@@ -20,24 +20,26 @@
 #include <string>
 #include <vector>
 
-// Panel-split arc (Task 4, pure motion): the Status lens's dashboard body,
-// moved verbatim out of AssetsPanel.cpp's DrawStatusLens -- see
-// AssetStatusPanel.hpp's own comment for why the exported body carries no
-// `state` parameter. This TU also carries DrawStatusLens's private helpers
-// (the attention/queued cards, the Unreferenced/Scenes cards, the activity-
-// feed age/title formatters) and the Status-only geometry constants they
-// share, none of which any other lens ever called.
+// AssetStatusPanel (panel-split arc): the "Asset Status" window. Task 4 moved
+// the dashboard BODY here as pure motion out of AssetsPanel.cpp's
+// DrawStatusLens -- see AssetStatusPanel.hpp's own comment for why the
+// exported body carries no `state` parameter -- together with that body's
+// private helpers (the attention/queued cards, the Unreferenced/Scenes cards,
+// the activity-feed age/title formatters) and the Status-only geometry
+// constants they share, none of which any other view ever called.
+//
+// Task 7 added the SHELL at the bottom of this file -- DrawAssetStatusPanel,
+// the window itself: its own ImGui::Begin("Asset Status"), NO toolbar (spec
+// s9.1) and the bottom bar (spec s9.2) on AssetPanelCommon's shared band
+// skeleton. The bar's right slot stays EMPTY until Task 8 wires spec s9.3's
+// recency line.
 //
 // BootSceneGuid, ScenesByName, DrawAssetPeekTooltip and PillWidth are NOT
-// here: all four are genuinely cross-lens (Browse and/or Graph call them
-// too, still in AssetsPanel.cpp), so Task 4 leaves their bodies exactly
-// where they were and only promotes their linkage from AssetsPanel.cpp's
-// anonymous namespace to Arcane::Editor scope (declared in
-// AssetPanelCommon.hpp, next to Task 3's RevealAssetInBrowser -- the
-// identical "cross-panel helper" problem that promotion already solved
-// once) so this TU can still reach them. Nothing about any of the four
-// CHANGED beyond that visibility -- see AssetsPanel.cpp's own comment at
-// each promoted definition.
+// here: all four are genuinely cross-panel (the Browser and/or Graph panels
+// call them too), so their declarations live on AssetPanelCommon.hpp and --
+// as of Task 7, which retired AssetsPanel.cpp where they used to sit --
+// their bodies live in AssetPanelCommon.cpp. Nothing about any of the four
+// has CHANGED beyond which file holds it.
 namespace Arcane::Editor
 {
     namespace
@@ -181,14 +183,14 @@ namespace Arcane::Editor
                 buttonsLeft = innerMin.x + innerW - recookW - problemsW - style.ItemSpacing.x;
                 ImGui::SetCursorScreenPos(ImVec2(buttonsLeft, innerMin.y));
                 // "Panel reports, app performs": neither button does any work
-                // here -- EditorApp::ConsumeBrowserActions owns both effects.
+                // here -- EditorApp::ConsumeAssetPanelActions owns both effects.
                 if (ImGui::Button("Recook"))
                     actions.recook = e.guid;
                 ImGui::SameLine();
                 // Panel-split spec s7.3/R1 (Task 3): Problems comes under
                 // the same focus-if-open rule as the other three deep
                 // links -- greyed + tooltipped when Problems is closed,
-                // never un-hiding it (see ConsumeBrowserActions's own
+                // never un-hiding it (see ConsumeAssetPanelActions's own
                 // updated comment for the host half of this change).
                 ImGui::BeginDisabled(!services.problemsOpen);
                 if (ImGui::Button("Problems"))
@@ -302,8 +304,10 @@ namespace Arcane::Editor
                 // "..." would otherwise cut the tail from first (it sits at
                 // the string's end), silently dropping the ONE thing this
                 // line exists to point the user at. Same "measure trailing
-                // content, then budget the rest" order PillWidth's callers
-                // already use elsewhere in this file.
+                // content, then budget the rest" order every other
+                // PillWidth caller uses (PillWidth itself lives in
+                // AssetPanelCommon.cpp as of Task 7 -- it is cross-panel,
+                // and this card is no longer one of two callers in one file).
                 constexpr const char* kProblemsTail = " \xC2\xB7 details in Problems";
                 const float tailWidth = ImGui::CalcTextSize(kProblemsTail).x;
                 const std::string shown = EllipsisToWidth(line, std::max(0.0f, innerW - tailWidth))
@@ -404,8 +408,9 @@ namespace Arcane::Editor
         // is zeroed for the row loop so the drawn well height (rowH * count,
         // computed up front so the fill can be painted BEHIND the rows)
         // matches the rows' own actual pitch exactly -- the same "vertical-
-        // only, don't trust automatic per-item spacing" fix DrawAssetsPanel's
-        // own toolbar-gap comment applies elsewhere in this file.
+        // only, don't trust automatic per-item spacing" fix
+        // DrawAssetBrowserPanel's own toolbar-gap comment states
+        // (AssetBrowserPanel.cpp).
         void DrawUnreferencedCard(AssetPanelModel& model, const AssetPanelServices& services,
                                   AssetPanelActions& actions)
         {
@@ -529,12 +534,12 @@ namespace Arcane::Editor
         // Panel-split spec s7.1 (Task 3): the button used to write
         // state.graphFocus/state.lens and call model.Select DIRECTLY -- the
         // precedent named above (the digest chip's own click-through in
-        // DrawBottomBar), from back when switching lenses inside one panel
-        // was not a host effect. The split invalidates that rationale: once
-        // Task 7 lands, Graph is a SEPARATE window, so this card raises
+        // the shared bottom bar), from back when switching lenses inside one
+        // panel was not a host effect. The split invalidated that rationale:
+        // Graph is a SEPARATE WINDOW as of Task 7, so this card raises
         // actions.focusInGraph instead and takes no `state` parameter at
-        // all -- the host (EditorApp::ConsumeBrowserActions) performs the
-        // focus-then-select-then-lens sequence, in that order, after this
+        // all -- the host (EditorApp::ConsumeAssetPanelActions) sets the
+        // focus, selects, and brings the Asset Graph tab forward, after this
         // frame's draw. R1/s7.3: greyed + tooltipped when Graph is closed.
         void DrawSceneCard(AssetPanelModel& model, const AssetPanelServices& services,
                            AssetPanelActions& actions, const AssetPanelEntry& e,
@@ -583,12 +588,14 @@ namespace Arcane::Editor
             // Panel-split spec s7.1 (Task 3): the focus-before-lens ordering
             // this button used to encode locally (comment retired along
             // with the writes it explained) now lives at the host's
-            // consumer -- EditorApp::ConsumeBrowserActions writes
-            // graphFocus, then Select, then the lens, in that same order,
-            // for the same reason: the Graph lens's projection is built
-            // from whatever graphFocus holds on ITS first frame, and
-            // Select is what makes the graph CENTER on this scene rather
-            // than merely contain it.
+            // consumer -- EditorApp::ConsumeAssetPanelActions writes
+            // graphFocus and Select before bringing the Asset Graph tab
+            // forward. Spec s7.1 (Task 7): the ordering DANCE itself has
+            // dissolved -- the host writes both before any next-frame draw,
+            // and the Graph panel's own rebuild trigger (graphBuiltStamp/
+            // graphBuiltFocus vs the model) does the rest. Select still
+            // matters: it is what makes the graph CENTER on this scene
+            // rather than merely contain it.
             ImGui::BeginDisabled(!services.graphOpen);
             if (ImGui::Button("Focus in Graph"))
                 actions.focusInGraph = e.guid;
@@ -615,9 +622,9 @@ namespace Arcane::Editor
     // Reveal, the Scenes card's Focus in Graph) -- both now raise
     // through `actions` instead, so `state` goes unread here, same as
     // `docs` beside it. Left in the signature rather than dropped: this
-    // is still the shared six-arg lens-body shape DrawBrowseLens/
-    // DrawGraphLens carry too, and Task 4 (moving this body out to its
-    // own panel unit) is where the shape itself changes.
+    // is still the shared body shape DrawAssetBrowserBody/
+    // DrawAssetGraphBody carry too, minus the `state` those two need and
+    // this one does not (spec s6: Status has no state struct).
     void DrawAssetStatusBody(AssetPanelModel& model, const Arcane::Project* project,
                              DocumentHost& /*docs*/, const AssetPanelServices& services,
                              AssetPanelActions& actions)
@@ -795,7 +802,7 @@ namespace Arcane::Editor
             ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
             ImGui::TextDisabled("Scenes");
 
-            // bootGuid: the SAME helper DrawBrowseLens reads for
+            // bootGuid: the SAME helper DrawAssetBrowserBody reads for
             // DrawAssetRow's "boot" pill, never a second parse.
             const Arcane::Guid bootGuid = BootSceneGuid(project);
 
@@ -813,5 +820,63 @@ namespace Arcane::Editor
         }
 
         ImGui::EndChild();
+    }
+
+    // ---- Panel-split Task 7: the window (spec s5/s9) -------------------
+    AssetPanelActions DrawAssetStatusPanel(AssetPanelModel& model, const Arcane::Project* project,
+                                           DocumentHost& docs, const AssetPanelServices& services,
+                                           bool* open)
+    {
+        AssetPanelActions actions;
+        if (!ImGui::Begin("Asset Status", open))
+        {
+            // Collapsed, or a docked tab that is not the selected one:
+            // ImGui has skipped this window's contents entirely. End is
+            // still owed (Begin/End pair unconditionally).
+            ImGui::End();
+            return actions;
+        }
+
+        // NO TOOLBAR (spec s9.1): the stat tiles start at the top of the
+        // body, and there is deliberately no kAssetPanelToolbarBodyGapPx
+        // Dummy either -- that gap exists to separate a toolbar ROW from the
+        // body beneath it, and this panel has no toolbar row to separate.
+        // The body supplies the page inset itself (DrawAssetStatusBody's
+        // `##statusbody` child, AlwaysUseWindowPadding) -- the same nesting
+        // this dashboard has always drawn under, when the outer child was
+        // the shared shell's `##assetsbody`.
+        if (ImGui::BeginChild("##assetstatusbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        {
+            if (!project)
+                ImGui::TextDisabled("No project open (data/-next-to-exe)");
+            else
+                DrawAssetStatusBody(model, project, docs, services, actions);
+        }
+        ImGui::EndChild();
+
+        // ---- bottom bar band (spec s9.2) -----------------------------
+        // LEFT: the one fixed form this view has always used, regardless of
+        // filter state (it has no search box of its own to filter against).
+        // RIGHT: EMPTY this task. Spec s9.3 gives the slot the activity
+        // ring's recency line ("last change 2m ago - uv_marker.png") and Task
+        // 8 wires it; the health-digest chip is NOT a stand-in -- its whole
+        // job is to point AT this panel, so pointing it at itself would be
+        // wrong on its own terms. Nothing else fills the gap in the meantime:
+        // spec s13's rule is that a bar never renders a fact it does not have.
+        {
+            const AssetPanelBottomBar bar = BeginAssetPanelBottomBar("##assetstatusbottombar");
+            if (bar.visible)
+            {
+                const HealthCounts health = model.Health();
+                char left[64];
+                std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d need attention",
+                              health.total, health.refused + health.queued);
+                ImGui::TextUnformatted(left);
+            }
+            EndAssetPanelBottomBar();
+        }
+
+        ImGui::End();
+        return actions;
     }
 }

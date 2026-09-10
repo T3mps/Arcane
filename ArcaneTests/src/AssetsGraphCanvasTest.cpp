@@ -1,6 +1,6 @@
 // Asset-manager arc (Plan 3, Task 3) diagnostic + regression: drive the REAL
-// DrawAssetsPanel with the Graph lens forced on, through device-less ImGui
-// frames (null backend -- no window, no GPU; software font atlas).
+// DrawAssetGraphPanel through device-less ImGui frames (null backend -- no
+// window, no GPU; software font atlas).
 //
 // This is the SAME harness that caught the shader editor's frame-2 EndCreate
 // abort (GraphCanvasHeadlessTest.cpp), and it exists here for the same reason:
@@ -11,13 +11,12 @@
 // index past the splitter -- plus the plain "does the whole node/pin/link
 // submission path survive at all".
 //
-// `state.lens = AssetLens::Graph` is set DIRECTLY. That was the branch's ONLY
-// reachability until Task 5 flipped kLensEnabledMask to 0b111; it is now one
-// route among three (toolbar button, Status's "Focus in Graph", this), and it
-// stays the one this harness uses because a device-less frame has no mouse to
-// click the other two with. The mask itself is a file-local constexpr in
-// AssetsPanel.cpp with no exported reader, so it is not assertable from here --
-// its witness is the render capture, not this test.
+// NO LENS SELECTION HAPPENS HERE ANY MORE. Every case below used to set
+// `state.lens = AssetLens::Graph` first, because that was the Graph body's
+// only reachability from a device-less frame. The panel-split arc's Task 7
+// made this canvas its own WINDOW: calling DrawAssetGraphPanel IS "the Graph
+// view is showing", and the lens vocabulary died with the shell that had
+// one.
 //
 // The fixture is deliberately shaped to hit every node VARIETY the draw path
 // branches on, not just the happy one:
@@ -32,8 +31,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/DocumentHost.hpp"
-#include "Panels/AssetGraphPanel.hpp"     // AssetsGraphProjectionIsCurrent, DestroyAssetGraphPanelCanvas (Task 5, panel-split)
-#include "Panels/AssetsPanel.hpp"
+#include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState, DrawAssetGraphPanel, DestroyAssetGraphPanelCanvas
+#include "Panels/AssetPanelModel.hpp"     // AssetPanelModel + AssetPanelProviders (the faked seam below)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind: what the ghost menu raises
 
 #include <Arcane/Assets/Assets.hpp>
@@ -42,11 +41,11 @@
 
 #include <imgui.h>
 // The panel exposes its canvas context as a `void*` on purpose
-// (AssetsPanel.hpp:340) so that production callers never need this header.
-// This test reaches through it anyway, the same way AssetsPanel.cpp itself
-// does internally (a reinterpret to ax::NodeEditor::EditorContext*), to query
-// the REAL ed::Config the panel's context ended up with -- see the zoom-table
-// regression check below.
+// (AssetGraphPanel.hpp's `graphCanvas`) so that production callers never need
+// this header. This test reaches through it anyway, the same way
+// AssetGraphPanel.cpp itself does internally (a reinterpret to
+// ax::NodeEditor::EditorContext*), to query the REAL ed::Config the panel's
+// context ended up with -- see the zoom-table regression check below.
 #include <imgui_node_editor.h>
 // The 2026-09-09 desk-pass cases at the bottom read ImGui's OWN id-conflict
 // verdict (ImGuiContext::DebugDrawIdConflictsId) and locate an open popup's
@@ -84,7 +83,7 @@ namespace
     }
 
     // The panel is auto-fit by default, which leaves it ~zero-height on frame 1
-    // and ~10px after -- and DrawGraphLens EARLY-RETURNS on a non-positive
+    // and ~10px after -- and DrawAssetGraphBody EARLY-RETURNS on a non-positive
     // canvas region, so an auto-fit harness would silently exercise the rebuild
     // and the context creation and NOTHING ELSE. Pinning a real size every
     // frame is what makes the node/pin/link/chrome submission actually run,
@@ -121,8 +120,8 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     std::error_code ec;
     fs::remove_all(root, ec);
 
-    // A real project, because DrawAssetsPanel's body refuses to draw any lens
-    // without one ("No project open") -- the Graph branch included.
+    // A real project, because DrawAssetGraphPanel's body band refuses to draw
+    // the canvas without one ("No project open").
     {
         auto created = Project::Create(root, "GraphCanvas");
         REQUIRE(created.has_value());
@@ -197,8 +196,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);   // software build, no upload
 
-    AssetsPanelState state;
-    state.lens = AssetLens::Graph;
+    AssetGraphPanelState state;
     // Task 5: the panel seeds `graphFocus` from the project's BOOT SCENE on
     // the first frame of a project, which would scope this harness to the
     // scene and leave the hub, its leaves and the overflow companion out of
@@ -219,7 +217,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     services.resolveAssetThumb = [spriteId](const Guid& g) -> std::uint64_t
     { return g == spriteId ? 1ull : 0ull; };
 
-    // What the "Assets" window actually measured on the last frame drawn --
+    // What the "Asset Graph" window actually measured on the last frame drawn --
     // the harness's own determinism witness, see the assertions below.
     ImVec2 lastPanelSize(0.0f, 0.0f);
     // ...and what the panel ASKED THE HOST FOR on that frame. The returned
@@ -234,13 +232,13 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
         ImGui::NewFrame();
         // Deterministic region -- see kPanelSize.
         ImGui::SetNextWindowSize(kPanelSize, ImGuiCond_Always);
-        lastActions = DrawAssetsPanel(state, model, &*project, docs, services);
+        lastActions = DrawAssetGraphPanel(state, model, &*project, docs, services);
         // Re-Begin the same window to read back what it measured. A second
         // Begin on an already-submitted window APPENDS to it (ImGui's
         // documented multi-Begin behaviour) -- it draws nothing here, it only
         // reads. No SetNextWindowSize this time, so it cannot influence what
         // it is measuring.
-        ImGui::Begin("Assets");
+        ImGui::Begin("Asset Graph");
         lastPanelSize = ImGui::GetWindowSize();
         ImGui::End();
         ImGui::Render();   // draw data discarded -- no backend
@@ -270,14 +268,14 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // ---- 2026-09-09 fix: zoom-table parity with the shader editor ---------
     // The Graph lens's ed::Config used to fall through to the vendored
     // library's own default zoom table (0.1-8.0, imgui_node_editor.cpp:
-    // 3309-3312) because AssetsPanel.cpp never called ApplyZoomLevels. Wheel
+    // 3309-3312) because the Graph panel never called ApplyZoomLevels. Wheel
     // zoom could then reach 8x, bilinearly magnifying the 12-14px canvas text
     // into unmistakable blur -- the shader editor's canvases install
     // GraphZoomLevels.hpp's kZoomLevels table instead and cap at 2.0x. This
     // queries the REAL ed::Config the panel's context ended up with (through
-    // the public node-editor header, the same reinterpret AssetsPanel.cpp
-    // performs on the `void*` it hands back per AssetsPanel.hpp:340) and
-    // asserts the ceiling matches the shader editor's, not the library's.
+    // the public node-editor header, the same reinterpret AssetGraphPanel.cpp
+    // performs on the `void*` it hands back) and asserts the ceiling matches
+    // the shader editor's, not the library's.
     {
         auto* ctx = static_cast<ax::NodeEditor::EditorContext*>(state.graphCanvas);
         REQUIRE(ctx != nullptr);
@@ -297,7 +295,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // evidence about the DRAW rather than about the build alone. Two witnesses,
     // because neither alone is sufficient:
     //
-    //   * the window measured what we pinned. An auto-fit "Assets" window
+    //   * the window measured what we pinned. An auto-fit "Asset Graph" window
     //     collapses to its toolbar (~10px of body), and ed::Begin over a
     //     region that small hands its child SkipItems -- at which point every
     //     Dummy and every AssetPill inside a node returns immediately and the
@@ -305,7 +303,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     //     happening. This is the assertion that goes red if the
     //     SetNextWindowSize above is ever dropped.
     //   * the lens reached the grid draw. DrawGraphGridFallback is only
-    //     reached past DrawGraphLens's non-positive-region early return, and
+    //     reached past DrawAssetGraphBody's non-positive-region early return, and
     //     the first thing it does is advance the phase (havePrevView latches
     //     there and nowhere else). This is what rules out the early return.
     //
@@ -426,63 +424,16 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     CHECK(state.graphHoverGuid == materialId);                  // ...and the dwell survived
     CHECK(state.graphHoverSeconds == 5.0f);
 
-    // ---- Task 5 fix round (review I1): the bottom bar's N gate -----------
-    // DrawBottomBar prints the Graph line's N only when the projection on
-    // screen was built for the CURRENT focus and the CURRENT entries; on any
-    // other frame it prints an em dash instead of a stale or fabricated count
-    // (spec §13 -- never render an unknown as a zero).
-    //
-    // WHAT IS AND IS NOT COVERED HERE, precisely. The transition itself is
-    // NOT device-less assertable: it is produced by a MOUSE CLICK on the
-    // Status lens's "Focus in Graph" button, nested inside an
-    // already-dispatched draw body with no seam to reach, and the string the
-    // bar prints is draw-body output with no return value to read. What IS
-    // cheaply assertable -- and is what the gate actually keys on -- is the
-    // gate CONDITION, in exactly the state that transition frame leaves
-    // behind: a lens that is Graph, a focus that changed, and a build that
-    // did not run this frame because the body drawn was another lens's.
-    //
-    // The predicate below is THE PANEL'S OWN
-    // (AssetsGraphProjectionIsCurrent, which DrawBottomBar calls to decide
-    // between the count and the em dash) -- not a restatement of it here. A
-    // mirrored conjunction would keep passing if the panel dropped a conjunct,
-    // which is the regression these legs exist to catch.
-    const auto graphCurrent = [&] { return AssetsGraphProjectionIsCurrent(state, model); };
-
-    // Baseline: a steady-state Graph frame IS current, so the real N prints.
-    state.lens       = AssetLens::Graph;
-    state.graphFocus = sceneId;
-    drawFrame();
-    CHECK(graphCurrent());
-
-    // The Focus-in-Graph shape: this frame's BODY was Status (so no rebuild
-    // happened) while the focus moved. That is the state the bar sees on the
-    // transition frame, and the gate must refuse it.
-    state.lens = AssetLens::Status;
-    const std::uint32_t epochBeforeStatus = state.graph.buildEpoch;
-    state.graphFocus = materialId;               // "focus" a different asset
-    drawFrame();                                 // Status body -- DrawGraphLens never runs
-    CHECK(state.graph.buildEpoch == epochBeforeStatus);   // ...proven: no rebuild
-    CHECK_FALSE(graphCurrent());                 // ...so N is unknown -> em dash
-
-    // And it re-arms: the next Graph frame rebuilds for the new focus, after
-    // which the real N is honest again.
-    state.lens = AssetLens::Graph;
-    drawFrame();
-    CHECK(state.graph.buildEpoch == epochBeforeStatus + 1u);
-    CHECK(graphCurrent());
-
-    // The third conjunct on its own: entries moved under a frame whose body
-    // was not the Graph lens. The focus is untouched here, so ONLY the stamp
-    // can close the gate -- which is what makes this leg evidence about the
-    // stamp rather than about the focus a second time.
-    state.lens = AssetLens::Status;
-    model.MarkAllDirty();
-    REQUIRE(model.RebuildIfDirty(&project->Registry(), fake.Make()));
-    drawFrame();
-    CHECK(state.graphBuiltFocus == state.graphFocus);   // focus leg still satisfied...
-    CHECK_FALSE(graphCurrent());                        // ...and the gate still closed
-    state.lens = AssetLens::Graph;
+    // (Panel-split Task 7: a block of five lens-flipping legs stood here --
+    // the Task 5 fix's coverage of AssetsGraphProjectionIsCurrent, the
+    // bottom bar's "is the projection on screen the one these numbers are
+    // about" gate. It is DELETED, not ported: the predicate itself is gone
+    // (spec §7.4), because the frame it guarded -- the Graph bar drawn in a
+    // frame whose BODY was another lens's -- required a lens flip to produce
+    // and is unrepresentable once each view owns its own window. The
+    // mechanism that replaced it is pinned end-to-end by its own case at the
+    // bottom of this file, "focusInGraph consumption refocuses and the next
+    // Graph frame rebuilds".)
 
     // ---- Task 6: the create bracket runs its no-query path every frame ----
     // The Graph lens opens an `ed::BeginCreate` / `ed::EndCreate` bracket every
@@ -612,7 +563,7 @@ namespace
         ImVec2 origin{ 0.0f, 0.0f };
         ImVec2 size{ 1200.0f, 640.0f };
 
-        AssetsPanelState*   state = nullptr;
+        AssetGraphPanelState* state = nullptr;
         AssetPanelModel*    model = nullptr;
         const Project*      project = nullptr;
         DocumentHost*       docs = nullptr;
@@ -626,7 +577,7 @@ namespace
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(origin, ImGuiCond_Always);
             ImGui::SetNextWindowSize(size, ImGuiCond_Always);
-            lastActions = DrawAssetsPanel(*state, *model, project, *docs, services);
+            lastActions = DrawAssetGraphPanel(*state, *model, project, *docs, services);
             ImGui::Render();
         }
 
@@ -634,7 +585,7 @@ namespace
         void Button(bool down)       { ImGui::GetIO().AddMouseButtonEvent(0, down); }
 
         // Node geometry, in SCREEN space, read back from the live canvas.
-        // The panel's node ids are index+1 (AssetsPanel.cpp's GraphNodeIdOf).
+        // The panel's node ids are index+1 (AssetGraphPanel.cpp's GraphNodeIdOf).
         ImVec2 NodeScreenCentre(std::uint64_t nodeId)
         {
             auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
@@ -685,7 +636,7 @@ namespace
 
         // The LEFT (dependencies/outbound) pin, mirroring NodeRightPinScreen
         // above -- GraphLeftPinId's handle, used by the non-derivable leg
-        // (AssetsPanel.cpp's `isRightPin` gate) rather than the derive one.
+        // (AssetGraphPanel.cpp's `isRightPin` gate) rather than the derive one.
         ImVec2 NodeLeftPinScreen(std::uint64_t nodeId)
         {
             auto* ed_ctx = static_cast<ax::NodeEditor::EditorContext*>(state->graphCanvas);
@@ -764,7 +715,8 @@ namespace
 // The fixture below pins the arithmetic down: a hub material referenced by six
 // others is SEVEN nodes, so node #1's RIGHT pin (1*4+2 = 6) collides with node
 // #6's body. Every asset is a MATERIAL because the derive affordance gives
-// every material a right pin unconditionally (AssetsPanel.cpp:3944-3951), so
+// every material a right pin unconditionally (AssetGraphPanel.cpp's node-pin
+// submission), so
 // the colliding pin is guaranteed to be submitted rather than depending on
 // which node the projection happened to order first.
 //
@@ -796,8 +748,7 @@ TEST_CASE("Assets panel Graph lens submits no conflicting ImGui item ids",
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
 
-    AssetsPanelState state;
-    state.lens = AssetLens::Graph;
+    AssetGraphPanelState state;
     state.graphFocusSeeded = true;   // nil focus == everything-mode
     DocumentHost docs;
 
@@ -937,8 +888,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
 
-    AssetsPanelState state;
-    state.lens = AssetLens::Graph;
+    AssetGraphPanelState state;
     state.graphFocusSeeded = true;
     DocumentHost docs;
 
@@ -954,7 +904,8 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
 
     REQUIRE(state.graph.nodes.size() == 7u);
     // The hub is a MATERIAL and therefore carries a right pin unconditionally
-    // (AssetsPanel.cpp:3984-3991) -- the handle the gesture starts from.
+    // (AssetGraphPanel.cpp's node-pin submission) -- the handle the gesture
+    // starts from.
     std::size_t hubIndex = state.graph.nodes.size();
     for (std::size_t i = 0; i < state.graph.nodes.size(); ++i)
         if (state.graph.nodes[i].guid == fx.hub)
@@ -986,7 +937,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
     hw.Frame();                        // Create stage -> stash + OpenPopup
 
     // ---- what the release stashed ----------------------------------------
-    // These two ARE the ghost menu's enabled gate (AssetsPanel.cpp:4690-4691).
+    // These two ARE the ghost menu's enabled gate (AssetGraphPanel.cpp).
     CHECK(state.graphWireGuid == fx.hub);
     CHECK(state.graphWireDerivable);
 
@@ -1005,7 +956,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
     hw.Button(true);   hw.Frame();
     hw.Button(false);  hw.Frame();
 
-    // THE ASSERTION. The entry's one job (AssetsPanel.cpp:4747-4749): raise the
+    // THE ASSERTION. The entry's one job (AssetGraphPanel.cpp's ghost menu): raise the
     // unified create request with the source material pre-filled as the parent.
     CHECK(hw.lastActions.requestCreateKind ==
           static_cast<int>(CreateAssetKind::MaterialInstance));
@@ -1030,7 +981,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
 // its entry merely disabled. Reasoned rather than desk-reverted (cheap to
 // re-derive: the old code's only gate on `wireCreateRequest` was reaching this
 // `else if` at all, which a LEFT-pin release does exactly as readily as a
-// RIGHT-pin one) -- see AssetsPanel.cpp's `derivable` local, ~:4421-4425.
+// RIGHT-pin one) -- see AssetGraphPanel.cpp's `derivable` local.
 //
 // The gesture is driven off the SAME MaterialHubFixture and the SAME hub node
 // as the derivable case above (no new fixture needed): the hub's right pin is
@@ -1039,7 +990,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
 // the source being a material. (Every fixture asset is a material on purpose,
 // per the derivable case's own header comment; a left-pin release is the
 // cheapest way to isolate "not the DEPENDENTS pin" from "not a material" as
-// the failing conjunct, and AssetsPanel.cpp's ruling comment calls out the
+// the failing conjunct, and AssetGraphPanel.cpp's ruling comment calls out the
 // left pin explicitly as the other way in.)
 TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a quiet no-op",
           "[editor][graphcanvas]")
@@ -1062,8 +1013,7 @@ TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a qui
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
 
-    AssetsPanelState state;
-    state.lens = AssetLens::Graph;
+    AssetGraphPanelState state;
     state.graphFocusSeeded = true;
     DocumentHost docs;
 
@@ -1079,9 +1029,8 @@ TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a qui
 
     REQUIRE(state.graph.nodes.size() == 7u);
     // referencers[0] references the hub, so it has a LEFT (outbound) pin --
-    // AssetsPanel.cpp:3961-3962 gives `hasLeftPin` only to the edge's `from`
-    // side, unlike the hub's right pin which every material gets
-    // unconditionally (:3994-4001).
+    // AssetGraphPanel.cpp gives `hasLeftPin` only to the edge's `from` side,
+    // unlike the hub's right pin, which every material gets unconditionally.
     std::size_t refIndex = state.graph.nodes.size();
     for (std::size_t i = 0; i < state.graph.nodes.size(); ++i)
         if (state.graph.nodes[i].guid == fx.referencers[0])
@@ -1129,7 +1078,7 @@ TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a qui
     // The gesture stash is cleared, not left holding the PRIOR (derivable)
     // drag's guid -- the same "named asset of an outgoing gesture must not
     // survive it" posture DestroyAssetGraphPanelCanvas's project-switch reset
-    // uses (AssetsPanel.cpp ~:4879-4880), applied here per-release instead of
+    // uses, applied here per-release instead of
     // per-project-switch.
     CHECK_FALSE(state.graphWireGuid.IsValid());
     CHECK_FALSE(state.graphWireDerivable);
@@ -1175,8 +1124,7 @@ TEST_CASE("digest chip raises showStatus only while the Status target is open",
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
 
-    AssetsPanelState state;
-    state.lens = AssetLens::Graph;
+    AssetGraphPanelState state;
     state.graphFocusSeeded = true;
     DocumentHost docs;
 
@@ -1208,4 +1156,193 @@ TEST_CASE("digest chip raises showStatus only while the Status target is open",
 
     std::error_code ec;
     fs::remove_all(fx.root, ec);
+}
+
+// ---------------------------------------------------------------------------
+// Panel-split spec §7.1/§7.4 + §12 (Task 7): the REPLACEMENT for the retired
+// projection-currency legs.
+//
+// WHAT WAS DELETED AND WHY. The Task 5 fix pinned
+// AssetsGraphProjectionIsCurrent -- a predicate the shared bottom bar asked
+// before printing the Graph line's N. It existed for exactly one frame shape:
+// the Status lens's "Focus in Graph" button flipped `state.lens` from INSIDE
+// the already-dispatched Status body, so the Graph BODY never ran that frame
+// while the bar, which ran after it, already read the new lens -- and would
+// otherwise have paired the previous build's node count with the new focus's
+// name. That frame requires a lens flip to produce. With one window per view
+// there is no lens to flip: the Graph bar draws inside the Graph window,
+// after the Graph body, in the same Begin/End. The predicate is deleted
+// (spec §7.4) and its legs go with it -- there is no way to reach the state
+// they described, so porting them would have pinned a fiction.
+//
+// WHAT REPLACES IT. The mechanism that took over: the card raises
+// `actions.focusInGraph`, the HOST writes the focus and the selection after
+// the draw (EditorApp::ConsumeAssetPanelActions), and the Graph panel's own
+// three-input rebuild trigger does the rest on its NEXT frame. This case
+// drives that second half against the real panel -- the host's consumption
+// applied by hand, then the frame that must react to it.
+//
+// SCOPE, precisely. The RAISE half (a mouse click on the Status panel's scene
+// card with `graphOpen` true) is not driven here: it needs the card's button
+// rect out of a live Status window, which is a Status-panel harness this file
+// does not have. Task 8's disabled-rule pass builds one for the same button
+// (spec §12's "New: disabled-rule coverage" bullet) and is where that half
+// lands. What IS driven here is everything downstream of the raise, which is
+// the half the deleted legs were actually about.
+TEST_CASE("focusInGraph consumption refocuses and the next Graph frame rebuilds",
+          "[editor][graphcanvas]")
+{
+    const fs::path root = fs::temp_directory_path() / "arcane_assets_graph_focusconsume_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    {
+        auto created = Project::Create(root, "GraphFocusConsume");
+        REQUIRE(created.has_value());
+    }
+
+    const fs::path content = root / "Content";
+    const Guid sceneId    = FixtureGuid(1);
+    const Guid materialId = FixtureGuid(2);
+    const Guid spriteId   = FixtureGuid(3);
+
+    WriteFile(content / "scenes" / "main.arcscene",
+              R"({"id":")" + sceneId.ToString() + R"(","version":4,"entities":[]})");
+    WriteFile(content / "materials" / "base.arcmat",
+              R"({"id":")" + materialId.ToString() + R"(","type":"material","kind":"sprite"})");
+    WriteFile(content / "sprites" / "hero.arcsprite",
+              R"({"id":")" + spriteId.ToString() + R"(","type":"sprite","name":"Hero"})");
+
+    auto project = Project::Open(root);
+    REQUIRE(project.has_value());
+    REQUIRE(project->SetBootScene(sceneId));
+
+    FakeProviders fake;
+    fake.refsByGuid[sceneId]  = { { materialId, AssetRefKind::References } };
+    fake.refsByGuid[spriteId] = { { materialId, AssetRefKind::DerivesFrom } };
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&project->Registry(), fake.Make()));
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    AssetGraphPanelState state;
+    // Opt out of the boot-scene seed so the focus below is the ONLY thing
+    // that ever writes `graphFocus` in this case -- otherwise the first frame
+    // would seed it to the boot scene and the "focus moved" step would be
+    // measuring the seed as much as the consumption.
+    state.graphFocusSeeded = true;
+    DocumentHost docs;
+    AssetPanelServices services{};
+    services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
+
+    const auto drawFrame = [&]()
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize(kPanelSize, ImGuiCond_Always);
+        DrawAssetGraphPanel(state, model, &*project, docs, services);
+        ImGui::Render();
+    };
+
+    // ---- steady state: built, for the scene -------------------------------
+    state.graphFocus = sceneId;
+    for (int frame = 0; frame < 3; ++frame)
+        drawFrame();
+    REQUIRE(state.graphBuilt);
+    REQUIRE(state.graphBuiltFocus == sceneId);
+    const std::uint32_t epoch = state.graph.buildEpoch;
+    // ...and genuinely settled: three frames over an unchanged model and focus
+    // left ONE build behind, so the +1 measured below is attributable to the
+    // consumption rather than to a panel that rebuilds every frame.
+    REQUIRE(epoch == 1u);
+
+    // ---- the host's focusInGraph consumption, applied by hand -------------
+    // Panel-split spec §7.1: focus, then select. That is the WHOLE of it --
+    // the host writes no other Graph state, and in particular does not poke
+    // graphBuilt/graphBuiltStamp/graphLayoutDirty to force anything. (The
+    // real consumer also calls SelectDockTab("Asset Graph"), which is pure
+    // window chrome with no bearing on the projection.)
+    state.graphFocus = materialId;
+    model.Select(materialId);
+
+    // ---- the next Graph frame reacts --------------------------------------
+    drawFrame();
+    CHECK(state.graph.buildEpoch == epoch + 1u);
+    CHECK(state.graphBuiltFocus == materialId);
+    // The rebuild really was FOR the new focus, not merely counted: the
+    // material is in the projection the panel is now drawing.
+    CHECK(std::any_of(state.graph.nodes.begin(), state.graph.nodes.end(),
+                      [&](const GraphNode& n) { return !n.isOverflow && n.guid == materialId; }));
+    // ...and the selection half landed too -- the canvas acknowledged the
+    // model's stamp on this same frame, which is what arms the centering the
+    // host's Select() exists for.
+    CHECK(model.selected == materialId);
+    CHECK(state.seenSelectionStampGraph == model.selectionStamp);
+
+    // One more frame changes nothing: the consumption is a ONE-SHOT rebuild
+    // trigger, not a latched dirty flag that keeps re-firing.
+    drawFrame();
+    CHECK(state.graph.buildEpoch == epoch + 1u);
+
+    // ---- the buried-tab hazard, and why the seed sits above Begin ---------
+    // THE HAZARD (found in Task 7's self-review, closed in the same commit).
+    // The panel early-outs when ImGui::Begin returns false, which is EVERY
+    // frame this window is a docked-but-unselected tab -- and the shipped
+    // default layout makes exactly that the normal state, since Asset Browser
+    // is the selected tab (spec §10). If the once-per-project boot-scene seed
+    // sat BELOW that early-out, its latch would still be unspent when the user
+    // clicks Status's "Focus in Graph": the host writes graphFocus and calls
+    // SelectDockTab, the tab comes forward, and the first frame that actually
+    // draws would seed the BOOT SCENE straight over the scene the user asked
+    // for. Every deep link into a never-yet-shown Graph panel would land on
+    // the wrong asset -- silently, and only while the panel had not been
+    // visited yet, which is precisely the case a desk pass is least likely to
+    // try.
+    //
+    // The two legs below are that fix's red/green. A COLLAPSED window is what
+    // makes an early-out reachable device-less: SetNextWindowCollapsed forces
+    // Begin to return false, exactly as a buried tab does.
+    DestroyAssetGraphPanelCanvas(state);          // == the project-switch seam: latch re-armed
+    REQUIRE_FALSE(state.graphFocusSeeded);
+    REQUIRE_FALSE(state.graphFocus.IsValid());
+
+    io.DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(kPanelSize, ImGuiCond_Always);
+    DrawAssetGraphPanel(state, model, &*project, docs, services);
+    ImGui::Render();
+    // Leg 1: the latch is SPENT even though the body never drew. Against the
+    // seed-below-Begin placement this is false -- and leg 2 then fails too.
+    CHECK(state.graphFocusSeeded);
+    CHECK(state.graphFocus == sceneId);           // the boot scene, seeded once
+
+    // Leg 2: the guarantee that actually matters to a user -- a host-written
+    // focus arriving while the tab is still buried SURVIVES the frame the tab
+    // finally comes forward on.
+    state.graphFocus = materialId;                // the host's consumption
+    model.Select(materialId);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowCollapsed(false, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(kPanelSize, ImGuiCond_Always);
+    DrawAssetGraphPanel(state, model, &*project, docs, services);
+    ImGui::Render();
+    CHECK(state.graphFocus == materialId);        // NOT re-seeded to the boot scene
+    CHECK(state.graphBuiltFocus == materialId);   // ...and the projection followed it
+
+    DestroyAssetGraphPanelCanvas(state);
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+
+    fs::remove_all(root, ec);
 }

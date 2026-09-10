@@ -147,7 +147,7 @@ namespace Arcane::Editor
 
         // Assets -> Show in Explorer / Copy Path, on a resolved asset Guid.
         // Extracted so the menu-bar route (the panel's tracked row) and the
-        // Assets panel's own row context menu (AssetsPanel.cpp) resolve the
+        // Asset Browser's own row context menu (AssetBrowserPanel.cpp) resolve the
         // SAME way -- one implementation, two entry points.
         void AssetPathAction(const Arcane::Project* proj, const Arcane::Guid& guid,
                              bool showInExplorer, bool copyPath)
@@ -2029,64 +2029,81 @@ namespace Arcane::Editor
 
         // Asset-manager redesign, Plan 1 Task 5: the invariant later tasks
         // rely on -- the model is current before ANY panel draw, whether or
-        // not the panel below is even visible this frame (a future consumer
-        // must never observe a stale rebuild just because Assets happened to
-        // be docked shut). Cheap when clean (RebuildIfDirty's own doc
-        // comment): no registry walk, no provider calls, unless something
-        // actually marked it dirty since the last frame.
-        //
-        // Task 9: DrawAssetsPanel replaced DrawAssetBrowserPanel as what this
-        // draws (AssetBrowser.* was retired in Task 15).
-        Arcane::Editor::AssetPanelActions browserActions;
+        // not any of the three panels below is even visible this frame (a
+        // consumer must never observe a stale rebuild just because the asset
+        // windows happened to be docked shut). Cheap when clean
+        // (RebuildIfDirty's own doc comment): no registry walk, no provider
+        // calls, unless something actually marked it dirty since the last
+        // frame. Panel-split Task 7: ONE rebuild, still, ahead of all THREE
+        // panels -- the invariant is now load-bearing for three windows
+        // instead of three lenses of one.
         const Arcane::Project* proj = m_runtime->CurrentProject();
         m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);
-        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
-        {
-            // Plan 1 Task 7's AssetServices seam, re-shaped into Task 9's
-            // AssetPanelServices at this ONE call site -- two distinct
-            // struct types (different consumers, per AssetServices's own
-            // header comment) that happen to share the thumbnail callable.
-            //
-            // Plan 2 Task 7 adds the Status lens's two seams here rather than
-            // to AssetServices: neither has any consumer outside this panel.
-            // `cookDetailFor` is what keeps the panel free of any knowledge of
-            // Arcane::Diagnostic or of this class's cook bookkeeping -- it
-            // answers ONLY for a PERMANENT row (a real refusal), so a
-            // transient ArtifactMissing row can never masquerade as a refusal
-            // reason on a card; nullopt sends the card to its own bare
-            // "cook refused" fallback.
-            Arcane::Editor::AssetPanelServices assetsPanelServices;
-            assetsPanelServices.resolveAssetThumb = m_assetServices.resolveAssetThumb;
-            assetsPanelServices.cookDetailFor =
-                [this](const Arcane::Guid& g) -> std::optional<std::string>
-                {
-                    const auto it = m_cookDiagnostics.find(g);
-                    if (it == m_cookDiagnostics.end() || !it->second.permanent)
-                        return std::nullopt;
-                    return it->second.diagnostic.detail.empty() ? it->second.diagnostic.message
-                                                                : it->second.diagnostic.detail;
-                };
-            // Borrowed non-owning for the draw only (Task 8's feed reads it);
-            // this log outlives every frame and is Clear()ed, never destroyed,
-            // on a project switch.
-            assetsPanelServices.activity = &m_assetActivity;
-            // Panel-split spec s7.3 (Task 3): the four focus-if-open gates
-            // (R1) -- filled at the same site every other services seam
-            // above is. Browser/Graph/Status all alias PanelId::Assets
-            // until Task 7 gives them their own panel ids; today there is
-            // exactly one "Assets" window housing all three lenses, so
-            // being inside this `if` already means all three read true.
-            // problemsOpen is a real, independent check -- Problems is
-            // already its own panel and can be closed while Assets is open.
-            assetsPanelServices.browserOpen  = m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets);
-            assetsPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets);
-            assetsPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets);
-            assetsPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
-            browserActions = Arcane::Editor::DrawAssetsPanel(
-                m_assetsPanel, m_assetModel, proj, m_documents, assetsPanelServices,
-                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
-        }
-        ConsumeBrowserActions(browserActions, ls);
+
+        // Plan 1 Task 7's AssetServices seam, re-shaped into Task 9's
+        // AssetPanelServices -- two distinct struct types (different
+        // consumers, per AssetServices's own header comment) that happen to
+        // share the thumbnail callable. Built ONCE and handed to all three
+        // panels (they read the identical seams), outside the visibility
+        // gates because the gate bools it carries are about the OTHER panels,
+        // not about the one being drawn.
+        //
+        // Plan 2 Task 7 adds the Status panel's two seams here rather than
+        // to AssetServices: neither has any consumer outside these panels.
+        // `cookDetailFor` is what keeps the panels free of any knowledge of
+        // Arcane::Diagnostic or of this class's cook bookkeeping -- it
+        // answers ONLY for a PERMANENT row (a real refusal), so a
+        // transient ArtifactMissing row can never masquerade as a refusal
+        // reason on a card; nullopt sends the card to its own bare
+        // "cook refused" fallback.
+        Arcane::Editor::AssetPanelServices assetsPanelServices;
+        assetsPanelServices.resolveAssetThumb = m_assetServices.resolveAssetThumb;
+        assetsPanelServices.cookDetailFor =
+            [this](const Arcane::Guid& g) -> std::optional<std::string>
+            {
+                const auto it = m_cookDiagnostics.find(g);
+                if (it == m_cookDiagnostics.end() || !it->second.permanent)
+                    return std::nullopt;
+                return it->second.diagnostic.detail.empty() ? it->second.diagnostic.message
+                                                            : it->second.diagnostic.detail;
+            };
+        // Borrowed non-owning for the draw only (Task 8's feed reads it);
+        // this log outlives every frame and is Clear()ed, never destroyed,
+        // on a project switch.
+        assetsPanelServices.activity = &m_assetActivity;
+        // Panel-split spec s7.3: the four focus-if-open gates (R1) -- filled
+        // at the same site every other services seam above is. As of Task 7
+        // all four are independent reads of four real panel ids; the first
+        // three used to alias PanelId::Assets, when one window housed all
+        // three lenses and they could only ever read identically.
+        assetsPanelServices.browserOpen  = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser);
+        assetsPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph);
+        assetsPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus);
+        assetsPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
+
+        // The three asset windows, each gated on its own PanelId exactly like
+        // Console/Problems below. Each returns its own AssetPanelActions;
+        // consumption is identical per value (spec s5), so the one handler
+        // runs over each in draw order -- Browser, Graph, Status. That order
+        // is not semantically load-bearing (spec s7.4): consumption happens
+        // after all three draws, so a deep link raised this frame lands in
+        // the next frame's draw whichever panel raised it.
+        Arcane::Editor::AssetPanelActions browserActions, graphActions, statusActions;
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser))
+            browserActions = Arcane::Editor::DrawAssetBrowserPanel(
+                m_assetBrowserUi, m_assetModel, proj, m_documents, assetsPanelServices,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetBrowser));
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph))
+            graphActions = Arcane::Editor::DrawAssetGraphPanel(
+                m_assetGraphUi, m_assetModel, proj, m_documents, assetsPanelServices,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetGraph));
+        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus))
+            statusActions = Arcane::Editor::DrawAssetStatusPanel(
+                m_assetModel, proj, m_documents, assetsPanelServices,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetStatus));
+        ConsumeAssetPanelActions(browserActions, ls);
+        ConsumeAssetPanelActions(graphActions, ls);
+        ConsumeAssetPanelActions(statusActions, ls);
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
@@ -2330,8 +2347,8 @@ namespace Arcane::Editor
             ShowSceneSaveDialog();
     }
 
-    void EditorApp::ConsumeBrowserActions(const Arcane::Editor::AssetPanelActions& browserActions,
-                                          LoopState& ls)
+    void EditorApp::ConsumeAssetPanelActions(const Arcane::Editor::AssetPanelActions& browserActions,
+                                             LoopState& ls)
     {
         // Unified create (Task 12). Both of these used to be their own flows;
         // both are now the SAME request into the SAME entry, which is what
@@ -2415,36 +2432,51 @@ namespace Arcane::Editor
         if (browserActions.copyGuid.IsValid())
             ImGui::SetClipboardText(browserActions.copyGuid.ToString().c_str());
 
-        // ---- Cross-panel deep links (panel-split spec s7.1, Task 3) --------
-        // Three former direct `state.lens` writers, now host-routed. Each
-        // raise site already gated itself on the matching AssetPanelServices
-        // bool before writing its action field (R1/s7.3: focus if open, else
-        // disabled + tooltipped) -- this consumer performs the effect, it
-        // does not re-check visibility.
+        // ---- Cross-panel deep links (panel-split spec s7.1) ----------------
+        // Three former direct `state.lens` writers: host-routed since Task 3,
+        // and genuinely cross-WINDOW commands since Task 7. Each raise site
+        // already gated itself on the matching AssetPanelServices bool before
+        // writing its action field (R1/s7.3: focus if open, else disabled +
+        // tooltipped); the IsVisible checks below are defense in depth, not a
+        // second gate. Under R1 the one thing this consumer must never do is
+        // OPEN a panel -- a closed target is a no-op, never an un-hide.
+        // SelectDockTab alone still does real work: a
+        // visible-but-buried-behind-a-sibling-tab window is not surfaced.
         //
-        // `showStatus` -- nothing but the lens switch (Ruling 9's own "jumps
-        // to the pane" shape, applied here to Status).
-        if (browserActions.showStatus)
-            m_assetsPanel.lens = Arcane::Editor::AssetLens::Status;
-        // `focusInGraph` -- focus BEFORE select BEFORE lens, the same
-        // ordering the card's own click handler used to encode locally
-        // (DrawSceneCard's retired comment): the Graph lens's projection is
-        // built from whatever `graphFocus` holds on its own first frame, and
-        // Select is what makes the graph CENTER on the scene rather than
-        // merely contain it.
-        if (browserActions.focusInGraph.IsValid())
+        // `showStatus` (the digest chip, Browser/Graph -> Status) -- the tab
+        // focus and nothing else. No selection or filter change; that is
+        // today's semantics, carried over unchanged from when it flipped a
+        // lens.
+        if (browserActions.showStatus &&
+            m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus))
+            Arcane::Editor::SelectDockTab("Asset Status");
+        // `focusInGraph` (Status's scene card -> Graph) -- write the focus,
+        // select, surface the tab. The old focus-BEFORE-select-BEFORE-lens
+        // ordering dance dissolves with the lens (spec s7.1): both writes
+        // land here, before any next-frame draw, and the Graph panel's own
+        // rebuild trigger (graphBuiltStamp/graphBuiltFocus against the model)
+        // does the rest on its next frame. Select still earns its line -- it
+        // is what makes the graph CENTER on the scene rather than merely
+        // contain it.
+        if (browserActions.focusInGraph.IsValid() &&
+            m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph))
         {
-            m_assetsPanel.graphFocus = browserActions.focusInGraph;
+            m_assetGraphUi.graphFocus = browserActions.focusInGraph;
             m_assetModel.Select(browserActions.focusInGraph);
-            m_assetsPanel.lens = Arcane::Editor::AssetLens::Graph;
+            Arcane::Editor::SelectDockTab("Asset Graph");
         }
-        // `revealInBrowse` -- the shared helper (AssetPanelCommon.*) carries
-        // today's exact Ruling-10 reveal sequence; this consumer's own job is
-        // only the trailing lens switch the extracted helper no longer makes.
-        if (browserActions.revealInBrowse.IsValid())
+        // `revealInBrowse` (Status's Unreferenced card -> Browser) -- the
+        // shared helper (AssetPanelCommon.*) carries the exact Ruling-10
+        // reveal sequence (clear both filters, force the folder ancestry and
+        // any derived fold open, then select); this consumer's own job is
+        // only the trailing tab focus the extracted helper deliberately does
+        // not make.
+        if (browserActions.revealInBrowse.IsValid() &&
+            m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser))
         {
-            Arcane::Editor::RevealAssetInBrowser(m_assetsPanel, m_assetModel, browserActions.revealInBrowse);
-            m_assetsPanel.lens = Arcane::Editor::AssetLens::Browse;
+            Arcane::Editor::RevealAssetInBrowser(m_assetBrowserUi, m_assetModel,
+                                                 browserActions.revealInBrowse);
+            Arcane::Editor::SelectDockTab("Asset Browser");
         }
 
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
@@ -2487,7 +2519,7 @@ namespace Arcane::Editor
         // specified, so none is invented. Panel-split spec s7.3/R1
         // (2026-09-09): the un-hide line is GONE -- nothing opens a panel
         // except the Window menu, and the raise site (DrawAttentionCard's
-        // "Problems" button, AssetsPanel.cpp) now disables itself with a
+        // "Problems" button, AssetStatusPanel.cpp) now disables itself with a
         // tooltip when Problems is closed, so this consumer only ever runs
         // while the panel is already visible. SelectDockTab alone still does
         // real work: a visible-but-buried-behind-a-sibling-tab panel is not
@@ -2688,7 +2720,7 @@ namespace Arcane::Editor
         // comments: "the caller decides") -- so the caller, here, does.
         // Scene never opens as a document at all (it replaces the editing
         // session instead, via the openScene action's unsaved-changes guard
-        // -- ConsumeBrowserActions above) -- `setAsBoot` is its only other
+        // -- ConsumeAssetPanelActions above) -- `setAsBoot` is its only other
         // effect, and reuses the SAME message text the row/preview-pane
         // "Set as Boot Scene" quick action already logs (this file, ~:2366).
         switch (r.kind)

@@ -19,12 +19,13 @@ namespace Arcane::Editor
 {
     class AssetActivityLog;
     class AssetPanelModel;
-    // AssetsPanel.hpp -- forward-declared rather than included: that header
-    // already includes THIS one (AssetPanelActions/Services + the create
-    // menu), so pulling it in here would be circular. RevealAssetInBrowser
-    // below only needs a reference to the type; AssetPanelCommon.cpp, which
-    // has the real definition to call into, includes AssetsPanel.hpp itself.
-    struct AssetsPanelState;
+    // AssetBrowserPanel.hpp -- forward-declared rather than included: that
+    // header already includes THIS one (AssetPanelActions/Services + the
+    // create menu), so pulling it in here would be circular.
+    // RevealAssetInBrowser below only needs a reference to the type;
+    // AssetPanelCommon.cpp, which has the real definition to call into,
+    // includes AssetBrowserPanel.hpp itself.
+    struct AssetBrowserPanelState;
     // AssetPanelModel.hpp -- forward-declared for the same reason: only a
     // pointer type is needed below (ScenesByName's return), and pulling the
     // full header in here is not required for that.
@@ -37,7 +38,7 @@ namespace Arcane::Editor
     enum class CookState : std::uint8_t;
     // Documents/DocumentHost.hpp -- forward-declared for OpenAssetRow below,
     // which only needs a reference to the type; the definition it calls into
-    // (AssetsPanel.cpp) already includes the real header.
+    // (AssetPanelCommon.cpp) already includes the real header.
     class DocumentHost;
 
     // Row/menu actions the APP resolves after the draw -- same "panel
@@ -136,12 +137,12 @@ namespace Arcane::Editor
         // activity above are already filled at), so a raise site can grey
         // its own control + explain when its target is closed rather than
         // opening it (R1: nothing opens a panel except the Window menu).
-        // The first three alias ONE panel (`PanelId::Assets`) until Task 7
-        // gives Browse/Graph/Status separate ids -- today they can only
-        // ever read identically, since there is exactly one "Assets"
-        // window housing all three lenses. `problemsOpen` is not an alias:
-        // Problems is already its own panel, and gates the Attention
-        // card's "Problems" button under the same rule.
+        // As of Task 7 all four are independent reads of four real, separate
+        // panel ids (`AssetBrowser`/`AssetGraph`/`AssetStatus`/`Problems`) --
+        // the first three aliased ONE `PanelId::Assets` while the three views
+        // were lenses of a single window, and could only ever read
+        // identically; now any of them can be closed while the others are
+        // open, which is exactly what makes these gates load-bearing.
         bool browserOpen = false, graphOpen = false, statusOpen = false, problemsOpen = false;
     };
 
@@ -174,91 +175,110 @@ namespace Arcane::Editor
     // forces the derived fold open when `foldedUnder` is valid, then
     // selects. A no-op when `guid` no longer resolves to an entry (the
     // action may be consumed a frame after it was raised, and the model
-    // can have moved on in between). `state` is Browse's own state mirror
-    // -- Task 7 retargets this parameter to `AssetBrowserPanelState&` once
-    // Browse is its own panel; nothing else about the contract changes.
-    void RevealAssetInBrowser(AssetsPanelState& state, AssetPanelModel& model,
+    // can have moved on in between). `state` is the Asset Browser's own
+    // state mirror; only the HOST calls this (action consumption), so no
+    // panel ever reaches into a sibling's state.
+    void RevealAssetInBrowser(AssetBrowserPanelState& state, AssetPanelModel& model,
                               const Arcane::Guid& guid);
 
-    // Panel-split Task 4: four more lens-shared helpers, promoted here for
-    // exactly the reason RevealAssetInBrowser above already was -- Browse
-    // and/or Graph call each of these from AssetsPanel.cpp, and the Status
-    // lens's body (AssetStatusPanel.cpp, its own TU as of Task 4) needs to
-    // reach the SAME four, not a second copy that could drift. Every one of
-    // the four keeps its body exactly where it was (AssetsPanel.cpp, still
-    // the one place any `ed::`/anonymous-namespace-sibling call it makes
-    // can resolve) -- only the enclosing namespace brace moved, from
-    // AssetsPanel.cpp's anonymous namespace (internal linkage, one TU only)
-    // out to here (external linkage, every TU that includes this header).
+    // ---- The cross-panel helper set (Tasks 4-6, homed here in Task 7) -----
+    // Eight helpers that more than one asset panel calls. Tasks 4-6 promoted
+    // each one's LINKAGE here (out of AssetsPanel.cpp's anonymous namespace,
+    // whose internal linkage hid it from every other TU) while leaving the
+    // BODY where it was, because AssetsPanel.cpp still existed and still
+    // called most of them. Task 7 deletes that file, so every body below now
+    // lives in AssetPanelCommon.cpp -- the destination ruled for a helper
+    // with two or more calling TUs, which each of these eight has (the
+    // per-helper caller census is in the Task 7 report). A helper with
+    // exactly ONE calling TU would have moved into that TU instead and lost
+    // its declaration here; none of the eight qualified.
 
     // The project's recorded boot scene as a guid -- see the definition's
-    // own comment (AssetsPanel.cpp) for the full rationale. Nil for a null
-    // project or an empty/unparseable bootScene.
+    // own comment (AssetPanelCommon.cpp) for the full rationale. Nil for a
+    // null project or an empty/unparseable bootScene.
     Arcane::Guid BootSceneGuid(const Arcane::Project* project);
 
     // Every Scene entry, name-sorted (ties broken on mount path) -- see the
-    // definition's own comment (AssetsPanel.cpp): the Status lens's Scenes
-    // rollup and the Graph lens's focus combo share this ONE list, in this
-    // ONE order.
+    // definition's own comment (AssetPanelCommon.cpp): the Status panel's
+    // Scenes rollup and the Graph panel's focus combo share this ONE list,
+    // in this ONE order.
     std::vector<const AssetPanelEntry*> ScenesByName(const AssetPanelModel& model);
 
     // The unified asset peek tooltip (spec s8) -- thumb, name, kind/subkind/
-    // instance pills, mount path, cook state, guid, and (Graph lens only)
-    // an edge-summary line. See the definition's own comment
-    // (AssetsPanel.cpp) for `forceShow`/`withEdgeSummary`.
+    // instance pills, mount path, cook state, guid, and (Graph only) an
+    // edge-summary line. See the definition's own comment
+    // (AssetPanelCommon.cpp) for `forceShow`/`withEdgeSummary`.
     void DrawAssetPeekTooltip(const AssetPanelModel& model, const AssetPanelServices& services,
                               const Arcane::Guid& guid, bool forceShow = false,
                               bool withEdgeSummary = false);
 
-    // Panel-split Task 5: three MORE lens-shared helpers, found when the
-    // Graph lens's body moved out to its own TU (AssetGraphPanel.cpp) --
-    // Task 4's four above were the ones the Status split already needed;
-    // these three are calls the Graph body makes that Browse's code in
-    // AssetsPanel.cpp still needs too. Same promotion, same reason: each
-    // keeps its body exactly where it was (AssetsPanel.cpp) and only the
-    // enclosing namespace brace moved, from an anonymous namespace out to
-    // here.
-
     // Resolve + route a double-click / Enter-open -- see the definition's
-    // own comment (AssetsPanel.cpp) for the exact routing (a scene goes
+    // own comment (AssetPanelCommon.cpp) for the exact routing (a scene goes
     // through `actions.openScene`, everything else through `docs`). A
-    // Browse row's double-click and the Graph lens's node double-click both
+    // Browser row's double-click and the Graph panel's node double-click both
     // call this, one copy.
     void OpenAssetRow(const AssetPanelEntry& e, const Arcane::Project* project,
                       DocumentHost& docs, AssetPanelActions& actions);
 
     // The unified asset context menu's ITEMS (spec s6) -- see the
-    // definition's own comment (AssetsPanel.cpp) for why this carries no
-    // popup bracket of its own. A Browse row's context menu and the Graph
-    // lens's node context menu both call this, one copy.
+    // definition's own comment (AssetPanelCommon.cpp) for why this carries
+    // no popup bracket of its own. A Browser row's context menu and the
+    // Graph panel's node context menu both call this, one copy.
     void DrawAssetMenuItems(AssetPanelActions& actions, const AssetPanelEntry& e,
                             bool kindSpecific);
 
     // Materials-only subkind pill text (spec s3.1/s6) -- see the
-    // definition's own comment (AssetsPanel.cpp). A Browse row's pill, the
-    // preview pane's pill and the Graph lens's node body pill all read this
+    // definition's own comment (AssetPanelCommon.cpp). A Browser row's pill,
+    // the preview pane's pill and a Graph node's body pill all read this
     // same text.
     const char* SubkindPillText(const AssetPanelEntry& e);
 
-    // Panel-split Task 6: a SIXTH lens-shared helper, found when the Browse
-    // lens's body moved out to its own TU (AssetBrowserPanel.cpp) -- the
-    // preview pane's cook row and DrawAssetPeekTooltip's own cook line (both
-    // still AssetsPanel.cpp's, the tooltip's body unmoved) format the same
-    // CookState the same way. Same promotion as the five above: the body
-    // keeps living exactly where it was (AssetsPanel.cpp), only the
-    // enclosing namespace brace moved.
-    //
     // CookState-to-display-string (spec s6/s8: "Cooked"/"Queued"/"Refused"/
-    // "Unknown") -- see the definition's own comment (AssetsPanel.cpp).
+    // "Unknown") -- the preview pane's cook row and DrawAssetPeekTooltip's
+    // own cook line format the same CookState the same way.
     const char* CookStateLabel(CookState cook);
 
     // AssetPill's own width, WITHOUT drawing it (EditorWidgets.cpp's
     // AssetPill, 12px text plus its two FramePadding.x cheeks) -- a caller
     // that positions a pill by hand needs the width one item early to
-    // budget an ellipsis against it. Cross-lens for the same reason as the
-    // three above: the Graph lens's node chrome and (before Task 4) the
-    // Status lens's attention card both call it.
+    // budget an ellipsis against it. The Graph panel's node chrome and the
+    // Status panel's attention card both call it.
     float PillWidth(const char* text);
+
+    // ---- The shared bottom-bar skeleton (panel-split spec s9.2, Task 7) ---
+    // All three panels end in the same 24px band: a hairline divider, LEFT =
+    // the panel's own context line, RIGHT = one glanceable fact. Only the two
+    // ends differ, so the skeleton and the digest chip are spelled ONCE here
+    // and each panel supplies its own text -- three hand-copied bars is
+    // exactly the drift the rest of this header already refuses.
+
+    // What BeginAssetPanelBottomBar hands back: whether the band is drawable
+    // at all this frame, plus the two layout values a right-aligned slot
+    // needs (both invariant inside the band, so they are measured once).
+    struct AssetPanelBottomBar
+    {
+        bool  visible    = false;   // false => draw nothing, but still End
+        float rightEdgeX = 0.0f;    // content-region right edge, in window space
+        float padY       = 0.0f;    // top pad that vertically centres one text line
+    };
+
+    // Open the bottom-bar child, paint its divider, and park the cursor where
+    // the left context line goes. ALWAYS pair with EndAssetPanelBottomBar --
+    // including when `visible` comes back false (BeginChild's own contract).
+    // The caller reserved this band's height by ending its body child at
+    // `-kAssetPanelBottomBarHeight`.
+    AssetPanelBottomBar BeginAssetPanelBottomBar(const char* id);
+    void EndAssetPanelBottomBar();
+
+    // The health-digest chip, right-aligned inside an open bottom bar: amber
+    // "N refused" + dim "- N cooking - N unused", drawn as two flush
+    // segments, with a single-hit-target click-through that raises
+    // `actions.showStatus`. The counts ALWAYS render (spec s7.3: information
+    // first, the chip never disappears); only the click goes inert when
+    // `services.statusOpen` is false, with a tooltip explaining why. Drawn by
+    // the Browser and Graph panels; Status does not chip itself.
+    void DrawAssetPanelHealthDigest(const AssetPanelBottomBar& bar, const AssetPanelModel& model,
+                                    const AssetPanelServices& services, AssetPanelActions& actions);
 
     // Toolbar / bottom bar band heights (spec s11.2's values table:
     // "toolbar wells / bottom bar | 24px / 24px"). The default ImGui
@@ -274,16 +294,16 @@ namespace Arcane::Editor
     // pure background between the toolbar's own bottom border and the
     // body's own top border -- 61->69 border-to-border at the mock's
     // native resolution). No §5/§11.2 value was previously pinned for
-    // this seam -- see DrawAssetsPanel's own comment for why it had
-    // silently collapsed to 0px live.
+    // this seam -- see DrawAssetBrowserPanel's own comment for why it had
+    // silently collapsed to 0px live. Applied by the Browser and Graph
+    // panels; Status has no toolbar to gap from (spec s9.1).
     inline constexpr float kAssetPanelToolbarBodyGapPx = 7.0f;
 
     // Task 10 (spec s6/s11.2) row pitch, promoted here in Task 4 alongside
     // BootSceneGuid/ScenesByName/DrawAssetPeekTooltip above: the Status
-    // lens's Unreferenced card (Plan 2 Task 8) draws its rows at this exact
-    // pitch, matching every Browse table row (AssetsPanel.cpp's own Task 10
-    // fixed-geometry block, unchanged) -- an `inline constexpr` rather than
-    // a second copy of the literal, the same avoid-drift reasoning every
-    // other constant on this header already follows.
+    // panel's Unreferenced card (Plan 2 Task 8) draws its rows at this exact
+    // pitch, matching every Browser table row -- an `inline constexpr`
+    // rather than a second copy of the literal, the same avoid-drift
+    // reasoning every other constant on this header already follows.
     inline constexpr float kTableRowHeight = 24.0f;
 }

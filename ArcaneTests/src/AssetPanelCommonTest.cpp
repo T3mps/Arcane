@@ -2,15 +2,15 @@
 // today's Reveal sequence (the Unreferenced card's own click handler,
 // pre-split) extracted to a free function so the host's `revealInBrowse`
 // consumer can run it without one panel reaching into a sibling's state.
-// Headless, no ImGui -- the function touches only AssetsPanelState and
-// AssetPanelModel, modeled on AssetPanelModelTest.cpp's fixture-building
+// Headless, no ImGui -- the function touches only AssetBrowserPanelState
+// and AssetPanelModel, modeled on AssetPanelModelTest.cpp's fixture-building
 // (a REAL temp dir + real files + registry.ScanContent, fake providers).
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Panels/AssetBrowserPanel.hpp"   // AssetBrowserPanelState -- the state this helper writes
 #include "Panels/AssetPanelCommon.hpp"
 #include "Panels/AssetPanelModel.hpp"
-#include "Panels/AssetsPanel.hpp"
 
 #include <Arcane/Project/AssetRegistry.hpp>
 
@@ -69,7 +69,7 @@ namespace
 }
 
 // RevealAssetInBrowser (panel-split spec s7.2): today's Reveal sequence
-// (AssetsPanel.cpp's Unreferenced card, pre-split) as a host-callable helper
+// (the Unreferenced card's own handler, pre-split) as a host-callable helper
 // -- clears search + kind filter BOTH places, walks the folder ancestry open
 // BOTH places, forces the derived fold, selects.
 TEST_CASE("RevealAssetInBrowser clears filters, opens ancestry, selects", "[editor]")
@@ -109,7 +109,7 @@ TEST_CASE("RevealAssetInBrowser clears filters, opens ancestry, selects", "[edit
     REQUIRE(target->folder == "props/crates/");
     REQUIRE(target->foldedUnder == textureGuid);
 
-    AssetsPanelState state;
+    AssetBrowserPanelState state;
     std::snprintf(state.search, sizeof(state.search), "zzz-no-match");
     state.railKind = 2;
     model.SetSearch(state.search);
@@ -139,7 +139,7 @@ TEST_CASE("RevealAssetInBrowser clears filters, opens ancestry, selects", "[edit
 TEST_CASE("RevealAssetInBrowser is a no-op for a guid the model no longer knows", "[editor]")
 {
     AssetPanelModel model;
-    AssetsPanelState state;
+    AssetBrowserPanelState state;
     std::snprintf(state.search, sizeof(state.search), "keep-me");
     state.railKind = 1;
     model.SetSearch(state.search);

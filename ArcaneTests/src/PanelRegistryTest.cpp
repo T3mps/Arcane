@@ -87,9 +87,53 @@ TEST_CASE("panel table: every row carries a valid section; section labels exist"
     for (PanelSection s : kSectionMenuOrder)
         CHECK(seen.insert(s).second);
     CHECK(seen.size() == static_cast<std::size_t>(PanelSection::Count));
-    // The assets row sits in the ASSETS section (Task 7 adds two siblings).
-    CHECK(kPanels[static_cast<std::size_t>(PanelId::Assets)].section == PanelSection::Assets);
+    // All three asset rows sit in the ASSETS section (panel-split spec s4.1/
+    // s4.4). Task 7 replaced the single `Assets` row with these three; a
+    // fourth asset panel that forgot its section would land in SCENE (enum
+    // value 2's default-constructed slot is not what these check -- each row
+    // states its section outright, and this is what pins that it is right).
+    CHECK(kPanels[static_cast<std::size_t>(PanelId::AssetBrowser)].section == PanelSection::Assets);
+    CHECK(kPanels[static_cast<std::size_t>(PanelId::AssetGraph)].section   == PanelSection::Assets);
+    CHECK(kPanels[static_cast<std::size_t>(PanelId::AssetStatus)].section  == PanelSection::Assets);
+    // ...and they are the ONLY three, so the ASSETS group never silently
+    // gains a member (the menu draws whatever carries the section).
+    int assetRows = 0;
+    for (const PanelInfo& p : kPanels)
+        if (p.section == PanelSection::Assets)
+            ++assetRows;
+    CHECK(assetRows == 3);
     // DIAGNOSTICS order is Problems then Console (board order, spec s4.2).
     CHECK(static_cast<std::size_t>(PanelId::Problems) <
           static_cast<std::size_t>(PanelId::Console));
+}
+
+TEST_CASE("ParsePanelVisibilityLine: the three asset panel names round-trip",
+          "[editor]")
+{
+    // Panel-split spec s4.1: each row's name is simultaneously the
+    // ImGui::Begin title, the menu label and THIS ini key, so a rename that
+    // missed the registry would show up here as an unparseable line.
+    auto r = ParsePanelVisibilityLine("Asset Browser=0");
+    REQUIRE(r.has_value());
+    CHECK(r->first == PanelId::AssetBrowser);
+    CHECK(r->second == false);
+
+    r = ParsePanelVisibilityLine("Asset Graph=1");
+    REQUIRE(r.has_value());
+    CHECK(r->first == PanelId::AssetGraph);
+    CHECK(r->second == true);
+
+    r = ParsePanelVisibilityLine("Asset Status=1");
+    REQUIRE(r.has_value());
+    CHECK(r->first == PanelId::AssetStatus);
+    CHECK(r->second == true);
+
+    // ...and the retired name is now simply unknown. An OLD ini carrying
+    // "Assets=1" must be ignored, not silently applied to one of the three
+    // (name-keyed parsing is what makes that true by construction, and this
+    // is the assertion that it stayed true through the rename).
+    CHECK(!ParsePanelVisibilityLine("Assets=1").has_value());
+    // The space in each name is load-bearing -- a caller that stripped it
+    // would parse nothing.
+    CHECK(!ParsePanelVisibilityLine("AssetBrowser=1").has_value());
 }

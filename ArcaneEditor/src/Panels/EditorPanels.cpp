@@ -235,8 +235,8 @@ namespace Arcane::Editor
                     // for the first time (sprite used to be reachable only by
                     // re-kinding an already-created fullscreen document).
                     //
-                    // The SAME list the Assets panel's `+ Create` popup and a
-                    // row's Create submenu draw (AssetsPanel.cpp's
+                    // The SAME list the Asset Browser's `+ Create` popup and
+                    // a row's Create submenu draw (AssetPanelCommon.cpp's
                     // DrawCreateMenuEntries) -- spelled twice only because
                     // this menu bar lives in a different TU with a different
                     // request struct; both raise the identical
@@ -376,10 +376,17 @@ namespace Arcane::Editor
         // fresh layout opens on it.
         ImGui::DockBuilderDockWindow("Inspector", rightId);
         ImGui::DockBuilderDockWindow("Material",  rightId);
-        ImGui::DockBuilderDockWindow("Assets",    bottomId);   // Assets tab first...
-        ImGui::DockBuilderDockWindow("Console",   bottomId);   // ...then Console...
-        ImGui::DockBuilderDockWindow("Problems",  bottomId);   // ...then Problems, tabbed together
-        ImGui::DockBuilderDockWindow("Viewport",  central);
+        // Panel-split spec s10: the three asset windows join the bottom node
+        // as tabs where the single "Assets" tab used to be, Asset Browser
+        // FIRST so a fresh layout opens on it. The G board's side-by-side
+        // arrangement (Browser + Status tabbed left, Graph right) is a USER
+        // arrangement the split makes possible, not the shipped default.
+        ImGui::DockBuilderDockWindow("Asset Browser", bottomId);   // Asset Browser tab first...
+        ImGui::DockBuilderDockWindow("Asset Graph",   bottomId);   // ...then Asset Graph...
+        ImGui::DockBuilderDockWindow("Asset Status",  bottomId);   // ...then Asset Status...
+        ImGui::DockBuilderDockWindow("Console",       bottomId);   // ...then Console...
+        ImGui::DockBuilderDockWindow("Problems",      bottomId);   // ...then Problems, all tabbed together
+        ImGui::DockBuilderDockWindow("Viewport",      central);
         ImGui::DockBuilderFinish(dockspaceId);
     }
 

@@ -171,7 +171,7 @@ namespace Arcane::Editor
     // Pill line height (spec §11.2's pinned 16px). Exposed -- rather than kept
     // file-local to EditorWidgets.cpp, as it was until Plan 3 -- for the same
     // reason kAssetRowThumbSize below is: a caller that positions a pill BY
-    // HAND (AssetsPanel.cpp's status cards vertically centre one inside a row
+    // HAND (AssetStatusPanel.cpp's cards vertically centre one inside a row
     // rect instead of chaining SameLine) needs the number, and re-declaring it
     // there made two constants nothing kept in step.
     inline constexpr float kPillLineHeight = 16.0f;
@@ -193,7 +193,7 @@ namespace Arcane::Editor
     // (rather than kept file-local to EditorWidgets.cpp) so a caller that
     // needs to compute a position against RowWithThumb's own thumb rect --
     // e.g. a status badge overlaid on a corner of it -- can do so without
-    // re-guessing the value; AssetsPanel.cpp's refused-marker badge (Task
+    // re-guessing the value; the Asset Browser's refused-marker badge (Task
     // 10 fix round 1) is the first such consumer.
     inline constexpr float kAssetRowThumbSize = 18.0f;
 

@@ -857,54 +857,34 @@ project "ArcaneTests"
         -- already via ArcaneTests/src/**.cpp above) is
         -- AssetGraphViewModelTest.cpp.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphViewModel.cpp",
-        -- Asset-manager arc (Plan 3, Task 3): AssetsPanel -- the Assets panel
-        -- itself. NOT a pure-logic unit like every entry above it: this one
-        -- is here so AssetsGraphCanvasTest.cpp can drive the REAL
-        -- DrawAssetsPanel through device-less ImGui frames with the Graph
-        -- lens forced on, which is the harness that caught the shader
-        -- editor's frame-2 EndCreate abort (GraphCanvasHeadlessTest.cpp) --
-        -- the imgui-node-editor canvas only runs inside a live ImGui frame,
-        -- so no headless unit can stand in for it. Precedent for compiling a
-        -- DRAW TU into the tests for exactly this reason is
-        -- ShaderEditorDocument.cpp above; the link closed with nothing else
-        -- added (DocumentHost/EditorWidgets/EditorFonts/AssetPanelModel/
+        -- Asset-manager arc (Plan 3, Task 3 -> panel-split Task 7): the three
+        -- ASSET PANELS plus their shared unit. NOT pure-logic units like
+        -- every entry above them: they are here so AssetsGraphCanvasTest.cpp
+        -- can drive the REAL DrawAssetGraphPanel through device-less ImGui
+        -- frames, the harness that caught the shader editor's frame-2
+        -- EndCreate abort (GraphCanvasHeadlessTest.cpp) -- the
+        -- imgui-node-editor canvas only runs inside a live ImGui frame, so no
+        -- headless unit can stand in for it. Precedent for compiling a DRAW
+        -- TU into the tests for exactly this reason is ShaderEditorDocument.cpp
+        -- above; the link closed with nothing else added
+        -- (DocumentHost/EditorWidgets/EditorFonts/AssetPanelModel/
         -- AssetReferenceIndex/AssetActivityLog are all already here, and
-        -- CreateAssetDialog's half of the panel's surface is header-only).
-        "%{wks.location}/ArcaneEditor/src/Panels/AssetsPanel.cpp",
-        -- Panel-split arc (Task 2): AssetPanelCommon -- the cross-panel
-        -- AssetPanelActions/AssetPanelServices contracts plus the shared
-        -- create menu (DrawCreateMenuEntries/DrawCreateMenu), extracted out
-        -- of AssetsPanel.cpp. AssetsPanel.cpp above calls both, so this TU
-        -- has to source-compile alongside it here too -- ArcaneEditor's own
-        -- project block (above, in this same file) finds it through
-        -- premake's src/**.cpp glob, but this ArcaneTests file list is
-        -- explicit, not globbed, so a new Panels/*.cpp never gets picked up
-        -- on its own.
+        -- CreateAssetDialog's half of the surface is header-only).
+        --
+        -- All four are listed because the link needs all four: the Graph
+        -- panel calls into AssetPanelCommon, and AssetPanelCommonTest.cpp
+        -- drives RevealAssetInBrowser against AssetBrowserPanel's state. NOTE
+        -- the standing caveat -- ArcaneEditor's own project block (above, in
+        -- this same file) finds these through premake's src/**.cpp glob, but
+        -- THIS list is explicit, so a new Panels/*.cpp is never picked up on
+        -- its own.
+        --
+        -- Panel-split Task 7 removed AssetsPanel.cpp's entry from here with
+        -- the file itself: the one "Assets" shell is now three windows, each
+        -- owning its own Begin/toolbar/body/bottom bar.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetPanelCommon.cpp",
-        -- Panel-split arc (Task 4): AssetStatusPanel -- the Status lens's
-        -- dashboard body (DrawAssetStatusBody), moved as pure motion out of
-        -- AssetsPanel.cpp's DrawStatusLens. AssetsPanel.cpp above calls it,
-        -- so this TU has to source-compile alongside it here too, same
-        -- reason (and same "not globbed, explicit list" caveat) as
-        -- AssetPanelCommon.cpp immediately above.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
-        -- Panel-split arc (Task 5): AssetGraphPanel -- the Graph lens's
-        -- canvas body (DrawAssetGraphBody) and its lifecycle
-        -- (AssetsGraphProjectionIsCurrent, DestroyAssetGraphPanelCanvas),
-        -- moved as pure motion out of AssetsPanel.cpp's DrawGraphLens /
-        -- DestroyAssetsPanelCanvas. AssetsGraphCanvasTest.cpp drives this TU
-        -- directly (the same device-less-ImGui-frame reason AssetsPanel.cpp
-        -- itself is here), so it has to source-compile alongside it here
-        -- too, same reason (and same "not globbed, explicit list" caveat)
-        -- as AssetPanelCommon.cpp/AssetStatusPanel.cpp above.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
-        -- Panel-split arc (Task 6): AssetBrowserPanel -- the Browse lens's
-        -- body (DrawAssetBrowserBody: rail + grouped table + preview pane),
-        -- moved as pure motion out of AssetsPanel.cpp's DrawBrowseLens.
-        -- AssetsPanel.cpp above calls it, so this TU has to source-compile
-        -- alongside it here too, same reason (and same "not globbed,
-        -- explicit list" caveat) as AssetPanelCommon.cpp/AssetStatusPanel.cpp/
-        -- AssetGraphPanel.cpp above.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
     }
 

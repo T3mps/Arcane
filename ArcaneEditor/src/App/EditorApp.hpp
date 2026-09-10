@@ -27,8 +27,10 @@
 #include <Arcane/Host/VerifyReport.hpp>       // --report (Task 9): VerifyReport
 #include <Arcane/Assets/ImageCompare.hpp>     // --compare (Task 9): PixelData/ImageCompareResult
 #include "Panels/AssetActivityLog.hpp"
+#include "Panels/AssetBrowserPanel.hpp"   // AssetBrowserPanelState (m_assetBrowserUi)
+#include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState (m_assetGraphUi) + the canvas teardown seam
 #include "Panels/AssetPanelModel.hpp"
-#include "Panels/AssetsPanel.hpp"
+#include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusPanel -- Status carries no state of its own
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/CreateAssetDialog.hpp"
 #include "Panels/DiagnosticStore.hpp"
@@ -288,11 +290,15 @@ namespace Arcane::Editor
         void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
                                  const FrameState& fs, LoopState& ls);
         // Asset-manager redesign, Plan 1 Task 9: takes AssetPanelActions
-        // (the panel's own action-report contract); the old AssetBrowserActions
+        // (the panels' own action-report contract); the old AssetBrowserActions
         // overload (superseded when AssetBrowser.* was retired, Task 15) is
-        // gone with the call site that produced it.
-        void ConsumeBrowserActions(const Arcane::Editor::AssetPanelActions& browserActions,
-                                   LoopState& ls);
+        // gone with the call site that produced it. Panel-split Task 7
+        // renamed it from ConsumeBrowserActions: consumption is identical per
+        // value and the host now runs it over THREE returned values (Browser,
+        // Graph, Status, in draw order), so naming it after one panel had
+        // stopped being true.
+        void ConsumeAssetPanelActions(const Arcane::Editor::AssetPanelActions& panelActions,
+                                      LoopState& ls);
         // ---- Unified create (asset-manager redesign, Plan 1 Task 12) -------
         // THE INVARIANT (spec s7): no creation path may bypass
         // CreateAssetRequest. These two functions are the whole of it --
@@ -1179,9 +1185,14 @@ namespace Arcane::Editor
         // fine only because the dtor never drains -- it just un-publishes.
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
-        // Asset-manager redesign, Plan 1 Task 9: the panel's session UI state
-        // (lens/search/rail selection).
-        Arcane::Editor::AssetsPanelState        m_assetsPanel;
+        // Asset-manager redesign, Plan 1 Task 9 -> panel-split Task 7: the
+        // asset panels' session UI state, one struct per WINDOW now that the
+        // three lenses are three panels (spec s6). The Asset Status window
+        // has no third member here on purpose -- its dashboard is entirely
+        // derived from the model and services, and by Task 3 its only state
+        // writes had already become actions.
+        Arcane::Editor::AssetBrowserPanelState  m_assetBrowserUi;   // search / rail / folds / preview width
+        Arcane::Editor::AssetGraphPanelState    m_assetGraphUi;     // canvas + projection + focus + gesture stash
         // Asset-manager redesign, Plan 1 Task 12: the unified create dialog's
         // cross-frame state (a modal outlives the draw that opened it). Set up
         // by the ONE entry (BeginCreateAsset) and drained by the ONE

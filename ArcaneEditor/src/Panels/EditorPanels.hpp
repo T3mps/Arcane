@@ -156,9 +156,11 @@ namespace Arcane::Editor
                                           const Arcane::PluginVTable* plugin,
                                           PlayLaunchMode& mode, uint64_t logoTex = 0);
 
-    // (The Assets panel is the REAL browser now -- AssetsPanel.cpp's
-    // DrawAssetsPanel; the placeholder stub retired in Slice 6, and
-    // DrawAssetBrowserPanel itself retired in the asset-manager arc's Task 15.)
+    // (The three asset panels are the REAL browser now --
+    // AssetBrowserPanel/AssetGraphPanel/AssetStatusPanel, panel-split Task 7;
+    // the placeholder stub retired in Slice 6, and Slice 6's OWN
+    // DrawAssetBrowserPanel retired in the asset-manager arc's Task 15, which
+    // is why that name was free for the window Task 7 shipped.)
 
 
     // Console panel UI state. Owned by EditorApp so it survives the frame; the
@@ -317,17 +319,18 @@ namespace Arcane::Editor
 
     // App-level effect the Inspector panel triggers but does not own. UNLIKE
     // AssetPanelActions -- which only RETURNS a request and defers every
-    // effect until AFTER DrawAssetsPanel returns ("Row actions the APP
-    // resolves after the draw", AssetsPanel.hpp) -- this callback runs its
-    // file IO + project-registry mutation SYNCHRONOUSLY, DURING
+    // effect until AFTER the asset panels return ("Row actions the APP
+    // resolves after the draw", AssetPanelCommon.hpp) -- this callback runs
+    // its file IO + project-registry mutation SYNCHRONOUSLY, DURING
     // DrawInspectorPanel's own draw; there is no deferred step here. That is
-    // safe because the Inspector draws AFTER the Assets panel every frame
-    // (EditorApp::MainLoop: DrawEditorUi, which owns DrawAssetsPanel,
-    // runs before DrawSelectionPanels, which owns DrawInspectorPanel) -- the
-    // Assets panel has already built and fully consumed its own per-frame
-    // entry snapshot by the time this callback can run, so mutating the
-    // project's asset registry here cannot invalidate anything the Assets
-    // panel is still iterating this frame. The one rule that DOES carry over
+    // safe because the Inspector draws AFTER all three asset panels every
+    // frame (EditorApp::MainLoop: DrawEditorUi, which owns
+    // DrawAssetBrowserPanel/DrawAssetGraphPanel/DrawAssetStatusPanel, runs
+    // before DrawSelectionPanels, which owns DrawInspectorPanel) -- the asset
+    // panels have already built and fully consumed their own per-frame entry
+    // snapshot by the time this callback can run, so mutating the project's
+    // asset registry here cannot invalidate anything an asset panel is still
+    // iterating this frame. The one rule that DOES carry over
     // unchanged: no dialogs launch from inside a panel draw, on either path.
     //
     // Sprite-asset arc, Task 4: dropping a TEXTURE onto a sprite-typed

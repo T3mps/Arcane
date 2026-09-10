@@ -1246,8 +1246,10 @@ namespace Arcane::Editor
         // layout under the new one's nodes. Same seam, same frame and the
         // same reason as the model reset immediately above; the panel owns
         // the actual teardown so no `ed::` call has to leave AssetGraphPanel.cpp
-        // (plan ruling 1; that file since Task 5, panel-split).
-        Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetsPanel);
+        // (plan ruling 1; that file since Task 5, panel-split). The Asset
+        // Browser's own mirrors are deliberately NOT reset here (spec s6):
+        // absent == default, and a stale key is never queried.
+        Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetGraphUi);
         // Asset-manager Plan 2 Task 5: session-only, same as the model
         // itself -- a switched-to project starts with an empty feed, not
         // the outgoing project's history.
@@ -2940,7 +2942,7 @@ namespace Arcane::Editor
             }
         }
 
-        // Asset-manager Plan 3 Task 3: the Assets panel's Graph-lens canvas
+        // Asset-manager Plan 3 Task 3: the Asset Graph panel's canvas
         // context, released while an ImGui context is still current -- the
         // ImGui context lives in m_gpu, which destructs only after Run()
         // returns, so here is inside its lifetime. Ahead of the render
@@ -2948,7 +2950,7 @@ namespace Arcane::Editor
         // ShutdownGraphPath states: this is pure ImGui/CPU state, and it
         // should be gone before anything below starts dismantling the
         // device. Idempotent and a no-op when the lens was never opened.
-        Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetsPanel);
+        Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetGraphUi);
 
         // The whole render teardown -- the view-before-texture invalidate,
         // both contexts, and the latch read-back -- in the one order that is

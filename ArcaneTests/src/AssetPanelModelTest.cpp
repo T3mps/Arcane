@@ -1011,7 +1011,7 @@ TEST_CASE("AssetPanelModel fold child inside a nested group carries its group's 
 // Review fix round 1 (2026-09-07): 1 Critical + 4 Important findings against
 // the nested-groups pass above, fixed in one round. Every case below is a
 // regression pin for one specific finding -- see the pass's own doc comments
-// in AssetPanelModel.cpp/AssetsPanel.cpp and
+// in AssetPanelModel.cpp/AssetBrowserPanel.cpp and
 // docs/specs/2026-09-06-asset-manager-redesign-design.md s6/s17 for the
 // rulings these enforce.
 // ---------------------------------------------------------------------------

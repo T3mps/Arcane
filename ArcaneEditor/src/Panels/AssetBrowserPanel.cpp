@@ -1,6 +1,7 @@
 #include "Panels/AssetBrowserPanel.hpp"
 
-#include "Panels/AssetsPanel.hpp"          // AssetsPanelState (Task 7 retargets this to AssetBrowserPanelState)
+#include "Documents/DocumentHost.hpp"      // the open route a row's double-click hands to OpenAssetRow
+#include "Panels/AssetPanelModel.hpp"      // AssetPanelModel/AssetPanelEntry/AssetPanelRow -- this panel's whole read surface
 #include "Panels/CreateAssetDialog.hpp"    // CreateKindForAssetKind -- the rail's per-kind "+" (AssetKind -> CreateAssetKind bridge)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
@@ -18,34 +19,37 @@
 #include <string_view>
 #include <vector>
 
-// AssetBrowserPanel (panel-split arc, Task 6): the Browse lens's body --
-// the rail, the grouped/folded asset table (scroll-to-selection + arrow-key
-// nav), the table<->preview drag splitter, and the resizable preview pane --
-// extracted as pure motion out of AssetsPanel.cpp's DrawBrowseLens (renamed
-// DrawAssetBrowserBody here -- Task 7 retargets its `state` parameter to
-// AssetBrowserPanelState&, not this task's concern). This TU also carries
-// DrawBrowseLens's private helpers (the row-interaction attachment, the
-// row/rail/group/header painters, the derived-list row, the preview-pane
-// splitter and its clamp math) and the Browse-only geometry constants they
-// share, none of which any other lens ever called.
+// AssetBrowserPanel (panel-split arc): the "Asset Browser" window. Task 6
+// moved the BODY here as pure motion out of AssetsPanel.cpp's DrawBrowseLens
+// (renamed DrawAssetBrowserBody) -- the rail, the grouped/folded asset table
+// (scroll-to-selection + arrow-key nav), the table<->preview drag splitter
+// and the resizable preview pane, plus that body's private helpers (the
+// row-interaction attachment, the row/rail/group/header painters, the
+// derived-list row, the preview-pane splitter and its clamp math) and the
+// Browser-only geometry constants they share, none of which any other view
+// ever called.
 //
-// BootSceneGuid, DrawAssetPeekTooltip, OpenAssetRow, DrawAssetMenuItems and
-// SubkindPillText are NOT here: all five are genuinely cross-lens (Graph
-// and/or Status call them too, still in AssetsPanel.cpp) and Task 4/5 already
-// promoted their linkage to Arcane::Editor scope, declared in
-// AssetPanelCommon.hpp -- this TU reaches them the same way AssetGraphPanel.cpp
-// does. CookStateLabel is a SIXTH, found by this task: DrawPreviewPane's cook
-// row and DrawAssetPeekTooltip (AssetsPanel.cpp) format the same CookState
-// the same way, so it got the identical promotion (declared in
-// AssetPanelCommon.hpp, body left in AssetsPanel.cpp, since
-// DrawAssetPeekTooltip keeps a caller there too).
+// Task 7 added the SHELL at the bottom of this file -- DrawAssetBrowserPanel,
+// the window itself: its own ImGui::Begin("Asset Browser"), the `+ Create` +
+// search toolbar (spec s9.1's R2 minimum, which is the old shared toolbar
+// minus the lens strip and minus the Graph focus slot), and the bottom bar
+// (spec s9.2), built on AssetPanelCommon's shared band skeleton + digest chip
+// so the three panels' bars cannot drift apart. `state` retargeted to
+// AssetBrowserPanelState& in the same task.
 //
-// kTooltipWidth/kTooltipThumbSize stay in AssetsPanel.cpp for the same
-// reason -- DrawAssetPeekTooltip is their only reader, and it stays there
-// too. kRailWidth/kRailRowHeight/kChildIndent/kGroupIndent and every Task 11
-// preview-pane geometry constant (plus ClampPreviewSaneRange/
-// ClampPreviewForLayout) move here in full: nothing outside the Browse body
-// ever read any of them.
+// BootSceneGuid, DrawAssetPeekTooltip, OpenAssetRow, DrawAssetMenuItems,
+// SubkindPillText and CookStateLabel are NOT here: all six are genuinely
+// cross-panel (the Graph and/or Status panels call them too), so their
+// declarations live on AssetPanelCommon.hpp and -- as of Task 7, which
+// retired AssetsPanel.cpp where they used to sit -- their bodies live in
+// AssetPanelCommon.cpp. This TU reaches them the same way AssetGraphPanel.cpp
+// and AssetStatusPanel.cpp do.
+//
+// kTooltipWidth/kTooltipThumbSize went to AssetPanelCommon.cpp with
+// DrawAssetPeekTooltip, their only reader. kRailWidth/kRailRowHeight/
+// kChildIndent/kGroupIndent and every Task 11 preview-pane geometry constant
+// (plus ClampPreviewSaneRange/ClampPreviewForLayout) live here in full:
+// nothing outside this panel ever read any of them.
 namespace Arcane::Editor
 {
     namespace
@@ -68,10 +72,10 @@ namespace Arcane::Editor
         //
         // 2026-09-07 follow-up (spec s5/s11.2 addendum): the pane's width
         // is no longer a single pinned constant -- it is user-resizable
-        // via a drag splitter (AssetsPanelState::previewPaneWidth, the
+        // via a drag splitter (AssetBrowserPanelState::previewPaneWidth, the
         // DESIRED width, session-only, matching every other field on that
         // struct). What was `kPreviewPaneWidth = 330.0f` becomes a default
-        // (AssetsPanel.hpp's kAssetsPreviewPaneDefaultWidth, half the old
+        // (AssetBrowserPanel.hpp's kAssetsPreviewPaneDefaultWidth, half the old
         // pinned width) + a clamp range, resizable within [min, max].
         constexpr float kPreviewPaneMinWidth     = 120.0f;
         constexpr float kPreviewPaneMaxWidth     = 480.0f;
@@ -109,7 +113,7 @@ namespace Arcane::Editor
         // The absolute sane-range clamp ONLY -- [kPreviewPaneMinWidth,
         // kPreviewPaneMaxWidth] -- and nothing else. This is the ONLY clamp
         // ever applied to a value before it is written into
-        // AssetsPanelState::previewPaneWidth (the splitter's drag and its
+        // AssetBrowserPanelState::previewPaneWidth (the splitter's drag and its
         // double-click reset, both below, are the field's only two
         // writers). Keeping the table-floor cap OUT of this function is
         // exactly what a 2026-09-07 review fix required: that cap (see
@@ -193,18 +197,18 @@ namespace Arcane::Editor
             }
         }
 
-        // See AssetsPanelState::groupOpen/childrenOpen's own doc comment:
+        // See AssetBrowserPanelState::groupOpen/childrenOpen's own doc comment:
         // these mirror the model's private defaults exactly (open, except the
         // diag:// mount root -- GroupDefaultOpen, spec s5 third revision;
         // children collapsed) so the panel can pick the right chevron glyph
         // and compute the flipped value to push through Set*Open.
-        bool GroupIsOpen(const AssetsPanelState& state, const std::string& folder)
+        bool GroupIsOpen(const AssetBrowserPanelState& state, const std::string& folder)
         {
             const auto it = state.groupOpen.find(folder);
             return it == state.groupOpen.end() ? GroupDefaultOpen(folder) : it->second;
         }
 
-        bool ChildrenAreOpen(const AssetsPanelState& state, const Arcane::Guid& texture)
+        bool ChildrenAreOpen(const AssetBrowserPanelState& state, const Arcane::Guid& texture)
         {
             const auto it = state.childrenOpen.find(texture);
             return it == state.childrenOpen.end() ? false : it->second;
@@ -265,7 +269,7 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: the rail (spec s6/s11.2) -----------------------------
-        void DrawRail(AssetsPanelState& state, AssetPanelModel& model, AssetPanelActions& actions)
+        void DrawRail(AssetBrowserPanelState& state, AssetPanelModel& model, AssetPanelActions& actions)
         {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kChrome);
             if (ImGui::BeginChild("##assetsrail", ImVec2(kRailWidth, 0.0f), ImGuiChildFlags_None))
@@ -428,7 +432,7 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: one folder-group chrome row (spec s6/s11.2) ----------
-        void DrawGroupRow(AssetsPanelState& state, AssetPanelModel& model, const AssetPanelRow& row)
+        void DrawGroupRow(AssetBrowserPanelState& state, AssetPanelModel& model, const AssetPanelRow& row)
         {
             ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(Theme::kChrome));
 
@@ -562,7 +566,7 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
-        void DrawAssetRow(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
+        void DrawAssetRow(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                           const AssetPanelEntry& e, const Arcane::Guid& bootGuid, int groupDepth)
         {
@@ -722,7 +726,7 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: one derived-child row (spec s6/s11.2) ----------------
-        void DrawChildRow(AssetsPanelState& /*state*/, AssetPanelModel& model, const Arcane::Project* project,
+        void DrawChildRow(AssetBrowserPanelState& /*state*/, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                           const AssetPanelEntry& e, int groupDepth)
         {
@@ -766,7 +770,7 @@ namespace Arcane::Editor
         // the exact remainder after reserving the rail and the pinned 330px
         // preview column, so the three stay side by side without the table
         // fighting the preview for space.
-        void DrawTable(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
+        void DrawTable(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                        DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                        const Arcane::Guid& bootGuid, float width)
         {
@@ -1167,7 +1171,7 @@ namespace Arcane::Editor
                 // ---- guid row: dim, click copies (spec s6: "guid
                 // (click-to-copy)"). Routed through `actions.copyGuid` -- the
                 // SAME field the row context menu's "Copy Guid" entry already
-                // sets (AssetsPanel.cpp's DrawRowContextMenu) -- so the host's
+                // sets (DrawRowContextMenu, this file) -- so the host's
                 // one existing consumer (EditorAppFrame.cpp's
                 // `ImGui::SetClipboardText(browserActions.copyGuid...)`) needs
                 // no new wiring; "panel reports, app performs" stays intact.
@@ -1307,7 +1311,7 @@ namespace Arcane::Editor
         // AssetStatusPanel.cpp use for their own exported bodies.
 
     // ---- Task 10/11: the Browse lens body (rail + table + preview) -----
-    void DrawAssetBrowserBody(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
+    void DrawAssetBrowserBody(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                               DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions)
     {
         // The project's recorded boot scene, resolved once per draw
@@ -1373,4 +1377,107 @@ namespace Arcane::Editor
         }
     }
 
+    // ---- Panel-split Task 7: the window (spec s5/s9) -------------------
+    AssetPanelActions DrawAssetBrowserPanel(AssetBrowserPanelState& state, AssetPanelModel& model,
+                                            const Arcane::Project* project, DocumentHost& docs,
+                                            const AssetPanelServices& services,
+                                            bool* open)
+    {
+        AssetPanelActions actions;
+        if (!ImGui::Begin("Asset Browser", open))
+        {
+            // Collapsed, or a docked tab that is not the selected one:
+            // ImGui has skipped this window's contents entirely, so there
+            // is nothing to draw and nothing the user could have asked for.
+            // End is still owed (Begin/End pair unconditionally).
+            ImGui::End();
+            return actions;
+        }
+
+        // ---- toolbar band: + Create -> search (flex) ------------------
+        // Spec s9.1 (R2, minimal): the lens strip and the Graph focus slot
+        // are GONE with the lens vocabulary itself, so the search well's
+        // flex math loses both subtracted terms -- including the strip's
+        // one ItemSpacing.x charge, which existed only to pay for the
+        // SameLine that placed the strip. What is left is the plain "take
+        // the rest of the row", still floored at 80px so a panel too narrow
+        // to pay for the Create button never hands ImGui a negative width.
+        {
+            ImGuiStyle& style = ImGui::GetStyle();
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
+
+            if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
+                ImGui::OpenPopup("##createmenu");
+            DrawCreateMenu(actions);
+
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x));
+            ImGui::InputTextWithHint("##assetssearch", ICON_LC_SEARCH " search...",
+                                     state.search, sizeof(state.search));
+            // Spec s6: the every-frame filter push happens HERE and nowhere
+            // else. Rows()/Rail()/ShownAssetCount() are the model's only
+            // filtered views and only this panel reads them, so a search
+            // keystroke cannot leak into the Graph or Status windows.
+            model.SetSearch(state.search);
+            model.SetKindFilter(state.railKind);
+
+            ImGui::PopStyleVar();
+        }
+
+        // 2026-09-07 fix (mock parity): ImGui bakes each item's "next line"
+        // cursor advance in AT PLACEMENT TIME using whatever ItemSpacing was
+        // active THEN, and the retired lens strip zeroed ItemSpacing for its
+        // own internal buttons -- so the toolbar's trailing edge silently
+        // inherited that zero and the body below sat flush against it with
+        // NO gap, live, even though nothing ever asked for that (confirmed by
+        // an automation pixel-scan of the live capture: 0px against the
+        // redline's 7px, kAssetPanelToolbarBodyGapPx's own comment). The
+        // strip is gone, but the EXPLICIT Dummy stays: it is what states the
+        // 7px seam outright instead of trusting ImGui's automatic per-item
+        // spacing for it a second time. Itself wrapped in a zeroed
+        // ItemSpacing so nothing implicit adds to either side of it.
+        // Vertical-only; the horizontal flush gutters DrawAssetBrowserBody's
+        // own SameLine(0,0) chain established are untouched.
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
+        ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
+        ImGui::PopStyleVar();
+
+        // ---- body band -----------------------------------------------
+        if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        {
+            if (!project)
+                ImGui::TextDisabled("No project open (data/-next-to-exe)");
+            else
+                DrawAssetBrowserBody(state, model, project, docs, services, actions);
+        }
+        ImGui::EndChild();
+
+        // ---- bottom bar band (spec s9.2) -----------------------------
+        // LEFT: this panel's own context line, in the two forms it has
+        // always had ("X of N shown" while a rail or search filter is on,
+        // "N assets - M selected" otherwise). RIGHT: the health digest chip.
+        {
+            const AssetPanelBottomBar bar = BeginAssetPanelBottomBar("##assetbrowserbottombar");
+            if (bar.visible)
+            {
+                const HealthCounts health = model.Health();
+                char left[64];
+                if (model.Filtered())
+                    std::snprintf(left, sizeof(left), "%d of %d shown",
+                                  model.ShownAssetCount(), health.total);
+                else
+                    std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d selected",
+                                  health.total, model.selected.IsValid() ? 1 : 0);
+                ImGui::TextUnformatted(left);
+
+                DrawAssetPanelHealthDigest(bar, model, services, actions);
+            }
+            EndAssetPanelBottomBar();
+        }
+
+        ImGui::End();
+        return actions;
+    }
 }

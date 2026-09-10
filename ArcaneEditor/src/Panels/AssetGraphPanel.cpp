@@ -1,9 +1,10 @@
 #include "Panels/AssetGraphPanel.hpp"
 
-#include "Panels/AssetsPanel.hpp"          // AssetsPanelState (Task 7 retargets this to AssetGraphPanelState)
+#include "Documents/DocumentHost.hpp"      // the open route a node's double-click hands to OpenAssetRow
+#include "Panels/AssetPanelModel.hpp"      // AssetPanelModel/AssetPanelEntry -- this panel's whole read surface
 #include "Panels/CreateAssetDialog.hpp"    // CreateAssetKind -- the pin-drag ghost menu's derive request
 #include "Widgets/CanvasEditScope.hpp"     // CanvasCreateScope: the unconditional-EndCreate rule
-#include "Widgets/CanvasPopupScope.hpp"    // ed::Suspend/Resume around the Graph lens's node menu
+#include "Widgets/CanvasPopupScope.hpp"    // ed::Suspend/Resume around the Graph canvas's node menu
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -19,9 +20,8 @@
 
 #include <imgui.h>
 // Plan 3 ruling 1: THE ONE TU that may name ax::NodeEditor for this panel.
-// AssetsPanel.hpp holds the context as a void* and EditorWidgets stays
+// AssetGraphPanel.hpp holds the context as a void* and EditorWidgets stays
 // node-editor-free precisely so this include never has to leave this file.
-// Task 5 (panel-split) moved that file: this TU is now where "this file" is.
 #include <imgui_node_editor.h>
 
 #include <algorithm>
@@ -33,41 +33,44 @@
 #include <string>
 #include <vector>
 
-// AssetGraphPanel (panel-split arc, Task 5): the Graph lens's ax::NodeEditor
-// canvas body and its lifecycle, extracted as pure motion out of
-// AssetsPanel.cpp's DrawGraphLens (renamed DrawAssetGraphBody here -- Task 7
-// retargets its `state` parameter to AssetGraphPanelState&, not this task's
-// concern). This TU also carries DrawGraphLens's private helpers (node id/pin
-// id encoding, the node chrome + legend painters, the dashed in-flight wire,
-// the canvas style descriptor) and the Graph-only geometry constants they
-// share, none of which any other lens ever called -- plus the two lifecycle
-// functions the host and the device-less canvas test both need:
-// AssetsGraphProjectionIsCurrent (moved AS-IS; a later task deletes it) and
-// DestroyAssetsPanelCanvas, renamed DestroyAssetGraphPanelCanvas here.
+// AssetGraphPanel (panel-split arc): the "Asset Graph" window. Task 5 moved
+// the ax::NodeEditor canvas BODY and its lifecycle here as pure motion out of
+// AssetsPanel.cpp's DrawGraphLens (renamed DrawAssetGraphBody), together with
+// that body's private helpers (node id/pin id encoding, the node chrome +
+// legend painters, the dashed in-flight wire, the canvas style descriptor)
+// and the Graph-only geometry constants they share, none of which any other
+// view ever called.
 //
-// BootSceneGuid, ScenesByName, DrawAssetPeekTooltip, PillWidth and
-// kTableRowHeight are NOT here: all five are genuinely cross-lens (Browse
-// and/or Status call them too, still in AssetsPanel.cpp/AssetStatusPanel.cpp)
-// and Task 4 already promoted their linkage to Arcane::Editor scope, declared
-// in AssetPanelCommon.hpp -- this TU reaches them the same way. Task 5 found
-// three MORE helpers this body calls that AssetsPanel.cpp's Browse code also
-// still needs -- OpenAssetRow, DrawAssetMenuItems and SubkindPillText -- and
-// promoted them the identical way (declared in AssetPanelCommon.hpp, bodies
-// left in AssetsPanel.cpp, since each keeps callers there too; see each
-// promoted definition's own comment). GraphFocusLabel stays put, UNPROMOTED:
-// its only two callers (the toolbar's focus combo, the bottom bar's "focus:"
-// clause) both stay in AssetsPanel.cpp until Task 7 moves the combo too, and
-// nothing in this body calls it. DrawGraphEdgeSummary likewise stays put: its
-// one caller is DrawAssetPeekTooltip, which stays in AssetsPanel.cpp, so
-// moving the summary helper here would only have added a promotion nothing
-// needs.
+// Task 7 added the SHELL at the bottom of this file -- DrawAssetGraphPanel,
+// the window itself: its own ImGui::Begin("Asset Graph"), the focus-combo
+// toolbar (spec s9.1's R2 minimum -- no Create, no search; the combo and its
+// GraphFocusLabel/kGraphFocus* constants came across from the retired shared
+// DrawToolbar, which is where they always belonged) and the bottom bar (spec
+// s9.2), built on AssetPanelCommon's shared band skeleton + digest chip.
+// `state` retargeted to AssetGraphPanelState& in the same task.
 //
-// Task 5 round 1 fix: the boot-scene graphFocus seed the first cut of this
-// move placed in DrawAssetGraphBody's own preamble is NOT here -- it is
-// SeedAssetGraphFocus, an inline helper exported from AssetGraphPanel.hpp
-// and called by DrawAssetsPanel (AssetsPanel.cpp) ahead of DrawToolbar. See
-// that helper's own comment for the one-frame toolbar/bottom-bar disagreement
-// the original placement produced.
+// AssetsGraphProjectionIsCurrent is DELETED as of Task 7 (spec s7.4), not
+// moved: it existed only because a same-frame LENS FLIP could put the Graph
+// bottom bar on screen in a frame whose body was another lens's. The bar now
+// draws inside this file's own Begin/End, after this file's own body, so that
+// frame is unrepresentable -- the bar prints realNodeCount when `graphBuilt`
+// and the em dash when the canvas was never opened at all.
+//
+// BootSceneGuid, ScenesByName, DrawAssetPeekTooltip, PillWidth, OpenAssetRow,
+// DrawAssetMenuItems, SubkindPillText and kTableRowHeight are NOT here: all
+// are genuinely cross-panel (the Browser and/or Status panels call them too),
+// so their declarations live on AssetPanelCommon.hpp and -- as of Task 7,
+// which retired AssetsPanel.cpp where they used to sit -- their bodies live
+// in AssetPanelCommon.cpp. This TU reaches them the same way it always has.
+// DrawGraphEdgeSummary went to AssetPanelCommon.cpp WITH DrawAssetPeekTooltip,
+// its only caller.
+//
+// Task 5 round 1 fix: the boot-scene graphFocus seed the first cut of that
+// move placed in DrawAssetGraphBody's own preamble is NOT in the body -- it
+// is SeedAssetGraphFocus, an inline helper exported from AssetGraphPanel.hpp
+// and called by DrawAssetGraphPanel below ahead of the toolbar. See that
+// helper's own comment for the one-frame toolbar/bottom-bar disagreement the
+// original placement produced.
 namespace Arcane::Editor
 {
     namespace
@@ -77,9 +80,9 @@ namespace Arcane::Editor
         // ===================================================================
         // Ruling 1: spec §10's "reuses the shader editor's canvas vocabulary"
         // IS the vendored ax::NodeEditor -- the shader editor has no
-        // hand-rolled canvas -- and every `ed::` call for this lens lives
+        // hand-rolled canvas -- and every `ed::` call for this panel lives
         // HERE, in this one TU. Nothing about the node editor reaches
-        // AssetsPanel.hpp (the context is a `void*` there) or the shared
+        // AssetGraphPanel.hpp (the context is a `void*` there) or the shared
         // widget layer (CanvasPopupScope.hpp:16-19 makes the same refusal).
         // The graph-framework extraction stays deferred: no schema, no undo,
         // no serialization layer is invented for this canvas.
@@ -87,6 +90,51 @@ namespace Arcane::Editor
         // The shader editor is the IDIOM SOURCE, cited per helper below --
         // copied in SHAPE, never by including its header.
         namespace ed = ax::NodeEditor;
+
+        // ---- The focus combo's own vocabulary (Task 7, moved verbatim from
+        // the retired shared DrawToolbar) ----------------------------------
+        // Plan 3 Task 5: the width of the focus combo. A fixed width, not a
+        // content-derived one: a label-derived width would make the combo
+        // jump every time the user picked a differently-named scene. 230px is
+        // the BOARD's own value, read off `OptionD.dc.html`'s focus well
+        // (`width: 230px`) rather than guessed -- longer names ellipsize
+        // inside the combo rather than widening it.
+        constexpr float kGraphFocusComboWidth = 230.0f;
+
+        // The "no scope root" label -- spelled ONCE, because the combo's
+        // preview, the combo's own first entry and the bottom bar's "focus:"
+        // clause must all read identically (ruling 6's nil focus, in words).
+        constexpr const char* kGraphFocusEverything = "everything";
+        // ...and what the same three places say when `graphFocus` names an
+        // asset the model no longer has an entry for -- a scene deleted
+        // while it was the focus. NOT "everything": the projection does not
+        // fall back to everything-mode there (AssetGraphViewModel::Build
+        // either builds a tombstone-rooted view or, for a guid the reference
+        // index cannot explain either, nothing at all), so saying
+        // "everything" would describe a graph that is not on screen.
+        constexpr const char* kGraphFocusMissing = "(missing)";
+
+        // What the current scope root is CALLED -- the combo's preview text
+        // and the bottom bar's "focus:" clause, one spelling so the two bands
+        // can never disagree about what is on screen. The returned pointer is
+        // either a literal or borrowed from the model's entry (stable for the
+        // frame -- Find()'s own doc comment; nothing between here and the
+        // draw mutates the model).
+        //
+        // fileName, not name: the render comparison against
+        // `OptionD-Graph-FINAL.png` caught the stem spelling naming the SAME
+        // scene two ways one band apart -- the graph's own node header says
+        // "main.arcscene" (DrawGraphNode) and the Status panel's scene cards
+        // say "main.arcscene" (DrawSceneCard), so a toolbar reading "main"
+        // was the panel's only dissenting voice. The board agrees
+        // (`focus: main.arcscene`).
+        const char* GraphFocusLabel(const AssetPanelModel& model, const Arcane::Guid& focus)
+        {
+            if (!focus.IsValid())
+                return kGraphFocusEverything;
+            const AssetPanelEntry* e = model.Find(focus);
+            return e ? e->fileName.c_str() : kGraphFocusMissing;
+        }
 
         // ---- Fixed geometry: spec §11.2's "graph nodes" row, VERBATIM -----
         // "graph nodes | w 180-220, header 24px, accent bar 3px, pins 9px"
@@ -1008,15 +1056,15 @@ namespace Arcane::Editor
     // crash that was fine on frame 1 and aborted on frame 2). That is also
     // the crash class the device-less test below the panel exists to keep
     // closed.
-    void DrawAssetGraphBody(AssetsPanelState& state, AssetPanelModel& model,
+    void DrawAssetGraphBody(AssetGraphPanelState& state, AssetPanelModel& model,
                             const Arcane::Project* project, DocumentHost& docs,
                             const AssetPanelServices& services,
                             AssetPanelActions& actions)
     {
         // The boot-scene graphFocus seed (spec s10) is NOT run here -- Task 5
-        // round 1 fix: DrawAssetsPanel calls SeedAssetGraphFocus (declared
-        // inline, AssetGraphPanel.hpp) right after Begin, BEFORE DrawToolbar,
-        // so the toolbar's focus combo and this body's own read of
+        // round 1 fix: DrawAssetGraphPanel (this file) calls
+        // SeedAssetGraphFocus right after Begin, BEFORE its focus-combo
+        // toolbar, so the combo and this body's own read of
         // `state.graphFocus` agree on the SAME frame a project opens. Seeding
         // it here instead ran it AFTER the toolbar had already read the
         // unseeded value that frame -- a one-frame "focus: everything" vs.
@@ -2096,29 +2144,168 @@ namespace Arcane::Editor
         }
     }
 
-    bool AssetsGraphProjectionIsCurrent(const AssetsPanelState& state, const AssetPanelModel& model)
+    // ---- Panel-split Task 7: the window (spec s5/s9) -------------------
+    AssetPanelActions DrawAssetGraphPanel(AssetGraphPanelState& state, AssetPanelModel& model,
+                                          const Arcane::Project* project, DocumentHost& docs,
+                                          const AssetPanelServices& services,
+                                          bool* open)
     {
-        // All three conjuncts earn their place, and each closes a gate the
-        // other two leave open:
-        //   * graphBuilt      -- the lens was never opened at all, so there is
-        //                        no projection behind the numbers.
-        //   * graphBuiltFocus -- the focus moved without a Graph body running
-        //                        since (Focus in Graph; also the toolbar combo
-        //                        on a frame where the lens body early-returns
-        //                        on a non-positive canvas region).
-        //   * graphBuiltStamp -- the model's entries moved under a frame whose
-        //                        body was NOT the Graph lens, so the build is
-        //                        about a different set of assets than the
-        //                        totals beside it.
-        // Exactly the same three inputs DrawGraphLens's own rebuild trigger
-        // uses -- by construction this is "would the lens rebuild if it ran
-        // right now", asked from outside it.
-        return state.graphBuilt
-            && state.graphBuiltFocus == state.graphFocus
-            && state.graphBuiltStamp == model.entriesStamp;
+        AssetPanelActions actions;
+
+        // THE SEED RUNS BEFORE Begin, not after it -- deliberately, and this
+        // is the ONE thing in this function that is not inside the window.
+        //
+        // Task 5 round 1 fix established that the boot-scene graphFocus seed
+        // must precede the toolbar: the focus combo reads `state.graphFocus`
+        // this same frame, and so does the bottom bar after the body, so a
+        // later seed (the first cut put it inside DrawAssetGraphBody's own
+        // preamble, which runs AFTER the toolbar) split the two bands for one
+        // frame -- "focus: everything" up top, "focus: <boot scene>" below.
+        //
+        // Task 7 adds a SECOND reason it cannot sit below the collapse
+        // early-out. `graphFocusSeeded` is a once-per-project latch, and the
+        // early-out fires on every frame this window is a docked-but-unselected
+        // tab -- which the SHIPPED DEFAULT LAYOUT makes the normal state (Asset
+        // Browser is the selected tab, spec s10). The latch would then still be
+        // unspent when the user clicks Status's "Focus in Graph": the host
+        // writes graphFocus and calls SelectDockTab, the tab comes forward, and
+        // the very first frame that draws would seed the BOOT SCENE straight
+        // over the scene the user just asked for. Seeding here spends the latch
+        // on the panel's first HOSTED frame instead of its first DRAWN one --
+        // matching the pre-split shell, which ran the seed unconditionally
+        // after a Begin it never checked. Safe above Begin because the seed
+        // touches no ImGui state at all (a guid, a bool, and a manifest read).
+        SeedAssetGraphFocus(state, project);
+
+        if (!ImGui::Begin("Asset Graph", open))
+        {
+            // Collapsed, or a docked tab that is not the selected one:
+            // ImGui has skipped this window's contents entirely. End is
+            // still owed (Begin/End pair unconditionally).
+            ImGui::End();
+            return actions;
+        }
+
+        // ---- toolbar band: the focus combo, and nothing else ----------
+        // Spec s9.1 (R2, minimal): no Create and no search here -- the
+        // Browser owns both, and the menubar's Assets > Create submenu keeps
+        // create reachable when only this window is open. Left-anchored,
+        // because with the lens strip gone there is no right-hand band left
+        // for it to flex against.
+        //
+        // Scope the graph to ONE scene, or to "everything" (ruling 6's nil
+        // focus). Writing state.graphFocus is all this takes: the body's own
+        // dirty check compares graphBuiltFocus and rebuilds the projection,
+        // so there is no rebuild call to make here.
+        {
+            ImGuiStyle& style = ImGui::GetStyle();
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
+
+            ImGui::SetNextItemWidth(kGraphFocusComboWidth);
+            // "focus: <name>" -- the BOARD's exact preview string
+            // (`OptionD.dc.html`: `<span>focus:</span> main.arcscene`), per
+            // the controller's board-strings-win ruling. The board paints its
+            // "focus:" half in kTextDim and the name in kText; BeginCombo's
+            // preview is a single string in a single colour, so the two-tone
+            // half of that is not expressible here without replacing the
+            // combo with a hand-drawn widget -- not invented, see the Task 5
+            // fix report.
+            char focusPreview[160];
+            std::snprintf(focusPreview, sizeof(focusPreview), "focus: %s",
+                          GraphFocusLabel(model, state.graphFocus));
+            if (ImGui::BeginCombo("##graphfocus", focusPreview))
+            {
+                if (ImGui::Selectable(kGraphFocusEverything, !state.graphFocus.IsValid()))
+                    state.graphFocus = Arcane::Guid{};
+                // PushID per row, keyed by the guid: two scenes may share a
+                // stem ("main.arcscene" in two folders), and ImGui would
+                // otherwise give both Selectables the SAME id -- clicking
+                // either would activate the first.
+                for (const AssetPanelEntry* s : ScenesByName(model))
+                {
+                    ImGui::PushID(s->guid.ToString().c_str());
+                    // fileName for the same reason GraphFocusLabel uses it:
+                    // this list and the Status panel's scene cards are the
+                    // same scenes, and they read identically there.
+                    if (ImGui::Selectable(s->fileName.c_str(), s->guid == state.graphFocus))
+                        state.graphFocus = s->guid;
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::PopStyleVar();
+        }
+
+        // The 7px toolbar->body seam, stated outright rather than left to
+        // ImGui's automatic per-item spacing -- see DrawAssetBrowserPanel's
+        // own comment (AssetBrowserPanel.cpp) for the mock-parity fix this
+        // came from, and kAssetPanelToolbarBodyGapPx for the measured value.
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
+        ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
+        ImGui::PopStyleVar();
+
+        // ---- body band -----------------------------------------------
+        if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        {
+            if (!project)
+                ImGui::TextDisabled("No project open (data/-next-to-exe)");
+            else
+                DrawAssetGraphBody(state, model, project, docs, services, actions);
+        }
+        ImGui::EndChild();
+
+        // ---- bottom bar band (spec s9.2) -----------------------------
+        // LEFT: what the SCOPED projection is showing out of the whole
+        // project, plus the scope root itself. N is realNodeCount, which
+        // counts real ASSET nodes only (ruling 12: neither the synthetic
+        // "+N more" companions nor tombstones are assets). The wording is the
+        // BOARD's, verbatim (`OptionD.dc.html`: `6 of 15 assets &middot;
+        // focus: main.arcscene`).
+        //
+        // THE GATE, and what remains of it (spec s7.4). Pre-split this line
+        // asked AssetsGraphProjectionIsCurrent -- a three-conjunct predicate
+        // guarding against a frame where the bar drew for the Graph lens
+        // while the BODY drawn that frame was another lens's, leaving the
+        // previous build's count paired with a new focus name. That frame is
+        // unrepresentable now: this bar draws inside this panel's own
+        // Begin/End, immediately after this panel's own body, so the
+        // projection beside it is always the one just rebuilt. What survives
+        // is the ONE honest unknown -- `graphBuilt` false, i.e. the canvas
+        // was never opened (or was just torn down at a project switch), so
+        // there is no projection behind the number at all. Spec s13: the bar
+        // renders that as an em dash and never as a fabricated 0.
+        {
+            const AssetPanelBottomBar bar = BeginAssetPanelBottomBar("##assetgraphbottombar");
+            if (bar.visible)
+            {
+                const HealthCounts health = model.Health();
+                char shown[16];
+                if (state.graphBuilt)
+                    std::snprintf(shown, sizeof(shown), "%d", state.graph.realNodeCount);
+                else
+                    std::snprintf(shown, sizeof(shown), "\xE2\x80\x94");   // U+2014 EM DASH
+                // 128, not 64: the form below embeds a SCENE NAME, and a real
+                // one ("prototype_courtyard_lighting") overflows 64 on its own
+                // -- snprintf would then truncate mid-name with no other symptom.
+                char left[128];
+                std::snprintf(left, sizeof(left), "%s of %d assets \xC2\xB7 focus: %s",
+                              shown, health.total,
+                              GraphFocusLabel(model, state.graphFocus));
+                ImGui::TextUnformatted(left);
+
+                DrawAssetPanelHealthDigest(bar, model, services, actions);
+            }
+            EndAssetPanelBottomBar();
+        }
+
+        ImGui::End();
+        return actions;
     }
 
-    void DestroyAssetGraphPanelCanvas(AssetsPanelState& state)
+    void DestroyAssetGraphPanelCanvas(AssetGraphPanelState& state)
     {
         if (state.graphCanvas)
         {

@@ -3,8 +3,10 @@
 // was retired -- this file's name stayed, since it still tests exactly these
 // surviving helpers): the PURE parts -- extension classification, entry
 // building over a REAL scanned AssetRegistry, and filter/search -- headless.
-// (The old DrawAssetBrowserPanel was ImGui and desk-verified; AssetsPanel.cpp's
-// DrawAssetsPanel is what draws the Assets panel now.)
+// (Slice 6's own DrawAssetBrowserPanel was ImGui and desk-verified. That NAME
+// is live again on a different function as of the panel-split arc's Task 7 --
+// AssetBrowserPanel.cpp's DrawAssetBrowserPanel, the "Asset Browser" window --
+// which is what draws these entries today.)
 
 #include <catch2/catch_test_macros.hpp>
 

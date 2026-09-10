@@ -9,7 +9,7 @@
 // menu) stays DEFERRED until a second real consumer drives its design, while
 // "ALL visual polish" is exactly the material to keep cleanly separated now.
 // These primitives were duplicated verbatim between ShaderEditorDocument.cpp
-// and AssetsPanel.cpp's Graph lens; hoisting them here is that separation.
+// and AssetGraphPanel.cpp's asset graph; hoisting them here is that separation.
 //
 // Its own header, sibling to CanvasPopupScope.hpp / GraphZoomLevels.hpp, and
 // NOT part of EditorWidgets.hpp/.cpp: that vocabulary is imgui.h plus

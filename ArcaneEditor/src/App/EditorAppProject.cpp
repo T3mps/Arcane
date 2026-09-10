@@ -12,7 +12,7 @@
 // The CreateXAt effects are NOT in that class and no longer share its rule:
 // since Task 12 they run from ConsumeCreateResult, inside the ImGui pass
 // (DrawModals) -- they create a file, register it and OPEN a document, which is
-// exactly what ConsumeBrowserActions' sprite mint and the Problems panel's
+// exactly what ConsumeAssetPanelActions' sprite mint and the Problems panel's
 // locator routing already do mid-pass. Only project/scene TEARDOWN needs the
 // frame-boundary deferral.
 //

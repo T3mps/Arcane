@@ -183,7 +183,7 @@ namespace Arcane::Editor
     // `requestCreateKind` field's contract stays "a CreateAssetKind value",
     // with no tagged-source branch at the consumer to keep in lockstep.
     // nullopt for the six AssetKinds nothing can mint (Texture/Audio/Font/
-    // Data/Diagnostic/Other) -- matching AssetsPanel.cpp's own
+    // Data/Diagnostic/Other) -- matching the Asset Browser rail's own
     // RailKindCreatable gate, which is what keeps those rails from offering a
     // `+` in the first place.
     [[nodiscard]] inline std::optional<CreateAssetKind> CreateKindForAssetKind(AssetKind k)

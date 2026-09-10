@@ -14,7 +14,7 @@
 // and the rest of the asset-classification family (Slice 6's Asset Browser)
 // live directly in this header now -- Panels/AssetBrowser.hpp/.cpp is
 // retired. KindIcon/KindLabel just below are promoted from AssetBrowser.cpp's
-// file-local (internal-linkage) duplicates -- AssetsPanel.cpp's own copy and
+// file-local (internal-linkage) duplicates -- the Assets panel's own copy and
 // this file's own RailKindLabel both used to shadow them independently; both
 // collapse onto these, the one shared definition from here on.
 
@@ -441,7 +441,7 @@ namespace Arcane::Editor
     // Content/ for attention. Every other group -- every OTHER mount root
     // included -- defaults open, unchanged. Shared verbatim by the model's own
     // open/closed resolution (AssetPanelModel.cpp's GroupOpenOrDefault) and the
-    // panel's chevron-glyph default (AssetsPanel.cpp's GroupIsOpen) so the two
+    // panel's chevron-glyph default (AssetBrowserPanel.cpp's GroupIsOpen) so the two
     // can never drift apart the way a stale/differing default once did for a
     // different reason (review fix round 1, Important 2's own precedent).
     inline bool GroupDefaultOpen(std::string_view groupKey)

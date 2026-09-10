@@ -17,7 +17,15 @@ namespace Arcane::Editor
 {
     enum class PanelId : std::uint8_t
     {
-        Viewport, Outliner, Inspector, Assets, Problems, Console,
+        // Panel-split spec s4.1 (Task 7): the single `Assets` id is REPLACED
+        // by three -- one per window. Each name below is simultaneously the
+        // ImGui::Begin title, the Window-menu label and the visibility ini
+        // key, per this header's own contract, so the three rows are all it
+        // takes for the registry, the menu and persistence to know about
+        // them.
+        Viewport, Outliner, Inspector,
+        AssetBrowser, AssetGraph, AssetStatus,
+        Problems, Console,
         Count
     };
 
@@ -43,12 +51,14 @@ namespace Arcane::Editor
     // Names must match each panel's ImGui::Begin title exactly
     // (PanelRegistryTest pins the invariants).
     inline constexpr PanelInfo kPanels[] = {
-        { PanelId::Viewport,  "Viewport",  true,  PanelSection::Scene       },
-        { PanelId::Outliner,  "Outliner",  false, PanelSection::Scene       },
-        { PanelId::Inspector, "Inspector", false, PanelSection::Scene       },
-        { PanelId::Assets,    "Assets",    false, PanelSection::Assets      },
-        { PanelId::Problems,  "Problems",  false, PanelSection::Diagnostics },
-        { PanelId::Console,   "Console",   false, PanelSection::Diagnostics },
+        { PanelId::Viewport,     "Viewport",      true,  PanelSection::Scene       },
+        { PanelId::Outliner,     "Outliner",      false, PanelSection::Scene       },
+        { PanelId::Inspector,    "Inspector",     false, PanelSection::Scene       },
+        { PanelId::AssetBrowser, "Asset Browser", false, PanelSection::Assets      },
+        { PanelId::AssetGraph,   "Asset Graph",   false, PanelSection::Assets      },
+        { PanelId::AssetStatus,  "Asset Status",  false, PanelSection::Assets      },
+        { PanelId::Problems,     "Problems",      false, PanelSection::Diagnostics },
+        { PanelId::Console,      "Console",       false, PanelSection::Diagnostics },
     };
     static_assert(std::size(kPanels) == static_cast<std::size_t>(PanelId::Count));
 

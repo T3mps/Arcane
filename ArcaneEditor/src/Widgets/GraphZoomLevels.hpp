@@ -19,11 +19,11 @@
 // that one's scope.
 //
 // This table used to live twice: once for real in ShaderEditorDocument.cpp,
-// and a second time as an omission -- AssetsPanel.cpp's Graph lens created its
+// and a second time as an omission -- the asset graph's canvas created its
 // ed::Config without ever calling the equivalent, so it silently inherited
 // the vendored library's 0.1-8.0 default and its 12-14px canvas text blurred
 // under 8x bilinear magnification of a baked glyph. Hoisting the one
-// definition here (rather than hand-copying it into AssetsPanel.cpp, the
+// definition here (rather than hand-copying it into AssetGraphPanel.cpp, the
 // exact smell this arc already paid down once for the guid predicate) is what
 // lets both files share it instead of drifting. See docs/specs/
 // 2026-09-06-asset-manager-redesign-design.md §19, 2026-09-09 entry for the
@@ -72,7 +72,7 @@ namespace Arcane::Editor
     // NavigateAction caches at :3333 is into the editor's own copy.
     //
     // inline: this header is included by more than one TU (today
-    // ShaderEditorDocument.cpp and AssetsPanel.cpp), so a plain function
+    // ShaderEditorDocument.cpp and AssetGraphPanel.cpp), so a plain function
     // definition here would violate ODR without it.
     inline void ApplyZoomLevels(ed::Config& cfg)
     {

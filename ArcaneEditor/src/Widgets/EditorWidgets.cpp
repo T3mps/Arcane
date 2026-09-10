@@ -770,7 +770,7 @@ namespace Arcane::Editor
         // row's own 24px table pitch painted a 28px highlight (measured by
         // the automated mock-vs-editor comparison), same bleed on the 26px
         // rail. This is the ONE Selectable every asset/child/rail row in
-        // AssetsPanel.cpp goes through, so one flag here fixes all three;
+        // the asset panels go through, so one flag here fixes all three;
         // DrawGroupRow's own Selectable carries the identical fix
         // separately, since group rows don't route through RowWithThumb.
         ImGui::SetNextItemAllowOverlap();

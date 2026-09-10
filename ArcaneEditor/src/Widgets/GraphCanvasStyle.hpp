@@ -9,12 +9,12 @@
 // what a grid line looks like, and which accent means "selected" or "hovered".
 // They are editor-wide facts, not per-canvas taste, and they were previously
 // spelled as identical literals in two files (ShaderEditorDocument.cpp and
-// AssetsPanel.cpp's Graph lens) with nothing holding them together.
+// AssetGraphPanel.cpp's asset graph) with nothing holding them together.
 //
 // PER-CANVAS TASTE STAYS AT THE CANVAS. The node body/title/border tones and
 // the canvas surface itself are NOT here and must not move here: the Graph
 // lens answers to the OptionD board (a recorded controller ruling, 2026-09-08,
-// written out at AssetsPanel.cpp's canvas-palette block) and the shader
+// written out at AssetGraphPanel.cpp's canvas-palette block) and the shader
 // editor's canvas answers to its own board and its own review history. Those
 // two value sets are deliberately different; the shared piece is the STRUCTURE
 // that consumes them (GraphCanvasStyleDesc below), never the values.
@@ -109,7 +109,7 @@ namespace Arcane::Editor
     // rather than defaults so a caller has to state its side:
     //
     //   nodeBody / nodeBorder -- the surface tones. Controller ruling
-    //     2026-09-08 (written out at AssetsPanel.cpp's canvas-palette block):
+    //     2026-09-08 (written out at AssetGraphPanel.cpp's canvas-palette block):
     //     the OptionD board is the redline for the Assets panel's Graph lens,
     //     and the ruling explicitly DECLINES to drag the shader canvas onto it
     //     -- that canvas has its own board, its own review history and no such
