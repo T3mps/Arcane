@@ -871,6 +871,16 @@ project "ArcaneTests"
         -- AssetReferenceIndex/AssetActivityLog are all already here, and
         -- CreateAssetDialog's half of the panel's surface is header-only).
         "%{wks.location}/ArcaneEditor/src/Panels/AssetsPanel.cpp",
+        -- Panel-split arc (Task 2): AssetPanelCommon -- the cross-panel
+        -- AssetPanelActions/AssetPanelServices contracts plus the shared
+        -- create menu (DrawCreateMenuEntries/DrawCreateMenu), extracted out
+        -- of AssetsPanel.cpp. AssetsPanel.cpp above calls both, so this TU
+        -- has to source-compile alongside it here too -- ArcaneEditor's own
+        -- project block (above, in this same file) finds it through
+        -- premake's src/**.cpp glob, but this ArcaneTests file list is
+        -- explicit, not globbed, so a new Panels/*.cpp never gets picked up
+        -- on its own.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetPanelCommon.cpp",
     }
 
     includedirs {

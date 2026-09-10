@@ -2037,13 +2037,13 @@ namespace Arcane::Editor
         //
         // Task 9: DrawAssetsPanel replaced DrawAssetBrowserPanel as what this
         // draws (AssetBrowser.* was retired in Task 15).
-        Arcane::Editor::AssetsPanelActions browserActions;
+        Arcane::Editor::AssetPanelActions browserActions;
         const Arcane::Project* proj = m_runtime->CurrentProject();
         m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets))
         {
             // Plan 1 Task 7's AssetServices seam, re-shaped into Task 9's
-            // AssetsPanelServices at this ONE call site -- two distinct
+            // AssetPanelServices at this ONE call site -- two distinct
             // struct types (different consumers, per AssetServices's own
             // header comment) that happen to share the thumbnail callable.
             //
@@ -2055,7 +2055,7 @@ namespace Arcane::Editor
             // transient ArtifactMissing row can never masquerade as a refusal
             // reason on a card; nullopt sends the card to its own bare
             // "cook refused" fallback.
-            Arcane::Editor::AssetsPanelServices assetsPanelServices;
+            Arcane::Editor::AssetPanelServices assetsPanelServices;
             assetsPanelServices.resolveAssetThumb = m_assetServices.resolveAssetThumb;
             assetsPanelServices.cookDetailFor =
                 [this](const Arcane::Guid& g) -> std::optional<std::string>
@@ -2318,7 +2318,7 @@ namespace Arcane::Editor
             ShowSceneSaveDialog();
     }
 
-    void EditorApp::ConsumeBrowserActions(const Arcane::Editor::AssetsPanelActions& browserActions,
+    void EditorApp::ConsumeBrowserActions(const Arcane::Editor::AssetPanelActions& browserActions,
                                           LoopState& ls)
     {
         // Unified create (Task 12). Both of these used to be their own flows;

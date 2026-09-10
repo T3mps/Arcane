@@ -316,7 +316,7 @@ namespace Arcane::Editor
                            bool* open = nullptr);
 
     // App-level effect the Inspector panel triggers but does not own. UNLIKE
-    // AssetsPanelActions -- which only RETURNS a request and defers every
+    // AssetPanelActions -- which only RETURNS a request and defers every
     // effect until AFTER DrawAssetsPanel returns ("Row actions the APP
     // resolves after the draw", AssetsPanel.hpp) -- this callback runs its
     // file IO + project-registry mutation SYNCHRONOUSLY, DURING
@@ -373,7 +373,7 @@ namespace Arcane::Editor
     // Inspector). Textures resolve directly; sprites resolve through their
     // referenced texture; materials route through Task 8's
     // MaterialPreviewHarvester (0 until then); everything else is 0. Task 9's
-    // AssetsPanelServices consumes this exact callable.
+    // AssetPanelServices consumes this exact callable.
     struct AssetServices
     {
         std::function<std::uint64_t(const Arcane::Guid&)> resolveAssetThumb;

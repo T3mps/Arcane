@@ -19,15 +19,13 @@
 // the panel shell.
 
 #include "Panels/AssetGraphViewModel.hpp"   // the Graph lens's built projection (state caches one)
+#include "Panels/AssetPanelCommon.hpp"   // AssetPanelActions/Services + create menu + shared chrome constants
 #include "Panels/AssetPanelModel.hpp"   // AssetPanelModel (current before every panel draw)
 #include "Widgets/GraphGridPhase.hpp"   // GraphGridPhase -- ImGui-only, no node-editor coupling
 
 #include <Arcane/Guid.hpp>
 
 #include <cstdint>
-#include <filesystem>
-#include <functional>
-#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -36,11 +34,6 @@ namespace Arcane { class Project; }
 namespace Arcane::Editor
 {
     class DocumentHost;
-    // Plan 2 Task 5's session activity ring. Forward-declared (same shape as
-    // DocumentHost above) rather than included: this header only needs to name
-    // a POINTER to one -- Task 8's feed, the first reader, includes the real
-    // header in the .cpp.
-    class AssetActivityLog;
 
     // Which lens the panel shows. Plan 1 shipped Browse only -- Graph (Plan 3)
     // and Status (Plan 2) existed in the enum and in the toolbar's lens strip
@@ -218,83 +211,6 @@ namespace Arcane::Editor
         bool          graphLayoutDirty = false;
     };
 
-    // Row/menu actions the APP resolves after the draw -- same "panel
-    // reports, app performs" split the old (retired) AssetBrowserActions used
-    // (dialogs and file IO never happen inside the panel draw). A superset of
-    // that retired struct: adds `copyGuid` (spec s6's new context-menu entry)
-    // and the unified-create pair (`requestCreateKind`/`createPrefillParent`,
-    // Task 12). Task 9's placeholder body never raised the row-action fields
-    // (no rows existed yet -- Task 10 draws them), but the struct carried the
-    // full shape from the start so later tasks could extend this exact
-    // contract rather than a new one.
-    struct AssetsPanelActions   // superset of the old (retired) AssetBrowserActions
-    {
-        Arcane::Guid createInstanceOf, createSpriteFrom, setBootScene,
-                     showInExplorer, copyPath, copyGuid;
-        std::filesystem::path openScene;
-        // Unified create (Task 12): request the create dialog for a kind.
-        // -1 = none. Values are **CreateAssetKind** (Panels/CreateAssetDialog.hpp)
-        // -- NOT AssetKind, which numbers differently. A producer starting
-        // from an AssetKind (the rail's per-kind "+") converts through
-        // CreateKindForAssetKind before writing here; this field never
-        // carries a raw AssetKind.
-        int  requestCreateKind = -1;
-        Arcane::Guid createPrefillParent;   // instance parent / sprite texture prefill
-
-        // Plan 2 Task 7 (Status lens): the two needs-attention card buttons,
-        // reported under exactly the same split as every field above -- the
-        // panel never invalidates an artifact and never touches panel
-        // visibility itself.
-        //
-        // `recook` names the refused asset the user asked to re-cook. The
-        // host's consumer is pinned by the plan's Ruling 8:
-        // InvalidateArtifact + ERASE that guid's cook-diagnostic row +
-        // PublishCookDiagnostics + CookQueue::NoteChanged + MarkDirty --
-        // erasing the row is what flips the card Refused -> Queued honestly
-        // (with no row, IsCookPending re-derives the state from the artifact
-        // store on the source's current cook key), and a source that still
-        // cannot cook re-fails and puts the row back.
-        //
-        // `showProblems` asks the host to surface the Problems pane and
-        // NOTHING more (Ruling 9 / spec s9.2 verbatim: "jumps to the pane").
-        // Deliberately not a guid: no pre-filtering is specified, so none is
-        // invented.
-        Arcane::Guid recook;
-        bool         showProblems = false;
-    };
-
-    // The Assets panel's read-only host seams. Originally just the
-    // thumbnail resolver (Plan 1 Task 7's AssetServices,
-    // consumed here per its own header comment: "Task 9's AssetsPanelServices
-    // consumes this exact callable"). Guid -> an ImGui texture id via the
-    // chrome context's texture cache; 0 = unavailable, caller falls back to
-    // the kind icon. Task 9's placeholder body never calls this; Task 10's
-    // rows are the first consumer. Plan 2 Task 7 added the two Status-lens
-    // seams beside it (see each field); every one of them is a READ the host
-    // answers -- effects still travel the other way, through
-    // AssetsPanelActions.
-    struct AssetsPanelServices
-    {
-        std::function<std::uint64_t(const Arcane::Guid&)> resolveAssetThumb;
-
-        // Plan 2 Task 7 (Status lens): the refusal DETAIL line for one guid,
-        // resolved by the HOST out of its own cook-diagnostic accumulator
-        // (EditorApp::m_cookDiagnostics -- detail, or message when the
-        // diagnostic carries no detail). `nullopt` when there is no PERMANENT
-        // row for the guid, in which case the card falls back to the bare
-        // "cook refused" line. A seam rather than a direct read for the same
-        // reason resolveAssetThumb is one: this panel compiles with zero
-        // knowledge of Arcane::Diagnostic or the host's bookkeeping.
-        std::function<std::optional<std::string>(const Arcane::Guid&)> cookDetailFor;
-
-        // Plan 2 Task 5's session activity ring, borrowed non-owning (the
-        // host owns it for the whole session; it is Clear()ed, never
-        // destroyed, on a project switch). Wired here in Task 7 so the
-        // services contract lands in one edit; Task 8's activity feed is its
-        // first reader. May be null -- a caller must guard.
-        const AssetActivityLog* activity = nullptr;
-    };
-
     // Draw the "Assets" panel: toolbar (+ Create / search / lens strip) ·
     // body (the active lens; Browse is a placeholder child until Task 10) ·
     // bottom bar (context + digest, spec s5). `model` is rebuilt by the
@@ -302,10 +218,10 @@ namespace Arcane::Editor
     // reads it, plus feeds this frame's toolbar edits back in
     // (SetSearch/SetKindFilter). `open` is forwarded to ImGui::Begin (the
     // tab's X button; null = no X).
-    AssetsPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
-                                       const Arcane::Project* project, DocumentHost& docs,
-                                       const AssetsPanelServices& services,
-                                       bool* open = nullptr);
+    AssetPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
+                                      const Arcane::Project* project, DocumentHost& docs,
+                                      const AssetPanelServices& services,
+                                      bool* open = nullptr);
 
     // Is the Graph lens's cached projection CURRENT -- built for the focus
     // and the entries the panel would name this frame (Plan 3 Task 5, review

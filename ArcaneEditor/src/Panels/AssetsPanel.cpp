@@ -43,24 +43,6 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Toolbar / bottom bar band heights (spec s11.2's values table:
-        // "toolbar wells / bottom bar | 24px / 24px"). The default ImGui
-        // frame (Inter 16px body over the theme's untouched FramePadding.y=3,
-        // EditorTheme.hpp's own comment) stands 22px tall; bumping
-        // FramePadding.y to 4 for just the toolbar row (pushed/popped around
-        // its controls) is what closes the last 2px to the pinned 24.
-        constexpr float kToolbarFramePadY = 4.0f;
-        constexpr float kBottomBarHeight  = 24.0f;
-        // 2026-09-07 fix (mock parity, automation-measured): the vertical
-        // gap between the toolbar row's bottom edge and the Browse body's
-        // top edge, pixel-scanned off `OptionBC-Browse-FINAL.png` (7px of
-        // pure background between the toolbar's own bottom border and the
-        // body's own top border -- 61->69 border-to-border at the mock's
-        // native resolution). No §5/§11.2 value was previously pinned for
-        // this seam -- see DrawAssetsPanel's own comment for why it had
-        // silently collapsed to 0px live.
-        constexpr float kToolbarBodyGapPx = 7.0f;
-
         // Plan 3 Task 5: the width of the toolbar's PER-LENS slot when the
         // Graph lens fills it with its focus combo (spec s5 -- the slot is
         // empty on every other lens, so this width leaves the layout too).
@@ -412,7 +394,7 @@ namespace Arcane::Editor
         // in `actions.openScene` for the host to load under the unsaved-
         // changes guard; every other kind opens through `docs`.
         void OpenAssetRow(const AssetPanelEntry& e, const Arcane::Project* project,
-                          DocumentHost& docs, AssetsPanelActions& actions)
+                          DocumentHost& docs, AssetPanelActions& actions)
         {
             if (!project)
                 return;
@@ -428,59 +410,17 @@ namespace Arcane::Editor
                 ARC_WARN("Assets: '{}' did not resolve to a file", e.mountPath);
         }
 
-        // The unified Create menu's entries (spec s7), spelled ONCE and shared
-        // by the toolbar's `+ Create` popup and every row's context-menu
-        // "Create" submenu -- the invariant ("no creation path may bypass
-        // CreateAssetRequest") is only cheap to hold if there is one list.
-        //
-        // `enabled` was the only difference between the two call sites while
-        // Mesh/Sprite/Scene had no dialog fields to land on (Task 12): the
-        // toolbar's entries went live then, the row context menu's stayed
-        // disabled. Both are live as of Task 13 -- kept as a parameter rather
-        // than collapsed to a bare call so a future producer (Plan 3's graph
-        // pin-drag) can still gate itself the same way without a third copy
-        // of this list. No per-row prefill flows through here: a row's own
-        // "Create ▸ Sprite..." does not pre-pick THIS row's texture (the
-        // dedicated "Create Sprite" quick action above it already covers
-        // that exact case, mint-or-reuse and open included) -- the generic
-        // submenu opens the SAME dialog the toolbar's `+ Create` does, empty
-        // texture field and all.
-        void DrawCreateMenuEntries(AssetsPanelActions& actions, bool enabled)
-        {
-            ImGui::BeginDisabled(!enabled);
-            const auto entry = [&](const char* label, CreateAssetKind kind)
-            {
-                if (ImGui::MenuItem(label))
-                    actions.requestCreateKind = static_cast<int>(kind);
-            };
-            entry(ICON_LC_PALETTE " Material...",         CreateAssetKind::Material);
-            entry(ICON_LC_LAYERS  " Material Instance...", CreateAssetKind::MaterialInstance);
-            ImGui::Separator();
-            entry(ICON_LC_BOX          " Mesh...",   CreateAssetKind::Mesh);
-            entry(ICON_LC_STICKER      " Sprite...", CreateAssetKind::Sprite);
-            entry(ICON_LC_CLAPPERBOARD " Scene...",  CreateAssetKind::Scene);
-            ImGui::EndDisabled();
-        }
-
-        void DrawCreateMenu(AssetsPanelActions& actions)
-        {
-            if (!ImGui::BeginPopup("##createmenu"))
-                return;
-            DrawCreateMenuEntries(actions, /*enabled=*/true);
-            ImGui::EndPopup();
-        }
-
         // Toolbar band: + Create -> search (flex) -> [per-lens slot: Graph's
         // focus combo, Plan 3 Task 5; EMPTY on Browse and Status] -> lens
         // strip anchored right-most (spec s5). Mutates `state` in place; the
         // create popup's entries are LIVE from Task 12 -- they set
         // `actions.requestCreateKind`, which EditorApp routes to the one
         // BeginCreateAsset entry.
-        void DrawToolbar(AssetsPanelState& state, AssetPanelModel& model, AssetsPanelActions& actions)
+        void DrawToolbar(AssetsPanelState& state, AssetPanelModel& model, AssetPanelActions& actions)
         {
             ImGuiStyle& style = ImGui::GetStyle();
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                ImVec2(style.FramePadding.x, kToolbarFramePadY));
+                                ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
 
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
                 ImGui::OpenPopup("##createmenu");
@@ -595,7 +535,7 @@ namespace Arcane::Editor
             // rather than via ImGui::Separator() -- that call consumes its
             // own layout row, which would push this child past the 24px the
             // caller already reserved for it (DrawAssetsPanel's
-            // BeginChild("##assetsbody", ImVec2(0, -kBottomBarHeight))).
+            // BeginChild("##assetsbody", ImVec2(0, -kAssetPanelBottomBarHeight))).
             {
                 ImDrawList* dl = ImGui::GetWindowDrawList();
                 const ImVec2 p0 = ImGui::GetWindowPos();
@@ -608,7 +548,7 @@ namespace Arcane::Editor
             // invariant here (no columns/tables in play), so it is safe to
             // read once and reuse for the right-aligned digest below.
             const float rightEdgeX = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-            const float padY = std::max(0.0f, (kBottomBarHeight - ImGui::GetTextLineHeight()) * 0.5f);
+            const float padY = std::max(0.0f, (kAssetPanelBottomBarHeight - ImGui::GetTextLineHeight()) * 0.5f);
 
             const HealthCounts health = model.Health();
             const bool filtered = model.Filtered();
@@ -789,7 +729,7 @@ namespace Arcane::Editor
         // line"). Off for every other caller, which is why it is a defaulted
         // parameter rather than a second helper: the anatomy above is spec
         // s8's and must stay ONE list, not two that drift.
-        void DrawAssetPeekTooltip(const AssetPanelModel& model, const AssetsPanelServices& services,
+        void DrawAssetPeekTooltip(const AssetPanelModel& model, const AssetPanelServices& services,
                                   const Arcane::Guid& guid, bool forceShow = false,
                                   bool withEdgeSummary = false)
         {
@@ -861,7 +801,7 @@ namespace Arcane::Editor
         // the OPENING gesture's business (it must happen once, when the menu
         // opens, not on every frame the popup is drawn), so each caller does
         // it at its own open site.
-        void DrawAssetMenuItems(AssetsPanelActions& actions, const AssetPanelEntry& e,
+        void DrawAssetMenuItems(AssetPanelActions& actions, const AssetPanelEntry& e,
                                 bool kindSpecific)
         {
             if (kindSpecific)
@@ -907,7 +847,7 @@ namespace Arcane::Editor
 
         // ---- Task 10: shared row context menu (spec s6) --------------------
         // The Browse-side bracket around DrawAssetMenuItems above.
-        void DrawRowContextMenu(AssetPanelModel& model, AssetsPanelActions& actions,
+        void DrawRowContextMenu(AssetPanelModel& model, AssetPanelActions& actions,
                                 const AssetPanelEntry& e, bool kindSpecific)
         {
             if (!ImGui::BeginPopupContextItem())
@@ -939,8 +879,8 @@ namespace Arcane::Editor
         // Selectable of that permanently, so `model.Select()` never fired
         // from a left-click).
         void AttachRowInteractions(AssetPanelModel& model, const Arcane::Project* project,
-                                   DocumentHost& docs, const AssetsPanelServices& services,
-                                   AssetsPanelActions& actions, const AssetPanelEntry& e,
+                                   DocumentHost& docs, const AssetPanelServices& services,
+                                   AssetPanelActions& actions, const AssetPanelEntry& e,
                                    bool kindSpecificMenu)
         {
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -960,7 +900,7 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: the rail (spec s6/s11.2) -----------------------------
-        void DrawRail(AssetsPanelState& state, AssetPanelModel& model, AssetsPanelActions& actions)
+        void DrawRail(AssetsPanelState& state, AssetPanelModel& model, AssetPanelActions& actions)
         {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::kChrome);
             if (ImGui::BeginChild("##assetsrail", ImVec2(kRailWidth, 0.0f), ImGuiChildFlags_None))
@@ -1258,7 +1198,7 @@ namespace Arcane::Editor
 
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
         void DrawAssetRow(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
-                          DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions,
+                          DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                           const AssetPanelEntry& e, const Arcane::Guid& bootGuid, int groupDepth)
         {
             ImGui::PushID(e.guid.ToString().c_str());
@@ -1418,7 +1358,7 @@ namespace Arcane::Editor
 
         // ---- Task 10: one derived-child row (spec s6/s11.2) ----------------
         void DrawChildRow(AssetsPanelState& /*state*/, AssetPanelModel& model, const Arcane::Project* project,
-                          DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions,
+                          DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                           const AssetPanelEntry& e, int groupDepth)
         {
             ImGui::PushID(e.guid.ToString().c_str());
@@ -1462,7 +1402,7 @@ namespace Arcane::Editor
         // preview column, so the three stay side by side without the table
         // fighting the preview for space.
         void DrawTable(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
-                       DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions,
+                       DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                        const Arcane::Guid& bootGuid, float width)
         {
             if (!ImGui::BeginChild("##assetscenter", ImVec2(width, 0.0f)))
@@ -1647,7 +1587,7 @@ namespace Arcane::Editor
         // cannot silently desync this row from what it actually names.
         // Shares the same peek tooltip every other representation uses
         // (spec s8).
-        void DrawDerivedRow(AssetPanelModel& model, const AssetsPanelServices& services,
+        void DrawDerivedRow(AssetPanelModel& model, const AssetPanelServices& services,
                             const Arcane::Guid& childGuid)
         {
             const AssetPanelEntry* child = model.Find(childGuid);
@@ -1752,7 +1692,7 @@ namespace Arcane::Editor
         // kind-specific action). Empty selection is a dim "no selection"
         // line -- no other row renders in that state.
         void DrawPreviewPane(AssetPanelModel& model, const Arcane::Project* project, DocumentHost& docs,
-                            const AssetsPanelServices& services, AssetsPanelActions& actions, float width)
+                            const AssetPanelServices& services, AssetPanelActions& actions, float width)
         {
             if (!ImGui::BeginChild("##assetspreview", ImVec2(width, 0.0f), ImGuiChildFlags_None))
             {
@@ -1996,7 +1936,7 @@ namespace Arcane::Editor
 
         // ---- Task 10/11: the Browse lens body (rail + table + preview) -----
         void DrawBrowseLens(AssetsPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
-                           DocumentHost& docs, const AssetsPanelServices& services, AssetsPanelActions& actions)
+                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions)
         {
             // The project's recorded boot scene, resolved once per draw
             // (rather than per row) for the "boot" pill (spec s6).
@@ -2098,8 +2038,8 @@ namespace Arcane::Editor
         // spell the fraction out in words ("N of M cooked") instead of
         // leaving the bare strip to speak for itself. Meaningless when
         // `refused` -- callers pass 0/0 for the refused card.
-        void DrawAttentionCard(AssetPanelModel& model, const AssetsPanelServices& services,
-                               AssetsPanelActions& actions, const AssetPanelEntry& e,
+        void DrawAttentionCard(AssetPanelModel& model, const AssetPanelServices& services,
+                               AssetPanelActions& actions, const AssetPanelEntry& e,
                                bool refused, float queuedProgress,
                                int queuedCooked, int queuedCookedAndQueued)
         {
@@ -2387,7 +2327,7 @@ namespace Arcane::Editor
         // only, don't trust automatic per-item spacing" fix DrawAssetsPanel's
         // own toolbar-gap comment applies elsewhere in this file.
         void DrawUnreferencedCard(AssetsPanelState& state, AssetPanelModel& model,
-                                  const AssetsPanelServices& services)
+                                  const AssetPanelServices& services)
         {
             const ImVec2 cardMin   = ImGui::GetCursorScreenPos();
             const float  cardWidth = ImGui::GetContentRegionAvail().x;
@@ -2550,7 +2490,7 @@ namespace Arcane::Editor
         //
         // `state` for that button alone: it is the only thing on this card
         // that writes panel state, and it writes it DIRECTLY rather than
-        // through AssetsPanelActions -- the panel/app split those actions
+        // through AssetPanelActions -- the panel/app split those actions
         // exist for is about effects the HOST must perform (file IO,
         // dialogs, scene loads), and switching which lens this same panel
         // draws is not one. The precedent is the digest chip's own
@@ -2632,8 +2572,8 @@ namespace Arcane::Editor
         // to persist to imgui.ini).
         void DrawStatusLens(AssetsPanelState& state, AssetPanelModel& model,
                             const Arcane::Project* project, DocumentHost& /*docs*/,
-                            const AssetsPanelServices& services,
-                            AssetsPanelActions& actions)
+                            const AssetPanelServices& services,
+                            AssetPanelActions& actions)
         {
             // AlwaysUseWindowPadding: a bordered-less child gets NO padding by
             // default, and the dashboard -- unlike the Browse lens's flush
@@ -3759,8 +3699,8 @@ namespace Arcane::Editor
         // closed.
         void DrawGraphLens(AssetsPanelState& state, AssetPanelModel& model,
                            const Arcane::Project* project, DocumentHost& docs,
-                           const AssetsPanelServices& services,
-                           AssetsPanelActions& actions)
+                           const AssetPanelServices& services,
+                           AssetPanelActions& actions)
         {
             // ---- 1. Rebuild the projection, and ONLY when it moved --------
             // The trigger is AssetPanelModel::entriesStamp (bumped exactly
@@ -4902,12 +4842,12 @@ namespace Arcane::Editor
         state.graphDragRight = false;
     }
 
-    AssetsPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
-                                       const Arcane::Project* project, DocumentHost& docs,
-                                       const AssetsPanelServices& services,
-                                       bool* open)
+    AssetPanelActions DrawAssetsPanel(AssetsPanelState& state, AssetPanelModel& model,
+                                      const Arcane::Project* project, DocumentHost& docs,
+                                      const AssetPanelServices& services,
+                                      bool* open)
     {
-        AssetsPanelActions actions;
+        AssetPanelActions actions;
         ImGui::Begin("Assets", open);
 
         // Plan 3 Task 5: the Graph lens opens scoped to the project's BOOT
@@ -4940,7 +4880,7 @@ namespace Arcane::Editor
         // edge silently inherited that zero too, and the body below sat
         // flush against it with NO gap, live, even though nothing here ever
         // asked for that -- confirmed by an automation pixel-scan of the
-        // live capture (0px) against the redline (7px, kToolbarBodyGapPx's
+        // live capture (0px) against the redline (7px, kAssetPanelToolbarBodyGapPx's
         // own comment). Fix: an EXPLICIT Dummy for the gap, itself wrapped
         // in a zeroed ItemSpacing so nothing implicit adds to either side
         // of it -- deliberately not trusting ImGui's automatic per-item
@@ -4949,10 +4889,10 @@ namespace Arcane::Editor
         // established are untouched.
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                             ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
-        ImGui::Dummy(ImVec2(0.0f, kToolbarBodyGapPx));
+        ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
         ImGui::PopStyleVar();
 
-        if (ImGui::BeginChild("##assetsbody", ImVec2(0.0f, -kBottomBarHeight)))
+        if (ImGui::BeginChild("##assetsbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
             if (!project)
                 ImGui::TextDisabled("No project open (data/-next-to-exe)");

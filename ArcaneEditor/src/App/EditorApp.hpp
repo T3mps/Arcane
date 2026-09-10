@@ -287,11 +287,11 @@ namespace Arcane::Editor
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
                                  const FrameState& fs, LoopState& ls);
-        // Asset-manager redesign, Plan 1 Task 9: takes AssetsPanelActions
+        // Asset-manager redesign, Plan 1 Task 9: takes AssetPanelActions
         // (the panel's own action-report contract); the old AssetBrowserActions
         // overload (superseded when AssetBrowser.* was retired, Task 15) is
         // gone with the call site that produced it.
-        void ConsumeBrowserActions(const Arcane::Editor::AssetsPanelActions& browserActions,
+        void ConsumeBrowserActions(const Arcane::Editor::AssetPanelActions& browserActions,
                                    LoopState& ls);
         // ---- Unified create (asset-manager redesign, Plan 1 Task 12) -------
         // THE INVARIANT (spec s7): no creation path may bypass

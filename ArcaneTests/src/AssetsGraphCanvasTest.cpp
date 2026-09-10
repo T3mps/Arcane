@@ -209,7 +209,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // Nil focus = "everything" (ruling 6), which is what puts the hub, its 22
     // leaves, the spine and the tombstone in ONE build.
     DocumentHost docs;
-    AssetsPanelServices services{};
+    AssetPanelServices services{};
     // A fake, never-dereferenced texture id for ONE guid, so the node body's
     // thumb branch (ImDrawList::AddImage) runs for real on the sprite while
     // every other node still exercises the kind-icon fallback beside it.
@@ -225,7 +225,7 @@ TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor]
     // actions are the panel's only channel to the app, so an idle frame that
     // raises one is a phantom request (Task 6's create bracket is checked
     // against exactly that below).
-    AssetsPanelActions lastActions;
+    AssetPanelActions lastActions;
 
     const auto drawFrame = [&]()
     {
@@ -615,8 +615,8 @@ namespace
         AssetPanelModel*    model = nullptr;
         const Project*      project = nullptr;
         DocumentHost*       docs = nullptr;
-        AssetsPanelServices services{};
-        AssetsPanelActions  lastActions;
+        AssetPanelServices services{};
+        AssetPanelActions  lastActions;
 
         void Frame()
         {
