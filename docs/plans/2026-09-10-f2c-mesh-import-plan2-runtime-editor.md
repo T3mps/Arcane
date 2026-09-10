@@ -19,7 +19,7 @@
 - **Build:** `msbuild Arcane.slnx /p:Configuration=Debug /m` from the repo root (vswhere locates msbuild). **`GenerateProjects.bat`** after ANY premake or file-list change (`ARCANE_SDK` is set).
 - **Premake reality:** `ArcaneTests` **globs its own** `src/**.cpp` (a new test file needs no edit) but compiles EDITOR TUs from an **EXPLICIT list** — a new `ArcaneEditor/src/**.cpp` a test drives MUST be added there. `ArcaneEditor`'s own block globs, so the same file needs no entry there. No new ThirdParty lib in this plan.
 - **Run tests FROM the exe dir:** `cd bin/Debug-windows-x86_64-md/ArcaneTests && ./ArcaneTests.exe "~[gpu]"`; the `[gpu]` lanes run as `./ArcaneTests.exe "[gpu]"` from the same directory. **Capture the seed banner** into any report that cites a run. `~[gpu]` is a BASELINE-COMPARABILITY convention, not a hazard gate — CI already runs the full suite.
-- **Baseline: 55464 assertions / 1535 cases** at ARC start (`~[gpu]`, Debug), **+69 cases from Plan 1** — so this plan starts from a Plan-1 head whose derived count Task 16 of that plan recorded. **Re-derive that head's numbers in Task 1 Step 1 and use them as this plan's baseline; never carry a recalled number forward.** Every task states its own delta and attributes it to named cases.
+- **Baseline: 55464 assertions / 1535 cases** at ARC start (`~[gpu]`, Debug), **+70 cases from Plan 1** — so this plan starts from a Plan-1 head whose derived count Task 16 of that plan recorded. **Re-derive that head's numbers in Task 1 Step 1 and use them as this plan's baseline; never carry a recalled number forward.** Every task states its own delta and attributes it to named cases.
 - **Every task ends green:** the whole tree compiles, `~[gpu]` passes, and (for the render tasks) the `[gpu]` lane passes on the machine's own backend.
 - **Anchors drift.** Every `file:line` is orientation against Plan 1's head. **Re-locate by SYMBOL name before editing.**
 - **Golden discipline (Arc 2, non-negotiable):** assert `gatePassed` + per-lane `verdict` **from the gate JSON only** — never a raw process exit code, never a visual impression. **Copy diff artifacts into the workspace BEFORE any re-run** (the gate deletes stale diff PNGs). A bless writes the **SOURCE** tree and must be **restaged to BOTH hosts**. `golden-gate.ps1` stages `Content/` **additively**, so strays accumulate — sweep them.
@@ -54,10 +54,17 @@ The eviction answer F2a assigned to F2c by name, landed as pure logic first so t
     //
     // 512 MiB, a compile-time constant for now. It becomes a cvar when the parked cvar
     // arc lands, and that arc's own trigger discipline decides when -- this constant is
-    // NOT a placeholder to be "fixed" ahead of it. UE's analogue is r.Streaming.PoolSize
-    // over one pool shared with textures (StreamingManagerTexture.cpp:455-458); Arcane
-    // has no texture byte budget yet, so a separate mesh budget is the right first move
-    // and unification is the eventual shape (comparison Decision 7, recorded there).
+    // NOT a placeholder to be "fixed" ahead of it.
+    //
+    // A DEDICATED MESH BUDGET HAS FIRST-CLASS UE PRECEDENT, and the earlier reading of
+    // Decision 7 understated it: alongside r.Streaming.PoolSize
+    // (StreamingManagerTexture.cpp:455-458) UE ships r.Streaming.PoolSizeForMeshes --
+    // default -1, meaning "share the texture pool", and any value >= 0 meaning a
+    // DEDICATED mesh pool of that size (TextureStreamingHelpers.cpp:125-129, consumed
+    // at AsyncTextureStreaming.cpp:668). So the shared pool is UE's DEFAULT, not UE's
+    // only shape, and a separate mesh budget is a configuration UE supports rather
+    // than a divergence we invented. Unification remains the eventual direction and
+    // the parked cvar arc is where it lands (comparison Decision 7).
     inline constexpr std::uint64_t kMeshResidencyBudgetBytes = 512ull * 1024ull * 1024ull;
 
     // What one resident mesh costs, and when it was last DRAWN (not last resolved --
@@ -447,7 +454,19 @@ TEST_CASE("pixel: ResizeOffscreen does NOT release resident mesh buffers",
 - [ ] **Step 2: Run — expect FAIL.**
 - [ ] **Step 3: Add the member, the create call, the forwarders, and the teardown.** Create beside `m_textures` in the vehicle's init; release it in `~NriGraphContext` **before** the graveyard drain and beside the other Release calls; do **not** release it on `Resize`/`ResizeOffscreen` (with the comment saying why).
 - [ ] **Step 4: Fill the supply from the resolver.** `SceneRenderResolver` already owns the `MeshCache` whose `Table()` the scene reads. Add `SceneRenderResolver::MeshSupply(const Guid&) -> {const MeshData*, MeshResolveState}` — a lookup in that table, returning `Ready` on a hit, and otherwise asking the cache which of Pending/Failed it is (Plan 1 Task 11 gave `MeshCache` the pending tri-state, so this is a query, not a re-resolve). The host wires `context.SetMeshSupply(...)` beside its existing `SetArtifactSupply` call.
-- [ ] **Step 5: Add the eviction call.** Once per frame, **after** the frame's recording and before the next frame's declarations — the vehicle's own end-of-frame point, beside where it advances `m_frameIndex`. Pass the frame counter, `m_graves`, and the graph's submit count as the fence, the same triple `InvalidateContentTexture` uses.
+- [ ] **Step 5: Add the eviction call, with the frame counter PINNED.** Once per frame, **after** the frame's recording and before the next frame's declarations — the vehicle's own end-of-frame point, beside where it advances `m_frameIndex`. Pass the frame counter, `m_graves`, and the graph's submit count as the fence, the same triple `InvalidateContentTexture` uses.
+
+  **THE COUNTER IS THE FRAME JUST RECORDED, i.e. the value BEFORE `m_frameIndex` advances.** `Resolve` stamped `lastDrawnFrame` with that same value all through this frame's declarations, and `SelectEvictions` protects `lastDrawnFrame == currentFrame`. Evicting with the ALREADY-ADVANCED counter makes that comparison match nothing, the protected set empties, and Plan 2 Task 1's drawn-this-frame rule becomes dead code that its unit test still passes — the worst shape of bug this plan can ship, because the policy looks proven. Spell the ordering at the call site:
+
+  ```cpp
+      // BEFORE the advance, deliberately: this frame's Resolve calls stamped
+      // lastDrawnFrame with m_frameIndex's CURRENT value, and SelectEvictions
+      // protects entries carrying exactly it. Evicting with the advanced counter
+      // protects nothing and can drop geometry the frame just recorded still names.
+      m_meshBuffers->EvictToBudget(m_frameIndex, m_graves,
+                                   m_graph ? m_graph->DebugSubmitCount() : 0);
+      ++m_frameIndex;
+  ```
 - [ ] **Step 6: Run `[gpu][meshcache]` — expect PASS.**
 - [ ] **Step 7: Full `~[gpu]` suite + the `[gpu]` lane — green.** Delta: **+2 `[gpu]` cases**. Commit — `feat(render): the vehicle owns the mesh buffer cache and evicts at frame boundaries`
 
@@ -943,7 +962,7 @@ Requesting, priming, invalidating, and drawing. Everything the material path alr
 
 - [ ] **Step 1: Write the failing invalidation test** (extend `AssetPanelModelTest.cpp`): the pure predicate `ThumbnailEligible(AssetKind)` returns true for `Material` and `Mesh` and false for `Model`, `Texture` (which resolves its own artifact thumbnail) and everything else. One case; the rest of this task's behaviour has no headless seam and says so.
 - [ ] **Step 2: Run — expect FAIL.**
-- [ ] **Step 3: Request on visible rows.** The Browse draw already calls `harvester.Request(guid)` for every VISIBLE un-thumbed material (idempotent, one hash lookup in the steady state). Add the `Mesh` arm through `ThumbnailEligible`. **Visible-only, LIFO — do not prime the whole project**; UE's thumbnail pool is LIFO for exactly this reason and the harvester's own header says so.
+- [ ] **Step 3: Request on visible rows.** The Browse draw already calls `harvester.Request(guid)` for every VISIBLE un-thumbed material (idempotent, one hash lookup in the steady state). Add the `Mesh` arm through `ThumbnailEligible`. **Visible-only, LIFO — do not prime the whole project.** The reason is Arcane's own and stands on its own: one harvest per frame costs a `ReadCapture` device idle, so the one harvest this frame pays for must always be something the user is actually looking at, and a FIFO queue would spend it on whatever was scrolled past first. **`MaterialPreviewHarvester.hpp`'s existing header attributes this to UE's thumbnail pool — that attribution has no evidence in the local UE dump and should be dropped when this task edits the file.** Keep the rule; drop the borrowed citation.
 - [ ] **Step 4: Prime from disk.** `PrimeFromDisk(materials)` gains the project's mesh guids, so a re-opened project loads its existing PNGs with **zero device idles** and queues a harvest only for a mesh with no PNG or whose `.arcmesh` is newer than it. The mtime comparison is against the `.arcmesh`, not the artifact — a slot reassignment changes the picture and a re-cook does too, and the `.arcmesh` moves for the first while Step 5 covers the second.
 - [ ] **Step 5: Invalidate on the four events that change a mesh's picture:**
   1. the `.arcmesh` is SAVED (its own document, or an external edit `PollAssetWatch` sees) → `InvalidateMesh(meshGuid)`;
@@ -1065,4 +1084,4 @@ TEST_CASE("host boot: the golden scene's imported prop resolves to sectioned geo
 - **No `Create▸Model` action** (T8 Step 6) — a model is imported, never authored. Not an omission; an explicit `false` with a comment.
 - **The mesh thumbnail's own invalidation on a TEXTURE cook is transitive** (T10 Step 5.4) through the material walk, and the step tells the executor to VERIFY that walk reaches meshes rather than assume it. If it stops at materials, the step says to extend it — that is a real possible finding, not a papered-over one.
 - **`kMeshResidencyBudgetBytes` stays a compile-time constant.** The parked cvar arc's own trigger discipline decides when it becomes a cvar; this plan must not pre-empt it (T1's header comment says so in the code, where someone might otherwise "fix" it).
-- **The texture side still has no byte budget**, so the two residency caches can each stay under their own limits while together exhausting VRAM — UE's single shared pool is the eventual shape (comparison Decision 7). Out of F2c's scope, recorded here so it is not rediscovered as a surprise.
+- **The texture side still has no byte budget**, so the two residency caches can each stay under their own limits while together exhausting VRAM — unification is the eventual direction (comparison Decision 7). **UE's shared pool is only its DEFAULT** — `r.Streaming.PoolSizeForMeshes >= 0` gives meshes a dedicated pool (`TextureStreamingHelpers.cpp:125-129`), so our separate budget is a shape UE supports, not one we invented. Out of F2c's scope, recorded here so it is not rediscovered as a surprise.

@@ -183,7 +183,7 @@ Nine fixtures, checked in, all produced by **one checked-in generator** so the c
 | `single.glb` | 1 mesh, 1 primitive (a unit quad, 4 verts / 2 tris), material `"SingleMat"` | the happy path; §5.3 determinism |
 | `multi.glb` | 1 mesh, 3 primitives; materials `"Metal"`, `"Metal"`, `"Paint"` | **A1's dedup pin — 3 sections, 2 slots, sections 0 and 1 share `slotIndex`** |
 | `nested.gltf` + `nested.bin` | 2-level node hierarchy, parent TRS × child TRS, buffer via `"uri":"nested.bin"` | §4.3 bake; **§5.4's external-buffer hashing** |
-| `mirrored.glb` | one node, `"scale":[-1,1,1]` | §4.3 winding flip (and, per A3, the future handedness assertion) |
+| `mirrored.glb` | one node, `"scale":[-1,1,1]`, **TWO primitives: one WITH a NORMAL accessor, one with POSITION only (no NORMAL)** | §4.3 winding flip (and, per A3, the future handedness assertion); the no-NORMAL primitive is what pins the flat-normal fallback's post-flip corner order (T7 step 2's UE divergence) — without it the winding predicate passes VACUOUSLY on that path, because the authored normals it compares against were never wrong |
 | `embedded_tex.glb` | 1 primitive, `baseColorTexture` → an embedded 2×2 PNG in the BIN chunk, image `"name":"albedo"` | §5.5 extraction; §6 material minting |
 | `degenerate.glb` | 3 triangles: 1 good, 2 with a repeated corner index | **A2 part 2 — warn and DROP, do not refuse** |
 | `empty.glb` | valid glTF, `"meshes":[]` | §4.5 nothing-drawable → refuse loudly |
@@ -1143,11 +1143,22 @@ The geometry half. Node TRS bakes into vertices, normals through the inverse tra
 
 **The pipeline, in order, and why each step sits where it does:**
 1. **Flatten the node tree.** Walk the scene's roots depth-first, accumulating `parentWorld * cgltf_node_transform_local(node)` per node. A node with no mesh contributes only its transform. (`cgltf_node_transform_world` exists, but the explicit walk is what makes the parent-child product observable in the `nested.gltf` test rather than trusted.)
-2. **Bake.** Per primitive of each mesh-bearing node: read POSITION / NORMAL / TEXCOORD_0 through `cgltf_accessor_read_float`; `position = world * vec4(p, 1)`; `normal = normalize(transpose(inverse(mat3(world))) * n)` — the inverse transpose, the same two lines UE spells at `GLTFMeshFactory.cpp:456-457`. **Missing NORMAL → the primitive's own flat face normal, computed from the baked triangle** (derived from geometry that is actually there — never a fabricated up-vector, which is the geometry spelling of §7.1's never-fabricate rule). **Missing TEXCOORD_0 → (0,0)**, the honest "no UV", which the fixed 32-byte stride requires us to write something for. **The bake loop carries one more comment, recording the last unrecorded non-goal (§2, trigger: *a consumer exists*):** a parsed file's `skins`, `animations` and a primitive's `targets` (morph targets) are **deliberately ignored** — no renderer or scene support exists for any of the three, so importing them would be stored-but-unread, which §6's own discipline forbids. `JOINTS_0`/`WEIGHTS_0` attributes are skipped by the same rule and for the same reason the fixed vertex layout skips `COLOR_0`. Say it in the code, beside the attribute reads, so the omission reads as a decision rather than an oversight.
-3. **Winding flip.** `determinant(mat3(world)) < 0` → emit each triangle's corners reversed. **The comment must state BOTH halves of the mirror rule (A3):** F2c ships the winding half; the reserved `Tangents` tag inherits the tangent-basis HANDEDNESS half, and `mirrored.glb`'s test grows a handedness assertion when that tag is first written — recorded here because the existing test stays green while a mirrored asset renders with inverted normal-map lighting, which is the silent regression A3 disarms.
+2. **Bake.** Per primitive of each mesh-bearing node: read POSITION / NORMAL / TEXCOORD_0 through `cgltf_accessor_read_float`; `position = world * vec4(p, 1)`; `normal = normalize(transpose(inverse(mat3(world))) * n)` — the inverse transpose, the same two lines UE spells at `GLTFMeshFactory.cpp:456-457`. **Missing NORMAL → the primitive's own flat face normal, computed from the baked triangle IN ITS POST-FLIP CORNER ORDER** (derived from geometry that is actually there — never a fabricated up-vector, which is the geometry spelling of §7.1's never-fabricate rule). **The post-flip part is load-bearing and is a deliberate divergence from UE:** `cross(v1-v0, v2-v0)` reverses sign when the corner order reverses, so a flat normal taken from the PRE-flip order points *into* a mirrored surface. UE has exactly this bug — `GenerateFlatNormals` runs at `GLTFMeshFactory.cpp:515`, **before** the mirrored corner loop at `:597-605` — so a mirrored no-NORMAL primitive imports with inverted normals there. **Do not inherit it.** Either compute the flat normal after the flip, or compute it before and negate when `bIsMirrored`; the two are equivalent and the first is harder to get wrong. **Missing TEXCOORD_0 → (0,0)**, the honest "no UV", which the fixed 32-byte stride requires us to write something for. **The bake loop carries one more comment, recording the last unrecorded non-goal (§2, trigger: *a consumer exists*):** a parsed file's `skins`, `animations` and a primitive's `targets` (morph targets) are **deliberately ignored** — no renderer or scene support exists for any of the three, so importing them would be stored-but-unread, which §6's own discipline forbids. `JOINTS_0`/`WEIGHTS_0` attributes are skipped by the same rule and for the same reason the fixed vertex layout skips `COLOR_0`. Say it in the code, beside the attribute reads, so the omission reads as a decision rather than an oversight.
+3. **Winding flip.** `determinant(mat3(world)) < 0` → emit each triangle's corners reversed. **Order against step 2:** the flip decides the corner order the flat-normal fallback reads, so the fallback runs AFTER it (or negates by `bIsMirrored`) — see step 2's UE-divergence note; a flip applied after normal generation is the defect, not a reordering preference. **The comment must state BOTH halves of the mirror rule (A3):** F2c ships the winding half; the reserved `Tangents` tag inherits the tangent-basis HANDEDNESS half, and `mirrored.glb`'s test grows a handedness assertion when that tag is first written — recorded here because the existing test stays green while a mirrored asset renders with inverted normal-map lighting, which is the silent regression A3 disarms.
 4. **Sections and slots (A1).** One section per primitive, `name` = the primitive's material name (empty when absent). Slots dedup **by name**: a `std::vector<std::string>` in first-seen order, one entry per distinct name; primitives with no material share **one unnamed slot appended last**. Each section's `slotIndex` is its name's position. Sections are emitted in walk order, and their index ranges tile the buffer with no gaps.
 5. **Remap.** `meshopt_generateVertexRemap` over the concatenated streams, then `meshopt_remapVertexBuffer` / `meshopt_remapIndexBuffer`. **Section ranges survive because remap rewrites index VALUES, never their ORDER** — state this, because it is the property that makes step 6 safe.
-6. **Optimize, per section, never across sections.** `meshopt_optimizeVertexCache` on each section's own index range in place; then `meshopt_optimizeVertexFetch` once over the whole buffer (it permutes VERTICES and rewrites indices, so it is range-agnostic). Cache-optimizing across a section boundary would scramble which triangles belong to which range — the exact hazard A1 names when it explains why sections are not merged ("meshopt reordering after the bake does not guarantee a merged material contiguous indices"), answered by never merging in the first place.
+6. **Optimize, per section, never across sections.** `meshopt_optimizeVertexCache` on each section's own index range in place — **and its `vertex_count` argument is the WHOLE buffer's vertex count, never the section's index count or a section-local vertex tally.** meshoptimizer sizes its internal scratch tables by `vertex_count` and indexes them **by index VALUE**, and a section's indices address the shared, already-remapped whole-mesh vertex buffer — so a section-local count is an **out-of-bounds write, not a suboptimal hint**. Spell it exactly as
+   ```cpp
+   // vertex_count is the WHOLE buffer's -- meshopt's scratch tables are indexed by
+   // INDEX VALUE, and a section's indices address the shared vertex buffer. Passing
+   // s.indexCount (or a section-local vertex tally) here is an out-of-bounds write,
+   // not a weaker optimisation.
+   meshopt_optimizeVertexCache(indices.data() + s.indexOffset,
+                               indices.data() + s.indexOffset,
+                               s.indexCount,
+                               vertices.size());
+   ```
+   Then `meshopt_optimizeVertexFetch` once over the whole buffer (it permutes VERTICES and rewrites indices, so it is range-agnostic). Cache-optimizing across a section boundary would scramble which triangles belong to which range — the exact hazard A1 names when it explains why sections are not merged ("meshopt reordering after the bake does not guarantee a merged material contiguous indices"), answered by never merging in the first place.
 7. **AABB.** min/max over the baked positions into the desc — the artifact's stored bounds (§5.2/§7.1), which resolution reads instead of recomputing.
 
 - [ ] **Step 1: Write the failing geometry test** (`MeshImporterGeometryTest.cpp`, reusing `MeshImporterRefusalTest.cpp`'s `ImportFixture` shape — copy the helper rather than cross-including a test TU):
@@ -1237,6 +1248,37 @@ TEST_CASE("mesh import: a negative-determinant node flips triangle winding", "[p
     }
 }
 
+TEST_CASE("mesh import: a mirrored NO-NORMAL primitive gets outward flat normals",
+          "[pipeline]")
+{
+    // THE NON-VACUOUS HALF of the case above. mirrored.glb's second primitive carries
+    // POSITION only, so its normals are GENERATED -- and the case above cannot fail on
+    // that primitive no matter what, because the flat normal and the geometric normal
+    // are computed from the same corners and agree by construction whichever order
+    // they were taken in. What must be asserted instead is that the generated normal
+    // points AWAY FROM the mesh's centroid, i.e. outward, which is false exactly when
+    // the flat normal was taken from the PRE-flip order (T7 pipeline step 2's UE
+    // divergence -- GLTFMeshFactory.cpp:515 runs before the mirrored loop at :597-605,
+    // and UE ships that inversion).
+    const MeshImportResult r = ImportFixture("mirrored.glb");
+    REQUIRE(r.mesh.has_value());
+    REQUIRE(r.mesh->desc.sections.size() == 2u);
+    const MeshArtifactSection& gen = r.mesh->desc.sections[1];   // the no-NORMAL one
+
+    glm::vec3 centroid(0.0f);
+    for (const auto& v : r.mesh->vertices) centroid += glm::vec3(v.px, v.py, v.pz);
+    centroid /= static_cast<float>(r.mesh->vertices.size());
+
+    for (std::uint32_t i = gen.indexOffset; i < gen.indexOffset + gen.indexCount; ++i)
+    {
+        const auto& v = r.mesh->vertices[r.mesh->indices[i]];
+        const glm::vec3 p(v.px, v.py, v.pz);
+        const glm::vec3 n(v.nx, v.ny, v.nz);
+        INFO("generated-normal vertex " << i);
+        CHECK(glm::dot(n, p - centroid) > 0.0f);   // outward, not into the surface
+    }
+}
+
 TEST_CASE("mesh import: an UNmirrored fixture passes the same winding predicate",
           "[pipeline]")
 {
@@ -1285,7 +1327,7 @@ TEST_CASE("mesh import: the vertex stream is deduplicated", "[pipeline]")
   **Texture behaviour must not move:** `TextureImporter.cpp`'s hash input is unchanged (a `.png` has no external buffers), so every existing texture artifact keeps its exact `sourceHash`. Confirm with the `[pipeline]` texture cases, which compare cooked keys.
 - [ ] **Step 8: Land the deferred assertion.** In `MeshImporterRefusalTest.cpp`'s degenerate case, add `CHECK(r.mesh.has_value()); CHECK(r.mesh->indices.size() == 3u);` — the two bad triangles are gone and the good one survives.
 - [ ] **Step 9: Run `[pipeline]` — expect PASS.**
-- [ ] **Step 10: Full `~[gpu]` suite — green.** Delta: **+7 cases** (6 new geometry + the positive control; the degenerate case grows assertions but not a case). Commit — `feat(pipeline): mesh bake, winding flip, per-primitive sections and name-deduped slots`
+- [ ] **Step 10: Full `~[gpu]` suite — green.** Delta: **+8 cases** (6 new geometry + the positive control + the mirrored no-NORMAL flat-normal case; the degenerate case grows assertions but not a case). Commit — `feat(pipeline): mesh bake, winding flip, per-primitive sections and name-deduped slots`
 
 ---
 
@@ -1557,7 +1599,9 @@ The F2a material scalar grows into a named-slot array, `MeshSource` appends `Imp
     // ONE material slot. `name` is the glTF material name the cook reported, and it is
     // the RE-ASSOCIATION KEY on re-import (R3): a re-export that reorders its
     // materials must not shuffle the user's assignments. Position is the tiebreak for
-    // unnamed or duplicate names -- UE's own rule (FbxStaticMeshImport.cpp:1946-1974).
+    // unnamed or duplicate names -- UE's own rule at the site that resolves a SECTION
+    // against the FINAL slot array (FbxStaticMeshImport.cpp:1991-2002; NOT :1946-1974,
+    // whose :1948 falls back into the NEWLY IMPORTED array, a different question).
     struct MeshSlot
     {
         std::string name;
@@ -2126,19 +2170,36 @@ After the FIRST successful cook — the moment authoritative slot names exist �
     // `existing` is the companion's current slots; `authoritative` is the freshly
     // cooked artifact's slot names (SlotNamesFromSections' answer, in slot order).
     //
-    // THE RULES, from R3 / s4.2, and they are UE's own (FbxStaticMeshImport.cpp:
-    // 1946-1974, read rather than inferred):
+    // THE RULES, from R3 / s4.2. Three are UE's, read rather than inferred; the
+    // fourth is OURS and is labelled as such -- do not re-attribute it.
     //   * match by NAME -- an existing slot whose name appears in `authoritative`
-    //     keeps its material assignment, wherever it moved to;
-    //   * APPEND unmatched authoritative names, in authoritative order;
+    //     keeps its material assignment, wherever it moved to
+    //     (FbxStaticMeshImport.cpp:1964-1970: UE compares ImportedMaterialSlotName and
+    //     BREAKS on the first match);
+    //   * APPEND unmatched authoritative names, in authoritative order
+    //     (the append-if-unmatched arm at FbxStaticMeshImport.cpp:1964-1974);
     //   * NEVER DELETE -- an existing slot whose name vanished is KEPT and WARNED.
     //     Deleting a user's material assignment over a re-export hiccup is worse than
-    //     carrying a harmless orphan; UE keeps it SILENTLY, and keep-and-WARN is a
-    //     strict improvement on that (the comparison's Decision 3 says so in as many
-    //     words);
+    //     carrying a harmless orphan; UE keeps it SILENTLY (there is no deletion arm),
+    //     and keep-and-WARN is a strict improvement on that (the comparison's
+    //     Decision 3 says so in as many words);
     //   * POSITION is the tiebreak for unnamed slots and duplicate names -- the case
     //     A1's by-name dedup makes rare but cannot make impossible (two DISTINCT glTF
-    //     materials may both be unnamed).
+    //     materials may both be unnamed). UE's analogous positional fallback -- the one
+    //     that resolves a SECTION against the FINAL slot array -- is at
+    //     FbxStaticMeshImport.cpp:1991-2002, NOT at :1946-1974 (that block's :1948
+    //     falls back into the NEWLY IMPORTED array, a different array and a different
+    //     question). Cite :1991-2002 for this rule.
+    //
+    // OURS, NOT UE'S -- the CONSUME-MATCHED rule (Step 3): once an existing slot has
+    // been matched, it is removed from the candidate pool so a later authoritative
+    // name with the same spelling cannot match it again. UE does NOT do this -- its
+    // matcher breaks on the first match and never consumes it (:1964-1970), so two
+    // identically-named candidates would both bind to the same existing slot there.
+    // We consume because the two-unnamed-slots case REQUIRES it: without consumption
+    // both unnamed authoritative names match existing slot 0 and the second user
+    // assignment is silently lost. This is a deliberate divergence, and the
+    // "unnamed and duplicate names fall back to POSITION" test is what pins it.
     [[nodiscard]] SlotReconciliation ReconcileSlots(
         const std::vector<Arcane::MeshSlot>& existing,
         const std::vector<std::string>& authoritative);
@@ -2206,7 +2267,7 @@ TEST_CASE("slot reconciliation: a first mint takes the authoritative names verba
 ```
 
 - [ ] **Step 2: Run — expect FAIL.**
-- [ ] **Step 3: Implement `ReconcileSlots`** per the four rules. Consume matched existing entries so a duplicate name matches each existing slot at most once (which is what makes the positional case come out right rather than assigning both to the first).
+- [ ] **Step 3: Implement `ReconcileSlots`** per the four rules. **Consume matched existing entries** so a duplicate name matches each existing slot at most once — which is what makes the positional case come out right rather than binding both authoritative names to the first existing slot. **This consumption is OURS, a deliberate divergence from UE**, whose matcher breaks on the first match and never consumes it (`FbxStaticMeshImport.cpp:1964-1970`); label it as ours in the code comment, not as UE's rule, and say that the two-unnamed-slots test is what requires it.
 - [ ] **Step 4: Implement `EditorApp::MintOrUpdateCompanionMesh(const Guid& modelGuid)`** in `EditorAppProject.cpp`, in the `MintOrReuseSpriteForTexture` lineage (that function's own reuse-or-mint scan is the structural model, and its comments about registering immediately and `MarkAllDirty` carry over):
   1. Resolve `modelGuid` to its source path; read its CURRENT mesh artifact through `Assets::MeshArtifactFor` — **null means the cook has not landed, so do nothing and return**; this function is only ever called from a cook-completion callback, so that is not an error.
   2. Compute `authoritative = SlotNamesFromSections(artifact.sections)`. **The pipeline's `SlotNamesFromSections` is not reachable from the editor's mesh path** — the artifact the editor holds is a `LoadedClientMesh` — so add the same two-line derivation as a `MeshImportWave.hpp` helper over `MeshSectionView`, with a comment naming the pipeline function it mirrors.
@@ -2318,7 +2379,7 @@ TEST_CASE("material reuse: an UNNAMED glTF material never matches anything", "[e
 - [ ] **Step 2: Zero-legacy sweep** (path-exclude + `-riw`): `EnumerateTextureSources`, `SetImporterForTesting`, `DiscoverUnknownTextureSources`, `EnumerateContentPngFiles`, `MeshAssetData::material` across `ArcaneClient ArcaneEditor ArcaneAssetPipeline ArcaneTests arccook scripts` — hits only in docs/specs history and in the deliberately-kept legacy-key READ arm of `LoadMeshAsset`.
 - [ ] **Step 3: `CGLTF_IMPLEMENTATION` sweep** — `grep -rn "CGLTF_IMPLEMENTATION" --include=*.cpp --include=*.hpp .` returns exactly `CgltfImpl.cpp`.
 - [ ] **Step 4: Placement-rule sweep** — no line inside `premake5.lua`'s `ArcaneClient` project block names `cgltf` or `meshoptimizer`, and `grep -rn "cgltf\|meshoptimizer" ArcaneClient/src` is empty. This is the 08-21 rule, and it is checked, not assumed.
-- [ ] **Step 5: Full suites, Debug AND Release, from the exe dir.** Derive the final counts and attribute every delta against the **55464 / 1535** baseline to the named per-task adds: T1 +4, T2 +3, T3 +6, T4 +3, T5 +4, T6 +6, T7 +7, T8 +6, T9 +4, T10 +5, T11 +5, T12 +3, T13 +5, T14 +4, T15 +4 = **+69 cases**. If the derived number differs, find out which task's count was wrong and say so — **derive, never recall.** Ledger both runs with their seed banners.
+- [ ] **Step 5: Full suites, Debug AND Release, from the exe dir.** Derive the final counts and attribute every delta against the **55464 / 1535** baseline to the named per-task adds: T1 +4, T2 +3, T3 +6, T4 +3, T5 +4, T6 +6, T7 +8, T8 +6, T9 +4, T10 +5, T11 +5, T12 +3, T13 +5, T14 +4, T15 +4 = **+70 cases**. If the derived number differs, find out which task's count was wrong and say so — **derive, never recall.** Ledger both runs with their seed banners.
 - [ ] **Step 6: Hand off.** Plan 2 begins at this commit. State in the handoff note: the ABI is now **24**; `ReferenceProject.arcproj` is restamped and `ReferenceProject.slnx` rebuilt; **Gacha's Game-module rebuild debt is one deeper (recorded, not actioned)**; `CollectMeshInstances` still emits one instance per entity resolving through `slots[0]` (Plan 2 Task 5 makes it per-section); `AssetKind::Model` has no graph hue and no browser fold yet (Plan 2 Task 8); imported meshes resolve to `MeshData` on the CPU but nothing uploads them (Plan 2 Tasks 1-5).
 - [ ] **Step 7: Commit** — `docs: F2c plan 1 closeout notes` (only if any doc changed; otherwise this task ends with no commit of its own, which is fine and should be said in the handoff).
 
