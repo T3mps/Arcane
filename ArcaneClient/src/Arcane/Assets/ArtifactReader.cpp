@@ -275,7 +275,7 @@ namespace Arcane
         // closed on any contentKind != Texture) -- that made this scan blind to every mesh
         // artifact, the seam this task exists to close (see ArtifactReader.hpp's own "F2c
         // TASK 4 FIX" banner paragraph). Now calls ParseCommonPrefix directly, which reads
-        // only the 33-byte kind-agnostic prefix and answers "whose guid is this" for ANY
+        // only the 37-byte kind-agnostic prefix and answers "whose guid is this" for ANY
         // content kind.
         [[nodiscard]] std::optional<CommonPrefix> ReadCommonPrefixOnly(const std::filesystem::path& path)
         {

@@ -85,6 +85,15 @@
 //                            exactly why the skip-unknown rule matters: a mesh reader
 //                            must tolerate a texture-kind tag turning up unused, and vice
 //                            versa, since both kinds share ONE tag space
+//     SECTION-RANGE VALIDATION: for every decoded SectionTable entry, indexOffset +
+//     indexCount must not exceed the header's own indexCount -- a section pointing past
+//     the index buffer is refused (Missing), never clamped or silently accepted, since
+//     letting it through would hand the draw path an out-of-range index range (the
+//     pipeline's ReadMeshArtifact applies the identical check for the identical reason).
+//     SECTIONCOUNT AGREEMENT: the header's declared sectionCount must equal the number of
+//     SectionTable entries actually decoded (zero, if the SectionTable section itself was
+//     absent) -- a mismatch is refused (Missing), the same "declared must match decoded"
+//     discipline the count-agreement rule below applies to vertices/indices.
 //     The header's declared vertexCount/indexCount must agree with what was actually
 //     DECODED: a file declaring nonzero counts but omitting the VertexData and/or
 //     IndexData section entirely is refused (Missing) rather than accepted with nonzero
