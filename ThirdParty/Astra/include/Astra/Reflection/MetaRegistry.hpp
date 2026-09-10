@@ -8,17 +8,52 @@
 
 #include "../Component/Component.hpp"
 #include "../Container/FlatMap.hpp"
+#include "../Container/SmallVector.hpp"
+#include "../Core/ModuleIdentity.hpp"
 #include "../Core/TypeContext.hpp"
 #include "../Core/TypeID.hpp"
 #include "TypeMeta.hpp"
 
 namespace Astra
 {
+    // Who is bound to a meta entry (spec 2026-09-09 §3.2). One per module
+    // that has registered, adopted, or drained this type. The TOP binder is
+    // the one whose closures the entry's TypeMeta content currently carries.
+    struct MetaBinder
+    {
+        ModuleToken module = nullptr;
+        MetaBuildFn build  = nullptr;   // null: this module has no reflect factory for the type
+                                        // (registered a component it did not reflect) -- it can
+                                        // hold refs but never source content (§3.6)
+        uint32_t    refs   = 0;         // live-or-shadowed registry slots + RegisterMeta adoptions
+        bool        pinned = false;     // resident module: never removed at zero refs
+    };
+
+    enum class BindOutcome    : uint8_t { Refused, Bound, BoundNeedsRebuild };
+    enum class ReleaseOutcome : uint8_t { Unbound, Held, Dropped, Retained, Rebound, Erased };
+    struct BindResult { BindOutcome outcome; TypeMeta* meta; };
+
     /**
      * Registry for type metadata, owned by a TypeContext.
      * Provides thread-safe registration and lookup of TypeMeta instances.
      * Instance() resolves through the active TypeContext, so all modules
      * sharing one context see the same metadata.
+     *
+     * Lifetime (spec 2026-09-09 §3.3): an entry's TypeMeta address is stable
+     * for the entry's whole life. Registrations bind and acquire refs; a
+     * binder leaves the stack only at zero refs and unpinned; the entry is
+     * erased only when its stack is empty. Bind/Acquire/InstallBaseline never
+     * run user code and may be called under a registry lock (lock order:
+     * registration mutex -> meta mutex). Release and Rebind may run a
+     * MetaBuildFn thunk -- user reflection code -- and must be called with
+     * no registry lock held; the thunk itself runs with THIS mutex released.
+     *
+     * NO USER CODE RUNS UNDER m_mutex, and a LOG SINK COUNTS AS USER CODE:
+     * ASTRA_LOG_* reaches a user-installed sink and a failing
+     * ASTRA_ENSURE_ALWAYS reaches a user-installed failure handler, either of
+     * which may re-enter this registry. So every diagnostic here is COMPOSED
+     * under the mutex (it has to read the entry) and EMITTED only after the
+     * lock scope has closed -- see CollisionMessage/ReportCollision.
      */
     class MetaRegistry
     {
@@ -46,154 +81,500 @@ namespace Astra
 
         /**
          * Registers a new type or returns the existing registration.
-         * Thread-safe.
+         * Thread-safe. Installs a binder-less entry: nothing holds it, and it
+         * is erased only if a later Bind attaches a binder that then releases
+         * to an empty stack -- the raw manual path, mostly for tests.
          * @param hash Type hash
          * @param name Type name
          * @return Reference to the TypeMeta (new or existing)
          */
         TypeMeta& Register(uint64_t hash, std::string_view name)
         {
-            std::unique_lock lock(m_mutex);
-
-            auto it = m_types.Find(hash);
-            if (it != m_types.end())
+            TypeMeta*   result = nullptr;
+            std::string collision;
             {
-                // Hash hit: only the name is available to disambiguate here.
-                // A DIFFERENT name on the same hash is a real XXHash64
-                // collision of two distinct types -- refuse loudly rather than
-                // alias the second type onto the first's metadata. Same name =>
-                // idempotent re-registration, return the existing entry.
-                // (Reference return type: cannot signal refusal via null, so
-                // the loud log/ensure IS the refusal; mirrors TypeContext.)
-                if (it->second->typeName != name)
-                {
-                    std::string msg = "MetaRegistry: type-identity collision -- incoming type '";
-                    msg.append(name);
-                    msg += "' shares the type-hash of already-registered '";
-                    msg.append(it->second->typeName);
-                    msg += "'. The second type is refused. Give types a unique unqualified name.";
-                    ASTRA_LOG_ERROR(msg);
-                    ASTRA_ENSURE_ALWAYS(false, "MetaRegistry type-identity collision");
-                }
-                return *it->second;
-            }
+                std::unique_lock lock(m_mutex);
 
-            auto meta = std::make_unique<TypeMeta>();
-            meta->typeHash = hash;
-            meta->typeName = name;
-            TypeMeta* ptr = meta.get();
-            m_types[hash] = std::move(meta);
-            return *ptr;
+                auto it = m_types.Find(hash);
+                if (it != m_types.end())
+                {
+                    // Hash hit: only the name is available to disambiguate here.
+                    // A DIFFERENT name on the same hash is a real XXHash64
+                    // collision of two distinct types -- refuse loudly rather than
+                    // alias the second type onto the first's metadata. Same name =>
+                    // idempotent re-registration, return the existing entry.
+                    // (Reference return type: cannot signal refusal via null, so
+                    // the loud log/ensure IS the refusal; mirrors TypeContext.)
+                    if (it->second.meta->typeName != name)
+                    {
+                        collision = CollisionMessage(it->second.meta->typeName, name);
+                    }
+                    // Returned on BOTH paths, collision included -- the diagnostic
+                    // IS the refusal, the return value cannot be one. Safe to hand
+                    // back after the lock closes: an entry's TypeMeta address is
+                    // stable for the entry's whole life, and a refusal installs
+                    // nothing that could move it.
+                    result = it->second.meta.get();
+                }
+                else
+                {
+                    TypeMeta fresh;
+                    fresh.typeHash = hash;
+                    fresh.typeName = name;
+                    result = InstallEntryLocked(hash, std::move(fresh)).meta.get();
+                }
+            }
+            ReportCollision(collision);   // outside the lock: user code
+            return *result;
         }
 
         /**
-         * Registers a TypeMeta instance directly.
+         * Registers a TypeMeta instance directly (binder-less, see above).
          * Thread-safe.
          * @param meta The TypeMeta to register (moved)
-         * @return Pointer to the registered TypeMeta
+         * @return Pointer to the registered TypeMeta, nullptr on identity collision
          */
         TypeMeta* Register(TypeMeta&& meta)
         {
-            std::unique_lock lock(m_mutex);
-
-            uint64_t hash = meta.typeHash;
-            auto it = m_types.Find(hash);
-            if (it != m_types.end())
+            TypeMeta*   result = nullptr;
+            std::string collision;
             {
-                // Hash hit: compare the identity fields the TypeMeta already
-                // carries. Matching size/alignment/triviality/name => the same
-                // type re-registered (idempotent), return the existing entry.
-                // Any difference is a real type-hash collision of two distinct
-                // types -- refuse loudly and return nullptr rather than alias
-                // one onto the other (aliasing mismatched size/alignment onto
-                // an existing entry corrupts memory downstream).
-                const TypeMeta& existing = *it->second;
-                if (existing.size != meta.size
-                    || existing.alignment != meta.alignment
-                    || existing.isTrivial != meta.isTrivial
-                    || existing.typeName != meta.typeName)
-                {
-                    std::string msg = "MetaRegistry: type-identity collision -- incoming type '";
-                    msg.append(meta.typeName);
-                    msg += "' shares the type-hash of already-registered '";
-                    msg.append(existing.typeName);
-                    msg += "'. The second type is refused (nullptr). Give types a unique unqualified name.";
-                    ASTRA_LOG_ERROR(msg);
-                    ASTRA_ENSURE_ALWAYS(false, "MetaRegistry type-identity collision");
-                    return nullptr;
-                }
-                // Idempotent re-registration - return existing
-                return it->second.get();
-            }
+                std::unique_lock lock(m_mutex);
 
-            auto metaPtr = std::make_unique<TypeMeta>(std::move(meta));
-            TypeMeta* ptr = metaPtr.get();
-            m_types[hash] = std::move(metaPtr);
-            return ptr;
+                uint64_t hash = meta.typeHash;
+                auto it = m_types.Find(hash);
+                if (it != m_types.end())
+                {
+                    // Hash hit: compare the identity fields the TypeMeta already
+                    // carries. Matching size/alignment/triviality/name => the same
+                    // type re-registered (idempotent), return the existing entry.
+                    // Any difference is a real type-hash collision of two distinct
+                    // types -- refuse loudly and return nullptr rather than alias
+                    // one onto the other (aliasing mismatched size/alignment onto
+                    // an existing entry corrupts memory downstream).
+                    if (!SameIdentity(*it->second.meta, meta))
+                    {
+                        collision = CollisionMessage(*it->second.meta, meta);
+                    }
+                    else
+                    {
+                        result = it->second.meta.get();
+                    }
+                }
+                else
+                {
+                    result = InstallEntryLocked(hash, std::move(meta)).meta.get();
+                }
+            }
+            ReportCollision(collision);   // outside the lock: user code
+            return result;
         }
 
-        // Hot-reload rebind: installs `fresh` if the hash is unknown; on a
-        // hash hit with MATCHING identity (size/alignment/triviality/name)
-        // move-assigns the contents through the existing pointer -- the
-        // address every ComponentDescriptor::meta caches stays valid, only
-        // the closures/fields swap. Identity mismatch refuses (nullptr),
-        // exactly like Register(TypeMeta&&). The componentId link maps are
-        // keyed by hash/id and are deliberately untouched.
+        // Raw content swap: installs `fresh` if the hash is unknown (binder-
+        // less); on a hash hit with MATCHING identity move-assigns the
+        // contents through the existing pointer -- the address every
+        // ComponentDescriptor::meta caches stays valid, only the closures/
+        // fields swap. Identity mismatch refuses (nullptr). Ignores the
+        // binder stack entirely: prefer Bind/Rebind, which respect it.
         TypeMeta* RebindInPlace(TypeMeta&& fresh)
         {
-            std::unique_lock lock(m_mutex);
-            auto it = m_types.Find(fresh.typeHash);
-            if (it == m_types.end())
+            TypeMeta* result   = nullptr;
+            bool      mismatch = false;
             {
-                uint64_t hash = fresh.typeHash;
-                auto metaPtr = std::make_unique<TypeMeta>(std::move(fresh));
-                TypeMeta* ptr = metaPtr.get();
-                m_types[hash] = std::move(metaPtr);
-                return ptr;
+                std::unique_lock lock(m_mutex);
+                auto it = m_types.Find(fresh.typeHash);
+                if (it == m_types.end())
+                {
+                    uint64_t hash = fresh.typeHash;
+                    result = InstallEntryLocked(hash, std::move(fresh)).meta.get();
+                }
+                else
+                {
+                    TypeMeta& existing = *it->second.meta;
+                    if (!SameIdentity(existing, fresh))
+                    {
+                        mismatch = true;
+                    }
+                    else
+                    {
+                        existing = std::move(fresh);   // move-assign: unique_ptr target address unchanged
+                        result = &existing;
+                    }
+                }
             }
-            TypeMeta& existing = *it->second;
-            if (existing.size != fresh.size
-                || existing.alignment != fresh.alignment
-                || existing.isTrivial != fresh.isTrivial
-                || existing.typeName != fresh.typeName)
+            if (mismatch)   // outside the lock: log sink + ENSURE handler are user code
             {
                 ASTRA_LOG_ERROR("MetaRegistry: RebindInPlace identity mismatch -- refused");
                 ASTRA_ENSURE_ALWAYS(false, "MetaRegistry rebind identity collision");
-                return nullptr;
             }
-            existing = std::move(fresh);   // move-assign: unique_ptr target address unchanged
-            return &existing;
+            return result;
         }
 
-        // Public erase: for module-owned NON-component metas (RegisterMeta
-        // teardown). Refuses a component-linked hash -- erasing one would
-        // dangle every cached ComponentDescriptor::meta for a live component.
-        bool Erase(uint64_t hash)
+        // ==== Binder stack (spec 2026-09-09 §3.3) =============================
+
+        // Drain / ReflectType path. Entry absent: install from `fresh` with
+        // `who`'s binder (refs 0, pinned iff Resident) as the only one. Entry
+        // present: identity-check `fresh`, then, if `who` has no binder yet,
+        // push one -- normally AT THE BOTTOM (first-wins content, no swap;
+        // this also covers a binder-less entry from Register/RebindInPlace,
+        // where the stack is empty and this binder becomes its only one),
+        // UNLESS the stack is NON-EMPTY and every existing binder is
+        // null-build (spec 2026-09-09 §3.6 degraded state: a real binder
+        // stack survived a departed top with nothing left that can rebuild
+        // its content). In that case first-wins would strand the entry with
+        // unrebuildable content forever, so this binder goes ON TOP instead
+        // and the content is swapped to `fresh`, rescuing the entry. A no-op
+        // if `who` already has a binder either way. Never runs a thunk.
+        BindResult InstallBaseline(uint64_t hash, Detail::ModuleIdentity who, MetaBuildFn build, TypeMeta&& fresh)
         {
-            std::unique_lock lock(m_mutex);
-            if (m_typeToComponentId.Find(hash) != m_typeToComponentId.end())
+            BindResult  r{ BindOutcome::Refused, nullptr };
+            std::string collision;
             {
-                ASTRA_ENSURE_ALWAYS(false,
-                    "MetaRegistry::Erase refused: hash is component-linked (use the "
-                    "component clear path, not a manual erase)");
-                return false;
+                std::unique_lock lock(m_mutex);
+                auto it = m_types.Find(hash);
+                if (it == m_types.end())
+                {
+                    Entry& e = InstallEntryLocked(hash, std::move(fresh));
+                    e.binders.push_back(MakeBinder(who, build));
+                    r = { BindOutcome::Bound, e.meta.get() };
+                }
+                else
+                {
+                    Entry& e = it->second;
+                    if (!SameIdentity(*e.meta, fresh))
+                    {
+                        collision = CollisionMessage(*e.meta, fresh);   // emitted after unlock
+                    }
+                    else
+                    {
+                        if (FindBinder(e, who.token) == e.binders.size())
+                        {
+                            if (NonEmptyAndAllNullBuild(e))
+                            {
+                                e.binders.push_back(MakeBinder(who, build));
+                                *e.meta = std::move(fresh);
+                            }
+                            else
+                            {
+                                // Empty stack (a binder-less entry from Register/
+                                // RebindInPlace) or a stack with a rebuildable binder:
+                                // either way, the default applies -- bottom insert,
+                                // first-wins content, no swap. For an empty stack this
+                                // binder is trivially the entry's only one.
+                                e.binders.insert(e.binders.begin(), MakeBinder(who, build));
+                            }
+                        }
+                        r = { BindOutcome::Bound, e.meta.get() };
+                    }
+                }
             }
-            return m_types.Erase(hash) != 0;
+            ReportCollision(collision);   // outside the lock: user code
+            return r;
         }
 
-        // Internal clear-path erase (spec 2026-08-09 meta-lifecycle rule):
-        // called when a component slot clears TO EMPTY, so the descriptor is
-        // already gone and nothing legitimately holds this meta. Removes the
-        // entry AND both link rows.
-        bool EraseUnchecked(uint64_t hash)
+        // Registration path. Entry absent: install from `fresh` (Refused when
+        // fresh is null) with `who`'s binder as the only one. Entry present,
+        // no binder for `who` yet: push a NEW binder on top (build != null)
+        // or just below the top (build == null -- it can hold refs but never
+        // source content); if it landed on top, swap content to `fresh`, or,
+        // when fresh is null and build != null, report BoundNeedsRebuild so
+        // the caller runs build() OUTSIDE its locks and calls Rebind. Entry
+        // present, binder exists: content is swapped only if that binder is
+        // top AND fresh is given (same-image re-bind / in-binary reload);
+        // otherwise nothing changes -- an existing top binder already carries
+        // this module's closures. An EXISTING null-build binder is upgraded in
+        // place when this call supplies a thunk: a module that registered the
+        // component before its reflect data was compiled in can now source
+        // content, and leaving it null-build would strand the entry in §3.6's
+        // degraded state the moment it ends up on top. Identity mismatch on any
+        // supplied fresh -> Refused. No ref change on any path. Never runs a
+        // thunk, and emits every diagnostic only after the mutex is released.
+        BindResult Bind(uint64_t hash, Detail::ModuleIdentity who, MetaBuildFn build, TypeMeta* fresh)
         {
-            std::unique_lock lock(m_mutex);
-            if (auto it = m_typeToComponentId.Find(hash); it != m_typeToComponentId.end())
+            BindResult  r{ BindOutcome::Refused, nullptr };
+            std::string collision;
             {
-                m_componentIdToType.Erase(it->second);
-                m_typeToComponentId.Erase(it);
+                std::unique_lock lock(m_mutex);
+                auto it = m_types.Find(hash);
+                if (it == m_types.end())
+                {
+                    if (fresh)   // else: nothing to install from -> Refused
+                    {
+                        Entry& e = InstallEntryLocked(hash, std::move(*fresh));
+                        e.binders.push_back(MakeBinder(who, build));
+                        r = { BindOutcome::Bound, e.meta.get() };
+                    }
+                }
+                else
+                {
+                    Entry& e = it->second;
+                    if (fresh && !SameIdentity(*e.meta, *fresh))
+                    {
+                        collision = CollisionMessage(*e.meta, *fresh);   // emitted after unlock
+                    }
+                    else
+                    {
+                        const size_t idx = FindBinder(e, who.token);
+                        if (idx == e.binders.size())
+                        {
+                            const bool onTop = (build != nullptr) || e.binders.empty();
+                            if (!onTop)
+                            {
+                                e.binders.insert(e.binders.end() - 1, MakeBinder(who, build));
+                                r = { BindOutcome::Bound, e.meta.get() };
+                            }
+                            else
+                            {
+                                e.binders.push_back(MakeBinder(who, build));
+                                if (fresh)
+                                {
+                                    *e.meta = std::move(*fresh);
+                                    r = { BindOutcome::Bound, e.meta.get() };
+                                }
+                                else
+                                {
+                                    r = { build ? BindOutcome::BoundNeedsRebuild : BindOutcome::Bound, e.meta.get() };
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Null-build UPGRADE: a module that registered this
+                            // type before it had a factory (component registered,
+                            // reflect data not compiled in yet) can now source
+                            // content. Adopt the thunk in place -- leaving the
+                            // binder null-build would strand the entry in the
+                            // degraded state of §3.6 the moment it ends up on top.
+                            if (build != nullptr && e.binders[idx].build == nullptr)
+                            {
+                                e.binders[idx].build = build;
+                            }
+                            if (fresh && idx == e.binders.size() - 1)
+                            {
+                                *e.meta = std::move(*fresh);
+                            }
+                            r = { BindOutcome::Bound, e.meta.get() };
+                        }
+                    }
+                }
             }
-            return m_types.Erase(hash) != 0;
+            ReportCollision(collision);   // outside the lock: user code
+            return r;
+        }
+
+        // refs++ on an EXISTING binder. A caller must Bind before Acquire;
+        // an absent binder is refused (ENSURE) and returns false.
+        bool Acquire(uint64_t hash, ModuleToken module)
+        {
+            bool bound = false;
+            {
+                std::unique_lock lock(m_mutex);
+                auto it = m_types.Find(hash);
+                const size_t idx = (it != m_types.end()) ? FindBinder(it->second, module) : 0;
+                bound = (it != m_types.end()) && idx < it->second.binders.size();
+                if (bound)
+                {
+                    ++it->second.binders[idx].refs;
+                }
+            }
+            // ENSURE outside the lock: its failure handler is user code.
+            return ASTRA_ENSURE_ALWAYS(bound, "MetaRegistry::Acquire without a prior Bind for this module");
+        }
+
+        // refs--. Held while refs remain. At zero: pinned -> Retained (binder
+        // stays, nothing else changes); unpinned -> the binder is removed --
+        // Dropped if it was not top; if it WAS top and other binders remain,
+        // content is rebuilt from the new top's thunk OUTSIDE this mutex,
+        // then swapped under it only if that binder is still top (Rebound).
+        // Rebound means the rebind was ATTEMPTED from the new top; the swap
+        // itself may have been dropped, for either of two DIFFERENT reasons.
+        // (1) The top changed during the thunk window (a thunk may re-enter
+        // Bind): that newer binder owns the content, so the attempted build is
+        // discarded SILENTLY -- a legal race, not an error. (2) The top is
+        // still the survivor but its own thunk built a differently-shaped type
+        // for this hash: that is a real identity collision, refused LOUDLY
+        // (log + ENSURE, after the mutex is released) and the content left
+        // alone. Both still report Rebound, because the departing binder's
+        // release completed. A new top with no build thunk cannot rebuild -> Retained
+        // + warning (§3.6). An empty stack erases the entry and both link rows
+        // (Erased). Unknown hash/module, or a binder already at zero refs,
+        // -> Unbound (the latter ENSUREs: release without acquire).
+        ReleaseOutcome Release(uint64_t hash, ModuleToken module)
+        {
+            MetaBuildFn rebuild = nullptr;
+            ModuleToken newTop  = nullptr;
+            // Composed under the mutex, emitted after it: a log sink and an
+            // ENSURE failure handler are user code and must never run here.
+            bool           releaseWithoutAcquire = false;
+            std::string    unrebuildable;
+            ReleaseOutcome outcome = ReleaseOutcome::Unbound;
+            {
+                std::unique_lock lock(m_mutex);
+                auto it = m_types.Find(hash);
+                if (it != m_types.end())
+                {
+                    Entry& e = it->second;
+                    const size_t idx = FindBinder(e, module);
+                    if (idx != e.binders.size())
+                    {
+                        MetaBinder& b = e.binders[idx];
+                        if (b.refs == 0)
+                        {
+                            releaseWithoutAcquire = true;   // outcome stays Unbound
+                        }
+                        else if (--b.refs > 0)
+                        {
+                            outcome = ReleaseOutcome::Held;
+                        }
+                        else if (b.pinned)
+                        {
+                            outcome = ReleaseOutcome::Retained;
+                        }
+                        else
+                        {
+                            const bool wasTop = (idx == e.binders.size() - 1);
+                            e.binders.erase(e.binders.begin() + idx);
+                            if (e.binders.empty())
+                            {
+                                EraseEntryLocked(it);
+                                outcome = ReleaseOutcome::Erased;
+                            }
+                            else if (!wasTop)
+                            {
+                                outcome = ReleaseOutcome::Dropped;
+                            }
+                            else if (e.binders.back().build == nullptr)
+                            {
+                                // Only binders without a factory remain: the content still
+                                // points at the departed module's closures and nothing can
+                                // rebuild it. Keep the entry (its address stays valid for
+                                // cached descriptors); name the hash, NOT typeName, which
+                                // may already view unmapped memory (§3.6).
+                                unrebuildable = "MetaRegistry: meta content for hash " + std::to_string(hash)
+                                              + " is bound to a departed module and no remaining binder can rebuild it";
+                                outcome = ReleaseOutcome::Retained;
+                            }
+                            else
+                            {
+                                rebuild = e.binders.back().build;
+                                newTop  = e.binders.back().module;
+                            }
+                        }
+                    }
+                }
+            }
+            // Every diagnostic below runs with the mutex RELEASED.
+            if (releaseWithoutAcquire)
+            {
+                ASTRA_ENSURE_ALWAYS(false, "MetaRegistry::Release on a binder with no refs (release without acquire)");
+            }
+            if (!unrebuildable.empty())
+            {
+                ASTRA_LOG_WARN(unrebuildable);
+            }
+            if (rebuild == nullptr)
+            {
+                return outcome;   // Unbound / Held / Retained / Dropped / Erased
+            }
+
+            // Outside the mutex: user reflection code.
+            TypeMeta fresh = rebuild();
+
+            std::string collision;
+            {
+                std::unique_lock lock(m_mutex);
+                auto it = m_types.Find(hash);
+                if (it != m_types.end() && !it->second.binders.empty()
+                    && it->second.binders.back().module == newTop)
+                {
+                    // The survivor we built for is still on top, so the two
+                    // relock cases are NOT interchangeable and must not share a
+                    // predicate: a matching identity is the ordinary swap, a
+                    // mismatched one means this module's OWN thunk built a
+                    // differently-shaped type for this hash -- a real collision,
+                    // refused loudly (after the unlock) rather than swallowed.
+                    if (SameIdentity(*it->second.meta, fresh))
+                    {
+                        *it->second.meta = std::move(fresh);
+                    }
+                    else
+                    {
+                        collision = CollisionMessage(*it->second.meta, fresh);
+                    }
+                }
+                // else: the top changed while the thunk ran (a re-entrant
+                // Bind) -- that binder owns the content now; drop ours,
+                // SILENTLY (this is a legal race, not a collision). The
+                // token compare is NOT ABA-proof against an erase-and-reinstall
+                // at this hash during the window, and need not be: `fresh`
+                // came from that module's own thunk and is identity-checked,
+                // so swapping it into a reinstalled entry of the same identity
+                // is still correct.
+            }
+            ReportCollision(collision);   // outside the lock: user code
+            return ReleaseOutcome::Rebound;
+        }
+
+        // Content refresh for a module whose binder is (still) top: the
+        // deferred half of BoundNeedsRebuild, run by the caller after it has
+        // dropped its own locks. Identity-checked. Returns false (no change)
+        // when the module's binder is not top or the entry is gone.
+        bool Rebind(uint64_t hash, ModuleToken module, TypeMeta&& fresh)
+        {
+            bool        swapped = false;
+            std::string collision;
+            {
+                std::unique_lock lock(m_mutex);
+                auto it = m_types.Find(hash);
+                if (it != m_types.end() && !it->second.binders.empty()
+                    && it->second.binders.back().module == module)
+                {
+                    if (!SameIdentity(*it->second.meta, fresh))
+                    {
+                        collision = CollisionMessage(*it->second.meta, fresh);   // emitted after unlock
+                    }
+                    else
+                    {
+                        *it->second.meta = std::move(fresh);
+                        swapped = true;
+                    }
+                }
+            }
+            ReportCollision(collision);   // outside the lock: user code
+            return swapped;
+        }
+
+        // ---- Diagnostics (tests, tools) ----
+        ASTRA_NODISCARD size_t BinderCount(uint64_t hash) const
+        {
+            std::shared_lock lock(m_mutex);
+            auto it = m_types.Find(hash);
+            return it != m_types.end() ? it->second.binders.size() : 0;
+        }
+
+        ASTRA_NODISCARD uint32_t Refs(uint64_t hash, ModuleToken module) const
+        {
+            std::shared_lock lock(m_mutex);
+            auto it = m_types.Find(hash);
+            if (it == m_types.end()) return 0;
+            const size_t idx = FindBinder(it->second, module);
+            return idx < it->second.binders.size() ? it->second.binders[idx].refs : 0;
+        }
+
+        ASTRA_NODISCARD bool IsPinned(uint64_t hash, ModuleToken module) const
+        {
+            std::shared_lock lock(m_mutex);
+            auto it = m_types.Find(hash);
+            if (it == m_types.end()) return false;
+            const size_t idx = FindBinder(it->second, module);
+            return idx < it->second.binders.size() && it->second.binders[idx].pinned;
+        }
+
+        ASTRA_NODISCARD ModuleToken TopBinder(uint64_t hash) const
+        {
+            std::shared_lock lock(m_mutex);
+            auto it = m_types.Find(hash);
+            return (it != m_types.end() && !it->second.binders.empty()) ? it->second.binders.back().module : nullptr;
         }
 
         /**
@@ -209,7 +590,7 @@ namespace Astra
             auto it = m_types.Find(hash);
             if (it != m_types.end())
             {
-                return it->second.get();
+                return it->second.meta.get();
             }
             return nullptr;
         }
@@ -236,11 +617,11 @@ namespace Astra
         {
             std::shared_lock lock(m_mutex);
 
-            for (const auto& [hash, meta] : m_types)
+            for (const auto& [hash, entry] : m_types)
             {
-                if (meta->typeName == name)
+                if (entry.meta->typeName == name)
                 {
-                    return meta.get();
+                    return entry.meta.get();
                 }
             }
             return nullptr;
@@ -272,7 +653,8 @@ namespace Astra
 
         /**
          * Links a type hash to a ComponentID for ECS integration.
-         * Thread-safe.
+         * Thread-safe. Link rows are context facts (ComponentIDs are
+         * context-scoped) and are dropped only when the entry is erased.
          * @param typeHash Type hash
          * @param componentId ComponentID from ComponentRegistry
          */
@@ -361,9 +743,9 @@ namespace Astra
             {
                 std::shared_lock lock(m_mutex);
                 snapshot.reserve(m_types.Size());
-                for (const auto& [hash, meta] : m_types)
+                for (const auto& [hash, entry] : m_types)
                 {
-                    snapshot.push_back(meta.get());
+                    snapshot.push_back(entry.meta.get());
                 }
             }
 
@@ -374,7 +756,7 @@ namespace Astra
         }
 
         /**
-         * Clears all registrations.
+         * Clears all registrations (entries, binders, link rows).
          * Thread-safe. Use with caution - mainly for testing.
          */
         void Clear()
@@ -386,8 +768,113 @@ namespace Astra
         }
 
     private:
+        struct Entry
+        {
+            std::unique_ptr<TypeMeta>  meta;      // address-stable for the entry's life
+            SmallVector<MetaBinder, 2> binders;   // back() == top == whose closures `meta` carries
+        };
+
+        // All helpers below require m_mutex to be held (unique for mutators).
+
+        Entry& InstallEntryLocked(uint64_t hash, TypeMeta&& fresh)
+        {
+            ASTRA_ASSERT(m_types.Find(hash) == m_types.end(),
+                         "MetaRegistry::InstallEntryLocked on a present hash -- would dangle every cached TypeMeta*");
+            Entry& e = m_types[hash];
+            e.meta = std::make_unique<TypeMeta>(std::move(fresh));
+            return e;
+        }
+
+        void EraseEntryLocked(typename FlatMap<uint64_t, Entry>::iterator it)
+        {
+            const uint64_t hash = it->first;
+            if (auto link = m_typeToComponentId.Find(hash); link != m_typeToComponentId.end())
+            {
+                m_componentIdToType.Erase(link->second);
+                m_typeToComponentId.Erase(link);
+            }
+            m_types.Erase(it);
+        }
+
+        static MetaBinder MakeBinder(Detail::ModuleIdentity who, MetaBuildFn build) noexcept
+        {
+            return MetaBinder{ who.token, build, 0u, who.residency == ModuleResidency::Resident };
+        }
+
+        // Index of `module`'s binder in e.binders, or e.binders.size() if none.
+        static size_t FindBinder(const Entry& e, ModuleToken module) noexcept
+        {
+            for (size_t i = 0; i < e.binders.size(); ++i)
+            {
+                if (e.binders[i].module == module) return i;
+            }
+            return e.binders.size();
+        }
+
+        // True when the stack is NON-EMPTY and no binder in it can source
+        // content (spec 2026-09-09 §3.6 degraded state). Deliberately false
+        // (not vacuously true) for an empty stack: a binder-less entry
+        // (Register/RebindInPlace, no binder pushed yet) has nothing to
+        // rescue, so it must take the ordinary bottom-insert/first-wins path
+        // in InstallBaseline, not the rescue path.
+        static bool NonEmptyAndAllNullBuild(const Entry& e) noexcept
+        {
+            if (e.binders.empty())
+            {
+                return false;
+            }
+            for (const MetaBinder& b : e.binders)
+            {
+                if (b.build != nullptr) return false;
+            }
+            return true;
+        }
+
+        // The identity fields a TypeMeta carries: matching => the same type
+        // (re-registered / rebuilt), anything else => a real type-hash
+        // collision of two distinct types.
+        static bool SameIdentity(const TypeMeta& a, const TypeMeta& b) noexcept
+        {
+            return a.size == b.size
+                && a.alignment == b.alignment
+                && a.isTrivial == b.isTrivial
+                && a.typeName == b.typeName;
+        }
+
+        // PURE MESSAGE BUILDER -- it composes, it never emits. Callers build
+        // the text while holding m_mutex (it has to read the entry) and pass
+        // it to ReportCollision only after the lock scope has closed.
+        static std::string CollisionMessage(std::string_view existingName, std::string_view incomingName)
+        {
+            std::string msg = "MetaRegistry: type-identity collision -- incoming type '";
+            msg.append(incomingName);
+            msg += "' shares the type-hash of already-registered '";
+            msg.append(existingName);
+            msg += "'. The second type is refused. Give types a unique unqualified name.";
+            return msg;
+        }
+
+        static std::string CollisionMessage(const TypeMeta& existing, const TypeMeta& incoming)
+        {
+            return CollisionMessage(existing.typeName, incoming.typeName);
+        }
+
+        // Emits what CollisionMessage composed. MUST be called with m_mutex
+        // NOT held: ASTRA_LOG_ERROR reaches a user-installed sink and the
+        // failing ENSURE reaches a user-installed handler, either of which may
+        // re-enter this registry. An empty message means "no collision".
+        static void ReportCollision(const std::string& msg)
+        {
+            if (msg.empty())
+            {
+                return;
+            }
+            ASTRA_LOG_ERROR(msg);
+            ASTRA_ENSURE_ALWAYS(false, "MetaRegistry type-identity collision");
+        }
+
         mutable std::shared_mutex m_mutex;
-        FlatMap<uint64_t, std::unique_ptr<TypeMeta>> m_types;
+        FlatMap<uint64_t, Entry> m_types;
         FlatMap<uint64_t, ComponentID> m_typeToComponentId;
         FlatMap<ComponentID, uint64_t> m_componentIdToType;
     };
@@ -552,7 +1039,13 @@ namespace Astra
                 auto meta = std::make_shared<TypeMeta>(builder.Build());
                 EnqueuePendingMeta([meta](TypeContext& ctx)
                 {
-                    ctx.Meta().Register(std::move(*meta));
+                    // Runs in the ENQUEUING module: the queue is module-local
+                    // and is drained by that module's own SetTypeContext /
+                    // Instance(), so the identity read here is this module's
+                    // -- token AND residency (spec 2026-09-09 §3.5 flow 1).
+                    // Installs a refs-0 baseline binder; first-wins content.
+                    ctx.Meta().InstallBaseline(meta->typeHash, CurrentModuleIdentity(),
+                                               &BuildMetaThunk<T>, std::move(*meta));
                 });
             }
         };

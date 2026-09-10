@@ -617,7 +617,28 @@ namespace Arcane
     //     ReferenceProject is restamped with this change, the precedent v16
     //     through v22 set (Gacha's Game restamp is this arc's follow-up in that
     //     repo, tracked there rather than here).
-    inline constexpr uint32_t kGamePluginABIVersion = 23;
+    // v24 (2026-09-10): Astra re-vendored to dev fa0900a -- the meta binder
+    //     scoping program (Astra spec 2026-09-09). Same failure class as v10:
+    //     ComponentRegistry's LAYOUT changed (the per-slot MetaBuildFn thunk
+    //     array became a per-slot ModuleToken array; ShadowEntry carries a
+    //     token instead of a thunk) and MetaRegistry's entries grew a binder
+    //     stack, so a v23 plugin's inlined template code (RegisterComponent /
+    //     ComponentModule::Register are header templates instantiated IN the
+    //     plugin) would manipulate a registry whose layout it does not know.
+    //     Reject the pairing. Public surface is source-compatible: Open /
+    //     Register / RegisterMeta / Reset keep their signatures; SetTypeContext
+    //     gained a DEFAULTED ModuleResidency parameter. Arcane itself calls none
+    //     of the changed internals (verified 2026-09-09), so this is a header
+    //     sync + bump with no Arcane logic change. What the sync buys: several
+    //     ComponentRegistry instances per TypeContext are now a supported shape
+    //     (meta erased only when no registry, handle, or resident module holds
+    //     it), which lifts the precondition that kept the engine roster on
+    //     anonymous registration (Runtime.cpp) -- whether to move it to a
+    //     Runtime-owned ComponentModule under SetTypeContext(ctx, Resident) is
+    //     a separate decision that re-opens the 2026-08-10 ratification.
+    //     ReferenceProject restamped with this change, per the v16+ precedent
+    //     (Gacha's Game restamp is tracked in that repo).
+    inline constexpr uint32_t kGamePluginABIVersion = 24;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
