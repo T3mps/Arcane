@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,8 +32,9 @@
 // Task 7 added the SHELL at the bottom of this file -- DrawAssetStatusPanel,
 // the window itself: its own ImGui::Begin("Asset Status"), NO toolbar (spec
 // s9.1) and the bottom bar (spec s9.2) on AssetPanelCommon's shared band
-// skeleton. The bar's right slot stays EMPTY until Task 8 wires spec s9.3's
-// recency line.
+// skeleton. Task 8 wired the bar's right slot with spec s9.3's recency line
+// (the activity ring's newest entry, "last change <rel> - <name>"; empty
+// when the ring is null or empty -- s13's never-fabricate rule).
 //
 // BootSceneGuid, ScenesByName, DrawAssetPeekTooltip and PillWidth are NOT
 // here: all four are genuinely cross-panel (the Browser and/or Graph panels
@@ -848,7 +850,7 @@ namespace Arcane::Editor
         if (ImGui::BeginChild("##assetstatusbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
             if (!project)
-                ImGui::TextDisabled("No project open (data/-next-to-exe)");
+                DrawAssetPanelNoProjectMessage();
             else
                 DrawAssetStatusBody(model, project, docs, services, actions);
         }
@@ -857,12 +859,14 @@ namespace Arcane::Editor
         // ---- bottom bar band (spec s9.2) -----------------------------
         // LEFT: the one fixed form this view has always used, regardless of
         // filter state (it has no search box of its own to filter against).
-        // RIGHT: EMPTY this task. Spec s9.3 gives the slot the activity
-        // ring's recency line ("last change 2m ago - uv_marker.png") and Task
-        // 8 wires it; the health-digest chip is NOT a stand-in -- its whole
-        // job is to point AT this panel, so pointing it at itself would be
-        // wrong on its own terms. Nothing else fills the gap in the meantime:
-        // spec s13's rule is that a bar never renders a fact it does not have.
+        // RIGHT: Task 8 wires spec s9.3's recency line ("last change 2m ago
+        // - uv_marker.png") -- the health-digest chip is NOT a stand-in --
+        // its whole job is to point AT this panel, so pointing it at itself
+        // would be wrong on its own terms. Sourced from `services.activity`,
+        // the SAME activity ring the body's own feed reads a few dozen
+        // lines up -- null-guarded the same way, and empty (spec s13: a bar
+        // never renders a fact it does not have) when the log is null or
+        // holds nothing yet, never a fabricated "just now".
         {
             const AssetPanelBottomBar bar = BeginAssetPanelBottomBar("##assetstatusbottombar");
             if (bar.visible)
@@ -872,6 +876,36 @@ namespace Arcane::Editor
                 std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d need attention",
                               health.total, health.refused + health.queued);
                 ImGui::TextUnformatted(left);
+
+                // The ring's OWN newest-first replay (AssetActivityLog::
+                // ForEachNewestFirst) -- the feed above uses this exact same
+                // walk to build every row; taking only the FIRST callback is
+                // "the newest entry", not a second, private access into the
+                // ring's internals. FormatActivityAge is the file-local
+                // helper the feed already calls, reused verbatim (spec s9.3:
+                // "the relative-time formatting reuses the feed's own").
+                if (services.activity && services.activity->Size() > 0)
+                {
+                    std::optional<AssetActivityEntry> newest;
+                    services.activity->ForEachNewestFirst([&](const AssetActivityEntry& e)
+                    {
+                        if (!newest)
+                            newest = e;
+                    });
+                    if (newest)
+                    {
+                        const std::string age  = FormatActivityAge(newest->when);
+                        const std::string name = newest->name.empty() ? newest->guid.ToString()
+                                                                       : newest->name;
+                        const std::string line = "last change " + age + " \xC2\xB7 " + name;
+                        const float lineWidth = ImGui::CalcTextSize(line.c_str()).x;
+
+                        ImGui::SameLine();
+                        ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), bar.rightEdgeX - lineWidth));
+                        ImGui::SetCursorPosY(bar.padY);
+                        ImGui::TextDisabled("%s", line.c_str());
+                    }
+                }
             }
             EndAssetPanelBottomBar();
         }

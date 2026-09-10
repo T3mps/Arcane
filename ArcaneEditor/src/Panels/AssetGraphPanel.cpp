@@ -2251,7 +2251,7 @@ namespace Arcane::Editor
         if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
             if (!project)
-                ImGui::TextDisabled("No project open (data/-next-to-exe)");
+                DrawAssetPanelNoProjectMessage();
             else
                 DrawAssetGraphBody(state, model, project, docs, services, actions);
         }

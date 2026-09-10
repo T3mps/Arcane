@@ -37,11 +37,12 @@ namespace Arcane::Editor
                              AssetPanelActions& actions);
 
     // Draw the "Asset Status" window (panel-split spec s5/s9): no toolbar ·
-    // body · bottom bar ("N assets - M need attention"; the right slot is
-    // EMPTY until Task 8 fills it with spec s9.3's recency line -- the bar
-    // never fabricates a fact it does not have). `model` is rebuilt by the
-    // caller before this runs every frame; this panel only reads it. `open`
-    // is forwarded to ImGui::Begin (the tab's X button; null = no X).
+    // body · bottom bar ("N assets - M need attention" left; the activity
+    // ring's recency line, spec s9.3, right -- empty when the ring is null
+    // or empty, the bar never fabricates a fact it does not have). `model`
+    // is rebuilt by the caller before this runs every frame; this panel only
+    // reads it. `open` is forwarded to ImGui::Begin (the tab's X button;
+    // null = no X).
     AssetPanelActions DrawAssetStatusPanel(AssetPanelModel& model, const Arcane::Project* project,
                                            DocumentHost& docs, const AssetPanelServices& services,
                                            bool* open = nullptr);

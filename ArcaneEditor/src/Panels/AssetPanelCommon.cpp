@@ -72,6 +72,13 @@ namespace Arcane::Editor
         ImGui::EndPopup();
     }
 
+    // Task 8 dedupe: the identical "no project" message all three panels'
+    // `if (!project)` guard drew inline.
+    void DrawAssetPanelNoProjectMessage()
+    {
+        ImGui::TextDisabled("No project open (data/-next-to-exe)");
+    }
+
     // Panel-split spec s7.2 (Task 3). Ported verbatim from the Unreferenced
     // card's own Reveal click handler (pre-split AssetsPanel.cpp) minus the
     // trailing `state.lens = Browse` write, which is the HOST's job now

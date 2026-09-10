@@ -1448,7 +1448,7 @@ namespace Arcane::Editor
         if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
             if (!project)
-                ImGui::TextDisabled("No project open (data/-next-to-exe)");
+                DrawAssetPanelNoProjectMessage();
             else
                 DrawAssetBrowserBody(state, model, project, docs, services, actions);
         }

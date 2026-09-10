@@ -306,4 +306,11 @@ namespace Arcane::Editor
     // rather than a second copy of the literal, the same avoid-drift
     // reasoning every other constant on this header already follows.
     inline constexpr float kTableRowHeight = 24.0f;
+
+    // Task 8 dedupe: the "no project" body message, spelled identically at
+    // all three panels' `if (!project)` guard (DrawAssetBrowserPanel/
+    // DrawAssetGraphPanel/DrawAssetStatusPanel) -- one string three ways to
+    // drift was exactly the kind of copy this header already refuses for
+    // the bottom-bar skeleton and the create menu.
+    void DrawAssetPanelNoProjectMessage();
 }
