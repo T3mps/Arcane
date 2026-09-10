@@ -9,6 +9,9 @@ against `main` @ `35cf5a91`. Prior law this spec builds on:
 rule, the material-scalar ruling), `docs/specs/2026-09-04-f2b-asset-cook-and-bindless-design.md`
 (the artifact/cook contract), `docs/research/2026-08-22-mesh-asset-ue-source2-comparison.md`
 (A1/A2 amendments; named-slots deferral "to F2c or not at all" — F2c is now).
+**Reference pass:** `docs/research/2026-09-10-f2c-ue-source2-comparison.md` — its
+amendments A1-A5 are folded into this spec ("comparison A_n" citations below);
+eleven other decisions confirmed or kept as justified divergences there.
 
 ---
 
@@ -44,8 +47,8 @@ corpus, both golden lanes, and the vendoring.
 | Draco (`KHR_draco_mesh_compression`) | Rejected outright — heavy dep duplicating meshopt compression |
 | `KHR_texture_basisu` | F2b's Basis/KTX2 rejection reads across (WASM/web firming up) |
 | LOD / simplification | First asset needing distance LODs (`meshopt_simplifyWithUpdate` is vendored, waiting) |
-| Tangents + normal maps | Reserved artifact section tag; T1 owns BC5; meshoptimizer v1.2 generates when wanted |
-| `EXT_meshopt_compression` decode | First real gltfpack asset — slice one REFUSES loudly, naming the extension; decoder already vendored, flip is cheap |
+| Tangents + normal maps | Reserved artifact section tag (which inherits the mirror rule's handedness half — §4.3/A3); T1 owns BC5; meshoptimizer v1.2 generates when wanted |
+| `EXT_meshopt_compression` decode | First real gltfpack asset — refused via §4.5's general `extensionsRequired` rule; decoder already vendored, flip is cheap |
 | 16-bit indices | Perf-only; all plumbing is unconditionally u32 today (`MeshNode.cpp:972-973`) |
 | Per-mesh file splitting | Future `MeshMetaSettings` option (granularity ruling R1) |
 | Per-section `MeshRenderer` overrides | `materialOverride` stays scalar and, when set, repaints ALL sections; per-section override arrays wait for a real need |
@@ -102,28 +105,46 @@ Beside the source, the editor mints a companion `.arcmesh` — the
 - **Unit rule:** authored meter scale kept VERBATIM; `Transform.scale` stays 1. The
   asset still solely expresses shape — now at authored size — so the two-spellings
   rationale holds without a normalize option (rejected, §2).
-- **Sections:** one per glTF primitive: `{name, indexOffset, indexCount}` (name = the
-  primitive's material name, empty when absent). `MeshData` grows `sections[]`;
-  a primitive-source mesh is one unnamed section — F2a files read forward losslessly.
+- **Sections:** one per glTF primitive: `{name, indexOffset, indexCount, slotIndex}`
+  — name = the primitive's material name (empty when absent), `slotIndex` pointing
+  into the slot array. Two primitives sharing one material share ONE slot through
+  their indices (comparison A1); the per-primitive index ranges stay separate because
+  meshopt reordering after the bake does not guarantee a merged material contiguous
+  indices. `MeshData` grows `sections[]`; a primitive-source mesh is one unnamed
+  section with `slotIndex` 0 — F2a files read forward losslessly.
+- **Mirror rule, both halves named (comparison A3):** a negative-determinant node
+  inverts triangle WINDING — shipped in F2c — and, once tangents exist, the
+  tangent-basis HANDEDNESS (UE drives both from the one `bIsMirrored` flag,
+  `GLTFMeshFactory.cpp:459-460`). The reserved `Tangents` artifact tag inherits the
+  handedness obligation, and the negative-scale fixture's test grows a handedness
+  assertion when that tag is first written.
 
 ### 4.4 The slot array (the F2a scalar grows)
 
 `MeshAssetData::material` (scalar Guid, `MeshAsset.hpp:89`) is **retired into**
 `slots: [{name, material}]`. The tolerant loader maps the legacy `"material"` key to a
-single unnamed slot, so every existing `.arcmesh` loads unchanged. The growth touches
-the four recorded sites (research §3.2): the asset struct + JSON, `MeshEntry`
-(`SceneResources.hpp:161-166`), the resolution chain — now **per-section**:
-component `materialOverride` (scalar; repaints all sections when set) → the section's
-slot guid → white — and the reference classifier (`Assets.cpp:960-965`), which walks
-every slot guid as a `References` edge.
+single unnamed slot, so every existing `.arcmesh` loads unchanged. The slot array **deduplicates by material name** (comparison A1): each distinct glTF
+material name mints ONE slot; every primitive using it points there via its section's
+`slotIndex`; primitives with no material share one unnamed slot appended last. The
+growth touches the four recorded sites (research §3.2): the asset struct + JSON,
+`MeshEntry` (`SceneResources.hpp:161-166`), the resolution chain — now **per-section
+through the index**: component `materialOverride` (scalar; repaints all sections when
+set) → `slots[section.slotIndex].material` → white — and the reference classifier
+(`Assets.cpp:960-965`), which walks every slot guid as a `References` edge.
 
 ### 4.5 Validation
 
 `cgltf_validate` is **mandatory** (untrusted input; the CVE patch rides the vendor). A
 file that parses but yields nothing drawable (no meshes, all-degenerate) **refuses
 loudly at cook** with a diagnostic — never a silent empty artifact (the never-fabricate
-discipline applied to geometry). `EXT_meshopt_compression`-compressed buffers refuse
-loudly naming the extension (§2).
+discipline applied to geometry). **Degenerate triangles inside an otherwise valid mesh
+are dropped with one WARN naming the primitive, not refused** (comparison A2 — the
+case an implementer actually meets; refusal is reserved for nothing-drawable). The
+refusal rule generalizes (A2, UE's shape): every entry in the file's
+`extensionsRequired` the importer does not implement refuses the cook loudly, **naming
+every unsupported entry in one diagnostic** — covering `EXT_meshopt_compression`,
+Draco, and `KHR_texture_basisu` without hand-listing them, and every future extension
+by construction; implementing one simply removes it from the unsupported set.
 
 ## 5. Cook integration
 
@@ -146,14 +167,15 @@ loudly naming the extension (§2).
 Same `'ARCA'` container disciplines (byte-explicit writes — never a struct memcpy —
 versioned, tagged section table with skip-unknown forward-compat,
 `ArtifactFormat.hpp:10-13, 309-313`). After the common prefix: a mesh header —
-`vertexCount` (u32), `indexCount` (u32), `sectionCount` (u32), AABB min/max (6×f32) —
-then sections:
+`vertexCount` (u32), `indexCount` (u32), `sectionCount` (u32), `indexWidth` (u8,
+**4** in v1 — comparison A5: a declared field rather than tag-inference duplicated
+across the two independent readers), AABB min/max (6×f32) — then sections:
 
 | Tag | Contents |
 |---|---|
 | `VertexData` | Interleaved pos/normal/uv, the pipeline's 32-byte stride (`MeshNode.cpp:207-222`) |
 | `IndexData` | u32 indices |
-| `SectionTable` | Per section: name (u16 length + UTF-8) + index offset/count |
+| `SectionTable` | Per section: name (u16 length + UTF-8) + index offset/count + `slotIndex` (u32, comparison A1) |
 | `Tangents` | **Reserved, unwritten** (additive later per skip-unknown) |
 | `Thumbnail` | **Reserved, unwritten** (R5 harvests editor-side) |
 
@@ -184,7 +206,12 @@ textures extract at editor discovery time (loose `.png`s beside the source, beco
 ordinary registered textures on the texture cook path); the companion `.arcmesh` and
 materials mint editor-side. A headless `arccook` run on a never-opened project cooks
 geometry artifacts only — correct, not a gap, and exactly how texture `.meta` minting
-already behaves.
+already behaves. An embedded texture extracts **only when the destination file is
+absent** — an existing extracted `.png` is never overwritten (§6's
+import-never-overwrites invariant extended: a user's edited or replaced texture
+survives re-import). Extracted files are named after the glTF image/texture name,
+suffixed on collision, with a source-derived fallback when the glTF supplies no name
+(comparison A4).
 
 ### 5.6 Refusal, pending, and the engine seams
 
@@ -284,7 +311,8 @@ prop issues `sections.size()` draws.
 ## 9. Testing and verification
 
 - **Fixture corpus** (checked in, tiny): single-mesh `.glb`; multi-primitive `.glb`
-  with multiple named materials; nested transforms; a negative-scale node;
+  with multiple named materials **including two primitives sharing one material**
+  (A1's dedup pin: two sections, ONE slot, equal `slotIndex`); nested transforms; a negative-scale node;
   embedded-texture `.glb`; **a `.gltf` + external `.bin` pair** (exercises §5.4's
   buffer hashing — editing the `.bin` must change the cook key); degenerate/empty;
   malformed sparse accessor (pins the CVE-hardened validate path — the fixture is a
@@ -337,6 +365,7 @@ ArcaneClient** (the 08-21 placement rule).
 | `RebuildIndexFromScan` reads texture headers to recover Guids | §5.1 — kind-agnostic prefix read |
 | glTF PBR inputs with no destination | §6 — drop-with-WARN; reserved tags are the additive future |
 | Slot assignments shuffled by re-export | R3/§4.2 — named slots, name re-association, keep-and-WARN |
+| Two primitives sharing one material → duplicate slots | Comparison A1 (§4.3/§4.4) — sections carry `slotIndex`; slots dedup by name |
 | External `.bin` edits not re-cooking | §5.4 — buffers hashed into the cook key |
 | Untrusted input (CVE class) | §4.5/§10 — mandatory validate + pinned patch + malformed fixture |
 | 2D/3D +Y sense confusion | §1 note via research §2 — both paths correct; stated once so nobody "fixes" it |
