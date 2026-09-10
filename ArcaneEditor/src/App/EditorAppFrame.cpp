@@ -2056,9 +2056,9 @@ namespace Arcane::Editor
         // transient ArtifactMissing row can never masquerade as a refusal
         // reason on a card; nullopt sends the card to its own bare
         // "cook refused" fallback.
-        Arcane::Editor::AssetPanelServices assetsPanelServices;
-        assetsPanelServices.resolveAssetThumb = m_assetServices.resolveAssetThumb;
-        assetsPanelServices.cookDetailFor =
+        Arcane::Editor::AssetPanelServices assetPanelServices;
+        assetPanelServices.resolveAssetThumb = m_assetServices.resolveAssetThumb;
+        assetPanelServices.cookDetailFor =
             [this](const Arcane::Guid& g) -> std::optional<std::string>
             {
                 const auto it = m_cookDiagnostics.find(g);
@@ -2070,16 +2070,16 @@ namespace Arcane::Editor
         // Borrowed non-owning for the draw only (Task 8's feed reads it);
         // this log outlives every frame and is Clear()ed, never destroyed,
         // on a project switch.
-        assetsPanelServices.activity = &m_assetActivity;
+        assetPanelServices.activity = &m_assetActivity;
         // Panel-split spec s7.3: the four focus-if-open gates (R1) -- filled
         // at the same site every other services seam above is. As of Task 7
         // all four are independent reads of four real panel ids; the first
         // three used to alias PanelId::Assets, when one window housed all
         // three lenses and they could only ever read identically.
-        assetsPanelServices.browserOpen  = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser);
-        assetsPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph);
-        assetsPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus);
-        assetsPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
+        assetPanelServices.browserOpen  = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser);
+        assetPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph);
+        assetPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus);
+        assetPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
 
         // The three asset windows, each gated on its own PanelId exactly like
         // Console/Problems below. Each returns its own AssetPanelActions;
@@ -2091,15 +2091,15 @@ namespace Arcane::Editor
         Arcane::Editor::AssetPanelActions browserActions, graphActions, statusActions;
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser))
             browserActions = Arcane::Editor::DrawAssetBrowserPanel(
-                m_assetBrowserUi, m_assetModel, proj, m_documents, assetsPanelServices,
+                m_assetBrowserUi, m_assetModel, proj, m_documents, assetPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetBrowser));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph))
             graphActions = Arcane::Editor::DrawAssetGraphPanel(
-                m_assetGraphUi, m_assetModel, proj, m_documents, assetsPanelServices,
+                m_assetGraphUi, m_assetModel, proj, m_documents, assetPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetGraph));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus))
             statusActions = Arcane::Editor::DrawAssetStatusPanel(
-                m_assetModel, proj, m_documents, assetsPanelServices,
+                m_assetModel, proj, m_documents, assetPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetStatus));
         ConsumeAssetPanelActions(browserActions, ls);
         ConsumeAssetPanelActions(graphActions, ls);
@@ -2347,19 +2347,19 @@ namespace Arcane::Editor
             ShowSceneSaveDialog();
     }
 
-    void EditorApp::ConsumeAssetPanelActions(const Arcane::Editor::AssetPanelActions& browserActions,
+    void EditorApp::ConsumeAssetPanelActions(const Arcane::Editor::AssetPanelActions& panelActions,
                                              LoopState& ls)
     {
         // Unified create (Task 12). Both of these used to be their own flows;
         // both are now the SAME request into the SAME entry, which is what
         // spec s7's invariant ("no creation path may bypass
         // CreateAssetRequest") actually asserts.
-        if (browserActions.requestCreateKind >= 0 &&
-            browserActions.requestCreateKind < Arcane::Editor::kCreateAssetKindCount)
+        if (panelActions.requestCreateKind >= 0 &&
+            panelActions.requestCreateKind < Arcane::Editor::kCreateAssetKindCount)
         {
             BeginCreateAsset({ static_cast<Arcane::Editor::CreateAssetKind>(
-                                   browserActions.requestCreateKind),
-                               browserActions.createPrefillParent });
+                                   panelActions.requestCreateKind),
+                               panelActions.createPrefillParent });
         }
         // "New Instance..." (a material row's context menu, and the preview
         // pane's kind-specific button): the same request with the clicked
@@ -2367,19 +2367,19 @@ namespace Arcane::Editor
         // ShowSaveFileDialog launch -- an instance mint that bypassed
         // CreateAssetRequest was exactly the second half of what the invariant
         // forbids.
-        if (browserActions.createInstanceOf.IsValid())
+        if (panelActions.createInstanceOf.IsValid())
         {
             BeginCreateAsset({ Arcane::Editor::CreateAssetKind::MaterialInstance,
-                               browserActions.createInstanceOf });
+                               panelActions.createInstanceOf });
         }
-        if (browserActions.createSpriteFrom.IsValid())
+        if (panelActions.createSpriteFrom.IsValid())
         {
             // Browser-initiated mint OPENS the new sprite document (the user
             // right-clicked a specific texture asking for exactly this); the
             // Inspector's texture-drop auto-mint below does NOT -- that one is
             // a means to filling a field, not a request to edit the sprite.
             if (const Arcane::Guid minted =
-                    MintOrReuseSpriteForTexture(browserActions.createSpriteFrom);
+                    MintOrReuseSpriteForTexture(panelActions.createSpriteFrom);
                 minted.IsValid())
             {
                 if (const Arcane::Project* proj = m_runtime->CurrentProject())
@@ -2394,7 +2394,7 @@ namespace Arcane::Editor
         // through BeginCreateAsset -> ConsumeCreateResult's Mesh arm
         // (MintMeshAsset) -- there is no separate createMesh consumer here,
         // by design.
-        if (!browserActions.openScene.empty())
+        if (!panelActions.openScene.empty())
         {
             // A scene double-clicked in the browser is not a document -- it
             // replaces the editing session, so it goes through the same
@@ -2406,31 +2406,31 @@ namespace Arcane::Editor
             // Scene" modal below, whose Save/Discard branches already set
             // sceneAction via TakePending().
             if (m_scene.Request(Arcane::Editor::SceneIntent::OpenScene,
-                                browserActions.openScene, *m_undo))
+                                panelActions.openScene, *m_undo))
                 ls.sceneAction = { Arcane::Editor::SceneIntent::OpenScene,
-                                   browserActions.openScene };
+                                   panelActions.openScene };
         }
-        if (browserActions.setBootScene.IsValid())
+        if (panelActions.setBootScene.IsValid())
         {
             // No unsaved-changes guard: this only rewrites the project
             // manifest and does not touch the live registry or session.
-            if (m_runtime->SetProjectBootScene(browserActions.setBootScene))
-                ARC_INFO("Boot scene set to {}", browserActions.setBootScene.ToString());
+            if (m_runtime->SetProjectBootScene(panelActions.setBootScene))
+                ARC_INFO("Boot scene set to {}", panelActions.setBootScene.ToString());
             else
                 m_modalErrors.Push("Scene Error", "Could not write the project's boot scene (see Console).");
         }
         // Row context menu parity for Show in Explorer / Copy Path (Part 3):
         // the SAME helper the menu-bar route above uses, on whichever row
         // the browser's own popup was just opened against.
-        if (browserActions.showInExplorer.IsValid())
-            AssetPathAction(m_runtime->CurrentProject(), browserActions.showInExplorer, true, false);
-        if (browserActions.copyPath.IsValid())
-            AssetPathAction(m_runtime->CurrentProject(), browserActions.copyPath, false, true);
+        if (panelActions.showInExplorer.IsValid())
+            AssetPathAction(m_runtime->CurrentProject(), panelActions.showInExplorer, true, false);
+        if (panelActions.copyPath.IsValid())
+            AssetPathAction(m_runtime->CurrentProject(), panelActions.copyPath, false, true);
         // Spec s6's new context-menu entry: Copy Guid, straight to the
         // clipboard (no file resolution needed -- unlike copyPath/
         // showInExplorer, a guid needs no project lookup to be copyable).
-        if (browserActions.copyGuid.IsValid())
-            ImGui::SetClipboardText(browserActions.copyGuid.ToString().c_str());
+        if (panelActions.copyGuid.IsValid())
+            ImGui::SetClipboardText(panelActions.copyGuid.ToString().c_str());
 
         // ---- Cross-panel deep links (panel-split spec s7.1) ----------------
         // Three former direct `state.lens` writers: host-routed since Task 3,
@@ -2447,7 +2447,7 @@ namespace Arcane::Editor
         // focus and nothing else. No selection or filter change; that is
         // today's semantics, carried over unchanged from when it flipped a
         // lens.
-        if (browserActions.showStatus &&
+        if (panelActions.showStatus &&
             m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus))
             Arcane::Editor::SelectDockTab("Asset Status");
         // `focusInGraph` (Status's scene card -> Graph) -- write the focus,
@@ -2458,11 +2458,11 @@ namespace Arcane::Editor
         // does the rest on its next frame. Select still earns its line -- it
         // is what makes the graph CENTER on the scene rather than merely
         // contain it.
-        if (browserActions.focusInGraph.IsValid() &&
+        if (panelActions.focusInGraph.IsValid() &&
             m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph))
         {
-            m_assetGraphUi.graphFocus = browserActions.focusInGraph;
-            m_assetModel.Select(browserActions.focusInGraph);
+            m_assetGraphUi.graphFocus = panelActions.focusInGraph;
+            m_assetModel.Select(panelActions.focusInGraph);
             Arcane::Editor::SelectDockTab("Asset Graph");
         }
         // `revealInBrowse` (Status's Unreferenced card -> Browser) -- the
@@ -2471,11 +2471,11 @@ namespace Arcane::Editor
         // any derived fold open, then select); this consumer's own job is
         // only the trailing tab focus the extracted helper deliberately does
         // not make.
-        if (browserActions.revealInBrowse.IsValid() &&
+        if (panelActions.revealInBrowse.IsValid() &&
             m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser))
         {
             Arcane::Editor::RevealAssetInBrowser(m_assetBrowserUi, m_assetModel,
-                                                 browserActions.revealInBrowse);
+                                                 panelActions.revealInBrowse);
             Arcane::Editor::SelectDockTab("Asset Browser");
         }
 
@@ -2497,20 +2497,20 @@ namespace Arcane::Editor
         // There is no per-guid cook API: CookQueue::NoteChanged() is
         // whole-project, coalescing and hash-decided, which is exactly right
         // here (the same call PollAssetWatch makes for a changed source).
-        if (browserActions.recook.IsValid())
+        if (panelActions.recook.IsValid())
         {
             if (m_runtime)
-                m_runtime->AssetsFacade().InvalidateArtifact(browserActions.recook);
-            m_cookDiagnostics.erase(browserActions.recook);
+                m_runtime->AssetsFacade().InvalidateArtifact(panelActions.recook);
+            m_cookDiagnostics.erase(panelActions.recook);
             PublishCookDiagnostics();   // the Problems row clears with it
             if (m_cookQueue)
                 m_cookQueue->NoteChanged();
-            m_assetModel.MarkDirty(browserActions.recook);
+            m_assetModel.MarkDirty(panelActions.recook);
             // Beside the dirty mark, never instead of it -- Task 5's rule for
             // every activity push. SourceChanged is the honest kind: the user
             // asked for the same thing a source edit asks for.
-            m_assetActivity.Push({ std::chrono::steady_clock::now(), browserActions.recook,
-                                   NameOfAsset(browserActions.recook),
+            m_assetActivity.Push({ std::chrono::steady_clock::now(), panelActions.recook,
+                                   NameOfAsset(panelActions.recook),
                                    Arcane::Editor::AssetActivityKind::SourceChanged,
                                    "recook requested" });
         }
@@ -2526,7 +2526,7 @@ namespace Arcane::Editor
         // surfaced, the same reason Edit -> Rename's own two-step
         // (ConsumeMenuRequests above) brings the Outliner forward -- Problems
         // just no longer gets the first of those two steps.
-        if (browserActions.showProblems)
+        if (panelActions.showProblems)
             Arcane::Editor::SelectDockTab("Problems");
     }
 

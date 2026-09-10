@@ -114,7 +114,7 @@ namespace
     };
 }
 
-TEST_CASE("Assets panel Graph lens survives device-less ImGui frames", "[editor][graphcanvas]")
+TEST_CASE("Asset Graph panel survives device-less ImGui frames", "[editor][graphcanvas]")
 {
     const fs::path root = fs::temp_directory_path() / "arcane_assets_graph_canvas_test";
     std::error_code ec;
@@ -724,7 +724,7 @@ namespace
 // and on the frame after next `g.DebugDrawIdConflictsId` is non-zero
 // (imgui.cpp:5773-5776 -- the count accumulated while hovering is examined one
 // NewFrame later).
-TEST_CASE("Assets panel Graph lens submits no conflicting ImGui item ids",
+TEST_CASE("Asset Graph panel submits no conflicting ImGui item ids",
           "[editor][graphcanvas]")
 {
     MaterialHubFixture fx;
@@ -867,7 +867,7 @@ TEST_CASE("Assets panel Graph lens submits no conflicting ImGui item ids",
 //     cursor at the moment of the click -- is what proved the gesture logic was
 //     correct and something was sitting ON TOP of the menu eating the click. The
 //     case above names what.
-TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
+TEST_CASE("Asset Graph panel pin-drag derives an instance",
           "[editor][graphcanvas]")
 {
     MaterialHubFixture fx;
@@ -992,7 +992,7 @@ TEST_CASE("Assets panel Graph lens pin-drag derives an instance",
 // cheapest way to isolate "not the DEPENDENTS pin" from "not a material" as
 // the failing conjunct, and AssetGraphPanel.cpp's ruling comment calls out the
 // left pin explicitly as the other way in.)
-TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a quiet no-op",
+TEST_CASE("Asset Graph panel pin-drag from a non-derivable source is a quiet no-op",
           "[editor][graphcanvas]")
 {
     MaterialHubFixture fx;

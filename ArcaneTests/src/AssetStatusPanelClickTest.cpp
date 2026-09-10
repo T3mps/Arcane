@@ -61,10 +61,15 @@
 // either an ACTION/STATE value or a library-exposed geometry query, never
 // rasterized text), so this reaches for the same structural technique
 // AssetsGraphCanvasTest.cpp's own error-tooltip case already uses
-// (`ImGui::FindWindowByName`, imgui_internal.h) -- comparing the "Asset
-// Status" window's own drawlist vertex count with the ring null/empty
-// against the SAME frame with one real entry pushed. Everything else about
-// the fixture is held constant across the two frames, so the delta is
+// (`ImGui::FindWindowByName`/an ImGuiWindow scan, imgui_internal.h) --
+// comparing the BOTTOM-BAR CHILD WINDOW's own drawlist vertex count (NOT
+// the whole "Asset Status" window tree) with the ring null/empty against
+// the SAME frame with one real entry pushed. The body's own Activity feed
+// section (DrawAssetStatusBody, a few dozen lines up) reads that SAME
+// services.activity and would grow ITS OWN child window's vertex count on
+// the identical frame, so scoping the sum to just the bar's child window
+// (matched by name containing "assetstatusbottombar", the id string
+// BeginAssetPanelBottomBar was called with) is what makes the delta
 // attributable to the recency line's own text draw and nothing else.
 
 #include <catch2/catch_test_macros.hpp>
@@ -655,17 +660,24 @@ TEST_CASE("Status panel bottom bar recency line is empty until the activity ring
     // BeginChild), which ImGui gives its OWN ImGuiWindow + ImDrawList
     // ("ParentName/childname_HASH", imgui.cpp's BeginChildEx) -- the recency
     // line's text therefore never lands in the TOP-LEVEL "Asset Status"
-    // window's own drawlist. Summing every WasActive window whose name
-    // starts with "Asset Status" (the top window plus its "##assetstatusbody"/
-    // "##statusbody"/bottom-bar children) is what actually covers it,
-    // without needing to know that child's hashed suffix.
+    // window's own drawlist, or in its "##assetstatusbody"/"##statusbody"
+    // body children. Summing every WasActive window whose name merely
+    // STARTS WITH "Asset Status" would confound this: the body's own
+    // Activity feed section (DrawAssetStatusBody, :762-778) ALSO reads
+    // services.activity and grows the BODY child's vertex count on the
+    // identical frame, so a broad sum would pass even with the recency
+    // line's own draw deleted. This scopes to ONLY the bar's own child
+    // window, matched by name CONTAINING "assetstatusbottombar" (the id
+    // string BeginAssetPanelBottomBar was called with -- still present
+    // verbatim inside the hashed child name, imgui.cpp's "%s/%s_%08X" --
+    // without needing to know the hash suffix).
     const auto vtxOf = [&]() -> int
     {
         hw.Frame(); hw.Frame(); hw.Frame();
         ImGuiContext& g = *ImGui::GetCurrentContext();
         int total = 0;
         for (ImGuiWindow* w : g.Windows)
-            if (w->WasActive && std::strncmp(w->Name, "Asset Status", 12) == 0)
+            if (w->WasActive && std::strstr(w->Name, "assetstatusbottombar") != nullptr)
                 total += w->DrawList->VtxBuffer.Size;
         REQUIRE(total > 0);
         return total;
