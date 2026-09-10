@@ -61,6 +61,13 @@
 // one caller is DrawAssetPeekTooltip, which stays in AssetsPanel.cpp, so
 // moving the summary helper here would only have added a promotion nothing
 // needs.
+//
+// Task 5 round 1 fix: the boot-scene graphFocus seed the first cut of this
+// move placed in DrawAssetGraphBody's own preamble is NOT here -- it is
+// SeedAssetGraphFocus, an inline helper exported from AssetGraphPanel.hpp
+// and called by DrawAssetsPanel (AssetsPanel.cpp) ahead of DrawToolbar. See
+// that helper's own comment for the one-frame toolbar/bottom-bar disagreement
+// the original placement produced.
 namespace Arcane::Editor
 {
     namespace
@@ -1006,21 +1013,14 @@ namespace Arcane::Editor
                             const AssetPanelServices& services,
                             AssetPanelActions& actions)
     {
-        // Plan 3 Task 5: the Graph lens opens scoped to the project's BOOT
-        // SCENE, not to "everything" (spec s10 -- the boot scene is the one
-        // root every project has, and an everything-mode first view of a real
-        // project is a hairball). Seeded HERE, on the first panel frame of a
-        // project, rather than at the host's project-open seam, because the
-        // panel is the only place that has both the project and the state --
-        // and it is seeded ONCE (graphFocusSeeded), so the combo's own
-        // "everything" entry stays pickable afterwards. A project-less boot
-        // seeds nothing and leaves the flag armed for the first real project;
-        // DestroyAssetGraphPanelCanvas re-arms it on every switch after that.
-        if (project && !state.graphFocusSeeded)
-        {
-            state.graphFocus       = BootSceneGuid(project);
-            state.graphFocusSeeded = true;
-        }
+        // The boot-scene graphFocus seed (spec s10) is NOT run here -- Task 5
+        // round 1 fix: DrawAssetsPanel calls SeedAssetGraphFocus (declared
+        // inline, AssetGraphPanel.hpp) right after Begin, BEFORE DrawToolbar,
+        // so the toolbar's focus combo and this body's own read of
+        // `state.graphFocus` agree on the SAME frame a project opens. Seeding
+        // it here instead ran it AFTER the toolbar had already read the
+        // unseeded value that frame -- a one-frame "focus: everything" vs.
+        // "focus: <boot scene>" split between the toolbar and the bottom bar.
 
         // ---- 1. Rebuild the projection, and ONLY when it moved --------
         // The trigger is AssetPanelModel::entriesStamp (bumped exactly

@@ -2,7 +2,7 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetActivityLog.hpp"    // AssetActivityEntry/Kind (Task 8's feed, the first reader)
-#include "Panels/AssetGraphPanel.hpp"   // DrawAssetGraphBody -- the Graph lens's body (Task 5, panel-split)
+#include "Panels/AssetGraphPanel.hpp"   // DrawAssetGraphBody + SeedAssetGraphFocus -- the Graph lens's body + boot-scene seed (Task 5, panel-split)
 #include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusBody -- the Status lens's body (Task 4, panel-split)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind + the AssetKind bridge (Task 12)
 #include "Widgets/EditorFonts.hpp"
@@ -2050,6 +2050,19 @@ namespace Arcane::Editor
     {
         AssetPanelActions actions;
         ImGui::Begin("Assets", open);
+
+        // Task 5 round 1 fix: the Graph lens's boot-scene graphFocus seed
+        // MUST run before DrawToolbar -- its focus combo (gated on
+        // lens==Graph) reads `state.graphFocus` this same frame, and so does
+        // the bottom bar after the body. Seeding it any later than here (the
+        // first cut put it inside DrawAssetGraphBody's own preamble, which
+        // runs AFTER DrawToolbar) let the toolbar read the unseeded value on
+        // the one frame a project opens with the Graph lens active while the
+        // bottom bar read the seeded one -- a one-frame "focus: everything"
+        // vs. "focus: <boot scene>" split between the two bands. See
+        // SeedAssetGraphFocus's own comment (AssetGraphPanel.hpp) for the
+        // full account.
+        SeedAssetGraphFocus(state, project);
 
         DrawToolbar(state, model, actions);
 

@@ -4,15 +4,24 @@
 // and its lifecycle, extracted as pure motion out of AssetsPanel.cpp's
 // DrawGraphLens/AssetsGraphProjectionIsCurrent/DestroyAssetsPanelCanvas --
 // see AssetGraphPanel.cpp's own header comment for the full accounting.
-// Exports exactly three symbols: DrawAssetGraphBody (the six-arg lens-body
-// shape DrawBrowseLens/DrawAssetStatusBody carry too -- Task 7 retargets
-// `state` to AssetGraphPanelState&, not this task's concern),
+// Exports four symbols: DrawAssetGraphBody (the six-arg lens-body shape
+// DrawBrowseLens/DrawAssetStatusBody carry too -- Task 7 retargets `state`
+// to AssetGraphPanelState&, not this task's concern),
 // AssetsGraphProjectionIsCurrent (same signature it had in AssetsPanel.hpp;
-// a later task deletes it) and DestroyAssetGraphPanelCanvas (renamed from
+// a later task deletes it), DestroyAssetGraphPanelCanvas (renamed from
 // DestroyAssetsPanelCanvas -- same body, same two call sites in
-// EditorApp.cpp, now repointed here).
+// EditorApp.cpp, now repointed here) and SeedAssetGraphFocus (Task 5 round 1
+// fix -- see its own comment for why the boot-scene seed had to become a
+// small inline helper the HOST calls, rather than living inside the drawn
+// body).
 
-#include "Panels/AssetPanelCommon.hpp"   // AssetPanelActions/AssetPanelServices
+#include "Panels/AssetPanelCommon.hpp"   // AssetPanelActions/AssetPanelServices, BootSceneGuid
+// AssetsPanel.hpp, included (not forward-declared): SeedAssetGraphFocus below
+// is inline and touches AssetsPanelState's own fields (`graphFocus`,
+// `graphFocusSeeded`), which needs the complete type, not just a reference
+// declaration. No circularity -- AssetsPanel.hpp does not include this header
+// back.
+#include "Panels/AssetsPanel.hpp"
 
 namespace Arcane { class Project; }
 
@@ -20,11 +29,33 @@ namespace Arcane::Editor
 {
     class AssetPanelModel;
     class DocumentHost;
-    // AssetsPanel.hpp -- forward-declared rather than included, same reason
-    // AssetPanelCommon.hpp's own forward declare gives: only a reference
-    // parameter is needed below, and AssetGraphPanel.cpp (which has the real
-    // definition to work with) includes AssetsPanel.hpp itself.
-    struct AssetsPanelState;
+
+    // Seed `graphFocus` to the project's boot scene, once per project,
+    // BEFORE anything reads it this frame -- Task 5 round 1 fix. The seed
+    // used to run inside DrawAssetGraphBody's own preamble, which executes
+    // AFTER DrawToolbar (DrawAssetsPanel's draw order): the toolbar's focus
+    // combo (gated on lens==Graph) would read the STILL-unseeded
+    // `graphFocus` on the one frame a project opens with the Graph lens
+    // active, while the bottom bar -- which runs after the body -- read the
+    // freshly-seeded value the same frame, so the toolbar said "focus:
+    // everything" and the bottom bar said "focus: <boot scene>" in the same
+    // frame. Exported as a small inline helper so `DrawAssetsPanel`
+    // (AssetsPanel.cpp) can call it at the ORIGINAL seam -- right after
+    // `ImGui::Begin`, before `DrawToolbar` -- restoring the pre-split
+    // execution order in effect, not just the code's physical location.
+    //
+    // Idempotent per project: `graphFocusSeeded` (cleared by
+    // DestroyAssetGraphPanelCanvas's project-switch reset) guards the write,
+    // so a user's own "everything" pick on the toolbar combo is never
+    // silently re-seeded back to the boot scene on a later frame.
+    inline void SeedAssetGraphFocus(AssetsPanelState& state, const Arcane::Project* project)
+    {
+        if (project && !state.graphFocusSeeded)
+        {
+            state.graphFocus       = BootSceneGuid(project);
+            state.graphFocusSeeded = true;
+        }
+    }
 
     // Draw the Graph lens body: the ax::NodeEditor canvas, its lazily-created
     // context, the built AssetGraphViewModel projection (rebuilt only when
@@ -32,11 +63,13 @@ namespace Arcane::Editor
     // kind-coloured edges, the selection bridge, the peek tooltip with its
     // edge summary, double-click open, the unified context menu, and the
     // pin-drag "Derive Instance..." gesture with its dashed in-flight wire
-    // and the canvas legend. `model`/`project` are read (plus the boot-scene
-    // focus seed, on the first frame of a project); every effect travels
-    // through `actions`, gated by `services`; `docs` routes a non-scene open
-    // the same way a Browse row's does. See the definition's own comment
-    // (AssetGraphPanel.cpp) for the full section-by-section accounting.
+    // and the canvas legend. `model`/`project` are read; every effect
+    // travels through `actions`, gated by `services`; `docs` routes a
+    // non-scene open the same way a Browse row's does. The boot-scene focus
+    // seed does NOT happen in here -- see SeedAssetGraphFocus above, and its
+    // caller in DrawAssetsPanel, for why it has to run before this body does.
+    // See the definition's own comment (AssetGraphPanel.cpp) for the full
+    // section-by-section accounting.
     void DrawAssetGraphBody(AssetsPanelState& state, AssetPanelModel& model,
                             const Arcane::Project* project, DocumentHost& docs,
                             const AssetPanelServices& services,
