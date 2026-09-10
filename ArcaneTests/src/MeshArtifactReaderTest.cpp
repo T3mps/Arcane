@@ -1,0 +1,245 @@
+// F2c Task 4: the ArcaneClient reader mirror for MESH artifacts -- Arcane::ReadClientMeshArtifact
+// (ArcaneClient-local, the byte-contract PEER of Task 3's Arcane::AssetPipeline::WriteMeshArtifact/
+// ReadMeshArtifact; ArcaneClient itself never links/includes ArcaneAssetPipeline -- see
+// ArtifactReader.hpp's own header banner). This suite is the CROSS-LIB byte-contract test for the
+// mesh half, exactly the discipline ArtifactReaderTest.cpp already established for the texture
+// half: every fixture is written through the PIPELINE's real WriteMeshArtifact and read back
+// through THIS reader, so a drift between the two independent implementations of the SAME on-disk
+// format shows up here, not at a later consumer.
+//
+// Pins: the round trip (header + vertices + indices + sections, byte-exact); the three client
+// refusal states each watched firing on their own (HashMismatch/VersionNewerThanEngine/Missing);
+// and FindArtifactForGuid's kind-agnostic common-prefix scan -- THE SEAM this task exists for
+// (ParseHeader's pre-split fail-closed non-Texture gate made a mesh artifact resolve as Missing
+// forever no matter how many times it was cooked). Tagged [artifact], same tag ArtifactReaderTest.cpp
+// uses (the reader half of the contract, even though this file links the pipeline lib to build its
+// fixtures). Swept by both `"~[gpu]"` (the required full-suite run) and any future `"[artifact]"`-
+// scoped run.
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <Arcane/Assets/ArtifactReader.hpp>
+
+#include <Arcane/AssetPipeline/ArtifactFormat.hpp>
+#include <Arcane/AssetPipeline/ArtifactStore.hpp>
+#include <Arcane/Guid.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <span>
+#include <system_error>
+#include <vector>
+
+namespace fs = std::filesystem;
+using Arcane::Guid;
+
+namespace
+{
+    fs::path TempDir(const char* leaf)
+    {
+        fs::path d = fs::temp_directory_path() / "arcane_mesh_artifact_reader_test" / leaf;
+        std::error_code ec;
+        fs::remove_all(d, ec);
+        fs::create_directories(d);
+        return d;
+    }
+
+    // Same generator every AssetPipeline*Test.cpp file duplicates locally rather than sharing
+    // (no test-only helper library crosses the same ArcaneClient/ArcaneAssetPipeline boundary
+    // the production code itself refuses to cross).
+    std::vector<std::byte> PatternBytes(std::size_t n, std::uint8_t seed)
+    {
+        std::vector<std::byte> out(n);
+        for (std::size_t i = 0; i < n; ++i)
+            out[i] = static_cast<std::byte>(static_cast<std::uint8_t>(seed + i * 7));
+        return out;
+    }
+
+    // FNV-1a 64-bit over just the source bytes -- the SAME algorithm and constants
+    // TextureImporter.cpp's HashSourceBytes and ArtifactReader.cpp's own client-side
+    // HashSourceBytes both use, duplicated here (this suite writes a fixture's sourceHash
+    // through the pipeline side, then ReadClientMeshArtifact re-derives the same fingerprint
+    // internally against `currentSourceBytes` -- the two must agree by construction).
+    std::uint64_t FnvOfSource(std::span<const std::byte> bytes) noexcept
+    {
+        std::uint64_t h = 14695981039346656037ULL;
+        constexpr std::uint64_t prime = 1099511628211ULL;
+        for (std::byte b : bytes)
+        {
+            h ^= static_cast<std::uint64_t>(static_cast<std::uint8_t>(b));
+            h *= prime;
+        }
+        return h;
+    }
+
+    // A minimal-but-valid mesh fixture: 3 zeroed vertices, indices {0,1,2}, one section
+    // spanning them -- just enough for WriteMeshArtifact/ReadClientMeshArtifact to round-trip
+    // cleanly, used by the refusal cases below where the SHAPE of the mesh is not the point.
+    Arcane::AssetPipeline::MeshArtifactDesc MinimalMeshDesc(const Guid& guid, std::uint64_t sourceHash)
+    {
+        Arcane::AssetPipeline::MeshArtifactDesc desc{};
+        desc.sourceGuid = guid;
+        desc.sourceHash = sourceHash;
+        desc.importerVersion = Arcane::kClientMeshImporterVersionMirror;
+        desc.vertexCount = 3;
+        desc.indexCount = 3;
+        desc.sectionCount = 1;
+        desc.sections = { { "Slot", 0, 3, 0 } };
+        return desc;
+    }
+}
+
+// ---- round trip (the cross-lib byte contract) -----------------------------------------------
+
+TEST_CASE("mesh artifact: pipeline writer -> client reader round-trip", "[artifact]")
+{
+    const fs::path dir = TempDir("client_mesh_roundtrip");
+    const Guid guid = Guid::Generate();
+    const std::vector<std::byte> source = PatternBytes(64, 0x11);
+
+    Arcane::AssetPipeline::MeshArtifactDesc desc{};
+    desc.sourceGuid = guid;
+    desc.sourceHash = FnvOfSource(source);   // the same FNV-1a 64 both sides use
+    desc.importerVersion = Arcane::kClientMeshImporterVersionMirror;
+    desc.vertexCount = 4; desc.indexCount = 9; desc.sectionCount = 2;
+    desc.aabbMin[0] = -1.0f; desc.aabbMax[1] = 2.5f;
+    desc.sections = { { "Metal", 0, 6, 0 }, { "Metal", 6, 3, 0 } };
+
+    // Vertices/indices as in MeshArtifactFormatTest's own round-trip case: a 4-vertex quad
+    // (two triangles sharing an edge, 9 total emitted indices across the two sections above).
+    const std::vector<Arcane::AssetPipeline::MeshArtifactVertex> vertices = {
+        { 0,0,0,  0,1,0,  0,0 }, { 1,0,0,  0,1,0,  1,0 },
+        { 1,0,1,  0,1,0,  1,1 }, { 0,0,1,  0,1,0,  0,1 },
+    };
+    const std::vector<std::uint32_t> indices = { 0,1,2, 0,2,3, 1,2,3 };
+
+    REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(dir / "m.arcart", desc,
+                                                      vertices, indices));
+
+    const Arcane::MeshArtifactReadResult r =
+        Arcane::ReadClientMeshArtifact(dir / "m.arcart", source, guid);
+    REQUIRE(r.refusal == Arcane::ArtifactRefusal::None);
+    REQUIRE(r.mesh.has_value());
+    CHECK(r.mesh->vertices.size() == 4u * 8u);
+    CHECK(r.mesh->indices == indices);
+    REQUIRE(r.mesh->sections.size() == 2u);
+    CHECK(r.mesh->sections[0].name == "Metal");
+    CHECK(r.mesh->sections[1].slotIndex == 0u);
+    CHECK(r.mesh->aabbMin[0] == -1.0f);
+    CHECK(r.mesh->aabbMax[1] == 2.5f);
+
+    // The interleaved layout itself: vertex 2's own 8 floats (pos/normal/uv), spot-checked --
+    // proves the client's independent field-by-field decode lands in the SAME order the
+    // pipeline's independent field-by-field encode wrote them in.
+    REQUIRE(r.mesh->vertices.size() >= 3u * 8u + 8u);
+    const float* v2 = &r.mesh->vertices[2 * 8];
+    CHECK(v2[0] == 1.0f);   // px
+    CHECK(v2[1] == 0.0f);   // py
+    CHECK(v2[2] == 1.0f);   // pz
+    CHECK(v2[6] == 1.0f);   // u
+    CHECK(v2[7] == 1.0f);   // v
+}
+
+// ---- refusals, each watched firing on its own -------------------------------------------------
+
+TEST_CASE("mesh artifact: the three client refusals", "[artifact]")
+{
+    // HashMismatch: the artifact is fine, the source moved underneath it.
+    // VersionNewerThanEngine: importerVersion == mirror + 1.
+    // Missing: expectedSourceGuid does not match the header's.
+    // Mirrors ArtifactReaderTest.cpp's own refusal case structure exactly (one input varied
+    // per SECTION, the rest held at a known-good baseline) -- write through the pipeline
+    // writer, vary one input each time, assert the named refusal and that `mesh` stays nullopt.
+    const fs::path dir = TempDir("client_mesh_refusals");
+    const Guid guid = Guid::Generate();
+    const std::vector<std::byte> source = PatternBytes(48, 0x22);
+
+    const Arcane::AssetPipeline::MeshArtifactDesc desc = MinimalMeshDesc(guid, FnvOfSource(source));
+    const std::vector<Arcane::AssetPipeline::MeshArtifactVertex> vertices(3);
+    const std::vector<std::uint32_t> indices = { 0, 1, 2 };
+
+    SECTION("HashMismatch: the artifact is fine, the source moved underneath it")
+    {
+        const fs::path path = dir / "hash_mismatch.arcart";
+        REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(path, desc, vertices, indices));
+
+        // Baseline: the SAME bytes the artifact was cooked from still validate.
+        REQUIRE(Arcane::ReadClientMeshArtifact(path, source, guid).refusal
+                == Arcane::ArtifactRefusal::None);
+
+        std::vector<std::byte> editedSource = source;
+        editedSource[0] = static_cast<std::byte>(static_cast<unsigned char>(editedSource[0]) ^ 0xFF);
+
+        const auto r = Arcane::ReadClientMeshArtifact(path, editedSource, guid);
+        CHECK(r.refusal == Arcane::ArtifactRefusal::HashMismatch);
+        CHECK_FALSE(r.mesh.has_value());
+    }
+
+    SECTION("VersionNewerThanEngine: importerVersion == mirror + 1")
+    {
+        const fs::path path = dir / "version_newer.arcart";
+        Arcane::AssetPipeline::MeshArtifactDesc bumped = desc;
+        bumped.importerVersion = Arcane::kClientMeshImporterVersionMirror + 1;
+        REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(path, bumped, vertices, indices));
+
+        const auto r = Arcane::ReadClientMeshArtifact(path, source, guid);
+        CHECK(r.refusal == Arcane::ArtifactRefusal::VersionNewerThanEngine);
+        CHECK_FALSE(r.mesh.has_value());
+    }
+
+    SECTION("Missing: expectedSourceGuid does not match the header's")
+    {
+        const fs::path path = dir / "wrong_guid.arcart";
+        REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(path, desc, vertices, indices));
+
+        const auto r = Arcane::ReadClientMeshArtifact(path, source, Guid::Generate());
+        CHECK(r.refusal == Arcane::ArtifactRefusal::Missing);
+        CHECK_FALSE(r.mesh.has_value());
+    }
+}
+
+// ---- FindArtifactForGuid: the kind-agnostic common-prefix scan (THE SEAM) --------------------
+
+TEST_CASE("mesh artifact: FindArtifactForGuid finds a MESH artifact", "[artifact]")
+{
+    // THE SEAM THIS TASK EXISTS FOR. Before the ParseCommonPrefix split, ParseHeader's
+    // fail-closed `contentKind != Texture` check made this scan blind to every mesh artifact
+    // -- so a mesh could be cooked, committed, and still resolve as Missing forever. A texture
+    // artifact in the SAME store is written alongside it, so this also proves the split did
+    // not make the scan kind-BLIND in the other direction: both are found, each by its own
+    // guid.
+    const fs::path store = TempDir("find_mesh") / "Intermediate";
+    Arcane::AssetPipeline::ArtifactStore artifactStore(store);
+
+    const Guid meshGuid = Guid::Generate();
+    const Guid texGuid = Guid::Generate();
+
+    // One mesh artifact, placed via the real store's PathFor (Artifacts/<hh>/<hex>.arcart).
+    const Arcane::AssetPipeline::MeshArtifactDesc meshDesc = MinimalMeshDesc(meshGuid, 0x1122334455667788ULL);
+    const std::vector<Arcane::AssetPipeline::MeshArtifactVertex> meshVertices(3);
+    const std::vector<std::uint32_t> meshIndices = { 0, 1, 2 };
+    const fs::path meshPath = artifactStore.PathFor(0xAAAAAAAA11111111ULL);
+    fs::create_directories(meshPath.parent_path());
+    REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(meshPath, meshDesc, meshVertices, meshIndices));
+
+    // One texture artifact, placed the same way.
+    Arcane::AssetPipeline::TextureArtifactDesc texDesc{};
+    texDesc.contentKind = Arcane::AssetPipeline::ContentKind::Texture;
+    texDesc.sourceGuid = texGuid;
+    texDesc.sourceHash = 0x99887766554433ULL;
+    texDesc.importerVersion = 1;
+    texDesc.format = Arcane::AssetPipeline::ArtifactPixelFormat::RGBA8;
+    texDesc.dimension = Arcane::AssetPipeline::ArtifactDimension::Tex2D;
+    texDesc.arrayOrDepth = 1; texDesc.width = 1; texDesc.height = 1; texDesc.mipCount = 1;
+    texDesc.mips = { Arcane::AssetPipeline::MipDesc{ 0, 4, 1, 1 } };
+    texDesc.thumbWidth = 1; texDesc.thumbHeight = 1;
+    const std::vector<std::byte> texel(4, std::byte{ 0xFF });
+    const fs::path texPath = artifactStore.PathFor(0xBBBBBBBB22222222ULL);
+    fs::create_directories(texPath.parent_path());
+    REQUIRE(Arcane::AssetPipeline::WriteTextureArtifact(texPath, texDesc, texel, texel));
+
+    CHECK(Arcane::FindArtifactForGuid(store, meshGuid).size() == 1u);
+    CHECK(Arcane::FindArtifactForGuid(store, texGuid).size() == 1u);
+    CHECK(Arcane::FindArtifactForGuid(store, Guid::Generate()).empty());
+}

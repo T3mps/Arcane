@@ -1,51 +1,105 @@
 #pragma once
 
-// Arcane::ArtifactReader -- the ArcaneClient-local reader for ".arcart" texture artifacts.
+// Arcane::ArtifactReader -- the ArcaneClient-local reader for ".arcart" artifacts. As of
+// F2c Task 4 this covers BOTH artifact kinds the container format carries: Texture
+// (ReadClientArtifact, F2b Task 6) and Mesh (ReadClientMeshArtifact, F2c Task 4).
 //
 // BYTE-CONTRACT PEER: ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp/.cpp
-// (Task 1's writer) is the OTHER half of this contract. This file is a DELIBERATE,
-// INDEPENDENT reimplementation -- ArcaneClient must never link or #include
-// ArcaneAssetPipeline (premake keeps that structurally true: ArcaneClient's includedirs
-// carry no AssetPipeline path), so the two sides stay byte-compatible ONLY by both
-// following the SAME written format, never by sharing code. A change to the on-disk
+// (Task 1's texture writer, Task 3's mesh writer) is the OTHER half of this contract. This
+// file is a DELIBERATE, INDEPENDENT reimplementation -- ArcaneClient must never link or
+// #include ArcaneAssetPipeline (premake keeps that structurally true: ArcaneClient's
+// includedirs carry no AssetPipeline path), so the two sides stay byte-compatible ONLY by
+// both following the SAME written format, never by sharing code. A change to the on-disk
 // layout in ArtifactFormat.cpp must be mirrored here BY HAND, or the cross-lib round-trip
-// test (ArtifactReaderTest.cpp, which writes fixtures through the pipeline's own
-// WriteTextureArtifact and reads them back through THIS reader) fails loudly. Add/keep
-// this same paragraph, naming this file, in ArtifactFormat.hpp's own header comment.
+// tests (ArtifactReaderTest.cpp for Texture, MeshArtifactReaderTest.cpp for Mesh -- each
+// writes fixtures through the pipeline's own writer and reads them back through THIS
+// reader) fail loudly. Add/keep this same paragraph, naming this file, in
+// ArtifactFormat.hpp's own header comment.
 //
 // ON-DISK FORMAT (mirrors ArtifactFormat.hpp's header comment field-for-field; every
 // multi-byte field little-endian, one byte at a time -- never a struct memcpy, for the
 // same reason ArtifactFormat.cpp's own writer states: struct padding is compiler/ABI
 // dependent):
-//   magic "ARCA" (4 bytes)
-//   artifactVersion   u32  (== 1)
-//   contentKind       u8   (1 == Texture)
-//   sourceGuid.hi     u64
-//   sourceGuid.lo     u64
-//   sourceHash        u64  (FNV-1a 64 over the RAW SOURCE bytes -- see HashSourceBytes
-//                            below; TextureImporter.cpp computes the SAME fingerprint
-//                            when it writes an artifact's header)
-//   importerVersion   u32
-//   format            u8   (ArtifactPixelFormatValue below mirrors this byte's meaning)
-//   dimension         u8
-//   arrayOrDepth      u32
-//   width             u32
-//   height            u32
-//   mipCount          u32
-//   srgb              u8   (0/1)
-//   thumbWidth        u32
-//   thumbHeight       u32
-//   sectionCount      u32
-//   sectionCount * { tag u32, offset u64, size u64 }   -- the section table
-//   section bodies, at their own table offsets:
+//
+//   COMMON PREFIX (every content kind, 37 bytes -- see ParseCommonPrefix in
+//   ArtifactReader.cpp; this is the kind-agnostic slice FindArtifactForGuid's directory
+//   scan actually reads, WELL inside kHeaderProbeBytes below):
+//     magic "ARCA" (4 bytes)
+//     artifactVersion   u32  (== 1)
+//     contentKind       u8   (1 == Texture, 2 == Mesh)
+//     sourceGuid.hi     u64
+//     sourceGuid.lo     u64
+//     sourceHash        u64  (FNV-1a 64 over the RAW SOURCE bytes -- see HashSourceBytes
+//                              below; TextureImporter.cpp/MeshImporter's own hash computes
+//                              the SAME fingerprint when it writes an artifact's header.
+//                              For a .gltf mesh source with external buffers,
+//                              `currentSourceBytes` is the .gltf file's own bytes FOLLOWED
+//                              BY every referenced buffer's bytes, in glTF declaration
+//                              order -- the exact concatenation ComputeMeshCookKey hashes
+//                              (Task 5), so both sides agree by construction.)
+//     importerVersion   u32
+//
+//   TEXTURE TAIL (contentKind == 1 only; ReadClientArtifact's own shape, unchanged since
+//   F2b Task 6):
+//     format            u8   (ArtifactPixelFormatValue below mirrors this byte's meaning)
+//     dimension         u8
+//     arrayOrDepth      u32
+//     width             u32
+//     height            u32
+//     mipCount          u32
+//     srgb              u8   (0/1)
+//     thumbWidth        u32
+//     thumbHeight       u32
+//   ...then the shared CONTAINER SECTION TABLE below, whose bodies for this kind are:
 //     MipTable  (tag 1): mipCount u32, then {offset u64, size u64, width u32, height u32}
 //                        per mip, in order (slice-major, mip-minor when arrayOrDepth > 1)
 //     Payload   (tag 2): raw texel bytes for every mip, back to back, addressed by each
 //                        mip's own offset/size into this section
 //     Thumbnail (tag 3): raw, uncompressed RGBA8 bytes, thumbWidth x thumbHeight
-//   A section tag this reader does not recognise is SKIPPED, not an error -- the same
-//   forward-compat rule ArtifactFormat.hpp's reader states (a future artifact kind, e.g.
-//   F2c's mesh artifacts, can add a section without breaking this reader).
+//
+//   MESH TAIL (contentKind == 2 only; ReadClientMeshArtifact's own shape, F2c Task 4,
+//   mirroring AssetPipeline::MeshArtifactDesc field-for-field):
+//     vertexCount       u32
+//     indexCount        u32
+//     sectionCount      u32
+//     indexWidth        u8   (v1's only legal value is 4 -- anything else is refused,
+//                              never silently reinterpreted; a future 16-bit path is a
+//                              reader BRANCH, not a byte-width guess)
+//     aabbMin           f32 x3
+//     aabbMax           f32 x3
+//   ...then the shared CONTAINER SECTION TABLE below, whose bodies for this kind are:
+//     VertexData   (tag 4): vertexCount vertices, 8 f32 each (px,py,pz, nx,ny,nz, u,v),
+//                            back to back, NOT a struct memcpy -- field by field, exactly
+//                            like every other multi-byte field in this format
+//     IndexData    (tag 5): indexCount u32 indices, back to back
+//     SectionTable (tag 6): sectionCount u32, then per section: nameLen u16, name bytes
+//                            (nameLen of them, NOT null-terminated), indexOffset u32,
+//                            indexCount u32, slotIndex u32 -- this is the MESH's own
+//                            per-drawable-range table, NOT the shared container section
+//                            table just above it (that one is a fixed {tag,offset,size}
+//                            index with no tag of its own)
+//     Tangents     (tag 7): RESERVED, UNWRITTEN in v1 -- a future arc appends it
+//                            additively under the skip-unknown rule below
+//     Thumbnail    (tag 3): RESERVED for mesh too, UNWRITTEN in v1 (R5 harvests it
+//                            editor-side later) -- shares Texture's own tag 3, which is
+//                            exactly why the skip-unknown rule matters: a mesh reader
+//                            must tolerate a texture-kind tag turning up unused, and vice
+//                            versa, since both kinds share ONE tag space
+//     The header's declared vertexCount/indexCount must agree with what was actually
+//     DECODED: a file declaring nonzero counts but omitting the VertexData and/or
+//     IndexData section entirely is refused (Missing) rather than accepted with nonzero
+//     declared counts paired with empty arrays -- an absent body disagrees with its
+//     declared count maximally, the same class of corruption a truncated section is (the
+//     pipeline's ReadMeshArtifact refuses with nullopt for the identical reason; the two
+//     readers agree on this rule through this paragraph, not through shared code).
+//
+//   CONTAINER SECTION TABLE (shared structure, both kinds, no tag of its own):
+//     sectionCount      u32
+//     sectionCount * { tag u32, offset u64, size u64 }
+//   A section tag this reader does not recognise -- including a tag that belongs to the
+//   OTHER content kind -- is SKIPPED, not an error -- the same forward-compat rule
+//   ArtifactFormat.hpp's reader states (a future artifact kind, or a reserved tag not yet
+//   written, can add/occupy a section without breaking either reader).
 //
 // GUID -> ARTIFACT RESOLUTION (this task's own judgment call): there is no index FILE on
 // disk to read -- ArtifactStore's Guid -> cook-key index (ArtifactStore.hpp) is IN-MEMORY
@@ -61,6 +115,20 @@
 // file every scan -- caught by review, fixed the same task the claim was made in
 // (ArtifactReader.cpp's ReadHeaderOnly/ReadFilePrefix carry the fix's own comment); take
 // this kind of claim as something to VERIFY against the code, not trust from a comment.
+//
+// F2c TASK 4 FIX -- THE KIND-AGNOSTIC SCAN: FindArtifactForGuid's per-candidate probe (then
+// named ReadHeaderOnly) used to parse the TEXTURE-shaped fixed header (ParseHeader, which
+// fails closed on any contentKind != Texture) -- correct for a texture READ, but it made
+// FindArtifactForGuid blind to every mesh artifact: a mesh could be cooked, committed to
+// disk, and still resolve as Missing forever, no matter how many times it was recooked,
+// because the scan itself never got past the contentKind gate to even compare the guid. That
+// probe (renamed ReadCommonPrefixOnly) now parses ONLY the kind-agnostic COMMON PREFIX
+// (ParseCommonPrefix in ArtifactReader.cpp -- 37 bytes: magic 4 + artifactVersion 4 +
+// contentKind 1 + sourceGuid 16 + sourceHash 8 + importerVersion 4 -- comfortably inside the
+// same kHeaderProbeBytes-bounded read above, so the cost claim in the paragraph above is
+// still true), so the scan recognises every content kind's sourceGuid. Each per-kind FULL
+// reader (ReadClientArtifact, ReadClientMeshArtifact) keeps its OWN fail-closed contentKind
+// check unchanged -- the scan just no longer gates on it.
 //
 // C1(b) FIX (final-review wave, 2026-09-04): FindArtifactForGuid returns EVERY
 // guid-matching candidate, not just the first the scan happens to visit. The single-match
@@ -79,12 +147,19 @@
 // Task 12's cook-completion invalidation is the un-latch).
 //
 // REFUSAL DISCIPLINE (spec s5, F2b Task 6 ruling; Task 8 completed it -- "refuse, never limp"):
+// applies IDENTICALLY to ReadClientMeshArtifact (F2c Task 4) -- SAME three states, SAME
+// subsumption clause, just checked against kClientMeshImporterVersionMirror instead of
+// kClientTextureImporterVersionMirror.
 //   Missing                 -- no artifact at all resolves for this guid. A REAL refusal
 //                               at the Assets facade layer since Task 8 (the sprite
 //                               cutover): content is artifact-only, the stb fallback is
 //                               retired, and a missing artifact refuses by name
 //                               ("ArtifactMissing"), memoized and latched like the other
-//                               two states below.
+//                               two states below. For the mesh reader this is also the
+//                               catch-all for "cannot be used and is not one of the two
+//                               named refusals": absent file, unparseable/corrupt bytes,
+//                               wrong contentKind, or a header sourceGuid that does not
+//                               match the caller's expectedSourceGuid.
 //   HashMismatch             -- an artifact EXISTS for this guid, but its header sourceHash
 //                               disagrees with the hash of the CURRENT staged source bytes:
 //                               the cook is stale (a source was edited without recooking)
@@ -92,9 +167,10 @@
 //                               known-bad artifact would mask exactly the failure the cook
 //                               step exists to catch.
 //   VersionNewerThanEngine   -- the artifact's importerVersion is NEWER than this build's
-//                               own kClientTextureImporterVersionMirror: THIS ENGINE is the
-//                               stale side (a downgrade, or a build-skew cook farm). Refuses
-//                               loudly for the same reason.
+//                               own kClientTextureImporterVersionMirror (or, for a mesh
+//                               artifact, kClientMeshImporterVersionMirror): THIS ENGINE is
+//                               the stale side (a downgrade, or a build-skew cook farm).
+//                               Refuses loudly for the same reason.
 //   SUBSUMPTION CLAUSE (restated from the spec): an artifact OLDER than the engine
 //   (importerVersion < the mirror) is NOT a third refusal kind -- it collapses into Missing.
 //   CookSession's own staleness check folds importerVersion into the cook KEY
@@ -113,6 +189,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace Arcane
@@ -201,6 +278,55 @@ namespace Arcane
     // header sourceGuid does not match `expectedSourceGuid` (a stray or renamed artifact
     // file sitting where the caller expected a different one).
     [[nodiscard]] ARCANE_API ArtifactReadResult ReadClientArtifact(
+        const std::filesystem::path& path,
+        std::span<const std::byte> currentSourceBytes,
+        const Guid& expectedSourceGuid);
+
+    // ---- Mesh artifacts (F2c Task 4) ----------------------------------------------------
+    // Independent reimplementation of the mesh half of the contract -- see this file's
+    // header banner (BYTE-CONTRACT PEER paragraph and the MESH TAIL on-disk layout) and
+    // ArtifactFormat.hpp's own MeshArtifactDesc/MeshArtifactSection, which this mirrors
+    // field for field WITHOUT including that header.
+
+    // Mirrors AssetPipeline::MeshArtifactSection field for field (see this file's
+    // no-shared-code banner). `indexOffset`/`indexCount` are in INDICES.
+    struct MeshSectionView
+    {
+        std::string   name;
+        std::uint32_t indexOffset = 0;
+        std::uint32_t indexCount  = 0;
+        std::uint32_t slotIndex   = 0;
+    };
+
+    struct LoadedClientMesh
+    {
+        std::vector<float>         vertices;   // 8 floats per vertex: pos, normal, uv
+        std::vector<std::uint32_t> indices;
+        std::vector<MeshSectionView> sections;
+        float aabbMin[3]{ 0.0f, 0.0f, 0.0f };
+        float aabbMax[3]{ 0.0f, 0.0f, 0.0f };
+    };
+
+    // This engine's own copy of AssetPipeline's kMeshImporterVersion -- mirrored BY
+    // HAND, never included, exactly like kClientTextureImporterVersionMirror above.
+    // Bump IN LOCKSTEP with that one.
+    inline constexpr std::uint32_t kClientMeshImporterVersionMirror = 1;
+
+    struct MeshArtifactReadResult
+    {
+        ArtifactRefusal                  refusal = ArtifactRefusal::Missing;
+        std::optional<LoadedClientMesh>  mesh;   // set iff refusal == None
+    };
+
+    // The mesh half of ReadClientArtifact, with the SAME refusal discipline: Missing
+    // covers "cannot be used and is not one of the two named refusals" (absent,
+    // unparseable, wrong contentKind, wrong sourceGuid); HashMismatch when the
+    // header's sourceHash disagrees with the CURRENT source bytes; VersionNewer
+    // ThanEngine when importerVersion exceeds the mirror above. `currentSourceBytes`
+    // for a .gltf with external buffers is the .gltf file's bytes FOLLOWED BY every
+    // referenced buffer's, in glTF declaration order -- the exact concatenation
+    // ComputeMeshCookKey hashes (Task 5), so the two sides agree by construction.
+    [[nodiscard]] ARCANE_API MeshArtifactReadResult ReadClientMeshArtifact(
         const std::filesystem::path& path,
         std::span<const std::byte> currentSourceBytes,
         const Guid& expectedSourceGuid);
