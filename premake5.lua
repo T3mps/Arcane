@@ -898,6 +898,14 @@ project "ArcaneTests"
         -- too, same reason (and same "not globbed, explicit list" caveat)
         -- as AssetPanelCommon.cpp/AssetStatusPanel.cpp above.
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
+        -- Panel-split arc (Task 6): AssetBrowserPanel -- the Browse lens's
+        -- body (DrawAssetBrowserBody: rail + grouped table + preview pane),
+        -- moved as pure motion out of AssetsPanel.cpp's DrawBrowseLens.
+        -- AssetsPanel.cpp above calls it, so this TU has to source-compile
+        -- alongside it here too, same reason (and same "not globbed,
+        -- explicit list" caveat) as AssetPanelCommon.cpp/AssetStatusPanel.cpp/
+        -- AssetGraphPanel.cpp above.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
     }
 
     includedirs {

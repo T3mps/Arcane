@@ -29,6 +29,12 @@ namespace Arcane::Editor
     // pointer type is needed below (ScenesByName's return), and pulling the
     // full header in here is not required for that.
     struct AssetPanelEntry;
+    // AssetPanelModel.hpp's CookState enum (fixed std::uint8_t underlying
+    // type, forward-declarable the same way a scoped enum with an explicit
+    // base always is) -- CookStateLabel below only needs the TYPE for its
+    // parameter, not the enumerators, so pulling in the model header for it
+    // is not required.
+    enum class CookState : std::uint8_t;
     // Documents/DocumentHost.hpp -- forward-declared for OpenAssetRow below,
     // which only needs a reference to the type; the definition it calls into
     // (AssetsPanel.cpp) already includes the real header.
@@ -233,6 +239,18 @@ namespace Arcane::Editor
     // preview pane's pill and the Graph lens's node body pill all read this
     // same text.
     const char* SubkindPillText(const AssetPanelEntry& e);
+
+    // Panel-split Task 6: a SIXTH lens-shared helper, found when the Browse
+    // lens's body moved out to its own TU (AssetBrowserPanel.cpp) -- the
+    // preview pane's cook row and DrawAssetPeekTooltip's own cook line (both
+    // still AssetsPanel.cpp's, the tooltip's body unmoved) format the same
+    // CookState the same way. Same promotion as the five above: the body
+    // keeps living exactly where it was (AssetsPanel.cpp), only the
+    // enclosing namespace brace moved.
+    //
+    // CookState-to-display-string (spec s6/s8: "Cooked"/"Queued"/"Refused"/
+    // "Unknown") -- see the definition's own comment (AssetsPanel.cpp).
+    const char* CookStateLabel(CookState cook);
 
     // AssetPill's own width, WITHOUT drawing it (EditorWidgets.cpp's
     // AssetPill, 12px text plus its two FramePadding.x cheeks) -- a caller
