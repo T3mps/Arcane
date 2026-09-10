@@ -15,6 +15,13 @@
 namespace Arcane::Editor
 {
     class AssetActivityLog;
+    class AssetPanelModel;
+    // AssetsPanel.hpp -- forward-declared rather than included: that header
+    // already includes THIS one (AssetPanelActions/Services + the create
+    // menu), so pulling it in here would be circular. RevealAssetInBrowser
+    // below only needs a reference to the type; AssetPanelCommon.cpp, which
+    // has the real definition to call into, includes AssetsPanel.hpp itself.
+    struct AssetsPanelState;
 
     // Row/menu actions the APP resolves after the draw -- same "panel
     // reports, app performs" split the old (retired) AssetBrowserActions used
@@ -59,6 +66,21 @@ namespace Arcane::Editor
         // invented.
         Arcane::Guid recook;
         bool         showProblems = false;
+
+        // Panel-split spec s7.1 (Task 3): three former DIRECT `state.lens`
+        // writers -- the digest chip, the Unreferenced card's Reveal
+        // button, and the Scenes card's "Focus in Graph" -- promoted to
+        // actions for the same reason `showProblems` already is one: once
+        // the split lands (Task 7) these cross INTO another panel's window,
+        // and "the panel mutates a sibling panel's state directly" is
+        // exactly the layering wart `showProblems`'s own header comment
+        // never allowed for the Problems pane. Each raise site gates itself
+        // on the matching AssetPanelServices bool below BEFORE writing here
+        // (R1/s7.3: focus if open, else disabled) -- a consumer does not
+        // need to re-derive that gate, only perform the effect.
+        bool         showStatus = false;   // digest chip (Browse/Graph -> Status)
+        Arcane::Guid revealInBrowse;       // Unreferenced card -> Browse
+        Arcane::Guid focusInGraph;         // Scenes card -> Graph
     };
 
     // The Assets panel's read-only host seams. Originally just the
@@ -91,6 +113,19 @@ namespace Arcane::Editor
         // services contract lands in one edit; Task 8's activity feed is its
         // first reader. May be null -- a caller must guard.
         const AssetActivityLog* activity = nullptr;
+
+        // Panel-split spec s7.3 (Task 3): host-filled every frame from
+        // m_panelVis (the same site resolveAssetThumb/cookDetailFor/
+        // activity above are already filled at), so a raise site can grey
+        // its own control + explain when its target is closed rather than
+        // opening it (R1: nothing opens a panel except the Window menu).
+        // The first three alias ONE panel (`PanelId::Assets`) until Task 7
+        // gives Browse/Graph/Status separate ids -- today they can only
+        // ever read identically, since there is exactly one "Assets"
+        // window housing all three lenses. `problemsOpen` is not an alias:
+        // Problems is already its own panel, and gates the Attention
+        // card's "Problems" button under the same rule.
+        bool browserOpen = false, graphOpen = false, statusOpen = false, problemsOpen = false;
     };
 
     // The unified Create menu's entries (spec s7), spelled ONCE and shared
@@ -112,6 +147,21 @@ namespace Arcane::Editor
     // texture field and all.
     void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled);
     void DrawCreateMenu(AssetPanelActions& actions);
+
+    // Panel-split spec s7.2 (Task 3): today's Reveal sequence (the
+    // Unreferenced card's own click handler, pre-split), extracted to a
+    // free function so the host's `revealInBrowse` consumer can run it
+    // without one panel reaching into a sibling's state -- clears search
+    // and the kind filter in BOTH places (state mirror + model), walks
+    // `guid`'s folder ancestry forcing every group open in both places,
+    // forces the derived fold open when `foldedUnder` is valid, then
+    // selects. A no-op when `guid` no longer resolves to an entry (the
+    // action may be consumed a frame after it was raised, and the model
+    // can have moved on in between). `state` is Browse's own state mirror
+    // -- Task 7 retargets this parameter to `AssetBrowserPanelState&` once
+    // Browse is its own panel; nothing else about the contract changes.
+    void RevealAssetInBrowser(AssetsPanelState& state, AssetPanelModel& model,
+                              const Arcane::Guid& guid);
 
     // Toolbar / bottom bar band heights (spec s11.2's values table:
     // "toolbar wells / bottom bar | 24px / 24px"). The default ImGui

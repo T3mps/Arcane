@@ -514,15 +514,21 @@ namespace Arcane::Editor
         // cannot know) because HealthCounts had no such field; the model's
         // AssetReferenceIndex now supplies it.
         //
-        // Plan 2 Task 8: `state` arrives non-const (not just to READ
-        // state.lens for the left context below, but to WRITE it -- the
-        // digest click-through switches lens directly, the same "the Draw*
-        // function mutates state in place" convention DrawToolbar's own
-        // SegmentedStrip handling already uses a few lines above this one).
-        // This function has no header declaration to keep in step (it is
-        // file-local, like every other Draw* helper above) -- only its
-        // single call site in DrawAssetsPanel changes.
-        void DrawBottomBar(AssetsPanelState& state, const AssetPanelModel& model)
+        // Plan 2 Task 8 note, superseded by panel-split Task 3: `state` used
+        // to arrive non-const so the digest click-through could switch
+        // `state.lens` directly, the same "the Draw* function mutates state
+        // in place" convention DrawToolbar's own SegmentedStrip handling
+        // uses a few lines above this one. Spec s7.1 retires that -- Status
+        // is a cross-window command's target now, not a sibling lens of
+        // this same panel -- so the click raises `actions.showStatus`
+        // instead and `state` reverts to a plain read (the left context's
+        // "X of N shown"/Graph-focus text below); `services` arrives beside
+        // `actions` for the digest's own R1 gate (s7.3). This function has
+        // no header declaration to keep in step (it is file-local, like
+        // every other Draw* helper above) -- only its single call site in
+        // DrawAssetsPanel changes.
+        void DrawBottomBar(const AssetsPanelState& state, const AssetPanelModel& model,
+                           const AssetPanelServices& services, AssetPanelActions& actions)
         {
             if (!ImGui::BeginChild("##assetsbottombar", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
                                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
@@ -632,16 +638,26 @@ namespace Arcane::Editor
             ImGui::SameLine(0.0f, 0.0f);
             ImGui::TextDisabled("%s", restPart);
 
-            // Digest click-through (spec s5): an InvisibleButton laid over
-            // the rect just drawn -- captured BEFORE the two TextColored/
-            // TextDisabled calls above, since neither is meant to change
-            // appearance on hover/press, a bare hit-test overlay is the
-            // smaller change (this file already overlays a full-body
-            // InvisibleButton for the identical reason in DrawAttentionCard).
-            // A no-op when already on Status, per spec.
+            // Digest click-through (spec s5; the routing + gate are now
+            // spec s7.1/s7.3, panel-split Task 3): an InvisibleButton laid
+            // over the rect just drawn -- captured BEFORE the two
+            // TextColored/TextDisabled calls above, since neither is meant
+            // to change appearance on hover/press, a bare hit-test overlay
+            // is the smaller change (this file already overlays a
+            // full-body InvisibleButton for the identical reason in
+            // DrawAttentionCard). Raises actions.showStatus rather than
+            // writing state.lens directly -- Status is a cross-window
+            // command's target now. The counts drawn above never grey
+            // (s7.3: information first, the chip never disappears); only
+            // the click affordance goes inert when Status is closed
+            // (R1: nothing opens a panel except the Window menu), with a
+            // tooltip on hover explaining why.
             ImGui::SetCursorScreenPos(digestScreenPos);
-            if (ImGui::InvisibleButton("##digestclick", ImVec2(digestWidth, ImGui::GetTextLineHeight())))
-                state.lens = AssetLens::Status;
+            if (ImGui::InvisibleButton("##digestclick", ImVec2(digestWidth, ImGui::GetTextLineHeight())) &&
+                services.statusOpen)
+                actions.showStatus = true;
+            if (!services.statusOpen && ImGui::IsItemHovered())
+                ImGui::SetTooltip("Asset Status is closed \xE2\x80\x94 open it from Window \xE2\x96\xB8");
 
             ImGui::EndChild();
         }
@@ -2115,8 +2131,18 @@ namespace Arcane::Editor
                 if (ImGui::Button("Recook"))
                     actions.recook = e.guid;
                 ImGui::SameLine();
+                // Panel-split spec s7.3/R1 (Task 3): Problems comes under
+                // the same focus-if-open rule as the other three deep
+                // links -- greyed + tooltipped when Problems is closed,
+                // never un-hiding it (see ConsumeBrowserActions's own
+                // updated comment for the host half of this change).
+                ImGui::BeginDisabled(!services.problemsOpen);
                 if (ImGui::Button("Problems"))
                     actions.showProblems = true;
+                ImGui::EndDisabled();
+                if (!services.problemsOpen &&
+                    ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Problems is closed \xE2\x80\x94 open it from Window \xE2\x96\xB8");
             }
 
             // ---- line 1: 18px thumb, state glyph, name, trailing content.
@@ -2326,8 +2352,8 @@ namespace Arcane::Editor
         // matches the rows' own actual pitch exactly -- the same "vertical-
         // only, don't trust automatic per-item spacing" fix DrawAssetsPanel's
         // own toolbar-gap comment applies elsewhere in this file.
-        void DrawUnreferencedCard(AssetsPanelState& state, AssetPanelModel& model,
-                                  const AssetPanelServices& services)
+        void DrawUnreferencedCard(AssetPanelModel& model, const AssetPanelServices& services,
+                                  AssetPanelActions& actions)
         {
             const ImVec2 cardMin   = ImGui::GetCursorScreenPos();
             const float  cardWidth = ImGui::GetContentRegionAvail().x;
@@ -2404,65 +2430,23 @@ namespace Arcane::Editor
                     AssetPill(e->fileName.c_str());
 
                     ImGui::SetCursorScreenPos(ImVec2(revealX, rowMin.y + (rowH - ImGui::GetFrameHeight()) * 0.5f));
+                    // Panel-split spec s7.1/s7.2 (Task 3): this card no
+                    // longer performs the reveal itself -- it raises
+                    // actions.revealInBrowse and the HOST calls
+                    // RevealAssetInBrowser (AssetPanelCommon.*), which
+                    // carries the exact Ruling-10 sequence (clear filters,
+                    // walk ancestry, force the derived fold, select) this
+                    // button used to run in place, plus the `state.lens =
+                    // Browse` write this button no longer needs to make.
+                    // R1/s7.3: greyed + tooltipped when Browse is closed --
+                    // nothing opens a panel except the Window menu.
+                    ImGui::BeginDisabled(!services.browserOpen);
                     if (ImGui::Button("Reveal"))
-                    {
-                        // Ruling 10 (plan doc): clear every filter, switch to
-                        // Browse, select the guid -- DrawTable's own scroll-
-                        // to-selection machinery (:1100-1114-ish, keyed off
-                        // state.seenSelectionStamp vs model.selectionStamp)
-                        // does the rest once Browse redraws next frame.
-                        model.SetSearch("");
-                        state.search[0] = '\0';
-                        model.SetKindFilter(-1);
-                        state.railKind = -1;   // -1 = All, the rail's own spelling
-
-                        // Controller ruling (Task 8 review, Ruling 10's gap):
-                        // clearing filters alone does not guarantee the row
-                        // is VISIBLE -- a collapsed ancestor group (or a
-                        // collapsed mount root, e.g. diag://'s own default-
-                        // closed state, GroupDefaultOpen) still hides it.
-                        // Walk `e->folder` up through every ancestor
-                        // (GroupParentOf -- the same chain DrawGroupRow's own
-                        // nesting walks, terminating at "" for a mount's own
-                        // root) and force each one open, through BOTH
-                        // writers DrawGroupRow's own toggle uses: state's
-                        // mirror (GroupIsOpen's source of truth for the
-                        // chevron glyph) and the model (SetGroupOpen -- the
-                        // actual Rows() rebuild trigger). The mount root
-                        // itself is included: it is simply the LAST non-empty
-                        // value this loop visits before GroupParentOf finally
-                        // returns "".
-                        for (std::string folder = e->folder; !folder.empty(); folder = GroupParentOf(folder))
-                        {
-                            state.groupOpen[folder] = true;
-                            model.SetGroupOpen(folder, true);
-                        }
-
-                        // Addendum (coordinator ruling, extending Ruling 10):
-                        // reachable -- a folded 1:1 derived sprite with zero
-                        // inbound IS unused-eligible (kind Sprite), so it can
-                        // be a `Reveal` target while still living under its
-                        // texture's own CLOSED fold. The group chain above
-                        // opens every ANCESTOR GROUP but says nothing about
-                        // fold state, which is a separate flag keyed by the
-                        // PARENT TEXTURE's guid (`foldedUnder`), not by
-                        // folder -- so it needs its own write, same two-map
-                        // spelling the fold chevron's own toggle uses
-                        // (DrawAssetRow's expander handler: state.childrenOpen
-                        // + model.SetChildrenOpen, both keyed by the PARENT's
-                        // guid). Consistent with the tree arc's uniform-
-                        // reveal precedent, where search already overrides
-                        // both group and fold collapse -- Reveal now forces
-                        // the same two collapse dimensions open explicitly.
-                        if (e->foldedUnder.IsValid())
-                        {
-                            state.childrenOpen[e->foldedUnder] = true;
-                            model.SetChildrenOpen(e->foldedUnder, true);
-                        }
-
-                        state.lens = AssetLens::Browse;
-                        model.Select(guid);
-                    }
+                        actions.revealInBrowse = guid;
+                    ImGui::EndDisabled();
+                    if (!services.browserOpen &&
+                        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("Asset Browser is closed \xE2\x80\x94 open it from Window \xE2\x96\xB8");
 
                     // Reserve the FULL row as one item -- EndCardFrame's own
                     // EndGroup measures the union of real items, so every row
@@ -2488,15 +2472,19 @@ namespace Arcane::Editor
         // placeholder for exactly as long as the Graph lens itself was
         // unreachable -- never a stub that pretended to do something).
         //
-        // `state` for that button alone: it is the only thing on this card
-        // that writes panel state, and it writes it DIRECTLY rather than
-        // through AssetPanelActions -- the panel/app split those actions
-        // exist for is about effects the HOST must perform (file IO,
-        // dialogs, scene loads), and switching which lens this same panel
-        // draws is not one. The precedent is the digest chip's own
-        // click-through in DrawBottomBar.
-        void DrawSceneCard(AssetsPanelState& state, AssetPanelModel& model,
-                           const AssetPanelEntry& e, const Arcane::Guid& bootGuid)
+        // Panel-split spec s7.1 (Task 3): the button used to write
+        // state.graphFocus/state.lens and call model.Select DIRECTLY -- the
+        // precedent named above (the digest chip's own click-through in
+        // DrawBottomBar), from back when switching lenses inside one panel
+        // was not a host effect. The split invalidates that rationale: once
+        // Task 7 lands, Graph is a SEPARATE window, so this card raises
+        // actions.focusInGraph instead and takes no `state` parameter at
+        // all -- the host (EditorApp::ConsumeBrowserActions) performs the
+        // focus-then-select-then-lens sequence, in that order, after this
+        // frame's draw. R1/s7.3: greyed + tooltipped when Graph is closed.
+        void DrawSceneCard(AssetPanelModel& model, const AssetPanelServices& services,
+                           AssetPanelActions& actions, const AssetPanelEntry& e,
+                           const Arcane::Guid& bootGuid)
         {
             if (!BeginCardFrame(e.guid.ToString().c_str(), 0, ImGui::GetContentRegionAvail().x))
                 return;
@@ -2538,24 +2526,21 @@ namespace Arcane::Editor
                              static_cast<int>(targets.size()));
             ImGui::TextDisabled("%s", line);
 
+            // Panel-split spec s7.1 (Task 3): the focus-before-lens ordering
+            // this button used to encode locally (comment retired along
+            // with the writes it explained) now lives at the host's
+            // consumer -- EditorApp::ConsumeBrowserActions writes
+            // graphFocus, then Select, then the lens, in that same order,
+            // for the same reason: the Graph lens's projection is built
+            // from whatever graphFocus holds on ITS first frame, and
+            // Select is what makes the graph CENTER on this scene rather
+            // than merely contain it.
+            ImGui::BeginDisabled(!services.graphOpen);
             if (ImGui::Button("Focus in Graph"))
-            {
-                // Focus BEFORE the lens, deliberately: the very next frame is
-                // the Graph lens's first, and its projection is built from
-                // whatever `graphFocus` holds when that frame runs. Setting
-                // the lens first would still land the same focus in the same
-                // frame (both writes happen here, before any draw), but the
-                // ordering states the dependency the way it actually reads --
-                // scope, then show -- so a later edit that moves either line
-                // cannot quietly build one unscoped frame first.
-                state.graphFocus = e.guid;
-                state.lens       = AssetLens::Graph;
-                // ...and select it, which is what makes the graph CENTER on
-                // this scene rather than merely contain it: the lens's
-                // selection bridge (Task 4) centers the canvas on an EXTERNAL
-                // selection change, and this is one.
-                model.Select(e.guid);
-            }
+                actions.focusInGraph = e.guid;
+            ImGui::EndDisabled();
+            if (!services.graphOpen && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Asset Graph is closed \xE2\x80\x94 open it from Window \xE2\x96\xB8");
 
             EndCardFrame();
         }
@@ -2570,7 +2555,15 @@ namespace Arcane::Editor
         // version of that logic; NoSavedSettings for the same reason every
         // other table in this file carries it (session-only layout, nothing
         // to persist to imgui.ini).
-        void DrawStatusLens(AssetsPanelState& state, AssetPanelModel& model,
+        // Panel-split spec s7.1 (Task 3): `state`'s only uses inside this
+        // body were the two deep-link writes (the Unreferenced card's
+        // Reveal, the Scenes card's Focus in Graph) -- both now raise
+        // through `actions` instead, so `state` goes unread here, same as
+        // `docs` beside it. Left in the signature rather than dropped: this
+        // is still the shared six-arg lens-body shape DrawBrowseLens/
+        // DrawGraphLens carry too, and Task 4 (moving this body out to its
+        // own panel unit) is where the shape itself changes.
+        void DrawStatusLens(AssetsPanelState& /*state*/, AssetPanelModel& model,
                             const Arcane::Project* project, DocumentHost& /*docs*/,
                             const AssetPanelServices& services,
                             AssetPanelActions& actions)
@@ -2699,7 +2692,7 @@ namespace Arcane::Editor
 
                 ImGui::Dummy(ImVec2(0.0f, kStatusSectionGap));
                 ImGui::TextDisabled("Unreferenced");
-                DrawUnreferencedCard(state, model, services);
+                DrawUnreferencedCard(model, services, actions);
 
                 // ---- RIGHT: Activity, then Scenes.
                 ImGui::TableSetColumnIndex(1);
@@ -2760,7 +2753,7 @@ namespace Arcane::Editor
                     ImGui::TextDisabled("no scenes");
                 else
                     for (const AssetPanelEntry* e : scenes)
-                        DrawSceneCard(state, model, *e, bootGuid);
+                        DrawSceneCard(model, services, actions, *e, bootGuid);
 
                 ImGui::EndTable();
             }
@@ -4911,7 +4904,7 @@ namespace Arcane::Editor
         }
         ImGui::EndChild();
 
-        DrawBottomBar(state, model);
+        DrawBottomBar(state, model, services, actions);
 
         ImGui::End();
         return actions;

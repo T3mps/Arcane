@@ -1145,3 +1145,66 @@ TEST_CASE("Assets panel Graph lens pin-drag from a non-derivable source is a qui
     std::error_code ec;
     fs::remove_all(fx.root, ec);
 }
+
+// ---------------------------------------------------------------------------
+// Panel-split spec s7.1/s7.3 (Task 3): the digest chip's click-through now
+// raises actions.showStatus rather than writing state.lens directly, and R1
+// gates the CLICK -- never the counts, which always render -- on
+// services.statusOpen. Real mouse input over the real bottom bar, the same
+// reason the pin-drag cases above need one: the InvisibleButton only exists
+// inside a live ImGui frame, so no headless unit can stand in for it.
+TEST_CASE("digest chip raises showStatus only while the Status target is open",
+          "[editor][graphcanvas]")
+{
+    MaterialHubFixture fx;
+    fx.Build("arcane_assets_digestclick_test", /*referencerCount=*/6);
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&fx.project->Registry(), fx.fake.Make()));
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1600.0f, 900.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr;
+    int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+
+    AssetsPanelState state;
+    state.lens = AssetLens::Graph;
+    state.graphFocusSeeded = true;
+    DocumentHost docs;
+
+    GraphMouseHarness hw;
+    hw.state = &state;
+    hw.model = &model;
+    hw.project = &*fx.project;
+    hw.docs = &docs;
+    hw.services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
+    hw.services.statusOpen = true;
+
+    for (int i = 0; i < 3; ++i) hw.Frame();
+    // The digest ends flush at the bottom bar's right edge; click just
+    // inside it. POSITIVE CONTROL FIRST -- if this leg misses the chip, the
+    // test fails loudly here instead of passing vacuously below.
+    const ImVec2 chip(hw.origin.x + hw.size.x - 20.0f,
+                      hw.origin.y + hw.size.y - kAssetPanelBottomBarHeight * 0.5f);
+    hw.MoveTo(chip); hw.Frame(); hw.Button(true); hw.Frame(); hw.Button(false); hw.Frame();
+    REQUIRE(hw.lastActions.showStatus);          // control: the click DOES land
+
+    hw.lastActions = {};
+    hw.services.statusOpen = false;              // target closed -> R1 disables
+    hw.MoveTo(chip); hw.Frame(); hw.Button(true); hw.Frame(); hw.Button(false); hw.Frame();
+    CHECK_FALSE(hw.lastActions.showStatus);
+
+    DestroyAssetsPanelCanvas(state);
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+
+    std::error_code ec;
+    fs::remove_all(fx.root, ec);
+}

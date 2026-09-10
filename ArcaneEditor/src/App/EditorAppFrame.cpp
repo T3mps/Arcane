@@ -2070,6 +2070,18 @@ namespace Arcane::Editor
             // this log outlives every frame and is Clear()ed, never destroyed,
             // on a project switch.
             assetsPanelServices.activity = &m_assetActivity;
+            // Panel-split spec s7.3 (Task 3): the four focus-if-open gates
+            // (R1) -- filled at the same site every other services seam
+            // above is. Browser/Graph/Status all alias PanelId::Assets
+            // until Task 7 gives them their own panel ids; today there is
+            // exactly one "Assets" window housing all three lenses, so
+            // being inside this `if` already means all three read true.
+            // problemsOpen is a real, independent check -- Problems is
+            // already its own panel and can be closed while Assets is open.
+            assetsPanelServices.browserOpen  = m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets);
+            assetsPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets);
+            assetsPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::Assets);
+            assetsPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
             browserActions = Arcane::Editor::DrawAssetsPanel(
                 m_assetsPanel, m_assetModel, proj, m_documents, assetsPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Assets));
@@ -2403,6 +2415,38 @@ namespace Arcane::Editor
         if (browserActions.copyGuid.IsValid())
             ImGui::SetClipboardText(browserActions.copyGuid.ToString().c_str());
 
+        // ---- Cross-panel deep links (panel-split spec s7.1, Task 3) --------
+        // Three former direct `state.lens` writers, now host-routed. Each
+        // raise site already gated itself on the matching AssetPanelServices
+        // bool before writing its action field (R1/s7.3: focus if open, else
+        // disabled + tooltipped) -- this consumer performs the effect, it
+        // does not re-check visibility.
+        //
+        // `showStatus` -- nothing but the lens switch (Ruling 9's own "jumps
+        // to the pane" shape, applied here to Status).
+        if (browserActions.showStatus)
+            m_assetsPanel.lens = Arcane::Editor::AssetLens::Status;
+        // `focusInGraph` -- focus BEFORE select BEFORE lens, the same
+        // ordering the card's own click handler used to encode locally
+        // (DrawSceneCard's retired comment): the Graph lens's projection is
+        // built from whatever `graphFocus` holds on its own first frame, and
+        // Select is what makes the graph CENTER on the scene rather than
+        // merely contain it.
+        if (browserActions.focusInGraph.IsValid())
+        {
+            m_assetsPanel.graphFocus = browserActions.focusInGraph;
+            m_assetModel.Select(browserActions.focusInGraph);
+            m_assetsPanel.lens = Arcane::Editor::AssetLens::Graph;
+        }
+        // `revealInBrowse` -- the shared helper (AssetPanelCommon.*) carries
+        // today's exact Ruling-10 reveal sequence; this consumer's own job is
+        // only the trailing lens switch the extracted helper no longer makes.
+        if (browserActions.revealInBrowse.IsValid())
+        {
+            Arcane::Editor::RevealAssetInBrowser(m_assetsPanel, m_assetModel, browserActions.revealInBrowse);
+            m_assetsPanel.lens = Arcane::Editor::AssetLens::Browse;
+        }
+
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
         // Recook, per the plan's Ruling 8: invalidate the artifact, ERASE this
         // guid's cook-diagnostic row, republish, poke the cook queue, and mark
@@ -2440,15 +2484,18 @@ namespace Arcane::Editor
         }
         // "Problems" SURFACES THE PANE and nothing more (Ruling 9 / spec s9.2
         // verbatim: "jumps to the pane"). No pre-filtering -- none is
-        // specified, so none is invented. Un-hide then select the tab: the
-        // exact two-step Edit -> Rename uses to bring the Outliner forward
-        // (ConsumeMenuRequests above), for the same reason -- a panel that is
-        // merely visible but buried behind a sibling tab is not surfaced.
+        // specified, so none is invented. Panel-split spec s7.3/R1
+        // (2026-09-09): the un-hide line is GONE -- nothing opens a panel
+        // except the Window menu, and the raise site (DrawAttentionCard's
+        // "Problems" button, AssetsPanel.cpp) now disables itself with a
+        // tooltip when Problems is closed, so this consumer only ever runs
+        // while the panel is already visible. SelectDockTab alone still does
+        // real work: a visible-but-buried-behind-a-sibling-tab panel is not
+        // surfaced, the same reason Edit -> Rename's own two-step
+        // (ConsumeMenuRequests above) brings the Outliner forward -- Problems
+        // just no longer gets the first of those two steps.
         if (browserActions.showProblems)
-        {
-            m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
             Arcane::Editor::SelectDockTab("Problems");
-        }
     }
 
     // ---- Unified create (asset-manager redesign, Plan 1 Task 12) ------------
