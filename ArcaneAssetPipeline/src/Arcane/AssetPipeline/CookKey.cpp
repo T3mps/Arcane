@@ -63,4 +63,33 @@ namespace Arcane::AssetPipeline
 
         return hasher.Digest();
     }
+
+    std::uint64_t ComputeMeshCookKey(std::span<const std::byte> sourceBytes,
+                                      std::span<const std::span<const std::byte>> externalBuffers,
+                                      const MeshMetaSettings& settings,
+                                      std::uint32_t importerVersion)
+    {
+        Fnv1a64 hasher;
+        hasher.Update(sourceBytes);
+
+        // Every external buffer, in glTF declaration order, each preceded by its own u32
+        // length (spec s5.4). The length prefix is what keeps two adjacent buffers from
+        // ever hashing the same as one longer buffer holding their concatenated bytes --
+        // without it, a re-export that merged buffers would silently keep the old key.
+        for (const std::span<const std::byte>& buffer : externalBuffers)
+        {
+            hasher.U32(static_cast<std::uint32_t>(buffer.size()));
+            hasher.Update(buffer);
+        }
+
+        // Explicit fields only, in declaration order -- never a struct memcpy/reinterpret_cast.
+        // v1 has exactly one field; any FUTURE field must be added here too, or a settings
+        // change silently fails to invalidate the cook key (MeshMetaSettings.hpp's own BINDING
+        // comment).
+        hasher.U32(settings.settingsVersion);
+
+        hasher.U32(importerVersion);
+
+        return hasher.Digest();
+    }
 }
