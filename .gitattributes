@@ -31,6 +31,7 @@
 *.html  text eol=lf
 *.svelte text eol=lf
 *.json  text eol=lf
+*.gltf  text eol=lf
 *.md    text eol=lf
 *.yml   text eol=lf
 *.yaml  text eol=lf
@@ -60,6 +61,12 @@
 *.ogg   binary
 *.mp3   binary
 *.flac  binary
+
+# 3D / mesh assets (glTF binary containers and their raw external buffers --
+# F2c Task 2's fixture corpus depends on byte-identical checkouts; text=auto's
+# heuristic is not trusted here since a small GLB can look mostly-ASCII).
+*.glb   binary
+*.bin   binary
 
 # Fonts
 *.ttf   binary
