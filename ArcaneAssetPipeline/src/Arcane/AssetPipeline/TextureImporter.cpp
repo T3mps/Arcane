@@ -1,6 +1,7 @@
 #include "Arcane/AssetPipeline/TextureImporter.hpp"
 
 #include "Arcane/AssetPipeline/CookKey.hpp"
+#include "Arcane/AssetPipeline/SourceHash.hpp"
 
 #include <stb_image.h>
 
@@ -138,25 +139,12 @@ namespace Arcane::AssetPipeline
             return chain;
         }
 
-        // FNV-1a 64-bit over just the source bytes -- deliberately NOT the full triple cook key
-        // (ComputeCookKey, which also folds in settings + importerVersion and is already
-        // recoverable from the artifact's own filename per ArtifactStore's contract). This is a
-        // content-only fingerprint of the source asset, independent of import settings. Same
-        // algorithm as CookKey.cpp's private Fnv1a64 (duplicated rather than shared -- that
-        // class lives in CookKey.cpp's own anonymous namespace, not exported), and the same "no
-        // std::hash" discipline: std::hash is implementation-defined and MUST NOT be used for
-        // anything that lands on disk.
-        std::uint64_t HashSourceBytes(std::span<const std::byte> bytes) noexcept
-        {
-            std::uint64_t h = 14695981039346656037ULL;
-            constexpr std::uint64_t prime = 1099511628211ULL;
-            for (std::byte b : bytes)
-            {
-                h ^= static_cast<std::uint64_t>(static_cast<std::uint8_t>(b));
-                h *= prime;
-            }
-            return h;
-        }
+        // HashSourceBytes itself now lives in SourceHash.hpp (extracted at F2c Task 7, when
+        // MeshImporter.cpp needed the SAME fingerprint over a different byte sequence -- see
+        // that header's own banner for the full rationale and why this call site's INPUT is
+        // unchanged by the move: a .png has no external buffers, so `pngBytes` below is exactly
+        // what this function always hashed, and every existing texture artifact keeps its exact
+        // on-disk sourceHash).
 
         // ---- BC7 encode (bc7enc_rdo, plain non-RDO encoder) ----------------------------------
         // Deterministic by construction (spec's determinism ruling, F2b Task 4): bc7enc.cpp has

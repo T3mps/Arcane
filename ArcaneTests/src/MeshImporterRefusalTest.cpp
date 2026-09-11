@@ -95,6 +95,10 @@ TEST_CASE("mesh import: degenerate triangles are DROPPED with a warning, not ref
     REQUIRE_FALSE(r.warnings.empty());
     // "one WARN naming the primitive" -- the diagnostic must locate the damage.
     CHECK(r.warnings[0].find("degenerate") != std::string::npos);
+    // F2c Task 7 (deferred from Task 6): the two bad triangles are gone and the good
+    // one survives -- one triangle, three indices.
+    CHECK(r.mesh.has_value());
+    CHECK(r.mesh->indices.size() == 3u);
 }
 
 TEST_CASE("mesh import: a mesh whose triangles are ALL degenerate refuses", "[pipeline]")

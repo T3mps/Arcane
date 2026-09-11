@@ -22,9 +22,10 @@
 // A degenerate triangle inside an otherwise valid primitive is NOT a refusal: it is
 // dropped with one warning naming its primitive (A2 part 2 -- the case an
 // implementer actually meets; refusing a 50k-triangle prop over three bad faces is
-// precisely the failure that amendment exists to prevent). Task 7 lands the actual
-// vertex/index bake (`ImportedMesh`) over these same cases; until then `mesh` stays
-// unset even when a file passes every rung.
+// precisely the failure that amendment exists to prevent). F2c Task 7 lands the actual
+// vertex/index bake (`ImportedMesh`) over these same cases -- `mesh` is now set
+// whenever `refusal` is empty (see ImportMesh's own comment below for the bake
+// pipeline: flatten, bake, winding flip, sections/slots, remap/optimize, AABB).
 
 #include <cstddef>
 #include <cstdint>
@@ -62,8 +63,9 @@ namespace Arcane::AssetPipeline
     // for cgltf_load_buffers' base directory and for diagnostics that name the file.
     //
     // See the REFUSAL LADDER above (this file's banner) for the order applied -- each
-    // rung's own spec clause is s4.5. Task 6 (this task) returns refusals/warnings only;
-    // `mesh` is filled in by Task 7.
+    // rung's own spec clause is s4.5. Task 6 landed refusals/warnings only; F2c Task 7
+    // fills in `mesh` (flatten, bake, winding flip, sections/slots, remap/optimize, AABB,
+    // SourceHash) over the same rungs.
     [[nodiscard]] MeshImportResult ImportMesh(
         std::span<const std::byte> sourceBytes,
         std::span<const std::span<const std::byte>> externalBuffers,

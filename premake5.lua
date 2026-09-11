@@ -204,6 +204,9 @@ project "ArcaneAssetPipeline"
         "%{IncludeDir.spdlog}",     -- I1 fix (final-review wave): TextureMetaSettings' WARN
         "%{IncludeDir.cgltf}",          -- F2c Task 1: MeshImporter cgltf_parse/cgltf_validate + CgltfImpl.cpp
         "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: MeshImporter remap/optimize/simplify (meshoptimizer.h)
+        "%{IncludeDir.glm}",            -- F2c Task 7: MeshImporter's bake math (node-transform
+                                         -- composition, inverse-transpose normals, winding-flip
+                                         -- cross/dot). Header-only -- no link.
     }
 
     defines {

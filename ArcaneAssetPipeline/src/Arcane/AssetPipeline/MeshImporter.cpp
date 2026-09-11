@@ -1,9 +1,18 @@
 #include "Arcane/AssetPipeline/MeshImporter.hpp"
 
-#include <cgltf.h>
+#include "Arcane/AssetPipeline/CookKey.hpp"
+#include "Arcane/AssetPipeline/SourceHash.hpp"
 
+#include <cgltf.h>
+#include <meshoptimizer.h>
+
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -100,12 +109,87 @@ namespace Arcane::AssetPipeline
                 return prim.material->name;
             return "primitive " + std::to_string(flatIndex);
         }
+
+        // A triangle whose three indices are not all distinct is degenerate (zero area) --
+        // shared by the rung 5 diagnostic pass below (counts and WARNS) and Task 7's bake pass
+        // (actually DROPS it from the baked buffers), so the two can never disagree about which
+        // triangles survive.
+        bool IsDegenerateTriangleIndices(cgltf_size i0, cgltf_size i1, cgltf_size i2) noexcept
+        {
+            return i0 == i1 || i1 == i2 || i0 == i2;
+        }
+
+        // Task 7 -- geometry bake helpers ------------------------------------------------------
+
+        // Section name (A1): the primitive's material name, or EMPTY when absent. Distinct from
+        // PrimitiveLabel above (which falls back to "primitive N" for a human-readable warning):
+        // an empty section name here is the signal the slot-dedup pass (pipeline step 4) uses to
+        // route the primitive into the shared unnamed slot, so it must never fall back to a
+        // synthesized label the way the warning text does.
+        std::string PrimitiveMaterialName(const cgltf_primitive& prim)
+        {
+            if (prim.material != nullptr && prim.material->name != nullptr)
+                return prim.material->name;
+            return {};
+        }
+
+        glm::vec3 ReadVec3(const cgltf_accessor* accessor, cgltf_size index)
+        {
+            cgltf_float v[3] = { 0.0f, 0.0f, 0.0f };
+            cgltf_accessor_read_float(accessor, index, v, 3);
+            return glm::vec3(v[0], v[1], v[2]);
+        }
+
+        glm::vec2 ReadVec2(const cgltf_accessor* accessor, cgltf_size index)
+        {
+            cgltf_float v[2] = { 0.0f, 0.0f };
+            cgltf_accessor_read_float(accessor, index, v, 2);
+            return glm::vec2(v[0], v[1]);
+        }
+
+        glm::mat4 LocalTransform(const cgltf_node& node)
+        {
+            float m[16];
+            cgltf_node_transform_local(&node, m);
+            // cgltf's out_matrix is 16 floats, column-major (columns 0..3 at m[0..3], m[4..7],
+            // m[8..11], m[12..15], translation last) -- exactly glm::mat4's own memory layout,
+            // so glm::make_mat4 reads it directly with no transpose.
+            return glm::make_mat4(m);
+        }
+
+        // Pipeline step 1: flatten the node tree -- depth-first, accumulating
+        // `parentWorld * cgltf_node_transform_local(node)` per node (MeshImporter.hpp's ImportMesh
+        // comment names why the explicit walk is used over cgltf_node_transform_world: it is what
+        // makes the parent-child product OBSERVABLE in the nested.gltf test rather than merely
+        // trusted). A node with no mesh of its own still contributes its transform to its
+        // children (nested.gltf's parent node). `out` collects one (mesh*, worldTransform) pair
+        // per node that DOES carry a mesh, in walk order.
+        void WalkNodeTree(const cgltf_node& node, const glm::mat4& parentWorld,
+                           std::vector<std::pair<const cgltf_mesh*, glm::mat4>>& out)
+        {
+            const glm::mat4 world = parentWorld * LocalTransform(node);
+            if (node.mesh != nullptr)
+                out.emplace_back(node.mesh, world);
+            for (cgltf_size i = 0; i < node.children_count; ++i)
+                WalkNodeTree(*node.children[i], world, out);
+        }
+
+        // One drawable range before slot dedup runs -- indexOffset/indexCount are already final
+        // (they describe the RAW, pre-remap index buffer, and remap never reorders index slots,
+        // only rewrites the values living in them -- pipeline step 5), only `slotIndex` is filled
+        // in afterward once every section's name has been seen.
+        struct RawSection
+        {
+            std::string   name;
+            std::uint32_t indexOffset;
+            std::uint32_t indexCount;
+        };
     }
 
     MeshImportResult ImportMesh(std::span<const std::byte> sourceBytes,
-                                 std::span<const std::span<const std::byte>> /*externalBuffers*/,
+                                 std::span<const std::span<const std::byte>> externalBuffers,
                                  const fs::path& sourcePath,
-                                 const Guid& /*sourceGuid*/,
+                                 const Guid& sourceGuid,
                                  const MeshMetaSettings& /*settings*/)
     {
         MeshImportResult result;
@@ -142,6 +226,15 @@ namespace Arcane::AssetPipeline
         }
 
         // ---- Rung 3: load buffers ------------------------------------------------------
+        // Geometry below is decoded from CGLTF'S OWN buffer load here, while Task 7's Step 7
+        // hashes the caller's `externalBuffers` snapshot instead of re-reading through cgltf --
+        // two INDEPENDENT reads of what is, today, the same bytes on disk (ReadExternalBuffers
+        // is what produced `externalBuffers`, and this call resolves the identical referenced
+        // files). If a referenced .bin changes on disk between the two reads, the artifact's
+        // sourceHash disagrees with whichever bytes the NEXT read of "current source bytes"
+        // sees, the client refuses with HashMismatch, and the next cook heals it -- ACCEPTED,
+        // not a bug: the alternative would be threading one already-read buffer through both
+        // cgltf's own buffer resolution and the hash, which cgltf's API gives no seam for.
         const cgltf_result loadResult = cgltf_load_buffers(&options, guard.data, sourcePath.string().c_str());
         if (loadResult != cgltf_result_success)
         {
@@ -216,9 +309,8 @@ namespace Arcane::AssetPipeline
                     const cgltf_size i1 = cgltf_accessor_read_index(&indices, t * 3 + 1);
                     const cgltf_size i2 = cgltf_accessor_read_index(&indices, t * 3 + 2);
 
-                    // A triangle whose three indices are not all distinct is degenerate
-                    // (zero area) -- dropped, never refused, per primitive.
-                    if (i0 == i1 || i1 == i2 || i0 == i2)
+                    // Degenerate (zero area) -- dropped, never refused, per primitive.
+                    if (IsDegenerateTriangleIndices(i0, i1, i2))
                         ++droppedInPrimitive;
                     else
                         ++survivingInPrimitive;
@@ -244,9 +336,318 @@ namespace Arcane::AssetPipeline
             return result;
         }
 
-        // Task 7 fills in `result.mesh` (vertices/indices/desc) over these same rungs --
-        // this task returns the refusal/warning verdict only.
+        // ---- Task 7: flatten, bake, flip, section/slot, remap/optimize, AABB, hash ------
+        // Every file that reaches here already passed rungs 1-5 above (parses, no unsupported
+        // required extension, buffers loaded, validated, and at least one triangle survives
+        // file-wide) -- this builds the actual `ImportedMesh` those rungs cleared.
+
+        // Step 1: flatten the node tree. Walk every root of the default scene (falling back to
+        // every root of every scene when there is no single default one) depth-first via
+        // WalkNodeTree above, collecting one (mesh*, worldTransform) pair per mesh-bearing node.
+        std::vector<std::pair<const cgltf_mesh*, glm::mat4>> nodeMeshRefs;
+        if (guard.data->scene != nullptr)
+        {
+            for (cgltf_size i = 0; i < guard.data->scene->nodes_count; ++i)
+                WalkNodeTree(*guard.data->scene->nodes[i], glm::mat4(1.0f), nodeMeshRefs);
+        }
+        else
+        {
+            for (cgltf_size s = 0; s < guard.data->scenes_count; ++s)
+                for (cgltf_size i = 0; i < guard.data->scenes[s].nodes_count; ++i)
+                    WalkNodeTree(*guard.data->scenes[s].nodes[i], glm::mat4(1.0f), nodeMeshRefs);
+        }
+
+        std::vector<MeshArtifactVertex> rawVertices;
+        std::vector<std::uint32_t>      rawIndices;
+        std::vector<RawSection>         rawSections;
+
+        for (const auto& [meshPtr, world] : nodeMeshRefs)
+        {
+            const glm::mat3 world3(world);
+            // Step 3's trigger: a negative determinant is a genuine mirror (an odd number of
+            // negative-scale axes), not merely "some component is negative".
+            const bool mirrored = glm::determinant(world3) < 0.0f;
+
+            // Step 2's normal matrix: the inverse transpose, the same two lines UE spells at
+            // GLTFMeshFactory.cpp:456-457 -- computed ONCE per node rather than once per vertex.
+            const glm::mat3 normalMatrix = glm::transpose(glm::inverse(world3));
+
+            for (cgltf_size primIdx = 0; primIdx < meshPtr->primitives_count; ++primIdx)
+            {
+                const cgltf_primitive& prim = meshPtr->primitives[primIdx];
+                // Same admission rule as the rung 5 gate above: only triangle-list primitives
+                // with an index accessor are bakeable.
+                if (prim.indices == nullptr || prim.type != cgltf_primitive_type_triangles)
+                    continue;
+
+                const cgltf_accessor* posAcc = cgltf_find_accessor(&prim, cgltf_attribute_type_position, 0);
+                if (posAcc == nullptr)
+                    continue;   // cgltf_validate (rung 4) requires POSITION on a drawable
+                                // primitive; a null here would mean validate let through
+                                // something it should not have -- skip defensively, never crash.
+                const cgltf_accessor* nrmAcc = cgltf_find_accessor(&prim, cgltf_attribute_type_normal, 0);
+                const cgltf_accessor* uvAcc  = cgltf_find_accessor(&prim, cgltf_attribute_type_texcoord, 0);
+
+                // Parsed-and-ignored, deliberately (S2, trigger: a consumer exists): this
+                // importer never reads a parsed file's `skins`/`animations`, or a primitive's
+                // morph `targets` -- no renderer or scene support exists for any of the three,
+                // so importing them would be stored-but-unread, which S6's own discipline
+                // forbids. JOINTS_0/WEIGHTS_0 attributes are skipped by the same rule and for
+                // the same reason the fixed 32-byte vertex layout already skips COLOR_0.
+
+                const std::string sectionName = PrimitiveMaterialName(prim);   // empty when absent
+                const std::uint32_t sectionIndexOffset = static_cast<std::uint32_t>(rawIndices.size());
+                const cgltf_size triangleCount = prim.indices->count / 3;
+
+                if (nrmAcc != nullptr)
+                {
+                    // Authored NORMAL: shared, indexed layout -- one raw vertex per POSITION
+                    // accessor entry (never per triangle-corner), so a primitive's own raw
+                    // vertex count matches its accessor's count exactly. multi.glb's fixture
+                    // contract depends on this: 4 raw vertices per quad primitive,
+                    // kMultiGlbRawVertexCount = 12 total before the remap below dedupes the
+                    // bit-identical vertices at the two shared edges.
+                    const std::uint32_t vertexBase = static_cast<std::uint32_t>(rawVertices.size());
+                    for (cgltf_size v = 0; v < posAcc->count; ++v)
+                    {
+                        MeshArtifactVertex mv{};
+                        const glm::vec3 worldPos = glm::vec3(world * glm::vec4(ReadVec3(posAcc, v), 1.0f));
+                        mv.px = worldPos.x; mv.py = worldPos.y; mv.pz = worldPos.z;
+
+                        const glm::vec3 worldN = glm::normalize(normalMatrix * ReadVec3(nrmAcc, v));
+                        mv.nx = worldN.x; mv.ny = worldN.y; mv.nz = worldN.z;
+
+                        // Missing TEXCOORD_0 -> (0,0), the honest "no UV" -- the fixed 32-byte
+                        // stride requires writing SOMETHING for every vertex.
+                        const glm::vec2 uv = (uvAcc != nullptr) ? ReadVec2(uvAcc, v) : glm::vec2(0.0f, 0.0f);
+                        mv.u = uv.x; mv.v = uv.y;
+
+                        rawVertices.push_back(mv);
+                    }
+
+                    for (cgltf_size t = 0; t < triangleCount; ++t)
+                    {
+                        const cgltf_size a0 = cgltf_accessor_read_index(prim.indices, t * 3 + 0);
+                        const cgltf_size a1 = cgltf_accessor_read_index(prim.indices, t * 3 + 1);
+                        const cgltf_size a2 = cgltf_accessor_read_index(prim.indices, t * 3 + 2);
+                        if (IsDegenerateTriangleIndices(a0, a1, a2))
+                            continue;   // already WARNED by the rung 5 pass above -- dropped
+                                        // here, never refused (A2 part 2).
+
+                        // Step 3: winding flip. A negative-determinant node reverses this
+                        // triangle's corner order. A3, WINDING HALF ONLY: F2c ships the winding
+                        // half of the mirror rule; the reserved Tangents tag inherits the
+                        // tangent-basis HANDEDNESS half, and mirrored.glb's test grows a
+                        // handedness assertion when that tag is first written -- recorded here
+                        // because the existing test stays green while a mirrored asset renders
+                        // with inverted normal-map lighting, which is the silent regression A3
+                        // disarms.
+                        const cgltf_size c0 = a0;
+                        const cgltf_size c1 = mirrored ? a2 : a1;
+                        const cgltf_size c2 = mirrored ? a1 : a2;
+
+                        rawIndices.push_back(vertexBase + static_cast<std::uint32_t>(c0));
+                        rawIndices.push_back(vertexBase + static_cast<std::uint32_t>(c1));
+                        rawIndices.push_back(vertexBase + static_cast<std::uint32_t>(c2));
+                    }
+                }
+                else
+                {
+                    // No authored NORMAL: generate one per TRIANGLE (flat/faceted shading).
+                    // Vertices are duplicated per triangle-corner here rather than shared through
+                    // the primitive's own index buffer: sharing would let one corner's normal be
+                    // silently overwritten by whichever adjacent triangle bakes last -- blending
+                    // two distinct face normals into a wrong value at a vertex meant to carry
+                    // exactly ONE flat normal. Duplicating is the textbook-correct faceted-
+                    // shading convention (hard edges everywhere a normal must be derived rather
+                    // than authored), and it costs nothing downstream: meshopt_generateVertexRemap
+                    // (step 5) re-dedupes any bit-identical vertices this produces, the same way
+                    // it dedupes shared edges ACROSS primitives.
+                    for (cgltf_size t = 0; t < triangleCount; ++t)
+                    {
+                        const cgltf_size a0 = cgltf_accessor_read_index(prim.indices, t * 3 + 0);
+                        const cgltf_size a1 = cgltf_accessor_read_index(prim.indices, t * 3 + 1);
+                        const cgltf_size a2 = cgltf_accessor_read_index(prim.indices, t * 3 + 2);
+                        if (IsDegenerateTriangleIndices(a0, a1, a2))
+                            continue;
+
+                        // Step 3's flip, same rule as the authored-NORMAL branch above.
+                        const cgltf_size corners[3] = { a0, mirrored ? a2 : a1, mirrored ? a1 : a2 };
+
+                        glm::vec3 bakedPos[3];
+                        for (int k = 0; k < 3; ++k)
+                            bakedPos[k] = glm::vec3(world * glm::vec4(ReadVec3(posAcc, corners[k]), 1.0f));
+
+                        // Step 2's UE-divergence guard: the flat normal is computed from the
+                        // BAKED triangle IN ITS POST-FLIP CORNER ORDER (`corners` above is
+                        // already reversed when `mirrored`) -- never from a fabricated up-vector
+                        // (S7.1's never-fabricate rule, read as geometry: derive it from what is
+                        // actually there). cross(v1-v0,v2-v0) reverses sign when the corner order
+                        // reverses, so a flat normal taken from the PRE-flip order points INTO a
+                        // mirrored surface. UE has exactly this bug: GenerateFlatNormals runs at
+                        // GLTFMeshFactory.cpp:515, BEFORE the mirrored-corner loop at :597-605, so
+                        // a mirrored no-NORMAL primitive imports there with inverted normals. Do
+                        // not inherit it -- computing after the flip (as here) and computing
+                        // before the flip then negating by `mirrored` are equivalent; this is the
+                        // harder-to-get-wrong of the two.
+                        const glm::vec3 flat = glm::normalize(
+                            glm::cross(bakedPos[1] - bakedPos[0], bakedPos[2] - bakedPos[0]));
+
+                        for (int k = 0; k < 3; ++k)
+                        {
+                            MeshArtifactVertex mv{};
+                            mv.px = bakedPos[k].x; mv.py = bakedPos[k].y; mv.pz = bakedPos[k].z;
+                            mv.nx = flat.x; mv.ny = flat.y; mv.nz = flat.z;
+                            // Missing TEXCOORD_0 -> (0,0), same honest-no-UV rule as above.
+                            const glm::vec2 uv = (uvAcc != nullptr) ? ReadVec2(uvAcc, corners[k])
+                                                                     : glm::vec2(0.0f, 0.0f);
+                            mv.u = uv.x; mv.v = uv.y;
+
+                            rawIndices.push_back(static_cast<std::uint32_t>(rawVertices.size()));
+                            rawVertices.push_back(mv);
+                        }
+                    }
+                }
+
+                const std::uint32_t sectionIndexCount =
+                    static_cast<std::uint32_t>(rawIndices.size()) - sectionIndexOffset;
+                rawSections.push_back(RawSection{ sectionName, sectionIndexOffset, sectionIndexCount });
+            }
+        }
+
+        // Step 4: sections + slot dedup BY NAME (A1). `slotNames` collects one entry per
+        // distinct non-empty material name, in FIRST-SEEN order; primitives with no material
+        // (empty name) share ONE unnamed slot APPENDED LAST -- its index is always
+        // `slotNames.size()`, never "wherever the first unnamed primitive was seen" the way the
+        // named slots are. Sections themselves are already in walk order (rawSections was built
+        // in that order above) and their ranges tile the (pre-remap) index buffer with no gaps
+        // by construction: each section's offset is the running `rawIndices.size()` at the time
+        // it started, and its count is exactly what that primitive appended.
+        std::vector<std::string> slotNames;
+        for (const RawSection& s : rawSections)
+        {
+            if (s.name.empty())
+                continue;
+            if (std::find(slotNames.begin(), slotNames.end(), s.name) == slotNames.end())
+                slotNames.push_back(s.name);
+        }
+        const auto unnamedSlotIndex = static_cast<std::uint32_t>(slotNames.size());
+
+        std::vector<MeshArtifactSection> sections;
+        sections.reserve(rawSections.size());
+        for (const RawSection& s : rawSections)
+        {
+            MeshArtifactSection section{};
+            section.name = s.name;
+            section.indexOffset = s.indexOffset;
+            section.indexCount = s.indexCount;
+            section.slotIndex = s.name.empty()
+                ? unnamedSlotIndex
+                : static_cast<std::uint32_t>(
+                      std::find(slotNames.begin(), slotNames.end(), s.name) - slotNames.begin());
+            sections.push_back(std::move(section));
+        }
+
+        // Step 5: remap. meshopt_generateVertexRemap dedupes bit-identical vertices across the
+        // WHOLE concatenated buffer (every primitive, every node), then
+        // meshopt_remapVertexBuffer/meshopt_remapIndexBuffer apply it. Section ranges survive
+        // unchanged: remap rewrites index VALUES (which vertex a slot in the index buffer
+        // names), never their ORDER (which slot a triangle occupies) -- `sections`'
+        // indexOffset/indexCount above were computed against `rawIndices`' own order and are
+        // still correct against the remapped `indices` below, because that order never moved.
+        // This is the property that makes step 6's per-section optimize safe: it can address
+        // `indices` by the SAME ranges `sections` already declares.
+        std::vector<std::uint32_t> remapTable(rawVertices.size());
+        const std::size_t uniqueVertexCount = meshopt_generateVertexRemap(
+            remapTable.data(), rawIndices.data(), rawIndices.size(),
+            rawVertices.data(), rawVertices.size(), sizeof(MeshArtifactVertex));
+
+        std::vector<MeshArtifactVertex> vertices(uniqueVertexCount);
+        meshopt_remapVertexBuffer(vertices.data(), rawVertices.data(), rawVertices.size(),
+                                   sizeof(MeshArtifactVertex), remapTable.data());
+
+        std::vector<std::uint32_t> indices(rawIndices.size());
+        meshopt_remapIndexBuffer(indices.data(), rawIndices.data(), rawIndices.size(), remapTable.data());
+
+        // Step 6: optimize, per section, NEVER across sections. meshopt_optimizeVertexCache runs
+        // on each section's own index range in place -- cache-optimizing across a section
+        // boundary would scramble which triangles belong to which range, the exact hazard A1
+        // names when it explains why sections are never merged.
+        for (const MeshArtifactSection& s : sections)
+        {
+            // vertex_count is the WHOLE buffer's -- meshopt's scratch tables are indexed by
+            // INDEX VALUE, and a section's indices address the shared vertex buffer. Passing
+            // s.indexCount (or a section-local vertex tally) here is an out-of-bounds write,
+            // not a weaker optimisation.
+            meshopt_optimizeVertexCache(indices.data() + s.indexOffset,
+                                        indices.data() + s.indexOffset,
+                                        s.indexCount,
+                                        vertices.size());
+        }
+
+        // Then meshopt_optimizeVertexFetch ONCE over the whole buffer: it permutes VERTICES and
+        // rewrites `indices` in place, so it is range-agnostic (safe to run once across every
+        // section, unlike optimizeVertexCache above). It can return fewer vertices than it was
+        // given when some are unreferenced after the remap/degenerate-drop above.
+        std::vector<MeshArtifactVertex> fetchOptimized(vertices.size());
+        const std::size_t vertexCountAfterFetch = meshopt_optimizeVertexFetch(
+            fetchOptimized.data(), indices.data(), indices.size(),
+            vertices.data(), vertices.size(), sizeof(MeshArtifactVertex));
+        fetchOptimized.resize(vertexCountAfterFetch);
+        vertices = std::move(fetchOptimized);
+
+        // Step 7: AABB -- min/max over the baked (and now remapped/optimized) positions, the
+        // artifact's stored bounds (S5.2/S7.1) that resolution reads instead of recomputing.
+        // Taken AFTER optimizeVertexFetch's permutation on purpose: the bounds are permutation-
+        // invariant, so computing them here proves they survive the whole pipeline rather than
+        // merely the bake.
+        float aabbMin[3] = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                              std::numeric_limits<float>::max() };
+        float aabbMax[3] = { std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
+                              std::numeric_limits<float>::lowest() };
+        for (const MeshArtifactVertex& v : vertices)
+        {
+            aabbMin[0] = std::min(aabbMin[0], v.px); aabbMax[0] = std::max(aabbMax[0], v.px);
+            aabbMin[1] = std::min(aabbMin[1], v.py); aabbMax[1] = std::max(aabbMax[1], v.py);
+            aabbMin[2] = std::min(aabbMin[2], v.pz); aabbMax[2] = std::max(aabbMax[2], v.pz);
+        }
+
+        // Step 7 (SourceHash): the artifact's sourceHash covers the source bytes FOLLOWED BY
+        // every passed-in external buffer's bytes, concatenated in glTF declaration order --
+        // the exact concatenation ArcaneClient/src/Arcane/Assets/ArtifactReader.hpp's
+        // `currentSourceBytes` contract names, so the client's re-hash of "the current source
+        // bytes" agrees with this header field by construction rather than by two functions
+        // happening to match. This is what makes `externalBuffers` a USED parameter: through
+        // Task 6 it was accepted but never read.
+        std::size_t hashInputSize = sourceBytes.size();
+        for (const std::span<const std::byte>& buffer : externalBuffers)
+            hashInputSize += buffer.size();
+        std::vector<std::byte> hashInput;
+        hashInput.reserve(hashInputSize);
+        hashInput.insert(hashInput.end(), sourceBytes.begin(), sourceBytes.end());
+        for (const std::span<const std::byte>& buffer : externalBuffers)
+            hashInput.insert(hashInput.end(), buffer.begin(), buffer.end());
+
+        MeshArtifactDesc desc{};
+        desc.contentKind = ContentKind::Mesh;
+        desc.sourceGuid = sourceGuid;
+        desc.sourceHash = HashSourceBytes(hashInput);
+        desc.importerVersion = kMeshImporterVersion;
+        desc.vertexCount = static_cast<std::uint32_t>(vertices.size());
+        desc.indexCount = static_cast<std::uint32_t>(indices.size());
+        desc.sectionCount = static_cast<std::uint32_t>(sections.size());
+        desc.indexWidth = 4;
+        desc.aabbMin[0] = aabbMin[0]; desc.aabbMin[1] = aabbMin[1]; desc.aabbMin[2] = aabbMin[2];
+        desc.aabbMax[0] = aabbMax[0]; desc.aabbMax[1] = aabbMax[1]; desc.aabbMax[2] = aabbMax[2];
+        desc.sections = std::move(sections);
+
+        ImportedMesh mesh{};
+        mesh.desc = std::move(desc);
+        mesh.vertices = std::move(vertices);
+        mesh.indices = std::move(indices);
+
         result.warnings = std::move(warnings);
+        result.mesh = std::move(mesh);
         return result;
     }
 
