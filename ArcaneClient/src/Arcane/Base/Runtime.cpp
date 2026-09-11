@@ -9,13 +9,14 @@
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Scene/PhysicsComponents.hpp>   // RegisterPhysicsComponents (engine roster)
-#include <Arcane/Scene/SceneModule.hpp>         // RegisterSceneComponents   (engine roster)
+#include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
+#include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+#include <Astra/Component/ComponentModule.hpp>
 #include <Astra/Component/ComponentRegistry.hpp>
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Core/WorkScheduler.hpp>
@@ -79,6 +80,7 @@ namespace Arcane
         std::unique_ptr<Astra::TypeContext>         ownedContext;   // null when an external one is injected
         Astra::TypeContext*                         context = nullptr;
         std::shared_ptr<Astra::ComponentRegistry>   components;
+        std::optional<Astra::ComponentModule>       engineModule;   // the engine roster's RAII owner; destructs AFTER registry (declared before it), BEFORE components
         std::unique_ptr<Astra::Registry>            registry;
         std::unique_ptr<SystemSchedulers>           schedulers;
         std::unique_ptr<RunLoop>                    loop;
@@ -111,7 +113,7 @@ namespace Arcane
             else { ownedContext = std::make_unique<Astra::TypeContext>(); context = ownedContext.get(); }
 
             // Install the shared context in THIS module BEFORE any TypeID/Registry use.
-            Astra::SetTypeContext(context);
+            Astra::SetTypeContext(context, Astra::ModuleResidency::Resident);
             components = std::make_shared<Astra::ComponentRegistry>();
 
             // The engine's OWN component roster, registered here so every host
@@ -124,34 +126,32 @@ namespace Arcane
             // SceneSerializer skips a type that is reflected but not
             // REGISTERED as a component.
             //
-            // Plugins now register only the types they themselves implement,
-            // through their own RAII Astra::ComponentModule handle (see
-            // PluginHost.cpp / HotReloadPlugin.cpp) -- the old "re-register
-            // the roster after unload" host ritual is gone. The engine's OWN
-            // roster deliberately stays on the PLAIN (anonymous, owner-less)
-            // registration path below rather than ALSO going through its own
-            // ComponentModule: a plugin's InstallOwned already shadows
-            // WHATEVER is live for an id, anonymous or module-owned, and
-            // restores that shadow on its own unload -- the anonymous
-            // baseline gets the exact same "plugin overrides it, unload
-            // restores it" behavior for free. Wrapping this roster in its own
-            // ComponentModule was tried and reverted: ReleaseModule reports a
-            // module's entries "cleared to empty" when it is the sole owner
-            // within ITS OWN registry, which erases the type's TypeMeta from
-            // the SHARED TypeContext (ComponentModule.hpp's own documented
-            // scope caveat -- "one registry per context is the supported
-            // shape"). Production only ever has one Runtime for the process's
-            // life, so that never bites there, but the test suite runs MANY
-            // short-lived Runtime instances (each with its own fresh
-            // ComponentRegistry, by existing design) against ONE process-wide
-            // TypeContext -- every one of those Runtimes tearing down its own
-            // engine ComponentModule wiped the shared reflected meta out from
-            // under every other registry/test using the same context, and a
-            // follow-up attempt to keep that handle alive past the Runtime's
-            // own lifetime (retiring it into a longer-lived container) traded
-            // that bug for a cross-module static-destruction-order crash at
-            // process exit. Anonymous registration was already correct and
-            // is not module-owned, so nothing here is ever torn down early.
+            // Plugins register only the types they themselves implement, through
+            // their own RAII Astra::ComponentModule (PluginHost.cpp /
+            // HotReloadPlugin.cpp). The engine's roster is module-owned too, since
+            // 2026-09-11 (spec docs/specs/2026-09-11-astra-adoption-design.md s5),
+            // through the Runtime-held handle below -- which REVERSES the
+            // 2026-08-10 ratification that kept it anonymous. That ratification
+            // rested on ComponentModule.hpp's old "one registry per context"
+            // caveat: ReleaseModule erased a type's TypeMeta from the SHARED
+            // TypeContext whenever the releasing registry was its sole owner, so
+            // the test suite's many short-lived Runtimes (73 construction sites)
+            // wiped the metas out from under each other, and retiring the handle
+            // into a longer-lived container traded that for a static-destruction
+            // crash at exit. The 2026-09-10 binder-stack vendor (ABI v24) removed
+            // the caveat -- several registries per context is now the supported
+            // shape -- and the residency declaration at SetTypeContext above is
+            // what makes the module-owned roster SAFE here: Arcane.dll never
+            // unmaps, so its binders are PINNED and every Reset reports Retained;
+            // registry-less GetMeta keeps resolving after the last Runtime dies
+            // (pinned by RuntimeTest.cpp's "[residency]" case). No plugin-side
+            // static is involved: Impl is pimpl-held and reset from ~Runtime.
+            //
+            // A plugin's InstallOwned shadows whatever is live for an id,
+            // module-owned or not, and its own unload restores the shadow -- the
+            // "plugin overrides it, unload restores it" behaviour is unchanged.
+            // RegisterSceneComponents / RegisterPhysicsComponents survive for the
+            // tests that register on bare registries; Runtime no longer calls them.
             //
             // ComponentID NUMBERING (corrected 2026-07-26 -- the previous comment
             // here claimed ids are resolved BY HASH and therefore order-
@@ -163,8 +163,14 @@ namespace Arcane
             // registered Transform + SpriteRenderer used to get 0,1; it now gets
             // 0,3). Ids are process-local; only the hash is stable across
             // processes.
-            RegisterSceneComponents(*components);
-            RegisterPhysicsComponents(*components);
+            engineModule.emplace(Astra::ComponentModule::Open(components, "Arcane"));
+            ARC_ASSERT(*engineModule, "Runtime: ComponentModule::Open refused -- the slot above must be installed first");
+            // EXACTLY the order RegisterSceneComponents + RegisterPhysicsComponents
+            // register in (SceneModule.hpp / PhysicsComponents.hpp): ids are a
+            // first-touch counter, so same order == same numbering as before.
+            engineModule->Register<Transform, WorldTransform, PreviousTransform, SpriteRenderer,
+                                   PostProcess, Identity, Hidden, Camera, MeshRenderer,
+                                   RigidBody2D, Collider2D, PhysicsBodyRef>();
 
             Astra::Registry::Config cfg;
             cfg.workScheduler = sched;

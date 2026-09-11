@@ -9,10 +9,13 @@
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
 
+#include <Astra/Core/TypeID.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
@@ -277,4 +280,38 @@ TEST_CASE("Runtime RestoreRegistry rejects a valid registry blob with a corrupt 
         CHECK(c.value == 42);
     });
     CHECK(seen == 1);
+}
+
+// Astra adoption Task 3 (residency, spec s5). The shape that crashed on
+// 2026-08-10: several Runtimes against ONE TypeContext, each tearing down its
+// own engine ComponentModule -- the last one used to erase the shared TypeMeta.
+// Two assertions, and the second is the load-bearing one: GetMeta<Transform>
+// would survive even an un-pinned release here, because this test exe drains
+// its OWN baseline binder for Transform at test_main.cpp:22 and never drops it.
+// BinderCount does not: Arcane.dll's binder stays on the stack ONLY because
+// Runtime declared Resident, so its Reset reports Retained instead of dropping
+// the binder (MetaRegistry::Release). A module-owned roster without Resident
+// makes the count fall by one -- that is the RED this case exists to show.
+TEST_CASE("Runtime: two Runtimes against the shared context leave the engine metas pinned",
+          "[runtime][residency]")
+{
+    const std::uint64_t hash = Astra::TypeID<Arcane::Transform>::Hash();
+    Astra::MetaRegistry& meta = Arcane::Test::SharedTypeContext().Meta();
+    const std::size_t before = meta.BinderCount(hash);
+    REQUIRE(before >= 2);   // this exe's baseline + Arcane.dll's (pinned at test_main's throwaway pin)
+
+    {
+        Arcane::Runtime a(&Arcane::Test::SharedTypeContext());
+        Arcane::Runtime b(&Arcane::Test::SharedTypeContext());
+        // The roster is present in BOTH registries (GetComponentDescriptor is the
+        // registry's presence query: null when the slot is empty).
+        CHECK(a.Components()->GetComponentDescriptor(Astra::TypeID<Arcane::Transform>::Value()) != nullptr);
+        CHECK(b.Components()->GetComponentDescriptor(Astra::TypeID<Arcane::PhysicsBodyRef>::Value()) != nullptr);
+        CHECK(meta.BinderCount(hash) == before);   // registration ACQUIRES on an existing binder, adds none
+    }
+
+    CHECK(meta.BinderCount(hash) == before);       // Retained: the pinned binder did not leave
+    const Astra::TypeMeta* still = Astra::GetMeta<Arcane::Transform>();
+    REQUIRE(still != nullptr);
+    CHECK(still->typeName == "Arcane::Transform");
 }

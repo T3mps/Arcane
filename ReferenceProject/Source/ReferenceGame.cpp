@@ -4,8 +4,9 @@
 // plugin lifecycle: pin the shared TypeContext, register the engine systems
 // that make a data scene tick and render, and round-trip the registry for
 // hot reload. It owns no component types (the engine roster is registered by
-// Runtime's ctor; a module that DID own types would register them through its
-// own RAII Astra::ComponentModule -- see HotReloadPlugin.cpp for that shape).
+// Runtime's ctor through its own Resident ComponentModule; a module that DID
+// own types would register them through its own RAII Astra::ComponentModule
+// -- see HotReloadPlugin.cpp for that shape).
 
 #include "GameApi.hpp"
 

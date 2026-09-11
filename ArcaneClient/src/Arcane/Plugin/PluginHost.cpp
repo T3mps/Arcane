@@ -257,12 +257,12 @@ namespace Arcane
             // BASED: a well-behaved plugin owns only the component types it
             // implements via its own Astra::ComponentModule, and that handle's
             // Shutdown-time Reset() already cleaned them up (restoring whatever
-            // it shadowed) before we get here. The engine's own roster is never
-            // displaced in the first place -- Runtime's constructor registers it
-            // anonymously (owner 0), not through a ComponentModule, so a plugin
-            // overriding one of those types shadows the anonymous entry and its
-            // own unload restores it via the same owner-stack mechanism -- so
-            // there is nothing to rebind on this path anymore.
+            // it shadowed) before we get here. The engine's own roster is
+            // module-owned too (Runtime's ctor holds an Astra::ComponentModule
+            // "Arcane" for it, under a Resident declaration -- Runtime.cpp), so
+            // a plugin overriding one of those types shadows the engine's entry
+            // and its own unload restores it via the same owner-stack
+            // mechanism -- so there is nothing to rebind on this path anymore.
             //
             // The purge below is the FALLBACK NET for a plugin that forgot (or
             // never adopted) that cleanup: it catches any descriptor still
