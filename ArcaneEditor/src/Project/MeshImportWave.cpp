@@ -112,14 +112,27 @@ namespace Arcane::Editor
                             // already have their own file on disk.
 
             const std::string stem = ImageFileStem(image.name, sourceStem, index);
-            const fs::path dest = dir / (stem + ExtensionForMime(image.mimeType));
+            const std::string ext = ExtensionForMime(image.mimeType);
+            const fs::path natural = dir / (stem + ext);
 
-            // A4's no-overwrite half, checked BEFORE any write: a destination that
-            // already exists -- a user's edited or replaced .png, or a PRIOR
-            // extraction (this source's own, or another source's own collision at
-            // the same name) -- is left exactly as it is.
-            if (fs::exists(dest))
-                continue;
+            // The three-way rule (spec s5.5 + A4, reconciled -- see this function's
+            // own header comment in MeshImportWave.hpp for the full account):
+            //   1. nothing at the natural name yet            -> write there.
+            //   2. something's there with IDENTICAL bytes     -> already extracted
+            //      (or a harmless duplicate) -> skip, write nothing.
+            //   3. something's there with DIFFERENT bytes     -> a genuine collision
+            //      (a user's edit, or another source's own image under this name) ->
+            //      NEVER overwritten; write to UniqueSiblingPath's next free name
+            //      instead.
+            fs::path dest = natural;
+            if (fs::exists(natural))
+            {
+                const std::optional<std::vector<std::byte>> existing = ReadWholeFile(natural);
+                if (existing && *existing == image.bytes)
+                    continue;   // arm 2: identical -- nothing to do.
+
+                dest = UniqueSiblingPath(dir, stem, ext);   // arm 3: collision.
+            }
 
             std::ofstream out(dest, std::ios::binary | std::ios::trunc);
             if (!out)

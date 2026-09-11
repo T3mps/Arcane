@@ -37,13 +37,36 @@ namespace Arcane::Editor
     // A newly-discovered `.gltf`/`.glb`'s embedded images, extracted to loose .png
     // siblings beside `source`. SurveyGltf's front half first (nullopt -- the file
     // will not cook either -- means no extraction, quietly); then, per EMBEDDED image
-    // in survey order, the destination is `source.parent_path()` / (ImageFileStem's
-    // stem + the extension `mimeType` implies, "image/png" -> ".png" etc.). A4's
-    // no-overwrite half is checked BEFORE any write: a destination that already
-    // exists -- a user's edited or replaced .png, or another source's own extraction
-    // already sitting at that name -- is skipped, never overwritten. Returns only the
-    // paths this call actually WROTE, which is what makes a second, no-op call's
-    // empty return the proof that nothing was re-extracted.
+    // in survey order, the NATURAL destination is `source.parent_path()` /
+    // (ImageFileStem's stem + the extension `mimeType` implies, "image/png" ->
+    // ".png" etc.).
+    //
+    // Spec s5.5 states two invariants that both have to hold at once: an already-
+    // extracted .png is NEVER overwritten, and (A4) a name COLLISION is suffixed
+    // rather than silently reused. A plain "skip if the destination exists" honors
+    // only the first -- it would hand two different sources embedding a same-named
+    // image the SAME texture, exactly what A4 exists to prevent. The reconciliation
+    // is a three-way rule, decided by a byte-compare against whatever already sits at
+    // the natural destination:
+    //   1. nothing there yet                -> write to the natural destination.
+    //   2. something there, IDENTICAL bytes -> already extracted (or a harmless
+    //                                           duplicate of the same content) ->
+    //                                           skip, write nothing.
+    //   3. something there, DIFFERENT bytes -> a genuine collision (a user's own
+    //                                           edit, or a different source's own
+    //                                           image sitting at this name) -> NEVER
+    //                                           overwritten; written instead to
+    //                                           UniqueSiblingPath's next free name.
+    // Byte-compare is what makes both invariants hold together: a user's edited copy
+    // is never clobbered (arm 3 gives the freshly-surveyed original its own sibling
+    // name instead of touching the edit), and re-discovering the SAME unmodified
+    // extraction is a true no-op (arm 2), so repeatedly re-dropping an unchanged
+    // source never grows an unbounded pile of "-1", "-2", ... siblings -- that pile
+    // only grows for a REAL divergence (arm 3), which is the rare case by
+    // construction (first discovery, or an actual re-drop after an edit/collision).
+    //
+    // Returns only the paths this call actually WROTE (arms 1 and 3), which is what
+    // makes a second, all-arm-2 call's empty return the proof that nothing changed.
     [[nodiscard]] std::vector<std::filesystem::path> ExtractEmbeddedTextures(
         const std::filesystem::path& source);
 }
