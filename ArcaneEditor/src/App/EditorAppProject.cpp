@@ -403,33 +403,47 @@ namespace Arcane::Editor
 
         // F2b desk-checkpoint fix: mid-session Content/ drop discovery. The
         // loop below can only watch what the registry ALREADY knows -- a
-        // .png dropped into Content/ after project open has no registry
-        // entry (AssetRegistry::ScanContent runs exactly once, at open) and
-        // is invisible to it. Own, slower gate than m_materialWatchNext
-        // (~2s vs. ~1s -- see m_contentDiscoveryNext's declaration for why):
-        // this step pays for a full recursive walk of Content/, a different
-        // cost shape than the loop below's per-KNOWN-file stat() calls.
-        // Runs BEFORE BuildAssetEntries below (not after) so a discovery
-        // this tick registers the new guid in time for the SAME tick's
-        // texture first-sighting branch to fire -- drop -> registered ->
-        // cook-triggered lands inside ONE poll interval.
+        // .png/.gltf/.glb dropped into Content/ after project open has no
+        // registry entry (AssetRegistry::ScanContent runs exactly once, at
+        // open) and is invisible to it. Own, slower gate than
+        // m_materialWatchNext (~2s vs. ~1s -- see m_contentDiscoveryNext's
+        // declaration for why): this step pays for a full recursive walk of
+        // Content/, a different cost shape than the loop below's per-KNOWN-
+        // file stat() calls. Runs BEFORE BuildAssetEntries below (not after)
+        // so a discovery this tick registers the new guid in time for the
+        // SAME tick's Texture/Model first-sighting branch to fire -- drop ->
+        // registered -> cook-triggered lands inside ONE poll interval.
+        //
+        // F2c s4.1, Task 9: widened from Texture-only to Texture + Model.
+        // ContentDiscovery.hpp's EnumerateContentSourceFiles/
+        // DiscoverUnknownSources now take an explicit extension set
+        // (generalized here from the old hardcoded ".png" scan, the
+        // identical widening CookSession::EnumerateSources went through in
+        // Task 8 on the pipeline side) -- kDiscoveryExtensions below is that
+        // set, both kinds' extensions in one array.
         if (m_editorClock >= m_contentDiscoveryNext)
         {
             m_contentDiscoveryNext = m_editorClock + 2.0;
 
-            std::unordered_set<std::string> knownTexturePaths;
+            static constexpr std::string_view kDiscoveryExtensions[] = {
+                ".png",           // Texture
+                ".gltf", ".glb",  // Model (F2c s4.1)
+            };
+
+            std::unordered_set<std::string> knownSourcePaths;
             for (const Arcane::Editor::AssetEntry& known :
                  Arcane::Editor::BuildAssetEntries(project->Registry()))
             {
-                if (known.kind != Arcane::Editor::AssetKind::Texture)
+                if (known.kind != Arcane::Editor::AssetKind::Texture &&
+                    known.kind != Arcane::Editor::AssetKind::Model)
                     continue;
                 if (const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(known.guid)))
-                    knownTexturePaths.insert(p->generic_string());
+                    knownSourcePaths.insert(p->generic_string());
             }
 
             for (const std::filesystem::path& dropped :
-                 Arcane::Editor::DiscoverUnknownTextureSources(project->Root() / "Content",
-                                                                knownTexturePaths))
+                 Arcane::Editor::DiscoverUnknownSources(project->Root() / "Content",
+                                                         kDiscoveryExtensions, knownSourcePaths))
             {
                 ARC_INFO("Assets: discovered new content file '{}' -- registering",
                          dropped.generic_string());
@@ -520,19 +534,24 @@ namespace Arcane::Editor
                 continue;
             }
 
-            if (e.kind != Arcane::Editor::AssetKind::Texture)
+            // F2c s4.1, Task 9: widened from Texture-only to Texture + Model --
+            // a re-exported .glb/.gltf triggers a recook the same way a
+            // re-saved .png does, including the C2 first-sighting-counts-as-
+            // change rule just below (which is what heals an uncooked clone).
+            if (e.kind != Arcane::Editor::AssetKind::Texture &&
+                e.kind != Arcane::Editor::AssetKind::Model)
                 continue;
 
-            // F2b Task 12: a texture source AND its .meta sidecar are BOTH
-            // watched -- a hand-edited or inspector-written .meta (the four
-            // cook-setting knobs) is a cook trigger exactly like editing the
-            // pixels themselves (spec s7 as amended). Deliberately no
-            // self-save re-baseline for the .meta half the way the material
-            // branch above has one: the editor's own inspector write to a
-            // .meta IS a legitimate cook trigger, not a false-positive
-            // reload to suppress -- there is no "our own edit, ignore it"
-            // case for a texture setting the way there is for a material's
-            // in-memory document state.
+            // F2b Task 12: a Texture/Model source AND its .meta sidecar are
+            // BOTH watched -- a hand-edited or inspector-written .meta (the
+            // four cook-setting knobs, textures today) is a cook trigger
+            // exactly like editing the pixels/geometry themselves (spec s7
+            // as amended). Deliberately no self-save re-baseline for the
+            // .meta half the way the material branch above has one: the
+            // editor's own inspector write to a .meta IS a legitimate cook
+            // trigger, not a false-positive reload to suppress -- there is
+            // no "our own edit, ignore it" case for a source setting the way
+            // there is for a material's in-memory document state.
             const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid));
             if (!path)
                 continue;
@@ -550,20 +569,22 @@ namespace Arcane::Editor
                     m_materialMtimes.try_emplace(watched.generic_string(), mtime);
                 if (inserted)
                 {
-                    // C2 FIX (final-review wave, 2026-09-04): for a TEXTURE entry,
-                    // first sighting COUNTS as a change -- it does NOT for a material
-                    // (the branch above), because a material's first sighting really
-                    // is a baseline (nothing is ever "cooked" for a material). A
-                    // texture's first sighting can be a source this project has NEVER
-                    // cooked (a fresh clone with no Intermediate/Artifacts yet, or a
-                    // .png just dropped into Content/ mid-session) -- treating that as
+                    // C2 FIX (final-review wave, 2026-09-04; widened to Model by F2c
+                    // s4.1, Task 9): for a Texture/Model entry, first sighting COUNTS
+                    // as a change -- it does NOT for a material (the branch above),
+                    // because a material's first sighting really is a baseline
+                    // (nothing is ever "cooked" for a material). A Texture/Model's
+                    // first sighting can be a source this project has NEVER cooked (a
+                    // fresh clone with no Intermediate/Artifacts yet, or a .png/.gltf/
+                    // .glb just dropped into Content/ mid-session) -- treating that as
                     // "nothing happened" left "the editor heals it in-process on open"
                     // a dead path: nothing ever called CookQueue::NoteChanged() for it,
-                    // so an uncooked project showed checkerboards forever. This makes
-                    // the very first watcher tick after open coalesce into ONE
-                    // hash-gated CookProject pass (CookQueue's own coalescing, see
-                    // CookQueue.hpp) -- free (upToDate, zero actual cooks) on an
-                    // already-fully-cooked project, the heal on one that isn't.
+                    // so an uncooked project showed checkerboards (or a missing mesh)
+                    // forever. This makes the very first watcher tick after open
+                    // coalesce into ONE hash-gated CookProject pass (CookQueue's own
+                    // coalescing, see CookQueue.hpp) -- free (upToDate, zero actual
+                    // cooks) on an already-fully-cooked project, the heal on one that
+                    // isn't.
                     it->second = mtime;
                     changed = true;
                     continue;
@@ -582,9 +603,9 @@ namespace Arcane::Editor
                 // classification too, so the whole entry is re-asked, not
                 // just its cook state.
                 m_assetModel.MarkDirty(e.guid);
-                // Asset-manager Plan 2 Task 5: a texture source or .meta
-                // sidecar changing on disk is SourceChanged too, same kind
-                // as the material branch above -- the feed does not
+                // Asset-manager Plan 2 Task 5: a Texture/Model source or
+                // .meta sidecar changing on disk is SourceChanged too, same
+                // kind as the material branch above -- the feed does not
                 // distinguish "will recook" from "already re-baked".
                 m_assetActivity.Push({ std::chrono::steady_clock::now(), e.guid, e.name,
                                         Arcane::Editor::AssetActivityKind::SourceChanged, {} });
@@ -592,7 +613,9 @@ namespace Arcane::Editor
 
             if (changed && m_cookQueue)
             {
-                ARC_INFO("texture '{}' (or its .meta) changed on disk", e.name);
+                ARC_INFO("{} '{}' (or its .meta) changed on disk",
+                         e.kind == Arcane::Editor::AssetKind::Model ? "model" : "texture",
+                         e.name);
                 // Watcher-triggered, hash-decided, NEVER BLOCKS: NoteChanged
                 // only submits a background CookSession::CookProject pass
                 // (JobSystem::Submit) and returns immediately -- the actual

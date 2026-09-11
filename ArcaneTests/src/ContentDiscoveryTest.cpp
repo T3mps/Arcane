@@ -22,6 +22,14 @@
 //      would call) mints its sidecar and registers it -> a cook pass cooks
 //      exactly the new one.
 //
+// F2c s4.1, Task 9: ContentDiscovery's two entry points were generalized from
+// a hardcoded ".png" scan (EnumerateContentPngFiles/DiscoverUnknownTextureSources)
+// to an explicit-extension-set one (EnumerateContentSourceFiles/
+// DiscoverUnknownSources) -- see that header's own comment. The texture-only
+// tests below pass a `{ ".png" }` extension set to stay byte-identical in
+// behavior; the dedicated case near the bottom of this file proves the
+// widening itself, with a `.gltf`/`.glb` extension set.
+//
 // [editor][cook] -- CPU-only, no GPU/ImGui/Runtime involved.
 
 #include <catch2/catch_test_macros.hpp>
@@ -42,7 +50,9 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -51,13 +61,18 @@ using namespace Arcane::AssetPipeline;
 using Arcane::Editor::AssetEntry;
 using Arcane::Editor::AssetKind;
 using Arcane::Editor::BuildAssetEntries;
-using Arcane::Editor::DiscoverUnknownTextureSources;
-using Arcane::Editor::EnumerateContentPngFiles;
+using Arcane::Editor::DiscoverUnknownSources;
+using Arcane::Editor::EnumerateContentSourceFiles;
 using Arcane::Editor::UnknownPaths;
 using Arcane::Guid;
 
 namespace
 {
+    // The texture-only extension set every pre-existing test below passes,
+    // so its behavior stays byte-identical across the EnumerateContentPngFiles
+    // -> EnumerateContentSourceFiles rename (F2c s4.1, Task 9).
+    constexpr std::string_view kPngExtensions[] = { ".png" };
+
     fs::path TempDir(const char* leaf)
     {
         fs::path d = fs::temp_directory_path() / "arcane_content_discovery_test" / leaf;
@@ -114,9 +129,9 @@ namespace
     }
 }
 
-// ---- Pure halves: EnumerateContentPngFiles / UnknownPaths -----------------
+// ---- Pure halves: EnumerateContentSourceFiles / UnknownPaths --------------
 
-TEST_CASE("EnumerateContentPngFiles finds every .png recursively, case-insensitively, "
+TEST_CASE("EnumerateContentSourceFiles finds every .png recursively, case-insensitively, "
           "regardless of a .meta sidecar", "[editor][cook]")
 {
     const fs::path dir = TempDir("enumerate_basic");
@@ -129,10 +144,10 @@ TEST_CASE("EnumerateContentPngFiles finds every .png recursively, case-insensiti
         std::ofstream(dir / "ignored.jpg", std::ios::binary) << "not a png";
     }
 
-    const std::vector<fs::path> found = EnumerateContentPngFiles(dir);
+    const std::vector<fs::path> found = EnumerateContentSourceFiles(dir, kPngExtensions);
     REQUIRE(found.size() == 3u);
     // Sorted -- deterministic order, same rule AssetRegistry::All() and
-    // CookSession::EnumerateTextureSources both follow.
+    // CookSession::EnumerateSources both follow.
     CHECK(std::is_sorted(found.begin(), found.end()));
 
     std::unordered_set<std::string> generic;
@@ -143,14 +158,14 @@ TEST_CASE("EnumerateContentPngFiles finds every .png recursively, case-insensiti
     CHECK(generic.count((dir / "sub" / "deep" / "c.png").generic_string()) == 1u);
 }
 
-TEST_CASE("EnumerateContentPngFiles on a missing directory returns empty, never throws",
+TEST_CASE("EnumerateContentSourceFiles on a missing directory returns empty, never throws",
           "[editor][cook]")
 {
     const fs::path missing = fs::temp_directory_path() / "arcane_content_discovery_test" /
                               "definitely_does_not_exist";
     std::error_code ec;
     fs::remove_all(missing, ec);
-    CHECK(EnumerateContentPngFiles(missing).empty());
+    CHECK(EnumerateContentSourceFiles(missing, kPngExtensions).empty());
 }
 
 TEST_CASE("UnknownPaths is a pure set difference over generic-string form", "[editor][cook]")
@@ -179,7 +194,7 @@ TEST_CASE("UnknownPaths: every candidate already known -> empty (the idempotence
     CHECK(UnknownPaths(candidates, known).empty());
 }
 
-TEST_CASE("DiscoverUnknownTextureSources composes enumeration + diff against a real temp dir",
+TEST_CASE("DiscoverUnknownSources composes enumeration + diff against a real temp dir",
           "[editor][cook]")
 {
     const fs::path dir = TempDir("discover_compose");
@@ -187,7 +202,7 @@ TEST_CASE("DiscoverUnknownTextureSources composes enumeration + diff against a r
     WritePngFile(dir / "sub" / "b.png", 2, 2, SolidPixels(2, 2, 2, 2, 2, 255));
 
     const std::unordered_set<std::string> known = { (dir / "a.png").generic_string() };
-    const std::vector<fs::path> unknown = DiscoverUnknownTextureSources(dir, known);
+    const std::vector<fs::path> unknown = DiscoverUnknownSources(dir, kPngExtensions, known);
 
     REQUIRE(unknown.size() == 1u);
     CHECK(unknown[0] == dir / "sub" / "b.png");
@@ -195,7 +210,36 @@ TEST_CASE("DiscoverUnknownTextureSources composes enumeration + diff against a r
     // Idempotence: once the known set catches up, a second pass finds nothing.
     std::unordered_set<std::string> caughtUp = known;
     caughtUp.insert((dir / "sub" / "b.png").generic_string());
-    CHECK(DiscoverUnknownTextureSources(dir, caughtUp).empty());
+    CHECK(DiscoverUnknownSources(dir, kPngExtensions, caughtUp).empty());
+}
+
+// F2c s4.1, Task 9: the extension set is now caller-supplied -- this proves
+// the widening actually works for a non-texture extension (a mesh source),
+// not just that the .png-only behavior above still holds. A dropped .glb is
+// discovered when ".glb" is in the extension set; a dropped .txt never is,
+// for any set that does not name it.
+TEST_CASE("EnumerateContentSourceFiles/DiscoverUnknownSources generalize past .png: a "
+          "dropped .glb is discovered, a dropped .txt is not", "[editor][cook]")
+{
+    const fs::path dir = TempDir("discover_glb");
+    static constexpr std::string_view kModelExtensions[] = { ".gltf", ".glb" };
+
+    std::ofstream(dir / "prop.glb", std::ios::binary) << "extension-only probe, not a real glb";
+    std::ofstream(dir / "notes.txt", std::ios::binary) << "not a recognized source extension";
+
+    const std::vector<fs::path> found = EnumerateContentSourceFiles(dir, kModelExtensions);
+    REQUIRE(found.size() == 1u);
+    CHECK(fs::equivalent(found[0], dir / "prop.glb"));
+
+    const std::vector<fs::path> unknown =
+        DiscoverUnknownSources(dir, kModelExtensions, std::unordered_set<std::string>{});
+    REQUIRE(unknown.size() == 1u);
+    CHECK(fs::equivalent(unknown[0], dir / "prop.glb"));
+
+    // Idempotence, same shape as the .png composition test above: once the
+    // dropped .glb is "known", a second pass reports nothing.
+    const std::unordered_set<std::string> caughtUp = { (dir / "prop.glb").generic_string() };
+    CHECK(DiscoverUnknownSources(dir, kModelExtensions, caughtUp).empty());
 }
 
 // ---- Session-level: Project + CookSession, no EditorApp/Runtime needed ----
@@ -269,13 +313,13 @@ TEST_CASE("F2b fix: discovery finds the drop, RegisterAsset mints its sidecar, a
     // discovery step computes (KnownTexturePaths mirrors its known-set
     // build verbatim).
     const std::vector<fs::path> unknown =
-        DiscoverUnknownTextureSources(dir / "Content", KnownTexturePaths(*proj));
+        DiscoverUnknownSources(dir / "Content", kPngExtensions, KnownTexturePaths(*proj));
     REQUIRE(unknown.size() == 1u);
     CHECK(fs::equivalent(unknown[0], dropped));
 
     // "the rescan registers it" -- Project::RegisterAsset is the exact call
     // Runtime::RegisterCreatedAsset forwards to (Runtime.cpp), and the one
-    // PollAssetWatch's fix makes for every path DiscoverUnknownTextureSources
+    // PollAssetWatch's fix makes for every path DiscoverUnknownSources
     // returns. Mints the sidecar (auto-import, imported-binary rule) and
     // enters the registry -- no AssetRegistry::ScanContent re-run, which
     // would have cleared the whole registry instead of adding one entry.
@@ -287,7 +331,7 @@ TEST_CASE("F2b fix: discovery finds the drop, RegisterAsset mints its sidecar, a
     // Idempotence: a second discovery pass, with the registry now caught
     // up, reports nothing new -- no duplicate registration, no spurious
     // re-cook trigger.
-    CHECK(DiscoverUnknownTextureSources(dir / "Content", KnownTexturePaths(*proj)).empty());
+    CHECK(DiscoverUnknownSources(dir / "Content", kPngExtensions, KnownTexturePaths(*proj)).empty());
 
     // "the cook pass cooks exactly it" -- the existing source is already
     // current (CookSession's own hash gate), the dropped one is fresh.

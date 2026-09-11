@@ -35,6 +35,7 @@ namespace Arcane
                 ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr",  // images
                 ".wav", ".ogg", ".mp3", ".flac",                  // audio
                 ".ttf", ".otf",                                   // fonts
+                ".gltf", ".glb",                                  // meshes (F2c s4.1)
             };
             for (std::string_view e : kBinaryExts)
                 if (extLower == e)

@@ -18,9 +18,24 @@ namespace Arcane::Editor
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return ext;
         }
+
+        // Same shape as CookSession.cpp's MatchesAnyExtension (private to
+        // that TU, deliberately mirrored rather than shared -- this file's
+        // own header comment explains why).
+        bool MatchesAnyExtension(const std::filesystem::path& p,
+                                  std::span<const std::string_view> extensions)
+        {
+            const std::string ext = LowerExt(p);
+            for (const std::string_view& candidate : extensions)
+                if (ext == candidate)
+                    return true;
+            return false;
+        }
     }
 
-    std::vector<std::filesystem::path> EnumerateContentPngFiles(const std::filesystem::path& contentDir)
+    std::vector<std::filesystem::path> EnumerateContentSourceFiles(
+        const std::filesystem::path& contentDir,
+        std::span<const std::string_view> extensions)
     {
         std::vector<std::filesystem::path> files;
 
@@ -41,7 +56,7 @@ namespace Arcane::Editor
             std::error_code fileEc;
             if (!entry.is_regular_file(fileEc) || fileEc)
                 continue;
-            if (LowerExt(entry.path()) != ".png")
+            if (!MatchesAnyExtension(entry.path(), extensions))
                 continue;
 
             files.push_back(entry.path());
@@ -64,10 +79,11 @@ namespace Arcane::Editor
         return unknown;
     }
 
-    std::vector<std::filesystem::path> DiscoverUnknownTextureSources(
+    std::vector<std::filesystem::path> DiscoverUnknownSources(
         const std::filesystem::path& contentDir,
+        std::span<const std::string_view> extensions,
         const std::unordered_set<std::string>& knownPaths)
     {
-        return UnknownPaths(EnumerateContentPngFiles(contentDir), knownPaths);
+        return UnknownPaths(EnumerateContentSourceFiles(contentDir, extensions), knownPaths);
     }
 }

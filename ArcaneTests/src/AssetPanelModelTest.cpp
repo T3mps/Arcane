@@ -1713,12 +1713,17 @@ namespace
 // CookStateOf gets above, and the only place Diagnostic/Other are pinned (no
 // fixture below reaches them). Spec s9.1's list is a verbatim requirement, so
 // a kind silently changing sides here has to fail a test.
-TEST_CASE("IsUnusedEligible: exactly Texture/Material/Sprite/Mesh (spec s9.1)", "[editor]")
+TEST_CASE("IsUnusedEligible: exactly Texture/Material/Sprite/Mesh/Model (spec s9.1, "
+          "F2c s4.1)", "[editor]")
 {
     CHECK(IsUnusedEligible(AssetKind::Texture));
     CHECK(IsUnusedEligible(AssetKind::Material));
     CHECK(IsUnusedEligible(AssetKind::Sprite));
     CHECK(IsUnusedEligible(AssetKind::Mesh));
+    // F2c s4.1, Task 9: Model joins the list -- its one consumer (the
+    // companion .arcmesh's DerivesFrom edge) is fully visible to the
+    // reference index, same as every other eligible kind here.
+    CHECK(IsUnusedEligible(AssetKind::Model));
 
     CHECK_FALSE(IsUnusedEligible(AssetKind::Scene));        // roots -- never unused
     CHECK_FALSE(IsUnusedEligible(AssetKind::Data));         // consumed by game code the index cannot see
@@ -1733,7 +1738,7 @@ TEST_CASE("IsUnusedEligible: exactly Texture/Material/Sprite/Mesh (spec s9.1)", 
     for (int i = 0; i < kAssetKindCount; ++i)
         if (IsUnusedEligible(static_cast<AssetKind>(i)))
             ++eligible;
-    CHECK(eligible == 4);
+    CHECK(eligible == 5);
 }
 
 // (1) Eligibility: spec s9.1's list is EXACTLY {Texture, Material, Sprite,

@@ -103,8 +103,15 @@ namespace Arcane::Editor
         // (Scene/Data/Audio/Font/Diagnostic/Other) is EXEMPT: a scene is a
         // root, and data/audio/font assets are pulled in by game code no
         // index observes, so a zero-inbound one is not evidence of anything.
+        //
+        // F2c s4.1, Task 9: Model joins the list. A Model's one consumer is
+        // its companion .arcmesh, whose DerivesFrom edge the reference index
+        // reads (Task 12) exactly like a Sprite's DerivesFrom edge onto its
+        // source Texture -- so a Model with no companion mesh is genuinely
+        // unreferenced, not merely unobserved.
         return kind == AssetKind::Texture || kind == AssetKind::Material
-            || kind == AssetKind::Sprite  || kind == AssetKind::Mesh;
+            || kind == AssetKind::Sprite  || kind == AssetKind::Mesh
+            || kind == AssetKind::Model;
     }
 
     void AssetPanelModel::MarkDirty(const Arcane::Guid& id)

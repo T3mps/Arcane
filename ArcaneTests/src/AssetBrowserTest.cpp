@@ -168,6 +168,31 @@ TEST_CASE("AssetKindOf classifies meshes, heuristic keeps material/texture/sprit
     CHECK(AssetKindFilterForFieldName("meshMaterial") == static_cast<int>(AssetKind::Material));
 }
 
+TEST_CASE("asset browser: .gltf/.glb classify as Model, case-insensitively", "[editor]")
+{
+    // F2c s4.1. Model is NOT Mesh: .arcmesh stays Mesh, and the two must never
+    // collapse -- the browser rail, the fold target and the unused-eligibility rule
+    // all read this answer.
+    CHECK(AssetKindOf("game://models/prop.gltf") == AssetKind::Model);
+    CHECK(AssetKindOf("game://models/prop.glb")  == AssetKind::Model);
+    CHECK(AssetKindOf("game://models/PROP.GLB")  == AssetKind::Model);
+    CHECK(AssetKindOf("game://meshes/prop.arcmesh") == AssetKind::Mesh);
+    CHECK(std::string(KindLabel(AssetKind::Model)) == "Model");
+    CHECK(KindIcon(AssetKind::Model) != KindIcon(AssetKind::Other));
+    // kAssetKindCount is what sizes the rail; a stale count silently drops the row.
+    CHECK(static_cast<int>(AssetKind::Other) + 1 == kAssetKindCount);
+}
+
+TEST_CASE("asset browser: a Model is unused-eligible; the reference index sees its"
+          " consumers", "[editor]")
+{
+    // s9.1's rule is "kinds whose consumers the reference index fully sees". A Model's
+    // one consumer is the companion .arcmesh, whose DerivesFrom edge the index reads
+    // (Task 12) -- so a Model with no companion is genuinely unreferenced and should
+    // say so, exactly like a Texture with no sprite.
+    CHECK(IsUnusedEligible(AssetKind::Model));
+}
+
 TEST_CASE("a .arcscene is a native JSON asset and gets a minted id", "[editor][project]")
 {
     // Native-JSON rule: a top-level "id" is read, or minted and written back.

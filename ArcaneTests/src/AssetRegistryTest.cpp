@@ -281,6 +281,49 @@ TEST_CASE("Project::Open with no Saved/Diagnostics mounts nothing and does not f
     std::filesystem::remove_all(dir, ec);
 }
 
+// F2c s4.1, Task 9: .gltf/.glb are imported binaries too -- the identical
+// sidecar-minting shape .png/.wav/.ttf already get, just newly extended to
+// mesh sources.
+TEST_CASE("asset registry: a dropped .gltf/.glb registers with a minted sidecar",
+          "[assets]")
+{
+    // The texture pattern, verbatim (AssetRegistry.cpp's ResolveSidecarId): a .gltf
+    // cannot embed an id, so its guid lives in "<file>.gltf.meta" -- appended to the
+    // FULL filename, Unity-style, so prop.gltf and prop.png get distinct sidecars.
+    const std::filesystem::path content = TempDir("registry_gltf") / "Content";
+    std::filesystem::create_directories(content);
+
+    // Reuse the shared gltf fixture corpus (ArcaneTests/data/gltf, staged
+    // beside the exe by premake's data copy) rather than authoring new
+    // binary fixtures -- same MeshFixture reuse rule AssetPipelineSessionTest.cpp
+    // already follows.
+    const std::filesystem::path fixtures = std::filesystem::path("data") / "gltf";
+    std::filesystem::copy_file(fixtures / "single.glb", content / "single.glb");
+    std::filesystem::copy_file(fixtures / "nested.gltf", content / "nested.gltf");
+
+    Arcane::AssetRegistry registry;
+    registry.ScanContent(content, "game");
+
+    CHECK(std::filesystem::exists(content / "single.glb.meta"));
+    CHECK(std::filesystem::exists(content / "nested.gltf.meta"));
+    // Both are registered, each under the guid its own sidecar carries.
+    CHECK(registry.All().size() == 2u);
+
+    // Case-insensitive, like every other extension in IsImportedBinary.
+    // Re-scanned with a FRESH registry instance (not the one above), so this
+    // can only pass if IsImportedBinary itself recognizes ".GLB" -- not
+    // because the first registry already knew the guid from the mixed-case
+    // scan above.
+    std::filesystem::copy_file(content / "single.glb", content / "PROP.GLB");
+    Arcane::AssetRegistry rescan;
+    rescan.ScanContent(content, "game");
+    CHECK(std::filesystem::exists(content / "PROP.GLB.meta"));
+    CHECK(rescan.All().size() == 3u);
+
+    std::error_code ec;
+    std::filesystem::remove_all(content, ec);
+}
+
 TEST_CASE("AssetRegistry::All() is ordered deterministically, not by hash", "[project]")
 {
     const auto dir = TempDir("all_deterministic_order");

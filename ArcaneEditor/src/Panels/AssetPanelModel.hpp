@@ -59,9 +59,14 @@ namespace Arcane::Editor
         // F2a, Task 9: .arcmesh procedural mesh assets (MeshDocument). Same
         // placement rule as Diagnostic above -- ahead of the catch-all.
         Mesh,
+        // F2c s4.1, Task 9: .gltf/.glb IMPORTED SOURCES. Distinct from Mesh for the same
+        // reason Texture is distinct from Sprite -- Model is the imported original, Mesh
+        // is the authored .arcmesh that derives from it (and folds under it in the
+        // browser). Same placement rule Diagnostic and Mesh used: ahead of the catch-all.
+        Model,
         Other,
     };
-    inline constexpr int kAssetKindCount = 10;
+    inline constexpr int kAssetKindCount = 11;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
@@ -93,6 +98,10 @@ namespace Arcane::Editor
             return AssetKind::Diagnostic;
         if (ext == ".arcmesh")
             return AssetKind::Mesh;
+        // F2c s4.1: the imported originals -- AssetRegistry's IsImportedBinary
+        // recognizes the identical pair as sidecar-bearing binaries.
+        if (ext == ".gltf" || ext == ".glb")
+            return AssetKind::Model;
         for (const char* e : { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr" })
             if (ext == e) return AssetKind::Texture;
         for (const char* e : { ".wav", ".ogg", ".mp3", ".flac" })
@@ -152,6 +161,12 @@ namespace Arcane::Editor
     // and the material branch must win it exactly as spriteMaterial's does
     // -- so `mesh` sits at the end, immediately before the -1 fallback,
     // rather than being checked before material/texture/sprite.
+    //
+    // F2c s4.1, Task 9: Model gets NO branch here, deliberately. No component
+    // field names a Model today -- MeshRenderer::mesh names an .arcmesh, i.e.
+    // AssetKind::Mesh above, not the imported .gltf/.glb it derives from -- so
+    // inventing a "model"/"gltf" substring rule would be a guess with no call
+    // site to justify it. Add one only when a real field needs it.
     inline int AssetKindFilterForFieldName(std::string_view fieldName)
     {
         std::string lower(fieldName);
@@ -266,6 +281,12 @@ namespace Arcane::Editor
             // A 3D box, for a procedural mesh -- ICON_LC_BOX exists in
             // IconsLucide.h (grepped: IconsLucide.h:287).
             case AssetKind::Mesh:     return ICON_LC_BOX;
+            // F2c s4.1, Task 9: ICON_LC_BOXES exists in IconsLucide.h (grepped:
+            // ArcaneEditor/src/Widgets/IconsLucide.h:289) -- a stack of boxes for the
+            // imported ORIGINAL, deliberately distinct from Mesh's single ICON_LC_BOX
+            // (the authored asset derived from it) so the two never read as one kind
+            // at a glance in the rail.
+            case AssetKind::Model:    return ICON_LC_BOXES;
             case AssetKind::Other:    return ICON_LC_FILE;
         }
         return ICON_LC_FILE;
@@ -284,6 +305,7 @@ namespace Arcane::Editor
             case AssetKind::Sprite:   return "Sprite";
             case AssetKind::Diagnostic: return "Diagnostic";
             case AssetKind::Mesh:     return "Mesh";
+            case AssetKind::Model:    return "Model";
             case AssetKind::Other:    return "Other";
         }
         return "Other";
@@ -305,13 +327,14 @@ namespace Arcane::Editor
     // AssetPanelEntry::cook's own default).
     [[nodiscard]] CookState CookStateOf(AssetKind kind, bool permanentDiag, bool pending);
 
-    // Which kinds may ever be flagged `unused` (spec s9.1, VERBATIM): exactly
-    // Texture, Material, Sprite and Mesh -- the kinds whose consumers the
-    // reference index fully sees. Scenes are roots (never unused);
-    // Data/Audio/Font are consumed by game code no index observes, so they are
-    // EXEMPT rather than falsely accused; Diagnostic/Other likewise. Sits
-    // beside CookStateOf on purpose -- both are the model's small, pure
-    // per-kind policy rules, and both are unit-testable without a model.
+    // Which kinds may ever be flagged `unused` (spec s9.1, VERBATIM as of its
+    // original list; F2c s4.1 Task 9 adds Model to it): Texture, Material,
+    // Sprite, Mesh and Model -- the kinds whose consumers the reference
+    // index fully sees. Scenes are roots (never unused); Data/Audio/Font are
+    // consumed by game code no index observes, so they are EXEMPT rather
+    // than falsely accused; Diagnostic/Other likewise. Sits beside
+    // CookStateOf on purpose -- both are the model's small, pure per-kind
+    // policy rules, and both are unit-testable without a model.
     [[nodiscard]] bool IsUnusedEligible(AssetKind kind);
 
     // Per-guid facade queries the model needs, injected by the host (EditorApp,
