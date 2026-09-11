@@ -367,8 +367,15 @@ namespace Arcane
     // function BY HAND rather than by shared code, per this file's own header banner. Both
     // sides: skip a buffer with no `uri` (embedded -- a GLB's BIN chunk, or cgltf's own
     // `.data` set some other way) and skip a `data:` URI (inline, already resolved wherever
-    // it is consumed); read every other referenced file, relative to the source's own
-    // directory, in array order.
+    // it is consumed, checked against the RAW still-encoded uri on both sides); PERCENT-
+    // DECODE every other uri BEFORE opening it (a reserved character -- a space, non-ASCII,
+    // common in an artist's export -- is percent-escaped in a glTF buffer uri; skipping the
+    // decode looks for a file literally named "my%20mesh.bin", which was never written) --
+    // this side's `DecodeUriPercentEscapes` (ArtifactReader.cpp) is a byte-for-byte port of
+    // `cgltf_decode_uri` (ThirdParty/cgltf/cgltf.h), the SAME function the pipeline side
+    // calls (via `DecodeUriToPath`, MeshImporter.cpp) before it opens a referenced file;
+    // then read every other referenced file, relative to the source's own directory, in
+    // array order.
     //
     // A .glb needs NONE of this -- it carries no external buffers, so the one caller
     // (AssetsImpl::ResolveMeshArtifact) never invokes this function for one; `sourceBytes`

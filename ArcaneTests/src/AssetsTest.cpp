@@ -25,7 +25,9 @@
 #include <fstream>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <Arcane/Assets/Assets.hpp>
@@ -38,6 +40,14 @@
 #include <Arcane/AssetPipeline/ArtifactFormat.hpp>
 #include <Arcane/AssetPipeline/TextureImporter.hpp>
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
+
+// Review fix (post-Task-11): the percent-encoded-uri facade test below routes a real
+// mesh cook through CookSession (the SAME orchestration arccook/the editor drive) --
+// see that test's own comment for why a hand-built WriteMeshArtifact fixture cannot
+// catch this class of defect.
+#include <Arcane/AssetPipeline/CookSession.hpp>
+
+#include <Json.hpp>
 
 namespace
 {
@@ -736,4 +746,97 @@ TEST_CASE("assets: MeshArtifactFor resolves and memoizes a cooked mesh artifact;
     CHECK_FALSE(mismatchAssets->CookPending(watched));
 
     std::filesystem::remove_all(root);
+}
+
+// Review fix (post-Task-11): the .gltf external-buffer path, ROUTED END-TO-END through the
+// REAL production cook (CookSession -- the same orchestration arccook and the editor's cook
+// queue both drive) and then through THIS reader's own client-side re-derivation
+// (Assets::MeshArtifactFor -> AssetsImpl::ResolveMeshArtifact -> ReadClientExternalBuffers).
+// Every mesh-facade fixture above this point hand-builds its artifact via WriteMeshArtifact
+// with a plain (never-percent-encoded) source path, which can NEVER catch a decode mismatch
+// between the two independent readers -- ArtifactReader.cpp's ReadClientExternalBuffers and
+// MeshImporter.cpp's ReadExternalBuffers (via cgltf_decode_uri) -- because nothing on the
+// client side ever had a percent-escape to get wrong. This case does: the fixture's buffer
+// uri needs a literal space, the shape a real DCC export commonly produces.
+TEST_CASE("assets: MeshArtifactFor resolves a .gltf whose external buffer uri is "
+          "percent-encoded (a space, the common artist-export shape)", "[assets][mesh]")
+{
+    namespace fs = std::filesystem;
+    const fs::path project = fs::temp_directory_path() / "arcane_assets_mesh_percent_uri";
+    std::error_code ec;
+    fs::remove_all(project, ec);
+    fs::create_directories(project / "Content" / "meshes", ec);
+
+    // nested.gltf's own fixture text declares `"buffers":[{"uri":"nested.bin",...}]` --
+    // rename the referenced .bin to a name that NEEDS percent-encoding (a literal space)
+    // and rewrite the .gltf's own uri to the percent-encoded form, exactly what a real
+    // export would carry.
+    const fs::path gltfFixture = fs::path("data") / "gltf" / "nested.gltf";
+    const fs::path binFixture  = fs::path("data") / "gltf" / "nested.bin";
+    REQUIRE(fs::exists(gltfFixture));
+    REQUIRE(fs::exists(binFixture));
+
+    std::string gltfText;
+    {
+        std::ifstream in(gltfFixture, std::ios::binary);
+        REQUIRE(in.good());
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        gltfText = ss.str();
+    }
+    const std::string kOriginalUri = "\"nested.bin\"";
+    const std::string kEncodedUri  = "\"nested%20mesh.bin\"";   // decodes to "nested mesh.bin"
+    const auto pos = gltfText.find(kOriginalUri);
+    REQUIRE(pos != std::string::npos);
+    gltfText.replace(pos, kOriginalUri.size(), kEncodedUri);
+
+    const fs::path gltfPath = project / "Content" / "meshes" / "nested.gltf";
+    {
+        std::ofstream out(gltfPath, std::ios::binary | std::ios::trunc);
+        REQUIRE(out.good());
+        out << gltfText;
+    }
+    fs::copy_file(binFixture, project / "Content" / "meshes" / "nested mesh.bin", ec);
+    REQUIRE_FALSE(ec);
+
+    const Arcane::Guid meshGuid = Arcane::Guid::Generate();
+    {
+        nlohmann::json meta;
+        meta["guid"] = meshGuid.ToString();
+        meta["version"] = 1;
+        fs::path metaPath = gltfPath;
+        metaPath += ".meta";
+        std::ofstream out(metaPath, std::ios::binary | std::ios::trunc);
+        REQUIRE(out.good());
+        out << meta.dump(2);
+    }
+
+    // THE PIPELINE SIDE: a real cook through CookSession, which percent-DECODES the buffer
+    // uri via cgltf (MeshImporter.cpp's DecodeUriToPath -> cgltf_decode_uri) before it ever
+    // opens "nested mesh.bin" -- if this refuses, the FIXTURE is wrong, not the client
+    // reader under test.
+    Arcane::AssetPipeline::CookSession session;
+    const Arcane::AssetPipeline::CookResult result = session.CookProject(project);
+    REQUIRE(result.failed == 0u);
+    REQUIRE(result.cooked == 1u);
+
+    // THE CLIENT SIDE, under test: Assets::MeshArtifactFor must independently re-derive the
+    // SAME currentSourceBytes -- which means percent-decoding "nested%20mesh.bin" to
+    // "nested mesh.bin" BEFORE opening it -- to hash-match what CookSession just cooked.
+    // Before the fix this returns null (the literal file "nested%20mesh.bin" does not
+    // exist, so the external-buffer read fails and the hash cannot match); after the fix
+    // it resolves.
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(project / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == meshGuid) return gltfPath;
+        return std::nullopt;
+    });
+
+    const Arcane::LoadedClientMesh* mesh = assets->MeshArtifactFor(meshGuid);
+    REQUIRE(mesh != nullptr);
+    CHECK_FALSE(mesh->vertices.empty());
+
+    fs::remove_all(project, ec);
 }

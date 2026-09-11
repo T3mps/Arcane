@@ -611,6 +611,63 @@ namespace Arcane
             }
             return h;
         }
+
+        // Review fix (post-Task-11): ONE hex digit's value, or -1 -- mirrors
+        // ThirdParty/cgltf/cgltf.h's own file-local `cgltf_unhex` exactly (0-9, A-F, a-f;
+        // anything else, INCLUDING the string's own null terminator when probed past the
+        // end, is -1). DecodeUriPercentEscapes below is the only caller.
+        [[nodiscard]] int UnhexDigit(char ch) noexcept
+        {
+            if (ch >= '0' && ch <= '9') return ch - '0';
+            if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+            if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+            return -1;
+        }
+
+        // Review fix (post-Task-11): percent-decode a URI, mirroring
+        // ThirdParty/cgltf/cgltf.h's own `cgltf_decode_uri` BYTE FOR BYTE (this file's
+        // no-shared-code banner -- cgltf is a pipeline-side dependency, never linked here).
+        // ReadClientExternalBuffers below is the ONE caller, and it is REQUIRED: a glTF
+        // buffer uri is percent-encoded whenever it carries a reserved character (a space
+        // -> "%20", non-ASCII -- common in an artist's export), and the pipeline's OWN
+        // ReadExternalBuffers (MeshImporter.cpp) runs cgltf_decode_uri on every buffer uri
+        // via DecodeUriToPath before opening the file -- skipping the decode here would
+        // make this reader look for a file literally named "my%20mesh.bin", which was never
+        // written, and a legitimately-cooked mesh would refuse permanently (Missing, or
+        // HashMismatch once ANY external buffer read fails and the hash input differs).
+        //
+        // `%XY` (two valid hex digits) decodes to the one byte X*16+Y and advances 3
+        // characters; anything else at a '%' -- end of string, a non-hex digit, only one
+        // hex digit before the end -- passes the '%' through VERBATIM and advances 1,
+        // exactly cgltf_decode_uri's own "a malformed escape is not an error" posture (its
+        // fallthrough `*write++ = *i++;` at the bottom of the loop). The bounds check below
+        // (`i + 2 < uri.size()`) is this function's own version of cgltf reading past a
+        // short match into the C string's null terminator: UnhexDigit(0) is -1 too, so both
+        // implementations reach the identical "malformed, pass through" outcome for a
+        // trailing "...%4" or a bare "...%" at the end of the string.
+        [[nodiscard]] std::string DecodeUriPercentEscapes(const std::string& uri)
+        {
+            std::string out;
+            out.reserve(uri.size());
+            std::size_t i = 0;
+            while (i < uri.size())
+            {
+                if (uri[i] == '%' && i + 2 < uri.size())
+                {
+                    const int hi = UnhexDigit(uri[i + 1]);
+                    const int lo = UnhexDigit(uri[i + 2]);
+                    if (hi >= 0 && lo >= 0)
+                    {
+                        out.push_back(static_cast<char>(hi * 16 + lo));
+                        i += 3;
+                        continue;
+                    }
+                }
+                out.push_back(uri[i]);
+                ++i;
+            }
+            return out;
+        }
     }
 
     ArtifactReadResult ReadClientArtifact(const std::filesystem::path& path,
@@ -774,8 +831,9 @@ namespace Arcane
     // F2c Task 11: see this function's own doc comment (ArtifactReader.hpp) for the full
     // contract and the ReadExternalBuffers (ArcaneAssetPipeline/MeshImporter.cpp) peer this
     // must agree with BY HAND. Core logic is the JSON read: no cgltf, no full glTF parse --
-    // just `buffers[].uri`, skipping an absent/embedded uri and a `data:` one, reading every
-    // other referenced file relative to the source's own directory.
+    // just `buffers[].uri`, skipping an absent/embedded uri and a `data:` one, PERCENT-
+    // DECODING every other uri (DecodeUriPercentEscapes, mirroring cgltf_decode_uri) before
+    // reading the referenced file relative to the source's own directory.
     std::optional<std::vector<std::vector<std::byte>>> ReadClientExternalBuffers(
         std::span<const std::byte> sourceBytes, const std::filesystem::path& sourcePath)
     {
@@ -800,9 +858,17 @@ namespace Arcane
                 continue;   // embedded (GLB BIN chunk) -- nothing to read
             const std::string uri = uriIt->get<std::string>();
             if (uri.rfind("data:", 0) == 0)
-                continue;   // inline data URI -- already resolved wherever it is consumed
+                continue;   // inline data URI -- already resolved wherever it is consumed;
+                            // checked against the RAW (still-encoded) uri, matching
+                            // MeshImporter.cpp's own order (its StartsWith(uri, "data:")
+                            // check runs before cgltf ever decodes anything for this buffer)
 
-            std::optional<std::vector<std::byte>> bytes = ReadWholeFile(baseDir / uri);
+            // Review fix (post-Task-11): PERCENT-DECODE before the filesystem join -- a raw
+            // uri carrying a reserved character (space -> "%20", ...) is not a valid
+            // filename component as-is. See DecodeUriPercentEscapes's own comment for why
+            // this step is required to agree with the pipeline's cgltf_decode_uri call.
+            std::optional<std::vector<std::byte>> bytes =
+                ReadWholeFile(baseDir / DecodeUriPercentEscapes(uri));
             if (!bytes)
                 return std::nullopt;   // referenced buffer unreadable
             buffers.push_back(std::move(*bytes));
