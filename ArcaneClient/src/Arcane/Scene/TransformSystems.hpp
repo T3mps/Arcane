@@ -25,11 +25,16 @@
 //     `world[i] = parentIndex[i] == kNoParent ? local[i] : world[parentIndex[i]] * local[i]`.
 //     Parents precede children, so the parent's world matrix is already final;
 //     the parent lookup is an array index, not a hash lookup.
-//   * DIRTY FLAGS skip untouched subtrees. Dirtiness is INHERITED: a moved
-//     parent leaves every descendant's WORLD matrix stale even though their
-//     LOCAL transforms did not change. Because `order` is topological, one
-//     forward pass suffices -- row i ORs its parent's already-decided
-//     dirtiness into its own (see Compose).
+//   * DIRTY FLAGS skip untouched subtrees. `moved` comes from the
+//     Changed<Transform> pre-pass (Astra adoption 2026-09-11, spec s6.3): one
+//     chunk-version compare per chunk and one tick compare per entity, in
+//     place of the retired per-row shadow-copy comparison. Dirtiness is
+//     INHERITED: a moved parent leaves every descendant's WORLD matrix stale
+//     even though their LOCAL transforms did not change. Because `order` is
+//     topological, one forward pass suffices -- row i ORs its parent's
+//     already-decided dirtiness into its own (see Compose). When the pre-pass
+//     finds nothing and nothing was rebuilt or materialised, operator() skips
+//     the linear pass entirely -- the EARLY-OUT.
 //
 // A steady-state frame now calls ForEachDescendant ZERO times; so does a
 // rebuild, which walks RelationshipGraph::GetChildren directly (it needs the
@@ -45,7 +50,9 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
+#include <Astra/Container/FlatMap.hpp>
 #include <Astra/Container/FlatSet.hpp>
+#include <Astra/Core/Tick.hpp>
 #include <Astra/Entity/Entity.hpp>
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/System/System.hpp>
@@ -60,34 +67,40 @@
 namespace Arcane
 {
     // The propagation cache, held as a Registry RESOURCE rather than as system
-    // state: the editor calls the system as a temporary
-    // (`TransformPropagationSystem{}(reg)` in EditorAppFrame/EditorAppScene)
-    // while the runtime scheduler owns a long-lived instance, so per-instance
-    // state would persist for one host and not the other. The registry is the
-    // one thing both share, and it is also the right lifetime -- a swapped
-    // registry (RestoreRegistry, ResetRegistry, scene load) drops the cache
-    // with the world it described.
+    // state: the editor's EditModeSchedule and the game module's fixedUpdate
+    // scheduler both own a long-lived instance, so per-instance state would
+    // persist for one host and not the other. The registry is the one thing
+    // both share, and it is also the right lifetime -- a swapped registry
+    // (RestoreRegistry, ResetRegistry, scene load) drops the cache with the
+    // world it described.
     //
     // Deliberately public: the properties this task exists for (topological
     // validity, and "rebuilt on structure, never on values") are only
     // assertable if the order and the rebuild counter can be read.
     struct TransformOrder
     {
-        // parentIndex sentinel: this row has no parent WITHIN the order. Only
-        // row 0 (the scene root) ever carries it.
         static constexpr std::uint32_t kNoParent = 0xFFFFFFFFu;
 
         // ---- structure: rebuilt only when StructureVersion()/root moves ----
         std::vector<Astra::Entity> order;        // BFS from the scene root; order[0] IS the root
         std::vector<std::uint32_t> parentIndex;  // index INTO order, always strictly < own index
+        // entity -> row in `order`, filled by Rebuild (which already walks every
+        // entity). THE bridge between Astra's entity-keyed Changed<Transform>
+        // yield and this cache's row-indexed arrays. An entity absent here is
+        // outside the scene root's subtree and is never written by the pass.
+        Astra::FlatMap<Astra::Entity, std::uint32_t> rowOf;
 
         // ---- per-row value state, parallel to `order` ----
-        // shadow/shadowValid are the change detector: "did this local pose move?"
-        // is answered by comparing against the pose the row was last composed
-        // from: ten float compares against ~128 flops of mat4_cast + mat4 product,
-        // which is the trade that makes skipping worth doing at all.
-        std::vector<Transform>    shadow;
-        std::vector<std::uint8_t> shadowValid;   // 0 => row i must recompose
+        // `moved` is the change detector (Astra adoption 2026-09-11, spec s6.3):
+        // set by the Changed<Transform> pre-pass for exactly the rows whose LOCAL
+        // pose was written since `lastRun` -- exact per entity because Transform
+        // is AstraChangeTracked (Components.hpp) -- and consumed (reset to 0) by
+        // Compose. It replaced a per-row shadow copy of the last-composed pose
+        // compared ten floats at a time every frame: the registry now answers
+        // "did this local move?" with one chunk-version compare per chunk and one
+        // tick compare per entity, and a scene in which nothing moved skips the
+        // linear pass entirely (the early-out in operator()).
+        std::vector<std::uint8_t> moved;         // 1 => row i's local was written since lastRun
         std::vector<std::uint8_t> dirty;         // decided this pass; read by children
 
         // Row i's world matrix -- and THE SOURCE its children compose against,
@@ -127,10 +140,26 @@ namespace Arcane
         // this sentinel has to become an explicit `built` flag.
         std::uint32_t structureVersion = 0;
 
+        // The "since" tick of the last pass: the pre-pass yields Transforms
+        // written STRICTLY after it. 0 == never (Astra's tick sentinel), so a
+        // fresh cache -- and one a Rebuild just reset -- sees every stamped
+        // Transform on its next pass. Lives on the RESOURCE, not the system: the
+        // editor's per-frame scheduler and the game module's fixedUpdate
+        // scheduler drive this same cache, and a swapped registry
+        // (RestoreRegistry, ResetRegistry, scene load) restarts its ticks at 1 --
+        // a since-tick stored anywhere else would be stale against it.
+        Astra::Tick lastRun = 0;
+
         // How many times the order has been rebuilt. Instrumentation, and the
         // only way a test can state the headline property as an assertion
         // rather than as a hope.
         std::uint32_t rebuilds = 0;
+        // Instrumentation for the adoption's tests: operator() calls that reached
+        // this cache, and rows Compose actually recomposed. An early-out leaves
+        // `composed` unchanged -- that is the assertion "a static scene does no
+        // matrix work" is made of.
+        std::uint32_t runs = 0;
+        std::uint32_t composed = 0;
 
         // Transient derived state; Registry::Save excludes resources entirely.
         // The no-op Serialize satisfies Astra's HasSerializeMethod so the
@@ -142,6 +171,28 @@ namespace Arcane
     struct TransformPropagationSystem
         : Astra::SystemTraits<Astra::Reads<Transform>, Astra::Writes<WorldTransform>>
     {
+        // EXCLUSIVE, because of the end-of-pass AdvanceTick below. Astra's tick
+        // contract (ArchetypeManager.hpp: CurrentTick "NEVER advanced concurrently
+        // with a running system"; SystemExecutor.hpp: systems in one group SHARE
+        // the group's tick) forbids a system advancing the counter while any
+        // other system of its group may be running or stamping. The scheduler
+        // honours this flag by giving the system its own group (SystemScheduler
+        // .hpp reads T::RequiresExclusive into the metadata), so the advance
+        // happens with nothing else in flight. Today both schedulers that own
+        // this system hold it alone, which is why the violation was latent; the
+        // flag makes the contract hold by construction, not by roster luck.
+        static constexpr bool RequiresExclusive = true;
+
+        // The ONE overload, everywhere: the game module's fixedUpdate scheduler,
+        // the editor's Edit-mode scheduler (EditModeSchedule) and the tests all
+        // drive this. Time base per pass: `since` is the cache's lastRun; at the
+        // end the cache takes CurrentTick() and the tick is ADVANCED -- mirroring
+        // the scheduler's post-segment advance -- so a write made after this pass
+        // is strictly newer than lastRun and IsNewer(t, t) never hides it (the
+        // "a clean leaf is not rewritten" canary in TransformOrderTest.cpp writes
+        // between two bare calls). Under a scheduler that advance is one extra
+        // tick per pass, taken in an exclusive group (above): ticks are cheap and
+        // only ever compared, and no other system can be mid-stamp when it moves.
         void operator()(Astra::Registry& reg)
         {
             const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
@@ -152,43 +203,39 @@ namespace Arcane
             if (!cache)
                 cache = reg.EmplaceResource<TransformOrder>();
             if (!cache) return;
+            TransformOrder& c = *cache;
+            ++c.runs;
 
-            // The whole invalidation policy, in two comparisons. StructureVersion
-            // covers attach/detach/reparent/destroy/clear; the root comparison
-            // covers the one structural change Astra cannot see, because the
-            // scene root is Arcane's idea, not the graph's.
+            // 1. Structure. StructureVersion covers attach/detach/reparent/destroy/
+            // clear; the root comparison covers the one structural change Astra
+            // cannot see. A Rebuild resets lastRun to 0 (inside Rebuild): a reparent
+            // must recompose everything, and a rebuilt row order invalidates any
+            // per-row memory.
             const std::uint32_t version = reg.StructureVersion();
-            if (cache->structureVersion != version || cache->root != root)
-                Rebuild(reg, root, version, *cache);
+            const bool rebuilt = (c.structureVersion != version || c.root != root);
+            if (rebuilt)
+                Rebuild(reg, root, version, c);
 
-            // Compose reports the rows that want a WorldTransform rather than
-            // adding one inline: AddComponent moves the entity to a different
-            // archetype, invalidating every component pointer the pass is
-            // holding for OTHER entities. (The same hazard the retired
-            // two-walk version deferred for, and the one Astra's traversals
-            // explicitly do not protect against.)
-            //
-            // The second pass then composes them. It is bounded at two by
-            // construction -- the adds cannot fail into a third -- and it only
-            // runs on a frame that actually materialised something, where its
-            // rows are almost all clean skips anyway.
-            if (Compose(reg, *cache))
-            {
-                for (Astra::Entity e : cache->needsWorld)
-                    reg.AddComponent<WorldTransform>(e, WorldTransform{});
-                Compose(reg, *cache);
-            }
+            // 2. Materialise missing WorldTransforms (the heal contract), 3. mark the
+            // rows whose local moved. Both are cheap in steady state: the probe's
+            // archetypes are empty, and the pre-pass chunk-rejects untouched chunks.
+            bool work = rebuilt;
+            work = Materialise(reg, c) || work;
+            work = MarkMoved(reg, c) || work;
+
+            // 4. THE EARLY-OUT. Nothing moved and nothing was rebuilt or
+            // materialised => nothing inherited => no row can need a matrix.
+            if (work)
+                Compose(reg, c);
+
+            // 5. Advance, on EVERY path (early-out included, so the pre-pass's
+            // chunk reject stays tight instead of re-scanning chunks stamped by
+            // unrelated writes until the next full pass).
+            c.lastRun = reg.CurrentTick();
+            reg.AdvanceTick();
         }
 
     private:
-        // BFS from the root over the live relationship graph. BFS is what makes
-        // the result topological: a row's children are appended after it, so
-        // every parent index is strictly less than its child's.
-        //
-        // Everything recomposes on the pass after a rebuild (shadowValid is
-        // cleared), which is both correct and cheap to reason about: a
-        // structural change moves whole subtrees anyway, and rebuilds are rare
-        // by construction.
         static void Rebuild(Astra::Registry& reg, Astra::Entity root,
                             std::uint32_t version, TransformOrder& c)
         {
@@ -228,8 +275,11 @@ namespace Arcane
             }
 
             const std::size_t n = c.order.size();
-            c.shadow.assign(n, Transform{});
-            c.shadowValid.assign(n, 0);
+            c.rowOf.Clear();
+            c.rowOf.Reserve(n);
+            for (std::size_t i = 0; i < n; ++i)
+                c.rowOf[c.order[i]] = static_cast<std::uint32_t>(i);
+            c.moved.assign(n, 0);
             c.dirty.assign(n, 0);
             c.world.resize(n);
             c.needsWorld.clear();
@@ -247,111 +297,104 @@ namespace Arcane
 
             c.root = root;
             c.structureVersion = version;
+            // Everything recomposes on the pass after a rebuild: with lastRun at
+            // "never", the pre-pass yields every Transform that was ever stamped.
+            c.lastRun = 0;
             ++c.rebuilds;
         }
 
-        // The linear pass. Returns true when at least one row wants a
-        // WorldTransform materialised, which the caller does between the two
-        // passes.
-        //
-        // WorldTransform is DERIVED, never authored: an entity that reaches this
-        // subtree with a Transform but no WorldTransform (a node Edit::CreateEntity
-        // just created, a SceneRoot minted by SceneAsset::CreateEmpty, one loaded
-        // from a pre-fix .arcscene, or one the Inspector's Add Component just put a
-        // Transform on) must get one here, or it can never satisfy
-        // RenderSubmissionSystem's view no matter what components get added to it
-        // afterward.
-        //
-        // That check cannot live in Rebuild: gaining a Transform is a COMPONENT
-        // change, so it moves no structure version and would be missed forever.
-        // And it deliberately does NOT skip rows this pass considers clean.
-        // An earlier draft keyed it on shadowValid -- "a row that has composed
-        // must already have a WorldTransform, because nothing removes one" --
-        // which bought a lookup per clean row by resting the guarantee on a
-        // CONVENTION (the editor's structure-lock) that a plugin does not share.
-        // An entity whose WorldTransform was removed behind our back and whose
-        // local then never moved again would have gone un-healed forever, where
-        // the retired walk re-added it the very next frame. The presence check
-        // is now unconditional, so the guarantee holds by construction: every
-        // spatial row in the subtree leaves this pass with a WorldTransform.
-        static bool Compose(Astra::Registry& reg, TransformOrder& c)
+        // WorldTransform is DERIVED, never authored: a subtree row with a
+        // Transform but no WorldTransform (Edit::CreateEntity, SceneAsset::
+        // CreateEmpty's root, a pre-fix .arcscene, an Inspector Add Component --
+        // or one REMOVED behind our back by a plugin) gets one here, or it can
+        // never satisfy RenderSubmissionSystem's view. Probed through the
+        // registry rather than per row so the early-out below cannot skip it:
+        // gaining a Transform marks the entity (the pre-pass sees it), but LOSING
+        // a WorldTransform marks nothing on Transform, and the archetypes this
+        // view matches are empty in steady state, so the probe is one chunk-list
+        // check per frame. Adds happen AFTER the walk (a structural change during
+        // a ForEach is refused) and BEFORE any component pointer is held.
+        static bool Materialise(Astra::Registry& reg, TransformOrder& c)
         {
             c.needsWorld.clear();
+            auto missing = reg.CreateView<const Transform, Astra::Not<WorldTransform>>();
+            missing.ForEach([&](Astra::Entity e, const Transform&)
+            {
+                if (c.rowOf.TryGet(e))
+                    c.needsWorld.push_back(e);
+            });
+            for (Astra::Entity e : c.needsWorld)
+            {
+                if (!reg.AddComponent<WorldTransform>(e, WorldTransform{}))
+                    continue;
+                c.moved[*c.rowOf.TryGet(e)] = 1;   // a fresh identity matrix must be composed
+            }
+            return !c.needsWorld.empty();
+        }
+
+        // The pre-pass: chunk-reject first, then -- because Transform is tracked
+        // -- exactly the entities whose Transform was written since lastRun.
+        // Entities outside the subtree (not in rowOf) are ignored.
+        static bool MarkMoved(Astra::Registry& reg, TransformOrder& c)
+        {
+            bool any = false;
+            auto changed = reg.CreateView<const Transform, Astra::Changed<Transform>>();
+            changed.Since(c.lastRun).ForEach([&](Astra::Entity e, const Transform&)
+            {
+                if (const std::uint32_t* row = c.rowOf.TryGet(e))
+                {
+                    c.moved[*row] = 1;
+                    any = true;
+                }
+            });
+            return any;
+        }
+
+        // The linear pass. THE SUBTLETY is unchanged: `inherited` is what makes a
+        // moved parent drag its whole subtree; one forward pass is enough because
+        // `order` is topological -- row p was decided before row i is read.
+        // A clean, non-inherited row does no lookup at all. A non-spatial node
+        // (never had a Transform, or the Inspector removed one) contributes no
+        // dirtiness and keeps its mirror row, so its children compose against
+        // exactly what they used to read off the component.
+        static void Compose(Astra::Registry& reg, TransformOrder& c)
+        {
             const std::size_t n = c.order.size();
             for (std::size_t i = 0; i < n; ++i)
             {
-                const Astra::Entity e = c.order[i];
                 const std::uint32_t p = c.parentIndex[i];
-                const Transform* local = std::as_const(reg).GetComponent<Transform>(e);
-                if (!local)
-                {
-                    // Non-spatial node (never had a Transform, or the Inspector
-                    // removed one -- Transform is deliberately not structure-
-                    // locked). The old walk skipped it and left its
-                    // WorldTransform, if any, at its last value; the mirror row
-                    // holds that same value, so its children compose against
-                    // exactly what they used to read off the component. It
-                    // contributes no dirtiness, because its world did not move.
-                    c.shadowValid[i] = 0;
-                    c.dirty[i] = 0;
-                    continue;
-                }
-
-                WorldTransform* world = reg.GetComponent<WorldTransform>(e);
-                if (!world)
-                {
-                    // Report and skip. The row recomposes on the second pass
-                    // (shadowValid is cleared, so `moved` is true there), and
-                    // its descendants pick the change up from `dirty` on that
-                    // same pass because they are ordered after it.
-                    c.needsWorld.push_back(e);
-                    c.shadowValid[i] = 0;
-                    c.dirty[i] = 0;
-                    continue;
-                }
-
-                // THE SUBTLETY. `inherited` is what makes a moved parent drag its
-                // whole subtree with it; a scheme that only checked `moved` would
-                // leave every descendant of a moved node at a stale world pose.
-                // One forward pass is enough precisely because `order` is
-                // topological -- row p was decided before row i is read.
                 const bool inherited = (p != TransformOrder::kNoParent) && c.dirty[p] != 0;
-                const bool moved     = !c.shadowValid[i] || !SamePose(c.shadow[i], *local);
+                const bool moved     = c.moved[i] != 0;
+                c.moved[i] = 0;   // consumed: the next pre-pass starts clean
                 if (!inherited && !moved)
                 {
                     c.dirty[i] = 0;
                     continue;   // the point of the exercise: no matrix work at all
                 }
 
+                const Astra::Entity e = c.order[i];
+                const Transform* local = std::as_const(reg).GetComponent<Transform>(e);
+                if (!local)
+                {
+                    c.dirty[i] = 0;
+                    continue;
+                }
+                // The ONE non-const fetch: this is the write. Compose is the sole
+                // writer of WorldTransform::matrix in engine source (see world[]).
+                WorldTransform* world = reg.GetComponent<WorldTransform>(e);
+                if (!world)
+                {
+                    c.dirty[i] = 0;   // Materialise refused it this frame; it retries next frame
+                    continue;
+                }
+
                 const glm::mat4 localMat = local->ToMatrix();
                 c.world[i] = (p == TransformOrder::kNoParent) ? localMat
                                                               : c.world[p] * localMat;
-                world->matrix    = c.world[i];
-                c.shadow[i]      = *local;
-                c.shadowValid[i] = 1;
-                c.dirty[i]       = 1;
+                world->matrix = c.world[i];
+                c.dirty[i]    = 1;
+                ++c.composed;
             }
-            return !c.needsWorld.empty();
-        }
-
-        // Exact float comparison, on purpose. This is a "did anything change"
-        // question, not a "are these close" one: a tolerance would make a slow
-        // drift invisible until it crossed the threshold, and any false
-        // NEGATIVE here silently freezes an entity's world matrix. Exact
-        // compare can only ever be conservative in the safe direction (NaN
-        // compares unequal, so a NaN pose recomposes every frame).
-        [[nodiscard]] static bool SamePose(const Transform& a, const Transform& b) noexcept
-        {
-            return a.position.x == b.position.x &&
-                   a.position.y == b.position.y &&
-                   a.position.z == b.position.z &&
-                   a.rotation.w == b.rotation.w &&
-                   a.rotation.x == b.rotation.x &&
-                   a.rotation.y == b.rotation.y &&
-                   a.rotation.z == b.rotation.z &&
-                   a.scale.x    == b.scale.x    &&
-                   a.scale.y    == b.scale.y    &&
-                   a.scale.z    == b.scale.z;
         }
     };
 }

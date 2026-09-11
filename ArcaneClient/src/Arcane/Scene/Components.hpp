@@ -47,6 +47,14 @@ namespace Arcane
     // rotation matrix" case).
     struct Transform
     {
+        // Astra change tracking (spec 2026-09-11 s6.2): 8 B per entity of
+        // {added, changed} ticks so Changed<Transform> is EXACT per entity --
+        // TransformPropagationSystem's pre-pass and PhysicsSystem's paused
+        // reconcile both need entity precision, and a coarse chunk stamp would
+        // recompose every row of a touched chunk. Nothing else is tracked
+        // (WorldTransform's readers all rebuild per frame; Hidden is a tag).
+        static constexpr bool AstraChangeTracked = true;
+
         glm::vec3 position{0.0f, 0.0f, 0.0f};
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};   // identity; glm's ctor is (w, x, y, z)
         glm::vec3 scale{1.0f, 1.0f, 1.0f};

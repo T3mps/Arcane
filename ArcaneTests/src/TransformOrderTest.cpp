@@ -901,3 +901,81 @@ TEST_CASE("a WorldTransform removed behind the system's back is healed",
     const WorldMap reference = ReferenceWorlds(reg, root);
     CheckMatchesReference(reg, reference);
 }
+
+// ============================================================================
+// Astra adoption (2026-09-11): the Changed<Transform> pre-pass + early-out.
+// ============================================================================
+TEST_CASE("a static scene early-outs: the second pass composes nothing", "[scene][transform-order]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    AwkwardScene s = BuildAwkwardScene(reg);
+
+    Arcane::TransformPropagationSystem propagate;
+    propagate(reg);
+    const std::uint32_t composedAfterFirst = OrderOf(reg).composed;
+    REQUIRE(composedAfterFirst == s.all.size());   // the first pass composes every spatial row
+
+    for (int i = 0; i < 8; ++i)
+        propagate(reg);
+    CHECK(OrderOf(reg).composed == composedAfterFirst);   // no matrix work at all
+    CHECK(OrderOf(reg).runs == 9u);
+
+    // One moved leaf costs exactly one composition, not a full pass.
+    reg.GetComponent<Arcane::Transform>(s.deepLeaf)->position.x += 1.0f;
+    propagate(reg);
+    CHECK(OrderOf(reg).composed == composedAfterFirst + 1);
+}
+
+TEST_CASE("a Rebuild forces a full recompose after a reparent under a clean parent",
+          "[scene][transform-order]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    AwkwardScene s = BuildAwkwardScene(reg);
+
+    Arcane::TransformPropagationSystem propagate;
+    propagate(reg);
+    propagate(reg);                                          // settled: lastRun is fresh
+    const std::uint32_t before = OrderOf(reg).composed;
+
+    // Nobody's LOCAL moves; only the structure does. The reparented subtree's
+    // world matrices are wrong until recomposed, and the pre-pass alone would
+    // see nothing -- Rebuild's lastRun = 0 is what makes every row moved.
+    reg.SetParent(s.lateChild, s.fanParent);
+    const WorldMap reference = ReferenceWorlds(reg, s.root);
+    propagate(reg);
+    CHECK(OrderOf(reg).composed == before + static_cast<std::uint32_t>(s.all.size()));
+    CheckMatchesReference(reg, reference);
+}
+
+TEST_CASE("a Transform written through Registry::Modified(id) is seen by the next pass",
+          "[scene][transform-order]")
+{
+    // The descriptor path the editor's Inspector and undo use: GetComponentByHash
+    // hands out a raw pointer and stamps NOTHING (Astra Registry.hpp), so the
+    // write is invisible to Changed<Transform> until the caller says Modified.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    Astra::Entity root = Spatial(reg, {0.0f, 0.0f, 0.0f});
+    Astra::Entity leaf = Spatial(reg, {1.0f, 0.0f, 0.0f});
+    reg.SetParent(leaf, root);
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    Arcane::TransformPropagationSystem propagate;
+    propagate(reg);
+
+    const std::uint64_t hash = Astra::TypeID<Arcane::Transform>::Hash();
+    const Astra::ComponentID id = Astra::TypeID<Arcane::Transform>::Value();
+    auto* raw = static_cast<Arcane::Transform*>(reg.GetComponentByHash(leaf, hash));
+    REQUIRE(raw != nullptr);
+    raw->position = glm::vec3(1.0f, 9.0f, 0.0f);
+    propagate(reg);
+    CHECK(reg.GetComponent<Arcane::WorldTransform>(leaf)->matrix[3].y == Catch::Approx(0.0f));   // invisible: no stamp
+
+    REQUIRE(reg.Modified(leaf, id));
+    propagate(reg);
+    CHECK(reg.GetComponent<Arcane::WorldTransform>(leaf)->matrix[3].y == Catch::Approx(9.0f));   // seen
+}
