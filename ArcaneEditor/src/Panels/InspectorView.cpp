@@ -172,17 +172,32 @@ namespace Arcane::Editor
             // Run `fn(instanceOfThatEntity)` for every selected entity carrying
             // this component. Falls back to the primary's own instance when the
             // fan-out context is absent, so a field is never silently un-editable.
+            //
+            // Every target is MARKED after fn (spec 2026-09-11 s6.4): GetComponentByHash
+            // stamps nothing, so without this an Inspector edit is invisible to the
+            // Edit-mode Changed<Transform> propagation (EditModeSchedule). Deliberate
+            // OVER-MARK: this same fan-out also serves the gesture-begin SNAPSHOT
+            // pass (BeginGestureIfActivated's SnapshotComponent lambda, and the
+            // multi-select seed reads), which is a READ -- so a widget activation
+            // that changes nothing still marks its component once. One spurious
+            // recompose per click on the selected entities, never a missed edit;
+            // a false positive is the safe direction here (TransformSystems.hpp).
             template<typename Fn>
             void ForEachTarget(void* primaryInstance, Fn&& fn)
             {
                 if (!registry || selection.empty())
                 {
                     fn(entity, primaryInstance);
+                    if (registry && descriptor)
+                        (void)registry->Modified(entity, descriptor->id);
                     return;
                 }
                 for (Astra::Entity e : selection)
                     if (void* data = registry->GetComponentByHash(e, descriptor->hash))
+                    {
                         fn(e, data);
+                        (void)registry->Modified(e, descriptor->id);
+                    }
             }
 
             // Open this row's gesture if its widget activated this frame. A thin

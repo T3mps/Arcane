@@ -41,11 +41,16 @@ namespace Arcane
     {
         if (!m_descriptor || !m_descriptor->deserialize || blob.empty())
             return;
-        void* instance = m_resolve().GetComponentByHash(m_entity, m_descriptor->hash);
+        Astra::Registry& reg = m_resolve();
+        void* instance = reg.GetComponentByHash(m_entity, m_descriptor->hash);
         if (!instance)
             return;   // entity/component gone -> safe no-op
         Astra::BinaryReader reader{std::span<const std::byte>(blob)};
         m_descriptor->deserialize(reader, instance);
+        // Declare the write (spec 2026-09-11 s6.4): GetComponentByHash stamped
+        // nothing, so without this an undone Transform is invisible to the
+        // Changed<Transform> propagation until something else touches it.
+        (void)reg.Modified(m_entity, m_descriptor->id);
     }
 
     void ComponentEditCommand::Undo() { Restore(m_before); }
