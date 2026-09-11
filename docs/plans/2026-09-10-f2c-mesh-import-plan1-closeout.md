@@ -2,15 +2,42 @@
 
 Task 16 of `docs/plans/2026-09-10-f2c-mesh-import-plan1-pipeline.md`. All 15
 implementation tasks are committed at HEAD `4a968173` when this closeout was
-written. This document is the end-to-end verification record and the
-handoff to Plan 2 (`docs/plans/2026-09-10-f2c-mesh-import-plan2-runtime-editor.md`).
+first written; the whole-branch final review's fix wave (2026-09-11) landed
+one commit after it and **corrected this document** (the plugin-load
+measurement in Step 5, the Plan 2 handoff notes in Step 6, and the suite
+numbers throughout — see "Final-review fix wave" below). This document is
+the end-to-end verification record and the handoff to Plan 2
+(`docs/plans/2026-09-10-f2c-mesh-import-plan2-runtime-editor.md`).
 
 Controller amendments bound this closeout: **ABI is 25** (not the brief's
 original 24 — an Astra sync consumed 24 before this arc started, Task 11
-bumped 24→25), and the **expected case total is 1611** (baseline 1535 + 76,
-not the brief's original +70 — six review-driven hardening tests were added
-during fix rounds beyond the plan's per-task estimates). Both are confirmed
-below by direct measurement, not recollection.
+bumped 24→25), and the **expected case total was 1611** at Task 16 (baseline
+1535 + 76, not the brief's original +70 — six review-driven hardening tests
+were added during fix rounds beyond the plan's per-task estimates). The
+final-review fix wave then added **+9** cases, for a **final total of 1620
+cases / 56118 assertions** (`~[gpu]`, Debug and Release identical). Every
+number below is confirmed by direct measurement, not recollection.
+
+## Final-review fix wave (2026-09-11)
+
+The whole-branch review (`a21e19ef..e39bbd53`, verdict "With fixes") landed
+in ONE fix commit immediately before this document's correction. Its items,
+each with the test that pins it (case titles abbreviated):
+
+| Item | Fix | Test (+cases) |
+|---|---|---|
+| I1 | The client's external-buffer reader is GLB-container-aware (locates chunk 0's JSON inside a `.glb`) and `AssetsImpl::ResolveMeshArtifact` no longer gates it on the `.gltf` extension — a `.glb` whose `buffers[1..]` carry a `uri` used to refuse `HashMismatch` forever. Fixture `external_bin.glb` + `external_bin.bin` added to the corpus. | `assets: MeshArtifactFor resolves a .glb whose second buffer references an external .bin` (+1; proven to fail `HashMismatch` with the fix stashed) |
+| I2 | Non-indexed triangle primitives import (`IndexCountOf`/`ReadIndex` in `MeshImporter.cpp`); non-triangle modes are skipped WITH one warning naming the primitive and mode; a non-multiple-of-3 index count drops its trailing partial triangle with a warning (ledger T6-13); the all-skipped refusal names the real reason. Fixture `nonindexed.glb` added. | `mesh import: a NON-INDEXED triangle primitive imports` (+1); `mesh import: a non-triangle primitive mode is SKIPPED with one warning` (+1, byte-patches `multi.glb`'s `"mode":4` → `5`) |
+| I3 | `CookResult::upToDateGuids` (additive), filled in the shared spine's up-to-date branch; `OnCookCompleted` mints companions over `cookedGuids ∪ upToDateGuids` (invalidations stay `cookedGuids`-only). | `cook session: a second pass over an unchanged source reports its guid in upToDateGuids` (+1) |
+| I4 | `MeshDocument`'s Imported posture: `ClearPrimarySlotMaterial` (pure) nils slot 0 instead of erasing for Imported (positional slotIndex ↔ slots[] correspondence); `SourceLabel` knows Imported; the Source combo and topology fields are replaced by read-only lines; no `BuildMeshData` preview (no WARN per edit). | `MeshDocument: clearing slot 0 on an IMPORTED mesh keeps the slot` (+1) |
+| I6 | The unmatched-texture WARN now states what is true (no on-disk copy whose bytes match the embedded image — edited or moved?) with the durable follow-up (a `.meta`-recorded extraction map) noted in code. | none (wording) |
+| I7 | This document (below). | none (docs) |
+| folded | `ArtifactFormat.hpp` banner rewritten to present tense; **slotIndex < sectionCount** bound in BOTH mesh readers + both banners; `ExtractEmbeddedTextures` WARNs on a write failure naming the destination (T13-28); `MintImportMaterials` skips a same-named repeat (`result.contains`). | pipeline: `a section whose slotIndex is >= sectionCount is refused` (+1); client: the same bound (+1), declared `vertexCount` with `VertexData` absent (+1), section range past `indexCount` (+1) — ledger T4-8's pins |
+
++1 +2 +1 +1 +4 = **+9**; 1611 + 9 = **1620**. ✓ The fixture generator was
+re-run twice after the two new fixtures were added; `git status --porcelain
+ArcaneTests/data/gltf` showed the ten pre-existing fixtures byte-identical
+on both runs (no `M` rows) and the three new files identical between runs.
 
 ## Step 1 — End-to-end, headless
 
@@ -191,10 +218,25 @@ from each config's own `ArcaneTests` exe directory.
 
 ### Baseline-comparable runs (`"~[gpu]"`, order=rand)
 
+At Task 16 (HEAD `4a968173`):
+
 | Config | Seed | Result |
 |---|---|---|
 | Debug | `789358831` | **All tests passed (56000 assertions in 1611 test cases)** |
 | Release | `2649618695` | **All tests passed (56000 assertions in 1611 test cases)** |
+
+**Final, after the fix wave** (both configs rebuilt from a clean
+invocation — Debug 1 min 29 s incremental, Release 2 min 32 s full — 0
+warnings, 0 errors; suites run from each config's own `ArcaneTests` exe
+directory, in the foreground):
+
+| Config | Seed | Result |
+|---|---|---|
+| Debug | `665150423` | **All tests passed (56118 assertions in 1620 test cases)** |
+| Release | `3763998629` | **All tests passed (56118 assertions in 1620 test cases)** |
+
+1620 − 1611 = **+9**, attributed case-by-case in the "Final-review fix wave"
+table above. The Task 16 attribution below is unchanged:
 
 1611 − 1535 = **+76**, matching the controller's revised, binding
 attribution exactly (derived from the run, not recalled):
@@ -251,32 +293,56 @@ stderr for both failures reads identically:
 [error] BootSequence: fatal stage 'plugin_load' failed
 ```
 
-This is **the known environmental note, not an arc regression**: Task 11's
-report (`.superpowers/sdd/2026-09-10-f2c-mesh-import-plan1-pipeline/task-11-report.md:201-217`)
-documents the identical `plugin: initial load failed` /
-`failed to load the game module` failure at `ArcaneEditor.exe --project ReferenceProject`,
-investigated and reproduced **byte-for-byte** at pre-Task-11 HEAD (`01ad0da7`,
-ABI 24 throughout, via a `git stash` round-trip) — ruling out an ABI
-mismatch from Task 11's own work and confirming it as "a pre-existing,
-environmental condition on this machine, unrelated to this task." This
-closeout's Release run reproduces the same condition again, now surfaced
-automatically through the `[gpu]`-tagged Witness suite rather than only a
-manual desk-check. The Debug full run (same session, same machine, run
-immediately after the Release build) did **not** hit it — both `W1` and
-`W3` ran to completion successfully in Debug (7.208 s and 1.970 s
-respectively, vs. Release's ~1.07 s immediate-exit failures) — consistent
-with Task 11's framing of an intermittent, machine-local, plugin-load
-condition rather than anything deterministic in either configuration's
-build correctness. Per the "Rebuild Game Module arc" memory item (already
-marked DESK-VERIFY-OWED), this is corroborating evidence for whoever next
-touches `PluginHost`/`Module` loading — not something this closeout task
-fixes (verification-only per its brief).
+**What this is — the controller's measurement (final-review correction,
+Ruling 6).** An earlier draft of this paragraph, and Task 11's own report,
+called this "an intermittent, machine-local, environmental plugin-load
+condition". That characterization was **wrong**, and the measurement that
+overturned it is recorded in the arc ledger. The `plugin: initial load
+failed` line comes from **two deterministic, already-known classes**,
+neither intermittent and neither an arc regression:
+
+- **(a) The Release `W1`/`W3` failures above: a Debug-CRT game DLL in a
+  Release host.** `ReferenceProject/Binaries/` is a SINGLE slot (not
+  per-config), and at the time of this Release run it held the
+  `ReferenceGame.dll` that Task 11's **Debug** rebuild had produced — all
+  four staged copies were verified `debugCRT=True`, mtime matching that
+  rebuild. A Release `ArcaneRuntime` refuses a Debug-CRT module at
+  `plugin_load` (the same class project memory records as "Debug-CRT
+  module in a Release host = AV/refusal at plugin_load — check
+  ucrtbased.dll imports first"). **PROVEN, not theorised:** rebuilding
+  `ReferenceGame` in Release, restaging it, and re-running the Release
+  `[witness]` suite gave **40 assertions / 2 cases PASS** — so the ABI-25
+  plugin half of Task 11's bump **is verified**, in both configurations.
+  The Debug DLL was then restored and restaged for the user's Debug desk
+  pass. This also explains why the Debug full run "did not hit it": the
+  Debug host was loading a Debug DLL — the configurations were never
+  symmetric, which is the opposite of intermittent.
+- **(b) Task 11's Debug-editor desk-check failure: a stale postbuild-staged
+  copy.** Task 11 launched `ArcaneEditor.exe --project ReferenceProject`
+  with a RELATIVE path from the exe directory, which resolved to the
+  postbuild-STAGED copy under `bin/…/ArcaneEditor/ReferenceProject/`, whose
+  `Binaries/ReferenceGame.dll` was stale relative to the freshly rebuilt
+  repo `ReferenceProject/Binaries/`. Task 14 found and worked around the
+  same path issue (its "launch the editor with an ABSOLUTE `--project`
+  path" lesson). Task 11's `git stash` "control" at `01ad0da7` reproduced
+  the failure byte-for-byte precisely BECAUSE it took the same stale-staged
+  path both times — the control controlled for the code, not for the path,
+  so its "pre-existing/environmental" conclusion did not follow.
+
+Neither class is a defect in this arc's code, in `PluginHost`, or in the
+ABI gate; both are staging/path facts about this machine's checkout that
+a single-slot `Binaries/` and a relative `--project` make easy to trip.
+They are recorded here so nobody re-derives "intermittent" from the same
+symptom again.
 
 **Step 5 verdict:** the baseline-comparable suites are 100% green in both
-configs at exactly the expected 1611 cases / 56000 assertions. The known,
-pre-documented `ReferenceGame.dll` plugin-load environmental condition
-reproduces in the Release `[gpu]` Witness suite; this is not a new defect
-and requires no code change from this task.
+configs — 1611 cases / 56000 assertions at Task 16, and **1620 cases /
+56118 assertions after the final-review fix wave** (both configs identical,
+seeds above). The Release `[gpu]` Witness failures observed at Task 16 are
+class (a) above: a Debug-CRT DLL in the single-slot `Binaries/`, proven by
+the Release `[witness]` PASS after a Release rebuild of `ReferenceGame`.
+No code change was needed; the plugin half of the ABI-25 ritual is
+verified.
 
 ## Step 6 — Handoff to Plan 2
 
@@ -307,15 +373,62 @@ begins at this commit (`4a968173`; the closeout commit lands one after).
   **Plan 2 Tasks 1-5** cover CPU-resolution-to-GPU-upload.
 - **Render-side mesh invalidation in `SceneRenderResolver`** (spec §7.3) is
   likewise unbuilt here — **Plan 2 Task 6**.
-- **The known `ReferenceGame.dll` "plugin: initial load failed" condition**
-  (Step 5 above) is environmental to this machine, first traced by Task 11
-  and reproduced again by this closeout's Release `[gpu]` suite run. Not an
-  arc regression; not actioned by this task.
+- **The `ReferenceGame.dll` "plugin: initial load failed" line** (Step 5
+  above) is two deterministic staging/path classes — a Debug-CRT DLL in the
+  single-slot `ReferenceProject/Binaries/` under a Release host, and a
+  relative `--project` resolving to a stale postbuild-staged copy. The
+  ABI-25 plugin half is verified (Release `[witness]` 40/2 PASS after a
+  Release `ReferenceGame` rebuild). Nothing is owed to Plan 2 here beyond
+  the two habits: rebuild `ReferenceGame` in the config you are about to
+  host it with, and launch hosts with an ABSOLUTE `--project` path.
+- **Plan 2's draw loop (Task 5): skip `indexCount == 0` sections.** The
+  importer CAN emit one today: a primitive whose every triangle was dropped
+  as degenerate, beside a healthy primitive that keeps the file drawable,
+  still gets a section record with `indexCount` 0 (`MeshImporter.cpp`'s
+  bake pushes the section AFTER the drop loop, from whatever survived), so
+  the per-section `CmdDrawIndexed` must tolerate a zero-length range rather
+  than assert on it.
+- **Plan 2's per-section material resolve: `slots[section.slotIndex]`
+  needs a bounds check.** The `.arcmesh` slot array is user-editable JSON
+  and can legitimately be SHORTER than the artifact's slot count (a
+  hand-trimmed file, or a companion minted before a re-export added a
+  slot and not yet reconciled) — resolve through `slotIndex <
+  slots.size() ? slots[slotIndex].material : nil`, never index blindly.
+  (Both readers now refuse `slotIndex >= sectionCount` at the ARTIFACT
+  level; the `.arcmesh` side is the half only the consumer can check.)
+- **Consider a `.meta`-recorded extraction map when the import-options UI
+  lands** (Plan 2 / F4). `GuidForGltfImage` re-walks Task 13's byte-compare
+  chain to find where an embedded image was extracted; once the user edits
+  that `.png` no candidate matches and albedo stays nil (the WARN now says
+  so honestly — I6). Recording each image's extraction destination in the
+  Model's `.meta` at extraction time would make the lookup path-based and
+  edit-tolerant.
+- **PARKED, decision owed before Plan 2 Task 11 (Ruling 7 — pre-existing
+  F2b defect surfaced by this arc): duplicate-content sources.** Two
+  byte-identical sources (say the same `.glb` dropped twice under two
+  names, or two identical `.png`s) get two guids but ONE cook key (the key
+  is content-addressed, `ComputeCookKey`/`ComputeMeshCookKey`), so the
+  store holds ONE artifact carrying the FIRST guid's `sourceGuid` header —
+  and the client's header-scan resolution (`FindArtifactForGuid`) resolves
+  the SECOND guid as `Missing` forever, loudly (visible in the Problems
+  pane, never silent). Two candidate fixes, each a spec-level change to
+  "the F2b triple": fold `sourceGuid` into BOTH cook keys (rewrites F2b's
+  content-addressing; forces a one-time recook of every artifact in every
+  project), or have the client consult the store index instead of
+  header-scanning (changes F2b's resolution design). Recommend deciding
+  before Plan 2 Task 11 lands the golden fixture so any recook happens
+  once. NOT in the fix wave by ruling.
 
 ## Step 7 — Files changed
 
 - `docs/plans/2026-09-10-f2c-mesh-import-plan1-closeout.md` (this file) —
-  new.
+  new at Task 16; corrected by the final-review fix wave (2026-09-11).
 
-No product code changed. `ReferenceProject/` (tracked) was never touched —
-the Step 1 e2e ran entirely against a scratch copy outside the repo tree.
+Task 16 changed no product code. The final-review fix wave's product-code
+changes are its own commit (`fix(f2c): final-review fixes — ...`, one commit
+before this document's correction); its per-file list and per-item report
+are in the arc's `.superpowers/sdd/…/final-fix-wave-report.md` (untracked,
+per the ledger convention) and summarised in the "Final-review fix wave"
+table above. `ReferenceProject/` (tracked) was never touched by either —
+the Step 1 e2e ran entirely against a scratch copy outside the repo tree,
+and `git status ReferenceProject/` was clean at both commits.
