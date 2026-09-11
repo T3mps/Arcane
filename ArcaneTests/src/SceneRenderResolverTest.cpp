@@ -94,16 +94,16 @@ namespace
 
     // A resolvable .arcmesh -- Cube reads no topology fields, so it is valid
     // under every parameter combination (MeshSubmissionTest.cpp's own
-    // WriteCubeMesh, mirrored here). `material` rides along as the mesh
-    // asset's own default material Guid, exactly what MeshEntry::material
-    // copies at MeshCache::Request time.
+    // WriteCubeMesh, mirrored here). `material` rides along as ONE unnamed
+    // slot (F2c Task 10), exactly what MeshEntry::slots[0] copies at
+    // MeshCache::Request time.
     Arcane::Guid WriteCubeMesh(const fs::path& file, const Arcane::Guid& material)
     {
         Arcane::MeshAssetData data;
-        data.id       = Arcane::Guid::Generate();
-        data.name     = "probe-cube";
-        data.source   = Arcane::MeshSource::Cube;
-        data.material = material;
+        data.id     = Arcane::Guid::Generate();
+        data.name   = "probe-cube";
+        data.source = Arcane::MeshSource::Cube;
+        data.slots  = { { std::string(), material } };
         REQUIRE(Arcane::SaveMeshAsset(file, data));
         return data.id;
     }
@@ -654,7 +654,8 @@ TEST_CASE("SceneRenderResolver publishes the scene's MeshTable and MeshMaterialT
     REQUIRE(meshEntry != nullptr);
     CHECK(meshEntry->bounds.min == glm::vec3(-0.5f, -0.5f, -0.5f));
     CHECK(meshEntry->bounds.max == glm::vec3(0.5f, 0.5f, 0.5f));
-    CHECK(meshEntry->material == defaultMat);
+    REQUIRE(meshEntry->slots.size() == 1u);
+    CHECK(meshEntry->slots[0].material == defaultMat);
 
     const Arcane::MeshMaterialTable* matTable = rt.Registry().GetResource<Arcane::MeshMaterialTable>();
     REQUIRE(matTable != nullptr);

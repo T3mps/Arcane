@@ -13,7 +13,7 @@ namespace Arcane
     // SpriteCache carries none: a MeshEntry owns plain CPU vectors
     // (MeshData/MeshBounds), nothing GPU. ONE map plus the failed set is the
     // whole state -- the loaded MeshAssetData is read, distilled into the
-    // MeshEntry (geometry, bounds, the default material Guid) and dropped;
+    // MeshEntry (geometry, bounds, the default material slots) and dropped;
     // see MeshCache.hpp's "WHAT IT DOES NOT KEEP".
     struct MeshCache::Impl
     {
@@ -82,11 +82,12 @@ namespace Arcane
         entry.bounds   = ComputeMeshBounds(*meshData);
         entry.data     = std::move(*meshData);
         // The ONE field of the loaded asset that outlives this call: Task 5's
-        // submission sweep reads the mesh's own default material straight off
-        // the published MeshTable (MeshEntry::material) rather than through
-        // the cache, so it never needs a MeshCache pointer of its own.
-        // Everything else in `data` is already baked into the geometry above.
-        entry.material = data->material;
+        // submission sweep reads the mesh's own default material slots straight
+        // off the published MeshTable (MeshEntry::slots, F2c Task 10) rather
+        // than through the cache, so it never needs a MeshCache pointer of its
+        // own. Everything else in `data` is already baked into the geometry
+        // above.
+        entry.slots = std::move(data->slots);
 
         im.table.emplace(id, std::move(entry));
     }

@@ -25,13 +25,13 @@
 // const MeshAssetData*` accessor lived here through Tasks 4-11, backed by a
 // second map beside `table`, on the stated premise that Task 5's material
 // chain would read the mesh's own default `material` Guid through it. Task 5
-// resolved that differently and better -- MeshEntry::material
-// (SceneResources.hpp) carries the Guid on the published table, so the
-// submission sweep needs no cache pointer at all -- and no other consumer
-// ever appeared: MeshDocument, its one named candidate, edits the SOURCE
-// .arcmesh and never touches the resolved cache. Deleted at F2a close with
-// zero production callers, which also removes the second map and the
-// write-ordering hazard between the two.
+// resolved that differently and better -- MeshEntry::slots (F2c Task 10 grew
+// this from a scalar `material`; SceneResources.hpp) carries the Guid(s) on
+// the published table, so the submission sweep needs no cache pointer at all
+// -- and no other consumer ever appeared: MeshDocument, its one named
+// candidate, edits the SOURCE .arcmesh and never touches the resolved cache.
+// Deleted at F2a close with zero production callers, which also removes the
+// second map and the write-ordering hazard between the two.
 //
 // ENGINE-SIDE, not editor-side, from the moment it is written -- the same
 // placement rule the sprite-resolution lift (2026-07-29) established for

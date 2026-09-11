@@ -8,6 +8,19 @@ namespace Arcane
 {
     namespace
     {
+        // F2c s4.3: every generator's LAST line. One unnamed section, slot 0,
+        // covering the whole (just-emitted) index range -- the invariant
+        // MeshData::sections' own comment states: never empty for a mesh with
+        // geometry, so no consumer needs an "if empty, draw everything"
+        // fallback. An empty `mesh.indices` (never actually emitted by any
+        // generator below, but not this helper's business to assume) still
+        // gets a legal, zero-length section rather than being special-cased.
+        void FinishSingleSection(MeshData& mesh)
+        {
+            mesh.sections.push_back(MeshSection{
+                std::string(), 0u, static_cast<std::uint32_t>(mesh.indices.size()), 0u });
+        }
+
         // One cube face's orthonormal (normal, u, v) frame, with u x v ==
         // normal for EVERY face -- that invariant is what makes the winding
         // below come out outward/CCW consistently across all six faces
@@ -67,6 +80,7 @@ namespace Arcane
             mesh.indices.push_back(base + 2);
             mesh.indices.push_back(base + 3);
         }
+        FinishSingleSection(mesh);
         return mesh;
     }
 
@@ -150,6 +164,7 @@ namespace Arcane
                 }
             }
         }
+        FinishSingleSection(mesh);
         return mesh;
     }
 
@@ -234,6 +249,7 @@ namespace Arcane
                 mesh.indices.push_back(i01);
             }
         }
+        FinishSingleSection(mesh);
         return mesh;
     }
 
@@ -341,6 +357,7 @@ namespace Arcane
         AppendCylinderCap(mesh, segments, -kHalfHeight, -1.0f);
         AppendCylinderCap(mesh, segments, kHalfHeight, 1.0f);
 
+        FinishSingleSection(mesh);
         return mesh;
     }
 
@@ -477,6 +494,7 @@ namespace Arcane
             }
         }
 
+        FinishSingleSection(mesh);
         return mesh;
     }
 }

@@ -69,14 +69,24 @@ namespace Arcane
     //
     // THE MATERIAL CHAIN (see MeshRenderer's own comment, Components.hpp):
     // materialOverride, if it resolves, wins; else the mesh asset's own
-    // default material (MeshEntry::material -- a copy of the loaded
-    // .arcmesh's MeshAssetData::material, made once at MeshCache::Request
-    // time, see SceneResources.hpp and MeshCache.cpp), if THAT resolves;
-    // else white (1,1,1,1). MeshMaterialTable::Resolve already folds "nil
-    // Guid" and "valid Guid, not (yet, or ever) in the table" into the same
-    // nullptr outcome (SceneResources.hpp), so the two-step fallback below
-    // is the whole chain -- no separate branch for "nil" vs. "broken
-    // reference" is needed at this call site.
+    // default material (MeshEntry::slots -- a copy of the loaded .arcmesh's
+    // MeshAssetData::slots, made once at MeshCache::Request time, see
+    // SceneResources.hpp and MeshCache.cpp), if THAT resolves; else white
+    // (1,1,1,1). MeshMaterialTable::Resolve already folds "nil Guid" and
+    // "valid Guid, not (yet, or ever) in the table" into the same nullptr
+    // outcome (SceneResources.hpp), so the two-step fallback below is the
+    // whole chain -- no separate branch for "nil" vs. "broken reference" is
+    // needed at this call site.
+    //
+    // F2c Task 10 DEFERRAL (spec s4.4, restated at this header's top): a
+    // mesh asset can now carry MULTIPLE slots, one per section, but this
+    // sweep still emits ONE MeshInstance per ENTITY and resolves through
+    // slots[0] only -- byte-identical behaviour for every F2a mesh (which
+    // carries at most one slot). Emitting one instance PER SECTION (so a
+    // multi-slot imported mesh's other sections stop being invisible) is
+    // Plan 2's Task 5, which is also what makes the DRAW side (MeshNode)
+    // consume a per-section submission at all; doing it here first would
+    // leave sections 1..N submitted but never drawn.
     //
     // WARN-ONCE, WITHOUT a function-local static or a caller-supplied memo:
     // this function never calls Request() on either cache-backed table (see
@@ -131,10 +141,16 @@ namespace Arcane
             if (!entry)
                 return;
 
+            // slots[0] when a slot exists, nil otherwise -- see the DEFERRAL
+            // note above this function for why "when a slot exists" is the
+            // whole per-section story this task tells.
+            const Guid meshDefaultMaterial =
+                entry->slots.empty() ? Guid{} : entry->slots[0].material;
+
             const ResolvedMeshMaterial* mat =
                 matTable ? matTable->Resolve(renderer.materialOverride) : nullptr;
             if (!mat)
-                mat = matTable ? matTable->Resolve(entry->material) : nullptr;
+                mat = matTable ? matTable->Resolve(meshDefaultMaterial) : nullptr;
             const glm::vec4 baseColor = mat ? mat->baseColor : glm::vec4(1.0f);
             // F2b Task 11: the resolved material's bindless slot, already
             // resolved by the time this sweep runs -- SceneRenderResolver::

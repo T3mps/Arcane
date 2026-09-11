@@ -6,9 +6,11 @@
 
 #include <filesystem>
 #include <fstream>
+#include <system_error>
 
 using namespace Arcane;
 using Catch::Matchers::WithinAbs;
+namespace fs = std::filesystem;
 
 namespace
 {
@@ -18,6 +20,18 @@ namespace
             std::filesystem::temp_directory_path() / "arcane_mesh_asset_test";
         std::filesystem::create_directories(p);
         return p / (std::string(stem) + ".arcmesh");
+    }
+
+    // F2c s4.4: a per-leaf scratch directory, mirroring MeshDocumentTest.cpp's own
+    // TempDir -- wiped and recreated so a stale file from a prior run can never
+    // leak into a hand-written-fixture test below.
+    fs::path TempDir(const char* leaf)
+    {
+        fs::path d = fs::temp_directory_path() / "arcane_mesh_asset_slots_test" / leaf;
+        std::error_code ec;
+        fs::remove_all(d, ec);
+        fs::create_directories(d);
+        return d;
     }
 }
 
@@ -31,7 +45,7 @@ TEST_CASE("a .arcmesh round-trips through save and load", "[mesh][asset]")
     in.segments           = 20;
     in.subdivisions       = 4;
     in.capsuleLengthRatio = 3.0f;
-    in.material           = Guid::Generate();
+    in.slots              = { { "", Guid::Generate() } };
 
     const std::filesystem::path p = TempMeshPath("roundtrip");
     REQUIRE(SaveMeshAsset(p, in));
@@ -167,6 +181,115 @@ TEST_CASE("the unit rule holds for every source", "[mesh][asset]")
         CHECK(b.max.x - b.min.x <= 1.0f + 1e-3f);
         CHECK(b.max.z - b.min.z <= 1.0f + 1e-3f);
     }
+}
+
+// ---------------------------------------------------------------------------
+// F2c s4.2/s4.4 (Task 10): MeshSource::Imported, importedSource, and the F2a
+// scalar `material` retired into a named-slot array. Backward compat is the
+// point -- every .arcmesh on disk today, ReferenceProject's own
+// reference_cube.arcmesh included, carries a scalar "material" and no
+// "slots" key, and the tolerant loader below is what keeps every one of them
+// loading unchanged.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("mesh asset: slots round-trip, and a legacy \"material\" key still loads",
+          "[mesh]")
+{
+    const fs::path dir = TempDir("mesh_slots");
+
+    MeshAssetData in;
+    in.id = Guid::Generate();
+    in.name = "Prop";
+    in.source = MeshSource::Imported;
+    in.importedSource = Guid::Generate();
+    in.slots = { { "Metal", Guid::Generate() }, { "Paint", Guid{} } };
+    REQUIRE(SaveMeshAsset(dir / "prop.arcmesh", in));
+
+    const auto out = LoadMeshAsset(dir / "prop.arcmesh");
+    REQUIRE(out.has_value());
+    CHECK(out->source == MeshSource::Imported);
+    CHECK(out->importedSource == in.importedSource);
+    REQUIRE(out->slots.size() == 2u);
+    CHECK(out->slots[0].name == "Metal");
+    CHECK(out->slots[0].material == in.slots[0].material);
+    CHECK(out->slots[1].name == "Paint");
+    CHECK_FALSE(out->slots[1].material.IsValid());   // an UNASSIGNED slot is legal
+    CHECK(*out == in);                                // memberwise equality still holds
+}
+
+TEST_CASE("mesh asset: a legacy scalar \"material\" maps to one unnamed slot", "[mesh]")
+{
+    const fs::path dir = TempDir("mesh_legacy");
+    const Guid mat = Guid::Generate();
+    // Hand-write an F2a-shaped .arcmesh: type/id/name/source/rings/segments/
+    // subdivisions/capsuleLengthRatio + "material": <mat> and NO "slots" key --
+    // exactly what SaveMeshAsset wrote before this task, and exactly what
+    // ReferenceProject's reference_cube.arcmesh still carries on disk.
+    {
+        std::ofstream f(dir / "legacy.arcmesh", std::ios::binary);
+        f << "{\n"
+          << "  \"type\": \"mesh\",\n"
+          << "  \"id\": \"" << Guid::Generate().ToString() << "\",\n"
+          << "  \"name\": \"Legacy\",\n"
+          << "  \"source\": \"cube\",\n"
+          << "  \"rings\": 16,\n"
+          << "  \"segments\": 32,\n"
+          << "  \"subdivisions\": 1,\n"
+          << "  \"capsuleLengthRatio\": 2.0,\n"
+          << "  \"material\": \"" << mat.ToString() << "\"\n"
+          << "}\n";
+    }
+
+    const auto out = LoadMeshAsset(dir / "legacy.arcmesh");
+    REQUIRE(out.has_value());
+    REQUIRE(out->slots.size() == 1u);
+    CHECK(out->slots[0].name.empty());
+    CHECK(out->slots[0].material == mat);
+    CHECK_FALSE(out->importedSource.IsValid());
+}
+
+TEST_CASE("mesh asset: a nil legacy material yields NO slot, not an empty one", "[mesh]")
+{
+    // An F2a mesh with no material assigned wrote "00000000-...". Mapping that to a
+    // slot would fabricate a material row in the Inspector for an asset that has
+    // none -- the same never-fabricate discipline s7.1 applies to geometry.
+    const fs::path dir = TempDir("mesh_legacy_nil");
+    {
+        std::ofstream f(dir / "legacy_nil.arcmesh", std::ios::binary);
+        f << "{\n"
+          << "  \"type\": \"mesh\",\n"
+          << "  \"id\": \"" << Guid::Generate().ToString() << "\",\n"
+          << "  \"name\": \"LegacyNil\",\n"
+          << "  \"source\": \"cube\",\n"
+          << "  \"rings\": 16,\n"
+          << "  \"segments\": 32,\n"
+          << "  \"subdivisions\": 1,\n"
+          << "  \"capsuleLengthRatio\": 2.0,\n"
+          << "  \"material\": \"" << Guid::Nil().ToString() << "\"\n"
+          << "}\n";
+    }
+
+    const auto out = LoadMeshAsset(dir / "legacy_nil.arcmesh");
+    REQUIRE(out.has_value());
+    CHECK(out->slots.empty());
+}
+
+TEST_CASE("mesh asset: an Imported mesh validates on importedSource, not on topology",
+          "[mesh]")
+{
+    // ValidateMeshAsset is PER SOURCE over the fields that source READS (its own
+    // contract). Imported reads neither rings nor segments, so a zero there is legal;
+    // what it does read is importedSource, and a nil one is a refusal that NAMES the
+    // field -- the Problems-pane actionability rule.
+    MeshAssetData data;
+    data.source = MeshSource::Imported;
+    data.rings = 0; data.segments = 0;          // meaningless to Imported
+    const auto reason = ValidateMeshAsset(data);
+    REQUIRE(reason.has_value());
+    CHECK(reason->find("importedSource") != std::string::npos);
+
+    data.importedSource = Guid::Generate();
+    CHECK_FALSE(ValidateMeshAsset(data).has_value());
 }
 
 #include <Arcane/Scene/Components.hpp>

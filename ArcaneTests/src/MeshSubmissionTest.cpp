@@ -73,16 +73,18 @@ namespace
     // A valid, minimal mesh asset -- Cube reads none of the topology fields
     // (MeshAssetTest.cpp: "a cube reads nothing -- valid under every
     // parameter combination"), so it is the cheapest way to get a resolvable
-    // .arcmesh on disk. `material` rides along so MeshEntry::material (the
-    // loaded asset's OWN default material Guid, the second link in the
-    // submission sweep's resolution chain) has something non-nil to assert on.
+    // .arcmesh on disk. `material` rides along as ONE unnamed slot (F2c Task
+    // 10: the F2a scalar `material` retired into `slots[]`) so
+    // MeshEntry::slots[0] (the loaded asset's OWN default material Guid, the
+    // second link in the submission sweep's resolution chain) has something
+    // non-nil to assert on.
     Arcane::Guid WriteCubeMesh(const fs::path& file, const Arcane::Guid& material)
     {
         Arcane::MeshAssetData data;
-        data.id       = Arcane::Guid::Generate();
-        data.name     = "probe-cube";
-        data.source   = Arcane::MeshSource::Cube;
-        data.material = material;
+        data.id     = Arcane::Guid::Generate();
+        data.name   = "probe-cube";
+        data.source = Arcane::MeshSource::Cube;
+        data.slots  = { { std::string(), material } };
         REQUIRE(Arcane::SaveMeshAsset(file, data));
         return data.id;
     }
@@ -199,10 +201,13 @@ TEST_CASE("MeshCache resolves a Guid once and keeps serving that entry", "[mesh]
     CHECK(entry.bounds.min == glm::vec3(-0.5f, -0.5f, -0.5f));
     CHECK(entry.bounds.max == glm::vec3(0.5f, 0.5f, 0.5f));
 
-    // MeshEntry::material is what the submission sweep reads the mesh's OWN
+    // MeshEntry::slots is what the submission sweep reads the mesh's OWN
     // default material Guid from -- copied off the loaded .arcmesh at Request
     // time so the chain never needs a second file read nor a cache pointer.
-    CHECK(entry.material == material);
+    // WriteCubeMesh above wrote `material` as ONE unnamed slot, so slots[0]
+    // is where it round-trips to.
+    REQUIRE(entry.slots.size() == 1u);
+    CHECK(entry.slots[0].material == material);
 
     // Per-frame sweeps call Request for every referenced Guid every frame;
     // the whole point is that this is free after the first one. Pinned BY
@@ -699,16 +704,20 @@ namespace
 {
     // A resolvable MeshEntry with REAL geometry (BuildCube/ComputeMeshBounds,
     // not a zeroed-out stand-in) and the given default material Guid --
-    // matching exactly what MeshCache::Request now produces
-    // (MeshCache.cpp: `entry.material = data->material`). The file header's
-    // "build them honestly" note is why this goes through the real
-    // generator/bounds functions rather than a fabricated MeshData.
+    // matching exactly what MeshCache::Request now produces (MeshCache.cpp:
+    // `entry.slots = std::move(data->slots)`), and matching the loader's own
+    // "a valid guid maps to ONE unnamed slot, nil maps to no slot at all"
+    // rule (MeshAsset.cpp's LoadMeshAsset) rather than fabricating a slot
+    // with a nil material for the nil-default-material callers below. The
+    // file header's "build them honestly" note is why this goes through the
+    // real generator/bounds functions rather than a fabricated MeshData.
     Arcane::MeshEntry MakeMeshEntry(const Arcane::Guid& defaultMaterial)
     {
         Arcane::MeshEntry entry;
-        entry.data     = Arcane::BuildCube(1.0f);
-        entry.bounds   = Arcane::ComputeMeshBounds(entry.data);
-        entry.material = defaultMaterial;
+        entry.data   = Arcane::BuildCube(1.0f);
+        entry.bounds = Arcane::ComputeMeshBounds(entry.data);
+        if (defaultMaterial.IsValid())
+            entry.slots.push_back(Arcane::MeshSlot{ std::string(), defaultMaterial });
         return entry;
     }
 

@@ -746,11 +746,21 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
         // Follow the .arcmesh's OWN material reference too -- the same
         // "resolve the referenced asset for real" rigor the sprite/post
         // materials get below, applied to this new asset kind.
+        //
+        // F2c Task 10: reference_cube.arcmesh on disk still carries the F2a
+        // scalar "material" key (deliberately NOT rewritten -- see this
+        // task's report), and NO "slots" key. This assertion is therefore no
+        // longer just a boot check -- it is the tolerant legacy-key mapping's
+        // END-TO-END PROOF: LoadMeshAsset's fallback path is what turns that
+        // scalar into slots[0] here, against a real file on disk rather than
+        // a hand-written test fixture.
         const auto meshData = Arcane::LoadMeshAsset(*meshAssetPath);
         REQUIRE(meshData.has_value());
         CHECK(meshData->source == Arcane::MeshSource::Cube);
-        REQUIRE(meshData->material.IsValid());
-        const auto meshMatPath = proj->ResolveAsset(Arcane::AssetId::FromGuid(meshData->material));
+        REQUIRE(meshData->slots.size() == 1u);
+        REQUIRE(meshData->slots[0].material.IsValid());
+        const auto meshMatPath =
+            proj->ResolveAsset(Arcane::AssetId::FromGuid(meshData->slots[0].material));
         REQUIRE(meshMatPath.has_value());
         CHECK(meshMatPath->filename() == "reference_mesh.arcmat");
 
@@ -967,12 +977,16 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
         CHECK_FALSE(entry->data.vertices.empty());
         CHECK(entry->bounds.min == glm::vec3(-0.5f, -0.5f, -0.5f));
         CHECK(entry->bounds.max == glm::vec3(0.5f, 0.5f, 0.5f));
-        REQUIRE(entry->material.IsValid());
+        // F2c Task 10: the F2a scalar `material` retired into `slots[]`, so this
+        // is reference_cube.arcmesh's legacy "material" key, mapped by
+        // LoadMeshAsset's tolerant fallback into ONE unnamed slot.
+        REQUIRE(entry->slots.size() == 1u);
+        REQUIRE(entry->slots[0].material.IsValid());
 
         const Arcane::MeshMaterialTable* materials =
             runtime.Registry().GetResource<Arcane::MeshMaterialTable>();
         REQUIRE(materials != nullptr);
-        const Arcane::ResolvedMeshMaterial* resolved = materials->Resolve(entry->material);
+        const Arcane::ResolvedMeshMaterial* resolved = materials->Resolve(entry->slots[0].material);
         REQUIRE(resolved != nullptr);
         // The AUTHORED colour, not ResolvedMeshMaterial's (1,1,1,1) default --
         // so a mis-kinded .arcmat (MeshMaterialCache's kind gate) or a renamed

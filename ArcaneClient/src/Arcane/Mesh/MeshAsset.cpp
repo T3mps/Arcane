@@ -24,6 +24,7 @@ namespace Arcane
                 case MeshSource::UvSphere: return "uvsphere";
                 case MeshSource::Cylinder: return "cylinder";
                 case MeshSource::Capsule:  return "capsule";
+                case MeshSource::Imported: return "imported";
             }
             return "cube";   // unreachable: every enumerator is handled above
         }
@@ -38,6 +39,7 @@ namespace Arcane
             if (s == "uvsphere") return MeshSource::UvSphere;
             if (s == "cylinder") return MeshSource::Cylinder;
             if (s == "capsule")  return MeshSource::Capsule;
+            if (s == "imported") return MeshSource::Imported;
             return std::nullopt;
         }
 
@@ -54,6 +56,7 @@ namespace Arcane
                 case MeshSource::UvSphere: return "UvSphere";
                 case MeshSource::Cylinder: return "Cylinder";
                 case MeshSource::Capsule:  return "Capsule";
+                case MeshSource::Imported: return "Imported";
             }
             return "Cube";   // unreachable: every enumerator is handled above
         }
@@ -78,7 +81,23 @@ namespace Arcane
         doc["segments"] = data.segments;
         doc["subdivisions"] = data.subdivisions;
         doc["capsuleLengthRatio"] = data.capsuleLengthRatio;
-        doc["material"] = data.material.ToString();
+        doc["importedSource"] = data.importedSource.ToString();
+
+        // F2c s4.4: `slots`, not the F2a scalar "material" -- the legacy key is
+        // READ-ONLY from here (LoadMeshAsset still maps it for a file that has not
+        // been re-saved yet), and SaveMeshAsset never writes it again. Every field
+        // above is written unconditionally (this struct's own SaveMeshAsset rule),
+        // and `slots` is no exception: an empty array is a legal, explicit "no
+        // material assigned", not an omission.
+        nlohmann::json slotsJson = nlohmann::json::array();
+        for (const MeshSlot& slot : data.slots)
+        {
+            nlohmann::json s;
+            s["name"] = slot.name;
+            s["material"] = slot.material.ToString();
+            slotsJson.push_back(std::move(s));
+        }
+        doc["slots"] = std::move(slotsJson);
 
         std::ofstream out(path, std::ios::binary);
         if (!out)
@@ -152,9 +171,39 @@ namespace Arcane
         if (doc.contains("capsuleLengthRatio") && doc["capsuleLengthRatio"].is_number())
             data.capsuleLengthRatio = doc["capsuleLengthRatio"].get<float>();
 
-        if (doc.contains("material") && doc["material"].is_string())
-            if (auto g = Guid::FromString(doc["material"].get<std::string>()))
-                data.material = *g;
+        if (doc.contains("importedSource") && doc["importedSource"].is_string())
+            if (auto g = Guid::FromString(doc["importedSource"].get<std::string>()))
+                data.importedSource = *g;
+
+        // F2c s4.4: `slots` when present and well-shaped; OTHERWISE the legacy
+        // scalar "material" key, tolerantly mapped -- a VALID guid becomes one
+        // unnamed slot, a nil/absent one becomes no slot at all (never a
+        // fabricated slot with no material, the same never-fabricate discipline
+        // s7.1 applies to geometry). No ARC_WARN on the legacy path, deliberately:
+        // unlike an unknown `source` string (a genuine anomaly), a legacy
+        // "material" key is the ENTIRE existing corpus -- warning on every F2a
+        // file in every project would be noise for a mapping that is exact and
+        // lossless, not a sign anything is wrong.
+        if (doc.contains("slots") && doc["slots"].is_array())
+        {
+            for (const auto& s : doc["slots"])
+            {
+                if (!s.is_object())
+                    continue;
+                MeshSlot slot;
+                if (s.contains("name") && s["name"].is_string())
+                    slot.name = s["name"].get<std::string>();
+                if (s.contains("material") && s["material"].is_string())
+                    if (auto g = Guid::FromString(s["material"].get<std::string>()))
+                        slot.material = *g;
+                data.slots.push_back(std::move(slot));
+            }
+        }
+        else if (doc.contains("material") && doc["material"].is_string())
+        {
+            if (auto g = Guid::FromString(doc["material"].get<std::string>()); g && g->IsValid())
+                data.slots.push_back(MeshSlot{ std::string(), *g });
+        }
 
         return data;
     }
@@ -209,6 +258,15 @@ namespace Arcane
                     return fmt::format("{} needs capsuleLengthRatio >= 1.0 (got {})",
                                         SourceDisplayName(data.source), data.capsuleLengthRatio);
                 return std::nullopt;
+
+            case MeshSource::Imported:
+                // Reads importedSource, not topology -- rings/segments/subdivisions/
+                // capsuleLengthRatio mean nothing to a cooked-artifact source, the
+                // same "reads nothing" shape Cube's own arm above documents.
+                if (!data.importedSource.IsValid())
+                    return fmt::format("{} needs importedSource to be set",
+                                        SourceDisplayName(data.source));
+                return std::nullopt;
         }
         return std::nullopt;   // unreachable: every enumerator is handled above
     }
@@ -230,6 +288,18 @@ namespace Arcane
             case MeshSource::UvSphere: return BuildUvSphere(0.5f, data.rings, data.segments);
             case MeshSource::Cylinder: return BuildCylinder(data.segments);
             case MeshSource::Capsule:  return BuildCapsule(data.rings, data.segments, data.capsuleLengthRatio);
+
+            case MeshSource::Imported:
+                // Task 11 territory, not this function's: an imported mesh's
+                // geometry comes from the cooked .arcmesh artifact (ResolveMeshData),
+                // never from a procedural generator. Keeps this switch exhaustive
+                // and the behaviour honest in the one commit between the two tasks
+                // -- nullopt here is NOT a validation failure (ValidateMeshAsset
+                // above already passed), just "wrong function, ask ResolveMeshData".
+                ARC_WARN("BuildMeshData: '{}' is an Imported mesh -- resolve it through "
+                         "ResolveMeshData (Task 11), not BuildMeshData",
+                         data.name);
+                return std::nullopt;
         }
         return std::nullopt;   // unreachable: every enumerator is handled above
     }

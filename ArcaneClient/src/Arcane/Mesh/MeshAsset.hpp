@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Arcane
 {
@@ -55,7 +56,33 @@ namespace Arcane
         UvSphere = 2,
         Cylinder = 3,
         Capsule  = 4,
+
+        // F2c s4.2: geometry comes from a cooked artifact rather than a generator.
+        // APPENDED, never reordered -- these values are persisted. An OLDER engine
+        // build reading "imported" gets today's tolerant posture: one ARC_WARN and a
+        // Cube fallback (LoadMeshAsset's unknown-source arm), visible not fatal.
+        Imported = 5,
     };
+
+    // ONE material slot. `name` is the glTF material name the cook reported, and it is
+    // the RE-ASSOCIATION KEY on re-import (R3): a re-export that reorders its
+    // materials must not shuffle the user's assignments. Position is the tiebreak for
+    // unnamed or duplicate names -- UE's own rule at the site that resolves a SECTION
+    // against the FINAL slot array (FbxStaticMeshImport.cpp:1991-2002; NOT :1946-1974,
+    // whose :1948 falls back into the NEWLY IMPORTED array, a different question).
+    struct MeshSlot
+    {
+        std::string name;
+        Guid        material{};
+    };
+
+    // Memberwise, never memcmp -- `name` is a std::string (its object bytes are a
+    // pointer/SSO buffer, not the text), the same reasoning MeshAssetData's own
+    // operator== comment gives.
+    [[nodiscard]] inline bool operator==(const MeshSlot& a, const MeshSlot& b) noexcept
+    {
+        return a.name == b.name && a.material == b.material;
+    }
 
     struct MeshAssetData
     {
@@ -75,18 +102,24 @@ namespace Arcane
         // future shape parameter must pass.
         float capsuleLengthRatio = 2.0f;
 
-        // ---- The mesh's DEFAULT material, overridable per entity ---------
+        // F2c s4.2: the registered .gltf/.glb this asset's geometry is cooked from.
+        // Meaningful ONLY when source == Imported; nil otherwise, and written
+        // unconditionally like every other field (SaveMeshAsset's own every-field rule
+        // -- a sparse write loses it on a source switch and back).
+        Guid importedSource{};
+
+        // ---- The mesh's DEFAULT material slots, overridable per entity ---
         // Both reference engines put assignment on the asset:
         // UStaticMesh::StaticMaterials (StaticMesh.h:1095) and Source 2's
         // m_materialGroups. MeshRenderer::materialOverride is
         // UMeshComponent::OverrideMaterials in miniature. Nil = white.
         //
-        // SCALAR, not an array, because F2a's primitives are single-section.
-        // F2c's imported multi-section meshes grow this into a slot array,
-        // which is ADDITIVE -- putting it on the component instead would have
-        // forced a later MOVE (a component schema change plus a scene
-        // re-author).
-        Guid material{};
+        // F2c s4.4: the F2a SCALAR `material` retired into a named-slot array. The
+        // tolerant loader maps a legacy "material" key to ONE unnamed slot, so every
+        // .arcmesh already on disk loads unchanged and nothing needs migrating.
+        // A generated primitive carries zero or one slot; an imported mesh carries one
+        // per DISTINCT glTF material name (A1 -- deduped by name, never per primitive).
+        std::vector<MeshSlot> slots;
     };
 
     // Memberwise equality, for the same reason SpriteAssetData has one: the
@@ -100,7 +133,8 @@ namespace Arcane
                a.rings == b.rings && a.segments == b.segments &&
                a.subdivisions == b.subdivisions &&
                a.capsuleLengthRatio == b.capsuleLengthRatio &&
-               a.material == b.material;
+               a.importedSource == b.importedSource &&
+               a.slots == b.slots;
     }
 
     // Write `data` as .arcmesh JSON. EVERY field is written, regardless of

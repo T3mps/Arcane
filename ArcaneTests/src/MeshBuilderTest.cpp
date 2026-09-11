@@ -363,3 +363,23 @@ TEST_CASE("the existing generators still satisfy the winding contract", "[mesh]"
     CHECK(WindingIsOutward(BuildCube(1.0f)));
     CHECK(WindingIsOutward(BuildUvSphere(0.5f, 8, 16)));
 }
+
+// ---------------------------------------------------------------------------
+// F2c Task 10 (task-10-brief.md, Step 2): MeshData::sections. Exhaustive over
+// the roster rather than sampled -- a generator added later without its
+// section line is precisely the silent case this catches.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("mesh builder: every generator emits exactly one whole-range section",
+          "[mesh]")
+{
+    for (const MeshData& m : { BuildCube(1.0f), BuildUvSphere(0.5f, 8, 12),
+                               BuildPlane(2), BuildCylinder(8), BuildCapsule(3, 8, 2.0f) })
+    {
+        REQUIRE(m.sections.size() == 1u);
+        CHECK(m.sections[0].name.empty());
+        CHECK(m.sections[0].indexOffset == 0u);
+        CHECK(m.sections[0].indexCount == m.indices.size());
+        CHECK(m.sections[0].slotIndex == 0u);
+    }
+}

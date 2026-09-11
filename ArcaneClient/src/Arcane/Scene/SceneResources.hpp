@@ -5,6 +5,7 @@
 // marks the subtree that IS the scene.
 
 #include <Arcane/Guid.hpp>
+#include <Arcane/Mesh/MeshAsset.hpp>        // MeshSlot -- MeshEntry::slots' element type
 #include <Arcane/Render/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 
 #include <Astra/Entity/Entity.hpp>
@@ -146,23 +147,24 @@ namespace Arcane
     // NOT against an erase, which is why MeshCache::Invalidate/Clear are the
     // only things that may ever remove an entry mid-frame.
     //
-    // `material` (F2a, Task 5) is a COPY of the loaded .arcmesh's own
-    // `MeshAssetData::material` -- the mesh's default material Guid, the
-    // second link in MeshSubmissionSystem's `materialOverride` -> mesh
-    // default -> white chain. It rides along here because
-    // MeshSubmissionSystem is host-published-resource-only by design (it
-    // reads MeshTable/MeshMaterialTable and never touches a cache pointer,
-    // matching RenderSubmissionSystem's rule of never touching the Assets
-    // facade). It is also the ONLY part of the loaded MeshAssetData that
-    // survives resolution at all: MeshCache keeps no copy of the asset (see
-    // MeshCache.hpp's "WHAT IT DOES NOT KEEP"), so anything needing the
-    // rest of it -- name, source, topology -- re-reads the .arcmesh, which
-    // is what MeshDocument does.
+    // `slots` (F2a Task 5; grown from a scalar `material` to a named-slot array in
+    // F2c Task 10) is a COPY of the loaded .arcmesh's own `MeshAssetData::slots` --
+    // the mesh's default material Guid PER SECTION, resolved through the index the
+    // section carries (MeshSection::slotIndex, Render/MeshBuilder.hpp), the second
+    // link in MeshSubmissionSystem's `materialOverride` -> per-section default ->
+    // white chain. It rides along here because MeshSubmissionSystem is
+    // host-published-resource-only by design (it reads MeshTable/MeshMaterialTable
+    // and never touches a cache pointer, matching RenderSubmissionSystem's rule of
+    // never touching the Assets facade). It is also the ONLY part of the loaded
+    // MeshAssetData that survives resolution at all: MeshCache keeps no copy of the
+    // asset (see MeshCache.hpp's "WHAT IT DOES NOT KEEP"), so anything needing the
+    // rest of it -- name, source, topology -- re-reads the .arcmesh, which is what
+    // MeshDocument does.
     struct MeshEntry
     {
-        MeshData   data;
-        MeshBounds bounds;
-        Guid       material{};
+        MeshData               data;
+        MeshBounds             bounds;
+        std::vector<MeshSlot>  slots;
     };
 
     // .arcmesh Guid -> the resolved record above. Same shape and lifetime

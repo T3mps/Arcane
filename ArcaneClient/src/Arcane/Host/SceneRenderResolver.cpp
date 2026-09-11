@@ -383,11 +383,23 @@ namespace Arcane
             // spine's Guid -> ResolvedMeshMaterial -> device step lives
             // entirely INSIDE MeshMaterialCache::Request, not here; this
             // sweep's own shape (request the override, then the mesh
-            // default) is unchanged.
+            // defaults) is unchanged.
             if (mr.materialOverride.IsValid())
                 im.meshMaterials->Request(mr.materialOverride);
-            if (it->second.material.IsValid())
-                im.meshMaterials->Request(it->second.material);
+            // F2c Task 10: EVERY slot's material, not just slots[0] -- unlike
+            // CollectMeshInstances (Scene/MeshSubmissionSystem.hpp), which
+            // defers per-section submission to Plan 2 Task 5 and only ever
+            // reads slots[0], this cache-population sweep has no such excuse
+            // to under-request: a slot this loop skips today is a slot whose
+            // material never lands in MeshMaterialTable, so the frame Plan 2
+            // turns per-section submission on, that section renders white
+            // for one full Request cycle while THIS sweep catches up -- a
+            // regression with no test to catch it, because nothing here
+            // would be wrong until that later task changes what reads this
+            // table.
+            for (const MeshSlot& slot : it->second.slots)
+                if (slot.material.IsValid())
+                    im.meshMaterials->Request(slot.material);
         });
 
         // Census, logged once per distinct outcome. "Nothing draws" has too many

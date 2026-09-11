@@ -40,6 +40,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace Arcane
@@ -51,10 +52,27 @@ namespace Arcane
         glm::vec2 uv;
     };
 
+    // One drawable range with its slot. Mirrors AssetPipeline::MeshArtifactSection
+    // (ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp) field for
+    // field -- that header is never included here, though: ArcaneClient links no
+    // AssetPipeline.
+    struct MeshSection
+    {
+        std::string   name;
+        std::uint32_t indexOffset = 0;   // in INDICES
+        std::uint32_t indexCount  = 0;
+        std::uint32_t slotIndex   = 0;
+    };
+
     struct MeshData
     {
-        std::vector<MeshVertex> vertices;
+        std::vector<MeshVertex>    vertices;
         std::vector<std::uint32_t> indices;
+        // F2c s4.3. NEVER EMPTY for a mesh with geometry: every generator ends by
+        // emitting exactly one unnamed section covering the whole index range, so no
+        // consumer needs an "if empty, draw everything" fallback -- an empty sections
+        // list means an empty mesh, and an empty mesh draws nothing.
+        std::vector<MeshSection>   sections;
     };
 
     // A cube centered at the origin, side length `sizeMeters` (so every

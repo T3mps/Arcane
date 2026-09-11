@@ -548,17 +548,27 @@ namespace Arcane::Editor
             RebuildPreviewMesh();
         }
 
-        // ---- material --------------------------------------------------------
+        // ---- material ----------------------------------------------------------
+        // F2c Task 10: the F2a scalar `material` retired into `slots[]`. This
+        // picker deliberately operates on slots[0] ONLY -- the same
+        // single-material UX F2a had, now expressed through the array: create
+        // one unnamed slot on first assignment, erase it on clear. A per-slot
+        // list UI (so an imported mesh's second, third, ... slot can be
+        // assigned here too) is NOT in either F2c plan; until it exists, an
+        // imported mesh's extra slots are editable by hand in the .arcmesh
+        // JSON only.
         ImGui::Separator();
         ImGui::TextUnformatted("Material");
         ImGui::SameLine();
         std::string display = "(none)";
-        if (m_data.material.IsValid())
+        const Arcane::Guid slot0Material =
+            m_data.slots.empty() ? Arcane::Guid{} : m_data.slots[0].material;
+        if (slot0Material.IsValid())
         {
-            display = m_data.material.ToString();
+            display = slot0Material.ToString();
             if (m_services.runtime)
                 if (const Arcane::Project* project = m_services.runtime->CurrentProject())
-                    if (const auto mount = project->Registry().Resolve(m_data.material))
+                    if (const auto mount = project->Registry().Resolve(slot0Material))
                         display = *mount;
         }
         ImGui::TextDisabled("%s", display.c_str());
@@ -574,19 +584,26 @@ namespace Arcane::Editor
                 if (payload->kind == AssetKind::Material)
                 {
                     const Arcane::MeshAssetData before = m_data;
-                    m_data.material = payload->guid;
+                    if (m_data.slots.empty())
+                        m_data.slots.push_back(Arcane::MeshSlot{ std::string(), payload->guid });
+                    else
+                        m_data.slots[0].material = payload->guid;
                     commit("Assign Material", before);
                 }
             }
             ImGui::EndDragDropTarget();
         }
-        if (m_data.material.IsValid())
+        if (slot0Material.IsValid())
         {
             ImGui::SameLine();
             if (ImGui::SmallButton("x##clearmaterial"))
             {
                 const Arcane::MeshAssetData before = m_data;
-                m_data.material = Arcane::Guid::Nil();
+                // Erase, not nil-out: an unnamed slot with a nil material is a
+                // different (and here, unreachable-through-this-picker) state
+                // from "no slot at all" -- the same "nil legacy material yields
+                // NO slot" rule MeshAsset.cpp's loader applies.
+                m_data.slots.erase(m_data.slots.begin());
                 commit("Clear Material", before);
             }
         }
