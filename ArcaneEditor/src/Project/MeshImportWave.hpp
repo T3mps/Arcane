@@ -27,46 +27,55 @@ namespace Arcane::Editor
     [[nodiscard]] std::filesystem::path UniqueSiblingPath(
         const std::filesystem::path& dir, const std::string& stem, const std::string& ext);
 
-    // A glTF image's file stem: its own name when it has one, else "<sourceStem>-<index>"
-    // (A4's source-derived fallback -- a glTF may name no image at all). Sanitised to
-    // filesystem-safe characters, because a glTF name is arbitrary UTF-8 and a '/' in
-    // one would silently write outside the intended folder.
+    // A glTF image's file stem: its own name when it has one AND that name is
+    // "usable" once sanitised, else "<sourceStem>-<index>" (A4's source-derived
+    // fallback). Sanitised to filesystem-safe characters, because a glTF name is
+    // arbitrary UTF-8 and a '/' in one would silently write outside the intended
+    // folder. "Usable" is its own gate on top of that: a name that sanitises down to
+    // empty, or to nothing but dots (a bare "." or ".." -- inert against escaping the
+    // folder once separators are gone, but still not a name a file can be created
+    // under), also falls back to the source-derived name -- treated as "no usable
+    // name" exactly like an empty glTF-authored name is.
     [[nodiscard]] std::string ImageFileStem(const std::string& imageName,
                                             const std::string& sourceStem, std::size_t index);
 
     // A newly-discovered `.gltf`/`.glb`'s embedded images, extracted to loose .png
     // siblings beside `source`. SurveyGltf's front half first (nullopt -- the file
     // will not cook either -- means no extraction, quietly); then, per EMBEDDED image
-    // in survey order, the NATURAL destination is `source.parent_path()` /
+    // in survey order, a destination is resolved from `source.parent_path()` /
     // (ImageFileStem's stem + the extension `mimeType` implies, "image/png" ->
-    // ".png" etc.).
+    // ".png" etc.) by walking a CHAIN of candidates.
     //
     // Spec s5.5 states two invariants that both have to hold at once: an already-
     // extracted .png is NEVER overwritten, and (A4) a name COLLISION is suffixed
     // rather than silently reused. A plain "skip if the destination exists" honors
     // only the first -- it would hand two different sources embedding a same-named
     // image the SAME texture, exactly what A4 exists to prevent. The reconciliation
-    // is a three-way rule, decided by a byte-compare against whatever already sits at
-    // the natural destination:
-    //   1. nothing there yet                -> write to the natural destination.
-    //   2. something there, IDENTICAL bytes -> already extracted (or a harmless
-    //                                           duplicate of the same content) ->
-    //                                           skip, write nothing.
-    //   3. something there, DIFFERENT bytes -> a genuine collision (a user's own
-    //                                           edit, or a different source's own
-    //                                           image sitting at this name) -> NEVER
-    //                                           overwritten; written instead to
-    //                                           UniqueSiblingPath's next free name.
-    // Byte-compare is what makes both invariants hold together: a user's edited copy
-    // is never clobbered (arm 3 gives the freshly-surveyed original its own sibling
-    // name instead of touching the edit), and re-discovering the SAME unmodified
-    // extraction is a true no-op (arm 2), so repeatedly re-dropping an unchanged
-    // source never grows an unbounded pile of "-1", "-2", ... siblings -- that pile
-    // only grows for a REAL divergence (arm 3), which is the rare case by
-    // construction (first discovery, or an actual re-drop after an edit/collision).
+    // walks the SAME candidate chain UniqueSiblingPath itself walks -- the natural
+    // name, then `-1`, `-2`, ... -- applying ONE byte-compare rule at every EXISTING
+    // candidate, with no separate "natural" case and "collision" case:
+    //   - a candidate that does not exist yet   -> write there. This is reached
+    //     immediately (the natural name) when nothing has ever collided, or after
+    //     skipping past one or more EXISTING-BUT-DIFFERENT candidates otherwise --
+    //     both are the same rule, just reached at a different point in the walk.
+    //   - an EXISTING candidate, IDENTICAL bytes -> already extracted right HERE (a
+    //     harmless duplicate, or this exact re-extraction already ran) -> the walk
+    //     stops, nothing is written.
+    //   - an EXISTING candidate, DIFFERENT bytes -> not a match (a user's edit,
+    //     another source's own image, or an EARLIER divergence's own sibling) ->
+    //     never overwritten; the walk continues to the next suffix.
+    // The chain walk (rather than checking the natural name alone) is what keeps a
+    // REPEATED divergence from piling up a fresh numbered duplicate on every
+    // re-extraction: once a diverged natural name has already produced `stem-1`,
+    // re-extracting again matches `stem-1`'s own bytes and stops there, rather than
+    // skipping past it (it differs from the still-diverged natural name, which it is
+    // never compared against) straight into minting `stem-2`. Re-discovering an
+    // entirely unmodified extraction is likewise a true no-op (matches at the natural
+    // name itself) -- the pile only grows for an actual NEW divergence, which is the
+    // rare case by construction (first discovery, or a genuine edit/collision).
     //
-    // Returns only the paths this call actually WROTE (arms 1 and 3), which is what
-    // makes a second, all-arm-2 call's empty return the proof that nothing changed.
+    // Returns only the paths this call actually WROTE, which is what makes a second,
+    // all-matched call's empty return the proof that nothing changed.
     [[nodiscard]] std::vector<std::filesystem::path> ExtractEmbeddedTextures(
         const std::filesystem::path& source);
 }

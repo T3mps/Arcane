@@ -59,6 +59,18 @@ namespace Arcane::Editor
             return out;
         }
 
+        // A sanitized stem is "usable" as a filename when it is non-empty and is not
+        // made ENTIRELY of dots. Separator replacement alone leaves a bare "."/".."
+        // untouched (there is no separator IN "..", so nothing above touches it), and
+        // while that is already inert against escaping the destination folder (a
+        // filename with no separator can never be multiple path components), "." and
+        // ".." are still not names a file can actually be created under on Windows --
+        // A4's own fallback arm exists for exactly this "no usable name" case.
+        bool IsUsableStem(const std::string& stem)
+        {
+            return stem.find_first_not_of('.') != std::string::npos;
+        }
+
         // The loose sibling's extension, implied by the glTF image's own declared
         // MIME type. The corpus's only embedded kind today is image/png
         // (embedded_tex.glb's fixture) -- anything else this engine has not been
@@ -69,6 +81,47 @@ namespace Arcane::Editor
             if (mimeType == "image/jpeg" || mimeType == "image/jpg")
                 return ".jpg";
             return ".png";
+        }
+
+        // Where an embedded image's bytes belong on disk, decided by walking the SAME
+        // candidate chain UniqueSiblingPath itself walks (`stem`+ext, `stem-1`+ext,
+        // `stem-2`+ext, ...) and applying the s5.5-vs-A4 byte-compare rule at every
+        // EXISTING candidate: identical bytes at some candidate means "already
+        // extracted right here" -- the walk stops there with nothing to write
+        // (`skip == true`). The first candidate that does not exist yet is where a
+        // genuine divergence's bytes belong, whether that is the natural name itself
+        // (nothing ever collided) or a later suffix (one or more EXISTING-BUT-
+        // DIFFERENT candidates were skipped past first) -- there is only ever ONE
+        // rule here, not a separate "natural" case and "collision" case.
+        //
+        // This is what keeps a REPEATED divergence from piling up a fresh numbered
+        // duplicate on every re-extraction: re-extracting after `stem-1` was already
+        // written for a still-diverged `stem` finds `stem-1`'s bytes identical to what
+        // it would write, matches it, and stops -- rather than skipping past the
+        // existing `stem-1` (because IT differs from the diverged `stem`, which it is
+        // never compared against) straight to minting `stem-2`.
+        struct DestinationDecision
+        {
+            fs::path path;
+            bool     skip = false;   // an identical copy already sits somewhere in the chain
+        };
+
+        DestinationDecision ResolveDestination(const fs::path& dir, const std::string& stem,
+                                                const std::string& ext,
+                                                const std::vector<std::byte>& bytes)
+        {
+            fs::path candidate = dir / (stem + ext);
+            for (int suffix = 1; ; ++suffix)
+            {
+                if (!fs::exists(candidate))
+                    return { candidate, false };
+
+                const std::optional<std::vector<std::byte>> existing = ReadWholeFile(candidate);
+                if (existing && *existing == bytes)
+                    return { candidate, true };
+
+                candidate = dir / (stem + "-" + std::to_string(suffix) + ext);
+            }
         }
     }
 
@@ -83,8 +136,9 @@ namespace Arcane::Editor
     std::string ImageFileStem(const std::string& imageName, const std::string& sourceStem,
                                std::size_t index)
     {
-        if (!imageName.empty())
-            return SanitizeForFilename(imageName);
+        const std::string sanitized = SanitizeForFilename(imageName);
+        if (IsUsableStem(sanitized))
+            return sanitized;
         return sourceStem + "-" + std::to_string(index);
     }
 
@@ -113,28 +167,12 @@ namespace Arcane::Editor
 
             const std::string stem = ImageFileStem(image.name, sourceStem, index);
             const std::string ext = ExtensionForMime(image.mimeType);
-            const fs::path natural = dir / (stem + ext);
 
-            // The three-way rule (spec s5.5 + A4, reconciled -- see this function's
-            // own header comment in MeshImportWave.hpp for the full account):
-            //   1. nothing at the natural name yet            -> write there.
-            //   2. something's there with IDENTICAL bytes     -> already extracted
-            //      (or a harmless duplicate) -> skip, write nothing.
-            //   3. something's there with DIFFERENT bytes     -> a genuine collision
-            //      (a user's edit, or another source's own image under this name) ->
-            //      NEVER overwritten; write to UniqueSiblingPath's next free name
-            //      instead.
-            fs::path dest = natural;
-            if (fs::exists(natural))
-            {
-                const std::optional<std::vector<std::byte>> existing = ReadWholeFile(natural);
-                if (existing && *existing == image.bytes)
-                    continue;   // arm 2: identical -- nothing to do.
+            const DestinationDecision decision = ResolveDestination(dir, stem, ext, image.bytes);
+            if (decision.skip)
+                continue;   // an identical copy already exists somewhere in the chain.
 
-                dest = UniqueSiblingPath(dir, stem, ext);   // arm 3: collision.
-            }
-
-            std::ofstream out(dest, std::ios::binary | std::ios::trunc);
+            std::ofstream out(decision.path, std::ios::binary | std::ios::trunc);
             if (!out)
                 continue;
             out.write(reinterpret_cast<const char*>(image.bytes.data()),
@@ -142,7 +180,7 @@ namespace Arcane::Editor
             if (!out)
                 continue;
 
-            written.push_back(dest);
+            written.push_back(decision.path);
         }
 
         return written;

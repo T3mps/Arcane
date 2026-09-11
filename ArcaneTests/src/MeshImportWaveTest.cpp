@@ -1,15 +1,18 @@
 // F2c Task 13: embedded-texture extraction at discovery (spec s5.5, A4). A .glb's
 // embedded images become loose .png siblings beside the source -- which the ordinary
-// texture-cook path then picks up on its own next sweep -- via a three-way rule that
-// reconciles s5.5's never-overwrite invariant with A4's suffix-on-collision one:
-// nothing at the natural name -> write; identical bytes there -> skip (already
-// extracted); different bytes there -> never overwrite, write to a suffixed sibling
-// instead (MeshImportWave.hpp's ExtractEmbeddedTextures comment has the full
-// account). This TU drives MeshImportWave.hpp's PURE halves directly:
-// UniqueSiblingPath's collision-suffix rule, ImageFileStem's name-or-fallback +
-// sanitisation, and ExtractEmbeddedTextures' three arms. [editor] -- CPU-only, no
-// GPU/ImGui/Project/device involved (MeshImportWave.hpp's own header comment states
-// the "PURE by design" rule).
+// texture-cook path then picks up on its own next sweep -- via a CHAIN WALK that
+// reconciles s5.5's never-overwrite invariant with A4's suffix-on-collision one: walk
+// the natural name, then -1, -2, ...; an EXISTING candidate with identical bytes
+// stops the walk (already extracted, skip); the first candidate that does not exist
+// yet is where a genuine divergence's bytes belong (MeshImportWave.hpp's
+// ExtractEmbeddedTextures comment has the full account, including why the walk --
+// not a natural-name-only check -- is what keeps a REPEATED divergence from piling up
+// a fresh duplicate on every re-extraction). This TU drives MeshImportWave.hpp's PURE
+// halves directly: UniqueSiblingPath's collision-suffix rule, ImageFileStem's
+// name-or-fallback + sanitisation (including the "nothing but dots" fallback case),
+// and ExtractEmbeddedTextures' chain walk. [editor] -- CPU-only, no GPU/ImGui/
+// Project/device involved (MeshImportWave.hpp's own header comment states the "PURE
+// by design" rule).
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -83,18 +86,26 @@ TEST_CASE("import wave: an unnamed glTF image falls back to a source-derived nam
     // write out of the folder it was meant for.
     CHECK(ImageFileStem("../../evil", "prop", 0).find('/') == std::string::npos);
     CHECK(ImageFileStem("../../evil", "prop", 0).find('\\') == std::string::npos);
+    // A name that sanitises down to nothing but dots is "no usable name" either --
+    // a bare "." or ".." carries no separator for the sanitiser to touch, but is
+    // still not a name a file can be created under, so it falls back exactly like an
+    // empty glTF name does.
+    CHECK(ImageFileStem("..", "prop", 3) == "prop-3");
+    CHECK(ImageFileStem(".", "prop", 0) == "prop-0");
 }
 
 TEST_CASE("import wave: an embedded texture extracts ONCE and is never overwritten"
           " (A4)", "[editor]")
 {
-    // The three-way rule (MeshImportWave.hpp's ExtractEmbeddedTextures comment):
-    // nothing there -> write; identical bytes there -> skip; DIFFERENT bytes there
-    // -> never overwrite, write the fresh bytes to a suffixed sibling instead. A
-    // user's edit makes the natural destination's bytes diverge from what the source
-    // would extract, so re-discovery hits arm 3, not a skip: the edit survives
-    // completely untouched, AND the source's own (still-current) image still gets a
-    // file on disk -- just not at the name the edit now owns.
+    // The chain-walk rule (MeshImportWave.hpp's ExtractEmbeddedTextures comment):
+    // walk the natural name, then -1, -2, ...; an EXISTING candidate with identical
+    // bytes stops the walk (skip); the first candidate that doesn't exist yet is
+    // where a genuine divergence's bytes belong. A user's edit makes the natural
+    // destination's bytes diverge from what the source would extract, so
+    // re-discovery walks past it (existing, but different) to the first free
+    // candidate: the edit survives completely untouched, AND the source's own
+    // (still-current) image still gets a file on disk -- just not at the name the
+    // edit now owns.
     const fs::path dir = TempDir("extract_once");
     fs::copy_file(fs::path("data") / "gltf" / "embedded_tex.glb", dir / "embedded_tex.glb");
 
@@ -118,6 +129,42 @@ TEST_CASE("import wave: an embedded texture extracts ONCE and is never overwritt
     CHECK(ReadBytes(second[0]) == originalBytes);
 }
 
+TEST_CASE("import wave: repeated re-discovery of the same divergence does not pile"
+          " up duplicates", "[editor]")
+{
+    // The defect the chain walk fixes: a NAIVE "diverged -> UniqueSiblingPath" rule
+    // (bare existence, no byte-compare at the suffixed candidates) would mint a FRESH
+    // numbered sibling on every single re-extraction of a still-diverged natural
+    // name -- albedo-1.png, then albedo-2.png, then albedo-3.png, forever. The chain
+    // walk instead compares bytes at EVERY existing candidate: the second
+    // re-extraction below finds albedo-1.png (written by the FIRST re-extraction)
+    // already holding the exact bytes it would write, matches it, and stops there --
+    // a true no-op, not a third file.
+    const fs::path dir = TempDir("no_pileup");
+    fs::copy_file(fs::path("data") / "gltf" / "embedded_tex.glb", dir / "embedded_tex.glb");
+
+    const auto first = ExtractEmbeddedTextures(dir / "embedded_tex.glb");
+    REQUIRE(first.size() == 1u);
+    CHECK(first[0] == dir / "albedo.png");
+
+    // The user edits the natural file -- the SAME divergence persists across every
+    // subsequent extraction below (never re-edited again).
+    WriteBytes(first[0], std::vector<std::uint8_t>{ 0xDE, 0xAD, 0xBE, 0xEF });
+
+    const auto second = ExtractEmbeddedTextures(dir / "embedded_tex.glb");
+    REQUIRE(second.size() == 1u);
+    CHECK(second[0] == dir / "albedo-1.png");
+
+    const auto third = ExtractEmbeddedTextures(dir / "embedded_tex.glb");
+    CHECK(third.empty());
+
+    std::size_t pngCount = 0;
+    for (const auto& entry : fs::directory_iterator(dir))
+        if (entry.path().extension() == ".png")
+            ++pngCount;
+    CHECK(pngCount == 2u);   // albedo.png (the edit) + albedo-1.png -- never a third
+}
+
 TEST_CASE("import wave: two glb files embedding a same-named but DIFFERENT image do"
           " not collide", "[editor]")
 {
@@ -130,9 +177,9 @@ TEST_CASE("import wave: two glb files embedding a same-named but DIFFERENT image
     // generator's internal layout; the flipped byte sits well past the 8-byte PNG
     // signature -- extraction never decodes the payload, so a structurally-invalid
     // PNG is still perfectly valid bytes to copy verbatim). A genuinely different
-    // image under the same name is arm 3 of the three-way rule: a real collision,
-    // never overwriting the first file, landing at UniqueSiblingPath's next free
-    // name instead.
+    // image under the same name is a real collision: never overwriting the first
+    // file, the chain walk continues past the diverged natural candidate and lands
+    // the corrupted bytes at the next free candidate instead.
     const fs::path dir = TempDir("two_sources_diff_bytes");
     fs::copy_file(fs::path("data") / "gltf" / "embedded_tex.glb", dir / "propA.glb");
     fs::copy_file(fs::path("data") / "gltf" / "embedded_tex.glb", dir / "propB.glb");
@@ -163,11 +210,12 @@ TEST_CASE("import wave: two glb files embedding a same-named but DIFFERENT image
 TEST_CASE("import wave: two glb files embedding byte-identical images dedupe"
           " silently", "[editor]")
 {
-    // Companion to the collision case above, pinning the three-way rule's middle
-    // arm: when a second source's embedded image is BYTE-IDENTICAL to what already
-    // sits at the natural destination (two meshes genuinely sharing one texture, or
-    // the same source re-discovered with nothing changed), nothing new is written --
-    // no needless "-1" clone of content that is already there.
+    // Companion to the collision case above, pinning the chain walk's "identical
+    // bytes stop the walk" rule at the FIRST candidate: when a second source's
+    // embedded image is BYTE-IDENTICAL to what already sits at the natural
+    // destination (two meshes genuinely sharing one texture, or the same source
+    // re-discovered with nothing changed), nothing new is written -- no needless
+    // "-1" clone of content that is already there.
     const fs::path dir = TempDir("two_sources_same_bytes");
     fs::copy_file(fs::path("data") / "gltf" / "embedded_tex.glb", dir / "propC.glb");
     fs::copy_file(fs::path("data") / "gltf" / "embedded_tex.glb", dir / "propD.glb");
