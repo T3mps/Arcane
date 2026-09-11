@@ -70,6 +70,14 @@ namespace Arcane::AssetPipeline
                                       std::uint32_t importerVersion)
     {
         Fnv1a64 hasher;
+
+        // Leading u32 length before the source bytes themselves -- without it, the source
+        // region and the buffer-list region that follows it are ambiguous: a shorter source
+        // plus a buffer that "absorbs" the missing tail hashes identically to a longer
+        // source with no buffers at all (both produce the same flat byte stream). The
+        // length pins where the source ends, so the greedy parse of the length-prefixed
+        // buffer region below is unique.
+        hasher.U32(static_cast<std::uint32_t>(sourceBytes.size()));
         hasher.Update(sourceBytes);
 
         // Every external buffer, in glTF declaration order, each preceded by its own u32

@@ -9,9 +9,12 @@
 // four-way shape TextureImporterTest's own cook-key case already established for the texture
 // half); the external-buffer case s5.4 exists for; the length-prefix's buffer-boundary
 // non-fungibility (two 8-byte buffers must not collide with one 16-byte buffer of the same
-// concatenated bytes); and MeshMetaSettings::FromMetaJson's tolerant fallback (missing block,
-// wrong-typed field, hand-edited negative, and its own round-trip through ToMetaJson). Tagged
-// "[pipeline]", the same tag this suite's sibling AssetPipeline*Test.cpp files use.
+// concatenated bytes); the source/buffer-list boundary's own non-fungibility (a leading u32
+// source-length prefix is what keeps a source that CONTAINS a buffer-shaped byte sequence from
+// colliding with an actual empty-source-plus-that-buffer encoding); and
+// MeshMetaSettings::FromMetaJson's tolerant fallback (missing block, wrong-typed field,
+// hand-edited negative, and its own round-trip through ToMetaJson). Tagged "[pipeline]", the
+// same tag this suite's sibling AssetPipeline*Test.cpp files use.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -92,6 +95,27 @@ TEST_CASE("mesh cook key: buffer boundaries are not fungible", "[pipeline]")
     const std::span<const std::byte> one[] = { joined };
     CHECK(ComputeMeshCookKey(src, two, MeshMetaSettings{}, kMeshImporterVersion)
           != ComputeMeshCookKey(src, one, MeshMetaSettings{}, kMeshImporterVersion));
+}
+
+TEST_CASE("mesh cook key: the source/buffer-list boundary is not fungible", "[pipeline]")
+{
+    // Without a leading length prefix on sourceBytes, the flat byte stream the hasher
+    // consumes does not distinguish where the source region ends and the buffer-list
+    // region begins: a 9-byte source that happens to CONTAIN a u32-length-prefixed 5-byte
+    // "buffer" (literally the bytes "05 00 00 00 BB BB BB BB BB") with zero real external
+    // buffers is byte-identical to an EMPTY source followed by one genuine 5-byte buffer
+    // {BB BB BB BB BB} -- both feed "05 00 00 00 BB BB BB BB BB" ahead of the fixed
+    // settings/importer-version tail. The leading source-length prefix is what pins the
+    // boundary and makes the two cases distinguishable.
+    const std::vector<std::byte> nineByteSrc = { std::byte{ 0x05 }, std::byte{ 0x00 }, std::byte{ 0x00 },
+                                                   std::byte{ 0x00 }, std::byte{ 0xBB }, std::byte{ 0xBB },
+                                                   std::byte{ 0xBB }, std::byte{ 0xBB }, std::byte{ 0xBB } };
+    const std::vector<std::byte> emptySrc{};
+    const std::vector<std::byte> bbBuffer(5, std::byte{ 0xBB });
+    const std::span<const std::span<const std::byte>> noBuffers{};
+    const std::span<const std::byte> oneBuffer[] = { bbBuffer };
+    CHECK(ComputeMeshCookKey(nineByteSrc, noBuffers, MeshMetaSettings{}, kMeshImporterVersion)
+          != ComputeMeshCookKey(emptySrc, oneBuffer, MeshMetaSettings{}, kMeshImporterVersion));
 }
 
 TEST_CASE("mesh meta settings: a missing or malformed block falls back, never throws",

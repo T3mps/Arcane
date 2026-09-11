@@ -38,14 +38,19 @@ namespace Arcane::AssetPipeline
                                                 std::uint32_t importerVersion);
 
     // COMPOSITE version: bump when importer logic, cgltf, or meshoptimizer change.
-    inline constexpr std::uint32_t kMeshImporterVersion = 1;   // {importer v1, cgltf <sha>, meshoptimizer v1.2}
+    inline constexpr std::uint32_t kMeshImporterVersion = 1;   // {importer v1, cgltf bbeb5b0, meshoptimizer v1.2}
 
-    // hash(source bytes + EVERY external buffer's bytes + settings fields + importer
-    // version). The external-buffer term is spec s5.4 and is load-bearing: a .gltf
-    // referencing "geometry.bin" changes NOTHING in its own bytes when that buffer is
-    // re-exported, so a key over the .gltf alone would serve a stale artifact forever.
-    // Buffers are fed in glTF DECLARATION ORDER, each preceded by its own u32 length,
-    // so two buffers can never be confused for one longer one.
+    // hash(u32 source length + source bytes + EVERY external buffer's bytes (each its own
+    // u32 length then the bytes) + settings fields + importer version). The external-buffer
+    // term is spec s5.4 and is load-bearing: a .gltf referencing "geometry.bin" changes
+    // NOTHING in its own bytes when that buffer is re-exported, so a key over the .gltf
+    // alone would serve a stale artifact forever. Buffers are fed in glTF DECLARATION
+    // ORDER, each preceded by its own u32 length, so two buffers can never be confused for
+    // one longer one -- and the LEADING source-length prefix anchors the source/buffer-list
+    // boundary for the same reason: without it, {sourceBytes, no buffers} and {shorter
+    // sourceBytes, one buffer that absorbs the missing tail} feed the identical byte stream
+    // (the encoding is injective end to end once every variable-length region -- source
+    // included -- carries its own length ahead of it).
     //
     // External IMAGES are deliberately NOT here: they are their own registered texture
     // assets with their own cook keys (s5.4), and folding them in would recook the
