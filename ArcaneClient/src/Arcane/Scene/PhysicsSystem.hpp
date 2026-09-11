@@ -71,6 +71,7 @@
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
+#include <Astra/Core/Tick.hpp>
 #include <Astra/Entity/Entity.hpp>
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/System/System.hpp>
@@ -110,6 +111,18 @@ namespace Arcane
     {
         std::unique_ptr<Phys::PhysicsWorld>                 world;
         std::unordered_map<Astra::Entity, Phys::BodyHandle> entityToBody;
+
+        // The paused reconcile's "since" tick (spec 2026-09-11 s6.5): PASS 3.5
+        // visits only bodies whose Transform was written after it. Taken at the
+        // END of every pass and the registry tick advanced, so PASS 4's own
+        // write-back marks land AT lastReconcile (not newer) and an author edit
+        // made between passes lands after it. On the resource, not the system:
+        // the registry that owns the ticks owns this too.
+        Astra::Tick   lastReconcile = 0;
+        // Instrumentation: bodies PASS 3.5 actually visited, cumulative. The gate's
+        // whole effect is "an untouched body is not visited"; this is how a test
+        // says so.
+        std::uint32_t reconciled = 0;
 
         // No-op serialization: PhysicsResource is a transient runtime resource.
         // Astra's ResourceStorage auto-calls RegisterComponent<T>, which
@@ -424,17 +437,25 @@ namespace Arcane
             // a paused body cannot move itself, so the live body pose is the baseline
             // and any divergence is an author edit. Skipped while stepping (Play =
             // body owns pos/rot; PASS 4 drives lt as before). Scale handled in Task 3.
+            //
+            // Gated on Changed<Transform> since the last pass (spec 2026-09-11
+            // s6.5): chunk-reject over every body, then exactly the bodies whose
+            // Transform was written -- Transform is tracked. The exact compares
+            // below STAY: a position-only edit changes Transform but must not
+            // rebuild every fixture, and only a real divergence teleports.
             // ------------------------------------------------------------------
             if (!m_stepWorld)
             {
-                auto view = reg.CreateView<PhysicsBodyRef, const Transform, const Collider2D, Astra::With<RigidBody2D>>();
-                view.ForEach([&](Astra::Entity   /*entity*/,
-                                 PhysicsBodyRef&  ref,
-                                 const Transform&  lt,
-                                 const Collider2D&      col)
+                auto view = reg.CreateView<PhysicsBodyRef, const Transform, Astra::Changed<Transform>,
+                                           const Collider2D, Astra::With<RigidBody2D>>();
+                view.Since(res->lastReconcile).ForEach([&](Astra::Entity   /*entity*/,
+                                                            PhysicsBodyRef&  ref,
+                                                            const Transform& lt,
+                                                            const Collider2D& col)
                 {
                     if (ref.handle == Phys::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))       return;
+                    ++res->reconciled;
 
                     // SCALE: rebuild fixtures when lt.scale changed. Exact compare --
                     // physics never writes scale, so appliedScale can't drift; this
@@ -542,6 +563,16 @@ namespace Arcane
                     }
                 });
             }
+
+            // Time base for the paused reconcile (see PhysicsResource::lastReconcile):
+            // AFTER PASS 4, so its write-back marks are not newer than this tick.
+            // Tick contract note: PhysicsSystem is never AddSystem'd anywhere (map
+            // B3) -- tests and (one day) a game module call it bare -- so this
+            // advance never runs inside a scheduler group. The day it is scheduled
+            // it needs `static constexpr bool RequiresExclusive = true;` for the
+            // same reason TransformPropagationSystem carries it (Task 5).
+            res->lastReconcile = reg.CurrentTick();
+            reg.AdvanceTick();
         }
 
     private:

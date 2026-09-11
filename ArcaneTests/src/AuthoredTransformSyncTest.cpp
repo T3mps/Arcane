@@ -399,3 +399,44 @@ TEST_CASE("create scales a circle by the representative (max) axis", "[transform
     CHECK(he.x == Approx(1.5f).margin(1e-4f));
     CHECK(he.y == Approx(1.5f).margin(1e-4f));
 }
+
+// ---- Astra adoption Task 7: the Changed<Transform> gate on PASS 3.5 ---------
+
+TEST_CASE("untouched paused bodies are not visited by the reconcile", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {2,3}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);                                   // first pass: since == never, the body is seen once
+    auto* res = reg.GetResource<PhysicsResource>();
+    REQUIRE(res->reconciled == 1u);
+
+    for (int i = 0; i < 5; ++i) paused(reg);       // nothing written between passes
+    CHECK(res->reconciled == 1u);                  // PASS 4's own write-back did not re-trigger it
+
+    reg.GetComponent<Transform>(e)->position = glm::vec3(5.0f, 3.0f, 0.0f);   // an author edit
+    paused(reg);
+    CHECK(res->reconciled == 2u);
+    CHECK(static_cast<float>(res->world->Position(res->entityToBody.at(e)).x) == Approx(5.0f).margin(1e-4f));
+}
+
+TEST_CASE("a position-only paused edit does not rebuild fixtures", "[transform-sync]")
+{
+    // The exact appliedScale compare STAYS inside the gate: a position edit
+    // changes Transform (so the gate admits the body) but must not cost a
+    // RebuildScaledFixtures.
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle bh = res->entityToBody.at(e);
+    const Phys::FixtureHandle before = res->world->GetBodyFixture(bh, 0u);
+
+    reg.GetComponent<Transform>(e)->position = glm::vec3(4.0f, 0.0f, 0.0f);
+    paused(reg);
+    const Phys::FixtureHandle after = res->world->GetBodyFixture(bh, 0u);
+    CHECK(before.index == after.index);
+    CHECK(before.generation == after.generation);
+    CHECK(static_cast<float>(res->world->Position(bh).x) == Approx(4.0f).margin(1e-4f));
+}
