@@ -1,5 +1,6 @@
 #include "Arcane/AssetPipeline/MeshImporter.hpp"
 
+#include "Arcane/AssetPipeline/CgltfGuard.hpp"
 #include "Arcane/AssetPipeline/CookKey.hpp"
 #include "Arcane/AssetPipeline/SourceHash.hpp"
 
@@ -22,20 +23,10 @@ namespace Arcane::AssetPipeline
 
     namespace
     {
-        // ---- cgltf_data* RAII guard -------------------------------------------------------
-        // Written FIRST, before any of the five refusal returns below: a function with five
-        // early-return refusals and a hand-written cgltf_free on each is exactly where a leak
-        // hides. Never copied or moved (each of ImportMesh/ReadExternalBuffers owns exactly
-        // one, as a local) -- copy is deleted so an accidental copy can't double-free; the
-        // destructor is the only cgltf_free call site in this whole file.
-        struct CgltfDataGuard
-        {
-            cgltf_data* data = nullptr;
-            ~CgltfDataGuard() { if (data) cgltf_free(data); }
-            CgltfDataGuard() = default;
-            CgltfDataGuard(const CgltfDataGuard&) = delete;
-            CgltfDataGuard& operator=(const CgltfDataGuard&) = delete;
-        };
+        // cgltf_data* RAII guard -- CgltfGuard.hpp (F2c Task 13: extracted out of this file
+        // so GltfSurvey.cpp, which runs the same parse/load/validate front half, shares the
+        // ONE definition rather than carrying a second near-copy). ImportMesh and
+        // ReadExternalBuffers below each own exactly one, as a local.
 
         // Whole-file read, used both by ReadExternalBuffers (for a referenced .bin) and
         // nowhere else in this TU -- ImportMesh never reads files itself, it is handed

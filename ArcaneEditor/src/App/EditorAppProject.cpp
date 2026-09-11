@@ -25,6 +25,7 @@
 #include "App/EditorApp.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
+#include "Project/MeshImportWave.hpp"   // F2c Task 13: embedded-texture extraction at discovery
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
 #include <Arcane/AssetPipeline/CookSession.hpp>   // IsCookPending's artifact-store oracle (2026-09-08 desk fix)
@@ -439,6 +440,36 @@ namespace Arcane::Editor
                     continue;
                 if (const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(known.guid)))
                     knownSourcePaths.insert(p->generic_string());
+            }
+
+            // F2c Task 13 (s5.5, A4): a newly-discovered .gltf/.glb has its embedded
+            // textures extracted to loose .png siblings BEFORE any registration --
+            // deliberately its own pass, ahead of the registration loop below, so the
+            // extracted .pngs are already sitting on disk when THAT loop's own
+            // DiscoverUnknownSources call sweeps the folder. That is what lets the
+            // model AND its textures both register inside this SAME poll interval,
+            // the identical one-interval property this block's header comment already
+            // claims for a plain drop -- waiting for the NEXT tick's sweep to notice
+            // the .pngs would make a model's own textures lag its own registration by
+            // a full m_contentDiscoveryNext gate.
+            auto isModelExtension = [](const std::filesystem::path& p)
+            {
+                std::string ext = p.extension().string();
+                for (char& c : ext)
+                    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+                return ext == ".gltf" || ext == ".glb";
+            };
+            for (const std::filesystem::path& dropped :
+                 Arcane::Editor::DiscoverUnknownSources(project->Root() / "Content",
+                                                         kDiscoveryExtensions, knownSourcePaths))
+            {
+                if (!isModelExtension(dropped))
+                    continue;
+                const std::vector<std::filesystem::path> extracted =
+                    Arcane::Editor::ExtractEmbeddedTextures(dropped);
+                if (!extracted.empty())
+                    ARC_INFO("Assets: extracted {} embedded texture(s) from '{}'",
+                             extracted.size(), dropped.filename().string());
             }
 
             for (const std::filesystem::path& dropped :
