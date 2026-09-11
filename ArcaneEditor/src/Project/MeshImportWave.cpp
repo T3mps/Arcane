@@ -1,6 +1,7 @@
 #include "Project/MeshImportWave.hpp"
 
 #include <Arcane/AssetPipeline/GltfSurvey.hpp>
+#include <Arcane/Base/Log.hpp>   // ARC_WARN (extraction write failure)
 
 #include <cstdint>
 #include <fstream>
@@ -173,13 +174,30 @@ namespace Arcane::Editor
             if (decision.skip)
                 continue;   // an identical copy already exists somewhere in the chain.
 
+            // Final-review folded fix (ledger T13-28): a write failure is WARNED, naming
+            // the destination, rather than skipped silently -- a Windows reserved device
+            // name ("CON", "NUL", ...) or a trailing dot in a glTF image name survives
+            // SanitizeForFilename and makes ofstream refuse the path; without this line
+            // the image simply never appeared and nothing said why.
             std::ofstream out(decision.path, std::ios::binary | std::ios::trunc);
             if (!out)
+            {
+                ARC_WARN("Arcane Editor: could not extract embedded image '{}' from '{}' to '{}' "
+                         "(the destination could not be opened for writing)",
+                         image.name.empty() ? "(unnamed)" : image.name,
+                         source.filename().string(), decision.path.generic_string());
                 continue;
+            }
             out.write(reinterpret_cast<const char*>(image.bytes.data()),
                        static_cast<std::streamsize>(image.bytes.size()));
             if (!out)
+            {
+                ARC_WARN("Arcane Editor: could not extract embedded image '{}' from '{}' to '{}' "
+                         "(the write failed part-way)",
+                         image.name.empty() ? "(unnamed)" : image.name,
+                         source.filename().string(), decision.path.generic_string());
                 continue;
+            }
 
             written.push_back(decision.path);
         }

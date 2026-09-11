@@ -622,3 +622,36 @@ TEST_CASE("cook session: a mesh failure memoizes exactly like a texture failure"
     CHECK(secondResult.failed == 1u);
     CHECK(importCalls->load() == 1);   // THE pin: still 1 -- no retry storm across sessions.
 }
+
+// ---- Final-review fix I3 (2026-09-11): CookResult::upToDateGuids -----------------------------
+
+TEST_CASE("cook session: a second pass over an unchanged source reports its guid in "
+          "upToDateGuids (and not in cookedGuids)", "[pipeline]")
+{
+    // The editor's companion .arcmesh mint used to fire over cookedGuids ONLY -- so a
+    // project cooked headlessly by arccook before its first editor open, or a
+    // byte-identical second drop (same bytes, same cook key, artifact already there),
+    // reported upToDate and never minted until the source was touched. The additive
+    // field this case pins is what OnCookCompleted's up-to-date mint loop reads.
+    const fs::path project = TempDir("cook_mesh_uptodate_guids");
+    fs::create_directories(project / "Content" / "meshes");
+    fs::copy_file(MeshFixture("single.glb"), project / "Content" / "meshes" / "single.glb");
+    const Guid meshGuid = Guid::Generate();
+    WriteMetaSidecar(project / "Content" / "meshes" / "single.glb", meshGuid);
+
+    CookSession session;
+    const CookResult first = session.CookProject(project);
+    REQUIRE(first.cooked == 1u);
+    CHECK(first.upToDate == 0u);
+    CHECK(first.upToDateGuids.empty());
+    REQUIRE(first.cookedGuids.size() == 1u);
+    CHECK(first.cookedGuids[0] == meshGuid);
+
+    const CookResult second = session.CookProject(project);
+    CHECK(second.cooked == 0u);
+    CHECK(second.cookedGuids.empty());
+    CHECK(second.failed == 0u);
+    REQUIRE(second.upToDate == 1u);
+    REQUIRE(second.upToDateGuids.size() == 1u);   // the count and the list agree
+    CHECK(second.upToDateGuids[0] == meshGuid);
+}

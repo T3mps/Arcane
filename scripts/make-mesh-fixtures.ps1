@@ -18,8 +18,8 @@
     or hosts (PowerShell's ConvertTo-Json over a plain @{} hashtable has
     UNSTABLE key order; [ordered]@{} is mandatory throughout this file).
 
-    THE CORPUS (nine fixtures, ten files -- nested.gltf ships with a sibling
-    nested.bin):
+    THE CORPUS (eleven fixtures, thirteen files -- nested.gltf ships with a
+    sibling nested.bin, external_bin.glb with a sibling external_bin.bin):
 
       single.glb          1 mesh, 1 primitive, a unit quad (4 verts / 2 tris),
                            material "SingleMat". The happy path (spec s5.3
@@ -150,6 +150,32 @@
                            implement that extension, purely by reading
                            extensionsRequired (no real Draco-compressed payload
                            is needed to exercise this path).
+
+      external_bin.glb +   (Final-review fix I1, 2026-09-11.) A GLB whose
+      external_bin.bin     buffers[0] is the BIN chunk (POSITION + NORMAL of a
+                           unit quad) and buffers[1] is {"uri":"external_bin.bin"}
+                           carrying the index accessor alone (6 u16 indices, 2
+                           triangles), material "ExternalBinMat". The GLB
+                           container only requires buffer 0 to be the BIN chunk;
+                           any further buffer may reference an external file
+                           exactly like a .gltf's -- legal, and the pipeline
+                           hashes such a file as .glb ++ .bin. The client's
+                           reader used to assume "a .glb carries no external
+                           buffers" and refused this file with HashMismatch
+                           forever; the [assets] facade case cooks it through
+                           CookSession and resolves it through
+                           Assets::MeshArtifactFor to pin the fix.
+
+      nonindexed.glb       (Final-review fix I2, 2026-09-11.) One triangle-mode
+                           primitive with POSITION ONLY and NO `indices`
+                           accessor -- 6 vertices drawn in order as 2 triangles
+                           (the implicit identity index buffer glTF defines for
+                           a non-indexed primitive), material "Flat". Legal and
+                           common; the importer used to `continue` on a null
+                           index accessor, refusing this file with the wrong
+                           reason ("every triangle is degenerate"). The
+                           [pipeline] geometry case asserts it imports with 6
+                           indices, one section and no warnings.
 
     Re-run: `powershell -ExecutionPolicy Bypass -File scripts\make-mesh-fixtures.ps1 -Force`
     from the repo root. Without -Force the script refuses to overwrite an
@@ -823,6 +849,91 @@ function Build-RequiresDraco {
     Write-GltfText (Join-Path $OutDir "requires_draco.gltf") $json
 }
 
+function Build-ExternalBin {
+    # buffer 0: the GLB's own BIN chunk -- POSITION + NORMAL of a unit quad in the
+    # XY plane facing +z (same geometry as single.glb).
+    $b = New-MeshBuilder
+    $positions = @(@(0.0, 0.0, 0.0), @(1.0, 0.0, 0.0), @(1.0, 1.0, 0.0), @(0.0, 1.0, 0.0))
+    $normals   = @(@(0.0, 0.0, 1.0), @(0.0, 0.0, 1.0), @(0.0, 0.0, 1.0), @(0.0, 0.0, 1.0))
+    $posAcc = Add-PositionAccessor $b $positions
+    $nrmAcc = Add-NormalAccessor $b $normals
+
+    # buffer 1: the EXTERNAL external_bin.bin, carrying the index accessor ALONE.
+    # Built through a second mesh builder (whose helpers hard-code buffer 0), then
+    # re-homed: its one bufferView is pointed at buffer 1 and appended after the
+    # BIN chunk's own views, and its one accessor is appended after the BIN
+    # chunk's own accessors with its bufferView index rewritten to match.
+    $ext = New-MeshBuilder
+    Add-IndexAccessorU16 $ext ([uint16[]](0, 1, 2, 0, 2, 3)) | Out-Null
+    $extView = $ext.BufferViews[0]
+    $extView["buffer"] = 1
+    $idxView = $b.BufferViews.Count
+    $b.BufferViews.Add($extView)
+    $extAccessor = $ext.Accessors[0]
+    $extAccessor["bufferView"] = $idxView
+    $idxAcc = $b.Accessors.Count
+    $b.Accessors.Add($extAccessor)
+
+    $json = [ordered]@{
+        asset     = (New-AssetBlock)
+        materials = @([ordered]@{ name = "ExternalBinMat" })
+        meshes    = @([ordered]@{
+            name       = "ExternalBinMesh"
+            primitives = @([ordered]@{
+                attributes = [ordered]@{ POSITION = $posAcc; NORMAL = $nrmAcc }
+                indices    = $idxAcc
+                material   = 0
+                mode       = 4
+            })
+        })
+        nodes       = @([ordered]@{ name = "ExternalBinNode"; mesh = 0 })
+        scenes      = @([ordered]@{ nodes = @(0) })
+        scene       = 0
+        buffers     = @(
+            [ordered]@{ byteLength = $b.Bin.Count },
+            [ordered]@{ uri = "external_bin.bin"; byteLength = $ext.Bin.Count }
+        )
+        bufferViews = @($b.BufferViews)
+        accessors   = @($b.Accessors)
+    }
+    Write-Glb (Join-Path $OutDir "external_bin.glb") $json ($b.Bin.ToArray()) | Out-Null
+    $extBytes = $ext.Bin.ToArray()
+    [System.IO.File]::WriteAllBytes((Join-Path $OutDir "external_bin.bin"), $extBytes)
+    Write-Host "Wrote $(Join-Path $OutDir 'external_bin.bin') ($($extBytes.Length) bytes)"
+}
+
+function Build-NonIndexed {
+    # Six POSITIONs drawn in order as two triangles -- a unit quad in the XY plane
+    # (facing +z), each triangle spelled out corner by corner. NO `indices` key on
+    # the primitive: glTF's implicit identity index buffer.
+    $b = New-MeshBuilder
+    $positions = @(
+        @(0.0, 0.0, 0.0), @(1.0, 0.0, 0.0), @(1.0, 1.0, 0.0),   # triangle 0
+        @(0.0, 0.0, 0.0), @(1.0, 1.0, 0.0), @(0.0, 1.0, 0.0)    # triangle 1
+    )
+    $posAcc = Add-PositionAccessor $b $positions
+
+    $json = [ordered]@{
+        asset     = (New-AssetBlock)
+        materials = @([ordered]@{ name = "Flat" })
+        meshes    = @([ordered]@{
+            name       = "NonIndexedMesh"
+            primitives = @([ordered]@{
+                attributes = [ordered]@{ POSITION = $posAcc }
+                material   = 0
+                mode       = 4
+            })
+        })
+        nodes       = @([ordered]@{ name = "NonIndexedNode"; mesh = 0 })
+        scenes      = @([ordered]@{ nodes = @(0) })
+        scene       = 0
+        buffers     = @([ordered]@{ byteLength = $b.Bin.Count })
+        bufferViews = @($b.BufferViews)
+        accessors   = @($b.Accessors)
+    }
+    Write-Glb (Join-Path $OutDir "nonindexed.glb") $json ($b.Bin.ToArray()) | Out-Null
+}
+
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
@@ -830,7 +941,8 @@ function Build-RequiresDraco {
 $expectedFiles = @(
     "single.glb", "multi.glb", "nested.gltf", "nested.bin",
     "mirrored.glb", "embedded_tex.glb", "degenerate.glb",
-    "empty.glb", "bad_sparse.glb", "requires_draco.gltf"
+    "empty.glb", "bad_sparse.glb", "requires_draco.gltf",
+    "external_bin.glb", "external_bin.bin", "nonindexed.glb"
 )
 
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
@@ -853,4 +965,6 @@ Build-Degenerate
 Build-Empty
 Build-BadSparse
 Build-RequiresDraco
+Build-ExternalBin
+Build-NonIndexed
 Write-Host "Done -- $($expectedFiles.Count) fixture files generated."

@@ -570,6 +570,14 @@ namespace Arcane
             {
                 if (static_cast<std::uint64_t>(section.indexOffset) + section.indexCount > out.header.indexCount)
                     return std::nullopt;
+                // SLOTINDEX BOUND (final-review fix, 2026-09-11; ArtifactReader.hpp's MESH
+                // TAIL banner): slotIndex >= sectionCount is impossible in a well-formed
+                // artifact (every slot has >= 1 section) and would size the editor's
+                // SlotNamesFromSections mirror by a corrupt value -- refused (Missing),
+                // never clamped; the pipeline's ReadMeshArtifact applies the identical
+                // rule, agreeing through the written contract rather than shared code.
+                if (section.slotIndex >= out.header.sectionCount)
+                    return std::nullopt;
             }
             // The header's declared sectionCount must agree with what the SectionTable
             // section actually carried (or, if that section was absent entirely, with
@@ -740,8 +748,8 @@ namespace Arcane
         {
             // Absent file, unparseable/corrupt bytes, wrong contentKind (ParseMeshHeader's
             // own fail-closed check), or any contract validation ReadMeshArtifactFile
-            // enforces (section-range, sectionCount/vertexCount/indexCount agreement,
-            // indexWidth != 4) -- every one of these collapses into Missing, the same
+            // enforces (section-range, slotIndex bound, sectionCount/vertexCount/indexCount
+            // agreement, indexWidth != 4) -- every one of these collapses into Missing, the same
             // "cannot be used and is not one of the two named refusals" catch-all
             // ReadClientArtifact uses for the texture kind.
             result.refusal = ArtifactRefusal::Missing;
@@ -828,17 +836,83 @@ namespace Arcane
         return matches;
     }
 
+    namespace
+    {
+        // Final-review fix I1 (2026-09-11): locate the JSON DOCUMENT inside `sourceBytes`,
+        // whichever glTF CONTAINER it is. A .gltf IS its JSON text (the whole file); a
+        // .glb wraps it: 12-byte header (magic "glTF", u32 version == 2, u32 totalLength)
+        // followed by chunk 0, which the GLB spec REQUIRES to be the JSON chunk (u32
+        // chunkLength, u32 chunkType == 0x4E4F534A "JSON", then chunkLength bytes of
+        // JSON, space-padded to a 4-byte boundary -- the padding is whitespace, so the
+        // parser tolerates it). Every read below is bounds-checked against the buffer
+        // BEFORE it happens; a malformed GLB (short header, wrong version, chunk 0 not
+        // JSON, a chunk length past the end) yields an EMPTY span, which the caller
+        // treats exactly like unparseable JSON (nullopt -> the hash cannot match ->
+        // Missing/HashMismatch, never a silent pass or an out-of-bounds read).
+        //
+        // WHY THIS EXISTS: the GLB container only requires buffer 0 to be the BIN chunk
+        // (and only when a BIN chunk is present at all); buffers[1..] may carry a `uri`
+        // like any .gltf's. The pipeline's ReadExternalBuffers (MeshImporter.cpp) hands
+        // BOTH containers to cgltf_parse, which sniffs the container and reads
+        // `buffers[].uri` identically for either -- so a .glb whose second buffer names
+        // an external .bin cooks with hash(.glb ++ .bin). Before this fix the client read
+        // "a .glb carries no external buffers" as a rule, hashed the .glb alone, and
+        // refused that legal file with HashMismatch permanently. The rule is now "every
+        // external buffer, whichever container" on both sides.
+        [[nodiscard]] std::span<const char> LocateGltfJsonDocument(std::span<const std::byte> sourceBytes) noexcept
+        {
+            const auto* text = reinterpret_cast<const char*>(sourceBytes.data());
+            const std::size_t size = sourceBytes.size();
+
+            const bool isGlb = size >= 4 && text[0] == 'g' && text[1] == 'l' && text[2] == 'T' && text[3] == 'F';
+            if (!isGlb)
+                return std::span<const char>(text, size);   // a .gltf: the whole file is the document
+
+            constexpr std::uint32_t kGlbVersion   = 2;
+            constexpr std::uint32_t kJsonChunkType = 0x4E4F534A;   // "JSON", little-endian
+            constexpr std::size_t   kHeaderBytes   = 12;            // magic + version + totalLength
+            constexpr std::size_t   kChunkHeaderBytes = 8;          // chunkLength + chunkType
+
+            ByteReader r(sourceBytes.data(), size);
+            std::uint32_t magic = 0, version = 0, totalLength = 0;
+            if (!r.U32(magic) || !r.U32(version) || !r.U32(totalLength))
+                return {};
+            if (version != kGlbVersion)
+                return {};
+            if (totalLength > size || totalLength < kHeaderBytes + kChunkHeaderBytes)
+                return {};   // a declared length past the buffer, or too short to hold chunk 0
+
+            std::uint32_t chunkLength = 0, chunkType = 0;
+            if (!r.U32(chunkLength) || !r.U32(chunkType))
+                return {};
+            if (chunkType != kJsonChunkType)
+                return {};   // chunk 0 MUST be JSON (GLB spec) -- anything else is malformed
+            const std::size_t jsonStart = kHeaderBytes + kChunkHeaderBytes;
+            if (chunkLength > totalLength - jsonStart)
+                return {};   // JSON chunk runs past the declared total length
+            return std::span<const char>(text + jsonStart, chunkLength);
+        }
+    }
+
     // F2c Task 11: see this function's own doc comment (ArtifactReader.hpp) for the full
     // contract and the ReadExternalBuffers (ArcaneAssetPipeline/MeshImporter.cpp) peer this
     // must agree with BY HAND. Core logic is the JSON read: no cgltf, no full glTF parse --
     // just `buffers[].uri`, skipping an absent/embedded uri and a `data:` one, PERCENT-
     // DECODING every other uri (DecodeUriPercentEscapes, mirroring cgltf_decode_uri) before
     // reading the referenced file relative to the source's own directory.
+    //
+    // Final-review fix I1: CONTAINER-AWARE. The JSON document is located first
+    // (LocateGltfJsonDocument above: the whole file for a .gltf, chunk 0's slice for a
+    // .glb) and only THAT slice is parsed -- the raw bytes of a .glb are not JSON and
+    // used to fail the parse outright, which (combined with the caller's old `.gltf`-only
+    // gate) is exactly how a .glb with a `uri` buffer beyond its BIN chunk refused forever.
     std::optional<std::vector<std::vector<std::byte>>> ReadClientExternalBuffers(
         std::span<const std::byte> sourceBytes, const std::filesystem::path& sourcePath)
     {
-        const auto* begin = reinterpret_cast<const char*>(sourceBytes.data());
-        const auto doc = nlohmann::json::parse(begin, begin + sourceBytes.size(),
+        const std::span<const char> document = LocateGltfJsonDocument(sourceBytes);
+        if (document.empty())
+            return std::nullopt;   // a malformed GLB container (or an empty source)
+        const auto doc = nlohmann::json::parse(document.data(), document.data() + document.size(),
                                                 /*cb=*/nullptr, /*allow_exceptions=*/false);
         if (doc.is_discarded() || !doc.is_object())
             return std::nullopt;

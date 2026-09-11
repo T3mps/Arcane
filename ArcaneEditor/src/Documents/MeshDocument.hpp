@@ -43,6 +43,16 @@
 // Task 9 wrote it and Task 10 falsified both; the note stays so the old
 // conclusion is not re-derived from the same (now wrong) premise.
 //
+// IMPORTED MESHES (F2c; final-review fix I4, 2026-09-11): every companion
+// .arcmesh the import wave mints (source == MeshSource::Imported) opens in
+// this same document. Its posture there is deliberately narrower than a
+// generated mesh's: no Source combo (the source IS its model), no topology
+// fields (the geometry is the cooked artifact's), no procedural preview
+// (BuildMeshData has nothing to build -- the panel says "preview in the
+// viewport" instead), and the material picker's clear NEVER erases slot 0
+// (ClearPrimarySlotMaterial below: the slot array mirrors the artifact's
+// slot table by position, so erasing would shift every later slot).
+//
 // Implements EditorDocument's five pure virtuals (EditorDocument.hpp:15-44);
 // DocumentHost owns the open-document list, the asset-type -> factory
 // routing, and the unsaved-close confirm modal.
@@ -186,6 +196,27 @@ namespace Arcane::Editor
         // Draw is the only ImGui method and they never call it, so this is
         // how they observe what a command did.
         const Arcane::MeshAssetData& Data() const noexcept { return m_data; }
+
+        // THE SLOT-CLEAR RULE (final-review fix I4, 2026-09-11) -- what the
+        // material picker's "x" button does to `data.slots`, factored out PURE
+        // so the headless [editor] units can pin it without ImGui:
+        //   * a GENERATED mesh (Plane/Cube/...) ERASES slot 0 -- the F2a
+        //     single-material UX expressed through the array: an unnamed slot
+        //     with a nil material is a different state from "no slot at all"
+        //     (MeshAsset.cpp's loader: a nil legacy material yields NO slot),
+        //     and a generated mesh has no artifact whose slot table the
+        //     array must stay aligned with;
+        //   * an IMPORTED mesh NEVER erases -- it sets slots[0].material to nil
+        //     and keeps the slot (its name included). The .arcmesh slot array
+        //     mirrors the cooked artifact's slot table BY POSITION (slotIndex
+        //     -> slots[slotIndex]; Plan 2's per-section draw resolves through
+        //     exactly that index), so erasing slot 0 would shift every later
+        //     slot down one and silently re-bind each section to the wrong
+        //     material. Applied to EVERY imported slot count (a single-slot
+        //     imported mesh keeps its one named-but-unassigned slot too --
+        //     the correspondence rule has no size threshold).
+        // A no-op on an empty slot array.
+        static void ClearPrimarySlotMaterial(Arcane::MeshAssetData& data);
 
         // The CURRENT preview geometry, rebuilt every time m_data changes
         // (construction, ApplyMeshData, or a live field edit in Draw).

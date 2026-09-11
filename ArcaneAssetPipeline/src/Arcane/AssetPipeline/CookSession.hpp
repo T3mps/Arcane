@@ -118,6 +118,20 @@ namespace Arcane::AssetPipeline
         // only look at the three counts above are unaffected.
         std::vector<Guid> cookedGuids;
 
+        // Final-review fix I3 (2026-09-11): WHICH guids landed in the `upToDate`
+        // bucket this call -- every kind, filled in the shared spine's up-to-date
+        // branch beside `++upToDate`. The editor's companion mint
+        // (EditorApp::OnCookCompleted -> MintOrUpdateCompanionMesh, spec s4.2)
+        // runs over cookedGuids UNION upToDateGuids: an artifact that is already
+        // current (a project cooked headlessly by arccook before its first editor
+        // open, or a byte-identical second drop sharing the first's cook key)
+        // reports here and NEVER in cookedGuids, and before this field existed
+        // such a Model never got its .arcmesh until its source was touched. The
+        // two cache INVALIDATIONS stay cookedGuids-only (nothing changed on disk
+        // for an up-to-date guid). Additive: existing callers that read only the
+        // counts or cookedGuids are unaffected.
+        std::vector<Guid> upToDateGuids;
+
         // Guid -> human reason, for every guid that landed in the `failed`
         // bucket this call -- the SAME strings LastFailures() carries,
         // duplicated into the result itself (not read back out of

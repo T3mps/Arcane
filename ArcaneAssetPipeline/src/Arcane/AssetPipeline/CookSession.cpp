@@ -395,6 +395,7 @@ namespace Arcane::AssetPipeline
                 {
                     store.PutIndex(*guid, cookKey);
                     removeSupersededArtifact(cookKey);
+                    result.upToDateGuids.push_back(*guid);   // I3: every kind, beside the count
                     ++result.upToDate;
                     if (m_progress) m_progress(source, true, "up to date");
                     continue;

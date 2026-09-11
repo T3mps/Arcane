@@ -255,6 +255,67 @@ TEST_CASE("MeshDocument: an invalid param set yields no preview geometry and sur
     CHECK_FALSE(doc.PreviewMesh()->vertices.empty());
 }
 
+TEST_CASE("MeshDocument: clearing slot 0 on an IMPORTED mesh keeps the slot (nil material), "
+          "on a generated mesh erases it -- and an imported mesh builds no procedural preview",
+          "[editor][mesh]")
+{
+    // Final-review fix I4 (2026-09-11). Every companion .arcmesh the import wave mints
+    // opens in MeshDocument; there the material picker's clear used to erase slot 0
+    // unconditionally, shifting every later slot down one and breaking the artifact's
+    // slotIndex <-> slots[] correspondence (Plan 2's per-section draw resolves through
+    // exactly that index). The rule is pure (ClearPrimarySlotMaterial) so it is pinned
+    // here without ImGui.
+    const Arcane::Guid matA = Arcane::Guid::Generate();
+    const Arcane::Guid matB = Arcane::Guid::Generate();
+
+    Arcane::MeshAssetData imported = Fixture();
+    imported.source         = Arcane::MeshSource::Imported;
+    imported.importedSource = Arcane::Guid::Generate();
+    imported.slots          = { { "Metal", matA }, { "Paint", matB } };
+
+    MeshDocument::ClearPrimarySlotMaterial(imported);
+    REQUIRE(imported.slots.size() == 2u);           // NOT shifted
+    CHECK(imported.slots[0].name == "Metal");       // the slot survives, name intact
+    CHECK_FALSE(imported.slots[0].material.IsValid());
+    CHECK(imported.slots[1].name == "Paint");       // slot 1 is still slot 1
+    CHECK(imported.slots[1].material == matB);
+
+    // The rule has no size threshold: a single-slot imported mesh keeps its one slot too.
+    Arcane::MeshAssetData importedSingle = imported;
+    importedSingle.slots = { { "SingleMat", matA } };
+    MeshDocument::ClearPrimarySlotMaterial(importedSingle);
+    REQUIRE(importedSingle.slots.size() == 1u);
+    CHECK_FALSE(importedSingle.slots[0].material.IsValid());
+
+    // Contrast: the F2a behaviour for a GENERATED mesh is unchanged -- erase.
+    Arcane::MeshAssetData generated = Fixture();   // Cube
+    generated.slots = { { "", matA } };
+    MeshDocument::ClearPrimarySlotMaterial(generated);
+    CHECK(generated.slots.empty());
+
+    // And the empty case is a no-op on either kind.
+    Arcane::MeshAssetData none = Fixture();
+    MeshDocument::ClearPrimarySlotMaterial(none);
+    CHECK(none.slots.empty());
+
+    // The preview half: an imported mesh yields NO procedural geometry (BuildMeshData
+    // is never asked, so its "wrong function" ARC_WARN never fires on an edit gesture)
+    // while the validator still runs -- a valid importedSource means no reason.
+    MeshDocument::Services services;
+    MeshDocument doc(services, FixturePath(), imported);
+    CHECK_FALSE(doc.PreviewMesh().has_value());
+    CHECK_FALSE(doc.ValidationReason().has_value());
+    CHECK_NOTHROW(doc.Tick(1.0 / 60.0));
+
+    // ...and a nil importedSource IS still a reportable refusal, imported or not.
+    Arcane::MeshAssetData detached = imported;
+    detached.importedSource = Arcane::Guid{};
+    doc.ApplyMeshData(detached);
+    CHECK_FALSE(doc.PreviewMesh().has_value());
+    REQUIRE(doc.ValidationReason().has_value());
+    CHECK(doc.ValidationReason()->find("importedSource") != std::string::npos);
+}
+
 TEST_CASE("MeshDocument::Save writes the asset and clears dirty", "[editor][mesh]")
 {
     const fs::path dir = TempDir("save");

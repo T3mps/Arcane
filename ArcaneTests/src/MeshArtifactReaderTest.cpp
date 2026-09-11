@@ -24,9 +24,11 @@
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>
 #include <Arcane/Guid.hpp>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <span>
 #include <system_error>
 #include <vector>
@@ -87,6 +89,62 @@ namespace
         desc.sectionCount = 1;
         desc.sections = { { "Slot", 0, 3, 0 } };
         return desc;
+    }
+
+    // ---- Independent raw encoder for the hand-rolled corruption cases (final-review fix
+    // wave, 2026-09-11) -- the SAME documented-layout encoder MeshArtifactFormatTest.cpp
+    // carries, duplicated per this suite's no-shared-helper convention. Mirrors the
+    // CONTRACT (ArtifactReader.hpp's MESH TAIL banner), not either implementation.
+    void PutU8(std::vector<std::byte>& b, std::uint8_t v) { b.push_back(static_cast<std::byte>(v)); }
+    void PutU16(std::vector<std::byte>& b, std::uint16_t v)
+    {
+        for (int i = 0; i < 2; ++i) PutU8(b, static_cast<std::uint8_t>(v >> (8 * i)));
+    }
+    void PutU32(std::vector<std::byte>& b, std::uint32_t v)
+    {
+        for (int i = 0; i < 4; ++i) PutU8(b, static_cast<std::uint8_t>(v >> (8 * i)));
+    }
+    void PutU64(std::vector<std::byte>& b, std::uint64_t v)
+    {
+        for (int i = 0; i < 8; ++i) PutU8(b, static_cast<std::uint8_t>(v >> (8 * i)));
+    }
+    void PutF32(std::vector<std::byte>& b, float v) { PutU32(b, std::bit_cast<std::uint32_t>(v)); }
+    void PutBytes(std::vector<std::byte>& b, const std::vector<std::byte>& data)
+    {
+        b.insert(b.end(), data.begin(), data.end());
+    }
+
+    // magic + artifactVersion + the mesh desc's fixed fields in declaration order (74 bytes),
+    // stamped with `guid`, `sourceHash` and the client's own importer-version mirror so the
+    // ONLY thing a hand-rolled file can be refused for is the corruption the case plants.
+    std::vector<std::byte> EncodeMeshHeader(const Guid& guid, std::uint64_t sourceHash,
+                                             std::uint32_t vertexCount, std::uint32_t indexCount,
+                                             std::uint32_t sectionCount)
+    {
+        std::vector<std::byte> h;
+        PutU8(h, static_cast<std::uint8_t>('A')); PutU8(h, static_cast<std::uint8_t>('R'));
+        PutU8(h, static_cast<std::uint8_t>('C')); PutU8(h, static_cast<std::uint8_t>('A'));
+        PutU32(h, 1);                                                          // artifactVersion
+        PutU8(h, static_cast<std::uint8_t>(Arcane::AssetPipeline::ContentKind::Mesh));
+        PutU64(h, guid.hi);
+        PutU64(h, guid.lo);
+        PutU64(h, sourceHash);
+        PutU32(h, Arcane::kClientMeshImporterVersionMirror);
+        PutU32(h, vertexCount);
+        PutU32(h, indexCount);
+        PutU32(h, sectionCount);
+        PutU8(h, 4);                                                           // indexWidth
+        PutF32(h, 0.0f); PutF32(h, 0.0f); PutF32(h, 0.0f);                     // aabbMin
+        PutF32(h, 0.0f); PutF32(h, 0.0f); PutF32(h, 0.0f);                     // aabbMax
+        return h;
+    }
+
+    void WriteFile(const fs::path& path, const std::vector<std::byte>& bytes)
+    {
+        std::ofstream ofs(path, std::ios::binary | std::ios::trunc);
+        REQUIRE(ofs.good());
+        ofs.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(ofs.good());
     }
 }
 
@@ -197,6 +255,144 @@ TEST_CASE("mesh artifact: the three client refusals", "[artifact]")
         CHECK(r.refusal == Arcane::ArtifactRefusal::Missing);
         CHECK_FALSE(r.mesh.has_value());
     }
+}
+
+// ---- structural corruptions, each refused Missing (final-review fix wave, 2026-09-11) ------
+// The pipeline's ReadMeshArtifact pins the same three rules on its own side
+// (MeshArtifactFormatTest.cpp); these are the CLIENT reader's own pins, so the two
+// independent implementations are each held to the written contract rather than one
+// being assumed to mirror the other. The first goes through the pipeline WRITER (which
+// does not validate, so it will happily write a desc the reader must refuse); the other
+// two are hand-rolled against the documented layout (ledger T4-8's named pins).
+
+TEST_CASE("client mesh reader: a section whose slotIndex is >= sectionCount is refused "
+          "Missing (the SLOTINDEX BOUND)", "[artifact]")
+{
+    const fs::path dir = TempDir("client_mesh_slotindex_bound");
+    const Guid guid = Guid::Generate();
+    const std::vector<std::byte> source = PatternBytes(32, 0x33);
+
+    Arcane::AssetPipeline::MeshArtifactDesc desc = MinimalMeshDesc(guid, FnvOfSource(source));
+    desc.sections = { { "", 0, 3, 7 } };   // slotIndex 7 against sectionCount 1
+    const std::vector<Arcane::AssetPipeline::MeshArtifactVertex> vertices(3);
+    const std::vector<std::uint32_t> indices = { 0, 1, 2 };
+
+    const fs::path path = dir / "slotindex_bound.arcart";
+    REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(path, desc, vertices, indices));   // the writer does not validate
+
+    const auto r = Arcane::ReadClientMeshArtifact(path, source, guid);
+    CHECK(r.refusal == Arcane::ArtifactRefusal::Missing);
+    CHECK_FALSE(r.mesh.has_value());
+
+    // Control: slotIndex 0 with everything else identical loads -- the refusal IS the bound.
+    desc.sections = { { "", 0, 3, 0 } };
+    REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(path, desc, vertices, indices));
+    CHECK(Arcane::ReadClientMeshArtifact(path, source, guid).refusal == Arcane::ArtifactRefusal::None);
+}
+
+TEST_CASE("client mesh reader: a declared vertexCount with the VertexData section absent is "
+          "refused Missing", "[artifact]")
+{
+    // Ledger T4-8: the COUNT-AGREEMENT rule on the client side. Every present section is
+    // internally consistent; only the VertexData body is missing outright, so the decoded
+    // vertex array (empty) disagrees with the declared count (3) maximally.
+    const fs::path dir = TempDir("client_mesh_missing_vertexdata");
+    const fs::path path = dir / "missing_vertexdata.arcart";
+    const Guid guid = Guid::Generate();
+    const std::vector<std::byte> source = PatternBytes(32, 0x44);
+
+    std::vector<std::byte> indexDataBody;
+    PutU32(indexDataBody, 0); PutU32(indexDataBody, 1); PutU32(indexDataBody, 2);
+
+    std::vector<std::byte> sectionTableBody;
+    PutU32(sectionTableBody, 1);   // 1 record
+    PutU16(sectionTableBody, 0);   // name length 0
+    PutU32(sectionTableBody, 0);   // indexOffset
+    PutU32(sectionTableBody, 3);   // indexCount
+    PutU32(sectionTableBody, 0);   // slotIndex
+
+    std::vector<std::byte> file = EncodeMeshHeader(guid, FnvOfSource(source), /*vertexCount*/ 3, /*indexCount*/ 3, /*sectionCount*/ 1);
+
+    constexpr std::uint32_t kContainerSectionCount = 2;   // IndexData + SectionTable ONLY
+    const std::uint64_t headerSize = file.size();
+    const std::uint64_t tableSize = 4 + kContainerSectionCount * 20ULL;
+    std::uint64_t offset = headerSize + tableSize;
+    const std::uint64_t indexOffset = offset; offset += indexDataBody.size();
+    const std::uint64_t sectionTableOffset = offset; offset += sectionTableBody.size();
+
+    PutU32(file, kContainerSectionCount);
+    PutU32(file, 5u /* IndexData */);    PutU64(file, indexOffset);        PutU64(file, indexDataBody.size());
+    PutU32(file, 6u /* SectionTable */); PutU64(file, sectionTableOffset); PutU64(file, sectionTableBody.size());
+    REQUIRE(file.size() == headerSize + tableSize);
+    PutBytes(file, indexDataBody);
+    PutBytes(file, sectionTableBody);
+    WriteFile(path, file);
+
+    const auto r = Arcane::ReadClientMeshArtifact(path, source, guid);
+    CHECK(r.refusal == Arcane::ArtifactRefusal::Missing);
+    CHECK_FALSE(r.mesh.has_value());
+}
+
+TEST_CASE("client mesh reader: a section range past the header's indexCount is refused "
+          "Missing", "[artifact]")
+{
+    // Ledger T4-8: the SECTION-RANGE rule on the client side. Hand-rolled with every body
+    // present and sized right; the ONE section claims indexOffset 0 + indexCount 5 against
+    // a 3-index buffer, which would hand Plan 2's draw path an out-of-range range.
+    const fs::path dir = TempDir("client_mesh_section_range");
+    const fs::path path = dir / "section_range.arcart";
+    const Guid guid = Guid::Generate();
+    const std::vector<std::byte> source = PatternBytes(32, 0x55);
+
+    std::vector<std::byte> vertexDataBody;
+    for (int v = 0; v < 3; ++v)
+        for (int f = 0; f < 8; ++f)
+            PutF32(vertexDataBody, 0.0f);
+
+    std::vector<std::byte> indexDataBody;
+    PutU32(indexDataBody, 0); PutU32(indexDataBody, 1); PutU32(indexDataBody, 2);
+
+    std::vector<std::byte> sectionTableBody;
+    PutU32(sectionTableBody, 1);   // 1 record
+    PutU16(sectionTableBody, 0);   // name length 0
+    PutU32(sectionTableBody, 0);   // indexOffset
+    PutU32(sectionTableBody, 5);   // indexCount 5 > the header's 3 -- THE corruption
+    PutU32(sectionTableBody, 0);   // slotIndex
+
+    std::vector<std::byte> file = EncodeMeshHeader(guid, FnvOfSource(source), /*vertexCount*/ 3, /*indexCount*/ 3, /*sectionCount*/ 1);
+
+    constexpr std::uint32_t kContainerSectionCount = 3;
+    const std::uint64_t headerSize = file.size();
+    const std::uint64_t tableSize = 4 + kContainerSectionCount * 20ULL;
+    std::uint64_t offset = headerSize + tableSize;
+    const std::uint64_t vertexOffset = offset; offset += vertexDataBody.size();
+    const std::uint64_t indexOffset  = offset; offset += indexDataBody.size();
+    const std::uint64_t sectionTableOffset = offset; offset += sectionTableBody.size();
+
+    PutU32(file, kContainerSectionCount);
+    PutU32(file, 4u /* VertexData */);   PutU64(file, vertexOffset);       PutU64(file, vertexDataBody.size());
+    PutU32(file, 5u /* IndexData */);    PutU64(file, indexOffset);        PutU64(file, indexDataBody.size());
+    PutU32(file, 6u /* SectionTable */); PutU64(file, sectionTableOffset); PutU64(file, sectionTableBody.size());
+    REQUIRE(file.size() == headerSize + tableSize);
+    PutBytes(file, vertexDataBody);
+    PutBytes(file, indexDataBody);
+    PutBytes(file, sectionTableBody);
+    WriteFile(path, file);
+
+    const auto r = Arcane::ReadClientMeshArtifact(path, source, guid);
+    CHECK(r.refusal == Arcane::ArtifactRefusal::Missing);
+    CHECK_FALSE(r.mesh.has_value());
+
+    // Control: the same hand-rolled encoding with indexCount 3 loads clean, so the
+    // refusal above is the range rule and not a slip in this encoder.
+    const std::size_t sectionIndexCountAt = static_cast<std::size_t>(sectionTableOffset) + 4 + 2 + 4;
+    REQUIRE(sectionIndexCountAt + 4 <= file.size());
+    file[sectionIndexCountAt] = std::byte{ 3 };
+    for (int i = 1; i < 4; ++i) file[sectionIndexCountAt + static_cast<std::size_t>(i)] = std::byte{ 0 };
+    WriteFile(path, file);
+    const auto control = Arcane::ReadClientMeshArtifact(path, source, guid);
+    REQUIRE(control.refusal == Arcane::ArtifactRefusal::None);
+    CHECK(control.mesh->sections[0].indexCount == 3u);
 }
 
 // ---- FindArtifactForGuid: the kind-agnostic common-prefix scan (THE SEAM) --------------------

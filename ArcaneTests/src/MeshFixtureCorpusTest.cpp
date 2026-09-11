@@ -31,9 +31,12 @@ namespace
 TEST_CASE("gltf corpus: every fixture spec s9 names is staged beside the exe",
           "[fixture][gltf]")
 {
+    // Final-review fix wave (2026-09-11) added external_bin.glb (+ its sibling .bin,
+    // I1) and nonindexed.glb (I2) -- see the generator's header for each one's role.
     for (const char* name : { "single.glb", "multi.glb", "nested.gltf", "nested.bin",
                               "mirrored.glb", "embedded_tex.glb", "degenerate.glb",
-                              "empty.glb", "bad_sparse.glb", "requires_draco.gltf" })
+                              "empty.glb", "bad_sparse.glb", "requires_draco.gltf",
+                              "external_bin.glb", "external_bin.bin", "nonindexed.glb" })
     {
         INFO(name);
         CHECK(fs::exists(FixtureDir() / name));
@@ -45,7 +48,7 @@ TEST_CASE("gltf corpus: every .glb carries a well-formed GLB container header",
 {
     for (const char* name : { "single.glb", "multi.glb", "mirrored.glb",
                               "embedded_tex.glb", "degenerate.glb", "empty.glb",
-                              "bad_sparse.glb" })
+                              "bad_sparse.glb", "external_bin.glb", "nonindexed.glb" })
     {
         INFO(name);
         const std::vector<std::uint8_t> bytes = ReadAll(FixtureDir() / name);
@@ -91,4 +94,14 @@ TEST_CASE("gltf corpus: the structural marks each later task depends on",
     // s4.3's winding-flip fixture needs a genuinely negative determinant.
     const std::string mirrored = text(FixtureDir() / "mirrored.glb");
     CHECK(mirrored.find("-1") != std::string::npos);
+
+    // I1: a .glb that references an EXTERNAL buffer by uri -- the whole point of the
+    // fixture is that buffers[1] carries one while buffers[0] is the BIN chunk.
+    const std::string externalBin = text(FixtureDir() / "external_bin.glb");
+    CHECK(externalBin.find("\"uri\":\"external_bin.bin\"") != std::string::npos);
+
+    // I2: a primitive with NO `indices` key at all -- the non-indexed shape.
+    const std::string nonindexed = text(FixtureDir() / "nonindexed.glb");
+    CHECK(nonindexed.find("\"indices\"") == std::string::npos);
+    CHECK(nonindexed.find("\"mode\":4") != std::string::npos);
 }

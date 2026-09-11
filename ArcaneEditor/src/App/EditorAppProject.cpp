@@ -708,7 +708,8 @@ namespace Arcane::Editor
                 // PLACEMENT IS LOAD-BEARING: this must run after BOTH invalidations
                 // just above, so MintOrUpdateCompanionMesh's own MeshArtifactFor read
                 // sees the artifact THIS cook just wrote rather than replaying the memo
-                // that call just dropped.
+                // that call just dropped. (The UP-TO-DATE half of the same mint runs
+                // in its own loop below, over result.upToDateGuids -- I3.)
                 if (const Arcane::Project* project = m_runtime->CurrentProject())
                 {
                     if (const auto mountPath = project->Registry().Resolve(guid))
@@ -779,6 +780,29 @@ namespace Arcane::Editor
             // PollAssetWatch's periodic trivial passes -- costs no rebuilds.
             if (!result.cookedGuids.empty())
                 m_assetModel.MarkAllDirty();
+
+            // Final-review fix I3 (2026-09-11): the companion mint ALSO runs over every
+            // Model-kind guid that was already UP TO DATE this pass -- cookedGuids UNION
+            // upToDateGuids. A project cooked headlessly by arccook before its first
+            // editor open, or a byte-identical second drop (same bytes -> same cook key
+            // -> the artifact already exists), reports upToDate and never reaches the
+            // loop above, so its .arcmesh was never minted until the source was touched.
+            // MintOrUpdateCompanionMesh's update arm is a no-op when the reconciled
+            // slots are unchanged (its own `r.slots == existingData->slots` return), so
+            // running it on every pass for an already-minted companion writes nothing
+            // -- idempotent by construction, which is what makes this safe on the
+            // steady-state periodic passes. NO invalidation here, deliberately: nothing
+            // changed on disk for an up-to-date guid, and the Assets memo it may hold
+            // (success or refusal) is still true. Kind-gated exactly like the loop above.
+            if (const Arcane::Project* project = m_runtime->CurrentProject())
+            {
+                for (const Arcane::Guid& guid : result.upToDateGuids)
+                {
+                    if (const auto mountPath = project->Registry().Resolve(guid))
+                        if (Arcane::Editor::AssetKindOf(*mountPath) == Arcane::Editor::AssetKind::Model)
+                            MintOrUpdateCompanionMesh(guid);
+                }
+            }
         }
 
         // Cook FAILURES -- CookSession's own vocabulary (corrupt source /
@@ -1752,6 +1776,13 @@ namespace Arcane::Editor
                          source->filename().string(), joined);
             }
 
+            // Final-review folded fix (ledger T15 minor): two DISTINCT glTF materials
+            // sharing one name resolve to ONE slot (A1 dedups slots by name), so the
+            // second would only ever mint an orphan sibling .arcmat nothing references.
+            // The first occurrence's answer stands for every later same-named one.
+            if (result.contains(material.name))
+                continue;
+
             // Step 1 (reuse-by-name): a hit means NOTHING is created here.
             const Arcane::Guid reused =
                 Arcane::Editor::FindReusableMeshMaterial(candidates, material.name);
@@ -1791,10 +1822,38 @@ namespace Arcane::Editor
                 }
                 else
                 {
-                    ARC_WARN("Arcane Editor: material '{}' in '{}' has a base-color texture "
-                             "that is not registered yet -- albedo left unset",
-                             material.name.empty() ? "(unnamed)" : material.name,
-                             source->filename().string());
+                    // Final-review fix I6 (2026-09-11): say what is TRUE. GuidForGltfImage
+                    // re-walks the byte-compare chain, so "no candidate" means no file on
+                    // disk under this image's name chain holds the EMBEDDED bytes -- the
+                    // common cause is the user having edited (or moved/renamed) the
+                    // extracted .png after Task 13 wrote it, which is a legitimate thing
+                    // to do and NOT a registration-lag condition. The earlier wording
+                    // ("not registered yet") sent the user to wait for a discovery sweep
+                    // that would never change the answer. DURABLE FOLLOW-UP (Plan 2 /
+                    // F4 scope, when the import-options UI lands): record each image's
+                    // extraction DESTINATION in the Model's own .meta at extraction time,
+                    // so this lookup resolves by recorded path rather than by re-matching
+                    // bytes that a user edit is allowed to change.
+                    const Arcane::AssetPipeline::GltfImage& image =
+                        survey.images[static_cast<std::size_t>(material.baseColorImage)];
+                    const std::string materialLabel = material.name.empty() ? "(unnamed)" : material.name;
+                    if (image.embedded)
+                    {
+                        ARC_WARN("Arcane Editor: material '{}' in '{}' -- base-color image '{}' has no "
+                                 "on-disk copy whose bytes match the embedded image (edited or moved?) "
+                                 "-- assign albedo by hand",
+                                 materialLabel, source->filename().string(),
+                                 image.name.empty() ? "(unnamed)" : image.name);
+                    }
+                    else
+                    {
+                        // An EXTERNAL image resolves by path, not bytes: the file the uri
+                        // names is not a registered asset (outside Content/, missing, or
+                        // not yet discovered) -- a different truth, stated as such.
+                        ARC_WARN("Arcane Editor: material '{}' in '{}' -- base-color image uri '{}' "
+                                 "does not resolve to a registered texture asset -- assign albedo by hand",
+                                 materialLabel, source->filename().string(), image.uri);
+                    }
                 }
             }
 

@@ -640,12 +640,16 @@ namespace Arcane
             // every EXTERNAL BUFFER's bytes, in glTF declaration order -- the exact
             // concatenation Task 5's ComputeMeshCookKey hashes and the pipeline's
             // MeshImporter.cpp (Step 7) writes into the artifact's sourceHash (see
-            // ArtifactReader.hpp's own MESH TAIL banner). Only a `.gltf` source carries
-            // external buffers at all -- a `.glb` embeds its buffer, so `sourceBytes` alone
-            // is already the complete hash input for one, same as a texture's .png; the
-            // extension check below is what keeps the common (.glb) case to reading one
-            // file, exactly as ArtifactReader.hpp's own "a .glb needs none of this" line
-            // promises.
+            // ArtifactReader.hpp's own MESH TAIL banner). EVERY EXTERNAL BUFFER, WHICHEVER
+            // CONTAINER (final-review fix I1): ReadClientExternalBuffers runs for BOTH
+            // mesh extensions -- a .glb's buffers[1..] may carry a `uri` exactly like a
+            // .gltf's (only buffer 0 is the BIN chunk), and the pipeline side
+            // (CookSession -> ReadExternalBuffers -> cgltf) hashes such a file as
+            // .glb ++ .bin. This used to be gated on `LowerExt(resolved) == ".gltf"` under
+            // the false premise that a .glb never references an external buffer; that
+            // gate made a legal .glb refuse HashMismatch permanently. The common case (a
+            // plain .glb, everything in its BIN chunk) still reads exactly one file: the
+            // reader finds an empty/absent uri list and appends nothing.
             MeshArtifactReadResult ResolveMeshArtifact(const Guid& id, const std::filesystem::path& resolved)
             {
                 if (m_contentRoot.empty())
@@ -663,15 +667,14 @@ namespace Arcane
                     reinterpret_cast<const std::byte*>(raw.data()),
                     reinterpret_cast<const std::byte*>(raw.data()) + raw.size());
 
-                if (LowerExt(resolved) == ".gltf")
                 {
-                    const std::span<const std::byte> gltfBytes(sourceBytes.data(), sourceBytes.size());
-                    if (const auto buffers = ReadClientExternalBuffers(gltfBytes, resolved))
+                    const std::span<const std::byte> fileBytes(sourceBytes.data(), sourceBytes.size());
+                    if (const auto buffers = ReadClientExternalBuffers(fileBytes, resolved))
                     {
                         for (const std::vector<std::byte>& buffer : *buffers)
                             sourceBytes.insert(sourceBytes.end(), buffer.begin(), buffer.end());
                     }
-                    // An unreadable/unparseable .gltf (nullopt) leaves `sourceBytes` at the
+                    // An unreadable/unparseable source (nullopt) leaves `sourceBytes` at the
                     // file's own bytes alone -- the resulting hash simply will not match any
                     // real artifact's sourceHash, surfacing as HashMismatch (or Missing, if
                     // the guid has no artifact at all) rather than a silent pass, mirroring

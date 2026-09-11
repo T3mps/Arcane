@@ -840,3 +840,72 @@ TEST_CASE("assets: MeshArtifactFor resolves a .gltf whose external buffer uri is
 
     fs::remove_all(project, ec);
 }
+
+// Final-review fix I1 (2026-09-11): a .glb whose buffers[1] carries a `uri`. The GLB
+// container only requires buffer 0 to be the BIN chunk -- any further buffer may reference
+// an external file exactly like a .gltf's, and the pipeline (CookSession ->
+// ReadExternalBuffers -> cgltf, which sniffs the container) hashes such a file as
+// .glb ++ .bin. Before the fix the client side (a) never even called
+// ReadClientExternalBuffers for a .glb (an extension gate in AssetsImpl::ResolveMeshArtifact,
+// built on the false premise "a .glb carries no external buffers") and (b) could not have
+// parsed one anyway (it JSON-parsed the RAW file bytes, and a GLB is not JSON) -- so it
+// hashed the .glb alone and this legal file refused HashMismatch permanently. Same
+// end-to-end shape as the percent-encoding case above: a REAL cook, then the facade.
+TEST_CASE("assets: MeshArtifactFor resolves a .glb whose second buffer references an "
+          "external .bin (the GLB container allows it; the pipeline hashes it)", "[assets][mesh]")
+{
+    namespace fs = std::filesystem;
+    const fs::path project = fs::temp_directory_path() / "arcane_assets_mesh_glb_external_bin";
+    std::error_code ec;
+    fs::remove_all(project, ec);
+    fs::create_directories(project / "Content" / "meshes", ec);
+
+    const fs::path glbFixture = fs::path("data") / "gltf" / "external_bin.glb";
+    const fs::path binFixture = fs::path("data") / "gltf" / "external_bin.bin";
+    REQUIRE(fs::exists(glbFixture));
+    REQUIRE(fs::exists(binFixture));
+
+    const fs::path glbPath = project / "Content" / "meshes" / "external_bin.glb";
+    fs::copy_file(glbFixture, glbPath, ec);
+    REQUIRE_FALSE(ec);
+    fs::copy_file(binFixture, project / "Content" / "meshes" / "external_bin.bin", ec);
+    REQUIRE_FALSE(ec);
+
+    const Arcane::Guid meshGuid = Arcane::Guid::Generate();
+    {
+        nlohmann::json meta;
+        meta["guid"] = meshGuid.ToString();
+        meta["version"] = 1;
+        fs::path metaPath = glbPath;
+        metaPath += ".meta";
+        std::ofstream out(metaPath, std::ios::binary | std::ios::trunc);
+        REQUIRE(out.good());
+        out << meta.dump(2);
+    }
+
+    // THE PIPELINE SIDE: the real cook. If this refuses, the FIXTURE is wrong (cgltf
+    // resolves buffers[1] through cgltf_load_buffers relative to the .glb's own dir).
+    Arcane::AssetPipeline::CookSession session;
+    const Arcane::AssetPipeline::CookResult result = session.CookProject(project);
+    REQUIRE(result.failed == 0u);
+    REQUIRE(result.cooked == 1u);
+
+    // THE CLIENT SIDE, under test: the facade must locate the JSON chunk INSIDE the GLB,
+    // read `buffers[1].uri`, append external_bin.bin's bytes, and hash-match the cook.
+    // Before the fix this returns null (HashMismatch: the .glb hashed alone).
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(project / "Content");
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value() == meshGuid) return glbPath;
+        return std::nullopt;
+    });
+
+    const Arcane::LoadedClientMesh* mesh = assets->MeshArtifactFor(meshGuid);
+    REQUIRE(mesh != nullptr);
+    CHECK(mesh->indices.size() == 6u);   // the two triangles the EXTERNAL buffer carried
+    REQUIRE(mesh->sections.size() == 1u);
+    CHECK(mesh->sections[0].name == "ExternalBinMat");
+
+    fs::remove_all(project, ec);
+}

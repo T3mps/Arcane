@@ -689,6 +689,14 @@ namespace Arcane::AssetPipeline
         {
             if (static_cast<std::uint64_t>(section.indexOffset) + section.indexCount > desc.indexCount)
                 return std::nullopt;
+            // SLOTINDEX BOUND (final-review fix, 2026-09-11; ArtifactFormat.hpp's banner): a
+            // slotIndex at or past sectionCount cannot occur in a well-formed artifact
+            // (every slot has >= 1 section, so max(slotIndex) + 1 <= sectionCount) and
+            // would size SlotNamesFromSections' table -- and the editor's companion slot
+            // array -- by a corrupt value. Refused, never clamped; the client reader
+            // applies the identical rule.
+            if (section.slotIndex >= desc.sectionCount)
+                return std::nullopt;
         }
         // The header's declared sectionCount must agree with what the SectionTable section
         // actually carried (or, if that section was absent entirely, with zero).

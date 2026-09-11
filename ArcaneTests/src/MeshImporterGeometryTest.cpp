@@ -325,3 +325,98 @@ TEST_CASE("mesh import: a mesh no scene node references refuses, not a silent em
     REQUIRE_FALSE(r.refusal.empty());
     CHECK(r.refusal.find("single.glb") != std::string::npos);
 }
+
+// ---- Final-review fix I2 (2026-09-11): primitive admission -----------------------------------
+
+TEST_CASE("mesh import: a NON-INDEXED triangle primitive imports (the implicit identity "
+          "index buffer), not refused as 'every triangle is degenerate'",
+          "[pipeline]")
+{
+    // nonindexed.glb: one mode-4 primitive, POSITION only, NO `indices` accessor, 6
+    // vertices drawn in order as 2 triangles, material "Flat". Legal glTF and common.
+    // Before the fix both rung 5 and the bake `continue`d on `prim.indices == nullptr`,
+    // so this file refused with the WRONG reason (a mixed file lost the geometry silently).
+    const MeshImportResult r = ImportFixture("nonindexed.glb");
+    REQUIRE(r.refusal.empty());
+    REQUIRE(r.mesh.has_value());
+    CHECK(r.warnings.empty());                // no degenerate, no skip, no partial
+    CHECK(r.mesh->indices.size() == 6u);      // 2 triangles, every corner emitted
+    CHECK(r.mesh->desc.indexCount == 6u);
+    REQUIRE(r.mesh->desc.sections.size() == 1u);
+    CHECK(r.mesh->desc.sections[0].name == "Flat");
+    CHECK(r.mesh->desc.sections[0].indexOffset == 0u);
+    CHECK(r.mesh->desc.sections[0].indexCount == 6u);
+    // No NORMAL -> the flat-normal branch duplicates per corner, then the remap dedupes
+    // the two bit-identical shared corners ((0,0,0) and (1,1,0) appear in both triangles
+    // with the same flat normal and the same (0,0) uv): 6 raw -> 4 unique.
+    CHECK(r.mesh->vertices.size() == 4u);
+    CHECK(r.mesh->desc.vertexCount == 4u);
+}
+
+TEST_CASE("mesh import: a non-triangle primitive mode is SKIPPED with one warning naming "
+          "it, and the surviving primitives still import",
+          "[pipeline]")
+{
+    // multi.glb's JSON chunk spells every primitive's mode explicitly ("mode":4, three
+    // times, primitive-major). Patching the FIRST occurrence to "mode":5 (triangle
+    // strip -- same byte length, so the GLB chunk lengths stay valid) turns primitive 0
+    // (Metal) into an unsupported mode while primitives 1 (Metal) and 2 (Paint) stay
+    // triangle lists. Before the fix primitive 0 was dropped SILENTLY; now it is skipped
+    // with exactly one warning naming the primitive and its mode, and the file imports
+    // with the two survivors.
+    std::vector<std::byte> bytes = ReadFixture("multi.glb");
+
+    const char* needle = "\"mode\":4";
+    const char* replacement = "\"mode\":5";
+    const std::size_t needleLen = std::strlen(needle);
+    REQUIRE(std::strlen(replacement) == needleLen);
+
+    const auto it = std::search(bytes.begin(), bytes.end(),
+                                 reinterpret_cast<const std::byte*>(needle),
+                                 reinterpret_cast<const std::byte*>(needle) + needleLen);
+    REQUIRE(it != bytes.end());   // the FIRST occurrence == primitive 0's own mode
+    std::copy(reinterpret_cast<const std::byte*>(replacement),
+              reinterpret_cast<const std::byte*>(replacement) + needleLen, it);
+
+    const auto buffers = ReadExternalBuffers(bytes, Fixture("multi.glb"));
+    std::vector<std::span<const std::byte>> spans;
+    if (buffers) for (const auto& b : *buffers) spans.emplace_back(b);
+    const MeshImportResult r =
+        ImportMesh(bytes, spans, Fixture("multi.glb"), Guid::Generate(), MeshMetaSettings{});
+
+    REQUIRE(r.refusal.empty());
+    REQUIRE(r.mesh.has_value());
+    // ONE warning, naming the primitive (its material name, "Metal", is PrimitiveLabel's
+    // first choice) and the mode it was skipped for.
+    REQUIRE(r.warnings.size() == 1u);
+    CHECK(r.warnings[0].find("Metal") != std::string::npos);
+    CHECK(r.warnings[0].find("skipped") != std::string::npos);
+    CHECK(r.warnings[0].find("mode 5") != std::string::npos);
+    // The two survivors: sections for primitive 1 (Metal) and primitive 2 (Paint), two
+    // slots, 12 indices (2 quads x 2 triangles x 3).
+    REQUIRE(r.mesh->desc.sections.size() == 2u);
+    CHECK(r.mesh->desc.sections[0].name == "Metal");
+    CHECK(r.mesh->desc.sections[1].name == "Paint");
+    CHECK(SlotNamesFromSections(r.mesh->desc.sections).size() == 2u);
+    CHECK(r.mesh->indices.size() == 12u);
+
+    // And the ALL-skipped refusal names the actual reason: patch the remaining two
+    // "mode":4 occurrences too and the file must refuse for its modes, not for
+    // "degenerate" triangles it never had.
+    for (int k = 0; k < 2; ++k)
+    {
+        const auto next = std::search(bytes.begin(), bytes.end(),
+                                       reinterpret_cast<const std::byte*>(needle),
+                                       reinterpret_cast<const std::byte*>(needle) + needleLen);
+        REQUIRE(next != bytes.end());
+        std::copy(reinterpret_cast<const std::byte*>(replacement),
+                  reinterpret_cast<const std::byte*>(replacement) + needleLen, next);
+    }
+    const MeshImportResult allSkipped =
+        ImportMesh(bytes, spans, Fixture("multi.glb"), Guid::Generate(), MeshMetaSettings{});
+    CHECK_FALSE(allSkipped.mesh.has_value());
+    REQUIRE_FALSE(allSkipped.refusal.empty());
+    CHECK(allSkipped.refusal.find("unsupported mode") != std::string::npos);
+    CHECK(allSkipped.refusal.find("3 skipped") != std::string::npos);   // one per primitive
+    CHECK(allSkipped.refusal.find("degenerate") == std::string::npos);
+}

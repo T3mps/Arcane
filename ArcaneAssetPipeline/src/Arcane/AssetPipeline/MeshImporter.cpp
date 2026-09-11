@@ -110,6 +110,52 @@ namespace Arcane::AssetPipeline
             return i0 == i1 || i1 == i2 || i0 == i2;
         }
 
+        // Final-review fix I2 (2026-09-11): NON-INDEXED primitives are legal glTF and common
+        // (a primitive with no `indices` accessor draws its POSITION accessor's vertices in
+        // order, three per triangle). Through Task 7 both the rung 5 gate and the bake
+        // `continue`d on `prim.indices == nullptr`, so a mixed file lost that geometry
+        // silently and a pure non-indexed file refused with the WRONG reason ("every
+        // triangle is degenerate"). The two helpers below are the ONE definition of "how
+        // many indices does this primitive have" and "what is index i" for BOTH passes, so
+        // they can never disagree about which triangles exist:
+        //   IndexCountOf -- the index accessor's count, or the POSITION accessor's count when
+        //                   there is no index accessor (the implicit identity index buffer);
+        //   ReadIndex    -- cgltf_accessor_read_index, or `i` itself when non-indexed.
+        // `posAcc` is the primitive's POSITION accessor (cgltf_validate, rung 4, requires one
+        // on every primitive; a null here is a defensive zero, never a crash).
+        cgltf_size IndexCountOf(const cgltf_primitive& prim, const cgltf_accessor* posAcc) noexcept
+        {
+            if (prim.indices != nullptr)
+                return prim.indices->count;
+            return posAcc != nullptr ? posAcc->count : 0;
+        }
+
+        cgltf_size ReadIndex(const cgltf_primitive& prim, cgltf_size i) noexcept
+        {
+            if (prim.indices != nullptr)
+                return cgltf_accessor_read_index(prim.indices, i);
+            return i;
+        }
+
+        // The glTF `mode` NUMBER for a cgltf primitive type (cgltf's own enum is offset by
+        // one and starts at `invalid`, so the enumerator's integer value is NOT the glTF
+        // mode) plus its spec name -- for the skipped-primitive warning below, which names
+        // the mode the way the file's author wrote it.
+        std::string PrimitiveModeLabel(cgltf_primitive_type type)
+        {
+            switch (type)
+            {
+                case cgltf_primitive_type_points:         return "0 (points)";
+                case cgltf_primitive_type_lines:          return "1 (lines)";
+                case cgltf_primitive_type_line_loop:      return "2 (line_loop)";
+                case cgltf_primitive_type_line_strip:     return "3 (line_strip)";
+                case cgltf_primitive_type_triangles:      return "4 (triangles)";
+                case cgltf_primitive_type_triangle_strip: return "5 (triangle_strip)";
+                case cgltf_primitive_type_triangle_fan:   return "6 (triangle_fan)";
+                default:                                  return "invalid";
+            }
+        }
+
         // Task 7 -- geometry bake helpers ------------------------------------------------------
 
         // Section name (A1): the primitive's material name, or EMPTY when absent. Distinct from
@@ -273,6 +319,8 @@ namespace Arcane::AssetPipeline
         std::vector<std::string> warnings;
         std::uint64_t survivingTrianglesTotal = 0;
         std::size_t flatPrimitiveIndex = 0;
+        std::size_t admittedPrimitives = 0;   // triangle-mode primitives this gate examined
+        std::size_t skippedPrimitives = 0;    // non-triangle-mode primitives, WARNED and skipped
 
         for (cgltf_size meshIdx = 0; meshIdx < guard.data->meshes_count; ++meshIdx)
         {
@@ -281,24 +329,46 @@ namespace Arcane::AssetPipeline
             {
                 const cgltf_primitive& prim = mesh.primitives[primIdx];
 
-                // Only triangle-list primitives carry the "triangle" notion this gate and
-                // the degenerate-drop rule both operate on; every fixture in the corpus is
-                // mode 4 (triangles) with an index accessor. A primitive with no index
-                // accessor or a non-triangles mode contributes zero triangles to the
-                // file-wide surviving count rather than being read out of bounds.
-                if (prim.indices == nullptr || prim.type != cgltf_primitive_type_triangles)
+                // Only triangle-LIST primitives (mode 4) carry the "triangle" notion this
+                // gate and the degenerate-drop rule both operate on. Final-review fix I2: a
+                // strip/fan/points/lines primitive is SKIPPED WITH ONE WARNING naming it and
+                // its mode -- never silently (a mixed file used to lose that geometry with
+                // no diagnostic at all). Converting strips/fans to lists is a future
+                // extension, not this importer's; the warning is what makes the gap visible.
+                if (prim.type != cgltf_primitive_type_triangles)
+                {
+                    ++skippedPrimitives;
+                    warnings.push_back(PrimitiveLabel(prim, flatPrimitiveIndex) + ": skipped -- primitive mode "
+                        + PrimitiveModeLabel(prim.type) + " unsupported (only mode 4, triangles, imports)");
                     continue;
+                }
+                ++admittedPrimitives;
 
-                const cgltf_accessor& indices = *prim.indices;
-                const cgltf_size triangleCount = indices.count / 3;
+                // I2: a NON-INDEXED triangle primitive (no `indices` accessor) is legal and
+                // imports -- IndexCountOf/ReadIndex (above) make the implicit identity index
+                // buffer look exactly like an authored one to this pass and to the bake.
+                const cgltf_accessor* posAcc = cgltf_find_accessor(&prim, cgltf_attribute_type_position, 0);
+                const cgltf_size indexCount = IndexCountOf(prim, posAcc);
+                const cgltf_size triangleCount = indexCount / 3;
+
+                // Ledger T6-13: an index count that is not a multiple of 3 has a trailing
+                // partial triangle (one or two dangling indices). Dropped WITH a warning --
+                // the `/ 3` above already never reads it; this names it so the drop is not
+                // silent.
+                if (indexCount % 3 != 0)
+                {
+                    warnings.push_back(PrimitiveLabel(prim, flatPrimitiveIndex) + ": index count "
+                        + std::to_string(indexCount) + " is not a multiple of 3 -- dropped the trailing "
+                        + std::to_string(indexCount % 3) + " dangling index(es) (partial triangle)");
+                }
 
                 cgltf_size droppedInPrimitive = 0;
                 cgltf_size survivingInPrimitive = 0;
                 for (cgltf_size t = 0; t < triangleCount; ++t)
                 {
-                    const cgltf_size i0 = cgltf_accessor_read_index(&indices, t * 3 + 0);
-                    const cgltf_size i1 = cgltf_accessor_read_index(&indices, t * 3 + 1);
-                    const cgltf_size i2 = cgltf_accessor_read_index(&indices, t * 3 + 2);
+                    const cgltf_size i0 = ReadIndex(prim, t * 3 + 0);
+                    const cgltf_size i1 = ReadIndex(prim, t * 3 + 1);
+                    const cgltf_size i2 = ReadIndex(prim, t * 3 + 2);
 
                     // Degenerate (zero area) -- dropped, never refused, per primitive.
                     if (IsDegenerateTriangleIndices(i0, i1, i2))
@@ -319,11 +389,27 @@ namespace Arcane::AssetPipeline
         }
 
         // The count is per FILE, not per primitive: one all-degenerate primitive beside a
-        // healthy one is a warning (already pushed above), not a refusal.
+        // healthy one is a warning (already pushed above), not a refusal. I2: the refusal
+        // names the ACTUAL reason -- a file whose primitives were ALL skipped for their mode
+        // says so, rather than being blamed for degenerate triangles it never had.
         if (survivingTrianglesTotal == 0)
         {
-            result.refusal = "mesh import refused: '" + fileName
-                + "' has nothing drawable (every triangle is degenerate)";
+            if (admittedPrimitives == 0 && skippedPrimitives > 0)
+            {
+                result.refusal = "mesh import refused: '" + fileName
+                    + "' has nothing drawable (every primitive uses an unsupported mode -- only mode 4, "
+                      "triangles, imports; " + std::to_string(skippedPrimitives) + " skipped)";
+            }
+            else if (admittedPrimitives == 0)
+            {
+                result.refusal = "mesh import refused: '" + fileName
+                    + "' has nothing drawable (meshes exist but declare no primitives)";
+            }
+            else
+            {
+                result.refusal = "mesh import refused: '" + fileName
+                    + "' has nothing drawable (every triangle is degenerate)";
+            }
             return result;
         }
 
@@ -366,9 +452,11 @@ namespace Arcane::AssetPipeline
             for (cgltf_size primIdx = 0; primIdx < meshPtr->primitives_count; ++primIdx)
             {
                 const cgltf_primitive& prim = meshPtr->primitives[primIdx];
-                // Same admission rule as the rung 5 gate above: only triangle-list primitives
-                // with an index accessor are bakeable.
-                if (prim.indices == nullptr || prim.type != cgltf_primitive_type_triangles)
+                // Same admission rule as the rung 5 gate above: only triangle-LIST primitives
+                // are bakeable (a non-triangle mode was already WARNED there -- I2 -- so this
+                // skip is silent by design, not a second diagnostic). Indexed OR non-indexed:
+                // IndexCountOf/ReadIndex below make the two look identical to the bake.
+                if (prim.type != cgltf_primitive_type_triangles)
                     continue;
 
                 const cgltf_accessor* posAcc = cgltf_find_accessor(&prim, cgltf_attribute_type_position, 0);
@@ -388,7 +476,9 @@ namespace Arcane::AssetPipeline
 
                 const std::string sectionName = PrimitiveMaterialName(prim);   // empty when absent
                 const std::uint32_t sectionIndexOffset = static_cast<std::uint32_t>(rawIndices.size());
-                const cgltf_size triangleCount = prim.indices->count / 3;
+                // `/ 3` drops a trailing partial triangle here exactly as rung 5 did (and
+                // WARNED about -- ledger T6-13), so the two passes agree on the triangle set.
+                const cgltf_size triangleCount = IndexCountOf(prim, posAcc) / 3;
 
                 if (nrmAcc != nullptr)
                 {
@@ -418,9 +508,9 @@ namespace Arcane::AssetPipeline
 
                     for (cgltf_size t = 0; t < triangleCount; ++t)
                     {
-                        const cgltf_size a0 = cgltf_accessor_read_index(prim.indices, t * 3 + 0);
-                        const cgltf_size a1 = cgltf_accessor_read_index(prim.indices, t * 3 + 1);
-                        const cgltf_size a2 = cgltf_accessor_read_index(prim.indices, t * 3 + 2);
+                        const cgltf_size a0 = ReadIndex(prim, t * 3 + 0);
+                        const cgltf_size a1 = ReadIndex(prim, t * 3 + 1);
+                        const cgltf_size a2 = ReadIndex(prim, t * 3 + 2);
                         if (IsDegenerateTriangleIndices(a0, a1, a2))
                             continue;   // already WARNED by the rung 5 pass above -- dropped
                                         // here, never refused (A2 part 2).
@@ -456,9 +546,9 @@ namespace Arcane::AssetPipeline
                     // it dedupes shared edges ACROSS primitives.
                     for (cgltf_size t = 0; t < triangleCount; ++t)
                     {
-                        const cgltf_size a0 = cgltf_accessor_read_index(prim.indices, t * 3 + 0);
-                        const cgltf_size a1 = cgltf_accessor_read_index(prim.indices, t * 3 + 1);
-                        const cgltf_size a2 = cgltf_accessor_read_index(prim.indices, t * 3 + 2);
+                        const cgltf_size a0 = ReadIndex(prim, t * 3 + 0);
+                        const cgltf_size a1 = ReadIndex(prim, t * 3 + 1);
+                        const cgltf_size a2 = ReadIndex(prim, t * 3 + 2);
                         if (IsDegenerateTriangleIndices(a0, a1, a2))
                             continue;
 

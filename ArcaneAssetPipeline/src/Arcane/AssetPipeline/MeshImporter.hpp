@@ -17,8 +17,9 @@
 //   3. cgltf_load_buffers fails              -> refuse, naming the missing buffer
 //   4. cgltf_validate fails                  -> refuse. MANDATORY -- the CVE the
 //                                                vendor pin exists for (s4.5/s10)
-//   5. nothing drawable (no meshes, or       -> refuse, naming the file (s4.5;
-//      every triangle degenerate FILE-wide)     UE's Error_NoPolygonFoundInMesh tier)
+//   5. nothing drawable (no meshes, every    -> refuse, naming the file AND the actual
+//      primitive skipped for its mode, or       reason (s4.5; UE's
+//      every triangle degenerate FILE-wide)     Error_NoPolygonFoundInMesh tier)
 // A degenerate triangle inside an otherwise valid primitive is NOT a refusal: it is
 // dropped with one warning naming its primitive (A2 part 2 -- the case an
 // implementer actually meets; refusing a 50k-triangle prop over three bad faces is
@@ -26,6 +27,18 @@
 // vertex/index bake (`ImportedMesh`) over these same cases -- `mesh` is now set
 // whenever `refusal` is empty (see ImportMesh's own comment below for the bake
 // pipeline: flatten, bake, winding flip, sections/slots, remap/optimize, AABB).
+//
+// PRIMITIVE ADMISSION (final-review fix I2, 2026-09-11): a primitive imports iff its
+// mode is 4 (triangles) -- INDEXED OR NOT. A primitive with no `indices` accessor is
+// legal glTF (its POSITION accessor's vertices are drawn in order, three per
+// triangle) and imports through the same code path as an indexed one (the file-local
+// IndexCountOf/ReadIndex pair in MeshImporter.cpp; an earlier version `continue`d on it
+// and silently lost the geometry). Every OTHER mode (points, lines, line_loop,
+// line_strip, triangle_strip, triangle_fan) is SKIPPED WITH ONE WARNING naming the
+// primitive and its mode -- never silently -- and a file whose primitives were ALL
+// skipped refuses saying exactly that. An index count that is not a multiple of 3 drops
+// its trailing partial triangle WITH a warning (ledger T6-13). `warnings` therefore
+// carries three vocabularies: dropped degenerates, skipped-for-mode, dropped partial.
 
 #include <cstddef>
 #include <cstdint>
@@ -52,7 +65,9 @@ namespace Arcane::AssetPipeline
     {
         std::optional<ImportedMesh> mesh;        // set iff refusal.empty()
         std::string                 refusal;     // human-readable; non-empty == refused
-        std::vector<std::string>    warnings;    // s4.5 tier 2 -- dropped degenerates
+        std::vector<std::string>    warnings;    // s4.5 tier 2 -- dropped degenerates,
+                                                 // skipped-for-mode primitives, dropped
+                                                 // partial triangles (this file's banner)
     };
 
     // Parses `sourceBytes` as glTF or GLB (cgltf sniffs the container) and imports it.

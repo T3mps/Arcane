@@ -32,8 +32,9 @@
 //     sourceHash        u64  (FNV-1a 64 over the RAW SOURCE bytes -- see HashSourceBytes
 //                              below; TextureImporter.cpp/MeshImporter's own hash computes
 //                              the SAME fingerprint when it writes an artifact's header.
-//                              For a .gltf mesh source with external buffers,
-//                              `currentSourceBytes` is the .gltf file's own bytes FOLLOWED
+//                              For a mesh source with external buffers (a .gltf, OR a
+//                              .glb whose buffers[1..] carry a `uri` -- I1),
+//                              `currentSourceBytes` is the source file's own bytes FOLLOWED
 //                              BY every referenced buffer's bytes, in glTF declaration
 //                              order -- the exact concatenation ComputeMeshCookKey hashes
 //                              (Task 5), so both sides agree by construction.)
@@ -94,6 +95,13 @@
 //     SectionTable entries actually decoded (zero, if the SectionTable section itself was
 //     absent) -- a mismatch is refused (Missing), the same "declared must match decoded"
 //     discipline the count-agreement rule below applies to vertices/indices.
+//     SLOTINDEX BOUND (final-review fix, 2026-09-11): every decoded section's slotIndex
+//     must be < the header's sectionCount. True by construction for any well-formed
+//     artifact (every slot has at least one section pointing at it, so max(slotIndex)+1
+//     <= sectionCount); a file violating it is corrupt and would size the editor's
+//     SlotNamesFromSections mirror (MeshImportWave.cpp) by an attacker-controlled index.
+//     Refused (Missing), never clamped -- the pipeline's ReadMeshArtifact applies the
+//     identical rule (ArtifactFormat.hpp's banner states it as a shared rule).
 //     The header's declared vertexCount/indexCount must agree with what was actually
 //     DECODED: a file declaring nonzero counts but omitting the VertexData and/or
 //     IndexData section entirely is refused (Missing) rather than accepted with nonzero
@@ -377,17 +385,27 @@ namespace Arcane
     // then read every other referenced file, relative to the source's own directory, in
     // array order.
     //
-    // A .glb needs NONE of this -- it carries no external buffers, so the one caller
-    // (AssetsImpl::ResolveMeshArtifact) never invokes this function for one; `sourceBytes`
-    // alone is already the complete hash input for a .glb, same as a texture's .png.
+    // EVERY EXTERNAL BUFFER, WHICHEVER CONTAINER (final-review fix I1, 2026-09-11): this
+    // is called for BOTH mesh extensions. A .glb is NOT exempt -- the GLB container only
+    // requires buffer 0 to be the BIN chunk; buffers[1..] may carry a `uri` exactly like a
+    // .gltf's, and the pipeline peer (cgltf_parse sniffs the container, then reads
+    // `buffers[].uri` identically) hashes such a file as .glb ++ .bin. So this function is
+    // CONTAINER-AWARE: when `sourceBytes` starts with the "glTF" magic it reads the 12-byte
+    // GLB header (version must be 2), then chunk 0's header (type must be "JSON",
+    // 0x4E4F534A) and parses THAT chunk's slice as the JSON document; otherwise the whole
+    // file is the document. Every header read is bounds-checked; a malformed GLB is nullopt.
+    // (This paragraph used to say "a .glb carries no external buffers" and the caller gated
+    // on the .gltf extension -- a legal .glb with a `uri` buffer refused HashMismatch
+    // forever; that rule was wrong and is retired.)
     //
-    // nullopt on a source that does not even parse as JSON, or a referenced buffer file
-    // that cannot be read -- both collapse into the SAME "this candidate's currentSourceBytes
-    // could not be built" outcome its caller turns into a hash that will not match any real
-    // artifact (surfacing as HashMismatch or Missing, never a silent pass -- see
-    // ResolveArtifact's own "an unreadable source reads as empty" comment for the texture
-    // path's identical posture). An empty (or absent) "buffers" array is NOT a failure --
-    // zero external buffers is the common .gltf-with-everything-embedded case.
+    // nullopt on a source that does not even parse as JSON (or whose GLB container is
+    // malformed), or a referenced buffer file that cannot be read -- both collapse into the
+    // SAME "this candidate's currentSourceBytes could not be built" outcome its caller turns
+    // into a hash that will not match any real artifact (surfacing as HashMismatch or
+    // Missing, never a silent pass -- see ResolveArtifact's own "an unreadable source reads
+    // as empty" comment for the texture path's identical posture). An empty (or absent)
+    // "buffers" array is NOT a failure -- zero external buffers is the common everything-
+    // embedded case (a plain .glb, or a .gltf with data: URIs).
     [[nodiscard]] std::optional<std::vector<std::vector<std::byte>>> ReadClientExternalBuffers(
         std::span<const std::byte> sourceBytes, const std::filesystem::path& sourcePath);
 }

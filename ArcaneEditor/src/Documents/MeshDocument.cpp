@@ -45,6 +45,7 @@ namespace Arcane::Editor
                 case Arcane::MeshSource::UvSphere: return "UV Sphere";
                 case Arcane::MeshSource::Cylinder: return "Cylinder";
                 case Arcane::MeshSource::Capsule:  return "Capsule";
+                case Arcane::MeshSource::Imported: return "Imported";   // I4: F2c's companion .arcmesh
             }
             return "Unknown";   // unreachable for a well-formed enum value; never refuses a draw
         }
@@ -152,6 +153,24 @@ namespace Arcane::Editor
             m_anchor, std::move(label), before, m_data));
     }
 
+    void MeshDocument::ClearPrimarySlotMaterial(Arcane::MeshAssetData& data)
+    {
+        if (data.slots.empty())
+            return;
+        if (data.source == Arcane::MeshSource::Imported)
+        {
+            // Keep the slot, drop the assignment -- see the declaration
+            // (MeshDocument.hpp) for the positional-correspondence rule.
+            data.slots[0].material = Arcane::Guid{};
+            return;
+        }
+        // Erase, not nil-out: an unnamed slot with a nil material is a
+        // different (and here, unreachable-through-this-picker) state from
+        // "no slot at all" -- the same "nil legacy material yields NO slot"
+        // rule MeshAsset.cpp's loader applies.
+        data.slots.erase(data.slots.begin());
+    }
+
     void MeshDocument::RebuildPreviewMesh()
     {
         // Independent calls, deliberately: BuildMeshData already returns
@@ -160,7 +179,16 @@ namespace Arcane::Editor
         // the panel needs both -- "no geometry" (PreviewMesh) and "here is
         // why" (ValidationReason) are two different things a caller reads.
         m_validationReason = Arcane::ValidateMeshAsset(m_data);
-        m_previewMesh = Arcane::BuildMeshData(m_data);
+        // I4: an IMPORTED mesh has no procedural geometry to preview --
+        // BuildMeshData's Imported arm is "wrong function, ask ResolveMeshData"
+        // and ARC_WARNs to say so, which every edit gesture in this document
+        // would otherwise trigger. Its geometry is the cooked artifact's,
+        // resolved through the scene (Plan 2's residency) -- the panel says
+        // exactly that in place of the preview. The validator still runs above
+        // (a nil importedSource is a real, reportable refusal).
+        m_previewMesh = (m_data.source == Arcane::MeshSource::Imported)
+            ? std::nullopt
+            : Arcane::BuildMeshData(m_data);
         // The ONE place the preview's inputs move, so the ONE place that owes
         // the redraw flag -- see m_previewDirty (MeshDocument.hpp) for why a
         // static image must not re-record a frame every Tick.
@@ -392,6 +420,7 @@ namespace Arcane::Editor
         // clean cleared image rather than garbage -- but this document shows
         // the REASON over that image regardless, because a clean blank
         // picture answers "what" and not "why".
+        const bool imported = (m_data.source == Arcane::MeshSource::Imported);
         ImGui::BeginChild("##meshpreview", ImVec2(0.0f, 220.0f), ImGuiChildFlags_Borders);
         const std::uint64_t texId = PreviewTextureId();
         if (m_validationReason)
@@ -403,6 +432,15 @@ namespace Arcane::Editor
             ImGui::PushTextWrapPos(0.0f);
             ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.35f, 1.0f), "%s", m_validationReason->c_str());
             ImGui::PopTextWrapPos();
+        }
+        else if (imported)
+        {
+            // I4: no procedural preview for an imported mesh (RebuildPreviewMesh
+            // never builds one) -- its geometry is the cooked artifact's, drawn
+            // by the scene. Checked BEFORE the texture id for the same reason
+            // the validation reason is: a device-backed session has a non-zero
+            // id from construction, holding only a cleared frame here.
+            ImGui::TextDisabled("(imported mesh -- preview in the viewport)");
         }
         else if (texId != 0)
         {
@@ -466,11 +504,27 @@ namespace Arcane::Editor
         };
 
         // ---- source ---------------------------------------------------------
+        // I4: an IMPORTED mesh's source is not a choice -- it IS its model
+        // (importedSource), and the five generated sources below would be a
+        // silent way to detach a companion from the artifact it mirrors. The
+        // combo is replaced by a read-only line naming the model; the
+        // generated table (kSources) deliberately does NOT carry Imported, so
+        // there is no arm through which a generated mesh could be flipped to
+        // Imported by hand either.
         static constexpr Arcane::MeshSource kSources[] = {
             Arcane::MeshSource::Plane, Arcane::MeshSource::Cube, Arcane::MeshSource::UvSphere,
             Arcane::MeshSource::Cylinder, Arcane::MeshSource::Capsule,
         };
-        if (ImGui::BeginCombo("Source", SourceLabel(m_data.source)))
+        if (imported)
+        {
+            std::string model = m_data.importedSource.ToString();
+            if (m_services.runtime)
+                if (const Arcane::Project* project = m_services.runtime->CurrentProject())
+                    if (const auto mount = project->Registry().Resolve(m_data.importedSource))
+                        model = *mount;
+            ImGui::TextDisabled("Source: Imported (from %s)", model.c_str());
+        }
+        else if (ImGui::BeginCombo("Source", SourceLabel(m_data.source)))
         {
             for (Arcane::MeshSource s : kSources)
             {
@@ -541,6 +595,12 @@ namespace Arcane::Editor
                 changed |= dragUint("Segments", m_data.segments, 3.0, 128.0);
                 changed |= dragFloatField("Length Ratio", m_data.capsuleLengthRatio, 0.02f, 1.0, 20.0);
                 break;
+            case Arcane::MeshSource::Imported:
+                // I4: rings/segments/subdivisions/capsuleLengthRatio mean nothing
+                // to a cooked-artifact source (ValidateMeshAsset's own Imported
+                // arm reads only importedSource) -- no topology widgets at all.
+                ImGui::TextDisabled("(imported mesh -- topology comes from the cooked artifact)");
+                break;
         }
         if (changed)
         {
@@ -552,11 +612,12 @@ namespace Arcane::Editor
         // F2c Task 10: the F2a scalar `material` retired into `slots[]`. This
         // picker deliberately operates on slots[0] ONLY -- the same
         // single-material UX F2a had, now expressed through the array: create
-        // one unnamed slot on first assignment, erase it on clear. A per-slot
-        // list UI (so an imported mesh's second, third, ... slot can be
-        // assigned here too) is NOT in either F2c plan; until it exists, an
-        // imported mesh's extra slots are editable by hand in the .arcmesh
-        // JSON only.
+        // one unnamed slot on first assignment, erase it on clear (for a
+        // GENERATED mesh; an IMPORTED mesh's clear nils the assignment and
+        // keeps the slot -- ClearPrimarySlotMaterial, I4). A per-slot list UI
+        // (so an imported mesh's second, third, ... slot can be assigned here
+        // too) is NOT in either F2c plan; until it exists, an imported mesh's
+        // extra slots are editable by hand in the .arcmesh JSON only.
         ImGui::Separator();
         ImGui::TextUnformatted("Material");
         ImGui::SameLine();
@@ -599,11 +660,10 @@ namespace Arcane::Editor
             if (ImGui::SmallButton("x##clearmaterial"))
             {
                 const Arcane::MeshAssetData before = m_data;
-                // Erase, not nil-out: an unnamed slot with a nil material is a
-                // different (and here, unreachable-through-this-picker) state
-                // from "no slot at all" -- the same "nil legacy material yields
-                // NO slot" rule MeshAsset.cpp's loader applies.
-                m_data.slots.erase(m_data.slots.begin());
+                // The rule lives in ClearPrimarySlotMaterial (pure, pinned by the
+                // headless units): erase for a generated mesh, nil-out-and-keep
+                // for an imported one -- see its declaration for why.
+                ClearPrimarySlotMaterial(m_data);
                 commit("Clear Material", before);
             }
         }

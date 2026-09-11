@@ -296,6 +296,74 @@ TEST_CASE("mesh artifact: a header declaring nonzero counts with the VertexData 
     CHECK_FALSE(ReadMeshArtifact(path).has_value());
 }
 
+TEST_CASE("mesh artifact: a section whose slotIndex is >= sectionCount is refused "
+          "(the SLOTINDEX BOUND)", "[pipeline]")
+{
+    // Final-review fix (2026-09-11), hand-rolled against the DOCUMENTED layout like the
+    // missing-VertexData case above: a well-formed file EXCEPT that its one section
+    // claims slotIndex 7 against sectionCount 1. Impossible for a well-formed artifact
+    // (every slot has >= 1 section, so max(slotIndex) + 1 <= sectionCount); left
+    // unchecked it would size SlotNamesFromSections' table -- and the editor's
+    // companion slot array -- by a corrupt value. Every OTHER check passes, so this pins
+    // the refusal to the bound itself.
+    const fs::path dir = TempDir("mesh_slotindex_bound");
+    const fs::path path = dir / "slotindex_bound.arcart";
+
+    constexpr std::uint32_t kVertexCount = 3;
+    constexpr std::uint32_t kIndexCount = 3;
+    constexpr std::uint32_t kSectionCount = 1;
+
+    std::vector<std::byte> vertexDataBody;
+    for (std::uint32_t v = 0; v < kVertexCount; ++v)
+        for (int f = 0; f < 8; ++f)
+            PutF32(vertexDataBody, 0.0f);
+
+    std::vector<std::byte> indexDataBody;
+    PutU32(indexDataBody, 0); PutU32(indexDataBody, 1); PutU32(indexDataBody, 2);
+
+    std::vector<std::byte> sectionTableBody;
+    PutU32(sectionTableBody, 1);   // 1 section record
+    PutU16(sectionTableBody, 0);   // name length 0
+    PutU32(sectionTableBody, 0);   // indexOffset
+    PutU32(sectionTableBody, 3);   // indexCount -- in range
+    PutU32(sectionTableBody, 7);   // slotIndex 7 >= sectionCount 1 -- THE corruption
+
+    std::vector<std::byte> file = EncodeMeshHeader(/*artifactVersion*/ 1, kVertexCount, kIndexCount, kSectionCount);
+
+    constexpr std::uint32_t kContainerSectionCount = 3;
+    const std::uint64_t headerSize = file.size();
+    const std::uint64_t tableSize = 4 + kContainerSectionCount * 20ULL;
+    std::uint64_t offset = headerSize + tableSize;
+
+    const std::uint64_t vertexOffset = offset; offset += vertexDataBody.size();
+    const std::uint64_t indexOffset  = offset; offset += indexDataBody.size();
+    const std::uint64_t sectionTableOffset = offset; offset += sectionTableBody.size();
+
+    PutU32(file, kContainerSectionCount);
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::VertexData));   PutU64(file, vertexOffset);       PutU64(file, vertexDataBody.size());
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::IndexData));    PutU64(file, indexOffset);        PutU64(file, indexDataBody.size());
+    PutU32(file, static_cast<std::uint32_t>(SectionTag::SectionTable)); PutU64(file, sectionTableOffset); PutU64(file, sectionTableBody.size());
+
+    REQUIRE(file.size() == headerSize + tableSize);
+
+    PutBytes(file, vertexDataBody);
+    PutBytes(file, indexDataBody);
+    PutBytes(file, sectionTableBody);
+
+    WriteFile(path, file);
+    CHECK_FALSE(ReadMeshArtifact(path).has_value());
+
+    // Control: the SAME bytes with slotIndex 0 load -- so the refusal above is the bound,
+    // not some other malformed byte in this hand-rolled encoding.
+    const std::size_t slotIndexAt = static_cast<std::size_t>(sectionTableOffset) + 4 + 2 + 4 + 4;
+    REQUIRE(slotIndexAt + 4 <= file.size());
+    for (int i = 0; i < 4; ++i) file[slotIndexAt + static_cast<std::size_t>(i)] = std::byte{ 0 };
+    WriteFile(path, file);
+    const auto control = ReadMeshArtifact(path);
+    REQUIRE(control.has_value());
+    CHECK(control->desc.sections[0].slotIndex == 0u);
+}
+
 // ---- forward-compat ------------------------------------------------------------------------
 
 TEST_CASE("mesh artifact: an unrecognised section tag is skipped, not fatal",

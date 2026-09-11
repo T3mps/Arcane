@@ -18,11 +18,22 @@
 // BYTE-CONTRACT PEER (F2b Task 6): ArcaneClient/src/Arcane/Assets/ArtifactReader.hpp/.cpp
 // mirrors BOTH pairs by hand -- a DELIBERATE, INDEPENDENT reimplementation, not a shared
 // consumer of this header (ArcaneClient must never link/include ArcaneAssetPipeline). It
-// currently mirrors only the texture pair; F2c Task 4 lands the mesh half. The two sides stay
-// byte-compatible ONLY by both following this written contract by hand; a layout change to
-// EITHER pair must be mirrored there, or ArtifactReaderTest.cpp's cross-lib round-trip case
-// (fixtures written through THIS file's writers, read back through that file's readers) fails
-// loudly.
+// mirrors the texture pair (ReadClientArtifact, F2b) AND the mesh pair (ReadClientMeshArtifact,
+// F2c Task 4). The two sides stay byte-compatible ONLY by both following this written contract
+// by hand; a layout change to EITHER pair must be mirrored there, or the cross-lib round-trip
+// cases (ArtifactReaderTest.cpp for Texture, MeshArtifactReaderTest.cpp for Mesh -- fixtures
+// written through THIS file's writers, read back through that file's readers) fail loudly.
+//
+// MESH READER VALIDATION RULES shared by BOTH readers, restated here so neither side drifts
+// (ReadMeshArtifact below; ReadClientMeshArtifact on the client): indexWidth == 4;
+// every section's indexOffset + indexCount <= indexCount (SECTION-RANGE); decoded
+// SectionTable entries == declared sectionCount; decoded vertices/indices == declared
+// counts (an ABSENT body disagrees maximally); and -- final-review fix, 2026-09-11 -- every
+// section's slotIndex < sectionCount (SLOTINDEX BOUND: true by construction, since every
+// slot has at least one section pointing at it, so max(slotIndex) + 1 <= sectionCount; a
+// file violating it is corrupt and would hand SlotNamesFromSections / the editor's companion
+// mint a slot table sized by an attacker-controlled index). Each is refused with nullopt
+// (pipeline) / Missing (client), never clamped.
 
 #include <cstddef>
 #include <cstdint>
@@ -246,6 +257,8 @@ namespace Arcane::AssetPipeline
     // omits the VertexData and/or IndexData section entirely is refused rather than returned
     // with nonzero declared counts paired with empty arrays -- an absent body disagrees with
     // its declared count maximally, the same class of corruption a truncated section is.
+    // A section whose slotIndex >= sectionCount is refused too (the SLOTINDEX BOUND in this
+    // file's banner -- the client reader applies the identical rule).
     [[nodiscard]] std::optional<LoadedMeshArtifact> ReadMeshArtifact(
         const std::filesystem::path& path);
 
