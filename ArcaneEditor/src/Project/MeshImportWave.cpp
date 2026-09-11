@@ -2,6 +2,7 @@
 
 #include <Arcane/AssetPipeline/GltfSurvey.hpp>
 
+#include <cstdint>
 #include <fstream>
 #include <optional>
 
@@ -184,5 +185,97 @@ namespace Arcane::Editor
         }
 
         return written;
+    }
+
+    // Mirrors AssetPipeline::SlotNamesFromSections (ArtifactFormat.cpp) field for field,
+    // over MeshSectionView instead of MeshArtifactSection -- see this function's own
+    // header-comment banner for why the pipeline's own answer is not reachable here.
+    std::vector<std::string> SlotNamesFromSections(const std::vector<Arcane::MeshSectionView>& sections)
+    {
+        bool any = false;
+        std::uint32_t maxSlot = 0;
+        for (const Arcane::MeshSectionView& s : sections)
+        {
+            any = true;
+            if (s.slotIndex > maxSlot) maxSlot = s.slotIndex;
+        }
+        if (!any) return {};
+
+        // Dedup BY NAME (A1): the first section that points at a given slot names it;
+        // every later section pointing at the same slot agrees by construction.
+        std::vector<std::string> names(static_cast<std::size_t>(maxSlot) + 1);
+        std::vector<bool> filled(names.size(), false);
+        for (const Arcane::MeshSectionView& s : sections)
+        {
+            if (!filled[s.slotIndex])
+            {
+                names[s.slotIndex] = s.name;
+                filled[s.slotIndex] = true;
+            }
+        }
+        return names;
+    }
+
+    SlotReconciliation ReconcileSlots(const std::vector<Arcane::MeshSlot>& existing,
+                                       const std::vector<std::string>& authoritative)
+    {
+        SlotReconciliation result;
+        result.slots.reserve(authoritative.size() + existing.size());
+
+        // OURS (see this function's own declaration comment): consumed[i] tracks which
+        // `existing` entries a PRIOR authoritative name has already claimed, so a later
+        // authoritative name sharing that spelling cannot re-bind to the same existing
+        // slot. UE's own matcher (FbxStaticMeshImport.cpp:1964-1970) never does this --
+        // it breaks on the first match and leaves the candidate pool untouched. Scanning
+        // `existing` in its ORIGINAL order on every lookup, unconsumed-first, is also
+        // what gives the unnamed/duplicate-name case its POSITIONAL tiebreak (UE's own
+        // fallback, FbxStaticMeshImport.cpp:1991-2002) for free: two same-spelled
+        // candidates resolve in existing-array order, not in whatever order a hash or a
+        // reverse scan would visit them.
+        std::vector<bool> consumed(existing.size(), false);
+
+        for (const std::string& name : authoritative)
+        {
+            std::size_t matchIndex = existing.size();
+            for (std::size_t i = 0; i < existing.size(); ++i)
+            {
+                if (!consumed[i] && existing[i].name == name)
+                {
+                    matchIndex = i;
+                    break;
+                }
+            }
+
+            if (matchIndex < existing.size())
+            {
+                // Match by NAME (FbxStaticMeshImport.cpp:1964-1970) -- keeps its
+                // material assignment wherever it moved to in `authoritative`.
+                consumed[matchIndex] = true;
+                result.slots.push_back({ name, existing[matchIndex].material });
+            }
+            else
+            {
+                // APPEND unmatched authoritative names, in authoritative order
+                // (the append-if-unmatched arm at FbxStaticMeshImport.cpp:1964-1974),
+                // unassigned (nil material) -- there is nothing to inherit.
+                result.slots.push_back({ name, Arcane::Guid{} });
+            }
+        }
+
+        // NEVER DELETE: an existing slot no authoritative name matched is KEPT (appended,
+        // in its original existing order) and WARNED -- not silently dropped the way a
+        // positional-only reconciliation would drop it.
+        for (std::size_t i = 0; i < existing.size(); ++i)
+        {
+            if (consumed[i])
+                continue;
+            result.slots.push_back(existing[i]);
+            result.warnings.push_back(
+                "material slot '" + existing[i].name + "' no longer appears in the "
+                "re-exported mesh -- kept, not deleted, so its material assignment is "
+                "not lost");
+        }
+
+        return result;
     }
 }

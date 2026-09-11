@@ -1575,6 +1575,23 @@ namespace Arcane::Editor
         // now it is the caller's (ConsumeCreateResult's) dialog-validated
         // Name+Location, unique already, so no loop survives here either.
         Arcane::Guid MintMeshAsset(const std::filesystem::path& target);
+
+        // F2c Task 14 (spec s4.2, R3): the companion .arcmesh mint after the FIRST
+        // successful cook of an imported model, and name-keyed slot reconciliation
+        // (MeshImportWave.hpp's ReconcileSlots) on every re-cook after that. Same
+        // reuse-or-mint shape as MintOrReuseSpriteForTexture above -- a registry scan
+        // for the (at most one) existing companion, mint fresh on zero/several, update
+        // in place on exactly one, never guessing among duplicates.
+        //
+        // Called ONLY from OnCookCompleted, for a guid that just finished cooking AND
+        // classifies as AssetKind::Model -- never a general-purpose entry point, and
+        // never before OnCookCompleted's own Assets/mesh-artifact invalidation for
+        // `modelGuid` has already run (this function's own definition explains why: it
+        // reads the FRESH artifact, not the memo the cook just replaced). A no-op when
+        // no project is open, `modelGuid` is invalid, or the fresh mesh artifact is not
+        // (yet, or ever) available -- a refused/failed cook can still reach this call,
+        // and that is not an error here.
+        void MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid);
         Arcane::Editor::DocServices MakeDocServices();
 
         // Problems-panel row click -> editor navigation. One switch over

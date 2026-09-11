@@ -26,6 +26,12 @@
 
 namespace fs = std::filesystem;
 using namespace Arcane::Editor;
+// F2c Task 14: ReconcileSlots' fixtures build MeshSlot/Guid directly -- both live in
+// namespace Arcane, one level up from Arcane::Editor's using-directive above (which
+// does not itself reach into its own enclosing namespace), so they need their own
+// targeted using-declarations rather than a second blanket `using namespace Arcane;`.
+using Arcane::Guid;
+using Arcane::MeshSlot;
 
 namespace
 {
@@ -247,4 +253,63 @@ TEST_CASE("import wave: a glb with no embedded images extracts nothing, quietly"
         if (entry.path().extension() == ".png")
             ++pngCount;
     CHECK(pngCount == 0u);
+}
+
+// ---- F2c Task 14: ReconcileSlots (spec s4.2, R3) --------------------------------
+
+TEST_CASE("slot reconciliation: a re-export that REORDERS materials keeps assignments",
+          "[editor]")
+{
+    // THE CASE R3 EXISTS FOR. Positional slots would silently swap the two materials
+    // here, and the user would find their prop repainted after a re-export.
+    const Guid metal = Guid::Generate(), paint = Guid::Generate();
+    const std::vector<MeshSlot> existing = { { "Metal", metal }, { "Paint", paint } };
+    const SlotReconciliation r = ReconcileSlots(existing, { "Paint", "Metal" });
+    REQUIRE(r.slots.size() == 2u);
+    CHECK(r.slots[0].name == "Paint");
+    CHECK(r.slots[0].material == paint);
+    CHECK(r.slots[1].name == "Metal");
+    CHECK(r.slots[1].material == metal);
+    CHECK(r.warnings.empty());
+}
+
+TEST_CASE("slot reconciliation: a new material appends; a vanished one is KEPT + warned",
+          "[editor]")
+{
+    const Guid metal = Guid::Generate(), old = Guid::Generate();
+    const std::vector<MeshSlot> existing = { { "Metal", metal }, { "Retired", old } };
+    const SlotReconciliation r = ReconcileSlots(existing, { "Metal", "Trim" });
+    // Metal keeps its assignment; Trim appends UNASSIGNED; Retired survives.
+    REQUIRE(r.slots.size() == 3u);
+    CHECK(r.slots[0].material == metal);
+    CHECK(r.slots[1].name == "Trim");
+    CHECK_FALSE(r.slots[1].material.IsValid());
+    CHECK(r.slots[2].name == "Retired");
+    CHECK(r.slots[2].material == old);
+    REQUIRE(r.warnings.size() == 1u);
+    CHECK(r.warnings[0].find("Retired") != std::string::npos);
+}
+
+TEST_CASE("slot reconciliation: unnamed and duplicate names fall back to POSITION",
+          "[editor]")
+{
+    // Two DISTINCT unnamed glTF materials are the case A1's by-name dedup makes rare
+    // but cannot make impossible. Positional tiebreak, UE's own fallback.
+    const Guid a = Guid::Generate(), b = Guid::Generate();
+    const std::vector<MeshSlot> existing = { { "", a }, { "", b } };
+    const SlotReconciliation r = ReconcileSlots(existing, { "", "" });
+    REQUIRE(r.slots.size() == 2u);
+    CHECK(r.slots[0].material == a);
+    CHECK(r.slots[1].material == b);
+    CHECK(r.warnings.empty());
+}
+
+TEST_CASE("slot reconciliation: a first mint takes the authoritative names verbatim",
+          "[editor]")
+{
+    const SlotReconciliation r = ReconcileSlots({}, { "Metal", "Paint" });
+    REQUIRE(r.slots.size() == 2u);
+    CHECK(r.slots[0].name == "Metal");
+    CHECK_FALSE(r.slots[0].material.IsValid());
+    CHECK(r.warnings.empty());
 }

@@ -694,6 +694,24 @@ namespace Arcane::Editor
             for (const Arcane::Guid& guid : result.cookedGuids)
             {
                 m_runtime->AssetsFacade().InvalidateArtifact(guid);
+                // F2c Task 14: the mesh half of the same un-latch, beside the texture
+                // one above -- the ASSETS-facade memo only (drops MeshArtifactFor's
+                // cached success/refusal so the read below sees the fresh artifact).
+                // The RENDER-side mesh invalidation (the resolver's own MeshCache
+                // entry) is Plan 2 Task 6's and gets its own line there.
+                m_runtime->AssetsFacade().InvalidateMeshArtifact(guid);
+                // F2c Task 14 (spec s4.2, R3): the companion .arcmesh mint/reconcile,
+                // for a Model-kind guid ONLY (every other kind has nothing analogous).
+                // PLACEMENT IS LOAD-BEARING: this must run after BOTH invalidations
+                // just above, so MintOrUpdateCompanionMesh's own MeshArtifactFor read
+                // sees the artifact THIS cook just wrote rather than replaying the memo
+                // that call just dropped.
+                if (const Arcane::Project* project = m_runtime->CurrentProject())
+                {
+                    if (const auto mountPath = project->Registry().Resolve(guid))
+                        if (Arcane::Editor::AssetKindOf(*mountPath) == Arcane::Editor::AssetKind::Model)
+                            MintOrUpdateCompanionMesh(guid);
+                }
                 if (m_viewportTargets.graph)
                 {
                     m_viewportTargets.graph->InvalidateContentTexture(guid);
@@ -1226,6 +1244,125 @@ namespace Arcane::Editor
             return {};
         m_assetModel.MarkAllDirty();
         return data.id;
+    }
+
+    // F2c Task 14 (spec s4.2, R3): the companion .arcmesh mint after the FIRST
+    // successful cook of an imported model, and name-keyed slot reconciliation on
+    // every re-cook after that -- see this method's own declaration (EditorApp.hpp)
+    // for the calling contract. In the MintOrReuseSpriteForTexture lineage: that
+    // function's own reuse-or-mint registry scan is the structural model here, and
+    // its "registries are small today" note (a per-call O(n) scan over a per-project
+    // asset count still in the dozens, not an index built once and invalidated on
+    // save/delete) applies unchanged.
+    void EditorApp::MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid)
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project || !modelGuid.IsValid())
+            return;
+
+        const auto source = project->ResolveAsset(Arcane::AssetId::FromGuid(modelGuid));
+        if (!source)
+            return;
+
+        // Step 1: the FRESH mesh artifact. OnCookCompleted invalidates BOTH memos for
+        // this guid (Assets::InvalidateArtifact/InvalidateMeshArtifact) before calling
+        // here, so this is never a replay of the memo the cook just replaced. Null
+        // means the cook has not actually landed a usable mesh artifact (a refused or
+        // failed cook can still reach this call) -- this function is only ever reached
+        // from a cook-completion callback, so quietly doing nothing is correct, not an
+        // error condition.
+        const Arcane::LoadedClientMesh* artifact = m_runtime->AssetsFacade().MeshArtifactFor(modelGuid);
+        if (!artifact)
+            return;
+
+        const std::vector<std::string> authoritative =
+            Arcane::Editor::SlotNamesFromSections(artifact->sections);
+
+        // Step 3: look for an EXISTING companion -- a registered .arcmesh whose
+        // source/importedSource name this model. The MeshAssetData doc comment on
+        // importedSource ("meaningful ONLY when source == Imported") is why both
+        // fields gate the match, not importedSource alone: nothing but this very mint
+        // ever sets importedSource to a non-nil guid, so the extra check costs nothing
+        // on the honest path and only hardens the dishonest one (a hand-edited file).
+        // Loaded data is kept (not re-read below) -- one registry scan, matching the
+        // sprite reuse-or-mint shape exactly, just avoiding the sprite path's own
+        // second read since this one DOES need the full struct back on the update arm.
+        std::filesystem::path existingPath;
+        std::optional<Arcane::MeshAssetData> existingData;
+        int matches = 0;
+        for (const auto& [guid, mount] : project->Registry().All())
+        {
+            if (Arcane::Editor::AssetKindOf(mount) != Arcane::Editor::AssetKind::Mesh)
+                continue;
+            const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(guid));
+            if (!p)
+                continue;
+            auto data = Arcane::LoadMeshAsset(*p);
+            if (data && data->source == Arcane::MeshSource::Imported &&
+                data->importedSource == modelGuid)
+            {
+                ++matches;
+                existingPath = *p;
+                existingData = std::move(data);
+            }
+        }
+
+        // Never guess among duplicates -- the same rule MintOrReuseSpriteForTexture
+        // applies to same-texture sprites, for the same reason: zero or several means
+        // there is no single answer to update, so mint a fresh sibling instead.
+        if (matches == 1 && existingData)
+        {
+            // Step 5: update in place.
+            const Arcane::Editor::SlotReconciliation r =
+                Arcane::Editor::ReconcileSlots(existingData->slots, authoritative);
+            if (r.slots == existingData->slots)
+                return;   // no-op re-cook -- never rewrite (the self-save feedback loop
+                          // PollAssetWatch's material branch already guards against;
+                          // rewriting an unchanged file here would re-trigger the
+                          // watcher for nothing).
+            Arcane::MeshAssetData updated = *existingData;
+            updated.slots = r.slots;
+            if (!Arcane::SaveMeshAsset(existingPath, updated))
+            {
+                ARC_WARN("Arcane Editor: could not update companion mesh '{}'",
+                         existingPath.generic_string());
+                return;
+            }
+            for (const std::string& w : r.warnings)
+                ARC_WARN("Arcane Editor: mesh '{}' -- {}", existingPath.filename().string(), w);
+            return;
+        }
+
+        // Step 4: mint a fresh companion (zero or several existing ones). A4's own
+        // collision rule (UniqueSiblingPath) -- never clobbers an existing file.
+        const std::filesystem::path mintPath = Arcane::Editor::UniqueSiblingPath(
+            source->parent_path(), source->stem().string(), ".arcmesh");
+
+        Arcane::MeshAssetData data;
+        data.id             = Arcane::Guid::Generate();
+        data.name           = mintPath.stem().string();
+        data.source         = Arcane::MeshSource::Imported;
+        data.importedSource = modelGuid;
+        // A first mint has no existing slots to reconcile against -- ReconcileSlots({},
+        // authoritative) takes the authoritative names verbatim, all unassigned, which
+        // is exactly the fresh-mint slot array (and keeps ONE code path deciding what a
+        // slot array from a name list looks like, rather than two).
+        data.slots = Arcane::Editor::ReconcileSlots({}, authoritative).slots;
+        if (!Arcane::SaveMeshAsset(mintPath, data))
+        {
+            ARC_WARN("Arcane Editor: could not mint a companion mesh at '{}'",
+                     mintPath.generic_string());
+            return;
+        }
+        // Register immediately, CHECKED -- MintOrReuseSpriteForTexture's own account of
+        // why above: an unregistered mint hands back a guid that can never resolve, so
+        // a failure here must not be treated as a success.
+        if (!m_runtime->RegisterCreatedAsset(mintPath))
+            return;
+        m_assetModel.MarkAllDirty();
+        m_assetActivity.Push({ std::chrono::steady_clock::now(), data.id,
+                                mintPath.filename().string(),
+                                Arcane::Editor::AssetActivityKind::Created, {} });
     }
 
     Arcane::Guid EditorApp::CreateMaterialAt(std::filesystem::path path, Arcane::MaterialSurface surface)

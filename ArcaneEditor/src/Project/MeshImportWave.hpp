@@ -14,6 +14,9 @@
 // parse, this file decides WHERE each embedded image lands on disk and enforces A4's
 // never-overwrite rule before writing.
 
+#include <Arcane/Mesh/MeshAsset.hpp>   // MeshSlot; transitively LoadedClientMesh/MeshSectionView
+                                        // (ArtifactReader.hpp) -- Task 14's slot reconciliation
+
 #include <cstddef>
 #include <filesystem>
 #include <string>
@@ -78,4 +81,65 @@ namespace Arcane::Editor
     // all-matched call's empty return the proof that nothing changed.
     [[nodiscard]] std::vector<std::filesystem::path> ExtractEmbeddedTextures(
         const std::filesystem::path& source);
+
+    // ---- F2c Task 14 (spec s4.2, R3): the companion .arcmesh mint + slot
+    // reconciliation on re-cook -------------------------------------------------------
+
+    // The editor-side mirror of AssetPipeline::SlotNamesFromSections (ArtifactFormat.hpp):
+    // the SAME two-line derivation (max slotIndex -> array size; the FIRST section
+    // touching a slot names it, and A1's dedup-by-name guarantees every later section
+    // pointing at that slot agrees) -- but over Arcane::MeshSectionView rather than
+    // AssetPipeline::MeshArtifactSection. The two structs mirror the SAME on-disk shape
+    // BY HAND, never by sharing code (ArtifactReader.hpp's own BYTE-CONTRACT PEER banner),
+    // so the pipeline's own SlotNamesFromSections is not reachable from here -- the
+    // artifact the editor's companion mint actually holds is a LoadedClientMesh
+    // (Assets::MeshArtifactFor's return type), whose `.sections` are MeshSectionView, not
+    // MeshArtifactSection. Sized to max(slotIndex)+1, empty when `sections` is empty.
+    [[nodiscard]] std::vector<std::string> SlotNamesFromSections(
+        const std::vector<Arcane::MeshSectionView>& sections);
+
+    // MeshImportWave.hpp -- R3's reconciliation, PURE so it is testable without a
+    // project, a registry or a cook.
+    struct SlotReconciliation
+    {
+        std::vector<Arcane::MeshSlot> slots;      // the new slot array to write
+        std::vector<std::string>      warnings;   // one per vanished-but-kept name
+    };
+
+    // `existing` is the companion's current slots; `authoritative` is the freshly
+    // cooked artifact's slot names (SlotNamesFromSections' answer, in slot order).
+    //
+    // THE RULES, from R3 / s4.2. Three are UE's, read rather than inferred; the
+    // fourth is OURS and is labelled as such -- do not re-attribute it.
+    //   * match by NAME -- an existing slot whose name appears in `authoritative`
+    //     keeps its material assignment, wherever it moved to
+    //     (FbxStaticMeshImport.cpp:1964-1970: UE compares ImportedMaterialSlotName and
+    //     BREAKS on the first match);
+    //   * APPEND unmatched authoritative names, in authoritative order
+    //     (the append-if-unmatched arm at FbxStaticMeshImport.cpp:1964-1974);
+    //   * NEVER DELETE -- an existing slot whose name vanished is KEPT and WARNED.
+    //     Deleting a user's material assignment over a re-export hiccup is worse than
+    //     carrying a harmless orphan; UE keeps it SILENTLY (there is no deletion arm),
+    //     and keep-and-WARN is a strict improvement on that (the comparison's
+    //     Decision 3 says so in as many words);
+    //   * POSITION is the tiebreak for unnamed slots and duplicate names -- the case
+    //     A1's by-name dedup makes rare but cannot make impossible (two DISTINCT glTF
+    //     materials may both be unnamed). UE's analogous positional fallback -- the one
+    //     that resolves a SECTION against the FINAL slot array -- is at
+    //     FbxStaticMeshImport.cpp:1991-2002, NOT at :1946-1974 (that block's :1948
+    //     falls back into the NEWLY IMPORTED array, a different array and a different
+    //     question). Cite :1991-2002 for this rule.
+    //
+    // OURS, NOT UE'S -- the CONSUME-MATCHED rule (Step 3): once an existing slot has
+    // been matched, it is removed from the candidate pool so a later authoritative
+    // name with the same spelling cannot match it again. UE does NOT do this -- its
+    // matcher breaks on the first match and never consumes it (:1964-1970), so two
+    // identically-named candidates would both bind to the same existing slot there.
+    // We consume because the two-unnamed-slots case REQUIRES it: without consumption
+    // both unnamed authoritative names match existing slot 0 and the second user
+    // assignment is silently lost. This is a deliberate divergence, and the
+    // "unnamed and duplicate names fall back to POSITION" test is what pins it.
+    [[nodiscard]] SlotReconciliation ReconcileSlots(
+        const std::vector<Arcane::MeshSlot>& existing,
+        const std::vector<std::string>& authoritative);
 }
