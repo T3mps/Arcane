@@ -148,6 +148,72 @@ namespace Arcane::AssetPipeline
             std::uint64_t offset;
             std::uint64_t size;
         };
+
+        // Mirrors ArtifactReader.cpp's own kHeaderProbeBytes reasoning: generous headroom
+        // over the fixed 37-byte common prefix (magic 4 + version 4 + contentKind 1 +
+        // sourceGuid 16 + sourceHash 8 + importerVersion 4) ReadArtifactPrefix actually
+        // parses, so a future prefix field added to either side does not silently start
+        // under-reading -- still minuscule next to a real artifact's payload, which is the
+        // whole point: RebuildIndexFromScan must never pay for anything past the header.
+        constexpr std::size_t kPrefixProbeBytes = 256;
+
+        // Reads at most `maxBytes` from the START of `path` -- NEVER the whole file. A file
+        // shorter than `maxBytes` on disk reads however many bytes actually exist; the
+        // bounds-checked ByteReader accessors then correctly refuse anything truncated
+        // inside the prefix, exactly as they would reading the same short buffer out of a
+        // full-file read. `ifs.bad()` (a genuine IO error) is distinguished from merely
+        // hitting EOF before `maxBytes` (failbit/eofbit, not badbit -- the ordinary "short
+        // file" case, not a failure).
+        [[nodiscard]] std::optional<std::vector<std::byte>> ReadFilePrefix(
+            const std::filesystem::path& path, std::size_t maxBytes)
+        {
+            std::ifstream ifs(path, std::ios::binary);
+            if (!ifs) return std::nullopt;
+
+            std::vector<std::byte> raw(maxBytes);
+            ifs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(maxBytes));
+            if (ifs.bad()) return std::nullopt;
+
+            const std::streamsize got = ifs.gcount();
+            if (got < 0) return std::nullopt;
+            raw.resize(static_cast<std::size_t>(got));
+            return raw;
+        }
+    }
+
+    std::optional<ArtifactPrefix> ReadArtifactPrefix(const std::filesystem::path& path)
+    {
+        const std::optional<std::vector<std::byte>> raw = ReadFilePrefix(path, kPrefixProbeBytes);
+        if (!raw) return std::nullopt;
+
+        ByteReader r(raw->data(), raw->size());
+
+        std::uint8_t magic[4]{};
+        for (std::uint8_t& b : magic)
+            if (!r.U8(b)) return std::nullopt;
+        if (magic[0] != kMagic[0] || magic[1] != kMagic[1] || magic[2] != kMagic[2] || magic[3] != kMagic[3])
+            return std::nullopt;
+
+        std::uint32_t version = 0;
+        if (!r.U32(version)) return std::nullopt;
+        if (version != kArtifactVersion) return std::nullopt;
+
+        ArtifactPrefix prefix;
+
+        std::uint8_t contentKind = 0;
+        if (!r.U8(contentKind)) return std::nullopt;
+        // NO contentKind GATE HERE, deliberately -- see this function's own doc comment
+        // (ArtifactFormat.hpp): the whole point is to answer "whose guid is this" for ANY
+        // kind. Each kind's own full reader (ReadTextureArtifact/ReadMeshArtifact) keeps
+        // its own fail-closed check unchanged.
+        prefix.contentKind = static_cast<ContentKind>(contentKind);
+
+        if (!r.U64(prefix.sourceGuid.hi)) return std::nullopt;
+        if (!r.U64(prefix.sourceGuid.lo)) return std::nullopt;
+        if (!r.U64(prefix.sourceHash)) return std::nullopt;
+        if (!r.U32(prefix.importerVersion)) return std::nullopt;
+
+        return prefix;
     }
 
     bool WriteTextureArtifact(const std::filesystem::path& path, const TextureArtifactDesc& desc,

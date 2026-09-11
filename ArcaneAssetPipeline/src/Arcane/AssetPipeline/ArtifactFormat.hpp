@@ -84,6 +84,34 @@ namespace Arcane::AssetPipeline
         Mesh    = 2,
     };
 
+    // The common prefix every artifact kind shares, read WITHOUT committing to a kind:
+    // exactly what ArtifactStore::RebuildIndexFromScan needs to recover a Guid, and
+    // nothing more. That scan called ReadTextureArtifact, which fails closed on any
+    // other kind (this file's own contentKind gate), so before F2c every mesh artifact
+    // was invisible to the index -- and CookProject's supersede-the-old-key self-heal,
+    // which reads Lookup, could never fire for one.
+    struct ArtifactPrefix
+    {
+        ContentKind   contentKind = ContentKind::Texture;
+        Guid          sourceGuid;
+        std::uint64_t sourceHash = 0;
+        std::uint32_t importerVersion = 0;
+    };
+
+    // Reads a BOUNDED PREFIX, never the whole file: this runs once per artifact in the
+    // store on every scan, and a texture artifact's payload is megabytes. Mirrors
+    // ArcaneClient/src/Arcane/Assets/ArtifactReader.cpp's own ParseCommonPrefix/
+    // kHeaderProbeBytes reasoning (that file's the client-side twin of this one; see
+    // this header's own BYTE-CONTRACT PEER paragraph) -- a generous fixed-size read from
+    // the start of the file, well inside which the 37-byte common prefix (magic 4 +
+    // artifactVersion 4 + contentKind 1 + sourceGuid 16 + sourceHash 8 + importerVersion
+    // 4) always lives. Deliberately does NOT gate on contentKind -- that is the whole
+    // point: this function answers "whose guid is this, and what kind is it" for ANY
+    // artifact kind, kind-agnostically, so a scan built on it can never go blind to a
+    // kind it doesn't already know about.
+    [[nodiscard]] std::optional<ArtifactPrefix> ReadArtifactPrefix(
+        const std::filesystem::path& path);
+
     struct MipDesc
     {
         std::uint64_t offset;

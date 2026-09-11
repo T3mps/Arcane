@@ -176,10 +176,13 @@ namespace Arcane::AssetPipeline
             const std::optional<std::uint64_t> cookKey = FromHex16(path.stem().string());
             if (!cookKey) continue;   // not a name this store minted -- skip, never abort the scan
 
-            const std::optional<LoadedArtifact> loaded = ReadTextureArtifact(path);
-            if (!loaded) continue;   // corrupt/unreadable -- skip, never abort the scan
+            // F2c Task 8: kind-agnostic prefix read, NOT ReadTextureArtifact -- see this
+            // function's own doc comment (ArtifactStore.hpp) for why the old texture-only
+            // read left every mesh artifact invisible to this index.
+            const std::optional<ArtifactPrefix> prefix = ReadArtifactPrefix(path);
+            if (!prefix) continue;   // corrupt/unreadable -- skip, never abort the scan
 
-            m_index[loaded->desc.sourceGuid] = *cookKey;
+            m_index[prefix->sourceGuid] = *cookKey;
         }
     }
 

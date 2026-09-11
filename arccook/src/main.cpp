@@ -1,7 +1,8 @@
-// arccook -- F2b Task 5: the offline asset cook CLI. Cooks a project's Content/ texture
-// sources into Intermediate/Artifacts via Arcane::AssetPipeline::CookSession, the SAME
-// session type the editor's future in-process cook (Task 12) drives -- the CLI never
-// diverges from the editor on what "stale" or "cooked" means.
+// arccook -- F2b Task 5: the offline asset cook CLI. Cooks a project's Content/ sources
+// (F2c Task 8: every kind in CookSession's own kind table -- texture and mesh) into
+// Intermediate/Artifacts via Arcane::AssetPipeline::CookSession, the SAME session type
+// the editor's future in-process cook (Task 12) drives -- the CLI never diverges from
+// the editor on what "stale" or "cooked" means.
 //
 // Exit codes: cook path -- 0 on success (failed == 0), 1 on ANY cook failure.
 // `--check` -- 0 clean (nothing stale), 2 stale (DISTINCT from a cook failure, so a CI
@@ -35,7 +36,7 @@ int main(int argc, char** argv)
     using namespace Arcane;
     using namespace Arcane::AssetPipeline;
 
-    Cli cli{ "arccook", "Arcane offline asset cook (F2b Task 5) -- textures today" };
+    Cli cli{ "arccook", "Arcane offline asset cook (F2b Task 5; F2c Task 8 adds meshes)" };
     cli.Option("project", "", "project folder to cook (required)").Required();
     cli.Flag("check", "report whether any source is stale without cooking "
                        "(exit 0 clean / 2 stale)");
@@ -89,6 +90,21 @@ int main(int argc, char** argv)
         {
             std::fprintf(stderr, "arccook: no CURRENT cooked artifact for guid %s "
                                   "(uncooked or stale)\n", guid->ToString().c_str());
+            return 1;
+        }
+
+        // F2c Task 8: --dump-dds is a TEXTURE-only debug aid (it writes a DDS, which only
+        // ever makes sense for a texture's own compressed/uncompressed mip payload). A
+        // guid whose CURRENT artifact is a mesh is refused with a named message here --
+        // better than handing ReadTextureArtifact a mesh-shaped file and letting its own
+        // contentKind gate print "failed to load", which would read as corruption rather
+        // than "wrong tool for this guid". The prefix read is the same bounded,
+        // kind-agnostic probe ArtifactStore::RebuildIndexFromScan uses.
+        const std::optional<ArtifactPrefix> prefix = ReadArtifactPrefix(*artifactPath);
+        if (prefix && prefix->contentKind == ContentKind::Mesh)
+        {
+            std::fprintf(stderr, "arccook: --dump-dds is a texture-only debug aid; guid %s "
+                                  "resolves to a MESH artifact\n", guid->ToString().c_str());
             return 1;
         }
 

@@ -9,50 +9,99 @@
 // project's Content/ tree fresh, so a session is cheap to construct once per process
 // (arccook's main.cpp) or reuse across many calls (a future editor cook button).
 //
-// Source enumeration: every ".png" under <projectDir>/Content (recursive) that has a
-// sibling "<file>.png.meta" sidecar (Unity convention -- matches
-// ArcaneClient/src/Arcane/Project/AssetRegistry.cpp's ResolveSidecarId) is a texture
-// source. A ".png" with no sidecar is not yet a registered asset -- CookSession never
+// F2c Task 8 (spec s5.1, R6): generalized the spine to cover TWO cookable kinds --
+// Texture and, as of this task, Mesh -- over the CookKinds() table below. R6's recorded
+// fallback (generalize only the store/index, keep sessions separate) is NOT taken here,
+// and the reason is worth stating: the kind table carries DATA (extensions, meta-block
+// key) while the per-kind work stays in per-kind private members/dispatch. Iterating a
+// data table and dispatching on a small closed enum IS the generalized spine;
+// type-erasing four differently-typed operations behind one std::function is the
+// "awkward signatures" outcome the fallback was recorded against, wearing the same name.
+// Texture behavior is BYTE-IDENTICAL across this widening -- every texture-facing type,
+// string, and file layout is untouched; only the source enumeration/settings-read/cook-
+// key/importer/writer calls are now reached through the kind table instead of being
+// hardcoded to the texture path.
+//
+// Source enumeration: every source extension in the kind table (CookKinds() below --
+// ".png" for Texture, ".gltf"/".glb" for Mesh) found under <projectDir>/Content
+// (recursive) that has a sibling "<file>.meta" sidecar (Unity convention -- matches
+// ArcaneClient/src/Arcane/Project/AssetRegistry.cpp's ResolveSidecarId) is a cookable
+// source. A source with no sidecar is not yet a registered asset -- CookSession never
 // mints one (minting a guid is AssetRegistry's job, host-side only) -- it is silently
 // skipped, never a failure. Nothing outside Content/ is ever considered: in particular
 // ReferenceProject/Verify/References/*.png (the golden-image ORACLE) is never under
 // Content/ and must never cook.
 //
 // Staleness: a source is up to date iff an artifact already exists at
-// ArtifactStore::PathFor(ComputeCookKey(currentBytes, currentSettings,
-// kTextureImporterVersion)) -- a PURE, content-addressed check that needs no in-memory
-// index and is correct even the very first time this process has ever seen the project.
-// CheckProject uses exactly this check, and nothing else, to answer `anyStale`.
+// ArtifactStore::PathFor(<the source's kind-appropriate cook key over its CURRENT bytes
+// and settings> -- ComputeCookKey for Texture, ComputeMeshCookKey for Mesh) -- a PURE,
+// content-addressed check that needs no in-memory index and is correct even the very
+// first time this process has ever seen the project. CheckProject uses exactly this
+// check, and nothing else, to answer `anyStale`.
 //
-// Failure memoization: when TextureImporter::ImportTexture fails (corrupt/unrecognised
-// source bytes) for a given cook key, the reason is persisted to
-// <projectDir>/Intermediate/Failed/<hex16>.fail (same hash-keyed spirit as
-// ArtifactStore, deliberately simpler -- one flat file per key, no 256-way sharding,
-// because failures are rare relative to artifacts). A later CookProject call -- same OR
-// a different CookSession/process, sharing the same Intermediate/ tree -- for the SAME
-// cook key reads that memo and reports the failure again WITHOUT ever re-invoking the
-// importer: the "no retry storm" contract. The memo is itself keyed by the cook key
-// (source bytes + settings + importer version), so it self-invalidates the moment any of
-// those three change -- a fixed/edited source or a settings change computes a NEW cook
-// key with no memo, and is attempted again. ArtifactStore::Commit failures (rare IO
-// errors, not the source's fault) are deliberately NOT memoized -- they are retried
-// every call, since the cost of retrying a commit is one file write, not a decode+encode.
+// Failure memoization: when a source's importer refuses it (TextureImporter::
+// ImportTexture returning nullopt for corrupt/unrecognised bytes; MeshImporter::
+// ImportMesh returning a non-empty MeshImportResult::refusal) for a given cook key, the
+// reason is persisted to <projectDir>/Intermediate/Failed/<hex16>.fail (same hash-keyed
+// spirit as ArtifactStore, deliberately simpler -- one flat file per key, no 256-way
+// sharding, because failures are rare relative to artifacts). A later CookProject call
+// -- same OR a different CookSession/process, sharing the same Intermediate/ tree -- for
+// the SAME cook key reads that memo and reports the failure again WITHOUT ever
+// re-invoking the importer: the "no retry storm" contract, kind-agnostic by construction
+// because the memo read/write path is SHARED spine code, never duplicated per kind. The
+// memo is itself keyed by the cook key (source bytes + settings + importer version), so
+// it self-invalidates the moment any of those three change -- a fixed/edited source or a
+// settings change computes a NEW cook key with no memo, and is attempted again.
+// ArtifactStore::Commit failures (rare IO errors, not the source's fault) are
+// deliberately NOT memoized -- they are retried every call, since the cost of retrying a
+// commit is one file write, not a decode+encode. A mesh source whose external buffer
+// (spec s5.4) cannot be read is likewise never memoized -- there is no stable cook key
+// to memo it under yet (the key itself depends on the buffer's bytes) -- it is reported
+// as a failure and simply retried next call, the same "cheap to retry" reasoning Commit
+// failures get.
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "Arcane/AssetPipeline/MeshImporter.hpp"
 #include "Arcane/AssetPipeline/TextureImporter.hpp"
 #include "Arcane/Guid.hpp"
 
 namespace Arcane::AssetPipeline
 {
+    // The cookable kinds this spine covers. A small, CLOSED enum -- adding a third kind
+    // is a one-row table edit plus one more switch arm at each of CookSession.cpp's four
+    // per-kind dispatch points (settings type, cook-key builder, importer, artifact
+    // writer), never a new sibling function.
+    enum class CookKind : std::uint8_t { Texture, Mesh };
+
+    // ONE ROW PER COOKABLE KIND (spec s5.1 / R6). DATA ONLY: the extensions that
+    // identify a source, and the ".meta" object key its settings block lives under.
+    // The per-kind WORK -- settings type, cook-key builder, importer, artifact writer
+    // -- stays in CookSession's own per-kind private members, because those four
+    // differ in their TYPES, not merely their behaviour.
+    struct CookKindEntry
+    {
+        CookKind                          kind;
+        std::span<const std::string_view> extensions;    // {".png"} / {".gltf", ".glb"}
+        const char*                       metaBlockKey;  // "texture" / "mesh"
+    };
+
+    // The kind table itself -- iterated by CookProject/CheckProject/
+    // ResolveCurrentArtifactPath, each `for (kind : CookKinds()) for (source :
+    // EnumerateSources(contentDir, kind.extensions))`. Backed by static storage; the
+    // returned span is valid for the whole process lifetime.
+    [[nodiscard]] std::span<const CookKindEntry> CookKinds() noexcept;
+
     struct CookResult
     {
         std::size_t cooked = 0;      // freshly imported + committed this call
@@ -93,24 +142,41 @@ namespace Arcane::AssetPipeline
         using ProgressFn = std::function<void(const std::filesystem::path& source, bool ok, const std::string& detail)>;
         void SetProgress(ProgressFn fn);
 
-        // Test-only seam: overrides the importer CookProject calls (default is
+        // Test-only seam: overrides the TEXTURE importer CookProject calls (default is
         // Arcane::AssetPipeline::ImportTexture) so a test can COUNT invocations across
         // two separate CookSession instances/processes sharing one Intermediate/ tree,
         // instead of inferring the count indirectly. NEVER called by production code --
         // arccook's main.cpp and the future editor caller (Task 12) always get the real
-        // importer.
+        // importer. F2c Task 8: renamed from SetImporterForTesting now that there are
+        // two importers to inject -- the unqualified name stopped being meaningful the
+        // moment a second one existed, and leaving it is how a test ends up injecting
+        // the wrong one.
         using ImporterFn = std::function<std::optional<ImportedTexture>(std::span<const std::byte>, const Guid&, const TextureMetaSettings&)>;
-        void SetImporterForTesting(ImporterFn fn);
+        void SetTextureImporterForTesting(ImporterFn fn);
 
-        // Cooks every stale texture source under projectDir/Content, writing artifacts
-        // to projectDir/Intermediate/Artifacts. See the file header above for the full
-        // staleness/failure/memoization contract. Clears LastFailures() at the start.
+        // The mesh half of the seam above -- same contract, same NEVER-called-by-
+        // production-code rule, mirroring ImportMesh's own signature exactly (source
+        // bytes, external buffers, source path, guid, settings) so a test's fake can
+        // wrap the real ImportMesh verbatim, the same shape the texture seam's own
+        // counting-fake tests already use.
+        using MeshImporterFn = std::function<MeshImportResult(std::span<const std::byte>,
+                                                                std::span<const std::span<const std::byte>>,
+                                                                const std::filesystem::path&,
+                                                                const Guid&,
+                                                                const MeshMetaSettings&)>;
+        void SetMeshImporterForTesting(MeshImporterFn fn);
+
+        // Cooks every stale source (every kind in CookKinds()) under projectDir/Content,
+        // writing artifacts to projectDir/Intermediate/Artifacts. See the file header
+        // above for the full staleness/failure/memoization contract. Clears
+        // LastFailures() at the start.
         [[nodiscard]] CookResult CookProject(const std::filesystem::path& projectDir);
 
-        // Read-only: true iff at least one texture source under projectDir/Content has
-        // no current artifact yet. Never imports, never writes to disk -- the `--check`
-        // core, shared verbatim with CookProject's own staleness test. Does not touch
-        // LastFailures() (it never imports, so it never has anything to report).
+        // Read-only: true iff at least one source (any kind in CookKinds()) under
+        // projectDir/Content has no current artifact yet. Never imports, never writes to
+        // disk -- the `--check` core, shared verbatim with CookProject's own staleness
+        // test. Does not touch LastFailures() (it never imports, so it never has
+        // anything to report).
         [[nodiscard]] bool CheckProject(const std::filesystem::path& projectDir) const;
 
         // Guid -> failure reason from the most recent CookProject call ONLY (cleared at
@@ -146,7 +212,8 @@ namespace Arcane::AssetPipeline
 
     private:
         ProgressFn m_progress;
-        ImporterFn m_importer;
+        ImporterFn m_textureImporter;
+        MeshImporterFn m_meshImporter;
         std::unordered_map<Guid, std::string> m_lastFailures;
     };
 }

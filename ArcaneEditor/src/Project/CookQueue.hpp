@@ -67,9 +67,10 @@ namespace Arcane::Editor
         CookQueue& operator=(const CookQueue&) = delete;
 
         // Test-only seam, forwarded verbatim to the owned CookSession --
-        // mirrors CookSession::SetImporterForTesting. Never called by
-        // production code (EditorApp always gets the real importer via
-        // CookSession's own default).
+        // mirrors CookSession::SetTextureImporterForTesting (F2c Task 8
+        // renamed CookSession's own seam; this wrapper's public name is
+        // unchanged). Never called by production code (EditorApp always
+        // gets the real importer via CookSession's own default).
         void SetImporterForTesting(Arcane::AssetPipeline::CookSession::ImporterFn fn);
 
         // Fires from INSIDE Pump() (see the class comment's threading

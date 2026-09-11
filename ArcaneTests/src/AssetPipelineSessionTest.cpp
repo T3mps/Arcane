@@ -9,6 +9,14 @@
 // Intermediate/ tree -- the importer runs EXACTLY ONCE for that failing key across both
 // sessions (never a retry storm), no artifact is ever produced for it, and the failure is
 // externally OBSERVABLE via both SetProgress's watcher and LastFailures().
+//
+// F2c Task 8 (spec s5.1, R6) extends this file with the MESH half of the same session-level
+// contract: a mesh source cooks to a mesh artifact; textures and meshes cook in the SAME
+// CookProject pass (the spine iterates the kind TABLE, not one hardcoded extension); an
+// external-buffer edit (spec s5.4) restales a .gltf whose own bytes never changed; a mesh
+// refusal's diagnostic survives verbatim into CookResult::failures; and a mesh failure
+// memoizes exactly like a texture one, driven through SetMeshImporterForTesting so the
+// no-retry-storm contract is pinned by counted invocations, not inferred.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -16,12 +24,15 @@
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>
 #include <Arcane/AssetPipeline/CookKey.hpp>
 #include <Arcane/AssetPipeline/CookSession.hpp>
+#include <Arcane/AssetPipeline/MeshImporter.hpp>
+#include <Arcane/AssetPipeline/MeshMetaSettings.hpp>
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <Json.hpp>
 #include <stb_image_write.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +59,25 @@ namespace
         fs::create_directories(d / "Content" / "textures");
         return d;
     }
+
+    // F2c Task 8: a BARE project dir -- unlike TempProjectDir above, this pre-creates
+    // nothing under Content/, so a mesh (or mixed) test can lay out exactly the Content/
+    // subtree it needs (e.g. "Content/meshes" only, so the fixture fails loudly if the
+    // spine still enumerates ".png" alone). Same temp root/cleanup discipline as
+    // TempProjectDir and AssetPipelineStoreTest.cpp's own TempDir.
+    fs::path TempDir(const char* leaf)
+    {
+        fs::path d = fs::temp_directory_path() / "arcane_pipeline_session_test" / leaf;
+        std::error_code ec;
+        fs::remove_all(d, ec);
+        fs::create_directories(d);
+        return d;
+    }
+
+    // The gltf/glb fixture corpus MeshImporterRefusalTest.cpp already established --
+    // reused verbatim rather than duplicated (single.glb, nested.gltf+nested.bin,
+    // requires_draco.gltf).
+    fs::path MeshFixture(const char* name) { return fs::path("data") / "gltf" / name; }
 
     std::vector<unsigned char> SolidPixels(int width, int height, unsigned char r, unsigned char g,
                                             unsigned char b, unsigned char a)
@@ -247,7 +277,7 @@ TEST_CASE("pipeline: a corrupt source memoizes its failure across two sessions, 
     std::vector<std::string> firedFailures;   // "watched firing": progress observed each failure
 
     CookSession sessionOne;
-    sessionOne.SetImporterForTesting(countingImporter);
+    sessionOne.SetTextureImporterForTesting(countingImporter);
     sessionOne.SetProgress([&](const fs::path& source, bool ok, const std::string& detail)
     {
         if (!ok) firedFailures.push_back(source.filename().string() + ": " + detail);
@@ -266,7 +296,7 @@ TEST_CASE("pipeline: a corrupt source memoizes its failure across two sessions, 
     // process/run over the SAME Intermediate/ tree) must still report the failure but must
     // NOT invoke the importer again for the same failing key.
     CookSession sessionTwo;
-    sessionTwo.SetImporterForTesting(countingImporter);
+    sessionTwo.SetTextureImporterForTesting(countingImporter);
     std::vector<std::string> secondFired;
     sessionTwo.SetProgress([&](const fs::path& source, bool ok, const std::string& detail)
     {
@@ -443,4 +473,152 @@ TEST_CASE("pipeline: a source-content-edit recook removes the superseded old-key
     // THE pin: the pre-edit artifact is gone, same as the settings-only case above --
     // C1(a) does not distinguish WHY the key changed, only THAT it did.
     CHECK_FALSE(fs::exists(oldPath));
+}
+
+// ---- F2c Task 8 (spec s5.1, R6): the MESH half of the session-level contract -----------
+
+TEST_CASE("cook session: a mesh source under Content/ cooks to a mesh artifact",
+          "[pipeline]")
+{
+    // A project tree with ONE .glb + its sidecar and nothing else -- so this fails if
+    // the spine still enumerates only .png.
+    const fs::path project = TempDir("cook_mesh");
+    fs::create_directories(project / "Content" / "meshes");
+    fs::copy_file(MeshFixture("single.glb"), project / "Content" / "meshes" / "single.glb");
+    const Guid meshGuid = Guid::Generate();
+    WriteMetaSidecar(project / "Content" / "meshes" / "single.glb", meshGuid);
+
+    CookSession session;
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 1u);
+    CHECK(result.failed == 0u);
+    REQUIRE(result.cookedGuids.size() == 1u);
+    CHECK(result.cookedGuids[0] == meshGuid);
+
+    // And the committed bytes really are a MESH artifact, not a texture one.
+    const auto path = session.ResolveCurrentArtifactPath(project, meshGuid);
+    REQUIRE(path.has_value());
+    CHECK(ReadMeshArtifact(*path).has_value());
+}
+
+TEST_CASE("cook session: textures and meshes cook in the SAME pass", "[pipeline]")
+{
+    // The spine iterates the kind TABLE, not one hardcoded extension.
+    const fs::path project = TempDir("cook_mixed_pass");
+    fs::create_directories(project / "Content" / "textures");
+    fs::create_directories(project / "Content" / "meshes");
+
+    const fs::path png = project / "Content" / "textures" / "uv_marker.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 11, 22, 33, 255));
+    const Guid texGuid = Guid::Generate();
+    WriteMetaSidecar(png, texGuid);
+
+    const fs::path glb = project / "Content" / "meshes" / "single.glb";
+    fs::copy_file(MeshFixture("single.glb"), glb);
+    const Guid meshGuid = Guid::Generate();
+    WriteMetaSidecar(glb, meshGuid);
+
+    CookSession session;
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 2u);
+    CHECK(result.failed == 0u);
+    REQUIRE(result.cookedGuids.size() == 2u);
+    CHECK(std::find(result.cookedGuids.begin(), result.cookedGuids.end(), texGuid)
+          != result.cookedGuids.end());
+    CHECK(std::find(result.cookedGuids.begin(), result.cookedGuids.end(), meshGuid)
+          != result.cookedGuids.end());
+}
+
+TEST_CASE("cook session: editing an external .bin restales the .gltf (spec s5.4)",
+          "[pipeline]")
+{
+    // The END-TO-END form of Task 5's key case: CheckProject must go clean -> stale
+    // when ONLY the buffer changed. A key over the .gltf alone passes this wrongly.
+    const fs::path project = TempDir("cook_mesh_external_buffer_restale");
+    fs::create_directories(project / "Content" / "meshes");
+
+    const fs::path gltf = project / "Content" / "meshes" / "nested.gltf";
+    const fs::path bin = project / "Content" / "meshes" / "nested.bin";
+    fs::copy_file(MeshFixture("nested.gltf"), gltf);
+    fs::copy_file(MeshFixture("nested.bin"), bin);
+    const Guid meshGuid = Guid::Generate();
+    WriteMetaSidecar(gltf, meshGuid);
+
+    CookSession session;
+    REQUIRE(session.CookProject(project).cooked == 1u);
+    CHECK_FALSE(session.CheckProject(project));
+
+    // Append ONE byte to the EXTERNAL buffer -- the .gltf's own bytes are untouched.
+    {
+        std::ofstream out(bin, std::ios::binary | std::ios::app);
+        REQUIRE(out.good());
+        out.put(static_cast<char>(0x7F));
+    }
+
+    CHECK(session.CheckProject(project));
+}
+
+TEST_CASE("cook session: a refused mesh reports the importer's OWN reason", "[pipeline]")
+{
+    // s4.5's diagnostics must survive the trip into CookResult::failures -- a spine
+    // that flattened them to "mesh import failed" would make the extensionsRequired
+    // rule useless in the Problems pane, which is the only place a user reads it.
+    const fs::path project = TempDir("cook_mesh_refusal");
+    fs::create_directories(project / "Content" / "meshes");
+
+    const fs::path gltf = project / "Content" / "meshes" / "requires_draco.gltf";
+    fs::copy_file(MeshFixture("requires_draco.gltf"), gltf);
+    const Guid meshGuid = Guid::Generate();
+    WriteMetaSidecar(gltf, meshGuid);
+
+    CookSession session;
+    const CookResult result = session.CookProject(project);
+    CHECK(result.cooked == 0u);
+    REQUIRE(result.failed == 1u);
+    REQUIRE(result.failures.size() == 1u);
+    CHECK(result.failures[0].first == meshGuid);
+    CHECK(result.failures[0].second.find("KHR_draco_mesh_compression") != std::string::npos);
+}
+
+TEST_CASE("cook session: a mesh failure memoizes exactly like a texture failure",
+          "[pipeline]")
+{
+    // The no-retry-storm contract is kind-agnostic, and it is SHARED code that makes
+    // it so -- no mesh-specific memo logic exists. Driven through the injected
+    // importer seam so invocations are COUNTED, not inferred, the same shape the
+    // existing texture memoization case (above) uses.
+    const fs::path project = TempDir("cook_mesh_memoized");
+    fs::create_directories(project / "Content" / "meshes");
+
+    const fs::path gltf = project / "Content" / "meshes" / "requires_draco.gltf";
+    fs::copy_file(MeshFixture("requires_draco.gltf"), gltf);
+    const Guid meshGuid = Guid::Generate();
+    WriteMetaSidecar(gltf, meshGuid);
+
+    auto importCalls = std::make_shared<std::atomic<int>>(0);
+    const CookSession::MeshImporterFn countingImporter =
+        [importCalls](std::span<const std::byte> bytes,
+                       std::span<const std::span<const std::byte>> externalBuffers,
+                       const fs::path& sourcePath, const Guid& g, const MeshMetaSettings& settings)
+        {
+            importCalls->fetch_add(1, std::memory_order_relaxed);
+            return ImportMesh(bytes, externalBuffers, sourcePath, g, settings);
+        };
+
+    CookSession sessionOne;
+    sessionOne.SetMeshImporterForTesting(countingImporter);
+    const CookResult firstResult = sessionOne.CookProject(project);
+    CHECK(firstResult.cooked == 0u);
+    CHECK(firstResult.failed == 1u);
+    CHECK(importCalls->load() == 1);
+
+    // A SECOND, independent session (a fresh CookSession -- simulating a second arccook
+    // process/run over the SAME Intermediate/ tree) must still report the failure but must
+    // NOT invoke the importer again for the same failing key.
+    CookSession sessionTwo;
+    sessionTwo.SetMeshImporterForTesting(countingImporter);
+    const CookResult secondResult = sessionTwo.CookProject(project);
+    CHECK(secondResult.cooked == 0u);
+    CHECK(secondResult.failed == 1u);
+    CHECK(importCalls->load() == 1);   // THE pin: still 1 -- no retry storm across sessions.
 }

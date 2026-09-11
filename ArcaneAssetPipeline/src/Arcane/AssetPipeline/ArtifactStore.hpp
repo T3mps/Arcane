@@ -67,10 +67,15 @@ namespace Arcane::AssetPipeline
 
         // Clears the in-memory index and repopulates it by scanning Artifacts/**/*.arcart: the
         // cook key comes from each file's own name (the store's own naming contract), the Guid
-        // from that artifact's own header via ReadTextureArtifact -- headers are self-describing,
-        // so nothing but the artifact files themselves is needed. A file that fails to parse as a
-        // 16-hex-digit cook key, or fails to load as a valid artifact, is skipped rather than
-        // aborting the scan.
+        // from that artifact's own header via ArtifactFormat::ReadArtifactPrefix -- a BOUNDED,
+        // KIND-AGNOSTIC read (headers are self-describing, so nothing but the artifact files
+        // themselves is needed). F2c Task 8: this used to call ReadTextureArtifact, which fails
+        // closed on any contentKind != Texture -- correct for a texture READ, but it made this
+        // scan blind to every mesh artifact (a mesh could be cooked and committed to disk and
+        // still never appear in the index, no matter how many times it was recooked). Reading
+        // only the common prefix recognises every content kind's sourceGuid without committing
+        // to one. A file that fails to parse as a 16-hex-digit cook key, or fails to load as a
+        // valid artifact prefix, is skipped rather than aborting the scan.
         void RebuildIndexFromScan();
 
         // Removes every on-disk artifact currently in the in-memory index whose Guid is absent

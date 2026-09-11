@@ -443,3 +443,53 @@ TEST_CASE("pipeline: SweepOrphans against an empty live set removes every indexe
     CHECK_FALSE(fs::exists(path));
     CHECK_FALSE(store.Lookup(guidA).has_value());
 }
+
+// ---- F2c Task 8 (spec s5.1, R6): RebuildIndexFromScan goes kind-agnostic --------------------
+
+TEST_CASE("artifact store: RebuildIndexFromScan recovers a MESH artifact's guid",
+          "[pipeline]")
+{
+    // s5.1's forcing point, and the reason the prefix read exists. A texture artifact
+    // is committed alongside so this also proves the change did not make the scan
+    // kind-BLIND in the other direction: both are found, each by its own guid.
+    const fs::path intermediate = TempDir("store_mesh_scan") / "Intermediate";
+    ArtifactStore store(intermediate);
+    const Guid meshGuid = Guid::Generate();
+    const Guid texGuid  = Guid::Generate();
+
+    // One mesh artifact under key 0xAAAA -- a minimal-but-valid, empty-geometry
+    // MeshArtifactDesc is enough for WriteMeshArtifact/RebuildIndexFromScan's own
+    // prefix read to round-trip, same "just enough to exercise real headers" spirit
+    // MakeDesc keeps for the texture kind above.
+    {
+        MeshArtifactDesc desc{};
+        desc.contentKind = ContentKind::Mesh;
+        desc.sourceGuid = meshGuid;
+        desc.sourceHash = 0x1122334455667788ULL;
+        desc.importerVersion = kMeshImporterVersion;
+        desc.vertexCount = 0;
+        desc.indexCount = 0;
+        desc.sectionCount = 0;
+        desc.indexWidth = 4;
+
+        const std::vector<MeshArtifactVertex> vertices;
+        const std::vector<std::uint32_t> indices;
+        REQUIRE(store.Commit(0xAAAAull, [&](const fs::path& tmp)
+        {
+            return WriteMeshArtifact(tmp, desc, vertices, indices);
+        }));
+    }
+
+    // One texture artifact under key 0xBBBB, through the SAME store, alongside it.
+    {
+        const TextureArtifactDesc desc = MakeDesc(texGuid, kTextureImporterVersion);
+        REQUIRE(store.Commit(0xBBBBull, [&](const fs::path& tmp)
+        {
+            return WriteTextureArtifact(tmp, desc, PatternBytes(4, 1), PatternBytes(4, 2));
+        }));
+    }
+
+    store.RebuildIndexFromScan();
+    CHECK(store.Lookup(meshGuid) == std::optional<std::uint64_t>(0xAAAAull));
+    CHECK(store.Lookup(texGuid)  == std::optional<std::uint64_t>(0xBBBBull));
+}

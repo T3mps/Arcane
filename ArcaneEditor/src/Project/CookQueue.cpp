@@ -33,7 +33,10 @@ namespace Arcane::Editor
 
     void CookQueue::SetImporterForTesting(Arcane::AssetPipeline::CookSession::ImporterFn fn)
     {
-        m_session.SetImporterForTesting(std::move(fn));
+        // F2c Task 8 renamed CookSession's own seam to SetTextureImporterForTesting (now
+        // that there are two importers to inject) -- this wrapper's own name and public
+        // surface are unchanged; only the forwarded call follows the rename.
+        m_session.SetTextureImporterForTesting(std::move(fn));
     }
 
     void CookQueue::SetOnCookComplete(CompletionFn fn)
