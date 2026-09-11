@@ -17,6 +17,7 @@
 #include "../Core/Delegate.hpp"
 #include "../Core/Log.hpp"
 #include "../Core/Result.hpp"
+#include "../Core/Tick.hpp"  // Tick / IsNewer (Ruling H lastRun staleness check in Execute)
 #include "../Core/TypeID.hpp"
 #include "../Registry/Registry.hpp"
 #include "System.hpp"
@@ -67,7 +68,14 @@ namespace Astra
             return m_executionDepth.load(std::memory_order_acquire) > 0;
         }
 
+        // Class-typed registration for a void(Registry&) system. A type that
+        // ALSO offers operator()(SystemContext&) is routed to the ContextSystem
+        // overload below instead (spec 2026-09-10 §2.6: the SystemContext&
+        // signature is preferred, since only it carries change-detection ticks),
+        // hence the `!ContextSystem<T>` subtraction -- without it a type
+        // satisfying both concepts would be an ambiguous call.
         template<System T, typename... Args>
+        requires (!ContextSystem<T>)
         ASTRA_NODISCARD Result<void, SystemError> AddSystem(Args&&... args)
         {
             // Uniform-graceful misuse policy (decision 2026-07-13): NO
@@ -126,10 +134,11 @@ namespace Astra
         // above (same Result/uniqueness/allocation handling, same optional
         // SystemTraits scan for scheduling), differing only in which
         // execution delegate it populates on the resulting SystemEntry.
-        // T is always given explicitly (AddSystem<MySystem>(args...)), so
-        // this never competes with the System<T> overload above for the
-        // same call: T can satisfy at most one of the two concepts in
-        // practice (they require invocability with disjoint argument types).
+        // T is always given explicitly (AddSystem<MySystem>(args...)). A type
+        // invocable with BOTH Registry& and SystemContext& lands here: the
+        // System<T> overload above is constrained `!ContextSystem<T>`, so the
+        // SystemContext& signature always wins (spec 2026-09-10 §2.6) -- it is
+        // the only one that receives LastRun()/ThisRun().
         template<ContextSystem T, typename... Args>
         ASTRA_NODISCARD Result<void, SystemError> AddSystem(Args&&... args)
         {
@@ -366,6 +375,34 @@ namespace Astra
             {
                 m_commandBuffer = std::make_unique<ParallelCommandBuffer>(&registry);
                 m_commandBufferRegistry = &registry;
+
+                // Change detection: ticks are per-registry, so a registry switch makes
+                // every cached lastRun meaningless -- reset so each system sees
+                // everything once against the new registry (never a false negative).
+                for (auto& md : m_context.metadata)
+                    md.lastRun = 0;
+            }
+
+            // Change detection (Ruling H): the pointer-identity reset above cannot
+            // see a Registry destroyed and re-created at the SAME address (stack
+            // re-entry, unique_ptr reset+make_unique -- the "reload level" flow):
+            // the new registry's ticks restart at 1 while every cached lastRun is
+            // far ahead, so nothing would read as changed until the tick caught up.
+            // A cached lastRun that is not strictly OLDER than the registry's
+            // current tick cannot have come from this registry -- after every
+            // Execute() the post-segment advance (Ruling G) leaves CurrentTick()
+            // newer than every lastRun, and nothing rewinds a registry's tick.
+            // Seeing one means the Registry at this address was destroyed and
+            // re-created (ticks restart at 1) or replaced by a loaded one: reset
+            // every lastRun so each system sees everything once (never a false
+            // negative). O(systems) integer compares per Execute().
+            {
+                const Tick now = registry.CurrentTick();
+                bool stale = false;
+                for (const auto& md : m_context.metadata)
+                    if (md.lastRun != 0 && !IsNewer(now, md.lastRun)) { stale = true; break; }
+                if (stale) ASTRA_UNLIKELY
+                    for (auto& md : m_context.metadata) md.lastRun = 0;
             }
 
             {
@@ -422,6 +459,20 @@ namespace Astra
 
                     // Execute via the provided executor
                     executor->Execute(m_context);
+
+                    // Change detection (spec §3.5; ruling G): the executor advanced
+                    // the tick once per GROUP (BeginSystemGroup), so right now
+                    // CurrentTick() == the tick of this segment's LAST group ==
+                    // exactly the lastRun those systems just recorded. Anything
+                    // stamped at this tick -- every structural change the flush
+                    // below applies, and any main-thread write made after
+                    // Execute() returns (e.g. an editor moving a transform between
+                    // frames) -- would read as NOT newer than that lastRun, and
+                    // those systems would silently miss it next frame: a false
+                    // negative, which the spec forbids. Advance once more here so
+                    // the flush and everything after it are stamped strictly newer
+                    // than every system's lastRun.
+                    registry.AdvanceTick();
 
                     // Task 3/Task 4, per segment: executor->Execute() above
                     // has just returned, so every system in this segment has

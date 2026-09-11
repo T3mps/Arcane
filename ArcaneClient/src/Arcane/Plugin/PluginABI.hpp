@@ -685,7 +685,59 @@ namespace Arcane
     //     through v24 set. Gacha's Game restamp is that repo's own follow-up, tracked
     //     there rather than here -- the grep evidence above is what proves it is safe to
     //     defer, not evidence it was done.
-    inline constexpr uint32_t kGamePluginABIVersion = 25;
+    // v26 (2026-09-11): Astra re-vendored to dev at the change-detection merge
+    //     (feat/change-detection, 18 commits over f3e311d incl. the S1
+    //     load-robustness fix + the adoption's two primitives). SAME FAILURE
+    //     CLASS AS v10/v24: plugins compile Astra's headers THEMSELVES, and
+    //     this diff moves in-memory layouts their
+    //     inlined templates index -- ArchetypeChunkPool's `Column` gained
+    //     `EntityTicks* ticks` beside `disabledWords`; `ArchetypeColumnMeta`
+    //     gained `trackedColumns[MAX_COMPONENTS]` + `trackedColumnCount` (128
+    //     slots here: Arcane defines no ASTRA_MAX_COMPONENTS); the chunk arena
+    //     now carves a per-column `Tick` version region and per-entity tick
+    //     columns, shifting component-array offsets; `EntityLocation` became an
+    //     aggregate; and the whole View/Query/ViewIterator ForEach path (which
+    //     TransformSystems.hpp / RenderSystems.hpp instantiate INSIDE
+    //     ReferenceGame.dll and Aphelyon.dll) now stamps chunk versions on
+    //     entry. A v25 plugin under a v26 host would read component arrays at
+    //     stale offsets and never stamp. Reject the pairing.
+    //     TWO ARCANE FACTS RIDE ALONG. (1) Residency (Plan 1 Task 3): Runtime
+    //     now calls SetTypeContext(ctx, ModuleResidency::Resident) and owns the
+    //     engine roster through a Runtime-held Astra::ComponentModule "Arcane"
+    //     -- the decision the v24 entry deferred, taken 2026-09-11 (spec
+    //     docs/specs/2026-09-11-astra-adoption-design.md s5). Reverses the
+    //     2026-08-10 ratification: its blocking caveat ("one registry per
+    //     context") is gone from the vendored headers, and a Resident binder is
+    //     pinned so the last Runtime's Reset reports Retained, never Erased.
+    //     Plugins, hosts and the test exe keep the one-arg (Transient) call.
+    //     (2) A TRACKED TYPE (Plan 1 Task 5): Transform declares
+    //     `static constexpr bool AstraChangeTracked = true` -- a static member,
+    //     so sizeof/reflect block/serialized bytes are unchanged and it needs
+    //     no bump of its own; it is recorded here because it is a header change
+    //     compiled into every plugin, and a non-const view over Transform now
+    //     yields Astra::Mut<Transform> (source-compatible via the implicit T&).
+    //     MEASURED, not assumed: `grep -rn -E` for every compile-affecting
+    //     change in the diff -- EntityLocation, AddEntity, BatchAddEntities,
+    //     ViewIterable, ViewIterator, Deserialize(, ComponentDescriptor,
+    //     ArchetypeColumnMeta, SystemContext(, ISystemExecutor,
+    //     ComponentUpdated, CreateView<, GetComponent<, GetRelations,
+    //     ModuleResidency, AstraChangeTracked, Changed<, Modified(, IsChanged
+    //     -- over BOTH game modules in the two trees returns NOTHING:
+    //
+    //       $ grep -rn -E "EntityLocation|AddEntity|BatchAddEntities|ViewIterable|ViewIterator|Deserialize\(|ComponentDescriptor|ArchetypeColumnMeta|SystemContext\(|ISystemExecutor|ComponentUpdated|CreateView<|GetComponent<|GetRelations|ModuleResidency|AstraChangeTracked|Changed<|Modified\(|IsChanged" ReferenceProject/Source/
+    //       (no output)
+    //       $ grep -rn -E "<same pattern>" D:/dev/starworks/Gacha/Game/Source/
+    //       (no output)
+    //
+    //     Both modules name only Astra::{BinaryReader, BinaryWriter, Entity,
+    //     Registry, SetTypeContext} (+ ComponentModule in a ReferenceGame
+    //     comment) and AddSystem<TransformPropagationSystem/RenderSubmission
+    //     System> -- header-only systems whose bodies change under them, which
+    //     is exactly why the gate, not the compiler, is what refuses a stale DLL.
+    //     ReferenceProject.arcproj restamped with this change, per the v16+
+    //     precedent. Gacha's Game restamp (21 -> 26) is Plan 1's LAST task, in
+    //     that repo, together with the Aphelyon.dll rebuild -- not deferred.
+    inline constexpr uint32_t kGamePluginABIVersion = 26;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

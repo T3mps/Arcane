@@ -94,6 +94,15 @@ namespace Astra
                 if (m_columnMeta.columns[c].descriptor->isEnableable)
                     m_columnMeta.enableableColumns[m_columnMeta.enableableColumnCount++] = c;
             }
+
+            // Same for AstraChangeTracked columns (Task 6): final ordinal order, so the
+            // chunk carve and every tick init/copy site share one early-out.
+            m_columnMeta.trackedColumnCount = 0;
+            for (uint16_t c = 0; c < m_columnMeta.columnCount; ++c)
+            {
+                if (m_columnMeta.columns[c].descriptor->isChangeTracked)
+                    m_columnMeta.trackedColumns[m_columnMeta.trackedColumnCount++] = c;
+            }
         }
 
         // Exact (non-pow2) capacity for a chunk of chunkBytes, under the same
@@ -111,21 +120,35 @@ namespace Astra
             size_t cap = usable / m_perEntitySize;
 
             // Enableable columns carve disabled-bit words INSIDE the chunk (Task 2),
-            // which the column-only estimate above does not account for. Archetypes
-            // with NO enableable column skip this entirely and keep the exact legacy
-            // value (verified: enableableColumnCount == 0 => early return of `cap`).
-            // Otherwise shrink `cap` until the precise carve layout (columns + word
-            // regions, mirrored by ComputeLayoutBytesForCapacity) fits chunkBytes,
-            // using an overshoot-proportional step so even tiny components converge in
-            // a couple of iterations, then reclaim any slack the step overshot.
-            if (m_columnMeta.enableableColumnCount > 0 && cap > 0)
+            // and change-tracked columns carve per-entity tick columns (Task 6) --
+            // neither of which the column-only estimate above accounts for.
+            // Archetypes with NO enableable and NO tracked column skip this entirely
+            // and keep the exact legacy value (verified: both counts == 0 => early
+            // return of `cap`). Otherwise shrink `cap` until the precise carve layout
+            // (columns + word regions + tick columns, mirrored by
+            // ComputeLayoutBytesForCapacity) fits chunkBytes, using an
+            // overshoot-proportional step so even tiny components converge in a
+            // couple of iterations, then reclaim any slack the step overshot.
+            if ((m_columnMeta.enableableColumnCount > 0 || m_columnMeta.trackedColumnCount > 0) && cap > 0)
             {
                 size_t layout = ComputeLayoutBytesForCapacity(cap);
                 while (cap > 0 && layout > chunkBytes)
                 {
-                    // Each unit of cap contributes >= m_perEntitySize column bytes, so
-                    // this step can never under-shrink into a non-terminating loop.
-                    size_t dec = (layout - chunkBytes) / m_perEntitySize;
+                    // Each unit of cap contributes >= m_perEntitySize column bytes PLUS
+                    // sizeof(EntityTicks) (8) bytes per change-tracked column (the
+                    // per-entity tick columns, see ComputeLayoutBytesForCapacity), so
+                    // dividing the overshoot by that per-unit cost is still a safe
+                    // UNDER-estimate of the units to drop (the disabled-word regions
+                    // add more per unit, never less): the step can never over-shrink,
+                    // and `dec >= 1` keeps the termination argument unchanged. Dividing
+                    // by m_perEntitySize alone made the first step over-shrink a tracked
+                    // archetype and left the grow-back loop below to climb the
+                    // difference one capacity unit at a time (~thousands of layout
+                    // calls per new chunk at the 512 KB ceiling for a small tracked
+                    // component); with the tick bytes in the divisor it converges in
+                    // <= 2 iterations (final review Important #6b).
+                    size_t dec = (layout - chunkBytes) /
+                                 (m_perEntitySize + sizeof(EntityTicks) * static_cast<size_t>(m_columnMeta.trackedColumnCount));
                     if (dec == 0) dec = 1;
                     cap -= std::min(cap, dec);
                     layout = ComputeLayoutBytesForCapacity(cap);
@@ -138,9 +161,11 @@ namespace Astra
 
         // Exact byte footprint of a chunk holding `cap` entities, byte-for-byte
         // mirroring ArchetypeChunk::InitializeColumns: cache-line-aligned column
-        // blocks followed by 8-byte-aligned disabled-word regions for each enableable
-        // column. The single source of truth the capacity math shrinks against so the
-        // chunk's own `offset <= m_chunkSize` carve assert can never trip.
+        // blocks, the 8-byte-aligned version region, 8-byte-aligned disabled-word
+        // regions for each enableable column, then 8-byte-aligned per-entity tick
+        // columns for each change-tracked column. The single source of truth the
+        // capacity math shrinks against so the chunk's own `offset <= m_chunkSize`
+        // carve assert can never trip.
         ASTRA_NODISCARD size_t ComputeLayoutBytesForCapacity(size_t cap) const noexcept
         {
             size_t offset = 0;
@@ -149,11 +174,18 @@ namespace Astra
                 offset = (offset + CACHE_LINE_SIZE - 1) & ~(CACHE_LINE_SIZE - 1);
                 offset += static_cast<size_t>(m_columnMeta.columns[c].stride) * cap;
             }
+            offset = (offset + 7) & ~size_t(7);                                  // version region
+            offset += static_cast<size_t>(m_columnMeta.columnCount) * sizeof(Tick);
             const size_t words = (cap + 63) / 64;
             for (uint16_t e = 0; e < m_columnMeta.enableableColumnCount; ++e)
             {
                 offset = (offset + 7) & ~size_t(7);
                 offset += words * 8;
+            }
+            for (uint16_t t = 0; t < m_columnMeta.trackedColumnCount; ++t)   // per-entity tick columns
+            {
+                offset = (offset + 7) & ~size_t(7);
+                offset += cap * sizeof(EntityTicks);
             }
             return offset;
         }
@@ -161,10 +193,11 @@ namespace Astra
         // Byte size a chunk must be allocated at to be GUARANTEED to hold exactly
         // `cap` entities once ComputeCapacityForBytes re-derives its capacity, i.e.
         // the conservative column estimate (perEntitySize*cap + alignmentOverhead)
-        // PLUS an upper bound on the enableable word regions. Callers that size a
-        // chunk from a known capacity (Deserialize) MUST use this rather than the raw
-        // column formula, or the word carve would shrink the re-derived capacity below
-        // `cap` and overflow. Zero-size archetypes keep the legacy entity-vector sizing.
+        // PLUS an upper bound on the enableable word regions and the change-tracked
+        // tick columns. Callers that size a chunk from a known capacity (Deserialize)
+        // MUST use this rather than the raw column formula, or the carves would shrink
+        // the re-derived capacity below `cap` and overflow. Zero-size archetypes keep
+        // the legacy entity-vector sizing.
         ASTRA_NODISCARD size_t ChunkBytesToHold(size_t cap) const noexcept
         {
             if (m_perEntitySize == 0)
@@ -175,6 +208,11 @@ namespace Astra
             {
                 const size_t words = (cap + 63) / 64;
                 bytes += static_cast<size_t>(ec) * (words * 8 + 8);   // +8/col: 8-byte-align slack upper bound
+            }
+            const uint16_t tc = m_columnMeta.trackedColumnCount;
+            if (tc > 0)
+            {
+                bytes += static_cast<size_t>(tc) * (cap * sizeof(EntityTicks) + 8);   // +8/col: align slack, as above
             }
             return bytes;
         }
@@ -206,7 +244,15 @@ namespace Astra
                 return m_chunkPool->GetChunkSize();
             const size_t dataBytes = m_totalCapacity * m_perEntitySize;
             const size_t raw = dataBytes / m_chunkPool->GetGrowDivisor();
-            const size_t oneEntityBytes = m_perEntitySize + m_alignmentOverhead;
+            // One entity's footprint INCLUDING the per-column carves (enableable
+            // disabled words, change-tracked per-entity tick columns): the same
+            // conservative bound Deserialize sizes restored chunks with. With no
+            // enableable and no tracked column this is exactly the legacy
+            // `m_perEntitySize + m_alignmentOverhead`; with them, the legacy value
+            // under-counted the carve, so a single large tracked component could
+            // make ComputeCapacityForBytes(target) == 0 and Initialize refuse
+            // (final review Important #6a).
+            const size_t oneEntityBytes = ChunkBytesToHold(1);
             const size_t target = std::max(raw, oneEntityBytes);
             return std::clamp(target, m_chunkPool->GetMinChunkBytes(), m_chunkPool->GetMaxChunkBytes());
         }
@@ -278,6 +324,11 @@ namespace Astra
                 ? (nonEmptyComponents - 1) * CACHE_LINE_SIZE
                 : 0;
 
+            // Change-detection version region (ArchetypeChunk::InitializeColumns):
+            // 8-byte align slack + one Tick per storage column. Folded into the
+            // overhead so ComputeCapacityForBytes' estimate stays a guaranteed fit.
+            alignmentOverhead += 8 + nonEmptyComponents * sizeof(Tick);
+
             m_perEntitySize = perEntitySize;
             m_alignmentOverhead = alignmentOverhead;
 
@@ -322,7 +373,7 @@ namespace Astra
         {
             return AddEntityInternal(entity, [&](auto& chunk, Entity e)
             {
-                return chunk->AddEntity(e);
+                return chunk->AddEntity(e, Now());
             });
         }
         
@@ -331,7 +382,7 @@ namespace Astra
         {
             return AddEntityInternal(entity, [&](auto& chunk, Entity e)
             {
-                return chunk->AddEntityWithComponents(e, std::forward<Components>(components)...);
+                return chunk->AddEntityWithComponents(e, Now(), std::forward<Components>(components)...);
             });
         }
         
@@ -384,7 +435,7 @@ namespace Astra
                     size_t toAdd = std::min(available, count - entityIndex);
                     size_t startIndex = chunk->GetCount();
 
-                    chunk->BatchAddEntities(entities.subspan(entityIndex, toAdd));
+                    chunk->BatchAddEntities(entities.subspan(entityIndex, toAdd), Now());
 
                     for (size_t i = 0; i < toAdd; ++i)
                     {
@@ -490,6 +541,13 @@ namespace Astra
                                  entities.begin() + produced,
                                  entities.begin() + produced + runLen);
                 chunk->SetCount(startSlot + runLen);
+                chunk->StampAllColumns(Now());
+                if (cm.trackedColumnCount) ASTRA_UNLIKELY
+                {
+                    const Tick now = Now();
+                    for (size_t r = 0; r < runLen; ++r)
+                        chunk->InitTicks(startSlot + r, now);
+                }
 
                 // Hoist the run's typed column bases ONCE. Empty (tag) components yield
                 // a null base -- never dereferenced; their placement-new is elided below.
@@ -698,6 +756,11 @@ namespace Astra
                     // and b (src) share id dId => same enableable-ness.
                     if (desc.isEnableable) ASTRA_UNLIKELY
                         dstChunk->SetDisabled(a, dstEntityIndex, srcChunk->IsDisabled(b, srcEntityIndex));
+                    // Tick carry (Task 6): a shared tracked column keeps the entity's own
+                    // {added, changed}; AllocateEntitySlot's InitTicks(Now()) survives only
+                    // on dst-only (newly added) tracked columns.
+                    if (desc.isChangeTracked) ASTRA_UNLIKELY
+                        dstChunk->CopyTicks(a, dstEntityIndex, *srcChunk, b, srcEntityIndex);
                     ++b;
                 }
                 else ASTRA_UNLIKELY                                              // dst-only: default-construct
@@ -773,55 +836,20 @@ namespace Astra
         ASTRA_NODISCARD bool HasComponent(ComponentID id) const { return m_mask.Test(id); }
 
         template<Component... Components, std::invocable<Entity, Components&...> Func>
-        ASTRA_FORCEINLINE void ForEach(Func&& func)
-        {
-            if (m_entityCount == 0 || m_chunks.empty()) ASTRA_UNLIKELY
-                return;
-            
-            const size_t numChunks = m_chunks.size();
-            
-            for (size_t i = 0; i < numChunks; ++i)
-            {
-                auto& chunk = m_chunks[i];
-                const size_t count = chunk->GetCount();
-                if (count == 0) ASTRA_UNLIKELY
-                {
-                    continue;
-                }
-                
-                // Prefetch next chunk's data while processing current chunk
-                if (i + 1 < numChunks) ASTRA_LIKELY
-                {
-                    auto& nextChunk = m_chunks[i + 1];
-                    if (nextChunk->GetCount() > 0)
-                    {
-                        // Prefetch the entity array and first component array of next chunk
-                        Simd::Ops::PrefetchT0(&nextChunk->GetEntities()[0]);
-                        if constexpr (sizeof...(Components) > 0)
-                        {
-                            using FirstComponent = std::tuple_element_t<0, std::tuple<Components...>>;
-                            Simd::Ops::PrefetchT0(nextChunk->GetComponentArray<FirstComponent>());
-                        }
-                    }
-                }
-                
-                ForEachImpl<Components...>(chunk.get(), count, std::forward<Func>(func), std::index_sequence_for<Components...>{});
-            }
-        }
-        
-        template<Component... Components, std::invocable<Entity, Components&...> Func>
-        ASTRA_FORCEINLINE void ForEachChunk(size_t chunkIndex, Func&& func)
-        {
-            if (chunkIndex >= m_chunks.size()) ASTRA_UNLIKELY
-                return;
-                
-            auto& chunk = m_chunks[chunkIndex];
-            const size_t count = chunk->GetCount();
-            if (count == 0) ASTRA_UNLIKELY
-                return;
+        ASTRA_FORCEINLINE void ForEach(Func&& func) { ForEachBody<false, Components...>(std::forward<Func>(func)); }
 
-            ForEachImpl<Components...>(chunk.get(), count, std::forward<Func>(func), std::index_sequence_for<Components...>{});
-        }
+        // Same loop as ForEach, plus the coarse change-detection stamp: every
+        // mutable-yield column (non-const, has storage) of every visited chunk is
+        // stamped with Now() BEFORE the chunk is iterated (spec §3.3 row 1). A view
+        // whose yields are all const instantiates the plain loop (empty column list).
+        template<Component... Components, std::invocable<Entity, Components&...> Func>
+        ASTRA_FORCEINLINE void ForEachStamped(Func&& func) { ForEachBody<true, Components...>(std::forward<Func>(func)); }
+
+        template<Component... Components, std::invocable<Entity, Components&...> Func>
+        ASTRA_FORCEINLINE void ForEachChunk(size_t chunkIndex, Func&& func) { ForEachChunkBody<false, Components...>(chunkIndex, std::forward<Func>(func)); }
+
+        template<Component... Components, std::invocable<Entity, Components&...> Func>
+        ASTRA_FORCEINLINE void ForEachChunkStamped(size_t chunkIndex, Func&& func) { ForEachChunkBody<true, Components...>(chunkIndex, std::forward<Func>(func)); }
 
         void EnsureCapacity(size_t additionalCount)
         {
@@ -965,7 +993,7 @@ namespace Astra
             }
         }
         
-        static Result<std::unique_ptr<Archetype>, SerializationError> Deserialize(BinaryReader& reader, const std::vector<ComponentDescriptor>& registryDescriptors, ArchetypeChunkPool* componentPool = nullptr)
+        static Result<std::unique_ptr<Archetype>, SerializationError> Deserialize(BinaryReader& reader, const std::vector<ComponentDescriptor>& registryDescriptors, ArchetypeChunkPool* componentPool = nullptr, const Tick* tickSource = nullptr)
         {
             using ResultType = Result<std::unique_ptr<Archetype>, SerializationError>;
 
@@ -1144,6 +1172,7 @@ namespace Astra
             // the untrusted raw disk mask.
             auto archetype = std::make_unique<Archetype>(localMask);
             archetype->m_chunkPool = componentPool;
+            archetype->SetTickSource(tickSource);
             archetype->Initialize(descriptors);
 
             if (!archetype->IsInitialized())
@@ -1156,6 +1185,14 @@ namespace Astra
             archetype->m_chunks.clear();
             archetype->m_totalCapacity = 0;
             archetype->m_entityCount = 0;
+
+            // Untrusted-load (2026-09-11 grading finding S1): m_entityCount is
+            // derived from what the chunks actually hold, never taken from the
+            // header. The header's entityCount is a cross-check only -- a
+            // disagreement means a crafted or corrupted archive, and it is
+            // refused here rather than caught by the trailing checksum, because
+            // Defragment/CompactChunks size their work from this field.
+            uint64_t chunkEntitySum = 0;
 
             // Read each chunk's data
             for (uint32_t chunkIndex = 0; chunkIndex < chunkCount; ++chunkIndex)
@@ -1211,7 +1248,7 @@ namespace Astra
                 {
                     Entity entity;
                     reader(entity);
-                    chunk->AddEntity(entity);
+                    chunk->AddEntity(entity, archetype->Now());
                 }
 
                 if (reader.HasError())
@@ -1264,9 +1301,14 @@ namespace Astra
                 }
 
                 // AppendChunk already installed the chunk in archetype->m_chunks.
+                chunkEntitySum += chunkEntityCount;
             }
 
-            archetype->m_entityCount = static_cast<size_t>(entityCount);
+            if (chunkEntitySum != entityCount) ASTRA_UNLIKELY
+            {
+                return ResultType::Err(SerializationError::CorruptedData);
+            }
+            archetype->m_entityCount = static_cast<size_t>(chunkEntitySum);
 
             return ResultType::Ok(std::move(archetype));
         }
@@ -1308,7 +1350,9 @@ namespace Astra
                     return m_chunkPool ? m_chunkPool->GetChunkSize() : ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
                 const size_t liveBytes = m_entityCount * m_perEntitySize;
                 const size_t raw = liveBytes / m_chunkPool->GetGrowDivisor();
-                const size_t oneEntityBytes = m_perEntitySize + m_alignmentOverhead;
+                // Carve-inclusive one-entity floor, same as NextChunkBytes (reduces
+                // to the legacy value when no column is enableable or tracked).
+                const size_t oneEntityBytes = ChunkBytesToHold(1);
                 const size_t target = std::max(raw, oneEntityBytes);
                 return std::clamp(target, m_chunkPool->GetMinChunkBytes(), m_chunkPool->GetMaxChunkBytes());
             }();
@@ -1383,7 +1427,21 @@ namespace Astra
                             for (size_t k = 0; k < run; ++k)
                                 dst->SetDisabled(c, dstIndex + k, src->IsDisabled(c, srcIndex + k));
                         }
+
+                        // Tick carry (Task 6): same archetype => same ordinal; each moved
+                        // slot keeps its own {added, changed} in the fresh chunk.
+                        if (desc.isChangeTracked) ASTRA_UNLIKELY
+                        {
+                            for (size_t k = 0; k < run; ++k)
+                                dst->CopyTicks(c, dstIndex + k, *src, c, srcIndex + k);
+                        }
                     }
+
+                    // Change-detection carry (plan deviation 4): the fresh dst chunk is at
+                    // version 0; fold in the source chunk's version per column so a recent
+                    // write is not lost by repacking. Ordinals match (same archetype).
+                    for (uint16_t c = 0; c < m_columnMeta.columnCount; ++c)
+                        dst->FoldColumnVersion(c, src->GetColumnVersion(c));
 
                     dst->SetCount(dst->GetCount() + run);
                     srcIndex += run;
@@ -1429,6 +1487,9 @@ namespace Astra
         ASTRA_NODISCARD const ArchetypeColumnMeta& GetColumnMeta() const noexcept { return m_columnMeta; }
 
         void SetComponentPool(ArchetypeChunkPool* pool) { m_chunkPool = pool; }
+
+        void SetTickSource(const Tick* source) noexcept { m_tickSource = source; }
+        ASTRA_NODISCARD Tick Now() const noexcept { return m_tickSource ? *m_tickSource : Tick{1}; }
 
         ASTRA_NODISCARD Archetype* GetAddEdge(ComponentID id) const noexcept
         {
@@ -1760,6 +1821,17 @@ namespace Astra
                         dstLocations.push_back(EntityLocation::Create(chunkIndex, startIndex + i));
                     }
                     chunk->SetCount(chunk->GetCount() + toAdd);
+                    chunk->StampAllColumns(Now());
+                    // Tracked columns: every claimed slot starts at Now(); the
+                    // BatchMoveComponentsFrom copy below overwrites the SHARED tracked
+                    // columns with the source's ticks, so only a newly ADDED tracked
+                    // component keeps Now().
+                    if (m_columnMeta.trackedColumnCount) ASTRA_UNLIKELY
+                    {
+                        const Tick now = Now();
+                        for (size_t i = 0; i < toAdd; ++i)
+                            chunk->InitTicks(startIndex + i, now);
+                    }
 
                     entityIndex += toAdd;
 
@@ -1890,7 +1962,100 @@ namespace Astra
                 func(entities[i], GetComponentValue<Components>(std::get<Is>(arrays), i)...);
             }
         }
-        
+
+        // ---- Coarse change-detection stamp for the iteration entry points ----
+        // Column ordinals of the mutable-yield components, resolved once per call.
+        // -1 for a const or tag component (skipped by StampMutableColumns).
+        template<typename... Components>
+        ASTRA_FORCEINLINE void ResolveMutableColumns(int* cols) const noexcept
+        {
+            size_t i = 0;
+            ((cols[i++] = Detail::IsMutableYield<Components>
+                ? m_columnMeta.idToColumn[TypeID<std::remove_const_t<Components>>::Value()]
+                : -1), ...);
+        }
+
+        template<size_t N>
+        ASTRA_FORCEINLINE static void StampMutableColumns(ArchetypeChunk* chunk, const int (&cols)[N], Tick now) noexcept
+        {
+            for (size_t i = 0; i < N; ++i)
+                if (cols[i] >= 0) chunk->StampColumn(cols[i], now);
+        }
+
+        // The one chunk loop behind ForEach (Stamp=false) and ForEachStamped
+        // (Stamp=true), so the stamped and unstamped iteration cannot drift. With
+        // Stamp=false, or when every yield is const/tag, the stamp block is not
+        // instantiated and this is the pre-existing loop byte for byte.
+        template<bool Stamp, Component... Components, typename Func>
+        ASTRA_FORCEINLINE void ForEachBody(Func&& func)
+        {
+            if (m_entityCount == 0 || m_chunks.empty()) ASTRA_UNLIKELY
+                return;
+
+            constexpr bool AnyMutable = (Detail::IsMutableYield<Components> || ...);
+            [[maybe_unused]] int cols[sizeof...(Components) == 0 ? 1 : sizeof...(Components)];
+            [[maybe_unused]] Tick now = 0;
+            if constexpr (Stamp && AnyMutable)
+            {
+                ResolveMutableColumns<Components...>(cols);
+                now = Now();
+            }
+
+            const size_t numChunks = m_chunks.size();
+
+            for (size_t i = 0; i < numChunks; ++i)
+            {
+                auto& chunk = m_chunks[i];
+                const size_t count = chunk->GetCount();
+                if (count == 0) ASTRA_UNLIKELY
+                {
+                    continue;
+                }
+
+                // Prefetch next chunk's data while processing current chunk
+                if (i + 1 < numChunks) ASTRA_LIKELY
+                {
+                    auto& nextChunk = m_chunks[i + 1];
+                    if (nextChunk->GetCount() > 0)
+                    {
+                        // Prefetch the entity array and first component array of next chunk
+                        Simd::Ops::PrefetchT0(&nextChunk->GetEntities()[0]);
+                        if constexpr (sizeof...(Components) > 0)
+                        {
+                            using FirstComponent = std::tuple_element_t<0, std::tuple<Components...>>;
+                            Simd::Ops::PrefetchT0(nextChunk->GetComponentArray<FirstComponent>());
+                        }
+                    }
+                }
+
+                if constexpr (Stamp && AnyMutable)
+                    StampMutableColumns(chunk.get(), cols, now);
+
+                ForEachImpl<Components...>(chunk.get(), count, std::forward<Func>(func), std::index_sequence_for<Components...>{});
+            }
+        }
+
+        template<bool Stamp, Component... Components, typename Func>
+        ASTRA_FORCEINLINE void ForEachChunkBody(size_t chunkIndex, Func&& func)
+        {
+            if (chunkIndex >= m_chunks.size()) ASTRA_UNLIKELY
+                return;
+
+            auto& chunk = m_chunks[chunkIndex];
+            const size_t count = chunk->GetCount();
+            if (count == 0) ASTRA_UNLIKELY
+                return;
+
+            constexpr bool AnyMutable = (Detail::IsMutableYield<Components> || ...);
+            if constexpr (Stamp && AnyMutable)
+            {
+                int cols[sizeof...(Components)];
+                ResolveMutableColumns<Components...>(cols);
+                StampMutableColumns(chunk.get(), cols, Now());
+            }
+            ForEachImpl<Components...>(chunk.get(), count, std::forward<Func>(func), std::index_sequence_for<Components...>{});
+        }
+
         std::pair<size_t, bool> GetOrCreateChunk()
         {
             if (!m_initialized) ASTRA_UNLIKELY
@@ -1943,6 +2108,8 @@ namespace Astra
             size_t entityIndex = chunk->GetCount();
             chunk->GetEntities().push_back(entity);   // capacity pre-reserved at chunk creation: never reallocates
             chunk->SetCount(entityIndex + 1);
+            chunk->StampAllColumns(Now());   // the destination of every single-entity move (MoveEntityFrom/MoveAndAdd/MoveAndAddByID) is stamped here
+            chunk->InitTicks(entityIndex, Now());   // tracked columns start at Now(); the move that follows copies the SHARED ones from the source
 
             ++m_entityCount;
             
@@ -2009,6 +2176,12 @@ namespace Astra
                         destChunk->SetDisabled(c, destEntityIndex, srcChunk->IsDisabled(c, srcEntityIndex));
                         srcChunk->SetDisabled(c, srcEntityIndex, false);
                     }
+
+                    // Tick carry (Task 6): same archetype => same ordinal on both chunks.
+                    if (desc.isChangeTracked) ASTRA_UNLIKELY
+                        destChunk->CopyTicks(c, destEntityIndex, *srcChunk, c, srcEntityIndex);
+
+                    destChunk->FoldColumnVersion(c, srcChunk->GetColumnVersion(c));
                 }
 
                 // Remove entity from source chunk's entity vector
@@ -2041,6 +2214,11 @@ namespace Astra
         size_t m_firstNonFullChunkIndex = 0;  // Track first chunk with available space for O(1) lookup
         bool m_initialized;
         ArchetypeChunkPool* m_chunkPool = nullptr;
+
+        // Change-detection time source: points at the owning ArchetypeManager's
+        // counter (stable: the manager is non-movable). Null for a hand-built
+        // archetype (tests), which then stamps with 1 -- "stamped at least once".
+        const Tick* m_tickSource = nullptr;
 
         // Add/remove transition edges, indexed by ComponentID (< MAX_COMPONENTS).
         // Lazily allocated on first edge; nullptr slot = no cached edge; freed with the archetype.

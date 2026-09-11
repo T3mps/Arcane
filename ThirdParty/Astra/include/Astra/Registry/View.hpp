@@ -10,6 +10,7 @@
 #include "../Archetype/Archetype.hpp"
 #include "../Archetype/ArchetypeManager.hpp"
 #include "../Component/Component.hpp"
+#include "../Container/SmallVector.hpp"
 #include "../Core/Base.hpp"
 #include "../Core/WorkScheduler.hpp"
 #include "../Entity/Entity.hpp"
@@ -49,6 +50,40 @@ namespace Astra
         static constexpr bool HasRequiredFilter = std::tuple_size_v<EnabledRequiredFilter> > 0;
         static constexpr bool HasOptionalFilter = std::tuple_size_v<EnabledOptionalFilter> > 0;
         static constexpr bool HasEnabledFilter  = HasRequiredFilter || HasOptionalFilter;
+
+        // ================= Change-detection filters (spec 2026-09-10 §3.4) =================
+        //
+        // Changed<T>/Added<T> are match-only terms (T required, never yielded, zero
+        // ViewAccess footprint) that reject whole chunks whose T column version is not
+        // newer than the querying tick. HasChangeFilter is the compile-time gate, exactly
+        // like HasEnabledFilter: a view naming no Changed/Added instantiates none of the
+        // reject code. Iteration-only this stage: ForEach(ctx, fn) / Since(tick).ForEach.
+        using ChangedTypes = typename Detail::QueryClassifier<QueryArgs...>::ChangedComponents;
+        using AddedTypes   = typename Detail::QueryClassifier<QueryArgs...>::AddedComponents;
+        static_assert(Detail::ChangeTermsAreRequired<QueryArgs...>,
+            "Changed<T>/Added<T>: T must also be listed as a required component of this view "
+            "(e.g. CreateView<const T, Changed<T>, ...>) -- filter what you fetch");
+    public:
+        static constexpr bool HasChangeFilter = (std::tuple_size_v<ChangedTypes> + std::tuple_size_v<AddedTypes>) > 0;
+    private:
+        // Any per-chunk filter at all: routes iteration through VisitChunkFiltered.
+        static constexpr bool HasChunkFilter = HasEnabledFilter || HasChangeFilter;
+
+        // Any Changed<T>/Added<T> term over a change-TRACKED T: inside a chunk that
+        // passed the version reject, that term is evaluated per entity from the tick
+        // column (spec §3.4 step 3). False for every untracked change filter, which
+        // stays chunk-granular and instantiates none of the per-entity mask code.
+        template<typename Tuple> struct AnyTracked;
+        template<typename... Ts> struct AnyTracked<std::tuple<Ts...>> : std::bool_constant<(IsChangeTrackedV<Ts> || ...)> {};
+        static constexpr bool HasTrackedChangeTerm = AnyTracked<ChangedTypes>::value || AnyTracked<AddedTypes>::value;
+
+        // Any yielded, non-const, change-tracked component: routes iteration through
+        // the view-owned chunk loops (Archetype::ForEachStamped cannot yield Mut) and
+        // switches the required yield to Mut<T>. False for every pre-existing view.
+        template<typename Tuple> struct AnyTrackedYield;
+        template<typename... Ts> struct AnyTrackedYield<std::tuple<Ts...>>
+            : std::bool_constant<((Detail::IsMutableYield<Ts> && IsChangeTrackedV<Ts>) || ...)> {};
+        static constexpr bool HasTrackedYield = AnyTrackedYield<RequiredTypes>::value || AnyTrackedYield<OptionalTypes>::value;
 
         // Parallel execution thresholds - based on empirical testing
         static constexpr size_t AVG_ENTITIES_PER_CHUNK = 256;                           // Typical for 16KB chunks with ~50 byte entities
@@ -108,46 +143,72 @@ namespace Astra
          * after the loop; the check (and the counter read) is compiled out
          * entirely in Release/Dist builds, so this contract carries zero Release
          * cost.
+         *
+         * Change detection (spec §3.4): a view with a Changed<T>/Added<T> filter
+         * needs a "since" tick and refuses this overload at compile time -- call
+         * ForEach(ctx, fn) from a SystemContext system, or Since(tick).ForEach(fn).
          */
         template<typename Func>
         ASTRA_FORCEINLINE void ForEach(Func&& func)
         {
-            if (!m_archetypeManager) ASTRA_UNLIKELY
-                return;  // Registry destroyed
-
-            EnsureArchetypes();
-
-#ifdef ASTRA_BUILD_DEBUG
-            // Captured AFTER EnsureArchetypes() so its own (legitimate) refresh
-            // of the counter is never mistaken for an in-loop structural change.
-            const uint32_t debugStartStructuralChangeCounter =
-                m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire);
-#endif
-
-            if (m_archetypes.empty()) ASTRA_UNLIKELY
-                return;
-
-            auto adapted = MakeEntityOptionalAdapter(func);
-            for (Archetype* archetype : m_archetypes)
-            {
-                ForEachImpl(archetype, adapted, RequiredTypes{}, OptionalTypes{});
-            }
-
-#ifdef ASTRA_BUILD_DEBUG
-            ASTRA_ASSERT(m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire) == debugStartStructuralChangeCounter,
-                "Structural mutation (create/destroy entity, add/remove component) detected during View::ForEach. "
-                "Defer structural changes into a CommandBuffer and call Execute() after the loop.");
-#endif
+            static_assert(!HasChangeFilter,
+                "This view has a Changed<T>/Added<T> filter and needs a 'since' tick: call "
+                "ForEach(ctx, fn) from a SystemContext system, or Since(tick).ForEach(fn).");
+            ForEachSince(Tick{0}, std::forward<Func>(func));
         }
-        
+
+        /**
+         * Tick-aware ForEach: `since` is taken from ctx.LastRun() (any TickContext --
+         * SystemContext, or a test stand-in), so Changed<T>/Added<T> terms see exactly
+         * what changed since this system last ran. Also valid on an unfiltered view.
+         */
+        template<TickContext Ctx, typename Func>
+        ASTRA_FORCEINLINE void ForEach(const Ctx& ctx, Func&& func) { ForEachSince(ctx.LastRun(), std::forward<Func>(func)); }
+
         template<typename Func>
         ASTRA_FORCEINLINE void ParallelForEach(Func&& func)
         {
+            static_assert(!HasChangeFilter,
+                "This view has a Changed<T>/Added<T> filter and needs a 'since' tick: call "
+                "ParallelForEach(ctx, fn) from a SystemContext system, or Since(tick).ParallelForEach(fn).");
+            ParallelForEachSince(Tick{0}, std::forward<Func>(func));
+        }
+
+        template<TickContext Ctx, typename Func>
+        ASTRA_FORCEINLINE void ParallelForEach(const Ctx& ctx, Func&& func) { ParallelForEachSince(ctx.LastRun(), std::forward<Func>(func)); }
+
+        /**
+         * Explicit-tick form for Registry&-only systems and tests:
+         * `view.Since(tick).ForEach(fn)` iterates with Changed<T>/Added<T> evaluated
+         * against `tick`. A thin non-owning handle over this view; use it immediately.
+         */
+        class SinceView
+        {
+        public:
+            SinceView(View& v, Tick since) noexcept : m_view(&v), m_since(since) {}
+            template<typename Func> void ForEach(Func&& func)         { m_view->ForEachSince(m_since, std::forward<Func>(func)); }
+            template<typename Func> void ParallelForEach(Func&& func) { m_view->ParallelForEachSince(m_since, std::forward<Func>(func)); }
+        private:
+            View* m_view;
+            Tick  m_since;
+        };
+        ASTRA_NODISCARD SinceView Since(Tick since) noexcept { return SinceView(*this, since); }
+
+    private:
+        // ForEach with an explicit "since" tick: the one stamped walk behind
+        // ForEach(fn), ForEach(ctx, fn) and Since(tick).ForEach(fn).
+        template<typename Func>
+        ASTRA_FORCEINLINE void ForEachSince(Tick since, Func&& func) { ForEachBody<true>(since, std::forward<Func>(func)); }
+
+        // ParallelForEach with an explicit "since" tick (see ForEachSince).
+        template<typename Func>
+        ASTRA_FORCEINLINE void ParallelForEachSince(Tick since, Func&& func)
+        {
             if (!m_archetypeManager) ASTRA_UNLIKELY
                 return;  // Registry destroyed
-            
+
             EnsureArchetypes();
-            
+
             if (m_archetypes.empty()) ASTRA_UNLIKELY
                 return;
 
@@ -162,12 +223,12 @@ namespace Astra
 
             if (quickCount < MIN_ENTITIES_QUICK_CHECK)
             {
-                return ForEach(adapted);
+                return ForEachSince(since, adapted);
             }
 
             // No scheduler injected: Astra spawns no threads — run sequentially inline.
             if (!m_scheduler)
-                return ForEach(adapted);
+                return ForEachSince(since, adapted);
 
             std::vector<std::pair<Archetype*, size_t>> chunkWork;
             // Better estimation based on typical entities per 16KB chunk
@@ -192,7 +253,7 @@ namespace Astra
             // Fall back to sequential for tiny workloads
             if (chunkWork.empty() || totalMatchingEntities < MIN_ENTITIES_FOR_PARALLEL || chunkWork.size() < MIN_CHUNKS_FOR_PARALLEL)
             {
-                return ForEach(adapted);
+                return ForEachSince(since, adapted);
             }
 
             m_scheduler->ParallelFor(chunkWork.size(), MIN_CHUNKS_PER_THREAD,
@@ -201,11 +262,12 @@ namespace Astra
                     for (size_t w = begin; w < end; ++w)
                     {
                         auto [archetype, chunkIndex] = chunkWork[w];
-                        ParallelForEachChunkImpl(archetype, chunkIndex, adapted, RequiredTypes{}, OptionalTypes{});
+                        ParallelForEachChunkImpl(archetype, chunkIndex, adapted, since, RequiredTypes{}, OptionalTypes{});
                     }
                 });
         }
 
+    public:
         /**
          * Like ParallelForEach, but threads a per-chunk sub-context to the body
          * (Theme B2 Phase B, Task 3 -- the machinery behind
@@ -250,9 +312,27 @@ namespace Astra
          * distinct iterationIndex values this call could have stamped, keeping
          * deferred-command SortKeys globally unique across sequential calls.
          * Callers that ignore the return value are unaffected (additive).
+         *
+         * Change detection (spec §3.4): a change-filtered view needs a "since"
+         * tick -- SystemContext::ParallelForEach calls the Tick-taking overload
+         * below; this one is compile-time refused on such a view.
          */
         template<typename Factory, typename Body>
         ASTRA_FORCEINLINE size_t ParallelForEachWithContext(Factory&& factory, Body&& body)
+        {
+            static_assert(!HasChangeFilter,
+                "This view has a Changed<T>/Added<T> filter and needs a 'since' tick: call "
+                "ParallelForEachWithContext(since, factory, body) (SystemContext::ParallelForEach does).");
+            return ParallelForEachWithContext(Tick{0}, std::forward<Factory>(factory), std::forward<Body>(body));
+        }
+
+        /**
+         * ParallelForEachWithContext with an explicit "since" tick for the view's
+         * Changed<T>/Added<T> terms (ignored by an unfiltered view). Same contract
+         * and return value as the two-argument form above.
+         */
+        template<typename Factory, typename Body>
+        ASTRA_FORCEINLINE size_t ParallelForEachWithContext(Tick since, Factory&& factory, Body&& body)
         {
             if (!m_archetypeManager) ASTRA_UNLIKELY
                 return 0;  // Registry destroyed
@@ -305,7 +385,7 @@ namespace Astra
                 {
                     body(e, std::forward<decltype(comps)>(comps)..., sub);
                 };
-                ParallelForEachChunkImpl(archetype, chunkIndex, wrapped, RequiredTypes{}, OptionalTypes{});
+                ParallelForEachChunkImpl(archetype, chunkIndex, wrapped, since, RequiredTypes{}, OptionalTypes{});
             };
 
             // No scheduler, or workload below the parallel thresholds: walk every
@@ -335,6 +415,7 @@ namespace Astra
 
         ASTRA_NODISCARD size_t Size() noexcept
         {
+            static_assert(!HasChangeFilter, "Changed<T>/Added<T> views are iteration-only this stage: Size/Empty/Contains/Get/Single/range-for need a tick; use ForEach(ctx, fn) or Since(tick).ForEach(fn)");
             if (!m_archetypeManager) ASTRA_UNLIKELY
                 return 0;  // Registry destroyed
 
@@ -363,11 +444,13 @@ namespace Astra
 
         ASTRA_NODISCARD bool Empty() noexcept
         {
+            static_assert(!HasChangeFilter, "Changed<T>/Added<T> views are iteration-only this stage: Size/Empty/Contains/Get/Single/range-for need a tick; use ForEach(ctx, fn) or Since(tick).ForEach(fn)");
             return Size() == 0;
         }
 
         ASTRA_NODISCARD bool Contains(Entity e) const
         {
+            static_assert(!HasChangeFilter, "Changed<T>/Added<T> views are iteration-only this stage: Size/Empty/Contains/Get/Single/range-for need a tick; use ForEach(ctx, fn) or Since(tick).ForEach(fn)");
             return VisibleRecord(e) != nullptr;
         }
 
@@ -385,6 +468,15 @@ namespace Astra
          */
         ASTRA_FORCEINLINE Iterator begin()
         {
+            static_assert(!HasChangeFilter, "Changed<T>/Added<T> views are iteration-only this stage: Size/Empty/Contains/Get/Single/range-for need a tick; use ForEach(ctx, fn) or Since(tick).ForEach(fn)");
+            // Ruling I: ViewIterator yields plain T&, which cannot mark a change-
+            // tracked entity's `changed` tick -- every write through range-for would
+            // be an exact-tier false negative. Refuse at compile time (same precedent
+            // as the enableable filter below); teaching the iterator to yield Mut<T>
+            // is a recorded follow-up.
+            static_assert(!HasTrackedYield,
+                "range-for over a change-tracked component requested non-const is not supported: the iterator yields T& "
+                "and cannot mark the entity's changed tick. Use ForEach(fn) (yields Mut<T>), or request `const T` for a read-only walk.");
             // Range-based for cannot honor the enableable disabled-bit filter:
             // ViewIterator has no access to the per-chunk disabled words, so
             // `for (auto x : view)` would visit disabled entities that
@@ -402,10 +494,12 @@ namespace Astra
                 "Use ForEach() or ParallelForEach() instead.");
 
             if (!m_archetypeManager) ASTRA_UNLIKELY
-                return Iterator(nullptr, 0);
+                return Iterator{};   // empty iterator: no archetypes, enters (and stamps) no chunk
 
             EnsureArchetypes();
-            return Iterator(m_archetypes.data(), m_archetypes.size());
+            // The iterator carries the current tick so it can apply the coarse
+            // change-detection stamp on every chunk it enters (non-const yields only).
+            return Iterator(m_archetypes.data(), m_archetypes.size(), m_archetypeManager->CurrentTick());
         }
 
         /**
@@ -413,6 +507,11 @@ namespace Astra
          */
         ASTRA_FORCEINLINE ViewSentinel end() const noexcept
         {
+            static_assert(!HasChangeFilter, "Changed<T>/Added<T> views are iteration-only this stage: Size/Empty/Contains/Get/Single/range-for need a tick; use ForEach(ctx, fn) or Since(tick).ForEach(fn)");
+            // See begin() (Ruling I): the iterator cannot mark a tracked entity.
+            static_assert(!HasTrackedYield,
+                "range-for over a change-tracked component requested non-const is not supported: the iterator yields T& "
+                "and cannot mark the entity's changed tick. Use ForEach(fn) (yields Mut<T>), or request `const T` for a read-only walk.");
             // See begin(): range-for is compile-time refused on required
             // enableable-filtered views so it cannot silently diverge from
             // ForEach()/Size() (IM-7).
@@ -425,19 +524,35 @@ namespace Astra
 
     private:
         // Random-access yield shape: each required -> a pointer (const preserved),
-        // each optional -> a pointer. Mirrors ForEach's yielded arguments.
+        // or a by-value Mut<R> for a non-const change-tracked R; each optional -> a
+        // pointer. Mirrors ForEach's yielded arguments.
+        template<typename R>
+        using AccessElement = std::conditional_t<Detail::IsMutableYield<R> && IsChangeTrackedV<R>, Mut<R>, R*>;
+
         template<typename ReqTuple, typename OptTuple> struct AccessTupleImpl;
         template<typename... R, typename... O>
         struct AccessTupleImpl<std::tuple<R...>, std::tuple<O...>>
         {
-            using type = std::tuple<R*..., O*...>;
+            using type = std::tuple<AccessElement<R>..., O*...>;
         };
 
         template<typename R>
-        ASTRA_FORCEINLINE R* BindRequired(const EntityRecord* rec) const
+        ASTRA_FORCEINLINE AccessElement<R> BindRequired(const EntityRecord* rec) const
         {
             using Bare = std::remove_const_t<R>;
-            return rec->archetype->template GetComponent<Bare>(rec->location);   // Bare* -> R* (adds const if any)
+            if constexpr (Detail::IsMutableYield<R> && IsChangeTrackedV<R>)
+            {
+                // Handing out the Mut does not mark; its first mutable use does, with
+                // the tick current at this call.
+                const int col = rec->archetype->GetColumnMeta().idToColumn[TypeID<Bare>::Value()];
+                return Mut<R>(rec->archetype->template GetComponent<Bare>(rec->location),
+                              rec->chunk->GetTicks(col) + rec->location.GetEntityIndex(),
+                              m_archetypeManager->CurrentTick());
+            }
+            else
+            {
+                return rec->archetype->template GetComponent<Bare>(rec->location);   // Bare* -> R* (adds const if any)
+            }
         }
         template<typename O>
         ASTRA_FORCEINLINE O* BindOptional(const EntityRecord* rec) const
@@ -450,6 +565,13 @@ namespace Astra
                 const ArchetypeColumnMeta& cm = rec->archetype->GetColumnMeta();
                 if (rec->chunk->IsDisabled(cm.idToColumn[TypeID<Bare>::Value()], rec->location.GetEntityIndex()))
                     return nullptr;
+            }
+            if constexpr (Detail::IsMutableYield<O> && IsChangeTrackedV<O>)
+            {
+                // Plan deviation 5: a present non-const tracked optional is a raw O*,
+                // so it marks the entity unconditionally (see MarkTrackedOptional).
+                const int col = rec->archetype->GetColumnMeta().idToColumn[TypeID<Bare>::Value()];
+                rec->chunk->GetTicks(col)[rec->location.GetEntityIndex()].changed = m_archetypeManager->CurrentTick();
             }
             return rec->archetype->template GetComponent<Bare>(rec->location);
         }
@@ -465,22 +587,49 @@ namespace Astra
             };
         }
 
+        // Get()'s stamp: the optional-presence array is built from the entity's own
+        // archetype, then the shared per-chunk stamp is applied to its chunk.
+        template<size_t... Oi>
+        ASTRA_FORCEINLINE void StampForGet(const EntityRecord* rec, std::index_sequence<Oi...> optSeq) const
+        {
+            std::array<bool, sizeof...(Oi)> hasOptional =
+            {
+                rec->archetype->template HasComponent<std::tuple_element_t<Oi, OptionalTypes>>()...
+            };
+            StampChunkForYields(rec->chunk, rec->archetype->GetColumnMeta(), hasOptional, m_archetypeManager->CurrentTick(),
+                                std::make_index_sequence<std::tuple_size_v<RequiredTypes>>{}, optSeq);
+        }
+
     public:
         using AccessTuple = typename AccessTupleImpl<RequiredTypes, OptionalTypes>::type;
 
         /**
          * Filter-aware random access: returns pointers to the yielded components for
-         * `e` (required -> T*, Optional -> T*), or Err(NotMatched) if `e` is absent,
-         * dead, filtered out, or disabled under this view's enabled filter. The
-         * pointers point INTO live chunk storage and are invalidated by any structural
-         * change (create/destroy/add/remove/defragment) — do not retain them across
-         * one. In-place value edits through the pointers are fine.
+         * `e` (required -> T*, or Mut<T> for a non-const change-tracked T; Optional ->
+         * T*), or Err(NotMatched) if `e` is absent, dead, filtered out, or disabled
+         * under this view's enabled filter. The pointers point INTO live chunk storage
+         * and are invalidated by any structural change (create/destroy/add/remove/
+         * defragment) — do not retain them across one. In-place value edits through
+         * the pointers are fine.
+         *
+         * Change detection: a NON-CONST requested component stamps the entity's chunk
+         * (that column's coarse version) on the way out, even on a `const View` -- and
+         * a change-tracked one is handed out as Mut<T>, which marks the entity on use.
+         * The Mut<T> carries the tick current when Get() ran: a handle retained across
+         * AdvanceTick() marks with that older tick, so do not keep one across frames
+         * (mark later writes with Registry::Modified<T>). All-const requests stamp
+         * nothing.
          */
         ASTRA_NODISCARD Result<AccessTuple, QueryError> Get(Entity e) const
         {
+            static_assert(!HasChangeFilter, "Changed<T>/Added<T> views are iteration-only this stage: Size/Empty/Contains/Get/Single/range-for need a tick; use ForEach(ctx, fn) or Since(tick).ForEach(fn)");
             const EntityRecord* rec = VisibleRecord(e);
             if (!rec) ASTRA_UNLIKELY
                 return Result<AccessTuple, QueryError>::Err(QueryError::NotMatched);
+            // Coarse change-detection stamp (spec §3.3): a non-const request is a
+            // write, so stamp the entity's chunk for every non-const yielded column
+            // that is present. All-const request: compiles to nothing.
+            StampForGet(rec, std::make_index_sequence<std::tuple_size_v<OptionalTypes>>{});
             return Result<AccessTuple, QueryError>::Ok(
                 MakeAccessTuple(rec, RequiredTypes{}, OptionalTypes{},
                                 std::make_index_sequence<std::tuple_size_v<RequiredTypes>>{},
@@ -490,19 +639,30 @@ namespace Astra
         /**
          * Filter-aware exactly-one-match accessor: Err(Empty) if no entity
          * matches this view, Err(MultipleMatched) if more than one does,
-         * otherwise Ok(Get(the one match)). Non-const because it reuses
-         * ForEach (which calls EnsureArchetypes()).
+         * otherwise Ok(Get(the one match)). Non-const because it reuses the
+         * ForEach walk (which calls EnsureArchetypes()).
+         *
+         * Change detection (spec §3.3 row 2, Ruling E): a non-const requested
+         * component stamps the returned entity's chunk (and a change-tracked one
+         * comes back as Mut<T>, marking on use) -- exactly Get()'s behaviour, because
+         * the one match is materialised through Get(). Only the RETURNED entity's
+         * chunk is stamped; the count/locate walk below runs UNSTAMPED
+         * (ForEachBody<false>) because counting is not a write -- so nothing is
+         * marked on the Empty / MultipleMatched paths, and no chunk other than
+         * the returned entity's is marked on success.
          */
         ASTRA_NODISCARD Result<AccessTuple, QueryError> Single()
         {
+            static_assert(!HasChangeFilter, "Changed<T>/Added<T> views are iteration-only this stage: Size/Empty/Contains/Get/Single/range-for need a tick; use ForEach(ctx, fn) or Since(tick).ForEach(fn)");
             Entity found{};
             size_t count = 0;
-            ForEach([&](Entity e, auto&&...) { if (count == 0) found = e; ++count; });
+            // Tick{0} is inert: Single() is refused above on change-filtered views.
+            ForEachBody<false>(Tick{0}, [&](Entity e, auto&&...) { if (count == 0) found = e; ++count; });
             if (count == 0) ASTRA_UNLIKELY
                 return Result<AccessTuple, QueryError>::Err(QueryError::Empty);
             if (count > 1) ASTRA_UNLIKELY
                 return Result<AccessTuple, QueryError>::Err(QueryError::MultipleMatched);
-            return Get(found);   // exactly one visible match; Get re-validates and materializes
+            return Get(found);   // exactly one visible match; Get re-validates, materializes AND stamps its chunk
         }
 
     private:
@@ -592,7 +752,7 @@ namespace Astra
 
             auto archetypes = m_archetypeManager->GetArchetypes();
             const size_t queryComponentCount =
-                (QueryBuilder::GetRequiredMask() | QueryBuilder::GetWithMask()).Count();
+                (QueryBuilder::GetRequiredMask() | QueryBuilder::GetWithMask() | QueryBuilder::GetChangeMask()).Count();
 
             m_archetypes.reserve(archetypes.size());
 
@@ -631,40 +791,110 @@ namespace Astra
                     static_assert(sizeof(Func) == 0,
                         "View callback must be invocable as (Entity, Comps&...) or (Comps&...). "
                         "Component params must be 'T&' (write) or 'const T&' (read); "
-                        "Optional<T> supplies a 'T*' argument.");
+                        "Optional<T> supplies a 'T*' argument. "
+                        "A change-tracked non-const component is yielded as Mut<T> (converts to T&; use .Read()/.Write()/.SetIfNeq()).");
             };
         }
 
-        template<typename Func, typename... Required, typename... Optional>
-        ASTRA_FORCEINLINE void ForEachImpl(Archetype* archetype, Func&& func, std::tuple<Required...>, std::tuple<Optional...>)
+        // Coarse change-detection stamp for a chunk this view is about to iterate:
+        // every non-const required column, plus every non-const optional column that
+        // is PRESENT on this archetype. Compiles to nothing for an all-const view:
+        // the if constexpr gate below is the structural guarantee (no stamp code is
+        // instantiated), same shape as the Archetype fast path's Stamp && AnyMutable.
+        template<size_t... ReqIs, size_t... OptIs>
+        ASTRA_FORCEINLINE void StampChunkForYields(ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm,
+                                                   const std::array<bool, sizeof...(OptIs)>& hasOptional, Tick now,
+                                                   std::index_sequence<ReqIs...>, std::index_sequence<OptIs...>) const
         {
-            if constexpr (!HasEnabledFilter)
+            constexpr bool AnyMutable = (Detail::IsMutableYield<std::tuple_element_t<ReqIs, RequiredTypes>> || ...)
+                                     || (Detail::IsMutableYield<std::tuple_element_t<OptIs, OptionalTypes>> || ...);
+            if constexpr (AnyMutable)
             {
-                // No enableable (non-IncludeDisabled) type in the query: the filtered
-                // path below is not instantiated at all, so this is the pre-existing,
-                // byte-identical loop (invariant 1).
-                if constexpr (sizeof...(Optional) == 0)
+                ((Detail::IsMutableYield<std::tuple_element_t<ReqIs, RequiredTypes>>
+                    ? chunk->StampColumn(cm.idToColumn[TypeID<std::remove_const_t<std::tuple_element_t<ReqIs, RequiredTypes>>>::Value()], now)
+                    : void()), ...);
+                (((Detail::IsMutableYield<std::tuple_element_t<OptIs, OptionalTypes>> && hasOptional[OptIs])
+                    ? chunk->StampColumn(cm.idToColumn[TypeID<std::remove_const_t<std::tuple_element_t<OptIs, OptionalTypes>>>::Value()], now)
+                    : void()), ...);
+            }
+        }
+
+        // The one archetype walk behind ForEach (Stamp=true) and the internal
+        // unstamped pass (Stamp=false: Single()'s count/locate, which is not a
+        // write -- Ruling E / spec §3.3 row 2). Mirrors Archetype::ForEachBody so the
+        // stamped and unstamped walks cannot drift; with Stamp=false no stamp code
+        // is instantiated anywhere below. `since` is the change-filter tick
+        // (Changed<T>/Added<T> chunk reject); ignored by a view without one.
+        template<bool Stamp, typename Func>
+        ASTRA_FORCEINLINE void ForEachBody(Tick since, Func&& func)
+        {
+            if (!m_archetypeManager) ASTRA_UNLIKELY
+                return;  // Registry destroyed
+
+            EnsureArchetypes();
+
+#ifdef ASTRA_BUILD_DEBUG
+            // Captured AFTER EnsureArchetypes() so its own (legitimate) refresh
+            // of the counter is never mistaken for an in-loop structural change.
+            const uint32_t debugStartStructuralChangeCounter =
+                m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire);
+#endif
+
+            if (m_archetypes.empty()) ASTRA_UNLIKELY
+                return;
+
+            auto adapted = MakeEntityOptionalAdapter(func);
+            for (Archetype* archetype : m_archetypes)
+            {
+                ForEachImpl<Stamp>(archetype, adapted, since, RequiredTypes{}, OptionalTypes{});
+            }
+
+#ifdef ASTRA_BUILD_DEBUG
+            ASTRA_ASSERT(m_archetypeManager->m_structuralChangeCounter.load(std::memory_order_acquire) == debugStartStructuralChangeCounter,
+                "Structural mutation (create/destroy entity, add/remove component) detected during View::ForEach. "
+                "Defer structural changes into a CommandBuffer and call Execute() after the loop.");
+#endif
+        }
+
+        template<bool Stamp, typename Func, typename... Required, typename... Optional>
+        ASTRA_FORCEINLINE void ForEachImpl(Archetype* archetype, Func&& func, Tick since, std::tuple<Required...>, std::tuple<Optional...>)
+        {
+            if constexpr (!HasChunkFilter)
+            {
+                // No enableable (non-IncludeDisabled) type and no Changed/Added term
+                // in the query: the filtered path below is not instantiated at all,
+                // so this is the pre-existing loop (invariant 1) plus, when Stamp,
+                // the coarse change-detection stamp of every non-const yielded
+                // column per visited chunk (all-const: no stamp code). A tracked
+                // non-const yield (Mut<T>) needs the view-owned loop below, which
+                // already handles zero optionals.
+                (void)since;
+                if constexpr (sizeof...(Optional) == 0 && !HasTrackedYield)
                 {
-                    archetype->ForEach<Required...>(std::forward<Func>(func));
+                    if constexpr (Stamp)
+                        archetype->ForEachStamped<Required...>(std::forward<Func>(func));
+                    else
+                        archetype->ForEach<Required...>(std::forward<Func>(func));
                 }
                 else
                 {
-                    ForEachWithOptional<Required..., Optional...>(archetype, std::forward<Func>(func), std::make_index_sequence<sizeof...(Required)>{}, std::make_index_sequence<sizeof...(Optional)>{});
+                    ForEachWithOptional<Stamp, Required..., Optional...>(archetype, std::forward<Func>(func), std::make_index_sequence<sizeof...(Required)>{}, std::make_index_sequence<sizeof...(Optional)>{});
                 }
             }
             else
             {
+                const Tick now = m_archetypeManager->CurrentTick();
                 const auto& chunks = archetype->GetChunks();
                 for (auto& chunk : chunks)
                 {
-                    VisitChunkFiltered(archetype, chunk.get(), func,
-                                       std::make_index_sequence<sizeof...(Required)>{},
-                                       std::make_index_sequence<sizeof...(Optional)>{});
+                    VisitChunkFiltered<Stamp>(archetype, chunk.get(), func, now, since,
+                                              std::make_index_sequence<sizeof...(Required)>{},
+                                              std::make_index_sequence<sizeof...(Optional)>{});
                 }
             }
         }
         
-        template<typename... Components, typename Func, size_t... RequiredTs, size_t... OptionalTs>
+        template<bool Stamp, typename... Components, typename Func, size_t... RequiredTs, size_t... OptionalTs>
         ASTRA_FORCEINLINE void ForEachWithOptional(Archetype* archetype, Func&& func, std::index_sequence<RequiredTs...>, std::index_sequence<OptionalTs...>)
         {
             constexpr size_t OptionalCount = sizeof...(OptionalTs);
@@ -673,6 +903,8 @@ namespace Astra
                 archetype->HasComponent<std::tuple_element_t<OptionalTs, OptionalTypes>>()...
             };
 
+            [[maybe_unused]] const Tick now = m_archetypeManager->CurrentTick();
+            [[maybe_unused]] const auto& cm = archetype->GetColumnMeta();
             const auto& chunks = archetype->GetChunks();
 
             for (auto& chunk : chunks)
@@ -683,6 +915,10 @@ namespace Astra
                     continue;
                 }
 
+                if constexpr (Stamp)
+                    StampChunkForYields(chunk.get(), cm, hasOptional, now,
+                                        std::index_sequence<RequiredTs...>{}, std::index_sequence<OptionalTs...>{});
+
                 std::tuple<std::tuple_element_t<RequiredTs, RequiredTypes>*...> requiredPtrs =
                 {
                     chunk->GetComponentArray<std::tuple_element_t<RequiredTs, RequiredTypes>>()...
@@ -692,21 +928,32 @@ namespace Astra
                     (hasOptional[OptionalTs] ? chunk->GetComponentArray<std::tuple_element_t<OptionalTs, OptionalTypes>>() : nullptr)...
                 };
 
+                // Tick columns for Mut<T> / optional marks (tracked yields only).
+                [[maybe_unused]] EntityTicks* reqTicks[sizeof...(RequiredTs) == 0 ? 1 : sizeof...(RequiredTs)] = {};
+                [[maybe_unused]] EntityTicks* optTicks[sizeof...(OptionalTs) == 0 ? 1 : sizeof...(OptionalTs)] = {};
+                if constexpr (HasTrackedYield)
+                    ResolveTrackedTicks(chunk.get(), cm, hasOptional, reqTicks, optTicks,
+                                        std::index_sequence<RequiredTs...>{}, std::index_sequence<OptionalTs...>{});
+
                 const auto& entities = chunk->GetEntities();
 
-                InvokeEntityCallback(entities, requiredPtrs, optionalPtrs, count, std::forward<Func>(func), std::make_index_sequence<sizeof...(RequiredTs)>{}, std::make_index_sequence<sizeof...(OptionalTs)>{});
+                InvokeEntityCallback<Stamp>(entities, requiredPtrs, optionalPtrs, count, std::forward<Func>(func), std::make_index_sequence<sizeof...(RequiredTs)>{}, std::make_index_sequence<sizeof...(OptionalTs)>{},
+                                            reqTicks, optTicks, now);
             }
         }
 
         template<typename Func, typename... Required, typename... Optional>
-        ASTRA_FORCEINLINE void ParallelForEachChunkImpl(Archetype* archetype, size_t chunkIndex, Func&& func, std::tuple<Required...>, std::tuple<Optional...>)
+        ASTRA_FORCEINLINE void ParallelForEachChunkImpl(Archetype* archetype, size_t chunkIndex, Func&& func, Tick since, std::tuple<Required...>, std::tuple<Optional...>)
         {
-            if constexpr (!HasEnabledFilter)
+            if constexpr (!HasChunkFilter)
             {
-                // Pre-existing byte-identical chunk walk (invariant 1).
-                if constexpr (sizeof...(Optional) == 0)
+                // Pre-existing chunk walk (invariant 1) plus the coarse change-
+                // detection stamp of every non-const yielded column for this chunk.
+                // A tracked non-const yield (Mut<T>) takes the view-owned loop.
+                (void)since;
+                if constexpr (sizeof...(Optional) == 0 && !HasTrackedYield)
                 {
-                    archetype->ForEachChunk<Required...>(chunkIndex, std::forward<Func>(func));
+                    archetype->ForEachChunkStamped<Required...>(chunkIndex, std::forward<Func>(func));
                 }
                 else
                 {
@@ -720,9 +967,9 @@ namespace Astra
                 const auto& chunks = archetype->GetChunks();
                 if (chunkIndex >= chunks.size()) ASTRA_UNLIKELY
                     return;
-                VisitChunkFiltered(archetype, chunks[chunkIndex].get(), func,
-                                   std::make_index_sequence<sizeof...(Required)>{},
-                                   std::make_index_sequence<sizeof...(Optional)>{});
+                VisitChunkFiltered<true>(archetype, chunks[chunkIndex].get(), func, m_archetypeManager->CurrentTick(), since,
+                                         std::make_index_sequence<sizeof...(Required)>{},
+                                         std::make_index_sequence<sizeof...(Optional)>{});
             }
         }
         
@@ -738,12 +985,19 @@ namespace Astra
             const auto& chunks = archetype->GetChunks();
             if (chunkIndex >= chunks.size()) ASTRA_UNLIKELY
                 return;
-                
+
             auto& chunk = chunks[chunkIndex];
             size_t count = chunk->GetCount();
             if (count == 0) ASTRA_UNLIKELY
                 return;
-                
+
+            // One tick read per chunk: the coarse stamp and the Mut<T> marks agree.
+            [[maybe_unused]] const Tick now = m_archetypeManager->CurrentTick();
+            [[maybe_unused]] const auto& cm = archetype->GetColumnMeta();
+
+            StampChunkForYields(chunk.get(), cm, hasOptional, now,
+                                std::index_sequence<RequiredTs...>{}, std::index_sequence<OptionalTs...>{});
+
             std::tuple<std::tuple_element_t<RequiredTs, RequiredTypes>*...> requiredPtrs =
             {
                 chunk->GetComponentArray<std::tuple_element_t<RequiredTs, RequiredTypes>>()...
@@ -752,10 +1006,18 @@ namespace Astra
             {
                 (hasOptional[OptionalTs] ? chunk->GetComponentArray<std::tuple_element_t<OptionalTs, OptionalTypes>>() : nullptr)...
             };
-            
+
+            // Tick columns for Mut<T> / optional marks (tracked yields only).
+            [[maybe_unused]] EntityTicks* reqTicks[sizeof...(RequiredTs) == 0 ? 1 : sizeof...(RequiredTs)] = {};
+            [[maybe_unused]] EntityTicks* optTicks[sizeof...(OptionalTs) == 0 ? 1 : sizeof...(OptionalTs)] = {};
+            if constexpr (HasTrackedYield)
+                ResolveTrackedTicks(chunk.get(), cm, hasOptional, reqTicks, optTicks,
+                                    std::index_sequence<RequiredTs...>{}, std::index_sequence<OptionalTs...>{});
+
             const auto& entities = chunk->GetEntities();
-            
-            InvokeEntityCallback(entities, requiredPtrs, optionalPtrs, count, std::forward<Func>(func), std::make_index_sequence<sizeof...(RequiredTs)>{}, std::make_index_sequence<sizeof...(OptionalTs)>{});
+
+            InvokeEntityCallback<true>(entities, requiredPtrs, optionalPtrs, count, std::forward<Func>(func), std::make_index_sequence<sizeof...(RequiredTs)>{}, std::make_index_sequence<sizeof...(OptionalTs)>{},
+                                       reqTicks, optTicks, now);
         }
 
         // Empty (tag) required components have no storage, so
@@ -779,12 +1041,99 @@ namespace Astra
             }
         }
 
-        template<typename EntitiesVec, typename ReqTuple, typename OptTuple, typename Func, size_t... ReqIs, size_t... OptIs>
-        ASTRA_FORCEINLINE void InvokeEntityCallback(const EntitiesVec& entities, const ReqTuple& reqPtrs, const OptTuple& optPtrs, size_t count, Func&& func, std::index_sequence<ReqIs...>, std::index_sequence<OptIs...>)
+        // ============ Change-tracked yield (spec §3.3, instantiated only when HasTrackedYield) ============
+        // Everything below the untracked branch of the two invoke helpers exists ONLY
+        // for a view that yields a non-const change-tracked component; every other
+        // view instantiates the pre-existing loop body byte for byte.
+
+        // Yield shape of one required component: Mut<R> for a non-const change-
+        // tracked R, otherwise the plain reference the pre-existing loops hand out.
+        template<typename R> struct YieldType { using type = R&; };
+        template<typename R> requires (Detail::IsMutableYield<R> && IsChangeTrackedV<R>)
+        struct YieldType<R> { using type = Mut<R>; };
+
+        // reqTicks[k] is the tick column for required k (nullptr unless tracked).
+        template<size_t K, typename ReqTuple>
+        ASTRA_FORCEINLINE typename YieldType<std::tuple_element_t<K, RequiredTypes>>::type
+        YieldRequired(const ReqTuple& reqPtrs, [[maybe_unused]] EntityTicks* const* reqTicks, size_t i, [[maybe_unused]] Tick now) const noexcept
         {
-            for (size_t i = 0; i < count; ++i)
+            using R = std::tuple_element_t<K, RequiredTypes>;
+            if constexpr (Detail::IsMutableYield<R> && IsChangeTrackedV<R>)
+                return Mut<R>(&std::get<K>(reqPtrs)[i], reqTicks[K] + i, now);
+            else
+                return RequiredElement(std::get<K>(reqPtrs), i);
+        }
+
+        // Plan deviation 5: a PRESENT non-const change-tracked optional is yielded as
+        // a raw O* (no conversion hook to mark through), so it marks the entity
+        // unconditionally. `opt` holds the pointers about to be handed out for entity
+        // i -- the chunk base pointers on the unfiltered path, the per-entity pointers
+        // on the enabled-filtered path (a disabled entity's pointer is nulled there
+        // and is not "present", so it must not mark).
+        template<size_t K, typename OptTuple>
+        ASTRA_FORCEINLINE static void MarkTrackedOptional([[maybe_unused]] const OptTuple& opt, [[maybe_unused]] EntityTicks* const* optTicks,
+                                                          [[maybe_unused]] size_t i, [[maybe_unused]] Tick now) noexcept
+        {
+            using O = std::tuple_element_t<K, OptionalTypes>;
+            if constexpr (Detail::IsMutableYield<O> && IsChangeTrackedV<O>)
             {
-                func(entities[i], RequiredElement(std::get<ReqIs>(reqPtrs), i)..., (std::get<OptIs>(optPtrs) ? &std::get<OptIs>(optPtrs)[i] : nullptr)...);
+                if (std::get<K>(opt)) optTicks[K][i].changed = now;
+            }
+        }
+        template<typename OptTuple, size_t... OptIs>
+        ASTRA_FORCEINLINE static void MarkTrackedOptionals([[maybe_unused]] const OptTuple& opt, [[maybe_unused]] EntityTicks* const* optTicks,
+                                                           [[maybe_unused]] size_t i, [[maybe_unused]] Tick now, std::index_sequence<OptIs...>) noexcept
+        {
+            (MarkTrackedOptional<OptIs>(opt, optTicks, i, now), ...);
+        }
+
+        // Tick columns for the tracked yields of one chunk: reqTicks[k] / optTicks[k]
+        // is the EntityTicks column for required / optional k, nullptr unless that
+        // yield is non-const AND change-tracked (AND, for an optional, present on this
+        // archetype). Same fold shape as StampChunkForYields; called only under
+        // `if constexpr (HasTrackedYield)`.
+        template<size_t... ReqIs, size_t... OptIs>
+        ASTRA_FORCEINLINE static void ResolveTrackedTicks([[maybe_unused]] ArchetypeChunk* chunk, [[maybe_unused]] const ArchetypeColumnMeta& cm,
+                                                          [[maybe_unused]] const std::array<bool, sizeof...(OptIs)>& hasOptional,
+                                                          [[maybe_unused]] EntityTicks** reqTicks, [[maybe_unused]] EntityTicks** optTicks,
+                                                          std::index_sequence<ReqIs...>, std::index_sequence<OptIs...>) noexcept
+        {
+            ((reqTicks[ReqIs] = (Detail::IsMutableYield<std::tuple_element_t<ReqIs, RequiredTypes>> && IsChangeTrackedV<std::tuple_element_t<ReqIs, RequiredTypes>>)
+                ? chunk->GetTicks(cm.idToColumn[TypeID<std::remove_const_t<std::tuple_element_t<ReqIs, RequiredTypes>>>::Value()]) : nullptr), ...);
+            ((optTicks[OptIs] = (hasOptional[OptIs] && Detail::IsMutableYield<std::tuple_element_t<OptIs, OptionalTypes>> && IsChangeTrackedV<std::tuple_element_t<OptIs, OptionalTypes>>)
+                ? chunk->GetTicks(cm.idToColumn[TypeID<std::remove_const_t<std::tuple_element_t<OptIs, OptionalTypes>>>::Value()]) : nullptr), ...);
+        }
+
+        // `Stamp` mirrors the chunk loops' parameter: with Stamp=false (Single()'s
+        // count/locate pass -- Ruling E, extended to the exact tier) the deviation-5
+        // optional mark is not instantiated either; a Mut<T> handed to the counting
+        // lambda is never touched, so required yields need no gate.
+        template<bool Stamp, typename EntitiesVec, typename ReqTuple, typename OptTuple, typename Func, size_t... ReqIs, size_t... OptIs>
+        ASTRA_FORCEINLINE void InvokeEntityCallback(const EntitiesVec& entities, const ReqTuple& reqPtrs, const OptTuple& optPtrs,
+                                                    size_t count, Func&& func, std::index_sequence<ReqIs...>, [[maybe_unused]] std::index_sequence<OptIs...> os,
+                                                    [[maybe_unused]] EntityTicks* const* reqTicks = nullptr, [[maybe_unused]] EntityTicks* const* optTicks = nullptr,
+                                                    [[maybe_unused]] Tick now = 0)
+        {
+            if constexpr (!HasTrackedYield)
+            {
+                // Pre-existing body, byte-identical: every untracked view lands here.
+                for (size_t i = 0; i < count; ++i)
+                {
+                    func(entities[i], RequiredElement(std::get<ReqIs>(reqPtrs), i)..., (std::get<OptIs>(optPtrs) ? &std::get<OptIs>(optPtrs)[i] : nullptr)...);
+                }
+            }
+            else
+            {
+                for (size_t i = 0; i < count; ++i)
+                {
+                    if constexpr (Stamp)
+                        MarkTrackedOptionals(optPtrs, optTicks, i, now, os);
+                    // Materialise the yields as lvalues (a tuple of T&... / Mut<T>...) so
+                    // `auto&`, `T&` (Mut's implicit conversion) and by-value `Mut<T>`
+                    // parameters all bind; std::apply hands them over as T& / Mut<T>&.
+                    std::tuple<typename YieldType<std::tuple_element_t<ReqIs, RequiredTypes>>::type...> req{ YieldRequired<ReqIs>(reqPtrs, reqTicks, i, now)... };
+                    std::apply([&](auto&... r) { func(entities[i], r..., (std::get<OptIs>(optPtrs) ? &std::get<OptIs>(optPtrs)[i] : nullptr)...); }, req);
+                }
             }
         }
 
@@ -847,21 +1196,89 @@ namespace Astra
             return base ? &base[i] : static_cast<OptT*>(nullptr);
         }
 
-        template<typename EntitiesVec, typename ReqTuple, typename OptTuple, typename Func, size_t... ReqIs, size_t... OptIs>
+        // Same `Stamp` gate as InvokeEntityCallback (Ruling E, extended).
+        template<bool Stamp, typename EntitiesVec, typename ReqTuple, typename OptTuple, typename Func, size_t... ReqIs, size_t... OptIs>
         ASTRA_FORCEINLINE void InvokeEntityCallbackFiltered(const EntitiesVec& entities, const ReqTuple& reqPtrs, const OptTuple& optPtrs,
                                                             size_t begin, size_t end, ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm,
-                                                            Func&& func, std::index_sequence<ReqIs...>, std::index_sequence<OptIs...>)
+                                                            Func&& func, std::index_sequence<ReqIs...>, [[maybe_unused]] std::index_sequence<OptIs...> os,
+                                                            [[maybe_unused]] EntityTicks* const* reqTicks = nullptr, [[maybe_unused]] EntityTicks* const* optTicks = nullptr,
+                                                            [[maybe_unused]] Tick now = 0)
         {
-            for (size_t i = begin; i < end; ++i)
+            if constexpr (!HasTrackedYield)
             {
-                func(entities[i], RequiredElement(std::get<ReqIs>(reqPtrs), i)..., FilteredOptionalArg<OptIs>(optPtrs, i, chunk, cm)...);
+                // Pre-existing body, byte-identical: every untracked view lands here.
+                for (size_t i = begin; i < end; ++i)
+                {
+                    func(entities[i], RequiredElement(std::get<ReqIs>(reqPtrs), i)..., FilteredOptionalArg<OptIs>(optPtrs, i, chunk, cm)...);
+                }
+            }
+            else
+            {
+                for (size_t i = begin; i < end; ++i)
+                {
+                    // Per-entity optional pointers first: an enableable tracked optional
+                    // that is disabled for this entity is nulled here and must not mark.
+                    std::tuple<std::tuple_element_t<OptIs, OptionalTypes>*...> opt{ FilteredOptionalArg<OptIs>(optPtrs, i, chunk, cm)... };
+                    if constexpr (Stamp)
+                        MarkTrackedOptionals(opt, optTicks, i, now, os);
+                    std::tuple<typename YieldType<std::tuple_element_t<ReqIs, RequiredTypes>>::type...> req{ YieldRequired<ReqIs>(reqPtrs, reqTicks, i, now)... };
+                    std::apply([&](auto&... r) { func(entities[i], r..., std::get<OptIs>(opt)...); }, req);
+                }
             }
         }
 
-        // Three-tier enabled-only filter for one chunk (shared by the serial and
-        // parallel paths). count==0 chunks are no-ops.
-        template<typename Func, size_t... ReqIs, size_t... OptIs>
-        ASTRA_FORCEINLINE void VisitChunkFiltered(Archetype* archetype, ArchetypeChunk* chunk, Func&& func,
+        // ============ Change-detection chunk reject (spec §3.4, instantiated only when HasChangeFilter) ============
+
+        // True iff every T in the tuple has a column version newer than `since` in
+        // this chunk. Empty tuple => true (the fold's identity).
+        template<typename... Ts>
+        ASTRA_FORCEINLINE static bool AllNewer(ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm, Tick since, std::tuple<Ts...>*) noexcept
+        {
+            return (IsNewer(chunk->GetColumnVersion(cm.idToColumn[TypeID<std::remove_const_t<Ts>>::Value()]), since) && ...);
+        }
+        ASTRA_FORCEINLINE static bool ChangeChunkPasses(ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm, Tick since) noexcept
+        {
+            return AllNewer(chunk, cm, since, static_cast<ChangedTypes*>(nullptr))
+                && AllNewer(chunk, cm, since, static_cast<AddedTypes*>(nullptr));
+        }
+
+        // ============ Change-detection per-entity tier (spec §3.4 step 3, instantiated only when HasTrackedChangeTerm) ============
+
+        // Per-entity tier (spec §3.4 step 3): for one tracked term, set the bit of
+        // every entity whose tick is NOT newer than `since`. Branchless per slot; the
+        // resulting word set is unioned with the enabled-filter sets so the callback
+        // is invoked in maximal runs of (enabled AND changed) entities.
+        template<bool UseAdded>
+        ASTRA_FORCEINLINE static void ExcludeNotNewer(const EntityTicks* ticks, size_t count, Tick since, uint64_t* excluded, bool& anyExcluded) noexcept
+        {
+            for (size_t i = 0; i < count; ++i)
+            {
+                const Tick t = UseAdded ? ticks[i].added : ticks[i].changed;
+                const uint64_t bit = static_cast<uint64_t>(!IsNewer(t, since));
+                excluded[i >> 6] |= bit << (i & 63);
+                anyExcluded |= (bit != 0);
+            }
+        }
+
+        // One excluded-mask pass per change-TRACKED term of the tuple; untracked
+        // terms contribute nothing here (the chunk reject already decided them).
+        template<bool UseAdded, typename... Ts>
+        ASTRA_FORCEINLINE static void BuildExcluded(ArchetypeChunk* chunk, const ArchetypeColumnMeta& cm, size_t count, Tick since,
+                                                    uint64_t* excluded, bool& anyExcluded, std::tuple<Ts...>*) noexcept
+        {
+            ((IsChangeTrackedV<Ts>
+                ? ExcludeNotNewer<UseAdded>(chunk->GetTicks(cm.idToColumn[TypeID<std::remove_const_t<Ts>>::Value()]), count, since, excluded, anyExcluded)
+                : void()), ...);
+        }
+
+        // Per-chunk filter for one chunk (shared by the serial and parallel paths):
+        // the Changed/Added version reject, then the three-tier enabled-only filter.
+        // count==0 chunks are no-ops. `now` is the caller's hoisted CurrentTick()
+        // for the coarse change-detection stamp; Stamp=false (the internal count/
+        // locate pass) instantiates no stamp at all. `since` is the change-filter
+        // tick; a view without Changed/Added terms instantiates no reject code.
+        template<bool Stamp, typename Func, size_t... ReqIs, size_t... OptIs>
+        ASTRA_FORCEINLINE void VisitChunkFiltered(Archetype* archetype, ArchetypeChunk* chunk, Func&& func, Tick now, Tick since,
                                                   std::index_sequence<ReqIs...> reqSeq, std::index_sequence<OptIs...> optSeq)
         {
             const size_t count = chunk->GetCount();
@@ -869,6 +1286,20 @@ namespace Astra
                 return;
 
             const ArchetypeColumnMeta& cm = archetype->GetColumnMeta();
+
+            if constexpr (HasChangeFilter)
+            {
+                // Chunk reject first, always (spec §2.2): a chunk whose T column is not
+                // newer than `since` for ANY Changed/Added term has nothing for us.
+                // Sits BEFORE the enabled whole-chunk reject and BEFORE the coarse
+                // stamp: a rejected chunk is not "visited" and must not be stamped.
+                // Unhinted on purpose: in the steady state most chunks are unchanged
+                // per frame, so the reject is the common outcome, not the rare one.
+                if (!ChangeChunkPasses(chunk, cm, since))
+                    return;
+            }
+            else
+                (void)since;
 
             std::array<bool, sizeof...(OptIs)> hasOptional =
             {
@@ -885,11 +1316,47 @@ namespace Astra
             const auto& entities = chunk->GetEntities();
 
             constexpr size_t NReq = std::tuple_size_v<EnabledRequiredFilter>;
-            const uint64_t* reqWords[NReq == 0 ? 1 : NReq];
+            const uint64_t* wordSets[NReq + 1];               // enabled sets + (optional) excluded set
             bool allZero = true;
-            const bool anyReqFull = ResolveRequiredFilter(chunk, cm, count, reqWords, allZero, std::make_index_sequence<NReq>{});
+            const bool anyReqFull = ResolveRequiredFilter(chunk, cm, count, wordSets, allZero, std::make_index_sequence<NReq>{});
             if (anyReqFull) ASTRA_UNLIKELY
                 return;   // Tier 2: a required column is fully disabled -> skip whole chunk
+            size_t setCount = NReq;
+
+            // Per-entity change tier (spec §3.4 step 3): for every change-TRACKED
+            // Changed<T>/Added<T> term, scan the tick column of this (version-passing)
+            // chunk into an "excluded" word set (SET bit == entity fails the term) and
+            // union it with the enabled sets below. Untracked terms were fully decided
+            // by the chunk reject above. Deliberately AFTER the whole-chunk enabled
+            // reject (an all-disabled chunk never pays the tick scan) and BEFORE the
+            // Tier-1/Tier-3 split. Not a reject: the chunk is still "visited" (Ruling B).
+            [[maybe_unused]] SmallVector<uint64_t, 64> excluded;   // 64 inline words = 4096 slots before a heap step
+            if constexpr (HasTrackedChangeTerm)
+            {
+                excluded.assign((count + 63) >> 6, 0ull);
+                bool anyExcluded = false;
+                BuildExcluded<false>(chunk, cm, count, since, excluded.data(), anyExcluded, static_cast<ChangedTypes*>(nullptr));
+                BuildExcluded<true >(chunk, cm, count, since, excluded.data(), anyExcluded, static_cast<AddedTypes*>(nullptr));
+                if (anyExcluded)
+                {
+                    wordSets[setCount++] = excluded.data();
+                    allZero = false;                       // a per-entity constraint exists: no Tier-1 whole-chunk call
+                }
+            }
+
+            // Tick columns for Mut<T> / optional marks (tracked yields only); after
+            // both whole-chunk rejects, like the stamp below (Ruling B).
+            [[maybe_unused]] EntityTicks* reqTicks[sizeof...(ReqIs) == 0 ? 1 : sizeof...(ReqIs)] = {};
+            [[maybe_unused]] EntityTicks* optTicks[sizeof...(OptIs) == 0 ? 1 : sizeof...(OptIs)] = {};
+            if constexpr (HasTrackedYield)
+                ResolveTrackedTicks(chunk, cm, hasOptional, reqTicks, optTicks, reqSeq, optSeq);
+
+            // Coarse change-detection stamp, deliberately AFTER both whole-chunk
+            // rejects above (change version, enabled): a chunk this view skips
+            // wholesale is not "visited" and must not be stamped (it would
+            // manufacture downstream false positives).
+            if constexpr (Stamp)
+                StampChunkForYields(chunk, cm, hasOptional, now, reqSeq, optSeq);
 
             if constexpr (HasOptionalFilter)
             {
@@ -899,16 +1366,17 @@ namespace Astra
             if (allZero)
             {
                 // Tier 1: all relevant columns fully enabled -> pre-existing body, no bit tests.
-                InvokeEntityCallback(entities, reqPtrs, optPtrs, count, func, reqSeq, optSeq);
+                InvokeEntityCallback<Stamp>(entities, reqPtrs, optPtrs, count, func, reqSeq, optSeq, reqTicks, optTicks, now);
                 return;
             }
 
-            // Tier 3: mixed -> enabled runs of the required intersection, per-entity
-            // optional nulling inside the runs.
-            Detail::ForEachEnabledRun(reqWords, NReq, count,
+            // Tier 3: mixed -> runs of the required-enabled intersection (AND the
+            // per-entity change mask when one was appended), per-entity optional
+            // nulling inside the runs.
+            Detail::ForEachEnabledRun(wordSets, setCount, count,
                 [&](size_t begin, size_t end)
                 {
-                    InvokeEntityCallbackFiltered(entities, reqPtrs, optPtrs, begin, end, chunk, cm, func, reqSeq, optSeq);
+                    InvokeEntityCallbackFiltered<Stamp>(entities, reqPtrs, optPtrs, begin, end, chunk, cm, func, reqSeq, optSeq, reqTicks, optTicks, now);
                 });
         }
 

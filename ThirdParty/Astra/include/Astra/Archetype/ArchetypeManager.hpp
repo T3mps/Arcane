@@ -19,6 +19,7 @@
 #include "../Container/Bitmap.hpp"
 #include "../Container/FlatMap.hpp"
 #include "../Container/SmallVector.hpp"
+#include "../Core/Tick.hpp"
 #include "../Core/TypeID.hpp"
 #include "../Entity/Entity.hpp"
 #include "../Entity/EntityRecord.hpp"
@@ -49,6 +50,7 @@ namespace Astra
             auto rootArchetype = std::make_unique<Archetype>(ComponentMask{});
             m_rootArchetype = rootArchetype.get();
             m_rootArchetype->m_chunkPool = &m_chunkPool;
+            m_rootArchetype->SetTickSource(&m_tick);
             m_rootArchetype->Initialize({});
 
             ArchetypeEntry entry;
@@ -571,6 +573,44 @@ namespace Astra
             }
         }
 
+        // Non-const component access IS a write for change detection (spec §3.3):
+        // stamp T's column in the entity's chunk and, for a change-tracked T, mark
+        // the entity's `changed` tick. Same validation and result as GetComponent<T>.
+        template<Component T>
+        ASTRA_NODISCARD T* GetComponentMut(Entity entity)
+        {
+            T* ptr = GetComponent<T>(entity);
+            if constexpr (!std::is_empty_v<T>)
+            {
+                if (ptr) ASTRA_LIKELY
+                {
+                    const EntityRecord* rec = m_records->GetRecord(entity.GetID());   // validated by GetComponent above
+                    const int col = rec->archetype->GetColumnMeta().idToColumn[TypeID<T>::Value()];
+                    rec->chunk->StampColumn(col, m_tick);
+                    if constexpr (IsChangeTrackedV<T>)
+                        rec->chunk->GetTicks(col)[rec->location.GetEntityIndex()].changed = m_tick;
+                }
+            }
+            return ptr;
+        }
+
+        // Explicit "I wrote T on this entity" for raw-pointer code (Registry::Modified).
+        // Returns false for a stale handle, an absent component, or a tag (no column).
+        // Type-erased, so the per-entity mark is a runtime null test on the tick column.
+        bool MarkWritten(Entity entity, ComponentID id)
+        {
+            const EntityRecord* rec = GetEntityRecord(entity);
+            if (!rec || !rec->chunk || id >= MAX_COMPONENTS) ASTRA_UNLIKELY
+                return false;
+            const int col = rec->archetype->GetColumnMeta().idToColumn[id];
+            if (col < 0) ASTRA_UNLIKELY
+                return false;
+            rec->chunk->StampColumn(col, m_tick);
+            if (EntityTicks* t = rec->chunk->GetTicks(col))
+                t[rec->location.GetEntityIndex()].changed = m_tick;
+            return true;
+        }
+
         template<Component T>
         ASTRA_NODISCARD bool HasComponent(Entity entity) const
         {
@@ -642,6 +682,20 @@ namespace Astra
             return m_structuralChangeCounter.load(std::memory_order_acquire);
         }
 
+        // ---- Change-detection time (spec 2026-09-10 §3.1) ----
+        // The one counter every stamp in this registry reads. Advanced by the
+        // scheduler between system groups (SystemExecutor::BeginSystemGroup) or by
+        // Registry::AdvanceTick for unscheduled use; NEVER advanced concurrently
+        // with a running system (plain, non-atomic by contract). Starts at 1 so a
+        // zero-initialised chunk/entity (tick 0 == "never") is older than any stamp.
+        ASTRA_NODISCARD Tick CurrentTick() const noexcept { return m_tick; }
+        Tick AdvanceTick() noexcept
+        {
+            if (++m_tick == 0) ASTRA_UNLIKELY
+                m_tick = 1;   // skip "never" on wraparound
+            return m_tick;
+        }
+
         /**
          * Resets the manager to a freshly-constructed state IN PLACE: every
          * archetype (including the old root) is destroyed, the entity map,
@@ -670,6 +724,7 @@ namespace Astra
             auto rootArchetype = std::make_unique<Archetype>(ComponentMask{});
             m_rootArchetype = rootArchetype.get();
             m_rootArchetype->m_chunkPool = &m_chunkPool;
+            m_rootArchetype->SetTickSource(&m_tick);
             m_rootArchetype->Initialize({});
 
             ArchetypeEntry entry;
@@ -968,7 +1023,7 @@ namespace Astra
                 reader(index);
 
                 // Deserialize the archetype
-                auto archetypeResult = Archetype::Deserialize(reader, registryDescriptors, &m_chunkPool);
+                auto archetypeResult = Archetype::Deserialize(reader, registryDescriptors, &m_chunkPool, &m_tick);
                 if (archetypeResult.IsErr() || reader.HasError())
                 {
                     return false;
@@ -979,6 +1034,13 @@ namespace Astra
                 // Read entity count for validation
                 uint64_t entityCount;
                 reader(entityCount);
+                // S1 (2026-09-11): this count was read and discarded. It must agree
+                // with the archetype just rebuilt (whose own count is now the chunk
+                // sum, verified in Archetype::Deserialize); refuse the load otherwise.
+                if (reader.HasError() || entityCount != archetype->GetEntityCount()) ASTRA_UNLIKELY
+                {
+                    return false;
+                }
 
                 if (i == 0)
                 {
@@ -1069,6 +1131,7 @@ namespace Astra
             auto archetype = std::make_unique<Archetype>(mask);
             Archetype* ptr = archetype.get();
             ptr->m_chunkPool = &m_chunkPool;
+            ptr->SetTickSource(&m_tick);
 
             std::vector<ComponentDescriptor> componentDescriptors;
 
@@ -1124,6 +1187,7 @@ namespace Astra
             auto archetype = std::make_unique<Archetype>(newMask);
             Archetype* ptr = archetype.get();
             ptr->m_chunkPool = &m_chunkPool;
+            ptr->SetTickSource(&m_tick);
 
             std::vector<ComponentDescriptor> componentDescriptors;
 
@@ -1284,6 +1348,11 @@ namespace Astra
                         // takes the born-enabled branch above -- no bit write.
                         if (desc.isEnableable) ASTRA_UNLIKELY
                             dstChunk->SetDisabled(c, dstEntityIdx, srcChunk->IsDisabled(sc, srcEntityIdx));
+                        // Tick carry (Task 6): a shared tracked column keeps the entity's
+                        // own {added, changed}. The newly ADDED component keeps the
+                        // InitTicks(Now()) value AllocateEntitySlot gave it.
+                        if (desc.isChangeTracked) ASTRA_UNLIKELY
+                            dstChunk->CopyTicks(c, dstEntityIdx, *srcChunk, sc, srcEntityIdx);
                     }
                 }
             }
@@ -1572,6 +1641,10 @@ namespace Astra
                         // in the id == newComponentId branch above) is born enabled.
                         if (desc.isEnableable) ASTRA_UNLIKELY
                             dstChunk->SetDisabled(c, dstEntityIdx, srcChunk->IsDisabled(sc, srcEntityIdx));
+                        // Tick carry (Task 6): mirror MoveAndAdd -- shared tracked column
+                        // keeps its ticks; the added component keeps AllocateEntitySlot's Now().
+                        if (desc.isChangeTracked) ASTRA_UNLIKELY
+                            dstChunk->CopyTicks(c, dstEntityIdx, *srcChunk, sc, srcEntityIdx);
                     }
                 }
             }
@@ -1640,6 +1713,7 @@ namespace Astra
         std::atomic<uint32_t> m_structuralChangeCounter{0};  // Fast path check
         std::atomic<uint32_t> m_archetypeRemovalCounter{0};  // Bumped when archetypes are deleted; views must fully re-collect
         uint32_t m_generation = 1;  // Generation counter for new archetypes
+        Tick m_tick = 1;   // change-detection time; see CurrentTick()
 
         template<typename... QueryArgs>
         friend class View;

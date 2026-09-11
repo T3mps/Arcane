@@ -3,9 +3,9 @@ change them in the Astra repo and re-run scripts\sync-astra.ps1, or the next
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Astra
-commit  : fa0900ab906989d92d74a08091dd5f881f1265cc
+commit  : a08bb043633df1e8e683d1655ec463143825d634
 branch  : dev
-subject : fix(reflection): final-review wave -- no user code under the meta mutex, Replaced ref-parity guard, loud post-thunk identity mismatch
-synced  : 2026-09-10 16:19:13
+subject : feat(registry): Modified(Entity, ComponentID) + non-stamping IsChanged<T>/IsAdded<T> for the Arcane adoption
+synced  : 2026-09-11 14:23:56
 scope   : include/ only (Arcane compiles nothing else from this tree --
           see Arcane/premake5.lua IncludeDir["Astra"])

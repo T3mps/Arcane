@@ -521,15 +521,18 @@ namespace Astra
             return m_archetypeManager->RemoveComponents<T>(validEntities);
         }
 
+        // Non-const access counts as a write for change detection (spec §3.3):
+        // T's chunk column is stamped with the current tick. Use the const
+        // overload (e.g. via std::as_const) for a read that must not stamp.
         template<Component T>
         ASTRA_NODISCARD T* GetComponent(Entity entity)
         {
             AssertContextAffinity();
             if (!m_entityManager.IsValid(entity))
                 return nullptr;
-            return m_archetypeManager->GetComponent<T>(entity);
+            return m_archetypeManager->GetComponentMut<T>(entity);
         }
-        
+
         template<Component T>
         ASTRA_NODISCARD const T* GetComponent(Entity entity) const
         {
@@ -538,7 +541,7 @@ namespace Astra
                 return nullptr;
             return m_archetypeManager->GetComponent<T>(entity);
         }
-        
+
         template<Component T>
         ASTRA_NODISCARD bool HasComponent(Entity entity) const
         {
@@ -546,6 +549,86 @@ namespace Astra
             if (!m_entityManager.IsValid(entity))
                 return false;
             return m_archetypeManager->HasComponent<T>(entity);
+        }
+
+        // ---- Change detection, explicit write side (spec §3.3) ----
+        // For code that holds a raw T* across frames: declare the write. Stamps T's
+        // chunk column (and marks the entity for a change-tracked T -- Task 7).
+        template<Component T>
+        bool Modified(Entity entity)
+        {
+            AssertContextAffinity();
+            if (!m_entityManager.IsValid(entity)) return false;
+            return m_archetypeManager->MarkWritten(entity, TypeID<T>::Value());
+        }
+
+        // Type-erased twin of Modified<T>: for hash/descriptor-driven writers (an
+        // editor Inspector fanning out over a ComponentDescriptor, an undo Restore
+        // through descriptor->deserialize) that hold a ComponentID but no T. Same
+        // table as MarkWritten: false for an invalid handle, an absent component,
+        // or a tag (no column); true after stamping the column and, for a tracked
+        // column, marking the entity.
+        bool Modified(Entity entity, ComponentID id)
+        {
+            AssertContextAffinity();
+            if (!m_entityManager.IsValid(entity)) return false;
+            return m_archetypeManager->MarkWritten(entity, id);
+        }
+
+        // Per-entity change query OUTSIDE a view (spec 2026-09-11 Arcane adoption
+        // s4). Tracked T: exact -- IsNewer(ticks[row].changed, since). Untracked
+        // T: chunk-coarse -- IsNewer(column version, since), so every entity of a
+        // stamped chunk answers true (documented, the same trade Changed<T> makes).
+        // NEVER stamps: a read that must not count as a write. False for an
+        // invalid handle, an absent component, or a tag.
+        template<Component T>
+        ASTRA_NODISCARD bool IsChanged(Entity entity, Tick since) const
+        {
+            AssertContextAffinity();
+            const EntityRecord* rec = m_archetypeManager->GetEntityRecord(entity);
+            if (!rec || !rec->chunk) return false;
+            const ComponentID id = TypeID<T>::Value();
+            if (id >= MAX_COMPONENTS) return false;
+            const int col = rec->archetype->GetColumnMeta().idToColumn[id];
+            if (col < 0) return false;
+            if (const EntityTicks* t = rec->chunk->GetTicks(col))
+                return IsNewer(t[rec->location.GetEntityIndex()].changed, since);
+            return IsNewer(rec->chunk->GetColumnVersion(col), since);
+        }
+
+        // IsChanged's twin over the `added` tick. For an untracked T this is
+        // IsChanged in effect (only the column version exists) -- the README's
+        // Added<T>-on-untracked caveat, restated for the entity form.
+        template<Component T>
+        ASTRA_NODISCARD bool IsAdded(Entity entity, Tick since) const
+        {
+            AssertContextAffinity();
+            const EntityRecord* rec = m_archetypeManager->GetEntityRecord(entity);
+            if (!rec || !rec->chunk) return false;
+            const ComponentID id = TypeID<T>::Value();
+            if (id >= MAX_COMPONENTS) return false;
+            const int col = rec->archetype->GetColumnMeta().idToColumn[id];
+            if (col < 0) return false;
+            if (const EntityTicks* t = rec->chunk->GetTicks(col))
+                return IsNewer(t[rec->location.GetEntityIndex()].added, since);
+            return IsNewer(rec->chunk->GetColumnVersion(col), since);
+        }
+
+        // Compare-then-store opt-in: assigns and stamps ONLY when `value != current`.
+        // Returns true iff a store happened. Deliberately not the default mark path
+        // (the compare costs more than the store it skips -- spec §2.4).
+        template<Component T>
+        requires std::equality_comparable<T>
+        bool SetIfNeq(Entity entity, const T& value)
+        {
+            AssertContextAffinity();
+            if (!m_entityManager.IsValid(entity)) return false;
+            T* current = m_archetypeManager->GetComponent<T>(entity);   // non-stamping fetch
+            if (!current) return false;
+            if (*current == value) return false;
+            *current = value;
+            m_archetypeManager->MarkWritten(entity, TypeID<T>::Value());
+            return true;
         }
 
         // ===================== Enableable components (Task 2) =====================
@@ -1215,6 +1298,11 @@ namespace Astra
         ASTRA_NODISCARD std::shared_ptr<ComponentRegistry> ShareComponentRegistry() const noexcept { return m_componentRegistry; }
         ASTRA_NODISCARD ArchetypeManager* GetArchetypeManager() noexcept { return m_archetypeManager.get(); }
         ASTRA_NODISCARD const ArchetypeManager* GetArchetypeManager() const noexcept { return m_archetypeManager.get(); }
+
+        // Change-detection time (spec 2026-09-10 §3.1): forwarded from the owning
+        // ArchetypeManager so views (which hold the manager) and the registry agree.
+        ASTRA_NODISCARD Tick CurrentTick() const noexcept { return m_archetypeManager->CurrentTick(); }
+        Tick AdvanceTick() noexcept { return m_archetypeManager->AdvanceTick(); }
 
         /**
          * Block source for CommandBuffer storage (Commands C1 fix): stable
