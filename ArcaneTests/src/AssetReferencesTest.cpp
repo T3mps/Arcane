@@ -64,6 +64,17 @@ namespace
         std::sort(pairs.begin(), pairs.end());
         return pairs;
     }
+
+    // Task 12: how many edges of `kind` a result carries -- the imported-mesh
+    // cases below need this to pin "EXACTLY ONE DerivesFrom" (the browser's
+    // fold predicate, AssetPanelModel.cpp's derivesFromCount == 1 gate) rather
+    // than merely "at least one", which ContainsRef alone cannot express.
+    std::size_t CountOfKind(const std::vector<Arcane::AssetRef>& refs, Arcane::AssetRefKind kind)
+    {
+        return static_cast<std::size_t>(
+            std::count_if(refs.begin(), refs.end(),
+                          [kind](const Arcane::AssetRef& r) { return r.kind == kind; }));
+    }
 }
 
 TEST_CASE("MaterialSurfaceFor reads the kind string; instances resolve through parent", "[assets]")
@@ -360,6 +371,140 @@ TEST_CASE("ListAssetReferences reads a mesh's material as References; a nil mate
     const auto nilRefs = assets->ListAssetReferences(*meshNilId);
     REQUIRE(nilRefs.has_value());
     CHECK(nilRefs->empty());
+
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// F2c Task 12 (spec s4.2/s4.4): the reference graph for an IMPORTED
+// .arcmesh -- importedSource as DerivesFrom, every slot's material as
+// References -- plus the legacy scalar-"material" regression net and
+// .gltf/.glb joining the leaf list.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("references: an imported .arcmesh derives from its source and references"
+          " every slot", "[assets]")
+{
+    // s4.2: the DerivesFrom edge is what folds the companion under its Model in the
+    // browser (the sprite-under-texture machinery, reused) and what makes the Graph
+    // panel render the import web with no new code.
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_mesh_slots_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    // Two named slots (matA, matB) and one deliberately NIL slot, to prove the
+    // nil one contributes nothing -- the same rule the legacy scalar branch
+    // already keeps (arc_listrefs_mesh_test above).
+    const auto mesh = WriteFile(dir, "imported.arcmesh",
+        R"({"id":"7e5b0007-0001-4001-8001-000000000001","type":"mesh","name":"Imported",)"
+        R"("source":"imported","importedSource":"7e5b0007-0001-4001-8001-000000000002",)"
+        R"("slots":[)"
+        R"({"name":"Body","material":"7e5b0007-0001-4001-8001-000000000003"},)"
+        R"({"name":"None","material":"00000000-0000-0000-0000-000000000000"},)"
+        R"({"name":"Trim","material":"7e5b0007-0001-4001-8001-000000000004"}]})");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value().ToString() == "7e5b0007-0001-4001-8001-000000000001") return mesh;
+        return std::nullopt;
+    });
+
+    const auto meshGuid  = Arcane::Guid::FromString("7e5b0007-0001-4001-8001-000000000001");
+    const auto modelGuid = Arcane::Guid::FromString("7e5b0007-0001-4001-8001-000000000002");
+    const auto matA      = Arcane::Guid::FromString("7e5b0007-0001-4001-8001-000000000003");
+    const auto matB      = Arcane::Guid::FromString("7e5b0007-0001-4001-8001-000000000004");
+    REQUIRE(meshGuid.has_value());
+    REQUIRE(modelGuid.has_value());
+    REQUIRE(matA.has_value());
+    REQUIRE(matB.has_value());
+
+    const auto refs = assets->ListAssetReferences(*meshGuid);
+    REQUIRE(refs.has_value());
+    CHECK(ContainsRef(*refs, *modelGuid, Arcane::AssetRefKind::DerivesFrom));
+    CHECK(ContainsRef(*refs, *matA, Arcane::AssetRefKind::References));
+    CHECK(ContainsRef(*refs, *matB, Arcane::AssetRefKind::References));
+    // EXACTLY ONE DerivesFrom: the browser's fold predicate requires it
+    // (AssetPanelModel.cpp's derivesFromCount == 1 gate), so a second one would
+    // silently unfold every imported mesh in the project.
+    CHECK(CountOfKind(*refs, Arcane::AssetRefKind::DerivesFrom) == 1u);
+    // The nil slot contributes NOTHING -- no phantom nil-guid entry, the same
+    // rule the scalar `material` branch already keeps.
+    CHECK(refs->size() == 3u);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("references: a legacy scalar-material .arcmesh is unchanged", "[assets]")
+{
+    // Regression net for the F2a corpus: no importedSource, no slots key, one
+    // References edge, no DerivesFrom. Reuses Task 10's own legacy shape
+    // (MeshAssetTest.cpp: type/id/name/source/rings/segments/subdivisions/
+    // capsuleLengthRatio + scalar "material", no "slots" key).
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_mesh_legacy_regression_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const auto mesh = WriteFile(dir, "legacy.arcmesh",
+        R"({"id":"7e5b0008-0001-4001-8001-000000000001","type":"mesh","name":"Legacy",)"
+        R"("source":"cube","rings":16,"segments":32,"subdivisions":1,)"
+        R"("capsuleLengthRatio":2.0,"material":"7e5b0008-0001-4001-8001-000000000002"})");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        if (id.Value().ToString() == "7e5b0008-0001-4001-8001-000000000001") return mesh;
+        return std::nullopt;
+    });
+
+    const auto meshId = Arcane::Guid::FromString("7e5b0008-0001-4001-8001-000000000001");
+    const auto matId  = Arcane::Guid::FromString("7e5b0008-0001-4001-8001-000000000002");
+    REQUIRE(meshId.has_value());
+    REQUIRE(matId.has_value());
+
+    const auto refs = assets->ListAssetReferences(*meshId);
+    REQUIRE(refs.has_value());
+    CHECK(CountOfKind(*refs, Arcane::AssetRefKind::DerivesFrom) == 0u);
+    CHECK(ContainsRef(*refs, *matId, Arcane::AssetRefKind::References));
+    CHECK(refs->size() == 1u);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("references: a .gltf/.glb is a LEAF, not unrecognised", "[assets]")
+{
+    // "empty, NEVER nullopt" -- the distinction Assets.hpp's own doc comment draws
+    // between "genuinely no outgoing edges" and "could not read this at all". A
+    // Model is a leaf like a .png: its embedded textures become SEPARATE assets
+    // at extraction (s5.5), so the file itself names nothing.
+    const fs::path dir = fs::temp_directory_path() / "arc_listrefs_gltf_leaf_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const auto gltf = WriteFile(dir, "model.gltf", R"({"asset":{"version":"2.0"}})");
+    const auto glb   = WriteFile(dir, "model.glb", "glTF-binary, not really, just bytes");
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([&](const Arcane::AssetId& id) -> std::optional<fs::path>
+    {
+        const std::string g = id.Value().ToString();
+        if (g == "7e5b0009-0001-4001-8001-000000000001") return gltf;
+        if (g == "7e5b0009-0001-4001-8001-000000000002") return glb;
+        return std::nullopt;
+    });
+
+    const auto gltfId = Arcane::Guid::FromString("7e5b0009-0001-4001-8001-000000000001");
+    const auto glbId  = Arcane::Guid::FromString("7e5b0009-0001-4001-8001-000000000002");
+    REQUIRE(gltfId.has_value());
+    REQUIRE(glbId.has_value());
+
+    const auto gltfRefs = assets->ListAssetReferences(*gltfId);
+    REQUIRE(gltfRefs.has_value());
+    CHECK(gltfRefs->empty());
+
+    const auto glbRefs = assets->ListAssetReferences(*glbId);
+    REQUIRE(glbRefs.has_value());
+    CHECK(glbRefs->empty());
 
     fs::remove_all(dir, ec);
 }

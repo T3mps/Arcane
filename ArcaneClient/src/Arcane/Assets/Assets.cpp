@@ -1052,7 +1052,13 @@ namespace Arcane
                 // outgoing edges").
                 static constexpr std::string_view kLeaf[] = {
                     ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr",
-                    ".wav", ".ogg", ".mp3", ".flac", ".ttf", ".otf" };
+                    ".wav", ".ogg", ".mp3", ".flac", ".ttf", ".otf",
+                    // F2c Task 12: an imported original names nothing of its own --
+                    // its embedded textures become SEPARATE assets at extraction
+                    // (s5.5) -- and a .glb is binary, not JSON, so routing it
+                    // through the JSON-parse path below would refuse it outright
+                    // rather than answer "no outgoing edges".
+                    ".gltf", ".glb" };
                 static constexpr std::string_view kOpaque[] = { ".json", ".arcdiag" };
                 for (std::string_view e : kLeaf)   if (ext == e) return std::vector<AssetRef>{};
                 for (std::string_view e : kOpaque) if (ext == e) return std::vector<AssetRef>{};
@@ -1099,8 +1105,33 @@ namespace Arcane
                 }
                 if (ext == ".arcmesh")
                 {
-                    if (auto it = json->find("material"); it != json->end())
+                    // F2c Task 12 (spec s4.2/s4.4): an IMPORTED mesh's companion
+                    // carries two kinds of outgoing edge now -- importedSource
+                    // (the .gltf/.glb it was extracted from) as DerivesFrom, and
+                    // every named slot's material as References. addGuid already
+                    // skips a nil/invalid guid (line ~1067 above), so an absent or
+                    // unassigned importedSource, and a nil slot, both contribute
+                    // NOTHING -- no phantom entry, same discipline as every other
+                    // branch here.
+                    if (auto it = json->find("importedSource"); it != json->end())
+                        addGuid(*it, AssetRefKind::DerivesFrom);
+                    if (auto slots = json->find("slots"); slots != json->end() && slots->is_array())
+                    {
+                        for (const auto& slot : *slots)
+                        {
+                            if (!slot.is_object())
+                                continue;
+                            if (auto it = slot.find("material"); it != slot.end())
+                                addGuid(*it, AssetRefKind::References);
+                        }
+                    }
+                    else if (auto it = json->find("material"); it != json->end())
+                    {
+                        // Legacy F2a shape (Task 10's tolerant load path, reused
+                        // here): no "slots" key at all -- the scalar "material"
+                        // is the ENTIRE existing corpus's only material edge.
                         addGuid(*it, AssetRefKind::References);
+                    }
                     return out;
                 }
                 if (ext == ".arcscene")

@@ -330,9 +330,18 @@ namespace Arcane
         //     texture's sole reason to exist.
         //   .arcmat -- "parent" (an instance): DerivesFrom; every
         //     texture-typed entry in "params": References.
-        //   .arcmesh -- "material": References; the nil guid (unassigned)
-        //     contributes nothing, so a mesh with no material yields an
-        //     empty list rather than a phantom nil-guid entry.
+        //   .arcmesh (F2c Task 12, spec s4.2/s4.4) -- three arms, an imported
+        //     mesh's companion getting the first two: "importedSource" (the
+        //     .gltf/.glb it was extracted from), when present and a valid
+        //     guid: DerivesFrom -- this is the edge the browser's fold
+        //     predicate folds the companion under its Model on
+        //     (AssetPanelModel.cpp's derivesFromCount == 1 gate) and the Graph
+        //     panel draws the import web from, with no new code. Every
+        //     "slots[].material": References. Otherwise (no "slots" key at
+        //     all -- the legacy F2a shape), the scalar "material": References,
+        //     same as before. In every arm, a nil/invalid/absent guid
+        //     contributes nothing, so a mesh naming no material anywhere
+        //     yields an empty list rather than a phantom nil-guid entry.
         //   .arcscene -- version >= 4 WITH a top-level "assets" manifest
         //     array (the save-time manifest, asset-manager Plan 2 Task 1):
         //     the manifest's guids, verbatim, as References -- INCLUDING an
@@ -348,10 +357,15 @@ namespace Arcane
         //     The two paths therefore agree only when every referenced
         //     target happens to be resolvable; the manifest is a strict
         //     superset of the scan's answer otherwise, by design.
-        //   leaf/opaque formats (images, audio, fonts, generic .json) --
-        //     empty, NEVER nullopt: a leaf asset genuinely has no outgoing
-        //     edges, a different fact than "could not even read this asset"
-        //     below.
+        //   leaf/opaque formats (images, audio, fonts, generic .json, and --
+        //     F2c Task 12 -- .gltf/.glb imported-mesh SOURCES) -- empty,
+        //     NEVER nullopt: a leaf asset genuinely has no outgoing edges, a
+        //     different fact than "could not even read this asset" below. A
+        //     .gltf/.glb names nothing of its own -- its embedded textures
+        //     become separate assets at extraction (spec s5.5) -- and, for
+        //     the binary .glb in particular, routing it through the
+        //     JSON-parse path instead would refuse it outright rather than
+        //     answer "no outgoing edges".
         //   anything else unrecognised -- also an empty, documented list
         //     (Task 3's coverage test pins this table so a future format
         //     can't silently fall through unnoticed).
