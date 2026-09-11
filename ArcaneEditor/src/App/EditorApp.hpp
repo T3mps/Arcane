@@ -1541,6 +1541,15 @@ namespace Arcane::Editor
         // one dispatcher (ConsumeCreateResult) can report a failed create
         // through ModalErrorQueue and select a successful one, without a
         // second lookup.
+        //
+        // CreateMaterialFileAt is CreateMaterialAt's file-production half, WITHOUT
+        // the OpenPath below it -- factored out (2026-09 review, Task 15) so
+        // import-time automation (EnsureMeshImportBaseMaterial) can mint the shared
+        // mesh-import base material without popping open a Material Editor tab as a
+        // side effect of a background import; the same reasoning MintImportMaterials'
+        // own instance-mint arm already applies to itself. CreateMaterialAt is now a
+        // thin wrapper: call this, then OpenPath the result for the user-dialog path.
+        Arcane::Guid CreateMaterialFileAt(std::filesystem::path path, Arcane::MaterialSurface surface);
         Arcane::Guid CreateMaterialAt(std::filesystem::path path,
                                       Arcane::MaterialSurface surface = Arcane::MaterialSurface::Fullscreen);
         Arcane::Guid CreateInstanceAt(std::filesystem::path path, Arcane::Guid parent);
@@ -1601,10 +1610,13 @@ namespace Arcane::Editor
         // mesh_import_base.arcmat` (MaterialSurface::Mesh, baseColor white, albedo
         // nil) at that FIXED path. The path IS the identity: an already-registered
         // asset there is REUSED (returns its guid); otherwise this is the first
-        // import and it is minted via CreateMaterialAt, which already produces
-        // exactly this file (kind="mesh", the two F2a params, no snippet/graph --
-        // CreateMaterialAt's own comment). Never uniquifies, never overwrites. Nil
-        // on failure (no project open, or the mint itself fails).
+        // import and it is minted via CreateMaterialFileAt (the FILE half only,
+        // never CreateMaterialAt -- 2026-09 review: this is background import
+        // automation, so it must not pop open a Material Editor tab as a side
+        // effect), which already produces exactly this file (kind="mesh", the two
+        // F2a params, no snippet/graph -- CreateMaterialFileAt's own comment).
+        // Never uniquifies, never overwrites. Nil on failure (no project open, or
+        // the mint itself fails).
         Arcane::Guid EnsureMeshImportBaseMaterial();
 
         // F2c Task 15 (spec s6, R4 steps 1-3): per glTF material in `survey`, in

@@ -1440,7 +1440,12 @@ namespace Arcane::Editor
                                 Arcane::Editor::AssetActivityKind::Created, {} });
     }
 
-    Arcane::Guid EditorApp::CreateMaterialAt(std::filesystem::path path, Arcane::MaterialSurface surface)
+    // CreateMaterialAt's file-production half, factored out WITHOUT the OpenPath
+    // that follows it (2026-09 review, Task 15's own EnsureMeshImportBaseMaterial):
+    // build the MaterialAssetData for `surface`, SaveMaterialAsset, checked
+    // RegisterCreatedAsset, MarkAllDirty. CreateMaterialAt below is now a thin
+    // wrapper -- call this, then open the document, for the user-dialog path only.
+    Arcane::Guid EditorApp::CreateMaterialFileAt(std::filesystem::path path, Arcane::MaterialSurface surface)
     {
         if (path.extension() != ".arcmat")
             path += ".arcmat";
@@ -1547,8 +1552,23 @@ namespace Arcane::Editor
         if (!registered)
             return {};
         m_assetModel.MarkAllDirty();
-        m_documents.OpenPath(path);
         return *registered;
+    }
+
+    Arcane::Guid EditorApp::CreateMaterialAt(std::filesystem::path path, Arcane::MaterialSurface surface)
+    {
+        const Arcane::Guid guid = CreateMaterialFileAt(path, surface);
+        if (!guid.IsValid())
+            return {};
+        // User-dialog path only. CreateMaterialFileAt's own OWN path parameter is a
+        // BY-VALUE copy (the extension normalization above never touches this
+        // function's `path`), so it is renormalized here before OpenPath -- same
+        // ".arcmat" suffixing rule, applied to the SAME path the file actually
+        // landed at.
+        if (path.extension() != ".arcmat")
+            path += ".arcmat";
+        m_documents.OpenPath(path);
+        return guid;
     }
 
     namespace
@@ -1644,8 +1664,8 @@ namespace Arcane::Editor
     // F2c Task 15 (spec s6, R4): the shared import base -- see this method's own
     // declaration (EditorApp.hpp) for the full contract. The fixed mount path IS
     // the identity: this scans for an asset ALREADY registered there before ever
-    // touching CreateMaterialAt, so every import after the first finds and reuses
-    // the SAME base rather than minting a second one.
+    // touching CreateMaterialFileAt, so every import after the first finds and
+    // reuses the SAME base rather than minting a second one.
     Arcane::Guid EditorApp::EnsureMeshImportBaseMaterial()
     {
         const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
@@ -1656,13 +1676,18 @@ namespace Arcane::Editor
             if (mount == "game://mesh_import_base.arcmat")
                 return guid;
 
-        // First import: mint it. CreateMaterialAt(..., MaterialSurface::Mesh)
+        // First import: mint it. CreateMaterialFileAt(..., MaterialSurface::Mesh)
         // already produces exactly the file s6 wants (kind="mesh", baseColor white,
-        // albedo nil, no snippet/graph -- that function's own comment above), so
-        // this is a call to it, not new code.
+        // albedo nil, no snippet/graph -- CreateMaterialFileAt's own comment above),
+        // so this is a call to it, not new code. The FILE half only, deliberately
+        // NOT CreateMaterialAt (2026-09 review): this is background import
+        // automation with no user-driven Create action behind it, so it must not
+        // pop open a Material Editor tab for the base material -- the same "no
+        // OpenPath" reasoning MintImportMaterials' own instance-mint arm already
+        // applies to itself, one level up.
         const std::filesystem::path basePath =
             project->Root() / "Content" / "mesh_import_base.arcmat";
-        return CreateMaterialAt(basePath, Arcane::MaterialSurface::Mesh);
+        return CreateMaterialFileAt(basePath, Arcane::MaterialSurface::Mesh);
     }
 
     // F2c Task 15 (spec s6, R4 steps 1-3): see this method's own declaration
