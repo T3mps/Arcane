@@ -287,12 +287,12 @@ namespace Arcane
             // not depend on unordered_map hash/bucket layout.
             // ------------------------------------------------------------------
             {
-                auto view = reg.CreateView<RigidBody2D, Collider2D, PhysicsBodyRef, Transform>();
+                auto view = reg.CreateView<const RigidBody2D, const Collider2D, PhysicsBodyRef, const Transform>();
                 view.ForEach([&](Astra::Entity   entity,
-                                 RigidBody2D&    rb,
-                                 Collider2D&     col,
+                                 const RigidBody2D&    rb,
+                                 const Collider2D&     col,
                                  PhysicsBodyRef& ref,
-                                 Transform& lt)
+                                 const Transform& lt)
                 {
                     // Skip entities that already have a tracked live handle.
                     if (ref.handle != Phys::kInvalidBody &&
@@ -427,12 +427,11 @@ namespace Arcane
             // ------------------------------------------------------------------
             if (!m_stepWorld)
             {
-                auto view = reg.CreateView<PhysicsBodyRef, Transform, Collider2D, RigidBody2D>();
+                auto view = reg.CreateView<PhysicsBodyRef, const Transform, const Collider2D, Astra::With<RigidBody2D>>();
                 view.ForEach([&](Astra::Entity   /*entity*/,
                                  PhysicsBodyRef&  ref,
-                                 Transform&  lt,
-                                 Collider2D&      col,
-                                 RigidBody2D&     /*rb*/)
+                                 const Transform&  lt,
+                                 const Collider2D&      col)
                 {
                     if (ref.handle == Phys::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))       return;
@@ -481,9 +480,9 @@ namespace Arcane
             // Transform and derives WorldTransform.
             // ------------------------------------------------------------------
             {
-                auto view = reg.CreateView<PhysicsBodyRef, Transform, RigidBody2D>();
+                auto view = reg.CreateView<const PhysicsBodyRef, Transform, RigidBody2D>();
                 view.ForEach([&](Astra::Entity   entity,
-                                 PhysicsBodyRef& ref,
+                                 const PhysicsBodyRef& ref,
                                  Transform& lt,
                                  RigidBody2D&    rb)
                 {

@@ -54,6 +54,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace Arcane
@@ -81,12 +82,10 @@ namespace Arcane
         std::vector<std::uint32_t> parentIndex;  // index INTO order, always strictly < own index
 
         // ---- per-row value state, parallel to `order` ----
-        // shadow/shadowValid are the change detector. Astra has no component
-        // change tracking and Task 4 is explicitly not allowed to add one, so
-        // "did this local pose move?" is answered by comparing against the pose
-        // the row was last composed from: ten float compares against ~128 flops
-        // of mat4_cast + mat4 product, which is the trade that makes skipping
-        // worth doing at all.
+        // shadow/shadowValid are the change detector: "did this local pose move?"
+        // is answered by comparing against the pose the row was last composed
+        // from: ten float compares against ~128 flops of mat4_cast + mat4 product,
+        // which is the trade that makes skipping worth doing at all.
         std::vector<Transform>    shadow;
         std::vector<std::uint8_t> shadowValid;   // 0 => row i must recompose
         std::vector<std::uint8_t> dirty;         // decided this pass; read by children
@@ -242,7 +241,7 @@ namespace Arcane
             // load restored, not a default identity.
             for (std::size_t i = 0; i < n; ++i)
             {
-                const WorldTransform* w = reg.GetComponent<WorldTransform>(c.order[i]);
+                const WorldTransform* w = std::as_const(reg).GetComponent<WorldTransform>(c.order[i]);
                 c.world[i] = w ? w->matrix : glm::mat4(1.0f);
             }
 
@@ -283,7 +282,7 @@ namespace Arcane
             {
                 const Astra::Entity e = c.order[i];
                 const std::uint32_t p = c.parentIndex[i];
-                Transform* local = reg.GetComponent<Transform>(e);
+                const Transform* local = std::as_const(reg).GetComponent<Transform>(e);
                 if (!local)
                 {
                     // Non-spatial node (never had a Transform, or the Inspector

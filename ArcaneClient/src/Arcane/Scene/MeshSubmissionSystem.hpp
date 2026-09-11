@@ -130,8 +130,8 @@ namespace Arcane
         const MeshTable*         meshTable = reg.GetResource<MeshTable>();
         const MeshMaterialTable* matTable  = reg.GetResource<MeshMaterialTable>();
 
-        auto view = reg.CreateView<WorldTransform, MeshRenderer, Astra::Not<Hidden>>();
-        view.ForEach([&](Astra::Entity, WorldTransform& world, MeshRenderer& renderer)
+        auto view = reg.CreateView<const WorldTransform, const MeshRenderer, Astra::Not<Hidden>>();
+        view.ForEach([&](Astra::Entity, const WorldTransform& world, const MeshRenderer& renderer)
         {
             // Nil or unresolved mesh: nothing to draw, and no placeholder --
             // see MeshTable's own comment (SceneResources.hpp) for why a

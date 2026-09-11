@@ -15,6 +15,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Arcane::Edit
@@ -62,8 +63,8 @@ namespace Arcane::Edit
     std::string AutoEntityName(Astra::Registry& reg)
     {
         std::unordered_set<std::string> taken;
-        reg.CreateView<Identity>().ForEach(
-            [&](Astra::Entity, Identity& info) { taken.insert(info.name); });
+        reg.CreateView<const Identity>().ForEach(
+            [&](Astra::Entity, const Identity& info) { taken.insert(info.name); });
         if (!taken.contains("Entity"))
             return "Entity";
         for (int i = 2;; ++i)
@@ -76,7 +77,7 @@ namespace Arcane::Edit
 
     std::string DisplayName(Astra::Registry& reg, Astra::Entity e)
     {
-        if (Identity* info = reg.GetComponent<Identity>(e))
+        if (const Identity* info = std::as_const(reg).GetComponent<Identity>(e))
             if (!info->name.empty())
                 return info->name;
         return "Entity " + std::to_string(e.GetID());
@@ -233,7 +234,7 @@ namespace Arcane::Edit
         // unchanged-name case, which a caller cannot act on.
         if (!reg.IsValid(e))
             return RenameResult::Invalid;
-        if (!reg.GetComponent<Identity>(e))
+        if (!std::as_const(reg).GetComponent<Identity>(e))
             return RenameResult::Invalid;
         const Astra::ComponentDescriptor* desc = FindIdentityDescriptor(reg, e);
         if (!desc)
@@ -389,7 +390,7 @@ namespace Arcane::Edit
             {
                 const Astra::Entity parent = reg.GetParent(e);
                 if (parent.IsValid() && reg.IsValid(parent))
-                    if (const Identity* info = reg.GetComponent<Identity>(parent))
+                    if (const Identity* info = std::as_const(reg).GetComponent<Identity>(parent))
                         if (info->id.IsValid())
                             entry["rootParentGuid"] = info->id.ToString();
             }
@@ -455,8 +456,8 @@ namespace Arcane::Edit
             // and the taken-name set for uniquify.
             std::unordered_map<std::string, Astra::Entity> byGuid;
             std::unordered_set<std::string> taken;
-            reg.CreateView<Identity>().ForEach(
-                [&](Astra::Entity e, Identity& info)
+            reg.CreateView<const Identity>().ForEach(
+                [&](Astra::Entity e, const Identity& info)
                 {
                     if (info.id.IsValid())
                         byGuid.emplace(info.id.ToString(), e);
@@ -679,7 +680,7 @@ namespace Arcane::Edit
         glm::mat4 m(1.0f);
         for (auto it = chain.rbegin(); it != chain.rend(); ++it)
         {
-            if (Transform* t = reg.GetComponent<Transform>(*it))
+            if (const Transform* t = std::as_const(reg).GetComponent<Transform>(*it))
                 m = m * t->ToMatrix();
         }
         return m;

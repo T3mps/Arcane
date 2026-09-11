@@ -19,6 +19,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>   // perspectiveRH_ZO, lookAtRH
 
+#include <utility>
+
 #include <optional>
 
 namespace Arcane
@@ -62,8 +64,8 @@ namespace Arcane
         // propagation pass that materialises it runs at a different point in the
         // frame for each host). A view over both would silently skip the camera for
         // that frame and the scene would flicker to the previous view.
-        reg.CreateView<Camera>().ForEach(
-            [&](Astra::Entity e, Camera& cam)
+        reg.CreateView<const Camera>().ForEach(
+            [&](Astra::Entity e, const Camera& cam)
         {
             // Task 5 (Phase 4): the projection guard is a no-op for every scene
             // that predates the field (Camera::projection defaults to
@@ -82,9 +84,9 @@ namespace Arcane
             // column 3 (it was column 2). The ORTHOGRAPHIC path is otherwise
             // untouched and stays glm::vec2-shaped end to end -- an ortho camera
             // frames the XY plane and has no use for the entity's Z.
-            if (const WorldTransform* wt = reg.GetComponent<WorldTransform>(e))
+            if (const WorldTransform* wt = std::as_const(reg).GetComponent<WorldTransform>(e))
                 center = glm::vec2(wt->matrix[3].x, wt->matrix[3].y);   // translation column
-            else if (const Transform* lt = reg.GetComponent<Transform>(e))
+            else if (const Transform* lt = std::as_const(reg).GetComponent<Transform>(e))
                 center = glm::vec2(lt->position);   // not propagated yet: local IS world for a root
         });
 
@@ -205,8 +207,8 @@ namespace Arcane
         float     nearZ = 0.1f;
         float     farZ  = 1000.0f;
 
-        reg.CreateView<Camera>().ForEach(
-            [&](Astra::Entity e, Camera& cam)
+        reg.CreateView<const Camera>().ForEach(
+            [&](Astra::Entity e, const Camera& cam)
         {
             if (!cam.active || cam.projection != CameraProjection::Perspective)
                 return;
@@ -219,9 +221,9 @@ namespace Arcane
             // Task 7 (F2a): capture the FULL matrix now, not just its
             // translation column -- same WorldTransform-then-Transform
             // fallback ActiveSceneCamera uses above.
-            if (const WorldTransform* wt = reg.GetComponent<WorldTransform>(e))
+            if (const WorldTransform* wt = std::as_const(reg).GetComponent<WorldTransform>(e))
                 world = wt->matrix;
-            else if (const Transform* lt = reg.GetComponent<Transform>(e))
+            else if (const Transform* lt = std::as_const(reg).GetComponent<Transform>(e))
                 world = lt->ToMatrix();   // not propagated yet: local IS world for a root
         });
 

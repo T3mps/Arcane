@@ -48,6 +48,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -970,11 +971,11 @@ namespace Arcane::Editor
                                  GizmoLive() && m_selection.HasSelection() &&
                                  (m_gizmoDrag.active || inViewport);
         Astra::Registry*        regPtr = nullptr;
-        Arcane::Transform* lt     = nullptr;
+        const Arcane::Transform* lt     = nullptr;
         if (gizmoActive)
         {
             regPtr = &m_runtime->Registry();
-            lt = regPtr->GetComponent<Arcane::Transform>(m_selection.Primary());
+            lt = std::as_const(*regPtr).GetComponent<Arcane::Transform>(m_selection.Primary());
         }
 
         if (lt)
@@ -1018,7 +1019,7 @@ namespace Arcane::Editor
                             m_gizmoDrag.txn = m_undo->Begin("Gizmo");
                             for (Astra::Entity e : roots)
                             {
-                                Arcane::Transform* et = regPtr->GetComponent<Arcane::Transform>(e);
+                                const Arcane::Transform* et = std::as_const(*regPtr).GetComponent<Arcane::Transform>(e);
                                 if (!et)
                                     continue;   // non-spatial node in the selection
                                 const Astra::ComponentDescriptor* ed =
@@ -1090,7 +1091,7 @@ namespace Arcane::Editor
                                 if (!planarParent || !Arcane::IsPlanarBasis(worldMat))
                                 {
                                     const Arcane::Identity* id =
-                                        regPtr->GetComponent<Arcane::Identity>(e);
+                                        std::as_const(*regPtr).GetComponent<Arcane::Identity>(e);
                                     // Which of the two failed is the difference
                                     // between "fix the parent" and "fix this
                                     // entity", so the message names it rather
@@ -1673,7 +1674,7 @@ namespace Arcane::Editor
         if (!InPlayMode() && GizmoLive() && m_selection.HasSelection())
         {
             Astra::Registry& drawReg = m_runtime->Registry();
-            Arcane::Transform* lt = drawReg.GetComponent<Arcane::Transform>(
+            const Arcane::Transform* lt = std::as_const(drawReg).GetComponent<Arcane::Transform>(
                 m_selection.Primary());
             if (lt)
             {
@@ -2212,7 +2213,7 @@ namespace Arcane::Editor
         if (menuReq.renameSelected && m_selection.HasSelection())
         {
             if (const Arcane::Identity* info =
-                    m_runtime->Registry().GetComponent<Arcane::Identity>(m_selection.Primary()))
+                    std::as_const(m_runtime->Registry()).GetComponent<Arcane::Identity>(m_selection.Primary()))
             {
                 // The rename box lives in the Outliner: un-hide it and pull its
                 // tab forward so the edit box appears where the user can see it,

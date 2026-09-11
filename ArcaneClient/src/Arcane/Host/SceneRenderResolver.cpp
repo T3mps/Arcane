@@ -194,8 +194,8 @@ namespace Arcane
             return census;
         Astra::Registry& reg = im.services.runtime->Registry();
 
-        reg.CreateView<SpriteRenderer>().ForEach(
-            [&](Astra::Entity, SpriteRenderer& s)
+        reg.CreateView<const SpriteRenderer>().ForEach(
+            [&](Astra::Entity, const SpriteRenderer& s)
         {
             if (!s.material.IsValid())
                 return;
@@ -220,8 +220,8 @@ namespace Arcane
         // and SpriteRenderer are different component types with no shared
         // entity requirement, the same reason Refresh keeps sweeps (1) and
         // (1b) apart.
-        reg.CreateView<MeshRenderer>().ForEach(
-            [&](Astra::Entity, MeshRenderer& mr)
+        reg.CreateView<const MeshRenderer>().ForEach(
+            [&](Astra::Entity, const MeshRenderer& mr)
         {
             if (!mr.mesh.IsValid())
                 return;
@@ -235,8 +235,8 @@ namespace Arcane
         // owns the warn-once bookkeeping this must not touch. If that rule ever
         // changes, both copies change together.
         Guid postId{};
-        reg.CreateView<PostProcess>().ForEach(
-            [&](Astra::Entity, PostProcess& pp)
+        reg.CreateView<const PostProcess>().ForEach(
+            [&](Astra::Entity, const PostProcess& pp)
         {
             if (pp.material.IsValid() && !postId.IsValid())
                 postId = pp.material;
@@ -335,8 +335,8 @@ namespace Arcane
         // pending.
         const bool materialsReady = compilerReady && im.services.batcher != nullptr;
         int seenSprites = 0, seenSpriteGuids = 0, seenMaterialGuids = 0;
-        reg.CreateView<SpriteRenderer>().ForEach(
-            [&](Astra::Entity, SpriteRenderer& s)
+        reg.CreateView<const SpriteRenderer>().ForEach(
+            [&](Astra::Entity, const SpriteRenderer& s)
         {
             ++seenSprites;
             if (s.sprite.IsValid())
@@ -380,8 +380,8 @@ namespace Arcane
         // CURRENT frame's sprite ones. See that block's own comment for the
         // rest of the reasoning, including why its change-detector now
         // watches these two tables as well.
-        reg.CreateView<MeshRenderer>().ForEach(
-            [&](Astra::Entity, MeshRenderer& mr)
+        reg.CreateView<const MeshRenderer>().ForEach(
+            [&](Astra::Entity, const MeshRenderer& mr)
         {
             if (!mr.mesh.IsValid())
                 return;
@@ -479,8 +479,8 @@ namespace Arcane
         // more than one warns once.
         Guid postId{};
         int  postCount = 0;
-        reg.CreateView<PostProcess>().ForEach(
-            [&](Astra::Entity, PostProcess& pp)
+        reg.CreateView<const PostProcess>().ForEach(
+            [&](Astra::Entity, const PostProcess& pp)
         {
             if (!pp.material.IsValid())
                 return;

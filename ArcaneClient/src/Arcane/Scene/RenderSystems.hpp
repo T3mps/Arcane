@@ -31,9 +31,11 @@
 #include <glm/gtc/quaternion.hpp>   // angleAxis -- rebuilding the current world turn for the blend
 
 #include <cmath>
+#include <utility>
 
 namespace Arcane
 {
+    // Reads<> is honest now: the view below is const (Astra adoption 2026-09-11).
     struct RenderSubmissionSystem
         : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, PreviousTransform, Hidden>>
     {
@@ -44,8 +46,8 @@ namespace Arcane
             const SpriteTable* spriteTable = reg.GetResource<SpriteTable>();
             const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
 
-            auto view = reg.CreateView<WorldTransform, SpriteRenderer, Astra::Not<Hidden>>();
-            view.ForEach([&](Astra::Entity e, WorldTransform& world, SpriteRenderer& sprite)
+            auto view = reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>();
+            view.ForEach([&](Astra::Entity e, const WorldTransform& world, const SpriteRenderer& sprite)
             {
                 // Task 3 (F1): the world matrix is a mat4 now, so the
                 // translation is COLUMN 3 (it was column 2). Everything below
@@ -74,7 +76,7 @@ namespace Arcane
                 // Treats the entity's local pose as its world pose -- exact for a flat
                 // / identity-rooted physics entity (the case today). No
                 // PreviousTransform -> the unchanged snap-to-step path.
-                if (const PreviousTransform* prev = reg.GetComponent<PreviousTransform>(e))
+                if (const PreviousTransform* prev = std::as_const(reg).GetComponent<PreviousTransform>(e))
                 {
                     // The current world pose, re-expressed as a pose so the two
                     // ends of the blend are the same type. Rotation is rebuilt

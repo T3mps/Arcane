@@ -43,6 +43,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 
@@ -767,8 +768,8 @@ void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
         // the resolver logs its own census from inside Arcane.dll, so the
         // two lines together localise the last case.
         int total = 0;
-        m_runtime->Registry().CreateView<Arcane::Camera>().ForEach(
-            [&](Astra::Entity, Arcane::Camera&) { ++total; });
+        m_runtime->Registry().CreateView<const Arcane::Camera>().ForEach(
+            [&](Astra::Entity, const Arcane::Camera&) { ++total; });
         if (total == 0)
             ARC_WARN("scene has no Camera component at all -- nothing sets the view. "
                      "Add a Camera component to an entity (a New Scene ships one).");
@@ -946,7 +947,7 @@ void RuntimeApp::ShutdownGraphPath()
                     if (hit.IsValid())
                     {
                         if (const Arcane::Identity* identity =
-                                m_runtime->Registry().GetComponent<Arcane::Identity>(hit))
+                                std::as_const(m_runtime->Registry()).GetComponent<Arcane::Identity>(hit))
                         {
                             res.resolved   = true;
                             res.entityName = identity->name;

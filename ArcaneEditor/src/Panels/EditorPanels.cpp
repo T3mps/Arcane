@@ -1364,7 +1364,7 @@ namespace Arcane::Editor
                 // spawn with no durable identity, so F2 does nothing rather
                 // than opening a box whose commit could not land.
                 if (const Arcane::Identity* info =
-                        registry.GetComponent<Arcane::Identity>(sel.Primary()))
+                        std::as_const(registry).GetComponent<Arcane::Identity>(sel.Primary()))
                     BeginRename(state, sel.Primary(), info->name);
             }
             if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && sel.HasSelection())
@@ -1565,7 +1565,7 @@ namespace Arcane::Editor
                         // box: an undo/redo between the two can change or
                         // remove the component.
                         const Arcane::Identity* info =
-                            registry.GetComponent<Arcane::Identity>(e);
+                            std::as_const(registry).GetComponent<Arcane::Identity>(e);
                         if (info && state.renameBuf != info->name)
                         {
                             if (binding.editMode)
@@ -1680,7 +1680,7 @@ namespace Arcane::Editor
                             // points (see the F2 site); without one the click
                             // stays a plain select.
                             const Arcane::Identity* info =
-                                registry.GetComponent<Arcane::Identity>(row.entity);
+                                std::as_const(registry).GetComponent<Arcane::Identity>(row.entity);
                             const bool slowSecond = binding.editMode && info != nullptr
                                 && sel.Count() == 1 && sel.Primary() == row.entity
                                 && state.lastClicked == row.entity
@@ -1743,7 +1743,7 @@ namespace Arcane::Editor
                         // (imgui.cpp:1587, not overridden by this editor), which
                         // is what lets the explanation reach a greyed item.
                         const Arcane::Identity* rowInfo =
-                            registry.GetComponent<Arcane::Identity>(row.entity);
+                            std::as_const(registry).GetComponent<Arcane::Identity>(row.entity);
                         if (ImGui::MenuItem("Rename", "F2", false, rowInfo != nullptr))
                             BeginRename(state, row.entity, rowInfo->name);
                         if (rowInfo == nullptr

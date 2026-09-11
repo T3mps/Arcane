@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace Arcane::Editor
 {
@@ -163,11 +164,11 @@ namespace Arcane::Editor
         {
             // No WorldTransform => a dead handle or a non-spatial node: there is
             // no position to frame, so it contributes nothing (not even a count).
-            const WorldTransform* world = reg.GetComponent<WorldTransform>(e);
+            const WorldTransform* world = std::as_const(reg).GetComponent<WorldTransform>(e);
             if (!world)
                 continue;
 
-            const SpriteRenderer* sprite = reg.GetComponent<SpriteRenderer>(e);
+            const SpriteRenderer* sprite = std::as_const(reg).GetComponent<SpriteRenderer>(e);
             if (!sprite)
             {
                 // A non-drawn node frames as its bare position.
@@ -191,8 +192,8 @@ namespace Arcane::Editor
         const SpriteTable* table = reg.GetResource<SpriteTable>();
         // The SAME view RenderSubmissionSystem submits from, so "frame
         // everything" frames exactly what is on screen.
-        reg.CreateView<WorldTransform, SpriteRenderer, Astra::Not<Hidden>>().ForEach(
-            [&](Astra::Entity, WorldTransform& world, SpriteRenderer& sprite)
+        reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>().ForEach(
+            [&](Astra::Entity, const WorldTransform& world, const SpriteRenderer& sprite)
             {
                 const SpriteEntry* entry = ResolveEntry(table, sprite);
                 const glm::vec2 half = SpriteHalfExtent(world.matrix,

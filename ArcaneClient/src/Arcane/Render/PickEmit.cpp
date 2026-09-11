@@ -42,8 +42,8 @@ namespace Arcane
         // matching the drawn quad.
         {
             const SpriteTable* spriteTable = registry.GetResource<SpriteTable>();
-            auto spriteView = registry.CreateView<WorldTransform, SpriteRenderer>();
-            spriteView.ForEach([&](Astra::Entity e, WorldTransform& xf, SpriteRenderer& sp)
+            auto spriteView = registry.CreateView<const WorldTransform, const SpriteRenderer>();
+            spriteView.ForEach([&](Astra::Entity e, const WorldTransform& xf, const SpriteRenderer& sp)
             {
                 // Task 3 (F1): the world matrix is a mat4, so the translation
                 // is column 3. Picking stays PLANAR (making it 3D is F4): the
@@ -102,8 +102,8 @@ namespace Arcane
 
         Phys::PhysicsWorld& world = *res->world;
 
-        auto colliderView = registry.CreateView<Collider2D, PhysicsBodyRef>();
-        colliderView.ForEach([&](Astra::Entity entity, Collider2D& col, PhysicsBodyRef& ref)
+        auto colliderView = registry.CreateView<const Collider2D, const PhysicsBodyRef>();
+        colliderView.ForEach([&](Astra::Entity entity, const Collider2D& col, const PhysicsBodyRef& ref)
         {
             if (ref.handle == Phys::kInvalidBody) return;
             if (!world.IsValid(ref.handle))       return;
