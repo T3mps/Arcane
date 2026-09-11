@@ -15,7 +15,6 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // Arcane::SceneRoot (DoSaveScene's empty-scene guard)
-#include <Arcane/Scene/TransformSystems.hpp>   // Edit-mode derived-transform refresh
 #include <Arcane/Serialization/SceneAsset.hpp>   // .arcscene read/apply/save (New/Open/Save Scene)
 
 #include <Astra/Registry/Registry.hpp>
@@ -95,36 +94,9 @@ namespace Arcane::Editor
 
         Arcane::Scene::CreateEmpty(reg);
         m_scene.Reset(*m_undo);
-        m_frameOnSceneOpen = true;
+        m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("No scene loaded -- started an empty one");
     }
-
-    // Put the newly-opened scene on screen.
-    //
-    // Deferred rather than framed on the spot: a scene can become current before
-    // the Viewport panel has ever been laid out (Init, and a project switch), and
-    // framing into a zero-sized panel fits nothing. The default camera puts the
-    // world ORIGIN at the panel's top-left, so without this, opening a project
-    // shows mostly empty space until the user discovers Home -- which reads as
-    // the content having failed to load.
-    void EditorApp::FrameSceneIfPending()
-    {
-        if (!m_frameOnSceneOpen) return;
-        if (ViewportWidth() == 0 || ViewportHeight() == 0) return;
-        m_frameOnSceneOpen = false;
-
-        const glm::vec2 panel((float)ViewportWidth(), (float)ViewportHeight());
-        Arcane::TransformPropagationSystem{}(m_runtime->Registry());
-        if (Arcane::Editor::SceneFramingBounds(m_runtime->Registry()).Valid())
-        {
-            FrameCamera(/*selectionOnly*/false);
-            return;
-        }
-        // An empty scene has nothing to fit, but the origin is where the user is
-        // about to build -- centre it rather than leaving it in the corner.
-        m_camera.offset = panel * 0.5f;
-    }
-
 
     // Scene dialogs start in the project's Content/scenes, created on demand:
     // a project scaffolded before scenes existed has no such folder, and the
@@ -184,7 +156,7 @@ namespace Arcane::Editor
         // thereby retract) the "scene" key -- do it explicitly so the outgoing
         // scene's rows don't survive into the new, empty one.
         Arcane::Diagnostics::Clear("scene");
-        m_frameOnSceneOpen = true;
+        m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("New scene");
         return true;
     }
@@ -232,7 +204,7 @@ namespace Arcane::Editor
 
         m_scene.Adopt(file, doc->id, *m_undo);
         m_recents.NoteSceneOpened(m_runtime->CurrentProject(), file);
-        m_frameOnSceneOpen = true;
+        m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("Opened scene {}", file.generic_string());
         return true;
     }
@@ -406,22 +378,12 @@ namespace Arcane::Editor
 
     void EditorApp::FrameCamera(bool selectionOnly)
     {
-        // WorldTransform is DERIVED, and in Edit mode the fixed phase (which
-        // owns TransformPropagationSystem) is paused -- the refresh that keeps
-        // it current runs later in the frame than this input-time call. Refresh
-        // it here too, so framing an entity created or moved this frame reads
-        // its real world pose instead of a stale or absent one. Edit-mode only,
-        // which is the only mode that reaches here.
-        Astra::Registry& reg = m_runtime->Registry();
-        Arcane::TransformPropagationSystem{}(reg);
-
-        const Arcane::Editor::FramingBounds bounds =
-            selectionOnly ? Arcane::Editor::SelectionFramingBounds(reg, m_selection.Entities())
-                          : Arcane::Editor::SceneFramingBounds(reg);
-        if (!bounds.Valid())
-            return;   // nothing framable: leave the user's view where it is
-
-        m_camera.Frame(bounds.min, bounds.max,
-                       glm::vec2((float)ViewportWidth(), (float)ViewportHeight()));
+        // Recorded, not executed: WorldTransform is DERIVED and Edit mode's
+        // propagation runs once per frame in phase 9 (EditModeSchedule). The
+        // request is serviced right after that pass, so framing an entity created
+        // or moved THIS frame reads its real world pose -- same frame, before the
+        // scene renders. No propagation runs at input time any more.
+        m_editSchedule.RequestFrame(selectionOnly ? Arcane::Editor::FrameRequest::Selection
+                                                  : Arcane::Editor::FrameRequest::Scene);
     }
 }

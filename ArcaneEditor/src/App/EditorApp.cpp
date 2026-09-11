@@ -1077,7 +1077,7 @@ namespace Arcane::Editor
                 if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
                 {
                     m_scene.Adopt(boot->file, boot->id, *m_undo);
-                    m_frameOnSceneOpen = true;
+                    m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
                 }
             }
         }

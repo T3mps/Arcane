@@ -32,7 +32,6 @@
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/MeshSubmissionSystem.hpp>   // CollectMeshInstances (ArmGraphViewportFrame's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
-#include <Arcane/Scene/TransformSystems.hpp>   // Edit-mode derived-transform refresh
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
 #include <Astra/Registry/Registry.hpp>   // Registry::InspectEntity/GetComponent (gizmo descriptor resolve)
@@ -1347,28 +1346,16 @@ namespace Arcane::Editor
             frame.viewportHeight = (float)ViewportHeight();
             m_resolver->Refresh(frame);
         }
-        // Derived transforms, refreshed for THIS frame before anything reads
-        // them.
-        //
-        // TransformPropagationSystem is a fixedUpdate system, and Edit mode
-        // holds the RunLoop paused -- so the whole fixed phase is frozen while
-        // SubmitRender still runs every frame. Without this, WorldTransform is
-        // never computed (nor materialised) in Edit mode: sprites do not draw
-        // at all until you press Play, and a gizmo drag moves Transform with
-        // nothing on screen following it. Play mode does not need this, since
-        // the fixed phase is running and would do the same work twice.
-        //
-        // World transforms are DERIVED data: whoever reads them is responsible
-        // for them being current, and in Edit mode that is the editor.
         if (!InPlayMode())
         {
-            Arcane::TransformPropagationSystem{}(m_runtime->Registry());
-            // THE DEFERRED FIRST-OPEN FRAMING. HERE and not in phase 6c
-            // (UpdateEditorCamera) for two reasons: this is after
-            // ApplyPendingViewportResize, so the fit sees THIS frame's
-            // viewport extent, and it is before the SetCamera push below --
-            // the one every render path reads.
-            FrameSceneIfPending();
+            // Once per Edit-mode frame, through the editor's own scheduler (spec
+            // 2026-09-11 s7) -- Play mode's fixedUpdate owns propagation, so
+            // nothing runs twice. Then the ONE pending camera-frame request, on
+            // the WorldTransforms this pass just refreshed and before the camera
+            // push below, which every render path reads.
+            m_editSchedule.RunFrame(m_runtime->Registry(), /*inPlayMode*/ false);
+            m_editSchedule.ServicePendingFrame(m_runtime->Registry(), m_selection.Entities(), m_camera,
+                                               glm::vec2((float)ViewportWidth(), (float)ViewportHeight()));
         }
 
         // Editor camera -> the Runtime slot SetRenderContext reads, for

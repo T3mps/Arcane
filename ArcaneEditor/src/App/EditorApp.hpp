@@ -46,6 +46,7 @@
 #include "App/PlayMode.hpp"
 #include "Panels/ProblemsPanel.hpp"
 #include "Project/EditorRecents.hpp"
+#include "Scene/EditModeSchedule.hpp"
 #include "Scene/SceneSession.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
@@ -835,7 +836,8 @@ namespace Arcane::Editor
         // camera-rect overlay and the panel's Image can never end up fitted
         // to two different rectangles. 0 before the vehicle exists (or after
         // a failed resize), which every caller already tolerates -- the
-        // panel skips its Image at 0 and FrameSceneIfPending defers.
+        // panel skips its Image at 0 and EditModeSchedule::ServicePendingFrame
+        // defers a SceneOpen request until the panel has a real size.
         [[nodiscard]] std::uint32_t ViewportWidth()  const noexcept;
         [[nodiscard]] std::uint32_t ViewportHeight() const noexcept;
         // The one "may editor shortcuts fire" predicate (three near-duplicates
@@ -1021,6 +1023,7 @@ namespace Arcane::Editor
         // the Runtime in Edit mode only; in Play the plugin's camera wins.
         // See EditorCamera.hpp for the transform convention.
         Arcane::Editor::EditorCamera m_camera;
+        Arcane::Editor::EditModeSchedule m_editSchedule;   // Edit-mode propagation + the pending frame request (spec 2026-09-11 s7)
         // RMB-drag pan gesture (rules: starts only inside the viewport, keeps
         // tracking once started -- see UpdateEditorCamera).
         struct CameraPanGesture
@@ -1029,15 +1032,11 @@ namespace Arcane::Editor
             glm::vec2 lastMouse{0.0f, 0.0f};   // WINDOW px -- only the delta is used
         };
         CameraPanGesture m_camPan;
-        // Point the editor camera at the selection (selectionOnly) or at the
-        // whole scene. A no-op when there is nothing framable, so the user's
-        // view is never thrown away by an F press that had no target.
+        // Records a frame request serviced after this frame's propagation
+        // (selectionOnly) or at the whole scene. A no-op when there is nothing
+        // framable, so the user's view is never thrown away by an F press that
+        // had no target.
         void FrameCamera(bool selectionOnly);
-        void FrameSceneIfPending();
-        // Set whenever a scene becomes the current one, consumed on the first frame
-        // the viewport has a real size. See FrameSceneIfPending for why it cannot
-        // be immediate.
-        bool m_frameOnSceneOpen = false;
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,
         // so the click-pick phase (later in the frame) does not also treat the
         // same click as a selection change. Reset at the top of FrameInput

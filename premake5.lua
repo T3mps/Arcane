@@ -742,6 +742,11 @@ project "ArcaneTests"
         -- skin in the same TU is never called, same pattern as
         -- ShaderEditorDocument above.
         "%{wks.location}/ArcaneEditor/src/Scene/EditGesture.cpp",
+        -- Astra adoption Task 8: EditModeSchedule (the Edit-mode scheduler + the
+        -- pending camera-frame request) source-compiles into the test exe so the
+        -- [editor] units drive it headlessly -- ImGui-free by construction, same
+        -- pattern as EditGesture/EditorCamera above.
+        "%{wks.location}/ArcaneEditor/src/Scene/EditModeSchedule.cpp",
         -- Widget layer: EditorWidgets is here as a LINK dependency, not a unit
         -- surface -- ShaderEditorDocument.cpp (compiled above) calls
         -- StableTextEdit for its four inline rename rows, and without this the
