@@ -515,6 +515,24 @@ namespace Arcane::AssetPipeline
             }
         }
 
+        // The bake's own closing gate. Rung 5 above counts triangles over data->meshes[]
+        // FILE-WIDE, regardless of whether any node's scene graph actually reaches a given
+        // mesh; the bake above is NODE-major (step 1's walk from the scene's roots), so a mesh
+        // nobody's node references still contributes its triangles to rung 5's "something's
+        // drawable" verdict while the bake itself produces NOTHING for it. This is what
+        // reconciles the two gates' different traversal orders: a file that passed rung 5 but
+        // baked to empty vertices/indices is exactly spec S4.5's "parses but yields nothing
+        // drawable" case ("a file that parses but yields nothing drawable refuses loudly at
+        // cook -- never a silent empty artifact") -- refuse loudly here rather than hand back a
+        // "successful" ImportedMesh with empty vertices/indices/sections.
+        if (rawVertices.empty() || rawIndices.empty())
+        {
+            result.refusal = "mesh import refused: '" + fileName
+                + "' has nothing drawable (meshes exist but no scene node references them -- "
+                  "nothing drawable through the scene)";
+            return result;
+        }
+
         // Step 4: sections + slot dedup BY NAME (A1). `slotNames` collects one entry per
         // distinct non-empty material name, in FIRST-SEEN order; primitives with no material
         // (empty name) share ONE unnamed slot APPENDED LAST -- its index is always

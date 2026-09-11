@@ -21,8 +21,10 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -280,4 +282,46 @@ TEST_CASE("mesh import: the vertex stream is deduplicated", "[pipeline]")
     const MeshImportResult r = ImportFixture("multi.glb");
     REQUIRE(r.mesh.has_value());
     CHECK(r.mesh->desc.vertexCount < kMultiGlbRawVertexCount);
+}
+
+TEST_CASE("mesh import: a mesh no scene node references refuses, not a silent empty artifact",
+          "[pipeline]")
+{
+    // Task review finding: rung 5's drawability gate counts triangles over data->meshes[]
+    // FILE-WIDE, but the bake reaches primitives only through the scene's node graph
+    // (pipeline step 1). A mesh nobody's node references still passes rung 5's gate while
+    // the bake itself produces nothing for it -- spec S4.5's "parses but yields nothing
+    // drawable" case, which must refuse loudly rather than hand back a "successful"
+    // ImportedMesh with empty vertices/indices/sections.
+    //
+    // Patched in memory, same byte-patch technique MeshImporterRefusalTest.cpp's
+    // all-degenerate case already uses: single.glb's JSON chunk contains the scene's own
+    // "nodes":[0] exactly once (the top-level "nodes" array -- SingleNode itself -- is a
+    // DIFFERENT, untouched substring: "nodes":[{"name":"SingleNode","mesh":0}]). Rewriting
+    // the SCENE's own reference to "nodes":[ ] (same byte length, so the GLB chunk lengths
+    // stay valid) leaves SingleNode and its mesh in the file but unreachable from the
+    // scene's roots.
+    std::vector<std::byte> bytes = ReadFixture("single.glb");
+
+    const char* needle = "\"nodes\":[0]";
+    const char* replacement = "\"nodes\":[ ]";
+    const std::size_t needleLen = std::strlen(needle);
+    REQUIRE(std::strlen(replacement) == needleLen);
+
+    const auto it = std::search(bytes.begin(), bytes.end(),
+                                 reinterpret_cast<const std::byte*>(needle),
+                                 reinterpret_cast<const std::byte*>(needle) + needleLen);
+    REQUIRE(it != bytes.end());
+    std::copy(reinterpret_cast<const std::byte*>(replacement),
+              reinterpret_cast<const std::byte*>(replacement) + needleLen, it);
+
+    const auto buffers = ReadExternalBuffers(bytes, Fixture("single.glb"));
+    std::vector<std::span<const std::byte>> spans;
+    if (buffers) for (const auto& b : *buffers) spans.emplace_back(b);
+    const MeshImportResult r =
+        ImportMesh(bytes, spans, Fixture("single.glb"), Guid::Generate(), MeshMetaSettings{});
+
+    CHECK_FALSE(r.mesh.has_value());
+    REQUIRE_FALSE(r.refusal.empty());
+    CHECK(r.refusal.find("single.glb") != std::string::npos);
 }
