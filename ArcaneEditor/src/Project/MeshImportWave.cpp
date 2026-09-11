@@ -72,18 +72,6 @@ namespace Arcane::Editor
             return stem.find_first_not_of('.') != std::string::npos;
         }
 
-        // The loose sibling's extension, implied by the glTF image's own declared
-        // MIME type. The corpus's only embedded kind today is image/png
-        // (embedded_tex.glb's fixture) -- anything else this engine has not been
-        // handed a fixture for falls back to .png rather than growing an untested
-        // branch.
-        std::string ExtensionForMime(const std::string& mimeType)
-        {
-            if (mimeType == "image/jpeg" || mimeType == "image/jpg")
-                return ".jpg";
-            return ".png";
-        }
-
         // Where an embedded image's bytes belong on disk, decided by walking the SAME
         // candidate chain UniqueSiblingPath itself walks (`stem`+ext, `stem-1`+ext,
         // `stem-2`+ext, ...) and applying the s5.5-vs-A4 byte-compare rule at every
@@ -124,6 +112,18 @@ namespace Arcane::Editor
                 candidate = dir / (stem + "-" + std::to_string(suffix) + ext);
             }
         }
+    }
+
+    // The corpus's only embedded kind today is image/png (embedded_tex.glb's
+    // fixture) -- anything else this engine has not been handed a fixture for falls
+    // back to .png rather than growing an untested branch. PUBLIC (see this
+    // function's header declaration) so Task 15's FindExtractedImagePath below can
+    // re-derive the SAME extension ExtractEmbeddedTextures wrote under.
+    std::string ExtensionForMime(const std::string& mimeType)
+    {
+        if (mimeType == "image/jpeg" || mimeType == "image/jpg")
+            return ".jpg";
+        return ".png";
     }
 
     fs::path UniqueSiblingPath(const fs::path& dir, const std::string& stem, const std::string& ext)
@@ -185,6 +185,23 @@ namespace Arcane::Editor
         }
 
         return written;
+    }
+
+    // Task 15's read-only re-run of the SAME chain ExtractEmbeddedTextures walks
+    // above (this function's own header declaration has the full account): reuses
+    // the private ResolveDestination helper -- rather than a second copy of the
+    // walk -- and translates its `skip` field (an EXISTING candidate already holds
+    // these exact bytes) into "found"; the candidate ResolveDestination returns when
+    // `skip` is false is where a WRITE would go, meaningless to a caller that never
+    // writes, so that path is discarded rather than returned.
+    std::optional<fs::path> FindExtractedImagePath(const fs::path& dir, const std::string& stem,
+                                                     const std::string& ext,
+                                                     const std::vector<std::byte>& bytes)
+    {
+        const DestinationDecision decision = ResolveDestination(dir, stem, ext, bytes);
+        if (decision.skip)
+            return decision.path;
+        return std::nullopt;
     }
 
     // Mirrors AssetPipeline::SlotNamesFromSections (ArtifactFormat.cpp) field for field,
@@ -277,5 +294,30 @@ namespace Arcane::Editor
         }
 
         return result;
+    }
+
+    // F2c Task 15 (spec s6, R4 step 1): reuse-by-name. Empty name never matches (no
+    // real asset has an empty stem, but the guard is what makes that a RULE rather
+    // than luck -- this function's own header comment). Otherwise counts candidates
+    // that are BOTH mesh-surface AND stem-equal; exactly one match reuses, zero or
+    // several mint fresh (never guess among duplicates, MintOrReuseSpriteForTexture's
+    // own rule).
+    Arcane::Guid FindReusableMeshMaterial(std::span<const MaterialCandidate> candidates,
+                                           const std::string& gltfMaterialName)
+    {
+        if (gltfMaterialName.empty())
+            return {};
+
+        Arcane::Guid unique{};
+        int matches = 0;
+        for (const MaterialCandidate& c : candidates)
+        {
+            if (c.meshSurface && c.stem == gltfMaterialName)
+            {
+                ++matches;
+                unique = c.guid;
+            }
+        }
+        return matches == 1 ? unique : Arcane::Guid{};
     }
 }

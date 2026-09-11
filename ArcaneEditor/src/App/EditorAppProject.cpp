@@ -29,6 +29,7 @@
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
 #include <Arcane/AssetPipeline/CookSession.hpp>   // IsCookPending's artifact-store oracle (2026-09-08 desk fix)
+#include <Arcane/AssetPipeline/GltfSurvey.hpp>   // F2c Task 15: MintImportMaterials' survey parameter
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
@@ -45,11 +46,13 @@
 #include <chrono>      // Asset-manager Plan 2 Task 5: m_assetActivity's now() stamp
 #include <cstddef>     // std::size_t (project_open's switch-local scan-progress callback)
 #include <filesystem>
+#include <fstream>     // F2c Task 15: ReadWholeGltfSource (MintOrUpdateCompanionMesh's survey read)
 #include <memory>
 #include <optional>    // take()'s fail-loud return (2026-08-11 review finding 3)
 #include <span>
 #include <string>
 #include <string_view>   // take()'s id parameter
+#include <unordered_map>   // F2c Task 15: MintImportMaterials' name -> Guid return map
 #include <unordered_set>   // SweepArtifactOrphans' live-guid set (F2b Task 12)
 #include <utility>       // std::move (F2b Task 12's cook-diagnostics bookkeeping)
 #include <vector>
@@ -1246,6 +1249,52 @@ namespace Arcane::Editor
         return data.id;
     }
 
+    namespace
+    {
+        // The glTF source's whole bytes -- SurveyGltf's own required shape
+        // (std::span<const std::byte>). nullopt on any read failure; the survey (and
+        // therefore the F2c Task 15 material mint below) is simply skipped for this
+        // cook -- the same quiet-failure posture MeshImportWave.cpp's own
+        // ReadWholeFile takes for extraction ("the cook will refuse it too").
+        std::optional<std::vector<std::byte>> ReadWholeGltfSource(const std::filesystem::path& path)
+        {
+            std::ifstream in(path, std::ios::binary);
+            if (!in)
+                return std::nullopt;
+            in.seekg(0, std::ios::end);
+            const std::streamoff len = in.tellg();
+            if (len < 0)
+                return std::nullopt;
+            in.seekg(0, std::ios::beg);
+            std::vector<std::byte> out(static_cast<std::size_t>(len));
+            if (!out.empty())
+            {
+                in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
+                if (!in)
+                    return std::nullopt;
+            }
+            return out;
+        }
+
+        // F2c Task 15 (spec s6) Step 6's never-reassign rule: only a slot whose
+        // material is NIL gets the minted/reused guid -- a slot the user already
+        // assigned is never touched, the same never-overwrite rule one level up
+        // from "import never overwrites an existing material asset", and what makes
+        // a re-cook safe. `minted` is MintImportMaterials' own name -> Guid map.
+        void ApplyMintedMaterials(std::vector<Arcane::MeshSlot>& slots,
+                                   const std::unordered_map<std::string, Arcane::Guid>& minted)
+        {
+            for (Arcane::MeshSlot& slot : slots)
+            {
+                if (slot.material.IsValid())
+                    continue;   // never reassign a slot the user already assigned.
+                const auto it = minted.find(slot.name);
+                if (it != minted.end())
+                    slot.material = it->second;
+            }
+        }
+    }
+
     // F2c Task 14 (spec s4.2, R3): the companion .arcmesh mint after the FIRST
     // successful cook of an imported model, and name-keyed slot reconciliation on
     // every re-cook after that -- see this method's own declaration (EditorApp.hpp)
@@ -1254,6 +1303,12 @@ namespace Arcane::Editor
     // its "registries are small today" note (a per-call O(n) scan over a per-project
     // asset count still in the dozens, not an index built once and invalidated on
     // save/delete) applies unchanged.
+    //
+    // F2c Task 15 (spec s6, R4 step 6): also surveys the SAME source for its glTF
+    // materials and reuse-or-mints one per material (MintImportMaterials), then
+    // assigns the result onto every NIL slot in the array this function is about to
+    // write -- both branches below (update-in-place and fresh-mint) share the one
+    // ApplyMintedMaterials call.
     void EditorApp::MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid)
     {
         const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
@@ -1277,6 +1332,17 @@ namespace Arcane::Editor
 
         const std::vector<std::string> authoritative =
             Arcane::Editor::SlotNamesFromSections(artifact->sections);
+
+        // F2c Task 15 (spec s6, R4 step 6): survey the SAME source for its glTF
+        // materials, read-only, independent of the mesh artifact/cook above -- a
+        // parse/read failure here mirrors ExtractEmbeddedTextures' own posture (the
+        // cook already refused, or will refuse, this file for the same reason, so
+        // there is nothing extra to report): `mintedMaterials` just stays empty and
+        // every slot below is left exactly as ReconcileSlots would already leave it.
+        std::unordered_map<std::string, Arcane::Guid> mintedMaterials;
+        if (const auto sourceBytes = ReadWholeGltfSource(*source))
+            if (const auto survey = Arcane::AssetPipeline::SurveyGltf(*sourceBytes, *source))
+                mintedMaterials = MintImportMaterials(modelGuid, *survey);
 
         // Step 3: look for an EXISTING companion -- a registered .arcmesh whose
         // source/importedSource name this model. The MeshAssetData doc comment on
@@ -1313,8 +1379,13 @@ namespace Arcane::Editor
         if (matches == 1 && existingData)
         {
             // Step 5: update in place.
-            const Arcane::Editor::SlotReconciliation r =
+            Arcane::Editor::SlotReconciliation r =
                 Arcane::Editor::ReconcileSlots(existingData->slots, authoritative);
+            // Task 15 step 6: assign onto NIL slots only -- a slot the user already
+            // assigned (or a prior import already assigned) is never touched, so
+            // this also makes the no-op-recook comparison below correctly see a
+            // real change on the first cook that resolves a previously-nil slot.
+            ApplyMintedMaterials(r.slots, mintedMaterials);
             if (r.slots == existingData->slots)
                 return;   // no-op re-cook -- never rewrite (the self-save feedback loop
                           // PollAssetWatch's material branch already guards against;
@@ -1348,6 +1419,10 @@ namespace Arcane::Editor
         // is exactly the fresh-mint slot array (and keeps ONE code path deciding what a
         // slot array from a name list looks like, rather than two).
         data.slots = Arcane::Editor::ReconcileSlots({}, authoritative).slots;
+        // Task 15 step 6: a first mint's slots are all nil -- ApplyMintedMaterials
+        // assigns every one that has a reused-or-minted match, exactly the "first
+        // mint takes the authoritative names verbatim" case, now also materialed.
+        ApplyMintedMaterials(data.slots, mintedMaterials);
         if (!Arcane::SaveMeshAsset(mintPath, data))
         {
             ARC_WARN("Arcane Editor: could not mint a companion mesh at '{}'",
@@ -1474,6 +1549,251 @@ namespace Arcane::Editor
         m_assetModel.MarkAllDirty();
         m_documents.OpenPath(path);
         return *registered;
+    }
+
+    namespace
+    {
+        // Percent-decodes a glTF URI's escape sequences ("%20" -> ' ', etc.) -- the
+        // same transform cgltf_decode_uri performs on a BUFFER uri
+        // (ArcaneAssetPipeline's MeshImporter.cpp, DecodeUriToPath), reimplemented
+        // here (rather than pulling cgltf into ArcaneEditor's includedirs, which
+        // would break the 08-21 placement rule that cgltf stays inside
+        // ArcaneAssetPipeline) for the one case Task 15 needs it: an EXTERNAL glTF
+        // image's own `uri` field.
+        std::string DecodeGltfUriPercentEscapes(const std::string& uri)
+        {
+            auto hexVal = [](char c) -> int
+            {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            std::string out;
+            out.reserve(uri.size());
+            for (std::size_t i = 0; i < uri.size(); )
+            {
+                if (uri[i] == '%' && i + 2 < uri.size())
+                {
+                    const int hi = hexVal(uri[i + 1]);
+                    const int lo = hexVal(uri[i + 2]);
+                    if (hi >= 0 && lo >= 0)
+                    {
+                        out.push_back(static_cast<char>(hi * 16 + lo));
+                        i += 3;
+                        continue;
+                    }
+                }
+                out.push_back(uri[i]);
+                ++i;
+            }
+            return out;
+        }
+
+        // Reverse of Project::ResolveAsset: which registered guid, if any, resolves
+        // to the EXACT filesystem path `target`? Same "registries are small today"
+        // per-call linear scan every other reuse-or-mint policy in this file uses
+        // (MintOrReuseSpriteForTexture, MintOrUpdateCompanionMesh).
+        std::optional<Arcane::Guid> GuidForResolvedPath(const Arcane::Project& project,
+                                                          const std::filesystem::path& target)
+        {
+            for (const auto& [guid, mount] : project.Registry().All())
+            {
+                const auto p = project.ResolveAsset(Arcane::AssetId::FromGuid(guid));
+                if (p && *p == target)
+                    return guid;
+            }
+            return std::nullopt;
+        }
+
+        // F2c Task 15 (spec s6 step 5): the registry guid a glTF image (embedded or
+        // external) is registered under. An EMBEDDED image was extracted by Task 13
+        // to a loose sibling via ExtractEmbeddedTextures' chain walk -- the exact
+        // path it landed at is not re-derivable from the name alone once a
+        // collision has occurred (identical bytes -> the existing file; different
+        // bytes -> a suffixed sibling), so this re-runs that SAME chain READ-ONLY
+        // (MeshImportWave::FindExtractedImagePath) rather than guessing. An
+        // EXTERNAL image resolves directly to `source.parent_path() / decoded uri`.
+        // nullopt when the image is not registered (yet) -- the caller warns once
+        // and leaves `albedo` nil rather than fabricating a guid.
+        std::optional<Arcane::Guid> GuidForGltfImage(const Arcane::Project& project,
+                                                      const std::filesystem::path& source,
+                                                      const Arcane::AssetPipeline::GltfImage& image,
+                                                      std::size_t imageIndex)
+        {
+            std::filesystem::path resolvedPath;
+            if (image.embedded)
+            {
+                const std::string stem = Arcane::Editor::ImageFileStem(
+                    image.name, source.stem().string(), imageIndex);
+                const std::string ext = Arcane::Editor::ExtensionForMime(image.mimeType);
+                const auto found = Arcane::Editor::FindExtractedImagePath(
+                    source.parent_path(), stem, ext, image.bytes);
+                if (!found)
+                    return std::nullopt;
+                resolvedPath = *found;
+            }
+            else
+            {
+                resolvedPath = source.parent_path() / DecodeGltfUriPercentEscapes(image.uri);
+            }
+            return GuidForResolvedPath(project, resolvedPath);
+        }
+    }
+
+    // F2c Task 15 (spec s6, R4): the shared import base -- see this method's own
+    // declaration (EditorApp.hpp) for the full contract. The fixed mount path IS
+    // the identity: this scans for an asset ALREADY registered there before ever
+    // touching CreateMaterialAt, so every import after the first finds and reuses
+    // the SAME base rather than minting a second one.
+    Arcane::Guid EditorApp::EnsureMeshImportBaseMaterial()
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return {};
+
+        for (const auto& [guid, mount] : project->Registry().All())
+            if (mount == "game://mesh_import_base.arcmat")
+                return guid;
+
+        // First import: mint it. CreateMaterialAt(..., MaterialSurface::Mesh)
+        // already produces exactly the file s6 wants (kind="mesh", baseColor white,
+        // albedo nil, no snippet/graph -- that function's own comment above), so
+        // this is a call to it, not new code.
+        const std::filesystem::path basePath =
+            project->Root() / "Content" / "mesh_import_base.arcmat";
+        return CreateMaterialAt(basePath, Arcane::MaterialSurface::Mesh);
+    }
+
+    // F2c Task 15 (spec s6, R4 steps 1-3): see this method's own declaration
+    // (EditorApp.hpp) for the full contract. In the MintOrReuseSpriteForTexture /
+    // MintOrUpdateCompanionMesh lineage -- registry/import-time automation; the "no
+    // creation path may bypass CreateAssetRequest" invariant governs the USER
+    // DIALOG path only and is untouched here (spec s6's own note, repeated at this
+    // call site so a later reviewer does not have to re-derive it).
+    std::unordered_map<std::string, Arcane::Guid> EditorApp::MintImportMaterials(
+        const Arcane::Guid& modelGuid, const Arcane::AssetPipeline::GltfSurvey& survey)
+    {
+        std::unordered_map<std::string, Arcane::Guid> result;
+
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project || !modelGuid.IsValid())
+            return result;
+
+        const auto source = project->ResolveAsset(Arcane::AssetId::FromGuid(modelGuid));
+        if (!source)
+            return result;
+
+        const Arcane::Guid baseGuid = EnsureMeshImportBaseMaterial();
+        if (!baseGuid.IsValid())
+            return result;
+
+        // Candidates for FindReusableMeshMaterial's pure stem match: every
+        // registered material asset whose SURFACE resolves to Mesh (the v22
+        // MaterialSurfaceFor accessor exists for exactly this shape of question).
+        std::vector<Arcane::Editor::MaterialCandidate> candidates;
+        for (const auto& [guid, mount] : project->Registry().All())
+        {
+            if (Arcane::Editor::AssetKindOf(mount) != Arcane::Editor::AssetKind::Material)
+                continue;
+            if (m_runtime->AssetsFacade().MaterialSurfaceFor(guid) != Arcane::MaterialSurface::Mesh)
+                continue;
+            const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(guid));
+            candidates.push_back({ guid, p ? p->stem().string() : std::string{}, true });
+        }
+
+        const std::string sourceStem = source->stem().string();
+
+        for (const Arcane::AssetPipeline::GltfMaterial& material : survey.materials)
+        {
+            // Dropped inputs, named loudly (spec s6): ONE ARC_WARN per file, per
+            // material, naming EVERY entry in one line -- never one per input
+            // (a wall of near-identical warnings) and never one per file (loses
+            // which material dropped what). Fires regardless of reuse-or-mint below:
+            // it is reporting what THIS glTF file's material authors that this
+            // engine has nowhere to put, which is true whether or not a new asset
+            // gets minted for it.
+            if (!material.droppedInputs.empty())
+            {
+                std::string joined;
+                for (std::size_t i = 0; i < material.droppedInputs.size(); ++i)
+                {
+                    if (i) joined += ", ";
+                    joined += material.droppedInputs[i];
+                }
+                ARC_WARN("Arcane Editor: material '{}' in '{}' drops unsupported input(s) at "
+                         "import: {}",
+                         material.name.empty() ? "(unnamed)" : material.name,
+                         source->filename().string(), joined);
+            }
+
+            // Step 1 (reuse-by-name): a hit means NOTHING is created here.
+            const Arcane::Guid reused =
+                Arcane::Editor::FindReusableMeshMaterial(candidates, material.name);
+            if (reused.IsValid())
+            {
+                result[material.name] = reused;
+                continue;
+            }
+
+            // THE INVARIANT: import never overwrites an existing .arcmat. The reuse
+            // arm above wrote nothing; UniqueSiblingPath below only ever returns a
+            // path that does not exist yet, so this arm cannot land on an existing
+            // file either -- which is what makes a user's edits to a
+            // previously-minted material permanent across every later re-import.
+            const std::filesystem::path mintPath = Arcane::Editor::UniqueSiblingPath(
+                source->parent_path(),
+                material.name.empty() ? sourceStem + "-mat" : material.name, ".arcmat");
+
+            Arcane::MaterialAssetData data;
+            data.id = Arcane::Guid::Generate();
+            data.parent = baseGuid;
+            data.name = mintPath.stem().string();
+            data.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(
+                material.baseColorFactor[0], material.baseColorFactor[1],
+                material.baseColorFactor[2], material.baseColorFactor[3]));
+
+            if (material.baseColorImage >= 0 &&
+                static_cast<std::size_t>(material.baseColorImage) < survey.images.size())
+            {
+                const auto albedo = GuidForGltfImage(
+                    *project, *source,
+                    survey.images[static_cast<std::size_t>(material.baseColorImage)],
+                    static_cast<std::size_t>(material.baseColorImage));
+                if (albedo)
+                {
+                    data.params.emplace_back("albedo", Arcane::MatParamValue::MakeTexture(*albedo));
+                }
+                else
+                {
+                    ARC_WARN("Arcane Editor: material '{}' in '{}' has a base-color texture "
+                             "that is not registered yet -- albedo left unset",
+                             material.name.empty() ? "(unnamed)" : material.name,
+                             source->filename().string());
+                }
+            }
+
+            if (!Arcane::SaveMaterialAsset(mintPath, data))
+            {
+                ARC_WARN("Arcane Editor: could not mint an import material at '{}'",
+                         mintPath.generic_string());
+                continue;
+            }
+            // Register immediately, CHECKED -- MintOrReuseSpriteForTexture's own
+            // account of why (this file, above): an unregistered mint hands back a
+            // guid that can never resolve.
+            const auto registered = m_runtime->RegisterCreatedAsset(mintPath);
+            if (!registered)
+                continue;
+            m_assetModel.MarkAllDirty();
+            m_assetActivity.Push({ std::chrono::steady_clock::now(), *registered,
+                                    mintPath.filename().string(),
+                                    Arcane::Editor::AssetActivityKind::Created, {} });
+
+            result[material.name] = *registered;
+        }
+
+        return result;
     }
 
     // EVERY mutable EditorApp member whose value refers to the current project

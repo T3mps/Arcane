@@ -19,6 +19,8 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -41,6 +43,16 @@ namespace Arcane::Editor
     // name" exactly like an empty glTF-authored name is.
     [[nodiscard]] std::string ImageFileStem(const std::string& imageName,
                                             const std::string& sourceStem, std::size_t index);
+
+    // The loose sibling's extension, implied by a glTF image's declared MIME type
+    // ("image/png" -> ".png", "image/jpeg"/"image/jpg" -> ".jpg", anything else this
+    // engine has not been handed a fixture for falls back to ".png" rather than
+    // growing an untested branch). PUBLIC (Task 13 kept this file-local) because Task
+    // 15's material mint (EditorAppProject.cpp) needs the SAME mapping to re-derive
+    // which extension an embedded image was extracted under -- one definition, so the
+    // write side (ExtractEmbeddedTextures) and the read side (FindExtractedImagePath
+    // below) can never drift.
+    [[nodiscard]] std::string ExtensionForMime(const std::string& mimeType);
 
     // A newly-discovered `.gltf`/`.glb`'s embedded images, extracted to loose .png
     // siblings beside `source`. SurveyGltf's front half first (nullopt -- the file
@@ -81,6 +93,24 @@ namespace Arcane::Editor
     // all-matched call's empty return the proof that nothing changed.
     [[nodiscard]] std::vector<std::filesystem::path> ExtractEmbeddedTextures(
         const std::filesystem::path& source);
+
+    // The READ-ONLY half of the SAME chain walk ExtractEmbeddedTextures runs above
+    // (this header's own comment on that function has the full account) -- never
+    // writes. Task 15 (material mint, spec s6 step 5) needs the EXACT path an
+    // embedded image's bytes were already extracted to, which is not re-derivable
+    // from the name alone once a collision has occurred (identical bytes -> the
+    // existing file; different bytes -> a suffixed sibling): re-running this SAME
+    // logic read-only, rather than duplicating the chain, is what keeps the two in
+    // lockstep.
+    //
+    // Walks `dir`/`stem``ext`, `dir`/`stem`-1`ext`, ... and returns the first
+    // EXISTING candidate whose on-disk bytes equal `bytes` (the one
+    // ExtractEmbeddedTextures itself would have stopped at); nullopt when no such
+    // candidate exists -- the image has not been extracted under this chain at all
+    // (not yet discovered, or the discovery sweep has not run since).
+    [[nodiscard]] std::optional<std::filesystem::path> FindExtractedImagePath(
+        const std::filesystem::path& dir, const std::string& stem, const std::string& ext,
+        const std::vector<std::byte>& bytes);
 
     // ---- F2c Task 14 (spec s4.2, R3): the companion .arcmesh mint + slot
     // reconciliation on re-cook -------------------------------------------------------
@@ -142,4 +172,22 @@ namespace Arcane::Editor
     [[nodiscard]] SlotReconciliation ReconcileSlots(
         const std::vector<Arcane::MeshSlot>& existing,
         const std::vector<std::string>& authoritative);
+
+    // ---- F2c Task 15 (spec s6, R4): material minting -- reuse-by-name, else mint an
+    // INSTANCE of the shared import base ------------------------------------------
+
+    // MeshImportWave.hpp -- the pure half of R4's step (1). Given the registry's
+    // material assets (guid + mount path + surface) and a glTF material name, which
+    // existing asset should the slot point at?
+    //
+    // R4's rule, and the shape UE takes (FbxImportUI.h:188-194, FbxMaterialImport.cpp:
+    // 571/624-689): reuse an existing MESH-surface material whose STEM equals the glTF
+    // material name. EXACTLY ONE match reuses; zero or several mint fresh -- the same
+    // never-guess-among-duplicates rule MintOrReuseSpriteForTexture already keeps, and
+    // for the same reason: picking one of two identically-named materials would be a
+    // coin flip the user cannot see.
+    struct MaterialCandidate { Arcane::Guid guid; std::string stem; bool meshSurface = false; };
+
+    [[nodiscard]] Arcane::Guid FindReusableMeshMaterial(
+        std::span<const MaterialCandidate> candidates, const std::string& gltfMaterialName);
 }

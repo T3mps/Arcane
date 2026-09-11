@@ -69,6 +69,10 @@
 
 namespace Astra { class TypeContext; }
 namespace Arcane { struct InputSnapshot; }   // by-reference phase parameters only
+// F2c Task 15: MintImportMaterials' survey parameter -- opaque here, the full
+// definition lives in Arcane/AssetPipeline/GltfSurvey.hpp, included only where the
+// struct is actually read (EditorAppProject.cpp).
+namespace Arcane::AssetPipeline { struct GltfSurvey; }
 // Opaque here on purpose: the play-mode settings handler (Task 6) is the only
 // thing in this header that needs these names, and ImGui's ini extension
 // point (ImGuiSettingsHandler) is internal-only -- imgui_internal.h stays
@@ -1592,6 +1596,42 @@ namespace Arcane::Editor
         // (yet, or ever) available -- a refused/failed cook can still reach this call,
         // and that is not an error here.
         void MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid);
+
+        // F2c Task 15 (spec s6, R4): the shared import base -- `Content/
+        // mesh_import_base.arcmat` (MaterialSurface::Mesh, baseColor white, albedo
+        // nil) at that FIXED path. The path IS the identity: an already-registered
+        // asset there is REUSED (returns its guid); otherwise this is the first
+        // import and it is minted via CreateMaterialAt, which already produces
+        // exactly this file (kind="mesh", the two F2a params, no snippet/graph --
+        // CreateMaterialAt's own comment). Never uniquifies, never overwrites. Nil
+        // on failure (no project open, or the mint itself fails).
+        Arcane::Guid EnsureMeshImportBaseMaterial();
+
+        // F2c Task 15 (spec s6, R4 steps 1-3): per glTF material in `survey`, in
+        // order -- reuse-by-name first (FindReusableMeshMaterial over the registry's
+        // MESH-surface materials; a hit means NOTHING is created), else mint a fresh
+        // INSTANCE of EnsureMeshImportBaseMaterial()'s base at
+        // `UniqueSiblingPath(source.parent_path(), ...)` with sparse overrides
+        // (`baseColor` from `baseColorFactor`, `albedo` from the extracted/
+        // registered base-color texture when one exists). One `ARC_WARN` per file,
+        // per material, naming every `droppedInputs` entry (spec s6's list).
+        //
+        // THE INVARIANT: import never overwrites an existing `.arcmat`. The reuse
+        // arm creates nothing; the mint arm can only ever land on a path
+        // UniqueSiblingPath has already proven free. Companion mints in the
+        // MintOrReuseSpriteForTexture lineage (registry/import-time automation) --
+        // the "no creation path may bypass CreateAssetRequest" invariant governs the
+        // user dialog path only, and is untouched here (spec s6's own note).
+        //
+        // Returns glTF material name -> the guid its slot should point at (reused or
+        // freshly minted); a name absent from the map means the mint itself failed
+        // (already ARC_WARN'd) -- the caller leaves that slot exactly as it was.
+        // `modelGuid` resolves the import's own source path (for placement); empty
+        // map when there is no project, `modelGuid` does not resolve, or the base
+        // material could not be ensured.
+        std::unordered_map<std::string, Arcane::Guid> MintImportMaterials(
+            const Arcane::Guid& modelGuid, const Arcane::AssetPipeline::GltfSurvey& survey);
+
         Arcane::Editor::DocServices MakeDocServices();
 
         // Problems-panel row click -> editor navigation. One switch over

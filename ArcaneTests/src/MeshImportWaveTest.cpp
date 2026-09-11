@@ -313,3 +313,45 @@ TEST_CASE("slot reconciliation: a first mint takes the authoritative names verba
     CHECK_FALSE(r.slots[0].material.IsValid());
     CHECK(r.warnings.empty());
 }
+
+// ---- F2c Task 15: FindReusableMeshMaterial (spec s6, R4 step 1) ----------------
+
+TEST_CASE("material reuse: exactly one same-named mesh material is reused", "[editor]")
+{
+    const Guid metal = Guid::Generate();
+    const std::vector<MaterialCandidate> candidates = {
+        { metal, "Metal", true },
+        { Guid::Generate(), "Paint", true },
+    };
+    CHECK(FindReusableMeshMaterial(candidates, "Metal") == metal);
+    CHECK_FALSE(FindReusableMeshMaterial(candidates, "Trim").IsValid());
+}
+
+TEST_CASE("material reuse: a SPRITE-surface material of the same name is not reused",
+          "[editor]")
+{
+    // A mesh slot pointing at a sprite material would resolve to nothing at draw time
+    // (MeshMaterialCache reads baseColor/albedo off a mesh-kind chain). The surface is
+    // part of the match, not a detail.
+    const std::vector<MaterialCandidate> candidates = {
+        { Guid::Generate(), "Metal", /*meshSurface*/ false },
+    };
+    CHECK_FALSE(FindReusableMeshMaterial(candidates, "Metal").IsValid());
+}
+
+TEST_CASE("material reuse: two same-named candidates reuse NEITHER", "[editor]")
+{
+    // Never guess among duplicates -- MintOrReuseSpriteForTexture's own rule.
+    const std::vector<MaterialCandidate> candidates = {
+        { Guid::Generate(), "Metal", true }, { Guid::Generate(), "Metal", true },
+    };
+    CHECK_FALSE(FindReusableMeshMaterial(candidates, "Metal").IsValid());
+}
+
+TEST_CASE("material reuse: an UNNAMED glTF material never matches anything", "[editor]")
+{
+    // An empty name would otherwise match every candidate with an empty stem, which
+    // no real asset has -- but the guard is what makes that a rule rather than luck.
+    const std::vector<MaterialCandidate> candidates = { { Guid::Generate(), "", true } };
+    CHECK_FALSE(FindReusableMeshMaterial(candidates, "").IsValid());
+}
