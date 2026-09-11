@@ -3,11 +3,15 @@
 // MeshCache: resolves .arcmesh Guids referenced by MeshRenderer::mesh into
 // Arcane::MeshEntry records for the scene's MeshTable. Mirrors SpriteCache's
 // host integration (SpriteCache.hpp) and its structure almost exactly -- like
-// that cache, there is no async compile step here, so Request() resolves
-// synchronously in one call: load the .arcmesh JSON (LoadMeshAsset) and
-// generate its geometry (BuildMeshData, which validates internally and
-// returns nullopt exactly when ValidateMeshAsset refuses the asset), then
-// compute its local bounds (ComputeMeshBounds) once alongside it.
+// that cache, there is no async compile step of its OWN here: load the
+// .arcmesh JSON (LoadMeshAsset), then resolve its geometry through
+// Mesh/MeshAsset.hpp's ResolveMeshData (F2c Task 11) -- a generated source
+// resolves synchronously in that one call (BuildMeshData + ComputeMeshBounds
+// internally, unchanged since before Task 11), but an Imported source can
+// come back PendingCook: the mesh COOK is async (arccook, or the editor's
+// background queue), even though this cache's OWN resolve step is not. See
+// Request's own comment for what PendingCook does to the per-frame contract
+// below.
 //
 // FAILURE DISCIPLINE, and this is the one place this cache DIFFERS from
 // SpriteCache rather than mirroring it: a failed resolve (unresolvable Guid,
@@ -20,6 +24,11 @@
 // nothing. So a nullptr Resolve() is the correct outcome, and
 // MeshSubmissionSystem (Task 5) is expected to skip the entity entirely, the
 // same way it would for a nil MeshRenderer::mesh.
+//
+// PendingCook (F2c Task 11) is a THIRD outcome, neither success nor failure:
+// an Imported mesh whose cook has not landed YET stays out of BOTH `table`
+// and `failed` -- see Request's own comment for why entering `failed` here
+// would be the exact regression F2b's desk-fix 2 fixed for the texture path.
 //
 // WHAT IT DOES NOT KEEP: the loaded MeshAssetData. An `AssetFor(Guid) ->
 // const MeshAssetData*` accessor lived here through Tasks 4-11, backed by a
@@ -40,6 +49,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Mesh/MeshAsset.hpp>          // MeshArtifactSupplyFn / CookPendingFn -- Services' Task 11 fields
 #include <Arcane/Scene/SceneResources.hpp>   // Arcane::MeshEntry (full type: Table()'s value type)
 
 #include <filesystem>
@@ -61,6 +71,14 @@ namespace Arcane
         struct Services
         {
             ResolveAssetFn resolveAsset;   // Guid -> path (project registry)
+            // F2c Task 11: forwarded VERBATIM from the Assets facade
+            // (Assets::MeshArtifactFor / Assets::CookPending) -- the same "no wrapper
+            // needed, the shapes already match" reasoning MeshMaterialCache::Services::
+            // resolveAlbedoSlot already uses for its own forward (F2b Task 11). Only an
+            // Imported .arcmesh's resolve (Request -> ResolveMeshData) ever consults
+            // these; a generated source needs neither.
+            MeshArtifactSupplyFn meshArtifactFor;
+            CookPendingFn        cookPending;
         };
 
         explicit MeshCache(Services services);
@@ -71,6 +89,15 @@ namespace Arcane
         // Ensure `id` is resolved (or known-failed) -- idempotent, a no-op
         // once known (same per-frame sweep contract as SpriteCache::Request).
         // Call per frame per referenced mesh Guid.
+        //
+        // F2c Task 11: an Imported mesh whose ResolveMeshData call answers
+        // MeshResolveState::PendingCook is a NO-OP, not a failure -- the guid stays out
+        // of both `table` and `failed`, so the very next Request (next frame) asks
+        // again. This is deliberately NOT idempotent for that one state (every OTHER
+        // outcome -- Ready or Failed -- IS idempotent, per the paragraph above): a
+        // PendingCook mesh has nothing memoized to skip, by design, the same "nothing
+        // was ever latched, so there is nothing to un-latch" posture Assets.hpp's
+        // SetCookPendingProbe states for the texture path (F2b desk-fix 2).
         void Request(const Guid& id);
 
         // Asset re-saved / removed: drop the table (and known-failed) entry

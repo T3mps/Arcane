@@ -18,10 +18,13 @@
 // same exe (STB_IMAGE_WRITE_IMPLEMENTATION defined there). Include header only.
 #include <stb_image_write.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -48,6 +51,93 @@ namespace
         REQUIRE(f.is_open());
         f << content;
         return path;
+    }
+
+    // ---- F2c Task 11: Assets::MeshArtifactFor/InvalidateMeshArtifact/CookPending --------
+    // Same idiom as the texture-artifact fixtures above: link ArcaneAssetPipeline to WRITE
+    // a real cooked artifact (Arcane::AssetPipeline::WriteMeshArtifact, the same production
+    // writer arccook drives), then read it back purely through the ArcaneClient facade
+    // under test -- Assets.cpp never links the pipeline (ArtifactReader.hpp's own banner).
+
+    // FNV-1a 64-bit over just the source bytes -- the SAME algorithm and constants
+    // TextureImporter.cpp/MeshImporter.cpp's own HashSourceBytes and ArtifactReader.cpp's
+    // client-side HashSourceBytes all use, duplicated here per MeshArtifactReaderTest.cpp's
+    // own "no test-only helper library crosses the pipeline/client boundary" precedent.
+    std::uint64_t FnvOfSource(std::span<const std::byte> bytes) noexcept
+    {
+        std::uint64_t h = 14695981039346656037ULL;
+        constexpr std::uint64_t prime = 1099511628211ULL;
+        for (std::byte b : bytes)
+        {
+            h ^= static_cast<std::uint64_t>(static_cast<std::uint8_t>(b));
+            h *= prime;
+        }
+        return h;
+    }
+
+    std::filesystem::path MeshSandboxRoot(const char* leaf)
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "arcane_assets_mesh_sandbox" / leaf;
+        std::error_code ec;
+        fs::remove_all(root, ec);
+        fs::create_directories(root / "Content" / "meshes", ec);
+        fs::create_directories(root / "Intermediate" / "Artifacts" / "aa", ec);
+        return root;
+    }
+
+    struct CookedMesh
+    {
+        std::filesystem::path root;
+        std::filesystem::path source;    // Content/meshes/<name>.glb
+        std::filesystem::path artifact;  // Intermediate/Artifacts/aa/<name>.arcart
+        Arcane::Guid guid;
+    };
+
+    // Writes `sourceBytes` as a `.glb` (no external-buffer JSON parse needed -- see
+    // AssetsImpl::ResolveMeshArtifact's own ".gltf only" gate) plus a matching cooked
+    // artifact: a minimal-but-valid 3-vertex/1-index-triple/1-section mesh, the same
+    // MeshArtifactReaderTest.cpp shape, since the SHAPE of the geometry is not the point
+    // for a facade-layer resolve/memoize/refuse test.
+    CookedMesh AddCookedMesh(const std::filesystem::path& root, const char* name,
+                             const std::vector<std::byte>& sourceBytes)
+    {
+        CookedMesh cm;
+        cm.root = root;
+        cm.source = root / "Content" / "meshes" / (std::string(name) + ".glb");
+        cm.artifact = root / "Intermediate" / "Artifacts" / "aa" / (std::string(name) + ".arcart");
+        cm.guid = Arcane::Guid::Generate();
+
+        {
+            std::ofstream f(cm.source, std::ios::binary);
+            REQUIRE(f.is_open());
+            f.write(reinterpret_cast<const char*>(sourceBytes.data()),
+                    static_cast<std::streamsize>(sourceBytes.size()));
+        }
+
+        Arcane::AssetPipeline::MeshArtifactDesc desc{};
+        desc.sourceGuid = cm.guid;
+        desc.sourceHash = FnvOfSource(sourceBytes);
+        desc.importerVersion = Arcane::kClientMeshImporterVersionMirror;
+        desc.vertexCount = 3;
+        desc.indexCount = 3;
+        desc.sectionCount = 1;
+        desc.sections = { { "Metal", 0, 3, 0 } };
+        const std::vector<Arcane::AssetPipeline::MeshArtifactVertex> vertices(3);
+        const std::vector<std::uint32_t> indices = { 0, 1, 2 };
+        REQUIRE(Arcane::AssetPipeline::WriteMeshArtifact(cm.artifact, desc, vertices, indices));
+
+        return cm;
+    }
+
+    Arcane::Assets::AssetResolver MeshOneShotResolver(const CookedMesh& cm)
+    {
+        return [guid = cm.guid, path = cm.source](const Arcane::AssetId& a)
+            -> std::optional<std::filesystem::path>
+        {
+            if (a.Value() == guid) return path;
+            return std::nullopt;
+        };
     }
 }
 
@@ -560,4 +650,90 @@ TEST_CASE("assets: png load of a missing or corrupt file fails without throwing"
     { std::ofstream f(junk, std::ios::binary); f << "not a png at all"; }
     CHECK_FALSE(Arcane::LoadPngRgba(junk, w, h, px));
     std::filesystem::remove_all(dir);
+}
+
+// ---- F2c Task 11: Assets::MeshArtifactFor / InvalidateMeshArtifact / CookPending --------
+//
+// ONE test case walking the whole lifecycle sequentially -- resolve, memoize, invalidate,
+// a SECOND (independent) cooked mesh proving the HashMismatch refusal latches, then
+// CookPending's own forward/default -- the same "one continuous narrative" shape
+// AssetsPixelsTest.cpp's own "InvalidateArtifact clears a memoized ArtifactMissing
+// refusal..." case already uses for the texture half of this exact lifecycle.
+
+TEST_CASE("assets: MeshArtifactFor resolves and memoizes a cooked mesh artifact; "
+          "InvalidateMeshArtifact drops the memo; a HashMismatch artifact refuses "
+          "loudly and latches; CookPending forwards its probe", "[assets][mesh]")
+{
+    Arcane::ResetContentArtifactRefusal();   // [assets] cases' standing discipline under random order
+    REQUIRE_FALSE(Arcane::ContentArtifactRefusalObserved());
+
+    const auto root = MeshSandboxRoot("resolve_memoize_invalidate_hashmismatch");
+
+    // ---- resolve, memoize, invalidate -------------------------------------------------
+    const std::vector<std::byte> sourceBytes = { std::byte{0x67}, std::byte{0x6C}, std::byte{0x54}, std::byte{0x46} };
+    const auto cm = AddCookedMesh(root, "cube", sourceBytes);
+
+    auto assets = Arcane::Assets::Create();
+    assets->SetContentRoot(root / "Content");
+    assets->SetAssetResolver(MeshOneShotResolver(cm));
+
+    const Arcane::LoadedClientMesh* first = assets->MeshArtifactFor(cm.guid);
+    REQUIRE(first != nullptr);
+    CHECK(first->vertices.size() == 3u * 8u);
+    CHECK(first->indices == std::vector<std::uint32_t>{ 0, 1, 2 });
+    REQUIRE(first->sections.size() == 1u);
+    CHECK(first->sections[0].name == "Metal");
+
+    // Memoized: deleting the artifact FILE between calls proves the second call never
+    // re-scans disk -- if it did, the cache would find nothing and answer null instead
+    // of the same pointer.
+    std::filesystem::remove(cm.artifact);
+    const Arcane::LoadedClientMesh* second = assets->MeshArtifactFor(cm.guid);
+    CHECK(second == first);
+
+    // InvalidateMeshArtifact drops the memo -- the NEXT call re-scans and, with the
+    // artifact genuinely gone now, answers null (a fresh ArtifactMissing refusal).
+    assets->InvalidateMeshArtifact(cm.guid);
+    CHECK(assets->MeshArtifactFor(cm.guid) == nullptr);
+    Arcane::ResetContentArtifactRefusal();   // that fresh Missing latched; clear before the next phase
+
+    // ---- HashMismatch refuses loudly and latches --------------------------------------
+    const std::vector<std::byte> originalBytes = { std::byte{0x01}, std::byte{0x02}, std::byte{0x03} };
+    const auto mismatch = AddCookedMesh(root, "mismatch", originalBytes);
+
+    // Edit the STAGED source AFTER cooking, without recooking -- the scratch scenario
+    // F2b Task 6's own HashMismatch case exercises for textures, reproduced here for mesh.
+    {
+        std::ofstream f(mismatch.source, std::ios::binary | std::ios::trunc);
+        REQUIRE(f.is_open());
+        f << "edited, no longer matches the cooked sourceHash";
+    }
+
+    auto mismatchAssets = Arcane::Assets::Create();
+    mismatchAssets->SetContentRoot(root / "Content");
+    mismatchAssets->SetAssetResolver(MeshOneShotResolver(mismatch));
+
+    CHECK(mismatchAssets->MeshArtifactFor(mismatch.guid) == nullptr);
+    CHECK(mismatchAssets->MeshArtifactFor(mismatch.guid) == nullptr);   // memoized: no retry storm
+
+    CHECK(Arcane::ContentArtifactRefusalObserved());
+    const std::string detail = Arcane::ContentArtifactRefusalDetail();
+    CHECK(detail.find("HashMismatch") != std::string::npos);
+    CHECK(detail.find(mismatch.guid.ToString()) != std::string::npos);
+    Arcane::ResetContentArtifactRefusal();   // leave the latch clean for later cases
+
+    // ---- CookPending: forwards the installed probe; false with none installed --------
+    const Arcane::Guid watched = Arcane::Guid::Generate();
+    const Arcane::Guid other   = Arcane::Guid::Generate();
+    CHECK_FALSE(mismatchAssets->CookPending(watched));   // no probe installed yet
+
+    mismatchAssets->SetCookPendingProbe([&](const Arcane::Guid& g) { return g == watched; });
+    CHECK(mismatchAssets->CookPending(watched));
+    CHECK_FALSE(mismatchAssets->CookPending(other));
+
+    // Clearing the probe (an empty std::function) restores "none installed" exactly.
+    mismatchAssets->SetCookPendingProbe({});
+    CHECK_FALSE(mismatchAssets->CookPending(watched));
+
+    std::filesystem::remove_all(root);
 }

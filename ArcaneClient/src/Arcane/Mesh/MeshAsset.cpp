@@ -303,4 +303,91 @@ namespace Arcane
         }
         return std::nullopt;   // unreachable: every enumerator is handled above
     }
+
+    MeshResolveResult ResolveMeshData(const MeshAssetData& data,
+                                       const MeshArtifactSupplyFn& supply,
+                                       const CookPendingFn& cookPending)
+    {
+        MeshResolveResult result;
+
+        if (data.source != MeshSource::Imported)
+        {
+            // PRIMITIVE DELEGATION, unchanged: BuildMeshData + ComputeMeshBounds is still
+            // the pure, device-free, supply-free path every builder test drives.
+            // BuildMeshData validates internally (ValidateMeshAsset) and returns nullopt
+            // exactly when that validation refuses `data` -- re-derive the human-readable
+            // reason on that path only, the same one-extra-call-on-failure-only trade
+            // MeshCache::Request already makes for the identical reason.
+            auto mesh = BuildMeshData(data);
+            if (!mesh)
+            {
+                const auto reason = ValidateMeshAsset(data);
+                result.state  = MeshResolveState::Failed;
+                result.reason = reason ? *reason : std::string("mesh failed to build");
+                return result;
+            }
+            result.bounds = ComputeMeshBounds(*mesh);
+            result.mesh   = std::move(*mesh);
+            result.state  = MeshResolveState::Ready;
+            return result;
+        }
+
+        // THE NIL GUARD: ValidateMeshAsset already refuses an Imported mesh with a nil
+        // importedSource (Task 10) -- proven here too, because THIS is the function a host
+        // actually calls, and a supply consulted with a nil guid is a directory scan for
+        // nothing. Checked BEFORE the supply call, never after.
+        if (!data.importedSource.IsValid())
+        {
+            result.state  = MeshResolveState::Failed;
+            result.reason = fmt::format("mesh '{}' cannot resolve: importedSource is nil",
+                                         data.name);
+            return result;
+        }
+
+        // THE SUPPLY CALL.
+        const LoadedClientMesh* artifact = supply ? supply(data.importedSource) : nullptr;
+        if (!artifact)
+        {
+            // THE PENDING/MISSING SPLIT (s7.1): PENDING is QUIET -- empty reason, nothing
+            // is wrong, it is still cooking, retry next frame. MISSING/REFUSED is LOUD --
+            // the reason NAMES the guid, the same "actionable Problems-pane message" rule
+            // ValidateMeshAsset's own reasons follow.
+            if (cookPending && cookPending(data.importedSource))
+            {
+                result.state = MeshResolveState::PendingCook;
+                return result;
+            }
+            result.state  = MeshResolveState::Failed;
+            result.reason = fmt::format(
+                "mesh '{}' has no cooked artifact for importedSource {}",
+                data.name, data.importedSource.ToString());
+            return result;
+        }
+
+        // THE ARTIFACT -> MeshData DECODE: eight floats per vertex (px,py,pz, nx,ny,nz,
+        // u,v) into MeshVertex; MeshSectionView -> MeshSection field for field; the
+        // artifact's OWN stored AABB into MeshBounds -- NEVER recomputed (s7.1: it was
+        // cooked from these exact vertices, and recomputing would be work that can only
+        // reproduce the same answer or produce a different, WRONG one).
+        MeshData mesh;
+        mesh.vertices.reserve(artifact->vertices.size() / 8);
+        for (std::size_t i = 0; i + 7 < artifact->vertices.size(); i += 8)
+        {
+            MeshVertex v;
+            v.position = { artifact->vertices[i + 0], artifact->vertices[i + 1], artifact->vertices[i + 2] };
+            v.normal   = { artifact->vertices[i + 3], artifact->vertices[i + 4], artifact->vertices[i + 5] };
+            v.uv       = { artifact->vertices[i + 6], artifact->vertices[i + 7] };
+            mesh.vertices.push_back(v);
+        }
+        mesh.indices = artifact->indices;
+        mesh.sections.reserve(artifact->sections.size());
+        for (const MeshSectionView& s : artifact->sections)
+            mesh.sections.push_back(MeshSection{ s.name, s.indexOffset, s.indexCount, s.slotIndex });
+
+        result.bounds.min = { artifact->aabbMin[0], artifact->aabbMin[1], artifact->aabbMin[2] };
+        result.bounds.max = { artifact->aabbMax[0], artifact->aabbMax[1], artifact->aabbMax[2] };
+        result.mesh  = std::move(mesh);
+        result.state = MeshResolveState::Ready;
+        return result;
+    }
 }

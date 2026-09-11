@@ -638,7 +638,54 @@ namespace Arcane
     //     a separate decision that re-opens the 2026-08-10 ratification.
     //     ReferenceProject restamped with this change, per the v16+ precedent
     //     (Gacha's Game restamp is tracked in that repo).
-    inline constexpr uint32_t kGamePluginABIVersion = 24;
+    // v25 (2026-09-10, F2c Task 11 -- CPU resolution of an imported mesh): `Assets`
+    //     (Assets/Assets.hpp, an ARCANE_API PURE-VIRTUAL facade) gained THREE virtuals,
+    //     `MeshArtifactFor(const Guid&)`, `InvalidateMeshArtifact(const Guid&)` and
+    //     `CookPending(const Guid&) const`, all APPENDED immediately after
+    //     `ListAssetReferences` -- the tail of the class, the exact "new virtuals go at
+    //     the end" shape the v21/v22 entries above already used for `ArtifactFor`/
+    //     `InvalidateArtifact`/`SetCookPendingProbe` and `MaterialSurfaceFor`/
+    //     `ListAssetReferences` themselves.
+    //     Checked against the same bar every append-only entry above applies: an append
+    //     reshuffles no EXISTING vtable slot, and `AssetsImpl` -- the one concrete class
+    //     implementing this interface -- stays private to Assets.cpp behind the single
+    //     `Assets::Create()` factory, so a module only ever CALLS through the pointer the
+    //     host hands it, never subclasses the vtable itself (the v22 entry's own framing
+    //     for why this class's appends are not a corruption finding).
+    //     TWO NEW BY-VALUE TYPES ride along (Assets/ArtifactReader.hpp): `LoadedClientMesh`
+    //     (vertices/indices/sections/aabb -- the mesh half of `LoadedClientArtifact`) and
+    //     `MeshSectionView` (name/indexOffset/indexCount/slotIndex). Neither crosses the
+    //     plugin vtable except as `MeshArtifactFor`'s own return pointer -- the SAME "by
+    //     value, never a layout hazard on its own" bar the v22 entry applied to `AssetRef`/
+    //     `AssetRefKind`.
+    //     THE SCHEMA FACT RIDING ALONG (already shipped, one commit earlier, at 01ad0da7 --
+    //     recorded here for completeness, not itself the reason for this bump): `.arcmesh`
+    //     grew `slots[]`/`importedSource` and `MeshSource::Imported = 5` (Task 10).
+    //     BACKWARD COMPATIBLE: the legacy scalar `"material"` key is still read (tolerantly
+    //     mapped to one unnamed slot) whenever `slots` is absent, so every v3-era `.arcmesh`
+    //     on disk still loads under a v25 engine with no migration.
+    //     MEASURED, not assumed: `grep -rn` for `MeshArtifactFor`, `InvalidateMeshArtifact`,
+    //     `CookPending`, `LoadedClientMesh`, `MeshSlot`, `MeshSection` and `ResolveMeshData`
+    //     over BOTH game modules in the two trees -- ReferenceProject/Source/ (GameApi.hpp,
+    //     ReferenceGame.cpp) and Gacha's Game/Source/ (GameApi.hpp, Aphelyon.cpp) -- returns
+    //     NOTHING in either tree:
+    //
+    //       $ grep -rn -E "MeshArtifactFor|InvalidateMeshArtifact|CookPending|LoadedClientMesh|MeshSlot|MeshSection|ResolveMeshData" ReferenceProject/Source/
+    //       (no output)
+    //       $ grep -rn -E "MeshArtifactFor|InvalidateMeshArtifact|CookPending|LoadedClientMesh|MeshSlot|MeshSection|ResolveMeshData" <Gacha checkout>/Game/Source/
+    //       (no output)
+    //
+    //     so no module in either tree breaks on this bump. The gate catches a stale stamp;
+    //     the compiler would not have.
+    //     THIS BUMP IS 24 -> 25, NOT 23 -> 24: the v24 entry directly above (an Astra
+    //     vendor sync, unrelated to this arc) already consumed 24 by the time this task
+    //     landed -- ABI bumps are cheap during engine dev, so the fix is simply to take
+    //     the next number, not to contest which change "deserved" 24.
+    //     ReferenceProject.arcproj is restamped with this change, the same precedent v16
+    //     through v24 set. Gacha's Game restamp is that repo's own follow-up, tracked
+    //     there rather than here -- the grep evidence above is what proves it is safe to
+    //     defer, not evidence it was done.
+    inline constexpr uint32_t kGamePluginABIVersion = 25;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

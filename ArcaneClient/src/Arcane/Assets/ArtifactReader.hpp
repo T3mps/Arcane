@@ -352,4 +352,35 @@ namespace Arcane
     // and picking the first clean one, never this function.
     [[nodiscard]] ARCANE_API std::vector<std::filesystem::path> FindArtifactForGuid(
         const std::filesystem::path& intermediateDir, const Guid& guid);
+
+    // F2c Task 11: the CLIENT-SIDE re-derivation of a .gltf's external buffer list --
+    // `currentSourceBytes` for a mesh candidate is the source file's own bytes FOLLOWED BY
+    // every referenced buffer's bytes, in glTF declaration order (see this file's MESH TAIL
+    // banner and the sourceHash field's own comment). `AssetsImpl` needs that exact
+    // concatenation to validate a candidate artifact, but must NEVER link ArcaneAssetPipeline
+    // (this file's own no-shared-code banner) -- so this reads the buffer LIST straight out
+    // of the .gltf's own JSON text (`buffers[].uri`) instead of going through cgltf.
+    //
+    // BYTE-CONTRACT PEER: Arcane::AssetPipeline::ReadExternalBuffers
+    // (ArcaneAssetPipeline/src/Arcane/AssetPipeline/MeshImporter.cpp) is the OTHER half of
+    // this contract -- a DELIBERATE, INDEPENDENT reimplementation, agreeing with this
+    // function BY HAND rather than by shared code, per this file's own header banner. Both
+    // sides: skip a buffer with no `uri` (embedded -- a GLB's BIN chunk, or cgltf's own
+    // `.data` set some other way) and skip a `data:` URI (inline, already resolved wherever
+    // it is consumed); read every other referenced file, relative to the source's own
+    // directory, in array order.
+    //
+    // A .glb needs NONE of this -- it carries no external buffers, so the one caller
+    // (AssetsImpl::ResolveMeshArtifact) never invokes this function for one; `sourceBytes`
+    // alone is already the complete hash input for a .glb, same as a texture's .png.
+    //
+    // nullopt on a source that does not even parse as JSON, or a referenced buffer file
+    // that cannot be read -- both collapse into the SAME "this candidate's currentSourceBytes
+    // could not be built" outcome its caller turns into a hash that will not match any real
+    // artifact (surfacing as HashMismatch or Missing, never a silent pass -- see
+    // ResolveArtifact's own "an unreadable source reads as empty" comment for the texture
+    // path's identical posture). An empty (or absent) "buffers" array is NOT a failure --
+    // zero external buffers is the common .gltf-with-everything-embedded case.
+    [[nodiscard]] std::optional<std::vector<std::vector<std::byte>>> ReadClientExternalBuffers(
+        std::span<const std::byte> sourceBytes, const std::filesystem::path& sourcePath);
 }

@@ -359,6 +359,36 @@ namespace Arcane
         // -- an unresolvable/unregistered guid -- mirroring
         // MaterialSurfaceFor's own "not readable at all" contract.
         virtual std::optional<std::vector<AssetRef>> ListAssetReferences(const Guid& id) = 0;
+
+        // ---- F2c Task 11 (mesh import): three virtuals, APPENDED AT THE END of the
+        // interface -- the v21/v22 precedent this class states as a rule (see ArtifactFor's
+        // own "NEW VIRTUALS GO AT THE END" banner): an append reshuffles no existing vtable
+        // slot, and nothing in a game module subclasses Assets.
+
+        // The cooked mesh artifact for `id` -- geometry, sections and the stored AABB --
+        // resolved and memoized exactly like ArtifactFor above, through the SAME
+        // ResolveArtifact candidate walk and the SAME refusal discipline (a PRESENT-but-
+        // invalid artifact refuses loudly and memoizes; a probe-quieted Missing returns
+        // null silently with no memo and no latch). Null for an invalid id, a refused
+        // artifact, or a guid with no cooked mesh artifact. Owned by this facade's
+        // LRU-budgeted cache -- copy it, never hold the pointer (PixelsFor's contract).
+        virtual const LoadedClientMesh* MeshArtifactFor(const Guid& id) = 0;
+
+        // The mesh half of InvalidateArtifact: drops every memoized entry (success OR
+        // memoized refusal) this facade holds for `id`'s MESH artifact. The un-latch a
+        // background mesh cook's completion needs -- without it, a .glb dropped mid-session
+        // never promotes past its first "not cooked yet" ask. Plan 2 Task 6 wires the
+        // cook-completion callback to it.
+        virtual void InvalidateMeshArtifact(const Guid& id) = 0;
+
+        // Is a cook plausibly still pending for `id`? A pure forward to the probe
+        // SetCookPendingProbe installed (false when none is). PUBLISHED because the
+        // resolution layer above this facade must distinguish "not cooked YET" (draw
+        // nothing QUIETLY, retry next frame -- s7.1) from "missing or refused" (draw
+        // nothing LOUDLY, memoize), and the accessors' own null answer cannot carry that
+        // difference. Generic rather than mesh-specific: it says nothing about kind, and a
+        // future consumer of the same distinction needs no fourth virtual.
+        [[nodiscard]] virtual bool CookPending(const Guid& id) const = 0;
     };
 
     // -----------------------------------------------------------------

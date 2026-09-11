@@ -1,5 +1,7 @@
 #include <Arcane/Assets/ArtifactReader.hpp>
 
+#include <Json.hpp>
+
 #include <array>
 #include <bit>
 #include <fstream>
@@ -767,5 +769,44 @@ namespace Arcane
         }
 
         return matches;
+    }
+
+    // F2c Task 11: see this function's own doc comment (ArtifactReader.hpp) for the full
+    // contract and the ReadExternalBuffers (ArcaneAssetPipeline/MeshImporter.cpp) peer this
+    // must agree with BY HAND. Core logic is the JSON read: no cgltf, no full glTF parse --
+    // just `buffers[].uri`, skipping an absent/embedded uri and a `data:` one, reading every
+    // other referenced file relative to the source's own directory.
+    std::optional<std::vector<std::vector<std::byte>>> ReadClientExternalBuffers(
+        std::span<const std::byte> sourceBytes, const std::filesystem::path& sourcePath)
+    {
+        const auto* begin = reinterpret_cast<const char*>(sourceBytes.data());
+        const auto doc = nlohmann::json::parse(begin, begin + sourceBytes.size(),
+                                                /*cb=*/nullptr, /*allow_exceptions=*/false);
+        if (doc.is_discarded() || !doc.is_object())
+            return std::nullopt;
+
+        std::vector<std::vector<std::byte>> buffers;
+        const auto buffersIt = doc.find("buffers");
+        if (buffersIt == doc.end() || !buffersIt->is_array())
+            return buffers;   // no buffers array at all -- zero external buffers, not a failure
+
+        const std::filesystem::path baseDir = sourcePath.parent_path();
+        for (const auto& b : *buffersIt)
+        {
+            if (!b.is_object())
+                continue;
+            const auto uriIt = b.find("uri");
+            if (uriIt == b.end() || !uriIt->is_string())
+                continue;   // embedded (GLB BIN chunk) -- nothing to read
+            const std::string uri = uriIt->get<std::string>();
+            if (uri.rfind("data:", 0) == 0)
+                continue;   // inline data URI -- already resolved wherever it is consumed
+
+            std::optional<std::vector<std::byte>> bytes = ReadWholeFile(baseDir / uri);
+            if (!bytes)
+                return std::nullopt;   // referenced buffer unreadable
+            buffers.push_back(std::move(*bytes));
+        }
+        return buffers;
     }
 }

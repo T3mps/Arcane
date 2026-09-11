@@ -236,6 +236,37 @@ namespace Arcane
         using PixelDataPtr   = std::shared_ptr<PixelData>;
         using TextureInfoPtr = std::shared_ptr<TextureInfo>;
         using ArtifactPtr    = std::shared_ptr<LoadedClientArtifact>;
+        using MeshPtr        = std::shared_ptr<LoadedClientMesh>;   // Task 11
+
+        // F2c Task 11: the C1(b) candidate walk (ResolveArtifact's own comment names the
+        // fix this codifies), FACTORED so it exists exactly once regardless of content
+        // kind -- rather than copying ResolveArtifact's 30-line candidate-walk loop+comment
+        // a second time for the mesh half. `Result` is ArtifactReadResult or
+        // MeshArtifactReadResult; `read` is ReadClientArtifact or ReadClientMeshArtifact's
+        // exact signature: (path, currentSourceBytes, expectedGuid) -> a Result carrying its
+        // own `.refusal`. Iterates every guid-matching candidate (ordinarily one; more than
+        // one means a stale, superseded artifact is still on disk alongside the fresh one --
+        // FindArtifactForGuid's own C1(b) paragraph) and accepts the FIRST that reads back
+        // clean, remembering the MOST INFORMATIVE refusal among the rest (HashMismatch/
+        // VersionNewerThanEngine over a bare Missing) if none do.
+        template <typename Result, typename ReadFn>
+        Result ResolveArtifactCandidates(const std::vector<std::filesystem::path>& candidates,
+                                         std::span<const std::byte> currentSourceBytes,
+                                         const Guid& id, ReadFn&& read)
+        {
+            Result best;
+            best.refusal = ArtifactRefusal::Missing;
+            for (const std::filesystem::path& candidate : candidates)
+            {
+                Result result = read(candidate, currentSourceBytes, id);
+                if (result.refusal == ArtifactRefusal::None)
+                    return result;   // THE fix: first candidate that validates wins
+
+                if (best.refusal == ArtifactRefusal::Missing && result.refusal != ArtifactRefusal::Missing)
+                    best.refusal = result.refusal;   // remember the most informative refusal seen
+            }
+            return best;
+        }
 
         // The process-wide content-artifact-refusal latch's storage (see Assets.hpp's own
         // "process-wide content-artifact-refusal latch" banner for the contract). One slot,
@@ -363,6 +394,14 @@ namespace Arcane
                 return p ? ArtifactForResolved(id, *p, CacheKey(*p)) : nullptr;
             }
 
+            // F2c Task 11: the mesh half of ArtifactFor -- see Assets.hpp's own doc
+            // comment (appended at the end of the interface).
+            const LoadedClientMesh* MeshArtifactFor(const Guid& id) override
+            {
+                const auto p = ResolveId(AssetId::FromGuid(id));
+                return p ? MeshArtifactForResolved(id, *p, CacheKey(*p)) : nullptr;
+            }
+
             BytesPtr GetBytes(const AssetId& id) override
             {
                 const auto p = ResolveId(id);
@@ -398,7 +437,8 @@ namespace Arcane
                                      m_json.Count() +
                                      m_pixels.Count() +
                                      m_textureInfo.Count() +
-                                     m_artifacts.Count());
+                                     m_artifacts.Count() +
+                                     m_meshes.Count());   // Task 11
                 return s;
             }
 
@@ -559,16 +599,14 @@ namespace Arcane
             // locked file or an external tool can still leave one behind), and BOTH the
             // stale and the fresh artifact carry the SAME sourceGuid header --
             // FindArtifactForGuid now returns EVERY guid-matching candidate rather than
-            // the first the scan happens to visit, and THIS function is the one that
-            // actually validates them: iterate every candidate and accept the FIRST that
-            // reads back clean (ArtifactRefusal::None); only refuse once NONE of them do,
-            // reporting the MOST INFORMATIVE refusal seen (HashMismatch/
-            // VersionNewerThanEngine over a bare Missing -- "we found something
-            // specifically wrong" beats "we found nothing usable"). The header-only probe
-            // inside FindArtifactForGuid stays cheap regardless of how many candidates
-            // exist; only guid-MATCHED candidates ever pay for a full ReadClientArtifact
-            // parse, exactly as before this fix (there was previously ever only one to
-            // pay for).
+            // the first the scan happens to visit; the walk itself (accept the FIRST that
+            // reads back clean, else the most informative refusal) is now FACTORED into
+            // the ResolveArtifactCandidates template above this class (Task 11 -- the
+            // mesh half needed the exact same walk against a different ReadClient*Artifact,
+            // and this is the shared point rather than a second 30-line copy). The
+            // header-only probe inside FindArtifactForGuid stays cheap regardless of how
+            // many candidates exist; only guid-MATCHED candidates ever pay for a full
+            // ReadClientArtifact parse.
             ArtifactReadResult ResolveArtifact(const Guid& id, const std::filesystem::path& resolved)
             {
                 if (m_contentRoot.empty())
@@ -590,18 +628,59 @@ namespace Arcane
                 const std::span<const std::byte> rawBytes(
                     reinterpret_cast<const std::byte*>(raw.data()), raw.size());
 
-                ArtifactReadResult best;
-                best.refusal = ArtifactRefusal::Missing;
-                for (const std::filesystem::path& candidate : candidates)
-                {
-                    ArtifactReadResult result = ReadClientArtifact(candidate, rawBytes, id);
-                    if (result.refusal == ArtifactRefusal::None)
-                        return result;   // THE fix: first candidate that validates wins
+                return ResolveArtifactCandidates<ArtifactReadResult>(
+                    candidates, rawBytes, id, ReadClientArtifact);
+            }
 
-                    if (best.refusal == ArtifactRefusal::Missing && result.refusal != ArtifactRefusal::Missing)
-                        best.refusal = result.refusal;   // remember the most informative refusal seen
+            // F2c Task 11: the mesh half of ResolveArtifact -- SAME candidate walk (the
+            // shared ResolveArtifactCandidates template above), against a MESH-shaped
+            // currentSourceBytes instead of a texture's raw file bytes.
+            //
+            // `currentSourceBytes` for a mesh: the source file's own bytes, followed by
+            // every EXTERNAL BUFFER's bytes, in glTF declaration order -- the exact
+            // concatenation Task 5's ComputeMeshCookKey hashes and the pipeline's
+            // MeshImporter.cpp (Step 7) writes into the artifact's sourceHash (see
+            // ArtifactReader.hpp's own MESH TAIL banner). Only a `.gltf` source carries
+            // external buffers at all -- a `.glb` embeds its buffer, so `sourceBytes` alone
+            // is already the complete hash input for one, same as a texture's .png; the
+            // extension check below is what keeps the common (.glb) case to reading one
+            // file, exactly as ArtifactReader.hpp's own "a .glb needs none of this" line
+            // promises.
+            MeshArtifactReadResult ResolveMeshArtifact(const Guid& id, const std::filesystem::path& resolved)
+            {
+                if (m_contentRoot.empty())
+                    return MeshArtifactReadResult{};
+
+                const std::filesystem::path intermediateRoot =
+                    m_contentRoot.parent_path() / "Intermediate";
+                const std::vector<std::filesystem::path> candidates =
+                    FindArtifactForGuid(intermediateRoot, id);
+                if (candidates.empty())
+                    return MeshArtifactReadResult{};
+
+                const std::vector<uint8_t> raw = ReadFileBytes(resolved);
+                std::vector<std::byte> sourceBytes(
+                    reinterpret_cast<const std::byte*>(raw.data()),
+                    reinterpret_cast<const std::byte*>(raw.data()) + raw.size());
+
+                if (LowerExt(resolved) == ".gltf")
+                {
+                    const std::span<const std::byte> gltfBytes(sourceBytes.data(), sourceBytes.size());
+                    if (const auto buffers = ReadClientExternalBuffers(gltfBytes, resolved))
+                    {
+                        for (const std::vector<std::byte>& buffer : *buffers)
+                            sourceBytes.insert(sourceBytes.end(), buffer.begin(), buffer.end());
+                    }
+                    // An unreadable/unparseable .gltf (nullopt) leaves `sourceBytes` at the
+                    // file's own bytes alone -- the resulting hash simply will not match any
+                    // real artifact's sourceHash, surfacing as HashMismatch (or Missing, if
+                    // the guid has no artifact at all) rather than a silent pass, mirroring
+                    // ResolveArtifact's own "an unreadable source reads as empty" posture.
                 }
-                return best;
+
+                const std::span<const std::byte> currentSourceBytes(sourceBytes.data(), sourceBytes.size());
+                return ResolveArtifactCandidates<MeshArtifactReadResult>(
+                    candidates, currentSourceBytes, id, ReadClientMeshArtifact);
             }
 
             // Refuse LOUDLY (ERROR, not WARN) and memoize -- "refuse, never limp"
@@ -804,6 +883,46 @@ namespace Arcane
                 return raw;
             }
 
+            // F2c Task 11: the mesh half of ArtifactForResolved -- MIRRORS it exactly: its
+            // own cache (m_meshes), the SAME ResolveMeshArtifact candidate walk (which
+            // itself shares ResolveArtifactCandidates with the texture path), the SAME
+            // QuietlyPending/RefuseArtifact refusal discipline.
+            const LoadedClientMesh* MeshArtifactForResolved(const Guid& id,
+                                                             const std::filesystem::path& resolved,
+                                                             const std::string& key)
+            {
+                if (m_meshes.Has(key))
+                {
+                    if (m_meshes.IsFailure(key))
+                        return nullptr;
+                    return m_meshes.Get(key).get();
+                }
+
+                const MeshArtifactReadResult art = ResolveMeshArtifact(id, resolved);
+                if (art.refusal != ArtifactRefusal::None || !art.mesh)
+                {
+                    // Desk-fix 2 (mirrored for mesh): a probe-quieted Missing returns null
+                    // with NO log, NO memo and NO latch -- see QuietlyPending's own comment.
+                    if (QuietlyPending(id, art.refusal))
+                        return nullptr;
+                    RefuseArtifact(m_meshes, key, id, art.refusal);
+                    return nullptr;
+                }
+
+                auto mesh = std::make_shared<LoadedClientMesh>(std::move(*art.mesh));
+                const uint64_t bytes =
+                    (uint64_t)mesh->vertices.size() * sizeof(float) +
+                    (uint64_t)mesh->indices.size() * sizeof(std::uint32_t);
+                const LoadedClientMesh* raw = mesh.get();
+                m_meshes.Put(key, mesh, bytes);
+                // Pin for the sweep below -- same reason ArtifactForResolved pins its own
+                // fresh entry.
+                m_meshes.Acquire(key);
+                EnforceBudget();
+                m_meshes.Release(key);
+                return raw;
+            }
+
             // F2b Task 12: the un-latch behind Assets.hpp's InvalidateArtifact
             // doc comment. Resolves `id` through the SAME ResolveId path every
             // accessor above does, then evicts that one resolved key from all
@@ -832,6 +951,27 @@ namespace Arcane
             void SetCookPendingProbe(std::function<bool(const Guid&)> probe) override
             {
                 m_cookPendingProbe = std::move(probe);
+            }
+
+            // F2c Task 11: the mesh half of InvalidateArtifact -- SAME shape, on the ONE
+            // cache this facade keeps for mesh artifacts (m_meshes), never the texture
+            // trio: a mesh cook completing has nothing to say about a texture guid's memo,
+            // and vice versa.
+            void InvalidateMeshArtifact(const Guid& id) override
+            {
+                const auto p = ResolveId(AssetId::FromGuid(id));
+                if (!p)
+                    return;
+                const std::string key = CacheKey(*p);
+                m_meshes.Evict(key);
+            }
+
+            // F2c Task 11: a two-line forward to the SAME probe SetCookPendingProbe
+            // installs above -- generic rather than mesh-specific (Assets.hpp's own doc
+            // comment on why), so this is the ONLY new state this virtual needs: none.
+            bool CookPending(const Guid& id) const override
+            {
+                return m_cookPendingProbe && m_cookPendingProbe(id);
             }
 
             // Asset-manager arc (ABI v22): see Assets.hpp's own doc comment for the
@@ -1032,15 +1172,16 @@ namespace Arcane
                        m_json.TotalBytes() +
                        m_pixels.TotalBytes() +
                        m_textureInfo.TotalBytes() +
-                       m_artifacts.TotalBytes();
+                       m_artifacts.TotalBytes() +
+                       m_meshes.TotalBytes();   // Task 11
             }
 
             // Budget sweep, run after every insert: evict the globally
-            // least-recently-used entry -- across ALL FIVE caches (three from
+            // least-recently-used entry -- across ALL SIX caches (three from
             // ABI v15 (the texture cache went with GetTexture); ABI v21 added
-            // m_textureInfo, then m_artifacts in the SAME arc, Task 7) --
-            // comparable via the shared recency clock -- until the total is
-            // back under budget. Pinned (refcounted) entries are never
+            // m_textureInfo, then m_artifacts in the SAME arc, Task 7; F2c Task 11
+            // added m_meshes) -- comparable via the shared recency clock -- until
+            // the total is back under budget. Pinned (refcounted) entries are never
             // offered by LeastRecentEvictable and Evict refuses them; memoized
             // failures are ~zero cost and skipped (evicting them frees nothing and
             // destroys their do-not-retry memo). The budget is strict, so an
@@ -1081,6 +1222,11 @@ namespace Arcane
                     {
                         key = candKey; used = candUsed; which = 4;
                     }
+                    if (m_meshes.LeastRecentEvictable(candKey, candUsed) &&
+                        candUsed < used)
+                    {
+                        key = candKey; used = candUsed; which = 5;   // Task 11
+                    }
 
                     bool evicted = false;
                     switch (which)
@@ -1090,6 +1236,7 @@ namespace Arcane
                     case 2: evicted = m_pixels.Evict(key); break;
                     case 3: evicted = m_textureInfo.Evict(key); break;
                     case 4: evicted = m_artifacts.Evict(key); break;
+                    case 5: evicted = m_meshes.Evict(key); break;
                     default: break;
                     }
                     if (!evicted)
@@ -1200,19 +1347,21 @@ namespace Arcane
             // insertion order is the row order the user sees.
             std::vector<Guid> m_unresolvedDiagnosticIds;
 
-            // ONE recency clock across the five caches (declared first: the
+            // ONE recency clock across the six caches (declared first: the
             // caches capture its address) so the budget sweep can compare LRU
             // candidates cross-cache. See AssetCache's shared-clock ctor.
             // THERE IS NO GPU TEXTURE CACHE HERE: this facade holds no device --
             // m_textureInfo and m_artifacts (both ABI v21) are CPU-side data
             // (header metadata; mips + payload bytes), never device objects --
             // NriTextureCache (Task 7) is what puts an m_artifacts entry on one.
+            // m_meshes (F2c Task 11) is the same CPU-side shape for the mesh kind.
             uint64_t m_lruClock = 0;
             AssetCache<BytesPtr>                 m_bytes{&m_lruClock};
             AssetCache<JsonPtr>                  m_json{&m_lruClock};
             AssetCache<PixelDataPtr>             m_pixels{&m_lruClock};
             AssetCache<TextureInfoPtr>           m_textureInfo{&m_lruClock};
             AssetCache<ArtifactPtr>              m_artifacts{&m_lruClock};
+            AssetCache<MeshPtr>                  m_meshes{&m_lruClock};
         };
     }
 

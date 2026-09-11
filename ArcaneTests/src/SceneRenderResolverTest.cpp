@@ -245,6 +245,14 @@ namespace
         // walks the reference graph.
         std::optional<std::vector<Arcane::AssetRef>> ListAssetReferences(const Arcane::Guid&) override { return std::nullopt; }
 
+        // F2c Task 11, ABI v25 (interface-completeness only, same reasoning as
+        // ArtifactFor/InvalidateArtifact/SetCookPendingProbe above): this
+        // suite drives SpriteCache, not MeshCache -- nothing here resolves a
+        // mesh artifact through the Assets facade directly.
+        const Arcane::LoadedClientMesh* MeshArtifactFor(const Arcane::Guid&) override { return nullptr; }
+        void InvalidateMeshArtifact(const Arcane::Guid&) override {}
+        bool CookPending(const Arcane::Guid&) const override { return false; }
+
         int pixelsForCalls       = 0;
         int textureInfoForCalls  = 0;
         int evictingCalls        = 0;

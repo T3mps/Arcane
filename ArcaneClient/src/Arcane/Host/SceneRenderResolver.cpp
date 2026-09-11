@@ -1,5 +1,10 @@
 #include <Arcane/Host/SceneRenderResolver.hpp>
 
+#include <Arcane/Assets/Assets.hpp>   // Task 11: assets->MeshArtifactFor/CookPending below
+                                       // are this TU's first CALLS through the facade pointer
+                                       // (every other use here is a bare pointer forward, which
+                                       // a forward declaration already covered) -- needs the
+                                       // complete type.
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Project/AssetId.hpp>
@@ -120,6 +125,22 @@ namespace Arcane
         // MeshMaterialCache.hpp).
         MeshCache::Services meshServices;
         meshServices.resolveAsset = resolveAsset;
+        // F2c Task 11: the mesh-artifact supply + cook-pending probe ResolveMeshData
+        // needs for an Imported .arcmesh -- forwarded straight off the SAME `assets`
+        // facade every cache above shares, mirroring RuntimeApp.cpp's own
+        // `graph.SetArtifactSupply` wiring for the texture path. Null-checked because
+        // `assets` itself can be null (no runtime installed, e.g. a bare-facade test
+        // harness) -- the same guard every other lambda here would need if it touched
+        // `assets` directly, made explicit since these two are the first fields on
+        // THIS Services struct to reach into the facade at all.
+        meshServices.meshArtifactFor = [assets](const Guid& g) -> const LoadedClientMesh*
+        {
+            return assets ? assets->MeshArtifactFor(g) : nullptr;
+        };
+        meshServices.cookPending = [assets](const Guid& g) -> bool
+        {
+            return assets ? assets->CookPending(g) : false;
+        };
         m_impl->meshes = std::make_unique<MeshCache>(std::move(meshServices));
 
         MeshMaterialCache::Services meshMaterialServices;

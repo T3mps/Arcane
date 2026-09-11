@@ -23,12 +23,14 @@
 // F2c's SEAM: an imported mesh becomes another MeshSource plus an artifact
 // reference, with no component and no scene change.
 
+#include <Arcane/Assets/ArtifactReader.hpp>   // LoadedClientMesh -- ResolveMeshData's supply payload
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/MeshBuilder.hpp>
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -180,6 +182,48 @@ namespace Arcane
     // DETERMINISTIC: same input, same bytes. F2c inherits this builder into a
     // cook step whose artifacts must be reproducible.
     [[nodiscard]] ARCANE_API std::optional<MeshData> BuildMeshData(const MeshAssetData& data);
+
+    // ---- F2c Task 11: CPU resolution of an Imported mesh -----------------
+
+    // Guid -> the cooked mesh artifact, device-free. In production this is
+    // Assets::MeshArtifactFor (Assets/Assets.hpp); ResolveMeshData below takes it as a
+    // closure so it stays testable with no facade and no device (MeshBuilderTest.cpp's own
+    // "pure, device-free" discipline, extended to the Imported path).
+    using MeshArtifactSupplyFn = std::function<const LoadedClientMesh*(const Guid&)>;
+    // Guid -> "is a cook plausibly still pending for this guid". In production this is
+    // Assets::CookPending, a pure forward to the probe SetCookPendingProbe installed
+    // (Assets.hpp) -- same "closure, not a facade pointer" reasoning as the supply above.
+    using CookPendingFn = std::function<bool(const Guid&)>;
+
+    enum class MeshResolveState : std::uint8_t
+    {
+        Ready,        // `mesh` is set
+        PendingCook,  // no artifact YET; retry later. NOT a failure -- see s7.1
+        Failed,       // invalid asset, missing/refused artifact, or no supply
+    };
+
+    struct MeshResolveResult
+    {
+        MeshResolveState        state = MeshResolveState::Failed;
+        std::optional<MeshData> mesh;
+        MeshBounds               bounds;  // the ARTIFACT's stored AABB for Imported;
+                                           // ComputeMeshBounds' answer for a primitive
+        std::string              reason;  // human-readable, non-empty iff Failed
+    };
+
+    // THE one entry point a host resolves a .arcmesh through. A generated source
+    // delegates straight to BuildMeshData + ComputeMeshBounds (unchanged, and it is
+    // still the pure, device-free, supply-free function every builder test drives);
+    // Imported resolves `data.importedSource` through `supply`.
+    //
+    // THE REFUSAL POSTURE, s13-flavoured for geometry (s7.1): PENDING -> draw nothing
+    // QUIETLY (a placeholder cube would FABRICATE a shape, which is worse than an
+    // empty space); MISSING or REFUSED -> draw nothing LOUDLY, with a diagnostic.
+    // Never render an unknown as a cube.
+    [[nodiscard]] ARCANE_API MeshResolveResult ResolveMeshData(
+        const MeshAssetData& data,
+        const MeshArtifactSupplyFn& supply,
+        const CookPendingFn& cookPending);
 
 #if defined(_MSC_VER)
 #pragma warning(pop)

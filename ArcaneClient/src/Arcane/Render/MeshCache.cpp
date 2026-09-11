@@ -65,31 +65,44 @@ namespace Arcane
         if (!data)
             return fail("asset failed to load");
 
-        // BuildMeshData returns nullopt EXACTLY when ValidateMeshAsset
-        // refuses `*data` (MeshAsset.hpp's own contract) -- re-deriving the
-        // human-readable reason here, rather than threading a
-        // std::string through BuildMeshData's optional, costs one extra call
-        // only on the failure path, which is not the one anything needs to be
-        // fast on.
-        auto meshData = BuildMeshData(*data);
-        if (!meshData)
+        // F2c Task 11: ResolveMeshData is now THE resolve path for every source -- a
+        // generated primitive delegates straight through to BuildMeshData +
+        // ComputeMeshBounds internally (unchanged), and an Imported mesh resolves
+        // through the mesh-artifact supply / cook-pending probe forwarded from the
+        // Assets facade (Services above).
+        const MeshResolveResult result =
+            ResolveMeshData(*data, im.services.meshArtifactFor, im.services.cookPending);
+        switch (result.state)
         {
-            const auto reason = ValidateMeshAsset(*data);
-            return fail(reason ? *reason : std::string("mesh failed to build"));
+        case MeshResolveState::Ready:
+        {
+            MeshEntry entry;
+            entry.bounds = result.bounds;
+            entry.data   = std::move(*result.mesh);
+            // The ONE field of the loaded asset that outlives this call: Task 5's
+            // submission sweep reads the mesh's own default material slots straight
+            // off the published MeshTable (MeshEntry::slots, F2c Task 10) rather
+            // than through the cache, so it never needs a MeshCache pointer of its
+            // own. Everything else in `data` is already baked into the geometry
+            // above.
+            entry.slots = std::move(data->slots);
+            im.table.emplace(id, std::move(entry));
+            return;
         }
-
-        MeshEntry entry;
-        entry.bounds   = ComputeMeshBounds(*meshData);
-        entry.data     = std::move(*meshData);
-        // The ONE field of the loaded asset that outlives this call: Task 5's
-        // submission sweep reads the mesh's own default material slots straight
-        // off the published MeshTable (MeshEntry::slots, F2c Task 10) rather
-        // than through the cache, so it never needs a MeshCache pointer of its
-        // own. Everything else in `data` is already baked into the geometry
-        // above.
-        entry.slots = std::move(data->slots);
-
-        im.table.emplace(id, std::move(entry));
+        case MeshResolveState::PendingCook:
+            // s7.1 / F2b desk-fix 2's own precedent (Assets.hpp's SetCookPendingProbe):
+            // a cook plausibly still pending is NOT a failure -- do nothing and retry
+            // next frame. Entering `failed` here would be the exact regression desk-fix
+            // 2 exists to prevent, one layer up: the pre-fix texture path memoized a
+            // transient ArtifactMissing as permanently broken, and this cache's own
+            // `failed` set would do the identical wrong thing to a mesh that is simply
+            // still cooking (this is also Task 10's known double-warn symptom -- it
+            // resolves here, because the generic "mesh failed to build" WARN the
+            // Failed arm below emits never fires for PendingCook).
+            return;
+        case MeshResolveState::Failed:
+            return fail(result.reason.empty() ? std::string("mesh failed to build") : result.reason);
+        }
     }
 
     void MeshCache::Invalidate(const Guid& id)
