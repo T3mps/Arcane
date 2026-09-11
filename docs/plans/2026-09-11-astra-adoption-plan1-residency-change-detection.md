@@ -1487,3 +1487,27 @@ In `D:\dev\starworks\Gacha`. `Game/Binaries/` is gitignored, so the commit is th
 - `EntityOps.cpp:189` (`GetComponent<Hidden>`, a tag) is left non-const: tags never stamp.
 - Test-file non-const views (`TransformPropagationTest.cpp:119,180`, `SceneJsonTest.cpp`, …) are left as written: harmless stamps, and the `Mut<T>` conversion keeps them compiling — map B4 "optional".
 - `RenderSystems.hpp:38` keeps `PreviousTransform` in its trait and `:77` its lerp until Plan 2.
+
+## Closeout (2026-09-11)
+
+Plan 1 is closed at this document's HEAD range **`c1a29ad3..f8701cda`** (Task 10's baselines-catch-up commit; the closeout-notes commit for this section follows immediately after). Plan 2 begins from that HEAD.
+
+**State handed off:**
+- Engine ABI is **26**.
+- Astra `dev` is vendored at **`a08bb04`** (`ThirdParty/Astra/VENDORED.txt` agrees) — the commit Task 1 produced on top of the branch-state drift below.
+- `Transform` is Astra-change-tracked.
+- `TransformOrder` carries `lastRun` / `moved` / `rowOf` / `runs` / `composed`.
+- `PhysicsResource` carries `lastReconcile` / `reconciled`.
+- The Runtime roster list in `Runtime.cpp` still names `PreviousTransform` (kept on purpose, id order preserved) — **Plan 2 removes it.**
+- `RenderSystems.hpp:38`'s trait still names `PreviousTransform`, and `RenderSubmissionSystem` (`:77`) still lerps by it — both stay until Plan 2.
+- Gacha (`D:\dev\starworks\Gacha`) is restamped to ABI 26 at **`83aa9813`** and rebuilt (Plan 2's ABI-27 restamp is that repo's own follow-up).
+- `scripts/automation-baselines.json` now reads this close's Debug/Release counts; the Dist rows are untouched and carried forward at their asset-manager Plan 3 committed values (55226/1516), with the file's `note` saying so.
+
+**Final derived counts (Step 3, both configs agreeing):**
+- Debug unfiltered (`ArcaneTests.exe`, all tests incl. `[witness][gpu]`): **118491 assertions / 1665 test cases**, all passing, seed 4189552635 (`Randomness seeded to:`). This run is what proves the staged `ReferenceProject/Binaries/ReferenceGame.dll` is current (`arccook: cooked=0 upToDate=1 failed=0` on both the Debug and Release `Arcane.slnx` builds).
+- Debug `~[gpu]`: **56217 assertions / 1632 test cases**, all passing, seed 1660673166.
+- Release `~[gpu]`: **56217 assertions / 1632 test cases**, all passing, seed 2716699730 — matches Debug exactly.
+- Attribution against the 56118/1620 F2c Plan 1 figure: +99 assertions / +12 cases, T3 +1 / T5 +3 / T6 +2 / T7 +2 / T8 +4 cases, the assertion delta accounted for in full by the 12 new cases' own assertions (7+51+10+7+24=99) with no change to any pre-existing case — see `scripts/automation-baselines.json`'s note for the full per-case table.
+- `check-baselines.ps1` against the rewritten file: Debug and Release both **+0 / +0, exit 0**.
+
+**Astra branch-state drift, controller-ruled:** the plan's Global Constraints anchored Astra at `feat/change-detection` @ `b664aa8` (17 commits ahead of `dev` @ `f3e311d`); by the time Task 1 ran, the user had committed the S1 load-robustness fix on top, landing the branch at **`dad6b6a`** (18 commits ahead) — a strict superset, so Task 1 proceeded from `dad6b6a` (ruling recorded in `.superpowers/sdd/2026-09-11-astra-adoption-plan1-residency-change-detection/progress.md`), which is why Task 10 Step 5 found only one modified-tracked file (`bench-compare/RESULTS.md`) instead of the plan's originally-expected two.
