@@ -28,10 +28,8 @@
 #include <Astra/System/System.hpp>
 
 #include <glm/glm.hpp>
-#include <glm/gtc/quaternion.hpp>   // angleAxis -- rebuilding the current world turn for the blend
 
 #include <cmath>
-#include <utility>
 
 namespace Arcane
 {
@@ -45,6 +43,7 @@ namespace Arcane
             if (!ctx || !ctx->batcher) return;
             const SpriteTable* spriteTable = reg.GetResource<SpriteTable>();
             const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
+            const PhysicsInterpBuffer* interp = reg.GetResource<PhysicsInterpBuffer>();
 
             auto view = reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>();
             view.ForEach([&](Astra::Entity e, const WorldTransform& world, const SpriteRenderer& sprite)
@@ -68,31 +67,31 @@ namespace Arcane
                 // angle as its physics body.
                 float worldRot = std::atan2(m[0].y, m[0].x);
 
-                // Render interpolation (Epic 04.2): if the entity carries a
-                // PreviousTransform (its prior fixed-step local pose, captured by
-                // PhysicsSystem write-back), draw at lerp(prev -> current, alpha) for
-                // smooth slow-mo. Rotation uses SLERP (LerpPose, Components.hpp) --
-                // shortest-arc, the 3D expression of what AngleLerp did here before.
-                // Treats the entity's local pose as its world pose -- exact for a flat
-                // / identity-rooted physics entity (the case today). No
-                // PreviousTransform -> the unchanged snap-to-step path.
-                if (const PreviousTransform* prev = std::as_const(reg).GetComponent<PreviousTransform>(e))
+                // Render interpolation (Epic 04.2, re-based 2026-09-11 spec s8): a
+                // physics body's PREVIOUS world-slot pose lives in PhysicsInterpBuffer
+                // (captured by PhysicsSystem PASS 2.5 before each step, indexed by
+                // PhysicsWorld body SLOT; slotOf is this entity's address into it,
+                // rebuilt by the same capture). Blend position (XY) and angle from it
+                // to the current WORLD pose by alpha -- Lerp/AngleLerp, the debug
+                // overlay's own helpers, so sprite and overlay agree to the bit.
+                // World-slot poses are world poses, MORE correct than the retired
+                // PreviousTransform path's local-as-world approximation. ANY miss --
+                // no buffer, not yet captured, no entry for this entity, slot past
+                // the buffer, or a recycled slot (generation mismatch) -- is the
+                // unchanged snap-to-step.
+                if (interp && interp->captured)
                 {
-                    // The current world pose, re-expressed as a pose so the two
-                    // ends of the blend are the same type. Rotation is rebuilt
-                    // about +Z from the angle read out of the basis above: the
-                    // world matrix carries scale as well as rotation, so its
-                    // columns are not an orthonormal frame to cast from.
-                    const PreviousTransform cur{ glm::vec3(worldPos, 0.0f),
-                                                 RotationAboutZ(worldRot) };
-                    const PreviousTransform blend = LerpPose(*prev, cur, ctx->alpha);
-                    worldPos = glm::vec2(blend.position);
-                    // Back to the one screen-space angle the batcher takes, read
-                    // the SAME way the un-interpolated path reads it above (the
-                    // image of local +X -- see RotationZ). For a planar blend
-                    // this is the angle; for an out-of-plane one it is its
-                    // projection, which is the most a screen-space quad can say.
-                    worldRot = RotationZ(blend.rotation);
+                    if (const InterpSlot* slot = interp->slotOf.TryGet(e))
+                    {
+                        if (slot->index < interp->prev.size()
+                            && interp->prev[slot->index].generation == slot->generation)
+                        {
+                            const InterpPose& pp = interp->prev[slot->index];
+                            worldPos = glm::vec2(Lerp(pp.position.x, worldPos.x, ctx->alpha),
+                                                 Lerp(pp.position.y, worldPos.y, ctx->alpha));
+                            worldRot = AngleLerp(pp.angle, worldRot, ctx->alpha);
+                        }
+                    }
                 }
                 // Only a Rect consults the sprite asset: Circle/Capsule exist to
                 // MATCH a collider, so they must stay on the 1x1 m base times

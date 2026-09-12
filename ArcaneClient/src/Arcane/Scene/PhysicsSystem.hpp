@@ -419,6 +419,22 @@ namespace Arcane
                             interp->prev[i].generation = 0;   // dead slot never matches
                         }
                     }
+
+                    // The entity -> slot map the sprite path reads (RenderSystems.hpp
+                    // carries no PhysicsBodyRef term: PhysicsComponents.hpp would drag
+                    // Manifold2D into every game module's include surface). Rebuilt
+                    // from entityToBody in the SAME capture that filled `prev`, so the
+                    // two are exactly as fresh as each other; a body PASS 1 removed
+                    // this pass is already gone from the map (no stale address).
+                    interp->slotOf.Clear();
+                    interp->slotOf.Reserve(entityToBody.size());
+                    for (const auto& [entity, handle] : entityToBody)
+                    {
+                        if (!world.IsValid(handle))
+                            continue;
+                        interp->slotOf[entity] = InterpSlot{ handle.index, handle.generation };
+                    }
+
                     interp->captured = true;
                 }
             }

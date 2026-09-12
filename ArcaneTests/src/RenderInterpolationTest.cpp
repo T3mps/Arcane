@@ -104,6 +104,10 @@ TEST_CASE("PhysicsInterpBuffer captures the pre-step pose each fixed step", "[in
     REQUIRE(h.index < buf->prev.size());
     const Arcane::InterpPose& pp = buf->prev[h.index];
     CHECK(pp.generation == h.generation);
+    const Arcane::InterpSlot* slot = buf->slotOf.TryGet(e);
+    REQUIRE(slot != nullptr);
+    CHECK(slot->index == h.index);
+    CHECK(slot->generation == h.generation);
     CHECK(pp.position.y == Approx(static_cast<float>(afterStep1.y)));
     CHECK(world.Position(h).y > pp.position.y);   // it kept falling after the capture
 }
@@ -179,34 +183,49 @@ TEST_CASE("DrawPhysicsDebug interpolates the body outline by alpha", "[interp]")
     CHECK(rec2.lastCircleCenter.x == Approx(10.0f));
 }
 
-TEST_CASE("RenderSubmissionSystem interpolates a sprite by PreviousTransform + alpha", "[interp]")
+namespace
+{
+    // A sprite entity addressed by a hand-built PhysicsInterpBuffer -- the exact
+    // shape PASS 2.5 leaves behind (prev[slot] + slotOf[e]), with no PhysicsWorld
+    // and no PhysicsBodyRef involved: the buffer is world-SLOT indexed and the
+    // map IS the entity's address. Current world pose from `lt`; previous `prev`.
+    Astra::Entity SpriteWithPrev(Astra::Registry& reg, const Arcane::Transform& lt,
+                                 Arcane::InterpPose prev, std::uint32_t slot, std::uint32_t generation)
+    {
+        Astra::Entity e = reg.CreateEntity();
+        Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
+        reg.AddComponent<Arcane::WorldTransform>(e, wt);
+        reg.AddComponent<Arcane::SpriteRenderer>(e, Arcane::SpriteRenderer{});
+
+        Arcane::PhysicsInterpBuffer buf;
+        buf.prev.resize(slot + 1);
+        prev.generation = generation;
+        buf.prev[slot] = prev;
+        buf.slotOf[e] = Arcane::InterpSlot{ slot, generation };
+        buf.captured = true;
+        reg.SetResource<Arcane::PhysicsInterpBuffer>(std::move(buf));
+        return e;
+    }
+}
+
+TEST_CASE("RenderSubmissionSystem interpolates a sprite by PhysicsInterpBuffer + alpha", "[interp]")
 {
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
 
-    // Current world pose at x=10; previous local pose at x=0. Untextured Rect
+    // Current world pose at x=10; previous world-slot pose at x=0. Untextured Rect
     // sprite: nil .arcsprite -> a 1x1 m quad, so the scale IS the 4x4 size.
-    Astra::Entity e = reg.CreateEntity();
     Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
-    Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
-    reg.AddComponent<Arcane::WorldTransform>(e, wt);
-    Arcane::SpriteRenderer sp;
-    reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
-    Arcane::PreviousTransform prev; prev.position = glm::vec3(0.0f); prev.rotation = Arcane::RotationAboutZ(0.0f);
-    reg.AddComponent<Arcane::PreviousTransform>(e, prev);
+    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f, 0.0f), 0.0f, 0 }, /*slot*/ 3, /*gen*/ 7);
 
     RecBatcher rec;
     Arcane::RenderContext2D ctx{ &rec, glm::vec2(0.0f, 0.0f), 1.0f, 0.5f };  // alpha 0.5
-    // MSVC: SetResource<T> takes T&&; the named lvalue `ctx` needs std::move
-    // (the brief's literal `SetResource<...>(ctx)` does not bind).
     reg.SetResource<Arcane::RenderContext2D>(std::move(ctx));
     Arcane::RenderSubmissionSystem{}(reg);
 
-    // Untextured -> Rect path (top-left origin). The quad is centered on the
-    // interpolated screen position: center x = lerp(0, 10, 0.5) = 5 at identity zoom.
     REQUIRE(rec.rectCalls == 1);
-    CHECK(rec.lastRectCenter().x == Approx(5.0f));
+    CHECK(rec.lastRectCenter().x == Approx(5.0f));   // lerp(0, 10, 0.5) at identity zoom
     CHECK(rec.lastRectCenter().y == Approx(0.0f));
     CHECK(rec.lastRotation == Approx(0.0f).margin(1e-5));
 }
@@ -217,17 +236,10 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
 
-    Astra::Entity e = reg.CreateEntity();
     Arcane::Transform lt; lt.position = glm::vec3(0.0f);
     lt.rotation = Arcane::RotationAboutZ(10.0f * kPi / 180.0f);   // current 10deg about +Z
-    lt.scale    = glm::vec3(4.0f, 4.0f, 1.0f);     // the 4x4 quad, sized by scale
-    Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
-    reg.AddComponent<Arcane::WorldTransform>(e, wt);
-    Arcane::SpriteRenderer sp;
-    reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
-    Arcane::PreviousTransform prev;
-    prev.rotation = Arcane::RotationAboutZ(350.0f * kPi / 180.0f);  // previous 350deg
-    reg.AddComponent<Arcane::PreviousTransform>(e, prev);
+    lt.scale    = glm::vec3(4.0f, 4.0f, 1.0f);
+    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), 350.0f * kPi / 180.0f, 0 }, 0, 1);
 
     RecBatcher rec;
     reg.SetResource<Arcane::RenderContext2D>(
@@ -238,4 +250,40 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
     // Shortest arc 350 -> 10 midpoint is 0deg, NOT 180deg.
     CHECK(std::sin(rec.lastRotation) == Approx(0.0f).margin(1e-5));
     CHECK(std::cos(rec.lastRotation) == Approx(1.0f).margin(1e-5));
+}
+
+TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss", "[interp]")
+{
+    // Every miss path takes the snap: a generation mismatch (recycled slot), a
+    // slot past the buffer, an uncaptured buffer, no entry for the entity.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
+    const Astra::Entity e = SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), 0.0f, 0 }, 2, 5);
+    (void)e;
+    reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{ nullptr, glm::vec2(0.0f), 1.0f, 0.5f });
+
+    auto submit = [&]
+    {
+        RecBatcher rec;
+        reg.GetResource<Arcane::RenderContext2D>()->batcher = &rec;
+        Arcane::RenderSubmissionSystem{}(reg);
+        REQUIRE(rec.rectCalls == 1);
+        return rec.lastRectCenter().x;
+    };
+    CHECK(submit() == Approx(5.0f));                                              // the hit, for contrast
+
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[2].generation = 6;        // recycled slot
+    CHECK(submit() == Approx(10.0f));
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[2].generation = 5;
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev.resize(2);               // slot past the end
+    CHECK(submit() == Approx(10.0f));
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev.resize(3);
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[2] = Arcane::InterpPose{ glm::vec2(0.0f), 0.0f, 5 };
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured = false;             // never captured
+    CHECK(submit() == Approx(10.0f));
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured = true;
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->slotOf.Clear();               // no entry for the entity
+    CHECK(submit() == Approx(10.0f));
 }

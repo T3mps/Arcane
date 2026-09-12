@@ -8,6 +8,7 @@
 #include <Arcane/Mesh/MeshAsset.hpp>        // MeshSlot -- MeshEntry::slots' element type
 #include <Arcane/Render/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 
+#include <Astra/Container/FlatMap.hpp>
 #include <Astra/Entity/Entity.hpp>
 
 #include <glm/glm.hpp>
@@ -57,6 +58,17 @@ namespace Arcane
         std::uint32_t generation = 0;      // 0 == dead slot (never matches a live handle)
     };
 
+    // One entity's address into `prev`: the body SLOT it occupied at capture and
+    // the handle generation it had then. Manifold2D-free on purpose -- this
+    // header is compiled by every game module, whose include surface has no
+    // Manifold2D row, so Phys::BodyHandle cannot appear here (and that is why
+    // RenderSubmissionSystem reads THIS map rather than PhysicsBodyRef).
+    struct InterpSlot
+    {
+        std::uint32_t index      = 0;
+        std::uint32_t generation = 0;
+    };
+
     // Per-body previous-pose buffer, indexed by PhysicsWorld body SLOT index (the
     // same space DrawPhysicsDebug iterates). Populated by PhysicsSystem before each
     // world.Step(); read by DrawPhysicsDebug. Transient runtime state (Registry::Save
@@ -65,6 +77,11 @@ namespace Arcane
     struct PhysicsInterpBuffer
     {
         std::vector<InterpPose> prev;
+        // entity -> its slot at capture. Rebuilt by PhysicsSystem PASS 2.5 from
+        // PhysicsResource::entityToBody in the same pass that fills `prev`, so the
+        // two are exactly as fresh as each other. Read by RenderSubmissionSystem:
+        // a miss (no entry, slot past `prev`, generation mismatch) snaps.
+        Astra::FlatMap<Astra::Entity, InterpSlot> slotOf;
         bool                    captured = false;   // false until the first capture
 
         template<typename Archive>
