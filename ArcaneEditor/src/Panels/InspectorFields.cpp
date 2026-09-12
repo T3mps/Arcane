@@ -8,6 +8,7 @@
 // FieldInfo.hpp, but it is included explicitly here for clarity.
 #include <Astra/Core/TypeID.hpp>
 #include <Astra/Reflection/MetaRegistry.hpp>   // GetMeta(hash) -> TypeMeta -> EnumInfo
+#include <Astra/Reflection/TypeMeta.hpp>
 #include <Astra/Registry/Registry.hpp>
 
 #include <cctype>
@@ -18,12 +19,20 @@
 #include <glm/gtc/quaternion.hpp>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace Arcane::Editor
 {
     FieldKind ClassifyField(const Astra::FieldInfo& f) noexcept
     {
         if (f.isPointer) return FieldKind::ReadOnly;
+
+        // A std::vector's own typeHash is the CONTAINER's, which no arm below
+        // names -- so it is asked first, and the answer is about the ELEMENT
+        // (VectorElementsClassify). Before the enum check too: a vector is
+        // never isEnum, but the order says which question is being asked.
+        if (f.isVector)
+            return VectorElementsClassify(f) ? FieldKind::Vector : FieldKind::ReadOnly;
 
         // bool IS distinguishable from int8 by hash: TypeID<T>::Hash() hashes the
         // compiler-derived type name ("bool" vs "signed char"/"__int8"/"char"),
@@ -137,6 +146,64 @@ namespace Arcane::Editor
         // the value's low bytes sit first in memory.
         auto* p = static_cast<std::byte*>(instance) + f.offset;
         std::memcpy(p, &v, f.size);
+    }
+
+    bool VectorElementsClassify(const Astra::FieldInfo& f) noexcept
+    {
+        if (!f.isVector)
+            return false;
+        // Astra populates the accessors only for a default-constructible,
+        // non-bool element (FieldInfo.hpp:419) -- no accessors, no editor:
+        // nothing here could add or address an element.
+        if (!f.vectorSize || !f.vectorElement || !f.vectorInsert || !f.vectorErase)
+            return false;
+        // The element must be a reflected STRUCT: GetMeta resolves enums too,
+        // so the enum info is checked away, and a fieldless struct has no
+        // rows to draw. A scalar or glm element has no meta at all.
+        const Astra::TypeMeta* em = Astra::GetMeta(f.elementTypeHash);
+        if (!em || em->GetEnumInfo() != nullptr || em->fields.empty())
+            return false;
+        for (const Astra::FieldInfo& nf : em->fields)
+        {
+            if (nf.isVector)
+                return false;   // no nesting (ruling A1 -- recorded follow-up)
+            if (ClassifyField(nf) == FieldKind::ReadOnly)
+                return false;   // refuse whole: no half-drawn elements
+        }
+        return true;
+    }
+
+    std::size_t VectorSize(const Astra::FieldInfo& f, const void* instance) noexcept
+    {
+        return (f.vectorSize && instance) ? f.vectorSize(instance) : 0;
+    }
+
+    void ApplyVectorInsert(const Astra::FieldInfo& f, void* instance, std::size_t at) noexcept
+    {
+        if (f.vectorInsert && instance)
+            f.vectorInsert(instance, at);
+    }
+
+    void ApplyVectorErase(const Astra::FieldInfo& f, void* instance, std::size_t at) noexcept
+    {
+        if (f.vectorErase && instance)
+            f.vectorErase(instance, at);
+    }
+
+    void ApplyVectorSwap(const Astra::FieldInfo& f, void* instance, std::size_t a, std::size_t b)
+    {
+        if (!f.vectorElement || !instance || a == b || f.elementSize == 0)
+            return;
+        void* pa = f.vectorElement(instance, a);
+        void* pb = f.vectorElement(instance, b);
+        if (!pa || !pb)
+            return;   // either index past the end
+        // Bytewise -- see the header on why this is sound for the roster's
+        // elements and what a non-trivial element would need first.
+        std::vector<std::byte> tmp(f.elementSize);
+        std::memcpy(tmp.data(), pa, f.elementSize);
+        std::memcpy(pa, pb, f.elementSize);
+        std::memcpy(pb, tmp.data(), f.elementSize);
     }
 
     void ApplyFloatEdit(const Astra::FieldInfo& f, void* instance, float v) noexcept

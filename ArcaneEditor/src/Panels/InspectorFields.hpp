@@ -14,6 +14,7 @@
 // only ever named by enumerator, never by the glm type itself, at this scope.
 #include <glm/gtc/quaternion.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -28,8 +29,12 @@ namespace Arcane::Editor
     // Quat = a glm::quat field: edited as three Euler-angle drags -- see the
     // QuatEulerView section below for the "Euler is a VIEW, the quaternion is
     // the STORAGE" contract that field type has to obey.
+    // Vector = a std::vector of a reflected struct, drawn as a header row
+    // (count + add) over one collapsible block per element whose rows are
+    // the element's OWN reflected fields through these same editors -- see
+    // the FieldKind::Vector section below for what qualifies.
     enum class FieldKind
-    { Bool, Int32, UInt32, Float, Vec2, Vec3, Vec4, Quat, AssetRef, String, Enum, ReadOnly };
+    { Bool, Int32, UInt32, Float, Vec2, Vec3, Vec4, Quat, AssetRef, String, Enum, Vector, ReadOnly };
 
     // Classify a reflected field into an editor kind. Unknown/compound types ->
     // ReadOnly (shown disabled, never crashing). Enum requires the enum type to
@@ -187,6 +192,42 @@ namespace Arcane::Editor
     // Width-correct enum write (see ReadEnumValue): stores the low `f.size`
     // bytes of `v`, leaving neighbouring struct bytes untouched.
     void ApplyEnumEdit (const Astra::FieldInfo& f, void* instance, std::int64_t v) noexcept;
+
+    // ---- FieldKind::Vector (2D physics wiring Plan 2, spec s7.3) ------------
+    //
+    // A std::vector field classifies Vector when its ELEMENT is a reflected
+    // struct every one of whose fields classifies to a kind this panel has a
+    // widget for. The element rows recurse through the existing editors, so
+    // an element the editors could only half-draw is refused WHOLE (ReadOnly,
+    // as every other compound type is). Vectors of scalars / glm / enums stay
+    // ReadOnly too: every scalar editor keys off a FieldInfo (f.Get<T>,
+    // ApplyFloatEdit(f, ..), RangeOfField(f)) and an element has none -- the
+    // same line ReflectionJson.hpp's container branch drew, for the same
+    // reason (and the bridge could not save what such an editor produced). A
+    // struct carrying a nested vector is refused one level down for the same
+    // reason. Recorded follow-ups, not gaps: no roster field is any of these.
+    [[nodiscard]] bool VectorElementsClassify(const Astra::FieldInfo& f) noexcept;
+
+    // Pure list mutations over the field's Astra element accessors
+    // (FieldInfo::vectorSize / vectorInsert / vectorErase / vectorElement --
+    // every one takes the CONTAINING component instance, never the vector).
+    // ImGui-free so the [editor] units drive them directly; the view brackets
+    // each into one ComponentEditCommand (a whole-component snapshot --
+    // Collider2D::Serialize carries the vector) exactly as it brackets an
+    // AssetRef pick. Null instance or a missing accessor: no-op, never a crash.
+    [[nodiscard]] std::size_t VectorSize(const Astra::FieldInfo& f, const void* instance) noexcept;
+    // Default-constructed element at `at`; `at >= size` appends (Astra's contract).
+    void ApplyVectorInsert(const Astra::FieldInfo& f, void* instance, std::size_t at) noexcept;
+    // `at >= size` is a no-op (Astra's contract).
+    void ApplyVectorErase (const Astra::FieldInfo& f, void* instance, std::size_t at) noexcept;
+    // Exchanges elements a and b BYTEWISE through vectorElement + elementSize.
+    // Sound for a trivially copyable element, which every vector element on
+    // the roster is (Fixture, MeshSlot): FieldInfo records no trivially-
+    // copyable bit and Astra offers no vectorSwap, so a future non-trivial
+    // element needs that accessor FIRST (recorded follow-up). Either index
+    // past the end, or a == b, is a no-op. Not noexcept: the temp is a heap
+    // buffer sized elementSize.
+    void ApplyVectorSwap  (const Astra::FieldInfo& f, void* instance, std::size_t a, std::size_t b);
 
     // Per-scalar-component "these differ across the selection" mask.
     //
