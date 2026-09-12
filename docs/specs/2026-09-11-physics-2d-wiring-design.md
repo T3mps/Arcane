@@ -1,6 +1,6 @@
 # 2D physics wiring — engine-owned world, editor integration, fixture authoring
 
-**Date:** 2026-09-11 · **Status:** approved 2026-09-11; Plan 1 written (docs/plans/2026-09-11-physics-2d-wiring-plan1-runtime.md) · **Follows:** Astra adoption Plans 1–2 (ABI 27, `PhysicsInterpBuffer{prev, slotOf, captured}` the one interpolation history) · **Precedes:** F2c Plan 2 (rendering)
+**Date:** 2026-09-11 · **Status:** Plans 1–2 closed (docs/plans/2026-09-11-physics-2d-wiring-plan1-runtime.md, docs/plans/2026-09-12-physics-2d-wiring-plan2-inspector.md) · **Follows:** Astra adoption Plans 1–2 (ABI 27, `PhysicsInterpBuffer{prev, slotOf, captured}` the one interpolation history) · **Precedes:** F2c Plan 2 (rendering)
 
 ## 1. What this is
 
@@ -139,6 +139,8 @@ Writer: a vector field whose element type is a **reflected struct** (has a `Type
 - per element — an indented, collapsible block that recurses the element type's reflected fields through the existing field editors (Fixture's `kind` enum, floats, `vec2`, `uint32`, `bool` all have editors), with **−** (`vectorErase`) and up / down (swap through `vectorElement`).
 
 Every mutation — a scalar edit inside an element, add, remove, reorder — commits through the existing `ComponentEditCommand` (whole-component before / after through the descriptor serialize seam; `Collider2D::Serialize` carries the vector), so undo / redo is byte-identical in shape to today's field edits, and the existing post-commit `Modified(e, id)` mark is what makes the next `PhysicsEditPass` rebuild the fixtures. List operations are one-shot commands (snapshot, mutate, snapshot, push); in-element scalar drags use the same transaction bracket scalar fields use today.
+
+*Shipped with rulings A1–A3 of Plan 2 — reflected-struct elements only, single-selection editing, bytewise reorder.*
 
 ## 8. Demonstration and tests
 

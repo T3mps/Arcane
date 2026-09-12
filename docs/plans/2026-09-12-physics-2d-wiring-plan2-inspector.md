@@ -1337,3 +1337,46 @@ git commit -m "test(interp): pin the sprite blend DIRECTION at alpha 0.25/0.75 t
 4. Multi-selection was not addressed by the spec; the fan-out's component-offset reads make element editing wrong under it → count-only (A2).
 
 **Known intentional gaps, each with its owner:** scalar-element and nested vectors (follow-up, no consumer); `vectorSwap` in Astra (follow-up, on the first non-trivial element); multi-selection list editing (follow-up, on demand); `SetGravity` upstream (Manifold2D, carried); an element-kind preview in the tree-node label (polish, not owed).
+
+---
+
+## Closeout (2026-09-12)
+
+Plan 2 is closed at this document's HEAD range **`371fa042..d1e458cc`** (`d1e458cc` is Task 5's baselines-booking commit; the closeout-notes commit for this section follows immediately after). No ABI bump, no Gacha restamp — `git diff --stat 371fa042..HEAD -- ArcaneClient ThirdParty/Astra` is empty; Gacha stays at `b860e9e0`.
+
+**State handed off:**
+- The Inspector has a real editor for `std::vector<ReflectedStruct>` fields — `FieldKind::Vector` — shipped with rulings **A1–A8** exactly as planned: reflected-struct elements only, every element field itself drawable (A1); a multi-selection draws the count and nothing else (A2); reorder is a bytewise `vectorElement` swap, sound only for the roster's trivially-copyable elements (A3); element rows skip the category selector and the search filter but keep the `Astra::Hidden` check (A4); `InspectorState::vectorProbe` is the device-less-drive test seam, null in production (A5); `InspectorView.cpp` now compiles into `ArcaneTests` so the seam can drive the real `DrawReflectedComponent` (A6); a list op is deferred past the element walk (A7); undo labels carry the element path, e.g. `Edit Arcane::Collider2D.fixtures[0].radius` (A8).
+- `Collider2D::fixtures` is authored in the editor now: header row (count + **+**), one collapsible tree-node block per element with the element's own reflected fields drawn through the existing scalar/enum/vec editors, remove/up/down per element (disabled at the ends), every mutation one undo step (list ops via the existing `ApplyImmediate` bracket; in-element edits via the existing activation-gesture bracket, re-targeted by `ElementContext`).
+- The α = 0.25 blend-direction pin Plan 1 owed now exists (`RenderInterpolationTest.cpp`, `[interp]`): the real `PhysicsSystem` capture → step → write-back → `TransformPropagationSystem` chain, asked at 0.25 and 0.75 rather than the symmetric 0.5 the two pre-existing hand-built cases used — proves the blend runs FROM the captured pose TOWARD the current one, not the reverse.
+- The golden lanes stayed untouched *by construction*, and Task 5 ran the gate rather than assuming it (Plan 1's Task 11 lesson): `main.arcscene` boots with no selection, so no `Collider2D` row — and therefore no Vector arm — ever draws in the `editor-ui` golden. `golden-gate.ps1 -Configuration Release` reports **4/4 lanes, diffCount=0**.
+- Stale prose naming `Collider2D::fixtures` as `Serializable(false)`/undrawable (pre-Plan-1 history) is gone from `EditorPanels.cpp` and `EditorInspectorMetaTest.cpp` — both now name `PhysicsBodyRef` as the roster's current "nothing drawable" witness and describe Collider2D as drawing a real Vector list.
+
+**Final derived counts (Task 5's own runs, both configs agreeing):**
+- Debug unfiltered (`ArcaneTests.exe`, all tests incl. `[witness][gpu]`): **118839 assertions / 1699 test cases**, all passing, seed 4190609956 — proves the freshly rebuilt `ReferenceProject/Binaries/ReferenceGame.dll` is current for both Debug and Release `Arcane.slnx` builds.
+- Debug `~[gpu]`: **56546 assertions / 1665 test cases**, all passing, seed 2827703545 (the `-r json` run fed to the guard).
+- Release `~[gpu]`: **56546 assertions / 1665 test cases**, all passing, seed 1747719072 (the `-r json` run fed to the guard) — **Debug and Release agree exactly.**
+- Both `ReferenceProject.slnx` and `Arcane.slnx` builds (Debug then Release) reported **0 Warning(s) / 0 Error(s)**. Each config flip used `/t:Rebuild` on `ReferenceProject.slnx` to defeat the single-slot `ReferenceProject\Binaries\` config-flip no-op.
+- **Attribution against the pre-plan baseline (56399/1655):**
+
+  | Task | Δ assertions | Δ cases | What moved |
+  |---|---|---|---|
+  | T1 (`896a4042`) | +40 | +2 | `FieldKind::Vector` classification + pure list ops: `"ClassifyField: Vector arm..."` (14), `"Vector list ops: insert appends..."` (26) |
+  | T2 (`213b28ab`) | +19 | +2 | The `[+]` header row + multi-selection refusal: `"Vector row: [+] appends..."` (15), `"...multi-selection draws the count..."` (4) |
+  | T3 (`87626410`) | +77 | +5 | Element blocks: `"Vector elements draw their reflected fields..."` (31), `"...[-] removes exactly that element..."` (11), `"...down / up reorder..."` (21), `"...in-element scalar drag is ONE gesture..."` (10), `"...a pure click on an element drag pushes nothing"` (4) |
+  | T4 (`89377a6b`) | +11 | +1 | The owed case: `"RenderSubmissionSystem blends FROM the captured pose..."` (11) |
+  | **Net (`~[gpu]`)** | **+147** | **+10** | matches this task's own measured 56546/1665 exactly |
+
+**Baseline guard outcome:** `check-baselines.ps1` reported `+147`/`+10` against the still-committed `56399/1655` before this task's edit; booked into `scripts/automation-baselines.json` (`d1e458cc`) with the per-task/per-case attribution above transcribed into that file's own dated note; the guard re-run against the updated file reported **`+0`/`+0`, exit 0** on both Debug and Release.
+
+**Rulings the controller made during this plan** (full detail in `.superpowers/sdd/2026-09-12-physics-2d-wiring-plan2-inspector/progress.md`):
+- Budget mode throughout: controller on Sonnet, inline `executing-plans`, no subagents, no per-task reviews — checkpoints after T2, T3, T5 only.
+- T1: the `ArcaneTests/src/**.cpp` premake glob is expanded at *generation* time into the `.vcxproj`'s static file list, not an MSBuild-native wildcard — a brand-new test file needed `GenerateProjects.bat` before it would compile, even though T1 touches no premake file (T2's own regen call was for the premake5.lua edit, not this).
+- T4: a **test-fixture gap in the plan's own copied snippet, not a product bug.** `TransformPropagationSystem::operator()` returns immediately with no `SceneRoot` resource set (`TransformSystems.hpp`), so the plan's Task 4 Step 1 code — copied verbatim, no `SceneRoot`/`SetParent` — left `propagate(reg)` a total no-op: `PhysicsSystem` wrote the correct one-step forward-Euler fall to `Transform` (confirmed by temporary `WARN` logging, 0.00173611), but `WorldTransform` never composed it (stayed at its default identity). Fixed the test's own hierarchy wiring (root entity + `SceneRoot` resource + `SetParent`) to match `PhysicsSystemTest.cpp`'s `BuildScene()` precedent, which every other real-`PhysicsSystem` test in the suite already follows. The plan's own diagnosis paragraph named "propagate ran after physics" and "entity has a WorldTransform" — both already true — so this was one level deeper than either.
+- T4 (minor): the plan's Step 2 stated the `[interp]` file's pre-task count as 9; measured pre-task was 8 (post-task 9, not 10). Recorded as measured; the file's own case count is not otherwise load-bearing.
+
+**Deferred / not actioned, each with its owner:**
+- Scalar-element and nested vectors in the Inspector's Vector editor (ruling A1) — no roster field needs one yet; refused whole by design, same line the JSON bridge drew in Plan 1.
+- `vectorSwap` in Astra for a non-trivial (non-trivially-copyable) element (ruling A3) — no roster element needs it yet; the bytewise reorder helper's own comment names the requirement.
+- Multi-selection list editing (ruling A2) — count-only today; on demand.
+- `SetGravity` upstream in Manifold2D (`D:\dev\starworks\Manifold2D`) — carried from Plan 1; until it lands, a gravity edit re-mints the whole world rather than pushing the new value.
+- An element-kind preview in the tree-node label (e.g. showing "Circle"/"Aabb" next to `[0]`) — polish, not owed; the index alone is what's there today.
