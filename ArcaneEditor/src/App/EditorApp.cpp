@@ -281,6 +281,10 @@ namespace Arcane::Editor
         // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
         // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
         m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
+        // Edit mode's only physics (spec 2026-09-11-physics-2d-wiring s6.1):
+        // through `this` rather than a captured Runtime*, so a later runtime
+        // re-creation on project switch keeps the binding valid.
+        m_editSchedule.SetPhysicsEditPass([this] { m_runtime->PhysicsEditPass(); });
 
         // Populate ctx for the SHARED type_context_install / project_open /
         // input_config / editor_lock stage bodies (ProjectBoot.cpp), which only

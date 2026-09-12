@@ -18,6 +18,7 @@
 
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 using Catch::Approx;
@@ -50,7 +51,14 @@ namespace
             reg.SetParent(e, root);
             return e;
         }
-        std::uint32_t Runs() { return reg.GetResource<Arcane::TransformOrder>()->runs; }
+        // Null-safe: TransformOrder is emplaced lazily by the propagation
+        // system's first execution, so a scene that has not yet run one has
+        // no resource at all -- 0 runs, not a null-dereference.
+        std::uint32_t Runs()
+        {
+            const auto* c = reg.GetResource<Arcane::TransformOrder>();
+            return c ? c->runs : 0u;
+        }
     };
     const glm::vec2 kViewport(800.0f, 600.0f);
 }
@@ -68,6 +76,31 @@ TEST_CASE("EditModeSchedule runs propagation exactly once per Edit-mode frame an
 
     CHECK_FALSE(schedule.RunFrame(s.reg, /*inPlayMode*/ true));
     CHECK(s.Runs() == 5u);
+}
+
+TEST_CASE("the physics edit pass runs before propagation, once per Edit frame, never in Play", "[editor][physics]")
+{
+    // Spec s6.1: EditModeSchedule owns Edit mode's ONLY physics -- the injected
+    // pass (EditorApp binds Runtime::PhysicsEditPass) runs before the
+    // propagation it feeds. Device-less: the seam is a callable, so this test
+    // links no Manifold2D.
+    Scene s;
+    EditModeSchedule schedule;
+    std::vector<std::string> order;
+    // Rolling, not fixed: propagation's run count is monotonic, so a lambda
+    // fired on a SECOND RunFrame call must compare against the count as of
+    // just before THAT call, not the original baseline.
+    std::uint32_t lastRuns = s.Runs();
+    schedule.SetPhysicsEditPass([&] { order.push_back("physics"); CHECK(s.Runs() == lastRuns); });
+    REQUIRE(schedule.RunFrame(s.reg, /*inPlayMode*/ false));
+    REQUIRE(order.size() == 1);
+    CHECK(s.Runs() == lastRuns + 1);
+    lastRuns = s.Runs();
+    CHECK_FALSE(schedule.RunFrame(s.reg, /*inPlayMode*/ true));
+    CHECK(order.size() == 1);                       // Play: no edit pass
+    REQUIRE(schedule.RunFrame(s.reg, false));
+    CHECK(order.size() == 2);
+    CHECK(s.Runs() == lastRuns + 1);
 }
 
 TEST_CASE("a moved entity is framed at its NEW bounds on the next frame service",

@@ -14,6 +14,7 @@
 // sites. Passing SharedTypeContext() explicitly keeps both modules on the SAME
 // instance, exactly like RuntimeTest.cpp's snapshot/restore cases.
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
@@ -29,9 +30,12 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/PhysicsComponents.hpp>
+#include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -246,4 +250,65 @@ TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present",
     CHECK(g_fakeLoadCalls == 1);
     CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
+}
+
+TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fresh world", "[editor][physics]")
+{
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::RegisterPhysicsComponents(reg);
+    const Astra::Entity root = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+    reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    const Astra::Entity e = reg.CreateEntity();
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f, -1.0f, 0.0f);
+    reg.AddComponent<Arcane::Transform>(e, lt);
+    reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+    Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+    reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+    Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+    col.fixtures.push_back(fx);
+    reg.AddComponent<Arcane::Collider2D>(e, col);
+    reg.SetParent(e, root);
+
+    // Edit mode: the host's per-frame Ensure + the schedule's edit pass.
+    runtime.EnsurePhysics();
+    runtime.PhysicsEditPass();
+
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime));
+    for (int i = 0; i < 30; ++i) { runtime.EnsurePhysics(); runtime.Loop().Advance(1.0 / 60.0); }
+    {
+        Astra::Registry& live = runtime.Registry();
+        float y = -1.0f;
+        for (Astra::Entity le : live.GetEntityManager())
+            if (const auto* rbp = live.GetComponent<Arcane::RigidBody2D>(le))
+                if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+                    y = live.GetComponent<Arcane::Transform>(le)->position.y;
+        CHECK(y > -0.5f);                           // it fell during Play
+    }
+
+    REQUIRE(play.Stop(runtime));                    // restore: the registry is replaced
+    CHECK(runtime.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    runtime.EnsurePhysics();                        // the next Edit frame
+    runtime.PhysicsEditPass();
+    // Not proven by comparing world addresses across the restore: the pre-Stop
+    // world is freed exactly when RestoreRegistry swaps the registry, and a
+    // same-size allocation right after a free routinely reuses that exact
+    // address. REQUIRE(res != nullptr) after the CHECK(...== nullptr) above
+    // already proves a fresh mint happened -- that is the invariant this pins.
+    const auto* res = runtime.Registry().GetResource<Arcane::PhysicsResource>();
+    REQUIRE(res != nullptr);
+    CHECK_FALSE(runtime.Registry().GetResource<Arcane::PhysicsInterpBuffer>()->captured);
+    Astra::Registry& restored = runtime.Registry();
+    float y = 0.0f; int dynamic = 0;
+    for (Astra::Entity le : restored.GetEntityManager())
+        if (const auto* rbp = restored.GetComponent<Arcane::RigidBody2D>(le))
+            if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+            { ++dynamic; y = restored.GetComponent<Arcane::Transform>(le)->position.y; }
+    REQUIRE(dynamic == 1);
+    CHECK(y == Catch::Approx(-1.0f));               // the authored pose
+    CHECK(res->entityToBody.size() == 1);           // re-minted from it
 }

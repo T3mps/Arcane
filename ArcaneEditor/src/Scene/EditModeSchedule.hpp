@@ -29,6 +29,7 @@
 #include <glm/vec2.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <span>
 
 namespace Arcane::Editor
@@ -65,8 +66,17 @@ namespace Arcane::Editor
         bool ServicePendingFrame(Astra::Registry& reg, std::span<const Astra::Entity> selection,
                                  EditorCamera& camera, glm::vec2 viewportSize);
 
+        // Edit mode's ONLY physics (spec 2026-09-11-physics-2d-wiring s6.1):
+        // an injected callable -- EditorApp binds Runtime::PhysicsEditPass --
+        // run by RunFrame BEFORE propagation, so bodies exist in the editor
+        // world without simulating and every authored edit reaches them the
+        // frame after it lands. A callable rather than the system itself so
+        // this class (and its device-less test) links no Manifold2D.
+        void SetPhysicsEditPass(std::function<void()> pass) { m_physicsEditPass = std::move(pass); }
+
     private:
-        Astra::SystemScheduler m_schedule;
-        FrameRequest           m_pending = FrameRequest::None;
+        Astra::SystemScheduler  m_schedule;
+        FrameRequest            m_pending = FrameRequest::None;
+        std::function<void()>  m_physicsEditPass;
     };
 }

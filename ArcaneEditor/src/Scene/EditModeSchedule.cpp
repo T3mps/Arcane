@@ -17,6 +17,7 @@ namespace Arcane::Editor
     {
         if (inPlayMode)
             return false;
+        if (m_physicsEditPass) m_physicsEditPass();   // mint / destroy / reconcile; propagation composes the result
         m_schedule.Execute(reg);   // sequential executor; one system, one group
         return true;
     }
