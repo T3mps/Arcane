@@ -445,6 +445,21 @@ namespace Arcane
                         world.AddFixture(handle, fd);
                     }
 
+                    // Authored Z rotation, applied on the live handle after every
+                    // fixture is in (SetAngle re-registers the body's proxies from
+                    // its pose, so one call covers them all -- the same property
+                    // PASS 3.5 relies on for a moved static body). BodyDef carries
+                    // no angle, so a mint used to start every body at 0 whatever
+                    // the Transform said; a PAUSED pass hid that because its PASS
+                    // 3.5 reconciled the angle in the same call, but a STEPPING
+                    // pass has no reconcile -- Play's first fixedUpdate frame (Play
+                    // re-mints from the authored state), ArcaneRuntime's boot --
+                    // and PASS 4 then wrote the zero back over the authored
+                    // quaternion: rotate the capsule in Edit, press Play, the
+                    // rotation is undone (2026-09-12 desk finding). Only the Z
+                    // turn reaches the body, as everywhere else in this file.
+                    world.SetAngle(handle, static_cast<Phys::Real>(RotationZ(lt.rotation)));
+
                     // Authored velocity applied after AddBody so we call SetVelocity
                     // on a live handle (also wakes sleeping Dynamic bodies).
                     if (rb.velocity.x != 0.0f || rb.velocity.y != 0.0f)

@@ -18,6 +18,7 @@
 #include <memory>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 using namespace Arcane;
@@ -207,6 +208,32 @@ TEST_CASE("paused author rotate sets body angle, is not stomped", "[transform-sy
     const Phys::BodyHandle bh = res->entityToBody.at(e);
     CHECK(static_cast<float>(res->world->GetAngle(bh)) == Approx(1.0f).margin(1e-4f));
     CHECK(RotationZ(reg.GetComponent<Transform>(e)->rotation) == Approx(1.0f).margin(1e-4f));
+}
+
+TEST_CASE("a body minted by a STEPPING pass carries its authored Z rotation into the write-back", "[transform-sync]")
+{
+    // 2026-09-12 desk finding: rotate the capsule in Edit mode, press Play, the
+    // rotation is undone. PASS 2 builds the BodyDef from Transform.position
+    // and never from Transform.rotation (BodyDef carries no angle), so a fresh
+    // mint starts the body at angle 0. A PAUSED pass hides that: its PASS 3.5
+    // runs right after the mint in the same call, sees Changed<Transform>,
+    // and SetAngles the body (the case above pins that order). A STEPPING
+    // pass has no PASS 3.5 -- it mints, steps, and PASS 4 writes the body's
+    // zero back over the authored quaternion. That is Play's first fixedUpdate
+    // frame (Play re-mints from the authored state), ArcaneRuntime's boot, and
+    // any re-mint that lands on a stepping frame.
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    reg.GetComponent<Transform>(e)->rotation = RotationAboutZ(1.0f);   // authored, pre-mint
+
+    // Zero gravity, fixedRotation: the body cannot turn on its own, so any
+    // change to the angle is the mint's doing.
+    PhysicsSystem stepping(kDt, /*stepWorld=*/true);
+    stepping(reg);                                                        // mint + step + write-back, no reconcile
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle bh = res->entityToBody.at(e);
+    CHECK(static_cast<float>(res->world->GetAngle(bh)) == Approx(1.0f).margin(1e-4f));   // minted rotated
+    CHECK(RotationZ(std::as_const(reg).GetComponent<Transform>(e)->rotation) == Approx(1.0f).margin(1e-4f));   // and written back rotated
 }
 
 TEST_CASE("author-while-paused then play resumes from authored pose", "[transform-sync]")
