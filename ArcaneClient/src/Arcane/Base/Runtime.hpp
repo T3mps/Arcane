@@ -249,6 +249,28 @@ namespace Arcane
         void ClearSystems();                                      // Clear() all three phase schedulers
         void ResetAudio() noexcept;                               // Drop plugin-created audio handles on reload
 
+        // --- engine-owned physics (2026-09-11, spec docs/specs/2026-09-11-physics-2d-wiring-design.md s4-s5) ---
+        // Manifold2D-free surface: hosts and modules never see PhysicsSystem or
+        // PhysicsWorld. InstallEngineSystems adds the engine's own systems
+        // (today: PhysicsSystem into fixedUpdate, Before<TransformPropagation
+        // System>); the ctor calls it, and ClearSystems calls it again after
+        // clearing, so every PluginHost load/reload/unload path keeps it.
+        // Idempotent. EnsurePhysics runs once per frame before Loop().Advance
+        // (beside SetRenderContext): it mints PhysicsResource + PhysicsInterp
+        // Buffer when the current registry lacks them -- scene open,
+        // RestoreRegistry (Play -> Stop, structural undo) and hot reload all
+        // replace the registry, and the next frame's Ensure is the reset --
+        // and re-mints the world when ResolvedGravity changed (the vendored
+        // PhysicsWorld has no SetGravity; a settings edit is authoring, not
+        // gameplay). PhysicsEditPass is Edit mode's only physics: a bare
+        // stepWorld=false pass (mint / destroy / reconcile, no step).
+        void      InstallEngineSystems();
+        void      EnsurePhysics();
+        void      PhysicsEditPass();
+        // Scene-root PhysicsSettings when present, else the project's physics
+        // block, else PhysicsConfig's default (0, 9.81; +Y down).
+        [[nodiscard]] glm::vec2 ResolvedGravity() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> m_impl;

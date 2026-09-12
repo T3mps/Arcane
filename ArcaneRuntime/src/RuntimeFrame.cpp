@@ -272,6 +272,7 @@ void AdvanceSim(FrameIo& io)
             if (simDt > 0.25) simDt = 0.25;
         }
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
+        io.runtime->EnsurePhysics();   // engine-owned physics (spec s4.3): mint/refresh the world before the step
         io.runtime->Loop().Advance(simDt,
             [&](double dt)          { io.plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ io.plugin->UpdateAll(dt, a); });

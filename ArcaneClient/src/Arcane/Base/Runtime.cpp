@@ -11,6 +11,7 @@
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
 #include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
+#include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsSystem/PhysicsResource (instantiated IN this module)
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
@@ -23,6 +24,8 @@
 #include <Astra/Serialization/SerializationError.hpp>
 
 #include <optional>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -242,6 +245,7 @@ namespace Arcane
         // engine logger. Each module installs its own (per-module Mosaic storage).
         Arcane::Log::InstallMosaicSink();
         Arcane::Assert::InstallMosaicHandler();
+        InstallEngineSystems();
     }
     Runtime::~Runtime() = default;   // do not reset the module slot: a later Runtime re-installs
 
@@ -371,6 +375,19 @@ namespace Arcane
         if (resources.IsErr())
             return false;
 
+        // PhysicsResource/PhysicsInterpBuffer are transient, host-owned resources
+        // that must never survive a save/load -- re-established fresh by the next
+        // EnsurePhysics, same as WorldTransform is re-derived by propagation. Astra's
+        // Registry::Load (format v2) now serializes EVERY resource whose type offers
+        // a Serialize(Archive&) method -- both types provide a no-op one only to
+        // satisfy that concept (their own doc comments explain why) -- so the loaded
+        // registry carries a DEFAULT-CONSTRUCTED, world-less zombie of each unless
+        // stripped here. EnsurePhysics's own `res && res->world` guard already treats
+        // that zombie as absent, so this is belt-and-suspenders for any OTHER caller
+        // that queries HasResource<PhysicsResource>() directly.
+        loaded->RemoveResource<PhysicsResource>();
+        loaded->RemoveResource<PhysicsInterpBuffer>();
+
         m_impl->registry = std::move(loaded);
         // Rebind the EXISTING loop to the swapped registry rather than recreating it:
         // a cached RunLoop* (a plugin that stored Loop() at init, a host toolbar) must
@@ -396,6 +413,54 @@ namespace Arcane
         m_impl->schedulers->fixedUpdate.Clear();
         m_impl->schedulers->update.Clear();
         m_impl->schedulers->render.Clear();
+        InstallEngineSystems();   // the module's systems are gone; the engine's are back
+    }
+
+    void Runtime::InstallEngineSystems()
+    {
+        auto& fixed = m_impl->schedulers->fixedUpdate;
+        if (fixed.HasSystem<PhysicsSystem>()) return;
+        const float fixedDt = static_cast<float>(1.0 / m_impl->loopCfg.fixedHz);
+        // AlreadyRegistered is the only failure and HasSystem just excluded it.
+        std::ignore = fixed.AddSystem<PhysicsSystem>(fixedDt, /*stepWorld*/ true);
+    }
+
+    glm::vec2 Runtime::ResolvedGravity() const
+    {
+        glm::vec2 g = ProjectManifest::PhysicsConfig{}.gravity;
+        if (m_impl->project)
+            g = m_impl->project->Manifest().physics.gravity;
+        if (const SceneRoot* sr = m_impl->registry->GetResource<SceneRoot>())
+            if (const PhysicsSettings* ps = std::as_const(*m_impl->registry).GetComponent<PhysicsSettings>(sr->entity))
+                g = ps->gravity;
+        return g;
+    }
+
+    void Runtime::EnsurePhysics()
+    {
+        Astra::Registry& reg = *m_impl->registry;
+        const glm::vec2 g = ResolvedGravity();
+        PhysicsResource* res = reg.GetResource<PhysicsResource>();
+        if (res && res->world)
+        {
+            const auto cur = res->world->Gravity();
+            if (static_cast<float>(cur.x) == g.x && static_cast<float>(cur.y) == g.y)
+                return;
+            // Gravity changed: replace the world. Bodies re-mint from their
+            // current Transforms on the next pass (PASS 1 sees every handle
+            // invalid against the new world; PASS 2 self-heals).
+        }
+        Manifold2D::Physics::WorldDef wd;
+        wd.gravityX = g.x;
+        wd.gravityY = g.y;
+        reg.SetResource(PhysicsResource{ std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd), {} });
+        reg.SetResource(PhysicsInterpBuffer{});
+    }
+
+    void Runtime::PhysicsEditPass()
+    {
+        const float fixedDt = static_cast<float>(1.0 / m_impl->loopCfg.fixedHz);
+        PhysicsSystem{ fixedDt, /*stepWorld*/ false }(*m_impl->registry);
     }
 
     void Runtime::ResetAudio() noexcept

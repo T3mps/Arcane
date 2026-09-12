@@ -1223,6 +1223,7 @@ namespace Arcane::Editor
         double simDt = std::chrono::duration<double>(now - ls.simPrev).count();
         ls.simPrev = now;
         if (simDt > 0.25) simDt = 0.25;
+        m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });

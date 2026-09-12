@@ -11,9 +11,14 @@
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
+#include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Scene/TransformSystems.hpp>
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
+
+#include <Manifold2D/Physics/PhysicsWorld.hpp>
 
 #include <Astra/Core/TypeID.hpp>
 #include <Astra/Serialization/SerializationError.hpp>
@@ -120,7 +125,7 @@ TEST_CASE("Runtime RestoreRegistry keeps the RunLoop object stable", "[runtime]"
     CHECK(&rt.Loop() == before);
 }
 
-TEST_CASE("Runtime ClearSystems empties all phase schedulers", "[runtime]")
+TEST_CASE("Runtime ClearSystems empties the module's systems and re-installs the engine's", "[runtime]")
 {
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
     // Registration must actually succeed, or Empty() below would already be
@@ -129,9 +134,141 @@ TEST_CASE("Runtime ClearSystems empties all phase schedulers", "[runtime]")
     REQUIRE(rt.Schedulers().update.AddSystem<NoOpSystem>().IsOk());        // type index, so reusing the
     REQUIRE(rt.Schedulers().render.AddSystem<NoOpSystem>().IsOk());        // same type across them is fine
     rt.ClearSystems();
-    CHECK(rt.Schedulers().fixedUpdate.Empty());
+    CHECK(rt.Schedulers().fixedUpdate.Size() == 1);   // the engine-owned PhysicsSystem is re-installed (2026-09-11); the module's NoOpSystem is gone
+    CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<NoOpSystem>());
     CHECK(rt.Schedulers().update.Empty());
     CHECK(rt.Schedulers().render.Empty());
+}
+
+// ---- 2D physics wiring Plan 1 Task 6: the engine-owned physics facade ------
+
+TEST_CASE("Runtime installs PhysicsSystem into fixedUpdate and re-installs after ClearSystems", "[runtime][physics]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
+    CHECK_FALSE(rt.Schedulers().update.HasSystem<Arcane::PhysicsSystem>());
+    rt.InstallEngineSystems();                                   // idempotent
+    CHECK(rt.Schedulers().fixedUpdate.Size() == 1);
+    REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>().IsOk());   // "the module's"
+    rt.ClearSystems();                                           // what PluginHost does on every unload/reload
+    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
+    CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
+    CHECK(rt.Schedulers().update.Empty());
+    CHECK(rt.Schedulers().render.Empty());
+}
+
+TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[runtime][physics]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    rt.EnsurePhysics();
+    const auto* res = rt.Registry().GetResource<Arcane::PhysicsResource>();
+    REQUIRE(res != nullptr);
+    REQUIRE(res->world != nullptr);
+    REQUIRE(rt.Registry().GetResource<Arcane::PhysicsInterpBuffer>() != nullptr);
+    CHECK_FALSE(rt.Registry().GetResource<Arcane::PhysicsInterpBuffer>()->captured);
+    const Manifold2D::Physics::PhysicsWorld* first = res->world.get();
+    rt.EnsurePhysics();                                          // same frame, same settings: no re-mint
+    CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>()->world.get() == first);
+    CHECK(static_cast<float>(first->Gravity().y) == Catch::Approx(9.81f));   // the engine default, no project
+
+    auto bytes = rt.SnapshotRegistry();
+    REQUIRE(bytes.IsOk());
+    REQUIRE(rt.RestoreRegistry(*bytes.GetValue()));              // replaces the registry: resources are gone
+    CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    rt.EnsurePhysics();
+    // Not compared against `first` by address: `first` now points at freed
+    // memory, and a same-size allocation immediately after a free routinely
+    // reuses that exact address (observed in practice) -- a coincidental match
+    // would not mean this is the OLD world. REQUIRE(!= nullptr) above already
+    // proves the resource re-minted; that is the invariant this pins.
+    REQUIRE(rt.Registry().GetResource<Arcane::PhysicsResource>() != nullptr);
+}
+
+TEST_CASE("ResolvedGravity: the engine default, then the scene-root PhysicsSettings override", "[runtime][physics]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    CHECK(rt.ResolvedGravity().y == Catch::Approx(9.81f));      // no project open: PhysicsConfig's default
+
+    Astra::Registry& reg = rt.Registry();
+    const Astra::Entity root  = reg.CreateEntity();
+    const Astra::Entity other = reg.CreateEntity();
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    Arcane::PhysicsSettings ps; ps.gravity = glm::vec2(0.0f, 2.0f);
+    reg.AddComponent<Arcane::PhysicsSettings>(other, ps);        // NOT the root: ignored
+    CHECK(rt.ResolvedGravity().y == Catch::Approx(9.81f));
+    reg.AddComponent<Arcane::PhysicsSettings>(root, ps);
+    CHECK(rt.ResolvedGravity().y == Catch::Approx(2.0f));
+
+    rt.EnsurePhysics();
+    const auto* res = rt.Registry().GetResource<Arcane::PhysicsResource>();
+    REQUIRE(res != nullptr);
+    CHECK(static_cast<float>(res->world->Gravity().y) == Catch::Approx(2.0f));
+    // A gravity edit re-mints the world (no SetGravity on the vendored
+    // PhysicsWorld; spec s4.3 amended): the next Ensure carries it.
+    const auto* before = res->world.get();
+    reg.GetComponent<Arcane::PhysicsSettings>(root)->gravity.y = 5.0f;
+    rt.EnsurePhysics();
+    res = rt.Registry().GetResource<Arcane::PhysicsResource>();
+    CHECK(res->world.get() != before);
+    CHECK(static_cast<float>(res->world->Gravity().y) == Catch::Approx(5.0f));
+}
+
+TEST_CASE("PhysicsEditPass mints bodies, moves none, captures nothing", "[runtime][physics]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Astra::Registry& reg = rt.Registry();
+    const Astra::Entity root = reg.CreateEntity();
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    const Astra::Entity e = reg.CreateEntity();
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f, -1.0f, 0.0f);
+    reg.AddComponent<Arcane::Transform>(e, lt);
+    reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+    Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+    reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+    Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+    col.fixtures.push_back(fx);
+    reg.AddComponent<Arcane::Collider2D>(e, col);
+
+    rt.EnsurePhysics();
+    for (int i = 0; i < 5; ++i) rt.PhysicsEditPass();
+    const auto* res = rt.Registry().GetResource<Arcane::PhysicsResource>();
+    REQUIRE(res->entityToBody.count(e) == 1);                    // minted (PhysicsBodyRef auto-added)
+    CHECK(reg.GetComponent<Arcane::Transform>(e)->position.y == Catch::Approx(-1.0f));   // did not fall
+    CHECK_FALSE(rt.Registry().GetResource<Arcane::PhysicsInterpBuffer>()->captured);
+}
+
+TEST_CASE("fixedUpdate runs physics BEFORE propagation whichever was added first", "[runtime][physics]")
+{
+    // Behavioural pin of the Before<> edge: after one fixed step the entity's
+    // WorldTransform carries the POST-step position PASS 4 wrote back. If
+    // propagation ran first it would lag one step behind.
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    // The module's insertion order: propagation AFTER the engine's physics
+    // (the ctor installed it) -- and the plan must not depend on that.
+    REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>().IsOk());
+    Astra::Registry& reg = rt.Registry();
+    const Astra::Entity root = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+    reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    const Astra::Entity e = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+    Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+    reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+    Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+    col.fixtures.push_back(fx);
+    reg.AddComponent<Arcane::Collider2D>(e, col);
+    reg.SetParent(e, root);
+
+    rt.EnsurePhysics();
+    rt.Loop().SetPaused(false);
+    rt.Loop().Advance(1.0 / 60.0);                               // exactly one fixed step at 60 Hz
+    const float y  = reg.GetComponent<Arcane::Transform>(e)->position.y;
+    const float wy = reg.GetComponent<Arcane::WorldTransform>(e)->matrix[3].y;
+    CHECK(y > 0.0f);                                             // it fell (+Y down)
+    CHECK(wy == Catch::Approx(y).margin(1e-6f));                 // propagation saw this step's write-back
 }
 
 TEST_CASE("Runtime ResetRegistry empties the registry but keeps the ComponentRegistry", "[runtime]")
