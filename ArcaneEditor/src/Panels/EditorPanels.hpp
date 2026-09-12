@@ -14,6 +14,7 @@
 #include <Arcane/Util/FunctionRef.hpp>   // ApplyStructural's mutate callback
 #include <cstdint>
 #include <functional>
+#include <glm/vec2.hpp>   // InspectorState::vectorProbe
 #include <glm/vec4.hpp>   // InspectorState::colorPopupOriginal
 #include <string>
 #include <unordered_map>
@@ -458,6 +459,19 @@ namespace Arcane::Editor
         // 0 means "no width chosen yet"; the first grid drawn seeds it from
         // the panel's available width.
         float labelColWidth = 0.0f;
+
+        // TEST SEAM (2D physics wiring Plan 2, FieldKind::Vector). When
+        // non-null, the vector editor records the screen-space CENTRE of every
+        // list control it draws this frame -- "<field>.add",
+        // "<field>[i].remove" / ".up" / ".down", and each element field row as
+        // "<field>[i].<elementField>" -- so a device-less test can aim
+        // io.AddMousePosEvent at them and click through the REAL ImGui path
+        // (EditorInspectorVectorTest.cpp). ImGui keeps no item-rect registry a
+        // test could read instead. Production never sets it: nullptr, one
+        // branch per control. Same "exposed on purpose so the test can reach
+        // it" shape as AssetGraphPanelState::graphCanvas. Nothing here clears
+        // it -- the test owns the map and clears it per frame.
+        std::unordered_map<std::string, glm::vec2>* vectorProbe = nullptr;
     };
     // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
     // `selectedAsset` (F2b Task 13): the Assets panel's last-clicked row

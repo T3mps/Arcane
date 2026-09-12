@@ -912,6 +912,19 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
+        -- 2D physics wiring Plan 2 (FieldKind::Vector): InspectorView -- the
+        -- Inspector's reflected-field visitor, the ImGui half whose PURE
+        -- halves (InspectorFields, InspectorMeta) are listed above. NOT a
+        -- pure-logic unit: it is here so EditorInspectorVectorTest.cpp can
+        -- drive the REAL DrawReflectedComponent through device-less ImGui
+        -- frames and click its list controls -- the same reason, and the same
+        -- precedent, as AssetGraphPanel.cpp above. The link closed with
+        -- nothing else added: every symbol it calls outside its own TU is
+        -- already compiled here (InspectorFields/InspectorMeta/EditorWidgets/
+        -- ColorPickerPopup/EditGesture/AssetPanelModel) or header-inline
+        -- (CreateAssetDialog.hpp's pill text, AssetPanelModel.hpp's three
+        -- field-name heuristics).
+        "%{wks.location}/ArcaneEditor/src/Panels/InspectorView.cpp",
     }
 
     includedirs {

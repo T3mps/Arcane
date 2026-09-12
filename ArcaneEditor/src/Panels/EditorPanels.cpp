@@ -2354,13 +2354,15 @@ namespace Arcane::Editor
                 {
                     // Every reflected field is non-serializable or Hidden, so the
                     // grid below would open, visit nothing and close -- a header
-                    // over a void. Arcane::Collider2D is the case today: its only
-                    // field is `fixtures`, Serializable(false) because the
-                    // reflection->JSON bridge has no container branch
-                    // (PhysicsComponents.hpp). Before this row, adding a
-                    // Collider2D from the catalog gave NO confirmation it had
-                    // done anything -- the section that appeared looked
-                    // indistinguishable from a rendering glitch.
+                    // over a void. Arcane::Collider2D WAS the case when this row
+                    // was added: its only field, `fixtures`, was Serializable(false)
+                    // because the reflection->JSON bridge had no container branch,
+                    // and adding a Collider2D from the catalog gave NO confirmation
+                    // it had done anything. Both halves are gone (2D physics wiring
+                    // Plans 1-2: the bridge grew the branch, the Inspector grew
+                    // FieldKind::Vector), so Collider2D now draws a real list; the
+                    // row stays for the next component that reflects only what it
+                    // cannot show.
                     //
                     // Says "not editable here" rather than "no fields": the
                     // component genuinely carries state (PhysicsSystem builds a

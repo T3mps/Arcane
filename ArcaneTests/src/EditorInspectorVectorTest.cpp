@@ -10,17 +10,29 @@
 #include <Astra/Reflection/TypeMeta.hpp>
 #include <Astra/Registry/Registry.hpp>
 
+#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
 #include <Panels/InspectorFields.hpp>
+#include <Panels/InspectorView.hpp>     // DrawReflectedComponent, ReflectedComponentArgs
+#include <Widgets/EditorWidgets.hpp>    // FieldGrid: the grid DrawReflectedComponent draws rows into
+
+#include <imgui.h>
 
 #include <glm/mat4x4.hpp>
 
 #include <cstddef>
+#include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
+
+#include "Helpers/TestTypeContext.hpp"
 
 using Catch::Approx;
 
@@ -162,4 +174,193 @@ TEST_CASE("Vector list ops: insert appends a default element, erase removes, swa
     Arcane::Editor::ApplyVectorErase(*f, nullptr, 0);
     Arcane::Editor::ApplyVectorSwap(*f, nullptr, 0, 1);
     CHECK(col.fixtures.size() == 2);
+}
+
+// ===========================================================================
+// Part 2 -- the device-less ImGui drive (spec s8, the s7.3 row). The REAL
+// DrawReflectedComponent, inside the REAL FieldGrid, over ONE entity's
+// Collider2D, with the window pinned at a known origin so a recorded item
+// centre is a mouse target -- the GraphMouseHarness shape
+// (AssetsGraphCanvasTest.cpp), which also reads its targets off a seam the
+// panel exposes on purpose (there, ed::GetNodePosition; here,
+// InspectorState::vectorProbe, ruling A5).
+// ===========================================================================
+
+namespace
+{
+    struct VectorHarness
+    {
+        std::shared_ptr<Astra::ComponentRegistry> creg = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{ creg };
+        Astra::Entity   e{};       // the primary: two fixtures, [0] a Circle, [1] an Aabb
+        Astra::Entity   other{};   // a second carrier, for the multi-selection case
+        Arcane::CommandStack undo{ [this]() -> Astra::Registry& { return reg; } };
+        Arcane::Editor::InspectorState state;
+        std::unordered_map<std::string, glm::vec2> probe;
+        std::vector<Astra::Entity> selection;
+        ImGuiContext* prev = nullptr;
+        ImGuiContext* ctx  = nullptr;
+
+        VectorHarness()
+        {
+            // Pin Arcane.dll's TypeContext to the shared one BEFORE any
+            // registration (EditorInspectorTest.cpp's MixedWorld rule: a bare
+            // Runtime installs an unshared context and Edit ops then report 0).
+            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::RegisterSceneComponents(reg);
+            Arcane::RegisterPhysicsComponents(reg);
+            e     = Make(/*radius*/ 0.5f,  /*halfW*/ 1.0f);
+            other = Make(/*radius*/ 0.25f, /*halfW*/ 2.0f);
+            selection = { e };
+
+            // Device-less ImGui: no backend; a software font atlas satisfies
+            // NewFrame. 1024 tall so every row of two 13-field fixtures is
+            // inside the viewport and therefore hoverable.
+            IMGUI_CHECKVERSION();
+            prev = ImGui::GetCurrentContext();
+            ctx  = ImGui::CreateContext();
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1280.0f, 1024.0f);
+            io.IniFilename = nullptr;
+            unsigned char* pixels = nullptr;
+            int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+            state.vectorProbe = &probe;
+        }
+
+        ~VectorHarness()
+        {
+            ImGui::DestroyContext(ctx);
+            ImGui::SetCurrentContext(prev);
+        }
+
+        // [0] a Circle, [1] an Aabb: distinguishable by kind, so a reorder is
+        // observable, and by a scalar each, so an in-element edit is too.
+        Astra::Entity Make(float radius, float halfW)
+        {
+            namespace P = Manifold2D::Physics;
+            Astra::Entity ent = reg.CreateEntity();
+            Arcane::Collider2D col;
+            Arcane::Fixture a; a.kind = P::ShapeKind::Circle; a.radius = radius;
+            Arcane::Fixture b; b.kind = P::ShapeKind::Aabb;   b.halfW  = halfW;
+            col.fixtures = { a, b };
+            reg.AddComponent<Arcane::Collider2D>(ent, col);
+            return ent;
+        }
+
+        const std::vector<Arcane::Fixture>& Fixtures()
+        {
+            return reg.GetComponent<Arcane::Collider2D>(e)->fixtures;
+        }
+
+        Astra::Registry::ComponentInfo Collider()
+        {
+            for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
+                if (ci.meta && ci.meta->typeName == "Arcane::Collider2D")
+                    return ci;
+            FAIL("the harness entity carries no Collider2D");
+            return {};
+        }
+
+        // One frame of the REAL row path: the window pinned at the origin, the
+        // grid opened the way DrawInspectorPanel opens it, one component, the
+        // uncategorised pass (Collider2D's only field has no category).
+        void Frame()
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            io.DeltaTime = 1.0f / 60.0f;
+            probe.clear();
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(640.0f, 1000.0f), ImGuiCond_Always);
+            ImGui::Begin("Inspector");
+            {
+                Arcane::Editor::FieldGrid grid("##fields", state.labelColWidth);
+                if (grid)
+                {
+                    const Astra::Registry::ComponentInfo ci = Collider();
+                    Arcane::Editor::ReflectedComponentArgs args{
+                        reg, ci, e, std::span<const Astra::Entity>(selection),
+                        &undo, /*project*/ nullptr, /*services*/ nullptr, state,
+                        "Collider 2D", std::string_view{}, std::string_view{} };
+                    Arcane::Editor::DrawReflectedComponent(args);
+                }
+            }
+            ImGui::End();
+            ImGui::Render();   // draw data discarded -- no backend
+        }
+
+        glm::vec2 Centre(const std::string& key)
+        {
+            INFO("probe key: " << key);
+            REQUIRE(probe.count(key) == 1);
+            return probe.at(key);
+        }
+
+        // Hover, press, release -- one frame each, so each input lands on its
+        // own NewFrame; ImGui::Button fires on the RELEASE frame.
+        void Click(const std::string& key)
+        {
+            const glm::vec2 c = Centre(key);
+            ImGui::GetIO().AddMousePosEvent(c.x, c.y);    Frame();
+            ImGui::GetIO().AddMouseButtonEvent(0, true);  Frame();
+            ImGui::GetIO().AddMouseButtonEvent(0, false); Frame();
+        }
+
+        // Press on the widget, move `dx` pixels right in ONE frame (past
+        // ImGui's 3 px drag threshold, so DragBehavior applies the whole
+        // delta that frame), release.
+        void Drag(const std::string& key, float dx)
+        {
+            const glm::vec2 c = Centre(key);
+            ImGui::GetIO().AddMousePosEvent(c.x, c.y);       Frame();
+            ImGui::GetIO().AddMouseButtonEvent(0, true);     Frame();
+            ImGui::GetIO().AddMousePosEvent(c.x + dx, c.y);  Frame();
+            ImGui::GetIO().AddMouseButtonEvent(0, false);    Frame();
+        }
+    };
+}
+
+TEST_CASE("Vector row: [+] appends one default element as ONE undo step; undo restores the list",
+          "[editor][physics]")
+{
+    VectorHarness h;
+    h.Frame();
+    h.Frame();   // frame 1 seeds the grid's label column; the row is a target from frame 2
+    REQUIRE(h.probe.count("fixtures.add") == 1);
+    REQUIRE(h.Fixtures().size() == 2);
+    REQUIRE_FALSE(h.undo.CanUndo());
+
+    h.Click("fixtures.add");
+    REQUIRE(h.Fixtures().size() == 3);
+    CHECK(h.Fixtures()[2].kind == Manifold2D::Physics::ShapeKind::Circle);   // Fixture's defaults
+    CHECK(h.Fixtures()[2].radius == Approx(0.5f));
+    CHECK(h.Fixtures()[0].radius == Approx(0.5f));                            // the two existing, untouched
+    CHECK(h.Fixtures()[1].halfW  == Approx(1.0f));
+    REQUIRE(h.undo.CanUndo());
+    CHECK(std::string(h.undo.UndoLabel()).find("fixtures.add") != std::string::npos);
+
+    // Exactly one step: undo empties the stack, and it restores the list.
+    h.undo.Undo();
+    CHECK(h.Fixtures().size() == 2);
+    CHECK_FALSE(h.undo.CanUndo());
+    REQUIRE(h.undo.CanRedo());
+    h.undo.Redo();
+    CHECK(h.Fixtures().size() == 3);
+}
+
+TEST_CASE("Vector row under a multi-selection draws the count and no list controls",
+          "[editor][physics]")
+{
+    // Ruling A2: the fan-out and the mixed-value seeds read at component
+    // offsets, which an element field does not have.
+    VectorHarness h;
+    h.selection = { h.e, h.other };
+    h.Frame();
+    h.Frame();
+    CHECK(h.probe.count("fixtures.add") == 0);
+    CHECK(h.probe.empty());
+    CHECK(h.Fixtures().size() == 2);
+    CHECK_FALSE(h.undo.CanUndo());
 }

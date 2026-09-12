@@ -5,6 +5,7 @@
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Scene/EditGesture.hpp"
 #include "Widgets/EditorWidgets.hpp"
+#include "Widgets/IconsLucide.h"        // ICON_LC_PLUS -- the vector row's [+]
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
 
@@ -154,6 +155,53 @@ namespace Arcane::Editor
             // but keyed rather than a single shared slot; see InspectorState::
             // quatEulerViews's own comment (EditorPanels.hpp) for why.
             std::unordered_map<std::uint64_t, Arcane::Editor::QuatEulerView>* quatEulerViews = nullptr;
+
+            // The vector editor's test seam -- InspectorState::vectorProbe,
+            // null in production (see its comment). Wired by
+            // DrawReflectedComponent like every other state pointer here.
+            std::unordered_map<std::string, glm::vec2>* probe = nullptr;
+
+            // Record the centre of the item JUST SUBMITTED under `key`. One
+            // null-check per control when the seam is unwired.
+            void RecordProbe(const std::string& key)
+            {
+                if (!probe)
+                    return;
+                const ImVec2 lo = ImGui::GetItemRectMin();
+                const ImVec2 hi = ImGui::GetItemRectMax();
+                (*probe)[key] = glm::vec2((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+            }
+
+            // One deferred list mutation for the Vector arm (ruling A7):
+            // recorded by a button while the elements are being walked, applied
+            // after the walk -- the walk holds vectorElement pointers that a
+            // resize under it would invalidate.
+            struct PendingListOp
+            {
+                enum Kind { Insert, Erase, Swap } kind;
+                std::size_t a;   // Insert: position; Erase: index; Swap: first index
+                std::size_t b;   // Swap: second index
+            };
+
+            // ONE immediate command per list op -- snapshot, mutate, snapshot,
+            // push -- the AssetRef pick's exact shape (spec s7.3). The verb
+            // is the undo label's tail: "Edit Arcane::Collider2D.fixtures.add".
+            void ApplyListOp(const std::string& rawName, const Astra::FieldInfo& f, void* instance,
+                             const PendingListOp& op)
+            {
+                const char* verb = op.kind == PendingListOp::Insert ? "add"
+                                 : op.kind == PendingListOp::Erase  ? "remove"
+                                 :                                    "move";
+                ApplyImmediate(rawName + "." + verb, instance, [&](void* d)
+                {
+                    switch (op.kind)
+                    {
+                        case PendingListOp::Insert: Arcane::Editor::ApplyVectorInsert(f, d, op.a);       break;
+                        case PendingListOp::Erase:  Arcane::Editor::ApplyVectorErase (f, d, op.a);       break;
+                        case PendingListOp::Swap:   Arcane::Editor::ApplyVectorSwap  (f, d, op.a, op.b); break;
+                    }
+                });
+            }
 
             // Fan-out targets. `selection` includes the primary; entities lacking
             // this component are skipped (the panel only shows components the whole
@@ -1293,6 +1341,47 @@ namespace Arcane::Editor
                         }
                         break;
                     }
+                    case Arcane::Editor::FieldKind::Vector:
+                    {
+                        // The HEADER row: the count + [+] in the value cell (the
+                        // field's display name is in the label cell, opened
+                        // above like every row). Element rows follow it (the
+                        // walk below); an insert is DEFERRED past them (ruling
+                        // A7) and bracketed as ONE immediate command.
+                        const std::size_t n = Arcane::Editor::VectorSize(f, instance);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("%zu element%s", n, n == 1 ? "" : "s");
+                        if (Multi())
+                        {
+                            // A multi-selection draws the count and nothing
+                            // else (ruling A2): the fan-out reads a field at
+                            // ITS offset from each entity's COMPONENT
+                            // (ComputeFieldMixed, the multi rows' seeds) --
+                            // wrong for an element, whose offset is element-
+                            // relative -- and the lists can differ in length
+                            // across the selection. UE's Details panel shows
+                            // "Multiple Values" for the array here; same
+                            // refusal, said in the tooltip.
+                            tooltipValue = "multi-selection: edit one entity at a time";
+                            hovered = false;   // the count text is not a hover target
+                            break;
+                        }
+                        ImGui::SameLine();
+                        std::optional<PendingListOp> pending;
+                        if (ImGui::SmallButton(ICON_LC_PLUS "##add"))
+                            pending = PendingListOp{ PendingListOp::Insert, n, 0 };
+                        RecordProbe(rawName + ".add");
+
+                        // (Task 3: the per-element blocks are walked here.)
+
+                        if (pending)
+                            ApplyListOp(rawName, f, instance, *pending);
+                        // The last item is a list control or an element row,
+                        // never this row's own content: the header tooltip
+                        // follows the label alone.
+                        hovered = false;
+                        break;
+                    }
                     case Arcane::Editor::FieldKind::ReadOnly:
                     default:
                         // A type this panel has no widget for. It keeps the grid's
@@ -1395,6 +1484,7 @@ namespace Arcane::Editor
         visitor.gesture    = &args.state.gesture;
         visitor.originalColor = &args.state.colorPopupOriginal;
         visitor.quatEulerViews = &args.state.quatEulerViews;
+        visitor.probe          = args.state.vectorProbe;   // null in production
         visitor.registry   = &args.registry;
         visitor.selection  = args.selection;
         visitor.componentDisplayName = args.componentDisplayName;

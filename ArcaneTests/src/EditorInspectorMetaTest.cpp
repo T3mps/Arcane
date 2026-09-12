@@ -156,8 +156,10 @@ TEST_CASE("FieldIsDrawable is both of the visitor's skips", "[editor]")
     // Astra::Hidden -- dropped by the visitor itself (InspectorView.cpp).
     CHECK_FALSE(FieldIsDrawable(ProbeField("secret")));
     // Serializable(false) -- dropped one frame out, by Astra's VisitFields,
-    // before Visit() is ever called. This is Collider2D::fixtures' case, and
-    // missing it is what left that component drawing an empty header.
+    // before Visit() is ever called. PhysicsBodyRef's two fields are the
+    // roster's case (Collider2D::fixtures was, until 2D physics wiring Plan 1
+    // made it serializable again); missing it is what once left a component
+    // drawing an empty header.
     CHECK_FALSE(FieldIsDrawable(ProbeField("unwritten")));
 }
 
@@ -172,7 +174,8 @@ TEST_CASE("AnyFieldDrawable separates an empty section from a populated one", "[
     const Astra::TypeMeta* empty = Astra::GetMeta<NothingDrawable>();
     REQUIRE(empty != nullptr);
     // Every field undrawable: the caller draws the disabled hint row instead of
-    // opening a grid that would visit nothing. Collider2D's shape today.
+    // opening a grid that would visit nothing. (Collider2D's shape once; it
+    // draws a FieldKind::Vector list since 2D physics wiring Plan 2.)
     CHECK_FALSE(AnyFieldDrawable(empty->fields));
 
     // A type with no reflected fields at all answers the same way -- vacuously
