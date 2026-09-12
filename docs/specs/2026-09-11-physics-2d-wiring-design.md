@@ -1,6 +1,6 @@
 # 2D physics wiring — engine-owned world, editor integration, fixture authoring
 
-**Date:** 2026-09-11 · **Status:** approved in brainstorm, awaiting spec review · **Follows:** Astra adoption Plans 1–2 (ABI 27, `PhysicsInterpBuffer{prev, slotOf, captured}` the one interpolation history) · **Precedes:** F2c Plan 2 (rendering)
+**Date:** 2026-09-11 · **Status:** approved 2026-09-11; Plan 1 written (docs/plans/2026-09-11-physics-2d-wiring-plan1-runtime.md) · **Follows:** Astra adoption Plans 1–2 (ABI 27, `PhysicsInterpBuffer{prev, slotOf, captured}` the one interpolation history) · **Precedes:** F2c Plan 2 (rendering)
 
 ## 1. What this is
 
@@ -50,6 +50,7 @@ PASS 3.5 reconciles pose and scale only (`Changed<Transform>`); a `Collider2D` o
 - `Collider2D` and `RigidBody2D` declare `static constexpr bool AstraChangeTracked = true` (8 B per entity each; physics entities are few).
 - PASS 1 (destroy), **paused passes only**, gains two destroy criteria beside dead / no-`RigidBody2D`: no `Collider2D`, or `Changed<Collider2D>` / `Changed<RigidBody2D>` since `lastReconcile`. A destroyed body is re-minted by PASS 2 in the same pass from the current components, so an Inspector edit of a fixture, a body type, or a mass takes effect the next Edit frame, as does undo. Play passes skip the criteria: PASS 4 writes `velocity` every step, which would otherwise read as a change.
 - The Inspector's existing post-commit `Modified(e, id)` is what stamps the edit (Plan 1 T6).
+- **PASS 1.5 (plan-time addition):** an entity carrying `RigidBody2D` + `Collider2D` but no `PhysicsBodyRef` gets one added before PASS 2 — the Inspector can never add it (`ComponentCatalog` structure-locks it), so an editor-authored body would otherwise never match the mint view. Collected, then added (never inside a `ForEach`).
 
 ### 4.2 `Runtime::InstallEngineSystems()`
 
@@ -61,7 +62,7 @@ Called by both hosts once per frame before `Loop().Advance`, beside `SetRenderCo
 
 1. Resolve settings (§5).
 2. If the current registry has no `PhysicsResource`: construct a `PhysicsWorld` from a `WorldDef` carrying the resolved gravity, `SetResource(PhysicsResource{world, {}})`, and `SetResource(PhysicsInterpBuffer{})`.
-3. Else if the resolved gravity differs from the world's: push it.
+3. Else if the resolved gravity differs from the world's: **replace the world** (plan-time amendment: the vendored `PhysicsWorld` exposes `Gravity()` but no setter). Bodies re-mint from their current `Transform`s on the next pass; in Play this drops velocities — a settings edit is authoring, not gameplay. A `SetGravity` upstream in Manifold2D is the recorded follow-up that makes the edit live.
 
 This one rule covers every registry replacement identically — scene open, `RestoreRegistry` (Play → Stop, a structural undo), hot reload's `ResetRegistry`: the old world dies with the old registry's resource storage; the next frame mints a fresh one; the next physics pass re-creates bodies from the authored `Transform`s through PASS 2. There is no explicit "reset the world on Stop" hook, and `RegistryStateCommand`'s deferred "post-restore reconcile hook" is discharged by construction.
 
@@ -126,7 +127,7 @@ Generic — nothing Fixture-specific; Astra's own `JsonSchema` may use `elementT
 
 ### 7.2 `ReflectionJson.hpp` — the container branch
 
-Writer: a vector field becomes a JSON array; each element goes through the same dispatch a field does — arithmetic, `glm` vectors, registered enums, and nested reflected structs via the existing sub-writer recursion (Fixture is a nested reflected struct). Reader: classify by type first (the existing discipline), `vectorResize` to the array's length, then read each element in place through the same dispatch; a malformed element is `ReadResult::Malformed` for the whole field, never a partial list. `Collider2D::fixtures` loses `Serializable(false)` and the comment that prescribed this fix.
+Writer: a vector field whose element type is a **reflected struct** (has a `TypeMeta`, is not an enum) becomes a JSON array of objects, each walked by the existing sub-writer recursion (Fixture is a nested reflected struct; so is `MeshSlot`). Reader: classify by type first (the existing discipline), shape-check every element, `vectorResize` to the array's length, then read each element in place; a malformed element or sub-field latches for the whole field, never a partial list. Vectors of scalars / `glm` / enums stay "unsupported field type" — fail loud — until a roster field needs them (plan-time amendment: the scalar helpers key off a `FieldInfo`, an element has none, and no roster field is such a vector; recorded follow-up). `Collider2D::fixtures` loses `Serializable(false)` and the comment that prescribed this fix.
 
 `kSceneJsonVersion` 4 → 5 (`Min` stays 3): a file carrying `fixtures` is one an older engine would refuse on the read side, so the number says so; every existing scene still loads (the `SceneAssetTest` "older version still loads" pin gains the v4 case).
 
@@ -165,7 +166,7 @@ Every mutation — a scalar edit inside an element, add, remove, reorder — com
 
 ## 9. ABI, build ritual, plans
 
-- **ABI 27 → 28** in Plan 1's vendor task: `FieldInfo` grew (compiled into every plugin's reflect blocks), `PhysicsSettings` joined the roster, `PhysicsSystem` gained `RequiresExclusive` + an ordering edge + the paused-pass gates, and `Collider2D` / `RigidBody2D` became tracked types (`PhysicsComponents.hpp` is on the game-module include surface; a static member changes no bytes, but Transform's precedent in the v26 entry records tracked types here). v28 ledger in the v26/v27 form with the grep evidence over both game modules; `ReferenceProject.arcproj` → 28; Gacha's restamp is Plan 1's own last task (as v26 was), not a follow-up.
+- **ABI 27 → 28** in Plan 1's vendor task: `FieldInfo` grew (compiled into every plugin's reflect blocks), `PhysicsSettings` joined the roster, `PhysicsSystem` gained `RequiresExclusive` + an ordering edge + the paused-pass gates, and `Collider2D` / `RigidBody2D` became tracked types (a static member changes no bytes, and `PhysicsComponents.hpp` is **not** on the game-module include surface — only the editor and the tests compile it — but Transform's precedent in the v26 entry records tracked types in the ledger regardless). v28 ledger in the v26/v27 form with the grep evidence over both game modules; `ReferenceProject.arcproj` → 28; Gacha's restamp is Plan 1's own last task (as v26 was), not a follow-up.
 - **Build order** (spec 2026-09-11-astra-adoption §9, unchanged): `sync-astra.ps1` → `GenerateProjects.bat` → `ReferenceProject.slnx` first per configuration (`/t:Rebuild` on every config flip of the single-slot `Binaries\`) → `Arcane.slnx` → unfiltered suite + `~[gpu]` + `check-baselines.ps1`. Absolute `--project` for every host launch. A Debug host launch happens while the Debug DLL is staged.
 - **Baseline:** 56216 / 1632 (`~[gpu]`, Debug and Release, Astra adoption Plan 2 close). Rises attributed per task; the golden lanes are untouched by construction.
 - **Plans:** `docs/plans/2026-09-11-physics-2d-wiring-plan1-runtime.md` — Astra `FieldInfo` → vendor + ABI 28 → JSON container branch → `PhysicsSettings` + `.arcproj` block → `PhysicsSystem` schedulable → `InstallEngineSystems` / `EnsurePhysics` / `PhysicsEditPass` + host calls → editor Edit / Play integration → overlay → `physics.arcscene` + witness → Gacha restamp → close. `…-plan2-inspector.md` — `FieldKind::Vector` editor + tests → close.
