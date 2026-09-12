@@ -364,3 +364,125 @@ TEST_CASE("Vector row under a multi-selection draws the count and no list contro
     CHECK(h.Fixtures().size() == 2);
     CHECK_FALSE(h.undo.CanUndo());
 }
+
+TEST_CASE("Vector elements draw their reflected fields as rows through the existing editors",
+          "[editor][physics]")
+{
+    VectorHarness h;
+    h.Frame();
+    h.Frame();
+    // Every Fixture field, for both elements, is a row (and therefore a
+    // recorded target): the enum, a float, the vec2, a uint32, the bool.
+    for (const char* field : { "kind", "radius", "halfLen", "halfW", "halfH", "localPos",
+                               "localAngle", "density", "friction", "restitution",
+                               "categoryBits", "maskBits", "isSensor" })
+    {
+        INFO("field: " << field);
+        CHECK(h.probe.count(std::string("fixtures[0].") + field) == 1);
+        CHECK(h.probe.count(std::string("fixtures[1].") + field) == 1);
+    }
+    CHECK(h.probe.count("fixtures[0].remove") == 1);
+    CHECK(h.probe.count("fixtures[0].up") == 1);
+    CHECK(h.probe.count("fixtures[0].down") == 1);
+    CHECK(h.probe.count("fixtures[1].down") == 1);
+    CHECK(h.probe.count("fixtures[2].remove") == 0);   // no third element, no third block
+}
+
+TEST_CASE("Vector row: [-] removes exactly that element as ONE undo step; undo restores it in place",
+          "[editor][physics]")
+{
+    namespace P = Manifold2D::Physics;
+    VectorHarness h;
+    h.Frame();
+    h.Frame();
+
+    h.Click("fixtures[0].remove");
+    REQUIRE(h.Fixtures().size() == 1);
+    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Aabb);     // the Circle went, the Aabb stayed
+    CHECK(h.Fixtures()[0].halfW == Approx(1.0f));
+    REQUIRE(h.undo.CanUndo());
+    CHECK(std::string(h.undo.UndoLabel()).find("fixtures.remove") != std::string::npos);
+
+    h.undo.Undo();
+    REQUIRE(h.Fixtures().size() == 2);
+    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);   // back at index 0, not appended
+    CHECK(h.Fixtures()[0].radius == Approx(0.5f));
+    CHECK(h.Fixtures()[1].kind == P::ShapeKind::Aabb);
+    CHECK_FALSE(h.undo.CanUndo());
+}
+
+TEST_CASE("Vector row: down / up reorder as ONE undo step each; the end buttons are inert",
+          "[editor][physics]")
+{
+    namespace P = Manifold2D::Physics;
+    VectorHarness h;
+    h.Frame();
+    h.Frame();
+
+    h.Click("fixtures[0].down");
+    REQUIRE(h.Fixtures().size() == 2);
+    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Aabb);
+    CHECK(h.Fixtures()[0].halfW == Approx(1.0f));          // the WHOLE element moved
+    CHECK(h.Fixtures()[1].kind == P::ShapeKind::Circle);
+    CHECK(h.Fixtures()[1].radius == Approx(0.5f));
+    REQUIRE(h.undo.CanUndo());
+    CHECK(std::string(h.undo.UndoLabel()).find("fixtures.move") != std::string::npos);
+    h.undo.Undo();
+    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);
+    CHECK_FALSE(h.undo.CanUndo());
+    h.Frame();   // re-record the targets over the restored list before aiming again
+
+    h.Click("fixtures[1].up");
+    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Aabb);
+    REQUIRE(h.undo.CanUndo());
+    h.undo.Undo();
+    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);
+    CHECK_FALSE(h.undo.CanUndo());
+    h.Frame();
+
+    // [0].up and [last].down are disabled: a click is a no-op with no step.
+    h.Click("fixtures[0].up");
+    CHECK(h.Fixtures()[0].kind == P::ShapeKind::Circle);
+    CHECK_FALSE(h.undo.CanUndo());
+    h.Click("fixtures[1].down");
+    CHECK(h.Fixtures()[1].kind == P::ShapeKind::Aabb);
+    CHECK_FALSE(h.undo.CanUndo());
+}
+
+TEST_CASE("Vector row: an in-element scalar drag is ONE gesture -- one undo step, labelled by element path",
+          "[editor][physics]")
+{
+    VectorHarness h;
+    h.Frame();
+    h.Frame();
+    REQUIRE(h.Fixtures()[0].radius == Approx(0.5f));
+
+    // 40 px right on the radius drag (speed 0.1/px -> +4.0). The exact figure
+    // is the widget's speed contract, not this test's: only the direction and
+    // the bracket are asserted.
+    h.Drag("fixtures[0].radius", 40.0f);
+    CHECK(h.Fixtures()[0].radius > 0.5f);
+    CHECK(h.Fixtures()[1].halfW == Approx(1.0f));           // the OTHER element untouched
+    CHECK(h.Fixtures()[1].radius == Approx(0.5f));
+    REQUIRE(h.undo.CanUndo());
+    CHECK(std::string(h.undo.UndoLabel()).find("fixtures[0].radius") != std::string::npos);
+
+    h.undo.Undo();
+    CHECK(h.Fixtures()[0].radius == Approx(0.5f));
+    CHECK_FALSE(h.undo.CanUndo());                          // exactly one step
+    CHECK(h.undo.CanRedo());
+}
+
+TEST_CASE("Vector row: a pure click on an element drag pushes nothing", "[editor][physics]")
+{
+    // The existing bracket's Cancel-on-no-edit rule, proven to hold one level
+    // down: activation opened a transaction, deactivation without an edit
+    // cancels it, and the stack stays empty.
+    VectorHarness h;
+    h.Frame();
+    h.Frame();
+    h.Click("fixtures[1].halfW");
+    CHECK(h.Fixtures()[1].halfW == Approx(1.0f));
+    CHECK_FALSE(h.undo.CanUndo());
+    CHECK_FALSE(h.undo.InTransaction());                    // nothing stranded open
+}

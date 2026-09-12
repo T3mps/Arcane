@@ -172,6 +172,29 @@ namespace Arcane::Editor
                 (*probe)[key] = glm::vec2((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
             }
 
+            // FieldKind::Vector: set while ONE element's rows are being drawn
+            // (a recursive Visit over the element struct's own fields), null
+            // otherwise. It does two things. ForEachTarget re-targets the
+            // fan-out from each entity's COMPONENT to that entity's element --
+            // an element field's offset is element-relative, so the editors'
+            // write-backs (ApplyFloatEdit(f, d, v) etc.) need `d` to BE the
+            // element. And the undo-label builders prefix the field with the
+            // element path (ruling A8): "fixtures[0].radius", never a bare
+            // "radius" that could be any element's.
+            struct ElementContext
+            {
+                const Astra::FieldInfo* vectorField;   // the vector field on the component
+                std::size_t             index;         // this element
+                std::string             prefix;        // "fixtures[0]."
+            };
+            const ElementContext* elementCtx = nullptr;
+
+            // The undo-label path for `field` in the current context.
+            [[nodiscard]] std::string LabelPath(const std::string& field) const
+            {
+                return elementCtx ? elementCtx->prefix + field : field;
+            }
+
             // One deferred list mutation for the Vector arm (ruling A7):
             // recorded by a button while the elements are being walked, applied
             // after the walk -- the walk holds vectorElement pointers that a
@@ -201,6 +224,46 @@ namespace Arcane::Editor
                         case PendingListOp::Swap:   Arcane::Editor::ApplyVectorSwap  (f, d, op.a, op.b); break;
                     }
                 });
+            }
+
+            // One element's header row: a tree node in the label column (the
+            // element index; DefaultOpen, so a fresh list shows its fields
+            // without a click), the three list buttons in the value column.
+            // Returns whether the node is open -- the caller draws the element's
+            // field rows and TreePops. The "###" id suffix keeps the node's id
+            // off its visible text, so the open state survives whatever a later
+            // preview might add to the label.
+            [[nodiscard]] bool ElementHeaderRow(std::size_t i, std::size_t n, const std::string& rawName,
+                                                std::optional<PendingListOp>& pending)
+            {
+                const std::string elementKey = rawName + "[" + std::to_string(i) + "]";
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::AlignTextToFramePadding();
+                const std::string nodeLabel = "[" + std::to_string(i) + "]###element";
+                const bool open = ImGui::TreeNodeEx(nodeLabel.c_str(),
+                                                    ImGuiTreeNodeFlags_DefaultOpen |
+                                                    ImGuiTreeNodeFlags_SpanAvailWidth);
+                ImGui::TableSetColumnIndex(1);
+                if (ImGui::SmallButton(ICON_LC_TRASH_2 "##remove"))
+                    pending = PendingListOp{ PendingListOp::Erase, i, 0 };
+                RecordProbe(elementKey + ".remove");
+                ImGui::SameLine();
+                // The end buttons are DISABLED rather than hidden: the row keeps
+                // its shape, and a disabled button is a target that does nothing
+                // -- which the drive pins.
+                ImGui::BeginDisabled(i == 0);
+                if (ImGui::SmallButton(ICON_LC_ARROW_UP "##up"))
+                    pending = PendingListOp{ PendingListOp::Swap, i, i - 1 };
+                ImGui::EndDisabled();
+                RecordProbe(elementKey + ".up");
+                ImGui::SameLine();
+                ImGui::BeginDisabled(i + 1 >= n);
+                if (ImGui::SmallButton(ICON_LC_ARROW_DOWN "##down"))
+                    pending = PendingListOp{ PendingListOp::Swap, i, i + 1 };
+                ImGui::EndDisabled();
+                RecordProbe(elementKey + ".down");
+                return open;
             }
 
             // Fan-out targets. `selection` includes the primary; entities lacking
@@ -235,6 +298,8 @@ namespace Arcane::Editor
             {
                 if (!registry || selection.empty())
                 {
+                    // primaryInstance is already the element when an element
+                    // row is drawing (Visit was handed the element pointer).
                     fn(entity, primaryInstance);
                     if (registry && descriptor)
                         (void)registry->Modified(entity, descriptor->id);
@@ -243,7 +308,23 @@ namespace Arcane::Editor
                 for (Astra::Entity e : selection)
                     if (void* data = registry->GetComponentByHash(e, descriptor->hash))
                     {
-                        fn(e, data);
+                        // Element context (FieldKind::Vector): the fan-out
+                        // hands fn the COMPONENT, but an element field's
+                        // offset is relative to the ELEMENT -- re-derive this
+                        // target's element from its own component through the
+                        // vector field's accessor. A target whose list is
+                        // shorter than the primary's has no such element and
+                        // is skipped; unreachable today (ruling A2: elements
+                        // draw for a single selection only), kept as the
+                        // correct answer if that ever widens.
+                        void* target = data;
+                        if (elementCtx)
+                        {
+                            target = elementCtx->vectorField->vectorElement(data, elementCtx->index);
+                            if (!target)
+                                continue;
+                        }
+                        fn(e, target);
                         (void)registry->Modified(e, descriptor->id);
                     }
             }
@@ -255,7 +336,7 @@ namespace Arcane::Editor
             void BeginGestureIfActivated(const std::string& field, void* primaryInstance)
             {
                 EditGesture::BeginOnActivate(stack, *gesture,
-                    [&] { return "Edit " + typeName + "." + field; },
+                    [&] { return "Edit " + typeName + "." + LabelPath(field); },
                     [&]
                     {
                         // Snapshot-style: one Begin + N snapshots + one Commit = one
@@ -305,7 +386,7 @@ namespace Arcane::Editor
                 std::optional<Arcane::ScopedTransaction> txn;
                 if (stack)
                 {
-                    txn.emplace(*stack, "Edit " + typeName + "." + field);
+                    txn.emplace(*stack, "Edit " + typeName + "." + LabelPath(field));
                     ForEachTarget(primaryInstance,
                                   [&](Astra::Entity e, void*) { txn->Snapshot(e, descriptor); });
                 }
@@ -422,7 +503,7 @@ namespace Arcane::Editor
                 std::optional<Arcane::ScopedTransaction> txn;
                 if (stack)
                 {
-                    txn.emplace(*stack, "Edit " + typeName + "." + field);
+                    txn.emplace(*stack, "Edit " + typeName + "." + LabelPath(field));
                     ForEachTarget(instance,
                                   [&](Astra::Entity e, void*) { txn->Snapshot(e, descriptor); });
                 }
@@ -435,7 +516,13 @@ namespace Arcane::Editor
                 // Group selector: this drive renders exactly one category, so a
                 // field belonging to any other one is another drive's business.
                 // Leaves from the UNPUSHED scope, like the two skips below.
-                if (Arcane::Editor::CategoryOfField(f) != activeCategory)
+                //
+                // Element rows (FieldKind::Vector) skip the group selector and
+                // the search below (ruling A4): the VECTOR field's own row
+                // already passed both, and an element's fields have no
+                // category of their own to be drawn under elsewhere. They keep
+                // the Hidden check -- an element can hide a field like anyone.
+                if (!elementCtx && Arcane::Editor::CategoryOfField(f) != activeCategory)
                     return;
 
                 // Astra::Hidden -- the FIELD ATTRIBUTE, "do not show this
@@ -462,8 +549,8 @@ namespace Arcane::Editor
                 // `sortingLayer`, one who does not can type `sorting`. The
                 // component-name-hit rule (a match on the header shows every field)
                 // lives inside the predicate, not here.
-                if (!Arcane::Editor::MatchesInspectorFilter(componentDisplayName, label,
-                                                            rawName, query))
+                if (!elementCtx && !Arcane::Editor::MatchesInspectorFilter(componentDisplayName, label,
+                                                                           rawName, query))
                     return;
 
                 ImGui::PushID(static_cast<int>(f.nameHash));
@@ -1372,7 +1459,30 @@ namespace Arcane::Editor
                             pending = PendingListOp{ PendingListOp::Insert, n, 0 };
                         RecordProbe(rawName + ".add");
 
-                        // (Task 3: the per-element blocks are walked here.)
+                        // The element walk. Each block is a tree node row plus
+                        // the element struct's OWN reflected fields, drawn by
+                        // this same visitor one level down: Visit is handed the
+                        // ELEMENT pointer, and elementCtx re-targets the fan-out
+                        // and the undo labels (Step 3-5). Nothing here resizes
+                        // the list -- `pending` is applied after the walk.
+                        const Astra::TypeMeta* em = Astra::GetMeta(f.elementTypeHash);   // non-null: Classify vetted it
+                        for (std::size_t i = 0; i < n && em; ++i)
+                        {
+                            ImGui::PushID(static_cast<int>(i));
+                            const bool open = ElementHeaderRow(i, n, rawName, pending);
+                            if (open)
+                            {
+                                void* elem = f.vectorElement(instance, i);
+                                const ElementContext ctx{ &f, i, rawName + "[" + std::to_string(i) + "]." };
+                                const ElementContext* saved = elementCtx;
+                                elementCtx = &ctx;
+                                for (const Astra::FieldInfo& nf : em->fields)
+                                    Visit(nf, elem);
+                                elementCtx = saved;
+                                ImGui::TreePop();
+                            }
+                            ImGui::PopID();
+                        }
 
                         if (pending)
                             ApplyListOp(rawName, f, instance, *pending);
@@ -1411,6 +1521,12 @@ namespace Arcane::Editor
                         ImGui::TextDisabled("unsupported");
                         break;
                 }
+                // Element rows are mouse targets for the device-less drive:
+                // every arm but the asset-ref one ends on the row's own
+                // widget, so this is the widget's rect (recorded before
+                // EndGesture reads item state, which a rect read leaves alone).
+                if (elementCtx)
+                    RecordProbe(elementCtx->prefix + rawName);
                 EndGesture();
                 if (readOnly)
                     ImGui::EndDisabled();
