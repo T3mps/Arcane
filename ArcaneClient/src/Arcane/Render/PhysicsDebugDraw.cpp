@@ -333,6 +333,8 @@ namespace Arcane
         {
             if (!world.Alive(i))
                 continue;
+            if (opts.onlyBody && *opts.onlyBody != world.HandleOf(i))
+                continue;
 
             const Shape&    s      = world.ShapeSlot(i);
             const BodyType  btype  = world.TypeSlot(i);
@@ -430,7 +432,7 @@ namespace Arcane
             }
 
             // ---- optional AABB outline (opts.drawAabbs) --------------------
-            if (opts.drawAabbs)
+            if (!opts.onlyBody && opts.drawAabbs)
             {
                 DrawAabbOutline(batcher, world.SlotAabb(i), off, zoom, thick, kColAabb);
             }
@@ -446,7 +448,7 @@ namespace Arcane
 
             // Velocity ray: COM -> COM + v * scale (DYNAMIC + awake only; a
             // resting/zero-velocity body draws nothing so the overlay stays clean).
-            if (opts.drawVelocities && btype == BodyType::Dynamic && awake)
+            if (!opts.onlyBody && opts.drawVelocities && btype == BodyType::Dynamic && awake)
             {
                 const Vec2  v   = world.VelSlot(i);
                 const float vx  = static_cast<float>(v.x);
@@ -463,7 +465,7 @@ namespace Arcane
 
             // Orientation tick: COM along local +x (rotated by the body angle),
             // so rotation is visible even on a rotation-invariant circle outline.
-            if (opts.drawOrientations)
+            if (!opts.onlyBody && opts.drawOrientations)
             {
                 const glm::vec2 dir = Rotate2D(glm::vec2(1.0f, 0.0f), angle);
                 const glm::vec2 tip = comS + dir * (opts.orientationTickLen * zoom);
@@ -472,7 +474,7 @@ namespace Arcane
 
             // COM marker: a small axis-aligned cross at the world COM (dynamic
             // bodies; statics/kinematics have COM == origin and add no insight).
-            if (opts.drawComMarkers && btype == BodyType::Dynamic)
+            if (!opts.onlyBody && opts.drawComMarkers && btype == BodyType::Dynamic)
             {
                 const float r = opts.comMarkerSize * zoom;
                 batcher.Line(glm::vec2(comS.x - r, comS.y),
@@ -488,7 +490,7 @@ namespace Arcane
         // midpoint makes the contact pop even when the two centers are close
         // (the ForEachContact pull API exposes the pair, not the manifold point,
         // so the midpoint is the best available "where" marker).
-        if (opts.drawContacts)
+        if (!opts.onlyBody && opts.drawContacts)
         {
             world.ForEachContact([&](std::uint32_t a, std::uint32_t b)
             {
@@ -507,7 +509,7 @@ namespace Arcane
         // candidate-pair links can connect the two fixtures' AABB centers without
         // a second lookup pass. FixtureBroadphaseTree() is null for a non-Tree
         // mover broadphase -- guarded.
-        if (opts.drawFixtureTree)
+        if (!opts.onlyBody && opts.drawFixtureTree)
         {
             if (const Phys::DynamicTree* tree = world.FixtureBroadphaseTree())
             {
@@ -551,7 +553,7 @@ namespace Arcane
         // returns the concrete tree by reference (statics always use the tree).
         // The opts.drawStaticGrid flag name is retained (renaming ripples to the
         // Sandbox HUD); it now toggles the static-tree overlay.
-        if (opts.drawStaticGrid)
+        if (!opts.onlyBody && opts.drawStaticGrid)
         {
             world.StaticTree().ForEachLeaf(
                 [&](std::uint32_t, const Aabb2& /*tight*/, const Aabb2& fat)
@@ -564,7 +566,7 @@ namespace Arcane
         //
         // Same as the static grid in a distinct warm tint, so static (cool blue)
         // vs residency (warm amber) read differently when both are on.
-        if (opts.drawResidencyGrid)
+        if (!opts.onlyBody && opts.drawResidencyGrid)
         {
             const Phys::SpatialGrid& grid = world.ResidencyGrid();
             const float ts = static_cast<float>(grid.TileSize());
@@ -589,7 +591,7 @@ namespace Arcane
         // reliable end -- we anchor the marker on body A. The normal points B->A;
         // we draw the arrow from the contact point along it. Colored by the
         // narrowphase kind that produced the manifold. ADDITIVE to drawContacts.
-        if (opts.drawManifolds)
+        if (!opts.onlyBody && opts.drawManifolds)
         {
             world.ForEachContactConstraint(
                 [&](const Phys::ContactConstraint& cc)

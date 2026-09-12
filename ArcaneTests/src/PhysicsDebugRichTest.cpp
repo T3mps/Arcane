@@ -176,3 +176,22 @@ TEST_CASE("PhysicsDebug rich: a resting body draws no velocity ray", "[render]")
     // 4 outline lines for the AABB, and NO velocity ray (static -> v == 0).
     CHECK(m.lines.size() == 4);
 }
+
+TEST_CASE("onlyBody draws exactly one outline and no other overlay", "[physics][debug]")
+{
+    // Two circles; filter to the second: one Circle call, zero Lines (no
+    // contacts, velocity rays, COM crosses or orientation ticks).
+    WorldDef wd;
+    PhysicsWorld w(wd);
+    BodyDef a; a.type = BodyType::Static;  a.position = Vec2(0, 0); a.shape = MakeCircle(Real(0.5)); a.density = Real(1);
+    BodyDef b; b.type = BodyType::Dynamic; b.position = Vec2(3, 0); b.shape = MakeCircle(Real(0.5)); b.density = Real(1);
+    w.AddBody(a);
+    const BodyHandle hb = w.AddBody(b);
+    RecMock rec;
+    Arcane::PhysicsDebugDrawOptions opts;   // defaults: contacts/velocity/COM/orientation ON
+    opts.onlyBody = hb;
+    Arcane::DrawPhysicsDebug(w, rec, opts);
+    CHECK(rec.circles.size() == 1);
+    CHECK(rec.lines.size() == 0);
+    CHECK(rec.circles[0].first.x == Approx(3.0f));
+}

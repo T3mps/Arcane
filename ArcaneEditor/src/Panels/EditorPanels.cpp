@@ -55,6 +55,7 @@ namespace Arcane::Editor
                         PanelVisibility& panels,
                         bool hasSelection,
                         bool hasAssetSelection,
+                        bool physicsOverlayOn,
                         const RecentSelection* recents,
                         const SceneRecents::List* sceneRecents)
     {
@@ -265,6 +266,16 @@ namespace Arcane::Editor
                     requests.showInExplorer = true;
                 if (ImGui::MenuItem("Copy Path", nullptr, false, hasAssetSelection))
                     requests.copyAssetPath = true;
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("View"))
+            {
+                // The whole-world physics overlay (outlines + contacts), Edit
+                // and Play alike -- spec 2026-09-11-physics-2d-wiring s6.3. The
+                // SELECTED body's outline needs no toggle: it is always drawn
+                // in Edit mode. Session state, deliberately not persisted.
+                if (ImGui::MenuItem("Physics Overlay", nullptr, physicsOverlayOn))
+                    requests.togglePhysicsOverlay = true;
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Window"))

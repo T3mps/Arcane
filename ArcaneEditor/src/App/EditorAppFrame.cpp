@@ -13,6 +13,7 @@
 
 #include "App/EditorApp.hpp"
 #include "Panels/EditorPanels.hpp"
+#include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
 #include "Viewport/ViewportImGuiInput.hpp"
 
@@ -28,9 +29,11 @@
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
+#include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
 #include <Arcane/Scene/MeshSubmissionSystem.hpp>   // CollectMeshInstances (ArmGraphViewportFrame's opaque 3D pass, F2a Task 10)
+#include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
 
@@ -45,6 +48,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -1609,6 +1613,37 @@ namespace Arcane::Editor
         m_runtime->SetRenderContext(&b);
         m_runtime->Loop().SubmitRender();
 
+        // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3), drawn AFTER
+        // the sprites and BEFORE the gizmo, through the SAME camera and the
+        // SAME interp buffer + alpha the sprites used, so overlay and sprite
+        // agree to the bit. The decision is PlanPhysicsOverlay (pure, tested).
+        {
+            Astra::Registry& reg = m_runtime->Registry();
+            const Arcane::PhysicsResource* phys = reg.GetResource<Arcane::PhysicsResource>();
+            std::optional<Manifold2D::Physics::BodyHandle> selectedBody;
+            // entityToBody (a plain Arcane-level map), not PhysicsBodyRef +
+            // PhysicsWorld::IsValid: ArcaneEditor.exe does not link Manifold2D
+            // (physics logic lives inside Arcane.dll only, same boundary the
+            // NRI include-only comment above documents) -- a direct call into
+            // an out-of-line PhysicsWorld method here is an unresolved symbol.
+            if (m_selection.HasSelection() && phys)
+                if (auto it = phys->entityToBody.find(m_selection.Primary()); it != phys->entityToBody.end())
+                    selectedBody = it->second;
+            const Arcane::Editor::PhysicsOverlayPlan plan =
+                Arcane::Editor::PlanPhysicsOverlay(InPlayMode(), m_physicsOverlay, selectedBody.has_value());
+            if (plan.draw && phys && phys->world)
+            {
+                const Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
+                Arcane::PhysicsDebugDrawOptions opts;
+                if (ctx) { opts.cameraOffset = ctx->cameraOffset; opts.zoom = ctx->zoom; opts.alpha = ctx->alpha; }
+                opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer>();
+                opts.drawVelocities = opts.drawComMarkers = opts.drawOrientations = false;   // outlines + contacts (spec)
+                opts.drawContacts   = plan.wholeWorld;
+                if (!plan.wholeWorld) opts.onlyBody = selectedBody;
+                Arcane::DrawPhysicsDebug(*phys->world, b, opts);
+            }
+        }
+
         // Transform gizmo, drawn AFTER the scene submit so it renders on
         // top. Frame ordering guarantees the input block above already ran
         // this frame, so m_gizmoHovered/m_gizmoDrag and the live
@@ -1979,8 +2014,10 @@ namespace Arcane::Editor
                                        m_panelVis,
                                        m_selection.HasSelection(),
                                        m_assetModel.selected.IsValid(),
+                                       m_physicsOverlay,
                                        &m_recents.projects,
                                        &m_recents.scenes);
+        if (menuReq.togglePhysicsOverlay) m_physicsOverlay = !m_physicsOverlay;
         // Play button's SeparateWindow branch: the toolbar only REPORTS the
         // click (same "panel reports, app performs" split as ViewportPanelResult);
         // the readiness checks live in SceneSession::Request's park condition

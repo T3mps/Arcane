@@ -1024,6 +1024,7 @@ namespace Arcane::Editor
         // See EditorCamera.hpp for the transform convention.
         Arcane::Editor::EditorCamera m_camera;
         Arcane::Editor::EditModeSchedule m_editSchedule;   // Edit-mode propagation + the pending frame request (spec 2026-09-11 s7)
+        bool m_physicsOverlay = false;   // View -> Physics Overlay (spec s6.3, session-only)
         // RMB-drag pan gesture (rules: starts only inside the viewport, keeps
         // tracking once started -- see UpdateEditorCamera).
         struct CameraPanGesture

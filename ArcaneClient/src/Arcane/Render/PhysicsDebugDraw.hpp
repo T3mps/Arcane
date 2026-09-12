@@ -20,9 +20,12 @@
 
 #include <Arcane/Base/Api.hpp>
 
+#include <Manifold2D/Physics/PhysicsTypes.hpp>   // BodyHandle -- optional<T> needs it complete
+
 #include <glm/vec2.hpp>
 
 #include <cstdint>
+#include <optional>
 
 // Physics types were lifted to the standalone Manifold2D library (Phase 2);
 // forward-declare them in their own namespace (this header only needs the types
@@ -141,6 +144,14 @@ namespace Arcane
         // are NOT interpolated -- they stay at the current step by spec.
         const PhysicsInterpBuffer* interp = nullptr;
         float                      alpha  = 0.0f;   // RunLoop::Alpha() in [0,1)
+
+        // ---- one-body filter (2026-09-11 physics wiring, spec s6.3) ---------
+        // When set, ONLY this body's shape outline is drawn -- no contacts,
+        // AABBs, velocity rays, COM crosses, orientation ticks or manifolds --
+        // so the editor can outline the SELECTED entity's collider in Edit mode
+        // without the whole-world overlay (the Unity collider gizmo). Null (the
+        // default) is every existing caller: the whole world, every flag honoured.
+        std::optional<Manifold2D::Physics::BodyHandle> onlyBody;
     };
 
     // Submit physics debug geometry to `batcher`.
