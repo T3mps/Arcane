@@ -54,17 +54,52 @@ namespace ArcaneEditorVectorTest
         ASTRA_REFLECT_FIELD(Opaque, m)
     ASTRA_END_REFLECT_TYPE()
 
+    // A reflected struct whose only undrawable field is Serializable(false):
+    // the JSON bridge skips that field on the element path, so the element
+    // DOES round-trip -- classification must ignore it too (2026-09-12
+    // review hardening 1), or the editor refuses a list the file can carry.
+    struct HalfHidden
+    {
+        float     x = 0.0f;
+        glm::mat4 cache{1.0f};
+    };
+
+    ASTRA_REFLECT_TYPE(HalfHidden)
+        ASTRA_REFLECT_FIELD(HalfHidden, x)
+        ASTRA_REFLECT_FIELD(HalfHidden, cache)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+    ASTRA_END_REFLECT_TYPE()
+
+    // A reflected struct with a std::string field. String classifies as a
+    // drawable kind, but ruling A3's reorder is a BYTEWISE swap, which
+    // corrupts an SSO string -- refused until Astra grows vectorSwap
+    // (2026-09-12 review hardening 2).
+    struct Named
+    {
+        std::string name;
+        float       x = 0.0f;
+    };
+
+    ASTRA_REFLECT_TYPE(Named)
+        ASTRA_REFLECT_FIELD(Named, name)
+        ASTRA_REFLECT_FIELD(Named, x)
+    ASTRA_END_REFLECT_TYPE()
+
     struct VectorProbe
     {
-        std::vector<int>             ints;      // scalar elements: ReadOnly (bridge parity, A1)
-        std::vector<Arcane::Fixture> fixtures;  // reflected struct, every field classifies: Vector
-        std::vector<Opaque>          opaques;   // reflected struct, one field ReadOnly: ReadOnly
+        std::vector<int>             ints;        // scalar elements: ReadOnly (bridge parity, A1)
+        std::vector<Arcane::Fixture> fixtures;    // reflected struct, every field classifies: Vector
+        std::vector<Opaque>          opaques;     // reflected struct, one field ReadOnly: ReadOnly
+        std::vector<HalfHidden>      halfHidden;  // undrawable field is Serializable(false): Vector
+        std::vector<Named>           named;       // String field: ReadOnly (bytewise swap)
     };
 
     ASTRA_REFLECT_TYPE(VectorProbe)
         ASTRA_REFLECT_FIELD(VectorProbe, ints)
         ASTRA_REFLECT_FIELD(VectorProbe, fixtures)
         ASTRA_REFLECT_FIELD(VectorProbe, opaques)
+        ASTRA_REFLECT_FIELD(VectorProbe, halfHidden)
+        ASTRA_REFLECT_FIELD(VectorProbe, named)
     ASTRA_END_REFLECT_TYPE()
 }
 
@@ -105,6 +140,16 @@ TEST_CASE("ClassifyField: Vector arm -- a vector of a fully-classifiable reflect
     CHECK_FALSE(Arcane::Editor::VectorElementsClassify(*FieldOf(probe, "ints")));
     CHECK(Arcane::Editor::ClassifyField(*FieldOf(probe, "opaques"))  == K::ReadOnly);
     CHECK_FALSE(Arcane::Editor::VectorElementsClassify(*FieldOf(probe, "opaques")));
+
+    // Hardening 1: a Serializable(false) element field is not the editor's
+    // to draw (the bridge skips it), so it must not condemn the element.
+    REQUIRE(FieldOf(probe, "halfHidden") != nullptr);
+    CHECK(Arcane::Editor::ClassifyField(*FieldOf(probe, "halfHidden")) == K::Vector);
+    // Hardening 2: a String field classifies drawable but cannot be swapped
+    // bytewise (A3) -- refused whole until Astra has vectorSwap.
+    REQUIRE(FieldOf(probe, "named") != nullptr);
+    CHECK(Arcane::Editor::ClassifyField(*FieldOf(probe, "named")) == K::ReadOnly);
+    CHECK_FALSE(Arcane::Editor::VectorElementsClassify(*FieldOf(probe, "named")));
 
     // A vector is one "component" for the mixed-mask machinery (which never
     // diffs it -- ComputeFieldMixed's default arm returns an empty mask).

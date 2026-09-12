@@ -165,10 +165,23 @@ namespace Arcane::Editor
             return false;
         for (const Astra::FieldInfo& nf : em->fields)
         {
+            // Not the editor's to draw and not the bridge's to save: the JSON
+            // container branch skips a Serializable(false) element field
+            // (ReflectionJson.hpp), and the view's element walk skips it the
+            // same way, so it neither condemns the element nor draws.
+            if (!nf.IsSerializable())
+                continue;
             if (nf.isVector)
                 return false;   // no nesting (ruling A1 -- recorded follow-up)
-            if (ClassifyField(nf) == FieldKind::ReadOnly)
+            const FieldKind k = ClassifyField(nf);
+            if (k == FieldKind::ReadOnly)
                 return false;   // refuse whole: no half-drawn elements
+            // A String draws, but ruling A3's reorder is a BYTEWISE swap of
+            // the element, which corrupts an SSO std::string. Refused whole
+            // until Astra offers a vectorSwap (recorded follow-up); no roster
+            // element carries one.
+            if (k == FieldKind::String)
+                return false;
         }
         return true;
     }

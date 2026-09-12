@@ -1477,7 +1477,16 @@ namespace Arcane::Editor
                                 const ElementContext* saved = elementCtx;
                                 elementCtx = &ctx;
                                 for (const Astra::FieldInfo& nf : em->fields)
+                                {
+                                    // The same skip Astra's VisitFields applies to a
+                                    // component's own fields one level up, and the
+                                    // JSON bridge applies on the element path: a
+                                    // Serializable(false) element field is not drawn,
+                                    // because an edit to it could never be saved.
+                                    if (!nf.IsSerializable())
+                                        continue;
                                     Visit(nf, elem);
+                                }
                                 elementCtx = saved;
                                 ImGui::TreePop();
                             }
