@@ -212,6 +212,94 @@ namespace
     }
 }
 
+namespace
+{
+    // A vector of REFLECTED STRUCTS -- the shape Collider2D::fixtures and
+    // MeshAssetData::slots have. Vectors of scalars stay unsupported (the
+    // HasVector case below), which is deliberate: no roster field needs them.
+    struct Slot { int id = 0; float weight = 1.0f; glm::vec2 offset{0.0f, 0.0f}; };
+    struct Bag  { int tag = 0; std::vector<Slot> slots; };
+}
+ASTRA_REFLECT_TYPE(Slot)
+    ASTRA_REFLECT_FIELD(Slot, id)
+    ASTRA_REFLECT_FIELD(Slot, weight)
+    ASTRA_REFLECT_FIELD(Slot, offset)
+ASTRA_END_REFLECT_TYPE()
+ASTRA_REFLECT_TYPE(Bag)
+    ASTRA_REFLECT_FIELD(Bag, tag)
+    ASTRA_REFLECT_FIELD(Bag, slots)
+ASTRA_END_REFLECT_TYPE()
+
+TEST_CASE("a vector of reflected structs round-trips as a JSON array", "[json][reflection]")
+{
+    const Astra::TypeMeta* meta = Astra::GetMeta<Bag>();
+    REQUIRE(meta != nullptr);
+
+    Bag a; a.tag = 3;
+    a.slots = { Slot{ 1, 0.5f,  glm::vec2(1.0f, 2.0f) },
+                Slot{ 2, 0.25f, glm::vec2(3.0f, 4.0f) } };
+    nlohmann::json j;
+    Arcane::ReflectionJsonWriter writer(j);
+    VisitMetaFields(*meta, &a, writer);
+    REQUIRE_FALSE(writer.HasError());
+    REQUIRE(j["slots"].is_array());
+    REQUIRE(j["slots"].size() == 2);
+    CHECK(j["slots"][1]["id"].get<int>() == 2);
+    CHECK(j["slots"][0]["offset"][1].get<float>() == Approx(2.0f));
+
+    SECTION("read REPLACES the live vector -- it never appends to what was there")
+    {
+        Bag out; out.slots.resize(5);
+        Arcane::ReflectionJsonReader reader(j);
+        VisitMetaFields(*meta, &out, reader);
+        REQUIRE_FALSE(reader.HasError());
+        REQUIRE(out.slots.size() == 2);
+        CHECK(out.slots[1].weight == Approx(0.25f));
+        CHECK(out.slots[0].offset.y == Approx(2.0f));
+        CHECK(out.tag == 3);
+    }
+    SECTION("an absent key keeps the default (forward/back compat)")
+    {
+        nlohmann::json only; only["tag"] = 9;
+        Bag out; out.slots.resize(1);
+        Arcane::ReflectionJsonReader reader(only);
+        VisitMetaFields(*meta, &out, reader);
+        REQUIRE_FALSE(reader.HasError());
+        CHECK(out.slots.size() == 1);
+        CHECK(out.tag == 9);
+    }
+    SECTION("a non-array node is malformed")
+    {
+        nlohmann::json bad = j; bad["slots"] = 5;
+        Bag out;
+        Arcane::ReflectionJsonReader reader(bad);
+        VisitMetaFields(*meta, &out, reader);
+        REQUIRE(reader.HasError());
+        CHECK(reader.Error().find("slots") != std::string::npos);
+    }
+    SECTION("a non-object element is malformed and nothing is read into the vector")
+    {
+        nlohmann::json bad = j; bad["slots"] = { 1, 2 };
+        Bag out; out.slots.resize(3);
+        Arcane::ReflectionJsonReader reader(bad);
+        VisitMetaFields(*meta, &out, reader);
+        REQUIRE(reader.HasError());
+        CHECK(out.slots.size() == 3);   // untouched: the shape check precedes the resize
+    }
+    SECTION("a malformed sub-field inside an element latches for the whole field")
+    {
+        nlohmann::json bad = j; bad["slots"][1]["offset"] = { 1.0 };   // vec2 with one number
+        Bag out;
+        Arcane::ReflectionJsonReader reader(bad);
+        VisitMetaFields(*meta, &out, reader);
+        REQUIRE(reader.HasError());
+        CHECK(out.slots.empty());       // refused whole, not left half-read
+    }
+}
+
+// std::vector<int> stays UNSUPPORTED after the 2026-09-11 container branch: the
+// branch handles vectors of REFLECTED STRUCTS only (see the Bag case above) --
+// a scalar element has no TypeMeta to walk.
 TEST_CASE("unsupported field type fails loud instead of silently dropping", "[json][reflection]")
 {
     const Astra::TypeMeta* meta = Astra::GetMeta<HasVector>();

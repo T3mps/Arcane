@@ -292,6 +292,14 @@ namespace Arcane
         // unsupported field type -> fail loud rather than silently drop.
         inline bool IsHandledType(const Astra::FieldInfo& f)
         {
+            // A std::vector of a REFLECTED STRUCT is handled (2026-09-11
+            // container branch); any other element kind is not -- see
+            // ReflectionJsonWriter::WriteVector for the why.
+            if (f.isVector)
+            {
+                const Astra::TypeMeta* em = Astra::GetMeta(f.elementTypeHash);
+                return em != nullptr && em->GetEnumInfo() == nullptr && static_cast<bool>(f.vectorElement);
+            }
             const uint64_t h = f.typeHash;
             if (IsScalarHash(h) || IsGlmVecHash(h) || IsGlmMatHash(h) || h == QuatHash())
                 return true;
@@ -357,6 +365,7 @@ namespace Arcane
 
         void Visit(const Astra::FieldInfo& field, void* instance) override
         {
+            if (field.isVector) { WriteVector(field, instance); return; }
             nlohmann::json value;
             if (Detail::WriteScalar(field, instance, value) ||
                 Detail::WriteGlm(field, instance, value)    ||
@@ -446,6 +455,38 @@ namespace Arcane
                 m_assetGuidSink->push_back(g);
         }
 
+        // std::vector<T> where T is a REFLECTED STRUCT -- the only element kind
+        // any roster field has today (Collider2D::fixtures, MeshAssetData::
+        // slots): a JSON array, one OBJECT per element, each walked by a
+        // sub-writer over the element type's reflected fields exactly as a
+        // nested-struct field is (so a guid nested in an element still reaches
+        // the asset sink). Vectors of scalars / glm / enums stay "unsupported
+        // field type" -- fail loud, never a partial array -- until a roster
+        // field needs them (spec 2026-09-11-physics-2d-wiring s7.2).
+        void WriteVector(const Astra::FieldInfo& field, void* instance)
+        {
+            const Astra::TypeMeta* em = Astra::GetMeta(field.elementTypeHash);
+            if (!em || em->GetEnumInfo() || !field.vectorSize || !field.vectorElement)
+            {
+                Fail(Detail::UnsupportedFieldMessage(field));
+                return;
+            }
+            nlohmann::json arr = nlohmann::json::array();
+            const std::size_t n = field.vectorSize(instance);
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                nlohmann::json elem = nlohmann::json::object();
+                ReflectionJsonWriter subWriter(elem, m_assetGuidSink);
+                void* elemInstance = field.vectorElement(instance, i);
+                for (const Astra::FieldInfo& nf : em->fields)
+                    if (nf.IsSerializable())
+                        subWriter.Visit(nf, elemInstance);
+                if (subWriter.HasError()) { Fail(subWriter.Error()); return; }
+                arr.push_back(std::move(elem));
+            }
+            m_out[std::string(field.name)] = std::move(arr);
+        }
+
         nlohmann::json& m_out;
         std::vector<Arcane::Guid>* m_assetGuidSink = nullptr;
         bool m_error = false;
@@ -470,6 +511,7 @@ namespace Arcane
 
             const nlohmann::json* node = Find(field);
             if (!node) return;   // supported but ABSENT -> keep the default (forward/back compat)
+            if (field.isVector) { ReadVector(field, instance, *node); return; }
 
             // PRESENT from here down, so "cannot read it" is data loss, not
             // compatibility. Each helper reports NotMine / Ok / Malformed; the
@@ -555,6 +597,35 @@ namespace Arcane
                 }
             });
             return found;
+        }
+
+        // The read half of WriteVector. SHAPE is checked for every element
+        // BEFORE the live vector is touched, so a malformed document leaves
+        // the component exactly as it was; a malformed SUB-FIELD inside an
+        // element (wrong-arity vec2, non-string enum) latches like any other
+        // and the vector is emptied rather than left half-read -- the
+        // component's load has already failed at that point, this is hygiene.
+        void ReadVector(const Astra::FieldInfo& field, void* instance, const nlohmann::json& node)
+        {
+            const Astra::TypeMeta* em = Astra::GetMeta(field.elementTypeHash);   // vetted by IsHandledType
+            if (!node.is_array()) { Fail(Detail::MalformedFieldMessage(field)); return; }
+            for (const nlohmann::json& elem : node)
+                if (!elem.is_object()) { Fail(Detail::MalformedFieldMessage(field)); return; }
+            field.vectorResize(instance, node.size());
+            for (std::size_t i = 0; i < node.size(); ++i)
+            {
+                ReflectionJsonReader subReader(node[i]);
+                void* elemInstance = field.vectorElement(instance, i);
+                for (const Astra::FieldInfo& nf : em->fields)
+                    if (nf.IsSerializable())
+                        subReader.Visit(nf, elemInstance);
+                if (subReader.HasError())
+                {
+                    field.vectorResize(instance, 0);
+                    Fail(subReader.Error());
+                    return;
+                }
+            }
         }
 
         const nlohmann::json& m_in;

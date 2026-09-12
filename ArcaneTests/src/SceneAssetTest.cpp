@@ -432,7 +432,7 @@ TEST_CASE("SaveSceneFile emits a v4 assets manifest: distinct, sorted, identity-
 
     std::ifstream in(file, std::ios::binary);
     const nlohmann::json doc = nlohmann::json::parse(in);
-    REQUIRE(doc["version"].get<int>() == 4);
+    REQUIRE(doc["version"].get<int>() == 5);
     REQUIRE(doc.contains("assets"));
     REQUIRE(doc["assets"].is_array());
     REQUIRE(doc["assets"].size() == 2);   // `early` ONCE, despite its two mentions
@@ -486,6 +486,39 @@ TEST_CASE("a v3 scene still loads after the v4 bump", "[scene][json]")
     const Arcane::Transform* t = fresh.GetComponent<Arcane::Transform>(sr->entity);
     REQUIRE(t != nullptr);
     CHECK(t->position.x == 100.0f);
+}
+
+TEST_CASE("a v4 scene still loads after the v5 bump", "[scene][json]")
+{
+    // v5 (2026-09-11) is ADDITIVE like v4: Collider2D::fixtures now writes as
+    // an array a v4 engine would refuse on read, so the number moved; nothing a
+    // v4 file already said changed, so v4 keeps loading. LITERAL 4 -- see the
+    // v3 case above for why not the symbolic constant.
+    const std::filesystem::path dir  = TempDir("arcane_scene_asset_v4");
+    const std::filesystem::path file = dir / ("legacy4" + std::string(Arcane::Scene::kSceneExt));
+    const std::string tName(Astra::GetMeta<Arcane::Transform>()->typeName);
+
+    nlohmann::json e0;
+    e0["components"][tName]["position"] = { 7.0, 0.0, 0.0 };
+    e0["parent"] = -1;
+    nlohmann::json doc;
+    doc["id"]       = "00000000-0000-0000-0000-000000000002";
+    doc["version"]  = 4;   // LITERAL
+    doc["assets"]   = nlohmann::json::array();
+    doc["entities"] = nlohmann::json::array({ e0 });
+    std::ofstream(file, std::ios::binary) << doc.dump();
+
+    std::string err;
+    const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+    REQUIRE(read.has_value());
+    CHECK(err.empty());
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry fresh{components};
+    Arcane::RegisterSceneComponents(fresh);
+    REQUIRE(Arcane::Scene::ApplySceneDocument(*read, fresh));
+    const Arcane::SceneRoot* sr = fresh.GetResource<Arcane::SceneRoot>();
+    REQUIRE(sr != nullptr);
+    CHECK(fresh.GetComponent<Arcane::Transform>(sr->entity)->position.x == 7.0f);
 }
 
 TEST_CASE("the scene loader never reads the assets manifest", "[scene][json]")

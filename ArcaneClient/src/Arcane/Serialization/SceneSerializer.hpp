@@ -74,7 +74,13 @@ namespace Arcane::Scene
     // It adds the top-level "assets" reference manifest documented above and
     // changes nothing a v3 file already said, so unlike every bump before it,
     // v4 does NOT invalidate its predecessor -- see kSceneJsonVersionMin.
-    inline constexpr int kSceneJsonVersion = 4;
+    //
+    // v5 (2026-09-11, 2D physics wiring Plan 1, engine ABI 28, spec s7.2) is
+    // ADDITIVE like v4: Collider2D::fixtures now writes as a JSON array a v4
+    // engine would refuse on read (its bridge had no container branch), so
+    // the number says so; nothing a v4 file already said changed, and v4 (and
+    // v3) keep loading -- kSceneJsonVersionMin stays 3.
+    inline constexpr int kSceneJsonVersion = 5;
 
     // The OLDEST schema this build still loads. v4's addition is additive, so a
     // v3 file is read exactly as it always was (the loader simply never looks
