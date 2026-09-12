@@ -58,6 +58,27 @@ namespace
         return e;
     }
 
+    // A FURTHER Aabb body into a registry BuildAabbBody already set up -- same
+    // components, no re-registration and no world reset, so multi-body cases
+    // can share one world.
+    Astra::Entity AddAabbBody(Astra::Registry& reg, glm::vec2 pos, glm::vec2 half,
+                              Phys::BodyType type)
+    {
+        Astra::Entity e = reg.CreateEntity();
+        Transform lt; lt.position = glm::vec3(pos, 0.0f);
+        reg.AddComponent<Transform>(e, lt);
+        reg.AddComponent<WorldTransform>(e, WorldTransform{});
+        RigidBody2D rb; rb.type = type;
+        if (type == Phys::BodyType::Dynamic) rb.fixedRotation = true;
+        reg.AddComponent<RigidBody2D>(e, rb);
+        Collider2D col; Fixture fx;
+        fx.kind = Phys::ShapeKind::Aabb; fx.halfW = half.x; fx.halfH = half.y;
+        col.fixtures.push_back(fx);
+        reg.AddComponent<Collider2D>(e, col);
+        reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
+        return e;
+    }
+
     // World-AABB half-extents of fixture[0] (single-fixture body at angle 0 -> the
     // world AABB equals the fixture box, so half-extents == the scaled half-dims).
     glm::vec2 Fixture0HalfExtents(Astra::Registry& reg)
@@ -525,6 +546,53 @@ TEST_CASE("a paused RigidBody2D type edit re-mints; removing Collider2D destroys
     paused(reg);
     CHECK(res->entityToBody.count(e) == 0);
     CHECK_FALSE(res->world->IsValid(second));
+}
+
+TEST_CASE("a fixture-less entity's PhysicsBodyRef is cleared, never left to alias another body after a world re-mint",
+          "[transform-sync]")
+{
+    // 2026-09-12 review finding 1. PASS 1's erase and PASS 2's empty-fixtures
+    // return used to leave ref.handle at its old {index, gen}. A FRESH world
+    // (gravity re-mint, Play->Stop restore, structural undo) hands out
+    // {index, gen} from the same sequence again, so whichever entity mints
+    // into that slot next holds the SAME handle -- and PASS 3.5 / PASS 4
+    // trust world.IsValid(handle) alone, so an author move of the
+    // fixture-less entity teleported SOMEONE ELSE's body.
+    Astra::Registry reg;
+    Astra::Entity a = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    Astra::Entity b = AddAabbBody  (reg, {2,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    Astra::Entity c = AddAabbBody  (reg, {4,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    auto* res = reg.GetResource<PhysicsResource>();
+    REQUIRE(res->entityToBody.size() == 3);
+
+    // The Inspector removes B's only fixture (the Vector editor's [-]): the
+    // paused PASS 1 destroys B's body on Changed<Collider2D>.
+    reg.GetComponent<Collider2D>(b)->fixtures.clear();
+    paused(reg);
+    CHECK(res->entityToBody.count(b) == 0);
+    CHECK(reg.GetComponent<PhysicsBodyRef>(b)->handle == Phys::kInvalidBody);   // cleared, not dangling
+
+    // Any world replacement. A and C re-mint into the fresh world; B has
+    // nothing to mint and must not keep a handle the fresh world will reuse.
+    Phys::WorldDef wd; wd.gravityX = 0.0f; wd.gravityY = 0.0f;
+    reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
+    res = reg.GetResource<PhysicsResource>();
+    paused(reg);
+    REQUIRE(res->entityToBody.count(a) == 1);
+    REQUIRE(res->entityToBody.count(c) == 1);
+    CHECK(res->entityToBody.count(b) == 0);
+    CHECK(reg.GetComponent<PhysicsBodyRef>(b)->handle == Phys::kInvalidBody);
+    CHECK_FALSE(reg.GetComponent<PhysicsBodyRef>(b)->handle == reg.GetComponent<PhysicsBodyRef>(c)->handle);
+
+    // The consequence that made this a defect: moving B must not move C.
+    const Phys::Vec2 cBefore = res->world->Position(res->entityToBody.at(c));
+    reg.GetComponent<Transform>(b)->position.x = 9.0f;
+    paused(reg);
+    const Phys::Vec2 cAfter = res->world->Position(res->entityToBody.at(c));
+    CHECK(static_cast<float>(cAfter.x) == Approx(static_cast<float>(cBefore.x)));
+    CHECK(static_cast<float>(cAfter.y) == Approx(static_cast<float>(cBefore.y)));
 }
 
 TEST_CASE("a stepping pass never re-mints on its own velocity write-back", "[transform-sync]")

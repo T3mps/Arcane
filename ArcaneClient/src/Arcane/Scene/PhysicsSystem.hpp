@@ -324,6 +324,18 @@ namespace Arcane
                     if (world.IsValid(it->second))
                         world.RemoveBody(it->second);
                     entityToBody.erase(it);
+                    // Clear the ref too, never leave it at the dead {index, gen}:
+                    // a FRESH world (gravity re-mint, Play->Stop restore, a
+                    // structural undo) reissues handles from the same sequence,
+                    // so a stale one becomes SOME OTHER entity's live handle and
+                    // PASS 3.5 / PASS 4 -- which trust world.IsValid alone --
+                    // would then move that entity's body on this one's edits.
+                    // A dead entity has no component to clear (and nothing to
+                    // alias through); a live one without RigidBody2D/Collider2D
+                    // may have shed PhysicsBodyRef with them.
+                    if (!reg.IsValid(e)) continue;
+                    if (PhysicsBodyRef* ref = reg.GetComponent<PhysicsBodyRef>(e))
+                        ref->handle = Phys::kInvalidBody;
                 }
             }
 
@@ -363,9 +375,18 @@ namespace Arcane
                         return;
                     }
 
-                    // Skip entities with no fixtures (cannot build a body).
+                    // Skip entities with no fixtures (cannot build a body) --
+                    // and clear the ref on the way out, for the same reason
+                    // PASS 1's erase does: an entity that reaches here with a
+                    // handle holds one from a world that no longer tracks it
+                    // (the fresh-world path above, where entityToBody is
+                    // empty), and a fresh world will hand that same
+                    // {index, gen} to the next entity it mints.
                     if (col.fixtures.empty())
+                    {
+                        ref.handle = Phys::kInvalidBody;
                         return;
+                    }
 
                     // ---- PRIMARY FIXTURE (fixtures[0]) ----
                     // Build the BodyDef from RigidBody2D dynamics params + fixture[0].
