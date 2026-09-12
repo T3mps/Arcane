@@ -184,14 +184,25 @@ namespace Manifold2D::Physics
         ASTRA_REFLECT_ENUM_VALUE(BodyType, Dynamic)
     ASTRA_END_REFLECT_ENUM()
 
+    // The reflected set is EXACTLY the buildable set. Polygon is part of the
+    // Core type but Fixture carries no authored vertex array, so
+    // MakeScaledShape (PhysicsSystem.hpp) asserts on it -- and everything
+    // reflected here is one Inspector combo pick away (FieldKind::Enum, one
+    // level down inside the Collider2D fixture list since the Vector editor),
+    // with a paused pass re-minting the body on the resulting
+    // Changed<Collider2D>. Reflecting Polygon made that assert a Debug-editor
+    // abort on a menu selection (2026-09-12 review). It comes back with the
+    // verts field (or a PolygonCollider2D component) that makes it buildable;
+    // PhysicsSystemTest's "every reflected ShapeKind value is one
+    // MakeScaledShape can build" holds the line. A hand-edited scene naming
+    // "Polygon" now loads with that fixture's kind left at its default
+    // (Circle) -- the JSON reader's existing unknown-enum-name rule
+    // (ReflectionJson.hpp, EnumFromString -> nullopt -> no write) -- instead
+    // of asserting at mint.
     ASTRA_REFLECT_ENUM(ShapeKind)
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Circle)
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Capsule)
         ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Aabb)
-        // Polygon is part of the Core type's full set but Fixture carries no
-        // authored vertex array -- Polygon colliders are not buildable until a
-        // later task adds a verts field (or a separate PolygonCollider2D component).
-        ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Polygon)
     ASTRA_END_REFLECT_ENUM()
 } // namespace Manifold2D::Physics
 

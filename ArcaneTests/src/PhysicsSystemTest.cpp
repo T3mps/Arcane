@@ -31,9 +31,12 @@
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
 
+#include <Astra/Reflection/MetaRegistry.hpp>   // GetMeta<ShapeKind>() -> EnumInfo (Test 4b)
 #include <Astra/Registry/Registry.hpp>
 
 #include <memory>
+#include <string_view>
+#include <vector>
 
 using Catch::Approx;
 
@@ -295,6 +298,41 @@ TEST_CASE("PhysicsSystem: two identical runs yield bit-exact Transform positions
     CHECK(posA_dyn.y == posB_dyn.y);
     CHECK(posA_kin.x == posB_kin.x);
     CHECK(posA_kin.y == posB_kin.y);
+}
+
+// ---------------------------------------------------------------------------
+// TEST 4b -- The reflected ShapeKind offers only what MakeScaledShape builds
+// ---------------------------------------------------------------------------
+TEST_CASE("PhysicsSystem: every reflected ShapeKind value is one MakeScaledShape can build", "[physics]")
+{
+    // 2026-09-12 review finding 2. The Inspector's enum combo (FieldKind::Enum,
+    // one level down inside the Collider2D fixture list since the Vector
+    // editor) offers EVERY reflected value, and a paused pass re-mints the
+    // body on the resulting Changed<Collider2D> -- so a reflected value
+    // MakeScaledShape cannot build (Polygon: Fixture carries no vertex array;
+    // MakeScaledShape asserts on it) was a Debug-editor abort one menu click
+    // away. The reflected set is therefore exactly the buildable set; a
+    // Polygon comes back when Fixture can carry its verts.
+    const Astra::TypeMeta* meta = Astra::GetMeta<Manifold2D::Physics::ShapeKind>();
+    REQUIRE(meta != nullptr);
+    const Astra::EnumInfo* info = meta->GetEnumInfo();
+    REQUIRE(info != nullptr);
+
+    std::vector<std::string_view> names;
+    for (const Astra::EnumValue& v : info->values)
+        names.push_back(v.name);
+    CHECK(names == std::vector<std::string_view>{ "Circle", "Capsule", "Aabb" });
+
+    // And each of them builds -- the shape kind round-trips through the
+    // scaled build, no fallback, no assert.
+    for (const Astra::EnumValue& v : info->values)
+    {
+        Arcane::Fixture fx;
+        fx.kind = static_cast<Manifold2D::Physics::ShapeKind>(v.value);
+        const Manifold2D::Physics::Shape s = Arcane::MakeScaledShape(fx, glm::vec2(1.0f, 1.0f));
+        INFO("kind: " << v.name);
+        CHECK(s.kind == fx.kind);
+    }
 }
 
 // ---------------------------------------------------------------------------
