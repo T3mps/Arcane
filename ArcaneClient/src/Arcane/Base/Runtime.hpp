@@ -267,6 +267,18 @@ namespace Arcane
         void      InstallEngineSystems();
         void      EnsurePhysics();
         void      PhysicsEditPass();
+        // Drop the physics world (and the interpolation history) so the NEXT
+        // EnsurePhysics mints a fresh one from the authored components. The
+        // editor calls this on Play: the world the Edit passes minted and
+        // reconciled is authoring state (the paused reconcile zeroes a body's
+        // velocity on every author move, by design), and Play must start the
+        // way ArcaneRuntime boots -- bodies at their authored poses WITH their
+        // authored RigidBody2D::velocity, applied by PASS 2's mint. The same
+        // strip RestoreRegistry performs on Stop, so Play and Stop are
+        // symmetric. Lives here rather than in the editor because destroying
+        // PhysicsResource destroys the PhysicsWorld, and ArcaneEditor.exe does
+        // not link Manifold2D. Nothing to do when no world exists yet.
+        void      ResetPhysics();
         // Scene-root PhysicsSettings when present, else the project's physics
         // block, else PhysicsConfig's default (0, 9.81; +Y down).
         [[nodiscard]] glm::vec2 ResolvedGravity() const;

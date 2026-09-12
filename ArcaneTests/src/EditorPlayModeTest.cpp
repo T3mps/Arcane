@@ -312,3 +312,67 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
     CHECK(y == Catch::Approx(-1.0f));               // the authored pose
     CHECK(res->entityToBody.size() == 1);           // re-minted from it
 }
+
+TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored velocity survives an earlier drag",
+          "[editor][physics]")
+{
+    // 2026-09-12 review finding 3. Play used to only unpause, so the world the
+    // Edit passes had been minting and reconciling carried straight into Play.
+    // The paused reconcile (PASS 3.5) zeroes a body's velocity on any Transform
+    // divergence -- the right call for "don't fling on resume" -- so an author
+    // who set RigidBody2D.velocity and THEN dragged the entity got a body at
+    // rest in Play, while ArcaneRuntime (which mints fresh at boot and applies
+    // rb.velocity in PASS 2) moved it. Editor Play must equal the standalone
+    // host's boot: Play drops the Edit world, and the first Play frame's
+    // EnsurePhysics mints a fresh one from the authored components.
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::RegisterPhysicsComponents(reg);
+    const Astra::Entity root = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+    reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+    Arcane::PhysicsSettings zeroG; zeroG.gravity = glm::vec2(0.0f, 0.0f);   // only the authored velocity moves it
+    reg.AddComponent<Arcane::PhysicsSettings>(root, zeroG);
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    const Astra::Entity e = reg.CreateEntity();
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f, -1.0f, 0.0f);
+    reg.AddComponent<Arcane::Transform>(e, lt);
+    reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+    Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+    rb.velocity = glm::vec2(5.0f, 0.0f);                                     // the authored velocity
+    reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+    Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+    col.fixtures.push_back(fx);
+    reg.AddComponent<Arcane::Collider2D>(e, col);
+    reg.SetParent(e, root);
+
+    // Edit mode: mint (velocity applied to the body), THEN the author drags
+    // the entity -- the paused reconcile teleports the body and zeroes its
+    // velocity, exactly as designed.
+    runtime.EnsurePhysics();
+    runtime.PhysicsEditPass();
+    reg.GetComponent<Arcane::Transform>(e)->position.x = 1.0f;   // the drag, stamped by Mut
+    runtime.PhysicsEditPass();
+    {
+        const auto* res = reg.GetResource<Arcane::PhysicsResource>();
+        REQUIRE(res != nullptr);
+        const auto v = res->world->Velocity(res->entityToBody.at(e));
+        REQUIRE(static_cast<float>(v.x) == Catch::Approx(0.0f));   // the Edit world's body is at rest
+    }
+    REQUIRE(reg.GetComponent<Arcane::RigidBody2D>(e)->velocity.x == Catch::Approx(5.0f));   // the AUTHORED value stands
+
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime));
+    // The pin on the mechanism, symmetric with Stop's: the Edit world is gone
+    // and the first Play frame's Ensure mints a fresh one.
+    CHECK(runtime.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    for (int i = 0; i < 30; ++i) { runtime.EnsurePhysics(); runtime.Loop().Advance(1.0 / 60.0); }
+
+    // The pin on the behaviour: half a second at 5 m/s from x = 1 -- the
+    // authored velocity was applied, as ArcaneRuntime would have.
+    const float x = runtime.Registry().GetComponent<Arcane::Transform>(e)->position.x;
+    CHECK(x > 1.5f);
+
+    REQUIRE(play.Stop(runtime));
+}

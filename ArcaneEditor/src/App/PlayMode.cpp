@@ -33,6 +33,19 @@ namespace Arcane::Editor
             m_usedPlugin = false;
         }
 
+        // Play starts from the AUTHORED state, the way ArcaneRuntime boots --
+        // not from the world the Edit passes have been minting and reconciling.
+        // That world is authoring state: the paused reconcile zeroes a body's
+        // velocity on every author move (by design, "don't fling on resume"),
+        // so carrying it into Play lost an authored RigidBody2D::velocity
+        // whenever the entity had been dragged after the velocity was set --
+        // editor Play and the standalone host disagreed. Dropping the world
+        // here makes the first Play frame's EnsurePhysics mint a fresh one,
+        // whose PASS 2 applies every authored velocity (2026-09-12 review).
+        // AFTER the snapshot: what Stop restores is the registry, and the world
+        // is never part of it either way (RestoreRegistry strips the same two).
+        runtime.ResetPhysics();
+
         runtime.Loop().SetPaused(false);
         m_mode = EditorMode::Play;
         return true;

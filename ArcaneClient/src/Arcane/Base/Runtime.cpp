@@ -463,6 +463,17 @@ namespace Arcane
         PhysicsSystem{ fixedDt, /*stepWorld*/ false }(*m_impl->registry);
     }
 
+    void Runtime::ResetPhysics()
+    {
+        // The two-resource strip RestoreRegistry performs, on the LIVE registry:
+        // the next EnsurePhysics sees neither and mints both. PASS 2 then
+        // re-mints every body from its components -- and PASS 1/2 clear any
+        // PhysicsBodyRef the fresh world does not track, so nothing here can
+        // leave a handle behind for the fresh world to reissue to someone else.
+        m_impl->registry->RemoveResource<PhysicsResource>();
+        m_impl->registry->RemoveResource<PhysicsInterpBuffer>();
+    }
+
     void Runtime::ResetAudio() noexcept
     {
         m_impl->ResetAudio();
