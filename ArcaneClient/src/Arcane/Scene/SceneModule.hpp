@@ -31,6 +31,7 @@ namespace Arcane
         // registered stable.
         creg.RegisterComponent<Camera>();
         creg.RegisterComponent<MeshRenderer>();
+        creg.RegisterComponent<PhysicsSettings>();   // 2026-09-11 physics wiring -- APPENDED (see the note above)
     }
 
     inline void RegisterSceneComponents(Astra::Registry& reg)

@@ -606,3 +606,28 @@ TEST_CASE("scene round-trips Collider2D fixtures through JSON", "[json][scene][p
     REQUIRE(rb != nullptr);
     CHECK(rb->type == Manifold2D::Physics::BodyType::Dynamic);
 }
+
+TEST_CASE("PhysicsSettings on the scene root round-trips through JSON", "[json][scene][physics]")
+{
+    nlohmann::json doc;
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg(components);
+        Arcane::RegisterSceneComponents(reg);
+        Astra::Entity root = reg.CreateEntity();
+        reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+        Arcane::PhysicsSettings ps; ps.gravity = glm::vec2(0.0f, 3.0f);
+        reg.AddComponent<Arcane::PhysicsSettings>(root, ps);
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+        doc = Arcane::Scene::SaveJson(reg);
+    }
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    REQUIRE(Arcane::Scene::LoadJson(reg, doc));
+    const Arcane::SceneRoot* sr = reg.GetResource<Arcane::SceneRoot>();
+    REQUIRE(sr != nullptr);
+    const Arcane::PhysicsSettings* ps = reg.GetComponent<Arcane::PhysicsSettings>(sr->entity);
+    REQUIRE(ps != nullptr);
+    CHECK(ps->gravity.y == Approx(3.0f));
+}

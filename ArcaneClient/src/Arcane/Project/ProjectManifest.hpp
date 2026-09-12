@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include <glm/vec2.hpp>
 #include <Json.hpp>   // nlohmann::json (the vendored single header)
 
 namespace Arcane
@@ -48,6 +49,15 @@ namespace Arcane
             float       minDurationSeconds = 0.0f;    // avoids an ~80ms splash flash
         };
 
+        // The project-wide physics defaults (2026-09-11, spec s5). A scene
+        // overrides them with a PhysicsSettings component on its root. Every
+        // field has a default so an absent "physics" block behaves exactly
+        // like this struct -- FromJson's lenient parse, as for splash.
+        struct PhysicsConfig
+        {
+            glm::vec2 gravity{0.0f, 9.81f};   // m/s^2; +Y is down
+        };
+
         int                    formatVersion = 0;
         std::string            name;
         std::string            description;
@@ -68,6 +78,10 @@ namespace Arcane
         // manifest has no "splash" block at all (see SplashConfig's own
         // per-field comments for what those defaults are and why).
         SplashConfig           splash;
+
+        // The project-wide physics defaults. Defaults apply whenever the
+        // manifest has no "physics" block (see PhysicsConfig above).
+        PhysicsConfig          physics;
 
         // Parse + validate a JSON document. nullopt on schema violation.
         static ARCANE_API std::optional<ProjectManifest> FromJson(const nlohmann::json& doc);

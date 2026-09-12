@@ -173,6 +173,18 @@ namespace Arcane
         Guid materialOverride{};
     };
 
+    // PhysicsSettings (2026-09-11, 2D physics wiring, spec s5): the PER-SCENE
+    // override of the project's physics block. Read by Runtime::EnsurePhysics
+    // from the SCENE-ROOT entity only (SceneRoot resource) -- beside Camera
+    // and PostProcess, where scene-level facts already live; on any other
+    // entity it is ignored (pinned by RuntimeTest). Presence IS the override:
+    // add it to change gravity for this scene, remove it to fall back to the
+    // project. +Y is DOWN (screen-space world, Manifold2D's y-down default).
+    struct PhysicsSettings
+    {
+        glm::vec2 gravity{0.0f, 9.81f};   // m/s^2; +Y down
+    };
+
     // The scene's post-processing stack (post arc): the Guid of a SAVED
     // fullscreen .arcmat whose pass DAG runs between the linear canvas and the
     // tonemap (the material IS the stack; kSceneInput wires read the scene
@@ -344,6 +356,11 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(MeshRenderer, materialOverride)
             ASTRA_REFLECT_ATTR(Category, "Appearance")
             ASTRA_REFLECT_ATTR(Tooltip, "Overrides the mesh asset's own material for this entity only. Nil uses the mesh's default.")
+    ASTRA_END_REFLECT_TYPE()
+
+    ASTRA_REFLECT_TYPE(PhysicsSettings)
+        ASTRA_REFLECT_FIELD(PhysicsSettings, gravity)
+            ASTRA_REFLECT_ATTR(Tooltip, "Gravity for THIS scene (m/s^2, +Y is down). Meaningful on the scene root only; overrides the project's physics block while present.")
     ASTRA_END_REFLECT_TYPE()
 
     // One field, so no Category -- see Transform above.

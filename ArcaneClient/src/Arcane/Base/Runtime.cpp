@@ -171,8 +171,12 @@ namespace Arcane
             // EXACTLY the order RegisterSceneComponents + RegisterPhysicsComponents
             // register in (SceneModule.hpp / PhysicsComponents.hpp): ids are a
             // first-touch counter, so same order == same numbering as before.
+            // 2026-09-11: PhysicsSettings appended to the scene roster (after
+            // MeshRenderer), so the three physics ids shifted up by one -- in-
+            // process only, as ever.
             engineModule->Register<Transform, WorldTransform, SpriteRenderer,
                                    PostProcess, Identity, Hidden, Camera, MeshRenderer,
+                                   PhysicsSettings,
                                    RigidBody2D, Collider2D, PhysicsBodyRef>();
 
             Astra::Registry::Config cfg;

@@ -93,6 +93,21 @@ namespace Arcane
             m.splash = cfg;
         }
 
+        // physics (2026-09-11): optional block; gravity is an array field with
+        // the same lenient rule as splash.backgroundColor -- present but
+        // malformed leaves the default, and BOTH elements must be numbers.
+        if (doc.contains("physics") && doc["physics"].is_object())
+        {
+            const auto& ph = doc["physics"];
+            ProjectManifest::PhysicsConfig cfg;   // defaults
+            if (ph.contains("gravity") && ph["gravity"].is_array() && ph["gravity"].size() >= 2
+                && ph["gravity"][0].is_number() && ph["gravity"][1].is_number())
+            {
+                cfg.gravity = glm::vec2(ph["gravity"][0].get<float>(), ph["gravity"][1].get<float>());
+            }
+            m.physics = cfg;
+        }
+
         return m;
     }
     catch (const nlohmann::json::exception&)

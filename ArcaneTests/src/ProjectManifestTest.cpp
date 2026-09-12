@@ -1,6 +1,7 @@
 // Arcane::ProjectManifest: parse + validate a .arcproj JSON document. CPU-only.
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectManifest.hpp>
@@ -129,6 +130,36 @@ TEST_CASE("a splash block with a wrong-typed field fails the whole manifest, not
         "formatVersion": 1, "name": "T", "engine": { "abi": 9 },
         "splash": { "showProgress": "yes" }
     })")).has_value());
+}
+
+TEST_CASE("a manifest physics block sets gravity; absent keeps the default", "[project]")
+{
+    const auto with = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 28 },
+        "physics": { "gravity": [0.0, 12.5] }
+    })"));
+    REQUIRE(with.has_value());
+    CHECK(with->physics.gravity.x == 0.0f);
+    CHECK(with->physics.gravity.y == Catch::Approx(12.5f));
+
+    const auto without = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 28 }
+    })"));
+    REQUIRE(without.has_value());
+    CHECK(without->physics.gravity.y == Catch::Approx(9.81f));
+}
+
+TEST_CASE("a malformed physics gravity leaves the default rather than failing the manifest", "[project]")
+{
+    // Same lenient spirit as splash.backgroundColor: present-but-malformed
+    // (wrong type, too short, a non-number element) keeps the default.
+    for (const char* body : { R"("gravity": 5)", R"("gravity": [1.0])", R"("gravity": [1.0, "x"])" })
+    {
+        const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(
+            std::string(R"({"formatVersion": 1, "name": "T", "engine": { "abi": 28 }, "physics": {)") + body + "}}"));
+        REQUIRE(m.has_value());
+        CHECK(m->physics.gravity.y == Catch::Approx(9.81f));
+    }
 }
 
 TEST_CASE("SetBootScene rewrites only that field, preserving key order", "[project]")

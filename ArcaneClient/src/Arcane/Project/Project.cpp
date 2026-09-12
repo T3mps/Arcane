@@ -385,6 +385,7 @@ namespace Arcane
         manifestJson["gameModule"]    = "";
         manifestJson["plugins"]       = nlohmann::json::array();
         manifestJson["bootScene"]     = "";
+        manifestJson["physics"]       = { { "gravity", { 0.0, 9.81 } } };   // stamped at birth with the engine default (+Y down)
         // Stamped at birth so the Open() below never needs its self-heal write.
         manifestJson["guid"]          = Guid::Generate().ToString();
 
