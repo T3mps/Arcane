@@ -96,16 +96,27 @@ namespace Arcane
         // RestoreRegistry / ResetRegistry swap the live registry and must keep this
         // SAME RunLoop object, so a cached RunLoop* (e.g. a plugin that stored
         // Runtime::Loop() at init, or a host toolbar) does not dangle across a restore.
-        // Resets the transient accumulator/alpha + sim-time state to a fresh loop's
-        // defaults -- the same observable state recreating the loop produced -- so the
-        // ONLY behavior change is that the object identity is preserved. The kept
+        // Resets the state that belonged to the OLD registry's run -- the step
+        // backlog (accumulator), the render alpha derived from it, a pending
+        // single-step, the time scale -- to a fresh loop's defaults. The kept
         // schedulers + Config are unchanged (a restore keeps both).
+        //
+        // `paused` is deliberately NOT reset: it is the HOST'S MODE (the editor's
+        // Edit vs Play), not per-registry sim state, and a registry swap must never
+        // silently flip the host into Play. It used to reset here ("a fresh loop's
+        // defaults", running included), which the editor's Stop masked by
+        // re-pausing right after its RestoreRegistry -- and which its scene-open
+        // (ResetRegistry, nothing after) and its hot-reload paths did not, so
+        // opening a physics scene in Edit mode unpaused the loop, fixedUpdate's
+        // PhysicsSystem stepped it every frame, and the bodies fell before Play was
+        // pressed and never came back (Play snapshotted the fallen poses). Pinned
+        // by RuntimeTest ("keeps the RunLoop object stable") and
+        // EditorPlayModeTest ("opening a scene in Edit mode does not simulate it").
         void Rebind(Astra::Registry& registry) noexcept
         {
             m_registry    = &registry;
             m_accumulator = 0.0;
             m_alpha       = 0.0;
-            m_paused      = false;
             m_timeScale   = 1.0;
             m_singleStep  = false;
         }

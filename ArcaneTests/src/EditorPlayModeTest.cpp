@@ -376,3 +376,99 @@ TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored 
 
     REQUIRE(play.Stop(runtime));
 }
+
+namespace
+{
+    // The physics demo's shape, built into whatever registry the Runtime holds
+    // NOW: a scene root and one dynamic circle a metre above the origin.
+    Astra::Entity BuildFallingBody(Arcane::Runtime& runtime)
+    {
+        Astra::Registry& reg = runtime.Registry();
+        Arcane::RegisterSceneComponents(reg);
+        Arcane::RegisterPhysicsComponents(reg);
+        const Astra::Entity root = reg.CreateEntity();
+        reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+        reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+        const Astra::Entity e = reg.CreateEntity();
+        Arcane::Transform lt; lt.position = glm::vec3(0.0f, -1.0f, 0.0f);
+        reg.AddComponent<Arcane::Transform>(e, lt);
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+        Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
+        reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+        Arcane::Collider2D col; Arcane::Fixture fx; fx.kind = Manifold2D::Physics::ShapeKind::Circle; fx.radius = 0.5f;
+        col.fixtures.push_back(fx);
+        reg.AddComponent<Arcane::Collider2D>(e, col);
+        reg.SetParent(e, root);
+        return e;
+    }
+
+    // One editor frame's sim advance, exactly as EditorApp::AdvanceSim makes
+    // it: the per-frame Ensure, then the loop with the plugin callbacks (none
+    // here). Whether fixedUpdate -- and so PhysicsSystem -- runs is the loop's
+    // paused flag's decision alone, which is the whole point of the case below.
+    void EditorFrame(Arcane::Runtime& runtime)
+    {
+        runtime.EnsurePhysics();
+        runtime.Loop().Advance(1.0 / 60.0, [](double) {}, [](double, double) {});
+    }
+}
+
+TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their authored pose until Play, and Stop returns them to it",
+          "[editor][physics]")
+{
+    // 2026-09-12 desk finding: open physics.arcscene from the Asset Browser
+    // and the bodies fell at once, in Edit mode, and never came back. The
+    // editor opens a scene through Runtime::ResetRegistry (DoOpenScene), and
+    // ResetRegistry rebinds the RunLoop, which used to reset `paused` to a
+    // fresh loop's default -- RUNNING. The next AdvanceSim ran fixedUpdate's
+    // PhysicsSystem(stepWorld=true) in "Edit" mode, so the bodies fell; Play
+    // then snapshotted the fallen poses and Stop restored them. The boot scene
+    // never showed it because boot pauses AFTER loading it.
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Editor::PlaySession play;
+
+    // The editor's boot: a scene loaded, then Edit mode (paused) -- the state
+    // the golden lanes see, which is why they never caught this.
+    BuildFallingBody(runtime);
+    runtime.Loop().SetPaused(true);
+    REQUIRE(runtime.Loop().IsPaused());
+
+    // The user opens ANOTHER scene: DoOpenScene's ResetRegistry, then the
+    // scene's content. Edit mode must survive the swap.
+    runtime.ResetRegistry();
+    const Astra::Entity e = BuildFallingBody(runtime);
+    CHECK(runtime.Loop().IsPaused());
+
+    // Thirty Edit-mode frames: EnsurePhysics mints the world (the Edit pass
+    // would mint the body; AdvanceSim's loop must not step it).
+    for (int i = 0; i < 30; ++i) EditorFrame(runtime);
+    const float yEdit = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(e)->position.y;
+    CHECK(yEdit == Catch::Approx(-1.0f));           // it did NOT fall in Edit mode
+
+    // Play: NOW it falls.
+    REQUIRE(play.Play(runtime));
+    for (int i = 0; i < 30; ++i) EditorFrame(runtime);
+    const float yPlay = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(e)->position.y;
+    CHECK(yPlay > -0.5f);
+
+    // Stop: back to the AUTHORED pose, not the fallen one -- and paused.
+    REQUIRE(play.Stop(runtime));
+    CHECK(runtime.Loop().IsPaused());
+    float yStop = 0.0f; int dynamic = 0;
+    Astra::Registry& restored = runtime.Registry();
+    for (Astra::Entity le : restored.GetEntityManager())
+        if (const auto* rbp = std::as_const(restored).GetComponent<Arcane::RigidBody2D>(le))
+            if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+            { ++dynamic; yStop = std::as_const(restored).GetComponent<Arcane::Transform>(le)->position.y; }
+    REQUIRE(dynamic == 1);
+    CHECK(yStop == Catch::Approx(-1.0f));
+    // And it STAYS put across further Edit-mode frames after the restore.
+    for (int i = 0; i < 30; ++i) EditorFrame(runtime);
+    yStop = 0.0f;
+    for (Astra::Entity le : runtime.Registry().GetEntityManager())
+        if (const auto* rbp = std::as_const(runtime.Registry()).GetComponent<Arcane::RigidBody2D>(le))
+            if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
+                yStop = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(le)->position.y;
+    CHECK(yStop == Catch::Approx(-1.0f));
+}

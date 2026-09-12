@@ -118,11 +118,21 @@ TEST_CASE("Runtime RestoreRegistry keeps the RunLoop object stable", "[runtime]"
 
     Arcane::RunLoop* after = &rt.Loop();
     CHECK(before == after);              // SAME object -> a cached RunLoop* stays valid
-    CHECK_FALSE(after->IsPaused());      // rebind resets transient sim-time state to defaults
+    // Paused SURVIVES the rebind. It is the HOST'S MODE (Edit vs Play), not
+    // per-registry sim state: the accumulator, alpha and a pending single-step
+    // belong to the old registry's step backlog and reset, but a registry swap
+    // must never silently flip the host into Play. This line used to pin the
+    // opposite ("rebind resets to a fresh loop's defaults", paused included),
+    // which the editor's Stop masked by re-pausing after its restore -- and
+    // which its scene-open (ResetRegistry, no re-pause) did not, so opening a
+    // physics scene in Edit mode ran fixedUpdate's PhysicsSystem and the
+    // bodies fell before Play was ever pressed (2026-09-12 desk finding).
+    CHECK(after->IsPaused());
 
-    // ResetRegistry holds the same invariant.
+    // ResetRegistry holds both invariants.
     rt.ResetRegistry();
     CHECK(&rt.Loop() == before);
+    CHECK(rt.Loop().IsPaused());
 }
 
 TEST_CASE("Runtime ClearSystems empties the module's systems and re-installs the engine's", "[runtime]")
