@@ -1,6 +1,6 @@
 // Epic 04.2 render interpolation: pure math (Lerp / shortest-arc AngleLerp for
-// the physics-side 2D InterpPose, LerpPose's SLERP for the 3D component pose),
-// PhysicsSystem previous-pose capture, and the two render consumers
+// the physics-side 2D InterpPose, PhysicsInterpBuffer's slot poses for the
+// sprite path), PhysicsSystem previous-pose capture, and the two render consumers
 // (DrawPhysicsDebug overlay + RenderSubmissionSystem sprites) driven against a
 // recording mock Batcher2D. CPU-only (tag [interp], never [gpu]).
 

@@ -98,7 +98,6 @@ namespace
 TEST_CASE("IsHiddenInInspector covers the derived caches and the eye's marker", "[editor][outliner]")
 {
     CHECK(IsHiddenInInspector("Arcane::WorldTransform"));
-    CHECK(IsHiddenInInspector("Arcane::PreviousTransform"));
     CHECK(IsHiddenInInspector("Arcane::PhysicsBodyRef"));
     // 2026-07-29 (user call): Hidden is a MECHANISM marker -- the Outliner
     // eye is its entire interface, so it surfaces nowhere else. Riding the
@@ -121,7 +120,6 @@ TEST_CASE("IsHiddenInInspector covers the derived caches and the eye's marker", 
 TEST_CASE("IsStructureLocked covers the derived types plus Identity", "[editor][outliner]")
 {
     CHECK(IsStructureLocked("Arcane::WorldTransform"));
-    CHECK(IsStructureLocked("Arcane::PreviousTransform"));
     CHECK(IsStructureLocked("Arcane::PhysicsBodyRef"));
     // Identity joined the list in the 2026-07-26 review fix: Edit::AddComponent
     // default-constructs, so a generic add stamped a NIL Guid on every selected
@@ -151,7 +149,6 @@ TEST_CASE("BuildComponentCatalog excludes internal types and sorts by name", "[e
     REQUIRE_FALSE(all.empty());
 
     CHECK(Find(all, "Arcane::WorldTransform") == nullptr);
-    CHECK(Find(all, "Arcane::PreviousTransform") == nullptr);
     CHECK(Find(all, "Arcane::PhysicsBodyRef") == nullptr);
     CHECK(Find(all, "Arcane::Transform") != nullptr);
     CHECK(Find(all, "Arcane::SpriteRenderer") != nullptr);
@@ -319,7 +316,6 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
 
     // The hide-list still applies to the engine roster.
     CHECK(Find(cat, "Arcane::WorldTransform") == nullptr);
-    CHECK(Find(cat, "Arcane::PreviousTransform") == nullptr);
     CHECK(Find(cat, "Arcane::PhysicsBodyRef") == nullptr);
     CHECK(Find(cat, "Arcane::Identity") == nullptr);
 

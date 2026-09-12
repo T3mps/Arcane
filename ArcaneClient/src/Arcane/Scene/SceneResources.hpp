@@ -29,9 +29,9 @@ namespace Arcane
     //
     // These two serve the PHYSICS-side InterpPose below, which stays a 2D pose
     // (glm::vec2 + a scalar angle) because Manifold2D is a 2D solver. The
-    // COMPONENT-side pose (Arcane::PreviousTransform) went 3D in Task 3 (F1)
-    // and blends through Arcane::LerpPose (Components.hpp), whose rotation half
-    // is glm::slerp -- the same shortest-arc guarantee, one dimension up.
+    // sprite path (RenderSubmissionSystem) blends through these same two
+    // helpers since the Astra adoption (2026-09-11), so overlay and sprite
+    // agree to the bit.
     [[nodiscard]] inline float Lerp(float a, float b, float t) noexcept
     {
         return a + (b - a) * t;
@@ -71,9 +71,10 @@ namespace Arcane
 
     // Per-body previous-pose buffer, indexed by PhysicsWorld body SLOT index (the
     // same space DrawPhysicsDebug iterates). Populated by PhysicsSystem before each
-    // world.Step(); read by DrawPhysicsDebug. Transient runtime state (Registry::Save
-    // excludes resources; the no-op Serialize satisfies Astra's HasSerializeMethod so
-    // the vector member does not hit the trivially-copyable path).
+    // world.Step(); read by DrawPhysicsDebug and RenderSubmissionSystem. Transient
+    // runtime state (Registry::Save excludes resources; the no-op Serialize satisfies
+    // Astra's HasSerializeMethod so the vector member does not hit the
+    // trivially-copyable path).
     struct PhysicsInterpBuffer
     {
         std::vector<InterpPose> prev;

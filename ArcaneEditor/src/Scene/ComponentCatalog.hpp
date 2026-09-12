@@ -28,7 +28,6 @@ namespace Arcane::Editor
     // per-frame caches, plus the eye's marker:
     //   Arcane::WorldTransform    -- recomputed by TransformPropagationSystem
     //                                every frame; an edit would be stomped.
-    //   Arcane::PreviousTransform -- the physics-capture interpolation pose.
     //   Arcane::PhysicsBodyRef    -- a live BodyHandle PhysicsSystem owns and
     //                                re-establishes; hand-adding one installs
     //                                a dangling handle.

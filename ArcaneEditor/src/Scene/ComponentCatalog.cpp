@@ -47,7 +47,6 @@ namespace Arcane::Editor
         // entity is implementation leakage. Unity keeps its scene-visibility
         // state in the Hierarchy for the same reason.
         return typeName == "Arcane::WorldTransform"
-            || typeName == "Arcane::PreviousTransform"
             || typeName == "Arcane::PhysicsBodyRef"
             || typeName == "Arcane::Hidden";
     }

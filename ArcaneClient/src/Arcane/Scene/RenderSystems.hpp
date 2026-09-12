@@ -35,7 +35,7 @@ namespace Arcane
 {
     // Reads<> is honest now: the view below is const (Astra adoption 2026-09-11).
     struct RenderSubmissionSystem
-        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, PreviousTransform, Hidden>>
+        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, Hidden>>
     {
         void operator()(Astra::Registry& reg)
         {
@@ -75,7 +75,7 @@ namespace Arcane
                 // to the current WORLD pose by alpha -- Lerp/AngleLerp, the debug
                 // overlay's own helpers, so sprite and overlay agree to the bit.
                 // World-slot poses are world poses, MORE correct than the retired
-                // PreviousTransform path's local-as-world approximation. ANY miss --
+                // per-entity local-pose component's local-as-world approximation. ANY miss --
                 // no buffer, not yet captured, no entry for this entity, slot past
                 // the buffer, or a recycled slot (generation mismatch) -- is the
                 // unchanged snap-to-step.

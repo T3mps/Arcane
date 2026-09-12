@@ -11,7 +11,7 @@
 #include <Astra/Reflection/Reflection.hpp>
 
 #include <glm/glm.hpp>
-#include <glm/gtc/quaternion.hpp>          // quat, mat4_cast, slerp
+#include <glm/gtc/quaternion.hpp>          // quat, mat4_cast
 
 #include <cmath>
 #include <cstdint>
@@ -22,9 +22,10 @@ namespace Arcane
     // Task 3 (F1): the transform spine is 3D. position/scale are vec3 and
     // rotation is a QUATERNION -- not Euler angles, which have no canonical
     // order and gimbal-lock, and not a matrix, which cannot be interpolated on
-    // the shortest arc (see PreviousTransform below). Storage is ALWAYS
-    // radians-equivalent (glm::quat has no unit of its own; nothing here
-    // changed). The editor still AUTHORS it as EULER ANGLES: the Inspector's
+    // the shortest arc (see the render interpolation note in
+    // RenderSystems.hpp). Storage is ALWAYS radians-equivalent (glm::quat has
+    // no unit of its own; nothing here changed). The editor still AUTHORS it
+    // as EULER ANGLES: the Inspector's
     // FieldKind::Quat draws a three-axis Euler view over the quaternion and
     // honours the AngleFormat attribute on the reflect row (see
     // InspectorFields.cpp). Directive (2026-08-22): radians internally,
@@ -106,45 +107,6 @@ namespace Arcane
     [[nodiscard]] inline glm::quat RotationAboutZ(float radians) noexcept
     {
         return glm::angleAxis(radians, glm::vec3(0.0f, 0.0f, 1.0f));
-    }
-
-    // PreviousTransform (Epic 04.2): an entity's LOCAL pose at the previous fixed
-    // step, captured by PhysicsSystem write-back before it overwrites Transform.
-    // RenderSubmissionSystem draws at lerp(previous -> current, alpha) for smooth
-    // slow-mo. Decomposed (position + rotation) so rotation interpolates on the
-    // shortest arc, NOT by lerping matrix components. Purely derived render state:
-    // an entity opts into interpolation by carrying it; absent -> the sprite snaps
-    // to the latest step (unchanged).
-    struct PreviousTransform
-    {
-        glm::vec3 position{0.0f, 0.0f, 0.0f};
-        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
-    };
-
-    // The render-interpolation blend: prev -> cur at alpha. Rotation is SLERP,
-    // which is the 3D expression of the shortest-arc contract above -- glm::slerp
-    // negates one input when their dot is negative, so a 170 deg -> -170 deg step
-    // takes the +20 deg arc through 180 rather than unwinding -340 deg through 0,
-    // exactly as the retired float path's AngleLerp did. A component-wise
-    // glm::mix of the two quaternions would take the wrong arc (pinned in
-    // TransformSpineTest.cpp), and lerping the two POSE MATRICES would shear
-    // through the middle of the turn instead of rotating.
-    //
-    // A free function rather than a method: it is a pure blend of two poses, and
-    // the ONE consumer (RenderSubmissionSystem) blends a PreviousTransform
-    // against a world pose it just decomposed, not against another component.
-    //
-    // The position half is spelled a + (b - a) * t, NOT glm::mix (which is
-    // a * (1 - t) + b * t): that is the exact expression Arcane::Lerp
-    // (SceneResources.hpp) used here before, and the two differ in the last ulp.
-    // Keeping the arithmetic identical is what makes a planar sprite land on the
-    // same sub-pixel it did before the widening.
-    [[nodiscard]] inline PreviousTransform LerpPose(const PreviousTransform& prev,
-                                                    const PreviousTransform& cur,
-                                                    float alpha) noexcept
-    {
-        return PreviousTransform{ prev.position + (cur.position - prev.position) * alpha,
-                                  glm::slerp(prev.rotation, cur.rotation, alpha) };
     }
 
     // The primitive a SpriteRenderer draws. Lets the ONE canonical 2D submission
@@ -333,16 +295,6 @@ namespace Arcane
     ASTRA_REFLECT_TYPE(WorldTransform)
         ASTRA_REFLECT_FIELD(WorldTransform, matrix)
             ASTRA_REFLECT_ATTR(Serializable, false)
-            ASTRA_REFLECT_ATTR(Hidden)
-    ASTRA_END_REFLECT_TYPE()
-
-    ASTRA_REFLECT_TYPE(PreviousTransform)
-        ASTRA_REFLECT_FIELD(PreviousTransform, position)
-            ASTRA_REFLECT_ATTR(Serializable, false)
-            ASTRA_REFLECT_ATTR(Hidden)
-        ASTRA_REFLECT_FIELD(PreviousTransform, rotation)
-            ASTRA_REFLECT_ATTR(Serializable, false)
-            ASTRA_REFLECT_ATTR(AngleFormat, Astra::AngleFormat::Unit::Radians)
             ASTRA_REFLECT_ATTR(Hidden)
     ASTRA_END_REFLECT_TYPE()
 

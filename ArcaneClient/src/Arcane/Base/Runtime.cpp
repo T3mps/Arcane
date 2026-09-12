@@ -161,14 +161,17 @@ namespace Arcane
             // m_next++`. Registration order fully determines numbering, and
             // registering the engine roster here DOES shift it (a plugin that
             // registered Transform + SpriteRenderer used to get 0,1; it now gets
-            // 0,3). Ids are process-local; only the hash is stable across
-            // processes.
+            // 0,2). Ids are process-local; only the hash is stable across
+            // processes. (2026-09-11: the roster below dropped its per-entity
+            // previous-pose slot -- Astra adoption plan 2 deleted the component
+            // end to end -- so every id after it shifted down by one; the
+            // worked example above already reflects the post-drop numbering.)
             engineModule.emplace(Astra::ComponentModule::Open(components, "Arcane"));
             ARC_ASSERT(*engineModule, "Runtime: ComponentModule::Open refused -- the slot above must be installed first");
             // EXACTLY the order RegisterSceneComponents + RegisterPhysicsComponents
             // register in (SceneModule.hpp / PhysicsComponents.hpp): ids are a
             // first-touch counter, so same order == same numbering as before.
-            engineModule->Register<Transform, WorldTransform, PreviousTransform, SpriteRenderer,
+            engineModule->Register<Transform, WorldTransform, SpriteRenderer,
                                    PostProcess, Identity, Hidden, Camera, MeshRenderer,
                                    RigidBody2D, Collider2D, PhysicsBodyRef>();
 

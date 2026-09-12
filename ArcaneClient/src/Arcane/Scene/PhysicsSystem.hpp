@@ -35,10 +35,6 @@
 //   3. STEP -- world->Step(m_fixedDt). Physics advances one fixed tick.
 //
 //   4. WRITE-BACK -- for each tracked entity:
-//      - (Epic 04.2, opt-in) if the entity carries a PreviousTransform, stash
-//        the about-to-be-overwritten Transform pose into it first, so
-//        RenderSubmissionSystem can lerp prev -> current by render alpha.
-//      - Then write:
 //        world->Position(handle) -> Transform.position.xy  (z preserved)
 //        world->GetAngle(handle) -> Transform.rotation, as a pure +Z quaternion
 //      (Also writes Velocity back into RigidBody2D.velocity for Dynamic bodies.)
@@ -249,7 +245,7 @@ namespace Arcane
     // -------------------------------------------------------------------------
     struct PhysicsSystem
         : Astra::SystemTraits<Astra::Reads<Collider2D>,
-                              Astra::Writes<Transform, PreviousTransform, PhysicsBodyRef, RigidBody2D>>
+                              Astra::Writes<Transform, PhysicsBodyRef, RigidBody2D>>
     {
         // fixedDt: the fixed timestep (seconds) forwarded to PhysicsWorld::Step.
         // Determinism contract: callers MUST pass the same constant every tick.
@@ -518,34 +514,13 @@ namespace Arcane
             // ------------------------------------------------------------------
             {
                 auto view = reg.CreateView<const PhysicsBodyRef, Transform, RigidBody2D>();
-                view.ForEach([&](Astra::Entity   entity,
+                view.ForEach([&](Astra::Entity   /*entity*/,
                                  const PhysicsBodyRef& ref,
                                  Transform& lt,
                                  RigidBody2D&    rb)
                 {
                     if (ref.handle == Phys::kInvalidBody) return;
                     if (!world.IsValid(ref.handle))          return;
-
-                    // Render interpolation (Epic 04.2): stash the pose we are about to
-                    // overwrite as this entity's PREVIOUS step pose (opt-in via the
-                    // PreviousTransform component), so RenderSubmissionSystem can lerp
-                    // prev -> current by alpha. Captured before the write below, so prev
-                    // == the step-N-1 pose (multiple steps/frame leave prev = second-to-
-                    // last, matching the physics pose buffer).
-                    // Gated on m_stepWorld -- mirrors the PASS 2.5 interp-buffer capture:
-                    // on a paused/mint-only pass the world does not step, so lt does not
-                    // change; capturing here would set prev==current and make a paused
-                    // Path-B sprite snap to the current pose instead of holding the same
-                    // sub-step-interpolated pose the debug overlay shows. Gating keeps
-                    // prev frozen at the true step-(N-1) pose while paused.
-                    if (m_stepWorld)
-                    {
-                        if (PreviousTransform* pt = reg.GetComponent<PreviousTransform>(entity))
-                        {
-                            pt->position = lt.position;
-                            pt->rotation = lt.rotation;
-                        }
-                    }
 
                     // THE 2D WRITE-BACK, NAMED DELIBERATELY (Task 3, F1). The
                     // solver owns the XY plane and the Z-axis turn, so that is
