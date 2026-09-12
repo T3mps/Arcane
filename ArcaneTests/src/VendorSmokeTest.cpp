@@ -89,6 +89,38 @@ TEST_CASE("Astra: registry create/get round-trip", "[vendor][astra]")
     REQUIRE(p->z == 3.0f);
 }
 
+namespace
+{
+    struct SmokeSlot { int id = 0; };
+    struct SmokeBag  { std::vector<SmokeSlot> slots; };
+}
+ASTRA_REFLECT_TYPE(SmokeSlot)
+    ASTRA_REFLECT_FIELD(SmokeSlot, id)
+ASTRA_END_REFLECT_TYPE()
+ASTRA_REFLECT_TYPE(SmokeBag)
+    ASTRA_REFLECT_FIELD(SmokeBag, slots)
+ASTRA_END_REFLECT_TYPE()
+
+TEST_CASE("Astra: FieldInfo carries std::vector element access (2026-09-11 vendor)", "[vendor][astra]")
+{
+    // The primitive the reflection->JSON container branch and the Inspector
+    // list editor stand on. Pinned here so a future re-vendor that drops it
+    // fails HERE, by name, not deep inside SceneJsonTest.
+    const Astra::TypeMeta* meta = Astra::GetMeta<SmokeBag>();
+    REQUIRE(meta != nullptr);
+    REQUIRE(meta->fields.size() == 1);
+    const Astra::FieldInfo& f = meta->fields[0];
+    REQUIRE(f.isVector);
+    CHECK(f.elementTypeHash == Astra::TypeID<SmokeSlot>::Hash());
+    CHECK(f.elementSize == sizeof(SmokeSlot));
+    SmokeBag bag;
+    REQUIRE(static_cast<bool>(f.vectorResize));
+    f.vectorResize(&bag, 3);
+    CHECK(f.vectorSize(&bag) == 3);
+    static_cast<SmokeSlot*>(f.vectorElement(&bag, 2))->id = 9;
+    CHECK(bag.slots[2].id == 9);
+}
+
 // ---------------------------------------------------------------- enkiTS
 #include <TaskScheduler.h>
 #include <atomic>

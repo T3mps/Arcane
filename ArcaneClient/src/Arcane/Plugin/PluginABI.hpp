@@ -772,7 +772,50 @@ namespace Arcane
     //     ReferenceProject.arcproj restamped with this change. Gacha's Game
     //     restamp (26 -> 27) is that repo's own follow-up, tracked there -- the
     //     grep is what proves it safe to defer, not evidence it was done.
-    inline constexpr uint32_t kGamePluginABIVersion = 27;
+    // v28 (2026-09-11, 2D physics wiring Plan 1): Astra re-vendored at 2e691c2
+    //     (dev, one commit over a08bb04): FieldInfo grew std::vector element
+    //     access -- elementTypeHash, elementSize and five std::function
+    //     accessors (vectorSize / vectorResize / vectorElement / vectorErase /
+    //     vectorInsert) -- so sizeof(FieldInfo) and every reflect block's
+    //     static-init shape moved. SAME FAILURE CLASS AS v10/v24/v26: plugins
+    //     compile Astra's reflect macros THEMSELVES (Components.hpp's blocks
+    //     are instantiated inside ReferenceGame.dll and Aphelyon.dll), so a v27
+    //     plugin would hand the host FieldInfo records laid out for the old
+    //     struct. Reject the pairing.
+    //     FOUR ARCANE FACTS RIDE ALONG, all from spec docs/specs/2026-09-11-
+    //     physics-2d-wiring-design.md and landing across this plan's tasks
+    //     (this entry is written at the vendor task, as v26's was):
+    //     (1) a new engine roster component, Arcane::PhysicsSettings
+    //     {glm::vec2 gravity} (Components.hpp), APPENDED after MeshRenderer in
+    //     RegisterSceneComponents and in Runtime's Resident roster, so no id
+    //     before it shifts; (2) Collider2D and RigidBody2D declare
+    //     AstraChangeTracked = true (static members -- no byte change; recorded
+    //     per the v26 precedent for Transform); (3) PhysicsSystem is
+    //     schedulable -- RequiresExclusive, Astra::Before<TransformPropagation
+    //     System>, PASS 4 gated on stepWorld, paused-pass re-mint criteria in
+    //     PASS 1 -- and Runtime installs it into fixedUpdate ITSELF: no game
+    //     module names it, and PhysicsSystem.hpp / PhysicsComponents.hpp are
+    //     NOT on the game-module include surface (build/arcane.lua carries no
+    //     Manifold2D row); (4) the reflection->JSON bridge gained a container
+    //     branch and Collider2D::fixtures lost Serializable(false) (scene
+    //     schema v5). The game-module include surface (build/arcane.lua) is
+    //     UNCHANGED.
+    //     MEASURED, not assumed: `grep -rn -E "FieldInfo|isVector|
+    //     PhysicsSettings|PhysicsSystem|PhysicsResource|Collider2D|RigidBody2D|
+    //     PhysicsBodyRef|EnsurePhysics|InstallEngineSystems|PhysicsEditPass"`
+    //     over BOTH game modules -- ReferenceProject/Source/ and Gacha's
+    //     Game/Source/ -- returns NOTHING in either tree:
+    //
+    //       $ grep -rn -E "FieldInfo|isVector|PhysicsSettings|PhysicsSystem|PhysicsResource|Collider2D|RigidBody2D|PhysicsBodyRef|EnsurePhysics|InstallEngineSystems|PhysicsEditPass" ReferenceProject/Source/
+    //       (no output)
+    //       $ grep -rn -E "<same pattern>" D:/dev/starworks/Gacha/Game/Source/
+    //       (no output)
+    //
+    //     so neither breaks at compile time; the gate, not the compiler,
+    //     refuses the stale DLL. ReferenceProject.arcproj restamped with this
+    //     change. Gacha's Game restamp (27 -> 28) is this plan's Task 10, in
+    //     that repo, together with the Aphelyon.dll rebuild -- not deferred.
+    inline constexpr uint32_t kGamePluginABIVersion = 28;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
