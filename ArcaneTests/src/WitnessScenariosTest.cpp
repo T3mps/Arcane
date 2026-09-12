@@ -246,3 +246,60 @@ TEST_CASE("W3: a reference missing at EVERY level reports the ordered search spa
     REQUIRE(tried[0].get<std::string>().find("vulkan") != std::string::npos);
     REQUIRE(tried[1].get<std::string>().find("runtime-scene.png") != std::string::npos);
 }
+
+TEST_CASE("W4: a dynamic body authored in physics.arcscene falls under the runtime host",
+          "[witness][gpu]")
+{
+    // The whole chain, observed from OUTSIDE: the v5 scene with Collider2D
+    // fixtures loads, Runtime installs PhysicsSystem and mints the world,
+    // fixedUpdate steps it 60 times at 1/60 s (--headless pins the sim dt),
+    // PASS 4 writes the pose back, propagation composes it, the sprite
+    // draws where the body ended. Geometry (physics.arcscene, +Y down,
+    // 1280x720, ortho 2.0 -> 180 px/m, origin at (640,360)): the Crate is
+    // authored spanning pixels y 90..270 and comes to rest on the Ground
+    // spanning 315..495, so a pick at its authored centre finds NOTHING and
+    // a pick at its resting centre finds "Crate". No render change is
+    // claimed: this scene is not the boot scene and no golden covers it.
+    //
+    // TWO separate host runs, one probe each -- VerifyReport.cpp's own
+    // comment (`only the first pick@ probe in a run is armed`, backed by
+    // RuntimeFrame.cpp's RenderGraph arming FrameDesc::pickPixel once from
+    // FirstPickProbe) means a second `--probe pick@...` in the same run
+    // never gets an "entity" key at all, only an "error" one explaining it
+    // was never armed. The plan's snippet asked both in one run; that reads
+    // as a plan-snippet defect against the current host, not a product bug.
+    WitnessScratch authoredScratch(StagedRuntimeDir(), "w4-physics-falls-authored");
+    WitnessRun authoredRun = RunWitness(HostInv(authoredScratch,
+        { "--scene", "4f6a1c2e-7b3d-4e8a-9c1f-2d5b6e7a8f90", "--probe", "pick@640,120" }));
+    INFO("host stdout: " << authoredRun.stdoutPath.string());
+    INFO("host stderr: " << authoredRun.stderrPath.string());
+    INFO("exit " << authoredRun.exitCode << ", wall " << authoredRun.wallMs
+                  << " ms, timedOut " << authoredRun.timedOut);
+    REQUIRE_FALSE(GradeProcessFacts(authoredRun).has_value());
+    REQUIRE(authoredRun.exitCode == 0);
+    REQUIRE(authoredRun.report["exitReason"].get<std::string>() == "frames-complete");
+    REQUIRE(authoredRun.report.contains("probes"));
+    REQUIRE(authoredRun.report["probes"].size() == 1);
+    const nlohmann::json& authored = authoredRun.report["probes"][0];
+    REQUIRE(authored["kind"] == "pick");
+    REQUIRE(authored.contains("entity"));
+    CHECK(authored["entity"].is_null());                          // it left
+
+    WitnessScratch restingScratch(StagedRuntimeDir(), "w4-physics-falls-resting");
+    WitnessRun restingRun = RunWitness(HostInv(restingScratch,
+        { "--scene", "4f6a1c2e-7b3d-4e8a-9c1f-2d5b6e7a8f90", "--probe", "pick@640,405" }));
+    INFO("host stdout: " << restingRun.stdoutPath.string());
+    INFO("host stderr: " << restingRun.stderrPath.string());
+    INFO("exit " << restingRun.exitCode << ", wall " << restingRun.wallMs
+                  << " ms, timedOut " << restingRun.timedOut);
+    REQUIRE_FALSE(GradeProcessFacts(restingRun).has_value());
+    REQUIRE(restingRun.exitCode == 0);
+    REQUIRE(restingRun.report["exitReason"].get<std::string>() == "frames-complete");
+    REQUIRE(restingRun.report.contains("probes"));
+    REQUIRE(restingRun.report["probes"].size() == 1);
+    const nlohmann::json& resting = restingRun.report["probes"][0];
+    REQUIRE(resting["kind"] == "pick");
+    REQUIRE(resting.contains("entity"));
+    REQUIRE(resting["entity"].is_string());
+    CHECK(resting["entity"].get<std::string>() == "Crate");       // and landed here
+}

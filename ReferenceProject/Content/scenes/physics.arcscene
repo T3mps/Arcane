@@ -1,0 +1,64 @@
+{
+  "assets": [],
+  "entities": [
+    {
+      "components": {
+        "Arcane::Camera": { "active": true, "orthographicSize": 2.0 },
+        "Arcane::Identity": { "id": { "hi": 4980164511003216701, "lo": 13316602907131203921 }, "name": "PhysicsScene" },
+        "Arcane::PhysicsSettings": { "gravity": [0.0, 9.81] },
+        "Arcane::Transform": { "position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] }
+      },
+      "parent": -1
+    },
+    {
+      "components": {
+        "Arcane::Identity": { "id": { "hi": 4980164511003216702, "lo": 13316602907131203922 }, "name": "Ground" },
+        "Arcane::RigidBody2D": { "bullet": false, "fixedRotation": false, "linearDamping": 0.0, "mass": 0.0, "type": "Static", "velocity": [0.0, 0.0] },
+        "Arcane::Collider2D": { "fixtures": [
+          { "categoryBits": 1, "density": 1.0, "friction": 0.6, "halfH": 0.25, "halfLen": 0.0, "halfW": 3.0, "isSensor": false, "kind": "Aabb", "localAngle": 0.0, "localPos": [0.0, 0.0], "maskBits": 4294967295, "radius": 0.5, "restitution": 0.0 }
+        ] },
+        "Arcane::SpriteRenderer": { "material": { "hi": 0, "lo": 0 }, "orderInLayer": 0, "shape": "Rect", "sortingLayer": 0, "sprite": { "hi": 0, "lo": 0 }, "tint": [0.35, 0.35, 0.4, 1.0] },
+        "Arcane::Transform": { "position": [0.0, 1.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [6.0, 0.5, 1.0] }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": { "id": { "hi": 4980164511003216703, "lo": 13316602907131203923 }, "name": "Crate" },
+        "Arcane::RigidBody2D": { "bullet": false, "fixedRotation": true, "linearDamping": 0.0, "mass": 0.0, "type": "Dynamic", "velocity": [0.0, 0.0] },
+        "Arcane::Collider2D": { "fixtures": [
+          { "categoryBits": 1, "density": 1.0, "friction": 0.6, "halfH": 0.5, "halfLen": 0.0, "halfW": 0.5, "isSensor": false, "kind": "Aabb", "localAngle": 0.0, "localPos": [0.0, 0.0], "maskBits": 4294967295, "radius": 0.5, "restitution": 0.0 }
+        ] },
+        "Arcane::SpriteRenderer": { "material": { "hi": 0, "lo": 0 }, "orderInLayer": 1, "shape": "Rect", "sortingLayer": 0, "sprite": { "hi": 0, "lo": 0 }, "tint": [0.9, 0.6, 0.2, 1.0] },
+        "Arcane::Transform": { "position": [0.0, -1.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": { "id": { "hi": 4980164511003216704, "lo": 13316602907131203924 }, "name": "Ball" },
+        "Arcane::RigidBody2D": { "bullet": false, "fixedRotation": false, "linearDamping": 0.0, "mass": 0.0, "type": "Dynamic", "velocity": [0.0, 0.0] },
+        "Arcane::Collider2D": { "fixtures": [
+          { "categoryBits": 1, "density": 1.0, "friction": 0.6, "halfH": 0.5, "halfLen": 0.0, "halfW": 0.5, "isSensor": false, "kind": "Circle", "localAngle": 0.0, "localPos": [0.0, 0.0], "maskBits": 4294967295, "radius": 0.5, "restitution": 0.2 }
+        ] },
+        "Arcane::SpriteRenderer": { "material": { "hi": 0, "lo": 0 }, "orderInLayer": 1, "shape": "Circle", "sortingLayer": 0, "sprite": { "hi": 0, "lo": 0 }, "tint": [0.3, 0.7, 0.9, 1.0] },
+        "Arcane::Transform": { "position": [-2.0, -1.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.0, 1.0, 1.0] }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": { "id": { "hi": 4980164511003216705, "lo": 13316602907131203925 }, "name": "Pill" },
+        "Arcane::RigidBody2D": { "bullet": false, "fixedRotation": false, "linearDamping": 0.0, "mass": 0.0, "type": "Dynamic", "velocity": [0.0, 0.0] },
+        "Arcane::Collider2D": { "fixtures": [
+          { "categoryBits": 1, "density": 1.0, "friction": 0.6, "halfH": 0.5, "halfLen": 0.5, "halfW": 0.5, "isSensor": false, "kind": "Capsule", "localAngle": 0.0, "localPos": [0.0, 0.0], "maskBits": 4294967295, "radius": 0.25, "restitution": 0.0 }
+        ] },
+        "Arcane::SpriteRenderer": { "material": { "hi": 0, "lo": 0 }, "orderInLayer": 1, "shape": "Capsule", "sortingLayer": 0, "sprite": { "hi": 0, "lo": 0 }, "tint": [0.7, 0.9, 0.4, 1.0] },
+        "Arcane::Transform": { "position": [2.0, -1.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0], "scale": [1.5, 0.5, 1.0] }
+      },
+      "parent": 0
+    }
+  ],
+  "id": "4f6a1c2e-7b3d-4e8a-9c1f-2d5b6e7a8f90",
+  "version": 5
+}
