@@ -244,7 +244,6 @@
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -612,8 +611,7 @@ namespace Arcane
         // graphics device, and the host-window context is what creates
         // and owns it. `config` is read for the same knobs Create() reads
         // EXCEPT the ones a surface owns -- vsync is meaningless with nothing to
-        // present to, and the open-ended drag-storm heartbeat is a windowed
-        // desk affordance, so neither is armed here.
+        // present to, so it is not armed here.
         //
         // IT DOES NOT ARM THE CRASH CHAIN. NriDiagnostics::Arm/Disarm install
         // and clear ONE process-wide slot with no per-owner identity, so an
@@ -1474,22 +1472,6 @@ namespace Arcane
         nri::Format   m_format     = nri::Format::UNKNOWN;
         std::uint64_t m_frameIndex = 0;   // PRESENTED frames; the command-slot clock
         bool          m_vsync      = true;
-
-        // --- the drag-storm heartbeat (D1 shakedown ride-along) -------------
-        // An open-ended run (`--nri-graph` with no --frames) prints NOTHING
-        // between "ready" and whatever the user's window close produces, so a
-        // desk user dragging the window for 30s has no way to tell a healthy
-        // vehicle from a wedged one. Armed only on that path -- a --frames N
-        // run already ends by itself and says how it went.
-        //
-        // It ticks from RenderFrame, i.e. from PRESENTED frames only, which is
-        // the point: a heartbeat that kept printing while the frame loop was
-        // stuck inside a submit would be worse than silence. Its ABSENCE is
-        // the wedge signal (and the hang watchdog is what turns a real wedge
-        // into a report).
-        bool                                  m_heartbeat = false;
-        std::uint64_t                         m_errorBaseline = 0;
-        std::chrono::steady_clock::time_point m_lastHeartbeat{};
     };
 
     // =====================================================================

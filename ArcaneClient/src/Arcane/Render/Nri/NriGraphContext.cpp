@@ -257,15 +257,6 @@ namespace Arcane
         if (!InitCommon(config, chromeNodes))
             return false;   // already logged
 
-        // See the header: the heartbeat exists for the open-ended drag-storm
-        // run and nothing else. The baseline is taken here rather than at the
-        // host's own baseline point so the number it prints means "errors this
-        // vehicle has produced", which is the question a desk user is asking
-        // mid-drag.
-        m_heartbeat     = (config.maxFrames == 0);
-        m_errorBaseline = RenderErrorCount();
-        m_lastHeartbeat = std::chrono::steady_clock::now();
-
         ARC_INFO("[nri-graph] ready: {}x{} format={} textures={} ring={}KiB/slot",
                  m_swap->Width(), m_swap->Height(), (int)m_format, m_swap->TextureCount(),
                  kUploadRingBytesPerFrame / 1024);
@@ -341,12 +332,6 @@ namespace Arcane
 
         if (!InitCommon(config, nodes))
             return false;   // already logged
-
-        // NO HEARTBEAT ARMING. m_heartbeat is the open-ended drag-storm
-        // affordance and a drag storm is a window event; an offscreen context
-        // has no window and (in the editor topology) sits beside a host-window
-        // context that already prints one.
-        m_errorBaseline = RenderErrorCount();
 
         ARC_INFO("[nri-graph] offscreen ready: {}x{} format={} ring={}KiB/slot, pacing {} frames deep",
                  m_offscreenWidth, m_offscreenHeight, (int)m_format,
@@ -1743,24 +1728,6 @@ namespace Arcane
         // happily while the GPU is wedged, which is precisely the state this
         // heartbeat exists to make visible.
         NriDiagnostics::PublishHeartbeat(m_swap->CompletedFrameValue());
-
-        // ~5s heartbeat, open-ended runs only (header: m_heartbeat). Deliberately
-        // AFTER the present, so "alive" means a frame actually reached the
-        // screen, and it reports the latch too -- "alive and clean" and "alive
-        // but latching errors" are different desk answers and the drag-storm
-        // gave the user neither.
-        if (m_heartbeat)
-        {
-            const auto now = std::chrono::steady_clock::now();
-            if (now - m_lastHeartbeat >= std::chrono::seconds(5))
-            {
-                m_lastHeartbeat = now;
-                const std::uint64_t errors = RenderErrorCount();
-                ARC_INFO("[nri-graph] alive: {} frame(s) presented, {} error(s) latched since the "
-                         "vehicle started", m_frameIndex,
-                         errors > m_errorBaseline ? errors - m_errorBaseline : 0);
-            }
-        }
 
         return FrameOutcome::Presented;
     }
