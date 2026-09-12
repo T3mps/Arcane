@@ -737,7 +737,42 @@ namespace Arcane
     //     ReferenceProject.arcproj restamped with this change, per the v16+
     //     precedent. Gacha's Game restamp (21 -> 26) is Plan 1's LAST task, in
     //     that repo, together with the Aphelyon.dll rebuild -- not deferred.
-    inline constexpr uint32_t kGamePluginABIVersion = 26;
+    // v27 (2026-09-11, Astra adoption Plan 2): PreviousTransform DELETED --
+    //     struct, reflect block, its RegisterSceneComponents slot and its slot
+    //     in Runtime's Resident ComponentModule roster -- together with LerpPose
+    //     (Components.hpp). Sprite render interpolation now reads the physics
+    //     side's PhysicsInterpBuffer through its new entity->slot map
+    //     (RenderSubmissionSystem, spec docs/specs/2026-09-11-astra-adoption-
+    //     design.md s8 -- the map rather than the spec's Optional<PhysicsBodyRef>
+    //     term, because PhysicsComponents.hpp drags Manifold2D headers a game
+    //     module's include surface does not carry; controller ruling 2026-09-11),
+    //     and PhysicsSystem's PASS 4 no longer stashes a previous local pose.
+    //     WHY A BUMP: every plugin compiles Components.hpp and SceneResources.hpp
+    //     (via RenderSystems.hpp) and so (a) bakes the reflect roster into its
+    //     own drained baselines, (b) inlines PhysicsInterpBuffer's LAYOUT (it
+    //     grew an Astra::FlatMap member), and (c) instantiates
+    //     RenderSubmissionSystem's body -- which reads that resource -- INSIDE
+    //     the DLL; and the roster's first-touch ids after the deleted slot shift
+    //     by one. A v26 DLL under a v27 host would register a roster the host no
+    //     longer knows and read a resource the host lays out differently. Reject
+    //     the pairing. The v16 entry above still names PreviousTransform: that is
+    //     history, and stays. The game-module include surface (build/arcane.lua)
+    //     is UNCHANGED.
+    //     MEASURED, not assumed: `grep -rn -E "PreviousTransform|LerpPose|
+    //     PhysicsBodyRef|PhysicsInterpBuffer|InterpPose|InterpSlot"` over BOTH game modules
+    //     -- ReferenceProject/Source/ and Gacha's Game/Source/ -- returns NOTHING
+    //     in either tree, so neither breaks at compile time; the gate, not the
+    //     compiler, refuses the stale DLL.
+    //
+    //       $ grep -rn -E "PreviousTransform|LerpPose|PhysicsBodyRef|PhysicsInterpBuffer|InterpPose|InterpSlot" ReferenceProject/Source/
+    //       (no output)
+    //       $ grep -rn -E "<same pattern>" D:/dev/starworks/Gacha/Game/Source/
+    //       (no output)
+    //
+    //     ReferenceProject.arcproj restamped with this change. Gacha's Game
+    //     restamp (26 -> 27) is that repo's own follow-up, tracked there -- the
+    //     grep is what proves it safe to defer, not evidence it was done.
+    inline constexpr uint32_t kGamePluginABIVersion = 27;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
