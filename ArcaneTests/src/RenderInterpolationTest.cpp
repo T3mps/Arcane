@@ -287,3 +287,80 @@ TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss",
     reg.GetResource<Arcane::PhysicsInterpBuffer>()->slotOf.Clear();               // no entry for the entity
     CHECK(submit() == Approx(10.0f));
 }
+
+TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the current one: alpha 0.25 lands a quarter of the way",
+          "[interp]")
+{
+    // The owed case (spec 2026-09-11-physics-2d-wiring s8, "Plan 2's owed
+    // case"): the two hand-built cases above use alpha 0.5, which is
+    // SYMMETRIC -- a reversed Lerp endpoint order would still pass them. This
+    // one runs the REAL chain (PhysicsSystem PASS 2.5 capture -> step -> PASS
+    // 4 write-back -> propagation) and asks at 0.25 and 0.75, which only the
+    // right direction satisfies. The endpoints are MEASURED through the same
+    // submit at alpha 0 and 1 rather than computed from world units, so the
+    // assertion is about the blend and not about the batcher's screen mapping.
+    namespace P = Manifold2D::Physics;
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::RegisterPhysicsComponents(reg);
+
+    P::WorldDef wd; wd.gravityY = 10.0f;
+    reg.SetResource(Arcane::PhysicsResource{ std::make_unique<P::PhysicsWorld>(wd), {} });
+    reg.SetResource(Arcane::PhysicsInterpBuffer{});   // opt in to capture
+
+    // A scene root: TransformPropagationSystem is a no-op with no SceneRoot
+    // resource (it returns immediately -- TransformSystems.hpp), and composes
+    // only entities reachable from it (PhysicsSystemTest.cpp's BuildScene is
+    // the precedent every other real-chain PhysicsSystem test follows).
+    Astra::Entity root = reg.CreateEntity();
+    Arcane::Transform rootLt; rootLt.position = glm::vec3(0.0f);
+    reg.AddComponent<Arcane::Transform>(root, rootLt);
+    reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+
+    // One dynamic circle free-falling from the origin, with a sprite on it.
+    // Untextured Rect sprite: nil .arcsprite -> a 1x1 m quad scaled 4x4.
+    Astra::Entity e = reg.CreateEntity();
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
+    reg.AddComponent<Arcane::Transform>(e, lt);
+    reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
+    Arcane::RigidBody2D rb; rb.type = P::BodyType::Dynamic;
+    reg.AddComponent<Arcane::RigidBody2D>(e, rb);
+    Arcane::Collider2D col;
+    { Arcane::Fixture fx; fx.kind = P::ShapeKind::Circle; fx.radius = 0.5f; col.fixtures.push_back(fx); }
+    reg.AddComponent<Arcane::Collider2D>(e, col);
+    reg.AddComponent<Arcane::SpriteRenderer>(e, Arcane::SpriteRenderer{});
+    reg.SetParent(e, root);
+    // No PhysicsBodyRef on purpose: PASS 1.5 adds it (Plan 1 Task 5).
+
+    Arcane::PhysicsSystem physics(1.0f / 60.0f);
+    Arcane::TransformPropagationSystem propagate;
+    physics(reg);      // mint, capture prev = the authored pose, step, write back
+    propagate(reg);    // WorldTransform = the post-step pose
+    REQUIRE(reg.GetComponent<Arcane::PhysicsBodyRef>(e) != nullptr);
+    REQUIRE(reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured);
+
+    reg.SetResource<Arcane::RenderContext2D>(
+        Arcane::RenderContext2D{ nullptr, glm::vec2(0.0f), 1.0f, 0.0f });
+    auto submitAt = [&](float alpha)
+    {
+        RecBatcher rec;
+        Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
+        ctx->batcher = &rec;
+        ctx->alpha   = alpha;
+        Arcane::RenderSubmissionSystem{}(reg);
+        REQUIRE(rec.rectCalls == 1);
+        return rec.lastRectCenter().y;
+    };
+
+    const float atPrev = submitAt(0.0f);
+    const float atCur  = submitAt(1.0f);
+    REQUIRE(atPrev != Approx(atCur));   // the body moved this step: the endpoints differ
+    const float span = atCur - atPrev;
+    CHECK(submitAt(0.25f) == Approx(atPrev + 0.25f * span));
+    CHECK(submitAt(0.75f) == Approx(atPrev + 0.75f * span));
+    // And the reversed direction is what these two would read under a
+    // swapped Lerp -- stated so the failure mode is named, not just implied.
+    CHECK(submitAt(0.25f) != Approx(atPrev + 0.75f * span));
+}
