@@ -346,3 +346,48 @@ Run that grep over both trees before committing and paste the (empty) result int
 - **Nothing production-wires the buffer:** `PhysicsSystem` is still unscheduled by both game modules and no host sets `PhysicsInterpBuffer`; the sprite lerp is test-proven mechanism until spec §2's trigger fires.
 - **`slotOf` is only as fresh as the last STEPPING pass** (PASS 2.5 is gated on `m_stepWorld`): a body destroyed and its slot recycled by a paused mint keeps its entity's stale entry until the next step. Same frozen-while-paused contract `prev` already has; the generation guard is a consistency check between the two, not a live recycled-slot detector.
 - `scripts/automation-baselines.json`: Plan 1 Task 10 catches it up; this plan's closeout re-runs `check-baselines.ps1` against that figure and leaves a further rise un-rewritten (net +0 cases here).
+
+## Closeout (2026-09-11)
+
+Plan 2 is closed at this document's HEAD range **`1e87d365..fea93bdf`** (`fea93bdf` is Task 4's baselines-booking commit; the closeout-notes commit for this section follows immediately after). No engine source changed in Task 4 — it sweeps, rebuilds both configs, derives the final counts from its own runs, runs the baseline guard, and books the result.
+
+**State handed off:**
+- Engine ABI is **27**.
+- `PreviousTransform` and `LerpPose` are **gone** — struct, reflect block, `RegisterSceneComponents` slot, Runtime's Resident `ComponentModule` roster slot, and the `TransformSpineTest` case that pinned `LerpPose`'s slerp behavior all deleted (Task 2, `fa94ae51`).
+- `PhysicsInterpBuffer{prev, slotOf, captured}` (`SceneResources.hpp`) is now the **one** interpolation history. `RenderSubmissionSystem` blends sprites through it (Lerp on position, AngleLerp on rotation) via its entity → slot map, snapping to the current pose on any buffer miss (generation-guarded).
+- `PhysicsSystem` is still **UNSCHEDULED** by both game modules, and `PhysicsInterpBuffer` is still **UNSET** in production — spec §2's non-goal / trigger is unchanged by this plan. The sprite-lerp path is test-proven mechanism only until something schedules `PhysicsSystem` and a host sets the buffer.
+- `ReferenceProject.arcproj` is restamped to ABI 27 (Task 3, `594250c4`). The game-module include surface (`build/arcane.lua`) is unchanged — no widened Manifold2D exposure, per the controller's Contradiction-1 ruling above.
+- The golden lanes are untouched — no re-bless in this plan. The controller's `golden-gate.ps1 -Configuration Release` run at `594250c4` (Task 3) passed **4/4 lanes, diffCount=0, maxLocalDifference=0.0** (the runtime dx12 `PassedOnFallback` result is a pre-existing shared-level golden, not a diff) — rendering is pixel-identical to the blessed goldens.
+- **`D:\dev\starworks\Gacha`'s `Game/Aphelyon.arcproj` is still at ABI 26, and its `Aphelyon.dll` was built against the Plan 1 SDK — that repo owes a 27 restamp + rebuild before it opens in a v27 host. No include-surface change rides this bump, so no regenerate is owed beyond the ordinary rebuild. Recorded here, not actioned.**
+
+**Final derived counts (Task 4's own runs, both configs agreeing):**
+- Debug unfiltered (`ArcaneTests.exe`, all tests incl. `[witness][gpu]`): **118490 assertions / 1665 test cases**, all passing, seed 899190504 (`Randomness seeded to:`) — proves the freshly rebuilt `ReferenceProject/Binaries/ReferenceGame.dll` is current for both Debug and Release `Arcane.slnx` builds.
+- Debug `~[gpu]`: **56216 assertions / 1632 test cases**, all passing, seed 3743893485 (console run); the `-r json` run fed to the guard measured the same 56216/1632, seed 2382397819.
+- Release `~[gpu]`: **56216 assertions / 1632 test cases**, all passing, seed 107922165 (console run); the `-r json` run fed to the guard measured the same 56216/1632, seed 11651397 — **Debug and Release agree exactly.**
+- Both `ReferenceProject.slnx` and `Arcane.slnx` builds (Debug then Release) reported **0 Warning(s) / 0 Error(s)**. Each config flip used `/t:Rebuild` to defeat the single-slot `ReferenceProject\Binaries\` config-flip no-op (a plain incremental Debug build after Task 3's staged Release DLL reported "up-to-date" without relinking — the DLL's own timestamp confirmed the no-op before the rebuild fixed it).
+- **Attribution against Plan 1's closeout (56217/1632):**
+
+  | Task | Δ assertions | Δ cases | What moved |
+  |---|---|---|---|
+  | T1 (`e4b30268`) | +13 | +1 | +3 on the pre-existing `"PhysicsInterpBuffer captures the pre-step pose each fixed step"` (5→8); +10 on the new `"RenderSubmissionSystem snaps to the current pose on any buffer miss"` (5 REQUIRE + 5 CHECK); the two rebuilt render cases net 0 |
+  | T2 (`fa94ae51`) | −14 | −1 | `TransformSpineTest`'s deleted `"PreviousTransform: the render blend slerps on the shortest arc across +-180 degrees"` (10 CHECKs, whole case gone) + 4 `EditorComponentCatalogTest` `CHECK`s (one apiece, across `"IsHiddenInInspector covers the derived caches and the eye's marker"`, `"IsStructureLocked covers the derived types plus Identity"`, `"BuildComponentCatalog excludes internal types and sorts by name"`, `"a fresh Runtime registers the engine's own component roster"`) |
+  | T3 (`594250c4`) | +0 | +0 | ABI restamp only, no test changes |
+  | **Net** | **−1** | **0** | matches this task's own measured 56216/1632 exactly |
+
+**Baseline guard outcome:** run against the still-committed `56217/1632` first (per the controller's ruling on Step 2), `check-baselines.ps1` reported **REGRESSED by 1** on assertions (cases unchanged, `+0`) and **exit 1** on both Debug and Release. This was then booked into `scripts/automation-baselines.json` as the file's first booked drop (a deleted component's pins traded for the buffer path's own — a reviewed update, not lost coverage), and the guard re-run against the updated file reported **`+0`/`+0`, exit 0** on both Debug and Release.
+
+**Rulings the controller made during this plan** (full detail in `.superpowers/sdd/2026-09-11-astra-adoption-plan2-interpolation/progress.md`):
+- No worktree; work directly on `main` at `1e87d365`, commit per task, never push (same convention as Plan 1).
+- T1 keeps `PreviousTransform` in `RenderSubmissionSystem`'s `Reads<>` trait for the one commit the plan mandates even though the body no longer reads it — deliberate overlap so T1's tests prove the buffer path alone; T2 drops it.
+- If T4's measured `~[gpu]` assertion count came in below the committed 56217 (predicted 56216), T4 books the drop into `scripts/automation-baselines.json` — Debug/Release rows to the measured figure, a dated note entry, Dist untouched, guard re-verified to exit 0 against the updated file. (This is the ruling this task executed.)
+- T2 also fixes T1's deferred struct-comment minor in `SceneResources.hpp` (one line, same comment region T2 already rewrites).
+- T2's rewording of T1's `RenderSystems.hpp` comment (avoiding the literal `PreviousTransform` identifier) stands even though it diverges from the plan's own verbatim text — the zero-legacy sweep is the assertion T2 must pass, and the reviewer judged nothing of value lost.
+- T3's step order runs Debug builds + unfiltered + `~[gpu]` before the Debug host launch, then Release builds + `~[gpu]` — reordered from the plan's written sequence because running the Debug editor launch after Release has staged its DLL into the single-slot `Binaries\` risks a config-mismatched plugin load; T3 therefore ends with the Release DLL staged, and T4 built/ran Debug before Release for the same reason.
+
+**Deferred minors (final review triages):**
+- Task 1: `SceneResources.hpp`'s `PhysicsInterpBuffer` struct comment (originally :60-64) still said "read by DrawPhysicsDebug" only, though `RenderSubmissionSystem` is a second reader now — folded into Task 2's dispatch (same comment region Task 2 already rewrites).
+- Task 1: both rebuilt blend cases use α=0.5 (brief-mandated), symmetric — a reversed `Lerp` endpoint order would still pass; inherited from the old cases, not fixed.
+- Task 1: the render-side generation guard is redundant by construction in production (`prev` and `slotOf` are written from the same handle in the same pass) — spec-mandated belt-and-braces; comment reads fine as-is.
+- Task 2: `PhysicsSystem.hpp:517`'s `Astra::Entity /*entity*/` — a discretionary unused-param comment-out beyond the brief, matching an existing convention in the file; harmless.
+- Task 3: `task-3-report.md:22` quotes the two-file +37/−2 delta as if it were `PluginABI.hpp` alone (report precision only).
+- Task 3: the v27 ledger entry's "MEASURED, not assumed" sentence ends in a period where v25/v26 end in a colon — inherited from the plan's verbatim text.
