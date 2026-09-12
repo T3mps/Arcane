@@ -13,9 +13,17 @@
 // Pass ordering inside operator() (each invocation = one fixed step):
 //
 //   1. DESTROY PASS -- walk entityToBody; for any entry whose entity is no
-//      longer alive (reg.IsValid returns false) or no longer has RigidBody2D,
-//      call world->RemoveBody(handle) and erase the map entry. Stale handles
-//      are collected first to keep iteration safe.
+//      longer alive (reg.IsValid returns false) or no longer has RigidBody2D
+//      or Collider2D, call world->RemoveBody(handle) and erase the map entry;
+//      or, paused, changed RigidBody2D/Collider2D (re-mint) -- an author edit
+//      of shape, mass or body type since the last reconcile, so PASS 2 rebuilds
+//      the body from the current components this same pass. Stale handles are
+//      collected first to keep iteration safe.
+//
+//   1.5 ENSURE PhysicsBodyRef -- an editor-authored RigidBody2D + Collider2D
+//      entity can never get one from the Inspector (ComponentCatalog structure-
+//      locks it), so this pass adds it before PASS 2's view would otherwise
+//      skip the entity forever.
 //
 //   2. CREATE/SYNC PASS -- for each entity with RigidBody2D + Collider2D +
 //      PhysicsBodyRef + Transform whose PhysicsBodyRef.handle == kInvalidBody:
@@ -34,7 +42,7 @@
 //
 //   3. STEP -- world->Step(m_fixedDt). Physics advances one fixed tick.
 //
-//   4. WRITE-BACK -- for each tracked entity:
+//   4. WRITE-BACK -- STEPPING passes only -- for each tracked entity:
 //        world->Position(handle) -> Transform.position.xy  (z preserved)
 //        world->GetAngle(handle) -> Transform.rotation, as a pure +Z quaternion
 //      (Also writes Velocity back into RigidBody2D.velocity for Dynamic bodies.)
@@ -66,6 +74,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Scene/TransformSystems.hpp>
 
 #include <Astra/Core/Tick.hpp>
 #include <Astra/Entity/Entity.hpp>
@@ -245,8 +254,18 @@ namespace Arcane
     // -------------------------------------------------------------------------
     struct PhysicsSystem
         : Astra::SystemTraits<Astra::Reads<Collider2D>,
-                              Astra::Writes<Transform, PhysicsBodyRef, RigidBody2D>>
+                              Astra::Writes<Transform, PhysicsBodyRef, RigidBody2D>,
+                              Astra::Before<TransformPropagationSystem>>
     {
+        // Scheduled by Runtime::InstallEngineSystems into fixedUpdate (2026-09-11
+        // physics wiring, spec s4.1). EXCLUSIVE: this pass advances the registry
+        // tick and mutates structurally (PASS 1.5 adds PhysicsBodyRef), so it
+        // owns its scheduler segment like TransformPropagationSystem does.
+        // BEFORE propagation: PASS 4's write-back must be what propagation
+        // composes this step, whichever order the module and the engine
+        // inserted their systems.
+        static constexpr bool RequiresExclusive = true;
+
         // fixedDt: the fixed timestep (seconds) forwarded to PhysicsWorld::Step.
         // Determinism contract: callers MUST pass the same constant every tick.
         // The 60 Hz RunLoop uses 1.0/60.0; tests use kDt = 1.0f/60.0f.
@@ -265,29 +284,62 @@ namespace Arcane
             auto&                  entityToBody  = res->entityToBody;
 
             // ------------------------------------------------------------------
-            // PASS 1: DESTROY -- remove body rows for dead or un-physicised entities.
-            // Collect stale entries first; erase after to avoid iterator invalidation.
+            // PASS 1: DESTROY -- remove body rows for dead or un-physicised
+            // entities, and (PAUSED passes only, spec s4.1a) for entities whose
+            // RigidBody2D or Collider2D changed since the last reconcile -- an
+            // author edit of shape, mass or body type -- so PASS 2 re-mints them
+            // from the current components in this same pass. Stepping passes
+            // skip the change criteria: PASS 4 writes velocity every step, which
+            // would otherwise read as an edit. Collect first; erase after (map
+            // iteration) -- and the change views are read BEFORE any erase so
+            // nothing is invalidated under them.
             //
-            // Implicit assumption: a handle becomes invalid ONLY via entity death or
-            // RigidBody2D removal. This guarantees the map cannot leak: no handle
-            // escapes without an IsValid==false or HasComponent==false trigger that
-            // causes removal here. The CREATE pass self-heals any stale handle by
-            // overwriting the map entry when it calls AddBody for the same entity.
+            // Implicit assumption: a handle becomes invalid ONLY through this
+            // pass. The CREATE pass self-heals any stale handle by overwriting
+            // the map entry when it calls AddBody for the same entity.
             // ------------------------------------------------------------------
             {
                 std::vector<Astra::Entity> toRemove;
+                if (!m_stepWorld)
+                {
+                    reg.CreateView<const PhysicsBodyRef, const Collider2D, Astra::Changed<Collider2D>, Astra::With<RigidBody2D>>()
+                        .Since(res->lastReconcile)
+                        .ForEach([&](Astra::Entity entity, const PhysicsBodyRef&, const Collider2D&) { toRemove.push_back(entity); });
+                    reg.CreateView<const PhysicsBodyRef, const RigidBody2D, Astra::Changed<RigidBody2D>, Astra::With<Collider2D>>()
+                        .Since(res->lastReconcile)
+                        .ForEach([&](Astra::Entity entity, const PhysicsBodyRef&, const RigidBody2D&) { toRemove.push_back(entity); });
+                }
                 for (auto& [entity, handle] : entityToBody)
                 {
-                    const bool dead   = !reg.IsValid(entity);
-                    const bool noBody = !dead && !reg.HasComponent<RigidBody2D>(entity);
-                    if (dead || noBody)
-                    {
-                        world.RemoveBody(handle);
+                    const bool dead       = !reg.IsValid(entity);
+                    const bool noBody     = !dead && !reg.HasComponent<RigidBody2D>(entity);
+                    const bool noCollider = !dead && !reg.HasComponent<Collider2D>(entity);
+                    if (dead || noBody || noCollider)
                         toRemove.push_back(entity);
-                    }
                 }
                 for (Astra::Entity e : toRemove)
-                    entityToBody.erase(e);
+                {
+                    auto it = entityToBody.find(e);
+                    if (it == entityToBody.end()) continue;   // listed twice, or never minted
+                    if (world.IsValid(it->second))
+                        world.RemoveBody(it->second);
+                    entityToBody.erase(it);
+                }
+            }
+
+            // ------------------------------------------------------------------
+            // PASS 1.5: ENSURE PhysicsBodyRef. The Inspector can never add one
+            // (ComponentCatalog structure-locks it), so an editor-authored
+            // RigidBody2D + Collider2D entity would otherwise never match PASS 2's
+            // view. Collected, then added -- AddComponent moves the entity
+            // between archetypes, never inside a ForEach.
+            // ------------------------------------------------------------------
+            {
+                std::vector<Astra::Entity> missing;
+                reg.CreateView<const RigidBody2D, const Collider2D, Astra::Not<PhysicsBodyRef>>()
+                    .ForEach([&](Astra::Entity entity, const RigidBody2D&, const Collider2D&) { missing.push_back(entity); });
+                for (Astra::Entity e : missing)
+                    reg.AddComponent<PhysicsBodyRef>(e, PhysicsBodyRef{});
             }
 
             // ------------------------------------------------------------------
@@ -508,10 +560,15 @@ namespace Arcane
             }
 
             // ------------------------------------------------------------------
-            // PASS 4: WRITE-BACK -- propagate post-step poses to Transform.
-            // TransformPropagationSystem (ordered after this) then reads
-            // Transform and derives WorldTransform.
+            // PASS 4: WRITE-BACK -- STEPPING passes only (spec s4.1, 2026-09-11).
+            // A paused pass has nothing to reflect: the author owns the pose and
+            // PASS 3.5 already pushed edits body-ward. The unconditional write
+            // this replaced stamped every physics entity's Transform changed on
+            // every Edit frame (propagation recomposed them all, defeating the
+            // change detection for exactly the entities physics touches) and
+            // flattened an authored out-of-plane rotation to its Z turn.
             // ------------------------------------------------------------------
+            if (m_stepWorld)
             {
                 auto view = reg.CreateView<const PhysicsBodyRef, Transform, RigidBody2D>();
                 view.ForEach([&](Astra::Entity   /*entity*/,
@@ -555,13 +612,12 @@ namespace Arcane
                 });
             }
 
-            // Time base for the paused reconcile (see PhysicsResource::lastReconcile):
-            // AFTER PASS 4, so its write-back marks are not newer than this tick.
-            // Tick contract note: PhysicsSystem is never AddSystem'd anywhere (map
-            // B3) -- tests and (one day) a game module call it bare -- so this
-            // advance never runs inside a scheduler group. The day it is scheduled
-            // it needs `static constexpr bool RequiresExclusive = true;` for the
-            // same reason TransformPropagationSystem carries it (Task 5).
+            // Time base for the paused reconcile and the re-mint criteria
+            // (PhysicsResource::lastReconcile): AFTER PASS 4, so a stepping
+            // pass's own write-back marks are never newer than it. Scheduled
+            // (Runtime::InstallEngineSystems) or bare (Runtime::PhysicsEditPass,
+            // tests) alike -- the advance-after-every-pass contract, spec
+            // 2026-09-11-astra-adoption s6.3.
             res->lastReconcile = reg.CurrentTick();
             reg.AdvanceTick();
         }

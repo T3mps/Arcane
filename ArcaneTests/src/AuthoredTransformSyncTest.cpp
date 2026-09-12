@@ -9,10 +9,15 @@
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Scene/TransformSystems.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <glm/gtc/quaternion.hpp>
+
 #include <memory>
+#include <tuple>
+#include <type_traits>
 #include <vector>
 
 using namespace Arcane;
@@ -439,4 +444,133 @@ TEST_CASE("a position-only paused edit does not rebuild fixtures", "[transform-s
     CHECK(before.index == after.index);
     CHECK(before.generation == after.generation);
     CHECK(static_cast<float>(res->world->Position(bh).x) == Approx(4.0f).margin(1e-4f));
+}
+
+// ---- 2D physics wiring Plan 1 Task 5: the paused-pass fixes ----------------
+
+TEST_CASE("a paused pass writes back nothing: Transform and RigidBody2D stay unstamped", "[transform-sync]")
+{
+    // Spec s4.1: PASS 4 is gated on stepWorld. Before, every paused pass wrote
+    // Transform + velocity for every body, stamping every physics entity
+    // changed each Edit frame (propagation recomposed them all) and flattening
+    // an authored out-of-plane rotation to its Z turn.
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {1,2}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    // An authored tilt OUT of the XY plane: the 2D solver has no state for it,
+    // and a paused pass must leave it alone.
+    const glm::quat tilt = glm::angleAxis(0.3f, glm::normalize(glm::vec3(1.0f, 0.0f, 0.0f)));
+    reg.GetComponent<Transform>(e)->rotation = tilt;
+
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);                                   // mints the body
+    const Astra::Tick afterMint = reg.CurrentTick();
+    paused(reg);                                   // a second paused pass: nothing authored changed
+    paused(reg);
+
+    // Nothing stamped since the mint pass: a Changed<Transform> view since
+    // afterMint is empty, and so is one over RigidBody2D.
+    int changedT = 0, changedRb = 0;
+    reg.CreateView<const Transform, Astra::Changed<Transform>>().Since(afterMint)
+        .ForEach([&](Astra::Entity, const Transform&) { ++changedT; });
+    reg.CreateView<const RigidBody2D, Astra::Changed<RigidBody2D>>().Since(afterMint)
+        .ForEach([&](Astra::Entity, const RigidBody2D&) { ++changedRb; });
+    CHECK(changedT == 0);
+    CHECK(changedRb == 0);
+    // The tilt survived (PASS 4 used to overwrite rotation with RotationAboutZ).
+    const glm::quat& r = reg.GetComponent<Transform>(e)->rotation;
+    CHECK(std::abs(glm::dot(r, tilt)) == Approx(1.0f).margin(1e-5f));
+}
+
+TEST_CASE("a paused Collider2D edit re-mints the body with the new shape", "[transform-sync]")
+{
+    // Spec s4.1a: Collider2D is tracked; a paused PASS 1 destroys a body whose
+    // Collider2D changed since lastReconcile and PASS 2 re-mints it the same
+    // pass. Observable as the fixture's world half-extents.
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle before = res->entityToBody.at(e);
+    CHECK(Fixture0HalfExtents(reg).x == Approx(0.5f).margin(1e-4f));
+
+    for (int i = 0; i < 3; ++i) paused(reg);       // untouched: the body is NOT re-minted
+    CHECK(res->entityToBody.at(e) == before);
+
+    reg.GetComponent<Collider2D>(e)->fixtures[0].halfW = 1.5f;   // the Inspector's edit, stamped by Mut
+    paused(reg);
+    REQUIRE(res->entityToBody.count(e) == 1);
+    CHECK(res->world->IsValid(res->entityToBody.at(e)));
+    CHECK_FALSE(res->world->IsValid(before));       // the old body is gone
+    CHECK(Fixture0HalfExtents(reg).x == Approx(1.5f).margin(1e-4f));
+}
+
+TEST_CASE("a paused RigidBody2D type edit re-mints; removing Collider2D destroys", "[transform-sync]")
+{
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Kinematic);
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle first = res->entityToBody.at(e);
+    CHECK(res->world->TypeSlot(first.index) == Phys::BodyType::Kinematic);
+
+    reg.GetComponent<RigidBody2D>(e)->type = Phys::BodyType::Static;
+    paused(reg);
+    const Phys::BodyHandle second = res->entityToBody.at(e);
+    CHECK_FALSE(res->world->IsValid(first));
+    CHECK(res->world->TypeSlot(second.index) == Phys::BodyType::Static);
+
+    reg.RemoveComponent<Collider2D>(e);
+    paused(reg);
+    CHECK(res->entityToBody.count(e) == 0);
+    CHECK_FALSE(res->world->IsValid(second));
+}
+
+TEST_CASE("a stepping pass never re-mints on its own velocity write-back", "[transform-sync]")
+{
+    // The re-mint criteria are PAUSED-ONLY: PASS 4 writes RigidBody2D::velocity
+    // every step, which would otherwise read as an author edit next pass.
+    Astra::Registry reg;
+    Astra::Entity e = BuildAabbBody(reg, {0,0}, {0.5f,0.5f}, Phys::BodyType::Dynamic);
+    PhysicsSystem stepping(kDt, /*stepWorld=*/true);
+    stepping(reg);
+    auto* res = reg.GetResource<PhysicsResource>();
+    const Phys::BodyHandle h = res->entityToBody.at(e);
+    for (int i = 0; i < 10; ++i) stepping(reg);
+    CHECK(res->entityToBody.at(e) == h);            // same body across ten steps
+    CHECK(res->world->IsValid(h));
+}
+
+TEST_CASE("an entity authored without PhysicsBodyRef is minted anyway", "[transform-sync]")
+{
+    // The Inspector can never add PhysicsBodyRef (it is structure-locked), so
+    // PASS 1.5 adds it for any RigidBody2D + Collider2D entity that lacks it.
+    Astra::Registry reg;
+    RegisterSceneComponents(reg);
+    RegisterPhysicsComponents(reg);
+    Phys::WorldDef wd; wd.gravityX = 0.0f; wd.gravityY = 0.0f;
+    reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
+    Astra::Entity e = reg.CreateEntity();
+    reg.AddComponent<Transform>(e, Transform{});
+    reg.AddComponent<WorldTransform>(e, WorldTransform{});
+    RigidBody2D rb; rb.type = Phys::BodyType::Kinematic;
+    reg.AddComponent<RigidBody2D>(e, rb);
+    Collider2D col; Fixture fx; fx.kind = Phys::ShapeKind::Circle; fx.radius = 0.5f; col.fixtures.push_back(fx);
+    reg.AddComponent<Collider2D>(e, col);
+    REQUIRE_FALSE(reg.HasComponent<PhysicsBodyRef>(e));
+
+    PhysicsSystem paused(kDt, /*stepWorld=*/false);
+    paused(reg);
+    REQUIRE(reg.HasComponent<PhysicsBodyRef>(e));
+    auto* res = reg.GetResource<PhysicsResource>();
+    REQUIRE(res->entityToBody.count(e) == 1);
+    CHECK(res->world->IsValid(res->entityToBody.at(e)));
+}
+
+TEST_CASE("PhysicsSystem declares the scheduler contract: exclusive, before propagation", "[transform-sync]")
+{
+    STATIC_REQUIRE(PhysicsSystem::RequiresExclusive);
+    STATIC_REQUIRE(std::tuple_size_v<PhysicsSystem::BeforeTypes> == 1);
+    STATIC_REQUIRE(std::is_same_v<std::tuple_element_t<0, PhysicsSystem::BeforeTypes>, TransformPropagationSystem>);
 }

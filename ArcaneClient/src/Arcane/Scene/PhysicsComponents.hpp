@@ -62,6 +62,12 @@ namespace Arcane
     // script-driven and must not be pushed by dynamic bodies).
     struct RigidBody2D
     {
+        // Astra change tracking (2026-09-11 physics wiring, spec s4.1a): a
+        // paused PhysicsSystem pass re-mints a body whose RigidBody2D or
+        // Collider2D changed since the last reconcile, so an Inspector edit
+        // (or its undo) reaches the world without an exact compare per body.
+        static constexpr bool AstraChangeTracked = true;
+
         Phys::BodyType type          = Phys::BodyType::Kinematic;
         glm::vec2         velocity      {0.0f, 0.0f};
         float             mass          = 0.0f;      // 0 => density-derived
@@ -126,6 +132,12 @@ namespace Arcane
     // Fixture is trivially copyable.
     struct Collider2D
     {
+        // Astra change tracking (2026-09-11 physics wiring, spec s4.1a): a
+        // paused PhysicsSystem pass re-mints a body whose RigidBody2D or
+        // Collider2D changed since the last reconcile, so an Inspector edit
+        // (or its undo) reaches the world without an exact compare per body.
+        static constexpr bool AstraChangeTracked = true;
+
         std::vector<Fixture> fixtures;
 
         template<typename Archive>
