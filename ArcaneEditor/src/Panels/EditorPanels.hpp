@@ -69,6 +69,7 @@ namespace Arcane::Editor
         bool saveScene = false;      // File -> Save Scene        (Save As when never saved)
         bool saveSceneAs = false;    // File -> Save Scene As...  (save dialog)
         bool rebuildModule = false;  // Build -> Rebuild Game Module (worker premake+msbuild)
+        bool openIde = false;        // Build -> Open Visual Studio (IdeLaunch; generates the .slnx first if missing)
         bool resetLayout = false;   // Window -> Reset Layout (rebuild default dock layout, re-show all)
         bool selectAll = false;        // Edit -> Select All
         bool deselectAll = false;      // Edit -> Deselect All
@@ -104,6 +105,9 @@ namespace Arcane::Editor
     // (greyed while playing -- the UE model, see the item's own comment --
     // while a build is already running, and when the open project declares no
     // gameModule at all).
+    // `ideState` gates Build -> Open Visual Studio (IdeMenuState below):
+    // greyed with a tooltip when no project is open or no Visual Studio
+    // install was found, exactly UE's CanAccessSourceCode greying.
     // `panels` drives the Window menu's toggles; only Reset Layout goes
     // through `requests` (it must run at EndDockSpace's DockBuilder-safe
     // point).
@@ -115,9 +119,15 @@ namespace Arcane::Editor
     // `sceneRecents` is the PER-PROJECT scene history (SceneRecents.hpp) that
     // drives File -> Open Recent Scene -- unlike `recents` above, which is the
     // Hub's shared, machine-wide project list.
+    // Why Build -> Open Visual Studio is enabled or not this frame. The app
+    // derives it (project open? devenv resolved?) and the menu only renders
+    // it -- the tooltip wording lives with the item, the facts with the app.
+    enum class IdeMenuState { Available, NoProject, NoVisualStudio };
+
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
+                        IdeMenuState ideState,
                         PanelVisibility& panels,
                         bool hasSelection,
                         bool hasAssetSelection,

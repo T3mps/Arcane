@@ -1067,6 +1067,12 @@ namespace Arcane::Editor
     // never reorder the recents lists.
     void EditorApp::OnProjectOpened(bool recordRecents)
     {
+        // Build -> Open Visual Studio needs to know whether devenv exists
+        // BEFORE its first draw (it greys with a tooltip otherwise); resolve
+        // once per process, here, rather than spawning vswhere from the menu
+        // path. See OpenInIde (EditorAppProject.cpp).
+        ResolveDevenvOnce();
+
         // Task 7: open into the project's boot scene, now that the plugin has
         // loaded (a scene naming a component the game module registers would
         // otherwise silently drop it) and m_undo exists (Adopt records the

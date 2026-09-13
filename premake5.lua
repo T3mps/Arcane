@@ -827,6 +827,15 @@ project "ArcaneTests"
         -- too but never invoked by any test -- process creation is desk-verify
         -- territory, the same rule as RuntimeLaunch's SpawnDetached above.
         "%{wks.location}/ArcaneEditor/src/Project/ModuleBuild.cpp",
+        -- Build -> Open Visual Studio / open-source-in-VS: IdeLaunch's PURE
+        -- halves (the ROT moniker predicate, solution-path equivalence, the
+        -- devenv argv, outcome wording) source-compile into the test exe so
+        -- the [editor] units drive them directly. The COM half (ROT walk +
+        -- late-bound DTE) and the CreateProcessW launch are compiled too and
+        -- reached ONLY by the opt-in [ide-desk] probe (SKIPs unless
+        -- ARCANE_IDE_DESK is set) -- same desk-verify rule as ModuleBuild's
+        -- Runner and RuntimeLaunch's SpawnDetached above.
+        "%{wks.location}/ArcaneEditor/src/Project/IdeLaunch.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/

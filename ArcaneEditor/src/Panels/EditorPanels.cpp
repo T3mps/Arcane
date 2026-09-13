@@ -52,6 +52,7 @@ namespace Arcane::Editor
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
+                        IdeMenuState ideState,
                         PanelVisibility& panels,
                         bool hasSelection,
                         bool hasAssetSelection,
@@ -323,6 +324,22 @@ namespace Arcane::Editor
                     ImGui::SetTooltip(playing        ? "Stop to rebuild"
                                       : buildingModule ? "A rebuild is already running (see Console)"
                                                        : "This project has no game module");
+                // Source/ in the Asset Browser, step 2: the solution-level
+                // entry point (Unreal keeps its "Open Visual Studio" under
+                // Tools; Build is our developer-actions menu and this arc,
+                // like the Rebuild item's, adds no top-level menu). Greyed on
+                // the two facts the app hands in -- no project, or no Visual
+                // Studio install (UE's CanAccessSourceCode greying) -- and
+                // NOT on Play/build state: opening the IDE disturbs neither.
+                // A never-generated project has no .slnx yet; the app runs
+                // premake first (see EditorApp::OpenInIde), not the menu.
+                const bool canOpenIde = ideState == IdeMenuState::Available;
+                if (ImGui::MenuItem("Open Visual Studio", nullptr, false, canOpenIde))
+                    requests.openIde = true;
+                if (!canOpenIde && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip(ideState == IdeMenuState::NoProject
+                                          ? "Open a project first"
+                                          : "No Visual Studio install found (vswhere found no devenv.exe)");
 #if !defined(ARCANE_DIST)
                 // GPU crash diagnostics arc, Task 11: the desk battery's
                 // trigger. Build is the developer-actions menu (it already owns

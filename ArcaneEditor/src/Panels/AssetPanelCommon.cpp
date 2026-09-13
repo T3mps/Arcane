@@ -234,6 +234,8 @@ namespace Arcane::Editor
         {
             if (e.kind == AssetKind::Scene)
                 actions.openScene = *path;
+            else if (e.kind == AssetKind::Source)
+                actions.openInIde = *path;   // the IDE is a source file's editor, not a document
             else
                 docs.OpenPath(*path);
         }

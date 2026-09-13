@@ -143,6 +143,27 @@ TEST_CASE("ComposeRebuildCommands is one premake-first cmd chain with folded std
     CHECK(cmd.rfind(") 2>&1") == cmd.size() - 6);
 }
 
+// Build -> Open Visual Studio: a project that has never been generated has no
+// .slnx to open, so the editor runs premake alone first -- the SAME premake
+// step Rebuild Game Module runs as its head, minus msbuild. Same cd-first,
+// parenthesised, stderr-folded shape, so the Console sees premake's errors.
+TEST_CASE("ComposeGenerateCommand is the premake-only head of the rebuild chain", "[editor]")
+{
+    const std::string cmd = ModuleBuild::ComposeGenerateCommand(
+        "D:/dev/starworks/Aphelyon", "D:/dev/starworks/ThirdParty/premake5/premake5.exe");
+
+    const std::size_t cdPos      = cmd.find("cd /d \"D:/dev/starworks/Aphelyon\"");
+    const std::size_t premakePos = cmd.find("\"D:/dev/starworks/ThirdParty/premake5/premake5.exe\" vs2026");
+    REQUIRE(cdPos != std::string::npos);
+    REQUIRE(premakePos != std::string::npos);
+    CHECK(cdPos < premakePos);
+
+    CHECK(cmd.find("msbuild") == std::string::npos);
+    CHECK(cmd.find("MSBuild") == std::string::npos);
+    CHECK(cmd.front() == '(');
+    CHECK(cmd.rfind(") 2>&1") == cmd.size() - 6);
+}
+
 TEST_CASE("Configuration matches the editor's own build flavor", "[editor]")
 {
 #ifdef _DEBUG

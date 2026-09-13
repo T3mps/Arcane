@@ -55,6 +55,14 @@ namespace Arcane::Editor
         Arcane::Guid createInstanceOf, createSpriteFrom, setBootScene,
                      showInExplorer, copyPath, copyGuid;
         std::filesystem::path openScene;
+        // Source/ in the Asset Browser, step 2: a Source row's Open (double-
+        // click, the preview pane's Open button, the context menu's Open --
+        // all three land in OpenAssetRow) asks the host to open THIS file in
+        // Visual Studio (EditorApp::OpenInIde -> IdeLaunch). A path, like
+        // openScene, because the host needs the resolved file and the panel
+        // already has it; empty = no request this frame. Source files have no
+        // DocumentHost factory on purpose -- the IDE is their editor.
+        std::filesystem::path openInIde;
         // Unified create (Task 12): request the create dialog for a kind.
         // -1 = none. Values are **CreateAssetKind** (Panels/CreateAssetDialog.hpp)
         // -- NOT AssetKind, which numbers differently. A producer starting

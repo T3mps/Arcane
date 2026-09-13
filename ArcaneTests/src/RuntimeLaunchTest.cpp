@@ -53,6 +53,22 @@ namespace
     }
 }
 
+// QuoteArg was file-private to RuntimeLaunch.cpp until IdeLaunch (Build ->
+// Open Visual Studio) became its second CreateProcessW caller; promoted to
+// the header, it gets the pin it never had. The rules are
+// CommandLineToArgvW's own: quote only when needed, double the backslashes
+// that precede a literal quote or the closing wrapper, and NOTHING else.
+TEST_CASE("QuoteArg reproduces CommandLineToArgvW's escaping rules", "[editor]")
+{
+    CHECK(QuoteArg(L"plain") == L"plain");                          // untouched
+    CHECK(QuoteArg(L"") == L"\"\"");                                // empty must still be a token
+    CHECK(QuoteArg(L"has space") == L"\"has space\"");
+    CHECK(QuoteArg(L"C:\\dir\\sub") == L"C:\\dir\\sub");            // backslashes alone: no quoting
+    CHECK(QuoteArg(L"C:\\my dir\\") == L"\"C:\\my dir\\\\\"");      // trailing backslash doubled before the wrapper
+    CHECK(QuoteArg(L"a\"b") == L"\"a\\\"b\"");                      // embedded quote escaped
+    CHECK(QuoteArg(L"a\\\"b") == L"\"a\\\\\\\"b\"");                // backslash before a quote: doubled + escaped
+}
+
 TEST_CASE("ExeCandidates: packaged layout first, dev bin layout second", "[editor]")
 {
     const fs::path dir = fs::path("C:/Somewhere/ArcaneEditor");

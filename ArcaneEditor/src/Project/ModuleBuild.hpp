@@ -79,7 +79,29 @@ namespace Arcane::Editor::ModuleBuild
     // paths contain; an embedded quote in a path is not defended against.
     std::string ComposeRebuildCommands(const ComposeInputs& in);
 
+    // Build -> Open Visual Studio's "no solution yet" path: the premake-ONLY
+    // head of the chain above --
+    //   ( cd /d "<root>" && "<premake>" vs2026 ) 2>&1
+    // -- so a never-generated project gets its .slnx written before devenv is
+    // asked to open it. Same cd-first, parenthesised, stderr-folded shape, for
+    // the same reasons.
+    std::string ComposeGenerateCommand(const std::filesystem::path& projectRoot,
+                                       const std::filesystem::path& premakeExe);
+
     // ---- resolution (probes the machine; not unit-tested) -------------------
+
+    // Run `commandLine` through cmd (_wpopen) SYNCHRONOUSLY, returning its
+    // merged output line-by-line plus the exit status (nullopt when the pipe
+    // itself could not be opened). For the short, one-shot steps a click can
+    // afford to wait on -- premake generating a solution takes well under a
+    // second -- where the Runner's worker thread would only add a frame of
+    // state machine for nothing. NOT for msbuild: that is the Runner's job.
+    struct CaptureResult
+    {
+        std::vector<std::string> lines;
+        std::optional<int>       exit;
+    };
+    CaptureResult RunCapture(const std::string& commandLine);
 
     // THIS process's exe directory (GetModuleFileNameW). Same private pattern
     // as EditorFonts.cpp/EditorAppScene.cpp, hoisted here because the SDK-root
@@ -93,11 +115,17 @@ namespace Arcane::Editor::ModuleBuild
     // fallback.
     std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot);
 
-    // MSBuild via vswhere (the documented VS-install-aware query:
+    // The one VS-install-aware query Microsoft documents: run
+    // %ProgramFiles(x86)%/Microsoft Visual Studio/Installer/vswhere.exe with
+    // `arguments` and return the FIRST line it prints (a path), or empty when
+    // vswhere is absent or found nothing. Shared by ResolveMsBuild below and
+    // IdeLaunch::ResolveDevenv -- one probe, two questions.
+    std::filesystem::path VsWhere(const std::string& arguments);
+
+    // MSBuild via VsWhere:
     //   vswhere -latest -requires Microsoft.Component.MSBuild
     //           -find MSBuild\**\Bin\MSBuild.exe
-    // under %ProgramFiles(x86)%/Microsoft Visual Studio/Installer), falling
-    // back to bare "msbuild" (PATH -- a Developer Command Prompt launch).
+    // falling back to bare "msbuild" (PATH -- a Developer Command Prompt launch).
     std::filesystem::path ResolveMsBuild();
 
     // Point ARCANE_SDK at `sdkRoot` in THIS process's environment block, which

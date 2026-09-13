@@ -2011,6 +2011,7 @@ namespace Arcane::Editor
         Arcane::Editor::BeginDockSpace(*m_undo, menuReq, m_scene.IsDirty(*m_undo),
                                        InPlayMode(),
                                        m_moduleBuild.Running(), hasGameModule,
+                                       IdeMenuStateNow(),
                                        m_panelVis,
                                        m_selection.HasSelection(),
                                        m_assetModel.selected.IsValid(),
@@ -2205,6 +2206,13 @@ namespace Arcane::Editor
         // finish-side effects all live in PollModuleBuild.
         if (menuReq.rebuildModule)
             StartModuleRebuild();
+        // Build -> Open Visual Studio: same immediacy as the rebuild above --
+        // nothing about finding/launching an IDE needs the frame-boundary
+        // deferral the scene/project requests use. Synchronous for the
+        // premake head (sub-second) and the COM probe; the launch itself is
+        // fire-and-forget.
+        if (menuReq.openIde)
+            OpenInIde({});
 #if !defined(ARCANE_DIST)
         // Build -> Diagnostics -> Crash GPU: fired RIGHT HERE, mid-ImGui-pass,
         // rather than deferred to a frame boundary the way the scene/project
@@ -2436,6 +2444,12 @@ namespace Arcane::Editor
                 ls.sceneAction = { Arcane::Editor::SceneIntent::OpenScene,
                                    panelActions.openScene };
         }
+        // Source/ in the Asset Browser, step 2: a Source row's Open goes to
+        // the IDE, not a document (OpenAssetRow sets this instead of calling
+        // DocumentHost). No session guard: opening a file in Visual Studio
+        // touches nothing the editor owns.
+        if (!panelActions.openInIde.empty())
+            OpenInIde(panelActions.openInIde);
         if (panelActions.setBootScene.IsValid())
         {
             // No unsaved-changes guard: this only rewrites the project

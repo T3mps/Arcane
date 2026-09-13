@@ -20,6 +20,15 @@
 
 namespace Arcane::Editor::RuntimeLaunch
 {
+    // One argv token -> its spelling inside a Win32 command line, by
+    // CommandLineToArgvW's own rules: returned untouched when it needs no
+    // quoting; otherwise wrapped in quotes with every backslash run that
+    // precedes a literal quote (or the closing wrapper) doubled. Pure --
+    // RuntimeLaunchTest pins the rules. Shared by SpawnDetached below and
+    // IdeLaunch's devenv launch (the two CreateProcessW callers), so there is
+    // exactly one place that has to get Windows' escaping right.
+    [[nodiscard]] std::wstring QuoteArg(const std::wstring& arg);
+
     // Where ArcaneRuntime.exe might live relative to the EDITOR exe's own
     // directory: packaged layout first (installed side by side), dev bin
     // layout second (premake's bin/<cfg>-<os>-<arch>-md/<Project>/ puts every

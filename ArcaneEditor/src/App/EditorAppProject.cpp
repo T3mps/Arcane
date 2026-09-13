@@ -25,6 +25,7 @@
 #include "App/EditorApp.hpp"
 #include "Panels/AssetPanelModel.hpp"
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
+#include "Project/IdeLaunch.hpp"   // Build -> Open Visual Studio / open source in VS
 #include "Project/MeshImportWave.hpp"   // F2c Task 13: embedded-texture extraction at discovery
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
@@ -2641,6 +2642,89 @@ namespace Arcane::Editor
         ARC_INFO("Build: {}", cmd);
         if (!m_moduleBuild.Start(cmd))
             ARC_WARN("Build: a rebuild is already running");
+    }
+
+    // ---- Build -> Open Visual Studio / open source in VS (see EditorApp.hpp) ---
+
+    void EditorApp::ResolveDevenvOnce()
+    {
+        if (m_devenvResolved)
+            return;
+        m_devenvResolved = true;
+        m_devenv = IdeLaunch::ResolveDevenv();
+        if (m_devenv.empty())
+            ARC_WARN("IDE: no Visual Studio install found (vswhere found no devenv.exe) -- "
+                     "Build > Open Visual Studio stays greyed");
+        else
+            ARC_INFO("IDE: Visual Studio at {}", m_devenv.string());
+    }
+
+    Arcane::Editor::IdeMenuState EditorApp::IdeMenuStateNow() const
+    {
+        if (!m_runtime->CurrentProject())
+            return IdeMenuState::NoProject;
+        if (m_devenv.empty())
+            return IdeMenuState::NoVisualStudio;
+        return IdeMenuState::Available;
+    }
+
+    void EditorApp::OpenInIde(const std::filesystem::path& file)
+    {
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj)
+        {
+            ARC_ERROR("IDE: no open project -- nothing to open");
+            return;
+        }
+        ResolveDevenvOnce();
+
+        // The solution to hand devenv, or to find in a running instance. A
+        // project that has never been generated has none yet: run premake
+        // alone, synchronously (well under a second), against the RUNNING
+        // editor's SDK -- the same SDK rule and the same premake head
+        // StartModuleRebuild uses -- and look again. Lines land in the
+        // Console under the same "Build: " prefix as a rebuild's.
+        std::filesystem::path solution = ModuleBuild::DiscoverSolution(proj->Root());
+        if (solution.empty())
+        {
+            const std::filesystem::path sdkRoot =
+                ModuleBuild::SdkRootFromExeDir(ModuleBuild::ExeDir());
+            ModuleBuild::SetSdkEnv(sdkRoot);
+            const std::string cmd = ModuleBuild::ComposeGenerateCommand(
+                proj->Root(), ModuleBuild::ResolvePremake(sdkRoot));
+            ARC_INFO("IDE: no solution in {} yet -- generating (premake vs2026)", proj->Root().generic_string());
+            ARC_INFO("Build: {}", cmd);
+            const ModuleBuild::CaptureResult gen = ModuleBuild::RunCapture(cmd);
+            for (const std::string& line : gen.lines)
+                ARC_INFO("Build: {}", line);
+            if (!gen.exit || *gen.exit != 0)
+                ARC_ERROR("Build: premake exited with {}", gen.exit ? std::to_string(*gen.exit) : "no exit code");
+            solution = ModuleBuild::DiscoverSolution(proj->Root());
+        }
+
+        const IdeLaunch::Outcome outcome = file.empty()
+            ? IdeLaunch::OpenSolution(m_devenv, solution)
+            : IdeLaunch::OpenFile(m_devenv, solution, file);
+
+        // One Console line per click, its severity by whether the click did
+        // what it asked: the three "it worked" outcomes are info, the
+        // transient one (Blocked) a warning, everything else an error.
+        const std::string what = file.empty() ? solution.filename().string()
+                                              : file.filename().string();
+        switch (outcome)
+        {
+            case IdeLaunch::Outcome::Activated:
+            case IdeLaunch::Outcome::OpenedInInstance:
+            case IdeLaunch::Outcome::Launched:
+                ARC_INFO("IDE: {} -- {}", what, IdeLaunch::Describe(outcome));
+                break;
+            case IdeLaunch::Outcome::Blocked:
+                ARC_WARN("IDE: {} -- {}", what, IdeLaunch::Describe(outcome));
+                break;
+            default:
+                ARC_ERROR("IDE: {} -- {}", what, IdeLaunch::Describe(outcome));
+                break;
+        }
     }
 
     void EditorApp::PollModuleBuild()

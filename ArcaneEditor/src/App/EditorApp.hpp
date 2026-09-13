@@ -1756,6 +1756,27 @@ namespace Arcane::Editor
         // ResetPerProjectState's rule.
         std::filesystem::path m_moduleBuildRoot;
 
+        // ---- Build -> Open Visual Studio / open source in VS (IdeLaunch.hpp) --
+        // OpenInIde(file) opens `file` in the Visual Studio that has the open
+        // project's solution loaded -- or, with `file` empty, just brings that
+        // solution up (the menu item). Both go: DiscoverSolution -> if none,
+        // run premake SYNCHRONOUSLY (ModuleBuild::ComposeGenerateCommand /
+        // RunCapture, its lines to the Console as "Build: ") -> rediscover ->
+        // IdeLaunch::OpenSolution/OpenFile, whose Outcome is logged in one
+        // Console line. Reached from Build -> Open Visual Studio
+        // (MenuRequests::openIde) and from a Source row's Open
+        // (AssetPanelActions::openInIde), EditorAppFrame.cpp.
+        //
+        // devenv.exe is resolved ONCE per process, lazily, on the first
+        // project open (vswhere spawns a process; ~100 ms, not per frame):
+        // m_devenvResolved latches the attempt, m_devenv holds the answer
+        // (empty = no install found -> the menu greys with a tooltip).
+        void OpenInIde(const std::filesystem::path& file);
+        [[nodiscard]] Arcane::Editor::IdeMenuState IdeMenuStateNow() const;
+        void ResolveDevenvOnce();
+        std::filesystem::path m_devenv;
+        bool                  m_devenvResolved = false;
+
         // ---- Report-written notify (GPU crash diagnostics arc, Task 9) -----
         // Diagnostics::ReportWrittenHook (Diagnostics.hpp) fires on WHATEVER
         // thread wrote the report -- the hang/gpu-stall watchdog thread for

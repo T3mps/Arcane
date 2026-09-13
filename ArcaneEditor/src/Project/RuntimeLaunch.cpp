@@ -16,45 +16,44 @@
 
 namespace Arcane::Editor::RuntimeLaunch
 {
-    namespace
+    // Windows command-line quoting (CreateProcessW takes ONE string, not
+    // an argv array, so something has to reproduce CommandLineToArgvW's
+    // own escaping rules): wrap in quotes when the token is empty or has
+    // whitespace/a quote, doubling backslashes that immediately precede a
+    // literal quote or the closing wrapper. BuildArgs deliberately returns
+    // UNQUOTED tokens (see its header comment), so this is the one place
+    // that has to get Windows' escaping right. Was file-private until
+    // IdeLaunch (Build -> Open Visual Studio) became the second
+    // CreateProcessW caller; the header now declares it, and
+    // RuntimeLaunchTest pins the rules.
+    std::wstring QuoteArg(const std::wstring& arg)
     {
-        // Windows command-line quoting (CreateProcessW takes ONE string, not
-        // an argv array, so something has to reproduce CommandLineToArgvW's
-        // own escaping rules): wrap in quotes when the token is empty or has
-        // whitespace/a quote, doubling backslashes that immediately precede a
-        // literal quote or the closing wrapper. Kept private to this TU --
-        // BuildArgs deliberately returns UNQUOTED tokens (see its header
-        // comment), so this is the one place that has to get Windows'
-        // escaping right.
-        std::wstring QuoteArg(const std::wstring& arg)
-        {
-            if (!arg.empty() && arg.find_first_of(L" \t\"") == std::wstring::npos)
-                return arg;
+        if (!arg.empty() && arg.find_first_of(L" \t\"") == std::wstring::npos)
+            return arg;
 
-            std::wstring out = L"\"";
-            std::size_t backslashes = 0;
-            for (wchar_t c : arg)
+        std::wstring out = L"\"";
+        std::size_t backslashes = 0;
+        for (wchar_t c : arg)
+        {
+            if (c == L'\\')
             {
-                if (c == L'\\')
-                {
-                    ++backslashes;
-                    continue;
-                }
-                if (c == L'"')
-                {
-                    out.append(backslashes * 2 + 1, L'\\');
-                    backslashes = 0;
-                    out.push_back(L'"');
-                    continue;
-                }
-                out.append(backslashes, L'\\');
-                backslashes = 0;
-                out.push_back(c);
+                ++backslashes;
+                continue;
             }
-            out.append(backslashes * 2, L'\\');
-            out.push_back(L'"');
-            return out;
+            if (c == L'"')
+            {
+                out.append(backslashes * 2 + 1, L'\\');
+                backslashes = 0;
+                out.push_back(L'"');
+                continue;
+            }
+            out.append(backslashes, L'\\');
+            backslashes = 0;
+            out.push_back(c);
         }
+        out.append(backslashes * 2, L'\\');
+        out.push_back(L'"');
+        return out;
     }
 
     std::vector<std::filesystem::path> ExeCandidates(const std::filesystem::path& editorExeDir)

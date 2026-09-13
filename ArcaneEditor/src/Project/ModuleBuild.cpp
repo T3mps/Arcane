@@ -114,6 +114,45 @@ namespace Arcane::Editor::ModuleBuild
         return cmd;
     }
 
+    std::string ComposeGenerateCommand(const std::filesystem::path& projectRoot,
+                                       const std::filesystem::path& premakeExe)
+    {
+        std::string cmd = "( cd /d ";
+        Quote(cmd, projectRoot);
+        cmd += " && ";
+        Quote(cmd, premakeExe);
+        cmd += " vs2026 ) 2>&1";
+        return cmd;
+    }
+
+    CaptureResult RunCapture(const std::string& commandLine)
+    {
+        CaptureResult out;
+#ifdef _WIN32
+        // Same _wpopen shape as the Runner's worker (see Runner::Start), just
+        // on the calling thread: the composed ( ... ) 2>&1 line runs through
+        // cmd.exe /c and its merged output is read to EOF.
+        if (FILE* pipe = ::_wpopen(Widen(commandLine).c_str(), L"r"))
+        {
+            char buf[4096];
+            while (std::fgets(buf, sizeof(buf), pipe))
+            {
+                std::string line(buf);
+                while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+                    line.pop_back();
+                out.lines.push_back(std::move(line));
+            }
+            out.exit = ::_pclose(pipe);
+        }
+        else
+            out.lines.push_back("could not start the shell (_wpopen failed)");
+#else
+        out.lines.push_back("project generation is Windows-only today (cmd + premake)");
+        (void)commandLine;
+#endif
+        return out;
+    }
+
     std::filesystem::path ExeDir()
     {
 #ifdef _WIN32
@@ -137,7 +176,7 @@ namespace Arcane::Editor::ModuleBuild
         return "premake5";   // PATH fallback (cmd resolves it)
     }
 
-    std::filesystem::path ResolveMsBuild()
+    std::filesystem::path VsWhere(const std::string& arguments)
     {
 #ifdef _WIN32
         // vswhere is the one install-location contract VS actually documents:
@@ -153,8 +192,8 @@ namespace Arcane::Editor::ModuleBuild
             {
                 std::string query = "\"";
                 query += vswhere.string();
-                query += "\" -latest -requires Microsoft.Component.MSBuild"
-                         " -find MSBuild\\**\\Bin\\MSBuild.exe";
+                query += "\" ";
+                query += arguments;
                 // A quoted exe at the head of a bare _popen line loses its
                 // quotes to cmd's outer-quote stripping; the standard dodge is
                 // one extra wrapping pair.
@@ -173,7 +212,18 @@ namespace Arcane::Editor::ModuleBuild
                 }
             }
         }
+#else
+        (void)arguments;
 #endif
+        return {};
+    }
+
+    std::filesystem::path ResolveMsBuild()
+    {
+        const std::filesystem::path found =
+            VsWhere("-latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe");
+        if (!found.empty())
+            return found;
         return "msbuild";   // PATH fallback (a Developer Command Prompt launch)
     }
 
