@@ -61,6 +61,10 @@ namespace Arcane::Editor
         entry(ICON_LC_BOX          " Mesh...",   CreateAssetKind::Mesh);
         entry(ICON_LC_STICKER      " Sprite...", CreateAssetKind::Sprite);
         entry(ICON_LC_CLAPPERBOARD " Scene...",  CreateAssetKind::Scene);
+        ImGui::Separator();
+        // The editor<->IDE surface, step 3: code, not content -- lands under
+        // Source/ (CreateKindRoot), same icon the Source rows carry.
+        entry(ICON_LC_FILE_CODE    " C++ Class...", CreateAssetKind::CppClass);
         ImGui::EndDisabled();
     }
 

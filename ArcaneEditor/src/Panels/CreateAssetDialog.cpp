@@ -1,6 +1,7 @@
 #include "Panels/CreateAssetDialog.hpp"
 
 #include "Panels/AssetPanelModel.hpp"
+#include "Project/ClassTemplates.hpp"   // CppClass: ValidateClassName + the Template combo's labels
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
@@ -12,8 +13,10 @@
 #include <algorithm>
 #include <cfloat>
 #include <cstdio>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Arcane::Editor
@@ -50,40 +53,60 @@ namespace Arcane::Editor
         // The model's folder strings are mount-path directories with a
         // trailing slash ("materials/"), and root-level assets fold into the
         // synthetic bucket "Content/" (MakeBaseEntry's own comment). Both
-        // shapes normalise to the same pair here.
-        FolderChoice MakeFolderChoice(const std::string& modelFolder)
+        // shapes normalise to the same pair here. `root` is the kind's
+        // CreateKindRoot ("Content" / "Source"): the display is "<root>/rel".
+        FolderChoice MakeFolderChoice(const std::string& relDir, const char* root)
         {
-            // The synthetic root bucket IS Content/ -- it names no
-            // subdirectory, so its relative part is empty.
-            if (modelFolder == "Content/")
-                return { "Content", "" };
-            std::string rel = modelFolder;
+            std::string rel = relDir;
             while (!rel.empty() && rel.back() == '/')
                 rel.pop_back();
-            return { "Content/" + rel, rel };
+            if (rel.empty())
+                return { root, "" };   // the root itself names no subdirectory
+            return { std::string(root) + "/" + rel, rel };
+        }
+
+        // A model folder KEY -> the directory relative to its mount root, or
+        // nullopt when the key belongs to another mount. Two key shapes
+        // (AssetPanelEntry::folder's own doc): the game mount is UNQUALIFIED
+        // ("Content/" is its root, "materials/" nested); every other mount is
+        // QUALIFIED ("source://" is its root, "source://combat/" nested).
+        std::optional<std::string> RelativeDirOfFolderKey(const std::string& key, const char* root)
+        {
+            const bool wantSource = std::string_view(root) == "Source";
+            if (const std::size_t sep = key.find("://"); sep != std::string::npos)
+            {
+                if (!wantSource || key.substr(0, sep) != "source")
+                    return std::nullopt;
+                return key.substr(sep + 3);   // "" for the root, "combat/" nested
+            }
+            if (wantSource)
+                return std::nullopt;
+            return key == "Content/" ? std::string() : key;
         }
 
         // Distinct create-able folders: every directory the project's OWN
-        // content already uses, plus the kind's default, plus Content/ itself.
+        // files already use under the kind's root, plus the kind's default,
+        // plus the root itself.
         //
-        // "game://" ONLY. The model groups folders across every mount (an
-        // engine:// and a game:// "materials/" share one Browse group), but a
-        // created asset can only land -- and only register + resolve by GUID --
-        // under the project's own content root (Project.cpp:229 mounts "game"
-        // at root/Content). Offering an engine or plugin folder here would
-        // offer a target RegisterCreatedAsset refuses (Project.cpp:334-338).
+        // ONE mount only -- "game://" for every asset kind, "source://" for
+        // CppClass. The model groups folders across every mount (an engine://
+        // and a game:// "materials/" share one Browse group), but a created
+        // file can only land -- and only register + resolve by GUID -- under
+        // the project's own root for that kind (Project.cpp mounts "game" at
+        // root/Content and "source" at root/Source). Offering an engine or
+        // plugin folder here would offer a target RegisterCreatedAsset refuses.
         std::vector<FolderChoice> BuildFolderChoices(const AssetPanelModel& model,
                                                      CreateAssetKind kind)
         {
-            std::set<std::string> folders;
-            folders.insert("Content/");                        // always offer the root
+            const char* root = CreateKindRoot(kind);
+            std::set<std::string> folders;                     // relative dirs, "" = root
+            folders.insert("");                                // always offer the root
             folders.insert(CreateKindDefaultFolder(kind));     // always offer the kind default
-            folders.erase("");                                 // a kind whose default IS the root
             for (const auto& [guid, e] : model.Entries())
             {
                 (void)guid;
-                if (e.mountPath.rfind("game://", 0) == 0)
-                    folders.insert(e.folder);
+                if (const auto rel = RelativeDirOfFolderKey(e.folder, root))
+                    folders.insert(*rel);
             }
 
             std::vector<FolderChoice> out;
@@ -91,10 +114,10 @@ namespace Arcane::Editor
             // Root first (it is the parent of everything else), then the rest
             // in the set's own alphabetical order -- a stable, predictable
             // list rather than unordered_map iteration order.
-            out.push_back(MakeFolderChoice("Content/"));
+            out.push_back(MakeFolderChoice("", root));
             for (const std::string& f : folders)
-                if (f != "Content/")
-                    out.push_back(MakeFolderChoice(f));
+                if (!f.empty())
+                    out.push_back(MakeFolderChoice(f, root));
             return out;
         }
 
@@ -110,7 +133,7 @@ namespace Arcane::Editor
         // path ("materials/" -> "materials").
         std::string DefaultRelativeFolder(CreateAssetKind kind)
         {
-            return MakeFolderChoice(CreateKindDefaultFolder(kind)).relative;
+            return MakeFolderChoice(CreateKindDefaultFolder(kind), CreateKindRoot(kind)).relative;
         }
 
         // Every material in the project, name-sorted -- the parent picker's
@@ -153,12 +176,19 @@ namespace Arcane::Editor
 
             const FolderChoice& folder = folders[static_cast<std::size_t>(
                 std::clamp(st.folderIndex, 0, static_cast<int>(folders.size()) - 1))];
+            const std::filesystem::path root = project.Root() / CreateKindRoot(st.request.kind);
             const std::filesystem::path targetDir =
-                folder.relative.empty() ? (project.Root() / "Content")
-                                        : (project.Root() / "Content" / folder.relative);
+                folder.relative.empty() ? root : (root / folder.relative);
 
-            const CreateNameCheck check =
+            CreateNameCheck check =
                 ValidateCreateName(st.name, targetDir, CreateKindExtension(st.request.kind));
+            // CppClass: the name is also a C++ TYPE name. The file rules above
+            // run first (cheapest, and a name that cannot be a file is moot);
+            // the identifier rules only speak once those pass, so the two
+            // messages never stack.
+            if (check.ok && st.request.kind == CreateAssetKind::CppClass)
+                if (const auto why = ClassTemplates::ValidateClassName(st.name))
+                    check = { false, *why };
             // The validation line is drawn UNCONDITIONALLY (empty when the
             // name is fine) so the modal's height -- and therefore every
             // control below it -- does not jump the instant a name goes from
@@ -202,6 +232,43 @@ namespace Arcane::Editor
                         ImGui::SetItemDefaultFocus();
                 }
                 ImGui::EndCombo();
+            }
+        }
+
+        // CppClass: the Template combo -- Component / System / Plain class
+        // (Project/ClassTemplates.hpp). Same shape as the Material Kind combo.
+        void DrawClassTemplateField(CreateDialogState& st)
+        {
+            ImGui::TextDisabled("Template");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const int count = static_cast<int>(ClassTemplates::Kind::Count);
+            const int index = std::clamp(st.classTemplate, 0, count - 1);
+            const auto label = [](int i) { return ClassTemplates::KindLabel(static_cast<ClassTemplates::Kind>(i)); };
+            if (ImGui::BeginCombo("##createclasstemplate", label(index)))
+            {
+                for (int i = 0; i < count; ++i)
+                {
+                    const bool selected = (i == index);
+                    if (ImGui::Selectable(label(i), selected))
+                        st.classTemplate = i;
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            // One line of what each template gives, so the choice is not a
+            // guess. Component is the one that goes live by itself.
+            switch (static_cast<ClassTemplates::Kind>(index))
+            {
+                case ClassTemplates::Kind::Component:
+                    ImGui::TextDisabled("Reflected data on an entity. Live after Rebuild Game Module.");
+                    break;
+                case ClassTemplates::Kind::System:
+                    ImGui::TextDisabled("A scheduler functor. Add its AddSystem line to Init (see the file).");
+                    break;
+                default:
+                    ImGui::TextDisabled("A .hpp/.cpp pair in the project namespace.");
+                    break;
             }
         }
 
@@ -521,6 +588,9 @@ namespace Arcane::Editor
                 case CreateAssetKind::Scene:
                     ImGui::Checkbox("Set as boot scene", &st.setAsBoot);
                     break;
+                case CreateAssetKind::CppClass:
+                    DrawClassTemplateField(st);
+                    break;
             }
 
             // Footer: Cancel then Create, right-aligned (the mock's order).
@@ -541,6 +611,7 @@ namespace Arcane::Editor
                                   std::clamp(st.folderIndex, 0,
                                              static_cast<int>(folders.size()) - 1))].relative;
                 r.surface   = static_cast<int>(MaterialSurfaceForComboIndex(st.surface));
+                r.classTemplate = st.classTemplate;
                 r.parent    = st.parent;
                 r.texture   = st.texture;
                 r.setAsBoot = st.setAsBoot;

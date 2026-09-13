@@ -24,6 +24,7 @@
 
 #include "App/EditorApp.hpp"
 #include "Panels/AssetPanelModel.hpp"
+#include "Project/ClassTemplates.hpp"   // Assets -> Create -> C++ Class (MintCppClass)
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
 #include "Project/IdeLaunch.hpp"   // Build -> Open Visual Studio / open source in VS
 #include "Project/MeshImportWave.hpp"   // F2c Task 13: embedded-texture extraction at discovery
@@ -2680,25 +2681,12 @@ namespace Arcane::Editor
 
         // The solution to hand devenv, or to find in a running instance. A
         // project that has never been generated has none yet: run premake
-        // alone, synchronously (well under a second), against the RUNNING
-        // editor's SDK -- the same SDK rule and the same premake head
-        // StartModuleRebuild uses -- and look again. Lines land in the
-        // Console under the same "Build: " prefix as a rebuild's.
+        // alone (RegenerateSolution) and look again.
         std::filesystem::path solution = ModuleBuild::DiscoverSolution(proj->Root());
         if (solution.empty())
         {
-            const std::filesystem::path sdkRoot =
-                ModuleBuild::SdkRootFromExeDir(ModuleBuild::ExeDir());
-            ModuleBuild::SetSdkEnv(sdkRoot);
-            const std::string cmd = ModuleBuild::ComposeGenerateCommand(
-                proj->Root(), ModuleBuild::ResolvePremake(sdkRoot));
             ARC_INFO("IDE: no solution in {} yet -- generating (premake vs2026)", proj->Root().generic_string());
-            ARC_INFO("Build: {}", cmd);
-            const ModuleBuild::CaptureResult gen = ModuleBuild::RunCapture(cmd);
-            for (const std::string& line : gen.lines)
-                ARC_INFO("Build: {}", line);
-            if (!gen.exit || *gen.exit != 0)
-                ARC_ERROR("Build: premake exited with {}", gen.exit ? std::to_string(*gen.exit) : "no exit code");
+            RegenerateSolution();
             solution = ModuleBuild::DiscoverSolution(proj->Root());
         }
 
@@ -2725,6 +2713,110 @@ namespace Arcane::Editor
                 ARC_ERROR("IDE: {} -- {}", what, IdeLaunch::Describe(outcome));
                 break;
         }
+    }
+
+    bool EditorApp::RegenerateSolution()
+    {
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj)
+            return false;
+        // Against the RUNNING editor's SDK -- the same SDK rule and the same
+        // premake head StartModuleRebuild uses (build/arcane.lua consumes
+        // ARCANE_SDK); synchronous, well under a second.
+        const std::filesystem::path sdkRoot =
+            ModuleBuild::SdkRootFromExeDir(ModuleBuild::ExeDir());
+        ModuleBuild::SetSdkEnv(sdkRoot);
+        const std::string cmd = ModuleBuild::ComposeGenerateCommand(
+            proj->Root(), ModuleBuild::ResolvePremake(sdkRoot));
+        ARC_INFO("Build: {}", cmd);
+        const ModuleBuild::CaptureResult gen = ModuleBuild::RunCapture(cmd);
+        for (const std::string& line : gen.lines)
+            ARC_INFO("Build: {}", line);
+        if (!gen.exit || *gen.exit != 0)
+        {
+            ARC_ERROR("Build: premake exited with {}", gen.exit ? std::to_string(*gen.exit) : "no exit code");
+            return false;
+        }
+        return true;
+    }
+
+    // ---- Assets -> Create -> C++ Class (see EditorApp.hpp) -------------------
+
+    Arcane::Guid EditorApp::MintCppClass(const std::filesystem::path& headerTarget,
+                                         const std::string& className, int templateKind)
+    {
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj)
+            return {};
+
+        const auto kind = static_cast<ClassTemplates::Kind>(
+            std::clamp(templateKind, 0, static_cast<int>(ClassTemplates::Kind::Count) - 1));
+        const ClassTemplates::Rendered files =
+            ClassTemplates::Render(kind, className, proj->Manifest().name);
+
+        const std::filesystem::path dir        = headerTarget.parent_path();
+        const std::filesystem::path headerPath = dir / files.headerName;
+        const std::filesystem::path sourcePath =
+            files.sourceName.empty() ? std::filesystem::path{} : dir / files.sourceName;
+
+        // The dialog validated the header's uniqueness; the source is derived
+        // from the same stem, so it is checked here, before either is written
+        // -- a half-created class is worse than a refused one.
+        std::error_code ec;
+        for (const std::filesystem::path* p : { &headerPath, &sourcePath })
+        {
+            if (!p->empty() && std::filesystem::exists(*p, ec))
+            {
+                ARC_ERROR("Create: '{}' already exists -- refusing to overwrite", p->generic_string());
+                return {};
+            }
+        }
+
+        const auto write = [](const std::filesystem::path& path, const std::string& text)
+        {
+            std::ofstream out(path, std::ios::binary);
+            if (!out)
+                return false;
+            out << text;
+            return static_cast<bool>(out);
+        };
+        if (!write(headerPath, files.header))
+        {
+            ARC_ERROR("Create: could not write '{}'", headerPath.generic_string());
+            return {};
+        }
+        if (!sourcePath.empty() && !write(sourcePath, files.source))
+        {
+            ARC_ERROR("Create: could not write '{}'", sourcePath.generic_string());
+            std::filesystem::remove(headerPath, ec);   // never leave half a class behind
+            return {};
+        }
+
+        // Register both under source:// (Project::RegisterAsset lists the
+        // source root; AssetRegistry's path-derived-guid rule mints no
+        // sidecar) so the rows appear without a reopen.
+        const std::optional<Arcane::Guid> headerGuid = m_runtime->RegisterCreatedAsset(headerPath);
+        std::optional<Arcane::Guid> sourceGuid;
+        if (!sourcePath.empty())
+            sourceGuid = m_runtime->RegisterCreatedAsset(sourcePath);
+        m_assetModel.MarkAllDirty();
+        if (!headerGuid)
+            ARC_WARN("Create: '{}' was written but did not register (see Console)", headerPath.generic_string());
+
+        ARC_INFO("Create: {} '{}' -> {}{}", ClassTemplates::KindLabel(kind), className,
+                 headerPath.generic_string(),
+                 sourcePath.empty() ? std::string() : " + " + sourcePath.filename().string());
+
+        // The .vcxproj is premake's glob over Source/**: regenerate so the new
+        // files are IN the project Visual Studio is about to show. A failure
+        // here is reported but does not undo the create -- the files are real
+        // and registered; the next Rebuild regenerates anyway.
+        if (!RegenerateSolution())
+            ARC_WARN("Create: the solution did not regenerate -- Visual Studio may not list the new files until the next Rebuild Game Module");
+
+        if (sourceGuid) return *sourceGuid;
+        if (headerGuid) return *headerGuid;
+        return {};
     }
 
     void EditorApp::PollModuleBuild()

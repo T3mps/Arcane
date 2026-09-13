@@ -258,6 +258,9 @@ namespace Arcane::Editor
                     entry("Mesh...",   Arcane::Editor::CreateAssetKind::Mesh);
                     entry("Sprite...", Arcane::Editor::CreateAssetKind::Sprite);
                     entry("Scene...",  Arcane::Editor::CreateAssetKind::Scene);
+                    ImGui::Separator();
+                    // The editor<->IDE surface, step 3: code under Source/.
+                    entry("C++ Class...", Arcane::Editor::CreateAssetKind::CppClass);
                     ImGui::EndMenu();
                 }
                 // Act on the Assets panel's last-clicked row; greyed until one
@@ -306,7 +309,7 @@ namespace Arcane::Editor
                     requests.resetLayout = true;
                 ImGui::EndMenu();
             }
-            if (ImGui::BeginMenu("Build"))
+            if (ImGui::BeginMenu("Tools"))
             {
                 // Disabled during Play -- the UE model: the level editor
                 // refuses a recompile while PIE runs (vendored source,
@@ -334,7 +337,7 @@ namespace Arcane::Editor
                 // A never-generated project has no .slnx yet; the app runs
                 // premake first (see EditorApp::OpenInIde), not the menu.
                 const bool canOpenIde = ideState == IdeMenuState::Available;
-                if (ImGui::MenuItem("Open Visual Studio", nullptr, false, canOpenIde))
+                if (ImGui::MenuItem("Open Visual Studio Solution...", nullptr, false, canOpenIde))
                     requests.openIde = true;
                 if (!canOpenIde && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip(ideState == IdeMenuState::NoProject

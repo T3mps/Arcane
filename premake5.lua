@@ -836,6 +836,12 @@ project "ArcaneTests"
         -- ARCANE_IDE_DESK is set) -- same desk-verify rule as ModuleBuild's
         -- Runner and RuntimeLaunch's SpawnDetached above.
         "%{wks.location}/ArcaneEditor/src/Project/IdeLaunch.cpp",
+        -- Assets -> Create -> C++ Class: ClassTemplates (name validation, the
+        -- project-name -> namespace rule, the three rendered templates as
+        -- strings) source-compiles into the test exe so the [editor] units
+        -- drive the whole text half directly. Writing/registering/regenerating
+        -- is EditorApp's (MintCppClass) and desk-verify.
+        "%{wks.location}/ArcaneEditor/src/Project/ClassTemplates.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/

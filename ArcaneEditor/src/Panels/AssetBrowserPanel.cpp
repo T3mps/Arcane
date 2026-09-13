@@ -182,7 +182,8 @@ namespace Arcane::Editor
 
         // Rail "+" gate (spec s6): only kinds with a Create-menu entry get
         // the hover create affordance. Textures/Data/Audio/Font/Diagnostic/
-        // Other get none.
+        // Other get none. Source has one since the C++ Class wizard
+        // (CreateKindForAssetKind bridges it to CppClass).
         bool RailKindCreatable(int kind)
         {
             switch (static_cast<AssetKind>(kind))
@@ -191,6 +192,7 @@ namespace Arcane::Editor
                 case AssetKind::Sprite:
                 case AssetKind::Mesh:
                 case AssetKind::Scene:
+                case AssetKind::Source:
                     return true;
                 default:
                     return false;

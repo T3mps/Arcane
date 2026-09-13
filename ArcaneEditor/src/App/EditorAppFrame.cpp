@@ -2684,8 +2684,10 @@ namespace Arcane::Editor
         // The Location combo always offers the kind's DEFAULT folder, whether
         // or not the project has one yet (BuildFolderChoices' own comment), so
         // the directory is made on demand here rather than the create failing
-        // on a project that simply has no "materials/" yet.
-        std::filesystem::path dir = proj->Root() / "Content";
+        // on a project that simply has no "materials/" yet. The ROOT is the
+        // kind's (CreateKindRoot): Content/ for assets, Source/ for a C++
+        // class -- the same rule the dialog's Location combo keyed off.
+        std::filesystem::path dir = proj->Root() / Arcane::Editor::CreateKindRoot(r.kind);
         if (!r.folder.empty())
             dir /= r.folder;
         std::error_code ec;
@@ -2743,6 +2745,13 @@ namespace Arcane::Editor
                 }
                 break;
             }
+            case Arcane::Editor::CreateAssetKind::CppClass:
+                // `target` is the HEADER (CreateKindExtension's ".hpp"); the
+                // mint derives the .cpp beside it, registers both under
+                // source:// and regenerates the solution. `created` is the
+                // file to open in Visual Studio (the .cpp when there is one).
+                created = MintCppClass(target, r.name, r.classTemplate);
+                break;
         }
 
         if (!created.IsValid())
@@ -2778,6 +2787,15 @@ namespace Arcane::Editor
                         m_modalErrors.Push("Scene Error",
                                            "Could not write the project's boot scene (see Console).");
                 }
+                break;
+            case Arcane::Editor::CreateAssetKind::CppClass:
+                // The IDE is a source file's editor (never a DocumentHost
+                // document): open the new file in Visual Studio through the
+                // same path a Source row's double-click takes -- UE opens the
+                // IDE after New C++ Class too. The solution was regenerated
+                // by the mint, so the file is already in the project VS sees.
+                if (const auto path = proj->ResolveAsset(Arcane::AssetId::FromGuid(created)))
+                    OpenInIde(*path);
                 break;
             default:
                 break;

@@ -159,3 +159,26 @@ TEST_CASE("Create-kind vocabulary and the AssetKind bridge", "[editor][create]")
           == "Create Material Instance");
     CHECK(std::string(CreateNounForExtension(".arcmat")) == "material");
 }
+
+// Assets -> Create -> C++ Class (the editor<->IDE surface, step 3): a sixth
+// create kind whose files land under Source/, not Content/. The header is the
+// kind's PRIMARY file (uniqueness validates against it; the .cpp is derived),
+// and a Source rail row bridges to it exactly as Material's row bridges to
+// Material.
+TEST_CASE("Create-kind vocabulary: C++ Class lands under Source/ and bridges from AssetKind::Source", "[editor][create]")
+{
+    CHECK(kCreateAssetKindCount == 6);
+    CHECK(CreateKindForAssetKind(AssetKind::Source) == CreateAssetKind::CppClass);
+
+    CHECK(std::string(CreateKindTitle(CreateAssetKind::CppClass))         == "Create C++ Class");
+    CHECK(std::string(CreateKindExtension(CreateAssetKind::CppClass))     == ".hpp");
+    CHECK(std::string(CreateKindDefaultFolder(CreateAssetKind::CppClass)) == "");   // Source/ itself
+    CHECK(std::string(CreateNounForExtension(".hpp"))                     == "class");
+
+    // The per-kind ROOT directory under the project: every asset kind is
+    // Content/, source is Source/. This is the one thing the dialog's
+    // Location combo and the dispatcher's target path both key off.
+    CHECK(std::string(CreateKindRoot(CreateAssetKind::CppClass)) == "Source");
+    CHECK(std::string(CreateKindRoot(CreateAssetKind::Material)) == "Content");
+    CHECK(std::string(CreateKindRoot(CreateAssetKind::Scene))    == "Content");
+}

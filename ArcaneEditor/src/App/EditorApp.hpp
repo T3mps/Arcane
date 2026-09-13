@@ -1777,6 +1777,28 @@ namespace Arcane::Editor
         std::filesystem::path m_devenv;
         bool                  m_devenvResolved = false;
 
+        // Run premake alone, SYNCHRONOUSLY, for the open project against the
+        // running editor's SDK (the same premake head Rebuild Game Module runs
+        // -- ModuleBuild::ComposeGenerateCommand / RunCapture), its lines to
+        // the Console as "Build: ". Two callers: OpenInIde when no .slnx exists
+        // yet, and MintCppClass ALWAYS (the .vcxproj must list the new files
+        // before Visual Studio opens them). Returns false when premake failed
+        // (exit != 0 or the shell could not start); the caller decides what
+        // that means for its own step.
+        bool RegenerateSolution();
+
+        // Assets -> Create -> C++ Class (ConsumeCreateResult's CppClass arm):
+        // render `templateKind` (a ClassTemplates::Kind) for `className` in
+        // the project's namespace, write the header (at `headerTarget`) and
+        // the source (beside it, when the kind has one -- refused if either
+        // already exists), register both under source://, regenerate the
+        // solution, and return the guid of the file to open (the .cpp when
+        // there is one, else the .hpp); nil on failure with the reason in the
+        // Console. Opening it in Visual Studio is the dispatcher's post-mint
+        // step, same "the caller decides" split as MintMeshAsset.
+        Arcane::Guid MintCppClass(const std::filesystem::path& headerTarget,
+                                  const std::string& className, int templateKind);
+
         // ---- Report-written notify (GPU crash diagnostics arc, Task 9) -----
         // Diagnostics::ReportWrittenHook (Diagnostics.hpp) fires on WHATEVER
         // thread wrote the report -- the hang/gpu-stall watchdog thread for

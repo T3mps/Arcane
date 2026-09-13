@@ -50,10 +50,15 @@ namespace Arcane::Editor
     // (a fresh material vs. an instance OF one). The two numberings are
     // therefore unrelated -- see CreateKindForAssetKind below, which is the
     // ONLY sanctioned bridge between them.
+    // CppClass (the editor<->IDE surface, step 3): Assets -> Create -> C++
+    // Class. The one kind whose files land under Source/, not Content/ --
+    // CreateKindRoot below is what keys that -- and whose "asset" is a pair
+    // of files (Project/ClassTemplates.hpp renders them); the header is the
+    // primary (uniqueness validates against ".hpp"), the .cpp is derived.
     enum class CreateAssetKind : std::uint8_t
-    { Material, MaterialInstance, Mesh, Sprite, Scene };
+    { Material, MaterialInstance, Mesh, Sprite, Scene, CppClass };
 
-    inline constexpr int kCreateAssetKindCount = 5;
+    inline constexpr int kCreateAssetKindCount = 6;
 
     // A request to create something. Raised by producers, consumed by
     // EditorApp::BeginCreateAsset. `prefillParent` pre-fills the kind's one
@@ -79,8 +84,20 @@ namespace Arcane::Editor
             case CreateAssetKind::Mesh:             return "Create Mesh";
             case CreateAssetKind::Sprite:           return "Create Sprite";
             case CreateAssetKind::Scene:            return "Create Scene";
+            case CreateAssetKind::CppClass:         return "Create C++ Class";
         }
         return "Create Asset";
+    }
+
+    // The directory under the project root a kind's files land in: every
+    // asset kind is Content/ (the game:// mount), C++ classes are Source/
+    // (the source:// mount -- the directory build/arcane.lua's game-module
+    // glob compiles). The dialog's Location combo and ConsumeCreateResult's
+    // target path both key off THIS, so the two can never disagree about
+    // where a create goes.
+    [[nodiscard]] inline const char* CreateKindRoot(CreateAssetKind k)
+    {
+        return k == CreateAssetKind::CppClass ? "Source" : "Content";
     }
 
     // The file extension the kind mints. Materials and material INSTANCES are
@@ -95,6 +112,7 @@ namespace Arcane::Editor
             case CreateAssetKind::Mesh:             return ".arcmesh";
             case CreateAssetKind::Sprite:           return ".arcsprite";
             case CreateAssetKind::Scene:            return ".arcscene";
+            case CreateAssetKind::CppClass:         return ".hpp";   // the primary of the pair
         }
         return "";
     }
@@ -111,6 +129,7 @@ namespace Arcane::Editor
             case CreateAssetKind::Mesh:             return "meshes/";
             case CreateAssetKind::Sprite:           return "sprites/";
             case CreateAssetKind::Scene:            return "scenes/";
+            case CreateAssetKind::CppClass:         return "";   // Source/ itself
         }
         return "";
     }
@@ -127,6 +146,7 @@ namespace Arcane::Editor
         if (extension == ".arcmesh")   return "mesh";
         if (extension == ".arcsprite") return "sprite";
         if (extension == ".arcscene")  return "scene";
+        if (extension == ".hpp")       return "class";
         return "file";
     }
 
@@ -194,6 +214,7 @@ namespace Arcane::Editor
             case AssetKind::Mesh:     return CreateAssetKind::Mesh;
             case AssetKind::Sprite:   return CreateAssetKind::Sprite;
             case AssetKind::Scene:    return CreateAssetKind::Scene;
+            case AssetKind::Source:   return CreateAssetKind::CppClass;
             default:                  return std::nullopt;
         }
     }
@@ -293,6 +314,7 @@ namespace Arcane::Editor
         Arcane::Guid parent, texture;
         bool setAsBoot = false;
         bool pickerOpen = false;
+        int  classTemplate = 0;     // CppClass: a ClassTemplates::Kind value (Template combo)
         // Set once DrawCreateAssetDialog has seeded folderIndex for THIS
         // request; BeginCreateAsset resets it to false along with everything
         // else. Deliberately separate from ImGui's own IsPopupOpen(title):
@@ -304,16 +326,18 @@ namespace Arcane::Editor
         bool seeded = false;
     };
 
-    // What a completed dialog hands back. `folder` is relative to Content/
-    // ("materials", or "" for Content/ itself) -- the dispatcher joins it onto
-    // the project's own content root, which is the only place a created asset
-    // can register and resolve by GUID (Project.cpp:229: "game" -> root /
-    // "Content").
+    // What a completed dialog hands back. `folder` is relative to the kind's
+    // ROOT (CreateKindRoot: Content/ for every asset kind, Source/ for
+    // CppClass) -- "materials", or "" for the root itself -- and the
+    // dispatcher joins it onto that root, which is the only place a created
+    // file can register and resolve by GUID (Project.cpp: "game" -> root /
+    // "Content", "source" -> root / "Source").
     struct CreateAssetResult
     {
         CreateAssetKind kind = CreateAssetKind::Material;
-        std::string name; std::string folder;    // relative to Content/
+        std::string name; std::string folder;    // relative to CreateKindRoot(kind)
         int surface = 0;                          // Material: MaterialSurface value
+        int classTemplate = 0;                    // CppClass: ClassTemplates::Kind value
         Arcane::Guid parent, texture; bool setAsBoot = false;
         // Task 13: Sprite's mint-or-reuse notice carries an "Open existing"
         // button (spec s7: "it says so and offers to open it") -- when this

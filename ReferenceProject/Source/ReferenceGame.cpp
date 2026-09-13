@@ -3,21 +3,26 @@
 // the host through the manifest's bootScene); this module's whole job is the
 // plugin lifecycle: pin the shared TypeContext, register the engine systems
 // that make a data scene tick and render, and round-trip the registry for
-// hot reload. It owns no component types (the engine roster is registered by
-// Runtime's ctor through its own Resident ComponentModule; a module that DID
-// own types would register them through its own RAII Astra::ComponentModule
-// -- see HotReloadPlugin.cpp for that shape).
+// hot reload. It owns no component types of its own today (the engine roster
+// is registered by Runtime's ctor through its own Resident ComponentModule),
+// but it OPENS its own Astra::ComponentModule in Init and drains this module's
+// ARCANE_COMPONENT registrar into it (Arcane/Plugin/GameComponents.hpp) -- so
+// a component added under Source/ (Assets -> Create -> C++ Class, or by hand
+// with one ARCANE_COMPONENT line in its .cpp) is live after a rebuild with no
+// edit here. HotReloadPlugin.cpp shows the same handle registering by hand.
 
 #include "GameApi.hpp"
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/GameComponents.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Scene/RenderSystems.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
 
+#include <Astra/Component/ComponentModule.hpp>
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
@@ -32,6 +37,15 @@
 namespace
 {
     Arcane::EngineContext* g_ctx = nullptr;
+
+    // This module's component types, owned by a heap-held handle deleted in
+    // Shutdown (which the host calls BEFORE unmapping). A RAW pointer on
+    // purpose -- the ComponentModule contract's "NEVER a plugin-side
+    // static/global object": a static whose destructor does live cleanup
+    // would run during FreeLibrary under the loader lock. A raw pointer has
+    // no destructor; a skipped Shutdown degrades to the contract's forget
+    // semantics (HotReloadPlugin.cpp carries the same note).
+    Astra::ComponentModule* g_module = nullptr;
 }
 
 extern "C"
@@ -56,18 +70,37 @@ extern "C"
                 ctx->imguiUserData);
         }
 
-        // 2. Register the engine systems (functors instantiate in THIS module):
+        // 2. This module's own component types: open the handle, drain the
+        // ARCANE_COMPONENT registrar into it. Zero types today; every
+        // component added under Source/ registers here without editing this.
+        g_module = new Astra::ComponentModule(
+            Astra::ComponentModule::Open(ctx->engine->Components(), "ReferenceGame"));
+        if (!*g_module)
+        {
+            delete g_module;   // empty handle: safe to destroy here (still mapped)
+            g_module = nullptr;
+            return false;      // SetTypeContext above makes this unreachable; fail loudly if not
+        }
+        const std::size_t components = Arcane::Game::RegisterComponents(*g_module);
+        ARC_INFO("ReferenceGame: registered {} module component type(s)", components);
+
+        // 3. Register the engine systems (functors instantiate in THIS module):
         // propagation makes the scene's parent/child transforms real each fixed
         // step, submission draws it. The boot scene itself is loaded by the HOST
         // (HostBoot::BootScene, after this Init returns) -- nothing here builds
-        // entities in code.
+        // entities in code. Systems stay EXPLICIT: their order is a design act.
         auto& sch = ctx->engine->Schedulers();
         std::ignore = sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>();
         std::ignore = sch.render.AddSystem<Arcane::RenderSubmissionSystem>();
         return true;
     }
 
-    GAME_API void GamePlugin_Shutdown() { g_ctx = nullptr; }
+    GAME_API void GamePlugin_Shutdown()
+    {
+        delete g_module;   // releases this module's descriptors + meta BEFORE the image unmaps
+        g_module = nullptr;
+        g_ctx    = nullptr;
+    }
 
     GAME_API void GamePlugin_FixedUpdate(double) {}
 
