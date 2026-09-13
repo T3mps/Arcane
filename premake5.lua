@@ -842,6 +842,15 @@ project "ArcaneTests"
         -- drive the whole text half directly. Writing/registering/regenerating
         -- is EditorApp's (MintCppClass) and desk-verify.
         "%{wks.location}/ArcaneEditor/src/Project/ClassTemplates.cpp",
+        -- arcbuild (the game-project build driver, spec docs/specs/
+        -- 2026-09-13-arcbuild-driver-design.md): Driver.cpp -- the PURE core
+        -- (Cli shape, --sdk precedence, the s4.3 decision table, exit-code
+        -- mapping, every composed child command line) -- source-compiles into
+        -- the test exe so the [build] units drive it directly, same "pure
+        -- logic, no spawn" pattern as ModuleBuild.cpp above. main.cpp (the
+        -- spawn + PE probe half) is NOT compiled here; the opt-in [build-desk]
+        -- cases run the built arcbuild.exe instead.
+        "%{wks.location}/arcbuild/src/Driver.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/
@@ -968,6 +977,7 @@ project "ArcaneTests"
         "%{IncludeDir.bc7enc_rdo}",   -- Task 4: AssetPipelineImporterTest.cpp drives bc7decomp.h directly for the decode-block sanity test
         "%{IncludeDir.cgltf}",          -- F2c Task 1: VendorSmokeTest.cpp drives cgltf_parse/cgltf_validate directly
         "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: VendorSmokeTest.cpp drives meshopt_generateVertexRemap/optimizeVertexCache directly
+        "%{wks.location}/arcbuild/src",   -- Driver.hpp for the [build] units (arcbuild Task 2)
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
