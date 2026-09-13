@@ -899,12 +899,12 @@ project "ArcaneTests"
         -- RecentProjects, this file has no "never clobber" contract to pin --
         -- it is the editor's own per-project file, not the Hub's shared one.
         "%{wks.location}/ArcaneEditor/src/Project/SceneRecents.cpp",
-        -- Build -> Rebuild Game Module: ModuleBuild's PURE halves (solution
-        -- discovery, the SDK-root walk, the composed premake+msbuild line)
+        -- Build -> Rebuild Game Module: ModuleBuild's PURE halves (the SDK-root
+        -- walk, the arcbuild.exe candidate list, the composed driver line)
         -- source-compile into the test exe so the [editor] units drive them
-        -- directly. The Runner/_wpopen half and the vswhere probe are compiled
-        -- too but never invoked by any test -- process creation is desk-verify
-        -- territory, the same rule as RuntimeLaunch's SpawnDetached above.
+        -- directly. The Runner/_wpopen half and RunCapture are compiled too;
+        -- no [editor] test invokes them -- only the opt-in [build-desk] cases
+        -- (BuildDriverTest.cpp) run RunCapture, against the built driver.
         "%{wks.location}/ArcaneEditor/src/Project/ModuleBuild.cpp",
         -- Build -> Open Visual Studio / open-source-in-VS: IdeLaunch's PURE
         -- halves (the ROT moniker predicate, solution-path equivalence, the

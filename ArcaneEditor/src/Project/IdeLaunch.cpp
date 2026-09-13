@@ -1,9 +1,9 @@
 #include "Project/IdeLaunch.hpp"
 
-#include "Project/ModuleBuild.hpp"     // VsWhere (the one vswhere probe)
 #include "Project/RuntimeLaunch.hpp"   // QuoteArg (the one Win32 argv escaper)
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Build/Toolchain.hpp>  // ResolveDevenv (the one vswhere probe, shared with arcbuild)
 
 #include <cwctype>
 #include <optional>
@@ -100,7 +100,7 @@ namespace Arcane::Editor::IdeLaunch
 
     std::filesystem::path ResolveDevenv()
     {
-        return ModuleBuild::VsWhere("-latest -find Common7\\IDE\\devenv.exe");
+        return Arcane::Toolchain::ResolveDevenv();
     }
 
 #ifdef _WIN32

@@ -33,6 +33,7 @@
 #include <Arcane/AssetPipeline/CookSession.hpp>   // IsCookPending's artifact-store oracle (2026-09-08 desk fix)
 #include <Arcane/AssetPipeline/GltfSurvey.hpp>   // F2c Task 15: MintImportMaterials' survey parameter
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Build/Toolchain.hpp>   // DiscoverSolution (OpenInIde's "which .slnx" question; arcbuild arc)
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MintMeshAsset)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (pre-teardown ABI gate)
@@ -2611,33 +2612,31 @@ namespace Arcane::Editor
             return;
         }
 
-        // The RUNNING editor's SDK wins over any machine-wide ARCANE_SDK: the
-        // point of the button is "rebuild against the engine you are looking
-        // at", and the project's premake5.lua resolves the engine through
-        // this variable (build/arcane.lua).
-        const std::filesystem::path sdkRoot =
-            ModuleBuild::SdkRootFromExeDir(ModuleBuild::ExeDir());
-        ModuleBuild::SetSdkEnv(sdkRoot);
-
-        ModuleBuild::ComposeInputs in;
-        in.projectRoot   = proj->Root();
-        in.premakeExe    = ModuleBuild::ResolvePremake(sdkRoot);
-        in.msbuildExe    = ModuleBuild::ResolveMsBuild();
-        in.solution      = ModuleBuild::DiscoverSolution(proj->Root());
-        in.configuration = ModuleBuild::Configuration();
-        if (in.solution.empty())
+        // arcbuild.exe does the work (spec 2026-09-13): premake first, then
+        // msbuild with /t:Rebuild ONLY when Binaries/ holds the other
+        // configuration's DLL -- so a wizard-made component costs one TU + a
+        // link. The RUNNING editor's SDK goes in as --sdk and wins over any
+        // machine-wide ARCANE_SDK: the point of the button is "rebuild
+        // against the engine you are looking at".
+        const std::filesystem::path exeDir  = ModuleBuild::ExeDir();
+        const std::filesystem::path sdkRoot = ModuleBuild::SdkRootFromExeDir(exeDir);
+        const std::filesystem::path driver  = ModuleBuild::ResolveDriver(exeDir);
+        if (driver.empty())
         {
-            // Nothing generated yet (fresh clone): premake -- which always
-            // runs first, every build -- is about to write it. Name it by the
-            // committed convention (the workspace in a project's premake5.lua
-            // is named after the project, e.g. Aphelyon.slnx); if a project
-            // breaks that convention, msbuild fails loudly with the missing
-            // path in the Console, which is the honest failure.
-            in.solution = proj->Root() / (proj->Manifest().name + ".slnx");
+            ARC_ERROR("Build: arcbuild.exe not found beside the editor nor in ../arcbuild/ -- "
+                      "build the engine workspace (Arcane.slnx) first");
+            return;
         }
 
+        ModuleBuild::DriverInputs in;
+        in.driverExe     = driver;
+        in.projectRoot   = proj->Root();
+        in.sdkRoot       = sdkRoot;
+        in.command       = "build";
+        in.configuration = ModuleBuild::Configuration();
+
         m_moduleBuildRoot = proj->Root();
-        const std::string cmd = ModuleBuild::ComposeRebuildCommands(in);
+        const std::string cmd = ModuleBuild::ComposeDriverCommand(in);
         ARC_INFO("Build: rebuilding {} ({}) against SDK {}",
                  proj->Manifest().gameModule, in.configuration, sdkRoot.generic_string());
         ARC_INFO("Build: {}", cmd);
@@ -2682,12 +2681,12 @@ namespace Arcane::Editor
         // The solution to hand devenv, or to find in a running instance. A
         // project that has never been generated has none yet: run premake
         // alone (RegenerateSolution) and look again.
-        std::filesystem::path solution = ModuleBuild::DiscoverSolution(proj->Root());
+        std::filesystem::path solution = Arcane::Toolchain::DiscoverSolution(proj->Root());
         if (solution.empty())
         {
-            ARC_INFO("IDE: no solution in {} yet -- generating (premake vs2026)", proj->Root().generic_string());
+            ARC_INFO("IDE: no solution in {} yet -- generating (arcbuild generate)", proj->Root().generic_string());
             RegenerateSolution();
-            solution = ModuleBuild::DiscoverSolution(proj->Root());
+            solution = Arcane::Toolchain::DiscoverSolution(proj->Root());
         }
 
         const IdeLaunch::Outcome outcome = file.empty()
@@ -2720,21 +2719,31 @@ namespace Arcane::Editor
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj)
             return false;
-        // Against the RUNNING editor's SDK -- the same SDK rule and the same
-        // premake head StartModuleRebuild uses (build/arcane.lua consumes
-        // ARCANE_SDK); synchronous, well under a second.
-        const std::filesystem::path sdkRoot =
-            ModuleBuild::SdkRootFromExeDir(ModuleBuild::ExeDir());
-        ModuleBuild::SetSdkEnv(sdkRoot);
-        const std::string cmd = ModuleBuild::ComposeGenerateCommand(
-            proj->Root(), ModuleBuild::ResolvePremake(sdkRoot));
+        // `arcbuild generate` against the RUNNING editor's SDK -- the same
+        // driver, same --sdk rule as StartModuleRebuild, minus msbuild;
+        // synchronous, well under a second.
+        const std::filesystem::path exeDir = ModuleBuild::ExeDir();
+        const std::filesystem::path driver = ModuleBuild::ResolveDriver(exeDir);
+        if (driver.empty())
+        {
+            ARC_ERROR("Build: arcbuild.exe not found beside the editor nor in ../arcbuild/ -- "
+                      "build the engine workspace (Arcane.slnx) first");
+            return false;
+        }
+        ModuleBuild::DriverInputs in;
+        in.driverExe     = driver;
+        in.projectRoot   = proj->Root();
+        in.sdkRoot       = ModuleBuild::SdkRootFromExeDir(exeDir);
+        in.command       = "generate";
+        in.configuration = ModuleBuild::Configuration();
+        const std::string cmd = ModuleBuild::ComposeDriverCommand(in);
         ARC_INFO("Build: {}", cmd);
         const ModuleBuild::CaptureResult gen = ModuleBuild::RunCapture(cmd);
         for (const std::string& line : gen.lines)
             ARC_INFO("Build: {}", line);
         if (!gen.exit || *gen.exit != 0)
         {
-            ARC_ERROR("Build: premake exited with {}", gen.exit ? std::to_string(*gen.exit) : "no exit code");
+            ARC_ERROR("Build: arcbuild generate exited with {}", gen.exit ? std::to_string(*gen.exit) : "no exit code");
             return false;
         }
         return true;
@@ -2826,10 +2835,15 @@ namespace Arcane::Editor
             // Severity COLORING only -- v1 deliberately does not parse MSVC
             // diagnostics into per-line locators (arc non-goal); these
             // contains-checks just pick the Console severity lane for the
-            // raw line.
+            // raw line. Lines arrive prefixed by the driver ([premake] /
+            // [msbuild] / [arcbuild]), so premake's own "Error: ..." and the
+            // driver's "[arcbuild] error: ..." refusals are matched after the
+            // prefix, not at column 0.
             const bool isError = line.find(": error") != std::string::npos ||
                                  line.find(": fatal") != std::string::npos ||
-                                 line.rfind("Error:", 0) == 0;
+                                 line.rfind("Error:", 0) == 0 ||
+                                 line.find("] Error:") != std::string::npos ||
+                                 line.find("] error:") != std::string::npos;
             const bool isWarn  = line.find(": warning") != std::string::npos;
             if (isError)     ARC_ERROR("Build: {}", line);
             else if (isWarn) ARC_WARN("Build: {}", line);
@@ -2849,7 +2863,7 @@ namespace Arcane::Editor
 
         if (*exit != 0)
         {
-            ARC_ERROR("Build: rebuild failed (exit code {})", *exit);
+            ARC_ERROR("Build: arcbuild exited with {} -- rebuild failed", *exit);
             Arcane::Diagnostic d;
             d.severity = Arcane::DiagSeverity::Error;
             d.scope    = Arcane::DiagScope::Plugin;

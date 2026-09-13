@@ -1730,9 +1730,12 @@ namespace Arcane::Editor
         void OnProjectOpened(bool recordRecents = true);
 
         // ---- Build -> Rebuild Game Module (ModuleBuild.hpp) -----------------
-        // StartModuleRebuild composes the premake+msbuild line for the open
-        // project (against the RUNNING editor's SDK, via ARCANE_SDK) and
-        // starts the worker; the menu item is greyed while playing/building/
+        // StartModuleRebuild resolves arcbuild.exe beside the editor (else
+        // ../arcbuild/), composes `arcbuild build --project <root> --config
+        // <editor's flavor> --sdk <the RUNNING editor's root>` and starts the
+        // worker; the driver runs premake then msbuild, forcing /t:Rebuild
+        // only when Binaries/ holds the other configuration's DLL (spec
+        // 2026-09-13 s4.3). The menu item is greyed while playing/building/
         // module-less, and this re-checks the same gates for any future
         // caller. PollModuleBuild is the per-frame drain (EditorAppProject.cpp,
         // called from MainLoop's top-of-frame consume block): worker lines ->
@@ -1759,9 +1762,9 @@ namespace Arcane::Editor
         // ---- Build -> Open Visual Studio / open source in VS (IdeLaunch.hpp) --
         // OpenInIde(file) opens `file` in the Visual Studio that has the open
         // project's solution loaded -- or, with `file` empty, just brings that
-        // solution up (the menu item). Both go: DiscoverSolution -> if none,
-        // run premake SYNCHRONOUSLY (ModuleBuild::ComposeGenerateCommand /
-        // RunCapture, its lines to the Console as "Build: ") -> rediscover ->
+        // solution up (the menu item). Both go: Toolchain::DiscoverSolution
+        // -> if none, RegenerateSolution (arcbuild generate, SYNCHRONOUS, its
+        // lines to the Console as "Build: ") -> rediscover ->
         // IdeLaunch::OpenSolution/OpenFile, whose Outcome is logged in one
         // Console line. Reached from Build -> Open Visual Studio
         // (MenuRequests::openIde) and from a Source row's Open
@@ -1777,14 +1780,13 @@ namespace Arcane::Editor
         std::filesystem::path m_devenv;
         bool                  m_devenvResolved = false;
 
-        // Run premake alone, SYNCHRONOUSLY, for the open project against the
-        // running editor's SDK (the same premake head Rebuild Game Module runs
-        // -- ModuleBuild::ComposeGenerateCommand / RunCapture), its lines to
-        // the Console as "Build: ". Two callers: OpenInIde when no .slnx exists
-        // yet, and MintCppClass ALWAYS (the .vcxproj must list the new files
-        // before Visual Studio opens them). Returns false when premake failed
-        // (exit != 0 or the shell could not start); the caller decides what
-        // that means for its own step.
+        // Run `arcbuild generate` alone, SYNCHRONOUSLY, for the open project
+        // against the running editor's SDK (ModuleBuild::ComposeDriverCommand
+        // / RunCapture), its lines to the Console as "Build: ". Two callers:
+        // OpenInIde when no .slnx exists yet, and MintCppClass ALWAYS (the
+        // .vcxproj must list the new files before Visual Studio opens them).
+        // Returns false when the driver failed (exit != 0 or the shell could
+        // not start); the caller decides what that means for its own step.
         bool RegenerateSolution();
 
         // Assets -> Create -> C++ Class (ConsumeCreateResult's CppClass arm):

@@ -1,21 +1,25 @@
 #pragma once
 
 // ModuleBuild: Build -> Rebuild Game Module. Rebuilds the OPEN project's game
-// module against the RUNNING editor's SDK: one composed cmd line -- premake
-// FIRST, every build (idempotent; kills the stale-.sln class of failure), then
-// msbuild -- run on a worker std::thread via _wpopen, its merged stdout+stderr
-// streamed line-by-line into a thread-safe queue the EditorApp drains once per
-// frame into the Console ("Build: " lines).
+// module against the RUNNING editor's SDK by spawning arcbuild.exe -- the
+// engine's game-project build driver (spec docs/specs/2026-09-13-arcbuild-
+// driver-design.md) -- and streaming its merged stdout+stderr line-by-line,
+// on a worker std::thread via _wpopen, into a thread-safe queue the
+// EditorApp drains once per frame into the Console ("Build: " lines).
 //
-// The COMPOSITION half is pure and unit-tested ([editor], ModuleBuildTest.cpp):
-// solution discovery, the SDK-root walk, and the command line itself. The
-// RESOLUTION half (vswhere, premake probe) and the Runner spawn processes and
-// are desk-verify territory -- the same split RuntimeLaunch.cpp draws around
-// SpawnDetached.
+// What the driver decides is the driver's: premake first every build, the
+// single-slot incremental rule (s4.3 -- /t:Rebuild only when Binaries/
+// holds the other configuration's DLL), where premake and msbuild are. This
+// file only knows (a) where arcbuild.exe is relative to the editor exe,
+// (b) the ONE command line to run it with, (c) how to stream it. The
+// COMPOSITION half is pure and unit-tested ([editor], ModuleBuildTest.cpp);
+// the Runner and RunCapture spawn processes and are desk-verify territory
+// -- the same split RuntimeLaunch.cpp draws around SpawnDetached.
 //
 // v1 NON-GOALS (arc decision): no Live-Coding patching, no in-editor code
 // editing, no MSVC-diagnostic parsing into per-line locators -- raw console
-// lines plus ONE failure row in Problems.
+// lines plus ONE failure row in Problems. No auto-build after the class
+// wizard's Create (a future opt-in Tools -> Settings item).
 
 #include <filesystem>
 #include <mutex>
@@ -28,18 +32,11 @@ namespace Arcane::Editor::ModuleBuild
 {
     // ---- pure halves ([editor]-tested; nothing here touches a process) ------
 
-    // The generated solution the rebuild drives: the first *.slnx in
-    // `projectRoot` (lexicographic, for determinism), else the first *.sln,
-    // else empty. Non-recursive on purpose -- the committed convention puts
-    // the premake workspace file in the project root (Aphelyon.slnx beside
-    // Aphelyon.arcproj), and a recursive scan would find ThirdParty/vendor
-    // solutions that are not ours to build.
-    std::filesystem::path DiscoverSolution(const std::filesystem::path& projectRoot);
-
     // The engine workspace root ("SDK root", what arcane.lua calls ARCANE_SDK)
     // from the editor exe's directory: three levels up, inverting the premake
     // targetdir rule <sdk>/bin/<cfg>-<system>-<arch>-md/ArcaneEditor/. Pure
-    // path math -- no filesystem probe -- so it composes into tests.
+    // path math -- no filesystem probe -- so it composes into tests. Passed
+    // to the driver as --sdk: "rebuild against the engine you are looking at".
     std::filesystem::path SdkRootFromExeDir(const std::filesystem::path& exeDir);
 
     // The msbuild configuration this editor build drives. The game DLL must
@@ -57,45 +54,42 @@ namespace Arcane::Editor::ModuleBuild
 #endif
     }
 
-    struct ComposeInputs
+    // Where arcbuild.exe might live relative to the EDITOR exe's directory:
+    // packaged layout first (installed side by side), dev bin layout second
+    // (premake's bin/<cfg>-<os>-<arch>-md/<Project>/ gives ArcaneEditor's
+    // dir an "../arcbuild/" neighbour) -- the RuntimeLaunch::ExeCandidates
+    // rule. Existence is NOT checked here; ResolveDriver does that.
+    std::vector<std::filesystem::path> DriverCandidates(const std::filesystem::path& editorExeDir);
+
+    // The first candidate that is a regular file, else empty (the caller
+    // refuses with a Console error naming both places it looked).
+    std::filesystem::path ResolveDriver(const std::filesystem::path& editorExeDir);
+
+    struct DriverInputs
     {
+        std::filesystem::path driverExe;
         std::filesystem::path projectRoot;
-        std::filesystem::path premakeExe;
-        std::filesystem::path msbuildExe;
-        std::filesystem::path solution;        // absolute, or relative to projectRoot
-        std::string           configuration;   // "Debug" / "Release"
+        std::filesystem::path sdkRoot;
+        std::string           command;         // "build" (Rebuild Game Module) / "generate" (RegenerateSolution)
+        std::string           configuration;   // Configuration()
     };
 
-    // The ONE command line the Runner executes:
-    //   ( cd /d "<root>" && "<premake>" vs2026 && "<msbuild>" "<sln>"
-    //     /p:Configuration=<cfg> /t:Rebuild /m /nologo ) 2>&1
-    // /t:Rebuild is NOT optional: Binaries\ is ONE shared slot across configs,
-    // so an incremental build can report success while leaving another config's
-    // DLL sitting there (see ModuleBuild.cpp and ModuleBuildTest.cpp).
-    // Parenthesized so the trailing 2>&1 folds EVERY member's stderr into the
-    // captured stdout (unparenthesized it would bind to msbuild alone, and
-    // premake's errors are exactly the ones worth seeing). All paths are
-    // wrapped in plain quotes -- good for spaces, which is what real install
-    // paths contain; an embedded quote in a path is not defended against.
-    std::string ComposeRebuildCommands(const ComposeInputs& in);
+    // THE ONE command line the Runner / RunCapture execute:
+    //   ( "<arcbuild>" <command> --project "<root>" --config <cfg> --sdk "<sdk>" ) 2>&1
+    // Parenthesised so the trailing 2>&1 folds the driver's stderr into the
+    // captured stdout (and so a quoted exe at the head survives cmd's
+    // outer-quote stripping). Plain quotes around paths -- good for spaces,
+    // which real install paths contain; an embedded quote is not defended.
+    std::string ComposeDriverCommand(const DriverInputs& in);
 
-    // Build -> Open Visual Studio's "no solution yet" path: the premake-ONLY
-    // head of the chain above --
-    //   ( cd /d "<root>" && "<premake>" vs2026 ) 2>&1
-    // -- so a never-generated project gets its .slnx written before devenv is
-    // asked to open it. Same cd-first, parenthesised, stderr-folded shape, for
-    // the same reasons.
-    std::string ComposeGenerateCommand(const std::filesystem::path& projectRoot,
-                                       const std::filesystem::path& premakeExe);
-
-    // ---- resolution (probes the machine; not unit-tested) -------------------
+    // ---- process halves (desk-verify; not unit-tested) ----------------------
 
     // Run `commandLine` through cmd (_wpopen) SYNCHRONOUSLY, returning its
     // merged output line-by-line plus the exit status (nullopt when the pipe
     // itself could not be opened). For the short, one-shot steps a click can
-    // afford to wait on -- premake generating a solution takes well under a
-    // second -- where the Runner's worker thread would only add a frame of
-    // state machine for nothing. NOT for msbuild: that is the Runner's job.
+    // afford to wait on -- `arcbuild generate` takes well under a second --
+    // where the Runner's worker thread would only add a frame of state
+    // machine for nothing. NOT for `build`: that is the Runner's job.
     struct CaptureResult
     {
         std::vector<std::string> lines;
@@ -105,35 +99,8 @@ namespace Arcane::Editor::ModuleBuild
 
     // THIS process's exe directory (GetModuleFileNameW). Same private pattern
     // as EditorFonts.cpp/EditorAppScene.cpp, hoisted here because the SDK-root
-    // walk above starts from it.
+    // walk and the driver lookup both start from it.
     std::filesystem::path ExeDir();
-
-    // The engine's bundled premake: <sdkRoot>/ThirdParty/premake5/
-    // premake5.exe (the repo layout arcane.lua documents), falling back to
-    // bare "premake5" (PATH) when the bundled copy is not there -- a packaged
-    // SDK may ship it elsewhere, and cmd's own resolution is the honest
-    // fallback.
-    std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot);
-
-    // The one VS-install-aware query Microsoft documents: run
-    // %ProgramFiles(x86)%/Microsoft Visual Studio/Installer/vswhere.exe with
-    // `arguments` and return the FIRST line it prints (a path), or empty when
-    // vswhere is absent or found nothing. Shared by ResolveMsBuild below and
-    // IdeLaunch::ResolveDevenv -- one probe, two questions.
-    std::filesystem::path VsWhere(const std::string& arguments);
-
-    // MSBuild via VsWhere:
-    //   vswhere -latest -requires Microsoft.Component.MSBuild
-    //           -find MSBuild\**\Bin\MSBuild.exe
-    // falling back to bare "msbuild" (PATH -- a Developer Command Prompt launch).
-    std::filesystem::path ResolveMsBuild();
-
-    // Point ARCANE_SDK at `sdkRoot` in THIS process's environment block, which
-    // the worker's cmd child inherits (the project's premake5.lua consumes it
-    // via build/arcane.lua). Deliberately overwrites any setx'd value: the
-    // whole point is building against the RUNNING editor's SDK, not whichever
-    // engine the machine-wide variable last pointed at.
-    void SetSdkEnv(const std::filesystem::path& sdkRoot);
 
     // ---- the worker ---------------------------------------------------------
 
@@ -141,7 +108,7 @@ namespace Arcane::Editor::ModuleBuild
     // worker owns the _wpopen pipe for its whole life; the main thread only
     // ever touches the mutex-guarded queue + flags, so there is no handle to
     // race over. Join() blocks until the child exits -- Shutdown calls it, and
-    // an editor closed mid-build waits for msbuild rather than leaking a
+    // an editor closed mid-build waits for the driver rather than leaking a
     // worker thread into destructed members.
     class Runner
     {
@@ -158,8 +125,9 @@ namespace Arcane::Editor::ModuleBuild
         std::vector<std::string> DrainLines();
 
         // The finished build's exit code, exactly once: nullopt while running,
-        // never started, or already taken. cmd's exit status, i.e. the first
-        // failing member of the && chain (or -1 when the pipe itself failed).
+        // never started, or already taken. cmd's exit status = arcbuild's own
+        // (the first failing child's, 2 for a refusal; -1 when the pipe
+        // itself failed).
         std::optional<int> TakeExit();
 
         // Block until the worker exits (see the class comment). Idempotent.

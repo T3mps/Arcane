@@ -39,7 +39,7 @@ namespace Arcane::Editor::IdeLaunch
 
     // Do two solution paths name the same file? DTE's Solution.FullName comes
     // back backslashed and in whatever case VS holds; ours comes from
-    // ModuleBuild::DiscoverSolution. Lexically normalised, separators unified,
+    // Arcane::Toolchain::DiscoverSolution. Lexically normalised, separators unified,
     // case-insensitive (Windows paths). An EMPTY side never matches -- a VS
     // with no solution open reports an empty FullName.
     [[nodiscard]] bool SameSolutionPath(const std::filesystem::path& a,
@@ -82,9 +82,10 @@ namespace Arcane::Editor::IdeLaunch
 
     // ---- resolution + COM (probe the machine; desk-verify) -----------------
 
-    // devenv.exe via ModuleBuild::VsWhere("-latest -find Common7\IDE\devenv.exe");
-    // empty when vswhere is absent or no IDE install answers (Build Tools
-    // alone has no devenv). Resolve once and cache -- it spawns a process.
+    // devenv.exe via Arcane::Toolchain::ResolveDevenv() (ArcaneCore's one
+    // vswhere probe, shared with arcbuild.exe); empty when vswhere is absent
+    // or no IDE install answers (Build Tools alone has no devenv). Resolve
+    // once and cache -- it spawns a process.
     [[nodiscard]] std::filesystem::path ResolveDevenv();
 
     // The ROT walk alone, for the [ide-desk] probe: which Access would a click

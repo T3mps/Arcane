@@ -1,8 +1,9 @@
-// ModuleBuild's PURE halves: solution discovery, the SDK-root walk, and the
-// composed premake+msbuild command line ([editor]). The Runner and the
-// resolution probes (vswhere, premake, _wpopen) spawn processes and are
-// desk-verify territory -- the same "no spawn test" split RuntimeLaunch's
-// SpawnDetached already draws.
+// ModuleBuild's PURE halves ([editor]) after the arcbuild driver arc: the
+// SDK-root walk, the driver-exe candidate list, and THE ONE COMMAND LINE the
+// Runner now executes -- arcbuild itself. Composition of premake/msbuild
+// lines, solution discovery and the s4.3 rule left the editor for the
+// driver (BuildDriverTest.cpp, ToolchainTest.cpp -- [build]). The Runner and
+// RunCapture spawn processes and stay desk-verify territory.
 
 #include <filesystem>
 #include <fstream>
@@ -17,8 +18,6 @@ namespace
     namespace fs = std::filesystem;
     using namespace Arcane::Editor;
 
-    // Unique temp dir per SECTION run; removed by the guard so a failing
-    // assertion cannot strand files for the next run to trip on.
     struct TempDir
     {
         fs::path path;
@@ -39,39 +38,8 @@ namespace
 
     void Touch(const fs::path& p)
     {
+        fs::create_directories(p.parent_path());
         std::ofstream(p.string()) << "x";
-    }
-}
-
-TEST_CASE("DiscoverSolution prefers .slnx over .sln, first lexicographic within a bucket",
-          "[editor]")
-{
-    TempDir dir("discover");
-    Touch(dir.path / "Zeta.sln");
-    Touch(dir.path / "beta.slnx");
-    Touch(dir.path / "Alpha.slnx");
-    Touch(dir.path / "notes.txt");
-
-    const fs::path found = ModuleBuild::DiscoverSolution(dir.path);
-    CHECK(found.filename() == "Alpha.slnx");
-}
-
-TEST_CASE("DiscoverSolution falls back to .sln, and to empty when neither exists",
-          "[editor]")
-{
-    TempDir dir("fallback");
-    SECTION("only a .sln")
-    {
-        Touch(dir.path / "Game.sln");
-        CHECK(ModuleBuild::DiscoverSolution(dir.path).filename() == "Game.sln");
-    }
-    SECTION("neither")
-    {
-        CHECK(ModuleBuild::DiscoverSolution(dir.path).empty());
-    }
-    SECTION("a directory that does not exist")
-    {
-        CHECK(ModuleBuild::DiscoverSolution(dir.path / "missing").empty());
     }
 }
 
@@ -86,82 +54,64 @@ TEST_CASE("SdkRootFromExeDir inverts the bin/<cfg>/<project> targetdir rule", "[
           fs::path("D:/dev/starworks/Gacha/Arcane"));
 }
 
-TEST_CASE("ComposeRebuildCommands is one premake-first cmd chain with folded stderr",
-          "[editor]")
+TEST_CASE("DriverCandidates: packaged beside the editor first, dev bin layout second", "[editor]")
 {
-    ModuleBuild::ComposeInputs in;
-    in.projectRoot   = "D:/dev/starworks/Aphelyon";
-    in.premakeExe    = "D:/dev/starworks/ThirdParty/premake5/premake5.exe";
-    in.msbuildExe    = "C:/Program Files/Microsoft Visual Studio/18/MSBuild.exe";
-    in.solution      = "D:/dev/starworks/Aphelyon/Aphelyon.slnx";
-    in.configuration = "Debug";
-
-    const std::string cmd = ModuleBuild::ComposeRebuildCommands(in);
-
-    // cd into the project root first (premake reads ./premake5.lua from cwd).
-    const std::size_t cdPos      = cmd.find("cd /d \"D:/dev/starworks/Aphelyon\"");
-    const std::size_t premakePos = cmd.find("premake5.exe\" vs2026");
-    const std::size_t msbuildPos = cmd.find("MSBuild.exe\"");
-    REQUIRE(cdPos != std::string::npos);
-    REQUIRE(premakePos != std::string::npos);
-    REQUIRE(msbuildPos != std::string::npos);
-    // Premake FIRST, every build (the arc's stale-.sln decision), then msbuild.
-    CHECK(cdPos < premakePos);
-    CHECK(premakePos < msbuildPos);
-
-    // The msbuild half names the solution and the configuration.
-    CHECK(cmd.find("\"D:/dev/starworks/Aphelyon/Aphelyon.slnx\"") != std::string::npos);
-    CHECK(cmd.find("/p:Configuration=Debug") != std::string::npos);
-    CHECK(cmd.find("/m /nologo") != std::string::npos);
-
-    // A space-laden exe path survives inside quotes.
-    CHECK(cmd.find("\"C:/Program Files/Microsoft Visual Studio/18/MSBuild.exe\"") !=
-          std::string::npos);
-
-    // THE LINK IS FORCED, ALWAYS -- and this is the assertion, not a detail.
-    //
-    // A game project's Binaries\ is a SINGLE SHARED SLOT: Debug and Release
-    // write the same <Project>.dll there, while their object trees live apart
-    // under Intermediate\<Config>\. So when a Release DLL is sitting in
-    // Binaries\ and the editor (a Debug build) asks for a Debug module, MSBuild
-    // compares the Debug objects against the Debug link stamp, finds both
-    // current, relinks NOTHING, and reports success in a fraction of a second --
-    // leaving the WRONG-CONFIG DLL in place for the host to load and refuse.
-    // Observed live at the desk: a 0.24s "All outputs are up-to-date"
-    // immediately followed by "the rebuilt module still failed to load".
-    //
-    // An incremental build therefore CANNOT be trusted to heal a cross-config
-    // module -- the state it reasons about is per-config, the artifact it
-    // guards is not. The worker must force the link every time; a few seconds
-    // per rebuild is the whole cost, and Rebuild Game Module is a deliberate
-    // user action, not a hot loop.
-    CHECK(cmd.find("/t:Rebuild") != std::string::npos);
-
-    // Parenthesized so the trailing 2>&1 folds EVERY member's stderr into the
-    // captured stdout -- unparenthesized it would bind to msbuild alone.
-    CHECK(cmd.front() == '(');
-    CHECK(cmd.rfind(") 2>&1") == cmd.size() - 6);
+    // The RuntimeLaunch::ExeCandidates rule, applied to arcbuild.exe.
+    const auto c = ModuleBuild::DriverCandidates("D:/sdk/bin/Debug-windows-x86_64-md/ArcaneEditor");
+    REQUIRE(c.size() == 2);
+    CHECK(c[0] == fs::path("D:/sdk/bin/Debug-windows-x86_64-md/ArcaneEditor") / "arcbuild.exe");
+    CHECK(c[1] == fs::path("D:/sdk/bin/Debug-windows-x86_64-md/ArcaneEditor") / ".." / "arcbuild" / "arcbuild.exe");
 }
 
-// Build -> Open Visual Studio: a project that has never been generated has no
-// .slnx to open, so the editor runs premake alone first -- the SAME premake
-// step Rebuild Game Module runs as its head, minus msbuild. Same cd-first,
-// parenthesised, stderr-folded shape, so the Console sees premake's errors.
-TEST_CASE("ComposeGenerateCommand is the premake-only head of the rebuild chain", "[editor]")
+TEST_CASE("ResolveDriver returns the first candidate that exists, else empty", "[editor]")
 {
-    const std::string cmd = ModuleBuild::ComposeGenerateCommand(
-        "D:/dev/starworks/Aphelyon", "D:/dev/starworks/ThirdParty/premake5/premake5.exe");
+    TempDir bin("driver");
+    const fs::path editorDir = bin.path / "ArcaneEditor";
+    fs::create_directories(editorDir);
+    SECTION("neither -> empty (StartModuleRebuild refuses with a Console error)")
+    {
+        CHECK(ModuleBuild::ResolveDriver(editorDir).empty());
+    }
+    SECTION("dev layout only -> ../arcbuild/arcbuild.exe")
+    {
+        Touch(bin.path / "arcbuild" / "arcbuild.exe");
+        CHECK(ModuleBuild::ResolveDriver(editorDir).lexically_normal() ==
+              (bin.path / "arcbuild" / "arcbuild.exe").lexically_normal());
+    }
+    SECTION("packaged beside wins over the dev neighbour")
+    {
+        Touch(bin.path / "arcbuild" / "arcbuild.exe");
+        Touch(editorDir / "arcbuild.exe");
+        CHECK(ModuleBuild::ResolveDriver(editorDir) == editorDir / "arcbuild.exe");
+    }
+}
 
-    const std::size_t cdPos      = cmd.find("cd /d \"D:/dev/starworks/Aphelyon\"");
-    const std::size_t premakePos = cmd.find("\"D:/dev/starworks/ThirdParty/premake5/premake5.exe\" vs2026");
-    REQUIRE(cdPos != std::string::npos);
-    REQUIRE(premakePos != std::string::npos);
-    CHECK(cdPos < premakePos);
+TEST_CASE("ComposeDriverCommand is arcbuild + the three flags, parenthesised, stderr-folded", "[editor]")
+{
+    // THE LINE THE EDITOR SPAWNS. Pinned exactly: the Runner executes this
+    // through cmd, and arcbuild's own [build] tests pin what these flags
+    // mean on the other side (spec s5.1).
+    ModuleBuild::DriverInputs in;
+    in.driverExe     = "D:/sdk/bin/Debug-windows-x86_64-md/arcbuild/arcbuild.exe";
+    in.projectRoot   = "D:/dev/starworks/Gacha/Game";
+    in.sdkRoot       = "D:/sdk";
+    in.command       = "build";
+    in.configuration = "Debug";
 
-    CHECK(cmd.find("msbuild") == std::string::npos);
-    CHECK(cmd.find("MSBuild") == std::string::npos);
-    CHECK(cmd.front() == '(');
-    CHECK(cmd.rfind(") 2>&1") == cmd.size() - 6);
+    CHECK(ModuleBuild::ComposeDriverCommand(in) ==
+          "( \"D:/sdk/bin/Debug-windows-x86_64-md/arcbuild/arcbuild.exe\" build"
+          " --project \"D:/dev/starworks/Gacha/Game\" --config Debug --sdk \"D:/sdk\" ) 2>&1");
+
+    // RegenerateSolution's spelling: same shape, `generate`.
+    in.command = "generate";
+    const std::string gen = ModuleBuild::ComposeDriverCommand(in);
+    CHECK(gen.find("arcbuild.exe\" generate --project") != std::string::npos);
+    CHECK(gen.front() == '(');
+    CHECK(gen.rfind(") 2>&1") == gen.size() - 6);
+
+    // A space-laden install path survives inside quotes.
+    in.driverExe = "C:/Program Files/Arcane/arcbuild.exe";
+    CHECK(ModuleBuild::ComposeDriverCommand(in).find("( \"C:/Program Files/Arcane/arcbuild.exe\" generate") == 0);
 }
 
 TEST_CASE("Configuration matches the editor's own build flavor", "[editor]")
