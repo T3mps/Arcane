@@ -42,7 +42,12 @@ the DLL boundary by construction.
 - `ArcaneClient/src/Arcane/Plugin/GameModule.hpp`: `class GameModule`
   (virtual hooks, every one defaulted) + `ARCANE_GAME_MODULE(Type)`, which
   emits the eight exports and the prologue. A module is its own class plus
-  one macro line; the two real modules shrink to what is specific to them.
+  one macro line.
+- **All three existing module sources adopt it as the arc's ending part**
+  (user ruling 2026-09-13): `ArcaneTests/plugins/HotReloadPlugin.cpp` (the
+  V1/V2/Bad DLLs — the macro's test vehicle, see §7), `ReferenceGame.cpp`,
+  and the Gacha Game's `Aphelyon.cpp`. After the arc no module in either
+  repo spells the exports by hand.
 - `Runtime::InstallEngineSystems()` owns `TransformPropagationSystem` and
   `RenderSubmissionSystem` beside `PhysicsSystem`. Modules stop registering
   them. A game system places itself with `Before`/`After` against the
@@ -60,9 +65,9 @@ the DLL boundary by construction.
   because the contract about who registers the scene systems changed.
 - Auto-build after the class wizard's Create (still the future Settings
   opt-in). Live Coding. Multiple game modules per project.
-- The test plugins (`ArcaneTests/plugins/HotReloadPlugin*.cpp`) stay on
-  the raw ABI — they test the ABI itself, and a macro over it would hide
-  what they exist to pin.
+- A raw-ABI test plugin kept "for reference": what the ABI pins is the
+  export set and its semantics, and `ArcaneTests/src/HotReloadTest.cpp`
+  pins those from the host side regardless of how the plugin spells them.
 
 ## 3. `Arcane/Plugin/GameModule.hpp`
 
@@ -110,7 +115,11 @@ with the export attribute inline (`__declspec(dllexport)` on Windows,
 `visibility("default")` elsewhere) — no `GameApi.hpp`, no `GAME_API`.
 The bodies are today's ReferenceGame bodies, generalised:
 
-- `GamePlugin_ABIVersion` → `kGamePluginABIVersion`.
+- `GamePlugin_ABIVersion` → `kGamePluginABIVersion`. The macro is the
+  one-argument face of `ARCANE_GAME_MODULE_ABI(Type, abi)`, whose second
+  argument is the value this export reports; the only intended caller of
+  the two-argument form is the `HotReloadPluginBad` build (`kGamePluginABIVersion
+  + HOTRELOAD_ABI_OFFSET`), which exists to be refused by the host's gate.
 - `GamePlugin_Init(ctx)`: the prologue in today's order — (1)
   `Astra::SetTypeContext(ctx->typeContext)`; `Log::InstallMosaicSink()`;
   `Assert::InstallMosaicHandler()`; (2) ImGui adoption when
@@ -229,25 +238,33 @@ list is explicit in one place (`InstallEngineSystems`), a game's placement
 is an explicit declaration on the type, and nothing self-registers a
 system through static initialisation.
 
-## 5. Consumers
+## 5. Consumers — the three module sources, all adopted
 
-1. **`ReferenceProject/Source/ReferenceGame.cpp`** → the class with no
+1. **`ArcaneTests/plugins/HotReloadPlugin.cpp`** (one source → V1/V2/Bad
+   DLLs) → a `GameModule` subclass: `OnInit` creates the `Pulse` entity and
+   registers its stepping system (`HOTRELOAD_STEP`), `OnSaveState` /
+   `OnLoadState` carry the plugin's own extras (the pulse entity id) after
+   the base's registry round-trip; `ARCANE_GAME_MODULE_ABI(Module,
+   kGamePluginABIVersion + HOTRELOAD_ABI_OFFSET)`; `PluginExport.hpp`
+   deleted. Its `HotReloadTest.cpp` expectations (V1 → V2 reload with state
+   carried, Bad refused and rolled back) do not change — that is the point.
+2. **`ReferenceProject/Source/ReferenceGame.cpp`** → the class with no
    overrides + the macro; `GameApi.hpp` deleted. The file's header comment
    keeps its role as the minimal end-to-end proof.
-2. **Gacha `Game/Source/Aphelyon.cpp`** → `OnUpdate` + `OnDrawUI` (the
+3. **Gacha `Game/Source/Aphelyon.cpp`** → `OnUpdate` + `OnDrawUI` (the
    HUD) + `m_time`; `GameApi.hpp` deleted; `SceneRootOf` replaced by
    `SceneRootEntity()`.
-3. **`ArcaneEditor/src/Project/ClassTemplates.cpp`** — the System
+4. **`ArcaneEditor/src/Project/ClassTemplates.cpp`** — the System
    template's comment (`:104-120`) shows the `Before`/`After` idiom and
    "add `AddSystem<…>()` in your module's `OnInit`"; `ClassTemplates.hpp:19`
    likewise. `ClassTemplatesTest` pins the new wording.
-4. **`build/arcane.lua:90`** — `GAME_BUILD_DLL` stays defined (harmless,
+5. **`build/arcane.lua:90`** — `GAME_BUILD_DLL` stays defined (harmless,
    and an external module may still use it); its comment stops naming
    `GameApi.hpp`.
-5. **`PluginABI.hpp:734`**'s comment about modules registering
+6. **`PluginABI.hpp:734`**'s comment about modules registering
    `TransformPropagationSystem/RenderSubmission` is rewritten to point at
    `InstallEngineSystems` and `GameModule.hpp`.
-6. **`GameComponents.hpp`**'s header comment references "this module's
+7. **`GameComponents.hpp`**'s header comment references "this module's
    `GamePlugin_Init`" — now "the `ARCANE_GAME_MODULE` prologue".
 
 ## 6. ABI
@@ -264,18 +281,18 @@ there (`chore(game): restamp …` as usual).
 
 ## 7. Testing
 
-- **`[plugin]` — a real plugin built with the macro.** A new test plugin
-  `ArcaneTests/plugins/GameModulePlugin.cpp` (premake project like
-  `HotReloadPluginV1`, staged beside the test exe) defines a
-  `GameModule` subclass that records every hook call into a counter block
-  exported for the test to read, owns one `ARCANE_COMPONENT` type, and
-  overrides `OnSaveState`/`OnLoadState` with a sentinel. The test loads it
-  through `PluginHost` against a real `Runtime` and pins: Init prologue ran
-  (the component type is registered; the module's log line names 1 type);
-  `OnInit` saw a bound `Context()`/`Components()`; `SaveState` →
-  `LoadState` round-trips the registry AND the sentinel; `Shutdown`
-  order (`OnShutdown` before the handle closes — the component type is
-  still registered inside `OnShutdown`, gone after unload).
+- **`[plugin]` — the hot-reload plugins, now built with the macro.**
+  `HotReloadTest.cpp`'s existing cases are the macro's plugin test: V1 →
+  V2 reload through `PluginHost` against a real `Runtime` proves the
+  prologue (the `Pulse` component registers through the drained handle),
+  the base `SaveState`/`LoadState` round-trip plus the module's
+  `OnSaveState`/`OnLoadState` extras (the pulse entity survives the swap
+  with its stepped value), and the `Shutdown` order; the Bad build proves
+  the ABI-override seam is what the host's gate refuses. One case is added:
+  a hook-order probe (the plugin records `OnInit`/`OnShutdown` into a
+  block the test reads through `Module::Symbol`, asserting `OnShutdown` saw
+  its component type still registered — the instance is torn down before
+  the handle).
 - **`[runtime]` — engine-owned systems.** After `Runtime` construction:
   `fixedUpdate.HasSystem<PhysicsSystem>() && HasSystem<TransformPropagationSystem>()`,
   `render.HasSystem<RenderSubmissionSystem>()`; after `ClearSystems()`,
@@ -296,9 +313,12 @@ there (`chore(game): restamp …` as usual).
 
 ## 8. Rollout
 
-1. `GameModule.hpp` + `Runtime::InstallEngineSystems` + the `[plugin]` /
-   `[runtime]` tests (RED first); ABI 29 + `ReferenceProject.arcproj`.
-2. ReferenceGame on the macro (no overrides); `GameApi.hpp` gone; gate.
-3. Aphelyon on the macro (Gacha commit + restamp).
-4. Wizard/template/ABI-header comments; `ClassTemplatesTest`.
-5. Memory + the arc's close.
+1. `GameModule.hpp` + `Runtime::InstallEngineSystems` + the `[runtime]`
+   tests (RED first); ABI 29 + `ReferenceProject.arcproj`.
+2. **The ending part — the three module sources, in this order:**
+   `HotReloadPlugin.cpp` (the `[plugin]` suite must stay green across the
+   conversion, plus the new hook-order case), then `ReferenceGame.cpp`
+   (`GameApi.hpp` gone; gate), then Aphelyon (Gacha commit + restamp).
+3. Wizard/template/ABI-header comments; `ClassTemplatesTest`.
+4. Memory + the arc's close: a repo-wide grep proves no hand-spelled
+   `GamePlugin_` export definition remains outside `GameModule.hpp`.
