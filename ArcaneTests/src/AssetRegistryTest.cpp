@@ -324,6 +324,108 @@ TEST_CASE("asset registry: a dropped .gltf/.glb registers with a minted sidecar"
     std::filesystem::remove_all(content, ec);
 }
 
+// ---------------------------------------------------------------------------
+// Source/ in the Asset Browser: C/C++ source files register under a
+// name-DERIVED guid (Guid::FromName over the mount path) -- the fourth
+// identity rule beside native-embedded, imported-binary-sidecar and
+// .arcdiag-envelope. Never minted randomly, never written back: no ".meta"
+// may ever land beside a .cpp, and the identity must be the SAME across two
+// FRESH registries (a restart), which a random Generate() could never give.
+// ---------------------------------------------------------------------------
+TEST_CASE("AssetRegistry registers C++ source files by a path-derived guid and writes no sidecar", "[project]")
+{
+    const auto dir = TempDir("source_classify");
+    std::filesystem::create_directories(dir / "sub");
+    std::ofstream(dir / "Game.cpp",     std::ios::binary) << "// cpp\n";
+    std::ofstream(dir / "Game.hpp",     std::ios::binary) << "// hpp\n";
+    std::ofstream(dir / "sub" / "Foo.h", std::ios::binary) << "// h\n";
+    std::ofstream(dir / "notes.txt",    std::ios::binary) << "not source\n";   // stays untracked
+
+    Arcane::AssetRegistry first;
+    CHECK(first.ScanContent(dir, "source") == 3);
+
+    // Mount paths carry the scheme + relative path, forward slashes, like every
+    // other kind; the .txt is not a tracked kind and never appears.
+    std::vector<std::string> paths;
+    for (const auto& [guid, mountPath] : first.All())
+        paths.push_back(mountPath);
+    CHECK(paths == std::vector<std::string>{ "source://Game.cpp", "source://Game.hpp", "source://sub/Foo.h" });
+
+    // No sidecar for any of them -- the identity is derived, not persisted.
+    CHECK_FALSE(std::filesystem::exists(dir / "Game.cpp.meta"));
+    CHECK_FALSE(std::filesystem::exists(dir / "Game.hpp.meta"));
+    CHECK_FALSE(std::filesystem::exists(dir / "sub" / "Foo.h.meta"));
+
+    // A FRESH registry (a restart) derives the identical guid for every file.
+    Arcane::AssetRegistry second;
+    CHECK(second.ScanContent(dir, "source") == 3);
+    CHECK(first.All() == second.All());
+
+    // And a source file's guid is a function of its MOUNT PATH, so the same
+    // file under another scheme is a different identity (no cross-mount clash).
+    Arcane::AssetRegistry other;
+    other.ScanContent(dir, "plugin/x");
+    for (const auto& [guid, mountPath] : first.All())
+        CHECK_FALSE(other.Resolve(guid).has_value());
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The Project-level half: Source/ mounts as source:// (a peer of game:// and
+// diag://) and its files are in the SAME registry the browser reads.
+TEST_CASE("Project::Open mounts source:// and registers Source/ files", "[project]")
+{
+    const auto dir = TempDir("source_mount_present");
+
+    auto created = Arcane::Project::Create(dir, "SourceMountPresent");
+    REQUIRE(created.has_value());
+
+    std::filesystem::create_directories(dir / "Source");
+    std::ofstream(dir / "Source" / "Game.cpp", std::ios::binary) << "// cpp\n";
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+
+    CHECK(proj->Mounts().HasMount("source"));
+
+    bool found = false;
+    for (const auto& [guid, mountPath] : proj->Registry().All())
+    {
+        if (mountPath != "source://Game.cpp")
+            continue;
+        found = true;
+        const auto resolved = proj->Mounts().Resolve(mountPath);
+        REQUIRE(resolved.has_value());
+        CHECK(resolved->filename() == "Game.cpp");
+        CHECK(std::filesystem::exists(*resolved));
+    }
+    CHECK(found);
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+// The negative half, mirroring diag://: a project with no Source/ directory
+// (a content-only project) mounts nothing and Open() does not fail.
+TEST_CASE("Project::Open with no Source/ mounts nothing and does not fail", "[project]")
+{
+    const auto dir = TempDir("source_mount_absent");
+
+    auto created = Arcane::Project::Create(dir, "SourceMountAbsent");
+    REQUIRE(created.has_value());
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir / "Source", ec);
+    REQUIRE_FALSE(std::filesystem::is_directory(dir / "Source"));
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK_FALSE(proj->Mounts().HasMount("source"));
+
+    std::filesystem::remove_all(dir, ec);
+}
+
 TEST_CASE("AssetRegistry::All() is ordered deterministically, not by hash", "[project]")
 {
     const auto dir = TempDir("all_deterministic_order");

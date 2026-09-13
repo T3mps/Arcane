@@ -129,6 +129,37 @@ namespace Arcane
             return id;
         }
 
+        // C/C++ source files (Source/ in the Asset Browser): the fourth identity
+        // rule. A .cpp can neither embed a guid nor tolerate a ".meta" beside it
+        // (a source tree is the user's, and sidecar noise there is exactly the
+        // Unity pain the sidecar rule is scoped to imported binaries to avoid),
+        // so identity is DERIVED -- Guid::FromName over the mount path -- never
+        // minted randomly, never written back. Stable across restarts by
+        // construction (same path -> same guid, which is what a restart needs
+        // from selection/fold state), and a rename IS a new identity: nothing
+        // references source by guid, so path-keyed is the honest identity here.
+        // Same never-mint / never-write shape as ResolveDiagId below.
+        bool IsSourceFile(std::string_view extLower)
+        {
+            static constexpr std::string_view kSourceExts[] = {
+                ".cpp", ".hpp", ".h", ".c", ".inl", ".cc", ".cxx", ".hxx",
+            };
+            for (std::string_view e : kSourceExts)
+                if (extLower == e)
+                    return true;
+            return false;
+        }
+
+        // The FromName namespace for source identities. A fixed, arbitrary
+        // v4-shaped constant (not Nil, so a source guid can never collide with
+        // an engine-built-in FromName id minted under some other namespace).
+        constexpr Guid kSourceIdNamespace{ 0x5a2c7e19b4d84f06ull, 0x9e3d1c8a7b6f5e40ull };
+
+        Guid ResolveSourceId(std::string_view mountPath)
+        {
+            return Guid::FromName(kSourceIdNamespace, mountPath);
+        }
+
         // .arcdiag: a crash/hang/gpu-stall report (GPU crash diagnostics arc,
         // Task 9). It is "native" in the sense that it carries an embedded
         // guid rather than a sidecar -- like .arcmat/.arcscene/.arcsprite --
@@ -291,6 +322,42 @@ namespace Arcane
         // "guid" (DiagEnvelope.hpp), not "id", so it needs ResolveDiagId,
         // not ResolveNativeId. See ResolveDiagId's own comment for why
         // conflating the two would be wrong, not just redundant.
+        //
+        // C/C++ source (IsSourceFile) is the fourth branch: its guid is DERIVED
+        // from the mount path (ResolveSourceId), which is why the mount path is
+        // computed FIRST below -- before any identity is resolved -- rather than
+        // after, where it used to sit. The hoist also means a file outside the
+        // content root is refused before any id is minted or written back,
+        // which is strictly better than minting an identity for a file that
+        // is then never registered.
+
+        // Mount path: "<scheme>://<relative-to-contentDir, forward slashes>". The
+        // ORIGINAL file is registered (the .meta only stores the id), so a resolved
+        // Guid still points at the real asset the loader reads. A file outside
+        // contentDir has no expressible mount path -- refuse it.
+        std::error_code ec;
+        const auto rel = std::filesystem::relative(file, contentDir, ec);
+        if (ec || rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+        {
+            ARC_WARN("AssetRegistry: '{}' is not under content root '{}' -- not registered",
+                     file.generic_string(), contentDir.generic_string());
+            // Producer: outside content root -- the file is never registered (no
+            // mount path exists), so a File locator is what a click can actually
+            // do something with; an Asset locator would point at nothing (no
+            // Guid is ever resolved for this file -- the identity branch below
+            // runs only for files that pass this check).
+            Diagnostic d;
+            d.severity = DiagSeverity::Warning;
+            d.scope    = DiagScope::Assets;
+            d.code     = "assets.outside-content-root";
+            d.message  = "'" + file.generic_string() + "' is not under content root '" +
+                         contentDir.generic_string() + "' -- not registered";
+            d.locator  = DiagLocator::File(file.string());
+            m_scanDiagnostics.push_back(std::move(d));
+            return std::nullopt;
+        }
+        const std::string mountPath = std::string(scheme) + "://" + rel.generic_string();
+
         Guid id;
         bool idWriteFailed = false;
         if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite" ||
@@ -300,6 +367,8 @@ namespace Arcane
             id = ResolveDiagId(file);   // F-7 CRITICAL: never ResolveNativeId -- see above
         else if (IsImportedBinary(ext))
             id = ResolveSidecarId(file, &idWriteFailed);
+        else if (IsSourceFile(ext))
+            id = ResolveSourceId(mountPath);   // derived, never written -- see IsSourceFile
         else
             return std::nullopt;
 
@@ -331,32 +400,6 @@ namespace Arcane
             d.locator  = DiagLocator::Asset(id);
             m_scanDiagnostics.push_back(std::move(d));
         }
-
-        // Mount path: "<scheme>://<relative-to-contentDir, forward slashes>". The
-        // ORIGINAL file is registered (the .meta only stores the id), so a resolved
-        // Guid still points at the real asset the loader reads. A file outside
-        // contentDir has no expressible mount path -- refuse it.
-        std::error_code ec;
-        const auto rel = std::filesystem::relative(file, contentDir, ec);
-        if (ec || rel.empty() || rel.is_absolute() || *rel.begin() == "..")
-        {
-            ARC_WARN("AssetRegistry: '{}' is not under content root '{}' -- not registered",
-                     file.generic_string(), contentDir.generic_string());
-            // Producer: outside content root -- the file is never registered (no
-            // mount path exists), so a File locator is what a click can actually
-            // do something with; an Asset locator would point at nothing (this
-            // Guid, even if minted above, is never inserted into m_byGuid).
-            Diagnostic d;
-            d.severity = DiagSeverity::Warning;
-            d.scope    = DiagScope::Assets;
-            d.code     = "assets.outside-content-root";
-            d.message  = "'" + file.generic_string() + "' is not under content root '" +
-                         contentDir.generic_string() + "' -- not registered";
-            d.locator  = DiagLocator::File(file.string());
-            m_scanDiagnostics.push_back(std::move(d));
-            return std::nullopt;
-        }
-        const std::string mountPath = std::string(scheme) + "://" + rel.generic_string();
 
         if (auto [it, inserted] = m_byGuid.try_emplace(id, mountPath);
             !inserted && it->second != mountPath)

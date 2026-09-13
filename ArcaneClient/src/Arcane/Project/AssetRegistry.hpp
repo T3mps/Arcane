@@ -13,6 +13,11 @@
 // key ("guid", DiagEnvelope.hpp's Envelope -- never "id") and are NEVER minted or written
 // back here, since a report's identity is fixed the moment Diagnostics wrote it. See
 // AddFile's .arcdiag branch (AssetRegistry.cpp).
+//
+// And a fourth rule for C/C++ source files (.cpp/.hpp/.h/...; Source/ in the Asset
+// Browser): the guid is DERIVED from the mount path (Guid::FromName), never minted and
+// never written -- no sidecar may ever land in a source tree. Same path, same guid,
+// across restarts; a rename is a new identity. See AddFile's IsSourceFile branch.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Base/Diagnostics.hpp>

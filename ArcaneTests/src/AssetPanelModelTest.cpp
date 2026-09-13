@@ -1701,6 +1701,100 @@ TEST_CASE("AssetPanelModel mount-rooted: a real game://diagnostics/ directory ne
 // digest. Same real-registry + FakeProviders discipline as every case above.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Source/ in the Asset Browser: the project's C++ source tree (source://,
+// AssetRegistry's path-derived-guid rule) is a THIRD peer root beside
+// Content/ and diagnostics/. Same mount-rooted machinery as diag:// above --
+// what is new is the kind (AssetKind::Source), the root label ("Source/"),
+// and that, unlike diagnostics/, it defaults OPEN: the whole point of the
+// step is making source VISIBLE.
+// ---------------------------------------------------------------------------
+TEST_CASE("AssetPanelModel mount-rooted: source:// gets its own Source/ root, kind Source, default open", "[editor]")
+{
+    const fs::path gameDir   = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_source_game_test";
+    const fs::path sourceDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_source_src_test";
+    std::error_code ec;
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(sourceDir, ec);
+    fs::create_directories(gameDir);
+    fs::create_directories(sourceDir / "sub");
+
+    WriteFile(gameDir, "hero.png", "bytes-hero");
+    WriteFile(sourceDir, "Game.cpp", "// cpp\n");
+    WriteFile(sourceDir, "Game.hpp", "// hpp\n");
+    WriteFile(sourceDir / "sub", "Foo.h", "// h\n");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(gameDir, "game") == 1);
+    REQUIRE(registry.AddContent(sourceDir, "source") == 3);
+
+    const Arcane::Guid heroId = GuidForPath(registry.All(), "game://hero.png");
+    const Arcane::Guid cppId  = GuidForPath(registry.All(), "source://Game.cpp");
+    const Arcane::Guid hId    = GuidForPath(registry.All(), "source://sub/Foo.h");
+    REQUIRE(heroId.IsValid());
+    REQUIRE(cppId.IsValid());
+    REQUIRE(hId.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));   // no SetGroupOpen anywhere -- pure defaults
+
+    // Content/ is untouched: still exactly hero.png.
+    const AssetPanelRow* content = FindGroupRow(model.Rows(), "Content/");
+    REQUIRE(content);
+    CHECK(content->groupCount == 1);
+
+    // Source/ is its OWN depth-0 root (key "source://", label "Source/"),
+    // counting only its direct files, and default OPEN -- rows visible with
+    // no SetGroupOpen call, the opposite of diagnostics/'s default.
+    const AssetPanelRow* sourceRoot = FindGroupRow(model.Rows(), "source://");
+    REQUIRE(sourceRoot);
+    CHECK(sourceRoot->groupLabel == "Source/");
+    CHECK(sourceRoot->groupDepth == 0);
+    CHECK(sourceRoot->groupCount == 2);   // Game.cpp + Game.hpp -- sub/Foo.h is the nested group's
+    CHECK(HasAssetRow(model.Rows(), cppId));
+
+    // Nested directory: depth measured within the source mount's own tree.
+    const AssetPanelRow* sub = FindGroupRow(model.Rows(), "source://sub/");
+    REQUIRE(sub);
+    CHECK(sub->groupLabel == "sub/");
+    CHECK(sub->groupDepth == 1);
+    CHECK(HasAssetRow(model.Rows(), hId));
+
+    // Classified as Source (its own kind, its own rail entry), never Other.
+    const AssetPanelEntry* cpp = model.Find(cppId);
+    REQUIRE(cpp);
+    CHECK(cpp->kind == AssetKind::Source);
+    CHECK(cpp->fileName == "Game.cpp");
+    bool railHasSource = false;
+    for (const RailEntry& r : model.Rail())
+        if (r.kind == static_cast<int>(AssetKind::Source))
+        {
+            railHasSource = true;
+            CHECK(r.label == "Source");
+            CHECK(r.count == 3);
+        }
+    CHECK(railHasSource);
+
+    // Peer ordering, same pin as diag://: every one of Content/'s rows before
+    // source://'s root, never interleaved.
+    const auto& rows = model.Rows();
+    int iContent = -1, iSource = -1;
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+    {
+        if (rows[i].type != AssetPanelRow::Type::Group) continue;
+        if (rows[i].groupName == "Content/")  iContent = i;
+        if (rows[i].groupName == "source://") iSource  = i;
+    }
+    REQUIRE(iContent >= 0);
+    REQUIRE(iSource >= 0);
+    CHECK(iContent < iSource);
+
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(sourceDir, ec);
+}
+
 namespace
 {
     bool ContainsGuid(const std::vector<Arcane::Guid>& v, const Arcane::Guid& g)
@@ -1730,6 +1824,7 @@ TEST_CASE("IsUnusedEligible: exactly Texture/Material/Sprite/Mesh/Model (spec s9
     CHECK_FALSE(IsUnusedEligible(AssetKind::Audio));
     CHECK_FALSE(IsUnusedEligible(AssetKind::Font));
     CHECK_FALSE(IsUnusedEligible(AssetKind::Diagnostic));
+    CHECK_FALSE(IsUnusedEligible(AssetKind::Source));       // no index sees who includes a header
     CHECK_FALSE(IsUnusedEligible(AssetKind::Other));
 
     // Exhaustive: every value of AssetKind is accounted for above, so a newly

@@ -670,6 +670,19 @@ TEST_CASE("ListAssetReferences never returns nullopt for any AssetKindOf-recogni
         { ".ttf",       "not a real ttf, just bytes" },
         { ".otf",       "not a real otf, just bytes" },
         { ".json",      "{}" },
+        // Source/ in the Asset Browser: C/C++ source registers under source://
+        // (AssetRegistry's path-derived-guid rule) and classifies as
+        // AssetKind::Source. Real code, not JSON -- routing it through the
+        // parse path would answer nullopt AND log "JSON parse failed" per
+        // file on every project open, which is the wart these rows pin shut.
+        { ".cpp",       "#include \"min.hpp\"\nint main() { return 0; }\n" },
+        { ".hpp",       "#pragma once\n" },
+        { ".h",         "#pragma once\n" },
+        { ".c",         "int x;\n" },
+        { ".inl",       "inline int f() { return 1; }\n" },
+        { ".cc",        "int y;\n" },
+        { ".cxx",       "int z;\n" },
+        { ".hxx",       "#pragma once\n" },
     };
 
     std::vector<std::pair<Arcane::Guid, fs::path>> mapping;

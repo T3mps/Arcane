@@ -1063,8 +1063,18 @@ namespace Arcane
                     // rather than answer "no outgoing edges".
                     ".gltf", ".glb" };
                 static constexpr std::string_view kOpaque[] = { ".json", ".arcdiag" };
+                // Source/ in the Asset Browser: C/C++ source (registered under
+                // source:// by AssetRegistry's IsSourceFile rule -- this list
+                // mirrors it exactly). Code may well NAME a guid in a string
+                // literal, but no index here can honestly see that, so "no
+                // outgoing edges" is the same answer .json data gets -- and
+                // never the parse path, which would log "JSON parse failed"
+                // once per source file on every project open.
+                static constexpr std::string_view kSource[] = {
+                    ".cpp", ".hpp", ".h", ".c", ".inl", ".cc", ".cxx", ".hxx" };
                 for (std::string_view e : kLeaf)   if (ext == e) return std::vector<AssetRef>{};
                 for (std::string_view e : kOpaque) if (ext == e) return std::vector<AssetRef>{};
+                for (std::string_view e : kSource) if (ext == e) return std::vector<AssetRef>{};
 
                 // Parse-on-call, and off the ALREADY-resolved path above --
                 // no second ResolveId round trip for the same guid.

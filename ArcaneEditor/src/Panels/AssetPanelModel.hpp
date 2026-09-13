@@ -64,9 +64,16 @@ namespace Arcane::Editor
         // is the authored .arcmesh that derives from it (and folds under it in the
         // browser). Same placement rule Diagnostic and Mesh used: ahead of the catch-all.
         Model,
+        // Source/ in the Asset Browser: C/C++ source files (.cpp/.hpp/.h/...),
+        // registered under source:// by AssetRegistry's path-derived-guid rule.
+        // Not content -- no cook pipeline (CookStateOf's default), never
+        // `unused` (IsUnusedEligible), no document type yet (double-click is
+        // the open-in-IDE step's job, not this one's). Same ahead-of-the-
+        // catch-all placement every kind since Diagnostic has used.
+        Source,
         Other,
     };
-    inline constexpr int kAssetKindCount = 11;
+    inline constexpr int kAssetKindCount = 12;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
@@ -110,6 +117,10 @@ namespace Arcane::Editor
             return AssetKind::Font;
         if (ext == ".json")
             return AssetKind::Data;
+        // Mirrors AssetRegistry.cpp's IsSourceFile list exactly -- the registry
+        // decides what registers, this only names what it registered.
+        for (const char* e : { ".cpp", ".hpp", ".h", ".c", ".inl", ".cc", ".cxx", ".hxx" })
+            if (ext == e) return AssetKind::Source;
         return AssetKind::Other;
     }
 
@@ -287,6 +298,9 @@ namespace Arcane::Editor
             // (the authored asset derived from it) so the two never read as one kind
             // at a glance in the rail.
             case AssetKind::Model:    return ICON_LC_BOXES;
+            // ICON_LC_FILE_CODE exists in IconsLucide.h (grepped: IconsLucide.h:708)
+            // -- a file with code brackets, distinct from Other's plain ICON_LC_FILE.
+            case AssetKind::Source:   return ICON_LC_FILE_CODE;
             case AssetKind::Other:    return ICON_LC_FILE;
         }
         return ICON_LC_FILE;
@@ -306,6 +320,7 @@ namespace Arcane::Editor
             case AssetKind::Diagnostic: return "Diagnostic";
             case AssetKind::Mesh:     return "Mesh";
             case AssetKind::Model:    return "Model";
+            case AssetKind::Source:   return "Source";
             case AssetKind::Other:    return "Other";
         }
         return "Other";
@@ -455,6 +470,8 @@ namespace Arcane::Editor
     {
         if (scheme == "diag")
             return "diagnostics/";
+        if (scheme == "source")
+            return "Source/";   // the on-disk directory's own name, a peer of "Content/"
         return std::string(scheme) + "/";   // unknown/future scheme -> scheme-named root
     }
 

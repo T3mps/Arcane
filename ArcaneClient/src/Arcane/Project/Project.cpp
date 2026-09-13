@@ -261,6 +261,21 @@ namespace Arcane
             proj.m_registry.AddContent(diagDir, "diag");
         }
 
+        // source:// -- the project's C++ source tree (<root>/Source, the same
+        // directory build/arcane.lua's game-module glob compiles), folded into
+        // the SAME registry so the Asset Browser lists it as a peer root of
+        // Content/. Source files register under a path-derived guid with no
+        // sidecar (AssetRegistry's fourth identity rule). Gated on the directory
+        // existing, exactly like diag:// above: Project::Create scaffolds
+        // Source/, but a content-only project (or one whose author removed it)
+        // stays silent -- no mount, no scan, no warning.
+        const std::filesystem::path sourceDir = root / "Source";
+        if (std::filesystem::is_directory(sourceDir, ec))
+        {
+            proj.m_mounts.Mount("source", sourceDir);
+            proj.m_registry.AddContent(sourceDir, "source");
+        }
+
         // KEY OWNERSHIP: "project" (fixed key) -- accumulated across the
         // WHOLE plugin loop below and published ONCE, unconditionally, right
         // before returning (so a clean re-open with no plugin problems
@@ -453,6 +468,11 @@ namespace Arcane
         std::vector<ContentRoot> roots;
         roots.push_back({ "game", m_root / "Content" });
         roots.push_back({ "diag", m_root / "Saved" / "Diagnostics" });
+        // source:// listed unconditionally for the same reason diag:// is: a
+        // Source/ created after Open() (a first New C++ Class, one day) must
+        // still find its root here rather than warn "outside every content
+        // root". Same existence-free path math as above.
+        roots.push_back({ "source", m_root / "Source" });
         for (const auto& pluginRoot : m_activePluginRoots)
             roots.push_back({ "plugin/" + pluginRoot.filename().string(),
                               pluginRoot / "Content" });
@@ -476,9 +496,9 @@ namespace Arcane
             // -- re-mounting with a canonicalized (possibly short-name,
             // e.g. 8.3 "ETHANT~1") path previously broke ResolveAsset()
             // callers comparing against the original long-form path. Only
-            // diag:// can reach this Mount() call in practice, the one root
-            // that may not have existed yet at Open() time (see the roots
-            // comment above).
+            // diag:// and source:// can reach this Mount() call in practice,
+            // the two roots that may not have existed yet at Open() time (see
+            // the roots comment above).
             if (!m_mounts.HasMount(root.scheme))
                 m_mounts.Mount(root.scheme, root.dir);
             return m_registry.AddFile(target, rootDir, root.scheme);
