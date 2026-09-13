@@ -1,8 +1,10 @@
 # arcbuild — the game-project build driver
 
-**Status:** design, 2026-09-13. Follows the editor<->IDE surface arc (Source/ in
-the browser, Open Visual Studio, the C++ Class wizard). Implementation plan to
-follow via `superpowers:writing-plans`.
+**Status:** implemented 2026-09-13 (plan
+`docs/plans/2026-09-13-arcbuild-driver-plan.md`; plan-time rulings R1–R10
+there, with the measured one-compile-one-link proof in its Closeout). Follows
+the editor<->IDE surface arc (Source/ in the browser, Open Visual Studio, the
+C++ Class wizard).
 
 ## 1. Why
 
@@ -69,6 +71,7 @@ commands:
   rebuild    generate, then msbuild /t:Rebuild unconditionally
   clean      msbuild /t:Clean, then remove Binaries/ and Intermediate/<config>/
   probe      print the slot verdict of §4.3 and exit (diagnostics; used by tests)
+             (exit 0 = the plain-build rows, 3 = the would-rebuild rows -- plan ruling R4)
 ```
 
 - `--project` accepts the directory or the `.arcproj`; the manifest's `name`
@@ -97,6 +100,10 @@ commands:
 - The SDK root is never inferred from the driver's own exe location in v1
   (the editor knows its root and passes `--sdk`; scripts/CI have the
   variable). `SdkRootFromExeDir` stays in the editor.
+- (Plan ruling R1: the probes above, plus `DiscoverSolution` and a
+  `ResolveDevenv`, live in ArcaneCore as `Arcane::Toolchain` -- shared by
+  arcbuild.exe and the editor's IdeLaunch, which still needs devenv and the
+  solution path after ModuleBuild lost them.)
 
 ### 4.2 generate
 `( cd /d "<root>" && "<premake>" <action> ) 2>&1` — `ComposeGenerateCommand`,
