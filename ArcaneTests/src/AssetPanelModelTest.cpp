@@ -1496,12 +1496,13 @@ TEST_CASE("AssetPanelModel mount-rooted: diag:// gets its own diagnostics/ root,
     CHECK_FALSE(HasAssetRow(model.Rows(), crash1Id));
     CHECK_FALSE(HasAssetRow(model.Rows(), crash2Id));
 
-    // diagnostics/ exists as its OWN depth-0 root (key "diag://", label
-    // "diagnostics/") -- present even collapsed (its own header always
+    // Diagnostics/ exists as its OWN depth-0 root (key "diag://", label
+    // "Diagnostics/" -- capitalised like its peers Content/ and Source/,
+    // 2026-09-12) -- present even collapsed (its own header always
     // shows, same rule every other group's own-collapse follows).
     const AssetPanelRow* diagRoot = FindGroupRow(model.Rows(), "diag://");
     REQUIRE(diagRoot);
-    CHECK(diagRoot->groupLabel == "diagnostics/");
+    CHECK(diagRoot->groupLabel == "Diagnostics/");
     CHECK(diagRoot->groupDepth == 0);
     CHECK(diagRoot->groupCount == 1);   // crash1.arcdiag only -- its own direct row
 
@@ -1663,8 +1664,9 @@ TEST_CASE("AssetPanelModel mount-rooted: a real game://diagnostics/ directory ne
     REQUIRE(gameDiagnostics);
     REQUIRE(diagRoot);
     CHECK(gameDiagnostics->groupName != diagRoot->groupName);
-    CHECK(gameDiagnostics->groupLabel == "diagnostics/");
-    CHECK(diagRoot->groupLabel == "diagnostics/");            // same LABEL, on purpose
+    CHECK(gameDiagnostics->groupLabel == "diagnostics/");     // the real directory's own name, verbatim
+    CHECK(diagRoot->groupLabel == "Diagnostics/");            // the mount's label -- differs only by case, and
+                                                              // the KEYS are what keep them apart, not the label
     CHECK(gameDiagnostics->groupDepth == 1);                  // Content/'s own child
     CHECK(diagRoot->groupDepth == 0);                         // a mount root in its own right
 
@@ -1793,6 +1795,71 @@ TEST_CASE("AssetPanelModel mount-rooted: source:// gets its own Source/ root, ki
 
     fs::remove_all(gameDir, ec);
     fs::remove_all(sourceDir, ec);
+}
+
+// User-directed root order (2026-09-12): Content/ then Source/ then
+// diagnostics/. Plain byte order over the qualified keys would put "diag://"
+// BEFORE "source://" ('d' < 's'), so the peer order has to be a per-scheme
+// RANK, not the key text: source first, diag last, any other scheme between.
+// Also pins that the rank never leaks into a mount's OWN subtree order
+// (source://sub/ still sits inside source://'s run).
+TEST_CASE("AssetPanelModel mount-rooted: root order is Content/ then Source/ then diagnostics/", "[editor]")
+{
+    const fs::path gameDir   = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_order3_game_test";
+    const fs::path sourceDir = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_order3_src_test";
+    const fs::path diagDir   = fs::temp_directory_path() / "arcane_asset_panel_model_mountroot_order3_diag_test";
+    std::error_code ec;
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(sourceDir, ec);
+    fs::remove_all(diagDir, ec);
+    fs::create_directories(gameDir / "materials");
+    fs::create_directories(sourceDir / "sub");
+    fs::create_directories(diagDir);
+
+    WriteFile(gameDir, "hero.png", "bytes-hero");
+    WriteFile(gameDir / "materials", "mat.arcmat",
+             R"({"id":"c2000001-0001-4001-8001-000000000002","type":"material","kind":"fullscreen"})");
+    WriteFile(sourceDir, "Game.cpp", "// cpp\n");
+    WriteFile(sourceDir / "sub", "Foo.h", "// h\n");
+    WriteDiagFile(diagDir, "crash1.arcdiag");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(gameDir, "game") == 2);
+    REQUIRE(registry.AddContent(sourceDir, "source") == 2);
+    REQUIRE(registry.AddContent(diagDir, "diag") == 1);
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
+
+    const auto& rows = model.Rows();
+    auto indexOfGroup = [&](const std::string& key) -> int
+    {
+        for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+            if (rows[i].type == AssetPanelRow::Type::Group && rows[i].groupName == key)
+                return i;
+        return -1;
+    };
+    const int iContent   = indexOfGroup("Content/");
+    const int iMaterials = indexOfGroup("materials/");
+    const int iSource    = indexOfGroup("source://");
+    const int iSourceSub = indexOfGroup("source://sub/");
+    const int iDiag      = indexOfGroup("diag://");
+    REQUIRE(iContent >= 0);
+    REQUIRE(iMaterials >= 0);
+    REQUIRE(iSource >= 0);
+    REQUIRE(iSourceSub >= 0);
+    REQUIRE(iDiag >= 0);
+
+    CHECK(iContent < iMaterials);     // Content/'s subtree first, intact
+    CHECK(iMaterials < iSource);      // then Source/'s root...
+    CHECK(iSource < iSourceSub);      // ...with its own subtree right under it
+    CHECK(iSourceSub < iDiag);        // and diagnostics/ LAST, after all of Source/
+
+    fs::remove_all(gameDir, ec);
+    fs::remove_all(sourceDir, ec);
+    fs::remove_all(diagDir, ec);
 }
 
 namespace

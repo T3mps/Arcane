@@ -469,7 +469,7 @@ namespace Arcane::Editor
     inline std::string MountRootLabel(std::string_view scheme)
     {
         if (scheme == "diag")
-            return "diagnostics/";
+            return "Diagnostics/";
         if (scheme == "source")
             return "Source/";   // the on-disk directory's own name, a peer of "Content/"
         return std::string(scheme) + "/";   // unknown/future scheme -> scheme-named root
@@ -487,6 +487,21 @@ namespace Arcane::Editor
     inline bool GroupDefaultOpen(std::string_view groupKey)
     {
         return groupKey != "diag://";
+    }
+
+    // Peer order of the QUALIFIED mount roots (user-directed 2026-09-12):
+    // Content/ (unqualified, always first -- GroupKeyLess) then Source/, then
+    // any other scheme (plugin content), then diagnostics/ LAST -- crash
+    // noise sits at the bottom, the project's own code right under its
+    // content. Lower sorts first. Consulted by AssetPanelModel.cpp's
+    // GroupKeyLess for the qualified bucket only; the order WITHIN one
+    // mount's own subtree stays plain lexicographic (the same `a < b` it
+    // always was), because every key under one scheme shares one rank.
+    inline int MountSchemeRank(std::string_view scheme)
+    {
+        if (scheme == "source") return 0;
+        if (scheme == "diag")   return 2;
+        return 1;
     }
 
     // Nesting depth of a group KEY (see the shape doc comment just above).
@@ -519,7 +534,7 @@ namespace Arcane::Editor
 
     // Display label for a group row: the LEAF segment only, trailing '/' kept
     // ("textures/patterns/" -> "patterns/"; a qualified root -> its mount's own
-    // label via MountRootLabel, e.g. "diag://" -> "diagnostics/"). A mount
+    // label via MountRootLabel, e.g. "diag://" -> "Diagnostics/"). A mount
     // root -- "Content/" or any other -- is its own leaf already, so it never
     // shortens to nothing (spec s6).
     inline std::string GroupLabelOf(std::string_view folder)

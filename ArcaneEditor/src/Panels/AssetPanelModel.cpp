@@ -456,14 +456,35 @@ namespace Arcane::Editor
         // bucket, plain lexicographic order applies exactly as before (so
         // Content/'s own subtree ordering, and the ordering WITHIN diag://'s
         // own subtree, are both bit-for-bit unchanged).
+        //
+        // Within the qualified bucket, the SCHEME's rank (MountSchemeRank,
+        // AssetPanelModel.hpp -- user-directed 2026-09-12: Source/ above
+        // diagnostics/) decides between two different mounts BEFORE the key
+        // text does: on raw bytes "diag://" < "source://" would put crash
+        // reports above the project's own code. Two keys of the SAME scheme
+        // share a rank, so a mount's own subtree order is exactly the `a < b`
+        // it always was.
         struct GroupKeyLess
         {
+            static std::string_view SchemeOf(const std::string& key)
+            {
+                const std::size_t sep = key.find("://");
+                return sep == std::string::npos ? std::string_view{}
+                                                : std::string_view(key).substr(0, sep);
+            }
             bool operator()(const std::string& a, const std::string& b) const
             {
                 const bool aQualified = a.find("://") != std::string::npos;
                 const bool bQualified = b.find("://") != std::string::npos;
                 if (aQualified != bQualified)
                     return !aQualified;   // unqualified (game/Content) always first
+                if (aQualified)
+                {
+                    const int ra = MountSchemeRank(SchemeOf(a));
+                    const int rb = MountSchemeRank(SchemeOf(b));
+                    if (ra != rb)
+                        return ra < rb;
+                }
                 return a < b;
             }
         };
