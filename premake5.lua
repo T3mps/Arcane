@@ -312,6 +312,85 @@ project "arccook"
     filter {}
 
 -- ============================================================================
+-- arcbuild: the game-project build driver (spec docs/specs/
+-- 2026-09-13-arcbuild-driver-design.md) -- Unreal's Build.bat analogue. ONE
+-- entry point (generate/build/rebuild/clean/probe) the editor's ModuleBuild,
+-- the Gacha scripts and CI all spawn, so the premake+msbuild orchestration
+-- lives once. It links ArcaneClient for Module::ScanFileCrtFlavor -- the
+-- s4.3 slot probe is the SAME verdict PluginHost refuses a cross-CRT module
+-- on, never a second PE scanner -- and for Project/ProjectManifest (the
+-- .arcproj rule the hosts use). arccook above is the structural template;
+-- the ArcaneClient.dll postbuild copy is ArcaneRuntime's. Its pure core
+-- (src/Driver.cpp) is ALSO source-compiled into ArcaneTests ([build]).
+-- ============================================================================
+project "arcbuild"
+    location "arcbuild"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+        "%{wks.location}/ArcaneClient/src",
+        "%{IncludeDir.ArcaneCore}",
+        -- Project.hpp's include closure (ProjectManifest -> <Json.hpp> + glm;
+        -- Diagnostics -> spdlog/Mosaic): headers only, same set ArcaneRuntime
+        -- takes minus imgui/NRI.
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.Mosaic}",
+    }
+
+    links { "ArcaneCore", "ArcaneClient" }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+    }
+
+    -- The driver loads ArcaneClient.dll from its own directory (dev bin
+    -- layout: bin/<cfg>/arcbuild/); a packaged layout ships it beside the
+    -- editor, where the DLL already is.
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+-- ============================================================================
 -- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
 -- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
 -- SDL3 links INTO this DLL; consumers link only the import lib.

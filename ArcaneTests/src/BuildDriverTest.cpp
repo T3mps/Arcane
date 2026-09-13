@@ -274,3 +274,82 @@ TEST_CASE("arcbuild::CleanTargets is exactly Binaries/ and Intermediate/<config>
         CHECK(s.find(".slnx") == std::string::npos);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The opt-in desk probe. Off by default: SKIPs unless ARCANE_BUILD_DESK names
+// an ABSOLUTE game-project directory (one with an .arcproj -- e.g.
+// D:\dev\starworks\Gacha\Game), so the ordinary suite never spawns the
+// driver. Runs the BUILT arcbuild.exe from the dev bin layout
+// (../arcbuild/ beside this exe -- the editor's own ResolveDriver rule) via
+// the editor's synchronous RunCapture. `probe` must answer with one row and
+// exit 0 or 3; `generate` must exit 0 and leave a workspace file behind.
+// Both are idempotent against a real project (premake rewrites only files
+// whose content changed).
+// ---------------------------------------------------------------------------
+
+#include <cstdlib>
+#include <Project/ModuleBuild.hpp>        // RunCapture + ExeDir (editor helpers compiled into the tests)
+#include <Arcane/Build/Toolchain.hpp>     // DiscoverSolution (the post-generate check)
+
+namespace
+{
+    fs::path DeskDriverExe()
+    {
+        return (Arcane::Editor::ModuleBuild::ExeDir() / ".." / "arcbuild" / "arcbuild.exe").lexically_normal();
+    }
+
+    std::string DeskLine(const char* command, const fs::path& project)
+    {
+        std::string cmd = "( \"";
+        cmd += DeskDriverExe().string();
+        cmd += "\" ";
+        cmd += command;
+        cmd += " --project \"";
+        cmd += project.string();
+        cmd += "\" --config Debug ) 2>&1";
+        return cmd;
+    }
+}
+
+TEST_CASE("arcbuild probe answers one s4.3 row against a real project on this desk", "[build-desk]")
+{
+    const char* env = std::getenv("ARCANE_BUILD_DESK");
+    if (!env || !*env)
+        SKIP("ARCANE_BUILD_DESK not set -- desk-only probe");
+    REQUIRE(fs::is_regular_file(DeskDriverExe()));
+
+    const Arcane::Editor::ModuleBuild::CaptureResult r =
+        Arcane::Editor::ModuleBuild::RunCapture(DeskLine("probe", fs::path(env)));
+    for (const std::string& line : r.lines)
+        INFO(line);
+    REQUIRE(r.exit.has_value());
+    CHECK((*r.exit == kExitOk || *r.exit == kExitProbeRebuild));
+
+    bool sawRow = false;
+    for (const std::string& line : r.lines)
+        if (line.rfind("[arcbuild] probe:", 0) == 0 && line.find(" state=") != std::string::npos)
+            sawRow = true;
+    CHECK(sawRow);
+}
+
+TEST_CASE("arcbuild generate writes the project's workspace file on this desk", "[build-desk]")
+{
+    const char* env = std::getenv("ARCANE_BUILD_DESK");
+    if (!env || !*env)
+        SKIP("ARCANE_BUILD_DESK not set -- desk-only probe");
+    REQUIRE(fs::is_regular_file(DeskDriverExe()));
+
+    const Arcane::Editor::ModuleBuild::CaptureResult r =
+        Arcane::Editor::ModuleBuild::RunCapture(DeskLine("generate", fs::path(env)));
+    for (const std::string& line : r.lines)
+        INFO(line);
+    REQUIRE(r.exit.has_value());
+    CHECK(*r.exit == kExitOk);
+
+    bool sawPremake = false;
+    for (const std::string& line : r.lines)
+        if (line.rfind("[premake]", 0) == 0)
+            sawPremake = true;
+    CHECK(sawPremake);
+    CHECK_FALSE(Arcane::Toolchain::DiscoverSolution(fs::path(env)).empty());
+}
