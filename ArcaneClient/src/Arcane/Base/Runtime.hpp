@@ -251,11 +251,15 @@ namespace Arcane
 
         // --- engine-owned physics (2026-09-11, spec docs/specs/2026-09-11-physics-2d-wiring-design.md s4-s5) ---
         // Manifold2D-free surface: hosts and modules never see PhysicsSystem or
-        // PhysicsWorld. InstallEngineSystems adds the engine's own systems
-        // (today: PhysicsSystem into fixedUpdate, Before<TransformPropagation
-        // System>); the ctor calls it, and ClearSystems calls it again after
-        // clearing, so every PluginHost load/reload/unload path keeps it.
-        // Idempotent. EnsurePhysics runs once per frame before Loop().Advance
+        // PhysicsWorld. InstallEngineSystems adds the engine's own systems --
+        // the STANDARD THREE (2026-09-13 game-module boilerplate spec s4.1):
+        // PhysicsSystem then TransformPropagationSystem into fixedUpdate,
+        // RenderSubmissionSystem into render; the ctor calls it, and
+        // ClearSystems calls it again after clearing, so every PluginHost
+        // load/reload/unload path keeps them. Idempotent (per-system HasSystem
+        // guards). A game module registers ONLY its own systems and places them
+        // with Astra::Before/After against these types (GameModule.hpp).
+        // EnsurePhysics runs once per frame before Loop().Advance
         // (beside SetRenderContext): it mints PhysicsResource + PhysicsInterp
         // Buffer when the current registry lacks them -- scene open,
         // RestoreRegistry (Play -> Stop, structural undo) and hot reload all

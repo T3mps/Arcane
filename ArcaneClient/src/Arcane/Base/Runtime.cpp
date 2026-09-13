@@ -13,6 +13,8 @@
 #include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
 #include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsSystem/PhysicsResource (instantiated IN this module)
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
+#include <Arcane/Scene/RenderSystems.hpp>       // RenderSubmissionSystem (engine-owned, instantiated IN this module)
+#include <Arcane/Scene/TransformSystems.hpp>    // TransformPropagationSystem (engine-owned, instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
 
@@ -418,11 +420,25 @@ namespace Arcane
 
     void Runtime::InstallEngineSystems()
     {
-        auto& fixed = m_impl->schedulers->fixedUpdate;
-        if (fixed.HasSystem<PhysicsSystem>()) return;
-        const float fixedDt = static_cast<float>(1.0 / m_impl->loopCfg.fixedHz);
-        // AlreadyRegistered is the only failure and HasSystem just excluded it.
-        std::ignore = fixed.AddSystem<PhysicsSystem>(fixedDt, /*stepWorld*/ true);
+        // The engine's STANDARD systems, owned here (spec docs/specs/2026-09-13-
+        // game-module-boilerplate-design.md s4.1) -- the UE/DOTS shape: the engine
+        // ticks the world; a game module registers only its own systems and
+        // places them with Astra::Before/After against these types. Each behind
+        // its own HasSystem guard: AlreadyRegistered is the only failure and
+        // this runs from the ctor AND after every ClearSystems. Order within a
+        // scheduler: PhysicsSystem declares Before<TransformPropagationSystem>;
+        // insertion order carries the rest (Astra's reorder is stable).
+        auto& fixed  = m_impl->schedulers->fixedUpdate;
+        auto& render = m_impl->schedulers->render;
+        if (!fixed.HasSystem<PhysicsSystem>())
+        {
+            const float fixedDt = static_cast<float>(1.0 / m_impl->loopCfg.fixedHz);
+            std::ignore = fixed.AddSystem<PhysicsSystem>(fixedDt, /*stepWorld*/ true);
+        }
+        if (!fixed.HasSystem<TransformPropagationSystem>())
+            std::ignore = fixed.AddSystem<TransformPropagationSystem>();
+        if (!render.HasSystem<RenderSubmissionSystem>())
+            std::ignore = render.AddSystem<RenderSubmissionSystem>();
     }
 
     glm::vec2 Runtime::ResolvedGravity() const

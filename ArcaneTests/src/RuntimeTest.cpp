@@ -12,6 +12,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
+#include <Arcane/Scene/RenderSystems.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
@@ -144,10 +145,14 @@ TEST_CASE("Runtime ClearSystems empties the module's systems and re-installs the
     REQUIRE(rt.Schedulers().update.AddSystem<NoOpSystem>().IsOk());        // type index, so reusing the
     REQUIRE(rt.Schedulers().render.AddSystem<NoOpSystem>().IsOk());        // same type across them is fine
     rt.ClearSystems();
-    CHECK(rt.Schedulers().fixedUpdate.Size() == 1);   // the engine-owned PhysicsSystem is re-installed (2026-09-11); the module's NoOpSystem is gone
+    // The engine-owned STANDARD systems come back (PhysicsSystem 2026-09-11;
+    // TransformPropagation + RenderSubmission 2026-09-13, game-module
+    // boilerplate spec s4.1); the module's NoOpSystems are gone.
+    CHECK(rt.Schedulers().fixedUpdate.Size() == 2);
     CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<NoOpSystem>());
     CHECK(rt.Schedulers().update.Empty());
-    CHECK(rt.Schedulers().render.Empty());
+    CHECK(rt.Schedulers().render.Size() == 1);
+    CHECK_FALSE(rt.Schedulers().render.HasSystem<NoOpSystem>());
 }
 
 // ---- 2D physics wiring Plan 1 Task 6: the engine-owned physics facade ------
@@ -158,13 +163,14 @@ TEST_CASE("Runtime installs PhysicsSystem into fixedUpdate and re-installs after
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
     CHECK_FALSE(rt.Schedulers().update.HasSystem<Arcane::PhysicsSystem>());
     rt.InstallEngineSystems();                                   // idempotent
-    CHECK(rt.Schedulers().fixedUpdate.Size() == 1);
-    REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>().IsOk());   // "the module's"
+    CHECK(rt.Schedulers().fixedUpdate.Size() == 2);              // Physics + TransformPropagation, both engine-owned (2026-09-13)
+    REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<NoOpSystem>().IsOk());   // "the module's"
     rt.ClearSystems();                                           // what PluginHost does on every unload/reload
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
-    CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
+    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
+    CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<NoOpSystem>());
     CHECK(rt.Schedulers().update.Empty());
-    CHECK(rt.Schedulers().render.Empty());
+    CHECK(rt.Schedulers().render.HasSystem<Arcane::RenderSubmissionSystem>());
 }
 
 TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[runtime][physics]")
@@ -254,9 +260,10 @@ TEST_CASE("fixedUpdate runs physics BEFORE propagation whichever was added first
     // WorldTransform carries the POST-step position PASS 4 wrote back. If
     // propagation ran first it would lag one step behind.
     Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
-    // The module's insertion order: propagation AFTER the engine's physics
-    // (the ctor installed it) -- and the plan must not depend on that.
-    REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>().IsOk());
+    // Both are engine-owned since 2026-09-13 (InstallEngineSystems installs
+    // physics then propagation); PhysicsSystem's Before<> edge is what this
+    // pins, so the plan must not depend on insertion order.
+    REQUIRE(rt.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
     Astra::Registry& reg = rt.Registry();
     const Astra::Entity root = reg.CreateEntity();
     reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});

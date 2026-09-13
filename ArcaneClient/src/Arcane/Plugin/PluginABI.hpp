@@ -732,7 +732,8 @@ namespace Arcane
     //     Both modules name only Astra::{BinaryReader, BinaryWriter, Entity,
     //     Registry, SetTypeContext} (+ ComponentModule in a ReferenceGame
     //     comment) and AddSystem<TransformPropagationSystem/RenderSubmission
-    //     System> -- header-only systems whose bodies change under them, which
+    //     System> (the pair the engine registers itself since v29) -- header-only
+    //     systems whose bodies change under them, which
     //     is exactly why the gate, not the compiler, is what refuses a stale DLL.
     //     ReferenceProject.arcproj restamped with this change, per the v16+
     //     precedent. Gacha's Game restamp (21 -> 26) is Plan 1's LAST task, in
@@ -815,7 +816,20 @@ namespace Arcane
     //     refuses the stale DLL. ReferenceProject.arcproj restamped with this
     //     change. Gacha's Game restamp (27 -> 28) is this plan's Task 10, in
     //     that repo, together with the Aphelyon.dll rebuild -- not deferred.
-    inline constexpr uint32_t kGamePluginABIVersion = 28;
+    // v29 (2026-09-13, game-module boilerplate): the ENGINE now registers
+    //     TransformPropagationSystem (fixedUpdate) and RenderSubmissionSystem
+    //     (render) in Runtime::InstallEngineSystems beside PhysicsSystem; a
+    //     game module registers ONLY its own systems and places them with
+    //     Astra::Before/After. Export names, signatures and EngineContext are
+    //     UNCHANGED -- a v28 module's own AddSystem<> of the pair returns
+    //     AlreadyRegistered (std::ignore'd, harmless), so nothing breaks at
+    //     load; the bump makes the contract change visible through the gate
+    //     instead of letting it pass by accident. Arcane/Plugin/GameModule.hpp
+    //     (ARCANE_GAME_MODULE) is the SDK face of the same contract.
+    //     ReferenceProject.arcproj restamped with this change; Gacha's Game
+    //     restamp (28 -> 29) is this plan's Task 4, in that repo, with the
+    //     Aphelyon.cpp conversion -- not deferred.
+    inline constexpr uint32_t kGamePluginABIVersion = 29;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
