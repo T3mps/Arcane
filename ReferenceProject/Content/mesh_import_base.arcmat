@@ -1,0 +1,22 @@
+{
+  "id": "c8fd4ec6-9b59-43fc-9dda-1288efc35232",
+  "kind": "mesh",
+  "name": "mesh_import_base",
+  "params": {
+    "albedo": {
+      "type": "texture",
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    "baseColor": {
+      "type": "color",
+      "value": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

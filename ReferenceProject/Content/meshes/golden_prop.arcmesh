@@ -1,0 +1,21 @@
+{
+  "capsuleLengthRatio": 2.0,
+  "id": "49304328-394e-450d-9816-2b8a2ad98191",
+  "importedSource": "87d2729a-374a-4d19-aec5-90526617a36a",
+  "name": "golden_prop",
+  "rings": 16,
+  "segments": 32,
+  "slots": [
+    {
+      "material": "fa85a886-d40d-47ad-849c-ff5c4d2eebaf",
+      "name": "Metal"
+    },
+    {
+      "material": "89fe251b-4dcd-4f30-8e56-d86fd9844361",
+      "name": "Paint"
+    }
+  ],
+  "source": "imported",
+  "subdivisions": 1,
+  "type": "mesh"
+}

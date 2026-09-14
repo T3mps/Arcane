@@ -1,0 +1,17 @@
+{
+  "id": "89fe251b-4dcd-4f30-8e56-d86fd9844361",
+  "name": "Paint",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.95,
+        0.15,
+        0.1,
+        1.0
+      ]
+    }
+  },
+  "parent": "c8fd4ec6-9b59-43fc-9dda-1288efc35232",
+  "type": "material"
+}

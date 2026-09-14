@@ -2,6 +2,7 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>   // MaterialCensus -- the binding-readiness probe
 
+#include <Arcane/Assets/Assets.hpp>       // Task 11: Assets::MeshArtifactFor/CookPending (golden prop)
 #include <Arcane/Base/Engine.hpp>        // ExecutablePathUtf8 (the argv[0] replacement)
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/Config.hpp>
@@ -651,7 +652,11 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     // break, and that breaking them is the point (the same "make the format
     // break observable" spirit the pose assertions below already apply to
     // Ground/BoxA/BoxB).
-    REQUIRE(children.size() == 6);
+    //
+    // F2c Plan 2, Task 11: 6 -> 7. GoldenProp (the imported multi-section
+    // prop) is the second MeshRenderer this scene carries -- see this same
+    // discipline applied below.
+    REQUIRE(children.size() == 7);
 
     std::vector<std::string> names;
     Astra::Entity pulseBox{};
@@ -670,7 +675,7 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
         names.push_back(info->name);
     }
     std::sort(names.begin(), names.end());
-    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "Ground", "MeshCube",
+    CHECK(names == std::vector<std::string>{"BoxA", "BoxB", "GoldenProp", "Ground", "MeshCube",
                                              "PerspectiveCamera", "PulseBox"});
 
     // THE POSE ASSERTION (Task 3, F1). Everything above this line asserts
@@ -870,7 +875,10 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
         // makes the rule visible: `meshReferenced` is pure scene data (a
         // MeshRenderer carrying a valid `mesh` Guid), so it already answers 1
         // before any sweep has run.
-        CHECK(cold.meshReferenced == 1);
+        //
+        // F2c Plan 2, Task 11: 1 -> 2 -- GoldenProp is a second MeshRenderer
+        // (MeshCube's sibling), counted here the same way.
+        CHECK(cold.meshReferenced == 2);
         CHECK(cold.meshBound == 0);
 
         Arcane::SceneRenderResolver::FrameInfo frame;
@@ -889,7 +897,7 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
         // provably not yet bound, which is the state this case wants.
         CHECK(census.spriteBound == 0);
         CHECK_FALSE(census.postBound);
-        CHECK(census.meshReferenced == 1);
+        CHECK(census.meshReferenced == 2);
         CHECK(census.meshBound == 0);
     }
 }
@@ -950,22 +958,38 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
         // before, and it is available at all only because neither mesh cache
         // compiles anything (no device or compile service is needed).
         const auto census = resolver.Materials();
-        CHECK(census.meshReferenced == 1);
-        CHECK(census.meshBound == 1);
+        // F2c Plan 2, Task 11: 1 -> 2 (both MeshCube and the golden-scene's
+        // imported GoldenProp resolve -- golden_prop.arcmesh's cook artifact
+        // is staged by ArcaneTests' own postbuild arccook step, same as
+        // reference_cube's generated geometry needs no cook at all).
+        CHECK(census.meshReferenced == 2);
+        CHECK(census.meshBound == 2);
 
-        // The MeshRenderer the reference scene authors.
-        Arcane::Guid meshGuid;
+        // The MeshRenderer THIS CASE follows end to end is specifically
+        // MeshCube's -- Task 11 (Plan 2) adds a second MeshRenderer
+        // (GoldenProp) to the scene, so a bare "the one MeshRenderer" scan no
+        // longer identifies a single entity; find MeshCube by name instead,
+        // exactly as the boot-scene case above does.
+        Astra::Entity meshCube = Astra::Entity::Invalid();
         int meshRenderers = 0;
         runtime.Registry().CreateView<Arcane::MeshRenderer>().ForEach(
-            [&](Astra::Entity, Arcane::MeshRenderer& mr)
+            [&](Astra::Entity e, Arcane::MeshRenderer&)
         {
             ++meshRenderers;
-            meshGuid = mr.mesh;
-            // Nil by design: the cube's colour comes from the MESH's own
-            // default material, which is the link this case exists to follow.
-            CHECK_FALSE(mr.materialOverride.IsValid());
+            const Arcane::Identity* info = runtime.Registry().GetComponent<Arcane::Identity>(e);
+            if (info && info->name == "MeshCube")
+                meshCube = e;
         });
-        REQUIRE(meshRenderers == 1);
+        REQUIRE(meshRenderers == 2);
+        REQUIRE(meshCube != Astra::Entity::Invalid());
+
+        const Arcane::MeshRenderer* meshCubeRenderer =
+            runtime.Registry().GetComponent<Arcane::MeshRenderer>(meshCube);
+        REQUIRE(meshCubeRenderer != nullptr);
+        // Nil by design: the cube's colour comes from the MESH's own
+        // default material, which is the link this case exists to follow.
+        CHECK_FALSE(meshCubeRenderer->materialOverride.IsValid());
+        const Arcane::Guid meshGuid = meshCubeRenderer->mesh;
         REQUIRE(meshGuid.IsValid());
 
         const Arcane::MeshTable* meshes = runtime.Registry().GetResource<Arcane::MeshTable>();
@@ -993,6 +1017,79 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
         // param fails HERE rather than rendering white at the desk.
         CHECK(resolved->baseColor != glm::vec4(1.0f));
     }
+}
+
+// --- the golden scene's imported prop (F2c Plan 2, Task 11) --------------
+// The END-TO-END pin under the golden lane: golden_prop.arcmesh loads, names
+// an importedSource, resolves through the artifact arccook produced during
+// ArcaneTests' own postbuild staging, and comes back with THREE sections over
+// TWO slots (multi.glb's A1 shape -- two "Metal" sections share slot 0, one
+// "Paint" section is slot 1). A regression anywhere in Plan 1's cook chain,
+// or in ResolveMeshData's Imported arm, surfaces here as a specific failure
+// rather than as an unexplained golden diff two steps later.
+TEST_CASE("host boot: the golden scene's imported prop resolves to sectioned geometry",
+          "[host]")
+{
+    const fs::path dir = FindReferenceProjectDir();
+    REQUIRE_FALSE(dir.empty());
+
+    // Runtime::OpenProject, not a bare Project::Open: MeshArtifactFor below
+    // resolves through the Assets facade's installed resolver, which only
+    // exists once a project is actually opened on the Runtime (same
+    // reasoning as the mesh/material render-table case above).
+    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(runtime.OpenProject(dir));
+    const Arcane::Project* proj = runtime.CurrentProject();
+    REQUIRE(proj != nullptr);
+    REQUIRE(Arcane::HostBoot::BootScene(runtime, *proj).has_value());
+
+    const Arcane::SceneRoot* sceneRoot = runtime.Registry().GetResource<Arcane::SceneRoot>();
+    REQUIRE(sceneRoot != nullptr);
+
+    Astra::Entity goldenProp = Astra::Entity::Invalid();
+    bool foundGoldenProp = false;
+    for (Astra::Entity child : runtime.Registry().GetChildren(sceneRoot->entity))
+    {
+        const Arcane::Identity* info = runtime.Registry().GetComponent<Arcane::Identity>(child);
+        if (info && info->name == "GoldenProp")
+        {
+            goldenProp = child;
+            foundGoldenProp = true;
+            break;
+        }
+    }
+    REQUIRE(foundGoldenProp);
+
+    const Arcane::MeshRenderer* meshRenderer =
+        runtime.Registry().GetComponent<Arcane::MeshRenderer>(goldenProp);
+    REQUIRE(meshRenderer != nullptr);
+    REQUIRE(meshRenderer->mesh.IsValid());
+
+    const auto meshAssetPath = proj->ResolveAsset(Arcane::AssetId::FromGuid(meshRenderer->mesh));
+    REQUIRE(meshAssetPath.has_value());
+    CHECK(meshAssetPath->filename() == "golden_prop.arcmesh");
+
+    const auto meshData = Arcane::LoadMeshAsset(*meshAssetPath);
+    REQUIRE(meshData.has_value());
+    REQUIRE(meshData->source == Arcane::MeshSource::Imported);
+    REQUIRE(meshData->importedSource.IsValid());
+    REQUIRE(meshData->slots.size() == 2u);
+
+    // ResolveMeshData through the boot Assets facade -- production's own
+    // wiring (MeshCache::Request forwards these same two closures from
+    // Services), exercised here with no MeshCache in between so a broken
+    // artifact resolution names itself precisely.
+    Arcane::Assets& assets = runtime.AssetsFacade();
+    const auto resolved = Arcane::ResolveMeshData(
+        *meshData,
+        [&assets](const Arcane::Guid& g) { return assets.MeshArtifactFor(g); },
+        [&assets](const Arcane::Guid& g) { return assets.CookPending(g); });
+
+    REQUIRE(resolved.state == Arcane::MeshResolveState::Ready);
+    REQUIRE(resolved.mesh.has_value());
+    REQUIRE(resolved.mesh->sections.size() == 3u);
+    CHECK(resolved.mesh->sections[0].slotIndex == resolved.mesh->sections[1].slotIndex);
+    CHECK(resolved.mesh->sections[2].slotIndex != resolved.mesh->sections[0].slotIndex);
 }
 
 // --- the reference scene's material content ------------------------------

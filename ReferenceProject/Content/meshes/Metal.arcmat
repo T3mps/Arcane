@@ -1,0 +1,17 @@
+{
+  "id": "fa85a886-d40d-47ad-849c-ff5c4d2eebaf",
+  "name": "Metal",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.1,
+        0.45,
+        0.95,
+        1.0
+      ]
+    }
+  },
+  "parent": "c8fd4ec6-9b59-43fc-9dda-1288efc35232",
+  "type": "material"
+}
