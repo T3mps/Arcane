@@ -1078,7 +1078,7 @@ EOF
 
 ## Closeout (2026-09-13)
 
-**Commits (Arcane, unpushed):** T1 `51730bcf` engine-owned systems + ABI 29 · T2 `4865d4f6` GameModule.hpp + HotReloadPlugin on the macro · T3 `a5d77e30` ReferenceGame · T5 `fac7487a` templates/comments · T6 = this booking commit. **Gacha (unpushed):** T4 `fac7487a` Aphelyon + restamp 29.
+**Commits (Arcane, unpushed):** T1 `51730bcf` engine-owned systems + ABI 29 · T2 `4865d4f6` GameModule.hpp + HotReloadPlugin on the macro · T3 `a5d77e30` ReferenceGame · T5 `fac7487a` templates/comments · T6 = this booking commit. **Gacha (unpushed):** T4 `23ea4d3a` Aphelyon + restamp 29.
 
 **What the modules became:** ReferenceGame 155 → 23 lines (a class with no overrides); Aphelyon 190 → 47 (OnFixedUpdate + the HUD); HotReloadPlugin 123 → 86 (with the probe and the extras). Sweep: the only `GamePlugin_*` definitions in either tree are inside `GameModule.hpp`; no `GameApi.hpp` / `PluginExport.hpp` remain; `GAME_API` survives only as `arcane.lua`'s define.
 
