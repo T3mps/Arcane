@@ -78,15 +78,13 @@ namespace Arcane
     // whole chain -- no separate branch for "nil" vs. "broken reference" is
     // needed at this call site.
     //
-    // F2c Task 10 DEFERRAL (spec s4.4, restated at this header's top): a
-    // mesh asset can now carry MULTIPLE slots, one per section, but this
-    // sweep still emits ONE MeshInstance per ENTITY and resolves through
-    // slots[0] only -- byte-identical behaviour for every F2a mesh (which
-    // carries at most one slot). Emitting one instance PER SECTION (so a
-    // multi-slot imported mesh's other sections stop being invisible) is
-    // Plan 2's Task 5, which is also what makes the DRAW side (MeshNode)
-    // consume a per-section submission at all; doing it here first would
-    // leave sections 1..N submitted but never drawn.
+    // PER SECTION (F2c Plan 2 Task 5 / spec s4.4): one MeshInstance per
+    // MeshData::sections entry. Material chain: component materialOverride
+    // (scalar -- when set, repaints ALL sections) ->
+    // slots[section.slotIndex].material (bounds-checked; a past-the-end
+    // slotIndex is a corrupt or hand-edited .arcmesh and falls through) ->
+    // white. A generated F2a primitive carries one whole-range section, so
+    // it still emits exactly one instance.
     //
     // WARN-ONCE, WITHOUT a function-local static or a caller-supplied memo:
     // this function never calls Request() on either cache-backed table (see
@@ -137,31 +135,37 @@ namespace Arcane
             const MeshEntry* entry = meshTable ? meshTable->Resolve(renderer.mesh) : nullptr;
             if (!entry)
                 return;
+            // Empty sections == empty mesh (MeshData's own contract) -- draw
+            // nothing rather than invent a whole-range fallback.
+            if (entry->data.sections.empty())
+                return;
 
-            // slots[0] when a slot exists, nil otherwise -- see the DEFERRAL
-            // note above this function for why "when a slot exists" is the
-            // whole per-section story this task tells.
-            const Guid meshDefaultMaterial =
-                entry->slots.empty() ? Guid{} : entry->slots[0].material;
-
-            const ResolvedMeshMaterial* mat =
+            const ResolvedMeshMaterial* overrideMat =
                 matTable ? matTable->Resolve(renderer.materialOverride) : nullptr;
-            if (!mat)
-                mat = matTable ? matTable->Resolve(meshDefaultMaterial) : nullptr;
-            const glm::vec4 baseColor = mat ? mat->baseColor : glm::vec4(1.0f);
-            // F2b Task 11: the resolved material's bindless slot, already
-            // resolved by the time this sweep runs -- SceneRenderResolver::
-            // Refresh's per-frame MeshMaterialCache::Request calls
-            // (Host/SceneRenderResolver.cpp) are what actually reach the
-            // device; this function calls neither cache (see the NO
-            // Request() CALL note above) and only copies the value across.
-            // No material resolved at all (nil override AND nil mesh
-            // default, or a broken override that fell through) means no
-            // slot either -- MeshInstance::materialSlot's own default,
-            // BindlessTable::kInvalidSlot, the flat baseColor path.
-            const std::uint32_t materialSlot = mat ? mat->materialSlot : BindlessTable::kInvalidSlot;
 
-            out.push_back(MeshInstance{ renderer.mesh, world.matrix, baseColor, materialSlot });
+            for (const MeshSection& section : entry->data.sections)
+            {
+                const ResolvedMeshMaterial* mat = overrideMat;
+                if (!mat)
+                {
+                    Guid slotMat{};
+                    if (section.slotIndex < entry->slots.size())
+                        slotMat = entry->slots[section.slotIndex].material;
+                    mat = matTable ? matTable->Resolve(slotMat) : nullptr;
+                }
+                const glm::vec4 baseColor = mat ? mat->baseColor : glm::vec4(1.0f);
+                const std::uint32_t materialSlot =
+                    mat ? mat->materialSlot : BindlessTable::kInvalidSlot;
+
+                MeshInstance inst;
+                inst.mesh         = renderer.mesh;
+                inst.model        = world.matrix;
+                inst.baseColor    = baseColor;
+                inst.materialSlot = materialSlot;
+                inst.indexOffset  = section.indexOffset;
+                inst.indexCount   = section.indexCount;
+                out.push_back(inst);
+            }
         });
     }
 }

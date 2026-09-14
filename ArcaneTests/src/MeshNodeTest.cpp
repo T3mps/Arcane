@@ -302,3 +302,83 @@ TEST_CASE("pixel: an instance whose mesh is not resident is SKIPPED, not drawn w
     REQUIRE(ctx->RenderFrameOffscreen(frame) == Arcane::NriGraphContext::FrameOutcome::Presented);
     CHECK(Arcane::RenderErrorCount() == before);
 }
+
+TEST_CASE("pixel: two sections of one mesh draw with distinct base colours",
+          "[gpu][meshnode]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    auto ctx = MakeParityContext();
+
+    // Two 1 m cubes as sections of ONE mesh, offset like NriGraphPixelTest's
+    // four-cube case so their silhouettes do not overlap at this camera.
+    Arcane::MeshData leftCube  = Arcane::BuildCube(1.0f);
+    Arcane::MeshData rightCube = Arcane::BuildCube(1.0f);
+    for (Arcane::MeshVertex& v : leftCube.vertices)
+        v.position.x -= 1.6f;
+    for (Arcane::MeshVertex& v : rightCube.vertices)
+        v.position.x += 1.6f;
+    Arcane::MeshData two;
+    two.vertices = leftCube.vertices;
+    two.vertices.insert(two.vertices.end(), rightCube.vertices.begin(), rightCube.vertices.end());
+    two.indices = leftCube.indices;
+    const std::uint32_t leftIndexCount = static_cast<std::uint32_t>(leftCube.indices.size());
+    const std::uint32_t vertexBase     = static_cast<std::uint32_t>(leftCube.vertices.size());
+    for (std::uint32_t i : rightCube.indices)
+        two.indices.push_back(i + vertexBase);
+    two.sections = {
+        { "L", 0, leftIndexCount, 0 },
+        { "R", leftIndexCount, static_cast<std::uint32_t>(rightCube.indices.size()), 1 },
+    };
+
+    const Arcane::Guid id{ 1, 1 };
+    ctx->SetMeshSupply(
+        [&](const Arcane::Guid& g) -> Arcane::NriMeshBufferCache::SupplyResult
+        {
+            if (g == id)
+                return { &two, Arcane::MeshResolveState::Ready };
+            return { nullptr, Arcane::MeshResolveState::Failed };
+        });
+
+    Arcane::MeshInstance left;
+    left.mesh        = id;
+    left.baseColor   = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    left.indexOffset = 0;
+    left.indexCount  = leftIndexCount;
+    Arcane::MeshInstance right;
+    right.mesh        = id;
+    right.baseColor   = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+    right.indexOffset = leftIndexCount;
+    right.indexCount  = static_cast<std::uint32_t>(rightCube.indices.size());
+    const Arcane::MeshInstance instances[] = { left, right };
+
+    Arcane::MeshSceneDesc scene;
+    scene.instances = instances;
+    const float aspect = static_cast<float>(kParityW) / static_cast<float>(kParityH);
+    scene.view = glm::lookAtRH(glm::vec3(0.0f, 0.0f, 4.0f),
+                               glm::vec3(0.0f, 0.0f, 0.0f),
+                               glm::vec3(0.0f, 1.0f, 0.0f));
+    scene.projection     = Arcane::PerspectiveProjection(60.0f, aspect, 0.1f, 100.0f);
+    scene.lightDirection = glm::vec3(0.0f, 0.0f, 1.0f);
+    scene.lightColor     = glm::vec3(1.0f);
+    scene.ambient        = glm::vec3(0.08f);
+
+    Arcane::NriGraphContext::FrameDesc frame;
+    frame.capture = true;
+    frame.mesh    = &scene;
+    REQUIRE(ctx->RenderFrameOffscreen(frame) == Arcane::NriGraphContext::FrameOutcome::Presented);
+
+    std::uint32_t w = 0, h = 0;
+    std::vector<unsigned char> rgba;
+    REQUIRE(ctx->ReadCapture(w, h, rgba));
+    REQUIRE(w == kParityW);
+    REQUIRE(h == kParityH);
+
+    const auto at = [&](std::uint32_t x, std::uint32_t y) {
+        const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4u;
+        return glm::ivec3(rgba[i], rgba[i + 1], rgba[i + 2]);
+    };
+    const glm::ivec3 leftPx  = at(40u, 48u);
+    const glm::ivec3 rightPx = at(120u, 48u);
+    CHECK(leftPx.r > leftPx.g + 40);
+    CHECK(rightPx.g > rightPx.r + 40);
+}

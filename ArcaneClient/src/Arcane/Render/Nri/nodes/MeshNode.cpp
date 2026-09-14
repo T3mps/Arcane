@@ -977,7 +977,8 @@ namespace Arcane
             core.CmdSetRootConstants(context.cmd, rootConstants);
 
             nri::DrawIndexedDesc draw = {};
-            draw.indexNum    = resident->indexCount;
+            draw.baseIndex   = instance.indexOffset;
+            draw.indexNum    = instance.indexCount ? instance.indexCount : resident->indexCount;
             draw.instanceNum = 1;
             core.CmdDrawIndexed(context.cmd, draw);
         }

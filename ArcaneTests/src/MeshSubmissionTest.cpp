@@ -1060,3 +1060,130 @@ TEST_CASE("CollectMeshInstances clears `out` on entry", "[mesh][submission]")
     Arcane::CollectMeshInstances(reg, out);   // second call, same unchanged scene
     REQUIRE(out.size() == 1);   // still 1, not 2 -- a rebuild, not an accumulation
 }
+
+TEST_CASE("mesh submission: a three-section mesh emits three instances with per-slot"
+          " materials", "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId   = Arcane::Guid::Generate();
+    const Arcane::Guid metalMat = Arcane::Guid::Generate();
+    const Arcane::Guid paintMat = Arcane::Guid::Generate();
+
+    Arcane::MeshEntry entry;
+    entry.data.sections = {
+        { "Metal", 0, 6, 0 },
+        { "Metal", 6, 3, 0 },
+        { "Paint", 9, 3, 1 },
+    };
+    entry.slots = { { "Metal", metalMat }, { "Paint", paintMat } };
+
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, std::move(entry));
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+    materials.emplace(metalMat, Arcane::ResolvedMeshMaterial{ glm::vec4(0.2f, 0.2f, 0.2f, 1.0f) });
+    materials.emplace(paintMat, Arcane::ResolvedMeshMaterial{ glm::vec4(1.0f, 0.0f, 0.0f, 1.0f) });
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+    REQUIRE(out.size() == 3u);
+    CHECK(out[0].indexOffset == 0u);  CHECK(out[0].indexCount == 6u);
+    CHECK(out[1].indexOffset == 6u);  CHECK(out[1].indexCount == 3u);
+    CHECK(out[2].indexOffset == 9u);  CHECK(out[2].indexCount == 3u);
+    CHECK(out[0].baseColor == out[1].baseColor);
+    CHECK(out[2].baseColor != out[0].baseColor);
+    CHECK(out[0].mesh == out[2].mesh);
+    CHECK(out[0].mesh == meshId);
+}
+
+TEST_CASE("mesh submission: materialOverride repaints EVERY section", "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId     = Arcane::Guid::Generate();
+    const Arcane::Guid metalMat   = Arcane::Guid::Generate();
+    const Arcane::Guid paintMat   = Arcane::Guid::Generate();
+    const Arcane::Guid overrideMat = Arcane::Guid::Generate();
+
+    Arcane::MeshEntry entry;
+    entry.data.sections = {
+        { "Metal", 0, 6, 0 },
+        { "Metal", 6, 3, 0 },
+        { "Paint", 9, 3, 1 },
+    };
+    entry.slots = { { "Metal", metalMat }, { "Paint", paintMat } };
+
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, std::move(entry));
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+    materials.emplace(metalMat,    Arcane::ResolvedMeshMaterial{ glm::vec4(0.2f, 0.2f, 0.2f, 1.0f) });
+    materials.emplace(paintMat,    Arcane::ResolvedMeshMaterial{ glm::vec4(1.0f, 0.0f, 0.0f, 1.0f) });
+    materials.emplace(overrideMat, Arcane::ResolvedMeshMaterial{ glm::vec4(0.0f, 0.0f, 1.0f, 1.0f) });
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, overrideMat);
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+    REQUIRE(out.size() == 3u);
+    CHECK(out[0].baseColor == glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+    CHECK(out[1].baseColor == glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+    CHECK(out[2].baseColor == glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+}
+
+TEST_CASE("mesh submission: a section whose slot is unassigned falls through to white",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    Arcane::MeshEntry entry;
+    entry.data.sections = { { "Metal", 0, 6, 0 } };
+    entry.slots = { { "Metal", Arcane::Guid{} } };
+
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, std::move(entry));
+    std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+    reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+    REQUIRE(out.size() == 1u);
+    CHECK(out[0].baseColor == glm::vec4(1.0f));
+    CHECK(out[0].materialSlot == Arcane::BindlessTable::kInvalidSlot);
+}
+
+TEST_CASE("mesh submission: a single-section F2a mesh still emits exactly one instance",
+          "[mesh][submission]")
+{
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, MakeMeshEntry(Arcane::Guid{}));
+    reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    SpawnMeshEntity(reg, glm::mat4(1.0f), meshId, Arcane::Guid{});
+
+    std::vector<Arcane::MeshInstance> out;
+    Arcane::CollectMeshInstances(reg, out);
+    REQUIRE(out.size() == 1u);
+    CHECK(out[0].indexOffset == 0u);
+    CHECK(out[0].indexCount == static_cast<std::uint32_t>(meshes.at(meshId).data.indices.size()));
+}

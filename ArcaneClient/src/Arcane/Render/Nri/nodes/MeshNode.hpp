@@ -259,6 +259,14 @@ namespace Arcane
         // ever safe as RAW BITS. Never route `col0` through float
         // arithmetic once the slot has been written into it.
         std::uint32_t materialSlot = BindlessTable::kInvalidSlot;
+
+        // WHICH SECTION of `mesh` this instance draws (F2c s7.4). A multi-section prop
+        // becomes sections.size() instances, one per section, each carrying the
+        // material its slot resolved to -- which is why the 128-byte zero-headroom
+        // MeshConstants block (mesh.hlsl:20-28) is UNTOUCHED by sections: the material
+        // identity already travels per draw, in materialSlot.
+        std::uint32_t indexOffset = 0;
+        std::uint32_t indexCount  = 0;   // 0 == "the whole mesh", the F2a shape
     };
 
     struct MeshSceneDesc
