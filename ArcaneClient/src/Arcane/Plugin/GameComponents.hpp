@@ -7,10 +7,9 @@
 //   #include <Arcane/Plugin/GameComponents.hpp>
 //   ARCANE_COMPONENT(MyGame::Health)
 //
-//   // GamePlugin_Init, ONCE, after SetTypeContext:
-//   g_module = new Astra::ComponentModule(
-//       Astra::ComponentModule::Open(ctx->engine->Components(), "MyGame"));
-//   Arcane::Game::RegisterComponents(*g_module);
+//   // ARCANE_GAME_MODULE(MyGame::Module) -- Arcane/Plugin/GameModule.hpp -- does
+//   // the rest: its Init opens this module's ComponentModule and drains the
+//   // registrar into it (Arcane::Game::RegisterComponents).
 //
 // Each ARCANE_COMPONENT line links one registrar node into a MODULE-LOCAL list
 // at DLL load; RegisterComponents drains that list into the module's own

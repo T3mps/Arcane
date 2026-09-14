@@ -58,6 +58,8 @@ TEST_CASE("ClassTemplates::Render Component: a reflected struct in the header, t
     CHECK(Has(r.source, "#include \"Health.hpp\""));
     CHECK(Has(r.source, "#include <Arcane/Plugin/GameComponents.hpp>"));
     CHECK(Has(r.source, "ARCANE_COMPONENT(Aphelyon::Health)"));
+    CHECK(Has(r.source, "ARCANE_GAME_MODULE"));          // the prologue that drains it
+    CHECK_FALSE(Has(r.source, "GamePlugin_Init"));
 
     // No template token survives, and both files end in a newline.
     CHECK_FALSE(Has(r.header, "{{"));
@@ -82,10 +84,17 @@ TEST_CASE("ClassTemplates::Render System: a header-only SystemTraits functor wit
     CHECK(Has(r.header, "struct Movement"));
     CHECK(Has(r.header, "Astra::SystemTraits<"));
     CHECK(Has(r.header, "void operator()(Astra::Registry& reg)"));
-    // Systems stay EXPLICIT (their order is a design act): the note carries
-    // the exact Init line, and points at Before/After for ordering.
-    CHECK(Has(r.header, "AddSystem<Aphelyon::Movement>()"));
+    // Systems stay EXPLICIT (their order is a design act): the note carries the
+    // exact OnInit line, and the default traits PLACE the system before the
+    // engine's TransformPropagationSystem (the gameplay-moves-things case; the
+    // note names After<> for the read-world-transforms case). The engine owns
+    // the standard systems, so nothing here mentions GamePlugin_Init.
+    CHECK(Has(r.header, "#include <Arcane/Scene/TransformSystems.hpp>"));
+    CHECK(Has(r.header, "Astra::Before<Arcane::TransformPropagationSystem>"));
     CHECK(Has(r.header, "Astra::After<"));
+    CHECK(Has(r.header, "OnInit"));
+    CHECK(Has(r.header, "AddSystem<Aphelyon::Movement>()"));
+    CHECK_FALSE(Has(r.header, "GamePlugin_Init"));
     CHECK_FALSE(Has(r.header, "{{"));
     CHECK(r.header.back() == '\n');
 }

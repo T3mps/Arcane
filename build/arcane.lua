@@ -87,7 +87,7 @@ function arcane_game_module(name)
         links   { "ArcaneClient" }
 
         defines {
-            "GAME_BUILD_DLL",                         -- GAME_API -> dllexport (GameApi.hpp)
+            "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARCANE_GAME_MODULE needs no define
             "IMGUI_API=__declspec(dllimport)",        -- adopt ArcaneClient.dll's single GImGui
             "_CRT_SECURE_NO_WARNINGS",
             "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",

@@ -14,10 +14,11 @@
 //                 and a .cpp carrying the ONE ARCANE_COMPONENT(ns::T) line
 //                 (Arcane/Plugin/GameComponents.hpp), so the type is live
 //                 after one Rebuild Game Module with no edit to Init.
-//   System     -- a header-only Astra::SystemTraits functor (engine systems
-//                 are header-only too) with the paste-ready AddSystem line
-//                 for GamePlugin_Init in its comment: systems stay EXPLICIT
-//                 because their scheduler order is a design act.
+//   System     -- a header-only Astra::SystemTraits functor placed Before the
+//                 engine's TransformPropagationSystem by default, with the
+//                 paste-ready AddSystem line for the module's OnInit in its
+//                 comment: systems stay EXPLICIT because their scheduler order
+//                 is a design act (the engine owns the standard ones).
 //   PlainClass -- a class in the project namespace with its own .cpp.
 //
 // Templates are embedded here rather than shipped as data files (UE's

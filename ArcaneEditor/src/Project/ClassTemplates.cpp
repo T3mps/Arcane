@@ -101,9 +101,9 @@ namespace {{NS}}
 
 #include <Arcane/Plugin/GameComponents.hpp>
 
-// The one registration line: this module's GamePlugin_Init drains every
-// ARCANE_COMPONENT of the module into its ComponentModule
-// (Arcane::Game::RegisterComponents). Exactly one .cpp per component type.
+// The one registration line: the ARCANE_GAME_MODULE prologue (Arcane/Plugin/
+// GameModule.hpp) drains every ARCANE_COMPONENT of the module into its
+// ComponentModule (Arcane::Game::RegisterComponents). One .cpp per type.
 ARCANE_COMPONENT({{NS}}::{{CLASS}})
 )";
 
@@ -111,15 +111,24 @@ ARCANE_COMPONENT({{NS}}::{{CLASS}})
 
 // {{CLASS}}: a system -- a functor the scheduler runs over the registry each
 // step. Declare what it reads and writes in the SystemTraits so the scheduler
-// can order and parallelise it; Astra::After<OtherSystem> / Astra::Before<...>
-// pin an explicit order where it matters.
+// can order and parallelise it.
+//
+// PLACEMENT. The engine owns its standard systems (Runtime::InstallEngineSystems:
+// PhysicsSystem -> TransformPropagationSystem in fixedUpdate, RenderSubmission
+// System in render). Say where THIS one runs relative to them in the traits:
+// Astra::Before<Arcane::TransformPropagationSystem> (the default below: move
+// things, THEN the engine propagates) or Astra::After<...> (read the propagated
+// WorldTransform). Astra orders by the type NAME, so naming an engine system
+// from a game module is fine; an anchor the host never installed adds no edge.
 //
 // Systems are registered EXPLICITLY, because their order is a design act.
-// Add this line to GamePlugin_Init, beside the engine systems:
+// Add this line to your module's OnInit (Arcane/Plugin/GameModule.hpp):
 //
-//     std::ignore = sch.fixedUpdate.AddSystem<{{NS}}::{{CLASS}}>();
+//     std::ignore = ctx.engine->Schedulers().fixedUpdate.AddSystem<{{NS}}::{{CLASS}}>();
 //
 // (fixedUpdate for simulation, render for submission-time work.)
+
+#include <Arcane/Scene/TransformSystems.hpp>   // the placement anchor
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/System/System.hpp>
@@ -127,7 +136,8 @@ ARCANE_COMPONENT({{NS}}::{{CLASS}})
 namespace {{NS}}
 {
     struct {{CLASS}}
-        : Astra::SystemTraits<Astra::Reads<>, Astra::Writes<>>
+        : Astra::SystemTraits<Astra::Reads<>, Astra::Writes<>,
+                              Astra::Before<Arcane::TransformPropagationSystem>>
     {
         void operator()(Astra::Registry& reg)
         {
