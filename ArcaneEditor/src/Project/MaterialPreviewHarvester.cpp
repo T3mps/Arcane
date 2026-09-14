@@ -797,6 +797,15 @@ namespace Arcane::Editor
             ctx->SetAssetResolver(services.resolveAsset);
         if (services.pixelSupply)
             ctx->SetPixelSupply(services.pixelSupply);
+        ctx->SetMeshSupply(
+            [this](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+            {
+                static const Arcane::Guid kSphere =
+                    Arcane::Guid{ 0x53504852ull, 1ull };   // 'SPHR'
+                if (id == kSphere && !sphere.vertices.empty())
+                    return { &sphere, Arcane::MeshResolveState::Ready };
+                return { nullptr, Arcane::MeshResolveState::Failed };
+            });
 
         batch = Arcane::Batcher2D::Create();
         if (!batch)
@@ -892,7 +901,7 @@ namespace Arcane::Editor
         else if (r.surface == Arcane::MaterialSurface::Mesh && !sphere.vertices.empty())
         {
             Arcane::MeshInstance mi;
-            mi.mesh = &sphere;
+            mi.mesh = Arcane::Guid{ 0x53504852ull, 1ull };   // must match SetMeshSupply above
             mi.model = glm::mat4(1.0f);
             mi.baseColor = r.meshColor;
             mi.materialSlot = r.meshSlot;

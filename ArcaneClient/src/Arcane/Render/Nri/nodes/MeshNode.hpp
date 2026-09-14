@@ -103,8 +103,10 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Render/MeshBuilder.hpp>      // MeshData / MeshVertex -- the CPU geometry
 #include <Arcane/Render/Nri/BindlessTable.hpp> // MeshInstance::materialSlot's kInvalidSlot default
+#include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/FramePacing.hpp>      // kSwapchainFramesInFlight
@@ -116,6 +118,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace Arcane
@@ -192,11 +195,16 @@ namespace Arcane
     // =====================================================================
     struct MeshInstance
     {
-        // BORROWED. Must outlive the RenderFrame call that carries it -- the
-        // vertex/index streams are copied into the upload ring at RECORD time,
-        // which is inside that call. Null means "draw nothing", which is not an
-        // error (a scene may legitimately carry a slot with no geometry yet).
-        const MeshData* mesh = nullptr;
+        // THE MESH'S ASSET GUID, not a borrowed CPU pointer (F2c s7.2). Geometry is
+        // resolved through the vehicle's NriMeshBufferCache at DECLARATION time and is
+        // already RESIDENT on the device by the time this node records -- so the
+        // borrow-lifetime contract this field used to carry (a raw MeshData* that had
+        // to outlive the RenderFrame call, copied into the ring every frame) is gone
+        // with the ring path it existed for.
+        //
+        // NIL means "draw nothing", which is not an error (a scene may legitimately
+        // carry a slot with no geometry yet) -- unchanged.
+        Guid mesh{};
 
         // Model -> world, METERS (MKS). Rotation, translation AND a
         // NON-UNIFORM scale are all safe here (Task 8/F2a): MeshNode::Record
@@ -255,10 +263,11 @@ namespace Arcane
 
     struct MeshSceneDesc
     {
-        // BORROWED for the duration of the RenderFrame call, exactly like
+        // BORROWED SPAN for the duration of the RenderFrame call, exactly like
         // FrameDesc::pickables: the declaration copies the SPAN into the
         // node's exec fn, never the elements, and the exec fn runs inside the
-        // same call. EMPTY IS LEGAL and means "no mesh pass this frame" --
+        // same call. The elements name meshes by Guid; they no longer point at
+        // CPU geometry. EMPTY IS LEGAL and means "no mesh pass this frame" --
         // DeclareGraphFrame declares no node for it, so an empty scene costs
         // the same as no scene at all.
         std::span<const MeshInstance> instances;
@@ -366,26 +375,28 @@ namespace Arcane
         // recording window, where a first-frame miss would stall it and a
         // FAILED miss would latch an error on a frame that is otherwise fine.
         //
-        // NO SCENE PARAMETER. It took one while instances carried a per-image
-        // albedo Guid that had to be made resident and given descriptor sets
-        // here; the bindless table (Task 8/10) resolves per-instance material
-        // state through AddMaterial instead, called ahead of Record by
-        // whoever feeds this node (a test, or Task 11's scene resolver) --
-        // there is still nothing about the SCENE (as opposed to the node's
-        // own table) for Prepare to resolve, and an unread parameter is only
-        // something for a reader to reason about.
+        // Resolves the PIPELINE **and** this frame's mesh residency. The residency half
+        // is here for the same reason the pipeline half is: NriMeshBufferCache::Resolve
+        // uploads through HelperInterface::UploadData, which SUBMITS AND WAITS
+        // INTERNALLY -- doing that inside an open command buffer is exactly the shape
+        // the graph's no-hand-barriers rule exists to prevent (NriTextureCache.hpp's NO
+        // BARRIERS section states it for images; geometry is the same hazard with a
+        // bigger payload). Record() therefore only ever LOOKS UP what Prepare made
+        // resident, and never resolves.
         //
         // Safe to skip entirely -- Record() then reports the missing pipeline
-        // once and draws nothing.
-        void Prepare(nri::Format canvasFormat);
+        // once and draws nothing. Device-less [nri] frame-shape cases pass a
+        // null context to AddMeshNode, which skips this.
+        void Prepare(nri::Format canvasFormat, const MeshSceneDesc& scene,
+                     NriMeshBufferCache& meshBuffers, std::uint64_t frameCounter);
 
         // Records one scene's opaque geometry into an ALREADY-OPEN raster pass
         // whose colour attachment is the canvas and whose depth attachment is
         // this node's depth target. In order: clear the DEPTH plane (the clear
         // seam -- graph attachments are LOAD/STORE, see
-        // NriGraphContext::DeclareGraphFrame), upload each distinct mesh's
-        // vertex/index streams through the ring, then one CmdDrawIndexed per
-        // instance.
+        // NriGraphContext::DeclareGraphFrame), bind each distinct mesh's
+        // already-resident vertex/index buffers, then one CmdDrawIndexed per
+        // instance. Never uploads; never touches the frame ring for geometry.
         //
         // IT DOES NOT CLEAR THE COLOUR PLANE. batch2d already cleared and drew
         // into the canvas; clearing it here would erase that.
@@ -498,34 +509,12 @@ namespace Arcane
         // builds this table so a scene of twenty cubes is one upload and twenty
         // draws rather than twenty uploads.
         //
-        // A RESERVED MEMBER, not a local, so the STEADY STATE allocates nothing
-        // inside the recording window -- which is the rule every node on this
-        // path keeps for descriptor sets, pipelines and GPU resources, and
-        // which Record() keeps ABSOLUTELY for all three. This table is the one
-        // qualified case: a frame carrying more than kInitialUploadSlots
-        // distinct meshes grows the vector and therefore does hit the heap
-        // mid-recording. That is a plain allocation with no fence or pool
-        // implications, it happens once per high-water mark rather than once
-        // per frame, and raising kInitialUploadSlots is the whole fix -- but it
-        // is not "never", and this comment does not say so.
-        struct Upload
-        {
-            const MeshData* mesh         = nullptr;
-            nri::Buffer*    vertexBuffer = nullptr;
-            std::uint64_t   vertexOffset = 0;
-            nri::Buffer*    indexBuffer  = nullptr;
-            std::uint64_t   indexOffset  = 0;
-            std::uint32_t   indexCount   = 0;
-            // False memoizes a FAILED upload (the ring ran dry), so a scene
-            // with twenty instances of one oversized mesh retries the ring once
-            // rather than twenty times.
-            bool            ok           = false;
-        };
-
-        // How many distinct meshes one frame is expected to carry before the
-        // table grows. Not a cap -- growth is legal and merely allocates once,
-        // unlike the descriptor-pool caps above, which are hard.
-        static constexpr std::size_t kInitialUploadSlots = 16;
+        // This frame's distinct-guid residency table, filled by Prepare.
+        // A RESERVED MEMBER, not a local -- the same steady-state-allocates-
+        // nothing rule m_uploads carried for the ring path. Past
+        // kInitialResidentSlots distinct meshes it grows once per high-water
+        // mark.
+        static constexpr std::size_t kInitialResidentSlots = 16;
 
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot) const
         {
@@ -601,14 +590,13 @@ namespace Arcane
         // open command buffer. Owned by the cache; borrowed here.
         nri::Pipeline* m_pipeline = nullptr;
 
-        // This frame's distinct-mesh upload table -- see Upload. Cleared at the
-        // top of every Record(), never shrunk.
-        std::vector<Upload> m_uploads;
+        // This frame's distinct-guid residency -- filled by Prepare, looked
+        // up by Record. Never resolved at record time.
+        std::vector<std::pair<Guid, const NriMeshBufferCache::Resident*>> m_residents;
 
         // One WARN/ERROR each, not one per instance per frame, for the
         // degradations a reader must be able to see.
         bool m_warnedNoPipeline    = false;
-        bool m_warnedRingOverflow  = false;
         bool m_warnedBadCamera     = false;
     };
 

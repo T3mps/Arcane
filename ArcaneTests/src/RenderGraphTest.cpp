@@ -6417,9 +6417,8 @@ TEST_CASE("nri graph frame: (T7P4) a mesh scene declares 'mesh' between the canv
 {
     // BORROWED BY THE SHAPE, so both live in this frame -- exactly the
     // lifetime rule MeshSceneDesc::instances documents.
-    const Arcane::MeshData cube = Arcane::BuildCube(1.0f);
     Arcane::MeshInstance one;
-    one.mesh = &cube;
+    one.mesh = Arcane::Guid{ 1, 1 };
     const Arcane::MeshInstance instances[] = { one };
 
     Arcane::MeshSceneDesc scene;
@@ -6478,9 +6477,8 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
     // barrier and its absence proves nothing. Here the mesh node is the canvas's
     // FIRST toucher, so both declarations show up as barriers and both can be
     // asserted outright.
-    const Arcane::MeshData cube = Arcane::BuildCube(1.0f);
     Arcane::MeshInstance one;
-    one.mesh = &cube;
+    one.mesh = Arcane::Guid{ 1, 1 };
     const Arcane::MeshInstance instances[] = { one };
 
     Arcane::MeshSceneDesc scene;

@@ -182,9 +182,17 @@ TEST_CASE("golden: an offscreen graph capture of a hand-authored lit cube matche
     // nothing this exe cannot supply: BuildCube is procedural geometry, not
     // an asset load.
     const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+    const Arcane::Guid cubeId{ 1, 1 };
+    v.ctx->SetMeshSupply(
+        [&](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+        {
+            if (id == cubeId)
+                return { &cube, Arcane::MeshResolveState::Ready };
+            return { nullptr, Arcane::MeshResolveState::Failed };
+        });
 
     Arcane::MeshInstance instance;
-    instance.mesh      = &cube;
+    instance.mesh      = cubeId;
     instance.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
     const Arcane::MeshInstance instances[] = { instance };
 

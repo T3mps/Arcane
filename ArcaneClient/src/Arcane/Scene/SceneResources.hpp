@@ -158,12 +158,10 @@ namespace Arcane
 
     // One resolved .arcmesh (F2a, Task 4): OWNED geometry, generated once by
     // MeshCache::Request from BuildMeshData, plus its local-space bounds
-    // (ComputeMeshBounds). MeshInstance::mesh (Render/Nri/nodes/MeshNode.hpp)
-    // BORROWS a raw pointer into `data` for exactly the duration of one
-    // RenderFrame call -- safe against a table rehash (std::unordered_map
-    // never relocates an existing element's storage, only its iterators) but
-    // NOT against an erase, which is why MeshCache::Invalidate/Clear are the
-    // only things that may ever remove an entry mid-frame.
+    // (ComputeMeshBounds). MeshInstance::mesh is the asset Guid (F2c s7.2);
+    // NriMeshBufferCache makes `data` resident at declaration time. The table
+    // lookup in CollectMeshInstances still decides whether the entity is
+    // drawable -- MeshCache::Invalidate/Clear erase that entry.
     //
     // `slots` (F2a Task 5; grown from a scalar `material` to a named-slot array in
     // F2c Task 10) is a COPY of the loaded .arcmesh's own `MeshAssetData::slots` --

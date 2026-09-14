@@ -68,6 +68,7 @@
 #include <Arcane/Render/Nri/BindlessTable.hpp>    // kInvalidSlot -- the four-cube bindless proof
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriTextureCache.hpp>  // ColorSpace -- Textures() is read directly, case 9
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>   // MeshInstance / MeshSceneDesc
 #include <Arcane/Scene/SceneCamera.hpp>           // PerspectiveProjection -- the camera under test
@@ -770,11 +771,39 @@ namespace
         scene.ambient        = glm::vec3(kAmbient);
     }
 
+    using MeshSupplyFn     = Arcane::NriMeshBufferCache::MeshSupplyFn;
+    using MeshSupplyResult = Arcane::NriMeshBufferCache::SupplyResult;
+
+    MeshSupplyFn SupplyOne(const Arcane::Guid& id, const Arcane::MeshData& data)
+    {
+        return [&id, &data](const Arcane::Guid& g) -> MeshSupplyResult
+        {
+            if (g == id)
+                return { &data, Arcane::MeshResolveState::Ready };
+            return { nullptr, Arcane::MeshResolveState::Failed };
+        };
+    }
+
+    MeshSupplyFn SupplyTwo(const Arcane::Guid& a, const Arcane::MeshData& da,
+                           const Arcane::Guid& b, const Arcane::MeshData& db)
+    {
+        return [&](const Arcane::Guid& g) -> MeshSupplyResult
+        {
+            if (g == a)
+                return { &da, Arcane::MeshResolveState::Ready };
+            if (g == b)
+                return { &db, Arcane::MeshResolveState::Ready };
+            return { nullptr, Arcane::MeshResolveState::Failed };
+        };
+    }
+
     std::vector<unsigned char> CaptureMesh(Arcane::GraphicsBackend backend,
                                            const Arcane::MeshSceneDesc& scene,
-                                           std::uint32_t& w, std::uint32_t& h)
+                                           std::uint32_t& w, std::uint32_t& h,
+                                           MeshSupplyFn supply)
     {
         PixelVehicle v = MakeVehicle(backend);
+        v.ctx->SetMeshSupply(std::move(supply));
 
         Arcane::NriGraphContext::FrameDesc frame;
         frame.capture = true;
@@ -797,9 +826,10 @@ namespace
         // so the cube covers the middle ~43% of the frame and leaves every
         // corner untouched.
         const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+        const Arcane::Guid cubeId{ 1, 1 };
 
         Arcane::MeshInstance one;
-        one.mesh      = &cube;
+        one.mesh      = cubeId;
         one.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);   // pure red, so channels separate cleanly
         const Arcane::MeshInstance instances[] = { one };
 
@@ -808,14 +838,14 @@ namespace
         FillCamera(scene);
 
         std::uint32_t w = 0, h = 0;
-        const std::vector<unsigned char> lit = CaptureMesh(backend, scene, w, h);
+        const std::vector<unsigned char> lit = CaptureMesh(backend, scene, w, h, SupplyOne(cubeId, cube));
 
         // The SAME scene with the directional light switched off. Only
         // `lightColor` differs, so every difference below IS the light.
         Arcane::MeshSceneDesc unlitScene = scene;
         unlitScene.lightColor = glm::vec3(0.0f);
         std::uint32_t uw = 0, uh = 0;
-        const std::vector<unsigned char> unlit = CaptureMesh(backend, unlitScene, uw, uh);
+        const std::vector<unsigned char> unlit = CaptureMesh(backend, unlitScene, uw, uh, SupplyOne(cubeId, cube));
         REQUIRE(w == uw);
         REQUIRE(h == uh);
 
@@ -880,14 +910,16 @@ namespace
         // the near cube's edge and 15 px clear of the far cube's.
         const Arcane::MeshData nearCube = Arcane::BuildCube(0.6f);
         const Arcane::MeshData farCube  = Arcane::BuildCube(3.0f);
+        const Arcane::Guid nearId{ 1, 1 };
+        const Arcane::Guid farId{ 2, 2 };
 
         Arcane::MeshInstance nearInstance;
-        nearInstance.mesh      = &nearCube;
+        nearInstance.mesh      = nearId;
         nearInstance.model     = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         nearInstance.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);   // RED = near
 
         Arcane::MeshInstance farInstance;
-        farInstance.mesh      = &farCube;
+        farInstance.mesh      = farId;
         farInstance.model     = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -1.5f));
         farInstance.baseColor = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);    // GREEN = far
 
@@ -904,9 +936,9 @@ namespace
 
         std::uint32_t w0 = 0, h0 = 0, w1 = 0, h1 = 0;
         const std::vector<unsigned char> nearFirstPixels =
-            CaptureMesh(backend, nearFirstScene, w0, h0);
+            CaptureMesh(backend, nearFirstScene, w0, h0, SupplyTwo(nearId, nearCube, farId, farCube));
         const std::vector<unsigned char> farFirstPixels =
-            CaptureMesh(backend, farFirstScene, w1, h1);
+            CaptureMesh(backend, farFirstScene, w1, h1, SupplyTwo(nearId, nearCube, farId, farCube));
         REQUIRE(w0 == w1);
         REQUIRE(h0 == h1);
 
@@ -1028,8 +1060,9 @@ namespace
         //      formula, so it needs nothing from this task to be
         //      trustworthy. ----
         const Arcane::MeshData referenceCube = Arcane::BuildCube(2.0f);
+        const Arcane::Guid referenceId{ 1, 1 };
         Arcane::MeshInstance referenceInstance;
-        referenceInstance.mesh      = &referenceCube;
+        referenceInstance.mesh      = referenceId;
         referenceInstance.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);   // white: pure N.L*light+ambient
         const Arcane::MeshInstance referenceInstances[] = { referenceInstance };
 
@@ -1038,7 +1071,8 @@ namespace
         FillCamera(referenceScene);   // lightDirection defaults to (0,0,1) -- exactly this face's normal
 
         std::uint32_t rw = 0, rh = 0;
-        const std::vector<unsigned char> referencePixels = CaptureMesh(backend, referenceScene, rw, rh);
+        const std::vector<unsigned char> referencePixels =
+            CaptureMesh(backend, referenceScene, rw, rh, SupplyOne(referenceId, referenceCube));
         const Rgba referenceCentre = At(referencePixels, rw, rw / 2u, rh / 2u);
 
         // ---- THE OBLIQUE, NON-UNIFORMLY-SCALED CASE. `model` scales X by 8x
@@ -1066,8 +1100,9 @@ namespace
         //   miss, not a rounding-sized one.
         const glm::vec3 correctNormal = glm::normalize(Arcane::NormalMatrixFor(model) * localNormal);
 
+        const Arcane::Guid obliqueId{ 2, 2 };
         Arcane::MeshInstance obliqueInstance;
-        obliqueInstance.mesh      = &obliqueQuad;
+        obliqueInstance.mesh      = obliqueId;
         obliqueInstance.model     = model;
         obliqueInstance.baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
         const Arcane::MeshInstance obliqueInstances[] = { obliqueInstance };
@@ -1078,7 +1113,8 @@ namespace
         obliqueScene.lightDirection = correctNormal;   // aim the light at the CORRECT answer
 
         std::uint32_t ow = 0, oh = 0;
-        const std::vector<unsigned char> obliquePixels = CaptureMesh(backend, obliqueScene, ow, oh);
+        const std::vector<unsigned char> obliquePixels =
+            CaptureMesh(backend, obliqueScene, ow, oh, SupplyOne(obliqueId, obliqueQuad));
         const Rgba obliqueCentre = At(obliquePixels, ow, ow / 2u, oh / 2u);
 
         // ---- THE SAME OBLIQUE SCENE, AMBIENT ONLY -- proves the light is
@@ -1090,7 +1126,7 @@ namespace
         obliqueUnlitScene.lightColor = glm::vec3(0.0f);
         std::uint32_t uw = 0, uh = 0;
         const std::vector<unsigned char> obliqueUnlitPixels =
-            CaptureMesh(backend, obliqueUnlitScene, uw, uh);
+            CaptureMesh(backend, obliqueUnlitScene, uw, uh, SupplyOne(obliqueId, obliqueQuad));
         REQUIRE(uw == ow);
         REQUIRE(uh == oh);
         const Rgba obliqueUnlitCentre = At(obliqueUnlitPixels, uw, uw / 2u, uh / 2u);
@@ -1305,10 +1341,11 @@ namespace
 
         const Arcane::MeshData cube = Arcane::BuildCube(kCubeSize);
 
-        const auto instanceAt = [&cube](float x, float y, std::uint32_t slot)
+        const Arcane::Guid cubeId{ 1, 1 };
+        const auto instanceAt = [&cube, cubeId](float x, float y, std::uint32_t slot)
         {
             Arcane::MeshInstance instance;
-            instance.mesh         = &cube;
+            instance.mesh         = cubeId;
             instance.model        = glm::translate(glm::mat4(1.0f), glm::vec3(x, y, 0.0f));
             instance.baseColor    = glm::vec4(1.0f);   // WHITE -- see this section's header comment
             instance.materialSlot = slot;
@@ -1326,6 +1363,7 @@ namespace
         scene.instances = instances;
         FillCamera(scene);
 
+        v.ctx->SetMeshSupply(SupplyOne(cubeId, cube));
         Arcane::NriGraphContext::FrameDesc frame;
         frame.capture = true;
         frame.mesh    = &scene;
@@ -1532,8 +1570,9 @@ namespace
         CHECK(v.ctx->ResolveMeshAlbedoSlot(albedoGuid) == slot);
 
         const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+        const Arcane::Guid cubeId{ 1, 1 };
         Arcane::MeshInstance instance;
-        instance.mesh         = &cube;
+        instance.mesh         = cubeId;
         // WHITE -- the sampled albedo passes through unmultiplied
         // (mesh.hlsl's ps_main: albedo * baseColor, and 1.0 * x is exact).
         instance.baseColor    = glm::vec4(1.0f);
@@ -1544,6 +1583,7 @@ namespace
         scene.instances = instances;
         FillCamera(scene);
 
+        v.ctx->SetMeshSupply(SupplyOne(cubeId, cube));
         Arcane::NriGraphContext::FrameDesc frame;
         frame.capture = true;
         frame.mesh    = &scene;

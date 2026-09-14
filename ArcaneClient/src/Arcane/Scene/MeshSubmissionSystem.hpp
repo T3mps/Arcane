@@ -115,14 +115,11 @@ namespace Arcane
     // Refresh, sweep (1b) at Host/SceneRenderResolver.cpp:357-378), not this
     // sweep's -- this function reads ONLY the already-published resources.
     //
-    // NO MeshData COPY: MeshInstance::mesh borrows a raw pointer straight
-    // into the MeshTable entry's owned MeshData, which the resolver's
-    // MeshCache owns and keeps alive well past this call and past the
-    // RenderFrame call that consumes `out` -- see MeshInstance's own
-    // borrowing-contract comment (MeshNode.hpp:160-166) and MeshEntry's
-    // (SceneResources.hpp). The one thing that CAN break that borrow is an
-    // erase, which is why SceneRenderResolver::InvalidateMesh documents when
-    // it may be called relative to this sweep.
+    // MeshInstance::mesh is the component's Guid (F2c s7.2). Geometry is made
+    // resident by NriMeshBufferCache at declaration time; this sweep no longer
+    // borrows MeshEntry::data. The MeshTable lookup still decides whether the
+    // entity is drawable at all -- a Guid not in the table is skipped, same as
+    // before.
     inline void CollectMeshInstances(Astra::Registry& reg, std::vector<MeshInstance>& out)
     {
         out.clear();
@@ -164,7 +161,7 @@ namespace Arcane
             // BindlessTable::kInvalidSlot, the flat baseColor path.
             const std::uint32_t materialSlot = mat ? mat->materialSlot : BindlessTable::kInvalidSlot;
 
-            out.push_back(MeshInstance{ &entry->data, world.matrix, baseColor, materialSlot });
+            out.push_back(MeshInstance{ renderer.mesh, world.matrix, baseColor, materialSlot });
         });
     }
 }

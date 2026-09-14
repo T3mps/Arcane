@@ -246,7 +246,16 @@ namespace Arcane::Editor
             // inside CreateOffscreen.
             ARC_WARN("MeshDocument '{}': the preview context could not be created -- "
                      "this document shows no preview", m_title);
+            return;
         }
+        m_preview->SetMeshSupply(
+            [this](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+            {
+                static const Arcane::Guid kPreview{ 0x50525657ull, 1ull };   // 'PRVW'
+                if (id == kPreview && m_previewMesh)
+                    return { &*m_previewMesh, Arcane::MeshResolveState::Ready };
+                return { nullptr, Arcane::MeshResolveState::Failed };
+            });
     }
 
     void MeshDocument::RenderPreview()
@@ -293,7 +302,7 @@ namespace Arcane::Editor
             const glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.75f, 1.0f));
             const glm::vec3 eye = center + dir * distance;
 
-            instanceStorage[0].mesh = &(*m_previewMesh);
+            instanceStorage[0].mesh = Arcane::Guid{ 0x50525657ull, 1ull };   // 'PRVW'
             instanceStorage[0].model = glm::mat4(1.0f);   // unit geometry -- see MeshAsset.hpp's UNIT RULE
             // Neutral white: resolving `material`'s actual baseColor/texture
             // into this preview is F2b/F2c's bindless-table territory (the

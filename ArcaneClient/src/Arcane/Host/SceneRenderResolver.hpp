@@ -252,19 +252,16 @@ namespace Arcane
         // the re-resolve draws NOTHING rather than a wrong-looking quad.
         //
         // WHEN THIS MAY BE CALLED IS A LIFETIME CONTRACT, not a preference.
-        // MeshInstance::mesh borrows a raw pointer INTO the MeshEntry
-        // (Render/Nri/nodes/MeshNode.hpp) and MeshCache::Invalidate ERASES
-        // that entry -- an erase is the one mutation MeshEntry's own comment
-        // says its borrowers are not safe against. So this must never land
-        // between a host's CollectMeshInstances sweep and the RenderFrame call
-        // that consumes its output. Both call sites today satisfy that by
-        // construction: MeshDocument::Save and MeshDocument::ApplyMeshData run
-        // from the editor's document phases (PumpEditorDocuments / DrawEditorUi,
-        // EditorAppFrame.cpp:273-274), which are strictly AFTER phase 10's
-        // ArmGraphViewportFrame -> RenderFrameOffscreen pair has returned and
-        // strictly BEFORE the next frame's -- no borrow is ever live across
-        // this call. A future caller inside the render phase would have to
-        // defer instead.
+        // CollectMeshInstances still looks the Guid up in MeshTable to decide
+        // whether the entity is drawable; MeshCache::Invalidate ERASES that
+        // entry. So this must never land between a host's CollectMeshInstances
+        // sweep and the RenderFrame call that consumes its output. Both call
+        // sites today satisfy that by construction: MeshDocument::Save and
+        // MeshDocument::ApplyMeshData run from the editor's document phases
+        // (PumpEditorDocuments / DrawEditorUi), which are strictly AFTER phase
+        // 10's ArmGraphViewportFrame -> RenderFrameOffscreen pair has returned
+        // and strictly BEFORE the next frame's. A future caller inside the
+        // render phase would have to defer instead.
         //
         // Only the GEOMETRY cache is touched. Re-saving an .arcmesh can change
         // which material Guid the mesh names as its default, and the Request

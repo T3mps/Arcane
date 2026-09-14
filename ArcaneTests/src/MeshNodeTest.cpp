@@ -24,11 +24,30 @@
 
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
 
+#include <Arcane/Assets/ImageCompare.hpp>
+#include <Arcane/Assets/ImageIo.hpp>
+#include <Arcane/Guid.hpp>
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Render/Nri/NriDevice.hpp>
+#include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
+#include <Arcane/Render/RenderDeviceDesc.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Scene/SceneCamera.hpp>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/epsilon.hpp>
 #include <glm/gtc/matrix_transform.hpp>   // glm::scale
 
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <type_traits>
+#include <vector>
+
+#include "Helpers/GpuCapability.hpp"
 
 TEST_CASE("NormalMatrixFor transforms a non-uniformly-scaled normal by the "
           "inverse transpose, not the upper 3x3",
@@ -143,4 +162,143 @@ TEST_CASE("NormalMatrixFor is not fooled by a small NON-UNIFORM scale into "
     // NOT identity (i.e. not `n` unchanged) -- the exact wrong answer a
     // determinant-threshold guard would have produced for this input.
     CHECK_FALSE(glm::epsilonEqual(transformed.x, n.x, 1e-3f));
+}
+
+TEST_CASE("mesh node: an instance names its mesh by GUID, not by borrowed pointer",
+          "[nri]")
+{
+    Arcane::MeshInstance instance;
+    instance.mesh = Arcane::Guid{ 1, 0 };
+    CHECK(instance.mesh.IsValid());
+    static_assert(std::is_same_v<decltype(Arcane::MeshInstance::mesh), Arcane::Guid>);
+}
+
+namespace
+{
+    constexpr std::uint32_t kParityW = 160;
+    constexpr std::uint32_t kParityH = 96;
+
+    std::unique_ptr<Arcane::NriGraphContext> MakeParityContext()
+    {
+        Arcane::RenderDeviceDesc desc;
+        desc.backend = Arcane::GraphicsBackend::D3D12;
+#if defined(ARCANE_DEBUG)
+        desc.enableValidation      = true;
+        desc.enableD3D12DebugLayer = true;
+        desc.enableSyncValidation  = true;
+#endif
+        static std::unique_ptr<Arcane::NativeDeviceOwner> native;
+        static std::unique_ptr<Arcane::NriDevice> nri;
+        native = Arcane::NativeDeviceOwner::Create(desc);
+        REQUIRE(native != nullptr);
+        nri = Arcane::NriDevice::Wrap(*native);
+        REQUIRE(nri != nullptr);
+        Arcane::HostConfig cfg;
+        cfg.backend = Arcane::GraphicsBackend::D3D12;
+        auto ctx = Arcane::NriGraphContext::CreateOffscreen(cfg, *nri, kParityW, kParityH, {});
+        REQUIRE(ctx != nullptr);
+        return ctx;
+    }
+}
+
+TEST_CASE("pixel: a cube drawn from the resident cache matches the ring's own pixels",
+          "[gpu][meshnode]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto ctx = MakeParityContext();
+    const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+    const Arcane::Guid cubeId{ 1, 1 };
+    ctx->SetMeshSupply(
+        [&](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+        {
+            if (id == cubeId)
+                return { &cube, Arcane::MeshResolveState::Ready };
+            return { nullptr, Arcane::MeshResolveState::Failed };
+        });
+
+    Arcane::MeshInstance instance;
+    instance.mesh      = cubeId;
+    instance.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    const Arcane::MeshInstance instances[] = { instance };
+
+    Arcane::MeshSceneDesc scene;
+    scene.instances = instances;
+    const float aspect = static_cast<float>(kParityW) / static_cast<float>(kParityH);
+    scene.view = glm::lookAtRH(glm::vec3(0.0f, 0.0f, 4.0f),
+                               glm::vec3(0.0f, 0.0f, 0.0f),
+                               glm::vec3(0.0f, 1.0f, 0.0f));
+    scene.projection     = Arcane::PerspectiveProjection(60.0f, aspect, 0.1f, 100.0f);
+    scene.lightDirection = glm::vec3(0.0f, 0.0f, 1.0f);
+    scene.lightColor     = glm::vec3(1.0f, 1.0f, 1.0f);
+    scene.ambient        = glm::vec3(0.08f);
+
+    Arcane::NriGraphContext::FrameDesc frame;
+    frame.capture = true;
+    frame.mesh    = &scene;
+    REQUIRE(ctx->RenderFrameOffscreen(frame) == Arcane::NriGraphContext::FrameOutcome::Presented);
+
+    std::uint32_t width = 0, height = 0;
+    std::vector<unsigned char> rgba;
+    REQUIRE(ctx->ReadCapture(width, height, rgba));
+
+    const std::filesystem::path referencePath =
+        std::filesystem::path("ReferenceProject") / "Verify" / "References" / "inprocess-lit-cube.png";
+    REQUIRE(std::filesystem::exists(referencePath));
+    Arcane::PixelData expected;
+    REQUIRE(Arcane::LoadPngRgba(referencePath, expected.width, expected.height, expected.rgba));
+    Arcane::PixelData actual;
+    actual.width  = width;
+    actual.height = height;
+    actual.rgba   = rgba;
+    const auto result = Arcane::CompareImages(expected, actual);
+    INFO("diffCount " << result.diffCount << " (ratio " << result.diffRatio << ") -- "
+                       << result.errorMessage);
+    CHECK(result.passed);
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
+TEST_CASE("pixel: an instance whose mesh is not resident is SKIPPED, not drawn wrong",
+          "[gpu][meshnode]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto ctx = MakeParityContext();
+    const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+    const Arcane::Guid cubeId{ 1, 1 };
+    const Arcane::Guid missing{ 9, 9 };
+    ctx->SetMeshSupply(
+        [&](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+        {
+            if (id == cubeId)
+                return { &cube, Arcane::MeshResolveState::Ready };
+            return { nullptr, Arcane::MeshResolveState::Failed };
+        });
+
+    Arcane::MeshInstance good;
+    good.mesh      = cubeId;
+    good.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    Arcane::MeshInstance bad;
+    bad.mesh      = missing;
+    bad.baseColor = glm::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+    const Arcane::MeshInstance instances[] = { bad, good };
+
+    Arcane::MeshSceneDesc scene;
+    scene.instances = instances;
+    const float aspect = static_cast<float>(kParityW) / static_cast<float>(kParityH);
+    scene.view = glm::lookAtRH(glm::vec3(0.0f, 0.0f, 4.0f),
+                               glm::vec3(0.0f, 0.0f, 0.0f),
+                               glm::vec3(0.0f, 1.0f, 0.0f));
+    scene.projection     = Arcane::PerspectiveProjection(60.0f, aspect, 0.1f, 100.0f);
+    scene.lightDirection = glm::vec3(0.0f, 0.0f, 1.0f);
+    scene.lightColor     = glm::vec3(1.0f, 1.0f, 1.0f);
+    scene.ambient        = glm::vec3(0.08f);
+
+    Arcane::NriGraphContext::FrameDesc frame;
+    frame.capture = true;
+    frame.mesh    = &scene;
+    REQUIRE(ctx->RenderFrameOffscreen(frame) == Arcane::NriGraphContext::FrameOutcome::Presented);
+    CHECK(Arcane::RenderErrorCount() == before);
 }

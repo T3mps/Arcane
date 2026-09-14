@@ -12,7 +12,6 @@
 
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
-#include <Arcane/Render/Nri/NriUploadRing.hpp>
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
@@ -231,7 +230,7 @@ namespace Arcane
         // absolute: a frame carrying more than kInitialUploadSlots distinct
         // meshes grows the vector mid-recording. See Upload's own comment for
         // why that qualified claim is the honest one.
-        m_uploads.reserve(kInitialUploadSlots);
+        m_residents.reserve(kInitialResidentSlots);
 
         return CreateBindless() && CreateBindings() && CreateConstantArena() && CreateSets();
     }
@@ -766,7 +765,8 @@ namespace Arcane
         });
     }
 
-    void MeshNode::Prepare(nri::Format canvasFormat)
+    void MeshNode::Prepare(nri::Format canvasFormat, const MeshSceneDesc& scene,
+                           NriMeshBufferCache& meshBuffers, std::uint64_t frameCounter)
     {
         // The PSO, built HERE so a first-frame pipeline compile does not land
         // inside the recording window. Re-resolved every frame because the
@@ -775,6 +775,28 @@ namespace Arcane
         // a silent attachment mismatch) and a cache HIT is a linear scan over
         // a handful of entries.
         m_pipeline = PipelineFor(canvasFormat);
+
+        // Residency at DECLARATION time -- UploadData submits and waits
+        // internally. Record only looks this table up.
+        m_residents.clear();
+        for (const MeshInstance& instance : scene.instances)
+        {
+            if (instance.mesh.IsNil())
+                continue;
+            bool seen = false;
+            for (const auto& e : m_residents)
+            {
+                if (e.first == instance.mesh)
+                {
+                    seen = true;
+                    break;
+                }
+            }
+            if (seen)
+                continue;
+            m_residents.push_back({ instance.mesh,
+                                    meshBuffers.Resolve(instance.mesh, frameCounter) });
+        }
     }
 
     void MeshNode::Record(RenderGraphNodeContext& context, const MeshSceneDesc& scene,
@@ -852,62 +874,17 @@ namespace Arcane
             std::memcpy(arena + ArenaOffset(frameSlot), &frameConstants, sizeof(frameConstants));
 
         // ---------------------------------------------------------------
-        // Vertex + index streams, straight into this frame's ring slot.
-        // ALLOCATED HERE, at RECORD time, and that is load-bearing: the
-        // vehicle calls ring.BeginFrame(slot) AFTER BuildFrame, so anything
-        // allocated during graph SETUP would land in the previous frame's slot
-        // and be overwritten while the GPU reads it.
-        //
-        // DEDUPED BY MeshData POINTER: a scene of twenty cubes is one upload
-        // and twenty draws, not twenty uploads. The table is a reserved member,
-        // so in the steady state this touches no heap -- past
-        // kInitialUploadSlots distinct meshes it does, which Upload's comment
-        // states outright rather than rounding to "never".
+        // Resident vertex + index buffers, looked up from Prepare's table.
+        // NEVER resolved here -- UploadData submits and waits internally.
+        // DEDUPED BY GUID: a scene of twenty cubes is one bind and twenty
+        // draws. Offset is always 0: these are dedicated buffers, not a ring.
         // ---------------------------------------------------------------
-        m_uploads.clear();
-        // Returns BY VALUE, deliberately: the table is a growable vector and a
-        // borrowed pointer into it would dangle the moment the next distinct
-        // mesh pushes past the reservation. An Upload is six words.
-        const auto uploadFor = [&](const MeshData* mesh) -> Upload
+        const auto residentFor = [&](const Guid& id) -> const NriMeshBufferCache::Resident*
         {
-            for (const Upload& existing : m_uploads)
-                if (existing.mesh == mesh)
-                    return existing;
-
-            Upload fresh;
-            fresh.mesh = mesh;
-
-            const std::uint64_t vertexBytes = mesh->vertices.size() * sizeof(MeshVertex);
-            const std::uint64_t indexBytes  = mesh->indices.size() * sizeof(std::uint32_t);
-            const NriUploadRing::Alloc vertexAlloc = context.ring.Allocate(vertexBytes, sizeof(MeshVertex));
-            const NriUploadRing::Alloc indexAlloc  = context.ring.Allocate(indexBytes, sizeof(std::uint32_t));
-            if (!vertexAlloc.cpu || !indexAlloc.cpu)
-            {
-                if (!m_warnedRingOverflow)
-                {
-                    m_warnedRingOverflow = true;
-                    GraphError("MeshNode: the upload ring could not fit this frame's mesh streams ("
-                               + std::to_string(vertexBytes + indexBytes)
-                               + " bytes) -- those instances are dropped this frame. Raise "
-                                 "kUploadRingBytesPerFrame in NriGraphContext.cpp.");
-                }
-                // Memoized as a FAILED upload (ok stays false) so a scene with
-                // twenty instances of one oversized mesh retries the ring once,
-                // not twenty times.
-                m_uploads.push_back(fresh);
-                return fresh;
-            }
-            std::memcpy(vertexAlloc.cpu, mesh->vertices.data(), (std::size_t)vertexBytes);
-            std::memcpy(indexAlloc.cpu, mesh->indices.data(), (std::size_t)indexBytes);
-
-            fresh.vertexBuffer = vertexAlloc.buffer;
-            fresh.vertexOffset = vertexAlloc.offset;
-            fresh.indexBuffer  = indexAlloc.buffer;
-            fresh.indexOffset  = indexAlloc.offset;
-            fresh.indexCount   = (std::uint32_t)mesh->indices.size();
-            fresh.ok           = true;
-            m_uploads.push_back(fresh);
-            return fresh;
+            for (const auto& e : m_residents)
+                if (e.first == id)
+                    return e.second;
+            return nullptr;
         };
 
         // THE TWO SETS this pass binds. set0 (frame slot) carries only b1
@@ -951,25 +928,27 @@ namespace Arcane
 
         core.CmdSetPipeline(context.cmd, *m_pipeline);
 
-        const MeshData* lastMesh = nullptr;
+        Guid lastMesh{};
+        bool lastBound = false;
         for (const MeshInstance& instance : scene.instances)
         {
-            if (!instance.mesh || instance.mesh->vertices.empty() || instance.mesh->indices.empty())
+            if (instance.mesh.IsNil())
                 continue;   // an empty slot is not an error -- see MeshInstance::mesh
 
-            const Upload upload = uploadFor(instance.mesh);
-            if (!upload.ok)
-                continue;   // the ring said why, once
+            const NriMeshBufferCache::Resident* resident = residentFor(instance.mesh);
+            if (!resident || !resident->ready || !resident->vertexBuffer || !resident->indexBuffer)
+                continue;   // not resident -- skip, never a stale bind from the last draw
 
-            if (instance.mesh != lastMesh)
+            if (!lastBound || instance.mesh != lastMesh)
             {
-                lastMesh = instance.mesh;
+                lastMesh  = instance.mesh;
+                lastBound = true;
                 nri::VertexBufferDesc vertexBuffer = {};
-                vertexBuffer.buffer = upload.vertexBuffer;
-                vertexBuffer.offset = upload.vertexOffset;
+                vertexBuffer.buffer = resident->vertexBuffer;
+                vertexBuffer.offset = 0;
                 vertexBuffer.stride = sizeof(MeshVertex);
                 core.CmdSetVertexBuffers(context.cmd, 0, &vertexBuffer, 1);
-                core.CmdSetIndexBuffer(context.cmd, *upload.indexBuffer, upload.indexOffset,
+                core.CmdSetIndexBuffer(context.cmd, *resident->indexBuffer, 0,
                                         nri::IndexType::UINT32);
             }
 
@@ -998,7 +977,7 @@ namespace Arcane
             core.CmdSetRootConstants(context.cmd, rootConstants);
 
             nri::DrawIndexedDesc draw = {};
-            draw.indexNum    = upload.indexCount;
+            draw.indexNum    = resident->indexCount;
             draw.instanceNum = 1;
             core.CmdDrawIndexed(context.cmd, draw);
         }
@@ -1018,7 +997,10 @@ namespace Arcane
         if (context)
         {
             if (MeshNode* node = context->Mesh())
-                node->Prepare(canvasFormat);
+            {
+                if (NriMeshBufferCache* cache = context->MeshBuffers())
+                    node->Prepare(canvasFormat, scene, *cache, context->PresentedFrames());
+            }
         }
 
         // `depth` is captured by reference ([&]) below, not shared_ptr -- safe

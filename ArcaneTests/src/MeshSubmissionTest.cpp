@@ -768,9 +768,8 @@ TEST_CASE("CollectMeshInstances uses a resolvable materialOverride's baseColor o
     Arcane::CollectMeshInstances(reg, out);
 
     REQUIRE(out.size() == 1);
-    // BORROWED: the instance must point INTO the published table's entry,
-    // never own a copy (MeshInstance::mesh's own borrowing contract).
-    CHECK(out[0].mesh == &meshes.at(meshId).data);
+    // The instance names the component's Guid; geometry is resident later.
+    CHECK(out[0].mesh == meshId);
     CHECK(out[0].model == matrix);
     CHECK(out[0].baseColor == glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
 }
