@@ -321,7 +321,8 @@ project "arccook"
 -- on, never a second PE scanner -- and for Project/ProjectManifest (the
 -- .arcproj rule the hosts use). arccook above is the structural template;
 -- the ArcaneClient.dll postbuild copy is ArcaneRuntime's. Its pure core
--- (src/Driver.cpp) is ALSO source-compiled into ArcaneTests ([build]).
+-- (Request.cpp, Slot.cpp, Compose.cpp) is ALSO source-compiled into
+-- ArcaneTests ([build]).
 -- ============================================================================
 project "arcbuild"
     location "arcbuild"
@@ -922,14 +923,17 @@ project "ArcaneTests"
         -- is EditorApp's (MintCppClass) and desk-verify.
         "%{wks.location}/ArcaneEditor/src/Project/ClassTemplates.cpp",
         -- arcbuild (the game-project build driver, spec docs/specs/
-        -- 2026-09-13-arcbuild-driver-design.md): Driver.cpp -- the PURE core
-        -- (Cli shape, --sdk precedence, the s4.3 decision table, exit-code
-        -- mapping, every composed child command line) -- source-compiles into
-        -- the test exe so the [build] units drive it directly, same "pure
-        -- logic, no spawn" pattern as ModuleBuild.cpp above. main.cpp (the
-        -- spawn + PE probe half) is NOT compiled here; the opt-in [build-desk]
-        -- cases run the built arcbuild.exe instead.
-        "%{wks.location}/arcbuild/src/Driver.cpp",
+        -- 2026-09-13-arcbuild-driver-design.md): the PURE core -- Request.cpp
+        -- (CLI), Slot.cpp (s4.3 CRT table, game-module only), Compose.cpp
+        -- (premake/msbuild lines). Source-compiles into the test exe so the
+        -- [build] units drive it directly, same "pure logic, no spawn" pattern
+        -- as ModuleBuild.cpp above. main.cpp (the spawn + PE probe half) is
+        -- NOT compiled here; the opt-in [build-desk] cases run the built
+        -- arcbuild.exe instead. `--engine` (spec §6) will add a sibling TU,
+        -- not grow Slot.cpp.
+        "%{wks.location}/arcbuild/src/Request.cpp",
+        "%{wks.location}/arcbuild/src/Slot.cpp",
+        "%{wks.location}/arcbuild/src/Compose.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/

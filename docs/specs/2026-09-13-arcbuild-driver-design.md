@@ -72,6 +72,8 @@ commands:
   clean      msbuild /t:Clean, then remove Binaries/ and Intermediate/<config>/
   probe      print the slot verdict of §4.3 and exit (diagnostics; used by tests)
              (exit 0 = the plain-build rows, 3 = the would-rebuild rows -- plan ruling R4)
+             `--force-rebuild` is a refusal (exit 2): probe is the slot row,
+             not a dry-run of `build`
 ```
 
 - `--project` accepts the directory or the `.arcproj`; the manifest's `name`
@@ -83,10 +85,17 @@ commands:
 - `--sdk` overrides `ARCANE_SDK` for the child premake (the driver sets the
   variable in its own environment before spawning, exactly `SetSdkEnv`); the
   editor always passes the running editor's root ("rebuild against the engine
-  you are looking at").
+  you are looking at"). An explicit `--sdk ""` is a refusal (exit 2) -- it
+  does not fall through to `ARCANE_SDK`.
+- `--action` is a premake generator token (`vs2026` default; `gmake2`/`ninja`
+  are the documented Linux seam, not yet a spawn path). It must be a non-empty
+  `[A-Za-z0-9_-]+` identifier; anything else is a refusal so the token cannot
+  become a `cmd.exe` fragment. It is not an enum until a non-msbuild build
+  step exists.
 - Output: every child line to stdout, prefixed `[premake]` / `[msbuild]`; the
   driver's own lines `[arcbuild]`. Exit code = the first failing child's, or
-  `2` for a driver refusal (no SDK, no project, no msbuild), `0` on success.
+  `2` for a driver refusal (no SDK, no project, empty `--sdk`, bad `--action`,
+  `--force-rebuild` on probe), `0` on success.
   The editor keeps colouring lines by `": error"` / `": warning"` as today.
 
 ## 4. Behaviour
@@ -97,6 +106,11 @@ commands:
 - msbuild: `vswhere -latest -requires Microsoft.Component.MSBuild -find
   MSBuild\**\Bin\MSBuild.exe`, else `msbuild` on PATH (`ModuleBuild::VsWhere`
   + `ResolveMsBuild`, moved).
+- Tools are resolved per command: `probe` needs neither; `generate` needs
+  premake; `build`/`rebuild` need both; `clean` needs msbuild only when a
+  workspace file exists. `ResolveMsBuild` never fails (PATH fallback, ruling
+  R8) -- skipping it on `probe` is so a nothing-stale check does not spawn
+  vswhere.
 - The SDK root is never inferred from the driver's own exe location in v1
   (the editor knows its root and passes `--sdk`; scripts/CI have the
   variable). `SdkRootFromExeDir` stays in the editor.
@@ -124,15 +138,21 @@ Before `build`, probe `<root>/Binaries/<gameModule>` (the manifest's
 `Module::ScanFileCrtFlavor` (ArcaneClient) is the probe — the same verdict
 PluginHost uses to refuse a cross-CRT module, so the driver and the host can
 never disagree about what "matches" means. `--force-rebuild` and the `rebuild`
-command bypass the probe. `probe` prints the row it landed on.
+command bypass the probe on `build`. `probe` prints the slot row it landed on
+and exits from that row (R4); `--force-rebuild` on `probe` is a refusal so
+the printed `-> /t:Rebuild` cannot disagree with exit 0 on a matching slot.
 
 Dist maps to Release for the probe (both are release-CRT), matching
 `ModuleBuild::Configuration()`'s Dist caveat.
 
 ### 4.4 clean
 `msbuild <sln> /t:Clean /p:Configuration=<cfg>`, then delete `Binaries/`
-(whole slot — it is one slot) and `Intermediate/<cfg>/`. Never touches
-`Source/`, `Content/`, `Saved/`, or the `.slnx` (generate rewrites that).
+(whole slot — it is one slot) and `Intermediate/<cfg>/`. The filesystem
+deletes still run if `/t:Clean` failed -- a broken generated Clean target
+must not leave the slot behind. `remove_all` errors are reported; if msbuild
+already succeeded, a delete failure becomes a driver refusal (exit 2). Never
+touches `Source/`, `Content/`, `Saved/`, or the `.slnx` (generate rewrites
+that).
 
 ## 5. Consumers, in order of adoption
 
@@ -159,7 +179,10 @@ The editor resolves `arcbuild.exe` beside its own exe (packaged layout) then
 - `--engine <root>` as a second target kind: the same commands over
   `Arcane.slnx` with the ReferenceProject-first ordering and the staging
   post-build awareness golden-gate.ps1 carries today. Adding it must not
-  change the game-project CLI.
+  change the game-project CLI. The source split is the seam:
+  `Request.hpp` grows the flag, `Compose.hpp`'s spawn lines are reused,
+  `Slot.hpp` (the game-module CRT table) is not, and a new engine-layout
+  unit owns ReferenceProject-first / staging. `main.cpp` dispatches.
 - `--action gmake2|ninja` with a non-msbuild build step is the Linux seam;
   §4.3's probe generalises to "the slot's flavor" per platform.
 

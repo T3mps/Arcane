@@ -111,6 +111,61 @@ TEST_CASE("arcbuild::MakeCli + RequestFromCli carry every flag of spec s3", "[bu
         const Arcane::Cli::Result r = cli.Parse(a.argc(), a.argv());
         CHECK_FALSE(r.ok);
     }
+    SECTION("explicit empty --sdk is engaged-but-empty, not unsupplied")
+    {
+        Argv a{ "build", "--project", "X", "--sdk", "" };
+        const Arcane::Cli::Result r = cli.Parse(a.argc(), a.argv());
+        REQUIRE(r.ok);
+        const Request req = RequestFromCli(Command::Build, r);
+        REQUIRE(req.sdk.has_value());
+        CHECK(req.sdk->empty());
+    }
+}
+
+TEST_CASE("arcbuild::IsValidAction is a premake identifier, not a shell fragment", "[build]")
+{
+    CHECK(IsValidAction("vs2026"));
+    CHECK(IsValidAction("gmake2"));
+    CHECK(IsValidAction("ninja"));
+    CHECK(IsValidAction("vs_2026"));
+    CHECK(IsValidAction("gmake-2"));
+    CHECK_FALSE(IsValidAction(""));
+    CHECK_FALSE(IsValidAction("vs2026 & echo hi"));
+    CHECK_FALSE(IsValidAction("vs2026;whoami"));
+    CHECK_FALSE(IsValidAction("vs2026|dir"));
+    CHECK_FALSE(IsValidAction("vs2026 && echo"));
+    CHECK_FALSE(IsValidAction("vs2026.exe"));
+    CHECK_FALSE(IsValidAction("vs 2026"));
+}
+
+TEST_CASE("arcbuild::ValidateRequest refuses empty --sdk, a non-identifier --action, and probe --force-rebuild",
+          "[build]")
+{
+    Request ok;
+    ok.command = Command::Build;
+    ok.action  = "vs2026";
+    CHECK_FALSE(ValidateRequest(ok).has_value());
+
+    Request emptySdk = ok;
+    emptySdk.sdk = fs::path();
+    REQUIRE(ValidateRequest(emptySdk).has_value());
+    CHECK(*ValidateRequest(emptySdk) == "--sdk requires a non-empty path (an empty value is not ARCANE_SDK)");
+
+    Request badAction = ok;
+    badAction.action = "vs2026 & echo hi";
+    REQUIRE(ValidateRequest(badAction).has_value());
+    CHECK(ValidateRequest(badAction)->find("invalid --action") != std::string::npos);
+
+    Request probeForce;
+    probeForce.command      = Command::Probe;
+    probeForce.action       = "vs2026";
+    probeForce.forceRebuild = true;
+    REQUIRE(ValidateRequest(probeForce).has_value());
+    CHECK(ValidateRequest(probeForce)->find("--force-rebuild") != std::string::npos);
+
+    Request buildForce = ok;
+    buildForce.forceRebuild = true;
+    CHECK_FALSE(ValidateRequest(buildForce).has_value());   // flag is legal on build
 }
 
 // ---- SDK precedence ---------------------------------------------------------
@@ -228,6 +283,10 @@ TEST_CASE("arcbuild::SolutionPath: a discovered workspace file wins over the <na
     const Layout l = AphelyonLayout();
     CHECK(SolutionPath(l, "D:/dev/starworks/Gacha/Game/Other.sln") == fs::path("D:/dev/starworks/Gacha/Game/Other.sln"));
     CHECK(SolutionPath(l, {}) == fs::path("D:/dev/starworks/Gacha/Game") / "Aphelyon.slnx");
+    // ComposeMsBuild does not cd: a relative discovery is joined onto root
+    // rather than assumed absolute (DiscoverSolution is absolute iff projectRoot is).
+    CHECK(SolutionPath(l, fs::path("Other.sln")) ==
+          (fs::path("D:/dev/starworks/Gacha/Game") / "Other.sln").lexically_normal());
 }
 
 // ---- composition --------------------------------------------------------------

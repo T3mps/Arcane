@@ -2,9 +2,10 @@
 // 2026-09-13-arcbuild-driver-design.md). Unreal's Build.bat analogue for
 // Arcane game projects: ONE entry point the editor (ModuleBuild), the Gacha
 // scripts and CI all call. It DRIVES premake and msbuild; it never owns
-// compilation. The pure core (every decision) is Driver.hpp; this file is
-// the shell: manifest, SDK, tool resolution, the slot probe, and the
-// spawn-and-stream of each child.
+// compilation. The pure core is Request / Slot / Compose (Driver.hpp is the
+// umbrella); this file is the shell: manifest, SDK, tool resolution, the
+// slot probe, and the spawn-and-stream of each child. `--engine` (spec §6)
+// will dispatch here as a second target kind -- it does not belong in Slot.hpp.
 //
 //   arcbuild <generate|build|rebuild|clean|probe> --project <dir|.arcproj>
 //            [--config Debug|Release|Dist] [--sdk <root>] [--action vs2026]
@@ -14,8 +15,9 @@
 // driver's own lines [arcbuild] (refusals: "[arcbuild] error: ..."). Flushed
 // per line -- the editor reads this through a pipe and streams it into its
 // Console. Exit: the first failing child's status, 2 for a driver refusal
-// (no SDK / no project / bad flags), 3 from `probe` when the slot would
-// force /t:Rebuild, 0 otherwise.
+// (no SDK / no project / bad flags / empty --sdk / bad --action), 3 from
+// `probe` when the slot row would force /t:Rebuild (ruling R4; --force-rebuild
+// is not valid on probe), 0 otherwise.
 
 #include "Driver.hpp"
 
@@ -111,7 +113,10 @@ namespace
             std::printf("%s %s\n", prefix, line.c_str());
             std::fflush(stdout);
         }
-        return ::_pclose(pipe);
+        const int status = ::_pclose(pipe);
+        if (status == -1)
+            return std::nullopt;   // pclose failed: not a child exit
+        return status;
 #else
         (void)commandLine; (void)prefix;
         std::printf("[arcbuild] error: the vs2026 action is Windows-only today (cmd + msbuild)\n");
@@ -185,7 +190,9 @@ namespace
                     "             flavor mismatches --config (or is unreadable)\n"
                     "  rebuild    generate, then msbuild /t:Rebuild unconditionally\n"
                     "  clean      msbuild /t:Clean, then remove Binaries/ and Intermediate/<config>/\n"
-                    "  probe      print the slot verdict and exit 0 (plain build) or 3 (/t:Rebuild)\n");
+                    "             (filesystem clean still runs if /t:Clean fails)\n"
+                    "  probe      print the slot row and exit 0 (absent/match) or 3 (mismatch/unreadable);\n"
+                    "             --force-rebuild is not valid here (pass it to build, or use rebuild)\n");
         std::fflush(stdout);
     }
 }
@@ -213,6 +220,8 @@ int main(int argc, char** argv)
         return parsed.exitCode;   // Cli printed the reason + usage (2), or --help (0)
 
     const Request req = RequestFromCli(*command, parsed);
+    if (const std::optional<std::string> why = ValidateRequest(req))
+        return Refuse(*why);
     g_quiet = req.quiet;
 
     const std::optional<std::filesystem::path> sdk = ResolveSdk(req.sdk, std::getenv("ARCANE_SDK"));
@@ -231,17 +240,19 @@ int main(int argc, char** argv)
     if (!manifest)
         return Refuse("'" + manifestFile->string() + "' is not a valid .arcproj");
 
-    std::error_code ec;
     Layout layout;
-    layout.manifest   = std::filesystem::absolute(*manifestFile, ec).lexically_normal();
-    layout.root       = layout.manifest.parent_path();
-    layout.name       = manifest->name;
-    layout.gameModule = manifest->gameModule;
+    {
+        std::error_code absEc;
+        const auto absoluteManifest = std::filesystem::absolute(*manifestFile, absEc);
+        if (absEc)
+            return Refuse("could not absolutise '" + manifestFile->string() + "': " + absEc.message());
+        layout.manifest   = absoluteManifest.lexically_normal();
+        layout.root       = layout.manifest.parent_path();
+        layout.name       = manifest->name;
+        layout.gameModule = manifest->gameModule;
+    }
 
     SetSdkEnv(*sdk);
-    Tools tools;
-    tools.premake = Arcane::Toolchain::ResolvePremake(*sdk);
-    tools.msbuild = Arcane::Toolchain::ResolveMsBuild();
 
     Say(std::string(CommandName(*command)) + " " + layout.name + " (" + req.config + ") in " +
         layout.root.generic_string() + " against SDK " + sdk->generic_string());
@@ -250,8 +261,11 @@ int main(int argc, char** argv)
     {
         case Command::Probe:
         {
+            // R4: print and exit both from the slot. --force-rebuild is
+            // already a ValidateRequest refusal; forceRebuild is hard-false
+            // so the printed arrow cannot disagree with ProbeExitCode.
             const Probe   p = ProbeSlot(layout, req.config);
-            const Verdict v = Decide(Command::Build, req.forceRebuild, p.state);
+            const Verdict v = Decide(Command::Build, /*forceRebuild=*/false, p.state);
             // The row is the command's whole output -- never quieted.
             std::printf("[arcbuild] %s\n", ProbeRow(p, req.config, v).c_str());
             std::fflush(stdout);
@@ -260,6 +274,8 @@ int main(int argc, char** argv)
 
         case Command::Generate:
         {
+            Tools tools;
+            tools.premake = Arcane::Toolchain::ResolvePremake(*sdk);
             const std::string line = ComposeGenerate(layout, tools, req.action);
             Say(line);
             return ExitFromChild(Stream(line, "[premake]"));
@@ -268,6 +284,9 @@ int main(int argc, char** argv)
         case Command::Build:
         case Command::Rebuild:
         {
+            Tools tools;
+            tools.premake = Arcane::Toolchain::ResolvePremake(*sdk);
+            tools.msbuild = Arcane::Toolchain::ResolveMsBuild();
             // Premake FIRST, every build (idempotent; kills the stale-.sln
             // class of failure -- the editor's standing decision).
             const std::string gen = ComposeGenerate(layout, tools, req.action);
@@ -296,20 +315,32 @@ int main(int argc, char** argv)
 
         case Command::Clean:
         {
+            // Filesystem clean still runs if /t:Clean fails (spec §4.4): a
+            // broken generated Clean target must not leave Binaries/ behind.
             int exit = kExitOk;
             const std::filesystem::path discovered = Arcane::Toolchain::DiscoverSolution(layout.root);
             if (discovered.empty())
                 Say("no workspace file in " + layout.root.generic_string() + " -- skipping msbuild /t:Clean");
             else
             {
+                Tools tools;
+                tools.msbuild = Arcane::Toolchain::ResolveMsBuild();
                 const std::string clean = ComposeMsBuild(tools, discovered, req.config, MsBuildTarget::Clean);
                 Say(clean);
                 exit = ExitFromChild(Stream(clean, "[msbuild]"));
             }
             for (const std::filesystem::path& dir : CleanTargets(layout, req.config))
             {
-                const auto removed = std::filesystem::remove_all(dir, ec);
-                Say("removed " + dir.generic_string() + " (" + std::to_string(removed) + " entries)");
+                std::error_code rec;
+                const auto removed = std::filesystem::remove_all(dir, rec);
+                if (rec)
+                {
+                    Say("failed to remove " + dir.generic_string() + ": " + rec.message());
+                    if (exit == kExitOk)
+                        exit = kExitRefused;
+                }
+                else
+                    Say("removed " + dir.generic_string() + " (" + std::to_string(removed) + " entries)");
             }
             return exit;
         }
