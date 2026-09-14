@@ -2,24 +2,19 @@
 //   HotReloadPluginV1  -> HOTRELOAD_STEP=1,  ABI = kGamePluginABIVersion
 //   HotReloadPluginV2  -> HOTRELOAD_STEP=10, ABI = kGamePluginABIVersion
 //   HotReloadPluginBad -> ABI = kGamePluginABIVersion + 999 (forces rollback)
-// One reflected component (Pulse, shared header) + the seven entry points.
-// SaveState/LoadState wrap the whole-registry snapshot via the engine Runtime.
+// Built ON the SDK's ARCANE_GAME_MODULE (Arcane/Plugin/GameModule.hpp), so the
+// [hotreload] suite is the macro's plugin test: the prologue (Pulse arrives
+// through the ARCANE_COMPONENT drain), the base Save/LoadState round-trip plus
+// this module's extras, the Shutdown order (the OnShutdown log line below),
+// and the ABI-override seam the Bad build exists to trip.
 
-#include "PluginExport.hpp"
 #include "HotReloadShared.hpp"
 
-#include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Plugin/GameModule.hpp>
 
 #include <Astra/Registry/Registry.hpp>
-#include <Astra/Component/ComponentModule.hpp>
-#include <Astra/Component/ComponentRegistry.hpp>
-#include <Astra/Core/TypeContext.hpp>
-#include <Astra/Serialization/BinaryWriter.hpp>
-#include <Astra/Serialization/BinaryReader.hpp>
 
-#include <cstddef>
-#include <vector>
+#include <cstdint>
 
 #ifndef HOTRELOAD_STEP
   #define HOTRELOAD_STEP 1
@@ -28,95 +23,64 @@
   #define HOTRELOAD_ABI_OFFSET 0
 #endif
 
-using Arcane::HotReloadTest::Pulse;
+// One reflected component (shared header), registered through the drain the
+// macro's Init performs -- the same path a wizard-made component takes.
+ARCANE_COMPONENT(Arcane::HotReloadTest::Pulse)
 
-namespace
+namespace Arcane::HotReloadTest
 {
-    Arcane::EngineContext* g_ctx = nullptr;
-    Astra::Entity          g_pulse{};
-
-    // Heap-held ownership handle for this module's component types, deleted in
-    // Shutdown (which the host calls BEFORE unmapping). A RAW pointer on
-    // purpose, per the ComponentModule.hpp contract's "NEVER a plugin-side
-    // static/global object": ANY static whose destructor does live cleanup --
-    // a ComponentModule by value, an optional, a unique_ptr -- runs that
-    // destructor during FreeLibrary at DLL_PROCESS_DETACH, under the loader
-    // lock, taking the registration mutex and possibly running meta thunks
-    // there. A raw pointer has no destructor, so a skipped Shutdown degrades
-    // to the contract's documented forget semantics: the handle leaks and the
-    // host's UnregisterModuleRange net catches the descriptor half.
-    Astra::ComponentModule* g_module = nullptr;
-
-    void CacheHandle(Astra::Registry& reg)
+    struct Module final : Arcane::GameModule
     {
-        g_pulse = {};
-        reg.CreateView<Pulse>().ForEach([&](Astra::Entity e, Pulse&) { g_pulse = e; });
-    }
+        Astra::Entity pulse = Astra::Entity::Invalid();
+
+        void CacheHandle()
+        {
+            pulse = Astra::Entity::Invalid();
+            Registry().CreateView<Pulse>().ForEach([&](Astra::Entity e, Pulse&) { pulse = e; });
+        }
+
+        bool OnInit(Arcane::EngineContext&) override
+        {
+            bool exists = false;
+            Registry().CreateView<Pulse>().ForEach([&](Astra::Entity, Pulse&) { exists = true; });
+            if (!exists)
+                Registry().CreateEntityWith(Pulse{0});   // fresh boot only
+            CacheHandle();
+            return true;
+        }
+
+        void OnFixedUpdate(double) override
+        {
+            if (auto* p = Registry().GetComponent<Pulse>(pulse))
+                p->ticks += (HOTRELOAD_STEP);            // V1: +1, V2: +10 (observably different code)
+        }
+
+        // The hook-order probe (PluginHostTest "OnShutdown runs while the
+        // module's component handle is still open"): say whether this module's
+        // ComponentModule handle is still open here -- i.e. the macro tore the
+        // instance down BEFORE the handle. Logged, not stamped into the registry:
+        // Unload() resets the registry right after, and Log::Engine() is the
+        // DLL's one logger the test can attach a sink to.
+        void OnShutdown() override
+        {
+            ARC_INFO("HotReloadPlugin: OnShutdown with handle {}",
+                     static_cast<bool>(Components()) ? "open" : "closed");
+        }
+
+        // Extras AFTER the base's registry blob: the pulse entity id, so
+        // OnLoadState can prove the base restored the entity it re-finds by view.
+        void OnSaveState(Astra::BinaryWriter& w) override
+        {
+            w(static_cast<uint64_t>(pulse));
+        }
+        bool OnLoadState(Astra::BinaryReader& r) override
+        {
+            uint64_t saved = 0; r(saved);
+            CacheHandle();
+            return !r.HasError() && static_cast<uint64_t>(pulse) == saved;
+        }
+    };
 }
 
-extern "C"
-{
-    GAME_API uint32_t GamePlugin_ABIVersion()
-    {
-        return Arcane::kGamePluginABIVersion + (HOTRELOAD_ABI_OFFSET);
-    }
-
-    GAME_API bool GamePlugin_Init(Arcane::EngineContext* ctx)
-    {
-        Astra::SetTypeContext(ctx->typeContext);          // 1. shared context in THIS module
-        g_ctx = ctx;
-        g_module = new Astra::ComponentModule(
-            Astra::ComponentModule::Open(ctx->engine->Components(), "HotReloadPlugin"));
-        if (!*g_module)
-        {
-            delete g_module;                               // empty handle: safe to destroy here (still mapped)
-            g_module = nullptr;
-            return false;                                  // SetTypeContext above makes this unreachable; fail loudly if not
-        }
-        g_module->Register<Pulse>();                       // descriptors + meta -> THIS image
-
-        Astra::Registry& reg = ctx->engine->Registry();
-        bool exists = false;
-        reg.CreateView<Pulse>().ForEach([&](Astra::Entity, Pulse&) { exists = true; });
-        if (!exists)
-            reg.CreateEntityWith(Pulse{0});               // fresh boot only
-        CacheHandle(reg);
-        return true;
-    }
-
-    GAME_API void GamePlugin_Shutdown() { delete g_module; g_module = nullptr; g_pulse = {}; }
-
-    GAME_API void GamePlugin_FixedUpdate(double)
-    {
-        if (auto* p = g_ctx->engine->Registry().GetComponent<Pulse>(g_pulse))
-            p->ticks += (HOTRELOAD_STEP);                 // V1: +1, V2: +10 (observably different code)
-    }
-
-    GAME_API void GamePlugin_Update(double, double) {}
-
-    GAME_API void GamePlugin_SaveState(Astra::BinaryWriter& w)
-    {
-        auto snap = g_ctx->engine->SnapshotRegistry();
-        if (snap.IsErr())
-        {
-            // Snapshot failed: write a zero-length blob so LoadState fails cleanly
-            // (RestoreRegistry rejects an empty frame) instead of masking the loss.
-            w(static_cast<uint64_t>(0));
-            return;
-        }
-        const std::vector<std::byte>& blob = *snap.GetValue();
-        w(static_cast<uint64_t>(blob.size()));
-        w.WriteBytes(blob.data(), blob.size());
-    }
-
-    GAME_API bool GamePlugin_LoadState(Astra::BinaryReader& r)
-    {
-        uint64_t n = 0; r(n);
-        std::vector<std::byte> blob(static_cast<size_t>(n));
-        r.ReadBytes(blob.data(), static_cast<size_t>(n));
-        if (r.HasError()) return false;
-        if (!g_ctx->engine->RestoreRegistry(blob)) return false;
-        CacheHandle(g_ctx->engine->Registry());
-        return true;
-    }
-}
+ARCANE_GAME_MODULE_ABI(Arcane::HotReloadTest::Module,
+                       ::Arcane::kGamePluginABIVersion + (HOTRELOAD_ABI_OFFSET))

@@ -1207,6 +1207,7 @@ project "ArcaneTests"
 -- Hot-reload TEST plugins: one source, three DLLs (V1 step=1, V2 step=10,
 -- Bad ABI). SharedLib, /MD, links Arcane (NOT ArcaneCore -- one ArcaneCore per process).
 -- Loaded at runtime by PluginHost in ArcaneTests; never linked by the test exe.
+-- Built ON Arcane/Plugin/GameModule.hpp (ARCANE_GAME_MODULE_ABI) -- the macro's plugin test vehicle.
 -- ============================================================================
 local function test_plugin(name, defs)
     project(name)
@@ -1218,7 +1219,10 @@ local function test_plugin(name, defs)
         targetname(name)
         targetdir ("bin/" .. outputdir .. "/" .. name)
         objdir ("bin-int/" .. outputdir .. "/" .. name)
-        files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/PluginExport.hpp", "%{prj.location}/HotReloadShared.hpp" }
+        files { "%{prj.location}/HotReloadPlugin.cpp", "%{prj.location}/HotReloadShared.hpp" }
+        -- The include surface a game module gets from build/arcane.lua, minus the
+        -- project's own Source/: GameModule.hpp pulls Log.hpp (spdlog) and imgui.h
+        -- (the ABI v2 handoff) on top of what Runtime.hpp already needed.
         includedirs {
             "%{wks.location}/ArcaneClient/src",
             "%{IncludeDir.ArcaneCore}",   -- Runtime.hpp (plugin API) includes <Arcane/Guid.hpp>
@@ -1226,12 +1230,17 @@ local function test_plugin(name, defs)
             "%{IncludeDir.Astra}",
             "%{IncludeDir.enkiTS}",
             "%{IncludeDir.Mosaic}",   -- Astra headers now #include <Mosaic/...> (Mosaic-seam adoption)
+            "%{IncludeDir.imgui}",
+            "%{IncludeDir.spdlog}",
         }
         links { "ArcaneClient" }
+        -- IMGUI_API=dllimport: adopt ArcaneClient.dll's single GImGui, exactly as
+        -- arcane.lua does for a real module.
         defines (defs)
+        defines { "IMGUI_API=__declspec(dllimport)" }
         filter "system:windows"
             systemversion "latest"
-            buildoptions { "/Zc:__cplusplus", "/bigobj" }
+            buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj" }   -- /utf-8: spdlog/fmt via Log.hpp, as arcane.lua sets
             fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
         filter "configurations:Debug"   defines { "ARCANE_DEBUG" }                    runtime "Debug"   symbols "on"
         filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" }        runtime "Release" optimize "speed" symbols "on"
@@ -1239,8 +1248,8 @@ local function test_plugin(name, defs)
         filter {}
 end
 
-test_plugin("HotReloadPluginV1",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=1",  "_CRT_SECURE_NO_WARNINGS" })
-test_plugin("HotReloadPluginV2",  { "GAME_BUILD_DLL", "HOTRELOAD_STEP=10", "_CRT_SECURE_NO_WARNINGS" })
-test_plugin("HotReloadPluginBad", { "GAME_BUILD_DLL", "HOTRELOAD_ABI_OFFSET=999", "_CRT_SECURE_NO_WARNINGS" })
+test_plugin("HotReloadPluginV1",  { "HOTRELOAD_STEP=1",          "_CRT_SECURE_NO_WARNINGS" })
+test_plugin("HotReloadPluginV2",  { "HOTRELOAD_STEP=10",         "_CRT_SECURE_NO_WARNINGS" })
+test_plugin("HotReloadPluginBad", { "HOTRELOAD_ABI_OFFSET=999",  "_CRT_SECURE_NO_WARNINGS" })
 
 group ""

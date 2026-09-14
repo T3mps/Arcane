@@ -12,8 +12,16 @@
 #include "../plugins/HotReloadShared.hpp"   // the SAME Pulse type the plugin uses
 #include <Arcane/Plugin/PluginHost.hpp>
 
+#include <Arcane/Base/Log.hpp>   // Log::Engine() sinks (the OnShutdown probe)
+
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Reflection/MetaRegistry.hpp>
+
+#include <spdlog/sinks/callback_sink.h>
+
+#include <algorithm>
+#include <memory>
+#include <string>
 
 #include <cstddef>
 #include <filesystem>
@@ -55,6 +63,38 @@ TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
     CHECK(ReadPulse(rt) == 5);                     // V1 increments by 1
     CHECK(Arcane::RenderErrorCount() == 0);
     host.Unload();
+}
+
+// The GameModule hook-order probe (spec 2026-09-13 s7): ARCANE_GAME_MODULE's
+// Shutdown calls OnShutdown BEFORE it closes the module's ComponentModule
+// handle (the instance goes first so a module can still touch its own
+// components). HotReloadPlugin's OnShutdown logs whether its Components()
+// handle is still open at that moment; Unload() then resets the registry
+// (fresh-boot semantics), so the evidence is read off the engine logger --
+// Log::Engine() is ArcaneClient.dll's ONE logger, and the plugin's ARC_INFO
+// lands in it (the SerializationNegativeTest capture shape).
+TEST_CASE("GameModule: OnShutdown runs while the module's component handle is still open", "[hotreload]")
+{
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    rt.Components()->RegisterComponent<Pulse>();
+
+    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.Load());
+    StepK(rt, *host.Vtable(), 2);
+    REQUIRE(ReadPulse(rt) == 2);
+
+    std::string captured;
+    auto sink = std::make_shared<spdlog::sinks::callback_sink_mt>(
+        [&](const spdlog::details::log_msg& m) { captured.append(m.payload.data(), m.payload.size()).push_back('\n'); });
+    Arcane::Log::Engine()->sinks().push_back(sink);
+    host.Unload();                                 // Shutdown -> OnShutdown (logs) -> handle closes -> unmap
+    {
+        auto& sinks = Arcane::Log::Engine()->sinks();
+        sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
+    }
+    INFO(captured);
+    CHECK(captured.find("HotReloadPlugin: OnShutdown with handle open") != std::string::npos);
+    CHECK(captured.find("with handle closed") == std::string::npos);
 }
 
 TEST_CASE("Hot swap V1->V2 preserves state AND runs the new code", "[hotreload]")
