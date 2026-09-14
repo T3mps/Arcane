@@ -8,6 +8,7 @@
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
+#include <Arcane/Mesh/MeshAsset.hpp>          // F2c Plan 2 Task 9: LoadMeshAsset/ResolveMeshData -- the mesh-ASSET branch
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/MeshBuilder.hpp>
 #include <Arcane/Render/MeshMaterialCache.hpp>
@@ -17,6 +18,8 @@
 #include <Arcane/Render/ShaderConventions.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 #include <Arcane/Scene/SceneCamera.hpp>       // PerspectiveProjection
+
+#include <Project/MeshImportWave.hpp>          // F2c Plan 2 Task 9: FrameMeshBounds
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -63,6 +66,47 @@ namespace Arcane::Editor
                    (static_cast<std::uint64_t>(pass) << 32);
         }
 
+        // ===== F2c PLAN 2 TASK 9: WHAT SUBJECT ONE WORK ITEM IS ============
+        // A material .arcmat, or (new) a mesh .arcmesh asset. NOT a second queue --
+        // see MaterialPreviewHarvester.hpp's file header for why one shared LIFO
+        // queue is load-bearing (a burst of one subject must not starve the other).
+        enum class Subject : std::uint8_t { Material, Mesh };
+
+        // The queue/pending/inFlight/ready key, widened from a bare material Guid.
+        // Asset Guids are unique across the WHOLE project registry regardless of
+        // kind (a material and a mesh asset can never share one), so `entries`,
+        // `failed` and `thumbToMaterial` below stay Guid-keyed unchanged -- widening
+        // THOSE would only add a lookup ambiguity ThumbTextureId/PixelsForThumb's
+        // Guid-only signatures have no way to resolve. What genuinely needs the
+        // Subject tag is dispatch: the shared queue must know, per item, whether to
+        // resolve a material (through the compile path) or a mesh (through
+        // ResolveMeshData) once it is popped.
+        struct WorkKey
+        {
+            Arcane::Guid id;
+            Subject subject = Subject::Material;
+
+            // Deliberately NOT explicit: every pre-existing material call site
+            // (Fail(id, ...), Push(id), queue/inFlight erase-by-Guid) keeps
+            // compiling unchanged, implicitly widening to {id, Subject::Material} --
+            // which is what makes the material path's behaviour provably untouched
+            // by this widening rather than a second hand-copy of it.
+            WorkKey() = default;
+            WorkKey(const Arcane::Guid& g, Subject s = Subject::Material) : id(g), subject(s) {}
+
+            bool operator==(const WorkKey&) const noexcept = default;
+        };
+
+        struct WorkKeyHash
+        {
+            std::size_t operator()(const WorkKey& k) const noexcept
+            {
+                std::size_t h = std::hash<Arcane::Guid>{}(k.id);
+                return h ^ (static_cast<std::size_t>(k.subject) + 0x9e3779b97f4a7c15ULL +
+                            (h << 6) + (h >> 2));
+            }
+        };
+
         // Layer the SAVED values onto a fresh instance -- template <- base's
         // params <- ... <- the leaf's params. Byte-for-byte the shape
         // SpriteMaterialCache::Impl::Bind and PostChainCache::Impl::Bind both
@@ -105,15 +149,24 @@ namespace Arcane::Editor
             std::uint32_t chainInputSlots = 1;                    // fullscreen only
         };
 
-        // ---- what one material renders as, once the compile has landed --
+        // ---- what one work item renders as, once it is ready to harvest --
         struct Ready
         {
             Arcane::Guid id;
-            Arcane::MaterialSurface surface = Arcane::MaterialSurface::Sprite;
-            std::uint16_t spriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;  // Sprite
-            Arcane::PostChainDesc post;                                            // Fullscreen
-            glm::vec4 meshColor{1.0f};                                             // Mesh
-            std::uint32_t meshSlot = 0xFFFFFFFFu;                                  // Mesh
+            Subject subject = Subject::Material;
+            Arcane::MaterialSurface surface = Arcane::MaterialSurface::Sprite;  // Material only
+            std::uint16_t spriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;  // Material/Sprite
+            Arcane::PostChainDesc post;                                  // Material/Fullscreen
+            glm::vec4 meshColor{1.0f};                     // Material/Mesh (the mesh-kind sphere)
+            std::uint32_t meshSlot = 0xFFFFFFFFu;          // Material/Mesh (the mesh-kind sphere)
+
+            // ---- Subject::Mesh (F2c Plan 2 Task 9): a mesh ASSET's own geometry ----
+            // Resolved synchronously in StartOne (ResolveMeshData compiles nothing, so
+            // there is no async Pending stage for this subject -- same shape as the
+            // Material/Mesh sphere branch above, which also skips straight to Ready).
+            Arcane::MeshData               meshGeometry;    // local space, unit-rule scaled
+            Arcane::MeshBounds             meshBounds;      // ResolveMeshData's answer -- FrameMeshBounds' input
+            std::vector<Arcane::MeshInstance> meshInstances;   // one per section, materials pre-resolved
         };
 
         // ---- one material's finished thumbnail --------------------------
@@ -139,26 +192,42 @@ namespace Arcane::Editor
         Arcane::MeshData sphere;
         std::unique_ptr<Arcane::MeshMaterialCache> meshMats;
 
-        // THE QUEUE IS A STACK. Task 10's Browse draw pushes every VISIBLE
-        // un-thumbed material each frame, so the newest push is the one on
-        // screen right now -- LIFO is what makes the frame's single harvest
-        // land on something the user is looking at (UE's thumbnail pool is
-        // LIFO for exactly this).
-        std::deque<Arcane::Guid> queue;
-        std::unordered_map<Arcane::Guid, Pending> pending;
+        // F2c Plan 2 Task 9: the synthetic mesh-buffer guid a Subject::Mesh harvest's
+        // geometry rides under, resolved by the SetMeshSupply lambda EnsureVehicle
+        // installs (mirroring `sphere`'s own 'SPHR' guid, immediately below in that
+        // lambda). Populated by Harvest() immediately before RenderFrameOffscreen and
+        // left alone afterward -- there is only ever one harvest per Pump, so nothing
+        // else ever reads or writes it concurrently.
+        Arcane::MeshData meshHarvestGeometry;
+
+        // THE QUEUE IS A STACK, and it is SHARED across both subjects (F2c Plan 2
+        // Task 9): Task 10's Browse draw pushes every VISIBLE un-thumbed material or
+        // mesh each frame, so the newest push is the one on screen right now -- LIFO
+        // is what makes the frame's single harvest land on something the user is
+        // looking at (UE's thumbnail pool is LIFO for exactly this), REGARDLESS of
+        // which subject it is -- a second, subject-specific queue would let a burst
+        // of one starve the other.
+        std::deque<WorkKey> queue;
+        std::unordered_map<WorkKey, Pending, WorkKeyHash> pending;
         std::vector<Ready> ready;                    // also LIFO (back = newest)
+        // `entries`/`failed`/`thumbToMaterial` stay Guid-keyed, deliberately NOT
+        // widened to WorkKey: ThumbTextureId/PixelsForThumb take a bare Guid with no
+        // Subject to disambiguate, and a material Guid can never collide with a mesh
+        // asset Guid (both are minted by the SAME project-wide registry), so keying
+        // these three on the asset id alone is exact, not an approximation.
         std::unordered_set<Arcane::Guid> failed;     // memoized refusals
         std::unordered_map<Arcane::Guid, Entry> entries;
         std::unordered_map<Arcane::Guid, Arcane::Guid> thumbToMaterial;
 
         // `inFlight` IS THE ONE MEMBERSHIP TEST, and it spans all three
-        // stages -- `queue`, `pending` and `ready`. Keeping one set rather
-        // than probing three containers is what makes Request()'s per-frame,
-        // per-visible-row call a single hash lookup, and what makes "did this
-        // guid get dropped somewhere" a single invariant instead of three.
-        // Every terminal outcome (a harvest, a refusal) erases from it;
-        // nothing else does, except Invalidate, which re-arms the guid.
-        std::unordered_set<Arcane::Guid> inFlight;
+        // stages -- `queue`, `pending` and `ready` -- for BOTH subjects at once.
+        // Keeping one set rather than probing three containers is what makes
+        // Request()/RequestMesh()'s per-frame, per-visible-row call a single hash
+        // lookup, and what makes "did this work item get dropped somewhere" a
+        // single invariant instead of three. Every terminal outcome (a harvest, a
+        // refusal) erases from it; nothing else does, except Invalidate/
+        // InvalidateMesh, which re-arms the item.
+        std::unordered_set<WorkKey, WorkKeyHash> inFlight;
 
         [[nodiscard]] Arcane::NriGraphContext* Chrome() const
         {
@@ -175,10 +244,10 @@ namespace Arcane::Editor
             return dir / (id.ToString() + ".png");
         }
 
-        void Push(const Arcane::Guid& id)
+        void Push(const WorkKey& key)
         {
-            if (inFlight.insert(id).second)
-                queue.push_front(id);   // LIFO
+            if (inFlight.insert(key).second)
+                queue.push_front(key);   // LIFO
         }
 
         // What one Harvest call did. THREE outcomes, not two, because a
@@ -192,15 +261,16 @@ namespace Arcane::Editor
         void ResetVehicle();                      // destroy it + re-queue what it scoped
         void DropVehicle();                       // ResetVehicle, as a FAILURE (spends budget)
         void GiveUp(std::string_view why);        // no previews at all, this session
-        void StartOne(const Arcane::Guid& id, double now);
+        void StartOne(const WorkKey& key, double now);
+        void StartOneMesh(const Arcane::Guid& mesh);   // F2c Plan 2 Task 9: the mesh-ASSET branch
         [[nodiscard]] static bool AllStagesLanded(const Pending& p);
         [[nodiscard]] bool Publish(Pending& p);   // pending -> ready; false = refused
         HarvestOutcome Harvest(Ready& r);         // ONE device idle
         std::uint64_t EnsureTexture(const Arcane::Guid& material, Entry& e) const;
         void ReleaseThumbTexture(Entry& e);       // the chrome-cache release sequence
-        // BY VALUE, deliberately: every caller passes a Guid that lives INSIDE
+        // BY VALUE, deliberately: every caller passes a key that lives INSIDE
         // the `pending` node this function erases.
-        void Fail(Arcane::Guid id, std::string_view why);
+        void Fail(WorkKey key, std::string_view why);
 
         // How many times the vehicle has been dropped this session. The budget
         // this feeds is what keeps DropVehicle's re-queue from becoming an
@@ -263,8 +333,9 @@ namespace Arcane::Editor
         sphere = {};
         for (const Ready& r : ready)
         {
-            inFlight.erase(r.id);   // ...so Push's dedupe cannot swallow it
-            Push(r.id);
+            const WorkKey key{ r.id, r.subject };
+            inFlight.erase(key);   // ...so Push's dedupe cannot swallow it
+            Push(key);
         }
         ready.clear();
     }
@@ -296,11 +367,11 @@ namespace Arcane::Editor
     void MaterialPreviewHarvester::Impl::GiveUp(std::string_view why)
     {
         if (!givenUp)
-            ARC_WARN("[thumbs] {} -- materials keep their kind icon for the rest of "
-                     "this session", why);
+            ARC_WARN("[thumbs] {} -- materials and meshes keep their kind icon for "
+                     "the rest of this session", why);
         givenUp = true;
-        for (const Arcane::Guid& g : inFlight)
-            failed.insert(g);
+        for (const WorkKey& k : inFlight)
+            failed.insert(k.id);
         for (const Ready& r : ready)
             failed.insert(r.id);
         queue.clear();
@@ -455,6 +526,49 @@ namespace Arcane::Editor
             im.Push(material);
     }
 
+    // F2c Plan 2 Task 9: mirrors Request() exactly, EXCEPT it tags the pushed work
+    // item Subject::Mesh so StartOne dispatches it through ResolveMeshData instead
+    // of the compile path. `entries`/`failed` are checked bare-Guid (shared with the
+    // material half, see WorkKey's own comment on why that is exact, not sloppy);
+    // `inFlight` is checked with the Mesh tag, since that IS the container where the
+    // two subjects genuinely need telling apart.
+    void MaterialPreviewHarvester::RequestMesh(const Arcane::Guid& mesh)
+    {
+        Impl& im = *m_impl;
+        if (!mesh.IsValid() || im.givenUp)
+            return;
+        if (im.entries.contains(mesh) || im.failed.contains(mesh) ||
+            im.inFlight.contains(WorkKey{ mesh, Subject::Mesh }))
+            return;
+        im.Push(WorkKey{ mesh, Subject::Mesh });
+    }
+
+    // Mirrors Invalidate() exactly, tagged Mesh throughout -- see that function's
+    // own comment for the full last-good/re-queue reasoning, which applies here
+    // unchanged.
+    void MaterialPreviewHarvester::InvalidateMesh(const Arcane::Guid& mesh)
+    {
+        Impl& im = *m_impl;
+        if (!mesh.IsValid())
+            return;
+        const WorkKey key{ mesh, Subject::Mesh };
+        im.failed.erase(mesh);
+        im.pending.erase(key);
+        im.ready.erase(std::remove_if(im.ready.begin(), im.ready.end(),
+                                      [&](const Impl::Ready& r)
+                                      { return r.id == mesh && r.subject == Subject::Mesh; }),
+                       im.ready.end());
+        im.queue.erase(std::remove(im.queue.begin(), im.queue.end(), key), im.queue.end());
+        im.inFlight.erase(key);
+        if (const std::filesystem::path png = im.ThumbPath(mesh); !png.empty())
+        {
+            std::error_code ec;
+            std::filesystem::remove(png, ec);
+        }
+        if (!im.givenUp)
+            im.Push(key);
+    }
+
     std::size_t MaterialPreviewHarvester::PendingCount() const
     {
         const Impl& im = *m_impl;
@@ -523,16 +637,24 @@ namespace Arcane::Editor
     // =====================================================================
     // The compile half
     // =====================================================================
-    void MaterialPreviewHarvester::Impl::Fail(Arcane::Guid id, std::string_view why)
+    void MaterialPreviewHarvester::Impl::Fail(WorkKey key, std::string_view why)
     {
-        ARC_WARN("[thumbs] no preview for material {} -- {}", id.ToString(), why);
-        failed.insert(id);
-        pending.erase(id);
-        inFlight.erase(id);
+        ARC_WARN("[thumbs] no preview for {} {} -- {}",
+                 key.subject == Subject::Mesh ? "mesh" : "material", key.id.ToString(), why);
+        failed.insert(key.id);
+        pending.erase(key);
+        inFlight.erase(key);
     }
 
-    void MaterialPreviewHarvester::Impl::StartOne(const Arcane::Guid& id, double now)
+    void MaterialPreviewHarvester::Impl::StartOne(const WorkKey& key, double now)
     {
+        // Subject::Mesh has its own branch, entirely separate from the compile
+        // pipeline below (a mesh asset compiles nothing -- this class's file header
+        // states that as the reason it needs no new stage-key slot).
+        if (key.subject == Subject::Mesh)
+            return StartOneMesh(key.id);
+
+        const Arcane::Guid& id = key.id;
         if (!services.resolveAsset)
             return Fail(id, "no asset resolver");
         const auto path = services.resolveAsset(id);
@@ -654,6 +776,84 @@ namespace Arcane::Editor
         p.data = std::move(*data);
         p.parentChain = std::move(chain);
         pending.emplace(id, std::move(p));
+    }
+
+    // ===== F2c Plan 2 Task 9: THE MESH-ASSET BRANCH =========================
+    // Resolves SYNCHRONOUSLY, like the mesh-kind MATERIAL branch just above (a mesh
+    // asset compiles nothing either) -- straight from `queue` to `ready`, with no
+    // `pending` stage at all. PER SECTION, the same material chain
+    // CollectMeshInstances resolves for a scene's MeshRenderer
+    // (Scene/MeshSubmissionSystem.hpp): slots[section.slotIndex]'s material -> the
+    // resolved baseColor/materialSlot, or white when the slot is empty/unresolved.
+    // There is no materialOverride here -- a thumbnail has no entity, only the
+    // asset's own default slots.
+    void MaterialPreviewHarvester::Impl::StartOneMesh(const Arcane::Guid& id)
+    {
+        const WorkKey key{ id, Subject::Mesh };
+        if (!services.resolveAsset)
+            return Fail(key, "no asset resolver");
+        const auto path = services.resolveAsset(id);
+        if (!path)
+            return Fail(key, "not in the asset registry");
+        const auto data = Arcane::LoadMeshAsset(*path);
+        if (!data)
+            return Fail(key, "asset failed to load");
+
+        // THE ONE entry point a host resolves a .arcmesh through (Mesh/MeshAsset.hpp's
+        // own comment on ResolveMeshData): a generated source resolves synchronously
+        // regardless of the seams below; an Imported source consults them and may
+        // answer PendingCook -- s7.1's quiet-not-a-failure outcome, treated here the
+        // same way a broken/missing artifact is (Fail, memoized), since this class has
+        // no per-frame poll of its own the way MeshCache::Request's per-frame sweep
+        // does -- Task 10's invalidation-on-cook-completion is what re-arms it.
+        const Arcane::MeshResolveResult resolved =
+            Arcane::ResolveMeshData(*data, services.meshArtifactFor, services.cookPending);
+        if (resolved.state == Arcane::MeshResolveState::PendingCook)
+            return Fail(key, "the mesh's cook has not landed yet");
+        if (resolved.state == Arcane::MeshResolveState::Failed)
+            return Fail(key, resolved.reason.empty() ? "mesh failed to build" : resolved.reason);
+        if (!resolved.mesh || resolved.mesh->sections.empty())
+            return Fail(key, "mesh has no geometry");
+
+        // Pump guarantees the vehicle exists before it calls this (meshMats is
+        // created alongside it) -- the same defensive read the mesh-kind MATERIAL
+        // branch above takes, for the identical reason.
+        if (!meshMats)
+            return Fail(key, "the preview vehicle is not available");
+
+        Ready r;
+        r.id          = id;
+        r.subject     = Subject::Mesh;
+        r.meshBounds  = resolved.bounds;
+        r.meshGeometry = std::move(*resolved.mesh);
+        r.meshInstances.reserve(r.meshGeometry.sections.size());
+        for (const Arcane::MeshSection& section : r.meshGeometry.sections)
+        {
+            Arcane::Guid slotMat{};
+            if (section.slotIndex < data->slots.size())
+                slotMat = data->slots[section.slotIndex].material;
+
+            glm::vec4 baseColor(1.0f);
+            std::uint32_t materialSlot = 0xFFFFFFFFu;
+            if (slotMat.IsValid())
+            {
+                meshMats->Request(slotMat);
+                const auto& table = meshMats->Table();
+                if (const auto it = table.find(slotMat); it != table.end())
+                {
+                    baseColor = it->second.baseColor;
+                    materialSlot = it->second.materialSlot;
+                }
+            }
+
+            Arcane::MeshInstance inst;
+            inst.baseColor    = baseColor;
+            inst.materialSlot = materialSlot;
+            inst.indexOffset  = section.indexOffset;
+            inst.indexCount   = section.indexCount;
+            r.meshInstances.push_back(inst);
+        }
+        ready.push_back(std::move(r));
     }
 
     void MaterialPreviewHarvester::OfferCompileResult(const Arcane::ShaderCompileResult& result)
@@ -804,6 +1004,15 @@ namespace Arcane::Editor
                     Arcane::Guid{ 0x53504852ull, 1ull };   // 'SPHR'
                 if (id == kSphere && !sphere.vertices.empty())
                     return { &sphere, Arcane::MeshResolveState::Ready };
+                // F2c Plan 2 Task 9: the mesh-ASSET harvest's own geometry, resolved by
+                // StartOneMesh and stashed here (Harvest, immediately before
+                // RenderFrameOffscreen) under this session-fixed synthetic guid -- must
+                // match the literal Harvest's Subject::Mesh branch mints its
+                // MeshInstance::mesh from below.
+                static const Arcane::Guid kMeshHarvest =
+                    Arcane::Guid{ 0x4D455348ull, 1ull };   // 'MESH'
+                if (id == kMeshHarvest && !meshHarvestGeometry.vertices.empty())
+                    return { &meshHarvestGeometry, Arcane::MeshResolveState::Ready };
                 return { nullptr, Arcane::MeshResolveState::Failed };
             });
 
@@ -877,7 +1086,7 @@ namespace Arcane::Editor
                     b.Rect(glm::vec2(x * kCheckerCell, y * kCheckerCell),
                            glm::vec2(kCheckerCell, kCheckerCell), light);
 
-        if (r.surface == Arcane::MaterialSurface::Sprite &&
+        if (r.subject == Subject::Material && r.surface == Arcane::MaterialSurface::Sprite &&
             r.spriteMaterial != Arcane::Batcher2D::kInvalidMaterialId)
         {
             const float s = 0.8f * extent;
@@ -894,11 +1103,13 @@ namespace Arcane::Editor
 
         std::vector<Arcane::MeshInstance> instances;
         Arcane::MeshSceneDesc meshScene;
-        if (r.surface == Arcane::MaterialSurface::Fullscreen && !r.post.passes.empty())
+        if (r.subject == Subject::Material && r.surface == Arcane::MaterialSurface::Fullscreen &&
+            !r.post.passes.empty())
         {
             vp.post = &r.post;
         }
-        else if (r.surface == Arcane::MaterialSurface::Mesh && !sphere.vertices.empty())
+        else if (r.subject == Subject::Material && r.surface == Arcane::MaterialSurface::Mesh &&
+                 !sphere.vertices.empty())
         {
             Arcane::MeshInstance mi;
             mi.mesh = Arcane::Guid{ 0x53504852ull, 1ull };   // must match SetMeshSupply above
@@ -919,6 +1130,46 @@ namespace Arcane::Editor
             meshScene.ambient = glm::vec3(0.12f);
             vp.mesh = &meshScene;
         }
+        // ===== F2c Plan 2 Task 9: A MESH ASSET, FRAMED BY ITS OWN AABB =====
+        // Unlike the mesh-kind MATERIAL branch above (a fixed sphere, a fixed
+        // camera), the geometry and the framing both vary per asset -- FrameMeshBounds
+        // (MeshImportWave.hpp) is the pure half of that, taking only the resolved
+        // bounds and a FOV. Same 35-degree FOV the sphere camera uses, so a material
+        // thumbnail and a mesh thumbnail read as one family at 64px.
+        else if (r.subject == Subject::Mesh && !r.meshGeometry.vertices.empty() &&
+                 !r.meshInstances.empty())
+        {
+            // Stashed on `this` for SetMeshSupply's lambda (installed once, in
+            // EnsureVehicle) to find when RenderFrameOffscreen below resolves
+            // kMeshHarvest -- there is only one harvest per Pump, so nothing else
+            // reads this between the assignment and the render call.
+            meshHarvestGeometry = std::move(r.meshGeometry);
+
+            constexpr float kMeshThumbFovDegrees = 35.0f;
+            const MeshThumbCamera cam = FrameMeshBounds(r.meshBounds, kMeshThumbFovDegrees);
+
+            instances = r.meshInstances;   // per-section baseColor/materialSlot/range,
+                                            // resolved by StartOneMesh; mesh/model are
+                                            // the same for every section of one asset.
+            for (Arcane::MeshInstance& inst : instances)
+            {
+                inst.mesh = Arcane::Guid{ 0x4D455348ull, 1ull };   // 'MESH' -- must match
+                                                                     // SetMeshSupply above
+                inst.model = glm::mat4(1.0f);   // unit geometry -- MeshAsset.hpp's UNIT RULE
+            }
+
+            meshScene.instances = instances;
+            meshScene.view = glm::lookAtRH(cam.eye, cam.target, glm::vec3(0.0f, 1.0f, 0.0f));
+            meshScene.projection =
+                Arcane::PerspectiveProjection(kMeshThumbFovDegrees, 1.0f, cam.nearZ, cam.farZ);
+            // The SAME light/ambient values as the mesh-kind material's sphere, left
+            // unchanged per this task's brief -- one lighting feel across every mesh
+            // thumbnail, material or asset.
+            meshScene.lightDirection = glm::vec3(0.45f, 0.7f, 0.8f);   // TOWARD the light
+            meshScene.lightColor = glm::vec3(1.0f);
+            meshScene.ambient = glm::vec3(0.12f);
+            vp.mesh = &meshScene;
+        }
 
         if (ctx->RenderFrameOffscreen(vp) != Arcane::NriGraphContext::FrameOutcome::Presented)
         {
@@ -932,11 +1183,18 @@ namespace Arcane::Editor
             // retry budget, which is what actually bounds a vehicle that fails
             // every time -- dropping alone never did, since the next Pump
             // rebuilds it immediately.
-            ARC_ERROR("[thumbs] the preview frame for material {} failed "
-                      "-- dropping the preview vehicle", r.id.ToString());
+            ARC_ERROR("[thumbs] the preview frame for {} {} failed "
+                      "-- dropping the preview vehicle",
+                      r.subject == Subject::Mesh ? "mesh" : "material", r.id.ToString());
+            meshHarvestGeometry = {};   // nothing else will read it before the next harvest
             DropVehicle();
             return HarvestOutcome::Retry;
         }
+        // The transient stash SetMeshSupply's lambda served this render from --
+        // freed here (rather than left for the next harvest to overwrite) so a
+        // large imported mesh's CPU buffer does not linger in memory for the rest
+        // of the session. A no-op when `r.subject` was Material.
+        meshHarvestGeometry = {};
 
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> rgba;
@@ -983,8 +1241,9 @@ namespace Arcane::Editor
         // pattern visible when it is one material rather than all of them.)
         if (const std::filesystem::path png = ThumbPath(r.id); !png.empty())
             if (!Arcane::WriteThumbnailPngRgba(png, w, h, std::move(rgba), 0))
-                ARC_WARN("[thumbs] could not persist the preview for material {} to '{}' "
+                ARC_WARN("[thumbs] could not persist the preview for {} {} to '{}' "
                          "-- it will be re-harvested on the next boot",
+                         r.subject == Subject::Mesh ? "mesh" : "material",
                          r.id.ToString(), png.generic_string());
 
         return HarvestOutcome::Done;
@@ -1054,21 +1313,23 @@ namespace Arcane::Editor
         {
             Impl::Ready r = std::move(im.ready.back());
             im.ready.pop_back();
-            im.inFlight.erase(r.id);
+            const WorkKey key{ r.id, r.subject };
+            im.inFlight.erase(key);
             switch (im.Harvest(r))
             {
                 case Impl::HarvestOutcome::Done:
-                    ARC_INFO("[thumbs] harvested a 64px preview for material {} ({} left)",
+                    ARC_INFO("[thumbs] harvested a 64px preview for {} {} ({} left)",
+                             r.subject == Subject::Mesh ? "mesh" : "material",
                              r.id.ToString(), PendingCount());
                     break;
                 case Impl::HarvestOutcome::Refused:
                     // Harvest already logged whatever went wrong. Memoize it so
-                    // a broken material cannot idle the device once a frame
+                    // a broken work item cannot idle the device once a frame
                     // forever.
                     im.failed.insert(r.id);
                     break;
                 case Impl::HarvestOutcome::Retry:
-                    // The VEHICLE failed, not the material. DropVehicle has
+                    // The VEHICLE failed, not the work item. DropVehicle has
                     // already re-queued every OTHER `ready` entry and taken a
                     // bite out of the retry budget; this one is the entry it
                     // could not see, because Pump popped it before the call.
@@ -1078,19 +1339,20 @@ namespace Arcane::Editor
                     if (im.givenUp)
                         im.failed.insert(r.id);
                     else
-                        im.Push(r.id);
+                        im.Push(key);
                     break;
             }
             return;   // one device idle per frame, no matter what else is due
         }
 
-        // ===== OTHERWISE START ONE (pure CPU: a JSON load + a DXC submit) =
+        // ===== OTHERWISE START ONE (pure CPU: a JSON load + a DXC submit, OR --
+        // for a Subject::Mesh item -- a JSON load + ResolveMeshData) ==========
         // It stays in `inFlight` across the move from `queue` to `pending` /
-        // `ready`, so Request() cannot re-push it and nothing is ever lost
-        // between the two containers.
-        const Arcane::Guid id = im.queue.front();
+        // `ready`, so Request()/RequestMesh() cannot re-push it and nothing is
+        // ever lost between the two containers.
+        const WorkKey key = im.queue.front();
         im.queue.pop_front();
-        im.StartOne(id, now);
+        im.StartOne(key, now);
     }
 
     // =====================================================================

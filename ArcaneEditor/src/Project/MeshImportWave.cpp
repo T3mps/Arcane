@@ -3,6 +3,11 @@
 #include <Arcane/AssetPipeline/GltfSurvey.hpp>
 #include <Arcane/Base/Log.hpp>   // ARC_WARN (extraction write failure)
 
+#include <glm/geometric.hpp>
+#include <glm/trigonometric.hpp>
+
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <optional>
@@ -337,5 +342,48 @@ namespace Arcane::Editor
             }
         }
         return matches == 1 ? unique : Arcane::Guid{};
+    }
+
+    // F2c Plan 2 Task 9 (spec s8, R5): see this function's own header declaration for
+    // the MARGIN and DEGENERATE-BOX reasoning -- both are load-bearing, not decoration.
+    MeshThumbCamera FrameMeshBounds(const Arcane::MeshBounds& bounds, float fovDegrees)
+    {
+        const glm::vec3 center = (bounds.min + bounds.max) * 0.5f;
+        // A DEGENERATE (zero-extent) box is floored to a UNIT radius here -- the header
+        // comment's own promised outcome ("a finite camera at a unit distance rather
+        // than a division by zero"), and the same 0.5m "unit sphere" scale
+        // BuildUvSphere(0.5f, ...) and MeshDocument::RenderPreview's own degenerate-
+        // bounds guard both use. Flooring `radius` itself (not just clamping `distance`
+        // after the fact) is load-bearing: with radius == 0, `distance` would ALSO be
+        // exactly 0, putting `eye` on top of `target` -- and glm::lookAtRH normalizes
+        // (target - eye), so a zero-length look vector is the NaN transform this
+        // function exists to rule out, not a merely-imprecise camera.
+        constexpr float kMinRadius = 0.5f;
+        const float radius = std::max(glm::length((bounds.max - bounds.min) * 0.5f), kMinRadius);
+
+        // 15% breathing room past a tight fit (this function's own header comment) --
+        // a box that exactly fills the frame reads as cropped at 64px.
+        constexpr float kMargin = 0.15f;
+        const float halfFovRad = glm::radians(fovDegrees) * 0.5f;
+        const float distance = radius / std::sin(halfFovRad) * (1.0f + kMargin);
+
+        // The mocks' own three-quarter direction (MaterialPreviewHarvester's sphere
+        // camera), so a mesh thumbnail and a material thumbnail read as one family.
+        const glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.6f, 1.0f));
+
+        MeshThumbCamera cam;
+        cam.eye    = center + dir * distance;
+        cam.target = center;
+
+        // Framed around the bounding SPHERE (a safe over-estimate of the box for any
+        // view direction), with a 1.5x radius margin on each side so the box's own
+        // corners -- which sit further from the centre than the sphere's silhouette
+        // radius the camera is aimed along -- are never clipped. The 0.01f floor keeps
+        // this positive even at a wide FOV, where `distance` (shrinking as sin(fov/2)
+        // grows) can fall below `radius * 1.5f` -- unrelated to the radius-flooring
+        // above, which only rules out a degenerate BOX, not a wide-angle CALLER.
+        cam.nearZ = std::max(0.01f, distance - radius * 1.5f);
+        cam.farZ  = std::max(cam.nearZ + 0.01f, distance + radius * 1.5f);
+        return cam;
     }
 }

@@ -1,19 +1,31 @@
 #pragma once
 
-// MaterialPreviewHarvester (asset-manager redesign, Plan 1 Task 8): LIVE 64px
-// thumbnails of real .arcmat materials for the Assets panel -- real shaded
-// pixels of the actual material, not a kind icon.
+// MaterialPreviewHarvester (asset-manager redesign, Plan 1 Task 8; widened F2c Plan 2
+// Task 9): LIVE 64px thumbnails of real .arcmat MATERIALS and, from F2c, real .arcmesh
+// MESH ASSETS, for the Assets panel -- real shaded pixels of the actual asset, not a
+// kind icon. The class name stays (renaming it would touch every call site for no
+// behavioural gain); its charter is what widened.
 //
 // ===== THE SHAPE, IN ONE PARAGRAPH ==================================
 // One LAZY 64x64 offscreen NriGraphContext (the same vehicle
 // ShaderEditorDocument::EnsureGraphPreviewContext builds for its own preview,
-// at 64 instead of 512), one device-less Batcher2D, and a LIFO queue of
-// material Guids. Pump() takes AT MOST ONE material per call, renders the
-// shader editor's quad-on-checkerboard (or a lit sphere, for a mesh material),
-// captures it with ReadCapture, hands the tight RGBA to the CHROME context's
-// NriTextureCache under a synthetic per-material Guid, and writes the same
-// bytes to <project>/Saved/Thumbnails/<guid>.png. The panel then draws
-// ThumbTextureId(material) like any other ImGui image.
+// at 64 instead of 512), one device-less Batcher2D, and ONE SHARED LIFO queue
+// of {Guid, Subject} work items -- a material or a mesh asset, never two
+// separate queues (a burst of one subject must not starve the other). Pump()
+// takes AT MOST ONE item per call, renders the shader editor's
+// quad-on-checkerboard (or a lit sphere, for a mesh-kind material), or --
+// for a mesh ASSET -- the mesh's own geometry framed by its AABB
+// (MeshImportWave.hpp's FrameMeshBounds), captures it with ReadCapture, hands
+// the tight RGBA to the CHROME context's NriTextureCache under a synthetic
+// per-asset Guid, and writes the same bytes to
+// <project>/Saved/Thumbnails/<guid>.png. The panel then draws
+// ThumbTextureId(id) like any other ImGui image.
+//
+// A MESH thumbnail compiles NOTHING (a mesh-kind .arcmat has no snippet, and
+// the mesh path was already the harvester's one compile-free branch), so it
+// needs no new stage-key slot in the process-wide scheme documented below --
+// not needing to extend that table is the evidence this belongs in the same
+// class rather than a second harvester competing for the same device idle.
 //
 // ===== WHY ONE PER PUMP, AND WHY THE PUMP MUST EARLY-OUT ============
 // ReadCapture idles the whole device (NriGraphContext::ReadCapture's own
@@ -83,6 +95,7 @@ namespace Arcane
     class ShaderSourceProvider;
     struct PixelData;
     struct ShaderCompileResult;
+    struct LoadedClientMesh;   // F2c Plan 2 Task 9: Services::meshArtifactFor's payload
 }
 
 namespace Arcane::Editor
@@ -93,6 +106,16 @@ namespace Arcane::Editor
         using ResolveAssetFn =
             std::function<std::optional<std::filesystem::path>(const Arcane::Guid&)>;
         using PixelSupplyFn = std::function<const Arcane::PixelData*(const Arcane::Guid&)>;
+        // F2c Plan 2 Task 9: the SAME two seams MeshCache::Services forwards from the
+        // Assets facade verbatim (Render/MeshCache.hpp's own comment on why no wrapper
+        // is needed) -- Guid -> the cooked mesh artifact, and Guid -> "is a cook
+        // plausibly still pending". Only an Imported .arcmesh's resolve ever consults
+        // these; a generated primitive needs neither, so leaving both unset (as
+        // EditorApp does until Task 10 wires the Browser panel's calls) is a safe,
+        // fully guarded no-op -- it degrades a mesh-asset request to "no cooked
+        // geometry yet" rather than crashing.
+        using MeshArtifactSupplyFn = std::function<const Arcane::LoadedClientMesh*(const Arcane::Guid&)>;
+        using CookPendingFn        = std::function<bool(const Arcane::Guid&)>;
 
         struct Services
         {
@@ -129,6 +152,11 @@ namespace Arcane::Editor
             // persistence this session; harvests still work, they just are
             // not written or re-read).
             std::function<std::filesystem::path()> thumbnailDir;
+
+            // F2c Plan 2 Task 9: the mesh-ASSET branch's own resolve seams -- see
+            // MeshArtifactSupplyFn/CookPendingFn's own comments above.
+            MeshArtifactSupplyFn meshArtifactFor;
+            CookPendingFn        cookPending;
         };
 
         explicit MaterialPreviewHarvester(Services services);
@@ -152,6 +180,17 @@ namespace Arcane::Editor
         // thumbnail keeps being served until the new one lands (last-good,
         // the same discipline SpriteMaterialCache::Invalidate states).
         void Invalidate(const Arcane::Guid& material);
+
+        // MESH ASSET counterparts of Request/Invalidate above (F2c Plan 2 Task 9,
+        // spec s8/R5) -- mirror them exactly, idempotent, LIFO push-front, clearing
+        // the failed memo, keeping the last-good thumbnail served until the new one
+        // lands. `mesh` shares this class's ONE queue/inFlight/failed/entries space
+        // with material Guids (asset Guids are unique across the whole registry
+        // regardless of kind, so the two can never collide) -- what actually
+        // distinguishes a mesh work item from a material one is the Subject tag
+        // carried alongside its Guid in the shared queue, not a second queue.
+        void RequestMesh(const Arcane::Guid& mesh);
+        void InvalidateMesh(const Arcane::Guid& mesh);
 
         // PROJECT OPEN: load every already-harvested PNG straight into the
         // pixel supply, and queue a harvest ONLY for a material with no PNG or

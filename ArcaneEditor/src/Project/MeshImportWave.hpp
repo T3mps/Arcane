@@ -16,6 +16,9 @@
 
 #include <Arcane/Mesh/MeshAsset.hpp>   // MeshSlot; transitively LoadedClientMesh/MeshSectionView
                                         // (ArtifactReader.hpp) -- Task 14's slot reconciliation
+#include <Arcane/Render/MeshBuilder.hpp>   // Arcane::MeshBounds -- F2c Plan 2 Task 9's FrameMeshBounds
+
+#include <glm/glm.hpp>
 
 #include <cstddef>
 #include <filesystem>
@@ -212,4 +215,23 @@ namespace Arcane::Editor
         }
         return n == 1 ? found : std::nullopt;
     }
+
+    // ---- F2c Plan 2 Task 9 (spec s8, R5): mesh-thumbnail framing --------------------
+
+    // The framing math, pulled out PURE so it is testable without a device -- the same
+    // split MeshResidencyBudget takes from NriMeshBufferCache, and for the same reason.
+    // Given a local-space AABB and a vertical FOV, where does the camera sit to frame
+    // the whole box with a small margin, looking at its centre?
+    //
+    // MARGIN, not a tight fit: a box that exactly fills the frame reads as cropped at
+    // thumbnail size, and the browser draws these at 64px. 15% is the mocks' own feel.
+    //
+    // A DEGENERATE BOX (a zero-extent AABB -- ComputeMeshBounds' documented answer for
+    // an empty mesh) yields a finite camera at a unit distance rather than a division
+    // by zero. An empty mesh has nothing to frame, and the harvest will produce an
+    // empty picture, which is the honest result -- but it must not produce a NaN
+    // transform, which is undefined behaviour on the GPU rather than a blank image.
+    struct MeshThumbCamera { glm::vec3 eye; glm::vec3 target; float nearZ; float farZ; };
+    [[nodiscard]] MeshThumbCamera FrameMeshBounds(const Arcane::MeshBounds& bounds,
+                                                  float fovDegrees);
 }
