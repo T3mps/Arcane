@@ -326,6 +326,27 @@ namespace Arcane::Editor
         return "Other";
     }
 
+    // Graph-node accent packed 0xRRGGBB. The five rows asset-manager spec §11.3
+    // pins, plus Model which F2c Plan 2 Task 8 adds -- that value EXTENDS the
+    // table rather than quoting it. 0 means "no row": the graph panel falls
+    // back to Theme::kGrab (#9a9a9a).
+    [[nodiscard]] inline std::uint32_t KindAccentRgb(AssetKind kind) noexcept
+    {
+        switch (kind)
+        {
+            case AssetKind::Texture:  return 0xb06a5bu;
+            case AssetKind::Material: return 0x6a9b5bu;
+            case AssetKind::Mesh:     return 0x5b9bb0u;
+            case AssetKind::Sprite:   return 0x9b5bb0u;
+            case AssetKind::Scene:    return 0xb09b5bu;
+            // F2c Plan 2 Task 8: extends §11.3. Adjacent to Mesh's #5b9bb0 in
+            // the same muted family (a Model and its Mesh are kin). Distinct
+            // from Sprite's #9b5bb0.
+            case AssetKind::Model:    return 0x5b7fb0u;
+            default:                  return 0;
+        }
+    }
+
     // An asset's cook-pipeline status, as the panel shows it (row markers +
     // the digest bar). Textures/sprites are the only kinds with a real cook
     // pipeline today; everything else defaults to Cooked (CookStateOf, Task 5)

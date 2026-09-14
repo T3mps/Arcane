@@ -605,3 +605,39 @@ TEST_CASE("AssetGraphViewModel Clear() empties nodes, edges and realNodeCount", 
     CHECK(vm.edges.empty());
     CHECK(vm.realNodeCount == 0);
 }
+
+TEST_CASE("AssetGraphViewModel: a Model node wears a distinct accent, not grab-gray",
+          "[editor]")
+{
+    // F2c Plan 2 Task 8: KindAccentRgb extends §11.3 with Model #5b7fb0.
+    // The graph panel's KindAccentColor maps 0 to Theme::kGrab; a non-zero
+    // value distinct from Mesh and Sprite is what keeps a Model node from
+    // collapsing into the unnamed-kind gray.
+    CHECK(KindAccentRgb(AssetKind::Model) == 0x5b7fb0u);
+    CHECK(KindAccentRgb(AssetKind::Model) != 0);
+    CHECK(KindAccentRgb(AssetKind::Model) != KindAccentRgb(AssetKind::Mesh));
+    CHECK(KindAccentRgb(AssetKind::Model) != KindAccentRgb(AssetKind::Sprite));
+    CHECK(KindAccentRgb(AssetKind::Data) == 0);   // still the grab-gray fallback
+
+    const auto model = ParseGuid("7e5e0008-0001-4001-8001-000000000001");
+    const auto mesh  = ParseGuid("7e5e0008-0001-4001-8001-000000000002");
+
+    std::unordered_map<Arcane::Guid, AssetPanelEntry> entries;
+    entries[model] = MakeEntry(model, "prop", AssetKind::Model);
+    entries[mesh]  = MakeEntry(mesh, "prop-mesh", AssetKind::Mesh);
+
+    AssetReferenceIndex index;
+    index.Update(model, true, Refs({}));
+    index.Update(mesh, true, Refs({ { model, Arcane::AssetRefKind::DerivesFrom } }));
+
+    GraphBuildInput in;
+    in.entries = &entries;
+    in.index = &index;
+
+    AssetGraphViewModel vm;
+    vm.Build(in);
+
+    const GraphNode* n = FindReal(vm.nodes, model);
+    REQUIRE(n != nullptr);
+    CHECK(n->kind == AssetKind::Model);
+}

@@ -195,6 +195,9 @@ namespace Arcane::Editor
                 case AssetKind::Source:
                     return true;
                 default:
+                    // Model: imported, never created -- no Create menu entry
+                    // (s8's F2c/F4 line). Same for Texture/Data/Audio/Font/
+                    // Diagnostic/Other.
                     return false;
             }
         }
@@ -574,7 +577,8 @@ namespace Arcane::Editor
         {
             ImGui::PushID(e.guid.ToString().c_str());
 
-            const bool hasChildren = (e.kind == AssetKind::Texture) && !e.derivedChildren.empty();
+            const bool hasChildren = (e.kind == AssetKind::Texture || e.kind == AssetKind::Model)
+                                  && !e.derivedChildren.empty();
             const bool childrenOpen = hasChildren && ChildrenAreOpen(state, e.guid);
             // Nested-groups review fix round 1, Important 2's consistency
             // twin (not itself named by the review, but the identical bug

@@ -232,17 +232,25 @@ namespace Arcane::Editor
             }
 
             // An instance material carries a `parent` DerivesFrom -- see
-            // ListAssetReferences's own doc comment (Assets.hpp). Only
-            // meaningful for materials: a folding sprite's DerivesFrom names a
-            // TEXTURE, never another material.
+            // ListAssetReferences's own doc comment (Assets.hpp). A folding
+            // sprite's DerivesFrom names a TEXTURE; a folding companion
+            // .arcmesh's DerivesFrom names a MODEL (F2c s4.2/s8). Never
+            // another material, never an arbitrary kind.
             e.isInstance = (e.kind == AssetKind::Material) && (derivesFromCount > 0);
 
-            // Fold: exactly one DerivesFrom, and it resolves to a texture.
+            // Fold: exactly one DerivesFrom, and it resolves to a Texture or
+            // a Model. Whitelist, not "anything with one DerivesFrom" -- a
+            // fold under an arbitrary asset would put a mesh inside a scene
+            // row.
             if (derivesFromCount == 1)
             {
                 const auto itT = live.find(derivesFromTarget);
-                if (itT != live.end() && AssetKindOf(*itT->second) == AssetKind::Texture)
-                    e.foldedUnder = derivesFromTarget;
+                if (itT != live.end())
+                {
+                    const AssetKind targetKind = AssetKindOf(*itT->second);
+                    if (targetKind == AssetKind::Texture || targetKind == AssetKind::Model)
+                        e.foldedUnder = derivesFromTarget;
+                }
             }
 
             // Sliced: a sprite that did NOT fold but still names a texture via

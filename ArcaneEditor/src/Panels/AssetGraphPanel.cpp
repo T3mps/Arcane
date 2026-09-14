@@ -315,25 +315,24 @@ namespace Arcane::Editor
         // the theme, and the kPillAmberBorder precedent (EditorWidgets.cpp:305)
         // covers a spec-pinned hex with no token.
         //
-        // The five rows §11.3 pins are the only five it pins. Every OTHER
-        // kind -- Audio/Font/Data/Diagnostic/Other -- gets the theme's
-        // neutral grab gray rather than an invented hue. That fallback is
-        // also what a SYNTHETIC OVERFLOW node lands on: it carries
+        // KindAccentRgb (AssetPanelModel.hpp) is the table: §11.3's five rows
+        // plus Model, which F2c Plan 2 Task 8 adds as an extension rather than
+        // a quotation. Every OTHER kind -- Audio/Font/Data/Diagnostic/Other --
+        // returns 0 and lands on the theme's neutral grab gray. That fallback
+        // is also what a SYNTHETIC OVERFLOW node lands on: it carries
         // AssetKind::Other ALWAYS, never its anchor's kind, precisely so this
         // table cannot paint it as one more instance of whatever it
         // overflowed from (AssetGraphViewModel.hpp's own field comment).
         ImVec4 KindAccentColor(AssetKind kind) noexcept
         {
-            switch (kind)
-            {
-                case AssetKind::Texture:  return ImVec4(0.6902f, 0.4157f, 0.3569f, 1.0f); // #b06a5b
-                case AssetKind::Material: return ImVec4(0.4157f, 0.6078f, 0.3569f, 1.0f); // #6a9b5b
-                case AssetKind::Mesh:     return ImVec4(0.3569f, 0.6078f, 0.6902f, 1.0f); // #5b9bb0
-                case AssetKind::Sprite:   return ImVec4(0.6078f, 0.3569f, 0.6902f, 1.0f); // #9b5bb0
-                case AssetKind::Scene:    return ImVec4(0.6902f, 0.6078f, 0.3569f, 1.0f); // #b09b5b
-                default: break;
-            }
-            return Theme::kGrab;   // #9a9a9a -- no §11.3 row, so no invented hue
+            const std::uint32_t rgb = KindAccentRgb(kind);
+            if (rgb == 0)
+                return Theme::kGrab;   // #9a9a9a -- no row, so no invented hue
+            const float s = 1.0f / 255.0f;
+            return ImVec4(static_cast<float>((rgb >> 16) & 0xff) * s,
+                          static_cast<float>((rgb >>  8) & 0xff) * s,
+                          static_cast<float>( rgb        & 0xff) * s,
+                          1.0f);
         }
 
         // The accent a node actually WEARS -- its kind hue, except that a

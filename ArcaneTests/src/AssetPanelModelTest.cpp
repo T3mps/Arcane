@@ -2282,3 +2282,111 @@ TEST_CASE("AssetPanelModel HealthCounts.unused feeds the digest numbers", "[edit
 
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("asset model: a companion .arcmesh folds under its Model source", "[editor]")
+{
+    // s4.2/s8: the sprite-under-texture foldedUnder machinery, reused with ZERO new
+    // code -- all it needed was the DerivesFrom edge (Plan 1 Task 12) and a fold
+    // predicate that accepts a Model target as well as a Texture one.
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_model_fold_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    WriteFile(dir, "prop.glb", "not a real glb, just bytes");
+    WriteFile(dir, "prop.arcmesh",
+             R"({"id":"e1000001-0001-4001-8001-000000000001","type":"mesh","name":"Prop"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const auto all = registry.All();
+
+    const Arcane::Guid modelGuid = GuidForPath(all, "game://prop.glb");
+    const Arcane::Guid meshGuid  = *Arcane::Guid::FromString("e1000001-0001-4001-8001-000000000001");
+    REQUIRE(modelGuid.IsValid());
+
+    FakeProviders fake;
+    fake.refsByGuid[meshGuid] = { { modelGuid, Arcane::AssetRefKind::DerivesFrom } };
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
+
+    const AssetPanelEntry* mesh  = model.Find(meshGuid);
+    const AssetPanelEntry* modelE = model.Find(modelGuid);
+    REQUIRE(mesh);
+    REQUIRE(modelE);
+    CHECK(mesh->kind == AssetKind::Mesh);
+    CHECK(modelE->kind == AssetKind::Model);
+    CHECK(mesh->foldedUnder == modelGuid);
+    REQUIRE(modelE->derivedChildren.size() == 1u);
+    CHECK(modelE->derivedChildren[0] == meshGuid);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("asset model: a .arcmesh deriving from something that is NOT a Model or a"
+          " Texture does not fold", "[editor]")
+{
+    // The predicate stays a whitelist, not "anything with one DerivesFrom" -- a fold
+    // under an arbitrary asset would put a mesh inside a scene row.
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_mesh_mat_nofold_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "materials");
+
+    WriteFile(dir / "materials", "body.arcmat",
+             R"({"id":"e2000001-0001-4001-8001-000000000001","type":"material","kind":"mesh"})");
+    WriteFile(dir, "body.arcmesh",
+             R"({"id":"e2000001-0001-4001-8001-000000000002","type":"mesh","name":"Body"})");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    const Arcane::Guid matId  = *Arcane::Guid::FromString("e2000001-0001-4001-8001-000000000001");
+    const Arcane::Guid meshId = *Arcane::Guid::FromString("e2000001-0001-4001-8001-000000000002");
+
+    FakeProviders fake;
+    fake.refsByGuid[meshId] = { { matId, Arcane::AssetRefKind::DerivesFrom } };
+
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
+
+    const AssetPanelEntry* mesh = model.Find(meshId);
+    REQUIRE(mesh);
+    CHECK_FALSE(mesh->foldedUnder.IsValid());
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("asset model: an unreferenced Model reports as unused", "[editor]")
+{
+    // IsUnusedEligible(Model) was set in Plan 1 Task 9; this is the end-to-end half --
+    // a .glb nobody imports (no companion) shows in the Unreferenced card, exactly
+    // like a texture no sprite uses.
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_unused_model_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    WriteFile(dir, "lonely.glb", "not a real glb, just bytes");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 1);
+    const auto all = registry.All();
+    const Arcane::Guid modelGuid = GuidForPath(all, "game://lonely.glb");
+    REQUIRE(modelGuid.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, fake.Make()));
+
+    const AssetPanelEntry* entry = model.Find(modelGuid);
+    REQUIRE(entry);
+    CHECK(entry->kind == AssetKind::Model);
+    CHECK(entry->unused);
+    CHECK(ContainsGuid(model.UnusedGuids(), modelGuid));
+
+    fs::remove_all(dir, ec);
+}
