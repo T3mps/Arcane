@@ -373,6 +373,23 @@ namespace Arcane::Editor
     // policy rules, and both are unit-testable without a model.
     [[nodiscard]] bool IsUnusedEligible(AssetKind kind);
 
+    // Which kinds route through MaterialPreviewHarvester for a REAL rendered
+    // thumbnail rather than falling back to their kind icon (F2c Plan 2 Task
+    // 10, spec s8): exactly Material and Mesh -- both are "the thing with
+    // geometry/slots and a resolved appearance" the harvester knows how to
+    // render. Texture is NOT eligible here -- it resolves its OWN artifact
+    // thumbnail directly (EditorApp's resolveAssetThumb texture branch), never
+    // through the harvester, so routing it through this predicate too would
+    // be a second, competing answer for the same guid. Model is deliberately
+    // excluded as well: it has no material assignment of its own -- its
+    // appearance IS its companion .arcmesh's, and harvesting both would spend
+    // two device idles on two near-identical pictures (the ordinary shape has
+    // the companion right beneath it, wearing the picture). Everything else
+    // has nothing to render a picture of. Sits beside CookStateOf/
+    // IsUnusedEligible on purpose -- the model's third small, pure per-kind
+    // policy rule, unit-testable without a model or a harvester.
+    [[nodiscard]] bool ThumbnailEligible(AssetKind kind);
+
     // Per-guid facade queries the model needs, injected by the host (EditorApp,
     // Task 5) so this unit never touches Arcane::Assets/Arcane::Project
     // directly. A left-empty (default-constructed std::function) callable is

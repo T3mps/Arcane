@@ -169,8 +169,8 @@ namespace Arcane::Editor
         // 10). A no-op once the material has a thumbnail, is already queued,
         // is in flight, or has failed, so it costs one hash lookup in the
         // steady state. Pushes to the FRONT of the queue (LIFO), so the one
-        // harvest this frame pays for is always something on screen -- UE's
-        // thumbnail pool is LIFO for exactly that reason.
+        // harvest this frame pays for is always something on screen: a FIFO
+        // queue would instead spend it on whatever was scrolled past first.
         void Request(const Arcane::Guid& material);
 
         // THE FORCED FORM: this material's pixels are now WRONG (it was saved,
@@ -193,9 +193,18 @@ namespace Arcane::Editor
         void InvalidateMesh(const Arcane::Guid& mesh);
 
         // PROJECT OPEN: load every already-harvested PNG straight into the
-        // pixel supply, and queue a harvest ONLY for a material with no PNG or
-        // whose .arcmat mtime is newer than its PNG's. Pure CPU -- it is
-        // called from a boot stage, strictly before any device exists.
+        // pixel supply, and queue a harvest ONLY for an asset with no PNG or
+        // whose SOURCE (.arcmat or, F2c Plan 2 Task 10, .arcmesh) mtime is
+        // newer than its PNG's. `materials` -- the parameter keeps its
+        // original name, now carrying mesh guids too, exactly as EditorApp's
+        // one call site widens it -- needs no Subject alongside each Guid:
+        // the "usable" PNG-load half of this function doesn't care what kind
+        // produced the picture, and the stale/missing half determines the
+        // right dispatch itself, off the resolved source path's own
+        // extension (Subject is this .cpp's private dispatch tag; a second
+        // public parameter here would duplicate what the extension already
+        // says). Pure CPU -- it is called from a boot stage, strictly before
+        // any device exists.
         void PrimeFromDisk(const std::vector<Arcane::Guid>& materials);
 
         // Offered every drained compile result by the process's ONE drain

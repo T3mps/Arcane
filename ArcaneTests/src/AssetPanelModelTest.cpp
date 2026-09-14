@@ -1903,6 +1903,42 @@ TEST_CASE("IsUnusedEligible: exactly Texture/Material/Sprite/Mesh/Model (spec s9
     CHECK(eligible == 5);
 }
 
+// F2c Plan 2 Task 10 (spec s8): the pure predicate behind the mesh-thumbnail
+// wiring's request/prime/draw gate. EXHAUSTIVE over AssetKind for the same
+// reason IsUnusedEligible's own test above is -- a newly added kind must fail
+// this test rather than silently default into (or out of) eligibility.
+// Material and Mesh are both "the thing with geometry/slots and a resolved
+// appearance" the harvester can actually render; Model is the one row that
+// LOOKS like it should qualify (it is imported geometry too) but does not --
+// its own header comment (AssetPanelModel.hpp) explains why: no material
+// assignment of its own, so harvesting it would duplicate its companion
+// .arcmesh's picture for a second device idle. Texture is also false here --
+// it resolves its OWN artifact thumbnail directly, never through this
+// predicate's harvester.
+TEST_CASE("ThumbnailEligible: exactly Material and Mesh (F2c Plan 2 Task 10, spec s8)",
+          "[editor]")
+{
+    CHECK(ThumbnailEligible(AssetKind::Material));
+    CHECK(ThumbnailEligible(AssetKind::Mesh));
+
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Model));     // wears its companion's picture
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Texture));   // resolves its own artifact thumb
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Audio));
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Font));
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Data));
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Scene));
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Sprite));
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Diagnostic));
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Source));
+    CHECK_FALSE(ThumbnailEligible(AssetKind::Other));
+
+    int eligible = 0;
+    for (int i = 0; i < kAssetKindCount; ++i)
+        if (ThumbnailEligible(static_cast<AssetKind>(i)))
+            ++eligible;
+    CHECK(eligible == 2);
+}
+
 // (1) Eligibility: spec s9.1's list is EXACTLY {Texture, Material, Sprite,
 // Mesh}. Scene/Data/Audio/Font/Diagnostic/Other are exempt -- their consumers
 // are game code the index cannot see, so a zero-inbound one is never accused.

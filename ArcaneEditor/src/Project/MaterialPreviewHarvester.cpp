@@ -24,8 +24,10 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <deque>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -204,9 +206,8 @@ namespace Arcane::Editor
         // Task 9): Task 10's Browse draw pushes every VISIBLE un-thumbed material or
         // mesh each frame, so the newest push is the one on screen right now -- LIFO
         // is what makes the frame's single harvest land on something the user is
-        // looking at (UE's thumbnail pool is LIFO for exactly this), REGARDLESS of
-        // which subject it is -- a second, subject-specific queue would let a burst
-        // of one starve the other.
+        // looking at, REGARDLESS of which subject it is -- a second, subject-specific
+        // queue would let a burst of one starve the other.
         std::deque<WorkKey> queue;
         std::unordered_map<WorkKey, Pending, WorkKeyHash> pending;
         std::vector<Ready> ready;                    // also LIFO (back = newest)
@@ -589,6 +590,11 @@ namespace Arcane::Editor
         {
             if (!id.IsValid())
                 continue;
+            // Resolved ONCE per guid, up front -- both the staleness check
+            // below and (F2c Plan 2 Task 10) the stale/missing dispatch at
+            // the bottom of this loop need it, and it is one cheap
+            // registry lookup either way.
+            const auto src = im.services.resolveAsset(id);
             const std::filesystem::path png = im.ThumbPath(id);
             bool usable = !png.empty();
             if (usable)
@@ -599,13 +605,17 @@ namespace Arcane::Editor
                 {
                     usable = false;   // no PNG at all
                 }
-                else if (const auto src = im.services.resolveAsset(id))
+                else if (src)
                 {
                     std::error_code srcEc;
                     const auto srcTime = std::filesystem::last_write_time(*src, srcEc);
-                    // A .arcmat NEWER than its PNG means the thumbnail is of
-                    // a material that no longer exists. An unreadable source
-                    // is not a reason to throw a good PNG away.
+                    // A source (.arcmat OR .arcmesh) NEWER than its PNG means
+                    // the thumbnail is of an asset that no longer exists in
+                    // that shape -- a slot reassignment moves an .arcmesh's
+                    // OWN mtime exactly like an edit moves a material's, so
+                    // this same comparison covers both without asking which
+                    // kind `id` is. An unreadable source is not a reason to
+                    // throw a good PNG away.
                     if (!srcEc && srcTime > pngTime)
                         usable = false;
                 }
@@ -628,9 +638,25 @@ namespace Arcane::Editor
                 usable = false;   // decode failed -- fall through and re-harvest
             }
             ++staleOrMissing;
-            im.Push(id);
+            // F2c Plan 2 Task 10: `materials` now carries the project's mesh
+            // guids too (EditorApp's one call site widens its filter), so a
+            // stale/missing entry has to dispatch through the RIGHT subject
+            // rather than always widening to Subject::Material the way a bare
+            // Guid implicitly would (WorkKey's own comment). The resolved
+            // source's extension is the answer -- Subject is this .cpp's own
+            // private dispatch tag, so asking the caller to carry it alongside
+            // each Guid would just duplicate what the extension already says.
+            bool isMesh = false;
+            if (src)
+            {
+                std::string ext = src->extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                isMesh = (ext == ".arcmesh");
+            }
+            im.Push(isMesh ? WorkKey{ id, Subject::Mesh } : WorkKey{ id });
         }
-        ARC_INFO("[thumbs] material previews: {} loaded from disk, {} queued for harvest",
+        ARC_INFO("[thumbs] previews: {} loaded from disk, {} queued for harvest",
                  loaded, staleOrMissing);
     }
 

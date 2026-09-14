@@ -910,23 +910,38 @@ namespace Arcane::Editor
                 tex = guid;
             else if (e->kind == Arcane::Editor::AssetKind::Sprite)
                 tex = FirstTextureRefOf(guid);
-            else if (e->kind == Arcane::Editor::AssetKind::Material)
+            else if (Arcane::Editor::ThumbnailEligible(e->kind))
             {
                 // Task 8: a REAL rendered preview, not a texture lookup --
-                // 0 until this material has been harvested (the caller falls
+                // 0 until this asset has been harvested (the caller falls
                 // back to the kind icon for that window). Task 10 (controller
                 // ruling, 2026-09-06): on a miss, ALSO push a harvest request
                 // right here -- "visible" is exactly what the Browse draw's
                 // clipper resolved this frame, this seam is the one place
-                // every material-thumb consumer (row, tooltip, later the
-                // preview pane) funnels through, and Request() is a cheap
-                // no-op once queued/harvested/given-up (dedupe + give-up
-                // latch, MaterialPreviewHarvester.hpp's own doc comment), so
-                // calling it from a tooltip/peek resolve too is harmless.
+                // every thumbnail consumer (row, tooltip, later the preview
+                // pane) funnels through, and Request()/RequestMesh() are
+                // cheap no-ops once queued/harvested/given-up (dedupe +
+                // give-up latch, MaterialPreviewHarvester.hpp's own doc
+                // comment), so calling either from a tooltip/peek resolve too
+                // is harmless.
+                //
+                // F2c Plan 2 Task 10 (spec s8): AssetKind::Model is
+                // deliberately NOT ThumbnailEligible -- it has no material
+                // assignment of its own, its appearance IS its companion
+                // .arcmesh's, and harvesting both would spend two device
+                // idles on two near-identical pictures (the ordinary shape
+                // has the companion right beneath it, wearing the picture).
+                // A Model row therefore falls straight through to the
+                // kind-icon fallback below, `tex` never set, same as any
+                // other ineligible kind.
                 if (!m_materialThumbs)
                     return 0;
                 const std::uint64_t id = m_materialThumbs->ThumbTextureId(guid);
-                if (id == 0)
+                if (id != 0)
+                    return id;
+                if (e->kind == Arcane::Editor::AssetKind::Mesh)
+                    m_materialThumbs->RequestMesh(guid);
+                else
                     m_materialThumbs->Request(guid);
                 return id;
             }
@@ -1213,12 +1228,22 @@ namespace Arcane::Editor
             // touches no device and no background job at all. The harvester's
             // own upload is lazy -- ThumbTextureId resolves the texture on
             // first ask, which is necessarily after CreateGraphVehicles.
+            //
+            // F2c Plan 2 Task 10 (spec s8): `materials` now ALSO carries the
+            // project's ThumbnailEligible(Mesh) guids -- PrimeFromDisk's own
+            // doc comment (MaterialPreviewHarvester.hpp) is what tells a
+            // stale/missing mesh apart from a stale/missing material, off the
+            // resolved source's extension, so a bare guid list is all this
+            // call site needs to hand over. Model is not in this list: it is
+            // not ThumbnailEligible (see resolveAssetThumb's Model comment
+            // just above), so priming it would only ever queue a harvest this
+            // asset can never serve a picture for.
             if (m_materialThumbs)
             {
                 std::vector<Arcane::Guid> materials;
                 for (const Arcane::Editor::AssetEntry& e :
                      Arcane::Editor::BuildAssetEntries(proj->Registry()))
-                    if (e.kind == Arcane::Editor::AssetKind::Material)
+                    if (Arcane::Editor::ThumbnailEligible(e.kind))
                         materials.push_back(e.guid);
                 m_materialThumbs->PrimeFromDisk(materials);
             }

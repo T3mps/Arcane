@@ -114,6 +114,17 @@ namespace Arcane::Editor
             || kind == AssetKind::Model;
     }
 
+    bool ThumbnailEligible(AssetKind kind)
+    {
+        // See this function's own header comment (AssetPanelModel.hpp) for the
+        // full reasoning: Material and Mesh are both real, resolvable
+        // appearances MaterialPreviewHarvester knows how to render; Texture
+        // resolves its own artifact thumbnail directly, never through the
+        // harvester, and Model wears its companion .arcmesh's picture rather
+        // than earning a second one.
+        return kind == AssetKind::Material || kind == AssetKind::Mesh;
+    }
+
     void AssetPanelModel::MarkDirty(const Arcane::Guid& id)
     {
         if (!m_allDirty)

@@ -281,8 +281,26 @@ namespace Arcane::Editor
                 return;
             std::unordered_map<Arcane::Guid, std::vector<Arcane::Guid>> children;
             std::unordered_set<Arcane::Guid> materials;
+            // F2c Plan 2 Task 10 (spec s8, Step 5.3/5.4): the ONE HOP this same
+            // walk now reaches beyond materials -- every MESH slot that names a
+            // material, keyed by the material it names. Built in the SAME
+            // registry pass as `children`/`materials` above (a mesh's own
+            // References edges are Assets::ListAssetReferences' .arcmesh
+            // branch, read through the identical `providers.refsFor` seam), so
+            // this reuses the walk rather than standing up a second index --
+            // exactly the reuse the brief asks for.
+            std::unordered_map<Arcane::Guid, std::vector<Arcane::Guid>> meshesByMaterial;
             for (const Arcane::Editor::AssetEntry& e : Arcane::Editor::BuildAssetEntries(registry))
             {
+                if (e.kind == Arcane::Editor::AssetKind::Mesh)
+                {
+                    const auto refs = providers.refsFor(e.guid);
+                    if (refs)
+                        for (const Arcane::AssetRef& r : *refs)
+                            if (r.kind == Arcane::AssetRefKind::References && r.target.IsValid())
+                                meshesByMaterial[r.target].push_back(e.guid);
+                    continue;
+                }
                 if (e.kind != Arcane::Editor::AssetKind::Material)
                     continue;
                 materials.insert(e.guid);
@@ -328,6 +346,26 @@ namespace Arcane::Editor
                         thumbs.Invalidate(child);
                         frontier.push_back(child);
                     }
+            }
+
+            // F2c Plan 2 Task 10 (spec s8, Step 5.3/5.4): `seen` IS the full
+            // set of materials this call just invalidated -- the seed(s) plus
+            // every derived instance below them -- so a mesh naming ANY of
+            // them (a base or one of its instances) has the wrong picture too,
+            // exactly like a derived material instance does. This is what
+            // makes a material save (event 3) AND a texture cook (event 4,
+            // which seeds THIS SAME walk through materials that reference the
+            // cooked texture) both reach the meshes wearing that material one
+            // hop further than this function used to stop.
+            std::unordered_set<Arcane::Guid> meshesInvalidated;
+            for (const Arcane::Guid& material : seen)
+            {
+                const auto it = meshesByMaterial.find(material);
+                if (it == meshesByMaterial.end())
+                    continue;
+                for (const Arcane::Guid& mesh : it->second)
+                    if (meshesInvalidated.insert(mesh).second)
+                        thumbs.InvalidateMesh(mesh);
             }
         }
     }
@@ -571,6 +609,41 @@ namespace Arcane::Editor
                 continue;
             }
 
+            // F2c Plan 2 Task 10 (spec s8, Step 5.1): an .arcmesh's THUMBNAIL
+            // is wrong the moment its bytes change on disk -- whether that
+            // write came from an in-editor MeshDocument::Save() (no
+            // onAssetSaved-style hook exists for mesh documents the way the
+            // material branch above has one) or a genuine external edit. Both
+            // land here identically: for a THUMBNAIL's purposes there is
+            // nothing to gain from telling them apart the way the material
+            // branch must (an external edit there also decides whether to
+            // reload an OPEN document without stomping unsaved changes -- a
+            // mesh document reload/dirty-conflict question this task does not
+            // own). Same mtime-baseline bookkeeping as the material branch,
+            // reusing the SAME map (keyed by path, so a mesh's path can never
+            // collide with a material's).
+            if (e.kind == Arcane::Editor::AssetKind::Mesh)
+            {
+                const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid));
+                if (!path)
+                    continue;
+                std::error_code ec;
+                const auto mtime = std::filesystem::last_write_time(*path, ec);
+                if (ec)
+                    continue;   // deleted/unreadable -- last-good keeps serving
+                const auto [it, inserted] =
+                    m_materialMtimes.try_emplace(path->generic_string(), mtime);
+                if (inserted || it->second == mtime)
+                {
+                    it->second = mtime;
+                    continue;   // first sighting is the baseline, not an event
+                }
+                it->second = mtime;
+                if (m_materialThumbs)
+                    m_materialThumbs->InvalidateMesh(e.guid);
+                continue;
+            }
+
             // F2c s4.1, Task 9: widened from Texture-only to Texture + Model --
             // a re-exported .glb/.gltf triggers a recook the same way a
             // re-saved .png does, including the C2 first-sighting-counts-as-
@@ -727,6 +800,17 @@ namespace Arcane::Editor
                             // F2c spec s7.3 re-accepts it). Heals on close/reopen.
                             if (companion && m_resolver)
                                 m_resolver->InvalidateMeshArtifact(*companion);
+                            // F2c Plan 2 Task 10 (spec s8, Step 5.2): the
+                            // companion's THUMBNAIL is wrong too -- a fresh
+                            // cook means fresh geometry, and PrimeFromDisk's
+                            // .arcmesh-mtime comparison cannot catch this half
+                            // (the .arcmesh file itself did not change, only
+                            // the artifact it resolves to). Last-good keeps
+                            // serving the old picture (Invalidate/
+                            // InvalidateMesh's own doc comment) until the
+                            // re-harvest lands.
+                            if (companion && m_materialThumbs)
+                                m_materialThumbs->InvalidateMesh(*companion);
                         }
                 }
                 if (m_viewportTargets.graph)
