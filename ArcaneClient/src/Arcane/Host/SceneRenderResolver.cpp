@@ -272,33 +272,34 @@ namespace Arcane
         // borrow-lifetime rule every caller owes, and for why the
         // mesh-MATERIAL cache is deliberately left alone here.
         //
-        // F2c s7.3: capture geometry identity from the CURRENT entry before
-        // the erase, re-resolve, then drop GPU residency only when source or
-        // importedSource changed (or there was no entry to compare). A slot
-        // reassignment hits neither field and must not re-upload.
-        MeshSource prevSource = MeshSource::Cube;
-        Guid       prevImported{};
-        bool       hadEntry = false;
+        // F2c s7.3: capture the GEOMETRY IDENTITY from the CURRENT entry before the
+        // erase, re-resolve, then drop GPU residency only when it moved (or when
+        // there was no entry to compare against). A slot reassignment touches none
+        // of it and must not re-upload.
+        //
+        // AS ONE TUPLE, and that is the fix for final-review C3: the pre-fix compare
+        // read {source, importedSource} only, so editing a UvSphere's `segments` and
+        // saving took the KEEP arm -- the CPU entry rebuilt with a new index count
+        // while the GPU buffers still held the old one, and CollectMeshInstances then
+        // emitted the new count against the old index buffer (an out-of-bounds read
+        // on a densification). MeshEntry::GeometryIdentity() is the single definition
+        // of what counts, so a future generator parameter cannot be half-covered here.
+        std::optional<MeshEntry::GeometryId> before;
         {
             const auto& table = m_impl->meshes->Table();
             if (const auto it = table.find(id); it != table.end())
-            {
-                hadEntry     = true;
-                prevSource   = it->second.source;
-                prevImported = it->second.importedSource;
-            }
+                before = it->second.GeometryIdentity();
         }
 
         m_impl->meshes->Invalidate(id);
         m_impl->meshes->Request(id);
 
-        bool dropGpu = !hadEntry;
-        if (hadEntry)
+        bool dropGpu = !before.has_value();
+        if (before)
         {
             const auto& table = m_impl->meshes->Table();
             if (const auto it = table.find(id); it != table.end())
-                dropGpu = it->second.source != prevSource
-                       || it->second.importedSource != prevImported;
+                dropGpu = it->second.GeometryIdentity() != *before;
             else
                 dropGpu = true;
         }
@@ -308,9 +309,16 @@ namespace Arcane
 
     void SceneRenderResolver::InvalidateMeshArtifact(const Guid& id)
     {
-        // GPU FIRST. MeshSupply/Prepare key residency on this same guid; if
-        // we rebuilt the CPU entry first, the next Resolve would HIT the
-        // still-resident OLD buffers and keep drawing the previous shape.
+        // BOTH SIDES, UNCONDITIONALLY -- a cook landing new vertices changes the
+        // geometry by definition, so unlike InvalidateMesh above there is nothing to
+        // compare and nothing to keep.
+        //
+        // The GPU call happens to come first and the ORDER DOES NOT MATTER: both
+        // calls are synchronous inside this one function, so no Resolve can
+        // interleave between them. (An earlier comment here claimed the order was
+        // load-bearing -- it is not, and preserving a non-existent invariant would
+        // only mislead. If either call ever becomes deferred, that is when an
+        // ordering rule has to be stated and justified.)
         if (m_impl->services.invalidateMeshGeometry)
             m_impl->services.invalidateMeshGeometry(id);
         m_impl->meshes->Invalidate(id);

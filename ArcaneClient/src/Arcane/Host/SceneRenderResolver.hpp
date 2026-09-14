@@ -276,13 +276,16 @@ namespace Arcane
         // .arcmat are untouched by a mesh edit. A .arcmat re-save is
         // InvalidateMaterial's business, below.
         //
-        // Device side (F2c s7.3 / Plan 2 Task 7): capture {source, importedSource}
-        // from the currently resolved entry, re-resolve, compare. Unchanged (a
-        // slot reassignment) -> leave resident GPU buffers alone, so re-pointing
-        // a material never re-uploads a two-million-triangle prop. Changed, or
-        // the entry did not exist -> invalidateMeshGeometry. Distinct from
-        // InvalidateMeshArtifact, which always drops residency (the cook landed
-        // new vertices).
+        // Device side (F2c s7.3 / Plan 2 Task 7): capture the entry's GEOMETRY
+        // IDENTITY (MeshEntry::GeometryIdentity -- source, importedSource and every
+        // generator parameter) before the erase, re-resolve, compare the whole
+        // tuple. Unchanged -> leave the resident GPU buffers alone, so re-pointing a
+        // material never re-uploads a two-million-triangle prop. Changed, or the
+        // entry did not exist -> invalidateMeshGeometry. A SLOT REASSIGNMENT IS THE
+        // ONLY THING THAT KEEPS RESIDENCY; a topology edit drops it (final-review C3
+        // -- the identity was source-only, so it did not). Distinct from
+        // InvalidateMeshArtifact, which always drops residency (the cook landed new
+        // vertices).
         void InvalidateMesh(const Guid& id);
 
         // A mesh ARTIFACT changed (a cook landed for the .gltf/.glb this mesh
@@ -290,10 +293,15 @@ namespace Arcane
         //   * InvalidateMeshArtifact  -> the GEOMETRY changed. Drop the resolved
         //                                MeshEntry AND the resident GPU buffers, and
         //                                re-request.
-        //   * InvalidateMesh          -> the .arcmesh changed (a slot reassignment, a
-        //                                topology edit). Drop the resolved MeshEntry and
-        //                                re-request, but KEEP THE RESIDENT BUFFERS when
-        //                                only slots moved -- see Task 7.
+        //   * InvalidateMesh          -> the .arcmesh changed. Drop the resolved
+        //                                MeshEntry and re-request, and KEEP THE
+        //                                RESIDENT BUFFERS only when the geometry
+        //                                identity is unchanged -- i.e. a SLOT
+        //                                REASSIGNMENT. A TOPOLOGY EDIT (source,
+        //                                importedSource, rings, segments,
+        //                                subdivisions, capsuleLengthRatio) lands in
+        //                                THIS arm and drops them -- see Task 7 and
+        //                                final-review C3.
         // `id` here is the .arcmesh's guid, not the model's: the caller maps the cooked
         // MODEL guid to its companion through the mint (or the reference index), because
         // the render side keys everything on the mesh asset the scene actually names.

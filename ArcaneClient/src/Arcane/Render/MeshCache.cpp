@@ -126,13 +126,21 @@ namespace Arcane
             // Task 5's submission sweep reads the mesh's own default material slots
             // straight off the published MeshTable (MeshEntry::slots, F2c Task 10)
             // rather than through the cache, so it never needs a MeshCache pointer
-            // of its own. F2c Plan 2 Task 7 copies source + importedSource beside
-            // them -- InvalidateMesh's residency-keep comparison (s7.3), read
-            // nowhere else. Everything else in `data` is already baked into the
-            // geometry above.
-            entry.source         = data->source;
-            entry.importedSource = data->importedSource;
-            entry.slots          = std::move(data->slots);
+            // of its own. F2c Plan 2 Task 7 copies the GEOMETRY IDENTITY beside them
+            // -- InvalidateMesh's residency-keep comparison (s7.3), read nowhere
+            // else. Widened at final review (C3) from {source, importedSource} to
+            // every generator parameter, because a `segments` edit is a geometry
+            // change that used to take the keep-residency arm; MeshEntry's own
+            // declaration carries the full account and the "add new parameters here"
+            // rule. Everything else in `data` is already baked into the geometry
+            // above.
+            entry.source             = data->source;
+            entry.importedSource     = data->importedSource;
+            entry.rings              = data->rings;
+            entry.segments           = data->segments;
+            entry.subdivisions       = data->subdivisions;
+            entry.capsuleLengthRatio = data->capsuleLengthRatio;
+            entry.slots              = std::move(data->slots);
             im.table.emplace(id, std::move(entry));
             return;
         }

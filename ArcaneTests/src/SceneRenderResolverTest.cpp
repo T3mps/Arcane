@@ -1140,3 +1140,143 @@ TEST_CASE("scene resolver: a .arcmesh whose SOURCE changed does drop residency",
 
     std::error_code ec; fs::remove_all(dir, ec);
 }
+
+TEST_CASE("scene resolver: a .arcmesh whose TOPOLOGY changed (same source) does drop "
+          "residency", "[mesh][host]")
+{
+    // The THIRD case, and the one final-review C3 says the first two hid between
+    // them: `source` is unchanged (UvSphere either side) but `segments` is not, and
+    // a generator parameter IS geometry. Keeping residency across it draws the OLD
+    // buffers with the NEW section's indexCount -- an out-of-bounds index read on a
+    // densification, the wrong shape on a decimation. s7.3 only ever grants the keep
+    // to "a slot reassignment".
+    const fs::path dir = MakeTempDir("mesh_invalidate_topology_drops_gpu");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const fs::path meshFile = dir / "Game" / "Content" / "sphere.arcmesh";
+    Arcane::MeshAssetData authored;
+    authored.id       = Arcane::Guid::Generate();
+    authored.name     = "probe-sphere";
+    authored.source   = Arcane::MeshSource::UvSphere;
+    authored.rings    = 16;
+    authored.segments = 32;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
+    const Arcane::Guid meshId = authored.id;
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    int gpuDrops = 0;
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    rs.invalidateMeshGeometry = [&](const Arcane::Guid& g)
+    {
+        if (g == meshId)
+            ++gpuDrops;
+    };
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    const auto indexCount = [&]() -> std::size_t
+    {
+        const Arcane::MeshTable* t = rt.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(t != nullptr);
+        const Arcane::MeshEntry* entry = t->Resolve(meshId);
+        REQUIRE(entry != nullptr);
+        return entry->data.indices.size();
+    };
+    const std::size_t dense = indexCount();
+    REQUIRE(dense > 0);
+    CHECK(gpuDrops == 0);
+
+    // Same source, same importedSource (nil) -- ONLY the radial segment count moves.
+    Arcane::MeshAssetData edited = authored;
+    edited.segments = 8;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, edited));
+
+    resolver.InvalidateMesh(meshId);
+    CHECK(gpuDrops == 1);
+    // ...and the CPU side really did change shape, so a kept GPU buffer would have
+    // been drawn with the wrong index range rather than merely being redundant.
+    CHECK(indexCount() < dense);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("scene resolver: every generator parameter counts as geometry identity",
+          "[mesh][host]")
+{
+    // The other three fields beside `segments`, so the identity tuple cannot
+    // silently shrink back toward {source, importedSource} one field at a time.
+    // `rings` (UvSphere/Capsule), `subdivisions` (Plane) and `capsuleLengthRatio`
+    // (Capsule) each get their own edit on a source that actually reads them --
+    // MeshAsset.hpp's operator== is the authoritative list of what MeshAssetData
+    // holds, and these four plus source/importedSource are all of it that is
+    // geometry (id/name/slots are not).
+    struct Case
+    {
+        const char*         leaf;
+        Arcane::MeshSource  source;
+        void              (*edit)(Arcane::MeshAssetData&);
+    };
+    const Case cases[] = {
+        { "rings",    Arcane::MeshSource::UvSphere, [](Arcane::MeshAssetData& d) { d.rings = 6; } },
+        { "subdiv",   Arcane::MeshSource::Plane,    [](Arcane::MeshAssetData& d) { d.subdivisions = 4; } },
+        { "capratio", Arcane::MeshSource::Capsule,  [](Arcane::MeshAssetData& d) { d.capsuleLengthRatio = 4.0f; } },
+    };
+
+    for (const Case& c : cases)
+    {
+        INFO("generator parameter: " << c.leaf);
+        const fs::path dir = MakeTempDir((std::string("mesh_identity_") + c.leaf).c_str());
+        REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+        const fs::path meshFile = dir / "Game" / "Content" / "probe.arcmesh";
+        Arcane::MeshAssetData authored;
+        authored.id     = Arcane::Guid::Generate();
+        authored.name   = "probe";
+        authored.source = c.source;
+        REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
+        const Arcane::Guid meshId = authored.id;
+
+        Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+        REQUIRE(rt.OpenProject(dir / "Game") == true);
+        REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+        const Astra::Entity e = rt.Registry().CreateEntity();
+        Arcane::MeshRenderer mr; mr.mesh = meshId;
+        rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+        int gpuDrops = 0;
+        Arcane::SceneRenderResolver::Services rs;
+        rs.runtime = &rt;
+        rs.invalidateMeshGeometry = [&](const Arcane::Guid& g)
+        {
+            if (g == meshId)
+                ++gpuDrops;
+        };
+        Arcane::SceneRenderResolver resolver(std::move(rs));
+
+        Arcane::SceneRenderResolver::FrameInfo frame;
+        frame.dt = 1.0 / 60.0;
+        resolver.Refresh(frame);
+        REQUIRE(gpuDrops == 0);
+
+        Arcane::MeshAssetData edited = authored;
+        c.edit(edited);
+        REQUIRE(Arcane::SaveMeshAsset(meshFile, edited));
+
+        resolver.InvalidateMesh(meshId);
+        CHECK(gpuDrops == 1);
+
+        std::error_code ec; fs::remove_all(dir, ec);
+    }
+}

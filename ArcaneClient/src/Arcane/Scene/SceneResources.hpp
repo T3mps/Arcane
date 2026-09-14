@@ -15,6 +15,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <tuple>                            // std::tie -- MeshEntry::GeometryIdentity
 #include <unordered_map>
 #include <vector>
 
@@ -180,14 +181,42 @@ namespace Arcane
         MeshBounds             bounds;
         std::vector<MeshSlot>  slots;
 
-        // F2c s7.3: what a .arcmesh save must be compared on to decide whether the
-        // RESIDENT BUFFERS survive it. A slot reassignment changes neither of these
-        // and must not re-upload a two-million-triangle prop; a source switch, or a
-        // re-pointed importedSource, changes the geometry and must. Copied at
-        // MeshCache::Request time beside `slots`, and read NOWHERE ELSE -- they exist
-        // for exactly this comparison, which is why they say so here.
-        MeshSource source = MeshSource::Cube;
-        Guid       importedSource{};
+        // F2c s7.3: THE GEOMETRY IDENTITY -- what a .arcmesh save must be compared on
+        // to decide whether the RESIDENT BUFFERS survive it. A slot reassignment
+        // touches none of these and must not re-upload a two-million-triangle prop;
+        // anything that changes the vertices must drop them.
+        //
+        // EVERY FIELD OF MeshAssetData THAT DETERMINES GEOMETRY IS HERE, not just
+        // `source` (final-review C3). rings/segments/subdivisions/capsuleLengthRatio
+        // are the generators' topology (MeshAsset.hpp's own TOPOLOGY and SHAPE RATIO
+        // blocks), and editing one of them while `source` stayed put used to take the
+        // KEEP arm: the CPU entry rebuilt with a new index count while the GPU
+        // buffers still held the old one, which CollectMeshInstances then drew past.
+        // MeshAssetData::operator== is the authoritative field list; the only members
+        // it carries that are NOT geometry are id, name and slots. A new generator
+        // parameter belongs here the day it is added.
+        //
+        // Copied at MeshCache::Request time beside `slots`, and read NOWHERE ELSE --
+        // they exist for exactly this comparison, which is why they say so here.
+        MeshSource    source = MeshSource::Cube;
+        Guid          importedSource{};
+        std::uint32_t rings              = 16;
+        std::uint32_t segments           = 32;
+        std::uint32_t subdivisions       = 1;
+        float         capsuleLengthRatio = 2.0f;
+
+        // The whole identity as ONE value, so no caller can compare a subset by
+        // accident -- which is exactly how C3 shipped. BY VALUE, not std::tie: the
+        // one caller (SceneRenderResolver::InvalidateMesh) captures it, ERASES the
+        // entry, re-resolves and only then compares, so a tuple of references would
+        // dangle across the erase.
+        using GeometryId = std::tuple<MeshSource, Guid, std::uint32_t, std::uint32_t,
+                                      std::uint32_t, float>;
+        [[nodiscard]] GeometryId GeometryIdentity() const noexcept
+        {
+            return { source, importedSource, rings, segments, subdivisions,
+                     capsuleLengthRatio };
+        }
     };
 
     // .arcmesh Guid -> the resolved record above. Same shape and lifetime
