@@ -3559,7 +3559,47 @@ namespace Arcane::Editor
             const bool byteEqual = m_previousCaptureValid &&
                                     w == m_previousCaptureWidth && h == m_previousCaptureHeight &&
                                     actual == m_previousCaptureRgba;
-            const bool idle = m_shaderCompiler ? m_shaderCompiler->IsIdle() : true;
+            const bool shaderIdle = m_shaderCompiler ? m_shaderCompiler->IsIdle() : true;
+            // Task 12a fix (task12-rca-report.md, root cause H3): byte-equal
+            // + shader-idle proves the RENDER is quiescent, not that the
+            // async cook/import-reconciliation pipeline feeding the Asset
+            // Browser has finished writing. A project's first open with a
+            // freshly-staged Model asset has PollAssetWatch's frame-1 sweep
+            // call m_cookQueue->NoteChanged() (EditorAppProject.cpp
+            // ~724-735), submitting an async CookSession::CookProject on a
+            // JobSystem worker; whenever that lands, Pump() -> OnCookCompleted
+            // -> MintOrUpdateCompanionMesh -> MarkAllDirty() changes
+            // AssetPanelModel's entry count on a LATER frame -- a race a
+            // byte-equal-frames check alone cannot see, because the pixels
+            // that changed belong to a frame this loop had not rendered yet.
+            // Widen the same idle conjunction to the two other background
+            // producers that can still change a later frame's captured UI:
+            //   - the cook queue (CookQueue::CookPending() / the editor's own
+            //     m_cookQueueSettling window between OnProjectOpened and the
+            //     first OnCookCompleted, EditorApp.hpp's own doc comment on
+            //     each);
+            //   - the material/mesh thumbnail harvester (PendingCount(),
+            //     queued + pending + ready -- MaterialPreviewHarvester.hpp),
+            //     which also calls back into chrome textures on a later
+            //     frame once a harvest lands.
+            // PollAssetWatch's own sweep is NOT a fourth conjunct: it runs
+            // synchronously, once per tick, inline on the frame that calls it
+            // (EditorAppProject.cpp ~416-420) -- it never straddles a frame
+            // boundary on its own, only the async CookQueue submission it can
+            // trigger does, and that is what cookIdle already waits on. The
+            // asset-activity feed (m_assetActivity.Push, same function) is a
+            // synchronous side effect of the same tick for the same reason.
+            // ContentDiscovery is a one-shot scan at project open, already
+            // finished long before the settle loop's first attempt.
+            const bool cookPending      = m_cookQueue && m_cookQueue->CookPending();
+            const bool harvesterPending = m_materialThumbs && m_materialThumbs->PendingCount() != 0;
+            const bool idle = Arcane::SettleProducersIdle(shaderIdle, m_cookQueueSettling,
+                                                           cookPending, harvesterPending);
+            // Kept apart from `idle` only for the per-attempt WARN below, so a
+            // caller can tell which producer is still busy without
+            // re-deriving it from SettleProducersIdle's own body.
+            const bool cookIdle      = !m_cookQueueSettling && !cookPending;
+            const bool harvesterIdle = !harvesterPending;
 
             // PLAN B (Task 8, ported here by Task 9): the comparison is a
             // THIRD conjunct, evaluated HERE -- inside the loop -- and not
@@ -3585,12 +3625,12 @@ namespace Arcane::Editor
                 m_compareEvaluated = true;
             }
 
-            if (byteEqual && idle && matches)
+            if (Arcane::SettleConverged(byteEqual, idle, matches))
             {
                 m_settleConverged = true;
                 ARC_INFO("--settle: CONVERGED after {} attempt(s) -- frame {} matches frame {} "
-                         "byte-for-byte ({}x{}), compiler idle", m_settleAttemptsUsed,
-                         m_frameCount + 1, m_frameCount, w, h);
+                         "byte-for-byte ({}x{}), compiler/cook-queue/thumbnail-harvester all idle",
+                         m_settleAttemptsUsed, m_frameCount + 1, m_frameCount, w, h);
 
                 // The exact pixels the composited editor showed -- same as
                 // the ordinary tail above -- this IS the converged capture.
@@ -3627,14 +3667,19 @@ namespace Arcane::Editor
 
             if (byteEqual && !idle)
             {
-                // The pixels agree but the compiler is not done -- exactly
-                // the case Task 10's runtime fix closes: NOT counted as
-                // converged.
+                // The pixels agree but at least one background producer is
+                // not done -- exactly the case Task 10's runtime fix closes
+                // for the shader compiler, and Task 12a widens to the cook
+                // queue and thumbnail harvester (see the idle conjunction's
+                // own comment above). Named individually rather than folded
+                // into one generic "not idle" so a caller can tell which
+                // knob to look at without re-deriving it from the code.
                 ARC_WARN("--settle attempt {}/{}: frame {} matches frame {} byte-for-byte, but "
-                         "the shader compiler is not idle yet (still pending/in-flight/"
-                         "undrained) -- not counted as converged",
+                         "not idle yet -- shaderCompiler={} cookQueue={} thumbnailHarvester={} "
+                         "-- not counted as converged",
                          m_settleAttemptsUsed, m_config.settleAttempts, m_frameCount + 1,
-                         m_frameCount);
+                         m_frameCount, shaderIdle ? "idle" : "busy", cookIdle ? "idle" : "busy",
+                         harvesterIdle ? "idle" : "busy");
             }
 
             // Not settled yet -- either the bytes genuinely differed, or they

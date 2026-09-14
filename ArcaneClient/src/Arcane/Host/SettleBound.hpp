@@ -132,4 +132,32 @@ namespace Arcane
         return (attempts >= attemptsNeeded) ? SettleBail::AttemptsBound
                                             : SettleBail::TimeoutBound;
     }
+
+    // Task 12a (task12-rca-report.md): byte-equal frames + an idle shader
+    // compiler proves the RENDER is quiescent, not that every background
+    // producer that can still change a LATER frame's captured UI is done.
+    // The editor's --settle loop widens the idle conjunct with two more
+    // producers (the cook queue and the material/mesh thumbnail harvester);
+    // extracted here, beside SettleBailDecision, for the same reason that one
+    // is: so the conjunction can be pinned in CI without a GPU, a frame loop
+    // or a live CookQueue/MaterialPreviewHarvester. Only the editor calls
+    // this today -- the runtime has no cook queue or thumbnail harvester of
+    // its own, and this function changes none of its behavior.
+    [[nodiscard]] constexpr bool SettleProducersIdle(bool shaderIdle, bool cookQueueSettling,
+                                                      bool cookPending,
+                                                      bool harvesterPending) noexcept
+    {
+        return shaderIdle && !cookQueueSettling && !cookPending && !harvesterPending;
+    }
+
+    // The full --settle convergence predicate (Plan B's byteEqual && idle &&
+    // matches, EditorAppFrame.cpp/RuntimeFrame.cpp's shared shape), as a pure
+    // function over the three conjuncts once they are each already known.
+    // `producersIdle` is SettleProducersIdle's answer (or, on the runtime,
+    // just its own shaderIdle -- the runtime has nothing else to widen with).
+    [[nodiscard]] constexpr bool SettleConverged(bool byteEqual, bool producersIdle,
+                                                 bool matches) noexcept
+    {
+        return byteEqual && producersIdle && matches;
+    }
 }

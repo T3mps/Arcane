@@ -8,6 +8,8 @@
 
 using Arcane::SettleBail;
 using Arcane::SettleBailDecision;
+using Arcane::SettleConverged;
+using Arcane::SettleProducersIdle;
 
 TEST_CASE("settle bail: keeps going until BOTH bounds are spent", "[settle]")
 {
@@ -69,4 +71,63 @@ TEST_CASE("settle bail: attempts-vs-timeout rounds UP, never down", "[settle]")
     // honest answer, and this pins that the division rewrite kept it.
     CHECK(SettleBailDecision(100, 100, 5001, 5001, 50) == SettleBail::TimeoutBound);
     CHECK(SettleBailDecision(101, 101, 5001, 5001, 50) == SettleBail::AttemptsBound);
+}
+
+// Task 12a (task12-rca-report.md): byte-equal frames + an idle shader
+// compiler proves the RENDER is quiescent, not that the async cook queue or
+// thumbnail harvester have finished writing to the Asset Browser's backing
+// state -- the 721px/"15 vs 16 assets" race. SettleProducersIdle/
+// SettleConverged pin the widened conjunction without a GPU, a frame loop,
+// or a live CookQueue/MaterialPreviewHarvester.
+TEST_CASE("settle producers: shader idle alone is NOT enough once the cook "
+          "queue or harvester are widened in", "[settle]")
+{
+    // Shader idle, cook queue settling (the first-open window before
+    // OnCookCompleted has fired once) -- NOT idle.
+    CHECK_FALSE(SettleProducersIdle(/*shaderIdle=*/true, /*cookQueueSettling=*/true,
+                                     /*cookPending=*/false, /*harvesterPending=*/false));
+    // Shader idle, cook queue no longer settling but a pass is in flight
+    // (CookQueue::CookPending()) -- NOT idle. This is the RCA's own
+    // reproduction: golden_prop's fresh mtime trips PollAssetWatch's frame-1
+    // sweep, NoteChanged() submits an async CookProject pass, and the settle
+    // loop must not converge while it is still running.
+    CHECK_FALSE(SettleProducersIdle(true, false, /*cookPending=*/true, false));
+    // Cook queue fully idle, but the thumbnail harvester still has queued or
+    // in-flight work (MaterialPreviewHarvester::PendingCount() != 0) -- NOT
+    // idle either.
+    CHECK_FALSE(SettleProducersIdle(true, false, false, /*harvesterPending=*/true));
+    // The shader compiler itself busy still governs too, unchanged from the
+    // pre-Task-12a behaviour this widens.
+    CHECK_FALSE(SettleProducersIdle(/*shaderIdle=*/false, false, false, false));
+    // All four clear -> idle.
+    CHECK(SettleProducersIdle(true, false, false, false));
+}
+
+TEST_CASE("settle converged: byte-equal frames + shader idle + cook pending "
+          "-> NOT converged; + cook idle + harvester idle -> converged", "[settle]")
+{
+    // Byte-equal frames, shader idle, but the cook queue is still pending:
+    // producersIdle is false, so the overall convergence predicate must stay
+    // false regardless of the reference match -- this is exactly the state
+    // the RCA shows the pre-fix loop wrongly called "converged" (it only
+    // checked shader idle).
+    const bool byteEqual = true;
+    const bool matches   = true;
+    const bool producersIdleWithCookPending =
+        SettleProducersIdle(/*shaderIdle=*/true, /*cookQueueSettling=*/false,
+                             /*cookPending=*/true, /*harvesterPending=*/false);
+    CHECK_FALSE(SettleConverged(byteEqual, producersIdleWithCookPending, matches));
+
+    // Once the cook queue AND the harvester both go idle too, the same
+    // byte-equal/matches pair now converges.
+    const bool producersFullyIdle =
+        SettleProducersIdle(/*shaderIdle=*/true, /*cookQueueSettling=*/false,
+                             /*cookPending=*/false, /*harvesterPending=*/false);
+    CHECK(SettleConverged(byteEqual, producersFullyIdle, matches));
+
+    // A non-byte-equal frame or a failed --compare still must not converge
+    // even with every producer idle -- SettleConverged is a plain AND, not a
+    // substitute for either of the other two conjuncts.
+    CHECK_FALSE(SettleConverged(/*byteEqual=*/false, producersFullyIdle, matches));
+    CHECK_FALSE(SettleConverged(byteEqual, producersFullyIdle, /*matches=*/false));
 }
