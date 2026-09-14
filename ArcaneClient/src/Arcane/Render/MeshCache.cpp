@@ -88,13 +88,16 @@ namespace Arcane
             MeshEntry entry;
             entry.bounds = result.bounds;
             entry.data   = std::move(*result.mesh);
-            // The ONE field of the loaded asset that outlives this call: Task 5's
-            // submission sweep reads the mesh's own default material slots straight
-            // off the published MeshTable (MeshEntry::slots, F2c Task 10) rather
-            // than through the cache, so it never needs a MeshCache pointer of its
-            // own. Everything else in `data` is already baked into the geometry
-            // above.
-            entry.slots = std::move(data->slots);
+            // Task 5's submission sweep reads the mesh's own default material slots
+            // straight off the published MeshTable (MeshEntry::slots, F2c Task 10)
+            // rather than through the cache, so it never needs a MeshCache pointer
+            // of its own. F2c Plan 2 Task 7 copies source + importedSource beside
+            // them -- InvalidateMesh's residency-keep comparison (s7.3), read
+            // nowhere else. Everything else in `data` is already baked into the
+            // geometry above.
+            entry.source         = data->source;
+            entry.importedSource = data->importedSource;
+            entry.slots          = std::move(data->slots);
             im.table.emplace(id, std::move(entry));
             return;
         }

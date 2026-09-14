@@ -171,16 +171,23 @@ namespace Arcane
     // white chain. It rides along here because MeshSubmissionSystem is
     // host-published-resource-only by design (it reads MeshTable/MeshMaterialTable
     // and never touches a cache pointer, matching RenderSubmissionSystem's rule of
-    // never touching the Assets facade). It is also the ONLY part of the loaded
-    // MeshAssetData that survives resolution at all: MeshCache keeps no copy of the
-    // asset (see MeshCache.hpp's "WHAT IT DOES NOT KEEP"), so anything needing the
-    // rest of it -- name, source, topology -- re-reads the .arcmesh, which is what
-    // MeshDocument does.
+    // never touching the Assets facade). Name and generated topology still re-read
+    // the .arcmesh (MeshDocument); MeshCache keeps no copy of the asset (see
+    // MeshCache.hpp's "WHAT IT DOES NOT KEEP").
     struct MeshEntry
     {
         MeshData               data;
         MeshBounds             bounds;
         std::vector<MeshSlot>  slots;
+
+        // F2c s7.3: what a .arcmesh save must be compared on to decide whether the
+        // RESIDENT BUFFERS survive it. A slot reassignment changes neither of these
+        // and must not re-upload a two-million-triangle prop; a source switch, or a
+        // re-pointed importedSource, changes the geometry and must. Copied at
+        // MeshCache::Request time beside `slots`, and read NOWHERE ELSE -- they exist
+        // for exactly this comparison, which is why they say so here.
+        MeshSource source = MeshSource::Cube;
+        Guid       importedSource{};
     };
 
     // .arcmesh Guid -> the resolved record above. Same shape and lifetime

@@ -271,10 +271,18 @@ namespace Arcane
         // render phase would have to defer instead.
         //
         // Only the GEOMETRY cache is touched. Re-saving an .arcmesh can change
-        // which material Guid the mesh names as its default, and the Request
-        // below re-reads that into the fresh MeshEntry::material -- but the
-        // resolved VALUES of any .arcmat are untouched by a mesh edit. A
-        // .arcmat re-save is InvalidateMaterial's business, below.
+        // which material Guid a slot names, and the Request below re-reads that
+        // into the fresh MeshEntry::slots -- but the resolved VALUES of any
+        // .arcmat are untouched by a mesh edit. A .arcmat re-save is
+        // InvalidateMaterial's business, below.
+        //
+        // Device side (F2c s7.3 / Plan 2 Task 7): capture {source, importedSource}
+        // from the currently resolved entry, re-resolve, compare. Unchanged (a
+        // slot reassignment) -> leave resident GPU buffers alone, so re-pointing
+        // a material never re-uploads a two-million-triangle prop. Changed, or
+        // the entry did not exist -> invalidateMeshGeometry. Distinct from
+        // InvalidateMeshArtifact, which always drops residency (the cook landed
+        // new vertices).
         void InvalidateMesh(const Guid& id);
 
         // A mesh ARTIFACT changed (a cook landed for the .gltf/.glb this mesh

@@ -1010,3 +1010,133 @@ TEST_CASE("scene resolver: a PENDING mesh is not latched as failed by invalidati
 
     std::error_code ec; fs::remove_all(dir, ec);
 }
+
+TEST_CASE("scene resolver: a .arcmesh SAVE re-resolves slots but keeps residency",
+          "[mesh][host]")
+{
+    // s7.3's distinction, and the reason the two entry points exist at all. A slot
+    // reassignment changes WHICH MATERIAL a section draws with -- nothing about the
+    // vertices -- so the resident buffers must survive it. Merging the two paths
+    // would make every material tweak a full geometry re-upload.
+    const fs::path dir = MakeTempDir("mesh_invalidate_slots_keep_gpu");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const Arcane::Guid matA = Arcane::Guid::Generate();
+    const Arcane::Guid matB = Arcane::Guid::Generate();
+    const fs::path meshFile = dir / "Game" / "Content" / "cube.arcmesh";
+    Arcane::MeshAssetData authored;
+    authored.id     = Arcane::Guid::Generate();
+    authored.name   = "probe-cube";
+    authored.source = Arcane::MeshSource::Cube;
+    authored.slots  = { { "Body", matA } };
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
+    const Arcane::Guid meshId = authored.id;
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    int gpuDrops = 0;
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    rs.invalidateMeshGeometry = [&](const Arcane::Guid& g)
+    {
+        if (g == meshId)
+            ++gpuDrops;
+    };
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    const auto slotsOf = [&]() -> std::vector<Arcane::MeshSlot>
+    {
+        const Arcane::MeshTable* t = rt.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(t != nullptr);
+        const Arcane::MeshEntry* entry = t->Resolve(meshId);
+        REQUIRE(entry != nullptr);
+        return entry->slots;
+    };
+    REQUIRE(slotsOf().size() == 1u);
+    CHECK(slotsOf()[0].material == matA);
+    CHECK(gpuDrops == 0);
+
+    Arcane::MeshAssetData edited = authored;
+    edited.slots = { { "Body", matB } };
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, edited));
+
+    resolver.InvalidateMesh(meshId);
+    REQUIRE(slotsOf().size() == 1u);
+    CHECK(slotsOf()[0].material == matB);   // re-resolved, no Refresh in between
+    CHECK(gpuDrops == 0);                   // residency survived the slot-only save
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("scene resolver: a .arcmesh whose SOURCE changed does drop residency",
+          "[mesh][host]")
+{
+    // The boundary, so the optimisation cannot silently become a correctness hole:
+    // switching source Cube -> Plane, or re-pointing importedSource, is a GEOMETRY
+    // change and must drop the buffers.
+    const fs::path dir = MakeTempDir("mesh_invalidate_source_drops_gpu");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const fs::path meshFile = dir / "Game" / "Content" / "cube.arcmesh";
+    Arcane::MeshAssetData authored;
+    authored.id     = Arcane::Guid::Generate();
+    authored.name   = "probe-cube";
+    authored.source = Arcane::MeshSource::Cube;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
+    const Arcane::Guid meshId = authored.id;
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    int gpuDrops = 0;
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    rs.invalidateMeshGeometry = [&](const Arcane::Guid& g)
+    {
+        if (g == meshId)
+            ++gpuDrops;
+    };
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    const auto vertexCount = [&]() -> std::size_t
+    {
+        const Arcane::MeshTable* t = rt.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(t != nullptr);
+        const Arcane::MeshEntry* entry = t->Resolve(meshId);
+        REQUIRE(entry != nullptr);
+        return entry->data.vertices.size();
+    };
+    const std::size_t cubeVerts = vertexCount();
+    REQUIRE(cubeVerts > 0);
+    CHECK(gpuDrops == 0);
+
+    Arcane::MeshAssetData edited = authored;
+    edited.source = Arcane::MeshSource::Plane;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, edited));
+
+    resolver.InvalidateMesh(meshId);
+    CHECK(gpuDrops == 1);
+    CHECK(vertexCount() == 4);              // Plane subdivisions=1; CPU rebuilt
+    CHECK(vertexCount() != cubeVerts);
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}

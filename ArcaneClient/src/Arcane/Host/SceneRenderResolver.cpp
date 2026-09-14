@@ -271,8 +271,39 @@ namespace Arcane
         // before this returns). See this method's header comment for the
         // borrow-lifetime rule every caller owes, and for why the
         // mesh-MATERIAL cache is deliberately left alone here.
+        //
+        // F2c s7.3: capture geometry identity from the CURRENT entry before
+        // the erase, re-resolve, then drop GPU residency only when source or
+        // importedSource changed (or there was no entry to compare). A slot
+        // reassignment hits neither field and must not re-upload.
+        MeshSource prevSource = MeshSource::Cube;
+        Guid       prevImported{};
+        bool       hadEntry = false;
+        {
+            const auto& table = m_impl->meshes->Table();
+            if (const auto it = table.find(id); it != table.end())
+            {
+                hadEntry     = true;
+                prevSource   = it->second.source;
+                prevImported = it->second.importedSource;
+            }
+        }
+
         m_impl->meshes->Invalidate(id);
         m_impl->meshes->Request(id);
+
+        bool dropGpu = !hadEntry;
+        if (hadEntry)
+        {
+            const auto& table = m_impl->meshes->Table();
+            if (const auto it = table.find(id); it != table.end())
+                dropGpu = it->second.source != prevSource
+                       || it->second.importedSource != prevImported;
+            else
+                dropGpu = true;
+        }
+        if (dropGpu && m_impl->services.invalidateMeshGeometry)
+            m_impl->services.invalidateMeshGeometry(id);
     }
 
     void SceneRenderResolver::InvalidateMeshArtifact(const Guid& id)
