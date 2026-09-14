@@ -153,6 +153,18 @@ has none — our GI arc is a BAKER, not Lumen).
 
 ## Sequencing
 
+**2026-09-14 ceiling layer** (binding; does not replace this contract):
+`docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`. Execute
+T1 → T5+T6 → T3 *lite* (CSM + cubemaps) → T4 *lite* → T2 *lite*. Scene SDF
+and VRAD3-parity **trail**, they do not lead. Time in this repo's units
+(specced architecture = weeks).
+
+**2026-09-14 public-origins pass** (rendering only, legal sources re-fetched):
+`docs/research/2026-09-14-source2-renderer-public-origins.md`. Source 2 is
+Valve's own successor (Newell: "entirely new engine"), not Unreal/id/Cry.
+Implement T1–T6 from VRF MIT + papers, never leaked S2 trees. Several
+08-12 cites marked UNRECHECKED there.
+
 NRI migration (spec'd) → foundational 3D slice → **T1 (grid + PBR + the
 forward/deferred decision) → T2 (baker + lightmaps + probes) → T3
 (reflections + CSM + atlas; SDF tier can trail) → T4/T5 in either order →

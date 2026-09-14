@@ -317,6 +317,11 @@ currently draws over `Batcher2D` content. ImGui UI is unaffected — `gameui` an
 ## Physics — decided
 
 **Vendor Box3D**, but **not until F1 has landed.**
+F1 landed 2026-08-22; the gate is open. **Extended 2026-09-14:** Box3D
+indefinitely, two worlds, Manifold3D later with Box3D as oracle (Box3D
+already *is* Rubikon-Lite + Box2D). Binding:
+`docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`. Do not
+seek private Rubikon-Lite source.
 
 [Box3D](https://github.com/erincatto/box3d) — Erin Catto, released 2026-06-30.
 MIT, C17 with a clean C API, forked from the Box2D codebase. Cross-platform

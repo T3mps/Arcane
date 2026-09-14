@@ -82,8 +82,22 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   the vendored `premake5.lua` is THIS repo's consumer wrapper -- never
   overwrite it from the standalone repo). Threading is injected via
   `Arcane/Jobs/ArcaneWorkScheduler.hpp` -> `Manifold2D::IWorkScheduler`.
+- **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
+  Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
+  engine-owned world. Do not teach `PhysicsSystem` to write 3D poses (it
+  flattens out-of-plane rotation on purpose). Manifold3D is later and
+  treats Box3D as the oracle -- Box3D already *is* Rubikon-Lite + Box2D.
+  Binding: `docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`.
 - The ECS is **Astra**, vendored at `ThirdParty/Astra` -- keep it current
   with the standalone repo (commit there first, then sync).
+- **3D visual target is Deadlock / Source 2 the renderer, not Unreal.**
+  Feature contract: `docs/research/2026-08-12-deadlock-render-target.md`.
+  Ceiling, sequencing, and "weeks not department-years": the 2026-09-14
+  doc above. **Legal origins / what to implement from:**
+  `docs/research/2026-09-14-source2-renderer-public-origins.md` (VRF MIT +
+  Valve talks + papers; Source 2 is Valve's own successor, not a third-party
+  fork). Nanite/Lumen/scene-SDF-first are non-goals. No leaked Source 2
+  source, ever -- including private Rubikon-Lite.
 
 ## Tests
 
