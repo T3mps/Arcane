@@ -35,6 +35,15 @@ namespace Arcane
         return m_impl->table;
     }
 
+    MeshResolveState MeshCache::Query(const Guid& id) const
+    {
+        if (m_impl->table.contains(id))
+            return MeshResolveState::Ready;
+        if (m_impl->failed.contains(id))
+            return MeshResolveState::Failed;
+        return MeshResolveState::PendingCook;
+    }
+
     void MeshCache::Request(const Guid& id)
     {
         Impl& im = *m_impl;

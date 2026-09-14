@@ -559,6 +559,16 @@ void RuntimeApp::MainLoop()
         {
             return rt ? rt->AssetsFacade().ArtifactFor(id) : nullptr;
         });
+    // F2c Plan 2 Task 3: CPU mesh geometry for NriMeshBufferCache. Looked up
+    // live -- m_resolver is set once at boot beside this vehicle.
+    graph.SetMeshSupply(
+        [this](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+        {
+            if (!m_resolver)
+                return {};
+            const auto s = m_resolver->MeshSupply(id);
+            return { s.mesh, s.state };
+        });
 
     // --compare / --bless (Task 8, FINDING 3 of the dispatch audit):
     // resolve the reference BEFORE the settle loop starts, so a reference

@@ -229,6 +229,7 @@
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/NriSwapChain.hpp>
+#include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriTextureCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
@@ -1119,6 +1120,27 @@ namespace Arcane
                 m_textures->SetArtifactSupply(std::move(supply));
         }
 
+        // Installed once by the frame driver, right after Create(). Without it every
+        // mesh misses (loudly, once) and every mesh instance draws nothing.
+        using MeshSupplyFn = NriMeshBufferCache::MeshSupplyFn;
+        void SetMeshSupply(MeshSupplyFn supply)
+        {
+            if (m_meshBuffers)
+                m_meshBuffers->SetMeshSupply(std::move(supply));
+        }
+
+        // The render-side half of a mesh cook's completion (s7.3) -- forwards to
+        // NriMeshBufferCache::Invalidate with THIS context's own graveyard/fence, the
+        // pair InvalidateContentTexture already uses. No-op without a cache.
+        void InvalidateMeshGeometry(const Guid& id)
+        {
+            if (m_meshBuffers)
+                m_meshBuffers->Invalidate(id, m_graves,
+                                          m_graph ? m_graph->DebugSubmitCount() : 0);
+        }
+
+        [[nodiscard]] NriMeshBufferCache* MeshBuffers() noexcept { return m_meshBuffers.get(); }
+
         // F2b Task 12: forwards to NriTextureCache::SetCookPendingOracle --
         // see that method's own doc comment for the full contract. Installed
         // only on a vehicle that also owns a live cook queue (the editor's
@@ -1338,6 +1360,13 @@ namespace Arcane
         // holds nothing of the graph's (its textures are persistent and are
         // not pool tenants), so it is deliberately NOT released on Resize.
         std::unique_ptr<NriTextureCache>   m_textures;
+        // Immediately after m_textures: a node's recorded command buffer names
+        // this cache's vertex/index buffers, so it must be destroyed AFTER the
+        // nodes (declaration order). Persistent, not a pool tenant --
+        // deliberately NOT released on Resize/ResizeOffscreen; re-uploading
+        // every mesh on a viewport drag would be the ring cliff through a
+        // different door.
+        std::unique_ptr<NriMeshBufferCache> m_meshBuffers;
         std::unique_ptr<RenderGraph>       m_graph;
         // The nodes, after everything they borrow (device, cache) and after the
         // graph whose transient pool the tonemap's source view names. Their

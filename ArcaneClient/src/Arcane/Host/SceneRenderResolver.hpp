@@ -50,7 +50,9 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
+#include <Arcane/Mesh/MeshAsset.hpp>           // MeshResolveState -- MeshSupply
 #include <Arcane/Render/GraphicsBackend.hpp>   // by value in Services
+#include <Arcane/Render/MeshBuilder.hpp>       // MeshData -- MeshSupply
 
 
 #include <cstdint>
@@ -307,6 +309,17 @@ namespace Arcane
         // project's registry, so a cached entry may resolve to something else
         // entirely (or nothing) once the project changes.
         void Clear();
+
+        // F2c Plan 2 Task 3: Guid -> CPU geometry the GPU cache uploads.
+        // Ready + pointer on a Table() hit; otherwise Query()'s PendingCook /
+        // Failed with a null mesh. Device-free -- the host wraps this into
+        // NriGraphContext::SetMeshSupply.
+        struct MeshGeometrySupply
+        {
+            const MeshData*  mesh  = nullptr;
+            MeshResolveState state = MeshResolveState::Failed;
+        };
+        [[nodiscard]] MeshGeometrySupply MeshSupply(const Guid& id) const;
 
     private:
         struct Impl;

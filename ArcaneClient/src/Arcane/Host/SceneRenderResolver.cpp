@@ -275,6 +275,22 @@ namespace Arcane
         m_impl->meshes->Request(id);
     }
 
+    SceneRenderResolver::MeshGeometrySupply SceneRenderResolver::MeshSupply(const Guid& id) const
+    {
+        MeshGeometrySupply out;
+        if (!m_impl || !m_impl->meshes)
+            return out;
+        const auto& table = m_impl->meshes->Table();
+        if (const auto it = table.find(id); it != table.end())
+        {
+            out.mesh  = &it->second.data;
+            out.state = MeshResolveState::Ready;
+            return out;
+        }
+        out.state = m_impl->meshes->Query(id);
+        return out;
+    }
+
     void SceneRenderResolver::InvalidateMaterial(const Guid& id)
     {
         m_impl->materials->Invalidate(id);

@@ -2139,6 +2139,16 @@ namespace Arcane::Editor
             {
                 return rt ? rt->AssetsFacade().ArtifactFor(id) : nullptr;
             });
+        // F2c Plan 2 Task 3: CPU mesh geometry for NriMeshBufferCache. Looked
+        // up live -- m_resolver is built at stage time, this vehicle later.
+        m_viewportTargets.graph->SetMeshSupply(
+            [this](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+            {
+                if (!m_resolver)
+                    return {};
+                const auto s = m_resolver->MeshSupply(id);
+                return { s.mesh, s.state };
+            });
         // F2b Task 12: which of a null artifact answer's two meanings applies
         // (still cooking vs. permanently refused) -- see NriTextureCache::
         // SetCookPendingOracle's own doc comment for the full contract this

@@ -8,8 +8,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Host/OffscreenVehicle.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
+#include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 
 #undef ERROR
@@ -268,4 +270,57 @@ TEST_CASE("pixel: a mesh with no indices or no vertices is refused, not uploaded
 
     cache->Release(v.nri->Graves(), 1);
     v.nri->Graves().Reap(1);
+}
+
+TEST_CASE("pixel: the vehicle owns one mesh buffer cache, released on teardown",
+          "[gpu][meshcache]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    Arcane::HostConfig cfg;
+    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.headless = true;
+    auto v = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
+    REQUIRE(v != nullptr);
+    REQUIRE(v->Graph().MeshBuffers() != nullptr);
+
+    MeshData cube = Arcane::BuildCube(1.0f);
+    v->Graph().SetMeshSupply([&](const Guid&) {
+        return SupplyResult{ &cube, MeshResolveState::Ready };
+    });
+    REQUIRE(v->Graph().MeshBuffers()->Resolve(GuidA(), 1) != nullptr);
+    CHECK(v->Graph().MeshBuffers()->ResidentCount() == 1u);
+
+    const std::uint64_t errors = Arcane::RenderErrorCount();
+    v.reset();
+    CHECK(Arcane::RenderErrorCount() == errors);
+}
+
+TEST_CASE("pixel: ResizeOffscreen does NOT release resident mesh buffers",
+          "[gpu][meshcache]")
+{
+    // Resident meshes are PERSISTENT and are not pool tenants -- the same reason
+    // m_textures is "deliberately NOT released on Resize" (its own declaration
+    // comment). Re-uploading every mesh on a viewport drag would be the ring cliff
+    // reintroduced through a different door.
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    Arcane::HostConfig cfg;
+    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.headless = true;
+    auto v = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
+    REQUIRE(v != nullptr);
+
+    MeshData cube = Arcane::BuildCube(1.0f);
+    v->Graph().SetMeshSupply([&](const Guid&) {
+        return SupplyResult{ &cube, MeshResolveState::Ready };
+    });
+    const NriMeshBufferCache::Resident* first =
+        v->Graph().MeshBuffers()->Resolve(GuidA(), 1);
+    REQUIRE(first != nullptr);
+    CHECK(v->Graph().MeshBuffers()->ResidentCount() == 1u);
+
+    v->Graph().ResizeOffscreen(320, 200);
+    const NriMeshBufferCache::Resident* after =
+        v->Graph().MeshBuffers()->Resolve(GuidA(), 2);
+    CHECK(after == first);
+    CHECK(v->Graph().MeshBuffers()->ResidentCount() == 1u);
 }

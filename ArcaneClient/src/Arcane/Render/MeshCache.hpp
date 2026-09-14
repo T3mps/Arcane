@@ -117,6 +117,11 @@ namespace Arcane
         // them).
         const std::unordered_map<Guid, MeshEntry>& Table() const;
 
+        // F2c Plan 2 Task 3: the GPU cache's supply needs Pending vs Failed
+        // without re-resolving. Ready = in Table(); Failed = known-failed set;
+        // PendingCook = neither (never requested, or Imported still cooking).
+        [[nodiscard]] MeshResolveState Query(const Guid& id) const;
+
     private:
         struct Impl;
         Impl* m_impl = nullptr;

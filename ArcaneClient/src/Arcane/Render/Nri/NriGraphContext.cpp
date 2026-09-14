@@ -410,6 +410,10 @@ namespace Arcane
         if (!m_textures)
             return false;   // already logged
 
+        m_meshBuffers = NriMeshBufferCache::Create(*m_device);
+        if (!m_meshBuffers)
+            return false;   // already logged
+
         m_graph = std::make_unique<RenderGraph>();
 
         // The offline artifacts the nodes below need as RAW BYTECODE (NRI's
@@ -790,6 +794,8 @@ namespace Arcane
         // ordering hazard the node releases above exist to avoid.
         if (m_textures)
             m_textures->Release(graves, fence);
+        if (m_meshBuffers)
+            m_meshBuffers->Release(graves, fence);
 
         // The sanctioned cache release (see NriPipelineCache.hpp): explicit,
         // at a fence the caller knows, rather than the destructor's direct-
@@ -1091,6 +1097,11 @@ namespace Arcane
         // release is what buries the imported view naming this texture -- the
         // identical ordering ~NriGraphContext uses, and the reason neither
         // destroys the output directly.
+        //
+        // m_meshBuffers is deliberately NOT released here -- resident meshes
+        // are persistent, not pool tenants (the same reason m_textures is
+        // kept across Resize). Re-uploading every mesh on a viewport drag
+        // would reintroduce the ring cliff through a different door.
         if (m_offscreen)
         {
             graves.Bury(fence, [graveCore, t = m_offscreen] { graveCore->DestroyTexture(t); });
@@ -1714,6 +1725,13 @@ namespace Arcane
         if (!m_graph->Execute(desc, *compiled))
             return RenderErrorCount() > errorsBefore ? FrameOutcome::Failed : FrameOutcome::Skipped;
 
+        // BEFORE the advance, deliberately: this frame's Resolve calls stamped
+        // lastDrawnFrame with m_frameIndex's CURRENT value, and SelectEvictions
+        // protects entries carrying exactly it. Evicting with the advanced counter
+        // protects nothing and can drop geometry the frame just recorded still names.
+        if (m_meshBuffers)
+            m_meshBuffers->EvictToBudget(m_frameIndex, m_graves,
+                                         m_graph ? m_graph->DebugSubmitCount() : 0);
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, after the frame's present and
@@ -1857,6 +1875,10 @@ namespace Arcane
         stamp.signalFenceNum = 1;
         (void)ARC_NRI_CHECK(m_device->Core().QueueSubmit(*m_device->GraphicsQueue(), stamp));
 
+        // BEFORE the advance -- same contract as RenderFrame() above.
+        if (m_meshBuffers)
+            m_meshBuffers->EvictToBudget(m_frameIndex, m_graves,
+                                         m_graph ? m_graph->DebugSubmitCount() : 0);
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, published ONLY when the caller has said
