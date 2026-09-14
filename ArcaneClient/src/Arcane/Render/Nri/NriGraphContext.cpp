@@ -1729,6 +1729,13 @@ namespace Arcane
         // lastDrawnFrame with m_frameIndex's CURRENT value, and SelectEvictions
         // protects entries carrying exactly it. Evicting with the advanced counter
         // protects nothing and can drop geometry the frame just recorded still names.
+        //
+        // AND ONLY AFTER A SUCCESSFUL Execute, also deliberately: the two early
+        // returns above (Failed / Skipped) leave the budget unchecked for that frame.
+        // A vehicle that skips every frame therefore never evicts -- accepted,
+        // because a skipping vehicle is not growing its resident set either (nothing
+        // resolved, nothing uploaded), and evicting behind a half-built command
+        // buffer is the one thing the frame-boundary rule above exists to prevent.
         if (m_meshBuffers)
             m_meshBuffers->EvictToBudget(m_frameIndex, m_graves,
                                          m_graph ? m_graph->DebugSubmitCount() : 0);

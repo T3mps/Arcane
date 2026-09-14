@@ -190,6 +190,91 @@ TEST_CASE("pixel: a mesh uploads once and stays resident across frames",
     v.nri->Graves().Reap(1);
 }
 
+TEST_CASE("mesh buffer cache: eviction ERASES the entry -- the next Resolve re-asks the "
+          "supply", "[render]")
+{
+    // Final-review I2, ruled: the budget counts CPU+GPU, so eviction must free BOTH
+    // or ResidentBytes() reports a number the process is not honouring. The CPU copy
+    // that makes the re-upload cheap lives in the SUPPLY (SceneRenderResolver's
+    // in-memory MeshTable), which is why re-asking is a table lookup and not a disk
+    // read -- pinned here device-less, on the NONE backend, because the rule is about
+    // bookkeeping rather than about any real buffer.
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+    auto cache = MakeDevicelessCache(*device);
+
+    MeshData cube = Arcane::BuildCube(1.0f);
+    int asks = 0;
+    cache->SetMeshSupply([&](const Guid&) {
+        ++asks;
+        return SupplyResult{ &cube, MeshResolveState::Ready };
+    });
+
+    const NriMeshBufferCache::Resident* a = cache->Resolve(GuidA(), 1);
+    REQUIRE(cache->Resolve(GuidB(), 2) != nullptr);
+    REQUIRE(cache->Resolve(GuidC(), 3) != nullptr);
+    REQUIRE(a != nullptr);
+    CHECK(asks == 3);
+    CHECK(cache->ResidentCount() == 3u);
+
+    const std::uint64_t one = a->bytes;
+    REQUIRE(one > 0u);
+    CHECK(cache->ResidentBytes() == one * 3u);
+
+    cache->EvictToBudget(4, device->Graves(), 1, /*budget=*/ one * 2 + 1);
+    CHECK(cache->ResidentCount() == 2u);
+    // EXACTLY the resident bytes: nothing hides behind a cold entry any more.
+    CHECK(cache->ResidentBytes() == one * 2u);
+
+    REQUIRE(cache->Resolve(GuidA(), 5) != nullptr);
+    CHECK(asks == 4);                        // the supply IS asked again
+    CHECK(cache->ResidentCount() == 3u);
+    CHECK(cache->ResidentBytes() == one * 3u);
+
+    cache->Release(device->Graves(), 2);
+    CHECK(cache->ResidentCount() == 0u);
+    CHECK(cache->ResidentBytes() == 0u);
+    device->Graves().Reap(2);
+}
+
+TEST_CASE("mesh buffer cache: a zero-size mesh is refused ONCE and never retried",
+          "[render]")
+{
+    // The device-less mirror of the [gpu][meshcache] zero-size case, which is the
+    // one upload refusal reachable without a real adapter -- final-review I1's
+    // never-retried half. A refusal that retried per frame is what leaked an
+    // nri::Buffer per frame before the fix.
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+    auto cache = MakeDevicelessCache(*device);
+
+    MeshData empty;
+    int asks = 0;
+    cache->SetMeshSupply([&](const Guid&) {
+        ++asks;
+        return SupplyResult{ &empty, MeshResolveState::Ready };
+    });
+    CHECK(cache->Resolve(GuidA(), 1) == nullptr);
+    for (std::uint64_t frame = 2; frame <= 6; ++frame)
+        CHECK(cache->Resolve(GuidA(), frame) == nullptr);
+    CHECK(asks == 1);                          // memoized, not once per frame
+    CHECK(cache->ResidentCount() == 0u);
+    CHECK(cache->ResidentBytes() == 0u);       // and nothing hidden in a CPU copy
+
+    // Invalidate is the un-latch, exactly as for a Failed supply.
+    MeshData cube = Arcane::BuildCube(1.0f);
+    cache->SetMeshSupply([&](const Guid&) {
+        ++asks;
+        return SupplyResult{ &cube, MeshResolveState::Ready };
+    });
+    cache->Invalidate(GuidA(), device->Graves(), 1);
+    REQUIRE(cache->Resolve(GuidA(), 7) != nullptr);
+    CHECK(asks == 2);
+
+    cache->Release(device->Graves(), 2);
+    device->Graves().Reap(2);
+}
+
 TEST_CASE("pixel: EvictToBudget drops the least-recently-drawn mesh and re-uploads it"
           " on the next ask", "[gpu][meshcache]")
 {
@@ -217,12 +302,20 @@ TEST_CASE("pixel: EvictToBudget drops the least-recently-drawn mesh and re-uploa
     const std::uint64_t one = a->bytes;
     cache->EvictToBudget(4, v.nri->Graves(), 1, /*budget=*/ one * 2 + 1);
     CHECK(cache->ResidentCount() == 2u);
+    CHECK(cache->ResidentBytes() == one * 2u);   // the CPU half went too (I2)
 
     const NriMeshBufferCache::Resident* a2 = cache->Resolve(GuidA(), 5);
     REQUIRE(a2 != nullptr);
     CHECK(a2->ready);
-    CHECK(asks == 3);        // CPU copy, not the supply
+    // FLIPPED at final review (I2, ruled): eviction ERASES the entry, CPU copy
+    // included, so this is a clean miss and the supply IS asked a fourth time. In
+    // production that supply is SceneRenderResolver's in-memory MeshTable, so the
+    // re-ask costs a table lookup rather than an artifact read -- which is what
+    // makes "keep the CPU copy for cheap re-upload" (s7.2) true one layer up
+    // instead of false down here.
+    CHECK(asks == 4);
     CHECK(cache->ResidentCount() == 3u);
+    CHECK(cache->ResidentBytes() == one * 3u);
 
     cache->Release(v.nri->Graves(), 2);
     v.nri->Graves().Reap(2);

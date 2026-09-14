@@ -395,8 +395,14 @@ namespace Arcane
         // Safe to skip entirely -- Record() then reports the missing pipeline
         // once and draws nothing. Device-less [nri] frame-shape cases pass a
         // null context to AddMeshNode, which skips this.
+        //
+        // `meshBuffers` is NULLABLE, and the two halves are independent: a null cache
+        // skips the RESIDENCY loop ONLY, and the pipeline is still resolved. Gating
+        // both on the cache (the pre-fix call-site shape) meant a hypothetically
+        // cache-less context also lost its pipeline and drew nothing behind a
+        // "missing pipeline" warning that named the wrong cause.
         void Prepare(nri::Format canvasFormat, const MeshSceneDesc& scene,
-                     NriMeshBufferCache& meshBuffers, std::uint64_t frameCounter);
+                     NriMeshBufferCache* meshBuffers, std::uint64_t frameCounter);
 
         // Records one scene's opaque geometry into an ALREADY-OPEN raster pass
         // whose colour attachment is the canvas and whose depth attachment is
@@ -513,15 +519,11 @@ namespace Arcane
         // shared cache. Null (already logged) if the cache refused it.
         [[nodiscard]] nri::Pipeline* PipelineFor(nri::Format canvasFormat);
 
-        // ONE distinct MeshData's ring allocation for ONE frame. Record()
-        // builds this table so a scene of twenty cubes is one upload and twenty
-        // draws rather than twenty uploads.
-        //
-        // This frame's distinct-guid residency table, filled by Prepare.
-        // A RESERVED MEMBER, not a local -- the same steady-state-allocates-
-        // nothing rule m_uploads carried for the ring path. Past
-        // kInitialResidentSlots distinct meshes it grows once per high-water
-        // mark.
+        // How many distinct mesh guids m_residents reserves room for. Prepare
+        // builds that table once per frame so a scene of twenty cubes resolves
+        // once and draws twenty times; a RESERVED MEMBER rather than a local, so
+        // the steady state allocates nothing inside the declaration window. Past
+        // this many distinct meshes the vector grows once per high-water mark.
         static constexpr std::size_t kInitialResidentSlots = 16;
 
         [[nodiscard]] std::uint64_t ArenaOffset(std::uint32_t frameSlot) const
@@ -600,6 +602,14 @@ namespace Arcane
 
         // This frame's distinct-guid residency -- filled by Prepare, looked
         // up by Record. Never resolved at record time.
+        //
+        // BORROWED POINTERS INTO THE CACHE'S MAP, so the table is cleared at BOTH
+        // ends of its life: at the top of Prepare (it is about to be rebuilt) and at
+        // the bottom of Record (its last reader is done). Without the second clear,
+        // an InvalidateMeshGeometry landing between Record(N) and Prepare(N+1) --
+        // which erases the map node -- would leave dangling pointers sitting in a
+        // live member. Nothing dereferences them today; clearing costs nothing and
+        // removes the trap rather than documenting it.
         std::vector<std::pair<Guid, const NriMeshBufferCache::Resident*>> m_residents;
 
         // One WARN/ERROR each, not one per instance per frame, for the

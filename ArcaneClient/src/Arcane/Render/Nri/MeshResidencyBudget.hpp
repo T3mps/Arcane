@@ -6,13 +6,37 @@
 // arithmetic that decides what happens is testable independently of the API that
 // carries it out.
 //
-// ONE COMBINED CPU+GPU BYTE BUDGET. The CPU copy is KEPT (re-upload after eviction
-// or a device recreate; editor reads) and therefore COUNTED -- a budget that
-// ignored it would under-report by exactly the amount that is easiest to forget.
+// ONE COMBINED CPU+GPU BYTE BUDGET, AND AN HONEST ONE. A resident entry costs its
+// GPU buffers PLUS the CPU copy the cache holds beside them, so both halves are
+// COUNTED -- a budget that ignored the CPU half would under-report by exactly the
+// amount that is easiest to forget.
+//
+// AND THE COROLLARY, which is what makes the count honest rather than merely
+// generous (final-review I2, ruled): EVICTION ERASES THE WHOLE ENTRY, CPU COPY
+// INCLUDED. A cache that freed only the GPU half would leave every evicted mesh's
+// geometry in memory, uncounted and unshrinkable, while ResidentBytes() reported
+// "fine" -- the one hazard s12 raises about residency, dressed as a policy.
+// NriMeshBufferCache::ResidentBytes() is therefore EXACTLY the resident CPU+GPU
+// bytes, with nothing hiding behind a not-ready entry.
+//
+// THE CPU COPY THAT SURVIVES AN EVICTION LIVES ONE LAYER UP, in the SUPPLY --
+// SceneRenderResolver's in-memory MeshTable (SceneResources.hpp), already populated
+// by the per-frame Request sweep. So s7.2's "re-upload after eviction without a
+// disk read" still holds exactly: the first draw after an eviction costs one table
+// lookup plus one upload, never an artifact read.
 //
 // 512 MiB, a compile-time constant for now. It becomes a cvar when the parked cvar
 // arc lands, and that arc's own trigger discipline decides when -- this constant is
 // NOT a placeholder to be "fixed" ahead of it.
+//
+// PER VEHICLE, NOT PER PROCESS (final-review I3). Every NriGraphContext creates its
+// own NriMeshBufferCache (NriGraphContext.cpp's Create), so the editor's viewport
+// vehicle, its thumbnail-harvester vehicle and one vehicle per open Mesh/Shader
+// document EACH get the full budget below -- N x 512 MiB worst case, not 512 MiB
+// shared. That mirrors NriTextureCache's own per-vehicle shape (which has no byte
+// budget at all), so it is not a new divergence, but it IS the real shape the
+// parked cvar arc inherits: a process-wide pool needs a shared allocator above
+// these caches, not a smaller constant here.
 //
 // A DEDICATED MESH BUDGET HAS FIRST-CLASS UE PRECEDENT, and the earlier reading of
 // Decision 7 understated it: alongside r.Streaming.PoolSize

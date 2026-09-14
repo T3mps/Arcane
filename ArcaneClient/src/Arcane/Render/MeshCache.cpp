@@ -20,6 +20,13 @@ namespace Arcane
         Services services;
         std::unordered_map<Guid, MeshEntry> table;
         std::unordered_set<Guid> failed;
+        // Every valid guid Request() has ever been handed. NOT a fourth outcome --
+        // it exists only so Query can tell "this guid is genuinely still cooking"
+        // from "nobody ever asked for this guid", which are otherwise the same
+        // answer (see Query). One Guid per referenced mesh; never consulted on any
+        // hot path.
+        std::unordered_set<Guid> requested;
+        bool warnedNeverRequested = false;   // one-shot, the house latch idiom
     };
 
     MeshCache::MeshCache(Services services)
@@ -35,19 +42,47 @@ namespace Arcane
         return m_impl->table;
     }
 
+    // PRECONDITION: `id` has been Request()ed -- by the per-frame sweep, or by a
+    // caller of its own. PendingCook means "not resolved YET, ask again next frame",
+    // and for a guid nobody ever requested that promise is false: nothing will ever
+    // promote it, so the answer is quiet-and-retried-forever where s7.1 asks for
+    // "missing/refused -> draw nothing LOUDLY".
+    //
+    // NOT A FOURTH MeshResolveState (final-review I4, ruled): that enum is Plan 1's
+    // type and travels three layers (here -> SceneRenderResolver::MeshSupply ->
+    // NriMeshBufferCache::SupplyResult -> the harvester), and widening it at closeout
+    // is unrun code on every one of them for a case that self-corrects in the scene
+    // path -- the resolver's Refresh sweep Requests every referenced mesh, so an
+    // unresolvable guid reaches `failed` within a frame. The exposure is a consumer
+    // resolving THROUGH this cache without going through that sweep, and the
+    // one-shot WARN below is what stops that consumer inheriting the silence.
     MeshResolveState MeshCache::Query(const Guid& id) const
     {
         if (m_impl->table.contains(id))
             return MeshResolveState::Ready;
         if (m_impl->failed.contains(id))
             return MeshResolveState::Failed;
+        if (id.IsValid() && !m_impl->requested.contains(id) && !m_impl->warnedNeverRequested)
+        {
+            m_impl->warnedNeverRequested = true;
+            ARC_WARN("MeshCache: Query({}) for a mesh that was never Request()ed -- answering "
+                     "PendingCook, which nothing will ever promote. The caller owes a Request "
+                     "(the per-frame sweep does this). Further occurrences are silent.",
+                     id.ToString());
+        }
         return MeshResolveState::PendingCook;
     }
 
     void MeshCache::Request(const Guid& id)
     {
         Impl& im = *m_impl;
-        if (!id.IsValid() || im.table.contains(id) || im.failed.contains(id))
+        if (!id.IsValid())
+            return;
+        // Recorded BEFORE the idempotence guard, so a guid that is already Ready or
+        // already known-failed still counts as requested -- Query's precondition is
+        // "somebody asked", not "somebody asked and it is still pending".
+        im.requested.insert(id);
+        if (im.table.contains(id) || im.failed.contains(id))
             return;
 
         // Negative-result caching into a SEPARATE set, deliberately unlike
@@ -142,5 +177,8 @@ namespace Arcane
     {
         m_impl->table.clear();
         m_impl->failed.clear();
+        // A Guid resolves through the CURRENT project's registry, so "was requested"
+        // is a claim about the outgoing project and goes with the rest of the state.
+        m_impl->requested.clear();
     }
 }

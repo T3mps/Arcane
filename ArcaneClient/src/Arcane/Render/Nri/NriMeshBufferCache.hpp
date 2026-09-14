@@ -23,7 +23,13 @@
 //   * A BYTE BUDGET AND AN LRU (MeshResidencyBudget.hpp). NriTextureCache has
 //     neither -- it never evicts a single entry (NriGraphContext's own note says
 //     so). Mesh geometry is where eviction became a real question (F2a's spec
-//     assigned it here by name).
+//     assigned it here by name). EVICTION ERASES THE WHOLE ENTRY, the CPU copy
+//     with it (final-review I2, ruled), so ResidentBytes() is exactly the
+//     resident CPU+GPU bytes and a cold entry can never hide memory behind a
+//     `ready == false`. The CPU copy that a re-upload reads after an eviction
+//     is NOT kept here -- it lives in the SUPPLY (SceneRenderResolver's
+//     in-memory MeshTable), so the next Resolve asks the supply again and that
+//     ask is a table lookup, never an artifact read.
 //   * NO COLOUR SPACE. A vertex buffer has no sRGB question, so the key is a bare
 //     Guid rather than (Guid, space).
 //   * NO PLACEHOLDER. A pending texture gets a checkerboard, which is a real,
@@ -78,10 +84,20 @@ namespace Arcane
             std::uint32_t indexCount   = 0;
             std::uint64_t bytes        = 0;
             std::uint64_t lastDrawnFrame = 0;
-            // The CPU copy is KEPT (re-upload after eviction/device recreate; editor
-            // reads) and counted in `bytes` -- see MeshResidencyBudget.hpp.
+            // The CPU copy of a RESIDENT mesh, counted in `bytes` alongside the two
+            // GPU buffers (MeshResidencyBudget.hpp). It does NOT outlive the entry:
+            // eviction erases the whole entry, and a refused upload clears this
+            // before memoizing, so `cpu` is non-empty if and only if `ready`.
             MeshData      cpu;
             bool          ready = false;   // upload succeeded; GPU objects are bindable
+            // Why this entry is not ready, when it is not. An NRI failure (a refused
+            // CreateCommittedBuffer or UploadData) is MEMOIZED and never retried --
+            // retrying it per frame is what leaked a buffer a frame before
+            // final-review I1. A supply that answered Failed memoizes as an empty
+            // entry with this flag CLEAR; the two are distinguished here so a reader
+            // (and a test) can tell "the device refused it" from "the asset is
+            // broken". Only Invalidate/Release clear either memo.
+            bool          uploadRefused = false;
         };
 
         static std::unique_ptr<NriMeshBufferCache> Create(NriDevice& device);
@@ -106,6 +122,11 @@ namespace Arcane
         // out from under it -- the same discipline NriTextureCache::Invalidate keeps.
         // Reports ONCE, at WARN, when the protected set alone exceeds the budget.
         //
+        // ERASES the evicted entries outright, CPU copy included -- see the banner and
+        // MeshResidencyBudget.hpp. The next Resolve of an evicted guid is therefore a
+        // full MISS: the supply is asked again (an in-memory MeshTable lookup in
+        // production, not a disk read) and the mesh re-uploads.
+        //
         // `budget` defaults to kMeshResidencyBudgetBytes. Tests pass a smaller value so
         // a handful of cubes can exercise the LRU without filling 512 MiB.
         void EvictToBudget(std::uint64_t frameCounter, Graveyard& graveyard,
@@ -120,11 +141,17 @@ namespace Arcane
 
         // Buries every NRI object this cache owns at `fence` and empties it.
         // Idempotent. THE DEVICE-LOSS / RECREATE HOOK TOO: a recreated device's
-        // buffers are new objects, and because the CPU copy is kept, the next Resolve
-        // re-uploads from memory rather than re-reading an artifact from disk.
+        // buffers are new objects, so every entry goes and the next Resolve is a
+        // clean miss that re-asks the supply -- which, in production, is
+        // SceneRenderResolver's in-memory MeshTable, so the re-upload still costs a
+        // table lookup rather than an artifact read.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
+        // Entries that are READY: uploaded, bindable, drawable. Nothing else is ever
+        // counted, and nothing else ever holds bytes -- see Resident::cpu.
         [[nodiscard]] std::size_t   ResidentCount() const noexcept;
+        // EXACTLY the resident CPU+GPU bytes -- the number the budget bounds, with no
+        // cold CPU copy hiding behind it (final-review I2).
         [[nodiscard]] std::uint64_t ResidentBytes() const noexcept;
 
     private:

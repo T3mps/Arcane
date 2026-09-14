@@ -120,6 +120,11 @@ namespace Arcane
         // F2c Plan 2 Task 3: the GPU cache's supply needs Pending vs Failed
         // without re-resolving. Ready = in Table(); Failed = known-failed set;
         // PendingCook = neither (never requested, or Imported still cooking).
+        //
+        // PRECONDITION: `id` has been Request()ed. PendingCook is a promise that
+        // asking again will eventually resolve, and only a requested guid can keep
+        // it -- see the definition for the full account and for the one-shot WARN a
+        // never-requested guid gets instead of a fourth state.
         [[nodiscard]] MeshResolveState Query(const Guid& id) const;
 
     private:

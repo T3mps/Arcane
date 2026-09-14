@@ -774,9 +774,14 @@ namespace
     using MeshSupplyFn     = Arcane::NriMeshBufferCache::MeshSupplyFn;
     using MeshSupplyResult = Arcane::NriMeshBufferCache::SupplyResult;
 
-    MeshSupplyFn SupplyOne(const Arcane::Guid& id, const Arcane::MeshData& data)
+    // The GUIDS are captured BY VALUE, the MeshData by reference, on purpose: a Guid
+    // is two words, so copying it costs nothing and removes a dangling-reference
+    // footgun from a helper other tests will copy. The MeshData is the big thing the
+    // supply must hand back as a live pointer, and every caller keeps it alive across
+    // the frames it drives.
+    MeshSupplyFn SupplyOne(Arcane::Guid id, const Arcane::MeshData& data)
     {
-        return [&id, &data](const Arcane::Guid& g) -> MeshSupplyResult
+        return [id, &data](const Arcane::Guid& g) -> MeshSupplyResult
         {
             if (g == id)
                 return { &data, Arcane::MeshResolveState::Ready };
@@ -784,10 +789,10 @@ namespace
         };
     }
 
-    MeshSupplyFn SupplyTwo(const Arcane::Guid& a, const Arcane::MeshData& da,
-                           const Arcane::Guid& b, const Arcane::MeshData& db)
+    MeshSupplyFn SupplyTwo(Arcane::Guid a, const Arcane::MeshData& da,
+                           Arcane::Guid b, const Arcane::MeshData& db)
     {
-        return [&](const Arcane::Guid& g) -> MeshSupplyResult
+        return [a, b, &da, &db](const Arcane::Guid& g) -> MeshSupplyResult
         {
             if (g == a)
                 return { &da, Arcane::MeshResolveState::Ready };

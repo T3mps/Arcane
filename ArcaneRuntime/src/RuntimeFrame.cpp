@@ -811,6 +811,11 @@ bool CaptureTail(FrameIo& io)
                 io.compareEvaluated = true;
             }
 
+            // THE SAME RULE Arcane::SettleConverged spells (Host/SettleBound.hpp),
+            // left inline here deliberately: the runtime's `idle` is just its own
+            // shaderIdle (no cook queue, no thumbnail harvester to widen with), which
+            // is the case that header's own comment carves out. Spelled inline, but
+            // NOT a second rule -- change one and change both.
             if (byteEqual && idle && matches)
             {
                 io.settleConverged = true;

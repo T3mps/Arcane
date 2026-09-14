@@ -225,11 +225,10 @@ namespace Arcane
         m_vertexInput.streams      = &m_stream;
         m_vertexInput.streamNum    = 1;
 
-        // Reserved once so Record()'s per-frame upload table keeps the STEADY
-        // STATE free of heap traffic inside the recording window. It is not an
-        // absolute: a frame carrying more than kInitialUploadSlots distinct
-        // meshes grows the vector mid-recording. See Upload's own comment for
-        // why that qualified claim is the honest one.
+        // Reserved once so Prepare()'s per-frame residency table keeps the STEADY
+        // STATE free of heap traffic inside the declaration window. It is not an
+        // absolute: a frame carrying more than kInitialResidentSlots distinct meshes
+        // grows the vector once, on the high-water mark.
         m_residents.reserve(kInitialResidentSlots);
 
         return CreateBindless() && CreateBindings() && CreateConstantArena() && CreateSets();
@@ -766,7 +765,7 @@ namespace Arcane
     }
 
     void MeshNode::Prepare(nri::Format canvasFormat, const MeshSceneDesc& scene,
-                           NriMeshBufferCache& meshBuffers, std::uint64_t frameCounter)
+                           NriMeshBufferCache* meshBuffers, std::uint64_t frameCounter)
     {
         // The PSO, built HERE so a first-frame pipeline compile does not land
         // inside the recording window. Re-resolved every frame because the
@@ -778,7 +777,13 @@ namespace Arcane
 
         // Residency at DECLARATION time -- UploadData submits and waits
         // internally. Record only looks this table up.
+        //
+        // GATED SEPARATELY FROM THE PIPELINE ABOVE, deliberately: a cache-less
+        // context still gets its pipeline and still reports the real reason it drew
+        // nothing, instead of a "missing pipeline" warning naming the wrong cause.
         m_residents.clear();
+        if (!meshBuffers)
+            return;
         for (const MeshInstance& instance : scene.instances)
         {
             if (instance.mesh.IsNil())
@@ -795,7 +800,7 @@ namespace Arcane
             if (seen)
                 continue;
             m_residents.push_back({ instance.mesh,
-                                    meshBuffers.Resolve(instance.mesh, frameCounter) });
+                                    meshBuffers->Resolve(instance.mesh, frameCounter) });
         }
     }
 
@@ -803,6 +808,18 @@ namespace Arcane
                           std::uint32_t frameSlot)
     {
         const nri::CoreInterface& core = context.core;
+
+        // m_residents holds BORROWED pointers into NriMeshBufferCache's map and this
+        // function is their last reader, so the table is dropped on EVERY exit path
+        // -- not just the tail. Between Record(N) and Prepare(N+1) an
+        // InvalidateMeshGeometry erases map nodes; leaving stale pointers in a live
+        // member for that window is a trap even though nothing walks it today. See
+        // the member's own declaration comment.
+        struct ResidentScope
+        {
+            std::vector<std::pair<Guid, const NriMeshBufferCache::Resident*>>* table;
+            ~ResidentScope() { table->clear(); }
+        } residentScope{ &m_residents };
 
         // ============ THE DEPTH CLEAR, and ONLY the depth clear ============
         // Graph attachments are LOAD/STORE and the declaration API carries no
@@ -997,11 +1014,12 @@ namespace Arcane
         // it and what a wrong one costs.
         if (context)
         {
+            // UNCONDITIONAL once a node exists: MeshBuffers() may be null, and
+            // Prepare's own residency half is what skips then -- the PIPELINE half
+            // must still run (see Prepare's declaration comment).
             if (MeshNode* node = context->Mesh())
-            {
-                if (NriMeshBufferCache* cache = context->MeshBuffers())
-                    node->Prepare(canvasFormat, scene, *cache, context->PresentedFrames());
-            }
+                node->Prepare(canvasFormat, scene, context->MeshBuffers(),
+                              context->PresentedFrames());
         }
 
         // `depth` is captured by reference ([&]) below, not shared_ptr -- safe
