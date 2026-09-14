@@ -1,6 +1,6 @@
 # Game module boilerplate — `Arcane::GameModule` + engine-owned scene systems
 
-**Status:** design, 2026-09-13. Follows the arcbuild driver arc
+**Status:** implemented 2026-09-13 (plan `docs/plans/2026-09-13-game-module-boilerplate-plan.md`, rulings R1–R8 and the measured Closeout there). Follows the arcbuild driver arc
 (`docs/specs/2026-09-13-arcbuild-driver-design.md`, implemented the same
 day). Implementation plan to follow via `superpowers:writing-plans`. User
 rulings folded in: the module's code is a **class deriving
