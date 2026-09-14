@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Arcane::Editor
@@ -190,4 +191,25 @@ namespace Arcane::Editor
 
     [[nodiscard]] Arcane::Guid FindReusableMeshMaterial(
         std::span<const MaterialCandidate> candidates, const std::string& gltfMaterialName);
+
+    // F2c Plan 2 Task 6: among (meshGuid, importedSource) pairs, the unique
+    // companion of `modelGuid`. Zero or several matches -> nullopt (never guess
+    // -- the same rule MintOrUpdateCompanionMesh uses). Cook completion
+    // invalidates THIS guid, never the model guid.
+    [[nodiscard]] inline std::optional<Arcane::Guid> UniqueImportedCompanion(
+        const Arcane::Guid& modelGuid,
+        std::span<const std::pair<Arcane::Guid, Arcane::Guid>> meshIdAndImportedSource)
+    {
+        std::optional<Arcane::Guid> found;
+        int n = 0;
+        for (const auto& [meshId, imported] : meshIdAndImportedSource)
+        {
+            if (imported == modelGuid)
+            {
+                ++n;
+                found = meshId;
+            }
+        }
+        return n == 1 ? found : std::nullopt;
+    }
 }

@@ -355,3 +355,24 @@ TEST_CASE("material reuse: an UNNAMED glTF material never matches anything", "[e
     const std::vector<MaterialCandidate> candidates = { { Guid::Generate(), "", true } };
     CHECK_FALSE(FindReusableMeshMaterial(candidates, "").IsValid());
 }
+
+TEST_CASE("import wave: UniqueImportedCompanion is the unique .arcmesh of a model, never the model",
+          "[editor]")
+{
+    const Guid model = Guid::Generate();
+    const Guid mesh  = Guid::Generate();
+    const Guid other = Guid::Generate();
+    const std::pair<Guid, Guid> pairs[] = {
+        { mesh, model },
+        { Guid::Generate(), other },
+    };
+    const auto found = UniqueImportedCompanion(model, pairs);
+    REQUIRE(found.has_value());
+    CHECK(*found == mesh);
+    CHECK(*found != model);
+
+    CHECK_FALSE(UniqueImportedCompanion(Guid::Generate(), pairs).has_value());
+
+    const std::pair<Guid, Guid> dupes[] = { { mesh, model }, { Guid::Generate(), model } };
+    CHECK_FALSE(UniqueImportedCompanion(model, dupes).has_value());
+}

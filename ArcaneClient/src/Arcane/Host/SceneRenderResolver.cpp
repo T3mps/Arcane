@@ -275,6 +275,17 @@ namespace Arcane
         m_impl->meshes->Request(id);
     }
 
+    void SceneRenderResolver::InvalidateMeshArtifact(const Guid& id)
+    {
+        // GPU FIRST. MeshSupply/Prepare key residency on this same guid; if
+        // we rebuilt the CPU entry first, the next Resolve would HIT the
+        // still-resident OLD buffers and keep drawing the previous shape.
+        if (m_impl->services.invalidateMeshGeometry)
+            m_impl->services.invalidateMeshGeometry(id);
+        m_impl->meshes->Invalidate(id);
+        m_impl->meshes->Request(id);
+    }
+
     SceneRenderResolver::MeshGeometrySupply SceneRenderResolver::MeshSupply(const Guid& id) const
     {
         MeshGeometrySupply out;

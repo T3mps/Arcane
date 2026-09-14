@@ -118,6 +118,13 @@ namespace Arcane
             // graph context exists) leaves every mesh's albedo unresolved,
             // the flat baseColor path.
             std::function<std::uint32_t(const Guid&)> resolveMeshAlbedoSlot;
+
+            // F2c Plan 2 Task 6: drop resident GPU buffers for this .arcmesh
+            // guid. Injected for the same reason resolveMeshAlbedoSlot is --
+            // this class holds no device. Null (tests that do not care, a host
+            // before its graph exists) skips the GPU half; CPU Invalidate +
+            // Request still run.
+            std::function<void(const Guid&)> invalidateMeshGeometry;
         };
 
         // This frame's facts. `now` is the compile service's clock (monotonic
@@ -269,6 +276,20 @@ namespace Arcane
         // resolved VALUES of any .arcmat are untouched by a mesh edit. A
         // .arcmat re-save is InvalidateMaterial's business, below.
         void InvalidateMesh(const Guid& id);
+
+        // A mesh ARTIFACT changed (a cook landed for the .gltf/.glb this mesh
+        // imports from). Distinct from InvalidateMesh, which is a .arcmesh SAVE:
+        //   * InvalidateMeshArtifact  -> the GEOMETRY changed. Drop the resolved
+        //                                MeshEntry AND the resident GPU buffers, and
+        //                                re-request.
+        //   * InvalidateMesh          -> the .arcmesh changed (a slot reassignment, a
+        //                                topology edit). Drop the resolved MeshEntry and
+        //                                re-request, but KEEP THE RESIDENT BUFFERS when
+        //                                only slots moved -- see Task 7.
+        // `id` here is the .arcmesh's guid, not the model's: the caller maps the cooked
+        // MODEL guid to its companion through the mint (or the reference index), because
+        // the render side keys everything on the mesh asset the scene actually names.
+        void InvalidateMeshArtifact(const Guid& id);
 
         // A .arcmat was re-saved: re-resolve on the next Refresh. Hits BOTH the
         // sprite-material and post caches -- one Guid cannot be known to be

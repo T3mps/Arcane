@@ -895,3 +895,118 @@ TEST_CASE("SceneRenderResolver::InvalidateMaterial drops the WHOLE mesh-material
 
     std::error_code ec; fs::remove_all(dir, ec);
 }
+
+TEST_CASE("scene resolver: InvalidateMeshArtifact drops geometry AND residency",
+          "[mesh][host]")
+{
+    const fs::path dir = MakeTempDir("mesh_invalidate_artifact");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const fs::path meshFile = dir / "Game" / "Content" / "plane.arcmesh";
+    Arcane::MeshAssetData authored;
+    authored.id           = Arcane::Guid::Generate();
+    authored.name         = "probe-plane";
+    authored.source       = Arcane::MeshSource::Plane;
+    authored.subdivisions = 1;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
+    const Arcane::Guid meshId = authored.id;
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    int gpuDrops = 0;
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    rs.invalidateMeshGeometry = [&](const Arcane::Guid& g)
+    {
+        if (g == meshId)
+            ++gpuDrops;
+    };
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+
+    const auto vertexCount = [&]() -> std::size_t
+    {
+        const Arcane::MeshTable* t = rt.Registry().GetResource<Arcane::MeshTable>();
+        REQUIRE(t != nullptr);
+        const Arcane::MeshEntry* entry = t->Resolve(meshId);
+        REQUIRE(entry != nullptr);
+        return entry->data.vertices.size();
+    };
+    REQUIRE(vertexCount() == 4);
+    CHECK(gpuDrops == 0);
+
+    Arcane::MeshAssetData edited = authored;
+    edited.subdivisions = 3;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, edited));
+
+    resolver.InvalidateMeshArtifact(meshId);
+    CHECK(gpuDrops == 1);
+    CHECK(vertexCount() == 16);   // Invalidate-THEN-Request, no Refresh in between
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}
+
+TEST_CASE("scene resolver: a PENDING mesh is not latched as failed by invalidation",
+          "[mesh][host]")
+{
+    const fs::path dir = MakeTempDir("mesh_invalidate_pending");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
+
+    const Arcane::Guid modelGuid = Arcane::Guid::Generate();
+    const fs::path meshFile = dir / "Game" / "Content" / "imported.arcmesh";
+    Arcane::MeshAssetData authored;
+    authored.id             = Arcane::Guid::Generate();
+    authored.name           = "probe-imported";
+    authored.source         = Arcane::MeshSource::Imported;
+    authored.importedSource = modelGuid;
+    REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
+    const Arcane::Guid meshId = authored.id;
+
+    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    REQUIRE(rt.OpenProject(dir / "Game") == true);
+    REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
+
+    int pendingAsks = 0;
+    rt.AssetsFacade().SetCookPendingProbe(
+        [&](const Arcane::Guid& g)
+        {
+            if (g == modelGuid)
+            {
+                ++pendingAsks;
+                return true;
+            }
+            return false;
+        });
+
+    const Astra::Entity e = rt.Registry().CreateEntity();
+    Arcane::MeshRenderer mr; mr.mesh = meshId;
+    rt.Registry().AddComponent<Arcane::MeshRenderer>(e, mr);
+
+    Arcane::SceneRenderResolver::Services rs;
+    rs.runtime = &rt;
+    Arcane::SceneRenderResolver resolver(std::move(rs));
+
+    Arcane::SceneRenderResolver::FrameInfo frame;
+    frame.dt = 1.0 / 60.0;
+    resolver.Refresh(frame);
+    REQUIRE(pendingAsks >= 1);
+    const int asksAfterRefresh = pendingAsks;
+
+    const Arcane::MeshTable* table = rt.Registry().GetResource<Arcane::MeshTable>();
+    REQUIRE(table != nullptr);
+    CHECK(table->Resolve(meshId) == nullptr);   // pending -- not in the table, not failed
+
+    resolver.InvalidateMeshArtifact(meshId);
+    CHECK(pendingAsks > asksAfterRefresh);      // Request asked again, not memoized failed
+
+    std::error_code ec; fs::remove_all(dir, ec);
+}

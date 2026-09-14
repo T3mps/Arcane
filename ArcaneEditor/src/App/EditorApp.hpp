@@ -1604,7 +1604,10 @@ namespace Arcane::Editor
         // no project is open, `modelGuid` is invalid, or the fresh mesh artifact is not
         // (yet, or ever) available -- a refused/failed cook can still reach this call,
         // and that is not an error here.
-        void MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid);
+        // Returns the companion .arcmesh guid when one was found or minted
+        // (including a no-op slot-reconcile recook -- geometry may still have
+        // changed). nullopt when nothing to invalidate.
+        std::optional<Arcane::Guid> MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid);
 
         // F2c Task 15 (spec s6, R4): the shared import base -- `Content/
         // mesh_import_base.arcmat` (MaterialSurface::Mesh, baseColor white, albedo

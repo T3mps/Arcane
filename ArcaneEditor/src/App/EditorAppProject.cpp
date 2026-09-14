@@ -717,7 +717,17 @@ namespace Arcane::Editor
                 {
                     if (const auto mountPath = project->Registry().Resolve(guid))
                         if (Arcane::Editor::AssetKindOf(*mountPath) == Arcane::Editor::AssetKind::Model)
-                            MintOrUpdateCompanionMesh(guid);
+                        {
+                            const auto companion = MintOrUpdateCompanionMesh(guid);
+                            // F2c Plan 2 Task 6 / spec s7.3: drop CPU MeshEntry AND
+                            // GPU residency for the COMPANION .arcmesh, not the
+                            // model guid. Viewport graph only -- document-preview
+                            // NriGraphContext instances are not invalidated on
+                            // cook completion (F2b document-preview gap ruling;
+                            // F2c spec s7.3 re-accepts it). Heals on close/reopen.
+                            if (companion && m_resolver)
+                                m_resolver->InvalidateMeshArtifact(*companion);
+                        }
                 }
                 if (m_viewportTargets.graph)
                 {
@@ -1336,15 +1346,15 @@ namespace Arcane::Editor
     // assigns the result onto every NIL slot in the array this function is about to
     // write -- both branches below (update-in-place and fresh-mint) share the one
     // ApplyMintedMaterials call.
-    void EditorApp::MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid)
+    std::optional<Arcane::Guid> EditorApp::MintOrUpdateCompanionMesh(const Arcane::Guid& modelGuid)
     {
         const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project || !modelGuid.IsValid())
-            return;
+            return std::nullopt;
 
         const auto source = project->ResolveAsset(Arcane::AssetId::FromGuid(modelGuid));
         if (!source)
-            return;
+            return std::nullopt;
 
         // Step 1: the FRESH mesh artifact. OnCookCompleted invalidates BOTH memos for
         // this guid (Assets::InvalidateArtifact/InvalidateMeshArtifact) before calling
@@ -1355,7 +1365,7 @@ namespace Arcane::Editor
         // error condition.
         const Arcane::LoadedClientMesh* artifact = m_runtime->AssetsFacade().MeshArtifactFor(modelGuid);
         if (!artifact)
-            return;
+            return std::nullopt;
 
         const std::vector<std::string> authoritative =
             Arcane::Editor::SlotNamesFromSections(artifact->sections);
@@ -1414,21 +1424,18 @@ namespace Arcane::Editor
             // real change on the first cook that resolves a previously-nil slot.
             ApplyMintedMaterials(r.slots, mintedMaterials);
             if (r.slots == existingData->slots)
-                return;   // no-op re-cook -- never rewrite (the self-save feedback loop
-                          // PollAssetWatch's material branch already guards against;
-                          // rewriting an unchanged file here would re-trigger the
-                          // watcher for nothing).
+                return existingData->id;   // no-op slot rewrite -- geometry may still have changed
             Arcane::MeshAssetData updated = *existingData;
             updated.slots = r.slots;
             if (!Arcane::SaveMeshAsset(existingPath, updated))
             {
                 ARC_WARN("Arcane Editor: could not update companion mesh '{}'",
                          existingPath.generic_string());
-                return;
+                return existingData->id;
             }
             for (const std::string& w : r.warnings)
                 ARC_WARN("Arcane Editor: mesh '{}' -- {}", existingPath.filename().string(), w);
-            return;
+            return existingData->id;
         }
 
         // Step 4: mint a fresh companion (zero or several existing ones). A4's own
@@ -1454,17 +1461,18 @@ namespace Arcane::Editor
         {
             ARC_WARN("Arcane Editor: could not mint a companion mesh at '{}'",
                      mintPath.generic_string());
-            return;
+            return std::nullopt;
         }
         // Register immediately, CHECKED -- MintOrReuseSpriteForTexture's own account of
         // why above: an unregistered mint hands back a guid that can never resolve, so
         // a failure here must not be treated as a success.
         if (!m_runtime->RegisterCreatedAsset(mintPath))
-            return;
+            return std::nullopt;
         m_assetModel.MarkAllDirty();
         m_assetActivity.Push({ std::chrono::steady_clock::now(), data.id,
                                 mintPath.filename().string(),
                                 Arcane::Editor::AssetActivityKind::Created, {} });
+        return data.id;
     }
 
     // CreateMaterialAt's file-production half, factored out WITHOUT the OpenPath

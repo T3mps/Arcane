@@ -796,6 +796,11 @@ namespace Arcane::Editor
                 Arcane::NriGraphContext* graph = m_viewportTargets.graph.get();
                 return graph ? graph->ResolveMeshAlbedoSlot(g) : 0xFFFFFFFFu;
             };
+            rs.invalidateMeshGeometry = [this](const Arcane::Guid& g)
+            {
+                if (Arcane::NriGraphContext* graph = m_viewportTargets.graph.get())
+                    graph->InvalidateMeshGeometry(g);
+            };
             m_resolver =
                 std::make_unique<Arcane::SceneRenderResolver>(std::move(rs));
         }

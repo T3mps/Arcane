@@ -318,6 +318,11 @@ bool RuntimeApp::StageSpriteTables(Arcane::HostBoot::BootContext&)
         Arcane::NriGraphContext* graph = Graph();
         return graph ? graph->ResolveMeshAlbedoSlot(g) : 0xFFFFFFFFu;
     };
+    rs.invalidateMeshGeometry = [this](const Arcane::Guid& g)
+    {
+        if (Arcane::NriGraphContext* graph = Graph())
+            graph->InvalidateMeshGeometry(g);
+    };
     m_resolver.emplace(std::move(rs));
     return true;
 }
