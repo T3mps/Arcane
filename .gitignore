@@ -53,6 +53,10 @@ ReferenceProject/ReferenceProject.slnx
 ReferenceProject/*.vcxproj*
 ReferenceProject/Binaries/
 ReferenceProject/Intermediate/
+# Task 12a: a bless run points --project at this SOURCE tree, so a harvest
+# during a bless (MaterialPreviewHarvester's thumbnailDir) would otherwise
+# drop Saved/Thumbnails/<guid>.png here.
+ReferenceProject/Saved/
 
 # -- Stray MSBuild log dirs (txt/log pairs msbuild drops beside projects) ------
 ArcaneClient/ArcaneClient/

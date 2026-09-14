@@ -892,6 +892,22 @@ namespace Arcane::Editor
                 const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject() : nullptr;
                 return p ? (p->Root() / "Saved" / "Thumbnails") : std::filesystem::path{};
             };
+            // Task 12a fix (RCA H1): mirror SceneRenderResolver.cpp's
+            // MeshCache::Services wiring (meshArtifactFor/cookPending) verbatim,
+            // off the same Assets facade every other lambda in this block
+            // already reaches through m_runtime. Never wired here before, so
+            // an Imported .arcmesh's mesh-ASSET branch (StartOneMesh ->
+            // ResolveMeshData) always saw two null callbacks and permanently
+            // took MeshAsset.cpp's "no cooked artifact" Failed branch --
+            // an imported mesh's Asset Browser thumbnail could never resolve.
+            hs.meshArtifactFor = [this](const Arcane::Guid& id) -> const Arcane::LoadedClientMesh*
+            {
+                return m_runtime ? m_runtime->AssetsFacade().MeshArtifactFor(id) : nullptr;
+            };
+            hs.cookPending = [this](const Arcane::Guid& id) -> bool
+            {
+                return m_runtime ? m_runtime->AssetsFacade().CookPending(id) : false;
+            };
             m_materialThumbs =
                 std::make_unique<Arcane::Editor::MaterialPreviewHarvester>(std::move(hs));
         }
