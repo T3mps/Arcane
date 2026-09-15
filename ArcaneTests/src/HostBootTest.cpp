@@ -27,6 +27,7 @@
 #include <Arcane/Render/ShaderConventions.hpp>   // kVsEntry/kPsEntry + profiles
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
+#include "Helpers/ReferenceProjectDir.hpp"   // FindReferenceProjectDir (was this file's own)
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Astra/Reflection/Reflection.hpp>
@@ -55,31 +56,12 @@ namespace
     namespace fs = std::filesystem;
 
     // Locate the repo's real Arcane/ReferenceProject from wherever this test exe
-    // happens to run. No other test in this suite reaches into source-tree
-    // content (no SOURCE_DIR-style define, no fixture-copy convention to
-    // follow), so rather than hardcoding a fixed "../../.." depth this walks
-    // UP from the exe's own directory looking for the "ReferenceProject/
-    // ReferenceProject.arcproj" landmark. The premake layout
-    // (Arcane/bin/<cfg>-<os>-<arch>-md/<project>/) makes 3 levels the expected
-    // answer today, but verifying-by-search survives a future bin/ layout
-    // change instead of silently opening the wrong directory (or none) with
-    // no diagnostic. Bounded to 8 levels; empty on failure.
-    fs::path FindReferenceProjectDir()
-    {
-        std::error_code ec;
-        fs::path dir = fs::path(Arcane::ExecutablePathUtf8()).parent_path();
-        for (int i = 0; i < 8 && !dir.empty(); ++i)
-        {
-            const fs::path candidate = dir / "ReferenceProject";
-            if (fs::is_regular_file(candidate / "ReferenceProject.arcproj", ec))
-                return candidate;
-            const fs::path parent = dir.parent_path();
-            if (parent == dir)
-                break;
-            dir = parent;
-        }
-        return {};
-    }
+    // happens to run. MOVED (F2c debts arc, Task E) to Helpers/
+    // ReferenceProjectDir.hpp -- the thumbnail golden set needs the SAME walk to
+    // reach Content/ and to bless SOURCE references, and two copies of a
+    // filesystem search that must agree is exactly how they stop agreeing. The
+    // reasoning that used to live here moved with it.
+    using Arcane::Test::FindReferenceProjectDir;
 }
 
 TEST_CASE("HostConfig parses --project", "[host]")
