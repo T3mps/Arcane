@@ -9,7 +9,15 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Engine.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Input/InputActions.hpp>        // Client-resident, and it logs (ARC_WARN)
 #include <Arcane/Render/RenderErrorLatch.hpp>   // RenderErrorCount -- a Client export
+
+#include <Json.hpp>
+#include <spdlog/sinks/callback_sink.h>
+
+#include <algorithm>
+#include <memory>
+#include <string>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -43,11 +51,59 @@ TEST_CASE("ArcaneCore.dll is a loaded module and defines the Core surface", "[co
 
 TEST_CASE("one engine logger: the exe and ArcaneClient.dll see the same spdlog instance", "[core-dll]")
 {
-    // Log::Engine() is Core's. A sink pushed from the exe must receive a line
-    // logged from INSIDE ArcaneClient.dll -- Diagnostics::Publish with no sink
-    // installed is silent, so use the plugin loader's own ARC_ERROR path:
-    // PluginLoadDiagnosticsTest already proves the Diagnostics half; this pins the
-    // LOGGER half, which the split moved.
-    CHECK(Arcane::Log::Engine() != nullptr);
-    CHECK(Arcane::Log::Engine() == Arcane::Log::Engine());
+    // PROVES: a log line emitted from INSIDE ArcaneClient.dll reaches a sink this
+    // EXE pushed, through a logger that lives in a THIRD module (ArcaneCore.dll).
+    //
+    // This is the half of the split most likely to rot silently. spdlog is
+    // header-only here, so each module owns its own registry (Log.hpp's opening
+    // comment): if ArcaneClient.dll ever resolved Log::Engine() to a local copy
+    // instead of Core's export, everything would still LOG -- to a second,
+    // sinkless instance -- and only the absence of lines would betray it. So
+    // assert the crossing directly rather than any property of Engine() alone.
+    //
+    // Vehicle: Arcane::InputActions, a Client-resident subsystem for the whole
+    // arc (ArcaneClient/src/Arcane/Input/), whose path compiler emits
+    // ARC_WARN("input: unknown control path '{}' in {}/{}") for a binding path
+    // that does not start with '<' (InputActions.cpp, CompileSinglePath). One
+    // map, one action, one bogus binding is the whole fixture -- no device, no
+    // window, no Runtime. Sink capture follows PluginHostTest.cpp's pattern
+    // (push, provoke, erase).
+    const HMODULE core   = ::GetModuleHandleW(L"ArcaneCore.dll");
+    const HMODULE client = ::GetModuleHandleW(L"ArcaneClient.dll");
+    REQUIRE(core != nullptr);
+    REQUIRE(client != nullptr);
+
+    std::string captured;
+    auto sink = std::make_shared<spdlog::sinks::callback_sink_mt>(
+        [&](const spdlog::details::log_msg& m) { captured.append(m.payload.data(), m.payload.size()).push_back('\n'); });
+    Arcane::Log::Engine()->sinks().push_back(sink);
+
+    {
+        auto actions = Arcane::InputActions::Create();   // the impl lives in ArcaneClient.dll
+        REQUIRE(actions != nullptr);
+        const nlohmann::json doc = nlohmann::json::parse(R"({
+            "actionMaps": [{
+                "name": "CoreDllProbe",
+                "actions": [{
+                    "name": "Bogus",
+                    "bindings": [{ "path": "bogus/whatever" }]
+                }]
+            }]
+        })");
+        CHECK(actions->LoadJson(doc));   // the map itself is well-formed; only the PATH is not
+    }
+
+    {
+        auto& sinks = Arcane::Log::Engine()->sinks();
+        sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
+    }
+
+    INFO(captured);
+    // The line crossed ArcaneClient.dll -> Core's logger -> this exe's sink.
+    CHECK(captured.find("input: unknown control path") != std::string::npos);
+    CHECK(captured.find("CoreDllProbe/Bogus") != std::string::npos);
+    // ...and the logger it travelled through is genuinely Core's, not a Client
+    // or exe copy -- without this the line above would pass just as happily on a
+    // per-module logger, which is the bug being excluded.
+    CHECK(OwnerOf(reinterpret_cast<const void*>(&Arcane::Log::Engine)) == core);
 }
