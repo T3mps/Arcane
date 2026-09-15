@@ -188,5 +188,12 @@ namespace Arcane
         // A Guid resolves through the CURRENT project's registry, so "was requested"
         // is a claim about the outgoing project and goes with the rest of the state.
         m_impl->requested.clear();
+        // Debt 14: the never-requested WARN latch goes with it -- it exists so ONE
+        // guid queried before its Request() gets a WARN instead of silence per
+        // process, and the new project's first pre-Request query is a fresh
+        // instance of exactly that situation, not a repeat of the outgoing
+        // project's. Left set here, a project switch would silently swallow the
+        // new project's first offender.
+        m_impl->warnedNeverRequested = false;
     }
 }

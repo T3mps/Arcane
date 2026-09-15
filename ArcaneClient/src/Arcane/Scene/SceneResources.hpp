@@ -15,7 +15,12 @@
 
 #include <cmath>
 #include <cstdint>
-#include <tuple>                            // std::tie -- MeshEntry::GeometryIdentity
+#include <tuple>                            // std::tuple -- MeshEntry::GeometryIdentity's
+                                            // return type. NOT std::tie: it returns the
+                                            // identity BY VALUE so the one caller
+                                            // (SceneRenderResolver::InvalidateMesh) can
+                                            // still compare it after erasing the entry
+                                            // it was read from (see GeometryIdentity()).
 #include <unordered_map>
 #include <vector>
 
