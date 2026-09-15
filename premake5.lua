@@ -596,12 +596,12 @@ project "ArcaneRuntime"
         -- tree because {COPYDIR} only ever adds/overwrites, never deletes (RCA:
         -- .superpowers/sdd/2026-09-10-f2c-mesh-import-plan2-runtime-editor/task12-rca2-report.md).
         -- {RMDIR} emits a BARE "rmdir /S /Q <path>" on Windows -- unlike {MKDIR} (which premake
-        -- wraps in "IF NOT EXIST"), it carries no existence guard. A first build (the path
-        -- doesn't exist yet) is still safe in practice: rmdir on a missing path prints "The
-        -- system cannot find the path specified." to the postbuild log but does not abort the
-        -- batch or set a nonzero exit for the step (verified: a from-scratch build with all
-        -- three ReferenceProject staged trees deleted beforehand completed 0 errors, the noise
-        -- being that one benign line per project).
+        -- wraps in "IF NOT EXIST"), it carries no existence guard. Task F (F2c debts closeout)
+        -- adds a {MKDIR} of the same path immediately before each {RMDIR} below, so the delete's
+        -- target is now GUARANTEED to exist (a no-op mkdir if a prior build already staged it)
+        -- rather than relying on the review-verified but incidental MSBuild fact that only the
+        -- postbuild block's LAST command's exit code reaches Exec -- a future reorder of this
+        -- list can no longer silently put a bare rmdir-on-missing-path ahead of a failing step.
         --
         -- Deliberately NOT mirrored the same way, subtree by subtree:
         --   Intermediate/ -- cooked artifacts; the targeted {COPYDIR} of Intermediate/Artifacts
@@ -614,9 +614,15 @@ project "ArcaneRuntime"
         --                    logic, not this copy.
         --   ReferenceProject.arcproj -- the project file itself.
         -- The whole-tree {COPYDIR} below still copies all of those additively, on purpose --
-        -- only Content/, Source/ and Verify/ get wiped first.
+        -- only Content/, Source/ and Verify/ get wiped first -- and any other non-source-of-
+        -- truth subtree the whole-tree copy carries along (Config/, Plugins/, Goldens/ today):
+        -- none of those are registry-mounted, so none can reproduce the phantom-asset class this
+        -- task guards against. This is today's list of exceptions, not a closed one.
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
@@ -711,10 +717,17 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
         -- Task C (F2c debts): wipe the staged Content/Source/Verify subtrees before the
         -- whole-tree {COPYDIR} below re-populates them, same reasoning (and NOT-mirrored
-        -- list -- Intermediate/, Saved/, Binaries/, the .arcproj) as ArcaneRuntime's matching
-        -- comment above.
+        -- list -- Intermediate/, Saved/, Binaries/, the .arcproj, and any other non-source-of-
+        -- truth subtree the whole-tree copy carries along, e.g. Config/, Plugins/, Goldens/ --
+        -- none registry-mounted, so none can reproduce the phantom-asset class; not a closed
+        -- list) as ArcaneRuntime's matching comment above. Task F adds a {MKDIR} of the same
+        -- path before each {RMDIR} so the delete's target is guaranteed to exist, same as
+        -- ArcaneRuntime's matching lines.
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
         -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
@@ -1188,8 +1201,10 @@ project "ArcaneTests"
         '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Saved"',
         '{COPYFILE} "%{wks.location}/ReferenceProject/Saved/verify-layout.ini" "%{cfg.buildtarget.directory}/ReferenceProject/Saved/verify-layout.ini"',
         -- Task C (F2c debts): symmetry with the two host exes' Content/Source/Verify wipe
-        -- (see ArcaneRuntime's matching comment above) -- a reference PNG removed/renamed in
-        -- SOURCE must not linger in this exe's staged Verify/ either.
+        -- (see ArcaneRuntime's matching comment above, incl. its NOT-mirrored list -- not a
+        -- closed one -- and Task F's {MKDIR}-before-{RMDIR} guard) -- a reference PNG
+        -- removed/renamed in SOURCE must not linger in this exe's staged Verify/ either.
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         -- Task 11 (plan-b comparator): the engine trap corpus. Task 10's own
         -- comment (above, now narrowed) predicted this would need widening

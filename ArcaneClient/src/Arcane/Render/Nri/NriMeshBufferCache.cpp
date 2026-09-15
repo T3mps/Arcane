@@ -170,10 +170,10 @@ namespace Arcane
             return false;
         };
 
-        // DebugFailNextUpload's latch (debt 13): consumed the moment this call
-        // REACHES the matching stage, whether or not the injection is armed for it,
-        // so an unrelated real failure at an earlier stage leaves the latch armed
-        // for whichever Upload call actually gets here next.
+        // DebugFailNextUpload's latch (debt 13): reset ONLY when this call's current
+        // stage equals the currently-armed stage -- an unrelated real failure at a
+        // DIFFERENT stage leaves the latch untouched, still armed, for whichever
+        // Upload call next actually reaches the matching stage.
         const bool debugFailVertex = (m_debugFailNextUpload == UploadStage::Vertex);
         if (debugFailVertex)
             m_debugFailNextUpload.reset();
