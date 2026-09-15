@@ -4,7 +4,7 @@
 // (asset Guids on components) and what the submission path can DRAW (resolved
 // tables + a bound post chain). One call per frame, from every host.
 //
-// WHY THIS EXISTS. RenderSubmissionSystem (Scene/RenderSystems.hpp) never
+// WHY THIS EXISTS. RenderSubmissionSystem (Render/RenderSystems.hpp) never
 // touches the Assets facade by design: it reads two pre-resolved lookup tables
 // the host must publish every frame (SceneResources.hpp:4 states the contract).
 // Until 2026-07-29 only the Arcane Editor did -- the resolution cache itself
@@ -52,7 +52,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>           // MeshResolveState -- MeshSupply
 #include <Arcane/Render/GraphicsBackend.hpp>   // by value in Services
-#include <Arcane/Render/MeshBuilder.hpp>       // MeshData -- MeshSupply
+#include <Arcane/Mesh/MeshBuilder.hpp>       // MeshData -- MeshSupply
 
 
 #include <cstdint>
@@ -227,7 +227,7 @@ namespace Arcane
             // resolver that has never swept reports everything unbound and
             // nothing un-REFERENCED). A MeshRenderer's effective material is
             // the materialOverride -> MeshEntry::material -> white chain
-            // (Scene/MeshSubmissionSystem.hpp), and its middle link is only
+            // (Render/MeshSubmissionSystem.hpp), and its middle link is only
             // knowable AFTER MeshCache has resolved the mesh -- so a
             // material-shaped `meshReferenced` would answer 0 cold and 1 warm,
             // breaking exactly that property. The mesh half of the material

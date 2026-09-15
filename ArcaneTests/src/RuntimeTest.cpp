@@ -12,7 +12,7 @@
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
-#include <Arcane/Scene/RenderSystems.hpp>
+#include <Arcane/Render/RenderSystems.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>

@@ -28,7 +28,7 @@
 #include <Arcane/Assets/ImageIo.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Host/HostConfig.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>

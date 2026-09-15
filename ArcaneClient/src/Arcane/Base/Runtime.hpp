@@ -7,7 +7,6 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>   // AssetRegistry::ScanProgressFn (OpenProject's progress param) -- light header, not Project.hpp
 #include <Arcane/Project/ProjectOpenOptions.hpp>   // ProjectOpenOptions (OpenProject's opts param) -- also light, also not Project.hpp
 #include <Arcane/Sim/RunLoop.hpp>
@@ -41,6 +40,7 @@ namespace Arcane
     class Batcher2D;
     class Project;
     class Config;
+    struct InputSnapshot;
     namespace Audio { class AudioDevice; }
 
 #if defined(_MSC_VER)

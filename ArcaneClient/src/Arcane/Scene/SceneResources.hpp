@@ -6,7 +6,7 @@
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>        // MeshSlot -- MeshEntry::slots' element type
-#include <Arcane/Render/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
+#include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 
 #include <Astra/Container/FlatMap.hpp>
 #include <Astra/Entity/Entity.hpp>
@@ -172,7 +172,7 @@ namespace Arcane
     // `slots` (F2a Task 5; grown from a scalar `material` to a named-slot array in
     // F2c Task 10) is a COPY of the loaded .arcmesh's own `MeshAssetData::slots` --
     // the mesh's default material Guid PER SECTION, resolved through the index the
-    // section carries (MeshSection::slotIndex, Render/MeshBuilder.hpp), the second
+    // section carries (MeshSection::slotIndex, Mesh/MeshBuilder.hpp), the second
     // link in MeshSubmissionSystem's `materialOverride` -> per-section default ->
     // white chain. It rides along here because MeshSubmissionSystem is
     // host-published-resource-only by design (it reads MeshTable/MeshMaterialTable
@@ -262,7 +262,7 @@ namespace Arcane
         // -- a Texture-typed value read off the .arcmat chain by
         // MeshMaterialCache::Request exactly like baseColor. Nil (the
         // default) is legal and means "no texture, the flat baseColor path"
-        // -- CollectMeshInstances (Scene/MeshSubmissionSystem.hpp) needs
+        // -- CollectMeshInstances (Render/MeshSubmissionSystem.hpp) needs
         // this only to know WHICH texture `materialSlot` below names; nothing
         // reads it directly at draw time.
         Guid albedo{};

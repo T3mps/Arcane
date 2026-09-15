@@ -64,7 +64,7 @@
 #include <Arcane/Render/FramePacing.hpp>          // kSwapchainFramesInFlight -- the probe latency
 #include <Arcane/Render/PickEmit.hpp>             // PickDrawable -- the id pass's input
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
-#include <Arcane/Render/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
+#include <Arcane/Mesh/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/BindlessTable.hpp>    // kInvalidSlot -- the four-cube bindless proof
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>

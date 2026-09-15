@@ -9,7 +9,7 @@
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
-#include <Arcane/Scene/RenderSystems.hpp>
+#include <Arcane/Render/RenderSystems.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
 
 #include <Manifold2D/Physics/PhysicsWorld.hpp>

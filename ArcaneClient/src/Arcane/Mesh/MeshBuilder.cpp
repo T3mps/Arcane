@@ -1,4 +1,4 @@
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 
 #include <glm/gtc/constants.hpp>
 

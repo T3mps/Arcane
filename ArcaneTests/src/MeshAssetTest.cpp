@@ -2,7 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <Arcane/Mesh/MeshAsset.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 
 #include <filesystem>
 #include <fstream>

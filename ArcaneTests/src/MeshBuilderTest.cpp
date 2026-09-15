@@ -1,4 +1,4 @@
-// Task 6 (Phase 4): pins Arcane/Render/MeshBuilder.hpp's two procedural
+// Task 6 (Phase 4): pins Arcane/Mesh/MeshBuilder.hpp's two procedural
 // generators. Pure geometry -- no device, no NRI, no Registry -- exactly the
 // "PURE AND DEVICE-FREE" contract the header itself states.
 //
@@ -24,7 +24,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 
 #include <glm/glm.hpp>
 #include <glm/geometric.hpp>

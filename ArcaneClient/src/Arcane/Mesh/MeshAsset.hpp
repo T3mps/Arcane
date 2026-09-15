@@ -26,7 +26,7 @@
 #include <Arcane/Assets/ArtifactReader.hpp>   // LoadedClientMesh -- ResolveMeshData's supply payload
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -46,7 +46,7 @@ namespace Arcane
     // under a +90 degree X rotation, right-handed: that takes BuildPlane's +Y
     // normal to +Z, facing a camera that looks down -Z. Orientation is the
     // Transform's job for the same reason size is; see BuildPlane's own
-    // comment in Render/MeshBuilder.hpp).
+    // comment in Mesh/MeshBuilder.hpp).
     //
     // Explicitly uint8_t-backed and explicitly numbered: these values are
     // PERSISTED, so reordering them silently re-authors every .arcmesh in

@@ -193,7 +193,7 @@ namespace Arcane::AssetPipeline
 
     // 32 bytes, interleaved pos/normal/uv -- the pipeline's fixed vertex stride (MeshNode.cpp's
     // vertex input). DELIBERATELY NOT Arcane::MeshVertex: that type lives in ArcaneClient
-    // (Render/MeshBuilder.hpp) and this library must never include ArcaneClient. The two are
+    // (Mesh/MeshBuilder.hpp) and this library must never include ArcaneClient. The two are
     // hand-mirrored, and the mirror is pinned by MeshArtifactReaderTest.cpp's cross-lib
     // round-trip plus the static_assert on sizeof below -- exactly the discipline this file's
     // own BYTE-CONTRACT PEER banner paragraph keeps for the whole format.

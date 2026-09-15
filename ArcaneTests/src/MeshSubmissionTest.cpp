@@ -4,7 +4,7 @@
 //   [1] MeshCache resolves .arcmesh Guids into owned geometry (MeshEntry).
 //   [2] MeshMaterialCache resolves "mesh"-kind .arcmat Guids into constants
 //       (ResolvedMeshMaterial).
-//   [3] CollectMeshInstances (Scene/MeshSubmissionSystem.hpp) is the
+//   [3] CollectMeshInstances (Render/MeshSubmissionSystem.hpp) is the
 //       consumer that sweeps the scene and resolves each MeshRenderer
 //       through a real MeshTable/MeshMaterialTable -- built directly here
 //       (real maps, real MeshData from BuildCube/ComputeMeshBounds) rather
@@ -27,13 +27,13 @@
 // <Extensions/NRIDeviceCreation.h> (declares nri::Message::ERROR) ahead of
 // anything below that could drag in <windows.h> (wingdi.h #defines ERROR).
 // See MeshSubmissionSystem.hpp's own header comment.
-#include <Arcane/Scene/MeshSubmissionSystem.hpp>
+#include <Arcane/Render/MeshSubmissionSystem.hpp>
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialTypes.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 #include <Arcane/Render/MeshCache.hpp>
 #include <Arcane/Render/MeshMaterialCache.hpp>
 #include <Arcane/Scene/Components.hpp>

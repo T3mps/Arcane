@@ -2,9 +2,10 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Config/Config.hpp>
-#include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/RuntimePresentation.hpp>
+#include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
@@ -13,7 +14,7 @@
 #include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
 #include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsSystem/PhysicsResource (instantiated IN this module)
 #include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
-#include <Arcane/Scene/RenderSystems.hpp>       // RenderSubmissionSystem (engine-owned, instantiated IN this module)
+#include <Arcane/Render/RenderSystems.hpp>       // RenderSubmissionSystem (engine-owned, instantiated IN this module)
 #include <Arcane/Scene/TransformSystems.hpp>    // TransformPropagationSystem (engine-owned, instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
@@ -90,27 +91,11 @@ namespace Arcane
         std::unique_ptr<SystemSchedulers>           schedulers;
         std::unique_ptr<RunLoop>                    loop;
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
-        InputSnapshot                               input{};   // latest host-supplied snapshot; plugins read via Input()
         std::unique_ptr<Assets>                     assets;
+        RuntimePresentation                         presentation;    // audio/input/ImGui/camera; destructs BEFORE assets (declared after it)
         Config                                      config;          // layered engine+project config (Slice 3)
         std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
-        Audio::AudioDeviceDesc                      audioDesc{};
-        Audio::AudioDevice                          audio;
-
-        // 2D camera the plugin drives (SetCamera) and the render bridge reads
-        // (SetRenderContext writes it into RenderContext2D). Defaults to the
-        // identity transform (offset (0,0), zoom 1).
-        glm::vec2                                   cameraOffset{0.0f, 0.0f};
-        float                                       cameraZoom = 1.0f;
-
-        // ImGui cross-DLL handoff (v2): the host's context + allocators, forwarded
-        // into the plugin's EngineContext by PluginHost. All null until the host
-        // calls SetImGui (and in headless hosts that never create an ImGuiLayer).
-        void* imguiContext  = nullptr;
-        void* imguiAlloc    = nullptr;
-        void* imguiFree     = nullptr;
-        void* imguiUserData = nullptr;
 
         explicit Impl(Astra::TypeContext* external, bool enableAudioDevice) : jobs(), sched(jobs.WorkScheduler())
         {
@@ -190,6 +175,12 @@ namespace Arcane
             schedulers = std::make_unique<SystemSchedulers>(sched);
             loop       = std::make_unique<RunLoop>(*registry, *schedulers, loopCfg);
 
+            assets = Assets::Create();
+            // Engine-default config layer (shipped beside the exe). A host with no
+            // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
+            // OpenProject re-layers the project + user files on top.
+            engineConfigDir = ExeDir() / "data" / "EngineConfig";
+            config.LoadEngineDefaults(engineConfigDir);
             // Device-less gating for the real OS audio device. There is no device-less signal
             // reachable here: Runtime holds no render device at all since Task 9
             // deleted the bridge, and neither this ctor nor HostConfig
@@ -198,44 +189,7 @@ namespace Arcane
             // "ArcaneRuntime --frames N" GPU-verify leave it false and get the noDevice null backend;
             // an interactive host passes true. AudioDeviceDesc::enableDevice defaults false
             // for the same reason, so a real device is always opt-in.
-            audioDesc.enableDevice = enableAudioDevice;
-            assets = Assets::Create();
-            // Engine-default config layer (shipped beside the exe). A host with no
-            // project still gets this base (e.g. input bindings for bare ArcaneRuntime);
-            // OpenProject re-layers the project + user files on top.
-            engineConfigDir = ExeDir() / "data" / "EngineConfig";
-            config.LoadEngineDefaults(engineConfigDir);
-            InitAudio();
-        }
-
-        ~Impl()
-        {
-            audio.Shutdown();
-        }
-
-        void InitAudio() noexcept
-        {
-            if (!assets)
-                return;
-
-            if (audio.Init(assets.get(), audioDesc))
-                return;
-
-            if (audioDesc.enableDevice)
-            {
-                ARC_WARN("Runtime: audio device init failed; falling back to null backend");
-                audioDesc.enableDevice = false;
-                if (audio.Init(assets.get(), audioDesc))
-                    return;
-            }
-
-            ARC_WARN("Runtime: audio subsystem is unavailable");
-        }
-
-        void ResetAudio() noexcept
-        {
-            audio.Shutdown();
-            InitAudio();
+            presentation.InitAudio(assets.get(), enableAudioDevice);
         }
     };
 
@@ -260,30 +214,30 @@ namespace Arcane
     JobSystem&             Runtime::Jobs()          noexcept { return m_impl->jobs; }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
     Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }
-    Audio::AudioDevice& Runtime::AudioSystem() noexcept { return m_impl->audio; }
+    Audio::AudioDevice& Runtime::AudioSystem() noexcept { return m_impl->presentation.audio; }
 
-    void Runtime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_impl->input = snap; }
-    const InputSnapshot& Runtime::Input() const noexcept { return m_impl->input; }
+    void Runtime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_impl->presentation.input = snap; }
+    const InputSnapshot& Runtime::Input() const noexcept { return m_impl->presentation.input; }
 
     void Runtime::SetImGui(void* context, void* alloc, void* freeFn, void* userData) noexcept
     {
-        m_impl->imguiContext  = context;
-        m_impl->imguiAlloc    = alloc;
-        m_impl->imguiFree     = freeFn;
-        m_impl->imguiUserData = userData;
+        m_impl->presentation.imguiContext  = context;
+        m_impl->presentation.imguiAlloc    = alloc;
+        m_impl->presentation.imguiFree     = freeFn;
+        m_impl->presentation.imguiUserData = userData;
     }
-    void* Runtime::ImGuiContext()  const noexcept { return m_impl->imguiContext; }
-    void* Runtime::ImGuiAlloc()    const noexcept { return m_impl->imguiAlloc; }
-    void* Runtime::ImGuiFree()     const noexcept { return m_impl->imguiFree; }
-    void* Runtime::ImGuiUserData() const noexcept { return m_impl->imguiUserData; }
+    void* Runtime::ImGuiContext()  const noexcept { return m_impl->presentation.imguiContext; }
+    void* Runtime::ImGuiAlloc()    const noexcept { return m_impl->presentation.imguiAlloc; }
+    void* Runtime::ImGuiFree()     const noexcept { return m_impl->presentation.imguiFree; }
+    void* Runtime::ImGuiUserData() const noexcept { return m_impl->presentation.imguiUserData; }
 
     void Runtime::SetCamera(glm::vec2 offset, float zoom) noexcept
     {
-        m_impl->cameraOffset = offset;
-        m_impl->cameraZoom   = zoom;
+        m_impl->presentation.cameraOffset = offset;
+        m_impl->presentation.cameraZoom   = zoom;
     }
-    glm::vec2 Runtime::CameraOffset() const noexcept { return m_impl->cameraOffset; }
-    float     Runtime::CameraZoom()   const noexcept { return m_impl->cameraZoom; }
+    glm::vec2 Runtime::CameraOffset() const noexcept { return m_impl->presentation.cameraOffset; }
+    float     Runtime::CameraZoom()   const noexcept { return m_impl->presentation.cameraZoom; }
 
     // SetRenderResources / Device() / Shaders() stood here. The setter also bound
     // the device into the Assets facade (Assets::SetDevice) so GetTexture could
@@ -301,7 +255,7 @@ namespace Arcane
         // DrawPhysicsDebug can interpolate poses between fixed steps. Runtime owns
         // the RunLoop, so this needs no plugin-ABI surface.
         m_impl->registry->SetResource<RenderContext2D>(
-            RenderContext2D{batcher, m_impl->cameraOffset, m_impl->cameraZoom,
+            RenderContext2D{batcher, m_impl->presentation.cameraOffset, m_impl->presentation.cameraZoom,
                             static_cast<float>(Loop().Alpha())});
     }
 
@@ -492,7 +446,7 @@ namespace Arcane
 
     void Runtime::ResetAudio() noexcept
     {
-        m_impl->ResetAudio();
+        m_impl->presentation.ResetAudio(m_impl->assets.get());
     }
 
     bool Runtime::OpenProject(const std::filesystem::path& pathOrFile, AssetRegistry::ScanProgressFn onProgress,

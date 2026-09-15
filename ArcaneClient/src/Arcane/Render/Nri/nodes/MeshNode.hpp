@@ -104,7 +104,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>      // MeshData / MeshVertex -- the CPU geometry
+#include <Arcane/Mesh/MeshBuilder.hpp>      // MeshData / MeshVertex -- the CPU geometry
 #include <Arcane/Render/Nri/BindlessTable.hpp> // MeshInstance::materialSlot's kInvalidSlot default
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
@@ -245,7 +245,7 @@ namespace Arcane
         // albedo` now lives on `Arcane::ResolvedMeshMaterial`
         // (Scene/SceneResources.hpp), resolved into a slot by
         // NriGraphContext::ResolveMeshAlbedoSlot and copied onto this field
-        // by CollectMeshInstances (Scene/MeshSubmissionSystem.hpp).
+        // by CollectMeshInstances (Render/MeshSubmissionSystem.hpp).
         //
         // PACKED INTO THE ROOT CONSTANTS' `normalMatrixCol0.w` by
         // MeshNode::Record (the 128-byte MeshRootConstants budget has ZERO

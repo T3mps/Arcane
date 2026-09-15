@@ -293,7 +293,7 @@ namespace Arcane
     //         the loaded .arcmesh), crosses too, not just the resource
     //         wrapping it: MeshSubmissionSystem.hpp is HEADER-ONLY and
     //         plugin-compiled, and reads `MeshEntry` straight off the
-    //         resolved table (Scene/MeshSubmissionSystem.hpp:113), including
+    //         resolved table (Render/MeshSubmissionSystem.hpp:113), including
     //         `MeshEntry::material` for the override -> mesh-default
     //         fallback (:58) -- the v8/v15 class of plugin-crossing surface,
     //         additive here only because the type is brand new. Runtime

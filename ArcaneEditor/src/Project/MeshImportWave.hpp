@@ -16,7 +16,7 @@
 
 #include <Arcane/Mesh/MeshAsset.hpp>   // MeshSlot; transitively LoadedClientMesh/MeshSectionView
                                         // (ArtifactReader.hpp) -- Task 14's slot reconciliation
-#include <Arcane/Render/MeshBuilder.hpp>   // Arcane::MeshBounds -- F2c Plan 2 Task 9's FrameMeshBounds
+#include <Arcane/Mesh/MeshBuilder.hpp>   // Arcane::MeshBounds -- F2c Plan 2 Task 9's FrameMeshBounds
 
 #include <glm/glm.hpp>
 

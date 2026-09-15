@@ -3,7 +3,7 @@
 // MeshSubmissionSystem (F2a, Task 5): turns a scene's MeshRenderer entities
 // into the std::vector<MeshInstance> a host hands to MeshSceneDesc for
 // RenderFrame (Render/Nri/nodes/MeshNode.hpp). Mirrors RenderSubmissionSystem's
-// sweep idiom (Scene/RenderSystems.hpp:47) almost exactly.
+// sweep idiom (Render/RenderSystems.hpp:47) almost exactly.
 //
 // A FREE FUNCTION, not an Astra::System, because the output vector is
 // HOST-OWNED: it must outlive the RenderFrame call that borrows into it (see

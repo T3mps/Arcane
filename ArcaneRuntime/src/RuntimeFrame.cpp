@@ -17,7 +17,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
-#include <Arcane/Scene/MeshSubmissionSystem.hpp>     // CollectMeshInstances (RenderGraph's opaque 3D pass, F2a Task 10)
+#include <Arcane/Render/MeshSubmissionSystem.hpp>     // CollectMeshInstances (RenderGraph's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
 
 #include <imgui.h>

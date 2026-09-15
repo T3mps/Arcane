@@ -1,6 +1,6 @@
 #pragma once
 
-// MeshBuilder: procedural mesh generators for the 3D slice's own geometry.
+// MeshBuilder: procedural mesh generators for the 3D slice's own geometry. Lives in Mesh/ (Core-bound): CPU geometry, never GPU.
 //
 // PURE AND DEVICE-FREE -- no NRI, no NriDevice, no GPU type anywhere in this
 // file or its .cpp. Same discipline GraphGridPhase

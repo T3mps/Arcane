@@ -50,7 +50,7 @@
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 #include <Arcane/Render/Nri/MeshResidencyBudget.hpp>
 
 #include <cstdint>

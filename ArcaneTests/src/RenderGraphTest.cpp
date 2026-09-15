@@ -33,7 +33,7 @@
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>  // FullscreenMaterialLayout / PostChainNode
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>       // AddMeshNode / MeshSceneDesc -- the opaque pass
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp> // OutlineJfaStepCount / PickNode / OutlineNode
-#include <Arcane/Render/MeshBuilder.hpp>       // BuildCube -- the opaque pass's geometry
+#include <Arcane/Mesh/MeshBuilder.hpp>       // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/Batcher2D.hpp>         // a device-less batcher drains the spans a node counts

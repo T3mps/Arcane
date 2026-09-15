@@ -10,7 +10,7 @@
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>          // F2c Plan 2 Task 9: LoadMeshAsset/ResolveMeshData -- the mesh-ASSET branch
 #include <Arcane/Render/Batcher2D.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 #include <Arcane/Render/MeshMaterialCache.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/PostChainCache.hpp>   // PostChainDesc
@@ -879,7 +879,7 @@ namespace Arcane::Editor
     // asset compiles nothing either) -- straight from `queue` to `ready`, with no
     // `pending` stage at all. PER SECTION, the same material chain
     // CollectMeshInstances resolves for a scene's MeshRenderer
-    // (Scene/MeshSubmissionSystem.hpp): slots[section.slotIndex]'s material -> the
+    // (Render/MeshSubmissionSystem.hpp): slots[section.slotIndex]'s material -> the
     // resolved baseColor/materialSlot, or white when the slot is empty/unresolved.
     // There is no materialOverride here -- a thumbnail has no entity, only the
     // asset's own default slots.

@@ -9,7 +9,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Scene/Components.hpp>
-#include <Arcane/Scene/RenderSystems.hpp>
+#include <Arcane/Render/RenderSystems.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Serialization/SceneSerializer.hpp>

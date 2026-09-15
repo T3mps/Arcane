@@ -17,7 +17,7 @@
 #undef ERROR
 
 #include <Arcane/Guid.hpp>
-#include <Arcane/Render/MeshBuilder.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
 

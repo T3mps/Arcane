@@ -32,7 +32,7 @@
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
-#include <Arcane/Scene/MeshSubmissionSystem.hpp>   // CollectMeshInstances (ArmGraphViewportFrame's opaque 3D pass, F2a Task 10)
+#include <Arcane/Render/MeshSubmissionSystem.hpp>   // CollectMeshInstances (ArmGraphViewportFrame's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)

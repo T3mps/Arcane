@@ -474,7 +474,7 @@ namespace Arcane
             if (mr.materialOverride.IsValid())
                 im.meshMaterials->Request(mr.materialOverride);
             // F2c Task 10: EVERY slot's material, not just slots[0] -- unlike
-            // CollectMeshInstances (Scene/MeshSubmissionSystem.hpp), which
+            // CollectMeshInstances (Render/MeshSubmissionSystem.hpp), which
             // defers per-section submission to Plan 2 Task 5 and only ever
             // reads slots[0], this cache-population sweep has no such excuse
             // to under-request: a slot this loop skips today is a slot whose
