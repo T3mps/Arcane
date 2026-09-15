@@ -2,6 +2,7 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Config/Config.hpp>
+#include <Arcane/Core/ModuleContext.hpp>   // ArcaneCore.dll's own Astra TypeContext slot
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/RuntimePresentation.hpp>
@@ -104,6 +105,15 @@ namespace Arcane
 
             // Install the shared context in THIS module BEFORE any TypeID/Registry use.
             Astra::SetTypeContext(context, Astra::ModuleResidency::Resident);
+            // ...and in ARCANECORE.DLL, which the split made a third module with
+            // its own per-module slot. Core's Serialization/ResourceSerialization
+            // TU touches the registry directly (FinishSnapshot/WriteResourceSection/
+            // ReadResourceSection), and Registry.hpp's birth-context guard fires if
+            // that module's slot is unset. Not reachable through the inline
+            // Astra::SetTypeContext above -- that one installs into THIS module by
+            // construction, which is exactly why Core exports an installer of its
+            // own (Arcane/Core/ModuleContext.hpp).
+            Core::SetModuleTypeContext(context);
             components = std::make_shared<Astra::ComponentRegistry>();
 
             // The engine's OWN component roster, registered here so every host

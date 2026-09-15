@@ -19,11 +19,14 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+#include <Arcane/Core/Api.hpp>
+
 namespace Arcane
 {
     enum class CliType : std::uint8_t { String, Int, Uint, Double };
 
-    class Cli
+    class ARCANE_CORE_API Cli
     {
     public:
         Cli(std::string prog, std::string desc) : m_prog(std::move(prog)), m_desc(std::move(desc)) {}
@@ -43,7 +46,9 @@ namespace Arcane
         Builder Flag(std::string name, std::string help);                         // bool, default off
         Builder Option(std::string name, std::string defaultValue, std::string help);
 
-        struct Result
+        // A nested class does not inherit the outer class's dllexport -- mark it
+        // explicitly (Core-DLL split, spec 2026-09-15 s8).
+        struct ARCANE_CORE_API Result
         {
             bool ok = false;
             bool helpRequested = false;

@@ -1,0 +1,231 @@
+#pragma once
+
+// MeshAsset: the .arcmesh file -- a native JSON asset with an embedded
+// top-level "id" (rides AssetRegistry::ScanContent's native path, exactly like
+// .arcsprite and .arcmat). It names a procedural GENERATOR plus the topology
+// that generator needs, and a default material.
+//
+// THE UNIT RULE, which decides every field here: generators emit UNIT
+// geometry. Scale expresses size, rotation expresses orientation, the asset
+// expresses shape. There is no sizeMeters and no radiusMeters -- the engine
+// already ruled this on SpriteRenderer ("There is NO size field: an entity is
+// sized by its Transform scale"), and BOTH reference engines confirm it for
+// meshes: neither UStaticMesh nor a Source 2 model stores a size, and UE reads
+// streaming scale straight off the component transform
+// (StaticMeshComponent.h:684).
+//
+// FLAT AND TAGGED, not a variant: per-source field meaning is documented
+// rather than enforced by the type, which is the same form
+// Manifold2D::Physics::Shape uses (halfLen simply means nothing to a Circle).
+// Its one real hazard is validating the whole struct regardless of tag, which
+// would refuse legal assets -- see ValidateMeshAsset.
+//
+// F2c's SEAM: an imported mesh becomes another MeshSource plus an artifact
+// reference, with no component and no scene change.
+
+#include <Arcane/Assets/ArtifactReader.hpp>   // LoadedClientMesh -- ResolveMeshData's supply payload
+#include <Arcane/Core/Api.hpp>
+#include <Arcane/Guid.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
+
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace Arcane
+{
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4251)  // std members on dll-exported types: benign under /MD
+#endif
+
+    // The generator roster -- Unity's built-in set, minus Quad (which is Plane
+    // under a +90 degree X rotation, right-handed: that takes BuildPlane's +Y
+    // normal to +Z, facing a camera that looks down -Z. Orientation is the
+    // Transform's job for the same reason size is; see BuildPlane's own
+    // comment in Mesh/MeshBuilder.hpp).
+    //
+    // Explicitly uint8_t-backed and explicitly numbered: these values are
+    // PERSISTED, so reordering them silently re-authors every .arcmesh in
+    // every project.
+    enum class MeshSource : std::uint8_t
+    {
+        Plane    = 0,
+        Cube     = 1,
+        UvSphere = 2,
+        Cylinder = 3,
+        Capsule  = 4,
+
+        // F2c s4.2: geometry comes from a cooked artifact rather than a generator.
+        // APPENDED, never reordered -- these values are persisted. An OLDER engine
+        // build reading "imported" gets today's tolerant posture: one ARC_WARN and a
+        // Cube fallback (LoadMeshAsset's unknown-source arm), visible not fatal.
+        Imported = 5,
+    };
+
+    // ONE material slot. `name` is the glTF material name the cook reported, and it is
+    // the RE-ASSOCIATION KEY on re-import (R3): a re-export that reorders its
+    // materials must not shuffle the user's assignments. Position is the tiebreak for
+    // unnamed or duplicate names -- UE's own rule at the site that resolves a SECTION
+    // against the FINAL slot array (FbxStaticMeshImport.cpp:1991-2002; NOT :1946-1974,
+    // whose :1948 falls back into the NEWLY IMPORTED array, a different question).
+    struct MeshSlot
+    {
+        std::string name;
+        Guid        material{};
+    };
+
+    // Memberwise, never memcmp -- `name` is a std::string (its object bytes are a
+    // pointer/SSO buffer, not the text), the same reasoning MeshAssetData's own
+    // operator== comment gives.
+    [[nodiscard]] inline bool operator==(const MeshSlot& a, const MeshSlot& b) noexcept
+    {
+        return a.name == b.name && a.material == b.material;
+    }
+
+    struct MeshAssetData
+    {
+        Guid          id{};
+        std::string   name;
+        MeshSource    source = MeshSource::Cube;
+
+        // ---- TOPOLOGY: density a Transform cannot express ----------------
+        std::uint32_t rings        = 16;   // UvSphere; Capsule (arc steps per cap)
+        std::uint32_t segments     = 32;   // UvSphere, Cylinder, Capsule (radial)
+        std::uint32_t subdivisions = 1;    // Plane (quads per axis; 1 = one quad)
+
+        // ---- SHAPE RATIO: a family no scale can reach --------------------
+        // Total height / diameter. A cylinder needs no equivalent because a
+        // cylinder scaled in Y is still a cylinder; a capsule scaled in Y is
+        // not (its hemispherical caps become ellipsoids). That is the test any
+        // future shape parameter must pass.
+        float capsuleLengthRatio = 2.0f;
+
+        // F2c s4.2: the registered .gltf/.glb this asset's geometry is cooked from.
+        // Meaningful ONLY when source == Imported; nil otherwise, and written
+        // unconditionally like every other field (SaveMeshAsset's own every-field rule
+        // -- a sparse write loses it on a source switch and back).
+        Guid importedSource{};
+
+        // ---- The mesh's DEFAULT material slots, overridable per entity ---
+        // Both reference engines put assignment on the asset:
+        // UStaticMesh::StaticMaterials (StaticMesh.h:1095) and Source 2's
+        // m_materialGroups. MeshRenderer::materialOverride is
+        // UMeshComponent::OverrideMaterials in miniature. Nil = white.
+        //
+        // F2c s4.4: the F2a SCALAR `material` retired into a named-slot array. The
+        // tolerant loader maps a legacy "material" key to ONE unnamed slot, so every
+        // .arcmesh already on disk loads unchanged and nothing needs migrating.
+        // A generated primitive carries zero or one slot; an imported mesh carries one
+        // per DISTINCT glTF material name (A1 -- deduped by name, never per primitive).
+        std::vector<MeshSlot> slots;
+    };
+
+    // Memberwise equality, for the same reason SpriteAssetData has one: the
+    // document's undo bracket compares an activation-time COPY against the live
+    // data to decide whether a drag actually moved anything. Memberwise and
+    // never memcmp -- `name` is a std::string (its object bytes are a
+    // pointer/SSO buffer, not the text) and the struct is padded.
+    [[nodiscard]] inline bool operator==(const MeshAssetData& a, const MeshAssetData& b) noexcept
+    {
+        return a.id == b.id && a.name == b.name && a.source == b.source &&
+               a.rings == b.rings && a.segments == b.segments &&
+               a.subdivisions == b.subdivisions &&
+               a.capsuleLengthRatio == b.capsuleLengthRatio &&
+               a.importedSource == b.importedSource &&
+               a.slots == b.slots;
+    }
+
+    // Write `data` as .arcmesh JSON. EVERY field is written, regardless of
+    // which fields the current source reads -- unlike .arcsprite's sparse
+    // rect/pivot write, a sparse write here has a real defect: set a
+    // capsule's rings, switch `source` to Plane, save, switch back, and
+    // rings silently reverts to its default. Writing every field is what
+    // lets the editor round-trip a source switch without discarding the
+    // other source's topology. False on IO failure.
+    ARCANE_CORE_API bool SaveMeshAsset(const std::filesystem::path& path, const MeshAssetData& data);
+
+    // Parse a .arcmesh. nullopt on IO/parse failure or when the file is not a
+    // mesh asset (the "type":"mesh" tag IS the discriminator, exactly as
+    // .arcsprite works -- no structurally-unique key distinguishes one).
+    // Malformed INDIVIDUAL fields fall back to their MeshAssetData default
+    // rather than failing the whole load.
+    ARCANE_CORE_API std::optional<MeshAssetData> LoadMeshAsset(const std::filesystem::path& path);
+
+    // nullopt == valid. Otherwise the human-readable reason, NAMING THE FIELD
+    // -- it is what a user reads in the Problems pane, and a reason that does
+    // not name the field is not actionable.
+    //
+    // Evaluated PER SOURCE, over the fields that source actually reads: a Plane
+    // with segments == 0 is VALID, because a plane has no radial segments.
+    // Validating the whole struct regardless of tag would refuse legal assets
+    // and is the flat struct's one real hazard.
+    //
+    // Thresholds are UE's, from GeometryCore's generators
+    // (SphereGenerator.h:200-201, CapsuleGenerator.h:265-267). UE CLAMPS
+    // silently where this refuses, and UE is not simply right: its generators
+    // are tool-time transients where a clamp is invisible, while .arcmesh is
+    // PERSISTED -- a silent clamp leaves the file saying 1 while the mesh is 3,
+    // forever. MeshDocument's param panel also bounds every one of these at the
+    // WIDGET (bounded DragInt/DragFloat, the idiom SpriteDocument already
+    // uses), so in practice refusal only ever fires on a hand-edited file.
+    [[nodiscard]] ARCANE_CORE_API std::optional<std::string> ValidateMeshAsset(const MeshAssetData& data);
+
+    // Generate the geometry. nullopt exactly when ValidateMeshAsset returns a
+    // reason -- an INVALID mesh is an error and emits nothing, where a NIL mesh
+    // Guid on a component is not an error at all (it draws nothing, like a nil
+    // sprite).
+    //
+    // DETERMINISTIC: same input, same bytes. F2c inherits this builder into a
+    // cook step whose artifacts must be reproducible.
+    [[nodiscard]] ARCANE_CORE_API std::optional<MeshData> BuildMeshData(const MeshAssetData& data);
+
+    // ---- F2c Task 11: CPU resolution of an Imported mesh -----------------
+
+    // Guid -> the cooked mesh artifact, device-free. In production this is
+    // Assets::MeshArtifactFor (Assets/Assets.hpp); ResolveMeshData below takes it as a
+    // closure so it stays testable with no facade and no device (MeshBuilderTest.cpp's own
+    // "pure, device-free" discipline, extended to the Imported path).
+    using MeshArtifactSupplyFn = std::function<const LoadedClientMesh*(const Guid&)>;
+    // Guid -> "is a cook plausibly still pending for this guid". In production this is
+    // Assets::CookPending, a pure forward to the probe SetCookPendingProbe installed
+    // (Assets.hpp) -- same "closure, not a facade pointer" reasoning as the supply above.
+    using CookPendingFn = std::function<bool(const Guid&)>;
+
+    enum class MeshResolveState : std::uint8_t
+    {
+        Ready,        // `mesh` is set
+        PendingCook,  // no artifact YET; retry later. NOT a failure -- see s7.1
+        Failed,       // invalid asset, missing/refused artifact, or no supply
+    };
+
+    struct MeshResolveResult
+    {
+        MeshResolveState        state = MeshResolveState::Failed;
+        std::optional<MeshData> mesh;
+        MeshBounds               bounds;  // the ARTIFACT's stored AABB for Imported;
+                                           // ComputeMeshBounds' answer for a primitive
+        std::string              reason;  // human-readable, non-empty iff Failed
+    };
+
+    // THE one entry point a host resolves a .arcmesh through. A generated source
+    // delegates straight to BuildMeshData + ComputeMeshBounds (unchanged, and it is
+    // still the pure, device-free, supply-free function every builder test drives);
+    // Imported resolves `data.importedSource` through `supply`.
+    //
+    // THE REFUSAL POSTURE, s13-flavoured for geometry (s7.1): PENDING -> draw nothing
+    // QUIETLY (a placeholder cube would FABRICATE a shape, which is worse than an
+    // empty space); MISSING or REFUSED -> draw nothing LOUDLY, with a diagnostic.
+    // Never render an unknown as a cube.
+    [[nodiscard]] ARCANE_CORE_API MeshResolveResult ResolveMeshData(
+        const MeshAssetData& data,
+        const MeshArtifactSupplyFn& supply,
+        const CookPendingFn& cookPending);
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+}

@@ -66,10 +66,12 @@ function arcane_game_module(name)
         includedirs {
             "%{wks.location}/Source",
             ARCANE_SDK .. "/ArcaneClient/src",
-            -- Core's namespaced include root (<Arcane/Guid.hpp> etc.) -- engine
-            -- headers a game module includes transitively reach into it
-            -- (Runtime.hpp includes Guid.hpp since the asset-registration work);
-            -- include-only, no Core link (Core links into ONE module per process).
+            -- Core's namespaced include root (<Arcane/Guid.hpp>, and since the
+            -- Core-DLL split the whole headless engine layer: Base/Scene/
+            -- Plugin/Project/Serialization/...) -- and its import lib: a game
+            -- module links BOTH engine DLLs (spec docs/specs/
+            -- 2026-09-15-core-dll-split-design.md s1.2); the host's own copies
+            -- of both DLLs are what the loader binds.
             ARCANE_SDK .. "/ArcaneCore/src",
             ARCANE_TP .. "/glm",
             ARCANE_TP .. "/Astra/include",
@@ -79,12 +81,13 @@ function arcane_game_module(name)
             ARCANE_TP .. "/Mosaic/include",
         }
 
-        -- Link the engine import lib by name out of the per-config SDK bin dir.
-        -- "ArcaneClient" is not a project in this workspace, so premake treats it as a
-        -- library link resolved against libdirs (-> Arcane.lib). imgui's exported
-        -- surface arrives through this same import lib (/WHOLEARCHIVE in the engine).
-        libdirs { ARCANE_BIN .. "/ArcaneClient" }
-        links   { "ArcaneClient" }
+        -- Link the engine import libs by name out of the per-config SDK bin dirs.
+        -- Neither is a project in this workspace, so premake treats them as
+        -- library links resolved against libdirs (-> ArcaneCore.lib /
+        -- ArcaneClient.lib). imgui's exported surface arrives through
+        -- ArcaneClient's import lib (/WHOLEARCHIVE in the engine).
+        libdirs { ARCANE_BIN .. "/ArcaneCore", ARCANE_BIN .. "/ArcaneClient" }
+        links   { "ArcaneCore", "ArcaneClient" }
 
         defines {
             "GAME_BUILD_DLL",                         -- kept for an external module's own GAME_API; ARCANE_GAME_MODULE needs no define

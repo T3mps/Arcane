@@ -17,6 +17,8 @@
 #include <filesystem>
 #include <string>
 
+#include <Arcane/Core/Api.hpp>
+
 namespace Arcane::Toolchain
 {
     // The generated workspace file a build drives: the first *.slnx in
@@ -27,30 +29,30 @@ namespace Arcane::Toolchain
     // the project root (Aphelyon.slnx beside Aphelyon.arcproj), and a
     // recursive scan would find ThirdParty/vendor solutions that are not
     // ours to build.
-    std::filesystem::path DiscoverSolution(const std::filesystem::path& projectRoot);
+    ARCANE_CORE_API std::filesystem::path DiscoverSolution(const std::filesystem::path& projectRoot);
 
     // The engine's bundled premake: <sdkRoot>/ThirdParty/premake5/premake5.exe
     // (the repo layout build/arcane.lua documents), lexically normalised,
     // falling back to bare "premake5" (PATH) when the bundled copy is not
     // there -- a packaged SDK may ship it elsewhere, and cmd's own resolution
     // is the honest fallback.
-    std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot);
+    ARCANE_CORE_API std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot);
 
     // The one VS-install-aware query Microsoft documents: run
     // %ProgramFiles(x86)%/Microsoft Visual Studio/Installer/vswhere.exe with
     // `arguments` and return the FIRST line it prints (a path), or empty when
     // vswhere is absent or found nothing. Shared by the two lookups below --
     // one probe, two questions. Windows-only; always empty elsewhere.
-    std::filesystem::path VsWhere(const std::string& arguments);
+    ARCANE_CORE_API std::filesystem::path VsWhere(const std::string& arguments);
 
     // MSBuild via VsWhere:
     //   vswhere -latest -requires Microsoft.Component.MSBuild
     //           -find MSBuild\**\Bin\MSBuild.exe
     // falling back to bare "msbuild" (PATH -- a Developer Command Prompt).
-    std::filesystem::path ResolveMsBuild();
+    ARCANE_CORE_API std::filesystem::path ResolveMsBuild();
 
     // devenv.exe via VsWhere: vswhere -latest -find Common7\IDE\devenv.exe.
     // Empty when no Visual Studio install is found (the editor greys its
     // Open Visual Studio item on that).
-    std::filesystem::path ResolveDevenv();
+    ARCANE_CORE_API std::filesystem::path ResolveDevenv();
 }

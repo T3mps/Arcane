@@ -16,9 +16,11 @@
 #include <string>
 #include <string_view>
 
+#include <Arcane/Core/Api.hpp>
+
 namespace Arcane
 {
-    struct Guid
+    struct ARCANE_CORE_API Guid
     {
         std::uint64_t hi = 0;   // bytes 0..7  (big-endian in the string form)
         std::uint64_t lo = 0;   // bytes 8..15

@@ -109,13 +109,18 @@ group ""
 
 group "Engine"
 -- ============================================================================
--- ArcaneCore: Arcane.Core static lib (presentation-free; also compiled by the
--- Server workspace as project "ArcaneCore" with static CRT -- same project
--- name in both workspaces)
+-- ArcaneCore: THE shared engine DLL (spec docs/specs/2026-09-15-core-dll-split-
+-- design.md). Presentation-free -- Base/Config/Jobs/Material/Mesh/Plugin/
+-- Project/Scene/Serialization/Sim/Sprite/Assets, none of which reach
+-- Render/Nri/Platform/ImGui/Input/Audio/Host. Every exe stages ArcaneCore.dll
+-- beside itself and every module (ArcaneClient.dll, the hosts, arccook/
+-- arcbuild, ArcaneTests, game modules) links the import lib, so there is
+-- exactly ONE copy per process BY CONSTRUCTION. Also consumed FROM SOURCE by
+-- the Server workspace with an explicit file list (Plan 2 retires that).
 -- ============================================================================
 project "ArcaneCore"
     location "ArcaneCore"
-    kind "StaticLib"
+    kind "SharedLib"
     language "C++"
     cppdialect "C++23"
     staticruntime "off"
@@ -137,6 +142,13 @@ project "ArcaneCore"
         -- M6 physics module (Arcane/Physics/) uses glm for vec2/mat. glm is
         -- header-only; adding it here keeps ArcaneCore presentation-free.
         "%{IncludeDir.glm}",
+        -- Core-DLL split: Assets/ decodes images (stb_image, whose one
+        -- implementation TU Assets/StbImpl.cpp moved here with it).
+        "%{IncludeDir.stb}",
+        -- Core-DLL split: Scene/ + Serialization/ are Astra-typed (Registry,
+        -- reflection); Jobs/JobSystem.cpp instantiates enkiTS.
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
         -- Phase 2 lift: ArcaneCore's still-resident Physics/Geometry will
         -- include Manifold2D/Core primitives (FunctionRef/BitSet/Simd/
         -- WorkScheduler) ahead of the Task 2 move.
@@ -144,15 +156,27 @@ project "ArcaneCore"
         "%{IncludeDir.Mosaic}",
     }
 
+    -- enkiTS: Jobs/JobSystem.cpp instantiates a TaskScheduler. Manifold2D:
+    -- Scene/PhysicsSystem.hpp is header-only today, but the link belongs on
+    -- this DLL from the start -- it is where the physics world will live.
+    links { "enkiTS", "Manifold2D" }
+
     defines {
+        "ARCANE_CORE_BUILD_DLL",
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "NOMINMAX",
+        "WIN32_LEAN_AND_MEAN",
     }
 
     filter "system:windows"
         systemversion "latest"
         buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+        -- dbghelp: MiniDumpWriteDump + StackWalk64/Sym* behind
+        -- Arcane/Base/Diagnostics.cpp (crash + hang post-mortem capture),
+        -- which moved into this DLL with the rest of Base/.
+        links { "dbghelp" }
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
@@ -283,6 +307,12 @@ project "arccook"
     links { "ArcaneCore", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
     dependson { "ArcaneAssetPipeline" }
 
+    -- Core-DLL split: ArcaneCore is a DLL now, loaded from this exe's own
+    -- directory (dev bin layout: bin/<cfg>/arccook/).
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
+    }
+
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
@@ -316,11 +346,13 @@ project "arccook"
 -- 2026-09-13-arcbuild-driver-design.md) -- Unreal's Build.bat analogue. ONE
 -- entry point (generate/build/rebuild/clean/probe) the editor's ModuleBuild,
 -- the Gacha scripts and CI all spawn, so the premake+msbuild orchestration
--- lives once. It links ArcaneClient for Module::ScanFileCrtFlavor -- the
--- s4.3 slot probe is the SAME verdict PluginHost refuses a cross-CRT module
--- on, never a second PE scanner -- and for Project/ProjectManifest (the
--- .arcproj rule the hosts use). arccook above is the structural template;
--- the ArcaneClient.dll postbuild copy is ArcaneRuntime's. Its pure core
+-- lives once. It links ArcaneCore (Module/Project live there since the
+-- Core-DLL split) for Module::ScanFileCrtFlavor -- the s4.3 slot probe is
+-- the SAME verdict PluginHost refuses a cross-CRT module on, never a second
+-- PE scanner -- and for Project/ProjectManifest (the .arcproj rule the hosts
+-- use). Spec 2026-09-15 s1.2/s10: the presentation-free driver no longer
+-- needs the presentation DLL at all. arccook above is the structural
+-- template; the ArcaneCore.dll postbuild copy is ArcaneRuntime's. Its pure core
 -- (Request.cpp, Slot.cpp, Compose.cpp) is ALSO source-compiled into
 -- ArcaneTests ([build]).
 -- ============================================================================
@@ -341,7 +373,6 @@ project "arcbuild"
 
     includedirs {
         "%{prj.location}/src",
-        "%{wks.location}/ArcaneClient/src",
         "%{IncludeDir.ArcaneCore}",
         -- Project.hpp's include closure (ProjectManifest -> <Json.hpp> + glm;
         -- Diagnostics -> spdlog/Mosaic): headers only, same set ArcaneRuntime
@@ -354,18 +385,18 @@ project "arcbuild"
         "%{IncludeDir.Mosaic}",
     }
 
-    links { "ArcaneCore", "ArcaneClient" }
+    links { "ArcaneCore" }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
     }
 
-    -- The driver loads ArcaneClient.dll from its own directory (dev bin
+    -- The driver loads ArcaneCore.dll from its own directory (dev bin
     -- layout: bin/<cfg>/arcbuild/); a packaged layout ships it beside the
     -- editor, where the DLL already is.
     postbuildcommands {
-        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
     }
 
     filter "system:windows"
@@ -560,14 +591,9 @@ project "ArcaneRuntime"
         -- CreateNoneForTests's comment about ArcaneTests' own copy.)
         "%{IncludeDir.NRI}",
     }
-    -- ArcaneCore is linked directly (alongside the Arcane DLL) even though the
-    -- host-boot layer (HostConfig/GpuContext/FramePerf/ProjectBoot) moved INTO
-    -- ArcaneClient.dll as Arcane/Host -- ArcaneRuntime.exe no longer source-compiles
-    -- any of it. ArcaneCore stays: it's a cheap, established two-static-copies
-    -- pattern (see the ArcaneTests links comment), and other exe TUs may still
-    -- want un-exported ArcaneCore APIs directly. ArcaneCore links into exactly
-    -- ONE module per PROCESS holds because ArcaneRuntime.exe and ArcaneClient.dll are
-    -- distinct modules.
+    -- ArcaneCore is a DLL since the Core-DLL split: exactly one copy per
+    -- process BY CONSTRUCTION, and it is ArcaneCore.dll. Both links below are
+    -- import libs; this exe stages both DLLs beside itself (postbuild).
     links { "ArcaneCore", "ArcaneClient" }
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
     dependson { "arccook" }
@@ -581,6 +607,7 @@ project "ArcaneRuntime"
         -- bytes, last rename wins -- see ArtifactStore.hpp's concurrency contract).
         '"%{wks.location}/bin/' .. outputdir .. '/arccook/arccook.exe" --project "%{wks.location}/ReferenceProject"',
         '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -711,6 +738,7 @@ project "ArcaneEditor"
         -- hash, concurrent same-key writes atomic-rename + deterministic).
         '"%{wks.location}/bin/' .. outputdir .. '/arccook/arccook.exe" --project "%{wks.location}/ReferenceProject"',
         '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -781,8 +809,10 @@ project "ArcaneEditor"
 group ""
 
 -- ============================================================================
--- ArcaneTests: Catch2 + rapidcheck (Server conventions). Links ArcaneCore
--- directly -- ArcaneCore links into exactly ONE module per process.
+-- ArcaneTests: Catch2 + rapidcheck (Server conventions). ArcaneCore is a DLL
+-- since the Core-DLL split: exactly one copy per process BY CONSTRUCTION, and
+-- it is ArcaneCore.dll -- the link below is its import lib, and this exe
+-- stages the DLL beside itself (postbuild).
 -- ============================================================================
 -- Solution folder for the test exe + its three hot-reload fixture DLLs, so
 -- the fixtures stop reading as top-level products. "Tests", not
@@ -1175,6 +1205,7 @@ project "ArcaneTests"
         -- line is this exe's ONLY source of a staged Intermediate/Artifacts.
         '"%{wks.location}/bin/' .. outputdir .. '/arccook/arccook.exe" --project "%{wks.location}/ReferenceProject"',
         '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
@@ -1281,7 +1312,10 @@ project "ArcaneTests"
 
 -- ============================================================================
 -- Hot-reload TEST plugins: one source, three DLLs (V1 step=1, V2 step=10,
--- Bad ABI). SharedLib, /MD, links Arcane (NOT ArcaneCore -- one ArcaneCore per process).
+-- Bad ABI). SharedLib, /MD. ArcaneCore is a DLL since the Core-DLL split:
+-- exactly one copy per process BY CONSTRUCTION, and it is ArcaneCore.dll --
+-- so a module links BOTH engine import libs, exactly as build/arcane.lua does
+-- for a real game module (spec 2026-09-15 s1.2).
 -- Loaded at runtime by PluginHost in ArcaneTests; never linked by the test exe.
 -- Built ON Arcane/Plugin/GameModule.hpp (ARCANE_GAME_MODULE_ABI) -- the macro's plugin test vehicle.
 -- ============================================================================
@@ -1309,7 +1343,7 @@ local function test_plugin(name, defs)
             "%{IncludeDir.imgui}",
             "%{IncludeDir.spdlog}",
         }
-        links { "ArcaneClient" }
+        links { "ArcaneCore", "ArcaneClient" }
         -- IMGUI_API=dllimport: adopt ArcaneClient.dll's single GImGui, exactly as
         -- arcane.lua does for a real module.
         defines (defs)
