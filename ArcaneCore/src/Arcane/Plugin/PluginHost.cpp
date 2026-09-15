@@ -5,11 +5,10 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/ClientHooks.hpp>
 
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
-
-#include <imgui.h>
 
 #include <chrono>
 #include <cstddef>
@@ -71,7 +70,7 @@ namespace Arcane
         // Restores whatever ImGui context was current before a call into
         // PluginHost, regardless of what the plugin's entry point does to
         // GImGui while it runs (2026-07-30 review, Fix 3). There is exactly
-        // one GImGui in the process -- imgui is exported from Arcane.dll and
+        // one GImGui in the process -- imgui is exported from ArcaneClient.dll and
         // imported everywhere else -- and a plugin's Init is free to call
         // ImGui::SetCurrentContext(...) to adopt the host's allocator/context
         // for its OWN offscreen "game" ImGui layer (Sandbox.cpp:102 does
@@ -97,13 +96,17 @@ namespace Arcane
         // pointer reads/writes) and safe even with no ImGui context at all
         // (headless [hotreload] tests): GetCurrentContext()/SetCurrentContext
         // both tolerate null.
-        struct ImGuiContextGuard
+        // Same contract as the old ImGuiContextGuard (comment above kept): restore
+        // whatever UI context was current before a call into PluginHost. Core knows
+        // no ImGui; the ClientRuntime's hooks do. Null hooks = headless = nothing to save.
+        struct UiContextGuard
         {
-            ImGuiContextGuard() noexcept : saved(ImGui::GetCurrentContext()) {}
-            ~ImGuiContextGuard() noexcept { ImGui::SetCurrentContext(saved); }
-            ImGuiContextGuard(const ImGuiContextGuard&) = delete;
-            ImGuiContextGuard& operator=(const ImGuiContextGuard&) = delete;
-            ImGuiContext* saved;
+            explicit UiContextGuard(IClientHooks* h) noexcept : hooks(h), saved(h ? h->SaveUiContext() : nullptr) {}
+            ~UiContextGuard() noexcept { if (hooks) hooks->RestoreUiContext(saved); }
+            UiContextGuard(const UiContextGuard&) = delete;
+            UiContextGuard& operator=(const UiContextGuard&) = delete;
+            IClientHooks* hooks;
+            void*         saved;
         };
 
         // Publishes the ONE diagnostic row naming WHICH load cause (OS-level load
@@ -195,10 +198,15 @@ namespace Arcane
         void RefreshContext()
         {
             ctx.abiVersion    = kGamePluginABIVersion;
-            ctx.imguiContext  = runtime.ImGuiContext();
-            ctx.imguiAlloc    = runtime.ImGuiAlloc();
-            ctx.imguiFree     = runtime.ImGuiFree();
-            ctx.imguiUserData = runtime.ImGuiUserData();
+            // The four ImGui void*s are presentation: null unless a client is
+            // attached AND the host installed its context (an ImGui-less host --
+            // ArcaneServer, a headless test -- hands the module null, as before).
+            ctx.imguiContext  = nullptr;
+            ctx.imguiAlloc    = nullptr;
+            ctx.imguiFree     = nullptr;
+            ctx.imguiUserData = nullptr;
+            if (IClientHooks* h = runtime.ClientHooks())
+                h->FillEngineContext(ctx);
         }
 
         bool CopyVersioned(std::uint32_t g, PluginImage& out)
@@ -246,7 +254,8 @@ namespace Arcane
             // host refactor unified all teardown paths (unload, init-failure, reload-of-
             // previous, reload-failure) through TeardownImage, so this single call
             // covers what the audio PR originally hooked at three separate sites.
-            runtime.ResetAudio();
+            if (IClientHooks* h = runtime.ClientHooks())
+                h->OnModuleTeardown();
             runtime.ClearSystems();
             // Reset while the module is still loaded: registered component destructors
             // may point into plugin code.
@@ -504,10 +513,10 @@ namespace Arcane
 
     bool PluginHost::Load()
     {
-        // See ImGuiContextGuard's comment: a plugin's Init may switch GImGui
+        // See UiContextGuard's comment: a plugin's Init may switch GImGui
         // and never switch it back (Sandbox.cpp:102), so every public entry
         // point restores whatever was current on entry before returning.
-        const ImGuiContextGuard imguiGuard;
+        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
 
         // Plugins-only host (no primary game module) -- the editor opening a project that has
         // plugin modules but no gameModule. Skip the primary copy/load/ABI/rollback path and
@@ -575,8 +584,8 @@ namespace Arcane
         if (!m_impl->current && m_impl->plugins.empty())
             return;
 
-        // See ImGuiContextGuard's comment (Load() above).
-        const ImGuiContextGuard imguiGuard;
+        // See UiContextGuard's comment (Load() above).
+        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
 
         // Quiesce plugins (reverse order) while everything is still mapped; the primary's
         // TeardownImage performs the SINGLE shared-state reset (audio/systems/registry)
@@ -591,7 +600,8 @@ namespace Arcane
         else
         {
             // Plugins-only (no primary loaded): do the shared reset here, once.
-            m_impl->runtime.ResetAudio();
+            if (IClientHooks* h = m_impl->runtime.ClientHooks())
+                h->OnModuleTeardown();
             m_impl->runtime.ClearSystems();
             m_impl->runtime.ResetRegistry();
         }
@@ -601,8 +611,8 @@ namespace Arcane
 
     bool PluginHost::Reload(bool restoreState)
     {
-        // See ImGuiContextGuard's comment (Load() above).
-        const ImGuiContextGuard imguiGuard;
+        // See UiContextGuard's comment (Load() above).
+        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
 
         // Plugins-only host: no primary to reload, and secondaries load once and never
         // hot-reload -- so a reload request is a no-op success (nothing to rebuild).
@@ -652,13 +662,13 @@ namespace Arcane
 
     void PluginHost::FixedUpdateAll(double dt)
     {
-        // See ImGuiContextGuard's comment (Load() above). FixedUpdate is not
+        // See UiContextGuard's comment (Load() above). FixedUpdate is not
         // expected to touch ImGui, but the guard is cheap (two pointer ops)
         // and this is a hot per-frame call, so it costs nothing to hold the
         // same "never leaks a context change" guarantee every entry point
         // here makes, rather than special-casing "the ones we know misbehave
         // today."
-        const ImGuiContextGuard imguiGuard;
+        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
         if (const PluginVTable* vt = Vtable(); vt && vt->FixedUpdate) vt->FixedUpdate(dt);
         for (auto& img : m_impl->plugins)
             if (img.plugin && img.plugin->VTable().FixedUpdate) img.plugin->VTable().FixedUpdate(dt);
@@ -666,8 +676,8 @@ namespace Arcane
 
     void PluginHost::UpdateAll(double dt, double alpha)
     {
-        // See ImGuiContextGuard's comment (Load() above).
-        const ImGuiContextGuard imguiGuard;
+        // See UiContextGuard's comment (Load() above).
+        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
         if (const PluginVTable* vt = Vtable(); vt && vt->Update) vt->Update(dt, alpha);
         for (auto& img : m_impl->plugins)
             if (img.plugin && img.plugin->VTable().Update) img.plugin->VTable().Update(dt, alpha);
@@ -675,14 +685,14 @@ namespace Arcane
 
     void PluginHost::DrawUIAll()
     {
-        // See ImGuiContextGuard's comment (Load() above). DrawUI is the ONE
+        // See UiContextGuard's comment (Load() above). DrawUI is the ONE
         // entry point that is SUPPOSED to touch ImGui (the plugin draws its
         // own HUD into its own offscreen "game" context, composited into the
         // viewport texture by the caller) -- the guard does not interfere
         // with that: it only restores whatever context was current on ENTRY
         // once THIS FUNCTION returns, so every plugin's DrawUI is still free
         // to leave the game context set for as long as it's running.
-        const ImGuiContextGuard imguiGuard;
+        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
         if (const PluginVTable* vt = Vtable(); vt && vt->DrawUI) vt->DrawUI();
         for (auto& img : m_impl->plugins)
             if (img.plugin && img.plugin->VTable().DrawUI) img.plugin->VTable().DrawUI();

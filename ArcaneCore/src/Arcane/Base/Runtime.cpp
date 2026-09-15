@@ -5,17 +5,15 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Base/RuntimePresentation.hpp>
-#include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Arcane/Plugin/ClientHooks.hpp>   // IClientHooks -- the ONE Core->Client reach-back (plan 1 P6)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
 #include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
 #include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsSystem/PhysicsResource (instantiated IN this module)
-#include <Arcane/Scene/SceneResources.hpp>   // RenderContext2D (instantiated IN this module)
-#include <Arcane/Render/RenderSystems.hpp>       // RenderSubmissionSystem (engine-owned, instantiated IN this module)
+#include <Arcane/Scene/SceneResources.hpp>   // SceneRoot (ResolvedGravity's scene-root lookup)
 #include <Arcane/Scene/TransformSystems.hpp>    // TransformPropagationSystem (engine-owned, instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
@@ -92,20 +90,25 @@ namespace Arcane
         std::unique_ptr<RunLoop>                    loop;
         RunLoop::Config                             loopCfg;   // reused by Restore/ResetRegistry when rebuilding the loop
         std::unique_ptr<Assets>                     assets;
-        RuntimePresentation                         presentation;    // audio/input/ImGui/camera; destructs BEFORE assets (declared after it)
         Config                                      config;          // layered engine+project config (Slice 3)
         std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
+        // The client seam (spec s2, plan 1 P6). Both null on a headless host; a
+        // ClientRuntime sets them from its own ctor and clears them from its dtor,
+        // so neither can outlive the object it points at.
+        ClientRuntime*                              client = nullptr;
+        IClientHooks*                               hooks  = nullptr;
 
-        explicit Impl(ProcessContext& process, bool enableAudioDevice) : jobs(), sched(jobs.WorkScheduler())
+        explicit Impl(ProcessContext& process) : jobs(), sched(jobs.WorkScheduler())
         {
             context = &process.TypeContext();
 
-            // Install the shared context in THIS module (ArcaneClient.dll) BEFORE any
-            // TypeID/Registry use. ArcaneCore.dll's own per-module slot is installed by
-            // ProcessContext::Create itself (Base/ProcessContext.cpp) -- the process has
-            // exactly one ProcessContext, constructed before any Runtime, so that slot is
-            // already live by the time this ctor runs.
+            // Install the shared context in THIS module (ArcaneCore.dll) BEFORE any
+            // TypeID/Registry use. ProcessContext::Create (Base/ProcessContext.cpp)
+            // already installed exactly this slot -- it is Core's TU too -- so this
+            // call is idempotent and kept only so the invariant is stated where the
+            // Registry work begins. ArcaneClient.dll's own slot is ClientRuntime's
+            // ctor's (Client/ClientRuntime.cpp).
             Astra::SetTypeContext(context, Astra::ModuleResidency::Resident);
             components = std::make_shared<Astra::ComponentRegistry>();
 
@@ -184,29 +187,32 @@ namespace Arcane
             // OpenProject re-layers the project + user files on top.
             engineConfigDir = ExeDir() / "data" / "EngineConfig";
             config.LoadEngineDefaults(engineConfigDir);
-            // Device-less gating for the real OS audio device. There is no device-less signal
-            // reachable here: Runtime holds no render device at all since Task 9
-            // deleted the bridge, and neither this ctor nor HostConfig
-            // carried a device-less flag. So the host states its intent through a ctor flag --
-            // enableAudioDevice (default false). Tests, servers, tools, and the scripted
-            // "ArcaneRuntime --frames N" GPU-verify leave it false and get the noDevice null backend;
-            // an interactive host passes true. AudioDeviceDesc::enableDevice defaults false
-            // for the same reason, so a real device is always opt-in.
-            presentation.InitAudio(assets.get(), enableAudioDevice);
+            // The audio device that used to be initialized here is ClientRuntime's
+            // (its RuntimePresentation member, initialized from its own ctor with
+            // the enableAudioDevice flag that moved there with it).
         }
     };
 
-    Runtime::Runtime(ProcessContext& process, bool enableAudioDevice)
-        : m_impl(std::make_unique<Impl>(process, enableAudioDevice))
+    Runtime::Runtime(ProcessContext& process)
+        : m_impl(std::make_unique<Impl>(process))
     {
         // Mosaic diagnostics: install the log sink + assert handler into THIS module
-        // (Arcane.dll) so Astra/Manifold2D/Mosaic code running here routes to the
-        // engine logger. Each module installs its own (per-module Mosaic storage).
+        // (ArcaneCore.dll) so Astra/Manifold2D/Mosaic code running here routes to the
+        // engine logger. Each module installs its own (per-module Mosaic storage);
+        // ClientRuntime's ctor does the same for ArcaneClient.dll.
         Arcane::Log::InstallMosaicSink();
         Arcane::Assert::InstallMosaicHandler();
         InstallEngineSystems();
     }
     Runtime::~Runtime() = default;   // do not reset the module slot: a later Runtime re-installs
+
+    void Runtime::AttachClient(ClientRuntime* client, IClientHooks* hooks) noexcept
+    {
+        m_impl->client = client;
+        m_impl->hooks  = hooks;
+    }
+    ClientRuntime* Runtime::Client()      const noexcept { return m_impl->client; }
+    IClientHooks*  Runtime::ClientHooks() const noexcept { return m_impl->hooks; }
 
     Astra::Registry&  Runtime::Registry()   noexcept { return *m_impl->registry; }
     SystemSchedulers& Runtime::Schedulers() noexcept { return *m_impl->schedulers; }
@@ -217,76 +223,19 @@ namespace Arcane
     JobSystem&             Runtime::Jobs()          noexcept { return m_impl->jobs; }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
     Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }
-    Audio::AudioDevice& Runtime::AudioSystem() noexcept { return m_impl->presentation.audio; }
-
-    void Runtime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_impl->presentation.input = snap; }
-    const InputSnapshot& Runtime::Input() const noexcept { return m_impl->presentation.input; }
-
-    void Runtime::SetImGui(void* context, void* alloc, void* freeFn, void* userData) noexcept
-    {
-        m_impl->presentation.imguiContext  = context;
-        m_impl->presentation.imguiAlloc    = alloc;
-        m_impl->presentation.imguiFree     = freeFn;
-        m_impl->presentation.imguiUserData = userData;
-    }
-    void* Runtime::ImGuiContext()  const noexcept { return m_impl->presentation.imguiContext; }
-    void* Runtime::ImGuiAlloc()    const noexcept { return m_impl->presentation.imguiAlloc; }
-    void* Runtime::ImGuiFree()     const noexcept { return m_impl->presentation.imguiFree; }
-    void* Runtime::ImGuiUserData() const noexcept { return m_impl->presentation.imguiUserData; }
-
-    void Runtime::SetCamera(glm::vec2 offset, float zoom) noexcept
-    {
-        m_impl->presentation.cameraOffset = offset;
-        m_impl->presentation.cameraZoom   = zoom;
-    }
-    glm::vec2 Runtime::CameraOffset() const noexcept { return m_impl->presentation.cameraOffset; }
-    float     Runtime::CameraZoom()   const noexcept { return m_impl->presentation.cameraZoom; }
-
-    // SetRenderResources / Device() / Shaders() stood here. The setter also bound
+    // The presentation surface -- AudioSystem/SetInputSnapshot/Input/SetImGui/
+    // ImGui*/SetCamera/CameraOffset/CameraZoom/SetRenderContext/SetSpriteMaterials/
+    // SetSpriteTable/SetMeshTable/SetMeshMaterials/ResetAudio -- stood here. It moved
+    // to ClientRuntime (Client/ClientRuntime.cpp) BODY-FOR-BODY at the Core-DLL split
+    // (plan 1 Task 4): every SetResource call still runs in ArcaneClient.dll, whose
+    // Astra slot that ctor installs, so the "scene TypeID resolves against the shared
+    // context" rule each of them documented is unchanged.
+    //
+    // SetRenderResources / Device() / Shaders() stood here too. The setter also bound
     // the device into the Assets facade (Assets::SetDevice) so GetTexture could
     // resolve a texture; both hosts have passed nullptr since Task 6, so that
     // bind has been a no-op and the facade stays device-less for its whole life.
     // Deleted at Task 9 -- ABI 14.
-
-    void Runtime::SetRenderContext(Batcher2D* batcher)
-    {
-        // SetResource<RenderContext2D> runs IN Arcane.dll so TypeID<RenderContext2D>
-        // resolves here against the shared context; the host never touches a scene TypeID.
-        // The camera comes from the STORED plugin camera (SetCamera) -- the host is
-        // camera-agnostic. Defaults (offset (0,0), zoom 1) are the identity transform.
-        // Epic 04.2: carry the render alpha so RenderSubmissionSystem +
-        // DrawPhysicsDebug can interpolate poses between fixed steps. Runtime owns
-        // the RunLoop, so this needs no plugin-ABI surface.
-        m_impl->registry->SetResource<RenderContext2D>(
-            RenderContext2D{batcher, m_impl->presentation.cameraOffset, m_impl->presentation.cameraZoom,
-                            static_cast<float>(Loop().Alpha())});
-    }
-
-    void Runtime::SetSpriteMaterials(const std::unordered_map<Guid, std::uint16_t>* materials)
-    {
-        // Same rule as SetRenderContext: SetResource<SpriteMaterialTable> runs
-        // IN Arcane.dll so the scene TypeID resolves against the shared context.
-        m_impl->registry->SetResource<SpriteMaterialTable>(SpriteMaterialTable{materials});
-    }
-
-    void Runtime::SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites)
-    {
-        // Same rule as SetRenderContext: SetResource<SpriteTable> runs IN
-        // Arcane.dll so the scene TypeID resolves against the shared context.
-        m_impl->registry->SetResource<SpriteTable>(SpriteTable{sprites});
-    }
-
-    void Runtime::SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes)
-    {
-        // F2a (Task 6) sibling of SetSpriteTable -- same rule, same reason.
-        m_impl->registry->SetResource<MeshTable>(MeshTable{meshes});
-    }
-
-    void Runtime::SetMeshMaterials(const std::unordered_map<Guid, ResolvedMeshMaterial>* materials)
-    {
-        // F2a (Task 6) sibling of SetSpriteMaterials -- same rule, same reason.
-        m_impl->registry->SetResource<MeshMaterialTable>(MeshMaterialTable{materials});
-    }
 
     Astra::Result<std::vector<std::byte>, Astra::SerializationError> Runtime::SnapshotRegistry() const
     {
@@ -373,11 +322,16 @@ namespace Arcane
         m_impl->schedulers->update.Clear();
         m_impl->schedulers->render.Clear();
         InstallEngineSystems();   // the module's systems are gone; the engine's are back
+        // ...and the client's presentation systems with them: RenderSubmissionSystem
+        // is ClientRuntime's to (re)install, and this is the ONE place that knows a
+        // clear just happened. Null on a headless host -- nothing to reinstall.
+        if (m_impl->hooks)
+            m_impl->hooks->OnSystemsCleared();
     }
 
     void Runtime::InstallEngineSystems()
     {
-        // The engine's STANDARD systems, owned here (spec docs/specs/2026-09-13-
+        // The engine's HEADLESS pair, owned here (spec docs/specs/2026-09-13-
         // game-module-boilerplate-design.md s4.1) -- the UE/DOTS shape: the engine
         // ticks the world; a game module registers only its own systems and
         // places them with Astra::Before/After against these types. Each behind
@@ -385,8 +339,11 @@ namespace Arcane
         // this runs from the ctor AND after every ClearSystems. Order within a
         // scheduler: PhysicsSystem declares Before<TransformPropagationSystem>;
         // insertion order carries the rest (Astra's reorder is stable).
+        // RenderSubmissionSystem was the third; it is presentation, so it is
+        // ClientRuntime's now (Client/ClientRuntime.cpp installs it at
+        // construction and on every OnSystemsCleared) and a Core-only host has
+        // exactly the systems it can execute.
         auto& fixed  = m_impl->schedulers->fixedUpdate;
-        auto& render = m_impl->schedulers->render;
         if (!fixed.HasSystem<PhysicsSystem>())
         {
             const float fixedDt = static_cast<float>(1.0 / m_impl->loopCfg.fixedHz);
@@ -394,8 +351,6 @@ namespace Arcane
         }
         if (!fixed.HasSystem<TransformPropagationSystem>())
             std::ignore = fixed.AddSystem<TransformPropagationSystem>();
-        if (!render.HasSystem<RenderSubmissionSystem>())
-            std::ignore = render.AddSystem<RenderSubmissionSystem>();
     }
 
     glm::vec2 Runtime::ResolvedGravity() const
@@ -445,11 +400,6 @@ namespace Arcane
         // leave a handle behind for the fresh world to reissue to someone else.
         m_impl->registry->RemoveResource<PhysicsResource>();
         m_impl->registry->RemoveResource<PhysicsInterpBuffer>();
-    }
-
-    void Runtime::ResetAudio() noexcept
-    {
-        m_impl->presentation.ResetAudio(m_impl->assets.get());
     }
 
     bool Runtime::OpenProject(const std::filesystem::path& pathOrFile, AssetRegistry::ScanProgressFn onProgress,

@@ -2024,7 +2024,7 @@ namespace Arcane::Editor
         // the readiness checks live in SceneSession::Request's park condition
         // (dirty OR never-saved) and DoLaunchStandalone keeps only a loud
         // backstop before the spawn.
-        if (Arcane::Editor::DrawSimTimeToolbar(m_play, *m_runtime,
+        if (Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
                                                m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
                                                ToolbarLogoTextureId()))
         {
@@ -2966,7 +2966,7 @@ namespace Arcane::Editor
                     // LaunchStandalone only reaches here already saved-or-dirty,
                     // never mid-Play in a way DoLaunchStandalone itself needs.
                     if (InPlayMode())
-                        m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
+                        m_play.Stop(m_runtime->Core(), m_plugin ? m_plugin->Vtable() : nullptr);
                     if (m_scene.Path().empty())
                     {
                         // Never saved: this needs a filename first. The intent

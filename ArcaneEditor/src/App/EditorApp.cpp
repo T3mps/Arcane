@@ -289,7 +289,7 @@ namespace Arcane::Editor
         // Populate ctx for the SHARED type_context_install / project_open /
         // input_config / editor_lock stage bodies (ProjectBoot.cpp), which only
         // have `ctx`, not `this` -- "stages populate as they go".
-        ctx.runtime = &*m_runtime;
+        ctx.runtime = &m_runtime->Core();
         return true;
     }
 
@@ -694,7 +694,7 @@ namespace Arcane::Editor
                 if (!data)
                     return nullptr;
                 Arcane::Editor::MeshDocument::Services meshDocServices;
-                meshDocServices.runtime = &*m_runtime;
+                meshDocServices.runtime = &m_runtime->Core();
                 meshDocServices.undo = m_undo ? &*m_undo : nullptr;
                 // Evict-then-re-resolve on a mesh re-save OR an undo/redo,
                 // the same one-call route the .arcsprite factory above takes
@@ -1003,7 +1003,7 @@ namespace Arcane::Editor
             // A game module OR just project plugin modules is enough to host: an empty
             // gameModule makes a plugins-only host (open a plugin-only project to work on it
             // before its game DLL exists). PluginHost handles the primary-less case.
-            m_plugin.emplace(*m_runtime,
+            m_plugin.emplace(m_runtime->Core(),
                 gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
             for (const auto& dll : pluginModules)
                 m_plugin->AddPlugin(dll);
@@ -1120,7 +1120,7 @@ namespace Arcane::Editor
         {
             if (const Arcane::Project* proj = m_runtime->CurrentProject())
             {
-                if (const auto boot = Arcane::HostBoot::BootScene(*m_runtime, *proj))
+                if (const auto boot = Arcane::HostBoot::BootScene(m_runtime->Core(), *proj))
                 {
                     m_scene.Adopt(boot->file, boot->id, *m_undo);
                     m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);

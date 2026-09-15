@@ -8,6 +8,7 @@
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -41,7 +42,10 @@ namespace { struct NoOpSystem { void operator()(Astra::Registry&) const {} }; }
 
 TEST_CASE("Runtime boots a usable substrate", "[runtime]")
 {
-    Arcane::Runtime rt(Arcane::Test::Process());
+    // A ClientRuntime, because the audio device is presentation since the Core-DLL
+    // split -- everything else here is the headless substrate, reached through the
+    // P5 aliases (which is itself the proof they forward to the owned Runtime).
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.TypeContext() != nullptr);
     REQUIRE(rt.WorkScheduler() != nullptr);
     REQUIRE(rt.WorkScheduler()->WorkerCount() >= 1);
@@ -61,7 +65,7 @@ TEST_CASE("Runtime boots a usable substrate", "[runtime]")
 
 TEST_CASE("Runtime resets audio without disturbing the engine substrate", "[runtime][audio]")
 {
-    Arcane::Runtime rt(Arcane::Test::Process());
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.AudioSystem().IsInitialized());
 
     rt.ResetAudio();
@@ -146,13 +150,15 @@ TEST_CASE("Runtime ClearSystems empties the module's systems and re-installs the
     REQUIRE(rt.Schedulers().render.AddSystem<NoOpSystem>().IsOk());        // same type across them is fine
     rt.ClearSystems();
     // The engine-owned STANDARD systems come back (PhysicsSystem 2026-09-11;
-    // TransformPropagation + RenderSubmission 2026-09-13, game-module
-    // boilerplate spec s4.1); the module's NoOpSystems are gone.
+    // TransformPropagation 2026-09-13, game-module boilerplate spec s4.1); the
+    // module's NoOpSystems are gone. RenderSubmissionSystem was the third until
+    // the Core-DLL split moved it to ClientRuntime, so on a BARE Runtime the
+    // render scheduler comes back empty -- the client's half of this is
+    // ClientRuntimeTest's "keeps render submission across ClearSystems".
     CHECK(rt.Schedulers().fixedUpdate.Size() == 2);
     CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<NoOpSystem>());
     CHECK(rt.Schedulers().update.Empty());
-    CHECK(rt.Schedulers().render.Size() == 1);
-    CHECK_FALSE(rt.Schedulers().render.HasSystem<NoOpSystem>());
+    CHECK(rt.Schedulers().render.Empty());
 }
 
 // ---- 2D physics wiring Plan 1 Task 6: the engine-owned physics facade ------
@@ -170,7 +176,8 @@ TEST_CASE("Runtime installs PhysicsSystem into fixedUpdate and re-installs after
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
     CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<NoOpSystem>());
     CHECK(rt.Schedulers().update.Empty());
-    CHECK(rt.Schedulers().render.HasSystem<Arcane::RenderSubmissionSystem>());
+    // Headless: RenderSubmissionSystem is the client's since the Core-DLL split.
+    CHECK_FALSE(rt.Schedulers().render.HasSystem<Arcane::RenderSubmissionSystem>());
 }
 
 TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[runtime][physics]")

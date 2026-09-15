@@ -5,6 +5,7 @@
 #include <Arcane/Assets/Assets.hpp>       // Task 11: Assets::MeshArtifactFor/CookPending (golden prop)
 #include <Arcane/Base/Engine.hpp>        // ExecutablePathUtf8 (the argv[0] replacement)
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // kGamePluginABIVersion (the probe tripwire)
@@ -617,7 +618,7 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     REQUIRE_FALSE(sceneFile.empty());
     CHECK(sceneFile.filename() == "main.arcscene");
 
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     const auto result = Arcane::HostBoot::BootScene(runtime, *proj);
     REQUIRE(result.has_value());
     CHECK(result->id.ToString() == proj->Manifest().bootScene);
@@ -820,8 +821,10 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
 
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
-    REQUIRE(Arcane::HostBoot::BootScene(runtime, *proj).has_value());
+    // ClientRuntime: SceneRenderResolver::Services::runtime is a ClientRuntime*
+    // since the Core-DLL split (the four Set*Table publishers are presentation).
+    Arcane::ClientRuntime runtime(Arcane::Test::Process());
+    REQUIRE(Arcane::HostBoot::BootScene(runtime.Core(), *proj).has_value());
 
     // Nested scope: the resolver's header contract is that it destructs BEFORE
     // the Runtime it publishes non-owning table pointers through.
@@ -907,7 +910,9 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
     const fs::path dir = FindReferenceProjectDir();
     REQUIRE_FALSE(dir.empty());
 
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    // ClientRuntime: SceneRenderResolver::Services::runtime is a ClientRuntime*
+    // since the Core-DLL split (the four Set*Table publishers are presentation).
+    Arcane::ClientRuntime runtime(Arcane::Test::Process());
     // Runtime::OpenProject, NOT Project::Open: only this path scans Content
     // into the AssetRegistry and installs the resolver behind
     // Runtime::CurrentProject(), which is what SceneRenderResolver's one
@@ -916,7 +921,7 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
     REQUIRE(runtime.OpenProject(dir));
     const Arcane::Project* proj = runtime.CurrentProject();
     REQUIRE(proj != nullptr);
-    REQUIRE(Arcane::HostBoot::BootScene(runtime, *proj).has_value());
+    REQUIRE(Arcane::HostBoot::BootScene(runtime.Core(), *proj).has_value());
 
     // Nested scope: the resolver publishes NON-OWNING pointers through the
     // Runtime and must destruct first (its own header contract).
@@ -1019,7 +1024,7 @@ TEST_CASE("host boot: the golden scene's imported prop resolves to sectioned geo
     // resolves through the Assets facade's installed resolver, which only
     // exists once a project is actually opened on the Runtime (same
     // reasoning as the mesh/material render-table case above).
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     REQUIRE(runtime.OpenProject(dir));
     const Arcane::Project* proj = runtime.CurrentProject();
     REQUIRE(proj != nullptr);

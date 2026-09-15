@@ -22,6 +22,7 @@
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N (kPassName only; the injector is NriDiagnostics::FireFault)
@@ -143,7 +144,7 @@ private:
 
     std::unique_ptr<Arcane::ProcessContext> m_process;   // the process's ONE (spec s3); declared before m_runtime so it outlives it
     // engaged by the boot sequence before MainLoop()/Shutdown() touch them (bare -> deref is safe).
-    std::optional<Arcane::Runtime>      m_runtime;      // destructs before m_gpu
+    std::optional<Arcane::ClientRuntime> m_runtime;     // destructs before m_gpu
     std::optional<Arcane::PluginHost>   m_plugin;       // destructs before m_runtime
     Arcane::FramePerf                   m_perf;
     std::uint64_t                       m_frameCount = 0;

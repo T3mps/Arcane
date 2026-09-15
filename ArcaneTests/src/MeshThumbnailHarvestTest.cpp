@@ -472,7 +472,7 @@ TEST_CASE("golden: the harvester's own 64px renders of five ReferenceProject sub
     // CookPending/PixelsFor all resolve through the Assets facade's installed
     // resolver, which only exists once a project is opened on a Runtime (the
     // same reasoning HostBootTest's own imported-prop case states).
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     REQUIRE(runtime.OpenProject(sourceRoot));
     const Arcane::Project* proj = runtime.CurrentProject();
     REQUIRE(proj != nullptr);

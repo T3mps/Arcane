@@ -1,13 +1,21 @@
 // Engine-owned scene systems (spec docs/specs/2026-09-13-game-module-boilerplate-
-// design.md s4): Runtime::InstallEngineSystems owns the standard three, they
-// survive ClearSystems (module unload / hot reload), a module that still
-// registers them is harmlessly refused, and a game system PLACES itself with
-// Astra's Before/After against the engine's types -- across the DLL boundary,
-// because Astra keys systems by a hash of the type NAME.
+// design.md s4): InstallEngineSystems owns the standard set, it survives
+// ClearSystems (module unload / hot reload), a module that still registers those
+// systems is harmlessly refused, and a game system PLACES itself with Astra's
+// Before/After against the engine's types -- across the DLL boundary, because
+// Astra keys systems by a hash of the type NAME.
+//
+// The standard set SPLIT at the Core-DLL split (spec 2026-09-15 s2, plan 1
+// Task 4): the fixedUpdate pair is Runtime's (Core, headless) and
+// RenderSubmissionSystem is ClientRuntime's (presentation). The split itself --
+// no render system on a bare Runtime, one on a ClientRuntime, surviving
+// ClearSystems through the hooks -- is pinned by ClientRuntimeTest.cpp; what
+// stays here is everything that is about the SCHEDULING contract.
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Render/RenderSystems.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
@@ -65,13 +73,11 @@ TEST_CASE("Runtime installs the engine's standard systems and reinstalls them af
 
     CHECK(sch.fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
     CHECK(sch.fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
-    CHECK(sch.render.HasSystem<Arcane::RenderSubmissionSystem>());
     CHECK_FALSE(sch.update.HasSystem<Arcane::TransformPropagationSystem>());
 
     rt.ClearSystems();   // what PluginHost does around a module unload / reload
     CHECK(sch.fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
     CHECK(sch.fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
-    CHECK(sch.render.HasSystem<Arcane::RenderSubmissionSystem>());
 }
 
 TEST_CASE("A module built against ABI 28 that still registers the pair is refused harmlessly", "[runtime]")
@@ -81,7 +87,13 @@ TEST_CASE("A module built against ABI 28 that still registers the pair is refuse
     // AlreadyRegistered -- the only failure AddSystem<T> has for a known T; the
     // old modules std::ignore it, so an unconverted DLL keeps working.
     CHECK(sch.fixedUpdate.AddSystem<Arcane::TransformPropagationSystem>().IsErr());
-    CHECK(sch.render.AddSystem<Arcane::RenderSubmissionSystem>().IsErr());
+
+    // RenderSubmissionSystem is the client's since the Core-DLL split, so the
+    // SAME refusal is pinned against a ClientRuntime -- an unconverted module in
+    // an interactive host is still refused harmlessly, and a headless host never
+    // had the system to collide with (ClientRuntimeTest pins that half).
+    Arcane::ClientRuntime crt(Arcane::Test::Process());
+    CHECK(crt.Schedulers().render.AddSystem<Arcane::RenderSubmissionSystem>().IsErr());
 }
 
 TEST_CASE("A game system places itself with Before/After against the engine's systems", "[runtime]")

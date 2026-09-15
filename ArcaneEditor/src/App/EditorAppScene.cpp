@@ -128,7 +128,7 @@ namespace Arcane::Editor
         // FIRST because Stop restores the pre-Play snapshot: left running, it would
         // later overwrite whatever scene is loaded after this.
         if (InPlayMode())
-            m_play.Stop(*m_runtime, m_plugin ? m_plugin->Vtable() : nullptr);
+            m_play.Stop(m_runtime->Core(), m_plugin ? m_plugin->Vtable() : nullptr);
         m_selection.Clear();
         // Click-pick can have a readback IN FLIGHT that names entities of the
         // outgoing scene. Bumping the

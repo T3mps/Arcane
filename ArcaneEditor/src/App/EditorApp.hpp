@@ -56,6 +56,7 @@
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
@@ -611,7 +612,7 @@ namespace Arcane::Editor
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
         std::unique_ptr<Arcane::ProcessContext> m_process;          // the process's ONE (spec s3); declared before m_runtime so it outlives it
-        std::optional<Arcane::Runtime>    m_runtime;                // destructs before m_gpu
+        std::optional<Arcane::ClientRuntime> m_runtime;             // destructs before m_gpu
         std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_runtime
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;

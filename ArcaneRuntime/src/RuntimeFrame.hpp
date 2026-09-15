@@ -31,7 +31,7 @@
 // refuses each other's mode by design, so the frame driver has to pick.
 
 #include <Arcane/Assets/ImageCompare.hpp>            // --compare N (Task 8): PixelData/ImageCompareOptions/ImageCompareResult
-#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Host/FramePerf.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 #include <Arcane/Host/HostConfig.hpp>
@@ -80,7 +80,10 @@ namespace Arcane::RuntimeFrame
         // IsOffscreen() only where the vehicle's own API genuinely differs.
         Arcane::NriGraphContext*     graph;
         Arcane::SceneRenderResolver* resolver;  // null iff the boot scene published none
-        Arcane::Runtime*             runtime;
+        // ClientRuntime: the frame body drives presentation (input snapshot,
+        // audio tick, camera, render context) as well as the headless substrate,
+        // which it reaches through the P5 aliases.
+        Arcane::ClientRuntime*       runtime;
         Arcane::PluginHost*          plugin;
         // PushSceneCamera is RuntimeApp's own, made public for exactly this
         // call (see RuntimeApp.hpp's comment on it).

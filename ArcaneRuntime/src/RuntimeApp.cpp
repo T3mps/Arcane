@@ -102,7 +102,7 @@ bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
     // Populate ctx for the SHARED type_context_install / project_open /
     // input_config stage bodies (ProjectBoot.cpp), which only have `ctx`, not
     // `this` -- "stages populate as they go".
-    ctx.runtime = &*m_runtime;
+    ctx.runtime = &m_runtime->Core();
     return true;
 }
 
@@ -184,7 +184,7 @@ bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
                   "manifest names a gameModule) or --plugin <dll>");
         return false;
     }
-    m_plugin.emplace(*m_runtime, gameModule.empty() ? std::filesystem::path{}
+    m_plugin.emplace(m_runtime->Core(), gameModule.empty() ? std::filesystem::path{}
                                                     : std::filesystem::path(gameModule));
     for (const auto& dll : pluginModules)
         m_plugin->AddPlugin(dll);
@@ -228,11 +228,11 @@ bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
                 ARC_ERROR("ArcaneRuntime: --scene '{}' is not a valid asset id", m_config.sceneOverride);
                 return false;
             }
-            (void)Arcane::HostBoot::BootScene(*m_runtime, *proj, *ov);
+            (void)Arcane::HostBoot::BootScene(m_runtime->Core(), *proj, *ov);
         }
         else
         {
-            (void)Arcane::HostBoot::BootScene(*m_runtime, *proj);
+            (void)Arcane::HostBoot::BootScene(m_runtime->Core(), *proj);
         }
     }
     else if (!m_config.sceneOverride.empty())

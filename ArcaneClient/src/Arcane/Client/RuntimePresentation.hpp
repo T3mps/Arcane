@@ -1,11 +1,12 @@
 #pragma once
 
-// RuntimePresentation: the presentation half of Runtime's substrate -- the OS audio
-// device, the host's per-frame input snapshot, the ImGui cross-DLL handoff and the
-// 2D camera the plugin drives. Lifted out of Runtime::Impl (Core-DLL split, plan 1
-// Task 1; spec docs/specs/2026-09-15-core-dll-split-design.md s1.3/s2) so that the
-// headless Runtime carries NO Audio/Input include: this struct is exactly what
-// ClientRuntime absorbs at Task 4. Client-only; Core never includes it.
+// RuntimePresentation: the presentation half of what Runtime's substrate used to be
+// -- the OS audio device, the host's per-frame input snapshot, the ImGui cross-DLL
+// handoff and the 2D camera the plugin drives. Lifted out of Runtime::Impl
+// (Core-DLL split, plan 1 Task 1; spec docs/specs/2026-09-15-core-dll-split-
+// design.md s1.3/s2) so that the headless Runtime carries NO Audio/Input include.
+// Task 4 made it ClientRuntime's member (Arcane/Client/ClientRuntime.hpp), which is
+// its only owner. Client-only; Core never includes it.
 
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Log.hpp>

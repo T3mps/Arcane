@@ -43,7 +43,7 @@
 
 TEST_CASE("Play snapshots and Stop restores the authored registry", "[editor]")
 {
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
 
     // Register Scene components on THIS Runtime's ComponentRegistry (a fresh instance
     // per Runtime) so SnapshotRegistry's Registry::Save() knows how to serialize
@@ -109,7 +109,7 @@ namespace
 // clearing the undo stack on Play was NOT safe to drop.
 TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
 {
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
 
@@ -169,7 +169,7 @@ TEST_CASE("Edit-mode undo/redo survives a Play/Stop round-trip", "[editor]")
 
 TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[editor]")
 {
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
     reg.CreateEntity();
@@ -225,7 +225,7 @@ namespace
 
 TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present", "[editor]")
 {
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
 
     Arcane::PluginVTable vt{};
     vt.SaveState = &FakeSaveState;
@@ -254,7 +254,7 @@ TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present",
 
 TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fresh world", "[editor][physics]")
 {
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
     Arcane::RegisterPhysicsComponents(reg);
@@ -325,7 +325,7 @@ TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored 
     // rb.velocity in PASS 2) moved it. Editor Play must equal the standalone
     // host's boot: Play drops the Edit world, and the first Play frame's
     // EnsurePhysics mints a fresh one from the authored components.
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
     Arcane::RegisterPhysicsComponents(reg);
@@ -425,7 +425,7 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
     // PhysicsSystem(stepWorld=true) in "Edit" mode, so the bodies fell; Play
     // then snapshotted the fallen poses and Stop restored them. The boot scene
     // never showed it because boot pauses AFTER loading it.
-    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process());
     Arcane::Editor::PlaySession play;
 
     // The editor's boot: a scene loaded, then Edit mode (paused) -- the state

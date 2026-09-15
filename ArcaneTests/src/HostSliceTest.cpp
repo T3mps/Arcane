@@ -7,18 +7,19 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
 // Device-less: the input-store path the host wires in its frame loop (SetInputSnapshot ->
-// Input()). No device needed -- the plugin reads input through Runtime::Input(), so
+// Input()). No device needed -- the plugin reads input through ClientRuntime::Input()
+// (presentation, above the Core seam since the Core-DLL split), so
 // the host's per-frame store must round-trip the snapshot verbatim. ([sandbox] so it
 // runs alongside the rest of the v2 sandbox wiring under ~[gpu].)
-TEST_CASE("Host input store: Runtime::Input reflects the last SetInputSnapshot", "[sandbox]")
+TEST_CASE("Host input store: ClientRuntime::Input reflects the last SetInputSnapshot", "[sandbox]")
 {
-    Arcane::Runtime rt(Arcane::Test::Process());
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
 
     Arcane::InputSnapshot snap;
     snap.SetScancode(42);              // arbitrary physical key down

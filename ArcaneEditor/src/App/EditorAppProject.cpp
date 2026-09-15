@@ -76,7 +76,7 @@ namespace Arcane::Editor
         Arcane::Editor::DocServices s;
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
-        s.runtime  = &*m_runtime;
+        s.runtime  = &m_runtime->Core();
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
         s.backend  = m_config.backend;
@@ -2221,7 +2221,7 @@ namespace Arcane::Editor
         // why these are not inline temporaries).
         const std::string pathStr = path.string();
         Arcane::HostBoot::BootContext ctx{};
-        ctx.runtime     = &*m_runtime;
+        ctx.runtime     = &m_runtime->Core();
         ctx.projectPath = pathStr.c_str();
         ctx.pluginPath  = m_config.pluginPath.c_str();
         ctx.moduleName  = "ArcaneEditor.exe";
@@ -3040,7 +3040,7 @@ namespace Arcane::Editor
         const auto pluginModules = Arcane::HostBoot::PluginModules(proj);
         if (gameModule.empty() && pluginModules.empty())
             return;
-        m_plugin.emplace(*m_runtime,
+        m_plugin.emplace(m_runtime->Core(),
             gameModule.empty() ? std::filesystem::path{}
                                : std::filesystem::path(gameModule));
         for (const auto& dll : pluginModules)

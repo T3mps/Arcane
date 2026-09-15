@@ -17,6 +17,7 @@
 #include "Documents/MeshDocument.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
@@ -416,7 +417,7 @@ TEST_CASE("MeshDocument::Save reaches the scene's MeshTable through the editor's
     authored.subdivisions = 1;
     REQUIRE(Arcane::SaveMeshAsset(file, authored));
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(file).has_value());
 

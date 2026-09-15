@@ -6,7 +6,7 @@
                                        // a forward declaration already covered) -- needs the
                                        // complete type.
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
@@ -158,7 +158,7 @@ namespace Arcane
         // The registry's SpriteTable / SpriteMaterialTable hold NON-OWNING
         // pointers into the caches below (SceneResources.hpp:96-99), so they
         // must be un-published before those maps die. Safe because every host
-        // declares this object so it destructs BEFORE the Runtime (header
+        // declares this object so it destructs BEFORE the ClientRuntime (header
         // contract) -- the alternative is a live registry pointing at freed
         // maps, which is only harmless as long as nothing renders again, and
         // "nothing renders again" is not an invariant worth betting on.

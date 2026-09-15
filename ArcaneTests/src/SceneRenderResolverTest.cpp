@@ -26,7 +26,7 @@
 // bare Arcane::Runtime, which would steal Arcane.dll's TypeContext slot.
 
 #include <Arcane/Assets/Assets.hpp>          // Arcane::Assets (the EvictingAssets fake), PixelData
-#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>   // MaterialAssetData -- mesh-material fixtures ([3] below)
 #include <Arcane/Material/MaterialTypes.hpp>   // MatParamValue::MakeColor
@@ -455,7 +455,7 @@ TEST_CASE("SceneRenderResolver publishes the scene's SpriteTable into the regist
     const fs::path file = dir / "Game" / "Content" / "probe.arcsprite";
     const Arcane::Guid id = WriteSprite(file, {0.125f, 0.875f});
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     // Registered so the resolver's project-backed asset resolver can find it by
     // Guid -- the same registration the editor performs when it mints an asset.
@@ -526,7 +526,7 @@ TEST_CASE("SceneRenderResolver picks up a sprite added after the first Refresh",
     const fs::path file = dir / "Game" / "Content" / "late.arcsprite";
     const Arcane::Guid id = WriteSprite(file, {0.5f, 0.5f});
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(file).has_value());
 
@@ -558,7 +558,7 @@ TEST_CASE("SceneRenderResolver picks up a sprite added after the first Refresh",
 
 TEST_CASE("SceneRenderResolver un-publishes its tables when it dies", "[sprite][mesh][host]")
 {
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     {
         Arcane::SceneRenderResolver::Services rs;
         rs.runtime = &rt;
@@ -619,7 +619,7 @@ TEST_CASE("SceneRenderResolver publishes the scene's MeshTable and MeshMaterialT
     const Arcane::Guid overrideMat = WriteMeshMaterial(overrideMatFile, overrideColor);
     const Arcane::Guid meshId      = WriteCubeMesh(meshFile, defaultMat);
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(defaultMatFile).has_value());
     REQUIRE(rt.RegisterCreatedAsset(overrideMatFile).has_value());
@@ -688,7 +688,7 @@ TEST_CASE("SceneRenderResolver::Clear drops the scene's MeshTable and MeshMateri
     const Arcane::Guid mat    = WriteMeshMaterial(matFile, glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
     const Arcane::Guid meshId = WriteCubeMesh(meshFile, mat);
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(matFile).has_value());
     REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
@@ -757,7 +757,7 @@ TEST_CASE("SceneRenderResolver::InvalidateMesh re-resolves a re-saved .arcmesh w
     REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
     const Arcane::Guid meshId = authored.id;
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
 
@@ -836,7 +836,7 @@ TEST_CASE("SceneRenderResolver::InvalidateMaterial drops the WHOLE mesh-material
     const Arcane::Guid instId = WriteMeshMaterialInstance(instFile, baseId, std::nullopt);        // inherits red
     const Arcane::Guid meshId = WriteCubeMesh(meshFile, Arcane::Guid{});   // nil default: only the overrides matter here
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(baseFile).has_value());
     REQUIRE(rt.RegisterCreatedAsset(instFile).has_value());
@@ -911,7 +911,7 @@ TEST_CASE("scene resolver: InvalidateMeshArtifact drops geometry AND residency",
     REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
     const Arcane::Guid meshId = authored.id;
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
 
@@ -971,7 +971,7 @@ TEST_CASE("scene resolver: a PENDING mesh is not latched as failed by invalidati
     REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
     const Arcane::Guid meshId = authored.id;
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
 
@@ -1032,7 +1032,7 @@ TEST_CASE("scene resolver: a .arcmesh SAVE re-resolves slots but keeps residency
     REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
     const Arcane::Guid meshId = authored.id;
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
 
@@ -1095,7 +1095,7 @@ TEST_CASE("scene resolver: a .arcmesh whose SOURCE changed does drop residency",
     REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
     const Arcane::Guid meshId = authored.id;
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
 
@@ -1163,7 +1163,7 @@ TEST_CASE("scene resolver: a .arcmesh whose TOPOLOGY changed (same source) does 
     REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
     const Arcane::Guid meshId = authored.id;
 
-    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+    Arcane::ClientRuntime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
 
@@ -1247,7 +1247,7 @@ TEST_CASE("scene resolver: every generator parameter counts as geometry identity
         REQUIRE(Arcane::SaveMeshAsset(meshFile, authored));
         const Arcane::Guid meshId = authored.id;
 
-        Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
+        Arcane::ClientRuntime rt(Arcane::Test::Process());
         REQUIRE(rt.OpenProject(dir / "Game") == true);
         REQUIRE(rt.RegisterCreatedAsset(meshFile).has_value());
 

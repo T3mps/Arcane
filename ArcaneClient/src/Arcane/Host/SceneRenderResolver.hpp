@@ -62,7 +62,7 @@ namespace Arcane
 {
     class Batcher2D;
     class MaterialInstance;
-    class Runtime;
+    class ClientRuntime;
     class ShaderCompiler;
     class ShaderSourceProvider;
     struct PostChainDesc;
@@ -73,9 +73,11 @@ namespace Arcane
     public:
         struct Services
         {
-            // The runtime whose Registry is swept and whose SpriteTable /
-            // SpriteMaterialTable resources are published. Required.
-            Runtime* runtime = nullptr;
+            // The client runtime whose Registry is swept and whose SpriteTable /
+            // SpriteMaterialTable resources are published. Required. ClientRuntime,
+            // not Runtime: the four Set*Table publishers are presentation and live
+            // above the Core seam since the Core-DLL split (plan 1 Task 4).
+            ClientRuntime* runtime = nullptr;
 
             // The frame batcher registered materials bind into. Null (a
             // device-less host or a test) disables material binding; sprite

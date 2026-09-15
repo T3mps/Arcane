@@ -1,11 +1,19 @@
 #pragma once
 
 // Runtime: the engine facade handed to plugins via EngineContext. Owns the substrate
-// that MUST outlive plugin reloads -- the shared TypeContext (installed in THIS module),
-// the persistent ComponentRegistry, the (swappable) Registry, the per-phase schedulers,
-// the RunLoop, and the JobSystem. ARCANE_API: the plugin and the host both call it.
+// that MUST outlive plugin reloads -- the shared TypeContext (installed in THIS module,
+// ArcaneCore.dll), the persistent ComponentRegistry, the (swappable) Registry, the
+// per-phase schedulers, the RunLoop, and the JobSystem. ARCANE_CORE_API: the plugin and
+// the host both call it.
+//
+// HEADLESS (Core-DLL split, spec docs/specs/2026-09-15-core-dll-split-design.md s2,
+// plan 1 Task 4): this class carries no audio device, no input snapshot, no camera,
+// no ImGui handoff and no render bridge -- that half is ClientRuntime's
+// (Arcane/Client/ClientRuntime.hpp, ArcaneClient.dll), which owns a Runtime and
+// attaches itself here. ArcaneServer, a bare Runtime in a test, and the editor's
+// embedded server world run with no client at all.
 
-#include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>   // AssetRegistry::ScanProgressFn (OpenProject's progress param) -- light header, not Project.hpp
 #include <Arcane/Project/ProjectOpenOptions.hpp>   // ProjectOpenOptions (OpenProject's opts param) -- also light, also not Project.hpp
@@ -18,12 +26,10 @@
 #include <glm/glm.hpp>
 
 #include <cstddef>
-#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace Astra { class Registry; class ComponentRegistry; class TypeContext; }
@@ -35,20 +41,21 @@ namespace Arcane
     class JobSystem;
     class ProcessContext;
     struct ITaskExecutor;
-    struct SpriteEntry;            // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
-    struct MeshEntry;               // Scene/SceneResources.hpp -- SpriteEntry's F2a (3D) sibling
-    struct ResolvedMeshMaterial;    // Scene/SceneResources.hpp -- mesh-material constants
-    class Batcher2D;
     class Project;
     class Config;
-    struct InputSnapshot;
-    namespace Audio { class AudioDevice; }
+    // The client seam (spec s2 + plan 1 P6). ClientRuntime is an ArcaneClient.dll
+    // type Core NEVER dereferences -- it only stores and hands the pointer on --
+    // so a forward declaration is the whole dependency. IClientHooks is Core's own
+    // (Arcane/Plugin/ClientHooks.hpp); consumers that CALL through it include that
+    // header themselves.
+    class ClientRuntime;
+    struct IClientHooks;
 
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)  // unique_ptr<Impl> member on a dll-exported class: benign under /MD (shared CRT heap)
 #endif
-    class ARCANE_API Runtime
+    class ARCANE_CORE_API Runtime
     {
     public:
         // Every Runtime is built on the process's ONE ProcessContext (spec 2026-09-15
@@ -57,8 +64,9 @@ namespace Arcane
         // module's Astra slot (Resident) and registers the engine roster, so the
         // FIRST Runtime in a process still pins the numbering (the TypeContext-theft
         // note in ArcaneTests stands).
-        // enableAudioDevice: as before -- false = the null backend; an interactive host passes true.
-        explicit Runtime(ProcessContext& process, bool enableAudioDevice = false);
+        // The audio-device flag that used to live here is ClientRuntime's now
+        // (there is no audio device below the client seam).
+        explicit Runtime(ProcessContext& process);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;
@@ -82,7 +90,16 @@ namespace Arcane
         std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
         Assets&                 AssetsFacade() noexcept;
         Config&                 Configuration() noexcept;   // layered engine+project config (Slice 3)
-        Audio::AudioDevice&     AudioSystem() noexcept;
+
+        // --- the client seam (Core-DLL split, spec s2 + plan 1 P6) ---
+        // A ClientRuntime (ArcaneClient.dll) attaches itself here at construction. Core
+        // never dereferences `client` (it is a forward-declared Client type) -- it hands
+        // it to the module through EngineContext (Task 5) -- and reaches presentation
+        // ONLY through `hooks`. Both null on a headless host (ArcaneServer, a bare
+        // Runtime in a test, the editor's embedded server world).
+        void           AttachClient(ClientRuntime* client, IClientHooks* hooks) noexcept;
+        ClientRuntime* Client()      const noexcept;
+        IClientHooks*  ClientHooks() const noexcept;
 
         // --- project (Slice 1b) ---
         // Open a project folder or .arcproj: validate-then-commit. On success the
@@ -157,69 +174,19 @@ namespace Arcane
         // stamp and the DLL agree again.
         bool RestampProjectEngineAbi(int abi);
 
-        // --- render bridge: the host sets the live batcher each frame, IN this module ---
-        // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
-        // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.
-        void SetRenderContext(Batcher2D* batcher);
-
-        // Publish the sprite-material resolution map (Guid -> Batcher2D material
-        // id, owned by the host's SpriteMaterialCache) into the registry's
-        // SpriteMaterialTable resource. Runs IN this module so the scene TypeID
-        // resolves against the shared context (SetRenderContext's rule). Null
-        // clears the table (sprites fall back to the plain pipeline).
-        void SetSpriteMaterials(const std::unordered_map<Guid, std::uint16_t>* materials);
-
-        // Publish the sprite-asset resolution map (.arcsprite Guid -> the
-        // resolved texture/UVs/size/pivot record, owned by the host) into the
-        // registry's SpriteTable resource. Same module rule and null semantics
-        // as SetSpriteMaterials above: null clears the table, and every sprite
-        // falls back to the untextured 1x1 m quad.
-        void SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites);
-
-        // F2a (Task 6) siblings of the two methods above, ONE dimension up:
-        // .arcmesh Guid -> owned CPU geometry + bounds (MeshTable), and
-        // "mesh"-kind .arcmat Guid -> constants-only baseColor
-        // (MeshMaterialTable). Same module rule (SetSpriteTable's own
-        // comment) and null semantics: null clears the table, and every
-        // MeshRenderer draws nothing (there is no untextured-quad-shaped
-        // fallback for a mesh -- see MeshTable's own comment,
-        // Scene/SceneResources.hpp).
-        void SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes);
-        void SetMeshMaterials(const std::unordered_map<Guid, ResolvedMeshMaterial>* materials);
-
-        // NO RENDER-RESOURCES BRIDGE LIVES HERE. A plugin is handed no
+        // THE RENDER / CAMERA / INPUT / IMGUI BRIDGES LIVE ON ClientRuntime NOW
+        // (Arcane/Client/ClientRuntime.hpp). They are presentation: a Batcher2D, the
+        // sprite/mesh resolution tables, the 2D camera, the host's input snapshot and
+        // the cross-DLL ImGui handoff. Core reaches the last of those -- and only that
+        // one -- back through IClientHooks::FillEngineContext.
+        //
+        // NO RENDER-RESOURCES BRIDGE LIVES THERE EITHER. A plugin is handed no
         // graphics device and no shader library, so it builds no engine
         // render objects of its own.
         //
         // If a plugin ever needs GPU resources, that is a new, deliberate API
         // over the render graph -- not a backend pointer handed across the
         // plugin boundary.
-
-        // --- camera bridge: the plugin drives the 2D camera; the render bridge reads it ---
-        // CANONICAL transform (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
-        // Defaults (offset (0,0), zoom 1) are the identity transform. RenderSubmissionSystem +
-        // DrawPhysicsDebug apply the SAME camera so sprites + the debug overlay move together.
-        void      SetCamera(glm::vec2 offset, float zoom) noexcept;
-        glm::vec2 CameraOffset() const noexcept;
-        float     CameraZoom()   const noexcept;
-
-        // --- input bridge ---
-        // Latest per-frame input snapshot. The host (ArcaneRuntime) stores it each frame
-        // via SetInputSnapshot; plugins read it via Input() in their update hooks.
-        void                 SetInputSnapshot(const InputSnapshot& snap) noexcept;
-        const InputSnapshot& Input() const noexcept;
-
-        // --- ImGui handoff (ABI v2) ---
-        // The host installs its ImGui context + allocators here (once, after creating
-        // the ImGuiLayer); PluginHost copies them into the EngineContext so the plugin
-        // can adopt the host's GImGui across the DLL boundary. Stored as void* to keep
-        // this header imgui-include-free (ImGuiContext* / ImGuiMemAllocFunc / ...).
-        // All null in a headless host (no ImGuiLayer) -> plugins skip the install.
-        void  SetImGui(void* context, void* alloc, void* freeFn, void* userData) noexcept;
-        void* ImGuiContext()  const noexcept;
-        void* ImGuiAlloc()    const noexcept;
-        void* ImGuiFree()     const noexcept;
-        void* ImGuiUserData() const noexcept;
 
         // --- hot-reload support (plugin Save/LoadState + the host call these) ---
         // Registry::Save() -> framed snapshot bytes. Returns a Result so a Save
@@ -238,19 +205,23 @@ namespace Arcane
         // its scene. Caller clears systems first (ClearSystems).
         void ResetRegistry();
 
-        void ClearSystems();                                      // Clear() all three phase schedulers
-        void ResetAudio() noexcept;                               // Drop plugin-created audio handles on reload
+        // Clear() all three phase schedulers, reinstall the engine's headless pair,
+        // then give the client (if any) its OnSystemsCleared hook so the
+        // presentation-side systems come back too.
+        void ClearSystems();
 
         // --- engine-owned physics (2026-09-11, spec docs/specs/2026-09-11-physics-2d-wiring-design.md s4-s5) ---
         // Manifold2D-free surface: hosts and modules never see PhysicsSystem or
-        // PhysicsWorld. InstallEngineSystems adds the engine's own systems --
-        // the STANDARD THREE (2026-09-13 game-module boilerplate spec s4.1):
-        // PhysicsSystem then TransformPropagationSystem into fixedUpdate,
-        // RenderSubmissionSystem into render; the ctor calls it, and
-        // ClearSystems calls it again after clearing, so every PluginHost
-        // load/reload/unload path keeps them. Idempotent (per-system HasSystem
-        // guards). A game module registers ONLY its own systems and places them
-        // with Astra::Before/After against these types (GameModule.hpp).
+        // PhysicsWorld. InstallEngineSystems adds the engine's HEADLESS pair --
+        // PhysicsSystem then TransformPropagationSystem into fixedUpdate.
+        // RenderSubmissionSystem is presentation and is ClientRuntime's to
+        // install (it does, at construction and on every OnSystemsCleared), so
+        // a Core-only host has exactly the systems it can execute. The ctor
+        // calls this, and ClearSystems calls it again after clearing, so every
+        // PluginHost load/reload/unload path keeps them. Idempotent (per-system
+        // HasSystem guards). A game module registers ONLY its own systems and
+        // places them with Astra::Before/After against these types
+        // (GameModule.hpp).
         // EnsurePhysics runs once per frame before Loop().Advance
         // (beside SetRenderContext): it mints PhysicsResource + PhysicsInterp
         // Buffer when the current registry lacks them -- scene open,

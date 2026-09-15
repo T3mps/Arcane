@@ -33,7 +33,7 @@ namespace
     // Arcane.dll's TypeContext slot).
     struct PerspectiveCameraFixture
     {
-        Arcane::Runtime  runtime{Arcane::Test::Process(), /*enableAudioDevice*/false};
+        Arcane::Runtime  runtime{Arcane::Test::Process()};
         Astra::Registry& reg = runtime.Registry();
 
         PerspectiveCameraFixture() = default;

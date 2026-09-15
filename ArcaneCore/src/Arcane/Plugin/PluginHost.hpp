@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Arcane/Base/Api.hpp>
+#include <Arcane/Core/Api.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 
 #include <cstdint>
@@ -14,7 +14,7 @@ namespace Arcane
     // Watches a game DLL, loads versioned copies (PDB-lock dodge), checks the ABI,
     // and rolls back to the last-good image on any failure (never a lost session).
     // Holds a Runtime& -- a PluginHost must NOT outlive its Runtime (the dtor calls into it).
-    class ARCANE_API PluginHost
+    class ARCANE_CORE_API PluginHost
     {
     public:
         // sourceDllPath is the PRIMARY game module (watched + hot-reloaded). Pass an EMPTY

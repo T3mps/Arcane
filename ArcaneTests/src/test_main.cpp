@@ -6,7 +6,7 @@
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Assert.hpp>
-#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
 // Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
@@ -20,16 +20,17 @@ int main(int argc, char* argv[]) {
     // Install the shared context in the TEST module BEFORE any test computes a
     // component TypeID, so engine/plugin/test agree (TypeID caches per-module).
     Astra::SetTypeContext(&Arcane::Test::SharedTypeContext());
-    // Same for Arcane.dll's own module slot, and BEFORE any test runs: a
-    // throwaway Runtime installs it and the slot persists after the Runtime
-    // dies. This must happen up front because per-type IDs are cached in
-    // per-module magic statics and never re-resolve -- pinning later cannot
-    // repair an id the DLL already cached.
+    // Same for the ENGINE DLLs' own module slots, and BEFORE any test runs. A
+    // throwaway ClientRuntime installs BOTH -- ArcaneClient.dll's from its own
+    // ctor, and ArcaneCore.dll's through the Runtime it owns -- and each slot
+    // persists after the object dies. This must happen up front because per-type
+    // IDs are cached in per-module magic statics and never re-resolve -- pinning
+    // later cannot repair an id a DLL already cached.
     // Scoped so it really is throwaway: otherwise it would hold an enkiTS
     // worker pool, an Assets facade and a loaded EngineConfig alive for the
     // whole session.
     {
-        Arcane::Runtime pin(Arcane::Test::Process());
+        Arcane::ClientRuntime pin(Arcane::Test::Process());
     }
     // Route this module's Mosaic guard failures through the engine logger, the
     // same as a host does. This does NOT change whether a FATAL guard aborts:
