@@ -619,3 +619,39 @@ by explicit path.
     it". The two facts sit on adjacent lines in `RebuildPreviewMesh`. Owed:
     nothing, unless a device-bearing document test ever becomes cheap, at which
     point the stronger assertion should replace this one.
+
+## Standing debts from the fix wave's scoped re-review (parked by the controller)
+
+The re-review of `1e1a673b..a8547d71` verdicted every finding ADDRESSED with no new
+Critical/Important breakage, and left four low-severity residuals. The SDD process
+allows one fix wave; these are parked here, with a ruling each, rather than fixed
+by a second wave. None changes behaviour a desk pass could observe except 14's one
+log line.
+
+12. **`NriMeshBufferCache::Resident::uploadRefused` is write-only.** I1 added it to
+    distinguish "refused" from "evicted"; I2's ruling then made eviction ERASE the
+    entry, so the only consumer that would have read it is gone. Harmless (the
+    memoized-null entry still refuses per frame without re-asking), but a flag with
+    no reader is a comment pretending to be code. Owed: either delete it or make
+    `ResidentCount()`/a diagnostic read it.
+13. **The real I1 leak path has no test.** The new `[render]` case exercises the
+    zero-size refusal, which returns BEFORE `Upload`; the create-into-locals /
+    publish-on-full-success rewrite is correct by inspection (the re-review traced
+    all three `abandon()` arms), not by evidence. Owed: a `[gpu][meshcache]` case
+    that forces the SECOND `CreateCommittedBuffer` to fail (an over-limit index
+    buffer, or an injectable failure seam) and asserts `ResidentCount()==0`,
+    no NRI validation error, and no re-ask on the next frame. This is the only
+    residual with correctness exposure: a future `Upload` edit could regress the
+    leak unnoticed until this lands.
+14. **`MeshCache::Clear()` resets `requested` but not `warnedNeverRequested`.** On
+    a project switch, one spurious "queried a never-requested mesh" WARN can fire
+    for the new project's first pre-`Request` query. One line, cosmetic. Owed:
+    clear the latch beside the set.
+15. **`SceneResources.hpp:18`'s include comment cites `std::tie`**, which
+    `GeometryIdentity()` deliberately does not use (it returns a value type so the
+    caller can compare across an erase). Comment-only. Owed: fix the comment.
+
+Reminder carried from the re-review, addressed to the desk pass: **debt 8 is the one
+with teeth** — ReferenceProject holds exactly one imported mesh, one too few for the
+golden lanes to catch the C1 class again. The "revisit at the next re-bless" trigger
+must not lapse.
