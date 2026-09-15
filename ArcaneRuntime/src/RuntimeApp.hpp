@@ -20,6 +20,7 @@
 #include <Arcane/Host/BootSequence.hpp>
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
@@ -27,7 +28,6 @@
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
-namespace Astra { class TypeContext; }
 class RuntimeApp
 {
 public:
@@ -141,7 +141,7 @@ private:
     // declaration order matches).
     Arcane::BootSplashPresenter           m_splashPresenter;
 
-    Astra::TypeContext*                 m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
+    std::unique_ptr<Arcane::ProcessContext> m_process;   // the process's ONE (spec s3); declared before m_runtime so it outlives it
     // engaged by the boot sequence before MainLoop()/Shutdown() touch them (bare -> deref is safe).
     std::optional<Arcane::Runtime>      m_runtime;      // destructs before m_gpu
     std::optional<Arcane::PluginHost>   m_plugin;       // destructs before m_runtime

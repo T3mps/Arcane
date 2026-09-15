@@ -380,7 +380,7 @@ TEST_CASE("BootScene loads the resolved scene into the runtime and reports the f
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     // Stands in for whatever the plugin's Init built before the boot scene
     // loads -- BootScene must DISCARD this, not merge into it.
     rt.Registry().CreateEntity();
@@ -421,7 +421,7 @@ TEST_CASE("BootScene leaves the registry untouched when there is no boot scene",
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Registry().CreateEntity();
     REQUIRE(rt.Registry().Size() == 1);
 
@@ -457,7 +457,7 @@ TEST_CASE("BootScene leaves the registry untouched when the resolved file fails 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Registry().CreateEntity();
     REQUIRE(rt.Registry().Size() == 1);
 
@@ -538,7 +538,7 @@ TEST_CASE("BootScene(runtime, project, id) boots an explicit Guid override into 
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Registry().CreateEntity();
     REQUIRE(rt.Registry().Size() == 1);
 
@@ -584,7 +584,7 @@ TEST_CASE("BootSceneFile/BootScene(project, id) fall into the manifest path's em
     const Arcane::Guid unknown = Arcane::Guid::Generate();
     CHECK(Arcane::HostBoot::BootSceneFile(*proj, unknown).empty());
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Registry().CreateEntity();
     REQUIRE(rt.Registry().Size() == 1);
 
@@ -617,7 +617,7 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
     REQUIRE_FALSE(sceneFile.empty());
     CHECK(sceneFile.filename() == "main.arcscene");
 
-    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
     const auto result = Arcane::HostBoot::BootScene(runtime, *proj);
     REQUIRE(result.has_value());
     CHECK(result->id.ToString() == proj->Manifest().bootScene);
@@ -820,7 +820,7 @@ TEST_CASE("ReferenceProject's scene census reports the sprite and post materials
     auto proj = Arcane::Project::Open(dir);
     REQUIRE(proj.has_value());
 
-    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
     REQUIRE(Arcane::HostBoot::BootScene(runtime, *proj).has_value());
 
     // Nested scope: the resolver's header contract is that it destructs BEFORE
@@ -907,7 +907,7 @@ TEST_CASE("ReferenceProject's mesh and its default material resolve into the ren
     const fs::path dir = FindReferenceProjectDir();
     REQUIRE_FALSE(dir.empty());
 
-    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
     // Runtime::OpenProject, NOT Project::Open: only this path scans Content
     // into the AssetRegistry and installs the resolver behind
     // Runtime::CurrentProject(), which is what SceneRenderResolver's one
@@ -1019,7 +1019,7 @@ TEST_CASE("host boot: the golden scene's imported prop resolves to sectioned geo
     // resolves through the Assets facade's installed resolver, which only
     // exists once a project is actually opened on the Runtime (same
     // reasoning as the mesh/material render-table case above).
-    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
     REQUIRE(runtime.OpenProject(dir));
     const Arcane::Project* proj = runtime.CurrentProject();
     REQUIRE(proj != nullptr);

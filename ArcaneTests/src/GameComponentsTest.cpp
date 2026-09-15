@@ -64,7 +64,7 @@ namespace
 
 TEST_CASE("Arcane::Game::RegisterComponents registers every ARCANE_COMPONENT of this module, once", "[plugin]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     Astra::Registry& reg = rt.Registry();
 
     // Before: the engine's own roster, none of ours.

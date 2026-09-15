@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
     // worker pool, an Assets facade and a loaded EngineConfig alive for the
     // whole session.
     {
-        Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+        Arcane::Runtime pin(Arcane::Test::Process());
     }
     // Route this module's Mosaic guard failures through the engine logger, the
     // same as a host does. This does NOT change whether a FATAL guard aborts:

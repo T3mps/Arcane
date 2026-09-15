@@ -251,7 +251,7 @@ namespace
             // Pin Arcane.dll's TypeContext to the shared one BEFORE any
             // registration (EditorInspectorTest.cpp's MixedWorld rule: a bare
             // Runtime installs an unshared context and Edit ops then report 0).
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::Runtime pin(Arcane::Test::Process());
             Arcane::RegisterSceneComponents(reg);
             Arcane::RegisterPhysicsComponents(reg);
             e     = Make(/*radius*/ 0.5f,  /*halfW*/ 1.0f);

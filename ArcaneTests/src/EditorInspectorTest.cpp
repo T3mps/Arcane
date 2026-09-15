@@ -101,7 +101,7 @@ namespace
 
         MixedWorld()
         {
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::Runtime pin(Arcane::Test::Process());
             Arcane::RegisterSceneComponents(reg);
         }
 

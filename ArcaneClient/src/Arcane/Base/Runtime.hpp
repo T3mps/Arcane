@@ -33,6 +33,7 @@ namespace Arcane
 {
     class Assets;
     class JobSystem;
+    class ProcessContext;
     struct ITaskExecutor;
     struct SpriteEntry;            // Scene/SceneResources.hpp -- only named here (pointer-to-map param)
     struct MeshEntry;               // Scene/SceneResources.hpp -- SpriteEntry's F2a (3D) sibling
@@ -50,23 +51,14 @@ namespace Arcane
     class ARCANE_API Runtime
     {
     public:
-        // externalContext == null: Runtime creates+owns a TypeContext (production: ArcaneRuntime).
-        // externalContext != null: install+use the caller's context so multiple modules
-        // (a test exe + Arcane.dll + the plugin) share one component-ID space.
-        //
-        // NO DEFAULT on externalContext, deliberately. This ctor resolves ten
-        // TypeID statics while registering the engine roster, so the FIRST Runtime
-        // in a process permanently pins Arcane.dll's component-ID numbering. A
-        // test that constructed a bare `Runtime rt;` would install an UNSHARED
-        // context and every later Edit:: op would silently report 0 changes --
-        // the failure recorded in the ArcaneTests TypeContext-theft note. Every
-        // caller already passes a context explicitly; making it required means the
-        // compiler enforces that instead of convention.
-        //
-        // enableAudioDevice: opt into a real OS audio device. Defaults false (device-less:
-        // tests/servers/tools and the scripted "ArcaneRuntime --frames N" verify use the null
-        // backend). An interactive host passes true; the real->null fallback still applies.
-        explicit Runtime(Astra::TypeContext* externalContext, bool enableAudioDevice = false);
+        // Every Runtime is built on the process's ONE ProcessContext (spec 2026-09-15
+        // s3): its TypeContext is the shared component-ID space; there is no
+        // Runtime-owned context any more. The ctor installs that context in THIS
+        // module's Astra slot (Resident) and registers the engine roster, so the
+        // FIRST Runtime in a process still pins the numbering (the TypeContext-theft
+        // note in ArcaneTests stands).
+        // enableAudioDevice: as before -- false = the null backend; an interactive host passes true.
+        explicit Runtime(ProcessContext& process, bool enableAudioDevice = false);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;

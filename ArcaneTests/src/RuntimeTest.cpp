@@ -41,7 +41,7 @@ namespace { struct NoOpSystem { void operator()(Astra::Registry&) const {} }; }
 
 TEST_CASE("Runtime boots a usable substrate", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.TypeContext() != nullptr);
     REQUIRE(rt.WorkScheduler() != nullptr);
     REQUIRE(rt.WorkScheduler()->WorkerCount() >= 1);
@@ -61,7 +61,7 @@ TEST_CASE("Runtime boots a usable substrate", "[runtime]")
 
 TEST_CASE("Runtime resets audio without disturbing the engine substrate", "[runtime][audio]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.AudioSystem().IsInitialized());
 
     rt.ResetAudio();
@@ -73,7 +73,7 @@ TEST_CASE("Runtime resets audio without disturbing the engine substrate", "[runt
 
 TEST_CASE("Runtime snapshot/restore preserves state AND the scheduler", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Counter>();
     auto& reg = rt.Registry();
     constexpr int kN = 2048;
@@ -106,7 +106,7 @@ TEST_CASE("Runtime RestoreRegistry keeps the RunLoop object stable", "[runtime]"
     // toolbar), and recreating would leave every such pointer dangling -> a
     // use-after-free the next time they touch it. This pins the "same object survives a
     // restore" invariant.
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Counter>();
     rt.Registry().CreateEntityWith(Counter{7});
 
@@ -138,7 +138,7 @@ TEST_CASE("Runtime RestoreRegistry keeps the RunLoop object stable", "[runtime]"
 
 TEST_CASE("Runtime ClearSystems empties the module's systems and re-installs the engine's", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     // Registration must actually succeed, or Empty() below would already be
     // true before ClearSystems() runs and the test would pass vacuously.
     REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<NoOpSystem>().IsOk());   // each scheduler has its own
@@ -159,7 +159,7 @@ TEST_CASE("Runtime ClearSystems empties the module's systems and re-installs the
 
 TEST_CASE("Runtime installs PhysicsSystem into fixedUpdate and re-installs after ClearSystems", "[runtime][physics]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
     CHECK_FALSE(rt.Schedulers().update.HasSystem<Arcane::PhysicsSystem>());
     rt.InstallEngineSystems();                                   // idempotent
@@ -175,7 +175,7 @@ TEST_CASE("Runtime installs PhysicsSystem into fixedUpdate and re-installs after
 
 TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[runtime][physics]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
     rt.EnsurePhysics();
     const auto* res = rt.Registry().GetResource<Arcane::PhysicsResource>();
@@ -203,7 +203,7 @@ TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[
 
 TEST_CASE("ResolvedGravity: the engine default, then the scene-root PhysicsSettings override", "[runtime][physics]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     CHECK(rt.ResolvedGravity().y == Catch::Approx(9.81f));      // no project open: PhysicsConfig's default
 
     Astra::Registry& reg = rt.Registry();
@@ -232,7 +232,7 @@ TEST_CASE("ResolvedGravity: the engine default, then the scene-root PhysicsSetti
 
 TEST_CASE("PhysicsEditPass mints bodies, moves none, captures nothing", "[runtime][physics]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     Astra::Registry& reg = rt.Registry();
     const Astra::Entity root = reg.CreateEntity();
     reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -259,7 +259,7 @@ TEST_CASE("fixedUpdate runs physics BEFORE propagation whichever was added first
     // Behavioural pin of the Before<> edge: after one fixed step the entity's
     // WorldTransform carries the POST-step position PASS 4 wrote back. If
     // propagation ran first it would lag one step behind.
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     // Both are engine-owned since 2026-09-13 (InstallEngineSystems installs
     // physics then propagation); PhysicsSystem's Before<> edge is what this
     // pins, so the plan must not depend on insertion order.
@@ -290,7 +290,7 @@ TEST_CASE("fixedUpdate runs physics BEFORE propagation whichever was added first
 
 TEST_CASE("Runtime ResetRegistry empties the registry but keeps the ComponentRegistry", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Counter>();
     rt.Registry().CreateEntityWith(Counter{42});
     REQUIRE(rt.Registry().Size() == 1);
@@ -323,7 +323,7 @@ TEST_CASE("FinishSnapshot propagates a Save failure instead of masking it", "[ru
 
 TEST_CASE("Runtime SnapshotRegistry returns an actionable Result", "[runtime][serialization]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Counter>();
     rt.Registry().CreateEntityWith(Counter{7});
 
@@ -365,7 +365,7 @@ TEST_CASE("Runtime snapshot/restore round-trips registered serializable resource
         Arcane::Serialization::ResourceCodec{
             Astra::TypeID<CameraSnapshot>::Hash(), &SaveCamera, &LoadCamera });
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     Astra::Entity root = rt.Registry().CreateEntity();
     rt.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
     rt.Registry().SetResource<CameraSnapshot>(CameraSnapshot{2.5f, 10.0f, 20.0f});
@@ -401,7 +401,7 @@ TEST_CASE("Runtime snapshot/restore round-trips registered serializable resource
 // swap rather than partially applying it.
 TEST_CASE("Runtime RestoreRegistry rejects a valid registry blob with a corrupt resource section", "[runtime][serialization]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Counter>();
     rt.Registry().CreateEntityWith(Counter{42});
 
@@ -455,8 +455,8 @@ TEST_CASE("Runtime: two Runtimes against the shared context leave the engine met
     REQUIRE(before >= 2);   // this exe's baseline + Arcane.dll's (pinned at test_main's throwaway pin)
 
     {
-        Arcane::Runtime a(&Arcane::Test::SharedTypeContext());
-        Arcane::Runtime b(&Arcane::Test::SharedTypeContext());
+        Arcane::Runtime a(Arcane::Test::Process());
+        Arcane::Runtime b(Arcane::Test::Process());
         // The roster is present in BOTH registries (GetComponentDescriptor is the
         // registry's presence query: null when the slot is empty).
         CHECK(a.Components()->GetComponentDescriptor(Astra::TypeID<Arcane::Transform>::Value()) != nullptr);

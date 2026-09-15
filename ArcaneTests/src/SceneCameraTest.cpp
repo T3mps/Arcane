@@ -20,7 +20,7 @@ namespace
     // CommandStackTest.cpp's note on the same hazard).
     struct CameraFixture
     {
-        Arcane::Runtime  runtime{&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false};
+        Arcane::Runtime  runtime{Arcane::Test::Process(), /*enableAudioDevice*/false};
         Astra::Registry& reg = runtime.Registry();
 
         // Deliberately does NOT call RegisterSceneComponents from THIS module:

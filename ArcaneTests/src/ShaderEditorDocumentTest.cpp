@@ -185,7 +185,7 @@ TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", 
     orphan.name = "Orphan";
     REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.arcmat", orphan));
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game"));
 
     DocServices services;
@@ -361,7 +361,7 @@ TEST_CASE("ReloadFromDisk discards the working copy; DependsOn walks the chain",
     inst.name = "Inst";
     REQUIRE(Arcane::SaveMaterialAsset(content / "inst.arcmat", inst));
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game"));
     DocServices services;
     services.runtime = &rt;
@@ -670,7 +670,7 @@ TEST_CASE("A material document publishes its diagnostics under its own key", "[d
     orphan.name   = "Orphan";
     REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.arcmat", orphan));
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game"));
 
     DocServices services;
@@ -712,7 +712,7 @@ TEST_CASE("Republishing an identical diagnostic set is idempotent", "[diagnostic
     orphan.name   = "Orphan";
     REQUIRE(Arcane::SaveMaterialAsset(content / "orphan.arcmat", orphan));
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game"));
 
     DocServices services;

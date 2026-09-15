@@ -54,6 +54,7 @@
 #include "Viewport/ViewportInput.hpp"
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -68,7 +69,6 @@
 
 #include <spdlog/sinks/callback_sink.h>
 
-namespace Astra { class TypeContext; }
 namespace Arcane { struct InputSnapshot; }   // by-reference phase parameters only
 // F2c Task 15: MintImportMaterials' survey parameter -- opaque here, the full
 // definition lives in Arcane/AssetPipeline/GltfSurvey.hpp, included only where the
@@ -610,7 +610,7 @@ namespace Arcane::Editor
         // ImGuiNri's m_imguiContext member.
         std::unique_ptr<Arcane::OffscreenImGuiLayer> m_gameImgui;
 
-        Astra::TypeContext*               m_typeContext = nullptr;  // heap-leaked singleton (NOT owned)
+        std::unique_ptr<Arcane::ProcessContext> m_process;          // the process's ONE (spec s3); declared before m_runtime so it outlives it
         std::optional<Arcane::Runtime>    m_runtime;                // destructs before m_gpu
         std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_runtime
         FramePerf                         m_perf;

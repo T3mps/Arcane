@@ -52,7 +52,7 @@ namespace
 
 TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();   // engine sees the type so views resolve
 
     Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
@@ -75,7 +75,7 @@ TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
 // lands in it (the SerializationNegativeTest capture shape).
 TEST_CASE("GameModule: OnShutdown runs while the module's component handle is still open", "[hotreload]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
 
     Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
@@ -103,7 +103,7 @@ TEST_CASE("Hot swap V1->V2 preserves state AND runs the new code", "[hotreload]"
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
 
     Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
@@ -133,7 +133,7 @@ TEST_CASE("ABI mismatch rolls back to last-good; session survives", "[hotreload]
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
 
     Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
@@ -165,7 +165,7 @@ TEST_CASE("Host drives a secondary plugin alongside the primary", "[hotreload]")
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
 
     Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
@@ -198,7 +198,7 @@ TEST_CASE("Plugins-only host (no primary module) loads and drives its secondarie
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
 
     Arcane::PluginHost host(rt, std::filesystem::path{});           // no primary game module
@@ -227,7 +227,7 @@ TEST_CASE("Unloading a plugin restores the descriptors it overrode", "[hotreload
     // test binary registers Pulse anonymously (below), the plugin's handle
     // overrides it, and unload must pop back to the test binary's entry --
     // non-null AND callable (a dangling restore faults right here).
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
 
     const Astra::ComponentID pulseId = Astra::TypeID<Pulse>::Value();
@@ -281,7 +281,7 @@ TEST_CASE("Unloading secondaries leaves no descriptor aimed at their images", "[
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
     const Astra::ComponentID pulseId = Astra::TypeID<Pulse>::Value();
     const Astra::ComponentDescriptor* base = rt.Components()->GetComponentDescriptor(pulseId);
@@ -323,7 +323,7 @@ TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotr
     std::filesystem::copy_file("HotReloadPluginBad.dll", "HotReloadBadSrc.dll",
                                std::filesystem::copy_options::overwrite_existing);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
 
     Arcane::PluginHost host(rt, std::filesystem::path("HotReloadBadSrc.dll"));

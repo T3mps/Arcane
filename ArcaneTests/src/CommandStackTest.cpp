@@ -571,7 +571,7 @@ TEST_CASE("StateId identifies the current state, not the number of edits", "[edi
     // (see Helpers/TestTypeContext.hpp and EditorPlayModeTest.cpp) rather than
     // a bare Arcane::Runtime -- a test-local Runtime would steal Arcane.dll's
     // TypeContext slot and Edit:: operations would silently report zero changes.
-    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
 
@@ -636,7 +636,7 @@ TEST_CASE("StateId: Push (one-shot command path) mints and retires ids too, not 
     // every other test in this file would stay green while StateId() kept
     // reporting a stale id after a real Push edit -- a caller (scene
     // dirty-tracking) would then read a genuinely dirty scene as clean.
-    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
 
@@ -692,7 +692,7 @@ TEST_CASE("StateId: an id evicted by the depth cap is never observed again", "[e
     // comparison losing its bite) would let the evicted id resurface while
     // walking Undo() back toward empty; this test walks that whole path and
     // checks every step, not just the final one.
-    Arcane::Runtime runtime(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime runtime(Arcane::Test::Process(), /*enableAudioDevice*/false);
     Astra::Registry& reg = runtime.Registry();
     Arcane::RegisterSceneComponents(reg);
 

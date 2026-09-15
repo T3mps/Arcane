@@ -50,7 +50,7 @@ namespace
             // pin cannot repair an already-cached id). Re-pinning here only keeps
             // the slot pointed at the shared context; never install an unshared
             // one anywhere in this suite.
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::Runtime pin(Arcane::Test::Process());
             RegisterSceneComponents(*reg);
         }
 

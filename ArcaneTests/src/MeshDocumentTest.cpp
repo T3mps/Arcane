@@ -416,7 +416,7 @@ TEST_CASE("MeshDocument::Save reaches the scene's MeshTable through the editor's
     authored.subdivisions = 1;
     REQUIRE(Arcane::SaveMeshAsset(file, authored));
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false);
+    Arcane::Runtime rt(Arcane::Test::Process(), /*enableAudioDevice*/false);
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.RegisterCreatedAsset(file).has_value());
 

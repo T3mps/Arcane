@@ -2,8 +2,8 @@
 
 #include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Config/Config.hpp>
-#include <Arcane/Core/ModuleContext.hpp>   // ArcaneCore.dll's own Astra TypeContext slot
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/RuntimePresentation.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -84,8 +84,7 @@ namespace Arcane
     {
         JobSystem                                   jobs;
         std::shared_ptr<Mosaic::IWorkScheduler>     sched;
-        std::unique_ptr<Astra::TypeContext>         ownedContext;   // null when an external one is injected
-        Astra::TypeContext*                         context = nullptr;
+        Astra::TypeContext*                         context = nullptr;   // the ProcessContext's -- Runtime owns nothing
         std::shared_ptr<Astra::ComponentRegistry>   components;
         std::optional<Astra::ComponentModule>       engineModule;   // the engine roster's RAII owner; destructs AFTER registry (declared before it), BEFORE components
         std::unique_ptr<Astra::Registry>            registry;
@@ -98,22 +97,16 @@ namespace Arcane
         std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
 
-        explicit Impl(Astra::TypeContext* external, bool enableAudioDevice) : jobs(), sched(jobs.WorkScheduler())
+        explicit Impl(ProcessContext& process, bool enableAudioDevice) : jobs(), sched(jobs.WorkScheduler())
         {
-            if (external) { context = external; }
-            else { ownedContext = std::make_unique<Astra::TypeContext>(); context = ownedContext.get(); }
+            context = &process.TypeContext();
 
-            // Install the shared context in THIS module BEFORE any TypeID/Registry use.
+            // Install the shared context in THIS module (ArcaneClient.dll) BEFORE any
+            // TypeID/Registry use. ArcaneCore.dll's own per-module slot is installed by
+            // ProcessContext::Create itself (Base/ProcessContext.cpp) -- the process has
+            // exactly one ProcessContext, constructed before any Runtime, so that slot is
+            // already live by the time this ctor runs.
             Astra::SetTypeContext(context, Astra::ModuleResidency::Resident);
-            // ...and in ARCANECORE.DLL, which the split made a third module with
-            // its own per-module slot. Core's Serialization/ResourceSerialization
-            // TU touches the registry directly (FinishSnapshot/WriteResourceSection/
-            // ReadResourceSection), and Registry.hpp's birth-context guard fires if
-            // that module's slot is unset. Not reachable through the inline
-            // Astra::SetTypeContext above -- that one installs into THIS module by
-            // construction, which is exactly why Core exports an installer of its
-            // own (Arcane/Core/ModuleContext.hpp).
-            Core::SetModuleTypeContext(context);
             components = std::make_shared<Astra::ComponentRegistry>();
 
             // The engine's OWN component roster, registered here so every host
@@ -203,8 +196,8 @@ namespace Arcane
         }
     };
 
-    Runtime::Runtime(Astra::TypeContext* externalContext, bool enableAudioDevice)
-        : m_impl(std::make_unique<Impl>(externalContext, enableAudioDevice))
+    Runtime::Runtime(ProcessContext& process, bool enableAudioDevice)
+        : m_impl(std::make_unique<Impl>(process, enableAudioDevice))
     {
         // Mosaic diagnostics: install the log sink + assert handler into THIS module
         // (Arcane.dll) so Astra/Manifold2D/Mosaic code running here routes to the

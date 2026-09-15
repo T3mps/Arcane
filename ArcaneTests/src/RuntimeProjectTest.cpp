@@ -39,7 +39,7 @@ TEST_CASE("Runtime::OpenProject adopts a valid project", "[project]")
     const fs::path dir = MakeTempDir("valid");
     REQUIRE(Arcane::Project::Create(dir / "Game", "MyGame").has_value());  // abi == this engine
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.CurrentProject() == nullptr);
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     REQUIRE(rt.CurrentProject() != nullptr);
@@ -61,7 +61,7 @@ TEST_CASE("Runtime::OpenProject forwards its progress callback through to the co
     WriteFile(dir / "Game" / "Content" / "a.arcmat", R"({"id":"aaaa1111-1111-4111-8111-111111111111"})");
     WriteFile(dir / "Game" / "Content" / "b.arcmat", R"({"id":"bbbb2222-2222-4222-8222-222222222222"})");
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     std::size_t calls = 0, lastDone = 0, lastTotal = 0;
     REQUIRE(rt.OpenProject(dir / "Game", [&](std::size_t done, std::size_t total)
     {
@@ -89,7 +89,7 @@ TEST_CASE("Runtime::OpenProject opens a mismatched engine ABI (the plugin gate o
         R"("gameModule":"","plugins":[],"bootScene":""})");
     std::error_code ec; fs::create_directories(dir / "Content", ec);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir) == true);
     REQUIRE(rt.CurrentProject() != nullptr);
     // The RUNTIME never rewrites the stamp: it must keep telling the Hub the
@@ -106,7 +106,7 @@ TEST_CASE("Runtime::OpenProject sets the Assets content root", "[project]")
     REQUIRE(Arcane::Project::Create(dir / "Game", "G").has_value());
     WriteFile(dir / "Game" / "Content" / "probe.json", R"({"ok":true})");
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "Game") == true);
     auto doc = rt.AssetsFacade().GetJson("probe.json");   // relative -> under Content/
     REQUIRE(doc != nullptr);
@@ -136,7 +136,7 @@ TEST_CASE("Runtime::OpenProject layers an enabled plugin's Config under the proj
     // The project's own Config/game.json overrides the shared key (project beats plugin).
     WriteFile(dir / "Config" / "game.json", R"({"shared":"project"})");
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir) == true);
     REQUIRE(rt.CurrentProject()->ActivePluginRoots().size() == 1);
 
@@ -153,7 +153,7 @@ TEST_CASE("Runtime::OpenProject switches projects on re-open", "[project]")
     REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
     REQUIRE(Arcane::Project::Create(dir / "B", "Beta").has_value());
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir / "A") == true);
     REQUIRE(rt.CurrentProject()->Manifest().name == "Alpha");
     REQUIRE(rt.OpenProject(dir / "B") == true);
@@ -188,7 +188,7 @@ TEST_CASE("Runtime::CloseProject returns to the fresh-Runtime no-project state",
         R"(},"gameModule":"","plugins":[],"bootScene":""})");
     WriteFile(dir / "Plugins" / "fx" / "Config" / "game.json", R"({"fromPlugin":true})");
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     REQUIRE(rt.OpenProject(dir) == true);
     REQUIRE(rt.CurrentProject() != nullptr);
     REQUIRE(rt.AssetsFacade().GetJson("close_project_probe.json") != nullptr);

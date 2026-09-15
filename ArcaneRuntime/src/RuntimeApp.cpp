@@ -80,44 +80,24 @@ RuntimeApp::RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash)
 
 bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
 {
-    // The TypeContext is the process-wide type-identity singleton shared across
-    // ArcaneRuntime.exe, Arcane.dll, and every loaded plugin. It is intentionally
-    // heap-allocated and never freed: TypeMeta entries registered by the plugin
-    // (via ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled
-    // into the plugin DLL. After PluginHost::Unload -> DLClose, those thunks
-    // point to unmapped memory. If the TypeContext (and its MetaRegistry) were
-    // ever destructed, ~std::function() would invoke those thunks -> crash.
-    // Heap-leaking is the correct production pattern for a long-running host;
-    // the OS reclaims all process memory on exit anyway.
-    // (The test exe is safe for a different reason: MetaRegistry::Register is first-writer-wins,
-    // and the test TUs that reflect these types are never unloaded, so their thunks -- not the
-    // plugin's -- own the MetaRegistry entries.)
-    m_typeContext = new Astra::TypeContext();
-    // Install the shared context in THIS module too. Astra's
-    // GetTypeContext()/SetTypeContext() resolve through a PER-MODULE static slot by
-    // design, and Runtime's ctor only installs it for Arcane.dll's slot
-    // (Runtime.cpp:120) -- ArcaneRuntime.exe is a separate binary and needs its own
-    // install, exactly as ArcaneEditor.exe does (EditorApp.cpp).
-    //
-    // THIS LINE'S ABSENCE WAS A REAL BUG (2026-07-30): the exe compiles the
-    // header-only ActiveSceneCamera sweep, so its TypeID<Camera>::Value() resolved
-    // against this module's own EMPTY DefaultTypeContext() and got an id that
-    // aliased Transform's in the shared one. CreateView<Camera> then returned every
-    // entity that had a Transform and read those bytes as a Camera -- position.x
-    // landed in orthographicSize, read 0, so the sweep reported "no usable camera",
-    // the view stayed identity at 1 px per metre, and a 1 m sprite drew as a
-    // single pixel in the corner. It looked exactly like "the sprite is missing".
-    // Nothing caught it because until the camera became a scene component this exe
-    // never touched a component type from its OWN code -- it only drove the plugin.
-    // Task 8 folds the fix into the SHARED type_context_install stage
-    // (ProjectBoot.cpp), which VerifySharedTypeContext's every host that
-    // populates ctx.runtime -- this exe's own SetTypeContext call still has to
-    // happen HERE, in this module, because Astra's slot is per-module.
-    Astra::SetTypeContext(m_typeContext);
+    // ProcessContext is the process's ONE instance (spec 2026-09-15 s3), owning
+    // the TypeContext every module shares -- ArcaneRuntime.exe, ArcaneClient.dll,
+    // ArcaneCore.dll, and every loaded plugin. An OWNED TypeContext is leaked on
+    // purpose (~ProcessContext): TypeMeta entries registered by the plugin (via
+    // ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled into
+    // the plugin DLL, and after PluginHost::Unload -> DLClose those thunks point
+    // to unmapped memory, so destructing the TypeContext would crash. Heap-
+    // leaking is the correct production pattern for a long-running host; the OS
+    // reclaims all process memory on exit anyway.
+    m_process = Arcane::ProcessContext::Create({});
+    if (!m_process) { ARC_ERROR("ArcaneRuntime: ProcessContext refused -- a second host in this process?"); return false; }
+    // This exe's OWN per-module Astra slot (unchanged reasoning: the slot is per module).
+    // ArcaneCore.dll's slot is installed by ProcessContext::Create itself.
+    Astra::SetTypeContext(&m_process->TypeContext());
     // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
     // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is not interactive ->
     // false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
-    m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
+    m_runtime.emplace(*m_process, m_config.maxFrames == 0);
 
     // Populate ctx for the SHARED type_context_install / project_open /
     // input_config stage bodies (ProjectBoot.cpp), which only have `ctx`, not
@@ -1424,7 +1404,9 @@ void RuntimeApp::Shutdown()
     //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
     //   m_gpu     -> ~GpuContext: the render/input stack, window LAST. So gpu
     //                outlives runtime + plugin. See GpuContext's header.
-    // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
+    // m_process (and the ProcessContext it holds) is declared BEFORE m_runtime,
+    // so it destructs AFTER it; its owned TypeContext is intentionally NOT freed
+    // (heap-leaked, see ~ProcessContext / StageRuntimeCreate).
 }
 
 int RuntimeApp::Run()

@@ -53,7 +53,7 @@ namespace
             // Arcane.dll's own per-module TypeContext slot, not the one
             // main() installs in this test module. Pin that slot to the
             // shared test context so both modules agree on component ids.
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::Runtime pin(Arcane::Test::Process());
             RegisterSceneComponents(reg);
         }
     };
@@ -80,7 +80,7 @@ namespace
 
         UndoWorld()
         {
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::Runtime pin(Arcane::Test::Process());
             RegisterSceneComponents(*reg);
         }
 

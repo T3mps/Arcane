@@ -145,7 +145,7 @@ TEST_CASE("editor-created child under SceneRoot gets a WorldTransform from propa
     // Arcane.dll would resolve component IDs through different TypeContext
     // slots, and Identity/SpriteRenderer added by CreateEntity would be
     // invisible to GetComponent calls made from this module.
-    Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime pin(Arcane::Test::Process());
 
     auto components = std::make_shared<Astra::ComponentRegistry>();
     Astra::Registry reg(components);

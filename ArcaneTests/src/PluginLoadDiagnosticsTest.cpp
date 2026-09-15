@@ -211,7 +211,7 @@ TEST_CASE("PluginHost::Load publishes the ABI-mismatch diagnostic under plugin:<
 {
     // The actual deliverable: PluginHost's primary-load-failure site, not just
     // the resolve plumbing the cases above cover in isolation.
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
 
     Capture cap;
     Arcane::Diagnostics::SetSink(&CaptureSink, &cap);
@@ -245,7 +245,7 @@ TEST_CASE("A failed reload publishes the cause; the next successful reload retra
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
                                std::filesystem::copy_options::overwrite_existing);
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();   // engine sees the type, mirrors PluginHostTest.cpp
 
     Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));

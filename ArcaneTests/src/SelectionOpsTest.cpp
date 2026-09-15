@@ -29,7 +29,7 @@ namespace
         {
             // Same cross-DLL TypeContext pin as EntityOpsTest.cpp -- Edit::
             // ops live in Arcane.dll and must agree on component IDs.
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::Runtime pin(Arcane::Test::Process());
             RegisterSceneComponents(reg);
         }
     };

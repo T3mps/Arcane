@@ -60,7 +60,7 @@ using namespace Arcane::Test::EngineSystems;
 
 TEST_CASE("Runtime installs the engine's standard systems and reinstalls them after ClearSystems", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     auto& sch = rt.Schedulers();
 
     CHECK(sch.fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
@@ -76,7 +76,7 @@ TEST_CASE("Runtime installs the engine's standard systems and reinstalls them af
 
 TEST_CASE("A module built against ABI 28 that still registers the pair is refused harmlessly", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     auto& sch = rt.Schedulers();
     // AlreadyRegistered -- the only failure AddSystem<T> has for a known T; the
     // old modules std::ignore it, so an unconverted DLL keeps working.
@@ -86,7 +86,7 @@ TEST_CASE("A module built against ABI 28 that still registers the pair is refuse
 
 TEST_CASE("A game system places itself with Before/After against the engine's systems", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     auto& fixed = rt.Schedulers().fixedUpdate;
     g_order.clear();
 
@@ -112,7 +112,7 @@ TEST_CASE("A game system places itself with Before/After against the engine's sy
 
 TEST_CASE("An ordering anchor that is not registered adds no constraint and no error", "[runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     auto& fixed = rt.Schedulers().fixedUpdate;
     g_order.clear();
 

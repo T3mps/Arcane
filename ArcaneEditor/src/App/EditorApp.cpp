@@ -256,31 +256,31 @@ namespace Arcane::Editor
 
     bool EditorApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
     {
-        // The TypeContext is the process-wide type-identity singleton shared across
-        // ArcaneEditor.exe, Arcane.dll, and every loaded plugin. It is intentionally
-        // heap-allocated and never freed: TypeMeta entries registered by the plugin
-        // (via ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled
-        // into the plugin DLL. After PluginHost::Unload -> DLClose, those thunks
-        // point to unmapped memory. If the TypeContext (and its MetaRegistry) were
-        // ever destructed, ~std::function() would invoke those thunks -> crash.
-        // Heap-leaking is the correct production pattern for a long-running host;
-        // the OS reclaims all process memory on exit anyway.
-        m_typeContext = new Astra::TypeContext();
-        // Install the shared context in THIS module too (ArcaneEditor.exe is a separate
-        // binary from Arcane.dll -- Astra::GetTypeContext()/SetTypeContext() resolve
-        // through a PER-MODULE static slot, by design; Runtime::Impl's ctor installs
-        // the same m_typeContext for Arcane.dll's own slot, see Runtime.cpp). Required
-        // BEFORE the gizmo interaction code's TypeID<Arcane::Transform>::Value()
-        // lookups (Registry::GetComponent<Transform> in the frame loop) -- without this,
-        // ArcaneEditor.exe's first TypeID<T>::Value() call would silently fall back to its
-        // own empty module-local DefaultTypeContext() instead of the shared one, so
-        // GetComponent<Transform> would resolve against the WRONG ComponentID
-        // (always-miss at best, aliasing a different component's bytes at worst).
-        Astra::SetTypeContext(m_typeContext);
+        // ProcessContext is the process's ONE instance (spec 2026-09-15 s3), owning
+        // the TypeContext every module shares -- ArcaneEditor.exe, ArcaneClient.dll,
+        // ArcaneCore.dll, and every loaded plugin. An OWNED TypeContext is leaked on
+        // purpose (~ProcessContext): TypeMeta entries registered by the plugin (via
+        // ASTRA_REFLECT in Components.hpp) hold std::function thunks compiled into
+        // the plugin DLL, and after PluginHost::Unload -> DLClose those thunks point
+        // to unmapped memory, so destructing the TypeContext would crash. Heap-
+        // leaking is the correct production pattern for a long-running host; the OS
+        // reclaims all process memory on exit anyway.
+        m_process = Arcane::ProcessContext::Create({});
+        if (!m_process) { ARC_ERROR("ArcaneEditor: ProcessContext refused -- a second host in this process?"); return false; }
+        // This exe's OWN per-module Astra slot (unchanged reasoning: the slot is per
+        // module). Required BEFORE the gizmo interaction code's
+        // TypeID<Arcane::Transform>::Value() lookups (Registry::GetComponent<Transform>
+        // in the frame loop) -- without this, ArcaneEditor.exe's first TypeID<T>::Value()
+        // call would silently fall back to its own empty module-local
+        // DefaultTypeContext() instead of the shared one, so GetComponent<Transform>
+        // would resolve against the WRONG ComponentID (always-miss at best, aliasing a
+        // different component's bytes at worst). ArcaneCore.dll's slot is installed by
+        // ProcessContext::Create itself.
+        Astra::SetTypeContext(&m_process->TypeContext());
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
         // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
         // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
-        m_runtime.emplace(m_typeContext, m_config.maxFrames == 0);
+        m_runtime.emplace(*m_process, m_config.maxFrames == 0);
         // Edit mode's only physics (spec 2026-09-11-physics-2d-wiring s6.1):
         // through `this` rather than a captured Runtime*, so a later runtime
         // re-creation on project switch keeps the binding valid.
@@ -3036,7 +3036,9 @@ namespace Arcane::Editor
         //   m_gpu     -> ~GpuContext: the render/input stack, window LAST. So
         //                gpu outlives runtime + plugin exactly as
         //                ArcaneRuntime's does. See GpuContext's header.
-        // m_typeContext is intentionally NOT freed (heap-leaked, see Init).
+        // m_process (and the ProcessContext it holds) is declared BEFORE m_runtime,
+        // so it destructs AFTER it; its owned TypeContext is intentionally NOT freed
+        // (heap-leaked, see ~ProcessContext / StageRuntimeCreate).
     }
 
     void EditorApp::Destroy()

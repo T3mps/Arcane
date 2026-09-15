@@ -18,7 +18,7 @@
 // runs alongside the rest of the v2 sandbox wiring under ~[gpu].)
 TEST_CASE("Host input store: Runtime::Input reflects the last SetInputSnapshot", "[sandbox]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
 
     Arcane::InputSnapshot snap;
     snap.SetScancode(42);              // arbitrary physical key down

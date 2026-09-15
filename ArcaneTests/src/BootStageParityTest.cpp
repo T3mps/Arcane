@@ -273,7 +273,7 @@ TEST_CASE("RuntimeStages' project_open .run() reuses CoreStages' attached detail
         std::ofstream(dir / "Content" / ("a" + std::to_string(i) + ".arcmat"), std::ios::binary)
             << R"({"id":")" << Arcane::Guid::Generate().ToString() << R"("})";
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     Arcane::BootSplashWindow splash("");
     Arcane::HostBoot::BootContext ctx{};
     ctx.runtime = &rt;
@@ -313,7 +313,7 @@ TEST_CASE("RuntimeStages' project_open .run() peeks splash.showProgress before O
         R"({"formatVersion":1,"name":"Bad","engine":{"abi":9999},)"
         R"("splash":{"showProgress":true}})";
 
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     Arcane::BootSplashWindow splash("");
     Arcane::HostBoot::BootContext ctx{};
     ctx.runtime = &rt;
@@ -396,7 +396,7 @@ TEST_CASE("project_open forwards BootContext::openOptions to Runtime::OpenProjec
     enum class Host { Editor, Runtime };
     auto runStage = [&](Host host, bool mountDiagnostics)
     {
-        Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+        Arcane::Runtime rt(Arcane::Test::Process());
         Arcane::BootSplashWindow splash("");
         Arcane::HostBoot::BootContext ctx{};
         ctx.runtime     = &rt;

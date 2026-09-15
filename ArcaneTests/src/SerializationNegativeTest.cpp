@@ -102,7 +102,7 @@ TEST_CASE("ParseSnapshot rejects malformed frames with a clean error", "[seriali
 
 TEST_CASE("RestoreRegistry rejects corrupt/garbage input without crashing", "[serialization][negative][runtime]")
 {
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
 
     SECTION("empty buffer")
     {

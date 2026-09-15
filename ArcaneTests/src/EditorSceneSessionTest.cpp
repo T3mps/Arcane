@@ -38,7 +38,7 @@ namespace
     // and a fake would not exercise the undo/redo id restoration that matters.
     struct Harness
     {
-        Arcane::Runtime runtime{&Arcane::Test::SharedTypeContext(), /*enableAudioDevice*/false};
+        Arcane::Runtime runtime{Arcane::Test::Process(), /*enableAudioDevice*/false};
         Arcane::CommandStack stack{[this]() -> Astra::Registry& { return runtime.Registry(); }};
         Astra::Entity entity{};
         const Astra::ComponentDescriptor* desc = nullptr;

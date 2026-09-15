@@ -57,7 +57,7 @@ namespace
             // Pin that slot to the shared test context; NEVER construct a bare
             // Arcane::Runtime here (it would install an unshared context and the
             // Edit:: ops would silently report 0 changes).
-            Arcane::Runtime pin(&Arcane::Test::SharedTypeContext());
+            Arcane::Runtime pin(Arcane::Test::Process());
             RegisterSceneComponents(*reg);
             // Registered so the PhysicsBodyRef hide-list assertion is a real
             // check rather than a vacuous one.
@@ -299,7 +299,7 @@ TEST_CASE("a fresh Runtime registers the engine's own component roster", "[edito
     // The same gap silently dropped Identity/Hidden when a runtime host
     // loaded a scene the editor saved: SceneSerializer skips a type that is
     // reflected but not REGISTERED as a component.
-    Arcane::Runtime rt(&Arcane::Test::SharedTypeContext());
+    Arcane::Runtime rt(Arcane::Test::Process());
     Astra::Registry& reg = rt.Registry();
     const Astra::Entity e = reg.CreateEntity();
     const std::array<Astra::Entity, 1> sel{ e };
