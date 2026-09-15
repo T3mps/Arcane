@@ -125,6 +125,50 @@ TEST_CASE("MeshDocument::ApplyMeshData marks the document dirty and rebuilds the
     CHECK(doc.PreviewMesh()->vertices.size() != cubeVertexCount);
 }
 
+TEST_CASE("MeshDocument: every preview rebuild also invalidates the preview vehicle's "
+          "geometry", "[editor][mesh]")
+{
+    // Final-review C2. The preview vehicle's NriMeshBufferCache keys residency on a
+    // FIXED synthetic guid ('PRVW'), and since Plan 2 Task 4 the mesh path resolves
+    // through that cache instead of re-uploading from &*m_previewMesh every record.
+    // So rebuilding m_previewMesh without invalidating that guid leaves the preview
+    // frozen on the first geometry the document ever built -- for every topology
+    // edit, every source change, every Save and every undo/redo.
+    //
+    // Device-less, through the counter RebuildPreviewMesh bumps at the invalidate
+    // (PreviewGeometryInvalidations): with no vehicle there is no picture to compare,
+    // but WHICH PATHS ISSUE THE INVALIDATE is the whole of the bug, and the issue
+    // and the m_preview->InvalidateMeshGeometry call are the same two adjacent lines.
+    MeshDocument::Services services;
+    Arcane::MeshAssetData before = Fixture();
+    before.source   = Arcane::MeshSource::UvSphere;
+    before.segments = 32;
+    MeshDocument doc(services, FixturePath(), before);
+
+    // Construction rebuilds once, so the baseline is 1, not 0.
+    const std::uint64_t afterCtor = doc.PreviewGeometryInvalidations();
+    CHECK(afterCtor == 1u);
+
+    // A TOPOLOGY edit: same source, more segments -- exactly the edit the Mesh
+    // document's param panel makes, and exactly the one that used to redraw the old
+    // shape.
+    Arcane::MeshAssetData denser = before;
+    denser.segments = 48;
+    doc.ApplyMeshData(denser);
+    CHECK(doc.PreviewGeometryInvalidations() == afterCtor + 1);
+    // ...and the geometry really did change, so a kept resident buffer would have
+    // been the WRONG one rather than merely redundant.
+    REQUIRE(doc.PreviewMesh().has_value());
+    const std::size_t denseVerts = doc.PreviewMesh()->vertices.size();
+
+    Arcane::MeshAssetData coarser = before;
+    coarser.segments = 8;
+    doc.ApplyMeshData(coarser);
+    CHECK(doc.PreviewGeometryInvalidations() == afterCtor + 2);
+    REQUIRE(doc.PreviewMesh().has_value());
+    CHECK(doc.PreviewMesh()->vertices.size() < denseVerts);
+}
+
 TEST_CASE("MeshDocument edits round-trip through the shared CommandStack", "[editor][mesh]")
 {
     UndoFixture fx;

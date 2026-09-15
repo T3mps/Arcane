@@ -240,6 +240,24 @@ namespace Arcane::Editor
         // reaching into a private member.
         [[nodiscard]] std::uint64_t PreviewTextureId() const noexcept;
 
+        // How many times this document has told its preview vehicle to drop the
+        // resident geometry under kPreviewMeshGuid -- once per RebuildPreviewMesh,
+        // vehicle or no vehicle.
+        //
+        // AN INSTRUMENT, not bookkeeping: since Plan 2 Task 4 the preview resolves
+        // its geometry through NriMeshBufferCache, which caches by guid and only
+        // consults the supply on a MISS, so a rebuild that does not invalidate
+        // leaves the preview frozen on the first shape the document ever built
+        // (final-review C2). That invalidate is the only thing standing between a
+        // topology edit and a stale picture, and it is unobservable from outside
+        // without a device; this counter is what lets a headless test prove every
+        // rebuild path issues one. Same role PresentedFrames/RenderErrorCount play
+        // for the graph.
+        [[nodiscard]] std::uint64_t PreviewGeometryInvalidations() const noexcept
+        {
+            return m_previewGeometryInvalidations;
+        }
+
     private:
         // Recompute m_previewMesh/m_validationReason from the CURRENT
         // m_data. Called from the ctor and from every path that mutates
@@ -317,6 +335,10 @@ namespace Arcane::Editor
         // actually landed in the texture (FrameOutcome::Presented). True at
         // construction so the opening image records on the first Tick.
         bool m_previewDirty = true;
+
+        // Bumped beside m_previewDirty, by RebuildPreviewMesh and nowhere else --
+        // see PreviewGeometryInvalidations() for why this counter exists.
+        std::uint64_t m_previewGeometryInvalidations = 0;
 
         // The document's ONE edit-gesture bracket (the ScopeGuard at the top
         // of Draw is its guaranteed close). Every topology drag shares it --

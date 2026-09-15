@@ -36,6 +36,15 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // THE ONE SPELLING of the synthetic guid this document's preview geometry is
+        // resident under on its own offscreen vehicle ('PRVW'). It appears in three
+        // places -- the vehicle's mesh supply, the single MeshInstance, and
+        // RebuildPreviewMesh's invalidate -- and final-review C2 is what happens when
+        // one of the three is missing, so it is a constant rather than three literals
+        // that can drift. NOT an asset guid: nothing in the project registry mints
+        // it, and it never leaves this document's vehicle.
+        inline constexpr Arcane::Guid kPreviewMeshGuid{ 0x50525657ull, 1ull };
+
         const char* SourceLabel(Arcane::MeshSource s)
         {
             switch (s)
@@ -193,6 +202,22 @@ namespace Arcane::Editor
         // the redraw flag -- see m_previewDirty (MeshDocument.hpp) for why a
         // static image must not re-record a frame every Tick.
         m_previewDirty = true;
+
+        // ...AND THE ONE PLACE THAT OWES THE GPU DROP (final-review C2). The redraw
+        // flag alone was enough while MeshNode re-uploaded from &*m_previewMesh every
+        // record; since Plan 2 Task 4 the geometry goes through the vehicle's
+        // NriMeshBufferCache, which caches by guid and only consults the supply on a
+        // MISS. Without this the vehicle keeps serving the FIRST shape this document
+        // ever built -- through all four rebuild paths (ctor, ApplyMeshData, Save,
+        // and Draw's live field edits), i.e. every topology drag, every source
+        // switch, every undo. It lives here, beside the flag, rather than at the four
+        // call sites, for exactly the reason the flag does.
+        //
+        // The counter is bumped whether or not a vehicle exists, so a device-less
+        // test can pin which paths issue the drop -- see its accessor's comment.
+        ++m_previewGeometryInvalidations;
+        if (m_preview)
+            m_preview->InvalidateMeshGeometry(kPreviewMeshGuid);
     }
 
     bool MeshDocument::Save()
@@ -251,8 +276,7 @@ namespace Arcane::Editor
         m_preview->SetMeshSupply(
             [this](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
             {
-                static const Arcane::Guid kPreview{ 0x50525657ull, 1ull };   // 'PRVW'
-                if (id == kPreview && m_previewMesh)
+                if (id == kPreviewMeshGuid && m_previewMesh)
                     return { &*m_previewMesh, Arcane::MeshResolveState::Ready };
                 return { nullptr, Arcane::MeshResolveState::Failed };
             });
@@ -302,7 +326,7 @@ namespace Arcane::Editor
             const glm::vec3 dir = glm::normalize(glm::vec3(1.0f, 0.75f, 1.0f));
             const glm::vec3 eye = center + dir * distance;
 
-            instanceStorage[0].mesh = Arcane::Guid{ 0x50525657ull, 1ull };   // 'PRVW'
+            instanceStorage[0].mesh = kPreviewMeshGuid;
             instanceStorage[0].model = glm::mat4(1.0f);   // unit geometry -- see MeshAsset.hpp's UNIT RULE
             // Neutral white: resolving `material`'s actual baseColor/texture
             // into this preview is F2b/F2c's bindless-table territory (the

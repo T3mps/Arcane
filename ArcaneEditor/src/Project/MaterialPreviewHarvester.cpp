@@ -194,13 +194,41 @@ namespace Arcane::Editor
         Arcane::MeshData sphere;
         std::unique_ptr<Arcane::MeshMaterialCache> meshMats;
 
-        // F2c Plan 2 Task 9: the synthetic mesh-buffer guid a Subject::Mesh harvest's
-        // geometry rides under, resolved by the SetMeshSupply lambda EnsureVehicle
-        // installs (mirroring `sphere`'s own 'SPHR' guid, immediately below in that
-        // lambda). Populated by Harvest() immediately before RenderFrameOffscreen and
-        // left alone afterward -- there is only ever one harvest per Pump, so nothing
-        // else ever reads or writes it concurrently.
+        // F2c Plan 2 Task 9: the ONE mesh-asset harvest in flight -- its REAL asset
+        // guid and the geometry StartOneMesh resolved for it, served to the vehicle
+        // by the SetMeshSupply lambda EnsureVehicle installs. Populated by Harvest()
+        // immediately before RenderFrameOffscreen and released immediately after;
+        // there is only ever one harvest per Pump, so nothing else reads or writes
+        // them in between.
+        //
+        // THE REAL GUID, NOT A SYNTHETIC ONE, and that is final-review C1's fix. This
+        // used to be a session-fixed 'MESH' guid the way `sphere` uses 'SPHR'. That
+        // was harmless while MeshNode re-uploaded from the supply every record, but
+        // since Plan 2 Task 4 residency is cached BY GUID and the supply is consulted
+        // only on a MISS -- so harvest #2 hit harvest #1's buffers and drew mesh A's
+        // geometry with mesh B's per-section index ranges (an out-of-bounds index
+        // read whenever B had more indices), then wrote the picture to
+        // Saved/Thumbnails/<B>.png. Every .arcmesh row in a project with two or more
+        // imported meshes showed the same picture. Keying on the asset's own guid is
+        // what makes each harvest's residency ITS OWN; the invalidate bracket in
+        // Harvest is what keeps it from outliving the stash it is served from.
+        Arcane::Guid     meshHarvestId;
         Arcane::MeshData meshHarvestGeometry;
+
+        // Drop the in-flight harvest's geometry AND the vehicle residency that was
+        // uploaded from it. Both halves, always together: the stash is freed so a
+        // large imported mesh's CPU buffer does not linger for the session, and the
+        // residency goes with it because a resident entry whose supply can no longer
+        // answer is a guid the cache would serve stale (or, after an eviction, refuse
+        // and memoize). The pre-fix code freed the stash alone, which is exactly that
+        // hazard.
+        void ReleaseMeshHarvest()
+        {
+            if (ctx && meshHarvestId.IsValid())
+                ctx->InvalidateMeshGeometry(meshHarvestId);
+            meshHarvestId = Arcane::Guid{};
+            meshHarvestGeometry = {};
+        }
 
         // THE QUEUE IS A STACK, and it is SHARED across both subjects (F2c Plan 2
         // Task 9): Task 10's Browse draw pushes every VISIBLE un-thumbed material or
@@ -282,6 +310,10 @@ namespace Arcane::Editor
         // write-off is genuinely terminal rather than something the next
         // Request() quietly revives.
         bool givenUp = false;
+        // One-shot, for PrimeFromDisk's extension sniff -- a boot that hands this
+        // class a guid resolving to neither .arcmesh nor .arcmat says it once and
+        // then stops talking.
+        bool warnedPrimeExtension = false;
     };
 
     // =====================================================================
@@ -332,6 +364,12 @@ namespace Arcane::Editor
         batch.reset();
         meshMats.reset();
         sphere = {};
+        // The stash goes with the vehicle it was serving -- the replacement vehicle
+        // has an empty cache, and the re-queued harvest re-resolves its own geometry.
+        // No InvalidateMeshGeometry here (and none needed): `ctx` is already gone,
+        // and its cache went with it.
+        meshHarvestId = Arcane::Guid{};
+        meshHarvestGeometry = {};
         for (const Ready& r : ready)
         {
             const WorkKey key{ r.id, r.subject };
@@ -505,8 +543,13 @@ namespace Arcane::Editor
         // a parent-chain change, which touch this material's file not at all).
         im.failed.erase(material);
         im.pending.erase(material);
+        // id AND subject, matching InvalidateMesh below exactly. Erasing by id alone
+        // is exact today (one flat guid map project-wide, so a material guid cannot
+        // also be a mesh guid) but the asymmetry invited a reader to assume one of
+        // the two was wrong.
         im.ready.erase(std::remove_if(im.ready.begin(), im.ready.end(),
-                                      [&](const Impl::Ready& r) { return r.id == material; }),
+                                      [&](const Impl::Ready& r)
+                                      { return r.id == material && r.subject == Subject::Material; }),
                        im.ready.end());
         im.queue.erase(std::remove(im.queue.begin(), im.queue.end(), material), im.queue.end());
         // AFTER the three erases above, never before: `inFlight` is what Push
@@ -561,6 +604,16 @@ namespace Arcane::Editor
                        im.ready.end());
         im.queue.erase(std::remove(im.queue.begin(), im.queue.end(), key), im.queue.end());
         im.inFlight.erase(key);
+        // ...AND THE VEHICLE'S RESIDENCY FOR THIS GUID (final-review C1). Since the
+        // harvest keys residency on the asset's own guid, a re-harvest after an edit
+        // or a cook would otherwise HIT the buffers uploaded from the PRE-edit
+        // geometry. Harvest's own pre-render invalidate already covers the ordinary
+        // path; this one covers the window before the re-harvest runs, and costs
+        // nothing when the guid is not resident.
+        if (im.ctx && mesh.IsValid())
+            im.ctx->InvalidateMeshGeometry(mesh);
+        if (im.meshHarvestId == mesh)
+            im.ReleaseMeshHarvest();
         if (const std::filesystem::path png = im.ThumbPath(mesh); !png.empty())
         {
             std::error_code ec;
@@ -646,13 +699,30 @@ namespace Arcane::Editor
             // source's extension is the answer -- Subject is this .cpp's own
             // private dispatch tag, so asking the caller to carry it alongside
             // each Guid would just duplicate what the extension already says.
+            //
+            // AN UNRESOLVABLE OR UNRECOGNISED PATH FALLS BACK TO Material, and now
+            // SAYS SO ONCE. The fallback itself is right -- Material is the only
+            // subject that can be attempted blind, and the attempt costs one
+            // Fail("not in the asset registry") -- but doing it in silence turned a
+            // widened-filter mistake at the one call site into a thumbnail that
+            // simply never appears. Latched, the house idiom: one line names the
+            // extension, the rest of the boot is quiet.
             bool isMesh = false;
+            std::string ext;
             if (src)
             {
-                std::string ext = src->extension().string();
+                ext = src->extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(),
                                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 isMesh = (ext == ".arcmesh");
+            }
+            if (!isMesh && ext != ".arcmat" && !im.warnedPrimeExtension)
+            {
+                im.warnedPrimeExtension = true;
+                ARC_WARN("[thumbs] PrimeFromDisk: {} resolves to {} -- neither .arcmesh nor "
+                         ".arcmat, so it is dispatched as a MATERIAL and will most likely be "
+                         "refused. Further occurrences are silent.",
+                         id.ToString(), src ? src->string() : std::string("nothing"));
             }
             im.Push(isMesh ? WorkKey{ id, Subject::Mesh } : WorkKey{ id });
         }
@@ -1031,13 +1101,12 @@ namespace Arcane::Editor
                 if (id == kSphere && !sphere.vertices.empty())
                     return { &sphere, Arcane::MeshResolveState::Ready };
                 // F2c Plan 2 Task 9: the mesh-ASSET harvest's own geometry, resolved by
-                // StartOneMesh and stashed here (Harvest, immediately before
-                // RenderFrameOffscreen) under this session-fixed synthetic guid -- must
-                // match the literal Harvest's Subject::Mesh branch mints its
-                // MeshInstance::mesh from below.
-                static const Arcane::Guid kMeshHarvest =
-                    Arcane::Guid{ 0x4D455348ull, 1ull };   // 'MESH'
-                if (id == kMeshHarvest && !meshHarvestGeometry.vertices.empty())
+                // StartOneMesh and stashed on `this` (Harvest, immediately before
+                // RenderFrameOffscreen) under the ASSET'S OWN GUID -- final-review C1.
+                // Exactly one asset is ever in flight, so this answers for exactly one
+                // guid at a time, and Harvest's invalidate bracket is what keeps the
+                // cache from holding a guid this lambda can no longer answer for.
+                if (id == meshHarvestId && !meshHarvestGeometry.vertices.empty())
                     return { &meshHarvestGeometry, Arcane::MeshResolveState::Ready };
                 return { nullptr, Arcane::MeshResolveState::Failed };
             });
@@ -1166,10 +1235,18 @@ namespace Arcane::Editor
                  !r.meshInstances.empty())
         {
             // Stashed on `this` for SetMeshSupply's lambda (installed once, in
-            // EnsureVehicle) to find when RenderFrameOffscreen below resolves
-            // kMeshHarvest -- there is only one harvest per Pump, so nothing else
+            // EnsureVehicle) to find when RenderFrameOffscreen below resolves this
+            // asset's guid -- there is only one harvest per Pump, so nothing else
             // reads this between the assignment and the render call.
+            meshHarvestId       = r.id;
             meshHarvestGeometry = std::move(r.meshGeometry);
+            // AND DROP ANY RESIDENCY THIS GUID ALREADY HAS, before the render rather
+            // than after (final-review C1). The vehicle outlives every harvest, so a
+            // re-harvest of the same asset -- which is precisely what InvalidateMesh
+            // queues after an edit or a cook -- would otherwise HIT the buffers built
+            // from the PREVIOUS version of that asset and redraw the old shape with
+            // the new section ranges.
+            ctx->InvalidateMeshGeometry(meshHarvestId);
 
             constexpr float kMeshThumbFovDegrees = 35.0f;
             const MeshThumbCamera cam = FrameMeshBounds(r.meshBounds, kMeshThumbFovDegrees);
@@ -1179,8 +1256,8 @@ namespace Arcane::Editor
                                             // the same for every section of one asset.
             for (Arcane::MeshInstance& inst : instances)
             {
-                inst.mesh = Arcane::Guid{ 0x4D455348ull, 1ull };   // 'MESH' -- must match
-                                                                     // SetMeshSupply above
+                inst.mesh  = meshHarvestId;     // the ASSET's own guid -- must match
+                                                 // SetMeshSupply above (final-review C1)
                 inst.model = glm::mat4(1.0f);   // unit geometry -- MeshAsset.hpp's UNIT RULE
             }
 
@@ -1212,15 +1289,16 @@ namespace Arcane::Editor
             ARC_ERROR("[thumbs] the preview frame for {} {} failed "
                       "-- dropping the preview vehicle",
                       r.subject == Subject::Mesh ? "mesh" : "material", r.id.ToString());
-            meshHarvestGeometry = {};   // nothing else will read it before the next harvest
+            ReleaseMeshHarvest();   // before DropVehicle, while `ctx` is still there
             DropVehicle();
             return HarvestOutcome::Retry;
         }
-        // The transient stash SetMeshSupply's lambda served this render from --
-        // freed here (rather than left for the next harvest to overwrite) so a
-        // large imported mesh's CPU buffer does not linger in memory for the rest
-        // of the session. A no-op when `r.subject` was Material.
-        meshHarvestGeometry = {};
+        // The transient stash SetMeshSupply's lambda served this render from, AND the
+        // residency uploaded out of it -- both released here rather than left for the
+        // next harvest, so a large imported mesh costs neither a lingering CPU buffer
+        // nor a slice of the vehicle's mesh budget for the rest of the session. A
+        // no-op when `r.subject` was Material.
+        ReleaseMeshHarvest();
 
         std::uint32_t w = 0, h = 0;
         std::vector<unsigned char> rgba;

@@ -956,6 +956,18 @@ project "ArcaneTests"
         -- Project, no device in it at all, same "pure logic" pattern as
         -- CookQueue/ContentDiscovery above.
         "%{wks.location}/ArcaneEditor/src/Project/MeshImportWave.cpp",
+        -- F2c Plan 2 final-review C1: MaterialPreviewHarvester source-compiles
+        -- into the test exe so MeshThumbnailHarvestTest.cpp can drive TWO REAL
+        -- mesh harvests through ONE preview vehicle on a real adapter. NOT a
+        -- pure-logic unit (its pure half, FrameMeshBounds, is MeshImportWave.cpp
+        -- above) -- it is here for the same reason AssetGraphPanel.cpp is: the
+        -- defect it guards (residency cached BY GUID, so harvest #2 drew harvest
+        -- #1's geometry under a session-fixed synthetic guid) has no seam short
+        -- of the device, so only the picture proves it. Everything it calls
+        -- outside its own TU is engine-side (Batcher2D, MeshMaterialCache,
+        -- NriGraphContext, ShaderCompiler, Assets) or already listed here
+        -- (MeshImportWave), so the link closed with nothing else added.
+        "%{wks.location}/ArcaneEditor/src/Project/MaterialPreviewHarvester.cpp",
         -- Asset-manager arc (Plan 1, Task 4): AssetPanelModel (the cached,
         -- foldable model behind the Assets panel's Browse lens) source-
         -- compiles into the test exe so the [editor] units drive it directly
