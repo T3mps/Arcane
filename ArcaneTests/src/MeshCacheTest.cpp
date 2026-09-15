@@ -29,11 +29,19 @@ namespace
 {
     // Mirrored verbatim from SpriteMaterialCacheTest.cpp's own copy, counting
     // occurrences instead of keeping only the last -- this test needs to tell
-    // "warned once" from "warned twice", not just capture the wording.
+    // "warned once" from "warned twice", not just capture the wording. Filtered
+    // to WARN level (final-review M4): the unfiltered version incremented on
+    // ANY message reaching Log::Engine(), so an unrelated INFO -- a future
+    // addition inside Query(), a background worker -- could turn
+    // CHECK(warns == 1) into a spurious red that reads as a debt-14 regression.
     std::shared_ptr<spdlog::sinks::callback_sink_mt> AttachLogCounter(int& count)
     {
         auto cb = std::make_shared<spdlog::sinks::callback_sink_mt>(
-            [&count](const spdlog::details::log_msg&) { ++count; });
+            [&count](const spdlog::details::log_msg& msg)
+            {
+                if (msg.level == spdlog::level::warn)
+                    ++count;
+            });
         Log::Engine()->sinks().push_back(cb);
         return cb;
     }

@@ -279,6 +279,13 @@ TEST_CASE("pixel: two meshes harvested through ONE preview vehicle each render t
 // thumbs/<backend>/<name>.png override if one is ever blessed -- it is the
 // hierarchy that is reused, not the second backend that is claimed.
 //
+// DEBUG AND RELEASE SHARE THIS SAME SET, one reference per subject, no
+// per-configuration override in the resolution rule -- an assumption the
+// final F2c-debts-arc review (I1) named and then measured: a from-scratch
+// Release build and a foreground Release run of this case both came back
+// clean (seed 18161288, 54/54 assertions), so the assumption held on this
+// pipeline, but it is unverified on any other machine or driver.
+//
 // ===== BUDGET 0, AND THE ONE FAILURE SHAPE THAT IS EXPECTED ==========
 // CompareImages at the library default: no ImageCompareOptions, no
 // maxDiffPixels, no maxDiffPixelRatio. The spike measured this at 64x64 on
