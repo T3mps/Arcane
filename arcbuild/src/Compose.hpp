@@ -58,8 +58,7 @@ namespace arcbuild
     // ( "<msbuild>" "<solution>" /p:Configuration=<cfg> [/t:Rebuild|/t:Clean] /m /nologo ) 2>&1
     // No cd (the solution path is absolute); /t: only when the target is not
     // the default Build.
-    [[nodiscard]] std::string ComposeMsBuild(const Tools& t, const std::filesystem::path& solution,
-                                             std::string_view config, MsBuildTarget target);
+    [[nodiscard]] std::string ComposeMsBuild(const Tools& t, const std::filesystem::path& solution, std::string_view config, MsBuildTarget target);
 
     // What `clean` removes after msbuild /t:Clean: <root>/Binaries (the whole
     // slot -- it is one slot) and <root>/Intermediate/<config>. Never Source/,

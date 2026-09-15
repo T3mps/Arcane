@@ -265,7 +265,7 @@ namespace Arcane
         ARCANE_GAME_MODULE_EXPORT uint32_t GamePlugin_ABIVersion()                                 \
         { return static_cast<uint32_t>(Abi); }                                                     \
         ARCANE_GAME_MODULE_EXPORT bool GamePlugin_Init(::Arcane::EngineContext* ctx)               \
-        { return arcane_game_module_state_.Init<Type>(ctx, #Type); }                                \
+        { return arcane_game_module_state_.Init<Type>(ctx, #Type); }                               \
         ARCANE_GAME_MODULE_EXPORT void GamePlugin_Shutdown()                                       \
         { arcane_game_module_state_.Shutdown(); }                                                  \
         ARCANE_GAME_MODULE_EXPORT void GamePlugin_FixedUpdate(double dt)                           \
