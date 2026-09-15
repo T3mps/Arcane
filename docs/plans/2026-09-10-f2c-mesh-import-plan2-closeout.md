@@ -804,6 +804,87 @@ tasks left open, on top of `e2286041`:
 20. **An untracked stray was noticed in SOURCE, not touched:**
     `ReferenceProject/Goldens/main-vulkan.actual.png`. Flagged by Task C's reviewer while
     auditing the staging change; not created by this arc, not staged or removed by it — the
-    user's call.
+    user's call. **Correction (M6, below): it is GITIGNORED, not merely untracked.**
+
+## Final whole-arc review, and the fix wave (2026-09-15)
+
+The whole-arc review (`.superpowers/sdd/2026-09-15-f2c-debts-arc/final-review-report.md`,
+range `805386ee..6bd6400a`) found 0 Critical, 2 Important (I1, I2), 6 Minor (M1-M6).
+Verdict: **With fixes**. I1 the controller closed directly (below); I2/M1/M4 closed by a
+scoped fix-wave dispatch; M2/M5 parked; M3 recorded as a new standing debt; M6 corrects
+debt 20 above.
+
+### I1 — the thumbnail golden set had never run in Release (CLOSED by the controller)
+
+CI runs `ArcaneTests.exe` unfiltered in both Debug and Release
+(`Jenkinsfile:77-78`), but every seed in this arc's own ledger was a Debug run — the
+five `[gpu][thumbs][golden]` budget-0 image assertions had never executed in Release
+anywhere, and the bless mechanism cannot fix a config-dependent pixel (one reference
+serves both configs). Closed by running it, not by code:
+
+- Release build (`ci\msbuild.cmd Arcane.slnx /p:Configuration=Release`) — clean.
+- The five references were present in the Release-staged
+  `Verify/References/thumbs/` (confirming the staging mirror covers Release too).
+- `bin\Release-windows-x86_64-md\ArcaneTests\ArcaneTests.exe "[thumbs][golden]"` —
+  **All tests passed (54 assertions in 1 test case), seed `18161288`.** The
+  configuration assumption held: one reference set serves both Debug and Release at
+  budget 0.
+- Full Release `ArcaneTests.exe "[gpu]"` — seed `1837078402`: 46 cases, 43 passed, 3
+  failed — `WitnessScenariosTest.cpp:134/203/278`. This is the **mirror of the
+  single-slot `ReferenceGame.dll` incident** recorded above (§"The single-slot
+  `ReferenceGame.dll` incident"): the single slot now held the **Debug**
+  `ReferenceGame.dll`, so the Release witness hosts couldn't load it. Environmental,
+  expected, not a finding — the tree stays in Debug for desk work; CI's Golden gate
+  stage rebuilds the slot per configuration, Release then Debug, by its own documented
+  ordering.
+
+`MeshThumbnailHarvestTest.cpp`'s case header (`:275-281`) stated the D3D12-only
+*backend* assumption but was silent on Debug-vs-Release; commit `baab3dfd` adds the one
+line stating the assumption and this measurement, beside it.
+
+### I2, M1, M4 — fix-wave commits
+
+| Finding | Fix | Commit |
+|---|---|---|
+| I2: a CI red on the thumbnail set arrived with no picture — the only `archiveArtifacts` glob stopped one level above `Saved/Verify/thumbs/` and lived in the Golden gate stage's `post` block, which is skipped when the preceding ArcaneTests stage fails the build | Widened the glob to `bin/**/ReferenceProject/Saved/Verify/**/*.png`; added the identical `post { always { archiveArtifacts …, allowEmptyArchive: true } }` block to the "Tests (incl [gpu])" stage | `8964e50d` |
+| M1: `scripts/golden-gate.ps1`'s `-SelfTest` header said a staged `Verify/` bless persists across a rebuild — true of the gate's own loop, but since `e2286041` the host postbuild wipes and recopies staged `Verify/` on every `msbuild`, so a bless of a *new* staged slot no longer survives one | One sentence added to the gate header; the matching corollary added to `premake5.lua`'s Verify/ comment, so both places agree (comment-only in both files) | `8964e50d` |
+| M4: `MeshCacheTest.cpp`'s `AttachLogCounter` incremented on every engine log reaching `Log::Engine()`, not just the WARN debt 14 cares about, so an unrelated INFO could red `CHECK(warns == 1)` and misdiagnose as a debt-14 regression | Filtered the counter to `msg.level == spdlog::level::warn` | `baab3dfd` |
+
+Verified (commit `baab3dfd`): `ArcaneTests.exe "mesh cache: Query on a never-requested
+guid warns once, and Clear() lets it warn again"` — All tests passed (7 assertions in 1
+test case), seed `693306600`; the broader `[render][mesh]` tag — All tests passed (1429
+assertions in 11 test cases), seed `1891818582`. Both foreground, Debug exe dir.
+
+### M3 — new standing debt: the `InvalidateMesh` KEEP-arm refusal latch
+
+`SceneRenderResolver::InvalidateMesh`'s KEEP arm (geometry identity unchanged, e.g. a
+material-slot reassignment) calls `invalidateMeshGeometry` only when
+`GeometryIdentity()` moved. A guid whose `Upload` the device refused, then edited in a
+way that leaves geometry identity unchanged, keeps `NriMeshBufferCache`'s
+`uploadRefused` latch alive while `MeshCache` re-`Request`s it — and `EvictToBudget`
+skips non-`ready` entries, so nothing clears the latch short of
+`Invalidate`/`Release`/`Clear`. `InvalidateMeshArtifact` is unconditional and
+unaffected. Correct behaviour for a *permanent* device refusal, wrong for a *transient*
+one. Pre-existing (not introduced by this arc); debt 12's `RefusedCount()` is the
+instrument that now makes it observable. Belongs beside standing debts 16-20.
+
+### Parked, with reasons
+
+- **M2.** `RefusedCount()` conflates "the device refused it" with "the asset is
+  broken" (debt 12 sets it on the zero-size-mesh path, which is the latter). Harmless
+  today — exactly one non-test reader, grep-confirmed. Park until a second reader
+  appears, then split the counters or rename the flag.
+- **M5.** `mesh-golden_prop` is the thumbnail set's smallest signal — a thin
+  diagonal sliver over the checkerboard, the least subject area of the five, and the
+  hardest reference to review meaningfully by eye. Not a defect (budget 0 still catches
+  it — the fail-proof run measured `diffCount=1625`). Re-check this subject first if
+  `FrameMeshBounds`'s framing is ever tuned.
+
+### M6 — correction to debt 20
+
+`ReferenceProject/Goldens/main-vulkan.actual.png` is not merely untracked: it matches
+`ReferenceProject/.gitignore:19` (`Goldens/*.actual.png`) — an intentionally ignored
+compare artifact. `git status` will never surface it; "noticed" is the only time it
+will come up. Still the user's call, unchanged.
 
 Push only after the desk pass.
