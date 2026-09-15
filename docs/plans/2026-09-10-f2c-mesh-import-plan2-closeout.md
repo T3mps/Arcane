@@ -677,3 +677,133 @@ configuration was then rebuilt and re-run on the final tree, `67885260`:
   Copy kept at `.superpowers/sdd/…plan2…/release-rerun/`.
 
 With this, every claim in this closeout rests on the tree that ships. Push is clear.
+
+---
+
+# Addendum — 2026-09-15: the F2c debts arc (1, 12–15 closed; 8 re-shaped into the thumbnail golden set)
+
+Bounded arc over Step 7's standing debts and this closeout's "gained by this wave" /
+"scoped re-review" debts. Decision record:
+`docs/research/2026-09-15-thumbnail-golden-lane-research.md`, committed `805386ee`. No plan
+document (brainstorming skill's bounded path); the ledger at
+`.superpowers/sdd/2026-09-15-f2c-debts-arc/progress.md` is the record. Order: 13+12 → 14/15
+→ 1 → a throwaway 64×64 spike → the thumbnail golden set → this closeout. Nothing pushed.
+
+## What closed, and the commit
+
+| Debt(s) | What closed it | Commit |
+|---|---|---|
+| 13, 12 | `NriMeshBufferCacheTest.cpp` gets a real `[gpu][meshcache]` case forcing the second `CreateCommittedBuffer` to fail via `DebugFailNextUpload`, asserting `ResidentCount()==0`, no NRI validation error, no re-ask next frame — `uploadRefused` finally gets a reader | `9cc68805` |
+| 14, 15 | `MeshCache::Clear()` resets the never-requested WARN latch (`warnedNeverRequested`) beside the `requested` set it already cleared; `SceneResources.hpp`'s include comment stops citing `std::tie`, which `GeometryIdentity()` doesn't use | `41b24ee3` |
+| 1 | The postbuild mirrors deletions for `ReferenceProject`'s `Content/`, `Source/` and `Verify/` subtrees (`{RMDIR}` before the whole-tree `{COPYDIR}`) in all three staging blocks (ArcaneRuntime, ArcaneEditor, ArcaneTests) | `e2286041`, plus this task's own `7149c285` (see "parked minors" below) |
+| 8 | Re-shaped, not closed by fiat — the harvester's correctness closed at the layer it lives, via the thumbnail golden set (five subjects, one bless workflow, a demonstrated fail-proof) | `733af6d0` |
+
+## Debt 8, re-shaped: the thumbnail golden set
+
+Per the decision record §2/§3: pinning thumbnails as their own artifact class inside
+`[gpu][thumbs]` proves the harvester's pixels in isolation, not the end-to-end editor
+thumbnail path — that half is deferred (see standing debts below), not closed here.
+
+`733af6d0` added one `[gpu][thumbs][golden]` case to `MeshThumbnailHarvestTest.cpp`, with
+five committed references under `ReferenceProject/Verify/References/thumbs/`, one per
+`Subject` kind that can collide:
+
+- `mesh-golden_prop` — imported, multi-section, blue/red diagonal
+- `mesh-reference_cube` — primitive, lit teal cube
+- `material-reference_mesh` — mesh-kind material, lit teal sphere
+- `material-pulse_sprite` — sprite surface, uv_marker quad, a real DXC compile
+- `material-reference_post` — fullscreen/post surface, graded checkerboard, two-pass chain
+
+All five through the one harvester; all four `StartOne` dispatches covered, none skipped.
+Bless workflow demonstrated end to end: RED, 5 refusals (seed `346185249`, no references yet)
+→ `ARCANE_THUMBS_BLESS=1` bless → the five PNGs viewed by the reviewer → rebuild → GREEN
+(seed `2377663032`) → GREEN again (seed `63288691`) → **fail-proof**: `mesh-reference_cube`'s
+bytes copied over `mesh-golden_prop`'s in the STAGED tree only → FAIL, `diffCount=1625`,
+ratio `0.4`, a diff PNG written (seed `885054252`) → rebuild restores the correct staged
+bytes → GREEN. Budget stays 0, per the spike below.
+
+## The 64×64 spike, and the budget-0 ruling
+
+Throwaway spike (deleted, tree clean): identical harvests → pass 0/0; a section recolor →
+FAIL 157px; a 1px shift → FAIL 207/693px; a single-pixel ±8 nudge → pass (absorbed); a
+single-pixel invert → FAIL 1px; a uniform +1 lift → pass; a **uniform +4 lift → FAIL, 2967px
+(73%)**, via `ImageCompare`'s stage-3 zero-variance short-circuit on flat regions. The
+64px-specific worry (the 31×31 SSIM window folding padding noise into edge-pixel stats)
+produced no false failure.
+
+**Ruling: budget 0 as-is, no new `ImageCompareOptions`.** The uniform-lift "failure" is the
+comparator's intended meaning at any resolution — the host lanes fail it too — and **a
+uniform exposure/tonemap lift is a re-bless event**, exactly what `ARCANE_THUMBS_BLESS`
+exists for. Tolerance is the wrong lever here (`feedback_default_values_are_not_measurements`).
+Cost if wrong: one extra re-bless per exposure-touching arc, a cost the design already
+accepted going in.
+
+## Suite deltas
+
+| Filter | Before this arc | After | Seeds along the way |
+|---|---|---|---|
+| `~[gpu]` | 1752 (57260 assertions) | **1753** (57269 assertions), +1 case | Task A: seed `897209450` → 1753 (1749 passed + 4 skipped), 57269/57269. Task C and Task E made no further `~[gpu]` change (Task E: 1753 unchanged, no new seed recorded). |
+| `[gpu]` | 44 (62383 assertions) | **46** (62473 assertions), +2 cases | Task A, post-environmental-fix: seed `2064653907` → 45 cases, 62419/62419 GREEN (+1 case, the new `[gpu][meshcache]` refusal test). Task E: seed `2825289862` → 46 cases, 62473/62473 (+1 case, +54 assertions, the thumbnail golden case). |
+
+Both golden lanes stayed `gatePassed: true` throughout — Task C's Debug gate run,
+`taskC-golden-gate-summary.json`: 4/4 lanes, every one `diffCount=0`. (`golden-gate.ps1`
+itself needed no change: its loop already clears-then-copies `Content/` +
+`Intermediate/Artifacts` and by documented design never restages `Verify/`.)
+
+## The single-slot `ReferenceGame.dll` incident
+
+Recorded as a reminder, not a finding. A prior Release gate run (this closeout's own
+"Release re-verified" step, above) had left a 172 KB **Release** `ReferenceGame.dll` in the
+single-slot `ReferenceProject/Binaries/`. Task A's Debug `[gpu]` run hit 3 red cases in
+`WitnessScenariosTest.cpp` — `plugin: initial load failed` — because the Debug witness
+hosts could not load a Release-CRT DLL. Controller-verified environmental: rebuilding
+`ReferenceProject.slnx` for Debug (1.5 MB) and restaging `Arcane.slnx` Debug fixed it outright
+(the GREEN 45-case rerun above); no code was touched. **Reminder for the desk: after any
+Release gate run, flip the single slot back to Debug before running Debug `[gpu]`.**
+
+## Parked minors, now closed
+
+This task's own commit `7149c285` closes three review-parked minors that this arc's earlier
+tasks left open, on top of `e2286041`:
+
+- Task C review (i): the "deliberately NOT mirrored" comment in all three `premake5.lua`
+  postbuild blocks now names `Config/`, `Plugins/`, `Goldens/` and any other non-source-of-
+  truth subtree the whole-tree copy carries along — none registry-mounted, so none can
+  reproduce the phantom-asset class — phrased as today's list of exceptions, not a closed one.
+- Task C review (ii): a `{MKDIR}` of the same staged path now precedes each `{RMDIR}` in all
+  three blocks, so the delete's target is structurally guaranteed to exist, rather than
+  resting on the incidental MSBuild fact (verified true, but no longer load-bearing) that only
+  a postbuild block's last command's exit code reaches `Exec`.
+- Task A review: `NriMeshBufferCache.cpp`'s `DebugFailNextUpload` latch comment, reworded from
+  reading as unconditional to describing the actual gated behaviour — the latch resets only
+  when the call's current stage equals the currently-armed stage.
+
+## Standing debts gained by this arc
+
+16. **The end-to-end editor thumbnail path is still unproven, deferred as its own witness
+    scenario.** The golden set above closes the harvester's correctness in isolation; it does
+    not exercise `PollAssetWatch` staleness, cook-completion re-arm, or the Browser row itself.
+    The decision record's own instrument: extend the real editor headless `--report` with a
+    thumbnail census (count, per-guid content hash, harvest state), graded from JSON like every
+    other lane — a report-schema extension (`VerifyReport.hpp`, `automation-vocabulary.txt`,
+    the gate's anti-drift pin) and its own small arc, not a ride-along here.
+17. **The harvester's runtime cache still lacks a content-hash tiebreak.**
+    `MaterialPreviewHarvester::PrimeFromDisk`'s mtime-only check re-harvests on every
+    checkout/CI clone that bumps mtimes without changing bytes. Explicitly NOT applied to the
+    new golden references (§2.6 of the decision record: keying references by content hash would
+    turn "the asset changed" from a loud red compare into a silent "missing reference" refusal)
+    — this is a cache-efficiency fix, scoped to the harvester's cache only.
+18. **The parked cvar arc gains a new trigger.** `kThumbSize`, `kThumbTime`, and the mesh
+    light/ambient triple are `constexpr` today; the day any of them becomes a cvar, the whole
+    five-image thumbnail reference set re-blesses. Add to that arc's trigger list alongside
+    `kMeshResidencyBudgetBytes` (Step 3 above).
+19. **`MeshThumbnailHarvestTest.cpp`'s name under-describes its own contents** — it now also
+    carries the golden-reference-compare case, not just the cross-contamination harvest check
+    its name suggests. Left as-is deliberately (avoids premake file-list churn); parked by
+    Task E's review as a Minor.
+20. **An untracked stray was noticed in SOURCE, not touched:**
+    `ReferenceProject/Goldens/main-vulkan.actual.png`. Flagged by Task C's reviewer while
+    auditing the staging change; not created by this arc, not staged or removed by it — the
+    user's call.
+
+Push only after the desk pass.
