@@ -123,6 +123,15 @@ namespace Arcane
         return n;
     }
 
+    std::size_t NriMeshBufferCache::RefusedCount() const noexcept
+    {
+        std::size_t n = 0;
+        for (const auto& [id, r] : m_entries)
+            if (r.uploadRefused)
+                ++n;
+        return n;
+    }
+
     std::size_t NriMeshBufferCache::SectionBytes(const MeshData& mesh) noexcept
     {
         std::size_t n = mesh.sections.size() * sizeof(MeshSection);
@@ -161,10 +170,19 @@ namespace Arcane
             return false;
         };
 
+        // DebugFailNextUpload's latch (debt 13): consumed the moment this call
+        // REACHES the matching stage, whether or not the injection is armed for it,
+        // so an unrelated real failure at an earlier stage leaves the latch armed
+        // for whichever Upload call actually gets here next.
+        const bool debugFailVertex = (m_debugFailNextUpload == UploadStage::Vertex);
+        if (debugFailVertex)
+            m_debugFailNextUpload.reset();
+
         nri::BufferDesc vbDesc = {};
         vbDesc.size  = vertexBytes;
         vbDesc.usage = nri::BufferUsageBits::VERTEX_BUFFER;
-        if (!ARC_NRI_CHECK(core.CreateCommittedBuffer(m_device->Device(), nri::MemoryLocation::DEVICE,
+        if (debugFailVertex
+            || !ARC_NRI_CHECK(core.CreateCommittedBuffer(m_device->Device(), nri::MemoryLocation::DEVICE,
                                                        0.0f, vbDesc, vb))
             || !vb)
         {
@@ -173,10 +191,15 @@ namespace Arcane
         }
         core.SetDebugName(vb, ("mesh vb " + id.ToString()).c_str());
 
+        const bool debugFailIndex = (m_debugFailNextUpload == UploadStage::Index);
+        if (debugFailIndex)
+            m_debugFailNextUpload.reset();
+
         nri::BufferDesc ibDesc = {};
         ibDesc.size  = indexBytes;
         ibDesc.usage = nri::BufferUsageBits::INDEX_BUFFER;
-        if (!ARC_NRI_CHECK(core.CreateCommittedBuffer(m_device->Device(), nri::MemoryLocation::DEVICE,
+        if (debugFailIndex
+            || !ARC_NRI_CHECK(core.CreateCommittedBuffer(m_device->Device(), nri::MemoryLocation::DEVICE,
                                                        0.0f, ibDesc, ib))
             || !ib)
         {
@@ -264,6 +287,11 @@ namespace Arcane
         }
         if (supplied.mesh->vertices.empty() || supplied.mesh->indices.empty())
         {
+            // Debt 12: the SAME memo as an Upload refusal below, taken before ever
+            // reaching CreateCommittedBuffer -- a zero-size nri::Buffer is precisely
+            // the shape of thing the device would refuse, so it counts in
+            // RefusedCount() exactly like one.
+            resident.uploadRefused = true;
             reportMiss("the mesh has no indices or no vertices -- a zero-size nri::Buffer is an NRI error, not a mesh");
             return nullptr;
         }

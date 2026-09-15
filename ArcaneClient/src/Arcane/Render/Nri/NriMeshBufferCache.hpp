@@ -56,6 +56,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 
 namespace Arcane
@@ -96,7 +97,11 @@ namespace Arcane
             // final-review I1. A supply that answered Failed memoizes as an empty
             // entry with this flag CLEAR; the two are distinguished here so a reader
             // (and a test) can tell "the device refused it" from "the asset is
-            // broken". Only Invalidate/Release clear either memo.
+            // broken". Only Invalidate/Release clear either memo. Read by
+            // RefusedCount() (debt 12) -- the zero-size refusal (an empty mesh) sets
+            // this too, because it is memoized the same way and for the same reason
+            // as a real CreateCommittedBuffer/UploadData refusal, even though it
+            // never reaches either call.
             bool          uploadRefused = false;
         };
 
@@ -153,6 +158,24 @@ namespace Arcane
         // EXACTLY the resident CPU+GPU bytes -- the number the budget bounds, with no
         // cold CPU copy hiding behind it (final-review I2).
         [[nodiscard]] std::uint64_t ResidentBytes() const noexcept;
+        // Entries the DEVICE (or a zero-size mesh, the same memo -- see
+        // Resident::uploadRefused) REFUSED: distinct from a Failed supply, which
+        // memoizes with this flag clear. Debt 12's reader for a flag that was
+        // write-only until now.
+        [[nodiscard]] std::size_t   RefusedCount() const noexcept;
+
+        // TEST INSTRUMENT ONLY (debt 13) -- never called by production code. There
+        // is no honest way to make a REAL device refuse only the SECOND
+        // CreateCommittedBuffer inside Upload (an over-limit index buffer needs a
+        // multi-GB CPU vector to reach it), so this forces the next Upload's create
+        // call at `stage` to fail as if the device had refused it -- exercising
+        // Upload's abandon() arm for real instead of by inspection. One-shot and
+        // latched: armed here, consumed by the next Upload call that REACHES that
+        // stage (not merely the next Upload call -- an earlier stage failing for a
+        // real reason leaves this armed for whichever Upload actually gets there),
+        // then cleared either way.
+        enum class UploadStage { Vertex, Index };
+        void DebugFailNextUpload(UploadStage stage) noexcept { m_debugFailNextUpload = stage; }
 
     private:
         NriMeshBufferCache() = default;
@@ -168,5 +191,8 @@ namespace Arcane
         std::unordered_map<Guid, Resident> m_entries;
         bool m_warnedOverBudget = false;
         bool m_warnedMiss       = false;
+        // DebugFailNextUpload's own latch -- see that method's comment. Never read
+        // outside Upload().
+        std::optional<UploadStage> m_debugFailNextUpload;
     };
 }

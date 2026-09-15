@@ -260,6 +260,9 @@ TEST_CASE("mesh buffer cache: a zero-size mesh is refused ONCE and never retried
     CHECK(asks == 1);                          // memoized, not once per frame
     CHECK(cache->ResidentCount() == 0u);
     CHECK(cache->ResidentBytes() == 0u);       // and nothing hidden in a CPU copy
+    // Debt 12: the zero-size refusal is the SAME memo an Upload refusal sets, taken
+    // before ever reaching CreateCommittedBuffer -- RefusedCount() counts it too.
+    CHECK(cache->RefusedCount() == 1u);
 
     // Invalidate is the un-latch, exactly as for a Failed supply.
     MeshData cube = Arcane::BuildCube(1.0f);
@@ -270,6 +273,7 @@ TEST_CASE("mesh buffer cache: a zero-size mesh is refused ONCE and never retried
     cache->Invalidate(GuidA(), device->Graves(), 1);
     REQUIRE(cache->Resolve(GuidA(), 7) != nullptr);
     CHECK(asks == 2);
+    CHECK(cache->RefusedCount() == 0u);        // the un-latch clears the refusal too
 
     cache->Release(device->Graves(), 2);
     device->Graves().Reap(2);
@@ -363,6 +367,72 @@ TEST_CASE("pixel: a mesh with no indices or no vertices is refused, not uploaded
 
     cache->Release(v.nri->Graves(), 1);
     v.nri->Graves().Reap(1);
+}
+
+TEST_CASE("pixel: DebugFailNextUpload forces Upload's abandon() arm for real, "
+          "refusing without leaking", "[gpu][meshcache]")
+{
+    // Debt 13: the real I1 leak path (create-into-locals / publish-on-full-success)
+    // was correct by inspection only -- the re-review traced all three abandon()
+    // arms, never exercised one. There is no honest way to make a REAL device fail
+    // only the SECOND CreateCommittedBuffer (an over-limit index buffer needs a
+    // multi-GB CPU vector to reach it), so DebugFailNextUpload injects the failure
+    // instead. Two SECTIONs so BOTH create-call sites inside Upload run their own
+    // abandon(): Index (vb real, ib injected -- abandon() has something to destroy)
+    // and Vertex (nothing was ever created yet -- abandon() destroys nothing).
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    auto v = MakeGpuVehicle(Arcane::GraphicsBackend::D3D12);
+    auto cache = NriMeshBufferCache::Create(*v.nri);
+    REQUIRE(cache != nullptr);
+
+    MeshData cube = Arcane::BuildCube(1.0f);
+    int asks = 0;
+    cache->SetMeshSupply([&](const Guid&) {
+        ++asks;
+        return SupplyResult{ &cube, MeshResolveState::Ready };
+    });
+
+    NriMeshBufferCache::UploadStage stage = NriMeshBufferCache::UploadStage::Index;
+    SECTION("the index buffer's create call is the one that fails")
+    {
+        stage = NriMeshBufferCache::UploadStage::Index;
+    }
+    SECTION("the vertex buffer's create call is the one that fails")
+    {
+        stage = NriMeshBufferCache::UploadStage::Vertex;
+    }
+
+    const std::uint64_t errorsBefore = Arcane::RenderErrorCount();
+    cache->DebugFailNextUpload(stage);
+    CHECK(cache->Resolve(GuidA(), 1) == nullptr);
+    CHECK(cache->ResidentCount() == 0u);
+    CHECK(cache->RefusedCount() == 1u);
+    // The abandon() arm ran through real NRI calls (a real CreateCommittedBuffer for
+    // the Index section, a real DestroyBuffer either way) with no validation
+    // complaint -- this is what the fixture CAN observe about the leak path: no NRI
+    // error was raised destroying what Upload created before the injected failure.
+    // It does NOT prove the driver reclaimed the memory; RenderErrorCount() is the
+    // instrument this codebase has, and no live-object-count seam exists here.
+    CHECK(Arcane::RenderErrorCount() == errorsBefore);
+    CHECK(asks == 1);                          // the supply was asked exactly once
+
+    // Memoized refusal: no per-frame retry.
+    CHECK(cache->Resolve(GuidA(), 2) == nullptr);
+    CHECK(asks == 1);
+    CHECK(cache->RefusedCount() == 1u);
+
+    // Invalidate un-latches it; the next Resolve uploads for real.
+    cache->Invalidate(GuidA(), v.nri->Graves(), 1);
+    REQUIRE(cache->Resolve(GuidA(), 3) != nullptr);
+    CHECK(asks == 2);
+    CHECK(cache->ResidentCount() == 1u);
+    CHECK(cache->RefusedCount() == 0u);
+    CHECK(Arcane::RenderErrorCount() == errorsBefore);
+
+    cache->Release(v.nri->Graves(), 2);
+    CHECK(cache->ResidentCount() == 0u);
+    v.nri->Graves().Reap(2);
+    CHECK(Arcane::RenderErrorCount() == errorsBefore);   // buries cleanly
 }
 
 TEST_CASE("pixel: the vehicle owns one mesh buffer cache, released on teardown",
