@@ -477,3 +477,145 @@ plan-external untracked paths (`ArcaneAssetPipeline/ArcaneAs.25D4CEF5/`,
 task did not create and must never stage.
 
 **Push only after the desk pass.**
+
+---
+
+# Addendum — 2026-09-14: final-review fix wave (C1-C3, I1-I4)
+
+The whole-branch review over `a04a1e0e..1e1a673b`
+(`.superpowers/sdd/2026-09-10-f2c-mesh-import-plan2-runtime-editor/final-review-report.md`)
+returned **NOT ready (→ With fixes)**: 3 Critical, 4 Important, ~11 Minor. One
+fix wave landed all seven Critical and Important findings plus the cheap
+Minors, in four commits on top of `1e1a673b`. No bless, no ABI change, no push.
+
+## What each finding was, and where it was fixed
+
+| # | Finding, in one line | Fix commit | Test |
+|---|---|---|---|
+| **C1** | `MaterialPreviewHarvester` rendered every mesh asset under one session-fixed synthetic `'MESH'` guid, so harvest #2 HIT harvest #1's resident buffers — mesh A's geometry drawn with mesh B's per-section index ranges (an OOB index read whenever B had more indices), persisted to `Saved/Thumbnails/<B>.png` | `762d5dcc` | NEW `ArcaneTests/src/MeshThumbnailHarvestTest.cpp`, `[gpu][thumbs]` |
+| **C2** | `MeshDocument`'s live preview froze on the first geometry it ever built — `RebuildPreviewMesh` never invalidated the fixed `'PRVW'` guid, so all four rebuild paths redrew the old shape | `762d5dcc` | `MeshDocumentTest.cpp`, device-less, through the new `PreviewGeometryInvalidations()` instrument |
+| **C3** | Task 7's residency-keep comparison read `{source, importedSource}` only, so a `rings`/`segments`/`subdivisions`/`capsuleLengthRatio` edit took the KEEP arm and drew the new index count against the old index buffer | `7b04b3bc` | `SceneRenderResolverTest.cpp`, two new `[mesh][host]` cases |
+| **I1** | `Upload` wrote `CreateCommittedBuffer`'s out-param straight onto the entry's live handle, and the cold-CPU re-upload arm retried a failed upload every frame — one leaked `nri::Buffer` per frame, and the documented memoization never happened | `f84d2205` | `NriMeshBufferCacheTest.cpp`, new device-less "refused ONCE and never retried" |
+| **I2** | Eviction freed only the GPU half; the kept CPU copy stopped being counted, so `ResidentBytes()` reported a number the process was not honouring | `f84d2205` | `NriMeshBufferCacheTest.cpp`, new device-less eviction case, plus the existing `[gpu]` case's expectation flipped |
+| **I3** | The 512 MiB budget is per-vehicle, not process-wide, and that was recorded nowhere | `f84d2205` | comment only (`MeshResidencyBudget.hpp`) |
+| **I4** | `MeshCache::Query` answered `PendingCook` for a guid nobody ever `Request`ed — quiet, retried forever, never reported | `f84d2205` | precondition comment + latched WARN, backed by a `requested` set; no test asserts the WARN (this suite has no logger seam), the precondition is pinned by reading, not by assertion |
+
+## The I2 ruling, recorded
+
+**Eviction ERASES the entry, CPU copy included** — plan Task 2 Step 6, not Task
+2 Step 1's shipped `[gpu]` expectation. The plan contradicted itself on this
+point and the implementer picked Step 1; the controller ruled for Step 6.
+
+Reasoning: the spec's binding invariant is ONE COMBINED, HONEST byte budget. A
+kept-but-uncounted CPU copy makes `ResidentBytes()` a lie, and a
+kept-and-counted one can never be shed by an LRU that only frees GPU. The
+spec's "CPU copy kept for re-upload after eviction, no disk read" is already
+satisfied one layer up: the supply is `SceneRenderResolver`'s in-memory
+`MeshTable`, so a re-upload after eviction is a table lookup, not an artifact
+read. The `[gpu]` test's "assert the supply was NOT asked again" therefore
+FLIPS to `asks == 4`; `MeshResidencyBudget.hpp` and `NriMeshBufferCache.hpp`'s
+banners now say where the surviving CPU copy actually lives, and that
+`ResidentBytes()` is exactly the resident CPU+GPU bytes. `Release` keeps its
+existing semantics (buries everything, empties).
+
+Cost if wrong: one extra `MeshTable` lookup plus one upload on the first draw
+after an eviction.
+
+## Minors taken in this wave
+
+- `MeshNode.cpp`/`.hpp`: the stale `kInitialUploadSlots` / "See Upload's own
+  comment" prose is gone; `m_residents` carries ONE correct description; the
+  table is cleared at the end of `Record` as well as the start of `Prepare`
+  (via RAII, so every exit path), removing the dangling-borrow window an
+  `InvalidateMeshGeometry` between `Record(N)` and `Prepare(N+1)` opened.
+- `MeshNode::Prepare` takes a NULLABLE cache and resolves the pipeline
+  unconditionally; only the residency loop is gated (`AddMeshNode`'s call site,
+  which lives in `MeshNode.cpp`, not `NriGraphContext.cpp` as the review's
+  cross-reference said).
+- `SceneRenderResolver.cpp`'s `InvalidateMeshArtifact`: the "GPU FIRST"
+  rationale was factually wrong — both calls are synchronous inside one
+  function — and now says so.
+- `NriGraphContext.cpp`: states that eviction runs only after a successful
+  `Execute`, and why that is accepted (behaviour unchanged).
+- `MaterialPreviewHarvester.cpp`: `PrimeFromDisk`'s extension sniff `ARC_WARN`s
+  (latched) instead of silently defaulting an unresolvable/unknown extension to
+  `Subject::Material`; material `Invalidate` and `InvalidateMesh` now erase
+  `ready` by id AND subject symmetrically.
+- `RuntimeFrame.cpp`: the inline settle predicate carries a one-line
+  back-reference to `SettleBound.hpp`'s `SettleConverged` (no behaviour change).
+- `NriGraphPixelTest.cpp`: `SupplyOne`/`SupplyTwo` capture their guids by value.
+
+## Post-fix evidence
+
+**Suites, Debug, foreground, from the exe dir**
+
+| Filter | Seed | Result |
+|---|---|---|
+| `~[gpu]` | `19810145` | **1752 cases (1748 passed, 4 skipped), 57260/57260 assertions** |
+| `[gpu]` | `2680713561` | **44 cases, 62383/62383 assertions** |
+| `[gpu][golden]` | `2211835299` | **1 case, 14/14 assertions — still matches, not re-blessed** |
+
+Delta against this closeout's own Step 4 Debug baselines (1747 cases / 57190
+assertions `~[gpu]`; 1790 / 119559 unfiltered, i.e. 43 `[gpu]` cases / 62369
+`[gpu]` assertions), attributed in full:
+
+- `~[gpu]` **+5 cases, +70 assertions** — 2 in `NriMeshBufferCacheTest.cpp`
+  (eviction erases; zero-size refused once), 2 in `SceneRenderResolverTest.cpp`
+  (topology drops residency; every generator parameter counts), 1 in
+  `MeshDocumentTest.cpp` (every preview rebuild invalidates).
+- `[gpu]` **+1 case, +14 assertions** — 12 from the new
+  `MeshThumbnailHarvestTest.cpp` case, 2 from the two `ResidentBytes()` checks
+  added to the flipped eviction case.
+
+**Golden gate, Debug, NO `--bless` anywhere.** The staged `Source/` and
+`Content/` trees under both hosts were swept against SOURCE first (file-list
+diff, both hosts: identical — no strays; the staging step is additive, and a
+stale `Source/GameApi.hpp` was the last one it stranded). `gatePassed: true`,
+four lanes, every one `diffCount=0`:
+
+| Combo | Verdict | Detail (verbatim from the JSON) |
+|---|---|---|
+| `ArcaneRuntime/dx12/runtime-scene` | `PassedOnFallback` | `exitReason=frames-complete diffCount=0 maxLocalDifference=0.0 resolvedLevel=shared (expected backend)` |
+| `ArcaneRuntime/vulkan/runtime-scene` | `Passed` | `exitReason=frames-complete diffCount=0 maxLocalDifference=0.0 resolvedLevel=backend` |
+| `ArcaneEditor/dx12/editor-ui` | `Passed` | `exitReason=frames-complete diffCount=0 maxLocalDifference=0.0 resolvedLevel=shared` |
+| `ArcaneEditor/vulkan/editor-ui` | `Passed` | `exitReason=frames-complete diffCount=0 maxLocalDifference=0.0 resolvedLevel=shared` |
+
+JSON kept at
+`.superpowers/sdd/2026-09-10-f2c-mesh-import-plan2-runtime-editor/fixwave-golden-gate-summary.json`
+(`schemaVersion: 3`, `selfTest: false`, `refusalReason: ""`). No pixel moved.
+
+**Constraints held.** `PluginABI.hpp` untouched across the wave; `out.txt` and
+the three plan-external untracked directories never staged; every commit staged
+by explicit path.
+
+## Standing debts gained by this wave
+
+8. **A second imported mesh in the golden scene — DECLINED, not forgotten.**
+   The review recommended adding one (or scrolling the Browser so
+   `golden_prop.arcmesh`'s row lands inside `editor-ui.png`), since one
+   imported asset is exactly one too few for the golden lanes to catch C1's
+   whole bug class. Declined for this branch because a second fixture forces a
+   third bless cycle against the plan's one-cycle goal; C1's two-mesh
+   `[gpu][thumbs]` harvester test is the net instead. Owed: revisit when the
+   golden scene is next re-blessed for an unrelated reason — the marginal cost
+   is zero then.
+9. **`main.arcscene`'s missing trailing newline is a SERIALIZER fix.** The
+   re-save dropped the file's final newline, so every future editor save of any
+   scene produces a "\ No newline at end of file" diff. Ruled out of scope for
+   this wave (a serializer change with its own blast radius, and the fixture
+   must not be hand-edited around it). Owed: one character in the scene writer,
+   then a re-save of the fixture on the next bless cycle.
+10. **`MeshCache`'s `requested` set is an accounting cost.** I4's latched WARN
+    has to know whether a guid was ever `Request`ed, which `table`/`failed`
+    cannot say, so `MeshCache` now keeps one `Guid` per referenced mesh for the
+    project's lifetime (cleared by `Clear()`). Trivial today; if the mesh count
+    per project ever makes it non-trivial, the honest alternative is the
+    `NotRequested` state the ruling declined, once `MeshResolveState`'s three
+    consumers can absorb a fourth value safely.
+11. **`MeshDocument::PreviewGeometryInvalidations()` is an instrument with one
+    reader.** It exists because C2's invalidate is unobservable without a
+    device; it counts the drop the document ISSUES, not one the vehicle
+    confirms, so it proves "which paths invalidate", not "the vehicle dropped
+    it". The two facts sit on adjacent lines in `RebuildPreviewMesh`. Owed:
+    nothing, unless a device-bearing document test ever becomes cheap, at which
+    point the stronger assertion should replace this one.
