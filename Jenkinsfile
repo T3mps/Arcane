@@ -95,6 +95,21 @@ pipeline {
                         bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-debug.json" -Configuration Debug -Invocation "unfiltered"'
                         bat 'powershell -ExecutionPolicy Bypass -File scripts\\check-baselines.ps1 -ReportPath "%WORKSPACE%\\test-results\\arcane-release.json" -Configuration Release -Invocation "unfiltered"'
                     }
+                    post {
+                        // Same rationale as the Golden gate stage's post block below:
+                        // the [gpu][thumbs][golden] case in THIS stage writes its own
+                        // -actual/-diff PNGs under
+                        // bin/<Config>/ArcaneTests/ReferenceProject/Saved/Verify/thumbs/,
+                        // and a red here fails the BUILD before the Golden gate stage
+                        // (and its post block) ever runs -- so without this block the
+                        // pictures are written and then wiped with the workspace, and a
+                        // CI failure of the thumbnail set arrives as a diffCount in the
+                        // JUnit XML with no image to look at.
+                        always {
+                            archiveArtifacts artifacts: 'bin/**/ReferenceProject/Saved/Verify/**/*.png',
+                                              allowEmptyArchive: true
+                        }
+                    }
                 }
                 stage('Golden gate') {
                     // Task 12 (plan-b comparator): the HOST-LEVEL half of the
@@ -147,7 +162,7 @@ pipeline {
                         // golden-gate.ps1 left on disk, at negligible cost
                         // on a clean run.
                         always {
-                            archiveArtifacts artifacts: 'bin/**/ReferenceProject/Saved/Verify/*.png',
+                            archiveArtifacts artifacts: 'bin/**/ReferenceProject/Saved/Verify/**/*.png',
                                               allowEmptyArchive: true
                         }
                     }

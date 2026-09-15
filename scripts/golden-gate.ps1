@@ -122,6 +122,11 @@
 #            spelled out at ~:581-585), so a
 #            bless made against the staged tree PERSISTS across the
 #            -SelfTest run in step 4 instead of being clobbered by it.
+#            (Since `e2286041`, the HOST POSTBUILD -- premake5.lua, not this
+#            script's loop -- RMDIRs and recopies staged Verify/ on every
+#            `msbuild`, so a bless of a NEW staged slot must be copied to
+#            SOURCE before the next build or it will not survive one; the
+#            gate's own restaging loop described above is unchanged.)
 #         4. Run `-SelfTest`. It mutates the SOURCE 0.4 -> 0.6 and restages
 #            it, so every lane now renders the same 0.6 state step 3 just
 #            blessed against, and all four report PASS on a scene that is,

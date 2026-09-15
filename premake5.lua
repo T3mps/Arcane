@@ -595,6 +595,10 @@ project "ArcaneRuntime"
         -- SOURCE (e.g. a5d77e30 deleting Source/GameApi.hpp) survives forever in the staged
         -- tree because {COPYDIR} only ever adds/overwrites, never deletes (RCA:
         -- .superpowers/sdd/2026-09-10-f2c-mesh-import-plan2-runtime-editor/task12-rca2-report.md).
+        -- Corollary for Verify/ specifically: this wipe-then-recopy runs on EVERY build, so a
+        -- `--bless` made against a staged Verify/ tree (scripts/golden-gate.ps1's -SelfTest
+        -- header, step 3) does not survive the next `msbuild` -- copy a new staged bless to
+        -- SOURCE before rebuilding, or it is gone.
         -- {RMDIR} emits a BARE "rmdir /S /Q <path>" on Windows -- unlike {MKDIR} (which premake
         -- wraps in "IF NOT EXIST"), it carries no existence guard. Task F (F2c debts closeout)
         -- adds a {MKDIR} of the same path immediately before each {RMDIR} below, so the delete's
