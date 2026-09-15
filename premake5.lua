@@ -588,6 +588,36 @@ project "ArcaneRuntime"
         '{MKDIR} "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
+        -- Task C (F2c debts): mirror DELETIONS for the subtrees whose SOURCE state can shrink
+        -- across a rebuild -- Content/, Source/ (project assets + generated components) and
+        -- Verify/ (golden traces) -- by wiping the staged copies immediately before the
+        -- whole-tree {COPYDIR} below re-populates them. Without this, a file removed from
+        -- SOURCE (e.g. a5d77e30 deleting Source/GameApi.hpp) survives forever in the staged
+        -- tree because {COPYDIR} only ever adds/overwrites, never deletes (RCA:
+        -- .superpowers/sdd/2026-09-10-f2c-mesh-import-plan2-runtime-editor/task12-rca2-report.md).
+        -- {RMDIR} emits a BARE "rmdir /S /Q <path>" on Windows -- unlike {MKDIR} (which premake
+        -- wraps in "IF NOT EXIST"), it carries no existence guard. A first build (the path
+        -- doesn't exist yet) is still safe in practice: rmdir on a missing path prints "The
+        -- system cannot find the path specified." to the postbuild log but does not abort the
+        -- batch or set a nonzero exit for the step (verified: a from-scratch build with all
+        -- three ReferenceProject staged trees deleted beforehand completed 0 errors, the noise
+        -- being that one benign line per project).
+        --
+        -- Deliberately NOT mirrored the same way, subtree by subtree:
+        --   Intermediate/ -- cooked artifacts; the targeted {COPYDIR} of Intermediate/Artifacts
+        --                    above (fed by arccook) and any in-session cook already keep it
+        --                    live, and it is additive by design (a cook cache).
+        --   Saved/        -- runtime state (thumbnails, layout, diffs) plus the committed
+        --                    verify-layout.ini seed; a host is expected to accumulate its own
+        --                    Saved/ across runs, and wiping it would nuke that state.
+        --   Binaries/     -- the single-slot game DLL; arcbuild owns its own rebuild-vs-reuse
+        --                    logic, not this copy.
+        --   ReferenceProject.arcproj -- the project file itself.
+        -- The whole-tree {COPYDIR} below still copies all of those additively, on purpose --
+        -- only Content/, Source/ and Verify/ get wiped first.
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
         -- Vendored dxc trio (minus dxc.exe): the runtime compile service
         -- (ShaderCompiler) LoadLibrary's these from the exe directory.
@@ -679,6 +709,13 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/data/shaders/materials" "%{cfg.buildtarget.directory}/data/shaders/materials"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data"',
         '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
+        -- Task C (F2c debts): wipe the staged Content/Source/Verify subtrees before the
+        -- whole-tree {COPYDIR} below re-populates them, same reasoning (and NOT-mirrored
+        -- list -- Intermediate/, Saved/, Binaries/, the .arcproj) as ArcaneRuntime's matching
+        -- comment above.
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
         -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
         -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
@@ -1150,6 +1187,10 @@ project "ArcaneTests"
         -- nothing else under ReferenceProject/Saved/ is read from this exe.
         '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Saved"',
         '{COPYFILE} "%{wks.location}/ReferenceProject/Saved/verify-layout.ini" "%{cfg.buildtarget.directory}/ReferenceProject/Saved/verify-layout.ini"',
+        -- Task C (F2c debts): symmetry with the two host exes' Content/Source/Verify wipe
+        -- (see ArcaneRuntime's matching comment above) -- a reference PNG removed/renamed in
+        -- SOURCE must not linger in this exe's staged Verify/ either.
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         -- Task 11 (plan-b comparator): the engine trap corpus. Task 10's own
         -- comment (above, now narrowed) predicted this would need widening
         -- "once Task 12's [gpu][golden] cases want staged reference images" --
