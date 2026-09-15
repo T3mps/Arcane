@@ -655,3 +655,25 @@ Reminder carried from the re-review, addressed to the desk pass: **debt 8 is the
 with teeth** — ReferenceProject holds exactly one imported mesh, one too few for the
 golden lanes to catch the C1 class again. The "revisit at the next re-bless" trigger
 must not lapse.
+
+## Release re-verified on the final tree (2026-09-15, after the desk pass)
+
+Step 4/5's Release evidence above predates the fix wave (`1e1a673b`); the fix wave
+itself ran Debug only. The user's desk pass (2026-09-15) passed; the Release
+configuration was then rebuilt and re-run on the final tree, `67885260`:
+
+- `ci\msbuild.cmd Arcane.slnx -p:Configuration=Release -m` — clean.
+- Stray sweep of the three Release-staged `ReferenceProject/{Source,Content}` trees
+  against SOURCE: no staged-only files.
+- `bin\Release-windows-x86_64-md\ArcaneTests\ArcaneTests.exe "~[gpu]"` — seed
+  3388799147 — **1752 cases (1748 passed, 4 skipped), 57260/57260 assertions.**
+- `ArcaneTests.exe "[gpu]"` — seed 388070428 — **44 cases, 62383/62383.**
+  Both identical to the Debug run on the same tree (seeds 3839093285 / 2188726981).
+- `scripts\golden-gate.ps1 -Configuration Release` — from
+  `bin\Release-windows-x86_64-md\golden-gate-summary.json`: `gatePassed: true`;
+  `ArcaneRuntime/dx12/runtime-scene` PassedOnFallback, `ArcaneRuntime/vulkan/runtime-scene`
+  Passed, `ArcaneEditor/dx12/editor-ui` Passed, `ArcaneEditor/vulkan/editor-ui` Passed —
+  every lane `exitReason=frames-complete diffCount=0 maxLocalDifference=0.0`. No bless.
+  Copy kept at `.superpowers/sdd/…plan2…/release-rerun/`.
+
+With this, every claim in this closeout rests on the tree that ships. Push is clear.
