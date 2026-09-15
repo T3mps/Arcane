@@ -15,6 +15,7 @@ TEST_CASE("ProcessContext: exactly one per process -- a second Create is refused
 {
     Arcane::ProcessContext& live = Arcane::Test::Process();
     REQUIRE(Arcane::ProcessContext::Current() == &live);
+    // a refused instance frees its never-installed context (plan 1 Task 3 review)
     CHECK(Arcane::ProcessContext::Create({}) == nullptr);                       // owned-context flavour
     Arcane::ProcessContextDesc adopt; adopt.externalTypeContext = &Arcane::Test::SharedTypeContext();
     CHECK(Arcane::ProcessContext::Create(adopt) == nullptr);                    // adopting flavour, same refusal

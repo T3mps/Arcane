@@ -32,10 +32,12 @@ namespace Arcane
 
     ProcessContext::~ProcessContext()
     {
-        if (m_slotHeld) g_current.store(nullptr);
-        // An OWNED TypeContext is LEAKED, deliberately: TypeMeta entries registered by a
-        // game module hold std::function thunks compiled into that DLL, and after its
-        // unload ~TypeContext would call into unmapped code (the heap-leak both hosts
+        if (!m_slotHeld)
+            return;   // a REFUSED instance: never installed anywhere, nothing points at its context -- m_owned frees normally
+        g_current.store(nullptr);
+        // The live instance's OWNED TypeContext is LEAKED, deliberately: TypeMeta entries
+        // registered by a game module hold std::function thunks compiled into that DLL, and
+        // after its unload ~TypeContext would call into unmapped code (the heap-leak both hosts
         // documented at their old `new Astra::TypeContext()` sites). Adopted contexts
         // belong to their owner.
         (void)m_owned.release();
