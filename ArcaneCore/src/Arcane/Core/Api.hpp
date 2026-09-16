@@ -6,15 +6,15 @@
 // objects and every game module. Sibling of ArcaneClient's own export macro
 // (Arcane/Base/Api.hpp); a symbol is marked with exactly ONE of the two, by the DLL
 // that defines it (spec docs/specs/2026-09-15-core-dll-split-design.md s8, R6).
-// ARCANE_CORE_STATIC comes FIRST and decorates nothing: the Gacha Server
-// compiles Core FROM SOURCE into a static lib until Plan 2 (Aphelyon's
-// Server/premake5.lua, project "ArcaneCore", static CRT), so it defines
-// ARCANE_CORE_STATIC workspace-wide. Without this branch that build sees
-// dllimport on declarations whose DEFINITIONS it is compiling -- Guid.cpp's
-// Generate/FromName, Cli.cpp's out-of-line members, Toolchain.cpp's five
-// functions -- which is MSVC C2491 on every one. Must precede the
-// ARCANE_CORE_BUILD_DLL test: a static consumer is neither exporting nor
-// importing.
+// ARCANE_CORE_STATIC comes FIRST and decorates nothing: the branch for a
+// consumer that compiles Core FROM SOURCE into a static lib (neither exporting
+// nor importing -- dllimport on a declaration whose definition the same build
+// compiles is MSVC C2491). No in-tree consumer takes it today: the Gacha Server
+// did until Core-DLL split Plan 2 retired its from-source project (2026-09-16),
+// and since Plan 3 it links ArcaneCore.dll through build/arcane.lua's
+// arcane_core_consumer() like every other consumer. Kept because the branch is
+// the documented shape for a future static build (a platform without shared
+// libraries), and it costs one #if.
 #if defined(ARCANE_CORE_STATIC)
     #define ARCANE_CORE_API
 #elif defined(_WIN32)

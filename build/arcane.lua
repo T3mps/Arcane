@@ -122,3 +122,77 @@ function arcane_game_module(name)
             symbols "off"
         filter {}
 end
+
+-- ============================================================================
+-- Core-only consumers (Core-DLL split, spec docs/specs/2026-09-15-core-dll-split-
+-- design.md s1.2 / s8, Plan 3). An external exe or static lib that needs the
+-- headless engine -- Cli, Guid, Base/Log, Project, ... -- and NOTHING from the
+-- presentation DLL links ArcaneCore.dll alone. Aphelyon's three services,
+-- their Common lib and their test exes are the consumers; the recipe is lifted
+-- from the engine's own ArcaneServer block in premake5.lua (the proven
+-- Core-only host).
+--
+-- arcane_core_consumer() configures the CURRENT project: call it INSIDE a
+-- `project` block, in place of `staticruntime`. It composes into whatever
+-- shape the project has (ConsoleApp, StaticLib, a factory function) rather
+-- than declaring one, because Core consumers do not share a shape the way
+-- game modules do. It adds:
+--   * staticruntime "off" -- /MD, one CRT heap across the DLL boundary (the
+--     whole reason a consumer links a DLL instead of compiling Core from
+--     source: objects allocated in ArcaneCore.dll are freed by the caller);
+--   * the Core include root + the SDK-PRIVATE header-only deps a Core header
+--     closure can reach (glm, Astra, enkiTS, Manifold2D, Mosaic). spdlog and
+--     nlohmann are deliberately NOT added: a consumer vendors its own copies
+--     (Aphelyon does, at the engine's versions), and two copies of a
+--     header-only library on one include path is a version split waiting to
+--     happen -- a consumer without them gets a clear missing-header error;
+--   * the import lib + libdir;
+--   * the engine's flavor contract, the same lines arcane_game_module
+--     carries: /utf-8, /arch:AVX2 (ArcaneCore.dll is built AVX2 workspace-wide,
+--     so the process already requires it -- matching keeps inline header
+--     codegen identical across the boundary), and per-config runtime +
+--     ARCANE_DEBUG / ARCANE_RELEASE+NDEBUG / ARCANE_DIST+NDEBUG so inline
+--     header layouts under #ifndef NDEBUG agree with the DLL's.
+-- It ends with `filter {}` so the caller's following lines are unfiltered.
+--
+-- arcane_core_stage_dll() adds the postbuild copy of ArcaneCore.dll beside an
+-- exe's output (the dev bin layout; ArcaneRuntime's own postbuild is the
+-- template). StaticLib consumers do not call it.
+-- ============================================================================
+function arcane_core_consumer()
+    staticruntime "off"
+
+    includedirs {
+        ARCANE_SDK .. "/ArcaneCore/src",
+        ARCANE_TP .. "/glm",
+        ARCANE_TP .. "/Astra/include",
+        ARCANE_TP .. "/enkiTS/src",
+        ARCANE_TP .. "/Manifold2D/include",
+        ARCANE_TP .. "/Mosaic/include",
+    }
+
+    libdirs { ARCANE_BIN .. "/ArcaneCore" }
+    links   { "ArcaneCore" }
+
+    filter "system:windows"
+        buildoptions { "/utf-8", "/arch:AVX2" }
+    filter { "system:linux or system:macosx", "architecture:x86_64" }
+        buildoptions { "-mavx2", "-mfma" }
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+    filter "configurations:Release"
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+    filter {}
+end
+
+function arcane_core_stage_dll()
+    postbuildcommands {
+        '{COPYFILE} "' .. ARCANE_BIN .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
+    }
+end

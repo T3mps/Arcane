@@ -391,8 +391,11 @@ adopting `Runtime` in the Combat Sphere phase, or `Aphelyon::Logger` moving
 onto `Base/Log`). Plan 3's first task is a Core-only consumer helper in
 `build/arcane.lua`, lifted from `ArcaneServer`'s own premake block (the proven
 Core-only host recipe), plus the Jenkins provisioning flip to the `-md` libpq
-(already built on the dev machine) and a Server CI stage that depends on built
-SDK binaries the way the Game stage already does.
+(a from-source vcpkg build — measured 2026-09-16 at Plan 3 planning, the
+`x64-windows-static-md` install held SDL3 only, so the ~15 min build §12 costed
+is real) and a Server CI stage that REFUSES an unbuilt SDK (the Server is the
+Gacha pipeline's reason to exist, so it fails rather than skipping the way the
+Game stage does).
 
 ## 9. Testing
 
@@ -475,10 +478,20 @@ services stay static-CRT (§8 amendment: nothing links). Green = both configs
 build with no `Arcane::` unresolved external, the three fast suites and
 AccountTests (ephemeral DB) pass. Starts after Plan 1 has shipped; merges last.
 
-**Plan 3 — Gacha repo, deferred.** The `/MD` migration as §8 originally
-described it (link `ArcaneCore.dll`, libpq on `x64-windows-static-md`, `Common`
-and the services on the dynamic CRT, the Jenkins lanes). Written when its
-trigger fires (§8 amendment); it likely folds into that phase's own plan.
+**Plan 3 — Gacha repo** (`docs/plans/2026-09-16-core-dll-split-plan3-gacha.md`).
+The `/MD` migration as §8 originally described it — `Common`, the three
+services and the four test exes on the dynamic CRT, libpq rebuilt on
+`x64-windows-static-md`, every exe linking `ArcaneCore.dll` through
+`build/arcane.lua`'s `arcane_core_consumer()` — **plus the first compiled-Core
+consumer that makes the boundary testable**: `Arcane::Cli` replaces the three
+hand-rolled `argv` loops through one `Aphelyon::ServiceCli` (the directional
+rule applied: the engine's typed parser, the services' vocabulary on top). The
+trigger was pulled deliberately rather than waited for (R12). Green = both
+configs build with no `Arcane::` unresolved external and no `LNK4098`, a
+`[core-dll]` test proves exe and DLL share a CRT flavor by import-table scan,
+the three fast suites and AccountTests (ephemeral DB) pass, and each service
+answers `--help` with exit 0 and a bogus flag with exit 2. Starts after Plan 2;
+merges last.
 
 ## 12. Costs, stated plainly
 
@@ -514,6 +527,7 @@ alone is 30.6k). This is boundary-drawing work, not a rebalancing of engine mass
 | R9 | Is out-of-process PIE a rival design or a mode | **A mode of the same picker**, kept | Godot `OS::create_instance`, Unity MPPM child processes, O3DE `ServerLauncher` + loopback, UE `bLaunchSeparateServer` — every mature engine ships it; cheap once §6 exists, and the honest network test |
 | R10 | Are per-domain engine DLLs reconsidered | **No — rejected, re-confirmed** | CryEngine's `gEnv` (one byte-identical struct, ~45 pointers, no versioned inter-DLL ABI; its own build calls dynamic per-domain linking a desktop convenience); O3DE's one-slot-per-type `AZ::Interface<T>` is what forces its separate-process PIE |
 | R11 | Do the services move to `/MD` in Plan 2 | **No — measured 2026-09-16: no service links a compiled Core symbol, so Plan 2 only retires the dead from-source project; the CRT flip is Plan 3, triggered by the first compiled-Core consumer** | The §8 premise was an assumption, not a measurement (six header-only includes; zero references to `Guid`/`Cli`/`Toolchain`/`TaskExecutor`). A CRT flip with no DLL boundary has no acceptance test, and the `arcane.lua` Core-consumer helper takes its shape from the first real consumer |
+| R12 | Wait for Plan 3's trigger (the first service needing a compiled Core symbol) or pull it | **Pull it, with `Arcane::Cli` as the consumer** | The two candidates the §8 amendment named are both bigger than the migration itself (Combat adopting `Runtime` is the Combat Sphere phase; `Aphelyon::Logger` onto `Base/Log` needs categories + a file sink in `Base/Log` first). The services' three copy-pasted `argv` loops are "parallel infrastructure server-side" — the exact thing the directional rule forbids — and the engine's parser is the smallest true consumer: a `Cli::Result` allocated in the DLL and freed in the exe is the one operation `/MD` exists for, so it is the acceptance test Plan 2's Q1 said a bare CRT flip lacks. |
 
 ---
 
