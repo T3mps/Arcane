@@ -544,16 +544,81 @@ project "ArcaneClient"
         optimize "speed"
         symbols "off"
 
--- ArcaneServer: empty skeleton for the engine-server host (servers consume
--- Arcane tooling -- capability lands here as it gets built). Stub main only.
+-- ============================================================================
+-- ArcaneServer: the Core-only dedicated-server host (ArcaneServer.exe). Core-DLL
+-- split (spec docs/specs/2026-09-15-core-dll-split-design.md s6, plan 1 Task 6):
+-- opens a project, loads its game module, and ticks a fixed-step loop headless --
+-- no window, no graphics device, no ClientRuntime. `links` below is the
+-- construction proof of "Core-only": ArcaneCore ONLY, never ArcaneClient (P10 --
+-- see the postbuild copy's matching comment for why ArcaneClient.dll is still
+-- STAGED beside this exe despite never being linked).
+-- ============================================================================
 project "ArcaneServer"
     location "ArcaneServer"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++23"
+    staticruntime "off"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
     files { "%{prj.location}/src/**.hpp", "%{prj.location}/src/**.cpp" }
+    includedirs {
+        "%{prj.location}/src",
+        "%{IncludeDir.ArcaneCore}",
+        "%{IncludeDir.nlohmann}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        -- Mosaic/Manifold2D: HEADERS ONLY, same reasoning as ArcaneRuntime's own
+        -- NRI comment -- Arcane/Scene/PhysicsSystem.hpp (Core, header-only)
+        -- includes Manifold2D/Physics/*.hpp for its PhysicsSystem/PhysicsResource
+        -- types, and Astra's own headers reach Mosaic's IWorkScheduler alias. This
+        -- exe does not link either: every Manifold2D/Mosaic OBJECT it can reach
+        -- (the PhysicsWorld a project's scene mints, the JobSystem's scheduler) is
+        -- created and destroyed inside ArcaneCore.dll.
+        "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.Mosaic}",
+    }
+    -- ArcaneCore ONLY -- see this project's header comment. NOT ArcaneClient:
+    -- that link line is the whole point of this task.
+    links { "ArcaneCore" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING" }
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
+        -- P10: the game module (ReferenceGame.dll et al) links BOTH ArcaneCore's
+        -- and ArcaneClient's import libs -- it is built as an engine-as-SDK
+        -- consumer against the FULL surface, the same DLL a windowed host loads
+        -- it into. The loader needs ArcaneClient.dll resolvable beside this exe
+        -- to MAP the module at all, even though NOTHING in this exe's own code
+        -- references it. The census (clientDllLoadedAtBoot/clientDllLoadedAfterModule)
+        -- reports whether it was ever actually loaded, rather than this postbuild
+        -- silently hiding the module's own dependency.
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
+        '{COPYDIR} "%{wks.location}/data/EngineConfig" "%{cfg.buildtarget.directory}/data/EngineConfig"',
+        -- Same staging pair ArcaneRuntime's/ArcaneEditor's postbuild carries (see
+        -- ArcaneRuntime's matching comment for the full "mirror deletions" reasoning):
+        -- wipe Content/Source/Verify before the whole-tree copy re-populates them, so
+        -- a file removed from SOURCE does not survive forever in the staged copy.
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Content"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Source"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
+        '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
+        '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
+    }
+    filter "system:windows"
+        systemversion "latest"
+        -- /bigobj: ServerApp.cpp pulls in Arcane/Scene/PhysicsSystem.hpp
+        -- (header-only, Manifold2D-templated) directly, same section-count
+        -- pressure ArcaneClient.dll's own /bigobj (above) exists for.
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter {}
 
 -- ============================================================================
 -- ArcaneRuntime: the thin standalone host (ArcaneRuntime.exe). Engine boot +
@@ -1018,6 +1083,19 @@ project "ArcaneTests"
         "%{wks.location}/arcbuild/src/Request.cpp",
         "%{wks.location}/arcbuild/src/Slot.cpp",
         "%{wks.location}/arcbuild/src/Compose.cpp",
+        -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
+        -- over the same Arcane::Cli arcbuild's Request.cpp above already
+        -- source-compiles) and its `--report` census (ServerReport) source-
+        -- compile into the test exe so ServerConfigTest.cpp's [server] units
+        -- drive ServerConfig::Parse directly, same "pure logic, no spawn"
+        -- pattern as Request.cpp. main.cpp (the ProcessContext/Runtime/
+        -- PluginHost boot + tick-loop half) is NOT compiled here -- the
+        -- opt-in [witness][server] cases spawn the real staged
+        -- ArcaneServer.exe instead (ServerWitnessTest.cpp), same "no spawn
+        -- test" split ModuleBuild.cpp/RuntimeLaunch.cpp/arcbuild's own
+        -- main.cpp already establish.
+        "%{wks.location}/ArcaneServer/src/ServerConfig.cpp",
+        "%{wks.location}/ArcaneServer/src/ServerReport.cpp",
         -- F2b Task 12: CookQueue (the editor's background texture cook --
         -- watcher-triggered, hash-decided, never blocks) source-compiles into
         -- the test exe so the [editor][cook] units drive its queuing/
@@ -1157,6 +1235,7 @@ project "ArcaneTests"
         "%{IncludeDir.cgltf}",          -- F2c Task 1: VendorSmokeTest.cpp drives cgltf_parse/cgltf_validate directly
         "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: VendorSmokeTest.cpp drives meshopt_generateVertexRemap/optimizeVertexCache directly
         "%{wks.location}/arcbuild/src",   -- Driver.hpp for the [build] units (arcbuild Task 2)
+        "%{wks.location}/ArcaneServer/src",   -- ServerConfig.hpp/ServerReport.hpp for the [server] units (Core-DLL split Task 6)
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
