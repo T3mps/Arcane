@@ -36,10 +36,14 @@ TEST_CASE("snapshot-all / reload / restore-all across two live Runtimes", "[hotr
 {
     std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll", std::filesystem::copy_options::overwrite_existing);
     Arcane::Runtime server(Arcane::Test::Process(), Arcane::NetMode::DedicatedServer);
-    Arcane::Runtime client(Arcane::Test::Process(), Arcane::NetMode::Client);
-    for (auto* rt : { &server, &client }) { rt->Components()->RegisterComponent<Pulse>(); rt->Components()->RegisterComponent<RoleCounters>(); }
+    // The client world shares the primary's ComponentRegistry (spec s4) -- which is
+    // what makes the cross-world snapshot/restore below meaningful: a registry of its
+    // own would answer UnknownComponent for every module-defined type.
+    Arcane::Runtime client(Arcane::Test::Process(), Arcane::NetMode::Client, server.Components());
+    server.Components()->RegisterComponent<Pulse>();
+    server.Components()->RegisterComponent<RoleCounters>();
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
-    host.AttachRuntime(server); host.AttachRuntime(client);
+    REQUIRE(host.AttachRuntime(server)); REQUIRE(host.AttachRuntime(client));
     REQUIRE(host.Load());
     // The module's OnInit creates its Pulse entity in the PRIMARY (server) world only;
     // give the client world its own state to prove the registry-only restore path.
@@ -64,11 +68,12 @@ TEST_CASE("snapshot-all / reload / restore-all across two live Runtimes", "[hotr
 TEST_CASE("hot reload is refused while any attached Runtime has an active net driver", "[hotreload][netmode]")
 {
     Arcane::Runtime a(Arcane::Test::Process(), Arcane::NetMode::DedicatedServer);
-    Arcane::Runtime b(Arcane::Test::Process(), Arcane::NetMode::Client);
-    for (auto* rt : { &a, &b }) { rt->Components()->RegisterComponent<Pulse>(); rt->Components()->RegisterComponent<RoleCounters>(); }
+    Arcane::Runtime b(Arcane::Test::Process(), Arcane::NetMode::Client, a.Components());
+    a.Components()->RegisterComponent<Pulse>();
+    a.Components()->RegisterComponent<RoleCounters>();
     FakeDriver drv; b.SetNetDriver(&drv);
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
-    host.AttachRuntime(a); host.AttachRuntime(b);
+    REQUIRE(host.AttachRuntime(a)); REQUIRE(host.AttachRuntime(b));
     REQUIRE(host.Load());
     const std::uint32_t gen = host.Generation();
     drv.active = true;
@@ -78,4 +83,64 @@ TEST_CASE("hot reload is refused while any attached Runtime has an active net dr
     drv.active = false;
     CHECK(host.ForceReload());
     host.Unload();
+}
+
+TEST_CASE("DetachRuntime empties the leaving world: it drops out of every teardown path", "[hotreload][netmode]")
+{
+    // A world that leaves a loaded host keeps ENTITIES whose component descriptors
+    // point into the module image, and the moment it is erased from Runtimes() it is
+    // no longer covered by TeardownImage's ClearSystems/ResetRegistry loop. So the
+    // detach itself has to do both, or those descriptors dangle at the unmap -- the
+    // permanent-dangling-descriptor class diagnosed 2026-07-31.
+    Arcane::Runtime server(Arcane::Test::Process(), Arcane::NetMode::DedicatedServer);
+    Arcane::Runtime client(Arcane::Test::Process(), Arcane::NetMode::Client, server.Components());
+    server.Components()->RegisterComponent<Pulse>();
+    server.Components()->RegisterComponent<RoleCounters>();
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.AttachRuntime(server)); REQUIRE(host.AttachRuntime(client));
+    REQUIRE(host.Load());
+
+    client.Registry().CreateEntityWith(Pulse{100});
+    REQUIRE(ReadPulse(client) == 100);
+    REQUIRE(client.Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());
+
+    host.DetachRuntime(client);
+    CHECK(host.Runtimes().size() == 1);
+    CHECK(host.Runtimes()[0] == &server);
+    CHECK_FALSE(client.Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());   // systems cleared...
+    CHECK(ReadPulse(client) == 0);                                             // ...and the registry emptied
+
+    // The staying world is untouched: same shared registry, module still live.
+    CHECK(client.Components() == server.Components());
+    CHECK(server.Schedulers().fixedUpdate.HasSystem<ServerOnlyTick>());
+    CHECK(host.IsLoaded());
+    host.Unload();
+}
+
+TEST_CASE("DetachRuntime refuses the PRIMARY of a loaded host", "[hotreload][netmode]")
+{
+    // The primary IS the module's world (EngineContext::engine, and the SaveState/
+    // LoadState half of a hot reload). Dropping it under a live module would leave the
+    // module pointing at a world the host no longer drives; Unload() first.
+    Arcane::Runtime server(Arcane::Test::Process(), Arcane::NetMode::DedicatedServer);
+    Arcane::Runtime client(Arcane::Test::Process(), Arcane::NetMode::Client, server.Components());
+    server.Components()->RegisterComponent<Pulse>();
+    server.Components()->RegisterComponent<RoleCounters>();
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.AttachRuntime(server)); REQUIRE(host.AttachRuntime(client));
+    REQUIRE(host.Load());
+    const std::uint32_t gen = host.Generation();
+
+    host.DetachRuntime(server);                 // refused, no-op
+    CHECK(host.Runtimes().size() == 2);
+    CHECK(host.Runtimes()[0] == &server);
+    CHECK(host.IsLoaded());
+    CHECK(host.Generation() == gen);
+    CHECK(server.Schedulers().fixedUpdate.HasSystem<ServerOnlyTick>());   // its systems survive the refusal
+    host.Unload();
+
+    // With nothing loaded the primary detaches cleanly (the contract is about a LIVE
+    // module, not about being first).
+    host.DetachRuntime(server);
+    CHECK(host.Runtimes().size() == 1);
 }

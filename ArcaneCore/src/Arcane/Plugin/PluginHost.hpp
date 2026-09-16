@@ -22,6 +22,20 @@ namespace Arcane
     // EngineContext::engine, the one whose SaveState/LoadState carries state across a
     // hot reload; every other attached Runtime is snapshot/restored through its
     // registry alone and repopulated from the module's re-registered system factories.
+    //
+    // WHAT THE N WORLDS SHARE, AND WHAT THEY DO NOT:
+    //   * ONE ComponentRegistry -- the PRIMARY's. Component types are registered ONCE
+    //     per DLL load (spec R1), and a module opens its Astra::ComponentModule on the
+    //     primary's registry alone (GameModule.hpp) -- so a secondary MUST be built as
+    //     Runtime(process, mode, primary.Components()), and AttachRuntime REFUSES one
+    //     that is not. Otherwise the module's component types resolve in the primary
+    //     world and nowhere else, and a registry snapshot moved between the two worlds
+    //     fails with UnknownComponent.
+    //   * SYSTEMS are PER-WORLD: one factory table, and each world's own NetMode
+    //     decides what it instantiates (Arcane/Plugin/SystemFactory.hpp).
+    //   * REGISTRY DATA is PER-WORLD: its own entities and resources, its own
+    //     snapshot/restore across a hot reload.
+    //
     // A PluginHost must NOT outlive its ProcessContext or any attached Runtime (the
     // dtor calls into them); DetachRuntime is the seam for a world that dies first.
     class ARCANE_CORE_API PluginHost
@@ -42,11 +56,16 @@ namespace Arcane
         PluginHost(const PluginHost&) = delete;
         PluginHost& operator=(const PluginHost&) = delete;
 
-        // Attach a world this module serves. The FIRST attach is the PRIMARY. Attaching
-        // to an already-loaded host instantiates the module's matching factories into
-        // the new Runtime immediately, so a world can join mid-session.
-        void AttachRuntime(Runtime& rt);
-        // Detach a world: its module-registered systems are cleared and it is dropped.
+        // Attach a world this module serves. The FIRST attach is the PRIMARY and always
+        // succeeds; a LATER one is REFUSED (false, host unchanged) unless its
+        // Components() is the primary's -- see the shared-ComponentRegistry invariant
+        // above. Attaching to an already-loaded host instantiates the module's matching
+        // factories into the new Runtime immediately, so a world can join mid-session.
+        // Re-attaching an already-attached Runtime is a no-op success.
+        bool AttachRuntime(Runtime& rt);
+        // Detach a world: its module-registered systems are cleared, its registry is
+        // RESET (it holds entities whose descriptors point into the module image, and
+        // after this call the teardown paths no longer cover it), and it is dropped.
         // Detaching the PRIMARY of a loaded host is refused (ARC_ERROR, no-op) -- it is
         // the module's own world; Unload() first.
         void DetachRuntime(Runtime& rt) noexcept;

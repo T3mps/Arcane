@@ -77,6 +77,26 @@ namespace Arcane
         // (ProcessContext::IsDedicatedServerProcess) -- an editor process hosts a
         // DedicatedServer world beside a Client one.
         explicit Runtime(ProcessContext& process, NetMode mode = NetMode::Standalone);
+
+        // SECONDARY-WORLD ctor: build this world on an EXISTING ComponentRegistry --
+        // the PRIMARY Runtime's (spec s4, the N-worlds-on-one-module invariant).
+        //
+        // WHY IT EXISTS. A game module opens its Astra::ComponentModule on the
+        // primary Runtime's registry and nowhere else (GameModule.hpp), so that is
+        // the only registry its component descriptors reach. A secondary world with
+        // a registry of its own would resolve NONE of the module's types: scene
+        // load and AddComponentByTypeName would miss, default-construct would have
+        // no descriptor, and a snapshot taken in one world would fail to load in the
+        // other (Astra's Registry::Load answers UnknownComponent for a type the
+        // target registry lacks). Component types are registered ONCE per DLL load
+        // and every world is stamped from that one registration; only registry DATA
+        // and the instantiated SYSTEM set are per-world.
+        //
+        // Pass `primary.Components()`. PluginHost::AttachRuntime REFUSES a secondary
+        // whose Components() is not the primary's, so the invariant is enforced at
+        // the one place it can be.
+        Runtime(ProcessContext& process, NetMode mode,
+                std::shared_ptr<Astra::ComponentRegistry> sharedComponents);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;

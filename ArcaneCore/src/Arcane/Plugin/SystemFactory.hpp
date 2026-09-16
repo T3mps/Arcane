@@ -11,10 +11,26 @@
 // serve N worlds (in-process PIE, an embedded server world beside the editor's
 // client world) without the module knowing how many there are.
 //
+// WHAT "N WORLDS ON ONE MODULE" DIVIDES, EXACTLY (spec s4/s5):
+//   * COMPONENT TYPES are SHARED -- registered ONCE per DLL load (spec R1). A
+//     module opens its Astra::ComponentModule on the PRIMARY Runtime's
+//     ComponentRegistry (GameModule.hpp), so every world a PluginHost serves
+//     shares that ONE registry: Runtime's three-argument ctor builds a secondary
+//     on the primary's, and PluginHost::AttachRuntime REFUSES a secondary with a
+//     registry of its own. Without that rule a module-defined type would resolve
+//     in the primary world and nowhere else -- scene load, AddComponentByTypeName
+//     and a cross-world registry snapshot (Astra answers UnknownComponent) would
+//     all miss.
+//   * SYSTEMS are PER-WORLD, and this table is how: the same factories, a
+//     different NetMode, a different instantiated set.
+//   * REGISTRY DATA is PER-WORLD: its own entities and resources, its own
+//     snapshot/restore across a hot reload.
+//
 // WHERE IT LIVES: on the ProcessContext (spec s3 / plan 1 P8) -- Core-owned, one
 // per process, outliving every module image. The `instantiate` std::function is
 // compiled INTO the module, so PluginHost clears a module's entries by owner key
-// BEFORE its image unmaps (PluginHost::TeardownImage).
+// BEFORE its image unmaps (PluginHost::TeardownImage). The owner key is the
+// image BASE, and it is mandatory: see SystemFactoryTable::Add.
 //
 // NET MODE IS NOT THE LAUNCH FLAG: ProcessContext::IsDedicatedServerProcess()
 // describes how the PROCESS was launched; a system branches on its Runtime's
@@ -92,15 +108,19 @@ namespace Arcane
     class ARCANE_CORE_API SystemFactoryTable
     {
     public:
-        // Append one entry. The `owner` field is IGNORED while an owner is open
-        // (BeginOwner below) -- the table stamps the open image instead, so a
-        // module never has to name, or be able to name, its own image base.
+        // Append one entry. The `owner` field the caller passes is IGNORED -- the
+        // table stamps the OPEN owner (BeginOwner below), so a module never has to
+        // name, or be able to name, its own image base. An Add with NO owner open
+        // is a programmer error: it asserts and DROPS the entry, because an unowned
+        // entry could never be cleared before its image unmaps (see the .cpp).
         void Add(SystemFactoryEntry e);
 
-        // Bracket a module image's Init. BeginOwner first CLEARS whatever that
-        // owner registered before, so re-running an image's Init (a secondary
-        // re-established across a primary hot reload) re-registers rather than
-        // double-registers: an image's Init is its ONE registration point.
+        // Bracket a module image's Init, keyed by the image BASE. BeginOwner first
+        // CLEARS whatever that owner registered before, so re-running an image's
+        // Init (a secondary re-established across a primary hot reload)
+        // re-registers rather than double-registers: an image's Init is its ONE
+        // registration point. A NULL key opens nothing (it would be un-clearable
+        // and would collide with the next module's null key).
         void BeginOwner(const void* owner) noexcept;
         void EndOwner() noexcept;
 

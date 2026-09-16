@@ -105,7 +105,10 @@ namespace Arcane
         NetMode                                     mode    = NetMode::Standalone;
         INetDriver*                                 net     = nullptr;
 
-        Impl(ProcessContext& proc, NetMode netMode)
+        // `sharedComponents` non-null = a SECONDARY world built on the PRIMARY's
+        // ComponentRegistry (spec s4; Runtime.hpp's three-argument ctor explains
+        // why a per-world registry would break every module-defined type).
+        Impl(ProcessContext& proc, NetMode netMode, std::shared_ptr<Astra::ComponentRegistry> sharedComponents)
             : jobs(), sched(jobs.WorkScheduler()), process(&proc), mode(netMode)
         {
             context = &proc.TypeContext();
@@ -117,7 +120,8 @@ namespace Arcane
             // Registry work begins. ArcaneClient.dll's own slot is ClientRuntime's
             // ctor's (Client/ClientRuntime.cpp).
             Astra::SetTypeContext(context, Astra::ModuleResidency::Resident);
-            components = std::make_shared<Astra::ComponentRegistry>();
+            components = sharedComponents ? std::move(sharedComponents)
+                                          : std::make_shared<Astra::ComponentRegistry>();
 
             // The engine's OWN component roster, registered here so every host
             // has it before any plugin loads. Previously nothing registered it
@@ -169,6 +173,20 @@ namespace Arcane
             // previous-pose slot -- Astra adoption plan 2 deleted the component
             // end to end -- so every id after it shifted down by one; the
             // worked example above already reflects the post-drop numbering.)
+            //
+            // A SECONDARY world sharing the primary's registry opens its OWN roster
+            // handle here too, and that is deliberate, not an oversight. VERIFIED
+            // against the vendored Astra: ComponentRegistry::OpenModuleId always
+            // mints a fresh owner id, so the second handle's Register<Ts...> hits
+            // InstallOwned's "live owner != owner" case (ComponentRegistry.hpp
+            // semantics 4) -- the primary's identical entry is PUSHED onto the id's
+            // shadow stack and one meta ref is acquired on the same binder. Both
+            // descriptors come from ArcaneCore.dll, which never unmaps, so the
+            // shadowed copy can never dangle; and ReleaseModule drops "this owner's
+            // SHADOWED entries wherever they sit" and otherwise restores the newest
+            // shadow, so the two handles may Reset in EITHER order (a secondary
+            // outliving its primary included). Benign, and it keeps every Runtime's
+            // teardown symmetric -- which is worth more than saving one shadow slot.
             engineModule.emplace(Astra::ComponentModule::Open(components, "Arcane"));
             ARC_ASSERT(*engineModule, "Runtime: ComponentModule::Open refused -- the slot above must be installed first");
             // EXACTLY the order RegisterSceneComponents + RegisterPhysicsComponents
@@ -201,7 +219,11 @@ namespace Arcane
     };
 
     Runtime::Runtime(ProcessContext& process, NetMode mode)
-        : m_impl(std::make_unique<Impl>(process, mode))
+        : Runtime(process, mode, nullptr) {}
+
+    Runtime::Runtime(ProcessContext& process, NetMode mode,
+                     std::shared_ptr<Astra::ComponentRegistry> sharedComponents)
+        : m_impl(std::make_unique<Impl>(process, mode, std::move(sharedComponents)))
     {
         // Mosaic diagnostics: install the log sink + assert handler into THIS module
         // (ArcaneCore.dll) so Astra/Manifold2D/Mosaic code running here routes to the

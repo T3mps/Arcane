@@ -250,9 +250,26 @@ namespace Arcane
         // image (spec s4): GameModule::RegisterSystem passes a null owner and the
         // table stamps the open one, so a module never names its own image base --
         // and TeardownImage can drop exactly its entries before the unmap.
+        //
+        // NO IMAGE RANGE, NO REGISTRATION. Module::Image() reports {} where the
+        // platform has no implementation (Module.cpp: non-Windows, "no host ships
+        // here yet") and when the PE header read fails. `base` is the whole owner
+        // key, so in that state nothing could ever clear a factory before the image
+        // unmaps -- and a second such module would collide on the same null key.
+        // Init still runs (a module that registers no systems is unaffected);
+        // SystemFactoryTable::Add then asserts and drops anything it does try to
+        // register, with the cause already named here.
         bool InitImage(Plugin& p)
         {
             const Module::ImageSpan image = p.LoadedModule().Image();
+            if (!image.base)
+            {
+                ARC_ERROR("plugin: '{}' reports no image range -- system-factory registration is "
+                          "refused for it (the owner key is the image base, Arcane/Plugin/"
+                          "SystemFactory.hpp); its components are still registered normally",
+                          p.LoadedModule().Path().generic_string());
+                return p.VTable().Init(&ctx);
+            }
             process.SystemFactories().BeginOwner(image.base);
             const bool ok = p.VTable().Init(&ctx);
             process.SystemFactories().EndOwner();
@@ -346,12 +363,23 @@ namespace Arcane
             // ReferenceProject -> Aphelyon, faulting in AddComponentByTypeName ->
             // ComponentDescriptor::DefaultConstruct) into a clean
             // SkippedUnregistered miss in SceneSerializer instead.
-            if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)
+            const Module::ImageSpan image = img.plugin->LoadedModule().Image();
+            // The SAME window, and the same reason, as the descriptor purge: this
+            // module's system-factory std::functions are compiled INTO the image, so
+            // they must die before it unmaps (spec s4 / plan 1 P8). OUTSIDE the
+            // `size` guard below on purpose: `base` ALONE is the owner key, and it is
+            // exactly the key InitImage opened the bracket with -- hiding the clear
+            // behind a range the purge needs would leave a dangling callable whenever
+            // Image() reports a base but no usable size. (A null base opened no
+            // bracket, so this is then a no-op on an empty owner.)
+            process.SystemFactories().ClearOwner(image.base);
+            // Component descriptors need the RANGE, not just the base -- hence the
+            // separate guard. Every attached world's registry is swept: they SHARE the
+            // primary's ComponentRegistry (Runtime's three-argument ctor), so this is
+            // one purge repeated harmlessly rather than N distinct ones, and it stays
+            // a loop so a future non-sharing arrangement is still covered.
+            if (image.size != 0)
             {
-                // The SAME window, and the same reason, as the descriptor purge: this
-                // module's system-factory std::functions are compiled INTO the image,
-                // so they must die before it unmaps (spec s4 / plan 1 P8).
-                process.SystemFactories().ClearOwner(image.base);
                 for (Runtime* rt : runtimes)
                 {
                     if (const auto& creg = rt->Components())
@@ -375,12 +403,14 @@ namespace Arcane
             {
                 if (!img.plugin)
                     continue;
-                if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)
+                const Module::ImageSpan image = img.plugin->LoadedModule().Image();
+                // Secondaries register system factories through the same
+                // GameModule::RegisterSystem path, so they get the same
+                // before-the-unmap clear the primary does in TeardownImage -- and,
+                // for the same reason, keyed on `base` alone, outside the range guard.
+                process.SystemFactories().ClearOwner(image.base);
+                if (image.size != 0)
                 {
-                    // Secondaries register system factories through the same
-                    // GameModule::RegisterSystem path, so they get the same
-                    // before-the-unmap clear the primary does in TeardownImage.
-                    process.SystemFactories().ClearOwner(image.base);
                     for (Runtime* rt : runtimes)
                     {
                         const auto& creg = rt->Components();
@@ -613,22 +643,39 @@ namespace Arcane
         {
             std::optional<Plugin> rollback = Plugin::Load(previous->dll);
             RefreshContext();
-            if (rollback && InitImage(*rollback))
+            if (rollback)
             {
-                if (restoreState && !snapshot.empty())
-                {
-                    Astra::BinaryReader r(snapshot);
-                    if (!rollback->VTable().LoadState(r))
-                        ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
-                }
-                // Same restore-all the success path performs: the other worlds are
-                // rolled back to the bytes taken before the failed swap.
-                for (auto& [rt, bytes] : secondaryWorlds)
-                    if (!rt->RestoreRegistry(bytes))
-                        ARC_ERROR("plugin: rollback restore of the {} world failed; last-good "
-                                  "running but that world's state may be lost", ToString(rt->Mode()));
+                // Adopt the image into `previous` BEFORE judging Init: whichever way
+                // Init goes, this image is now mapped and InitImage has already opened
+                // (and closed) its factory bracket, so the failure path must run the
+                // full TeardownImage rather than let the optional quietly FreeLibrary.
+                // Otherwise anything the module registered before failing -- factories
+                // and component descriptors alike -- outlives its own code, and the
+                // factory entries live in a PROCESS-LIFETIME table.
+                const bool rollbackInit = InitImage(*rollback);
                 previous->plugin = std::move(*rollback);
-                rolledBack = true;
+                if (rollbackInit)
+                {
+                    if (restoreState && !snapshot.empty())
+                    {
+                        Astra::BinaryReader r(snapshot);
+                        if (!previous->plugin->VTable().LoadState(r))
+                            ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
+                    }
+                    // Same restore-all the success path performs: the other worlds are
+                    // rolled back to the bytes taken before the failed swap.
+                    for (auto& [rt, bytes] : secondaryWorlds)
+                        if (!rt->RestoreRegistry(bytes))
+                            ARC_ERROR("plugin: rollback restore of the {} world failed; last-good "
+                                      "running but that world's state may be lost", ToString(rt->Mode()));
+                    rolledBack = true;
+                }
+                else
+                {
+                    // Init failed, so no Shutdown is owed (the Load() init-failure path
+                    // makes the same call with the same argument).
+                    TeardownImage(*previous, /*callShutdown*/ false);
+                }
             }
         }
 
@@ -675,11 +722,25 @@ namespace Arcane
         m_impl->pluginSources.push_back(std::move(dll));
     }
 
-    void PluginHost::AttachRuntime(Runtime& rt)
+    bool PluginHost::AttachRuntime(Runtime& rt)
     {
         auto& rts = m_impl->runtimes;
         if (std::find(rts.begin(), rts.end(), &rt) != rts.end())
-            return;   // idempotent: attaching the same world twice is a no-op, not two worlds
+            return true;   // idempotent: attaching the same world twice is a no-op, not two worlds
+        // THE SHARED-COMPONENTREGISTRY INVARIANT (spec s4). A module opens its
+        // Astra::ComponentModule on the PRIMARY's registry and nowhere else
+        // (GameModule.hpp), so a secondary with a registry of its own would resolve
+        // none of the module's component types -- and a registry snapshot moved
+        // between the two worlds would fail with UnknownComponent. Refuse here,
+        // where the mistake is still cheap and nameable, rather than letting it
+        // surface as an empty view or a failed scene load much later.
+        if (!rts.empty() && rt.Components() != rts.front()->Components())
+        {
+            ARC_ERROR("PluginHost: refusing to attach a Runtime with its own ComponentRegistry -- "
+                      "every world one module serves must share the PRIMARY's (spec 2026-09-15 s4); "
+                      "build it as Runtime(process, mode, primary.Components())");
+            return false;
+        }
         rts.push_back(&rt);
         // A world joining an ALREADY-LOADED host gets the module's matching systems
         // now; the EngineContext's primary-derived fields do not change (the primary
@@ -688,6 +749,7 @@ namespace Arcane
         // every world attached by then.
         if (m_impl->current || !m_impl->plugins.empty())
             rt.InstantiateModuleSystems();
+        return true;
     }
 
     void PluginHost::DetachRuntime(Runtime& rt) noexcept
@@ -702,7 +764,21 @@ namespace Arcane
                       "it is the module's own world; Unload() first");
             return;
         }
-        rt.ClearSystems();   // drop this module's systems from the world that is leaving
+        // The world that is leaving still holds this module's SYSTEMS and, in its
+        // registry, ENTITIES whose component descriptors point into the module image.
+        // The moment it is erased from `runtimes` it drops out of TeardownImage's
+        // ClearSystems/ResetRegistry loop, so both have to happen HERE -- otherwise
+        // those descriptors dangle as soon as the module unmaps: exactly the
+        // permanent-dangling-descriptor class diagnosed 2026-07-31 (TeardownImage's
+        // purge comment tells that story).
+        //
+        // NO UnregisterModuleRange here, deliberately: every attached world SHARES the
+        // primary's ComponentRegistry, so purging the module's descriptors would strip
+        // them from the worlds that are STAYING. Emptying THIS world's registry is the
+        // whole job; the descriptors themselves die with the image, for all worlds at
+        // once, in TeardownImage.
+        rt.ClearSystems();
+        rt.ResetRegistry();
         rts.erase(it);
     }
 
