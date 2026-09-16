@@ -104,6 +104,7 @@ central merge-hotspot file) does not bite — this manifest is small and rarely 
   "description": "",
   "engine": { "abi": 5 },             // engine/ABI binding (== Arcane::kGamePluginABIVersion); host refuses incompatible ABI
   "gameModule": "Aphelyon.dll",       // the project's primary module (game-as-DLL)
+  "sourceDir": "Source/Game",         // OPTIONAL (default "Source"): the module's source dir UNDER Source/ (Source/<Module>/, 2026-09-16)
   "plugins": [                        // enabled plugins, .uproject-style
     { "name": "Sandbox", "enabled": false }
   ],
@@ -136,8 +137,13 @@ Aphelyon/                     <- project root (opened by the Arcane Editor)
 
 - **`Content/`** (not `data/`) is the `game://` mount root — the name should read
   `game://...` and match the Unreal-style content model we are adopting.
-- **`Source/`** holds the C++ game module *with* the project (self-contained, Unreal-style),
-  built against the engine SDK (Decision #6).
+- **`Source/`** holds the project's C++ *with* the project (self-contained, Unreal-style) and is the
+  `source://` mount. The game module's own sources live at the manifest's `sourceDir` (default
+  `Source/` itself; `Source/Game/` is the Unreal `Source/<Module>/` shape that lets a project keep
+  other code — its services — under `Source/` without compiling it into the module; decision record
+  `docs/research/2026-09-16-multiplayer-shape-and-project-layout.md` §5). Built against the engine
+  SDK (Decision #6), whose `arcane_game_module` reads `sourceDir` from the manifest beside the
+  project's `premake5.lua`.
 - **`Binaries/ Intermediate/ Saved/`** are the disposable derived tree — the same set
   Unreal gitignores. `Saved/` also holds the import/derived-data cache (the Unity `Library/`
   <-> Unreal `DDC` analog) until it warrants its own `DerivedData/`.

@@ -256,3 +256,56 @@ TEST_CASE("RestampEngineAbi rewrites the nested stamp, preserving engine sibling
 
     fs::remove_all(dir, ec);
 }
+
+// sourceDir (2026-09-16, decision record docs/research/2026-09-16-multiplayer-
+// shape-and-project-layout.md s5, ruling L3): the directory under Source/ that
+// build/arcane.lua compiles into gameModule and the editor's Create C++ Class
+// defaults to. ONE field, three readers (build, editor, docs) -- so the rule
+// lives here once and the test pins it.
+TEST_CASE("ProjectManifest parses sourceDir and defaults it to Source", "[project]")
+{
+    auto full = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "X", "engine": { "abi": 4 }, "sourceDir": "Source/Game"
+    })"));
+    REQUIRE(full.has_value());
+    CHECK(full->sourceDir == "Source/Game");
+
+    auto bare = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "X", "engine": { "abi": 4 }
+    })"));
+    REQUIRE(bare.has_value());
+    CHECK(bare->sourceDir == "Source");
+
+    // A trailing slash is normalised away; "Source" itself is allowed explicitly.
+    auto slash = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "X", "engine": { "abi": 4 }, "sourceDir": "Source/Game/"
+    })"));
+    REQUIRE(slash.has_value());
+    CHECK(slash->sourceDir == "Source/Game");
+    auto plain = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "X", "engine": { "abi": 4 }, "sourceDir": "Source"
+    })"));
+    REQUIRE(plain.has_value());
+    CHECK(plain->sourceDir == "Source");
+}
+
+TEST_CASE("ProjectManifest rejects a sourceDir outside Source/ or escaping it", "[project]")
+{
+    auto reject = [](const char* value)
+    {
+        const nlohmann::json doc = {
+            { "formatVersion", 1 }, { "name", "X" }, { "engine", { { "abi", 4 } } }, { "sourceDir", value }
+        };
+        return !Arcane::ProjectManifest::FromJson(doc).has_value();
+    };
+    CHECK(reject("Src"));                 // not under Source/
+    CHECK(reject("Sources/Game"));        // prefix trick: "Source" + "s"
+    CHECK(reject("Source/../Other"));     // escapes the mount
+    CHECK(reject("Source\\Game"));        // backslashes: the manifest is forward-slashed
+    CHECK(reject(""));                    // empty: say Source or omit the key
+    CHECK(reject("/Source/Game"));        // absolute
+    // Wrong TYPE follows the other optionals' contract: type_error -> nullopt.
+    CHECK_FALSE(Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "X", "engine": { "abi": 4 }, "sourceDir": 7
+    })")).has_value());
+}

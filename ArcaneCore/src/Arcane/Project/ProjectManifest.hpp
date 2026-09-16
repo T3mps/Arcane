@@ -74,6 +74,19 @@ namespace Arcane
         // stays a separate project. The Hub's Duplicate regenerates it outright.
         std::string            guid;
 
+        // The directory, relative to the project root and UNDER Source/, that
+        // holds the game module's sources: build/arcane.lua's game-module
+        // glob compiles `<sourceDir>/**` (the manifest is the ONE place this
+        // is stated -- the SDK reads it beside the project's premake5.lua),
+        // and the editor's Create C++ Class defaults its Location to the same
+        // folder. "Source" (the default, an absent key) is today's flat
+        // layout; "Source/Game" is the Unreal-style Source/<Module>/ layout
+        // that lets a project keep other code (its services) under Source/
+        // without it being compiled into the module. Always forward-slashed,
+        // no trailing slash. Decision record: docs/research/2026-09-16-
+        // multiplayer-shape-and-project-layout.md s5 (L3).
+        std::string            sourceDir = "Source";
+
         // The pre-device splash's configuration. Defaults apply whenever the
         // manifest has no "splash" block at all (see SplashConfig's own
         // per-field comments for what those defaults are and why).

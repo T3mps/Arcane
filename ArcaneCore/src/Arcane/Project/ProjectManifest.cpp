@@ -45,6 +45,27 @@ namespace Arcane
         m.bootScene   = doc.value("bootScene", std::string{});
         m.guid        = doc.value("guid", std::string{});
 
+        // sourceDir: optional, default "Source". Strict and loud (plan ruling
+        // S3): it must name Source/ itself or a directory under it, with no
+        // ".." segment, no backslash and no leading slash -- a module
+        // directory outside the source:// mount could never register a
+        // created class, and a silently-accepted bad value is the failure
+        // class this engine keeps meeting. build/arcane.lua applies the
+        // identical rule on the build side.
+        if (doc.contains("sourceDir"))
+        {
+            std::string dir = doc.value("sourceDir", std::string{});   // type_error -> nullopt via the try/catch
+            while (!dir.empty() && dir.back() == '/')
+                dir.pop_back();
+            const bool underSource = dir == "Source" || dir.rfind("Source/", 0) == 0;
+            const bool escapes = dir.find("..") != std::string::npos
+                              || dir.find('\\') != std::string::npos
+                              || dir.find("//") != std::string::npos;
+            if (!underSource || escapes)
+                return std::nullopt;
+            m.sourceDir = std::move(dir);
+        }
+
         if (doc.contains("plugins") && doc["plugins"].is_array())
         {
             for (const auto& p : doc["plugins"])
