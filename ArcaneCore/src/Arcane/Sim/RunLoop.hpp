@@ -57,6 +57,25 @@ namespace Arcane
         // running loop already steps), but harmless to call.
         void RequestSingleStep() noexcept { m_singleStep = true; }
 
+        // The fixed step's rate (Hz) -- a RUNTIME value (Core-DLL split, plan 1
+        // Task 6 review round 1): StepFixed's canonical `fixedDt` (`1.0 /
+        // m_cfg.fixedHz`) used to be fixed at construction, so a host whose
+        // --fixed-dt names a non-default step (ArcaneServer/src/ServerApp.cpp)
+        // had no way to make that step size real -- only realDt, the Advance()
+        // PARAMETER, was under its control, and realDt only decides how many
+        // fixed steps ACCUMULATE per Advance() call, never their size. The two
+        // are independent by design (time-scale's own header comment: "the fixed
+        // step stays canonical... determinism is preserved"), which is exactly
+        // why changing one alone silently left the other at Config::fixedHz's
+        // default of 60. SetFixedHz is the setter that makes the rate itself
+        // change. Refused (a no-op) for a non-positive hz: StepFixed divides by
+        // it, so zero or negative would be a divide-by-zero or a nonsensical
+        // negative step -- the same "refuse the impossible request" contract
+        // SetTimeScale's own clamp upholds, just declining rather than clamping
+        // (there is no sane default to clamp TO here).
+        void SetFixedHz(double hz) noexcept { if (hz > 0.0) m_cfg.fixedHz = hz; }
+        [[nodiscard]] double FixedHz() const noexcept { return m_cfg.fixedHz; }
+
         // Advance one real frame. Returns the render alpha in [0,1) for interpolation.
         double Advance(double realDt)
         {

@@ -57,3 +57,25 @@ TEST_CASE("S2: ArcaneServer refuses a missing project with a report that says so
     CHECK(run.report.at("project").at("opened") == false);
     CHECK(run.report.at("exitReason") == "project-open-failed");
 }
+TEST_CASE("S3: ArcaneServer's --fixed-dt is REAL -- the census reports the ACTUAL step, not the requested value echoed blind", "[witness][server]")
+{
+    // Review round 1: the census's fixedDt is derived from
+    // RunLoop::Loop().FixedHz() AFTER ServerApp::Run() calls SetFixedHz(1 /
+    // cfg.fixedDtSeconds) -- this is the end-to-end proof that --fixed-dt 0.05
+    // makes the loop's canonical step 0.05s, not merely a config echo (see
+    // ServerFixedRateTest.cpp for the unit-level proof against RunLoop directly).
+    WitnessScratch scratch(StagedServerDir(), "s3-fixed-dt");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneServer.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "server-report.json";
+    inv.args = { "--project", "ReferenceProject", "--frames", "10", "--fixed-dt", "0.05", "--report", inv.reportPath.generic_string() };
+    inv.hardCapMs = 60000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    CHECK(run.exitCode == 0);
+    const auto& r = run.report;
+    CHECK(r.at("fixedDt") == 0.05);
+    CHECK(r.at("framesTicked") == 10);
+    CHECK(r.at("exitReason") == "frames-complete");
+}
