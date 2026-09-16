@@ -2598,7 +2598,8 @@ namespace Arcane::Editor
     // this function opens the dialog and does not create anything.
     void EditorApp::BeginCreateAsset(const Arcane::Editor::CreateAssetRequest& request)
     {
-        if (!m_runtime->CurrentProject())
+        const Arcane::Project* project = m_runtime->CurrentProject();
+        if (!project)
         {
             // A created asset can only register + resolve by GUID inside a
             // project (Project.cpp:334-338). Refused LOUDLY rather than
@@ -2612,6 +2613,13 @@ namespace Arcane::Editor
         // half-typed name or a stale parent for the next one to inherit.
         m_createDialog = Arcane::Editor::CreateDialogState{};
         m_createDialog.request = request;
+        // A C++ Class's Location combo defaults to the game module's OWN
+        // directory (CppClassDefaultFolder(manifest.sourceDir)), not Source/
+        // itself -- the source:// mount stays Source/ (plan ruling S2); only
+        // the DEFAULT folder for a new class moves with the module layout.
+        if (request.kind == Arcane::Editor::CreateAssetKind::CppClass)
+            m_createDialog.request.cppDefaultFolder =
+                Arcane::Editor::CppClassDefaultFolder(project->Manifest().sourceDir);
         m_createDialog.open    = true;
 
         // The Material surface combo's starting index. `prefillSurface` is a

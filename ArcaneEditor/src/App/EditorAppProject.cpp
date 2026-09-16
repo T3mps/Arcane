@@ -2908,7 +2908,8 @@ namespace Arcane::Editor
                  headerPath.generic_string(),
                  sourcePath.empty() ? std::string() : " + " + sourcePath.filename().string());
 
-        // The .vcxproj is premake's glob over Source/**: regenerate so the new
+        // The .vcxproj is premake's glob over the manifest's sourceDir (Source/**
+        // by default, Source/Game/** for the Source/<Module>/ layout): regenerate so the new
         // files are IN the project Visual Studio is about to show. A failure
         // here is reported but does not undo the create -- the files are real
         // and registered; the next Rebuild regenerates anyway.

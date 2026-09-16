@@ -96,12 +96,18 @@ namespace Arcane::Editor
         // root/Content and "source" at root/Source). Offering an engine or
         // plugin folder here would offer a target RegisterCreatedAsset refuses.
         std::vector<FolderChoice> BuildFolderChoices(const AssetPanelModel& model,
-                                                     CreateAssetKind kind)
+                                                     CreateAssetKind kind,
+                                                     const std::string& cppDefaultFolder)
         {
             const char* root = CreateKindRoot(kind);
             std::set<std::string> folders;                     // relative dirs, "" = root
             folders.insert("");                                // always offer the root
-            folders.insert(CreateKindDefaultFolder(kind));     // always offer the kind default
+            // CppClass's default folder comes from the manifest's sourceDir
+            // (CppClassDefaultFolder, seeded onto the request by BeginCreateAsset);
+            // every other kind keeps its fixed CreateKindDefaultFolder.
+            folders.insert(kind == CreateAssetKind::CppClass
+                               ? cppDefaultFolder
+                               : std::string(CreateKindDefaultFolder(kind)));
             for (const auto& [guid, e] : model.Entries())
             {
                 (void)guid;
@@ -130,10 +136,15 @@ namespace Arcane::Editor
         }
 
         // The kind's default folder as a CreateAssetResult-shaped relative
-        // path ("materials/" -> "materials").
-        std::string DefaultRelativeFolder(CreateAssetKind kind)
+        // path ("materials/" -> "materials"). Same CppClass substitution as
+        // BuildFolderChoices above -- the seeded index must land on the same
+        // folder the combo actually offers as the default.
+        std::string DefaultRelativeFolder(CreateAssetKind kind, const std::string& cppDefaultFolder)
         {
-            return MakeFolderChoice(CreateKindDefaultFolder(kind), CreateKindRoot(kind)).relative;
+            const std::string dir = kind == CreateAssetKind::CppClass
+                                        ? cppDefaultFolder
+                                        : std::string(CreateKindDefaultFolder(kind));
+            return MakeFolderChoice(dir, CreateKindRoot(kind)).relative;
         }
 
         // Every material in the project, name-sorted -- the parent picker's
@@ -485,7 +496,7 @@ namespace Arcane::Editor
             return std::nullopt;
 
         const char* title = CreateKindTitle(st.request.kind);
-        const std::vector<FolderChoice> folders = BuildFolderChoices(model, st.request.kind);
+        const std::vector<FolderChoice> folders = BuildFolderChoices(model, st.request.kind, st.request.cppDefaultFolder);
 
         // Re-arm the ImGui popup whenever it isn't currently open -- which
         // includes a competing dockspace-level modal having closed it out
@@ -500,7 +511,7 @@ namespace Arcane::Editor
             ImGui::OpenPopup(title);
         if (!st.seeded)
         {
-            st.folderIndex = IndexOfRelativeFolder(folders, DefaultRelativeFolder(st.request.kind));
+            st.folderIndex = IndexOfRelativeFolder(folders, DefaultRelativeFolder(st.request.kind, st.request.cppDefaultFolder));
             st.seeded = true;
         }
 

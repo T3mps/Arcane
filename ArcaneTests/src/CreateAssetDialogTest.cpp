@@ -175,6 +175,15 @@ TEST_CASE("Create-kind vocabulary: C++ Class lands under Source/ and bridges fro
     CHECK(std::string(CreateKindDefaultFolder(CreateAssetKind::CppClass)) == "");   // Source/ itself
     CHECK(std::string(CreateNounForExtension(".hpp"))                     == "class");
 
+    // The manifest's sourceDir moves the DEFAULT folder, never the root: the
+    // source:// mount stays Source/ (the browser shows every module), and the
+    // Location combo pre-selects the game module's own directory. Same
+    // string shape the model uses for folders (trailing slash, "" = root).
+    CHECK(CppClassDefaultFolder("Source")        == "");
+    CHECK(CppClassDefaultFolder("Source/Game")   == "Game/");
+    CHECK(CppClassDefaultFolder("Source/Game/")  == "Game/");     // tolerant of a trailing slash
+    CHECK(CppClassDefaultFolder("Source/a/b")    == "a/b/");
+
     // The per-kind ROOT directory under the project: every asset kind is
     // Content/, source is Source/. This is the one thing the dialog's
     // Location combo and the dispatcher's target path both key off.

@@ -71,6 +71,7 @@ namespace Arcane::Editor
         CreateAssetKind kind = CreateAssetKind::Material;
         Arcane::Guid    prefillParent;   // instance parent / sprite texture
         int             prefillSurface = -1; // pre-picked MaterialSurface, -1 none
+        std::string     cppDefaultFolder;   // CppClass only: CppClassDefaultFolder(manifest.sourceDir), seeded by the app -- see CppClassDefaultFolder below
     };
 
     // ---- per-kind vocabulary (pure; shared by the dialog and its dispatcher)
@@ -132,6 +133,23 @@ namespace Arcane::Editor
             case CreateAssetKind::CppClass:         return "";   // Source/ itself
         }
         return "";
+    }
+
+    // The Location combo's default for a C++ CLASS specifically, derived from
+    // the manifest's sourceDir (ProjectManifest.hpp): the game module's own
+    // directory, relative to the source:// mount root (Source/), in the
+    // model's folder-string shape -- "" for the root itself, "Game/" for
+    // "Source/Game". CreateKindDefaultFolder(CppClass) stays "" as the
+    // manifest-less fallback; CreateKindRoot(CppClass) stays "Source" (the
+    // MOUNT does not move -- plan ruling S2).
+    [[nodiscard]] inline std::string CppClassDefaultFolder(std::string_view sourceDir)
+    {
+        std::string dir(sourceDir);
+        while (!dir.empty() && dir.back() == '/')
+            dir.pop_back();
+        if (dir == "Source" || dir.rfind("Source/", 0) != 0)
+            return "";
+        return dir.substr(7) + "/";
     }
 
     // The noun the uniqueness message names ("a <noun> named X already exists
