@@ -1591,3 +1591,246 @@ git commit -m "feat(editor): play-mode picker grows listen server, client + embe
 - **Type consistency:** `Runtime(ProcessContext&, bool)` (T3) → `Runtime(ProcessContext&, NetMode = Standalone)` (T5) — the T4 `ClientRuntime(ProcessContext&, bool enableAudioDevice)` keeps the audio flag on the Client side and constructs `m_core(process)`; `Test::Process()` (T3) is used unchanged through T7; `PluginHost(ProcessContext&, path)` + `AttachRuntime` (T5) is what T6/T7 call; `IClientHooks`/`AttachClient` (T4) is what T5's `RefreshContext` reads; `ToString(NetMode)` (T5) is what T6's census and T7's `WorldFact` use; `Runtime::Process()` (T5) is what T7's `PlaySession` uses to build the embedded world.
 
 <!-- CLOSEOUT -->
+
+## Closeout (Task 8, 2026-09-15)
+
+**Plan 1 (Arcane) is closed.** All seven implementation tasks landed on `main`
+(no worktree), unpushed. Spec `docs/specs/2026-09-15-core-dll-split-design.md`
+status line updated to `Implemented -- plan 1 (Arcane) closed 2026-09-15 at
+c5abeb48; plan 2 (Gacha /MD) pending`.
+
+### Per-task commits (both repos)
+
+| Task | Arcane commit(s) | Gacha commit(s) |
+|---|---|---|
+| Plan | `06ba82e2` | — |
+| T1 — prep (MeshBuilder/RenderSystems moves, `RuntimePresentation` lift) | `49cda5a1` | — |
+| T2 — `ArcaneCore.dll`, `ARCANE_CORE_API`, the physical move | `882106f5` + fix `ddae6049` | `84b63f44` (explicit file list) + `a3351eee` (`ARCANE_CORE_STATIC`) |
+| T3 — `ProcessContext` | `a783e81c` + fix `dc23a5e3` | — |
+| T4 — `ClientRuntime` split, `IClientHooks` | `231fb719` | — |
+| T5 — `NetMode`/`RoleMask`, N-Runtime `PluginHost`, ABI 30 | `7452555e` + fix `dc826b5a` | `8ab1be42` (ABI 29→30 restamp) |
+| T6 — `ArcaneServer.exe`, `ProjectHost.hpp`, `--report` census | `34cccd6b` + fix `6561909c` | — |
+| T7 — editor play-mode picker, `--play-as`, report `worlds` | `5c7726bc` + fix `c5abeb48` | — |
+| T8 — this closeout (baselines, spec status, docs, Closeout) | *(this commit)* | — |
+
+Base HEAD at Task 8 start: `c5abeb48` (last code commit). No Gacha change this task.
+
+### Step 1 — the two-config measurement
+
+Build ritual, both configs (`ReferenceProject.slnx -t:Rebuild` before
+`Arcane.slnx` each time, per the single-slot trap): Debug pair, Release pair,
+then flip back to Debug. All four builds: **0 Error(s), 0 Warning(s).**
+
+| Run | Config | Seed | Assertions | Cases (passed/skipped) |
+|---|---|---|---|---|
+| `~[gpu]` `-r json` | Debug | `1046182859` | 57524 | 1786 / 4 |
+| `~[gpu]` `-r json` | Release | `2201046918` | 57524 | 1786 / 4 |
+| unfiltered `-r json` | Debug | `1519477275` | 120005 | 1833 / 4 |
+
+Debug and Release `~[gpu]` are byte-identical (57524/1786), matching Task 7's
+own last fix-round measurement at the same code head exactly (the ruling at
+progress.md line 94 deferred Task 7's Release `~[gpu]` to this task's
+mandatory two-config measurement; this run discharges it — no separate Release
+run was needed since Task 8 changes only docs + the baselines JSON, not code).
+
+`check-baselines.ps1 -Invocation "~[gpu]"` **before** this edit, both configs,
+against the still-committed 57269/1749:
+```
+telemetry: arcanetests.assertions [Debug/~[gpu]]   = 57524, baseline 57269 (+255)
+telemetry: arcanetests.cases      [Debug/~[gpu]]   = 1786,  baseline 1749  (+37)
+telemetry: arcanetests.assertions [Release/~[gpu]] = 57524, baseline 57269 (+255)
+telemetry: arcanetests.cases      [Release/~[gpu]] = 1786,  baseline 1749  (+37)
+```
+Booked below; guard re-run **after** the edit reports `+0/+0` exit 0 in both
+configs (see "Baselines booked").
+
+**Golden gate — 4/4 lanes, `diffCount=0`, both configs, no re-bless:**
+
+| Lane | Debug | Release |
+|---|---|---|
+| ArcaneRuntime/dx12/runtime-scene | PassedOnFallback, `diffCount=0`, `resolvedLevel=shared (expected backend)` | same |
+| ArcaneRuntime/vulkan/runtime-scene | Passed, `diffCount=0`, `resolvedLevel=backend` | same |
+| ArcaneEditor/dx12/editor-ui | Passed, `diffCount=0`, `resolvedLevel=shared` | same |
+| ArcaneEditor/vulkan/editor-ui | Passed, `diffCount=0`, `resolvedLevel=shared` | same |
+
+Order run: Release gate first, then the slot flipped back to Debug
+(`ReferenceProject.slnx -t:Rebuild -p:Configuration=Debug` + a Debug
+`Arcane.slnx` restage), then the Debug gate. **The desk is left on Debug.**
+
+### The plan's whole rise — per-task attribution, reconciled
+
+Grand total: `57524 - 57269 = +255 assertions`, `1786 - 1749 = +37 cases`.
+Reconciled two ways: (a) the ledger's own per-task deltas, each derived at
+that task's own close from its own per-case `-r json` (progress.md line 97),
+sum to exactly `+255/+37` with **zero residual**; (b) this close's own
+per-case JSON independently confirms every wholly-new suite by direct
+tag/file attribution (below) — the two methods agree everywhere they overlap.
+
+| Task | Assertions | Cases | Source of the figure |
+|---|---|---|---|
+| T2 — `CoreDllTest.cpp` | +14 | +2 | **Confirmed directly** from this close's JSON: `CoreDllTest.cpp` = 2 cases / 14 assertions, both `[core-dll]`. Matches the fix-round-final delta in task-2-report.md exactly (the review round 1 fix rewrote case 2 from a tautology to a real cross-DLL logger pin, 9→14 assertions). |
+| T3 — `ProcessContextTest.cpp` | +8 | +3 | **Confirmed directly**: `ProcessContextTest.cpp` = 3 cases / 8 assertions, all `[process]`. |
+| T4 — `ClientRuntimeTest.cpp` net of two re-pins | +15 | +3 | `ClientRuntimeTest.cpp` = 3 cases / **18** assertions, confirmed directly (wholly new file, all `[client][runtime]`). Net task delta is `+15/+3` per the ledger (task-4-report.md): two pre-existing cases in `RuntimeEngineSystemsTest.cpp`/`RuntimeTest.cpp` were re-pinned to the engine-owned-systems split (P7), netting `-3` assertions against those cases with no case-count change — not independently re-derivable from a single post-hoc snapshot (it requires the case's PRIOR assertion count), so this half is cited from the task's own contemporaneous before/after JSON. `18 - 3 = 15`. |
+| T5 — `RoleMaskTest.cpp` + `MultiRuntimeReloadTest.cpp` + `ClassTemplatesTest` pin | +84 | +11 | **Confirmed directly** for the bulk: `RoleMaskTest.cpp` = 7 cases / 45 assertions (all `[netmode][runtime]`), `MultiRuntimeReloadTest.cpp` = 4 cases / 38 assertions (all `[hotreload][netmode]`) — sums to 11 cases / 83 assertions. Plus `+1` assertion on a pre-existing `ClassTemplatesTest` case (a re-pin, no case-count change, cited from task-5-report.md). `83 + 1 = 84`. |
+| T6 — `ServerConfigTest.cpp` + `ServerFixedRateTest.cpp` + `ServerWitnessTest.cpp` (S1/S2/S3) | +51 | +8 | **Confirmed directly**, all three wholly new: `ServerConfigTest.cpp` 3/17, `ServerFixedRateTest.cpp` 2/5, `ServerWitnessTest.cpp` 3/29 (S1/S2/S3 — `[server][witness]`, NOT `[gpu]`-tagged per ruling P14, so all three sit inside `~[gpu]`). `3+2+3=8` cases, `17+5+29=51` assertions. |
+| T7 — `EditorPlayModeTest` +5, `ServerLaunchTest` +3, `VerifyReportTest` +1, `HostConfigTest` +1 | +83 | +10 | 10 cases directly identified: 5 `EditorPlayModeTest.cpp` cases carry the plan's `[netmode]` tag (the 3 from the initial round plus the fix round's I1 attach-refusal case and the C1 exit-order pin), summing to 50 assertions; `ServerLaunchTest.cpp` (wholly new) = 3 cases / 11 assertions; `VerifyReportTest.cpp`'s `worlds` case (`"schema 6: worlds carries one entry per live world, in host order"`) = 1 case / 12 assertions; `HostConfigTest.cpp`'s `--play-as` case = 1 case / 7 assertions. `50+11+12+7=80` of the task's `+83` reconciled directly; the remaining `+3` assertions are re-pins on pre-existing `VerifyReportTest.cpp`/`HostConfigTest.cpp` cases from the schema-5→6 bump (five sites per task-7-report.md item 3) and are not separable from a single post-hoc snapshot — cited from the task's own contemporaneous guard reading (`+83/+10` exactly, task-7-report.md fix-round section). |
+| **Sum** | **+255** | **+37** | Reproduces the measured grand-total rise to the assertion, with **zero residual**. |
+
+Case names were read from the JSON's `test-info.name` field (never a source
+regex), matching the file's own 2026-09-12 convention.
+
+### The `[gpu]` case identity at this close
+
+Measured this close: unfiltered Debug totals **1837** cases attempted
+(1833 passed + 4 skipped) against `~[gpu]`'s **1790** (1786 passed + 4
+skipped) — **the same 4 SKIP cases appear identically in both runs** (they
+are environment-conditional, e.g. `[ide-desk]`/`[build-desk]`, not
+`[gpu]`-tagged), so they cancel out of the subtraction either way it is taken:
+`1837 - 1790 = 47` using totals-including-skips, or `1833 - 1786 = 47` using
+passed-only counts. Directly cross-checked by counting the `gpu` tag on every
+case in the unfiltered JSON: **47** cases carry it, and zero `[gpu]`-tagged
+cases leak into the `~[gpu]` run (both independently confirmed from this
+close's own JSON, not derived by subtraction alone).
+
+**This does not match the brief's "expect 35" premise, and the discrepancy is
+resolved, not smoothed over.** The brief's expectation was `34 (prior) + 1
+(E1) = 35`; the measured `[gpu]` count is 47. Task 2's own Step 8 measurement
+— commit `882106f5`, base head after only T1+T2, **before any of T3–T7 ran**
+— already recorded an unfiltered Debug run of 1797 passed cases against that
+same close's `~[gpu]` of 1751 passed cases (task-2-report.md §10): `1797 -
+1751 = 46`. Neither T1 nor T2 added any `[gpu]`-tagged case (T1 is a pure
+refactor; T2's `CoreDllTest` cases are tagged `[core-dll]`), so **the `[gpu]`
+count entering this plan was already 46, not the documented "34"** — some
+unrelated, concurrent work (outside this plan) grew the raw `[gpu]`-tagged
+case count by 12 between the automation-baselines.json note's last `[gpu]`-
+identity entry (2026-09-12, "34") and this plan's own 2026-09-15 baseline
+backfill (57269/1749), and that growth was never re-stated in the note's
+`[gpu]`-invisibility argument. This plan's **own** contribution is exactly
+what the brief predicted: **E1 adds exactly +1** (`46 → 47`), confirmed by
+the same arithmetic that isolates T2's baseline (46) from this close's
+measurement (47). The stale "34" is a pre-existing gap in the baselines
+file's own documentation, not a defect introduced by this plan — flagged here
+rather than corrected in the JSON note, since Step 2's prose-sweep scope is
+the ArcaneCore-static-lib language, not the `[gpu]`-identity narrative, and
+the note's `baselines` rows themselves (the only load-bearing numbers) were
+never wrong.
+
+### Task 2 Step 7 — the newly-exported-symbol list
+
+The Step 7 link-error loop that chases `ArcaneCore.dll`'s export boundary to
+zero found **zero** unresolved symbols on the first post-move build — every
+symbol in the moved layer already carried `ARCANE_API` (it already lived
+inside a DLL, `ArcaneClient.dll`), so the `sed` macro rename was the whole
+audit for the 79 moved files. The only symbols genuinely NEW to
+`ARCANE_CORE_API` are Core's own pre-existing (never-exported) headers, marked
+by hand in Task 2 Step 4:
+
+| # | file:line | symbol |
+|---|---|---|
+| 1 | `Guid.hpp:23` | `struct ARCANE_CORE_API Guid` |
+| 2 | `Cli/Cli.hpp:30` | `class ARCANE_CORE_API Cli` |
+| 3 | `Cli/Cli.hpp:52` | `struct ARCANE_CORE_API Cli::Result` (nested — does not inherit the outer export) |
+| 4 | `Build/Toolchain.hpp:32` | `ARCANE_CORE_API Toolchain::DiscoverSolution(const std::filesystem::path&)` |
+| 5 | `Build/Toolchain.hpp:39` | `ARCANE_CORE_API Toolchain::ResolvePremake(const std::filesystem::path&)` |
+| 6 | `Build/Toolchain.hpp:46` | `ARCANE_CORE_API Toolchain::VsWhere(const std::string&)` |
+| 7 | `Build/Toolchain.hpp:52` | `ARCANE_CORE_API Toolchain::ResolveMsBuild()` |
+| 8 | `Build/Toolchain.hpp:57` | `ARCANE_CORE_API Toolchain::ResolveDevenv()` |
+| 9 | `Core/ModuleContext.hpp:45` | `ARCANE_CORE_API void Arcane::Core::SetModuleTypeContext(Astra::TypeContext*)` — created by Task 2's own unbriefed fix (§5 below), later absorbed into `ProcessContext::Create` at Task 3 (`Core/ModuleContext.{hpp,cpp}` deleted). |
+
+Header-only Core files (`Crypto/`, `Net/*`, `Util/*`, `Jobs/TaskExecutor.hpp`,
+`Version.hpp`) got no macro, as briefed.
+
+### P10 — `ArcaneServer.exe` stages `ArcaneClient.dll`, pinned as a FACT
+
+Ruling P10: `ArcaneServer.exe` links `ArcaneCore` **only**, but its
+`postbuildcommands` stage `ArcaneClient.dll` beside itself too, because a
+game module links BOTH import libs (spec §1.2) and the loader needs
+`ArcaneClient.dll` resolvable to map the module — the construction gate is
+the exe's link line, proven by the S1 witness's `clientDllLoadedAtBoot ==
+false`, not by whether `ArcaneClient.dll` is present on disk. Task 6's S1
+desk-check census (task-6-report.md, `ArcaneServer.exe --project
+ReferenceProject --frames 60 --report out.json`):
+```json
+"presentation":{"clientAttached":false,"clientDllLoadedAfterModule":true,"clientDllLoadedAtBoot":false}
+```
+`clientDllLoadedAfterModule: true` is **exactly what P10 predicts, and is a
+FACT, not a defect**: `ReferenceGame.dll` (the module) links both import
+libs, so loading it pulls `ArcaneClient.dll` in even though
+`ArcaneServer.exe`'s own link line never references a single Client symbol.
+Shedding the module's Client import (a server-only compile-out) is spec §10
+follow-on work, explicitly out of this arc's scope.
+
+### Task 7 desk pass — OWED
+
+Per task-7-report.md, **not performed by any implementer, owed to the user**:
+click each of the three new play-mode picker rows once in a live editor
+(Play, then Stop) — "Listen server (in viewport)", "Client + embedded server
+(in viewport)", "Client + separate server process" — and for the last one,
+confirm an `ArcaneServer.log` appears beside `ArcaneServer.exe` and that it
+**stops on Stop** (the `EditorAppFrame.cpp` `wasPlaying && !InPlayMode()`
+observation is the line under test). This item remains open; Task 8 performed
+no interactive desk verification (headless suites and scripted gates only).
+
+### Outside-arc item — a pre-existing order-dependent SIGSEGV class (two repros, not this plan's)
+
+Neither repro is caused by any commit in this plan; both are pre-existing
+engine defects this plan's own tests made more likely to surface, because
+Task 7's new cases are the first to hand a REAL loaded module through
+`PlaySession`. **The mechanism in both cases**: a module-registered
+`Astra::TypeContext` entry (a component or resource type first resolved
+*inside* a plugin DLL) is not retracted when that DLL unmaps, so a later
+resolution of the same type from a different module dereferences a dangling
+descriptor.
+
+1. **`SceneAssetTest` — "a v3 scene still loads after the v4 bump"** crashes
+   when it runs immediately after `PluginLoadDiagnosticsTest`'s rollback case
+   (Astra-side; reproduced at Task 5's base head `231fb719` with that task's
+   whole diff stashed — see task-5-report.md concern 1). Pre-dates this plan
+   entirely.
+2. **`EntityOpsTest.cpp:496` — "CreateEntityInScene parents the top-level
+   create under SceneRoot, surviving a save/load round trip"** crashes after
+   any `PluginHost` Load + `ForceReload` + Unload sequence, with **no Task 7
+   code on the crashing path** — bisected to a two-test deterministic repro
+   and a probe matrix (task-7-report.md, fix-round "NEW FINDING" section):
+   `ARCANE_GAME_MODULE`'s `SaveState` resolves `SceneRoot` from inside the
+   module DLL; if that module is the FIRST registrar of `SceneRoot` in the
+   shared `TypeContext`, the registration is never retracted at unload, and a
+   later `GetResource<SceneRoot>()` from `ArcaneClient.dll`
+   (`Edit::CreateEntityInScene`) dereferences the dangling entry. Resolving
+   `SceneRoot` from the exe FIRST makes the suite deterministic (probe PB),
+   which is evidence for the mechanism, not a fix — masking it that way was
+   explicitly rejected (it would hide a real production bug from the suite).
+
+Both are the same "raw pointers INTO a plugin module dangle on unload" bug
+class as the pre-existing `ComponentModule` descriptor-retraction machinery
+already partially covers ("Unloading a plugin restores the descriptors it
+overrode" pin) — this class is TYPE-registration retraction, which that pin
+does not reach. Recommended follow-up, outside this arc: module-registered
+`TypeContext` entries need the same retraction-on-unload discipline
+`ComponentModule` descriptors already have.
+
+Task 8's own unfiltered Debug run (seed `1519477275`, 120005/1833) did **not**
+hit either repro — both are order-dependent and did not trigger under this
+run's random seed.
+
+### Plan 2 hand-off (Gacha /MD)
+
+- Gacha `Server/premake5.lua` now carries the explicit file list (Task 2,
+  commits `84b63f44` + `a3351eee`) in place of the from-source `ArcaneCore`
+  glob — narrowed BEFORE the Arcane-side move landed, so the Server never saw
+  Scene/Plugin/Project (Astra/Manifold2D/enkiTS) sources it has no include
+  paths for.
+- `Game/Aphelyon.arcproj` is at ABI **30** (Task 5, Gacha commit `8ab1be42`).
+- **Plan 2 deletes the from-source `ArcaneCore` project and links
+  `ArcaneCore.dll` on the `-md` triplet** — the static-CRT source build
+  (`ARCANE_CORE_STATIC`, Task 2's C1/I1 fix) is the bridge Plan 1 leaves in
+  place; Plan 2 retires it outright rather than extending its file list
+  further.
+
+### Baselines booked
+
+`scripts/automation-baselines.json`'s six `baselines` rows: Debug and Release
+`arcanetests.assertions`/`arcanetests.cases` under `~[gpu]` updated
+`57269→57524` / `1749→1786`. **Dist is untouched** (not built in this plan;
+stays at its asset-manager Plan 3 row, `55226/1516`). `check-baselines.ps1`
+after the edit reports `+0/+0` exit 0 in both Debug and Release.

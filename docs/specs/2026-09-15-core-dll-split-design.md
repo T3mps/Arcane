@@ -1,9 +1,7 @@
 # ArcaneCore becomes the shared engine DLL — N worlds per process and a real dedicated server
 
 **Date:** 2026-09-15
-**Status:** Approved (user ruling 2026-09-13 "Core = the shared engine DLL"; the
-shape below approved in-session 2026-09-15). Implementation plans to follow via
-`superpowers:writing-plans` — see §11 for the two-plan split.
+**Status:** Implemented -- plan 1 (Arcane) closed 2026-09-15 at `c5abeb48`; plan 2 (Gacha /MD) pending.
 **Research:** `docs/research/2026-09-15-core-dll-split-context-brief.md` (current
 state: build shape, the six edges, per-module statics, `Runtime`'s member split,
 logging, ABI 29, Gacha's static-CRT source build, the single `ARCANE_API`, LOC);

@@ -11,9 +11,14 @@ monorepo with full filtered history; docs under `docs/` may still cite
 pre-extraction paths (`Arcane/...`, `docs/superpowers/...`, `../ThirdParty`).
 
 ```
-ArcaneCore/        # static lib: Net/Types/Logger + shared header-only utils.
-                   #   Namespaced include root ArcaneCore/src/Arcane ->
-                   #   #include <Arcane/...>. ZERO game references -- keep it that way.
+ArcaneCore/        # the shared engine DLL (ArcaneCore.dll): Base/Config/Jobs/
+                   #   Material/Mesh/Plugin/Project/Scene/Serialization/Sim/
+                   #   Sprite/Assets (the headless engine layer) plus Net/
+                   #   Types/Logger + shared header-only utils. Presentation-
+                   #   free; every host, tool and game module links it
+                   #   (Core-DLL split, 2026-09-15). Namespaced include root
+                   #   ArcaneCore/src/Arcane -> #include <Arcane/...>. ZERO
+                   #   game references -- keep it that way.
 ArcaneClient/      # the engine DLL: Base/Platform/Render/Host (SDL3, NRI on
                    #   D3D12+Vulkan, Batcher2D, ACES tonemap, MSDF text, Assets,
                    #   ImGui, enkiTS jobs, Astra ECS runtime, scene save/load,
