@@ -52,6 +52,17 @@ function arcane_game_module(name)
         language "C++"
         cppdialect "C++23"
         staticruntime "off"                         -- /MD: share one CRT heap with ArcaneClient.dll
+
+        -- C4251 ("needs to have dll-interface"): disabled for every consumer, the
+        -- same ruling the engine workspace makes for itself (premake5.lua, the
+        -- workspace-level disablewarnings). The warning guards against a
+        -- DLL/client CRT-layout mismatch; this helper's contract -- /MD, one
+        -- toolset, one heap shared with ArcaneClient.dll -- makes that mismatch
+        -- structurally impossible, and the host's CRT-flavor gate refuses a
+        -- module that breaks it at load. Every exported engine class that holds
+        -- an STL member would otherwise warn at every consumer call site.
+        disablewarnings { "4251" }
+
         targetname(name)
         -- Flat Binaries/ (config-agnostic, matching the manifest's gameModule name).
         -- Dev + the host run Debug; Binaries/ holds the config the host loads.
@@ -161,6 +172,16 @@ end
 -- ============================================================================
 function arcane_core_consumer()
     staticruntime "off"
+
+    -- C4251 ("needs to have dll-interface"): disabled for every consumer, the
+    -- same ruling the engine workspace makes for itself (premake5.lua, the
+    -- workspace-level disablewarnings). The warning guards against a
+    -- DLL/client CRT-layout mismatch; this helper's contract -- /MD, one
+    -- toolset, one heap shared with ArcaneCore.dll -- makes that mismatch
+    -- structurally impossible, and the host's CRT-flavor gate refuses a
+    -- module that breaks it at load. Every exported engine class that holds
+    -- an STL member would otherwise warn at every consumer call site.
+    disablewarnings { "4251" }
 
     includedirs {
         ARCANE_SDK .. "/ArcaneCore/src",
