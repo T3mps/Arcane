@@ -97,8 +97,10 @@ namespace Astra
         void ReadBytes(void* data, size_t size)
         {
             if (m_error != SerializationError::None) return;
+            if (size == 0) return;   // a zero-length read is a no-op; `data` may be an empty
+                                     // container's null data() and memcpy is declared nonnull (UBSan)
             
-            if (m_position + size > m_size)
+            if (size > m_size - m_position)   // overflow-free form of m_position + size > m_size
             {
                 m_error = SerializationError::CorruptedData;
                 return;

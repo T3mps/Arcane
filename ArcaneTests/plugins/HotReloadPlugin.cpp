@@ -51,7 +51,18 @@ namespace Arcane::HotReloadTest
             bool exists = false;
             Registry().CreateView<Pulse>().ForEach([&](Astra::Entity, Pulse&) { exists = true; });
             if (!exists)
+            {
                 Registry().CreateEntityWith(Pulse{0});   // fresh boot only
+#ifndef HOTRELOAD_INIT_FAIL
+                // The use-after-unload probe (HotReloadShared.hpp). This is the FIRST
+                // resolve of ProbeResource in the process -- the identity Astra records
+                // for it is this DLL's. The [hotreload][typecontext] case then resolves
+                // it from the exe AFTER this image unmaps. Excluded from the INIT_FAIL
+                // build so that fixture's behaviour is unchanged (it exists for the
+                // factory-teardown path and must not become a first registrar here).
+                Registry().SetResource<ProbeResource>(ProbeResource{42});
+#endif
+            }
             CacheHandle();
             // The s4 contract: factories registered ONCE per DLL load, with an explicit
             // mask; each Runtime instantiates what its NetMode matches.

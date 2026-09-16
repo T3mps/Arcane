@@ -422,3 +422,51 @@ TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotr
     std::error_code ec;
     std::filesystem::remove("HotReloadBadSrc.dll", ec);
 }
+
+TEST_CASE("Resolving a type the UNLOADED plugin registered first is safe", "[hotreload][typecontext]")
+{
+    // The scenario behind vendored Astra 056063c (stamp b8291b9), pinned HERE because
+    // the fix itself is pinned upstream: Astra's TypeContext records a TypeIdentity the
+    // FIRST time any module resolves a type, and that identity used to carry a
+    // `const std::type_info*` owned by the resolving image. When the first registrar was
+    // a plugin DLL, every LATER resolve of that type ran IsTypeIdentityCollision
+    // (TypeContext.hpp:162 pre-fix) over a type_info in an image that no longer existed
+    // -- the order-dependent SIGSEGV the Core-DLL split closeout recorded at
+    // EntityOps.cpp:101. Since 056063c the field is `uint64_t rttiName`, a hash of the
+    // mangled name, so the same compare reads two owned values and cannot dangle.
+    //
+    // Determinism comes from the TYPE, not from --order: ProbeResource is touched by the
+    // plugin's OnInit and by nothing else in this exe (HotReloadShared.hpp spells out
+    // that rule), so the plugin is its first registrar however Catch2 shuffles.
+    // Deliberately NOT asserted while the module is mapped -- a GetResource<ProbeResource>()
+    // before Unload() would have the EXE resolve the type with the image still loaded,
+    // which still trips the old crash but stops this case pinning "resolve AFTER unload".
+    //
+    // The user's original lex-order repro of the same fault, kept as documentation
+    // rather than a second case (it depends on suite ordering; this one does not):
+    //   ArcaneTests.exe "PlaySession routes Play/Stop through the hosted module*,CreateEntityInScene refuses*" --order lex
+    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
+                               std::filesystem::copy_options::overwrite_existing);
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
+
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.AttachRuntime(rt));
+    REQUIRE(host.Load());        // OnInit's SetResource<ProbeResource> is the type's first resolve
+    REQUIRE(host.IsLoaded());
+
+    host.Unload();               // the registrar's image unmaps HERE
+
+    // THE PIN: this exe's first-ever resolve of ProbeResource, against an entry whose
+    // identity was recorded by code that is gone. Pre-fix this faulted inside
+    // IsTypeIdentityCollision; now it is a uint64 compare that finds the existing id.
+    const Astra::ComponentID id = Astra::TypeID<Arcane::HotReloadTest::ProbeResource>::Value();
+    CHECK(id != Astra::INVALID_COMPONENT);   // resolved, not refused as a collision
+
+    // Unload() reset the registry (fresh-boot semantics), so the resource itself is
+    // gone -- reading it through the just-resolved id is the second safe touch.
+    CHECK(rt.Registry().GetResource<Arcane::HotReloadTest::ProbeResource>() == nullptr);
+    CHECK(Arcane::RenderErrorCount() == 0);
+}

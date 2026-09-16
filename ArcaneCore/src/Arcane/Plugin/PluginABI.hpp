@@ -846,7 +846,27 @@ namespace Arcane
     //     the pairing. ReferenceProject.arcproj restamped with
     //     this change; Gacha's Game restamp (29 -> 30) is this plan's Task 5 Gacha
     //     commit, with the Aphelyon.dll rebuild -- not deferred.
-    inline constexpr uint32_t kGamePluginABIVersion = 30;
+    // v31 (2026-09-16, Astra type-identity discriminator): the vendored Astra
+    //     moved to `b8291b9`, whose load-bearing commit `056063c` REPLACED the last
+    //     field of Astra::TypeIdentity -- `const std::type_info* rtti` became
+    //     `uint64_t rttiName`, a hash of the RTTI mangled name. Same offset, same
+    //     struct size, so nothing about the layout announces the change; but
+    //     MakeTypeIdentity<T>, GetOrAssignComponentID and IsTypeIdentityCollision
+    //     are header-inline and therefore instantiated in EVERY module, so a module
+    //     built against the OLD header hands the SHARED TypeContext a pointer where
+    //     the host stores a hash, and its own inline collision check dereferences
+    //     the host's hash as a type_info*. OBSERVED: a v30 ReferenceGame.dll built
+    //     before the vendoring, under a host built after it, failed the E1 editor
+    //     witness at EditorWitnessTest.cpp:32 (GradeProcessFacts); rebuilding the
+    //     module against the new header passed. Reject the pairing -- the mismatch
+    //     is a wild dereference, not a degraded feature. (The fix itself removes the
+    //     mirror-image hazard: the old pointer field dangled once the image that
+    //     FIRST resolved a type unloaded, which is exactly the plugin case --
+    //     pinned by PluginHostTest's [hotreload][typecontext] scenario.)
+    //     ReferenceProject.arcproj restamped with this change; Gacha's Game restamp
+    //     (30 -> 31) is the paired commit in that repo, with the Aphelyon.dll
+    //     rebuild -- not deferred.
+    inline constexpr uint32_t kGamePluginABIVersion = 31;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

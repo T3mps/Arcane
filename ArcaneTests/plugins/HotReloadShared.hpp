@@ -27,4 +27,17 @@ namespace Arcane::HotReloadTest
     ASTRA_END_REFLECT_TYPE()
     struct ServerOnlyTick { void operator()(Astra::Registry& r) { r.CreateView<RoleCounters>().ForEach([](Astra::Entity, RoleCounters& c) { ++c.serverTicks; }); } };
     struct ClientOnlyTick { void operator()(Astra::Registry& r) { r.CreateView<RoleCounters>().ForEach([](Astra::Entity, RoleCounters& c) { ++c.clientTicks; }); } };
+
+    // The use-after-unload probe (PluginHostTest, "[hotreload][typecontext]"). A
+    // plain, NON-reflected resource -- exactly Arcane::SceneRoot's shape -- and NOT
+    // a component: the plugin's OnInit SetResource<ProbeResource> is meant to be
+    // this type's FIRST resolve anywhere in the process, so the identity Astra
+    // records for it belongs to the PLUGIN image.
+    //
+    // NO TEST-EXE CODE MAY RESOLVE ProbeResource BEFORE THE PLUGIN DOES. TypeID<>,
+    // GetResource<>, SetResource<>, RegisterComponent<> and views all resolve it;
+    // one stray host-side use anywhere in ArcaneTests would make the EXE the first
+    // registrar and the pin would silently stop pinning anything. It is deliberately
+    // absent from every other case, and its one case resolves it only AFTER Unload().
+    struct ProbeResource { int value = 0; };
 }

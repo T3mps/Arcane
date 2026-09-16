@@ -3,9 +3,9 @@ change them in the Astra repo and re-run scripts\sync-astra.ps1, or the next
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Astra
-commit  : 2e691c2c98869e430aa230f33b8a298603ed356b
+commit  : b8291b96d84792858c39b77bf578bc40b2a916c5
 branch  : dev
-subject : feat(reflection): FieldInfo std::vector element access -- elementTypeHash + size/resize/element/erase/insert accessors
-synced  : 2026-09-11 23:23:25
+subject : fix(componentmodule): log a same-name owner override at trace, not info -- it is the designed shadow-push, not a conflict
+synced  : 2026-09-16 01:43:16
 scope   : include/ only (Arcane compiles nothing else from this tree --
           see Arcane/premake5.lua IncludeDir["Astra"])
