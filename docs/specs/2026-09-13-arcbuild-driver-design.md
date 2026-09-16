@@ -152,7 +152,9 @@ deletes still run if `/t:Clean` failed -- a broken generated Clean target
 must not leave the slot behind. `remove_all` errors are reported; if msbuild
 already succeeded, a delete failure becomes a driver refusal (exit 2). Never
 touches `Source/`, `Content/`, `Saved/`, or the `.slnx` (generate rewrites
-that).
+that). The game module's source root is the manifest's `sourceDir` (default
+`Source/`; `Source/Game/` for the `Source/<Module>/` layout, 2026-09-16) --
+premake reads it, the driver never needs to.
 
 ## 5. Consumers, in order of adoption
 

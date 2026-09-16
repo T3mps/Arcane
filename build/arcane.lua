@@ -17,6 +17,7 @@
 --       configurations { "Debug", "Release", "Dist" }
 --   include(os.getenv("ARCANE_SDK") .. "/build/arcane.lua")
 --   arcane_game_module("MyGame")   -- declares the SharedLib game module (-> Binaries/MyGame.dll)
+--   (arcane_game_module reads the game module's source directory -- Source/ by default, or the manifest's "sourceDir" e.g. Source/Game -- from the one .arcproj beside this premake5.lua)
 --
 -- The module implements the extern-C plugin ABI (Arcane/Plugin/PluginABI.hpp --
 -- see kGamePluginABIVersion there); the host's ABI gate refuses a cross-build
@@ -44,9 +45,51 @@ local ARCANE_TP = ARCANE_SDK .. "/ThirdParty"       -- vendored header-only deps
 -- one heap crosses the ArcaneClient.dll/Game.dll boundary).
 local ARCANE_BIN = ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}-md"
 
+-- The game module's source directory comes from the project's MANIFEST, never
+-- from a premake option (decision record docs/research/2026-09-16-multiplayer-
+-- shape-and-project-layout.md s5, ruling L3; plan ruling S1): `sourceDir`,
+-- default "Source" (today's flat layout), or e.g. "Source/Game" for the
+-- Unreal-style Source/<Module>/ layout. One field, three readers -- this
+-- glob, the editor's Create C++ Class default, the docs -- so they cannot
+-- drift. _MAIN_SCRIPT_DIR is the directory of the premake5.lua being run,
+-- which is the project root for every consumer (the manifest sits beside it).
+-- The validation mirrors ProjectManifest::FromJson exactly (Source itself, or
+-- under Source/, no "..", no backslash, no leading slash); a bad value or an
+-- ambiguous root is an error(), never a guess.
+local function arcane_module_source_dir()
+    local root = _MAIN_SCRIPT_DIR
+    local manifests = os.matchfiles(root .. "/*.arcproj")
+    if #manifests == 0 then
+        error("arcane_game_module: no .arcproj manifest beside " .. root .. "/premake5.lua (a game module needs its project manifest)")
+    elseif #manifests > 1 then
+        error("arcane_game_module: more than one .arcproj beside " .. root .. "/premake5.lua: " .. table.concat(manifests, ", "))
+    end
+    local text = io.readfile(manifests[1])
+    local doc, err = json.decode(text)
+    if not doc then
+        error("arcane_game_module: cannot parse " .. manifests[1] .. ": " .. tostring(err))
+    end
+    local dir = doc.sourceDir
+    if dir == nil then
+        return "Source"
+    end
+    if type(dir) ~= "string" then
+        error("arcane_game_module: " .. manifests[1] .. ": sourceDir must be a string")
+    end
+    dir = dir:gsub("/+$", "")
+    local underSource = (dir == "Source") or (dir:sub(1, 7) == "Source/")
+    local escapes = dir:find("..", 1, true) or dir:find("\\", 1, true) or dir:find("//", 1, true)
+    if not underSource or escapes or dir == "" then
+        error("arcane_game_module: " .. manifests[1] .. ": sourceDir '" .. tostring(doc.sourceDir) ..
+              "' must be Source or a directory under Source/ (no '..', no backslash)")
+    end
+    return dir
+end
+
 -- Declare + fully configure a game module (the project's primary plugin).
 -- Call AFTER declaring the workspace + configurations. Builds -> Binaries/<name>.dll.
 function arcane_game_module(name)
+    local sourceDir = arcane_module_source_dir()
     project(name)
         kind "SharedLib"
         language "C++"
@@ -69,13 +112,13 @@ function arcane_game_module(name)
         targetdir "%{wks.location}/Binaries"
         objdir "%{wks.location}/Intermediate/%{cfg.buildcfg}"
 
-        files { "%{wks.location}/Source/**.cpp", "%{wks.location}/Source/**.hpp" }
+        files { "%{wks.location}/" .. sourceDir .. "/**.cpp", "%{wks.location}/" .. sourceDir .. "/**.hpp" }
 
         -- Public engine header surface (in-place) + the header-only ThirdParty deps a
         -- game module pulls in transitively (glm/Astra scene types, imgui handoff,
         -- spdlog via Log.hpp, the Mosaic threading seam).
         includedirs {
-            "%{wks.location}/Source",
+            "%{wks.location}/" .. sourceDir,
             ARCANE_SDK .. "/ArcaneClient/src",
             -- Core's namespaced include root (<Arcane/Guid.hpp>, and since the
             -- Core-DLL split the whole headless engine layer: Base/Scene/
