@@ -217,6 +217,24 @@ namespace Arcane
         // case for no reason.
         std::string     dumpLayoutPath = "";
 
+        // --play-as <standalone|listen-server|embedded-server|client>. Enter Play
+        // at the END of boot in that TOPOLOGY (Arcane::Editor::PlayTopology), rather
+        // than sitting in Edit mode -- the scripted half of the play-mode picker the
+        // Core-DLL split's Task 7 grew. Empty = off, which is the ordinary Edit-mode
+        // boot every other run performs.
+        //
+        // EDITOR ONLY, and refused outright by ArcaneRuntime (its main.cpp, beside
+        // --dump-layout's refusal): the runtime host has no Edit mode to leave and no
+        // PlaySession to enter, so parsing it and shrugging would exit 0 having
+        // silently done nothing -- the exact silent-success failure this file's
+        // rule 3 refuses everywhere else.
+        //
+        // NOT a Cli::Choices() list, deliberately: the registered default is the
+        // EMPTY string and an empty value is not one of the choices, so the value
+        // check is a post-parse refusal (beside --fixed-dt's) rather than a
+        // registration-time constraint that would reject every ordinary run.
+        std::string     playAs = "";
+
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have

@@ -253,6 +253,12 @@ namespace Arcane
         m_settleCaptureFailed = captureFailed;
     }
 
+    void VerifyReport::SetWorlds(std::vector<WorldFact> worlds)
+    {
+        m_worldsSet = true;
+        m_worlds    = std::move(worlds);
+    }
+
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
     {
         for (const auto& spec : specs)
@@ -544,8 +550,14 @@ namespace Arcane
         // Bumped 4 -> 5 by Task 2 of the host-witness-harness arc: `compare`
         // gained `triedPaths` -- the ordered candidate list this run's
         // ResolveReference actually probed (see SetCompare's own comment).
-        // 3 and 4 remain readable -- see kOldestSupportedSchemaVersion above
-        // -- every field a 3-era or 4-era consumer knew is still emitted
+        //
+        // Bumped 5 -> 6 by Task 7 of the Core-DLL split (plan 1): the report
+        // gained `worlds`, one entry per live Runtime (see SetWorlds). A
+        // PROCESS is no longer a WORLD -- the editor's client + embedded
+        // server play mode runs two -- and a section a consumer may now
+        // expect is a contract change, not a silent addition.
+        // 3, 4 and 5 remain readable -- see kOldestSupportedSchemaVersion above
+        // -- every field a 3-, 4- or 5-era consumer knew is still emitted
         // with the same meaning.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
@@ -613,6 +625,23 @@ namespace Arcane
               : m_settleConverged                          ? "converged"
               : m_settleBail == SettleBail::AttemptsBound   ? "attempts-bound"
                                                            : "timeout-bound";
+        }
+
+        // The world set (schemaVersion 6). ABSENT unless SetWorlds was called --
+        // the same absence-must-be-absence contract as `capture`/`compare`/the
+        // settle keys above, so "this host does not report worlds" never reads
+        // as "this run had none".
+        if (m_worldsSet)
+        {
+            nlohmann::json worlds = nlohmann::json::array();
+            for (const WorldFact& w : m_worlds)
+            {
+                worlds.push_back({ { "role",               w.role },
+                                    { "hasAuthority",       w.hasAuthority },
+                                    { "entities",           w.entities },
+                                    { "fixedUpdateSystems", w.fixedUpdateSystems } });
+            }
+            j["worlds"] = std::move(worlds);
         }
 
         j["probes"] = m_probes;

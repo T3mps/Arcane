@@ -17,7 +17,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -26,9 +28,11 @@
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
 
+#include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
@@ -38,6 +42,7 @@
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "../plugins/HotReloadShared.hpp"
 
 #include <App/PlayMode.hpp>
 
@@ -198,58 +203,56 @@ TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[editor
     CHECK(runtime.Loop().IsPaused());
 }
 
-namespace
+// Play/Stop route through the hosted module's OWN SaveState/LoadState when one is
+// loaded -- the fix for the Stop crash, where the module must re-establish its
+// native resources (the physics world) that the raw registry snapshot omits.
+//
+// DRIVEN THROUGH A REAL PluginHost since the Core-DLL split's Task 7, not the fake
+// vtable this case used to build by hand: PlaySession takes the HOST now (it is
+// also what attaches/detaches the embedded server world) and reads Vtable() off
+// it, so there is no longer a seam a hand-made vtable can be pushed through. The
+// module under test is the same HotReloadPluginV1 the [hotreload] suite uses, and
+// what it proves is the same round trip end to end: ARCANE_GAME_MODULE's
+// SaveState writes the registry blob PLUS this module's own extra (its Pulse
+// entity id), and its LoadState restores the registry and then REFUSES (returns
+// false, which Stop reports) unless the re-found Pulse entity is the very same
+// one -- so a Stop that returns true is a statement about the module's blob, not
+// only about the registry.
+TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/LoadState", "[editor][hotreload]")
 {
-    // Minimal fake plugin vtable: SaveState writes a marker, LoadState reads it back.
-    // Proves PlaySession routes Play/Stop through the plugin's SaveState/LoadState when
-    // a vtable is supplied -- the fix for the Stop crash, where the plugin must
-    // re-establish its own native resources (physics world) that the raw registry
-    // snapshot omits. Counters live in a struct so each test run resets them locally.
-    int g_fakeSaveCalls = 0;
-    int g_fakeLoadCalls = 0;
-
-    void FakeSaveState(Astra::BinaryWriter& w)
-    {
-        ++g_fakeSaveCalls;
-        w(static_cast<std::uint64_t>(0xABCD));
-    }
-
-    bool FakeLoadState(Astra::BinaryReader& r)
-    {
-        ++g_fakeLoadCalls;
-        std::uint64_t marker = 0;
-        r(marker);
-        return !r.HasError() && marker == 0xABCD;
-    }
-}
-
-TEST_CASE("PlaySession routes Play/Stop through the plugin vtable when present", "[editor]")
-{
+    using namespace Arcane::HotReloadTest;
     Arcane::Runtime runtime(Arcane::Test::Process());
+    runtime.Components()->RegisterComponent<Pulse>();
+    runtime.Components()->RegisterComponent<RoleCounters>();
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.AttachRuntime(runtime));
+    REQUIRE(host.Load());                       // OnInit creates the module's Pulse entity
 
-    Arcane::PluginVTable vt{};
-    vt.SaveState = &FakeSaveState;
-    vt.LoadState = &FakeLoadState;
-
-    g_fakeSaveCalls = 0;
-    g_fakeLoadCalls = 0;
+    const auto readPulse = [&runtime]
+    {
+        int v = -1;
+        runtime.Registry().CreateView<Pulse>().ForEach([&](Astra::Entity, Pulse& p) { v = p.ticks; });
+        return v;
+    };
+    REQUIRE(readPulse() == 0);                  // the AUTHORED value
 
     Arcane::Editor::PlaySession play;
-
-    // Play routes through the plugin's SaveState (NOT Runtime::SnapshotRegistry), so the
-    // plugin captures its own scene incl. native resources; then it unpauses the loop.
-    REQUIRE(play.Play(runtime, &vt));
-    CHECK(g_fakeSaveCalls == 1);
-    CHECK(g_fakeLoadCalls == 0);
+    REQUIRE(play.Play(runtime, &host));         // snapshots through the module, then unpauses
     CHECK(play.IsPlaying());
     CHECK_FALSE(runtime.Loop().IsPaused());
 
-    // Stop routes through the plugin's LoadState (which re-establishes native resources
-    // after RestoreRegistry -- what Arcane Editor cannot do itself); then it re-pauses.
-    REQUIRE(play.Stop(runtime, &vt));
-    CHECK(g_fakeLoadCalls == 1);
+    // Play-time mutation, exactly as a running game would produce.
+    runtime.Registry().CreateView<Pulse>().ForEach([](Astra::Entity, Pulse& p) { p.ticks = 99; });
+    REQUIRE(readPulse() == 99);
+
+    // Stop restores through the module's LoadState and re-pauses. A true here is
+    // the module's own verdict on its extra blob (see the comment above).
+    REQUIRE(play.Stop(runtime, &host));
     CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
+    CHECK(readPulse() == 0);                    // the play-time mutation is gone
+
+    host.Unload();
 }
 
 TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fresh world", "[editor][physics]")
@@ -471,4 +474,81 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
             if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
                 yStop = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(le)->position.y;
     CHECK(yStop == Catch::Approx(-1.0f));
+}
+
+// ---- Core-DLL split, plan 1 Task 7: the three play TOPOLOGIES ---------------
+// PlaySession no longer has one shape. Standalone is what every case above
+// drives; ListenServer re-roles the ONE world; EmbeddedServer stands a SECOND
+// DedicatedServer world up beside it on the SAME ProcessContext (spec s7), and
+// ClientOnly is that same world under a separate SERVER PROCESS (whose spawn is
+// ServerLaunchTest's/desk territory, not this file's).
+
+namespace
+{
+    std::size_t CountEntities(Arcane::Runtime& rt)
+    { std::size_t n = 0; for (Astra::Entity e : rt.Registry().GetEntityManager()) { (void)e; ++n; } return n; }
+}
+
+TEST_CASE("Play as embedded server stands up a second DedicatedServer world on the same ProcessContext with the same scene; Stop tears it down", "[editor][netmode]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::RegisterSceneComponents(runtime.Registry());
+    const Astra::Entity root = runtime.Registry().CreateEntityWith(Arcane::Transform{});
+    runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+    runtime.Registry().CreateEntityWith(Arcane::Transform{});
+    const std::size_t authored = CountEntities(runtime);
+
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime, nullptr, Arcane::Editor::PlayTopology::EmbeddedServer));
+    Arcane::Runtime* server = play.ServerWorld();
+    REQUIRE(server != nullptr);
+    CHECK(server->Mode() == Arcane::NetMode::DedicatedServer);
+    CHECK(server->HasAuthority());
+    CHECK(&server->Process() == &runtime.Process());          // shares the ProcessContext and nothing else
+    CHECK(server != &runtime);
+    CHECK(CountEntities(*server) == authored);                // the same scene, restored registry-only
+    CHECK(runtime.Mode() == Arcane::NetMode::Client);
+    CHECK_FALSE(runtime.HasAuthority());
+    CHECK_FALSE(server->Loop().IsPaused());
+    for (int i = 0; i < 5; ++i) play.TickServer(1.0 / 60.0);  // ticks independently of the editor's world
+    CHECK(server->Loop().IsPaused() == false);
+
+    REQUIRE(play.Stop(runtime));
+    CHECK(play.ServerWorld() == nullptr);
+    CHECK(runtime.Mode() == Arcane::NetMode::Standalone);
+    CHECK(runtime.Loop().IsPaused());
+    CHECK(CountEntities(runtime) == authored);
+}
+
+TEST_CASE("Play as listen server flips the ONE world to ListenServer; Stop restores Standalone", "[editor][netmode]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime, nullptr, Arcane::Editor::PlayTopology::ListenServer));
+    CHECK(runtime.Mode() == Arcane::NetMode::ListenServer);
+    CHECK(runtime.HasAuthority());
+    CHECK(play.ServerWorld() == nullptr);                     // one world, dual role (spec R3)
+    REQUIRE(play.Stop(runtime));
+    CHECK(runtime.Mode() == Arcane::NetMode::Standalone);
+}
+
+TEST_CASE("Play as embedded server with a loaded module: the server world gets the Server-masked system, the editor world the Client-masked", "[editor][netmode][hotreload]")
+{
+    using namespace Arcane::HotReloadTest;
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    runtime.Components()->RegisterComponent<Pulse>(); runtime.Components()->RegisterComponent<RoleCounters>();
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(runtime);
+    REQUIRE(host.Load());
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime, &host, Arcane::Editor::PlayTopology::EmbeddedServer));
+    REQUIRE(play.ServerWorld() != nullptr);
+    CHECK(host.Runtimes().size() == 2);
+    CHECK(play.ServerWorld()->Schedulers().fixedUpdate.HasSystem<ServerOnlyTick>());
+    CHECK_FALSE(play.ServerWorld()->Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());
+    CHECK(runtime.Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());
+    CHECK_FALSE(runtime.Schedulers().fixedUpdate.HasSystem<ServerOnlyTick>());
+    REQUIRE(play.Stop(runtime, &host));
+    CHECK(host.Runtimes().size() == 1);
+    host.Unload();
 }

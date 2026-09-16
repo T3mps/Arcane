@@ -126,6 +126,36 @@ namespace Arcane
     [[nodiscard]] ARCANE_API bool PickPixelInRange(std::int32_t x, std::int32_t y,
                                                     std::uint32_t width, std::uint32_t height) noexcept;
 
+    // ONE WORLD a host was running when it wrote its report (schemaVersion 6,
+    // Core-DLL split plan 1 Task 7). A process is no longer one world: the
+    // editor's "client + embedded server" play mode runs a Client world and a
+    // DedicatedServer world side by side on one ProcessContext, and an agent
+    // that can only see the process cannot otherwise tell whether the second
+    // one came up at all -- let alone whether it got the same scene.
+    //
+    //   role               -- Arcane::ToString(Runtime::Mode()): "Standalone" |
+    //                         "DedicatedServer" | "ListenServer" | "Client".
+    //   hasAuthority       -- Runtime::HasAuthority(): true for every role but
+    //                         Client. Carried as its own field rather than left
+    //                         to be re-derived from `role`, so a consumer across
+    //                         the Servitor boundary never has to hardcode the
+    //                         engine's role->authority table.
+    //   entities           -- how many entities that world's registry holds. Two
+    //                         worlds seeded from the same scene report the same
+    //                         number; that equality is the fact an embedded-server
+    //                         scenario actually asserts.
+    //   fixedUpdateSystems -- the size of that world's fixedUpdate scheduler: the
+    //                         engine pair plus whatever the module's ROLE-MASKED
+    //                         factories instantiated for this world's NetMode, so
+    //                         a client and a server world legitimately differ.
+    struct WorldFact
+    {
+        std::string   role;
+        bool          hasAuthority = false;
+        std::uint64_t entities = 0;
+        std::uint64_t fixedUpdateSystems = 0;
+    };
+
     // Accumulates one host run's observations and renders them as one JSON
     // document. Every setter is independent and optional except Evaluate,
     // which reads back whatever SetCapture/AddCensus have been given so far
@@ -145,10 +175,12 @@ namespace Arcane
         // the ordered candidate list ResolveReference actually probed
         // (Arcane::ReferenceResolution::triedPaths), so an agent debugging a
         // "resolvedLevel none" verdict can see WHERE this run looked rather
-        // than guessing from the naming convention. 3 and 4 remain readable:
-        // every field a 3-era or 4-era consumer knows is still emitted with
-        // the same meaning.
-        static constexpr int kSchemaVersion                = 5;
+        // than guessing from the naming convention. 6 added `worlds` -- one
+        // entry per live Runtime (WorldFact above), because a process is no
+        // longer one world. 3, 4 and 5 remain readable: every field a 3-, 4- or
+        // 5-era consumer knows is still emitted with the same meaning, and
+        // `worlds` is ABSENT on any run that did not set it.
+        static constexpr int kSchemaVersion                = 6;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -386,6 +418,15 @@ namespace Arcane
         void SetSettle(std::uint64_t attemptsUsed, bool converged, SettleBail bail,
                        bool captureFailed);
 
+        // The run's WORLD SET (schemaVersion 6) -- see WorldFact above for what
+        // each field means. Emitted as a `worlds` array ONLY when this was
+        // actually called: the same absence-must-be-absence contract
+        // SetCapture/SetCompare/SetSettle already uphold, so "this host does not
+        // report worlds" stays distinguishable from "this run had none". Order is
+        // the HOST's: the editor emits its own world first, then the embedded
+        // server world when one is up.
+        void SetWorlds(std::vector<WorldFact> worlds);
+
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
         // Callable more than once (specs accumulate) -- there is no reset,
@@ -464,6 +505,11 @@ namespace Arcane
         bool          m_settleConverged     = false;
         SettleBail    m_settleBail          = SettleBail::Keep;
         bool          m_settleCaptureFailed = false;
+
+        // The world set (schemaVersion 6) -- m_worldsSet gates emission the same
+        // way every other optional section's flag does.
+        bool                   m_worldsSet = false;
+        std::vector<WorldFact> m_worlds;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

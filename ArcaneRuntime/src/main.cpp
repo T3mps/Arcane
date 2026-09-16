@@ -65,6 +65,23 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    // --play-as: THIS HOST'S SECOND REFUSAL, in the same table and for the same
+    // reason (Core-DLL split, plan 1 Task 7). The flag asks an editor to LEAVE
+    // Edit mode at boot in a chosen topology; this host has no Edit mode to
+    // leave and no PlaySession to enter -- it is always simply running the game
+    // -- so parsing it and shrugging would exit 0 having silently ignored a
+    // topology the caller explicitly asked for. Same position too: AHEAD of
+    // Diagnostics::Install, so this `return 2;` is already clean (see the
+    // --dump-layout block above for the full watchdog-join reasoning).
+    if (!parsed.config->playAs.empty())
+    {
+        std::fprintf(stderr, "error: --play-as is an EDITOR-only flag (this host has no Edit "
+                             "mode to leave and no play session to enter; it always runs the "
+                             "game). Use ArcaneEditor.exe, or ArcaneServer.exe for a dedicated "
+                             "server.\n");
+        return 2;
+    }
+
     // Same arming as the editor, same reasoning, same position relative to the
     // probe -- see ArcaneEditor/src/main.cpp. The two hosts must not diverge on
     // whether a crash or a hang leaves evidence behind.

@@ -501,9 +501,12 @@ namespace Arcane::Editor
     }
 
     bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            const Arcane::PluginVTable* plugin,
-                            PlayLaunchMode& mode, uint64_t logoTex)
+                            Arcane::PluginHost* host,
+                            PlayLaunchMode& mode, bool& launchServerRequested,
+                            uint64_t logoTex)
     {
+        launchServerRequested = false;   // always written before this returns
+
         // Icon button with a hover tooltip (icons need discoverable labels).
         // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
         // glyph so that two buttons showing the SAME icon (e.g. Play and Resume
@@ -614,11 +617,42 @@ namespace Arcane::Editor
                        playing, playing ? "Stop" : "Play"))
         {
             if (playing)
-                play.Stop(runtime, plugin);
-            else if (mode == PlayLaunchMode::SeparateWindow)
-                launchStandaloneRequested = true;   // caller resolves + spawns; play/plugin untouched
+            {
+                // ONE Stop for every topology -- PlaySession tears down whatever
+                // it stood up (the embedded server world detaches here). The
+                // SEPARATE server PROCESS is not this object's to kill; the caller
+                // stops it right after, keyed on the Play->Edit flip.
+                play.Stop(runtime, host);
+            }
             else
-                play.Play(runtime, plugin);
+            {
+                switch (mode)
+                {
+                    case PlayLaunchMode::Viewport:
+                        play.Play(runtime, host, PlayTopology::Standalone);
+                        break;
+                    case PlayLaunchMode::SeparateWindow:
+                        launchStandaloneRequested = true;   // caller resolves + spawns; play/plugin untouched
+                        break;
+                    case PlayLaunchMode::ListenServer:
+                        play.Play(runtime, host, PlayTopology::ListenServer);
+                        break;
+                    case PlayLaunchMode::EmbeddedServer:
+                        play.Play(runtime, host, PlayTopology::EmbeddedServer);
+                        break;
+                    case PlayLaunchMode::SeparateServerProcess:
+                        // BOTH halves, and in this order: the viewport world enters
+                        // Play as a CLIENT here, and the caller spawns the authority
+                        // (ArcaneServer.exe) for it. A Play that refuses leaves the
+                        // request standing anyway -- the caller's own spawn refusal
+                        // path is the one that reports, and a spawned server with no
+                        // client is still stoppable, whereas a silently skipped spawn
+                        // would leave the picker looking like it did nothing.
+                        play.Play(runtime, host, PlayTopology::ClientOnly);
+                        launchServerRequested = true;
+                        break;
+                }
+            }
         }
 
         // The split's second half. Zero spacing, then back up one border width so the
@@ -639,9 +673,10 @@ namespace Arcane::Editor
         // Play-mode dropdown (Task 6, runtime-host-fold arc): choose whether the Play
         // button this hangs off enters PIE ("In viewport", today's behavior) or spawns a
         // standalone ArcaneRuntime window on the active scene ("Separate window",
-        // fire-and-forget). These two rows are also the future SERVER-SET seam: a
-        // server-driven "how should this build play" directive lands here as a new
-        // row, never as a separate UI-only concept bolted on elsewhere.
+        // fire-and-forget). Those two rows WERE the future SERVER-SET seam, and the
+        // Core-DLL split's Task 7 is that future arriving: the three rows below are
+        // the network TOPOLOGIES, landing here as rows rather than as a separate
+        // UI-only concept bolted on elsewhere, exactly as promised.
         if (ImGui::BeginPopup("##play_mode"))
         {
             // MarkIniSettingsDirty on change, as the shader editor's layout
@@ -656,6 +691,29 @@ namespace Arcane::Editor
             if (ImGui::MenuItem("Separate window", nullptr, mode == PlayLaunchMode::SeparateWindow))
             {
                 mode = PlayLaunchMode::SeparateWindow;
+                ImGui::MarkIniSettingsDirty();
+            }
+            ImGui::Separator();
+            // The topology rows (spec s7). The first two stay IN the viewport --
+            // they are PlaySession topologies, one world and two worlds
+            // respectively -- while the third is the viewport world as a pure
+            // client with the authority in a spawned ArcaneServer.exe.
+            if (ImGui::MenuItem("Listen server (in viewport)", nullptr,
+                                mode == PlayLaunchMode::ListenServer))
+            {
+                mode = PlayLaunchMode::ListenServer;
+                ImGui::MarkIniSettingsDirty();
+            }
+            if (ImGui::MenuItem("Client + embedded server (in viewport)", nullptr,
+                                mode == PlayLaunchMode::EmbeddedServer))
+            {
+                mode = PlayLaunchMode::EmbeddedServer;
+                ImGui::MarkIniSettingsDirty();
+            }
+            if (ImGui::MenuItem("Client + separate server process", nullptr,
+                                mode == PlayLaunchMode::SeparateServerProcess))
+            {
+                mode = PlayLaunchMode::SeparateServerProcess;
                 ImGui::MarkIniSettingsDirty();
             }
             ImGui::EndPopup();

@@ -177,6 +177,16 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          ArcaneRuntime REFUSES OUTRIGHT (see that exe's
 //                          main.cpp) -- there is no ImGui layout on a game
 //                          host to dump.
+//   --play-as <topology> -- HONOURED as of the Core-DLL split's plan 1 Task 7:
+//                          enter Play at the END of boot (EditorApp::
+//                          StageFinalize, after the boot scene is loaded) in the
+//                          named topology -- standalone | listen-server |
+//                          embedded-server | client, the scripted half of the
+//                          transport's play-mode picker. THE SECOND FLAG THIS
+//                          HOST HONOURS THAT ArcaneRuntime REFUSES OUTRIGHT (see
+//                          that exe's main.cpp, beside --dump-layout's refusal):
+//                          a game host has no Edit mode to leave and no play
+//                          session to enter.
 //   --settle / --report -- HONOURED as of Task 9 (the editor's verification
 //   --compare / --bless    surface): PresentChromeFrame's capture arm is the
 //                          SAME three-conjunct predicate (byte-equal &&

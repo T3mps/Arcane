@@ -11,6 +11,7 @@
 #include "App/EditorApp.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Project/RuntimeLaunch.hpp"
+#include "Project/ServerLaunch.hpp"   // DoLaunchServer's candidate list + argv
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -128,7 +129,10 @@ namespace Arcane::Editor
         // FIRST because Stop restores the pre-Play snapshot: left running, it would
         // later overwrite whatever scene is loaded after this.
         if (InPlayMode())
-            m_play.Stop(m_runtime->Core(), m_plugin ? m_plugin->Vtable() : nullptr);
+            m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
+        // The separate-server topology's other half dies with the session it
+        // belongs to. Unconditional: a silent no-op on every other topology.
+        m_serverProcess.Stop();
         m_selection.Clear();
         // Click-pick can have a readback IN FLIGHT that names entities of the
         // outgoing scene. Bumping the
@@ -372,6 +376,56 @@ namespace Arcane::Editor
 
         if (!Arcane::Editor::RuntimeLaunch::SpawnDetached(resolved, args))
             m_modalErrors.Push("Play in Separate Window Failed",
+                                "Failed to launch '" + resolved.string() +
+                                "'. See the Console for details.");
+    }
+
+    // The "Client + separate server process" play mode's spawn (Core-DLL split,
+    // plan 1 Task 7). Same shape as DoLaunchStandalone directly above --
+    // resolve, refuse loudly, spawn -- with the two differences its declaration
+    // states: the child is TRACKED (m_serverProcess, so Stop can end it) and the
+    // scene-readiness gate does not apply (ArcaneServer boots the manifest's
+    // bootScene, not the live document).
+    void EditorApp::DoLaunchServer()
+    {
+        const Arcane::Project* proj = m_runtime->CurrentProject();
+        if (!proj)
+        {
+            m_modalErrors.Push("Play with Separate Server Failed",
+                                "Open a project before playing with a separate server process.");
+            return;
+        }
+
+        const std::vector<std::filesystem::path> candidates =
+            Arcane::Editor::ServerLaunch::ExeCandidates(CurrentExeDir());
+
+        std::filesystem::path resolved;
+        std::error_code ec;
+        for (const std::filesystem::path& candidate : candidates)
+        {
+            if (std::filesystem::is_regular_file(candidate, ec))
+            {
+                resolved = candidate;
+                break;
+            }
+        }
+
+        if (resolved.empty())
+        {
+            std::string looked;
+            for (const std::filesystem::path& candidate : candidates)
+            {
+                if (!looked.empty()) looked += "\nand\n";
+                looked += "'" + candidate.string() + "'";
+            }
+            ARC_ERROR("LaunchServer: ArcaneServer.exe not found ({})", looked);
+            m_modalErrors.Push("Play with Separate Server Failed",
+                                "ArcaneServer.exe was not found. Looked in:\n" + looked);
+            return;
+        }
+
+        if (!m_serverProcess.Spawn(resolved, Arcane::Editor::ServerLaunch::BuildArgs(proj->Root())))
+            m_modalErrors.Push("Play with Separate Server Failed",
                                 "Failed to launch '" + resolved.string() +
                                 "'. See the Console for details.");
     }

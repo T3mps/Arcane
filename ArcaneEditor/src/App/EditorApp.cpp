@@ -161,7 +161,7 @@ namespace Arcane::Editor
         // rollback) could have left in a bogus state. Viewport is also the
         // safe fallback: it is today's behavior, unchanged.
         if (std::sscanf(line, "Mode=%d", &mode) == 1 && mode >= 0 &&
-            mode <= static_cast<int>(Arcane::Editor::PlayLaunchMode::SeparateWindow))
+            mode <= static_cast<int>(Arcane::Editor::PlayLaunchMode::SeparateServerProcess))
         {
             self->m_playMode = static_cast<Arcane::Editor::PlayLaunchMode>(mode);
         }
@@ -1091,6 +1091,26 @@ namespace Arcane::Editor
         // boot would otherwise leave armed. See RetargetDumpDir's own
         // comment below for the <project>/Saved/Diagnostics vs default split.
         RetargetDumpDir();
+
+        // --play-as (Core-DLL split, plan 1 Task 7): the SCRIPTED half of the
+        // play-mode picker. Last thing in boot, and that placement is the whole
+        // correctness argument -- OnProjectOpened above has already loaded the
+        // manifest's bootScene (HostBoot::BootScene) and run EnsureScene, so the
+        // registry Play snapshots here IS the authored scene. Entering Play any
+        // earlier would seed an embedded server world from a pre-scene registry
+        // and then watch the editor's own world diverge from it.
+        if (!m_config.playAs.empty())
+        {
+            using Topo = Arcane::Editor::PlayTopology;
+            const Topo topo = m_config.playAs == "listen-server"   ? Topo::ListenServer
+                             : m_config.playAs == "embedded-server" ? Topo::EmbeddedServer
+                             : m_config.playAs == "client"          ? Topo::ClientOnly
+                                                                    : Topo::Standalone;
+            // HostConfig::Parse already refused every other spelling, so the
+            // fall-through above is "standalone" and nothing else.
+            if (!m_play.Play(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr, topo))
+                ARC_ERROR("--play-as {}: Play refused", m_config.playAs);
+        }
         return true;
     }
 
@@ -2809,6 +2829,31 @@ namespace Arcane::Editor
                 report.AddCensus(census.spriteReferenced, census.spriteBound,
                                   census.postReferenced, census.postBound,
                                   census.meshReferenced, census.meshBound);
+            }
+
+            // The WORLD SET (schemaVersion 6, Core-DLL split plan 1 Task 7). A
+            // process is no longer a world: --play-as embedded-server runs the
+            // editor's world as a Client beside a DedicatedServer one, and from
+            // outside the process there is otherwise no way to tell whether the
+            // second came up -- let alone whether it got the same scene. Carried
+            // unconditionally, like the census above: both facts are live reads
+            // that cost nothing, and a run with one world reports one entry.
+            {
+                std::vector<Arcane::WorldFact> worlds;
+                auto fact = [](Arcane::Runtime& rt)
+                {
+                    Arcane::WorldFact w;
+                    w.role         = Arcane::ToString(rt.Mode());
+                    w.hasAuthority = rt.HasAuthority();
+                    std::uint64_t n = 0;
+                    for (Astra::Entity e : rt.Registry().GetEntityManager()) { (void)e; ++n; }
+                    w.entities           = n;
+                    w.fixedUpdateSystems = rt.Schedulers().fixedUpdate.Size();
+                    return w;
+                };
+                worlds.push_back(fact(m_runtime->Core()));
+                if (Arcane::Runtime* s = m_play.ServerWorld()) worlds.push_back(fact(*s));
+                report.SetWorlds(std::move(worlds));
             }
 
             // The --compare verdict (Task 9), ported from RuntimeApp::

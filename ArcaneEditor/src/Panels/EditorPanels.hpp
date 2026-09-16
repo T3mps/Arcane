@@ -21,7 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace Arcane { class RunLoop; class Runtime; class Project; struct PluginVTable; }
+namespace Arcane { class RunLoop; class Runtime; class Project; class PluginHost; struct PluginVTable; }
 namespace Astra { class Registry; }
 
 namespace Arcane::Editor
@@ -146,9 +146,12 @@ namespace Arcane::Editor
     // Not its own window: no tab, cannot be docked or moved. Unity-style toggles (Play
     // tinted while playing, Pause tinted while paused + disabled outside Play, Step
     // disabled outside Play). Undo/Redo moved to the Edit menu; the gizmo tools moved to
-    // the Viewport overlay. `plugin` is the hosted plugin's vtable (may be null):
-    // Play/Stop route through its SaveState/LoadState so the plugin re-establishes its
-    // native resources on restore. Does NOT take a RunLoop&: play.Stop() ->
+    // the Viewport overlay. `host` is the hosted PluginHost (may be null): Play/Stop
+    // route through its vtable's SaveState/LoadState so the plugin re-establishes its
+    // native resources on restore, AND it is what attaches/detaches the embedded server
+    // world in the EmbeddedServer topology -- one parameter, both jobs (Core-DLL split,
+    // plan 1 Task 7; it used to be a bare `const PluginVTable*`).
+    // Does NOT take a RunLoop&: play.Stop() ->
     // Runtime::RestoreRegistry destroys and replaces the RunLoop, so the loop is fetched
     // fresh from `runtime` AFTER Play/Stop handling. `logoTex` is the Arcane logo as an
     // ImGui texture id (the raw nri::Texture* as a uint64_t, matching DrawViewportPanel's
@@ -165,9 +168,19 @@ namespace Arcane::Editor
     // checks are NOT owned by that spawn step -- they live in the SceneSession
     // intent machine (SceneSession::Request, run by RunSceneAction before this
     // ever returns true); DoLaunchStandalone keeps only a defensive backstop.
+    //
+    // ListenServer/EmbeddedServer enter Play right here, like Viewport, differing
+    // only in the PlayTopology handed to play.Play. SeparateServerProcess does
+    // BOTH halves: it enters Play as a CLIENT world here AND sets
+    // `launchServerRequested` for that one frame, which the caller turns into an
+    // ArcaneServer.exe spawn (EditorApp::DoLaunchServer) -- the same "panel
+    // reports, app performs" split as the return value above, in its own out
+    // parameter because the two requests are independent and can never both be
+    // true. It is always written (true or false) before this returns.
     [[nodiscard]] bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                                          const Arcane::PluginVTable* plugin,
-                                          PlayLaunchMode& mode, uint64_t logoTex = 0);
+                                          Arcane::PluginHost* host,
+                                          PlayLaunchMode& mode, bool& launchServerRequested,
+                                          uint64_t logoTex = 0);
 
     // (The three asset panels are the REAL browser now --
     // AssetBrowserPanel/AssetGraphPanel/AssetStatusPanel, panel-split Task 7;

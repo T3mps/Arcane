@@ -43,6 +43,7 @@
 #include "Project/CookQueue.hpp"
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
 #include "Project/ModuleBuild.hpp"
+#include "Project/ServerLaunch.hpp"   // ServerProcess is a BY-VALUE member (m_serverProcess)
 #include "App/PlayMode.hpp"
 #include "Panels/ProblemsPanel.hpp"
 #include "Project/EditorRecents.hpp"
@@ -781,6 +782,15 @@ namespace Arcane::Editor
         // plugin loads).
         Arcane::Editor::PlaySession m_play;
 
+        // The "Client + separate server process" play mode's child (Core-DLL split,
+        // plan 1 Task 7): ONE tracked ArcaneServer.exe, spawned by DoLaunchServer and
+        // stopped on every Play->Edit flip. Beside m_play deliberately -- it is the
+        // other half of that topology's Play session, and the two are started and
+        // stopped together. Stop() is a silent no-op when nothing was spawned, which
+        // is what lets every Stop site call it unconditionally; the destructor is the
+        // backstop for an editor that exits mid-session.
+        Arcane::Editor::ServerLaunch::ServerProcess m_serverProcess;
+
         // THE Play/edit predicate (architecture pass sec 1). Editor code asks this,
         // never m_play.IsPlaying() raw, so the predicate has one greppable name.
         [[nodiscard]] bool InPlayMode() const noexcept { return m_play.IsPlaying(); }
@@ -920,6 +930,20 @@ namespace Arcane::Editor
         // Effect for the LaunchStandalone intent (RunSceneAction's case). Not
         // called directly outside that -- the SceneSession machine is the gate.
         void DoLaunchStandalone();
+
+        // The "Client + separate server process" spawn (Core-DLL split, plan 1
+        // Task 7), mirroring DoLaunchStandalone above: resolve ArcaneServer.exe
+        // from ServerLaunch::ExeCandidates(CurrentExeDir()), take the first
+        // candidate that is a real file, and spawn it on the open project.
+        // Both refusals (no project, no exe) surface as a modal naming what was
+        // looked for, exactly as the standalone launch's do.
+        //
+        // NOT routed through the SceneSession intent machine, and that is the one
+        // real difference: the server boots the project MANIFEST's bootScene, not
+        // whatever is on screen, so there is no "save this scene first" question
+        // to park behind -- the unsaved-scene guard DoLaunchStandalone needs
+        // exists because THAT spawn passes --scene <guid> of the live document.
+        void DoLaunchServer();
 
         // Ordered multi-select source of truth (set + primary); slice-2 consumers
         // operate on Primary(), shared by the Hierarchy panel (and, later, the

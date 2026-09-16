@@ -126,6 +126,12 @@ namespace Arcane
         // after OnInit, any other attached Runtime at attach, and all of them again
         // after a hot reload. The std::function lives in THIS module and PluginHost
         // clears it before the image unmaps.
+        //
+        // THIS IS ALSO THE ONLY WAY A SYSTEM SURVIVES A MODE FLIP: Runtime::SetNetMode
+        // clears the schedulers and re-instantiates from this table, so a module that
+        // still adds systems DIRECTLY in OnInit (the pre-ABI-30 idiom) loses them the
+        // moment its world is re-roled -- the editor's play-mode picker does exactly
+        // that -- and does not get them back until the next reload.
         template <class System, class... Args>
         void RegisterSystem(RoleMask mask, SystemPhase phase, Args... args)
         {

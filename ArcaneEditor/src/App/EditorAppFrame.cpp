@@ -1231,6 +1231,12 @@ namespace Arcane::Editor
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
+        // The embedded server world (EmbeddedServer topology) advances on the same
+        // real dt, right after -- its OWN loop and its OWN Server-masked systems.
+        // The module's FixedUpdate hook above is bound to the PRIMARY world and is
+        // deliberately NOT re-run for it (MultiRuntimeReloadTest's StepAll documents
+        // the same rule). A no-op on every other topology.
+        m_play.TickServer(simDt);
         m_runtime->AudioSystem().Update(simDt);
     }
 
@@ -2024,8 +2030,15 @@ namespace Arcane::Editor
         // the readiness checks live in SceneSession::Request's park condition
         // (dirty OR never-saved) and DoLaunchStandalone keeps only a loud
         // backstop before the spawn.
+        // The Play->Edit flip this toolbar can perform is also what ends a
+        // "Client + separate server process" session, and the panel has no
+        // business owning a process handle -- so the flip is OBSERVED here
+        // (panel reports, app performs, same split as the two requests below).
+        const bool wasPlaying = InPlayMode();
+        bool launchServerRequested = false;
         if (Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
-                                               m_plugin ? m_plugin->Vtable() : nullptr, m_playMode,
+                                               m_plugin ? &*m_plugin : nullptr, m_playMode,
+                                               launchServerRequested,
                                                ToolbarLogoTextureId()))
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
@@ -2034,6 +2047,16 @@ namespace Arcane::Editor
             if (m_scene.Request(Arcane::Editor::SceneIntent::LaunchStandalone, {}, *m_undo))
                 ls.sceneAction = { Arcane::Editor::SceneIntent::LaunchStandalone, {} };
         }
+        // Unlike the standalone launch above, this one needs no SceneSession
+        // gate: ArcaneServer boots the project MANIFEST's bootScene, so there
+        // is no unsaved live document for it to get wrong (DoLaunchServer's
+        // own declaration states the split).
+        if (launchServerRequested)
+            DoLaunchServer();
+        // Stop is the end of the whole session, including the child process.
+        // A no-op on every topology that never spawned one.
+        if (wasPlaying && !InPlayMode())
+            m_serverProcess.Stop();
         // The toolbar's Play/Stop click is the only mid-frame PlayMode flip point
         // (sec 1's rule): re-derive so this frame's consume blocks and panels see
         // the true state, not last frame's.
@@ -2966,7 +2989,8 @@ namespace Arcane::Editor
                     // LaunchStandalone only reaches here already saved-or-dirty,
                     // never mid-Play in a way DoLaunchStandalone itself needs.
                     if (InPlayMode())
-                        m_play.Stop(m_runtime->Core(), m_plugin ? m_plugin->Vtable() : nullptr);
+                        m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
+                    m_serverProcess.Stop();   // the session's other half; no-op otherwise
                     if (m_scene.Path().empty())
                     {
                         // Never saved: this needs a filename first. The intent

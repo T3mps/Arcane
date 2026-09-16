@@ -30,6 +30,8 @@ namespace Arcane
         cli.Option("dump-layout", "", "write the live ImGui layout to this .ini at shutdown "
                                       "(editor only; the authoring half of the committed "
                                       "verify-layout.ini seed)");
+        cli.Option("play-as", "", "editor only: start playing at boot as standalone | "
+                                  "listen-server | embedded-server | client");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
                                          "for AT LEAST N attempts -- it gives up only once BOTH N attempts "
@@ -111,6 +113,7 @@ namespace Arcane
         cfg.probes         = r.GetMany("probe");
         cfg.reportPath     = r.Get("report");
         cfg.dumpLayoutPath = r.Get("dump-layout");
+        cfg.playAs         = r.Get("play-as");
         // Malformed --probe syntax is refused HERE, at parse time, not
         // deferred to evaluation. VerifyReport::Evaluate only ever sees specs
         // ParseProbe already accepted (a host parses-and-logs separately, at
@@ -207,6 +210,21 @@ namespace Arcane
             (!std::isfinite(*cfg.fixedTimeSeconds) || *cfg.fixedTimeSeconds < 0.0))
         {
             std::fprintf(stderr, "error: --fixed-time wants a non-negative, finite number of seconds\n");
+            return { std::nullopt, 2 };
+        }
+        // --play-as: a VALUE check, not a Cli::Choices() one -- the registered
+        // default is "" (absent = an ordinary Edit-mode boot) and an empty string
+        // is not one of the choices, so registering them would refuse every run
+        // that never passed the flag. A misspelled topology must still be a
+        // refusal rather than a silent fall-through to Standalone: "the editor
+        // played, just not the way you asked" is exactly the invisible wrong
+        // answer rule 3 exists to prevent.
+        if (!cfg.playAs.empty() && cfg.playAs != "standalone" && cfg.playAs != "listen-server"
+            && cfg.playAs != "embedded-server" && cfg.playAs != "client")
+        {
+            std::fprintf(stderr, "error: --play-as must be one of standalone | listen-server | "
+                                 "embedded-server | client\n");
+            cli.PrintUsage();
             return { std::nullopt, 2 };
         }
         // "Was --settle supplied" mirrors --fixed-dt's own r.Supplied() reasoning

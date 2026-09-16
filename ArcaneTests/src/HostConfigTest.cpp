@@ -934,3 +934,25 @@ TEST_CASE("host config: --fixed-time is optional and validated like --fixed-dt",
         CHECK(code == 2);
     }
 }
+
+// ---- Core-DLL split, plan 1 Task 7: --play-as (EDITOR only) ----------------
+
+TEST_CASE("host config: --play-as round-trips a known topology, refuses an unknown one, and defaults empty", "[host]")
+{
+    // NOT a Cli::Choices() list: the registered default is "" (absent = the
+    // editor's ordinary Edit-mode boot), and an empty string is not one of the
+    // choices -- so the refusal is a post-parse one, like --fixed-dt's.
+    const auto ok = Run({ "--play-as", "embedded-server" });
+    REQUIRE(ok.config.has_value());
+    CHECK(ok.config->playAs == "embedded-server");
+
+    const auto bad = RunCapturingStderr({ "--play-as", "bogus" });
+    CHECK_FALSE(bad.outcome.config.has_value());
+    CHECK(bad.outcome.exitCode == 2);
+    if (bad.captured)
+        CHECK(bad.err.find("--play-as must be one of") != std::string::npos);
+
+    const auto absent = Run({});
+    REQUIRE(absent.config.has_value());
+    CHECK(absent.config->playAs.empty());
+}

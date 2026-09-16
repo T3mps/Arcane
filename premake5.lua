@@ -1025,6 +1025,16 @@ project "ArcaneTests"
         -- invoked by any test -- process creation is desk-verify territory,
         -- same "no spawn test" rule the task brief states outright.
         "%{wks.location}/ArcaneEditor/src/Project/RuntimeLaunch.cpp",
+        -- Core-DLL split Plan 1, Task 7: ServerLaunch -- the "Client + separate
+        -- server process" play mode's exe-candidate list and argv builder. Same
+        -- split, same reason as RuntimeLaunch.cpp directly above: ExeCandidates/
+        -- BuildArgs are PURE and the [editor] units drive them directly, while
+        -- ServerProcess::Spawn (the one CreateProcessW call in the file) is
+        -- compiled here but never invoked by any test -- process creation is
+        -- desk-verify territory. ServerProcess's DORMANT half (a never-spawned
+        -- handle's IsRunning/Stop) IS covered, because the editor calls Stop()
+        -- unconditionally after every Play->Stop.
+        "%{wks.location}/ArcaneEditor/src/Project/ServerLaunch.cpp",
         -- Diagnostics arc: DiagnosticStore (key -> current diagnostic set, the
         -- publication-group replace semantics, filter/sort/count) source-compiles
         -- into the test exe so the [diagnostics] units drive it directly -- no
