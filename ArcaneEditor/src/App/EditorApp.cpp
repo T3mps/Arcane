@@ -1003,8 +1003,11 @@ namespace Arcane::Editor
             // A game module OR just project plugin modules is enough to host: an empty
             // gameModule makes a plugins-only host (open a plugin-only project to work on it
             // before its game DLL exists). PluginHost handles the primary-less case.
-            m_plugin.emplace(m_runtime->Core(),
+            // ABI 30: built on the ProcessContext; the editor's one world is ATTACHED
+            // (and is therefore the primary -- the module's own world).
+            m_plugin.emplace(*m_process,
                 gameModule.empty() ? std::filesystem::path{} : std::filesystem::path(gameModule));
+            m_plugin->AttachRuntime(m_runtime->Core());
             for (const auto& dll : pluginModules)
                 m_plugin->AddPlugin(dll);
             if (!m_plugin->Load())

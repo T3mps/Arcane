@@ -17,6 +17,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>   // AssetRegistry::ScanProgressFn (OpenProject's progress param) -- light header, not Project.hpp
 #include <Arcane/Project/ProjectOpenOptions.hpp>   // ProjectOpenOptions (OpenProject's opts param) -- also light, also not Project.hpp
+#include <Arcane/Plugin/SystemFactory.hpp>   // NetMode (a ctor default argument) + the factory table this Runtime instantiates from
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
 
@@ -50,6 +51,9 @@ namespace Arcane
     // header themselves.
     class ClientRuntime;
     struct IClientHooks;
+    // The replication seam (Arcane/Sim/NetDriver.hpp). Runtime stores it, never
+    // owns it, and asks it exactly one question -- see SetNetDriver below.
+    struct INetDriver;
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -66,11 +70,44 @@ namespace Arcane
         // note in ArcaneTests stands).
         // The audio-device flag that used to live here is ClientRuntime's now
         // (there is no audio device below the client seam).
-        explicit Runtime(ProcessContext& process);
+        //
+        // `mode` is THIS world's network role (spec s4). It decides which of the
+        // loaded module's registered system factories this Runtime instantiates,
+        // and it is entirely independent of how the process was LAUNCHED
+        // (ProcessContext::IsDedicatedServerProcess) -- an editor process hosts a
+        // DedicatedServer world beside a Client one.
+        explicit Runtime(ProcessContext& process, NetMode mode = NetMode::Standalone);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;
         Runtime& operator=(const Runtime&) = delete;
+
+        // --- network role + the module's systems (spec s4) ---
+        [[nodiscard]] ProcessContext& Process()      noexcept;
+        [[nodiscard]] NetMode         Mode()         const noexcept;
+        // True for every mode but Client: this world owns the authoritative
+        // simulation. The ONE predicate gameplay code should branch on.
+        [[nodiscard]] bool            HasAuthority() const noexcept;
+
+        // Re-role this world: clear the systems (which reinstalls the engine pair
+        // and, through the client hooks, the presentation ones) and re-instantiate
+        // the module's factories for the new mode. Valid with no module loaded --
+        // the table is simply empty and nothing is instantiated.
+        void SetNetMode(NetMode m);
+
+        // Instantiate every factory in Process().SystemFactories() whose mask
+        // matches Mode(), into the matching phase scheduler. Idempotent: a second
+        // call re-adds nothing (Astra answers AlreadyRegistered, which is ignored).
+        // Called at the end of the ctor -- so a Runtime built AFTER the module
+        // loaded still gets its systems -- and by PluginHost on load, attach and
+        // hot reload.
+        std::size_t InstantiateModuleSystems();
+
+        // The replication driver for this world, or null. Set by the (future) net
+        // layer; PluginHost asks IsActive() before a hot reload and refuses while
+        // it answers true. Non-owning.
+        void                       SetNetDriver(INetDriver* d) noexcept;
+        [[nodiscard]] INetDriver*  NetDriver() const noexcept;
 
         // --- substrate the plugin registers into / the host drives ---
         Astra::Registry&        Registry()      noexcept;

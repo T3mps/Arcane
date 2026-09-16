@@ -27,6 +27,10 @@
 #include <filesystem>
 
 using Arcane::HotReloadTest::Pulse;
+// The plugin's other component type: a HOST-side base owner for every type the
+// module registers, so the module's unload pops its shadow onto a live entry
+// rather than onto nothing (see the RegisterComponent pairs below).
+using Arcane::HotReloadTest::RoleCounters;
 
 namespace
 {
@@ -54,8 +58,10 @@ TEST_CASE("PluginHost loads a plugin and runs it across the ABI", "[hotreload]")
 {
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();   // engine sees the type so views resolve
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
     REQUIRE(host.Load());
     REQUIRE(host.IsLoaded());
 
@@ -77,8 +83,10 @@ TEST_CASE("GameModule: OnShutdown runs while the module's component handle is st
 {
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
     REQUIRE(host.Load());
     StepK(rt, *host.Vtable(), 2);
     REQUIRE(ReadPulse(rt) == 2);
@@ -105,8 +113,10 @@ TEST_CASE("Hot swap V1->V2 preserves state AND runs the new code", "[hotreload]"
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
     REQUIRE(host.Load());
     StepK(rt, *host.Vtable(), 5);
     REQUIRE(ReadPulse(rt) == 5);
@@ -135,8 +145,10 @@ TEST_CASE("ABI mismatch rolls back to last-good; session survives", "[hotreload]
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
     REQUIRE(host.Load());
     StepK(rt, *host.Vtable(), 3);
     REQUIRE(ReadPulse(rt) == 3);
@@ -167,8 +179,10 @@ TEST_CASE("Host drives a secondary plugin alongside the primary", "[hotreload]")
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
     host.AddPlugin(std::filesystem::path("HotReloadPluginV2.dll"));   // secondary, +10 per step
     REQUIRE(host.Load());
     REQUIRE(host.IsLoaded());
@@ -200,8 +214,10 @@ TEST_CASE("Plugins-only host (no primary module) loads and drives its secondarie
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path{});           // no primary game module
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path{});           // no primary game module
+    host.AttachRuntime(rt);
     host.AddPlugin(std::filesystem::path("HotReloadPluginV1.dll")); // one secondary (+1/step)
     REQUIRE(host.Load());
     CHECK_FALSE(host.IsLoaded());            // no PRIMARY is loaded...
@@ -229,13 +245,15 @@ TEST_CASE("Unloading a plugin restores the descriptors it overrode", "[hotreload
     // non-null AND callable (a dangling restore faults right here).
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
 
     const Astra::ComponentID pulseId = Astra::TypeID<Pulse>::Value();
     const Astra::ComponentDescriptor* base = rt.Components()->GetComponentDescriptor(pulseId);
     REQUIRE(base != nullptr);
 
     {
-        Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+        Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+        host.AttachRuntime(rt);
         REQUIRE(host.Load());
         REQUIRE(rt.Components()->GetComponentDescriptor(pulseId) != nullptr);
         host.Unload();
@@ -283,12 +301,14 @@ TEST_CASE("Unloading secondaries leaves no descriptor aimed at their images", "[
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
     const Astra::ComponentID pulseId = Astra::TypeID<Pulse>::Value();
     const Astra::ComponentDescriptor* base = rt.Components()->GetComponentDescriptor(pulseId);
     REQUIRE(base != nullptr);
 
     {
-        Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+        Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+        host.AttachRuntime(rt);
         host.AddPlugin(std::filesystem::path("HotReloadPluginV2.dll"));   // secondary
         REQUIRE(host.Load());
         StepAllK(rt, host, 1);
@@ -325,8 +345,10 @@ TEST_CASE("Reload failure with no last-good yields an honest dead state", "[hotr
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadBadSrc.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadBadSrc.dll"));
+    host.AttachRuntime(rt);
     CHECK_FALSE(host.ForceReload());   // new image fails, no last-good -> double failure
     CHECK_FALSE(host.IsLoaded());      // honest: no plugin
     CHECK(host.Vtable() == nullptr);

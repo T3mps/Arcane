@@ -68,7 +68,7 @@ TEST_CASE("ClassTemplates::Render Component: a reflected struct in the header, t
     CHECK(r.source.back() == '\n');
 }
 
-TEST_CASE("ClassTemplates::Render System: a header-only SystemTraits functor with the paste-ready AddSystem line", "[editor]")
+TEST_CASE("ClassTemplates::Render System: a header-only SystemTraits functor with the paste-ready RegisterSystem line", "[editor]")
 {
     const ClassTemplates::Rendered r =
         ClassTemplates::Render(ClassTemplates::Kind::System, "Movement", "Aphelyon");
@@ -93,7 +93,12 @@ TEST_CASE("ClassTemplates::Render System: a header-only SystemTraits functor wit
     CHECK(Has(r.header, "Astra::Before<Arcane::TransformPropagationSystem>"));
     CHECK(Has(r.header, "Astra::After<"));
     CHECK(Has(r.header, "OnInit"));
-    CHECK(Has(r.header, "AddSystem<Aphelyon::Movement>()"));
+    // ABI 30 (Core-DLL split, spec 2026-09-15 s4): the paste-ready line is the
+    // SDK's RegisterSystem -- a role-masked FACTORY, not a direct AddSystem into
+    // one Runtime's scheduler -- so a wizard-made system serves every world the
+    // host attached.
+    CHECK(Has(r.header, "RegisterSystem<Aphelyon::Movement>(Arcane::RoleMask::Both, Arcane::SystemPhase::FixedUpdate)"));
+    CHECK_FALSE(Has(r.header, "AddSystem<"));
     CHECK_FALSE(Has(r.header, "GamePlugin_Init"));
     CHECK_FALSE(Has(r.header, "{{"));
     CHECK(r.header.back() == '\n');

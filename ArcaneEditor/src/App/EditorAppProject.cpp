@@ -3040,9 +3040,10 @@ namespace Arcane::Editor
         const auto pluginModules = Arcane::HostBoot::PluginModules(proj);
         if (gameModule.empty() && pluginModules.empty())
             return;
-        m_plugin.emplace(m_runtime->Core(),
+        m_plugin.emplace(*m_process,
             gameModule.empty() ? std::filesystem::path{}
                                : std::filesystem::path(gameModule));
+        m_plugin->AttachRuntime(m_runtime->Core());
         for (const auto& dll : pluginModules)
             m_plugin->AddPlugin(dll);
         if (!m_plugin->Load())

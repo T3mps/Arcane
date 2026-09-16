@@ -17,6 +17,7 @@
 #include <Arcane/Scene/TransformSystems.hpp>    // TransformPropagationSystem (engine-owned, instantiated IN this module)
 #include <Arcane/Serialization/RegistrySnapshot.hpp>
 #include <Arcane/Serialization/ResourceSerialization.hpp>
+#include <Arcane/Sim/NetDriver.hpp>   // INetDriver::IsActive (the hot-reload refusal asks it)
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/Component/ComponentModule.hpp>
@@ -98,10 +99,16 @@ namespace Arcane
         // so neither can outlive the object it points at.
         ClientRuntime*                              client = nullptr;
         IClientHooks*                               hooks  = nullptr;
+        // The network role of THIS world + the process object whose factory table it
+        // instantiates from (spec s4). `net` is the replication driver, non-owning.
+        ProcessContext*                             process = nullptr;
+        NetMode                                     mode    = NetMode::Standalone;
+        INetDriver*                                 net     = nullptr;
 
-        explicit Impl(ProcessContext& process) : jobs(), sched(jobs.WorkScheduler())
+        Impl(ProcessContext& proc, NetMode netMode)
+            : jobs(), sched(jobs.WorkScheduler()), process(&proc), mode(netMode)
         {
-            context = &process.TypeContext();
+            context = &proc.TypeContext();
 
             // Install the shared context in THIS module (ArcaneCore.dll) BEFORE any
             // TypeID/Registry use. ProcessContext::Create (Base/ProcessContext.cpp)
@@ -193,8 +200,8 @@ namespace Arcane
         }
     };
 
-    Runtime::Runtime(ProcessContext& process)
-        : m_impl(std::make_unique<Impl>(process))
+    Runtime::Runtime(ProcessContext& process, NetMode mode)
+        : m_impl(std::make_unique<Impl>(process, mode))
     {
         // Mosaic diagnostics: install the log sink + assert handler into THIS module
         // (ArcaneCore.dll) so Astra/Manifold2D/Mosaic code running here routes to the
@@ -203,8 +210,38 @@ namespace Arcane
         Arcane::Log::InstallMosaicSink();
         Arcane::Assert::InstallMosaicHandler();
         InstallEngineSystems();
+        // ...and then whatever the LOADED module already registered, for THIS mode:
+        // a Runtime built after the module loaded (the editor's embedded server
+        // world, a second PIE world) must not come up system-less. Empty table when
+        // no module is loaded -- the common case -- so this costs nothing.
+        InstantiateModuleSystems();
     }
     Runtime::~Runtime() = default;   // do not reset the module slot: a later Runtime re-installs
+
+    ProcessContext& Runtime::Process()      noexcept { return *m_impl->process; }
+    NetMode         Runtime::Mode()   const noexcept { return m_impl->mode; }
+    bool            Runtime::HasAuthority() const noexcept { return m_impl->mode != NetMode::Client; }
+
+    void Runtime::SetNetDriver(INetDriver* d) noexcept { m_impl->net = d; }
+    INetDriver* Runtime::NetDriver() const noexcept { return m_impl->net; }
+
+    std::size_t Runtime::InstantiateModuleSystems()
+    {
+        return m_impl->process->SystemFactories().InstantiateInto(*m_impl->schedulers, m_impl->mode);
+    }
+
+    void Runtime::SetNetMode(NetMode m)
+    {
+        if (m == m_impl->mode)
+            return;
+        ARC_INFO("Runtime: net mode {} -> {}", ToString(m_impl->mode), ToString(m));
+        m_impl->mode = m;
+        // ClearSystems reinstalls the engine pair and fires OnSystemsCleared (the
+        // client's presentation systems); the module's systems then come back for
+        // the NEW mode only -- which is the whole point of the re-role.
+        ClearSystems();
+        InstantiateModuleSystems();
+    }
 
     void Runtime::AttachClient(ClientRuntime* client, IClientHooks* hooks) noexcept
     {

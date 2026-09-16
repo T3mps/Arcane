@@ -40,6 +40,7 @@
 #include <Astra/Registry/Registry.hpp>
 
 using Arcane::HotReloadTest::Pulse;
+using Arcane::HotReloadTest::RoleCounters;
 
 namespace
 {
@@ -216,7 +217,8 @@ TEST_CASE("PluginHost::Load publishes the ABI-mismatch diagnostic under plugin:<
     Capture cap;
     Arcane::Diagnostics::SetSink(&CaptureSink, &cap);
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginBad.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginBad.dll"));
+    host.AttachRuntime(rt);
     CHECK_FALSE(host.Load());
 
     REQUIRE(cap.calls.size() == 1);
@@ -247,8 +249,10 @@ TEST_CASE("A failed reload publishes the cause; the next successful reload retra
 
     Arcane::Runtime rt(Arcane::Test::Process());
     rt.Components()->RegisterComponent<Pulse>();   // engine sees the type, mirrors PluginHostTest.cpp
+    rt.Components()->RegisterComponent<RoleCounters>();
 
-    Arcane::PluginHost host(rt, std::filesystem::path("HotReloadPluginV1.dll"));
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    host.AttachRuntime(rt);
     REQUIRE(host.Load());   // good load first -- its Diagnostics::Clear happens BEFORE the sink below
 
     Capture cap;

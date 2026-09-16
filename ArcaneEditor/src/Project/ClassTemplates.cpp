@@ -124,9 +124,11 @@ ARCANE_COMPONENT({{NS}}::{{CLASS}})
 // Systems are registered EXPLICITLY, because their order is a design act.
 // Add this line to your module's OnInit (Arcane/Plugin/GameModule.hpp):
 //
-//     std::ignore = ctx.engine->Schedulers().fixedUpdate.AddSystem<{{NS}}::{{CLASS}}>();
+//     RegisterSystem<{{NS}}::{{CLASS}}>(Arcane::RoleMask::Both, Arcane::SystemPhase::FixedUpdate);
 //
-// (fixedUpdate for simulation, render for submission-time work.)
+// (FixedUpdate for simulation, Render for submission-time work. The mask says
+// which worlds get it: RoleMask::Server for authoritative-only simulation,
+// RoleMask::Client for presentation-only, RoleMask::Both for either.)
 
 #include <Arcane/Scene/TransformSystems.hpp>   // the placement anchor
 

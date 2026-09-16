@@ -20,9 +20,13 @@
 // module needs. THE ENGINE OWNS ITS STANDARD SYSTEMS (Runtime::
 // InstallEngineSystems: PhysicsSystem -> TransformPropagationSystem in
 // fixedUpdate, RenderSubmissionSystem in render) -- a module registers ONLY its
-// own systems, in OnInit, and places them with Astra::Before<...> /
-// Astra::After<...> against the engine's types (Astra keys systems by a hash
-// of the type NAME, so that works across the DLL boundary).
+// own systems, in OnInit through RegisterSystem<T>(mask, phase) (ABI 30), and
+// places them with Astra::Before<...> / Astra::After<...> against the engine's
+// types (Astra keys systems by a hash of the type NAME, so that works across the
+// DLL boundary). RegisterSystem declares a FACTORY, not an instance: each of the
+// N Runtimes the host attached instantiates the subset its NetMode matches
+// (Arcane/Plugin/SystemFactory.hpp), which is what lets one module image serve a
+// server world and a client world in one process.
 //
 // EVERYTHING HERE INSTANTIATES IN THE MODULE IMAGE, on purpose: SetTypeContext,
 // the Mosaic installs and RegisterComponents each act on THIS module's own
@@ -32,9 +36,11 @@
 
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/ProcessContext.hpp>   // Process()/RegisterSystem reach SystemFactories()
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/GameComponents.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
+#include <Arcane/Plugin/SystemFactory.hpp>   // RoleMask / SystemPhase / SystemFactoryEntry
 #include <Arcane/Scene/SceneResources.hpp>   // SceneRoot: SceneRootEntity() + the Save/LoadState root id
 
 #include <Astra/Component/ComponentModule.hpp>
@@ -47,6 +53,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <tuple>       // std::ignore (RegisterSystem's AddSystem result)
 #include <type_traits>
 #include <vector>
 
@@ -91,6 +99,12 @@ namespace Arcane
         }
         [[nodiscard]] Runtime&         Engine()   const noexcept { return *Context().engine; }
         [[nodiscard]] Astra::Registry& Registry() const noexcept { return Engine().Registry(); }
+        // The process object (ABI 30): the shared TypeContext and the system-factory
+        // table. Engine() is the PRIMARY world; Process() is what every world shares.
+        [[nodiscard]] ProcessContext&  Process()  const noexcept { return *Context().process; }
+        // The presentation extension, or NULL on a headless host (ArcaneServer, an
+        // embedded server world, a headless test). Always null-check it.
+        [[nodiscard]] ClientRuntime*   Client()   const noexcept { return Context().client; }
         [[nodiscard]] Astra::ComponentModule& Components() const noexcept
         {
             ARC_ASSERT(m_components != nullptr, "GameModule::Components() outside the OnInit..OnShutdown window");
@@ -103,6 +117,21 @@ namespace Arcane
         {
             const SceneRoot* sr = Registry().GetResource<SceneRoot>();
             return sr ? sr->entity : Astra::Entity::Invalid();
+        }
+
+        // Register one of this module's systems ONCE per DLL load (spec s4: "systems
+        // stay explicit, their order is a design act" -- an explicit line in OnInit,
+        // with an explicit mask; Astra's Before/After traits still place it). Every
+        // Runtime whose NetMode matches `mask` instantiates it: the primary right
+        // after OnInit, any other attached Runtime at attach, and all of them again
+        // after a hot reload. The std::function lives in THIS module and PluginHost
+        // clears it before the image unmaps.
+        template <class System, class... Args>
+        void RegisterSystem(RoleMask mask, SystemPhase phase, Args... args)
+        {
+            Process().SystemFactories().Add(SystemFactoryEntry{
+                std::string(Astra::TypeID<System>::Name()), mask, phase,
+                [args...](Astra::SystemScheduler& s) { std::ignore = s.AddSystem<System>(args...); }, nullptr });
         }
 
         // Bound by ARCANE_GAME_MODULE's Init before OnInit runs. Not for modules.

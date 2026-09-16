@@ -5,6 +5,7 @@
 // EngineContext is the C++ facade handed to the plugin (Arcane::Runtime).
 
 #include <Arcane/Core/Api.hpp>
+#include <Arcane/Plugin/SystemFactory.hpp>   // NetMode (an EngineContext field, ABI 30)
 
 #include <cstdint>
 
@@ -13,7 +14,9 @@ namespace Mosaic { struct IWorkScheduler; }   // the shared data-parallel seam (
 
 namespace Arcane
 {
-    class Runtime;  // defined in Arcane.dll; the plugin holds it opaquely via EngineContext
+    class Runtime;  // defined in ArcaneCore.dll; the plugin holds it opaquely via EngineContext
+    class ProcessContext;  // <Arcane/Base/ProcessContext.hpp>; the process's one (ABI 30)
+    class ClientRuntime;   // ArcaneClient.dll's presentation extension; null on a headless host (ABI 30)
     struct ITaskExecutor;  // <Arcane/Jobs/TaskExecutor.hpp>; same enki pool, worker-index face
 
     // Bump on ANY change to EngineContext layout or the entry-point set/signatures.
@@ -829,7 +832,18 @@ namespace Arcane
     //     ReferenceProject.arcproj restamped with this change; Gacha's Game
     //     restamp (28 -> 29) is this plan's Task 4, in that repo, with the
     //     Aphelyon.cpp conversion -- not deferred.
-    inline constexpr uint32_t kGamePluginABIVersion = 29;
+    // v30 (2026-09-15, Core-DLL split): headers a module compiles moved DLLs
+    //     (Base/Scene/Plugin/Project/Serialization/Sim/... now export from
+    //     ArcaneCore.dll, ARCANE_CORE_API; a module links BOTH import libs, build/
+    //     arcane.lua); EngineContext gained process, client and netMode -- exactly
+    //     three, tail-appended; and the module contract gained system-factory
+    //     registration with role masks (GameModule::RegisterSystem, spec s4) --
+    //     each Runtime instantiates what its NetMode matches. A v29 module under a
+    //     v30 host would read EngineContext at the old size and register no
+    //     factories. Reject the pairing. ReferenceProject.arcproj restamped with
+    //     this change; Gacha's Game restamp (29 -> 30) is this plan's Task 5 Gacha
+    //     commit, with the Aphelyon.dll rebuild -- not deferred.
+    inline constexpr uint32_t kGamePluginABIVersion = 30;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
@@ -850,6 +864,11 @@ namespace Arcane
         Mosaic::IWorkScheduler* workScheduler; // the one engine enkiTS adapter (shared instance)
         Arcane::ITaskExecutor* taskExecutor;   // SAME enki pool, worker-index ParallelFor (physics/general)
         Arcane::Runtime*       engine;         // registry, schedulers, snapshot/restore, render ctx
+
+        // ABI 30 (Core-DLL split, spec 2026-09-15 s2/s3/s4) -- the ONLY three additions:
+        Arcane::ProcessContext*  process;      // the process's one (TypeContext, system factories)
+        Arcane::ClientRuntime*   client;       // presentation extension; NULL on a headless host (ArcaneServer, an embedded server world)
+        Arcane::NetMode          netMode;      // the PRIMARY Runtime's mode -- systems branch on THIS, never on process->IsDedicatedServerProcess()
 
         // ImGui cross-DLL handoff (v2). ImGui's globals (GImGui) and heap do not
         // cross the DLL boundary; a plugin that wants to draw ImGui must adopt the

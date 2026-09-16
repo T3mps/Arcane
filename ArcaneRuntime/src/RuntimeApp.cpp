@@ -184,8 +184,12 @@ bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
                   "manifest names a gameModule) or --plugin <dll>");
         return false;
     }
-    m_plugin.emplace(m_runtime->Core(), gameModule.empty() ? std::filesystem::path{}
+    // ABI 30: the host is built on the ProcessContext (the module's TypeContext + the
+    // system-factory table) and ATTACHES the worlds the module serves. One here; the
+    // first attached is the primary.
+    m_plugin.emplace(*m_process, gameModule.empty() ? std::filesystem::path{}
                                                     : std::filesystem::path(gameModule));
+    m_plugin->AttachRuntime(m_runtime->Core());
     for (const auto& dll : pluginModules)
         m_plugin->AddPlugin(dll);
     if (!m_plugin->Load())

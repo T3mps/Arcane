@@ -26,6 +26,7 @@
 // One reflected component (shared header), registered through the drain the
 // macro's Init performs -- the same path a wizard-made component takes.
 ARCANE_COMPONENT(Arcane::HotReloadTest::Pulse)
+ARCANE_COMPONENT(Arcane::HotReloadTest::RoleCounters)
 
 namespace Arcane::HotReloadTest
 {
@@ -46,6 +47,10 @@ namespace Arcane::HotReloadTest
             if (!exists)
                 Registry().CreateEntityWith(Pulse{0});   // fresh boot only
             CacheHandle();
+            // The s4 contract: factories registered ONCE per DLL load, with an explicit
+            // mask; each Runtime instantiates what its NetMode matches.
+            RegisterSystem<ServerOnlyTick>(Arcane::RoleMask::Server, Arcane::SystemPhase::FixedUpdate);
+            RegisterSystem<ClientOnlyTick>(Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate);
             return true;
         }
 

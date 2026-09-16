@@ -2,19 +2,25 @@
 
 #include <Arcane/Plugin/Plugin.hpp>
 
+#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/ClientHooks.hpp>
+#include <Arcane/Plugin/SystemFactory.hpp>
+#include <Arcane/Sim/NetDriver.hpp>
 
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>       // std::ignore (InitPluginsLive's discarded Init result)
 #include <utility>
 #include <vector>
 
@@ -164,7 +170,11 @@ namespace Arcane
 
     struct PluginHost::Impl
     {
-        Runtime&               runtime;
+        // The process's one ProcessContext (TypeContext + the system-factory table)
+        // and the worlds this module serves. runtimes.front() is the PRIMARY: the
+        // Runtime the module is handed as EngineContext::engine.
+        ProcessContext&        process;
+        std::vector<Runtime*>  runtimes;
         std::filesystem::path  source;
         std::filesystem::path  tempDir;
         EngineContext          ctx{};
@@ -184,20 +194,30 @@ namespace Arcane
         std::vector<std::filesystem::path> pluginSources;
         std::vector<PluginImage>           plugins;
 
-        Impl(Runtime& rt, std::filesystem::path src)
-            : runtime(rt), source(std::move(src))
+        Impl(ProcessContext& proc, std::filesystem::path src)
+            : process(proc), source(std::move(src))
         {
             tempDir = std::filesystem::temp_directory_path() / "arcane_plugins" / HostProcessTag();
-            ctx.typeContext   = runtime.TypeContext();
-            ctx.workScheduler = runtime.WorkScheduler();
-            ctx.taskExecutor  = runtime.TaskExecutor();
-            ctx.engine        = &runtime;
             RefreshContext();
+        }
+
+        // The primary world -- the one the module itself lives in. Asserted non-empty
+        // at Load(); every internal caller runs after that gate or guards itself.
+        [[nodiscard]] Runtime& Primary() const noexcept { return *runtimes.front(); }
+        // The primary's client hooks, or null with no world attached yet / a headless
+        // host. Every UiContextGuard site goes through here.
+        [[nodiscard]] IClientHooks* PrimaryHooks() const noexcept
+        {
+            return runtimes.empty() ? nullptr : runtimes.front()->ClientHooks();
         }
 
         void RefreshContext()
         {
             ctx.abiVersion    = kGamePluginABIVersion;
+            // ABI 30: the process object, the primary's presentation extension (null on
+            // a headless host) and the primary's net mode.
+            ctx.process       = &process;
+            ctx.typeContext   = &process.TypeContext();
             // The four ImGui void*s are presentation: null unless a client is
             // attached AND the host installed its context (an ImGui-less host --
             // ArcaneServer, a headless test -- hands the module null, as before).
@@ -205,8 +225,47 @@ namespace Arcane
             ctx.imguiAlloc    = nullptr;
             ctx.imguiFree     = nullptr;
             ctx.imguiUserData = nullptr;
-            if (IClientHooks* h = runtime.ClientHooks())
+            if (runtimes.empty())
+            {
+                // No world attached yet (a host that constructed the PluginHost before
+                // AttachRuntime). Nothing to describe; Load() refuses this state.
+                ctx.workScheduler = nullptr;
+                ctx.taskExecutor  = nullptr;
+                ctx.engine        = nullptr;
+                ctx.client        = nullptr;
+                ctx.netMode       = NetMode::Standalone;
+                return;
+            }
+            Runtime& primary  = Primary();
+            ctx.workScheduler = primary.WorkScheduler();
+            ctx.taskExecutor  = primary.TaskExecutor();
+            ctx.engine        = &primary;
+            ctx.client        = primary.Client();
+            ctx.netMode       = primary.Mode();
+            if (IClientHooks* h = primary.ClientHooks())
                 h->FillEngineContext(ctx);
+        }
+
+        // Run one image's Init with the factory table's owner bracket open on that
+        // image (spec s4): GameModule::RegisterSystem passes a null owner and the
+        // table stamps the open one, so a module never names its own image base --
+        // and TeardownImage can drop exactly its entries before the unmap.
+        bool InitImage(Plugin& p)
+        {
+            const Module::ImageSpan image = p.LoadedModule().Image();
+            process.SystemFactories().BeginOwner(image.base);
+            const bool ok = p.VTable().Init(&ctx);
+            process.SystemFactories().EndOwner();
+            return ok;
+        }
+
+        // Give every attached world the module's matching systems. Idempotent (Astra
+        // answers AlreadyRegistered, which InstantiateInto ignores), so the load,
+        // attach and reload paths can all call it without coordinating.
+        void InstantiateAll()
+        {
+            for (Runtime* rt : runtimes)
+                rt->InstantiateModuleSystems();
         }
 
         bool CopyVersioned(std::uint32_t g, PluginImage& out)
@@ -254,12 +313,18 @@ namespace Arcane
             // host refactor unified all teardown paths (unload, init-failure, reload-of-
             // previous, reload-failure) through TeardownImage, so this single call
             // covers what the audio PR originally hooked at three separate sites.
-            if (IClientHooks* h = runtime.ClientHooks())
-                h->OnModuleTeardown();
-            runtime.ClearSystems();
-            // Reset while the module is still loaded: registered component destructors
-            // may point into plugin code.
-            runtime.ResetRegistry();
+            // Every ATTACHED world, not just the primary: each has its own schedulers
+            // holding this module's system objects and its own registry holding this
+            // module's component instances.
+            for (Runtime* rt : runtimes)
+            {
+                if (IClientHooks* h = rt->ClientHooks())
+                    h->OnModuleTeardown();
+                rt->ClearSystems();
+                // Reset while the module is still loaded: registered component destructors
+                // may point into plugin code.
+                rt->ResetRegistry();
+            }
 
             // ...and the DESCRIPTORS themselves die with the image too, which the
             // line above does NOT cover. The hot-reload contract is now HANDLE-
@@ -283,11 +348,18 @@ namespace Arcane
             // SkippedUnregistered miss in SceneSerializer instead.
             if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)
             {
-                if (const auto& creg = runtime.Components())
+                // The SAME window, and the same reason, as the descriptor purge: this
+                // module's system-factory std::functions are compiled INTO the image,
+                // so they must die before it unmaps (spec s4 / plan 1 P8).
+                process.SystemFactories().ClearOwner(image.base);
+                for (Runtime* rt : runtimes)
                 {
-                    const std::size_t dropped = creg->UnregisterModuleRange(image.base, image.size);
-                    if (dropped != 0)
-                        ARC_TRACE("PluginHost: disowned {} component descriptor(s) owned by the unloading module", dropped);
+                    if (const auto& creg = rt->Components())
+                    {
+                        const std::size_t dropped = creg->UnregisterModuleRange(image.base, image.size);
+                        if (dropped != 0)
+                            ARC_TRACE("PluginHost: disowned {} component descriptor(s) owned by the unloading module", dropped);
+                    }
                 }
             }
 
@@ -299,18 +371,25 @@ namespace Arcane
         // its Shutdown; this catches one that forgot, BEFORE FreeLibrary.
         void DisownPluginImages()
         {
-            const auto& creg = runtime.Components();
-            if (!creg)
-                return;
             for (auto& img : plugins)
             {
                 if (!img.plugin)
                     continue;
                 if (const Module::ImageSpan image = img.plugin->LoadedModule().Image(); image.size != 0)
                 {
-                    const std::size_t dropped = creg->UnregisterModuleRange(image.base, image.size);
-                    if (dropped != 0)
-                        ARC_TRACE("PluginHost: disowned {} descriptor(s) from a secondary that skipped handle cleanup", dropped);
+                    // Secondaries register system factories through the same
+                    // GameModule::RegisterSystem path, so they get the same
+                    // before-the-unmap clear the primary does in TeardownImage.
+                    process.SystemFactories().ClearOwner(image.base);
+                    for (Runtime* rt : runtimes)
+                    {
+                        const auto& creg = rt->Components();
+                        if (!creg)
+                            continue;
+                        const std::size_t dropped = creg->UnregisterModuleRange(image.base, image.size);
+                        if (dropped != 0)
+                            ARC_TRACE("PluginHost: disowned {} descriptor(s) from a secondary that skipped handle cleanup", dropped);
+                    }
                 }
             }
         }
@@ -334,7 +413,7 @@ namespace Arcane
                 PluginResolveError resolveError;
                 std::optional<Plugin> p = Plugin::Load(src, &resolveError);
                 RefreshContext();
-                if (!p || !p->VTable().Init(&ctx))
+                if (!p || !InitImage(*p))
                 {
                     if (p && p->VTable().Shutdown) p->VTable().Shutdown();
                     if (!p)   // a real load failure, not Init()-returned-false -- name the cause
@@ -371,8 +450,40 @@ namespace Arcane
             for (auto& img : plugins)
             {
                 RefreshContext();
-                if (img.plugin) img.plugin->VTable().Init(&ctx);
+                // BeginOwner clears this image's previous entries first, so a
+                // re-established secondary re-registers rather than double-registers.
+                if (img.plugin) std::ignore = InitImage(*img.plugin);
             }
+        }
+
+        // The hot-reload refusal (spec s5): swapping the module under a live net
+        // driver would rebuild the world both ends of a connection agreed on. Names
+        // WHICH attached world is holding it open -- with N worlds, "a driver is
+        // active" is not actionable on its own.
+        bool RefuseReloadForActiveNetDriver()
+        {
+            for (std::size_t i = 0; i < runtimes.size(); ++i)
+            {
+                const INetDriver* d = runtimes[i]->NetDriver();
+                if (!d || !d->IsActive())
+                    continue;
+                const std::string name = source.stem().string();
+                ARC_ERROR("plugin: reload refused -- Runtime #{} ({}) has an active net driver "
+                          "(spec 2026-09-15 s5); stop it first", i + 1, ToString(runtimes[i]->Mode()));
+                Diagnostic diag;
+                diag.severity = DiagSeverity::Warning;
+                diag.scope    = DiagScope::Project;
+                diag.code     = "plugin.reload.refused-net-active";
+                diag.message  = "Hot reload of '" + name + "' was refused: Runtime #" +
+                                std::to_string(i + 1) + " (" + ToString(runtimes[i]->Mode()) +
+                                ") has an active net driver.";
+                diag.detail   = "Reloading the game module rebuilds the world; stop the "
+                                "networked session first, then rebuild.";
+                const std::vector<Diagnostic> diags{std::move(diag)};
+                Diagnostics::Publish("plugin:" + name, diags);
+                return true;
+            }
+            return false;
         }
 
         // The primary module's full reload sequence (copy + ABI + SaveState/LoadState +
@@ -385,6 +496,12 @@ namespace Arcane
     bool PluginHost::Impl::ReloadPrimary(bool restoreState)
     {
         const std::string name = source.stem().string();
+
+        // The refusal comes FIRST, before anything is copied, torn down or counted:
+        // a refused reload must leave the live module, the generation and every
+        // attached registry exactly as they were (spec s5).
+        if (RefuseReloadForActiveNetDriver())
+            return false;
 
         const std::uint32_t nextGen = gen + 1;
         PluginImage next;
@@ -408,23 +525,58 @@ namespace Arcane
             }
         }
 
+        // SNAPSHOT ALL (spec s5). The PRIMARY's state travels through the module's own
+        // SaveState/LoadState above -- the module decides what its world means. Every
+        // OTHER attached world has no module code of its own, so its registry IS its
+        // state: snapshot it here and restore it after the new image's Init. A failed
+        // snapshot aborts the reload with the live module untouched, exactly as a
+        // failed SaveState does.
+        std::vector<std::pair<Runtime*, std::vector<std::byte>>> secondaryWorlds;
+        if (restoreState)
+        {
+            for (std::size_t i = 1; i < runtimes.size(); ++i)
+            {
+                auto snap = runtimes[i]->SnapshotRegistry();
+                if (snap.IsErr())
+                {
+                    ARC_ERROR("plugin: snapshot of Runtime #{} ({}) failed; aborting reload, "
+                              "keeping live plugin", i + 1, ToString(runtimes[i]->Mode()));
+                    DeleteFiles(next);
+                    return false;
+                }
+                secondaryWorlds.emplace_back(runtimes[i], std::move(*snap.GetValue()));
+            }
+        }
+
         std::optional<PluginImage> previous = std::move(current);
         current.reset();
         if (previous)
             TeardownImage(*previous, true);
 
         if (!restoreState)
-            runtime.ResetRegistry();
+            for (Runtime* rt : runtimes)
+                rt->ResetRegistry();
 
         PluginResolveError resolveError;
         std::optional<Plugin> loadedNext = Plugin::Load(next.dll, &resolveError);
         RefreshContext();
-        const bool initRan = loadedNext && loadedNext->VTable().Init(&ctx);
+        const bool initRan = loadedNext && InitImage(*loadedNext);
         bool ok = initRan;
         if (ok && restoreState)
         {
             Astra::BinaryReader r(snapshot);
             ok = loadedNext->VTable().LoadState(r);
+            // RESTORE ALL: the other worlds come back from their own registry bytes.
+            for (auto& [rt, bytes] : secondaryWorlds)
+            {
+                if (!ok)
+                    break;
+                if (!rt->RestoreRegistry(bytes))
+                {
+                    ARC_ERROR("plugin: restore of the {} world failed after reload", ToString(rt->Mode()));
+                    ok = false;
+                }
+            }
         }
 
         if (ok)
@@ -434,6 +586,10 @@ namespace Arcane
             gen = nextGen;
             if (previous)
                 DeleteFiles(*previous);
+            // The new image re-registered its factories in Init; nothing has
+            // instantiated them yet -- for the primary either, since TeardownImage
+            // cleared its systems. Every attached world, one call.
+            InstantiateAll();
             Diagnostics::Clear("plugin:" + name);
             ARC_INFO("plugin reloaded (gen {}, snapshot {} bytes)", nextGen, snapshot.size());
             return true;
@@ -449,14 +605,15 @@ namespace Arcane
             PublishPluginLoadFailure(name, source, resolveError);
         }
         DeleteFiles(next);
-        runtime.ClearSystems();
+        for (Runtime* rt : runtimes)
+            rt->ClearSystems();
 
         bool rolledBack = false;
         if (previous && !previous->dll.empty())
         {
             std::optional<Plugin> rollback = Plugin::Load(previous->dll);
             RefreshContext();
-            if (rollback && rollback->VTable().Init(&ctx))
+            if (rollback && InitImage(*rollback))
             {
                 if (restoreState && !snapshot.empty())
                 {
@@ -464,6 +621,12 @@ namespace Arcane
                     if (!rollback->VTable().LoadState(r))
                         ARC_ERROR("plugin: rollback LoadState failed; last-good running but state may be lost");
                 }
+                // Same restore-all the success path performs: the other worlds are
+                // rolled back to the bytes taken before the failed swap.
+                for (auto& [rt, bytes] : secondaryWorlds)
+                    if (!rt->RestoreRegistry(bytes))
+                        ARC_ERROR("plugin: rollback restore of the {} world failed; last-good "
+                                  "running but that world's state may be lost", ToString(rt->Mode()));
                 previous->plugin = std::move(*rollback);
                 rolledBack = true;
             }
@@ -472,6 +635,7 @@ namespace Arcane
         if (rolledBack)
         {
             current = std::move(previous);
+            InstantiateAll();
             ARC_ERROR("plugin reload failed (gen {}); rolled back to last-good", nextGen);
             return false;
         }
@@ -492,8 +656,8 @@ namespace Arcane
         return false;
     }
 
-    PluginHost::PluginHost(Runtime& runtime, std::filesystem::path src)
-        : m_impl(std::make_unique<Impl>(runtime, std::move(src))) {}
+    PluginHost::PluginHost(ProcessContext& process, std::filesystem::path src)
+        : m_impl(std::make_unique<Impl>(process, std::move(src))) {}
 
     PluginHost::~PluginHost()
     {
@@ -511,12 +675,54 @@ namespace Arcane
         m_impl->pluginSources.push_back(std::move(dll));
     }
 
+    void PluginHost::AttachRuntime(Runtime& rt)
+    {
+        auto& rts = m_impl->runtimes;
+        if (std::find(rts.begin(), rts.end(), &rt) != rts.end())
+            return;   // idempotent: attaching the same world twice is a no-op, not two worlds
+        rts.push_back(&rt);
+        // A world joining an ALREADY-LOADED host gets the module's matching systems
+        // now; the EngineContext's primary-derived fields do not change (the primary
+        // cannot change while loaded -- DetachRuntime refuses dropping it). Before
+        // Load() there is nothing to instantiate: Load()'s own InstantiateAll covers
+        // every world attached by then.
+        if (m_impl->current || !m_impl->plugins.empty())
+            rt.InstantiateModuleSystems();
+    }
+
+    void PluginHost::DetachRuntime(Runtime& rt) noexcept
+    {
+        auto& rts = m_impl->runtimes;
+        const auto it = std::find(rts.begin(), rts.end(), &rt);
+        if (it == rts.end())
+            return;
+        if (it == rts.begin() && (m_impl->current || !m_impl->plugins.empty()))
+        {
+            ARC_ERROR("PluginHost: refusing to detach the PRIMARY Runtime of a loaded host -- "
+                      "it is the module's own world; Unload() first");
+            return;
+        }
+        rt.ClearSystems();   // drop this module's systems from the world that is leaving
+        rts.erase(it);
+    }
+
+    std::span<Runtime* const> PluginHost::Runtimes() const noexcept
+    {
+        return std::span<Runtime* const>(m_impl->runtimes.data(), m_impl->runtimes.size());
+    }
+
     bool PluginHost::Load()
     {
+        // A host with no world attached has nothing to hand the module: EngineContext
+        // ::engine would be null and the module's Init would fault on its first
+        // Registry() call. A programmer error at the call site, not a runtime state.
+        ARC_ASSERT(!m_impl->runtimes.empty(),
+                   "PluginHost::Load: attach at least one Runtime first (AttachRuntime)");
+
         // See UiContextGuard's comment: a plugin's Init may switch GImGui
         // and never switch it back (Sandbox.cpp:102), so every public entry
         // point restores whatever was current on entry before returning.
-        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
+        const UiContextGuard uiGuard(m_impl->PrimaryHooks());
 
         // Plugins-only host (no primary game module) -- the editor opening a project that has
         // plugin modules but no gameModule. Skip the primary copy/load/ABI/rollback path and
@@ -524,7 +730,12 @@ namespace Arcane
         // primary present this branch is never taken, so the delicate path below and every
         // [hotreload] test stay byte-identical.
         if (m_impl->source.empty())
-            return m_impl->LoadInitPlugins();
+        {
+            if (!m_impl->LoadInitPlugins())
+                return false;
+            m_impl->InstantiateAll();
+            return true;
+        }
 
         const std::string name = m_impl->source.stem().string();
 
@@ -546,7 +757,7 @@ namespace Arcane
         PluginResolveError resolveError;
         std::optional<Plugin> plugin = Plugin::Load(img.dll, &resolveError);
         m_impl->RefreshContext();
-        const bool initRan = plugin && plugin->VTable().Init(&m_impl->ctx);
+        const bool initRan = plugin && m_impl->InitImage(*plugin);
         if (!initRan)
         {
             if (plugin)
@@ -576,6 +787,9 @@ namespace Arcane
             Unload();
             return false;
         }
+        // Every module that is going to register factories this session has now run
+        // its Init: give each attached world the systems its NetMode matches (spec s4).
+        m_impl->InstantiateAll();
         return true;
     }
 
@@ -585,7 +799,7 @@ namespace Arcane
             return;
 
         // See UiContextGuard's comment (Load() above).
-        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
+        const UiContextGuard uiGuard(m_impl->PrimaryHooks());
 
         // Quiesce plugins (reverse order) while everything is still mapped; the primary's
         // TeardownImage performs the SINGLE shared-state reset (audio/systems/registry)
@@ -599,11 +813,15 @@ namespace Arcane
         }
         else
         {
-            // Plugins-only (no primary loaded): do the shared reset here, once.
-            if (IClientHooks* h = m_impl->runtime.ClientHooks())
-                h->OnModuleTeardown();
-            m_impl->runtime.ClearSystems();
-            m_impl->runtime.ResetRegistry();
+            // Plugins-only (no primary loaded): do the shared reset here, once -- for
+            // every attached world, the same set TeardownImage covers.
+            for (Runtime* rt : m_impl->runtimes)
+            {
+                if (IClientHooks* h = rt->ClientHooks())
+                    h->OnModuleTeardown();
+                rt->ClearSystems();
+                rt->ResetRegistry();
+            }
         }
         m_impl->DisownPluginImages();
         m_impl->plugins.clear();   // unload plugin DLLs AFTER the reset
@@ -612,7 +830,7 @@ namespace Arcane
     bool PluginHost::Reload(bool restoreState)
     {
         // See UiContextGuard's comment (Load() above).
-        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
+        const UiContextGuard uiGuard(m_impl->PrimaryHooks());
 
         // Plugins-only host: no primary to reload, and secondaries load once and never
         // hot-reload -- so a reload request is a no-op success (nothing to rebuild).
@@ -625,9 +843,18 @@ namespace Arcane
         // Reload == ReloadPrimary exactly (the single-module hot-reload contract). Note:
         // secondaries re-Init AFTER the primary here (a documented ordering nuance vs boot)
         // and rebuild their own state rather than snapshotting it.
+        // The net-driver refusal is ReloadPrimary's own first act (spec s5); ask it
+        // here too, BEFORE the secondaries are quiesced, so a refused reload bounces
+        // nothing at all -- not the primary, not a secondary, not a generation.
+        if (m_impl->RefuseReloadForActiveNetDriver())
+            return false;
         m_impl->ShutdownPluginsLive();
         const bool ok = m_impl->ReloadPrimary(restoreState);
         m_impl->InitPluginsLive();
+        // The re-established secondaries re-registered their factories in InitPluginsLive
+        // (after ReloadPrimary's own InstantiateAll); idempotent, so this only adds what
+        // they brought back.
+        m_impl->InstantiateAll();
         return ok;
     }
 
@@ -668,7 +895,7 @@ namespace Arcane
         // same "never leaks a context change" guarantee every entry point
         // here makes, rather than special-casing "the ones we know misbehave
         // today."
-        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
+        const UiContextGuard uiGuard(m_impl->PrimaryHooks());
         if (const PluginVTable* vt = Vtable(); vt && vt->FixedUpdate) vt->FixedUpdate(dt);
         for (auto& img : m_impl->plugins)
             if (img.plugin && img.plugin->VTable().FixedUpdate) img.plugin->VTable().FixedUpdate(dt);
@@ -677,7 +904,7 @@ namespace Arcane
     void PluginHost::UpdateAll(double dt, double alpha)
     {
         // See UiContextGuard's comment (Load() above).
-        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
+        const UiContextGuard uiGuard(m_impl->PrimaryHooks());
         if (const PluginVTable* vt = Vtable(); vt && vt->Update) vt->Update(dt, alpha);
         for (auto& img : m_impl->plugins)
             if (img.plugin && img.plugin->VTable().Update) img.plugin->VTable().Update(dt, alpha);
@@ -692,7 +919,7 @@ namespace Arcane
         // with that: it only restores whatever context was current on ENTRY
         // once THIS FUNCTION returns, so every plugin's DrawUI is still free
         // to leave the game context set for as long as it's running.
-        const UiContextGuard uiGuard(m_impl->runtime.ClientHooks());
+        const UiContextGuard uiGuard(m_impl->PrimaryHooks());
         if (const PluginVTable* vt = Vtable(); vt && vt->DrawUI) vt->DrawUI();
         for (auto& img : m_impl->plugins)
             if (img.plugin && img.plugin->VTable().DrawUI) img.plugin->VTable().DrawUI();
