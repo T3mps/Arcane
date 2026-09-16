@@ -1839,7 +1839,7 @@ after the edit reports `+0/+0` exit 0 in both Debug and Release.
 
 A whole-branch review of the closed plan (`80a44876..2b042ca5` and the eight
 task commits behind it) returned **1 Critical, 2 Important and 13 minors**, all
-fixed in one commit, `b51d1011`. The Critical: `PluginHost::Impl::
+fixed in one commit, `1987655d`. The Critical: `PluginHost::Impl::
 LoadInitPlugins`' failure branch unmapped a secondary whose `Init` returned
 `false` **without clearing its system factories** — the local
 `std::optional<Plugin>` died at the `return false` (FreeLibrary) while
