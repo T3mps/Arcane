@@ -552,3 +552,61 @@ TEST_CASE("Play as embedded server with a loaded module: the server world gets t
     CHECK(host.Runtimes().size() == 1);
     host.Unload();
 }
+
+TEST_CASE("Play as embedded server is REFUSED when the host will not take the server world: no half-built world is left behind", "[editor][netmode]")
+{
+    // The binding invariant's own refusal path (spec s4; review round 1, I1).
+    // PlaySession builds the server world on `runtime.Components()`, so a Play
+    // driven against a world that is NOT the host's primary hands AttachRuntime a
+    // secondary with a ComponentRegistry the primary does not share -- which it
+    // refuses. A refused attach must unwind the whole Play: a server world the
+    // module does not serve has no gameplay in it, and leaving one standing would
+    // be a silently inert second world.
+    using namespace Arcane::HotReloadTest;
+    Arcane::Runtime primary(Arcane::Test::Process());
+    Arcane::Runtime other(Arcane::Test::Process());            // its OWN ComponentRegistry
+    REQUIRE(other.Components() != primary.Components());
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.AttachRuntime(primary));                      // primary = the first attach
+
+    Arcane::Editor::PlaySession play;
+    CHECK_FALSE(play.Play(other, &host, Arcane::Editor::PlayTopology::EmbeddedServer));
+    CHECK(play.ServerWorld() == nullptr);                      // nothing half-built survives
+    CHECK(play.Topology() == Arcane::Editor::PlayTopology::Standalone);
+    CHECK_FALSE(play.IsPlaying());                             // the session stayed in Edit
+    CHECK(host.Runtimes().size() == 1);                        // the host is unchanged
+    CHECK(other.Mode() == Arcane::NetMode::Standalone);        // and so is the would-be client
+}
+
+TEST_CASE("an embedded-server session Stopped before its PlaySession dies leaves the host exactly one world, and Unload runs clean", "[editor][netmode][hotreload]")
+{
+    // The EXIT-PATH contract, device-free (review round 1, C1). PluginHost holds a
+    // RAW pointer to every attached world, and PlaySession now OWNS one -- so the
+    // session must be Stopped while the host is still alive, which is precisely
+    // what EditorApp::Shutdown does (ahead of the member teardown that would
+    // otherwise free the server world out from under ~PluginHost). This case pins
+    // the ORDER that makes that safe: Stop detaches and destroys the server world,
+    // and the host is then left with exactly the one world it began with, so its
+    // own teardown touches nothing that is gone. The EditorApp exit path itself is
+    // only reachable through a real editor process -- E1 ([witness][gpu],
+    // --play-as embedded-server, no explicit Stop) is the witness for that half.
+    using namespace Arcane::HotReloadTest;
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    runtime.Components()->RegisterComponent<Pulse>();
+    runtime.Components()->RegisterComponent<RoleCounters>();
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.AttachRuntime(runtime));
+    REQUIRE(host.Load());
+    {
+        Arcane::Editor::PlaySession play;
+        REQUIRE(play.Play(runtime, &host, Arcane::Editor::PlayTopology::EmbeddedServer));
+        REQUIRE(host.Runtimes().size() == 2);
+        REQUIRE(play.Stop(runtime, &host));                    // Shutdown's call, in Shutdown's position
+        CHECK(play.ServerWorld() == nullptr);
+        CHECK(host.Runtimes().size() == 1);
+    }                                                          // ~PlaySession: nothing left to free
+    CHECK(host.Runtimes().size() == 1);
+    CHECK(host.Runtimes()[0] == &runtime);
+    host.Unload();                                             // clean: no freed world in the loop
+    CHECK_FALSE(host.IsLoaded());
+}

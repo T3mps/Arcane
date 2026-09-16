@@ -222,9 +222,12 @@ namespace Arcane
         if (!cfg.playAs.empty() && cfg.playAs != "standalone" && cfg.playAs != "listen-server"
             && cfg.playAs != "embedded-server" && cfg.playAs != "client")
         {
+            // A stderr one-liner and stop, no PrintUsage(): every sibling
+            // post-parse refusal in this file does exactly that, and this
+            // message already names all four accepted values, so a usage dump
+            // would add a screen of noise and no information.
             std::fprintf(stderr, "error: --play-as must be one of standalone | listen-server | "
                                  "embedded-server | client\n");
-            cli.PrintUsage();
             return { std::nullopt, 2 };
         }
         // "Was --settle supplied" mirrors --fixed-dt's own r.Supplied() reasoning
