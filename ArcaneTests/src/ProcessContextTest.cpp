@@ -8,8 +8,16 @@
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Scene/PhysicsSystem.hpp>      // PhysicsResource
+#include <Arcane/Scene/SceneResources.hpp>     // SceneRoot / PhysicsInterpBuffer / the four tables
+#include <Arcane/Scene/TransformSystems.hpp>   // TransformOrder
+
+#include <Astra/Component/Component.hpp>   // INVALID_COMPONENT
+#include <Astra/Core/TypeID.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
+
+#include <type_traits>
 
 TEST_CASE("ProcessContext: exactly one per process -- a second Create is refused", "[process]")
 {
@@ -27,6 +35,38 @@ TEST_CASE("ProcessContext: the test process is not a dedicated-server process an
     Arcane::ProcessContext& live = Arcane::Test::Process();
     CHECK_FALSE(live.IsDedicatedServerProcess());
     CHECK(&live.TypeContext() == &Arcane::Test::SharedTypeContext());
+}
+
+// ProcessContext::Create pre-warms the engine's RESOURCE types (Core-owned, no
+// registrar to order them) so ArcaneCore.dll is their first registrar by
+// construction -- see Arcane/Scene/EngineResourceTypes.hpp.
+//
+// WHAT THIS PROVES IS PRESENCE, NOT REGISTRAR IDENTITY: from inside the test exe
+// there is no way to ask "which module minted this id" -- TypeID<T>::Value() answers
+// the same for every module on the shared context, which is the point of the shared
+// context. So this pins that all eight resolve to a real id once the process's
+// ProcessContext exists, and that the id is stable across calls (a second Value()
+// re-reads the same magic static rather than minting a second id).
+TEST_CASE("ProcessContext::Create leaves every engine resource type resolved and stable", "[process]")
+{
+    (void)Arcane::Test::Process();   // forces Create if test_main somehow had not
+
+    auto pin = [](auto tag)
+    {
+        using T = typename decltype(tag)::type;
+        const Astra::ComponentID first = Astra::TypeID<T>::Value();
+        CHECK(first != Astra::INVALID_COMPONENT);
+        CHECK(Astra::TypeID<T>::Value() == first);
+    };
+    // The list must track EngineResourceTypes.cpp's.
+    pin(std::type_identity<Arcane::SceneRoot>{});
+    pin(std::type_identity<Arcane::PhysicsInterpBuffer>{});
+    pin(std::type_identity<Arcane::SpriteTable>{});
+    pin(std::type_identity<Arcane::SpriteMaterialTable>{});
+    pin(std::type_identity<Arcane::MeshTable>{});
+    pin(std::type_identity<Arcane::MeshMaterialTable>{});
+    pin(std::type_identity<Arcane::PhysicsResource>{});
+    pin(std::type_identity<Arcane::TransformOrder>{});
 }
 
 TEST_CASE("Runtime: every Runtime is built on the ProcessContext and reports its TypeContext", "[process][runtime]")

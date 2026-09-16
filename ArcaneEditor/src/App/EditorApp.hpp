@@ -1068,7 +1068,22 @@ namespace Arcane::Editor
         // the Runtime in Edit mode only; in Play the plugin's camera wins.
         // See EditorCamera.hpp for the transform convention.
         Arcane::Editor::EditorCamera m_camera;
-        Arcane::Editor::EditModeSchedule m_editSchedule;   // Edit-mode propagation + the pending frame request (spec 2026-09-11 s7)
+        // Edit-mode propagation + the pending frame request (spec 2026-09-11 s7).
+        //
+        // LAZY ON PURPOSE, and the declaration slot is deliberate (2026-09-16).
+        // EditModeSchedule's ctor runs AddSystem<TransformPropagationSystem>, which
+        // resolves WorldTransform/Transform/... through Astra::TypeID<T>::Value() --
+        // and that CACHES PER MODULE, permanently. As a plain member it ran at
+        // EditorApp construction, i.e. BEFORE StageRuntimeCreate installs the shared
+        // TypeContext, so ArcaneEditor.exe kept the ids from its own private
+        // DefaultTypeContext forever. They coincided with the shared ones only by
+        // first-touch accident; the moment anything resolved an extra type in the
+        // shared context first (ProcessContext::Create's engine-resource pre-warm),
+        // Materialise read WorldTransform under SceneRoot's id and the viewport
+        // rendered EMPTY with RenderErrorCount 0. Emplaced in StageRuntimeCreate
+        // immediately after Astra::SetTypeContext. Same slot as the old member, so
+        // destruction order is unchanged: it still destructs before m_runtime.
+        std::optional<Arcane::Editor::EditModeSchedule> m_editSchedule;
         bool m_physicsOverlay = false;   // View -> Physics Overlay (spec s6.3, session-only)
         // RMB-drag pan gesture (rules: starts only inside the viewport, keeps
         // tracking once started -- see UpdateEditorCamera).

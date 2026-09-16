@@ -1364,9 +1364,9 @@ namespace Arcane::Editor
             // nothing runs twice. Then the ONE pending camera-frame request, on
             // the WorldTransforms this pass just refreshed and before the camera
             // push below, which every render path reads.
-            m_editSchedule.RunFrame(m_runtime->Registry(), /*inPlayMode*/ false);
-            m_editSchedule.ServicePendingFrame(m_runtime->Registry(), m_selection.Entities(), m_camera,
-                                               glm::vec2((float)ViewportWidth(), (float)ViewportHeight()));
+            m_editSchedule->RunFrame(m_runtime->Registry(), /*inPlayMode*/ false);
+            m_editSchedule->ServicePendingFrame(m_runtime->Registry(), m_selection.Entities(), m_camera,
+                                                glm::vec2((float)ViewportWidth(), (float)ViewportHeight()));
         }
 
         // Editor camera -> the Runtime slot SetRenderContext reads, for

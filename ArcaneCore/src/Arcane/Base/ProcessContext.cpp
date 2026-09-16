@@ -1,5 +1,6 @@
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Scene/EngineResourceTypes.hpp>   // PrewarmEngineResourceTypes (Base including Scene is within one DLL)
 #include <Astra/Core/TypeContext.hpp>
 #include <atomic>
 namespace Arcane
@@ -25,6 +26,10 @@ namespace Arcane
         // Install the context in THIS module's (ArcaneCore.dll's) per-module Astra slot,
         // Resident: Core never unmaps, so its binders are pinned (Runtime.cpp's residency note).
         Astra::SetTypeContext(pc->m_context, Astra::ModuleResidency::Resident);
+        // With the shared context installed here and nowhere else yet, Core claims
+        // first-registrar of every engine RESOURCE type (see EngineResourceTypes.hpp
+        // for why that matters and why it is defence, not a fix).
+        PrewarmEngineResourceTypes();
         return pc;
     }
 

@@ -11,6 +11,7 @@
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
+#include <Arcane/Scene/EngineRoster.hpp>        // EngineComponentRoster -- THE roster list (registered below, verified in ProjectHost.hpp)
 #include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
 #include <Arcane/Scene/PhysicsSystem.hpp>       // PhysicsSystem/PhysicsResource (instantiated IN this module)
 #include <Arcane/Scene/SceneResources.hpp>   // SceneRoot (ResolvedGravity's scene-root lookup)
@@ -45,6 +46,15 @@ namespace Arcane
 {
     namespace
     {
+        // Register the named roster into `m`. The list itself lives in
+        // Scene/EngineRoster.hpp so this registration and ProjectHost.hpp's
+        // VerifySharedTypeContext expand the SAME pack and cannot drift.
+        template<typename... Ts>
+        void RegisterRoster(Astra::ComponentModule& m, TypeList<Ts...>)
+        {
+            m.Register<Ts...>();
+        }
+
         // Directory of the running executable, so exe-relative engine assets (here the
         // shipped data/EngineConfig defaults) resolve regardless of CWD -- mirrors the
         // exe-relative pattern in Assets.cpp / Render/ShaderPaths.cpp.
@@ -189,16 +199,13 @@ namespace Arcane
             // teardown symmetric -- which is worth more than saving one shadow slot.
             engineModule.emplace(Astra::ComponentModule::Open(components, "Arcane"));
             ARC_ASSERT(*engineModule, "Runtime: ComponentModule::Open refused -- the slot above must be installed first");
-            // EXACTLY the order RegisterSceneComponents + RegisterPhysicsComponents
-            // register in (SceneModule.hpp / PhysicsComponents.hpp): ids are a
-            // first-touch counter, so same order == same numbering as before.
-            // 2026-09-11: PhysicsSettings appended to the scene roster (after
-            // MeshRenderer), so the three physics ids shifted up by one -- in-
-            // process only, as ever.
-            engineModule->Register<Transform, WorldTransform, SpriteRenderer,
-                                   PostProcess, Identity, Hidden, Camera, MeshRenderer,
-                                   PhysicsSettings,
-                                   RigidBody2D, Collider2D, PhysicsBodyRef>();
+            // The roster -- and the ORDER that is the id numbering -- is named
+            // once, in Scene/EngineRoster.hpp, because ProjectHost.hpp's
+            // VerifySharedTypeContext must check the same twelve types this
+            // registers (2026-09-16: a one-type probe missed the editor's
+            // early WorldTransform resolve). Ids are a first-touch counter, so
+            // same order == same numbering as before.
+            RegisterRoster(*engineModule, EngineComponentRoster{});
 
             Astra::Registry::Config cfg;
             cfg.workScheduler = sched;

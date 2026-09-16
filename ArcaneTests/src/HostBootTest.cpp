@@ -65,6 +65,33 @@ namespace
     using Arcane::Test::FindReferenceProjectDir;
 }
 
+// VerifySharedTypeContext, widened 2026-09-16 from a single Transform probe to the
+// whole EngineComponentRoster (Arcane/Scene/EngineRoster.hpp).
+//
+// THE HAPPY PATH IS ALL THAT IS CONSTRUCTIBLE HERE, and deliberately so: the check
+// compares THIS module's cached TypeID<T>::Value() against the registry's id for the
+// same name hash, and this process has exactly one shared TypeContext (test_main
+// installs it before Catch2 runs), so ids are process-wide first-touch and the test
+// exe cannot be made to hold a second, wrong set. The negative case is a HOST bug by
+// nature -- a module resolving a type before its SetTypeContext -- and its RED was
+// the real one: with EditorApp's EditModeSchedule still a plain member, ArcaneEditor
+// .exe refused boot here naming Arcane::WorldTransform with two different ids. What
+// this case pins is that the widened check does not false-positive on a correct
+// module, for every one of the twelve types rather than just Transform.
+TEST_CASE("VerifySharedTypeContext accepts a module on the shared context, for the whole engine roster",
+          "[host][typecontext]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    CHECK(Arcane::ProjectHost::VerifySharedTypeContext(rt.Registry(), "ArcaneTests.exe"));
+    // The primitive the roster version expands, still callable for one named type.
+    CHECK(Arcane::ProjectHost::VerifySharedTypeContextFor<Arcane::Transform>(rt.Registry(), "ArcaneTests.exe"));
+    CHECK(Arcane::ProjectHost::VerifySharedTypeContextFor<Arcane::WorldTransform>(rt.Registry(), "ArcaneTests.exe"));
+    // An UNREGISTERED type is not a contradiction -- unchanged from the one-probe
+    // version, and what lets the check run before a game module has registered.
+    struct NeverRegistered { int x = 0; };
+    CHECK(Arcane::ProjectHost::VerifySharedTypeContextFor<NeverRegistered>(rt.Registry(), "ArcaneTests.exe"));
+}
+
 TEST_CASE("HostConfig parses --project", "[host]")
 {
     const char* argv[] = { "ArcaneRuntime", "--project", "MyGame" };

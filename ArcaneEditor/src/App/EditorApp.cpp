@@ -277,14 +277,34 @@ namespace Arcane::Editor
         // different component's bytes at worst). ArcaneCore.dll's slot is installed by
         // ProcessContext::Create itself.
         Astra::SetTypeContext(&m_process->TypeContext());
+        // NOW, and not a line earlier (2026-09-16): EditModeSchedule's ctor resolves
+        // the TransformPropagationSystem's component mask, and TypeID<T>::Value()
+        // caches per module for the process's life -- as a plain EditorApp member it
+        // ran before the install above and pinned this exe to its own private ids.
+        // See EditorApp.hpp's declaration comment for the incident.
+        m_editSchedule.emplace();
         // Opt into a real audio device only for an INTERACTIVE run (maxFrames == 0 = run
         // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
         // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
         m_runtime.emplace(*m_process, m_config.maxFrames == 0);
+        // THIS EXE asks about ITS OWN caches (2026-09-16). VerifySharedTypeContext
+        // is inline, so it only ever answers for the module holding the call --
+        // ProjectBoot.cpp's type_context_install stage compiles into
+        // ArcaneClient.dll and speaks for ArcaneClient.dll alone. Nothing had ever
+        // asked ArcaneEditor.exe about ArcaneEditor.exe, which is why the editor's
+        // early WorldTransform resolve (EditModeSchedule, constructed below now,
+        // a plain member before) was invisible to the check even in principle.
+        // Fatal: a wrong id here means every view in this exe reads the wrong bytes.
+        if (!Arcane::HostBoot::VerifySharedTypeContext(m_runtime->Registry(), "ArcaneEditor.exe"))
+        {
+            ARC_ERROR("ArcaneEditor: refusing to boot -- this exe is not on the engine's "
+                      "Astra TypeContext (see the per-type errors above)");
+            return false;
+        }
         // Edit mode's only physics (spec 2026-09-11-physics-2d-wiring s6.1):
         // through `this` rather than a captured Runtime*, so a later runtime
         // re-creation on project switch keeps the binding valid.
-        m_editSchedule.SetPhysicsEditPass([this] { m_runtime->PhysicsEditPass(); });
+        m_editSchedule->SetPhysicsEditPass([this] { m_runtime->PhysicsEditPass(); });
 
         // Populate ctx for the SHARED type_context_install / project_open /
         // input_config / editor_lock stage bodies (ProjectBoot.cpp), which only
@@ -1146,7 +1166,7 @@ namespace Arcane::Editor
                 if (const auto boot = Arcane::HostBoot::BootScene(m_runtime->Core(), *proj))
                 {
                     m_scene.Adopt(boot->file, boot->id, *m_undo);
-                    m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
+                    m_editSchedule->RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
                 }
             }
         }

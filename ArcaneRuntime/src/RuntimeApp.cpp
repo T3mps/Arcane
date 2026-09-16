@@ -98,6 +98,17 @@ bool RuntimeApp::StageRuntimeCreate(Arcane::HostBoot::BootContext& ctx)
     // until quit). The scripted "ArcaneRuntime --frames N" GPU-verify is not interactive ->
     // false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
     m_runtime.emplace(*m_process, m_config.maxFrames == 0);
+    // THIS EXE asks about ITS OWN caches (2026-09-16), for the same reason the
+    // editor now does: VerifySharedTypeContext is inline, so ProjectBoot.cpp's
+    // type_context_install stage answers for ArcaneClient.dll and no other module.
+    // ArcaneRuntime.exe has no known early resolver today -- this is the
+    // deterministic net that would catch one the moment it appears.
+    if (!Arcane::HostBoot::VerifySharedTypeContext(m_runtime->Registry(), "ArcaneRuntime.exe"))
+    {
+        ARC_ERROR("ArcaneRuntime: refusing to boot -- this exe is not on the engine's "
+                  "Astra TypeContext (see the per-type errors above)");
+        return false;
+    }
 
     // Populate ctx for the SHARED type_context_install / project_open /
     // input_config stage bodies (ProjectBoot.cpp), which only have `ctx`, not

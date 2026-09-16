@@ -647,6 +647,14 @@ project "ArcaneRuntime"
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
+        -- Manifold2D: HEADERS ONLY, exactly as ArcaneServer takes it (see that
+        -- project's matching comment). Since 2026-09-16 RuntimeApp.cpp makes its
+        -- OWN VerifySharedTypeContext call, which expands the engine roster --
+        -- and the roster's physics third (RigidBody2D/Collider2D/PhysicsBodyRef,
+        -- Core's Scene/PhysicsComponents.hpp) is Manifold2D-typed. This exe does
+        -- not link Manifold2D: every object it can reach is created and
+        -- destroyed inside ArcaneCore.dll.
+        "%{IncludeDir.Manifold2D}",
         "%{IncludeDir.Mosaic}",
         -- NRI Phase 2, Task 7: RuntimeApp holds an Arcane::NriGraphContext (the
         -- --nri-graph vehicle), and that header is NRI-typed because the node
@@ -736,7 +744,11 @@ project "ArcaneRuntime"
     }
     filter "system:windows"
         systemversion "latest"
-        buildoptions { "/Zc:__cplusplus" }
+        -- /bigobj (2026-09-16): RuntimeApp.cpp's own VerifySharedTypeContext call
+        -- expands the twelve-type engine roster, and each Astra::TypeID<T> pulls in
+        -- another COMDAT set on top of an already-wide include surface -- C1128
+        -- without this. Same reason ArcaneServer/ArcaneEditor/ArcaneClient carry it.
+        buildoptions { "/Zc:__cplusplus", "/bigobj" }
         fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
     filter "configurations:Debug"    defines { "ARCANE_DEBUG" }                   runtime "Debug"   symbols "on"
     filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" }       runtime "Release" optimize "speed" symbols "on"

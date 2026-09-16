@@ -165,6 +165,14 @@ namespace Arcane::HostBoot
             // bug #3 (the 2026-07-30 Camera/Transform aliasing incident) --
             // discovering it loudly at boot beats discovering it as "my
             // sprite renders as one pixel" hours later.
+            //
+            // WHICH MODULE THIS ANSWERS FOR (2026-09-16): the check is inline, so
+            // it compiles into the module holding the CALL -- this body lives in
+            // ArcaneClient.dll, so this call verifies ArcaneClient.dll's caches
+            // and nothing else, whichever host is running the stage. The host
+            // exes ask about THEMSELVES with their own direct calls (EditorApp::
+            // StageRuntimeCreate, RuntimeApp::Init, ServerApp); ctx.moduleName is
+            // the host's label for the log, not the module under test.
             if (!ctx.runtime) return true;   // facility absent -- nothing to verify
             return VerifySharedTypeContext(ctx.runtime->Registry(),
                                            ctx.moduleName ? ctx.moduleName : "HostBoot");

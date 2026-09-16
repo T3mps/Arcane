@@ -95,7 +95,7 @@ namespace Arcane::Editor
 
         Arcane::Scene::CreateEmpty(reg);
         m_scene.Reset(*m_undo);
-        m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
+        m_editSchedule->RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("No scene loaded -- started an empty one");
     }
 
@@ -160,7 +160,7 @@ namespace Arcane::Editor
         // thereby retract) the "scene" key -- do it explicitly so the outgoing
         // scene's rows don't survive into the new, empty one.
         Arcane::Diagnostics::Clear("scene");
-        m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
+        m_editSchedule->RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("New scene");
         return true;
     }
@@ -208,7 +208,7 @@ namespace Arcane::Editor
 
         m_scene.Adopt(file, doc->id, *m_undo);
         m_recents.NoteSceneOpened(m_runtime->CurrentProject(), file);
-        m_editSchedule.RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
+        m_editSchedule->RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
         ARC_INFO("Opened scene {}", file.generic_string());
         return true;
     }
@@ -437,7 +437,7 @@ namespace Arcane::Editor
         // request is serviced right after that pass, so framing an entity created
         // or moved THIS frame reads its real world pose -- same frame, before the
         // scene renders. No propagation runs at input time any more.
-        m_editSchedule.RequestFrame(selectionOnly ? Arcane::Editor::FrameRequest::Selection
-                                                  : Arcane::Editor::FrameRequest::Scene);
+        m_editSchedule->RequestFrame(selectionOnly ? Arcane::Editor::FrameRequest::Selection
+                                                   : Arcane::Editor::FrameRequest::Scene);
     }
 }

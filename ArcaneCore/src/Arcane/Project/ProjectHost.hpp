@@ -29,7 +29,8 @@
 #include <Arcane/Base/Runtime.hpp>       // Runtime::ResetRegistry/Registry (BootScene)
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (BootSceneFile)
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Scene/Components.hpp>            // Arcane::Transform (VerifySharedTypeContext's default probe)
+#include <Arcane/Scene/Components.hpp>            // Arcane::Transform (VerifySharedTypeContextFor's default probe)
+#include <Arcane/Scene/EngineRoster.hpp>          // EngineComponentRoster (VerifySharedTypeContext checks EVERY roster type)
 #include <Arcane/Serialization/SceneAsset.hpp>    // ReadSceneFile/ApplySceneDocument/CreateEmpty (BootScene)
 
 #include <Astra/Component/ComponentRegistry.hpp>  // GetComponentIDFromHash (VerifySharedTypeContext)
@@ -63,8 +64,20 @@ namespace Arcane::ProjectHost
     // registry (populated inside Arcane.dll) holds for the same STABLE name hash.
     // Returns false and logs ARC_ERROR on mismatch; true when correct or when the
     // component is not registered yet (nothing to contradict).
+    //
+    // ONE PROBE WAS NOT ENOUGH (2026-09-16, the second lesson). A module does not
+    // get its private ids all at once: TypeID<T>::Value() caches PER TYPE in a magic
+    // static, so a module that resolved SOME types too early is wrong about exactly
+    // those and right about the rest. ArcaneEditor.exe declared EditModeSchedule as
+    // a plain EditorApp member; its ctor's AddSystem<TransformPropagationSystem>
+    // resolved WorldTransform (and the rest of that system's mask) in the exe's
+    // private DefaultTypeContext BEFORE StageRuntimeCreate installed the shared one,
+    // while Transform -- the old single probe -- still matched by first-touch luck.
+    // The viewport rendered EMPTY with RenderErrorCount 0. So the check below walks
+    // the WHOLE EngineComponentRoster and reports every mismatching type; use
+    // VerifySharedTypeContextFor<T> only when a single named type is the question.
     template<typename Probe = Arcane::Transform>
-    inline bool VerifySharedTypeContext(const Astra::Registry& reg, const char* moduleName)
+    inline bool VerifySharedTypeContextFor(const Astra::Registry& reg, const char* moduleName)
     {
         const auto* creg = reg.GetComponentRegistry();
         if (!creg)
@@ -83,6 +96,29 @@ namespace Arcane::ProjectHost
                   moduleName, Astra::TypeID<Probe>::Name(),
                   (unsigned)mine, (unsigned)*shared.GetValue());
         return false;
+    }
+
+    namespace Detail
+    {
+        // Expand the roster pack: check EVERY type, do not stop at the first bad
+        // one, so the log names all of them (which type mismatched is the whole
+        // diagnostic -- it points straight at what resolved early).
+        template<typename... Ts>
+        inline bool VerifyRoster(const Astra::Registry& reg, const char* moduleName, Arcane::TypeList<Ts...>)
+        {
+            bool ok = true;
+            ((ok = VerifySharedTypeContextFor<Ts>(reg, moduleName) && ok), ...);
+            return ok;
+        }
+    }
+
+    // The boot check every host calls FROM ITS OWN TRANSLATION UNIT (being inline,
+    // it asks about the calling module's caches and no other -- ArcaneClient.dll's
+    // call in ProjectBoot.cpp cannot answer for ArcaneEditor.exe). Checks all twelve
+    // engine component types named in Scene/EngineRoster.hpp.
+    inline bool VerifySharedTypeContext(const Astra::Registry& reg, const char* moduleName)
+    {
+        return Detail::VerifyRoster(reg, moduleName, Arcane::EngineComponentRoster{});
     }
 
     // The game module to host: the project's gameModule when a project is open and it
