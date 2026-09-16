@@ -1728,8 +1728,8 @@ by hand in Task 2 Step 4:
 | # | file:line | symbol |
 |---|---|---|
 | 1 | `Guid.hpp:23` | `struct ARCANE_CORE_API Guid` |
-| 2 | `Cli/Cli.hpp:30` | `class ARCANE_CORE_API Cli` |
-| 3 | `Cli/Cli.hpp:52` | `struct ARCANE_CORE_API Cli::Result` (nested — does not inherit the outer export) |
+| 2 | `Cli/Cli.hpp:29` | `class ARCANE_CORE_API Cli` |
+| 3 | `Cli/Cli.hpp:51` | `struct ARCANE_CORE_API Cli::Result` (nested — does not inherit the outer export) |
 | 4 | `Build/Toolchain.hpp:32` | `ARCANE_CORE_API Toolchain::DiscoverSolution(const std::filesystem::path&)` |
 | 5 | `Build/Toolchain.hpp:39` | `ARCANE_CORE_API Toolchain::ResolvePremake(const std::filesystem::path&)` |
 | 6 | `Build/Toolchain.hpp:46` | `ARCANE_CORE_API Toolchain::VsWhere(const std::string&)` |

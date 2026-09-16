@@ -201,7 +201,8 @@ project "ArcaneCore"
 -- artifact formats (texture now, mesh in F2c). arccook (later tasks) links
 -- this alongside ArcaneCore to produce cooked content; this lib only
 -- INCLUDES ArcaneCore headers (Guid) and does not link ArcaneCore itself.
--- Same static-lib shape as ArcaneCore above (server-style warnings/flags).
+-- Same warnings/flags shape as ArcaneCore's block above (server-style), but a
+-- StaticLib -- ArcaneCore itself is the shared DLL (Core-DLL split, 2026-09-15).
 -- ============================================================================
 project "ArcaneAssetPipeline"
     location "ArcaneAssetPipeline"
