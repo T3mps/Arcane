@@ -45,7 +45,7 @@ namespace Arcane
         virtual ~OffscreenImGuiLayer() = default;
 
         // The underlying ImGuiContext* (as void*, keeping this header imgui-free
-        // like Runtime.hpp). Pass to a plugin via Runtime::SetImGui / EngineContext.
+        // like Runtime.hpp). Pass to a plugin via ClientRuntime::SetImGui / EngineContext.
         virtual void* Context() const = 0;
 
         // Injected IO for the NEXT BeginFrame. Coordinates are target-local px.

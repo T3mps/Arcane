@@ -236,7 +236,7 @@ void AdvanceSim(FrameIo& io)
         const Arcane::InputSnapshot snap =
             io.gpu->InDevices().Sample(io.gpu->Imgui().WantCaptureKeyboard(),
                                       io.gpu->Imgui().WantCaptureMouse());
-        io.runtime->SetInputSnapshot(snap);   // plugins read it via Runtime::Input()
+        io.runtime->SetInputSnapshot(snap);   // plugins read it via ClientRuntime::Input()
         io.gpu->Input().Update(frameDt, snap);
         if (io.gpu->Input().Pressed("quit"))                { io.quit = true; return; }
         if (io.gpu->Input().Pressed("reload_plugin"))       io.plugin->ForceReload();

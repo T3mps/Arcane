@@ -14,7 +14,12 @@ namespace Arcane::Server
         cli.Option("plugin",  "", "game DLL to host (empty = the project's gameModule; a server with nothing to host refuses boot)");
         cli.Option("frames",  "0", "tick N fixed steps then exit (0 = run until terminated)").Type(CliType::Uint);
         cli.Option("fixed-dt", "0.016666666666666666", "seconds per fixed tick").Type(CliType::Double);
-        cli.Option("report",  "", "write the census to this JSON path");
+        // The --report caveat is stated in the help text, not only in a doc: the
+        // report is written when the tick loop ENDS (ServerApp::Finish), so with
+        // --frames 0 a server that is killed writes none. A console-control
+        // handler that finishes on Ctrl+C/terminate is the follow-up.
+        cli.Option("report",  "", "write the census to this JSON path (written when the "
+                                  "loop ends -- with --frames 0 a killed server writes none)");
         cli.Flag  ("print-engine-info", "print engine identity JSON to stdout and exit");
 
         const Cli::Result r = cli.Parse(argc, argv);

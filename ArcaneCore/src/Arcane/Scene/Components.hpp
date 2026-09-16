@@ -202,7 +202,7 @@ namespace Arcane
     // ACameraActor is placed BY its transform; it does not carry one).
     //
     // Before this existed the camera was host state driven through
-    // Runtime::SetCamera -- a Sandbox-era artifact from when the physics showcase
+    // ClientRuntime::SetCamera -- a Sandbox-era artifact from when the physics showcase
     // owned its own camera class. That made the editor viewport and a standalone
     // runtime get their view from different places, so a scene could look correct
     // in the editor and render nothing in the game. A camera IS scene data.

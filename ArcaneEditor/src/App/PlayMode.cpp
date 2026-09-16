@@ -54,11 +54,24 @@ namespace Arcane::Editor
         // The TOPOLOGY switch happens AFTER the snapshot and the physics reset, so
         // what Stop restores is the authored state regardless of which one was
         // entered -- the world set below is built FROM that same authored state.
+        //
+        // AND EVERY SetNetMode ON THE PRIMARY IS FOLLOWED BY RefreshEngineContext
+        // (final-review fix wave, I1). Runtime::SetNetMode moves the WORLD's mode, but
+        // the module reads its own role off EngineContext::netMode -- a struct
+        // PluginHost fills only on the load/reload/attach paths. Left stale, a module
+        // asked "do I have authority?" answers Standalone (yes) while its world is a
+        // Client (no). The call is a no-op when there is no host.
         switch (topology)
         {
             case PlayTopology::Standalone: break;
-            case PlayTopology::ListenServer: runtime.SetNetMode(Arcane::NetMode::ListenServer); break;
-            case PlayTopology::ClientOnly:   runtime.SetNetMode(Arcane::NetMode::Client); break;
+            case PlayTopology::ListenServer:
+                runtime.SetNetMode(Arcane::NetMode::ListenServer);
+                if (host) host->RefreshEngineContext();
+                break;
+            case PlayTopology::ClientOnly:
+                runtime.SetNetMode(Arcane::NetMode::Client);
+                if (host) host->RefreshEngineContext();
+                break;
             case PlayTopology::EmbeddedServer:
             {
                 // The second world: same ProcessContext, same module (attached below), the
@@ -101,6 +114,7 @@ namespace Arcane::Editor
                     return false;
                 }
                 runtime.SetNetMode(Arcane::NetMode::Client);
+                if (host) host->RefreshEngineContext();
                 break;
             }
         }
@@ -130,8 +144,12 @@ namespace Arcane::Editor
         // Back to one Standalone world before the restore: SetNetMode clears and
         // re-instantiates the module's systems for the new role, and the schedulers
         // survive the registry swap the restore performs right after.
+        // ...and the module's view of it comes back with it (I1, see Play above).
         if (runtime.Mode() != Arcane::NetMode::Standalone)
+        {
             runtime.SetNetMode(Arcane::NetMode::Standalone);
+            if (host) host->RefreshEngineContext();
+        }
         m_topology = PlayTopology::Standalone;
 
         const Arcane::PluginVTable* plugin = host ? host->Vtable() : nullptr;

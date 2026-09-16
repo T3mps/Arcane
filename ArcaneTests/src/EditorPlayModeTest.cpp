@@ -38,6 +38,7 @@
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
+#include <Arcane/Scene/TransformSystems.hpp>   // TransformPropagationSystem -- the engine pair's other half
 
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
 
@@ -211,13 +212,21 @@ TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[editor
 // vtable this case used to build by hand: PlaySession takes the HOST now (it is
 // also what attaches/detaches the embedded server world) and reads Vtable() off
 // it, so there is no longer a seam a hand-made vtable can be pushed through. The
-// module under test is the same HotReloadPluginV1 the [hotreload] suite uses, and
-// what it proves is the same round trip end to end: ARCANE_GAME_MODULE's
-// SaveState writes the registry blob PLUS this module's own extra (its Pulse
-// entity id), and its LoadState restores the registry and then REFUSES (returns
-// false, which Stop reports) unless the re-found Pulse entity is the very same
-// one -- so a Stop that returns true is a statement about the module's blob, not
-// only about the registry.
+// module under test is the same HotReloadPluginV1 the [hotreload] suite uses.
+//
+// WHICH PATH RAN IS MADE DECIDABLE, and that took one extra fixture line
+// (final-review fix wave, minor 9 -- the comment here used to claim a
+// discrimination its assertions did not establish: restoring `ticks` to 0 is what
+// BOTH paths do, so it named nothing). The separator is SceneRoot: it is a
+// registry RESOURCE, and resources are not in a registry snapshot, so
+// Runtime::RestoreRegistry alone comes back with it GONE. ARCANE_GAME_MODULE's
+// LoadState re-sets it from an id its SaveState wrote beside the blob
+// (GameModule.hpp). So a SceneRoot that is still there after Stop is a statement
+// that the MODULE's LoadState ran -- exactly the property this case exists for,
+// since a module's own native resources (the physics world) ride that same seam.
+// On top of that the module's OnLoadState REFUSES (returns false, which Stop
+// reports) unless the Pulse entity it re-finds is the saved one, so the REQUIRE on
+// Stop's return is a check on the module's extra blob too.
 TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/LoadState", "[editor][hotreload]")
 {
     using namespace Arcane::HotReloadTest;
@@ -227,6 +236,12 @@ TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/Lo
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
     REQUIRE(host.AttachRuntime(runtime));
     REQUIRE(host.Load());                       // OnInit creates the module's Pulse entity
+
+    // The path discriminator (see the comment above): a SceneRoot RESOURCE, which
+    // only the module's LoadState puts back.
+    Arcane::RegisterSceneComponents(runtime.Registry());
+    const Astra::Entity root = runtime.Registry().CreateEntityWith(Arcane::Transform{});
+    runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
 
     const auto readPulse = [&runtime]
     {
@@ -241,7 +256,8 @@ TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/Lo
     CHECK(play.IsPlaying());
     CHECK_FALSE(runtime.Loop().IsPaused());
 
-    // Play-time mutation, exactly as a running game would produce.
+    // Play-time mutation, exactly as a running game would produce -- plus the
+    // resource DROPPED, the way a restore that swaps the registry drops it.
     runtime.Registry().CreateView<Pulse>().ForEach([](Astra::Entity, Pulse& p) { p.ticks = 99; });
     REQUIRE(readPulse() == 99);
 
@@ -251,6 +267,11 @@ TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/Lo
     CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
     CHECK(readPulse() == 0);                    // the play-time mutation is gone
+    // THE PATH: SceneRoot is back, so it was the MODULE's LoadState that restored,
+    // not Runtime::RestoreRegistry (whose blob carries no resources at all).
+    const Arcane::SceneRoot* sr = runtime.Registry().GetResource<Arcane::SceneRoot>();
+    REQUIRE(sr != nullptr);
+    CHECK(sr->entity == root);
 
     host.Unload();
 }
@@ -540,6 +561,11 @@ TEST_CASE("Play as embedded server with a loaded module: the server world gets t
     Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
     host.AttachRuntime(runtime);
     REQUIRE(host.Load());
+    // The BEHAVIOUR probe both worlds stamp into (RoleCounters, HotReloadShared.hpp):
+    // one entity carrying it, in the AUTHORED scene, so the registry-only seed
+    // carries it into the server world too.
+    runtime.Registry().CreateEntityWith(RoleCounters{});
+
     Arcane::Editor::PlaySession play;
     REQUIRE(play.Play(runtime, &host, Arcane::Editor::PlayTopology::EmbeddedServer));
     REQUIRE(play.ServerWorld() != nullptr);
@@ -548,8 +574,85 @@ TEST_CASE("Play as embedded server with a loaded module: the server world gets t
     CHECK_FALSE(play.ServerWorld()->Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());
     CHECK(runtime.Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());
     CHECK_FALSE(runtime.Schedulers().fixedUpdate.HasSystem<ServerOnlyTick>());
+
+    // PRESENCE IS NOT EXECUTION (final-review fix wave, minor 13). TickServer drives
+    // the server world's OWN loop; the Server-masked system must actually run there,
+    // and the Client-masked one must not -- which is what separates "the right
+    // factories were instantiated" from "the right systems are doing the work".
+    for (int i = 0; i < 5; ++i) play.TickServer(1.0 / 60.0);
+    const auto serverCounters = [&]
+    {
+        RoleCounters c{};
+        play.ServerWorld()->Registry().CreateView<RoleCounters>()
+            .ForEach([&](Astra::Entity, RoleCounters& r) { c = r; });
+        return c;
+    }();
+    CHECK(serverCounters.serverTicks > 0);
+    CHECK(serverCounters.clientTicks == 0);
+
     REQUIRE(play.Stop(runtime, &host));
     CHECK(host.Runtimes().size() == 1);
+    // Back to Standalone, so the editor world's fixedUpdate carries BOTH masks again
+    // -- the module's pair, alongside the engine's own PhysicsSystem and
+    // TransformPropagationSystem (Runtime::InstallEngineSystems, ABI 29), which the
+    // SetNetMode clear-and-reinstantiate must not have dropped.
+    CHECK(runtime.Mode() == Arcane::NetMode::Standalone);
+    CHECK(runtime.Schedulers().fixedUpdate.HasSystem<ServerOnlyTick>());
+    CHECK(runtime.Schedulers().fixedUpdate.HasSystem<ClientOnlyTick>());
+    CHECK(runtime.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
+    CHECK(runtime.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
+    host.Unload();
+}
+
+TEST_CASE("a Play topology flip moves the NETMODE the MODULE sees, not only the world's", "[editor][netmode][hotreload]")
+{
+    // Final-review fix wave, I1. Runtime::SetNetMode moves the WORLD's mode, but a
+    // module branches on EngineContext::netMode -- the struct PluginHost fills, and
+    // used to fill ONLY on its load/reload/attach paths. PlaySession flips the
+    // primary's mode on every Play and Stop, so without a refresh a module asked "do
+    // I have authority?" answered Standalone (yes) while its world was a Client (no):
+    // the whole point of the field, inverted, silently.
+    //
+    // PluginHost::Context() is the read-only/diagnostic accessor this reads through.
+    using namespace Arcane::HotReloadTest;
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    runtime.Components()->RegisterComponent<Pulse>();
+    runtime.Components()->RegisterComponent<RoleCounters>();
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+    REQUIRE(host.AttachRuntime(runtime));
+    REQUIRE(host.Load());
+
+    const Arcane::EngineContext* ctx = host.Context();
+    REQUIRE(ctx != nullptr);
+    REQUIRE(ctx->engine == &runtime);
+    CHECK(ctx->netMode == Arcane::NetMode::Standalone);      // the load-path value
+
+    Arcane::Editor::PlaySession play;
+
+    // ListenServer: one world, both roles.
+    REQUIRE(play.Play(runtime, &host, Arcane::Editor::PlayTopology::ListenServer));
+    CHECK(runtime.Mode() == Arcane::NetMode::ListenServer);
+    CHECK(ctx->netMode == Arcane::NetMode::ListenServer);    // and the module sees it
+    REQUIRE(play.Stop(runtime, &host));
+    CHECK(ctx->netMode == Arcane::NetMode::Standalone);      // and sees it come back
+
+    // ClientOnly: the world loses authority, and so must the module's view of it --
+    // this is the pairing that used to read "Standalone" over a Client world.
+    REQUIRE(play.Play(runtime, &host, Arcane::Editor::PlayTopology::ClientOnly));
+    CHECK(runtime.Mode() == Arcane::NetMode::Client);
+    CHECK_FALSE(runtime.HasAuthority());
+    CHECK(ctx->netMode == Arcane::NetMode::Client);
+    REQUIRE(play.Stop(runtime, &host));
+    CHECK(ctx->netMode == Arcane::NetMode::Standalone);
+
+    // EmbeddedServer re-roles the PRIMARY to Client too (the authority is the second
+    // world), so the module's view follows it there as well.
+    REQUIRE(play.Play(runtime, &host, Arcane::Editor::PlayTopology::EmbeddedServer));
+    CHECK(ctx->netMode == Arcane::NetMode::Client);
+    CHECK(ctx->engine == &runtime);                          // still the PRIMARY, not the server world
+    REQUIRE(play.Stop(runtime, &host));
+    CHECK(ctx->netMode == Arcane::NetMode::Standalone);
+
     host.Unload();
 }
 

@@ -15,10 +15,15 @@
 #include <filesystem>
 #include <thread>
 
+// Only for the two GetModuleHandleW census probes below (P10/S1). Windows-only
+// until the Linux port: elsewhere the probe has no equivalent worth faking, so
+// both report false and the report says nothing rather than something wrong.
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#endif
 
 namespace Arcane::Server
 {
@@ -37,8 +42,11 @@ namespace Arcane::Server
         // exe's link line never names ArcaneClient, so this must read false on a
         // clean build. If it ever reads true, a Core symbol's export/import got
         // routed through Client somewhere and that is a defect to fix, not a
-        // value to relax.
+        // value to relax. Windows-only probe (see the include guard above): it
+        // reads false on every other platform, where no host ships yet.
+#ifdef _WIN32
         rep.clientDllLoadedAtBoot = ::GetModuleHandleW(L"ArcaneClient.dll") != nullptr;
+#endif
 
         Arcane::ProcessContextDesc d;
         d.isDedicatedServerProcess = true;
@@ -99,8 +107,10 @@ namespace Arcane::Server
         // P10: the game module's OWN import of ArcaneClient (the module links
         // both import libs so it can build against the full engine surface),
         // reported honestly rather than hidden -- this exe's own link line
-        // still never names ArcaneClient.
+        // still never names ArcaneClient. Windows-only, like its sibling above.
+#ifdef _WIN32
         rep.clientDllLoadedAfterModule = ::GetModuleHandleW(L"ArcaneClient.dll") != nullptr;
+#endif
 
         (void)Arcane::ProjectHost::BootScene(*m_runtime, *proj);
 

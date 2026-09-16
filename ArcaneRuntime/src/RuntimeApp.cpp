@@ -747,7 +747,7 @@ void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
     // the plugin's update ran, so a scene that ships a camera beats a plugin
     // that also pushes one -- the scene is the authored artifact. No camera
     // leaves the stored camera untouched (a plugin that drives the camera
-    // itself via Runtime::SetCamera therefore still works) and says so
+    // itself via ClientRuntime::SetCamera therefore still works) and says so
     // once, rather than substituting an identity view that would render an
     // older scene as an unexplained black window.
     int camCount = 0;

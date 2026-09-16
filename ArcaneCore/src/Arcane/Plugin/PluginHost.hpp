@@ -49,7 +49,8 @@ namespace Arcane
         //
         // `process` is the process's ONE ProcessContext: the module's TypeContext and
         // the system-factory table the module registers into. At least one Runtime
-        // must be attached before Load().
+        // must be attached before Load() -- Load() REFUSES (logs and returns false)
+        // a host with none, in every configuration.
         PluginHost(ProcessContext& process, std::filesystem::path sourceDllPath);
         ~PluginHost();
 
@@ -93,9 +94,27 @@ namespace Arcane
         void UpdateAll(double dt, double alpha);
         void DrawUIAll();
 
+        // Re-derive the EngineContext's PRIMARY-dependent fields (engine, client,
+        // workScheduler/taskExecutor, netMode and the ImGui handoff) from the primary
+        // Runtime as it is NOW. The load/reload/attach paths already do this for
+        // themselves; this is the seam for a host that changes the primary's state
+        // BETWEEN those points -- specifically Runtime::SetNetMode, which the editor's
+        // PlaySession calls on every Play/Stop flip (final-review fix wave, I1).
+        // Without it a module reading ctx->netMode sees Standalone ("I have
+        // authority") while its world is a Client. A no-op when no Runtime is
+        // attached. Cheap: a handful of pointer reads.
+        void RefreshEngineContext();
+
         [[nodiscard]] bool                IsLoaded()   const noexcept;
         [[nodiscard]] const PluginVTable* Vtable()     const noexcept;
         [[nodiscard]] std::uint32_t       Generation() const noexcept;
+
+        // READ-ONLY / DIAGNOSTIC. The very EngineContext struct handed to every
+        // loaded module's Init -- exposed so a test (or a host's census) can see what
+        // the module sees. Never a mutation seam: the fields are derived, and
+        // RefreshEngineContext above is the only supported way to move them. The
+        // pointer is stable for this host's lifetime.
+        [[nodiscard]] const EngineContext* Context() const noexcept;
 
     private:
         struct Impl;

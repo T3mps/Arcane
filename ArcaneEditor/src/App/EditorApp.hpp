@@ -571,7 +571,7 @@ namespace Arcane::Editor
         // output texture (Unity/Unreal "game view") so the plugin's debug HUD
         // lives inside the Viewport panel, never over the editor chrome. Created
         // in Init after the editor ImGui layer is up; the plugin is pointed at it
-        // via Runtime::SetImGui (in place of the editor context). Declared after
+        // via ClientRuntime::SetImGui (in place of the editor context). Declared after
         // m_gpu (destructs BEFORE it -- see below for the real reason this
         // ordering matters) and before
         // m_runtime/m_plugin (destructs AFTER the
@@ -614,7 +614,39 @@ namespace Arcane::Editor
 
         std::unique_ptr<Arcane::ProcessContext> m_process;          // the process's ONE (spec s3); declared before m_runtime so it outlives it
         std::optional<Arcane::ClientRuntime> m_runtime;             // destructs before m_gpu
-        std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_runtime
+
+        // ===== THE PLAY SESSION SITS BETWEEN m_runtime AND m_plugin ==============
+        // Declaration order IS the teardown contract here (final-review fix wave,
+        // I2). Since plan 1 Task 7 m_play OWNS a Runtime -- the embedded
+        // DedicatedServer world -- and PluginHost keeps a RAW pointer to every world
+        // it serves for the whole attach. So:
+        //   * AFTER m_process/m_runtime  => destroyed BEFORE them: the server world
+        //     was built on that ProcessContext and on the primary's ComponentRegistry.
+        //   * BEFORE m_plugin            => destroyed AFTER it: ~PluginHost's
+        //     Unload -> TeardownImage iterates its `runtimes` calling ClientHooks()/
+        //     ClearSystems()/ResetRegistry(), so every world it points at must still
+        //     be alive. With m_play declared after m_plugin (as it was) that loop ran
+        //     over a freed Runtime whenever the editor exited mid-EmbeddedServer Play.
+        // EditorApp::Shutdown ALSO ends the session explicitly, before any of this --
+        // belt and braces, and it is what keeps the VerifyReport's `worlds` array
+        // honest. Do not drop either half.
+
+        // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
+        // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.
+        // Arcane Editor boots in Edit (see Init: the RunLoop is paused right after the
+        // plugin loads).
+        Arcane::Editor::PlaySession m_play;
+
+        // The "Client + separate server process" play mode's child (Core-DLL split,
+        // plan 1 Task 7): ONE tracked ArcaneServer.exe, spawned by DoLaunchServer and
+        // stopped on every Play->Edit flip. Beside m_play deliberately -- it is the
+        // other half of that topology's Play session, and the two are started and
+        // stopped together. Stop() is a silent no-op when nothing was spawned, which
+        // is what lets every Stop site call it unconditionally; the destructor is the
+        // backstop for an editor that exits mid-session.
+        Arcane::Editor::ServerLaunch::ServerProcess m_serverProcess;
+
+        std::optional<Arcane::PluginHost> m_plugin;                 // destructs before m_play, m_runtime
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
 
@@ -776,20 +808,8 @@ namespace Arcane::Editor
         };
         ConsoleDiagnostics m_consoleDiag;
 
-        // Play-in-editor (Task 8): Edit|Play state machine. Play() snapshots the
-        // registry + unpauses the RunLoop; Stop() restores the snapshot + re-pauses.
-        // Arcane Editor boots in Edit (see Init: the RunLoop is paused right after the
-        // plugin loads).
-        Arcane::Editor::PlaySession m_play;
-
-        // The "Client + separate server process" play mode's child (Core-DLL split,
-        // plan 1 Task 7): ONE tracked ArcaneServer.exe, spawned by DoLaunchServer and
-        // stopped on every Play->Edit flip. Beside m_play deliberately -- it is the
-        // other half of that topology's Play session, and the two are started and
-        // stopped together. Stop() is a silent no-op when nothing was spawned, which
-        // is what lets every Stop site call it unconditionally; the destructor is the
-        // backstop for an editor that exits mid-session.
-        Arcane::Editor::ServerLaunch::ServerProcess m_serverProcess;
+        // (m_play / m_serverProcess are declared UP with m_runtime/m_plugin -- the
+        // teardown contract, see that block.)
 
         // THE Play/edit predicate (architecture pass sec 1). Editor code asks this,
         // never m_play.IsPlaying() raw, so the predicate has one greppable name.
@@ -1041,7 +1061,7 @@ namespace Arcane::Editor
             Arcane::TransactionId txn = Arcane::TransactionId::None;
         } m_gizmoDrag;
 
-        // The EDITOR's viewport camera (Edit mode). Runtime::SetCamera is the
+        // The EDITOR's viewport camera (Edit mode). ClientRuntime::SetCamera is the
         // PLUGIN's seam, so a project whose game module never calls it would be
         // stuck at the identity transform -- offset (0,0), zoom 1, i.e. 1 px per
         // metre. EditorApp drives this from viewport input and pushes it into

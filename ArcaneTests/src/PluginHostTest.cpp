@@ -1,10 +1,12 @@
 // PluginHost: versioned copy-and-load, ABI check, last-good rollback, hot swap.
-// No window, no device. Uses the HotReloadPlugin V1/V2/Bad DLLs copied
+// No window, no device. Uses the HotReloadPlugin V1/V2/Bad/InitFail DLLs copied
 // next to ArcaneTests.exe (relative paths; run the exe FROM its output dir).
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Base/ProcessContext.hpp>       // SystemFactories() -- the C1 size instrument
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/SystemFactory.hpp>      // SystemFactoryTable::Size()
 #include <Arcane/Render/RenderErrorLatch.hpp>   // RenderErrorCount()
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (the engine-roster survivor check)
 
@@ -233,6 +235,59 @@ TEST_CASE("Plugins-only host (no primary module) loads and drives its secondarie
     CHECK(ReadPulse(rt) == 4);
     CHECK(Arcane::RenderErrorCount() == 0);
     host.Unload();
+}
+
+TEST_CASE("A secondary whose Init FAILS leaves no system factory pointing into its unmapped image", "[hotreload]")
+{
+    // Final-review fix wave, C1. LoadInitPlugins' failure branch used to let the
+    // local std::optional<Plugin> die at its `return false` -- FreeLibrary -- while
+    // everything that module's OnInit had registered was still in the ProcessContext's
+    // PROCESS-LIFETIME SystemFactoryTable: InitImage had already opened and closed the
+    // owner bracket, and the image was never pushed into `plugins`, so
+    // DisownPluginImages never saw it and nothing ever called ClearOwner(image.base).
+    // The next Runtime construction then instantiated a std::function compiled into
+    // freed code.
+    //
+    // HotReloadPluginInitFail is the fixture that reaches that branch: a clean ABI, a
+    // clean load, two RegisterSystem calls, and THEN `return false` from OnInit. The
+    // TABLE SIZE is the instrument -- it is process-wide and shared by every case in
+    // this suite, so the claim is "back to where this case found it", measured, not a
+    // fixed number.
+    std::filesystem::copy_file("../HotReloadPluginV1/HotReloadPluginV1.dll", "HotReloadPluginV1.dll",
+                               std::filesystem::copy_options::overwrite_existing);
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    rt.Components()->RegisterComponent<Pulse>();
+    rt.Components()->RegisterComponent<RoleCounters>();
+
+    const std::size_t before = Arcane::Test::Process().SystemFactories().Size();
+
+    {
+        Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("HotReloadPluginV1.dll"));
+        REQUIRE(host.AttachRuntime(rt));
+        host.AddPlugin(std::filesystem::path("HotReloadPluginInitFail.dll"));
+        // The primary comes up, the secondary refuses, and Load unwinds the WHOLE
+        // session (no half-loaded host) -- so every factory either module registered
+        // is gone by the time this returns.
+        CHECK_FALSE(host.Load());
+        CHECK_FALSE(host.IsLoaded());
+        CHECK(Arcane::Test::Process().SystemFactories().Size() == before);
+    }
+    CHECK(Arcane::Test::Process().SystemFactories().Size() == before);
+
+    // AND THE PROCESS IS STILL USABLE, which is the consequence the size number
+    // stands in for: a NEW world built on the same ProcessContext instantiates the
+    // table's entries. With a stale entry surviving, this call dispatches a
+    // std::function whose code has been unmapped -- an access violation, not a
+    // wrong answer. It must instantiate nothing and return cleanly.
+    Arcane::Runtime fresh(Arcane::Test::Process());
+    CHECK(fresh.InstantiateModuleSystems() == 0);
+
+    // The world that WAS attached is intact too (Unload reset its registry; it
+    // still takes entities and resolves the module's shared component types).
+    rt.Registry().CreateEntityWith(Pulse{7});
+    CHECK(ReadPulse(rt) == 7);
+    CHECK(Arcane::RenderErrorCount() == 0);
 }
 
 TEST_CASE("Unloading a plugin restores the descriptors it overrode", "[hotreload]")

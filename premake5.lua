@@ -796,7 +796,9 @@ project "ArcaneEditor"
     -- transitive-link reasoning as bc7enc_rdo above.
     links { "ArcaneCore", "ArcaneClient", "imgui-node-editor", "ArcaneAssetPipeline", "bc7enc_rdo", "meshoptimizer" }
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
-    dependson { "arccook" }
+    -- ArcaneServer: the play-mode picker's separate-server row resolves and spawns
+    -- ../ArcaneServer/ArcaneServer.exe, so it has to be built beside this exe.
+    dependson { "arccook", "ArcaneServer" }
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
@@ -1283,7 +1285,8 @@ project "ArcaneTests"
     defines { "MOSAIC_ENABLE_ASSERTS" }
 
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
-    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad", "arccook" }
+    dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad",
+                "HotReloadPluginInitFail", "arccook" }
 
     -- The test exe loads ArcaneClient.dll from its own directory.
     postbuildcommands {
@@ -1307,6 +1310,7 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV1/HotReloadPluginV1.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV1.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginInitFail/HotReloadPluginInitFail.dll" "%{cfg.buildtarget.directory}/HotReloadPluginInitFail.dll"',
         -- Test data fixtures: copy ArcaneTests/data's CONTENTS into the test output
         -- dir's data/ so tests find their fixtures by relative path. {COPYDIR}
         -- copies the directory's contents, merging with the data/fonts dir the
@@ -1401,8 +1405,9 @@ project "ArcaneTests"
         symbols "off"
 
 -- ============================================================================
--- Hot-reload TEST plugins: one source, three DLLs (V1 step=1, V2 step=10,
--- Bad ABI). SharedLib, /MD. ArcaneCore is a DLL since the Core-DLL split:
+-- Hot-reload TEST plugins: one source, four DLLs (V1 step=1, V2 step=10,
+-- Bad ABI, InitFail = OnInit registers its factories then returns false --
+-- PluginHost's secondary-init-failure teardown fixture, final-review fix wave C1). SharedLib, /MD. ArcaneCore is a DLL since the Core-DLL split:
 -- exactly one copy per process BY CONSTRUCTION, and it is ArcaneCore.dll --
 -- so a module links BOTH engine import libs, exactly as build/arcane.lua does
 -- for a real game module (spec 2026-09-15 s1.2).
@@ -1451,5 +1456,6 @@ end
 test_plugin("HotReloadPluginV1",  { "HOTRELOAD_STEP=1",          "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginV2",  { "HOTRELOAD_STEP=10",         "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginBad", { "HOTRELOAD_ABI_OFFSET=999",  "_CRT_SECURE_NO_WARNINGS" })
+test_plugin("HotReloadPluginInitFail", { "HOTRELOAD_INIT_FAIL=1",  "_CRT_SECURE_NO_WARNINGS" })
 
 group ""

@@ -1,7 +1,13 @@
-// Minimal hot-reload test plugin. Built into three DLLs from this one source:
-//   HotReloadPluginV1  -> HOTRELOAD_STEP=1,  ABI = kGamePluginABIVersion
-//   HotReloadPluginV2  -> HOTRELOAD_STEP=10, ABI = kGamePluginABIVersion
-//   HotReloadPluginBad -> ABI = kGamePluginABIVersion + 999 (forces rollback)
+// Minimal hot-reload test plugin. Built into four DLLs from this one source:
+//   HotReloadPluginV1       -> HOTRELOAD_STEP=1,  ABI = kGamePluginABIVersion
+//   HotReloadPluginV2       -> HOTRELOAD_STEP=10, ABI = kGamePluginABIVersion
+//   HotReloadPluginBad      -> ABI = kGamePluginABIVersion + 999 (forces rollback)
+//   HotReloadPluginInitFail -> HOTRELOAD_INIT_FAIL: OnInit registers its system
+//        factories and THEN returns false. The ABI is fine and the image loads
+//        cleanly, so this is the one failure shape that gets as far as running a
+//        module's registrations before the host has to unwind them -- the fixture
+//        for PluginHost's secondary-init-failure teardown (final-review fix wave,
+//        C1: the factories must be ClearOwner'ed before the image unmaps).
 // Built ON the SDK's ARCANE_GAME_MODULE (Arcane/Plugin/GameModule.hpp), so the
 // [hotreload] suite is the macro's plugin test: the prologue (Pulse arrives
 // through the ARCANE_COMPONENT drain), the base Save/LoadState round-trip plus
@@ -51,7 +57,15 @@ namespace Arcane::HotReloadTest
             // mask; each Runtime instantiates what its NetMode matches.
             RegisterSystem<ServerOnlyTick>(Arcane::RoleMask::Server, Arcane::SystemPhase::FixedUpdate);
             RegisterSystem<ClientOnlyTick>(Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate);
+#ifdef HOTRELOAD_INIT_FAIL
+            // AFTER the registrations, deliberately: this build exists to leave
+            // entries in the process-lifetime SystemFactoryTable that point into an
+            // image the host is about to unmap. See the header comment.
+            ARC_INFO("HotReloadPlugin: OnInit refusing on purpose (HOTRELOAD_INIT_FAIL)");
+            return false;
+#else
             return true;
+#endif
         }
 
         void OnFixedUpdate(double) override

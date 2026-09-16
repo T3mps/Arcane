@@ -1834,3 +1834,43 @@ run's random seed.
 `57269→57524` / `1749→1786`. **Dist is untouched** (not built in this plan;
 stays at its asset-manager Plan 3 row, `55226/1516`). `check-baselines.ps1`
 after the edit reports `+0/+0` exit 0 in both Debug and Release.
+
+### Final-review fix wave (2026-09-16)
+
+A whole-branch review of the closed plan (`80a44876..2b042ca5` and the eight
+task commits behind it) returned **1 Critical, 2 Important and 13 minors**, all
+fixed in one commit, `b51d1011`. The Critical: `PluginHost::Impl::
+LoadInitPlugins`' failure branch unmapped a secondary whose `Init` returned
+`false` **without clearing its system factories** — the local
+`std::optional<Plugin>` died at the `return false` (FreeLibrary) while
+everything that module's `OnInit` had registered was still in the ProcessContext's
+process-lifetime `SystemFactoryTable`, so the next `Runtime` construction
+dispatched a `std::function` compiled into freed code (reproduced as a SIGSEGV
+before the fix). It now adopts the image into a `PluginImage` and runs the same
+full `TeardownImage` the primary's own init-failure path runs. The two
+Importants: `EngineContext::netMode` went stale on a `PlaySession` topology flip
+(a module read `Standalone` — "I have authority" — over a `Client` world);
+`PluginHost` gained `RefreshEngineContext()` (plus a read-only `Context()`
+accessor for the pin) and `PlaySession::Play`/`Stop` call it after every
+`SetNetMode`. And `EditorApp`'s `m_play`/`m_serverProcess` are now declared
+**before** `m_plugin`, so `~PluginHost` runs first over a still-alive world —
+the `Shutdown()` Stop is kept as the belt to that braces. No ABI bump (a new
+`PluginHost` method is not an `EngineContext`/vtable change).
+
+New fixture: a **fourth** test plugin, `HotReloadPluginInitFail`
+(`HOTRELOAD_INIT_FAIL`), whose `OnInit` registers its factories and then returns
+`false` — the only failure shape that gets as far as running a module's
+registrations before the host must unwind them.
+
+Measurement (full detail in `.superpowers/sdd/2026-09-15-core-dll-split-plan1-arcane/final-fix-report.md`):
+two-config build, `0 Error(s) / 0 Warning(s)` in all four; `~[gpu]` Debug seed
+`1611933621` and Release seed `893178814`, both **57562 / 1788**
+(`+38 / +2` against the 2026-09-15 booking); unfiltered Debug seed `2945909899`,
+**120043 / 1835 passed** (1839 incl. 4 SKIPs), all passing, no order-dependent
+SIGSEGV this run; `golden-gate.ps1` **4/4 `diffCount=0` in both configs, no
+re-bless**; desk left on Debug.
+
+**Baselines re-booked:** the four Debug/Release rows `57524→57562` /
+`1786→1788`; Dist untouched. The `+38` reconciles to the assertion with zero
+residual — C1 pin +8, I1 pin +21, `RoleCounters`/engine-pair additions +7,
+the `SceneRoot` path discriminator +2.

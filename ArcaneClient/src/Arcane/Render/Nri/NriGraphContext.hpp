@@ -391,7 +391,7 @@ namespace Arcane
             bool capture = false;
 
             // This frame's 2D content, ALREADY SUBMITTED into the batcher by
-            // the frame driver (Runtime::SetRenderContext + SubmitRender) and
+            // the frame driver (ClientRuntime::SetRenderContext + SubmitRender) and
             // not yet drained -- this path drains it. Borrowed for
             // the duration of the RenderFrame call and never stored; null
             // renders a cleared canvas.

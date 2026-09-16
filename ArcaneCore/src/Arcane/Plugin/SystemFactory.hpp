@@ -108,6 +108,19 @@ namespace Arcane
     class ARCANE_CORE_API SystemFactoryTable
     {
     public:
+        SystemFactoryTable() = default;
+
+        // NEITHER COPYABLE NOR MOVABLE, and that is the invariant, not tidiness:
+        // there is exactly ONE of these per process, owned by the ProcessContext,
+        // and PluginHost clears a module's entries out of THAT instance by owner key
+        // before the image unmaps. A copy would hold the module's std::functions past
+        // the unmap with nothing tracking it, and BeginOwner/EndOwner's open-owner
+        // state would fork. Nothing copies or moves it today; this keeps it that way.
+        SystemFactoryTable(const SystemFactoryTable&)            = delete;
+        SystemFactoryTable& operator=(const SystemFactoryTable&) = delete;
+        SystemFactoryTable(SystemFactoryTable&&)                 = delete;
+        SystemFactoryTable& operator=(SystemFactoryTable&&)      = delete;
+
         // Append one entry. The `owner` field the caller passes is IGNORED -- the
         // table stamps the OPEN owner (BeginOwner below), so a module never has to
         // name, or be able to name, its own image base. An Add with NO owner open

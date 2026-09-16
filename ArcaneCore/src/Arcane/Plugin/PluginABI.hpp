@@ -233,14 +233,14 @@ namespace Arcane
     //     TransformPropagationSystem would compose mat3s over mat4 storage.
     //     Reject the pairing.
     //     Edit::WorldMatrix/ParentWorldMatrix and DecomposeTRS/ComposeTRS
-    //     (ARCANE_CORE_API, mat3 -> mat4) also changed signature, but a mangled-name
+    //     (ARCANE_API, mat3 -> mat4) also changed signature, but a mangled-name
     //     mismatch fails loudly at load; it adds nothing to the verdict above.
     // v16, amended (2026-08-22, F1 Task 4): the transform PROPAGATION was
     //     replaced -- TransformSystems.hpp gained a public TransformOrder
     //     (a Registry resource holding a flat topological order + dirty state)
     //     and TransformPropagationSystem stopped walking
     //     Relations::ForEachDescendant. The version STAYS AT 16 deliberately:
-    //     no existing type's layout moved, no ARCANE_CORE_API signature changed, and
+    //     no existing type's layout moved, no ARCANE_API signature changed, and
     //     TransformOrder is new, so a module built against the earlier v16
     //     header cannot reference it. Both copies of the header-only system
     //     compute the same `parentWorld * local` product and this system is the
@@ -257,7 +257,7 @@ namespace Arcane
     //     header. Accept the pairing; rebuild the module to get the win.
     // v16, amended (2026-08-22, F1 final review): two additive changes, and the
     //     version STAYS AT 16 for both.
-    //       * `ARCANE_CORE_API bool IsPlanarBasis(const glm::mat4&)` joins
+    //       * `ARCANE_API bool IsPlanarBasis(const glm::mat4&)` joins
     //         DecomposeTRS/ComposeTRS in Edit/Gizmo.hpp. A NEW export: no
     //         existing signature moved, and a module built against the earlier
     //         v16 header cannot reference a symbol it has no declaration for.
@@ -337,14 +337,14 @@ namespace Arcane
     //     Scene::kSceneJsonVersion (Serialization/SceneSerializer.hpp:62)
     //     stays at 3.
     // v18 (2026-08-30, arc 2): the automation-tooling close-out moved three
-    //     ARCANE_CORE_API surfaces. Checked against the same "does this actually
+    //     ARCANE_API surfaces. Checked against the same "does this actually
     //     corrupt a mixed pairing" bar the v7, v16-amended and v17 entries
     //     apply -- and unlike v17, TWO of these are genuine LAYOUT changes, so
     //     this one clears that bar rather than resting on desk legibility:
-    //       * `HostConfig` (Host/HostConfig.hpp:13, an ARCANE_CORE_API STRUCT)
+    //       * `HostConfig` (Host/HostConfig.hpp:13, an ARCANE_API STRUCT)
     //         gained `settleTimeoutMs` (uint64). Layout. A v17 module holding
     //         one by value disagrees with the host about its SIZE.
-    //       * `VerifyReport` (Host/VerifyReport.hpp:134, an ARCANE_CORE_API CLASS)
+    //       * `VerifyReport` (Host/VerifyReport.hpp:134, an ARCANE_API CLASS)
     //         gained SetSettle plus five members, and its JSON went
     //         schemaVersion 2 -> 3 with `mode` changing value "offscreen" ->
     //         "headless". Layout, and a WIRE contract change besides -- the
@@ -371,19 +371,19 @@ namespace Arcane
     //     at 3. ReferenceProject and Gacha's Game are restamped with this
     //     change, the same precedent v16 and v17 set.
     // v19 (2026-09-03, Arc A -- the automation verdict vocabulary): the two
-    //     ARCANE_CORE_API surfaces v18 moved MOVED AGAIN, and a third joined them.
+    //     ARCANE_API surfaces v18 moved MOVED AGAIN, and a third joined them.
     //     Checked against the same "does this actually corrupt a mixed
     //     pairing" bar the v18 entry applies -- all three clear it on layout
     //     or on mangled name, so this one does not rest on desk legibility
     //     either:
-    //       * `HostConfig` (Host/HostConfig.hpp:13, an ARCANE_CORE_API STRUCT)
+    //       * `HostConfig` (Host/HostConfig.hpp:13, an ARCANE_API STRUCT)
     //         gained `std::optional<double> fixedTimeSeconds` -- --fixed-time,
     //         which pins the scene clock independently of the frame count.
     //         LAYOUT: `optional<double>` is 16 bytes, so a v18 module holding
     //         a HostConfig by value disagrees with the host about its SIZE.
     //         Identical failure to the one the v18 entry recorded for
     //         `settleTimeoutMs`.
-    //       * `VerifyReport` (Host/VerifyReport.hpp, an ARCANE_CORE_API CLASS)
+    //       * `VerifyReport` (Host/VerifyReport.hpp, an ARCANE_API CLASS)
     //         gained `m_compareMaxLocalDifference`, and `SetCompare` gained a
     //         NON-DEFAULTED eleventh parameter (`double maxLocalDifference`).
     //         Both at once: the member is LAYOUT, and the new parameter moves
@@ -403,7 +403,7 @@ namespace Arcane
     //         not a silent misread, but still exactly what this gate exists to
     //         catch before LoadLibrary rather than after.
     //     Additive and harmless on their own, recorded so the list is complete:
-    //     `Host/Verdict.hpp` and `Host/ExclusionList.hpp` are new ARCANE_CORE_API
+    //     `Host/Verdict.hpp` and `Host/ExclusionList.hpp` are new ARCANE_API
     //     headers, and `ImageCompareOptions`/`ImageCompareResult` each gained
     //     a member -- all of them consumed by the two HOSTS and ArcaneTests and
     //     by no game module.
@@ -426,7 +426,7 @@ namespace Arcane
     //         search space the resolver probed. LAYOUT: a v19 module calling
     //         `ResolveReference` disagrees with the host about the return
     //         struct's SIZE.
-    //       * `VerifyReport` (Host/VerifyReport.hpp:134, an ARCANE_CORE_API CLASS)
+    //       * `VerifyReport` (Host/VerifyReport.hpp:134, an ARCANE_API CLASS)
     //         gained `m_compareTriedPaths`, and `SetCompare` gained a
     //         NON-DEFAULTED twelfth parameter
     //         (`std::vector<std::string> triedPaths`). The same pairing the
@@ -836,11 +836,14 @@ namespace Arcane
     //     (Base/Scene/Plugin/Project/Serialization/Sim/... now export from
     //     ArcaneCore.dll, ARCANE_CORE_API; a module links BOTH import libs, build/
     //     arcane.lua); EngineContext gained process, client and netMode -- exactly
-    //     three, tail-appended; and the module contract gained system-factory
+    //     three, and NOT tail-appended: they sit BETWEEN `engine` and the four
+    //     ImGui void*s (see the struct below), so the ImGui block's offsets move
+    //     as well as the struct's size; and the module contract gained system-factory
     //     registration with role masks (GameModule::RegisterSystem, spec s4) --
     //     each Runtime instantiates what its NetMode matches. A v29 module under a
-    //     v30 host would read EngineContext at the old size and register no
-    //     factories. Reject the pairing. ReferenceProject.arcproj restamped with
+    //     v30 host would read EngineContext at the old size AND read its ImGui
+    //     handoff at the wrong offsets, and would register no factories. Reject
+    //     the pairing. ReferenceProject.arcproj restamped with
     //     this change; Gacha's Game restamp (29 -> 30) is this plan's Task 5 Gacha
     //     commit, with the Aphelyon.dll rebuild -- not deferred.
     inline constexpr uint32_t kGamePluginABIVersion = 30;

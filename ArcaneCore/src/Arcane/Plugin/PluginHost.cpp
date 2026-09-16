@@ -445,9 +445,33 @@ namespace Arcane
                 RefreshContext();
                 if (!p || !InitImage(*p))
                 {
-                    if (p && p->VTable().Shutdown) p->VTable().Shutdown();
-                    if (!p)   // a real load failure, not Init()-returned-false -- name the cause
+                    if (p)
+                    {
+                        // THE IMAGE IS MAPPED AND ITS FACTORY BRACKET ALREADY RAN
+                        // (final-review fix wave, C1). `p` is a local optional: letting
+                        // it die at the `return false` below FreeLibrary's the image
+                        // while everything this module's OnInit registered before
+                        // failing is still in the PROCESS-LIFETIME SystemFactoryTable
+                        // -- it was never pushed into `plugins`, so DisownPluginImages
+                        // never sees it and nothing ever calls ClearOwner(image.base).
+                        // The next Runtime construction would then instantiate a
+                        // std::function compiled into freed code. Adopt the image into
+                        // a PluginImage and run the SAME full teardown the primary's
+                        // own init-failure path runs (Load() above, ReloadPrimary's
+                        // rollback branch): ClearOwner, the component-descriptor purge
+                        // and the registry reset, all while the image is still mapped.
+                        // callShutdown stays TRUE -- the Shutdown this replaces was
+                        // unconditional, and the macro's Shutdown() after a failed
+                        // OnInit is a no-op (GameModule.hpp nulls instance/components
+                        // on that path).
+                        PluginImage failed;
+                        failed.plugin = std::move(*p);
+                        TeardownImage(failed, /*callShutdown*/ true);
+                    }
+                    else   // a real load failure, not Init()-returned-false -- name the cause
+                    {
                         PublishPluginLoadFailure(name, src, resolveError);
+                    }
                     ShutdownPluginsLive();
                     DisownPluginImages();
                     plugins.clear();
@@ -782,6 +806,16 @@ namespace Arcane
         rts.erase(it);
     }
 
+    void PluginHost::RefreshEngineContext()
+    {
+        m_impl->RefreshContext();
+    }
+
+    const EngineContext* PluginHost::Context() const noexcept
+    {
+        return &m_impl->ctx;
+    }
+
     std::span<Runtime* const> PluginHost::Runtimes() const noexcept
     {
         return std::span<Runtime* const>(m_impl->runtimes.data(), m_impl->runtimes.size());
@@ -791,9 +825,19 @@ namespace Arcane
     {
         // A host with no world attached has nothing to hand the module: EngineContext
         // ::engine would be null and the module's Init would fault on its first
-        // Registry() call. A programmer error at the call site, not a runtime state.
+        // Registry() call. A programmer error at the call site, not a runtime state --
+        // hence the assert. But the assert COMPILES OUT in Release (final-review fix
+        // wave, minor 3), and "Init faults on a null engine" is not a Release failure
+        // mode worth keeping: refuse the load for real, in every configuration, so the
+        // header's "Load() refuses" is true as written.
         ARC_ASSERT(!m_impl->runtimes.empty(),
                    "PluginHost::Load: attach at least one Runtime first (AttachRuntime)");
+        if (m_impl->runtimes.empty())
+        {
+            ARC_ERROR("PluginHost::Load: refused -- no Runtime is attached "
+                      "(AttachRuntime first; the module's EngineContext::engine would be null)");
+            return false;
+        }
 
         // See UiContextGuard's comment: a plugin's Init may switch GImGui
         // and never switch it back (Sandbox.cpp:102), so every public entry

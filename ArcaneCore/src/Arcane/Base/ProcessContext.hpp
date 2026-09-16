@@ -30,6 +30,12 @@ namespace Arcane
     {
     public:
         [[nodiscard]] static std::unique_ptr<ProcessContext> Create(ProcessContextDesc desc);
+        // DIAGNOSTICS / TEST ONLY -- ambient state, which spec s7 warns against.
+        // Production code RECEIVES its ProcessContext (a Runtime holds one by
+        // reference; a module reads EngineContext::process), so that the object a
+        // caller acts on is the one its caller chose rather than whichever happens
+        // to be installed. Reaching for this in engine or host code is the smell
+        // that a reference was not threaded through; thread it.
         [[nodiscard]] static ProcessContext* Current() noexcept;
         ~ProcessContext();
         ProcessContext(const ProcessContext&) = delete;

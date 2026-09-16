@@ -3080,19 +3080,20 @@ namespace Arcane::Editor
         // Core-DLL split plan 1 Task 7, review round 1 (C1). Since this task
         // m_play OWNS A Runtime -- the embedded DedicatedServer world -- and
         // PluginHost holds a RAW pointer to it for the whole attach. Member
-        // order does NOT cover that: m_play is declared AFTER m_plugin, so
-        // reverse-order destruction runs ~PlaySession (freeing the server
-        // Runtime's Impl) BEFORE ~PluginHost, whose Unload -> TeardownImage
-        // then iterates its `runtimes` calling ClientHooks()/ClearSystems()/
-        // ResetRegistry() on freed memory. Exiting mid-EmbeddedServer Play is
+        // order NOW covers that too (m_play is declared BEFORE m_plugin since
+        // the final-review fix wave, I2, so ~PluginHost runs first over a
+        // still-alive world), and this call is the belt to that braces: it is
+        // what covers the paths that never reach member teardown at all, and
+        // it keeps the report below honest. Exiting mid-EmbeddedServer Play is
         // an ordinary exit (--play-as embedded-server, or the picker's row
         // plus Alt+F4), not an exotic one.
         //
-        // The fix is the doctrine ShutdownGraphPath already states for the
-        // render stack: close the BORROWER at the point the owner is about to
-        // die, rather than reason about a declaration order that runs later.
-        // Stop() detaches the server world from the host and destroys it, in
-        // that order, so ~PluginHost sees exactly the one world it started with.
+        // This is the doctrine ShutdownGraphPath already states for the render
+        // stack: close the BORROWER at the point the owner is about to die,
+        // instead of resting the whole guarantee on a declaration order that
+        // runs later. Stop() detaches the server world from the host and
+        // destroys it, in that order, so ~PluginHost sees exactly the one world
+        // it started with.
         //
         // AFTER ShutdownGraphPath, and that is load-bearing too: the
         // VerifyReport block inside it reads m_play.ServerWorld() for the
@@ -3112,14 +3113,17 @@ namespace Arcane::Editor
 
         // The member destructors then run (after Run returns + ~EditorApp), in
         // reverse declaration order -- the load-bearing TEARDOWN CONTRACT:
-        //   m_play    -> ~PlaySession: owns the EMBEDDED SERVER Runtime since
-        //                plan 1 Task 7, and is declared AFTER m_plugin, so it
-        //                would otherwise free a world the host still points at.
-        //                The Stop() directly above is what makes this entry a
-        //                statement about an ALREADY-EMPTY session rather than a
-        //                hazard -- do not drop it (review round 1, C1).
         //   m_plugin  -> ~PluginHost: Unload (TeardownLive -> ClearSystems +
-        //                ResetRegistry) while the plugin DLL is STILL mapped.
+        //                ResetRegistry) while the plugin DLL is STILL mapped, and
+        //                over the `runtimes` it points at -- all of which must
+        //                therefore still be alive. It runs FIRST of this group.
+        //   m_play    -> ~PlaySession: owns the EMBEDDED SERVER Runtime since
+        //                plan 1 Task 7. Declared BEFORE m_plugin (final-review fix
+        //                wave, I2) precisely so it destructs AFTER it: the host's
+        //                teardown loop can no longer walk a freed world. The Stop()
+        //                directly above is the belt to this braces -- it leaves an
+        //                ALREADY-EMPTY session here -- and is kept for the paths
+        //                that never reach member teardown (review round 1, C1).
         //   m_runtime -> ~Runtime: destroys JobSystem + the now-empty Registry.
         //   m_gpu     -> ~GpuContext: the render/input stack, window LAST. So
         //                gpu outlives runtime + plugin exactly as

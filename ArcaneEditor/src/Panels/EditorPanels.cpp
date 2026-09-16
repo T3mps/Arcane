@@ -17,6 +17,7 @@
 #include "Scene/SelectionContext.hpp"
 
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>   // the .meta "texture" block's four knobs (F2b Task 13)
+#include <Arcane/Base/Diagnostics.hpp>   // the refused-Play Problems row (final-review fix wave, minor 11)
 #include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
@@ -626,19 +627,47 @@ namespace Arcane::Editor
             }
             else
             {
+                // A REFUSED Play IS REPORTED, not just logged (final-review fix
+                // wave, minor 11). PlaySession returns false for a failed
+                // snapshot, a failed restore into the embedded server world, or
+                // a PluginHost that refused to attach it -- all of which leave
+                // the session in Edit, so the ONLY thing the user sees is a Play
+                // button that did not light. Publish one Problems row, keyed
+                // "editor:play" (this is its sole publisher, and the
+                // publication-group contract means the next successful Play's
+                // Clear retracts it).
+                const auto reportRefusal = [](const char* what)
+                {
+                    Arcane::Diagnostic d;
+                    d.severity = Arcane::DiagSeverity::Warning;
+                    d.scope    = Arcane::DiagScope::Scene;
+                    d.code     = "play.refused";
+                    d.message  = std::string("Play was refused (") + what + ")";
+                    d.detail   = "The scene snapshot failed, or the plugin host refused the "
+                                 "server world. The editor stayed in Edit mode; see the Console.";
+                    const std::vector<Arcane::Diagnostic> rows{std::move(d)};
+                    Arcane::Diagnostics::Publish("editor:play", rows);
+                };
+                const auto tryPlay = [&](PlayTopology topology, const char* what)
+                {
+                    if (play.Play(runtime, host, topology))
+                        Arcane::Diagnostics::Clear("editor:play");
+                    else
+                        reportRefusal(what);
+                };
                 switch (mode)
                 {
                     case PlayLaunchMode::Viewport:
-                        play.Play(runtime, host, PlayTopology::Standalone);
+                        tryPlay(PlayTopology::Standalone, "in viewport");
                         break;
                     case PlayLaunchMode::SeparateWindow:
                         launchStandaloneRequested = true;   // caller resolves + spawns; play/plugin untouched
                         break;
                     case PlayLaunchMode::ListenServer:
-                        play.Play(runtime, host, PlayTopology::ListenServer);
+                        tryPlay(PlayTopology::ListenServer, "listen server");
                         break;
                     case PlayLaunchMode::EmbeddedServer:
-                        play.Play(runtime, host, PlayTopology::EmbeddedServer);
+                        tryPlay(PlayTopology::EmbeddedServer, "embedded server");
                         break;
                     case PlayLaunchMode::SeparateServerProcess:
                         // BOTH halves, and in this order: the viewport world enters
@@ -647,8 +676,13 @@ namespace Arcane::Editor
                         // request standing anyway -- the caller's own spawn refusal
                         // path is the one that reports, and a spawned server with no
                         // client is still stoppable, whereas a silently skipped spawn
-                        // would leave the picker looking like it did nothing.
-                        play.Play(runtime, host, PlayTopology::ClientOnly);
+                        // would leave the picker looking like it did nothing. That
+                        // combination is UNREACHABLE today: ClientOnly only re-roles
+                        // the one world, and the only `return false` before that point
+                        // is a failed snapshot of a world the editor is already
+                        // holding -- the row below exists for a future refusal, not an
+                        // observed one.
+                        tryPlay(PlayTopology::ClientOnly, "client + separate server");
                         launchServerRequested = true;
                         break;
                 }

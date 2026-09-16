@@ -161,7 +161,7 @@ namespace Arcane
 
         // Install this backend's identity + capability flags on a NAMED ImGui
         // context (an `ImGuiContext*`, spelled void* like every other
-        // context-passing seam in this tree -- Runtime::SetImGui,
+        // context-passing seam in this tree -- ClientRuntime::SetImGui,
         // OffscreenImGuiLayer::Context). Pins it for the call and restores
         // whatever was current. Idempotent and null-safe.
         //
