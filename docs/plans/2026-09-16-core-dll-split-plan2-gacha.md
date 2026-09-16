@@ -271,3 +271,41 @@ git commit -m "docs(core-dll): close plan 2 -- spec status, closeout"
 - **Type consistency:** no code types; the five `links` edits name the same projects the file declares (Auth, Account, Combat, AccountTests, the `aphelyon_test_project` helper); the ephemeral-DB recipe matches the Jenkinsfile verbatim including `-p aphelyon_ci` on the teardown.
 
 <!-- CLOSEOUT -->
+
+## Closeout
+
+**Commits.**
+- Task 1 (Arcane, spec s8 amendment + s11 rewrite + R11): `ff7da5c2`
+- Task 2 (Gacha, from-source `ArcaneCore` project retired): `47e44626`
+- Task 3 (Arcane, this closeout): this commit
+
+**Task 2 Step 1 measurements (verbatim from the Task 2 report).**
+- `$ARCANE_SDK` sha at generate time: `ff7da5c2` (at/after `cac776b2`, as required).
+- `grep -rn "Arcane::Guid\|Guid::\|Arcane::Cli\b\|CliType\|Toolchain\|TaskExecutor\|BuildInfo(" Server --include=*.cpp --include=*.hpp | grep -v "^\s*//" | wc -l` → `0`. Premise held: no compiled-Core symbol reference anywhere in `Server/`.
+- The six headers actually reached (`grep -rhoE "#include <Arcane/[A-Za-z/]+\.hpp>" Server --include=*.hpp --include=*.cpp | sort -u`): `Arcane/Crypto/Crypto.hpp`, `Arcane/Net/Protocol.hpp`, `Arcane/Net/RateLimiter.hpp`, `Arcane/Net/TcpSocket.hpp`, `Arcane/Util/Logger.hpp`, `Arcane/Util/LruCache.hpp`.
+- `ArcaneCore` mentions in `Server/premake5.lua`: `31` before the edit, `11` after (Steps 2-5 of Task 2 — the `IncludeDir` declaration/usages and comment prose only; no build/link reference remains).
+
+**Build results (both configurations, Task 2 Step 6).**
+- Debug: `exit=0`. No ` error ` lines; MSBuild's minimal-verbosity output emitted no `Warning(s)`/`Error(s)` summary line at all (0 warnings, 0 errors). All 9 projects (Auth, Account, Combat, CommonTests, AuthTests, CombatTests, AccountTests + dependency libs) linked and produced `.exe`/`.lib` outputs. No `ArcaneCore.vcxproj` was generated or built.
+- Release: `exit=0`, same result — all projects linked cleanly, 0 warnings, 0 errors.
+- `grep -c "LNK2019\|LNK2001"` on both build logs: `0` in each. Zero unresolved externals in both configs — the falsifier (Global Constraints, Q4) did not trigger.
+
+**Suite results (Task 2 Steps 7-8, all "All tests passed").**
+- CommonTests: seed `2054446374` — 420 assertions in 66 test cases.
+- AuthTests: seed `2168142511` — 34 assertions in 12 test cases.
+- CombatTests: seed `1854228525` — 1 assertion in 1 test case.
+- AccountTests (ephemeral CI database, `-p aphelyon_ci`): seed `1410286466` — 1296 assertions in 194 test cases.
+
+**Ephemeral-DB plan defect and its correction.** The Task 2 Step 8 recipe as written in this plan (and mirrored from the Jenkinsfile) omitted `export POSTGRES_PORT=5433` before the `docker compose ... up` line. Run as written, the first AccountTests attempt bound the ephemeral `aphelyon_ci` container to the compose file's default host port 5432 (`${POSTGRES_PORT:-5432}`) instead of 5433; AccountTests.exe (correctly pointed at `localhost:5433` per the brief) then saw `Connection refused` on every DB-backed test — 93 failures, 101 passed, a pure port-mismatch, not a build/link problem. The container was torn down (`$C down -v`, still `-p aphelyon_ci`) and the full sequence re-run with the export in place first. The corrected recipe, export line first:
+
+```bash
+C="docker compose -p aphelyon_ci -f Server/docker-compose.yml -f ci/docker-compose.ci.yml"
+export POSTGRES_PORT=5433
+$C up -d --wait --build
+$C exec -T postgres psql -U aphelyon -d aphelyon -v ON_ERROR_STOP=1 -f /sql/schema.sql
+$C exec -T postgres psql -U aphelyon -d aphelyon -v ON_ERROR_STOP=1 -f /sql/seed.sql
+(cd Server/bin/Debug-windows-x86_64/AccountTests && POSTGRES_PORT=5433 APHELYON_TEST_DB_URL=postgresql://aphelyon:aphelyon@localhost:5433/aphelyon ./AccountTests.exe)
+$C down -v
+```
+The Jenkinsfile already sets `POSTGRES_PORT` in the CI stage's `environment {}`, so CI itself was never exposed to this defect — it is a plan/brief gap for a manually-run recipe, now recorded here for any future step-8-style recipe. The run that counts is the re-upped one above (seed `1410286466`, 194/194 passed). The mis-bound first attempt was still isolated by `-p aphelyon_ci`'s own container name and volume: **the dev database (`aphelyon_postgres`, the default compose project) was never touched by any command in either attempt** — every compose invocation in Task 2, on both the failed and the passing run, carried `-p aphelyon_ci`.
+
