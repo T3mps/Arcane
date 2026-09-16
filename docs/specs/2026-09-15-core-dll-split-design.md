@@ -372,6 +372,28 @@ link line; `Common` and the three services flip to `staticruntime "off"`. This i
 the from-source static build, which stays valid because the Arcane-side change
 does not remove the sources it compiles.
 
+**Amendment, measured 2026-09-16 (Plan 2 planning).** The paragraph above
+assumed the services link `ArcaneCore.dll`. They do not, and never did: the
+Server's Core dependency is exactly six header-only files (`Net/TcpSocket`,
+`Net/Protocol`, `Net/RateLimiter`, `Crypto/Crypto`, `Util/Logger`,
+`Util/LruCache`), whose transitive includes reach no `ARCANE_CORE_API`
+declaration, and nothing under `Server/` references the three compiled Core
+sources the from-source project built (`Guid.cpp`, `Cli.cpp`, `Toolchain.cpp` —
+grep: zero hits for `Arcane::Guid`, `Arcane::Cli`, `Toolchain`,
+`TaskExecutor`). There is nothing to link, so the `/MD` flip — whose only
+purpose is one CRT heap across a DLL boundary — has no present cause. **Plan 2
+therefore retires the from-source project, the `ARCANE_CORE_STATIC` define and
+the five dead `links` lines, keeps the header include, and leaves the CRT
+static and libpq on `x64-windows-static`.** The migration this paragraph
+describes becomes **Plan 3**, written when its consumer exists; its trigger is
+the first service that calls a compiled Core symbol (most likely Combat
+adopting `Runtime` in the Combat Sphere phase, or `Aphelyon::Logger` moving
+onto `Base/Log`). Plan 3's first task is a Core-only consumer helper in
+`build/arcane.lua`, lifted from `ArcaneServer`'s own premake block (the proven
+Core-only host recipe), plus the Jenkins provisioning flip to the `-md` libpq
+(already built on the dev machine) and a Server CI stage that depends on built
+SDK binaries the way the Game stage already does.
+
 ## 9. Testing
 
 **Device-less (`[runtime]`, `[plugin]`), the load-bearing suite:**
@@ -446,11 +468,17 @@ both configs):
 6. **`ArcaneServer.exe` real** (§6), with its `--report` witness.
 7. **Editor PIE picker** (§7), in-process modes plus the out-of-process spawn.
 
-**Plan 2 — Gacha repo.** The `/MD` migration (§8): `Server/premake5.lua` drops
-its from-source `ArcaneCore` project and links `ArcaneCore.dll`; libpq rebuilt on
-`x64-windows-static-md`; `Common` and Auth/Account/Combat flip to dynamic CRT;
-AccountTests and the Jenkins lanes green. Starts after Plan 1 step 2 has landed
-and pushed; merges last.
+**Plan 2 — Gacha repo** (`docs/plans/2026-09-16-core-dll-split-plan2-gacha.md`).
+Retire the from-source `ArcaneCore` project, the `ARCANE_CORE_STATIC` define and
+the dead `links` lines from `Server/premake5.lua`; keep the header include; the
+services stay static-CRT (§8 amendment: nothing links). Green = both configs
+build with no `Arcane::` unresolved external, the three fast suites and
+AccountTests (ephemeral DB) pass. Starts after Plan 1 has shipped; merges last.
+
+**Plan 3 — Gacha repo, deferred.** The `/MD` migration as §8 originally
+described it (link `ArcaneCore.dll`, libpq on `x64-windows-static-md`, `Common`
+and the services on the dynamic CRT, the Jenkins lanes). Written when its
+trigger fires (§8 amendment); it likely folds into that phase's own plan.
 
 ## 12. Costs, stated plainly
 
@@ -485,6 +513,7 @@ alone is 30.6k). This is boundary-drawing work, not a rebalancing of engine mass
 | R8 | Does Gacha move in the same change | **No — Gacha last, its own PR (Plan 2)** | Two repos, two build systems, two pipelines; the services keep the from-source static build until then, and the Arcane-side change does not remove the sources they compile |
 | R9 | Is out-of-process PIE a rival design or a mode | **A mode of the same picker**, kept | Godot `OS::create_instance`, Unity MPPM child processes, O3DE `ServerLauncher` + loopback, UE `bLaunchSeparateServer` — every mature engine ships it; cheap once §6 exists, and the honest network test |
 | R10 | Are per-domain engine DLLs reconsidered | **No — rejected, re-confirmed** | CryEngine's `gEnv` (one byte-identical struct, ~45 pointers, no versioned inter-DLL ABI; its own build calls dynamic per-domain linking a desktop convenience); O3DE's one-slot-per-type `AZ::Interface<T>` is what forces its separate-process PIE |
+| R11 | Do the services move to `/MD` in Plan 2 | **No — measured 2026-09-16: no service links a compiled Core symbol, so Plan 2 only retires the dead from-source project; the CRT flip is Plan 3, triggered by the first compiled-Core consumer** | The §8 premise was an assumption, not a measurement (six header-only includes; zero references to `Guid`/`Cli`/`Toolchain`/`TaskExecutor`). A CRT flip with no DLL boundary has no acceptance test, and the `arcane.lua` Core-consumer helper takes its shape from the first real consumer |
 
 ---
 
