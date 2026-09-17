@@ -285,8 +285,8 @@ TEST_CASE("Framing bounds match how sprites are rendered", "[editor]")
 {
     auto reg = MakeSceneRegistry();
     // World size = the sprite asset's base size (1x1 m unresolved) * world
-    // scale, about the pivot (the centre by default) -- exactly
-    // RenderSubmissionSystem's dstSize/dstPos derivation.
+    // scale, about the pivot (the centre by default) -- the XY box of exactly
+    // the SpriteWorldQuad corners RenderSubmissionSystem submits.
     const Astra::Entity a = MakeSprite(*reg, glm::vec2(3.0f, 4.0f), glm::vec2(2.0f, 1.0f));
     const std::vector<Astra::Entity> one{a};
 

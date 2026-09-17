@@ -1652,6 +1652,14 @@ namespace Arcane::Editor
         // runtime drifted apart in the first place.
         b.SetGlobals(m_resolver ? m_resolver->Globals() : Arcane::GlobalParams{});
 
+        // The frame's view-projection for the WORLD-space spans (F4 plan 1
+        // T5): sprites submit world METRES through QuadWorld/CircleWorld and
+        // the vertex shader projects them, so the batcher needs the same view
+        // the overlay and the gizmo below read. Sticky within this Begin()
+        // bracket only -- both callers (the viewport frame and the capture
+        // re-Begin) reach this line right after their Begin.
+        b.SetViewProjection(m_runtime->View().ViewProjection());
+
         m_runtime->SetRenderContext(&b);
         m_runtime->Loop().SubmitRender();
 

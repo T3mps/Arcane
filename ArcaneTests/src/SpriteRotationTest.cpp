@@ -1,12 +1,17 @@
-// Sprite rotation: the 2D submission path turns sprites with their entity's
+// Sprite rotation: the submission path turns sprites with their entity's
 // WorldTransform rotation (so a rotating physics body's sprite rotates with it
 // -- previously quads were axis-aligned and ignored rotation, which made
 // rotating/compound bodies look "buggy" while the physics was correct).
 //
-// CPU-only (tag [render], NOT [gpu]): the QuadCorners geometry helper is pure
-// math, and RenderSubmissionSystem is driven against a RECORDING mock Batcher2D
-// (no graphics device) to assert the rotation flows from the transform to the
-// draw call.
+// Since F4 plan 1 T5 a sprite is a WORLD quad: RenderSubmissionSystem hands the
+// batcher four world-space corners in metres (SpriteWorldQuad) through
+// QuadWorld / CircleWorld and projects nothing itself, so every expectation
+// below is in world metres, +Y up, read off the recorded corners.
+//
+// CPU-only (tag [render], NOT [gpu]): the QuadCorners / SpriteWorldQuad
+// geometry helpers are pure math, and RenderSubmissionSystem is driven against
+// a RECORDING mock Batcher2D (no graphics device) to assert the pose flows from
+// the transform to the draw call.
 
 #include <array>
 #include <cmath>
@@ -21,6 +26,7 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Render/RenderSystems.hpp>
+#include <Arcane/Render/SpriteGeometry.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
@@ -28,6 +34,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 using Catch::Approx;
 
@@ -64,6 +71,44 @@ TEST_CASE("QuadCorners: 90 degrees rotates the edges about the center", "[render
 }
 
 // ============================================================================
+// SpriteWorldQuad: the sprite corner rule (F4 plan 1 T5). WORLD-space corners
+// TL,TR,BR,BL from the full basis; the image top is the +Y edge; the pivot
+// ((0,0) = BOTTOM-left, (0.5,0.5) = centre) anchors the quad at the origin.
+// ============================================================================
+TEST_CASE("SpriteWorldQuad: the image top is +Y, the pivot anchors the quad, the full basis applies",
+          "[render][sprite]")
+{
+    const glm::mat4 world = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 3.0f, 0.5f));
+    const auto q = Arcane::SpriteWorldQuad(world, {2.0f, 1.0f}, {0.5f, 0.5f});
+    CHECK(q.corners[0] == glm::vec3(1.0f, 3.5f, 0.5f));   // TL: left, UP
+    CHECK(q.corners[1] == glm::vec3(3.0f, 3.5f, 0.5f));   // TR
+    CHECK(q.corners[2] == glm::vec3(3.0f, 2.5f, 0.5f));   // BR
+    CHECK(q.corners[3] == glm::vec3(1.0f, 2.5f, 0.5f));   // BL
+
+    // Pivot (0,0) = BOTTOM-left: the origin IS the BL corner and the quad
+    // extends +x / +y (up) from it.
+    const auto bl = Arcane::SpriteWorldQuad(glm::mat4(1.0f), {2.0f, 2.0f}, {0.0f, 0.0f});
+    CHECK(bl.corners[3] == glm::vec3(0.0f, 0.0f, 0.0f));
+    CHECK(bl.corners[0] == glm::vec3(0.0f, 2.0f, 0.0f));
+    CHECK(bl.corners[1] == glm::vec3(2.0f, 2.0f, 0.0f));
+
+    // The FULL basis, not the XY plane: a 90-degree X tilt lays the quad into
+    // the XZ plane (local +y -> world +z).
+    const auto tilted = Arcane::SpriteWorldQuad(
+        glm::rotate(glm::mat4(1.0f), glm::half_pi<float>(), glm::vec3(1, 0, 0)), {1, 1}, {0.5f, 0.5f});
+    CHECK(std::abs(tilted.corners[0].y) < 1e-5f);
+    CHECK(tilted.corners[0].z == Approx(0.5f));
+    CHECK(tilted.corners[0].x == Approx(-0.5f));
+
+    // Scale rides the matrix: a (3,4) world scale on a (2,0.5) base is a
+    // (6,2) quad about the centre pivot.
+    const auto scaled = Arcane::SpriteWorldQuad(
+        glm::scale(glm::mat4(1.0f), glm::vec3(3.0f, 4.0f, 1.0f)), {2.0f, 0.5f}, {0.5f, 0.5f});
+    CHECK(scaled.corners[1] - scaled.corners[0] == glm::vec3(6.0f, 0.0f, 0.0f));
+    CHECK(scaled.corners[0] - scaled.corners[3] == glm::vec3(0.0f, 2.0f, 0.0f));
+}
+
+// ============================================================================
 // RenderSubmissionSystem passes the WorldTransform rotation to the batcher.
 // ============================================================================
 namespace
@@ -71,93 +116,78 @@ namespace
     // A sprite is named by asset Guid, so an ordinary generated Guid drives the
     // TEXTURED arm here -- the real key rather than a stand-in for one.
 
-    // Recording mock: captures the Rect/Quad rotation + the Circle submissions.
-    // `rects` keeps the FULL quad geometry per submission (both the untextured
-    // Rect arm and the textured QuadTextured arm land here) so the pivot/size
-    // derivation can be asserted, not just the rotation that flows through it.
+    // Recording mock for the WORLD-space surface (F4 plan 1 T5): every
+    // QuadWorld lands in `rects` with its full corner geometry (both the
+    // untextured arm and the textured/material arms), every CircleWorld in the
+    // circle fields. The SCREEN-space primitives (Quad/QuadTextured/Rect/
+    // Circle) count into `screenCalls` only: sprites must never reach them
+    // again, and a case can assert exactly that.
     struct MockBatcher final : Arcane::Batcher2D
     {
         struct RectRec
         {
-            glm::vec2    pos{0.0f, 0.0f};
-            glm::vec2    size{0.0f, 0.0f};
-            float        rotation = 0.0f;
-            Arcane::Guid textureId{};        // nil == the untextured arm
-            glm::vec2    uvMin{0.0f, 0.0f};
-            glm::vec2    uvMax{0.0f, 0.0f};
+            std::array<glm::vec3, 4> corners{};   // TL, TR, BR, BL, world metres
+            uint16_t                 materialId = 0;
+            Arcane::Guid             textureId{};   // nil == the untextured arm
+            glm::vec2                uvMin{0.0f, 0.0f};
+            glm::vec2                uvMax{0.0f, 0.0f};
+
+            glm::vec3 centre()  const { return (corners[0] + corners[2]) * 0.5f; }
+            glm::vec3 topEdge() const { return corners[1] - corners[0]; }   // local +x, scaled
+            glm::vec3 upEdge()  const { return corners[0] - corners[3]; }   // local +y, scaled
+            // The quad's turn about +Z: the angle of its top edge.
+            float angle() const { return std::atan2(topEdge().y, topEdge().x); }
         };
 
         int                  rectCalls = 0;
         int                  circleCalls = 0;
-        float                lastRotation = 0.0f;
+        int                  screenCalls = 0;
         float                lastCircleRadius = 0.0f;
-        glm::vec2            lastCircleCenter{0.0f, 0.0f};
+        glm::vec3            lastCircleCenter{0.0f};
+        std::vector<glm::vec3> circleCenters;
         std::vector<RectRec> rects;
+        glm::mat4            viewProjection{1.0f};
 
         void Begin(uint32_t, uint32_t) override {}
         void SetLayer(uint16_t, uint16_t) override {}
-        void Quad(glm::vec2 pos, glm::vec2 size,
-                  glm::vec2 uvMin, glm::vec2 uvMax,
-                  glm::vec4, float rotation) override
-        {
-            ++rectCalls;
-            lastRotation = rotation;
-            rects.push_back(RectRec{pos, size, rotation, Arcane::Guid::Nil(),
-                                    uvMin, uvMax});
-        }
-        // THE IDENTITY-CARRYING SUBMISSION -- what RenderSubmissionSystem's
-        // textured arm actually calls. Overridden rather than left to the
-        // interface default (which forwards to Quad and drops the Guid on the
-        // floor), so a case can assert WHICH asset the draw named.
-        void QuadTextured(uint16_t, const Arcane::Guid& textureId,
-                          glm::vec2 pos, glm::vec2 size,
-                          glm::vec2 uvMin, glm::vec2 uvMax,
-                          glm::vec4, float rotation) override
-        {
-            ++rectCalls;
-            lastRotation = rotation;
-            rects.push_back(RectRec{pos, size, rotation, textureId, uvMin, uvMax});
-        }
+        void Quad(glm::vec2, glm::vec2, glm::vec2, glm::vec2, glm::vec4, float) override
+        { ++screenCalls; }
+        void QuadTextured(uint16_t, const Arcane::Guid&, glm::vec2, glm::vec2,
+                          glm::vec2, glm::vec2, glm::vec4, float) override
+        { ++screenCalls; }
         void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
                    glm::vec4) override {}
-        void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4, float rotation) override
+        void Rect(glm::vec2, glm::vec2, glm::vec4, float) override { ++screenCalls; }
+        void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
+        void Circle(glm::vec2, float, glm::vec4) override { ++screenCalls; }
+        void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
+        void End() override {}
+        Arcane::Batch2DStats Stats() const override { return {}; }
+        void QuadWorld(uint16_t materialId, const Arcane::Guid& textureId,
+                       const std::array<glm::vec3, 4>& corners,
+                       glm::vec2 uvMin, glm::vec2 uvMax, glm::vec4) override
         {
             ++rectCalls;
-            lastRotation = rotation;
-            rects.push_back(RectRec{pos, size, rotation, Arcane::Guid::Nil(),
-                                    glm::vec2(0.0f), glm::vec2(1.0f)});
+            rects.push_back(RectRec{corners, materialId, textureId, uvMin, uvMax});
         }
-        void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
-        void Circle(glm::vec2 center, float radius, glm::vec4) override
+        void CircleWorld(glm::vec3 center, glm::vec3, glm::vec3, float radius, glm::vec4) override
         {
             ++circleCalls;
             lastCircleCenter = center;
             lastCircleRadius = radius;
+            circleCenters.push_back(center);
         }
-        void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
-        void End() override {}
-        Arcane::Batch2DStats Stats() const override { return {}; }
-        // World-space surface (F4 plan 1 T4). Nothing submits through it until
-        // T5 moves sprites onto QuadWorld; recorded minimally so a T5 case can
-        // assert the corners it was handed.
-        std::vector<std::array<glm::vec3, 4>> worldQuads;
-        glm::mat4                             viewProjection{1.0f};
-        void QuadWorld(uint16_t, const Arcane::Guid&, const std::array<glm::vec3, 4>& corners,
-                       glm::vec2, glm::vec2, glm::vec4) override
-        {
-            worldQuads.push_back(corners);
-        }
-        void CircleWorld(glm::vec3, glm::vec3, glm::vec3, float, glm::vec4) override {}
         void SetViewProjection(const glm::mat4& vp) override { viewProjection = vp; }
     };
 
-    // F4 plan 1 T3: RenderContext2D carries a ViewTransform. This one's Affine2D
-    // is the PIXEL IDENTITY up to the mirror -- scale (1, -1), offset (0, 0):
-    // Point(w) = (w.x, -w.y) -- so every x expectation below is the old one and
-    // every y expectation is its negation (+Y up on a y-down canvas).
+    // RenderContext2D carries a ViewTransform (F4 plan 1 T3), but since T5 the
+    // submission system never reads it -- the corners are world metres and the
+    // host's SetViewProjection does the projecting. Any view will do; this one
+    // is deliberately NOT the pixel identity so a regression that projects
+    // through it would move every expectation below.
     Arcane::ViewTransform PixelView()
     {
-        return Arcane::ViewTransform::Orthographic({500.0f, -500.0f}, 500.0f, {1000u, 1000u});
+        return Arcane::ViewTransform::Orthographic({37.0f, -11.0f}, 3.0f, {800u, 600u});
     }
 
     // Spawn a single sprite of `shape` at an identity-rotation world transform
@@ -191,21 +221,37 @@ TEST_CASE("RenderSubmissionSystem draws a Circle-shape sprite as a disc", "[rend
 
     CHECK(mock.circleCalls == 1);                              // one disc...
     CHECK(mock.rectCalls   == 0);                              // ...not a rect
-    CHECK(mock.lastCircleRadius == Approx(20.0f));             // radius = dstSize.x / 2
-    CHECK(mock.lastCircleCenter.x == Approx(200.0f));          // centered on the entity
-    CHECK(mock.lastCircleCenter.y == Approx(-150.0f));         // y mirrored (PixelView)
+    CHECK(mock.screenCalls == 0);                              // ...and in WORLD space
+    CHECK(mock.lastCircleRadius == Approx(20.0f));             // radius = worldSize.x / 2, metres
+    CHECK(mock.lastCircleCenter.x == Approx(200.0f));          // centred on the entity, world
+    CHECK(mock.lastCircleCenter.y == Approx(150.0f));          // +Y up, nothing mirrored
+    CHECK(mock.lastCircleCenter.z == Approx(0.0f));
 }
 
 TEST_CASE("RenderSubmissionSystem draws a Capsule-shape sprite as a rect + 2 discs",
           "[render]")
 {
     MockBatcher mock;
-    // dstSize = (2*halfLen + 2r, 2r) = (60, 20) -> r=10, halfLen=20.
+    // worldSize = (2*halfLen + 2r, 2r) = (60, 20) m -> r=10, halfLen=20.
     SubmitSprite(mock, Arcane::SpriteShape::Capsule, glm::vec2(60.0f, 20.0f));
 
     CHECK(mock.rectCalls   == 1);                 // central band
     CHECK(mock.circleCalls == 2);                 // two end discs
-    CHECK(mock.lastCircleRadius == Approx(10.0f)); // r = dstSize.y / 2
+    CHECK(mock.screenCalls == 0);
+    CHECK(mock.lastCircleRadius == Approx(10.0f)); // r = worldSize.y / 2
+    // The band is (size.x - size.y) x size.y about the centre; the discs sit
+    // at centre +/- right * halfLen, in WORLD metres.
+    REQUIRE(mock.rects.size() == 1);
+    CHECK(mock.rects[0].centre().x == Approx(200.0f));
+    CHECK(mock.rects[0].centre().y == Approx(150.0f));
+    CHECK(mock.rects[0].topEdge().x == Approx(40.0f));
+    CHECK(mock.rects[0].topEdge().y == Approx(0.0f).margin(1e-5));
+    CHECK(mock.rects[0].upEdge().y  == Approx(20.0f));
+    REQUIRE(mock.circleCenters.size() == 2);
+    CHECK(mock.circleCenters[0].x == Approx(220.0f));
+    CHECK(mock.circleCenters[0].y == Approx(150.0f));
+    CHECK(mock.circleCenters[1].x == Approx(180.0f));
+    CHECK(mock.circleCenters[1].y == Approx(150.0f));
 }
 
 TEST_CASE("RenderSubmissionSystem rotates the sprite quad by the WorldTransform",
@@ -237,12 +283,23 @@ TEST_CASE("RenderSubmissionSystem rotates the sprite quad by the WorldTransform"
     Arcane::RenderSubmissionSystem sys;
     sys(reg);
 
-    // The sprite was submitted, rotated by the body's angle (extracted from the
-    // WorldTransform matrix). The old axis-aligned path passed rotation 0. The
-    // CANVAS angle is the world angle times the map's AngleSign: -theta under
-    // the mirrored (+Y up) map (F4 plan 1 T3).
-    CHECK(mock.rectCalls == 1);
-    CHECK(static_cast<double>(mock.lastRotation) == Approx(static_cast<double>(-theta)).margin(1e-4));
+    // The sprite was submitted as a WORLD quad turned by the body's angle: its
+    // top edge (local +x through the full basis) points along theta in the
+    // world sense (+Y up; nothing mirrors it), is 40 m long, and the quad is
+    // 12 m tall about the entity position.
+    REQUIRE(mock.rectCalls == 1);
+    CHECK(mock.screenCalls == 0);
+    const MockBatcher::RectRec& q = mock.rects[0];
+    CHECK(static_cast<double>(q.angle()) == Approx(static_cast<double>(theta)).margin(1e-4));
+    CHECK(glm::length(q.topEdge()) == Approx(40.0f));
+    CHECK(glm::length(q.upEdge())  == Approx(12.0f));
+    CHECK(q.centre().x == Approx(100.0f));
+    CHECK(q.centre().y == Approx(100.0f));
+    // The up edge is the top edge turned +90 degrees (a right-handed, +Y-up
+    // quad -- not a mirrored one).
+    const glm::vec3 t = glm::normalize(q.topEdge()), u = glm::normalize(q.upEdge());
+    CHECK(u.x == Approx(-t.y).margin(1e-5));
+    CHECK(u.y == Approx( t.x).margin(1e-5));
 }
 
 // ============================================================================
@@ -266,7 +323,7 @@ TEST_CASE("Sprite with a resolved SpriteTable entry uses derived size and UVs",
     table.emplace(gid, e);
     reg.SetResource<Arcane::SpriteTable>(Arcane::SpriteTable{ &table });
 
-    // Transform scale (3,4) at zoom 1 -> (2,0.5) * (3,4) = (6, 2).
+    // Transform scale (3,4) -> (2,0.5) * (3,4) = (6, 2) m.
     Astra::Entity ent = reg.CreateEntity();
     Arcane::Transform lt; lt.scale = glm::vec3(3.0f, 4.0f, 1.0f);
     Arcane::WorldTransform wt; wt.matrix = lt.ToMatrix();
@@ -282,8 +339,11 @@ TEST_CASE("Sprite with a resolved SpriteTable entry uses derived size and UVs",
     sys(reg);
 
     REQUIRE(batcher.rects.size() == 1);
-    CHECK(batcher.rects[0].size == glm::vec2(6.0f, 2.0f));
+    CHECK(batcher.rects[0].topEdge() == glm::vec3(6.0f, 0.0f, 0.0f));
+    CHECK(batcher.rects[0].upEdge()  == glm::vec3(0.0f, 2.0f, 0.0f));
+    CHECK(batcher.rects[0].materialId == Arcane::Batcher2D::kMaterialSprite);
     CHECK(batcher.rects[0].textureId == texId);
+    // uvMin rides the TL corner (QuadWorld's order): the image top is +Y.
     CHECK(batcher.rects[0].uvMin == glm::vec2(0.25f, 0.5f));
     CHECK(batcher.rects[0].uvMax == glm::vec2(0.75f, 1.0f));
 }
@@ -294,8 +354,8 @@ TEST_CASE("Non-center pivot offsets the quad and survives rotation", "[render][s
     Astra::Registry reg{components};
     Arcane::RegisterSceneComponents(reg);
 
-    // entry: sizeMeters (2,2), pivot (0,0) (top-left). Transform position P,
-    // rotation 0, scale 1, zoom 1.
+    // entry: sizeMeters (2,2), pivot (0,0) (BOTTOM-left, +Y up). Transform
+    // position P, rotation 0, scale 1.
     std::unordered_map<Arcane::Guid, Arcane::SpriteEntry> table;
     const auto gid = Arcane::Guid::Generate();
     Arcane::SpriteEntry e;
@@ -319,20 +379,20 @@ TEST_CASE("Non-center pivot offsets the quad and survives rotation", "[render][s
     Arcane::RenderSubmissionSystem sys;
     sys(reg);
 
-    // pivot (0,0) means the PIVOT sits at P and the quad extends +x/+y IN WORLD
-    // (+Y up: pivot y = 0 is the BOTTOM):
-    //   centerOffW = (0.5-0.0, 0.5-0.0) * (2,2) = (1,1); centerW = P + (1,1) = (11,21);
-    //   canvas centre = (11,-21) under PixelView; dstPos = (11,-21) - (1,1) = (10,-22),
-    // i.e. the top-left of a quad whose BOTTOM-left is the pivot's pixel (10,-20).
-    // Exact equality: cos(0)==1 and sin(0)==0 exactly, so no transcendental
-    // error enters the unrotated path.
+    // pivot (0,0) means the PIVOT sits at P as the quad's BOTTOM-LEFT corner
+    // and the quad extends +x / +y (up) from it IN WORLD:
+    //   BL = P = (10,20), TL = (10,22), TR = (12,22), BR = (12,20).
+    // Exact equality: the unrotated matrix is exact, so no transcendental
+    // error enters this path.
     REQUIRE(batcher.rects.size() == 1);
-    CHECK(batcher.rects[0].pos == glm::vec2(10.0f, -22.0f));
+    CHECK(batcher.rects[0].corners[3] == glm::vec3(10.0f, 20.0f, 0.0f));   // BL == pivot
+    CHECK(batcher.rects[0].corners[0] == glm::vec3(10.0f, 22.0f, 0.0f));   // TL
+    CHECK(batcher.rects[0].corners[1] == glm::vec3(12.0f, 22.0f, 0.0f));   // TR
+    CHECK(batcher.rects[0].corners[2] == glm::vec3(12.0f, 20.0f, 0.0f));   // BR
 
-    // Same entity rotated 90 deg (pi/2): the center must ORBIT the pivot.
-    //   rotated centerOffW = R(pi/2)*(1,1) = (c-s, s+c) = (-1, 1)
-    //   -> centerW = (9, 21) -> canvas (9, -21) -> dstPos = (8, -22).
-    // The canvas rotation is -pi/2 (AngleSign of the mirrored map).
+    // Same entity rotated 90 deg (pi/2) about +Z: the quad must ORBIT the
+    // pivot, which stays put at P. R(pi/2)(x,y) = (-y, x):
+    //   TL = P + R(0,2) = (8,20), TR = P + R(2,2) = (8,22), BR = P + R(2,0) = (10,22).
     // Approx here, not ==: cos(half_pi<float>()) is -4.37e-8, not 0.
     Arcane::Transform rot; rot.position = glm::vec3(P, 0.0f);
     rot.rotation = Arcane::RotationAboutZ(glm::half_pi<float>());
@@ -340,7 +400,14 @@ TEST_CASE("Non-center pivot offsets the quad and survives rotation", "[render][s
     sys(reg);
 
     REQUIRE(batcher.rects.size() == 2);
-    CHECK(batcher.rects[1].pos.x == Approx(8.0f).margin(1e-4));
-    CHECK(batcher.rects[1].pos.y == Approx(-22.0f).margin(1e-4));
-    CHECK(batcher.rects[1].rotation == Approx(-glm::half_pi<float>()).margin(1e-4));
+    const MockBatcher::RectRec& q = batcher.rects[1];
+    CHECK(q.corners[3].x == Approx(10.0f).margin(1e-4));   // BL still the pivot
+    CHECK(q.corners[3].y == Approx(20.0f).margin(1e-4));
+    CHECK(q.corners[0].x == Approx(8.0f).margin(1e-4));    // TL
+    CHECK(q.corners[0].y == Approx(20.0f).margin(1e-4));
+    CHECK(q.corners[1].x == Approx(8.0f).margin(1e-4));    // TR
+    CHECK(q.corners[1].y == Approx(22.0f).margin(1e-4));
+    CHECK(q.corners[2].x == Approx(10.0f).margin(1e-4));   // BR
+    CHECK(q.corners[2].y == Approx(22.0f).margin(1e-4));
+    CHECK(q.angle() == Approx(glm::half_pi<float>()).margin(1e-4));
 }

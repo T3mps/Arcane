@@ -30,24 +30,25 @@ namespace
     }
 
     // The recording-mock shape from SpriteRotationTest.cpp, counting only.
+    // Sprites are WORLD quads since F4 plan 1 T5, so the count sits on
+    // QuadWorld; the screen-space Quad/Rect stay no-ops.
     struct CountingBatcher final : Arcane::Batcher2D
     {
         int rects = 0;
         void Begin(uint32_t, uint32_t) override {}
         void SetLayer(uint16_t, uint16_t) override {}
         void Quad(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
-                  glm::vec4, float) override { ++rects; }
+                  glm::vec4, float) override {}
         void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
                    glm::vec4) override {}
-        void Rect(glm::vec2, glm::vec2, glm::vec4, float) override { ++rects; }
+        void Rect(glm::vec2, glm::vec2, glm::vec4, float) override {}
         void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
         void Circle(glm::vec2, float, glm::vec4) override {}
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
-        // World-space surface (F4 plan 1 T4): nothing here submits through it.
         void QuadWorld(uint16_t, const Arcane::Guid&, const std::array<glm::vec3, 4>&,
-                       glm::vec2, glm::vec2, glm::vec4) override {}
+                       glm::vec2, glm::vec2, glm::vec4) override { ++rects; }
         void CircleWorld(glm::vec3, glm::vec3, glm::vec3, float, glm::vec4) override {}
         void SetViewProjection(const glm::mat4&) override {}
     };

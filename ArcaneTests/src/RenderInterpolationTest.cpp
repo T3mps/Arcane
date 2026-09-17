@@ -4,6 +4,7 @@
 // (DrawPhysicsDebug overlay + RenderSubmissionSystem sprites) driven against a
 // recording mock Batcher2D. CPU-only (tag [interp], never [gpu]).
 
+#include <array>
 #include <cmath>
 
 #include <catch2/catch_approx.hpp>
@@ -124,41 +125,54 @@ TEST_CASE("PhysicsInterpBuffer captures the pre-step pose each fixed step", "[in
 
 namespace
 {
-    // Recording Batcher2D: captures the last Circle center + count. All other
-    // primitive overrides are no-ops (the tests disable every non-outline overlay).
+    // Recording Batcher2D. The overlay (DrawPhysicsDebug) still draws in PIXELS
+    // through Circle(); sprites submit WORLD quads through QuadWorld /
+    // CircleWorld (F4 plan 1 T5), so both surfaces record. All other primitive
+    // overrides are no-ops (the tests disable every non-outline overlay).
     struct RecBatcher final : Arcane::Batcher2D
     {
+        // Screen-space surface (the overlay's).
         int       circleCalls = 0;
         glm::vec2 lastCircleCenter{0.0f, 0.0f};
-        int       rectCalls = 0;
-        float     lastRotation = 0.0f;
-        glm::vec2 lastRectPos{0.0f, 0.0f};    // top-left origin of the last Rect/Quad
-        glm::vec2 lastRectSize{0.0f, 0.0f};
+        int       screenQuadCalls = 0;   // Rect/Quad: sprites must NOT land here any more
+
+        // World-space surface (the sprites').
+        int                       quadCalls = 0;
+        std::array<glm::vec3, 4>  lastCorners{};   // TL, TR, BR, BL in world metres
+        int                       worldCircleCalls = 0;
+        glm::vec3                 lastWorldCircleCenter{0.0f};
+        glm::mat4                 viewProjection{1.0f};
 
         void Begin(uint32_t, uint32_t) override {}
         void SetLayer(uint16_t, uint16_t) override {}
-        void Quad(glm::vec2 p, glm::vec2 sz, glm::vec2, glm::vec2,
-                  glm::vec4, float rot) override
-        { ++rectCalls; lastRotation = rot; lastRectPos = p; lastRectSize = sz; }
+        void Quad(glm::vec2, glm::vec2, glm::vec2, glm::vec2, glm::vec4, float) override
+        { ++screenQuadCalls; }
         void Glyph(glm::vec2, glm::vec2, glm::vec2, glm::vec2,
                    glm::vec4) override {}
-        void Rect(glm::vec2 p, glm::vec2 sz, glm::vec4, float rot) override
-        { ++rectCalls; lastRotation = rot; lastRectPos = p; lastRectSize = sz; }
+        void Rect(glm::vec2, glm::vec2, glm::vec4, float) override
+        { ++screenQuadCalls; }
         void Line(glm::vec2, glm::vec2, float, glm::vec4) override {}
         void Circle(glm::vec2 c, float, glm::vec4) override
         { ++circleCalls; lastCircleCenter = c; }
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
-        // World-space surface (F4 plan 1 T4): nothing submits through it until
-        // T5 moves sprites onto QuadWorld.
-        void QuadWorld(uint16_t, const Arcane::Guid&, const std::array<glm::vec3, 4>&,
-                       glm::vec2, glm::vec2, glm::vec4) override {}
-        void CircleWorld(glm::vec3, glm::vec3, glm::vec3, float, glm::vec4) override {}
-        void SetViewProjection(const glm::mat4&) override {}
+        void QuadWorld(uint16_t, const Arcane::Guid&, const std::array<glm::vec3, 4>& corners,
+                       glm::vec2, glm::vec2, glm::vec4) override
+        { ++quadCalls; lastCorners = corners; }
+        void CircleWorld(glm::vec3 c, glm::vec3, glm::vec3, float, glm::vec4) override
+        { ++worldCircleCalls; lastWorldCircleCenter = c; }
+        void SetViewProjection(const glm::mat4& vp) override { viewProjection = vp; }
 
-        // Center of the last Rect/Quad (Batcher2D quads are top-left origin).
-        glm::vec2 lastRectCenter() const { return lastRectPos + lastRectSize * 0.5f; }
+        // Centre of the last world quad: the diagonal's midpoint, in metres.
+        glm::vec3 lastQuadCentre() const { return (lastCorners[0] + lastCorners[2]) * 0.5f; }
+        // The last world quad's turn about +Z: the angle of its top edge TL->TR,
+        // which is the local +x axis (SpriteWorldQuad); 0 for an unrotated quad.
+        float lastQuadAngle() const
+        {
+            const glm::vec3 top = lastCorners[1] - lastCorners[0];
+            return std::atan2(top.y, top.x);
+        }
     };
 }
 
@@ -240,10 +254,47 @@ TEST_CASE("RenderSubmissionSystem interpolates a sprite by PhysicsInterpBuffer +
     reg.SetResource<Arcane::RenderContext2D>(std::move(ctx));
     Arcane::RenderSubmissionSystem{}(reg);
 
-    REQUIRE(rec.rectCalls == 1);
-    CHECK(rec.lastRectCenter().x == Approx(5.0f));   // lerp(0, 10, 0.5) at identity zoom
-    CHECK(rec.lastRectCenter().y == Approx(0.0f));
-    CHECK(rec.lastRotation == Approx(0.0f).margin(1e-5));
+    REQUIRE(rec.quadCalls == 1);
+    CHECK(rec.screenQuadCalls == 0);                    // a WORLD quad, not a pixel rect
+    CHECK(rec.lastQuadCentre().x == Approx(5.0f));      // lerp(0, 10, 0.5), in metres
+    CHECK(rec.lastQuadCentre().y == Approx(0.0f));
+    CHECK(rec.lastQuadAngle() == Approx(0.0f).margin(1e-5));
+}
+
+TEST_CASE("RenderSubmissionSystem submits sprites as WORLD quads with the interpolated XY pose",
+          "[render][sprite][interp]")
+{
+    // F4 plan 1 T5: the system projects NOTHING. It hands the batcher world
+    // METRES -- corners from the full world basis (SpriteWorldQuad) with the
+    // interpolated pose re-baked into the matrix's XY translation and Z-angle --
+    // and the host's view-projection (SetViewProjection) does the rest on the
+    // GPU. The view in RenderContext2D is therefore irrelevant to the corners.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    // Current pose (10, 4, z=1.5) scaled 4x4; previous world-slot pose (0, 0).
+    Arcane::Transform lt; lt.position = glm::vec3(10.0f, 4.0f, 1.5f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
+    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f, 0.0f), 0.0f, 0 }, /*slot*/ 1, /*gen*/ 2);
+
+    RecBatcher rec;
+    // A deliberately NON-identity view: the corners must not move with it.
+    reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{
+        &rec, Arcane::ViewTransform::Orthographic({123.0f, -45.0f}, 7.0f, {640u, 480u}), 0.25f });
+    Arcane::RenderSubmissionSystem{}(reg);
+
+    REQUIRE(rec.quadCalls == 1);
+    CHECK(rec.screenQuadCalls == 0);
+    // centre == lerp(prev, current, alpha) in XY; z == the entity's z (untouched by
+    // the 2D interp).
+    CHECK(rec.lastQuadCentre().x == Approx(2.5f));
+    CHECK(rec.lastQuadCentre().y == Approx(1.0f));
+    CHECK(rec.lastQuadCentre().z == Approx(1.5f));
+    // The re-bake preserved the basis lengths (the 4x4 scale): a 4 m top edge
+    // along +x, a 4 m left edge with TL ABOVE BL (+Y up = image top).
+    CHECK(rec.lastCorners[1] - rec.lastCorners[0] == glm::vec3(4.0f, 0.0f, 0.0f));
+    CHECK(rec.lastCorners[0] - rec.lastCorners[3] == glm::vec3(0.0f, 4.0f, 0.0f));
+    CHECK(rec.lastCorners[0].z == Approx(1.5f));
 }
 
 TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest arc", "[interp]")
@@ -262,11 +313,13 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
         Arcane::RenderContext2D{ &rec, PixelView(), 0.5f });
     Arcane::RenderSubmissionSystem{}(reg);
 
-    REQUIRE(rec.rectCalls == 1);
-    // Shortest arc 350 -> 10 midpoint is 0deg, NOT 180deg (the mirrored map
-    // negates the canvas angle, which leaves 0 at 0).
-    CHECK(std::sin(rec.lastRotation) == Approx(0.0f).margin(1e-5));
-    CHECK(std::cos(rec.lastRotation) == Approx(1.0f).margin(1e-5));
+    REQUIRE(rec.quadCalls == 1);
+    // Shortest arc 350 -> 10 midpoint is 0deg, NOT 180deg. The angle is read
+    // off the WORLD quad's top edge (world sense, +Y up; nothing mirrors it).
+    CHECK(std::sin(rec.lastQuadAngle()) == Approx(0.0f).margin(1e-5));
+    CHECK(std::cos(rec.lastQuadAngle()) == Approx(1.0f).margin(1e-5));
+    // The re-bake keeps the basis lengths: still a 4 m top edge.
+    CHECK(glm::length(rec.lastCorners[1] - rec.lastCorners[0]) == Approx(4.0f));
 }
 
 TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss", "[interp]")
@@ -286,8 +339,8 @@ TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss",
         RecBatcher rec;
         reg.GetResource<Arcane::RenderContext2D>()->batcher = &rec;
         Arcane::RenderSubmissionSystem{}(reg);
-        REQUIRE(rec.rectCalls == 1);
-        return rec.lastRectCenter().x;
+        REQUIRE(rec.quadCalls == 1);
+        return rec.lastQuadCentre().x;
     };
     CHECK(submit() == Approx(5.0f));                                              // the hit, for contrast
 
@@ -367,8 +420,8 @@ TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the curre
         ctx->batcher = &rec;
         ctx->alpha   = alpha;
         Arcane::RenderSubmissionSystem{}(reg);
-        REQUIRE(rec.rectCalls == 1);
-        return rec.lastRectCenter().y;
+        REQUIRE(rec.quadCalls == 1);
+        return rec.lastQuadCentre().y;
     };
 
     const float atPrev = submitAt(0.0f);
@@ -376,10 +429,10 @@ TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the curre
     REQUIRE(atPrev != Approx(atCur));   // the body moved this step: the endpoints differ
     const float span = atCur - atPrev;
     // margin, not Approx's relative epsilon alone: the measured centre is the
-    // batcher's top-left + size/2, and that round trip through a 4 px half-size
-    // costs ~1 ulp at magnitude 2 (1.2e-7) on values of ~4e-4 px -- a 3e-4
-    // relative error, above the 1.2e-5 Approx allows. The blend under test is
-    // ~1.7e-3 px end to end, so a 1e-6 margin still separates 0.25 from 0.75.
+    // world quad's diagonal midpoint, and that round trip through a 2 m
+    // half-size costs ~1 ulp at magnitude 2 (1.2e-7) on values of ~4e-4 m -- a
+    // 3e-4 relative error, above the 1.2e-5 Approx allows. The blend under test
+    // is ~1.7e-3 m end to end, so a 1e-6 margin still separates 0.25 from 0.75.
     CHECK(submitAt(0.25f) == Approx(atPrev + 0.25f * span).margin(1e-6f));
     CHECK(submitAt(0.75f) == Approx(atPrev + 0.75f * span).margin(1e-6f));
     // And the reversed direction is what these two would read under a

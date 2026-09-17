@@ -100,16 +100,14 @@ namespace Arcane::Editor
     };
 
     // Bounds over an explicit entity set (Frame Selected). A sprite contributes
-    // the box RenderSubmissionSystem draws it in -- its sprite asset's base size
-    // (1x1 m when unresolved) times the world scale, about the asset's pivot --
-    // so framing and rendering cannot disagree. An entity with a WorldTransform but no
-    // SpriteRenderer contributes its position as a zero-extent point, so
-    // framing a bare node centres on it instead of doing nothing. Entities with
-    // no WorldTransform (and dead handles) are skipped. Rotation reaches the
-    // CENTRE but not the EXTENT: a non-centre pivot orbits the box with the
-    // world rotation (matching submission), while the extent stays the
-    // axis-aligned one of the unrotated sprite, so a rotated sprite can still
-    // overhang the box by up to its half-diagonal.
+    // the XY bounding box of the quad RenderSubmissionSystem draws -- the SAME
+    // four world corners, SpriteWorldQuad (its sprite asset's base size, 1x1 m
+    // when unresolved, through the full world basis about the asset's pivot;
+    // F4 plan 1 T5) -- so framing and rendering cannot disagree, and a rotated
+    // sprite frames as the exact AABB of its turned quad. An entity with a
+    // WorldTransform but no SpriteRenderer contributes its position as a
+    // zero-extent point, so framing a bare node centres on it instead of doing
+    // nothing. Entities with no WorldTransform (and dead handles) are skipped.
     [[nodiscard]] FramingBounds SelectionFramingBounds(Astra::Registry& reg,
                                                        std::span<const Astra::Entity> entities);
 

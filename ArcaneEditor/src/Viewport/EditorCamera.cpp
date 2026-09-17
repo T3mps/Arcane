@@ -1,5 +1,6 @@
 #include "Viewport/EditorCamera.hpp"
 
+#include <Arcane/Render/SpriteGeometry.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
@@ -16,13 +17,6 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // World scale from a world matrix, as basis-column lengths -- the same
-        // derivation RenderSubmissionSystem uses to size the drawn quad.
-        glm::vec2 WorldScaleOf(const glm::mat4& m) noexcept
-        {
-            return glm::vec2(glm::length(glm::vec2(m[0])), glm::length(glm::vec2(m[1])));
-        }
-
         void Grow(FramingBounds& b, glm::vec2 mn, glm::vec2 mx) noexcept
         {
             if (b.count == 0)
@@ -38,14 +32,6 @@ namespace Arcane::Editor
             ++b.count;
         }
 
-        // Sprite half-extent in world units: the sprite asset's base size times
-        // the world scale, halved. abs() keeps min <= max, which Frame relies
-        // on; a negatively authored base size would otherwise invert the box.
-        glm::vec2 SpriteHalfExtent(const glm::mat4& world, glm::vec2 baseSize) noexcept
-        {
-            return glm::abs(baseSize * WorldScaleOf(world)) * 0.5f;
-        }
-
         // Task 3 (F1): mat4 world matrix -- the translation moved from
         // column 2 to column 3. Framing stays PLANAR (the editor camera is
         // 2D; F4 owns the 3D one), so the Z of a world position is ignored
@@ -55,24 +41,25 @@ namespace Arcane::Editor
             return glm::vec2(m[3].x, m[3].y);
         }
 
-        // The drawn quad's CENTRE. The world position is the sprite's PIVOT, and
-        // the quad's centre sits pivot->centre away from it, turned by the world
-        // rotation, mirroring RenderSubmissionSystem's centerOff
-        // (RenderSystems.hpp:98). Exactly zero at the default (0.5,0.5) pivot, so
-        // an entity whose pivot is untouched frames exactly as it always did.
-        // NOT bit-identical to submission's offset: `half` arrives already
-        // abs()-ed (SpriteHalfExtent above), so this uses |baseSize * worldScale|
-        // where submission uses the signed product. They diverge only for a
-        // NEGATIVE sizeMeters, where framing then brackets the mirrored quad on
-        // the wrong side -- framing is an axis-aligned estimate either way, and
-        // the abs() is what keeps min <= max for Frame.
-        glm::vec2 SpriteCentre(const glm::mat4& world, glm::vec2 half, glm::vec2 pivot) noexcept
+        // The drawn quad's XY bounding box: the SAME four world corners
+        // RenderSubmissionSystem submits (SpriteWorldQuad -- the full basis
+        // about the pivot, F4 plan 1 T5), min/max'd in the plane. One corner
+        // rule for drawing and framing, so the two cannot disagree; a rotated
+        // sprite frames as the exact AABB of its turned quad, and a negative
+        // scale/size simply lands its corners on the other side (min <= max
+        // holds by construction).
+        void GrowSprite(FramingBounds& b, const glm::mat4& world, const SpriteEntry* entry) noexcept
         {
-            const glm::vec2 off = (glm::vec2(0.5f) - pivot) * (half * 2.0f);
-            const float angle = std::atan2(world[0].y, world[0].x);
-            const float c = std::cos(angle), s = std::sin(angle);
-            return WorldPositionOf(world) + glm::vec2(c * off.x - s * off.y,
-                                                      s * off.x + c * off.y);
+            const SpriteQuad q = SpriteWorldQuad(world,
+                                                 entry ? entry->sizeMeters : glm::vec2(1.0f),
+                                                 entry ? entry->pivot      : glm::vec2(0.5f));
+            glm::vec2 mn(q.corners[0]), mx(q.corners[0]);
+            for (const glm::vec3& c : q.corners)
+            {
+                mn = glm::min(mn, glm::vec2(c));
+                mx = glm::max(mx, glm::vec2(c));
+            }
+            Grow(b, mn, mx);
         }
 
         // The sprite asset a SpriteRenderer resolves to, on submission's rules:
@@ -176,12 +163,7 @@ namespace Arcane::Editor
                 Grow(b, pos, pos);
                 continue;
             }
-            const SpriteEntry* entry = ResolveEntry(table, *sprite);
-            const glm::vec2 half = SpriteHalfExtent(world->matrix,
-                                                    entry ? entry->sizeMeters : glm::vec2(1.0f));
-            const glm::vec2 centre = SpriteCentre(world->matrix, half,
-                                                  entry ? entry->pivot : glm::vec2(0.5f));
-            Grow(b, centre - half, centre + half);
+            GrowSprite(b, world->matrix, ResolveEntry(table, *sprite));
         }
         return b;
     }
@@ -195,12 +177,7 @@ namespace Arcane::Editor
         reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>().ForEach(
             [&](Astra::Entity, const WorldTransform& world, const SpriteRenderer& sprite)
             {
-                const SpriteEntry* entry = ResolveEntry(table, sprite);
-                const glm::vec2 half = SpriteHalfExtent(world.matrix,
-                                                        entry ? entry->sizeMeters : glm::vec2(1.0f));
-                const glm::vec2 centre = SpriteCentre(world.matrix, half,
-                                                      entry ? entry->pivot : glm::vec2(0.5f));
-                Grow(b, centre - half, centre + half);
+                GrowSprite(b, world.matrix, ResolveEntry(table, sprite));
             });
         return b;
     }

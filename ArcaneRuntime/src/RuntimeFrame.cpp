@@ -431,6 +431,12 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     io.gpu->Batch().Begin(frameWidth, frameHeight);
     io.gpu->Batch().SetGlobals(io.frameGlobals);
     io.app.PushSceneCamera((float)frameWidth, (float)frameHeight);
+    // The frame's view-projection for the WORLD-space spans (F4 plan 1 T5):
+    // sprites submit world METRES through QuadWorld/CircleWorld and the vertex
+    // shader projects them. AFTER PushSceneCamera, which is what installs this
+    // frame's view -- before it the stored view is last frame's -- and before
+    // the submit that records against it. Sticky within this Begin() bracket.
+    io.gpu->Batch().SetViewProjection(io.runtime->View().ViewProjection());
     {
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->SetRenderContext(&io.gpu->Batch());
