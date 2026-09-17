@@ -82,6 +82,18 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    // --view-mode: the THIRD editor-only refusal, same table, same reasoning
+    // (F4 plan 1 T7). The flag seeds the EDITOR's viewport camera mode; this
+    // host has no editor camera -- the game's own SetView is the only view --
+    // so accepting it would exit 0 having seeded nothing.
+    if (!parsed.config->viewMode.empty())
+    {
+        std::fprintf(stderr, "error: --view-mode is an EDITOR-only flag (this host has no editor "
+                             "viewport camera to seed; the game drives its own view). Use "
+                             "ArcaneEditor.exe.\n");
+        return 2;
+    }
+
     // Same arming as the editor, same reasoning, same position relative to the
     // probe -- see ArcaneEditor/src/main.cpp. The two hosts must not diverge on
     // whether a crash or a hang leaves evidence behind.

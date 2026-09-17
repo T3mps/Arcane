@@ -980,6 +980,12 @@ project "ArcaneTests"
         -- test exe so the [editor] units drive the PURE math headlessly -- no
         -- ImGui and no engine calls in it, same pattern as SceneSession above.
         "%{wks.location}/ArcaneEditor/src/Viewport/EditorCamera.cpp",
+        -- F4 plan 1 T7: ViewportSettings (the PURE [EditorViewport][Camera] ini
+        -- line writer/reader + the --view-mode seed) source-compiles into the
+        -- test exe so the [editor][settings] units drive the round-trip and the
+        -- refusal table with a bare ImGuiTextBuffer (no context needed), same
+        -- pattern as EditorCamera above.
+        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportSettings.cpp",
         -- Widget layer: EditGesture's PURE decision core (gesture ownership +
         -- close-path verdicts) source-compiles into the test exe so the
         -- [editor] units drive the full decision table headlessly -- the ImGui

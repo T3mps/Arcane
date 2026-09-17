@@ -57,6 +57,22 @@ TEST_CASE("HostConfig: --help exits 0, no config", "[host]") {
     const auto o = Run({"--help"});
     REQUIRE_FALSE(o.config.has_value()); REQUIRE(o.exitCode == 0);
 }
+TEST_CASE("HostConfig: --view-mode perspective parses (editor viewport seed, F4 plan 1 T7)", "[host]") {
+    const auto o = Run({"--view-mode", "perspective"});
+    REQUIRE(o.config.has_value());
+    REQUIRE(o.config->viewMode == "perspective");
+    const auto two = Run({"--view-mode", "2d"});
+    REQUIRE(two.config.has_value());
+    REQUIRE(two.config->viewMode == "2d");
+    // Absent = no seed: the persisted [EditorViewport][Camera] mode stands.
+    const auto absent = Run({});
+    REQUIRE(absent.config.has_value());
+    REQUIRE(absent.config->viewMode.empty());
+}
+TEST_CASE("HostConfig: --view-mode refuses any other spelling", "[host]") {
+    const auto o = Run({"--view-mode", "sideways"});
+    REQUIRE_FALSE(o.config.has_value()); REQUIRE(o.exitCode != 0);
+}
 TEST_CASE("HostConfig: bad arg exits 2, no config", "[host]") {
     const auto o = Run({"--backend", "metal"});
     REQUIRE_FALSE(o.config.has_value()); REQUIRE(o.exitCode == 2);

@@ -121,6 +121,17 @@ namespace Arcane::Editor
         constexpr uint32_t kScF    = 9;    // SDL_SCANCODE_F
         constexpr uint32_t kScHome = 74;   // SDL_SCANCODE_HOME
 
+        // Perspective navigation (F4 plan 1 T7, UpdateEditorCamera): WASD/QE
+        // fly while the right button is held (W/E/Q/S/D are the same keys the
+        // gizmo/scene shortcuts above name -- the same scancode constants are
+        // reused; only A is new), Alt is the orbit modifier, Alt+G / Alt+J
+        // switch the view mode (Perspective / 2D).
+        constexpr uint32_t kScA    = 4;    // SDL_SCANCODE_A
+        constexpr uint32_t kScG    = 10;   // SDL_SCANCODE_G
+        constexpr uint32_t kScJ    = 13;   // SDL_SCANCODE_J
+        constexpr uint32_t kScLAlt = 226;  // SDL_SCANCODE_LALT
+        constexpr uint32_t kScRAlt = 230;  // SDL_SCANCODE_RALT
+
         // ASCII-lowercased extension, for a case-insensitive suffix check: a
         // hand-typed "MyScene.ARCSCENE" already names an .arcscene, and stapling a
         // second suffix onto it produces a file the user did not ask for.
@@ -709,9 +720,12 @@ namespace Arcane::Editor
         // whose result reappears the moment Play starts, from a viewpoint
         // the user never chose. RMB=bit1; InputSnapshot.hpp. Play is
         // untouched: the plugin keeps RMB + wheel and its camera wins.
+        // MMB=bit2 joined the mask with the Perspective pan (F4 plan 1 T7);
+        // Alt+LMB (orbit) needs no extra clause -- LMB is already masked in
+        // Edit mode above, unconditionally.
         if (!InPlayMode())
         {
-            pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x2u);
+            pluginSnap.mouseButtons &= ~static_cast<uint8_t>(0x2u | 0x4u);
             pluginSnap.wheelY = 0.0f;
         }
         m_runtime->SetInputSnapshot(pluginSnap);
@@ -719,7 +733,7 @@ namespace Arcane::Editor
 
         HandleUndoRedoAndSceneShortcuts(snap, fs);
         HandleGizmoModeKeys(snap);
-        UpdateEditorCamera(snap, inViewport, lx, ly);
+        UpdateEditorCamera(snap, inViewport, lx, ly, static_cast<float>(frameDt));
         UpdateGizmoInteraction(snap, inViewport, lx, ly, fs.gameUiClaims);
     }
 
@@ -828,7 +842,14 @@ namespace Arcane::Editor
         m_edges.e.Update(eDown);
         m_edges.r.Update(rDown);
         m_edges.q.Update(qDown);
-        const bool keysActive = ShortcutsLive(snap, true);
+        // NOT while the right mouse button is held: W/E/Q are then the flight
+        // keys of a Look gesture (UpdateEditorCamera, F4 plan 1 T7 -- UE's
+        // WASD_RMBOnly), and a fly-forward must not also switch the tool to
+        // Translate. Tested on the raw button rather than the gesture state
+        // because this phase runs BEFORE the camera phase starts the gesture,
+        // and an RMB+W press on the same frame would otherwise slip through.
+        const bool rmbHeld    = (snap.mouseButtons & 0x2u) != 0;
+        const bool keysActive = ShortcutsLive(snap, true) && !rmbHeld;
         // Q = Select (no gizmo); W/E/R activate a transform gizmo (UE5 tools).
         if (keysActive && m_edges.q.pressed)
         {
@@ -851,61 +872,153 @@ namespace Arcane::Editor
     // Phase 6c: editor viewport camera. Its tail holds the FIRST of the frame's
     // two SetView pushes -- see the comment there; the gizmo phase below reads
     // what it writes.
-    void EditorApp::UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport, float lx, float ly)
+    void EditorApp::UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport,
+                                       float lx, float ly, float dt)
     {
-        // Editor viewport camera (Edit mode): RMB-drag pans, wheel zooms
-        // at the cursor, F frames the selection (everything when nothing
-        // is selected), Home frames everything. The plugin no longer sees
-        // RMB/wheel in Edit mode (see the pluginSnap mask above), so the
-        // two cameras cannot fight over the same gesture.
-        const bool      rmbDown = (snap.mouseButtons & 0x2u) != 0;
-        m_edges.rmb.Update(rmbDown);
-        const glm::vec2 mouseWindow(snap.mouseX, snap.mouseY);
+        // Editor viewport camera (Edit mode), Unreal's input model by view
+        // mode (EditorCamera.hpp, F4 spec s4):
+        //   2D          -- RMB-drag pans, wheel zooms at the cursor.
+        //   Perspective -- RMB-drag looks about the eye (WASD/QE fly while it
+        //                  is held; Shift boosts; the wheel then steps the
+        //                  speed), Alt+LMB-drag orbits the pivot, MMB-drag
+        //                  pans in the view plane, the wheel dollies.
+        //   both        -- F frames the selection (everything when nothing is
+        //                  selected), Home frames everything, Alt+G / Alt+J
+        //                  switch to Perspective / 2D.
+        // The plugin no longer sees RMB/MMB/wheel (nor LMB) in Edit mode
+        // (see the pluginSnap mask above), so the two cameras cannot fight
+        // over the same gesture.
+        //
+        // All three button edges are tracked HERE, unconditionally, every
+        // frame (this phase runs before the gizmo phase, which reads
+        // m_edges.lmb rather than updating it again -- a second Update with
+        // the same value would erase the press edge). A button already held
+        // before the cursor enters the viewport is therefore never misread as
+        // a fresh press.
+        const bool lmb = (snap.mouseButtons & 0x1u) != 0;
+        const bool rmb = (snap.mouseButtons & 0x2u) != 0;
+        const bool mmb = (snap.mouseButtons & 0x4u) != 0;
+        m_edges.lmb.Update(lmb);
+        m_edges.rmb.Update(rmb);
+        m_edges.mmb.Update(mmb);
+        const bool alt   = snap.ScancodeDown(kScLAlt)   || snap.ScancodeDown(kScRAlt);
+        const bool shift = snap.ScancodeDown(kScLShift) || snap.ScancodeDown(kScRShift);
+        const glm::vec2 mouse(snap.mouseX, snap.mouseY);
+        const glm::vec2 delta = mouse - m_camGesture.lastMouse;
+
+        using Gesture = CameraGesture;
+        using Arcane::Editor::ViewMode;
         if (!InPlayMode())
         {
-            // A pan may only START over the viewport, but once
-            // started it keeps tracking anywhere -- same rule as the
-            // gizmo drag, so crossing the panel edge mid-drag does
-            // not strand the view.
-            if (m_edges.rmb.pressed && inViewport)
+            // A gesture may only START over the viewport, but once started it
+            // keeps tracking anywhere -- same rule as the gizmo drag, so
+            // crossing the panel edge mid-drag does not strand the view. In
+            // Perspective the Alt+LMB test comes FIRST so an orbit press is
+            // never read as a look (RMB) or pan (MMB) start on the same frame.
+            const bool wasNone = m_camGesture.kind == Gesture::None;
+            if (wasNone && inViewport)
             {
-                m_camPan.panning = true;
+                if (m_camera.mode == ViewMode::TwoD)
+                {
+                    if (m_edges.rmb.pressed)             m_camGesture.kind = Gesture::Pan2D;
+                }
+                else if (alt && m_edges.lmb.pressed)     m_camGesture.kind = Gesture::Orbit;
+                else if (m_edges.rmb.pressed)            m_camGesture.kind = Gesture::Look;
+                else if (m_edges.mmb.pressed)            m_camGesture.kind = Gesture::Pan3D;
             }
-            if (!rmbDown)
-            {
-                m_camPan.panning = false;
-            }
-            // RMB held across BOTH frames, so m_camPan.lastMouse is a
-            // real previous cursor and the press edge cannot jump the
-            // view by the whole distance from wherever the cursor last
-            // was (same guard as Sandbox's Interaction pan). Equivalence:
-            // m_camPan.panning && m_edges.rmb.down && !m_edges.rmb.pressed has
-            // the same truth table as the old m_camPanning && m_prevRmbDown
-            // -- m_camPan.panning implies rmbDown this frame (the `!rmbDown`
-            // branch above clears it otherwise), so `down` is redundant and
-            // `!pressed` (not a fresh rising edge) is exactly "was also down
-            // last frame".
-            if (m_camPan.panning && m_edges.rmb.down && !m_edges.rmb.pressed)
-            {
-                m_camera.Pan2D(mouseWindow - m_camPan.lastMouse, ViewportSize());
-            }
+            // Ruling C: `fresh` is TRUE only on the frame the gesture started
+            // and FALSE on every later frame of it (and while there is none).
+            // Assigned BEFORE the apply below reads it, so the press frame
+            // itself is the one that applies nothing.
+            m_camGesture.fresh = wasNone && m_camGesture.kind != Gesture::None;
 
-            // Zoom anchors on the viewport-local cursor, the pixel space
-            // the resolved view maps to. Deliberately NOT
-            // gated on snap.wantCaptureMouse: it is true over the
-            // viewport image by design (see the pluginSnap comment
-            // above); inViewport already folds in m_viewportActive,
-            // which is false whenever another panel owns the cursor.
-            if (inViewport && snap.wheelY != 0.0f)
+            // A gesture lives exactly as long as ITS button is held -- an
+            // orbit survives Alt lifting mid-drag (UE does the same), and a
+            // mode switch mid-gesture ends it on the next frame through the
+            // button test, never through the mode.
+            const bool held = (m_camGesture.kind == Gesture::Pan2D && rmb)
+                           || (m_camGesture.kind == Gesture::Look  && rmb)
+                           || (m_camGesture.kind == Gesture::Orbit && lmb)
+                           || (m_camGesture.kind == Gesture::Pan3D && mmb);
+            if (!held)
             {
-                m_camera.ZoomAt2D(glm::vec2(lx, ly), snap.wheelY, ViewportSize());
+                m_camGesture.kind  = Gesture::None;
+                m_camGesture.fresh = false;
+            }
+            else if (!m_camGesture.fresh)
+            {
+                // Not the press frame (Ruling C): lastMouse is a real previous
+                // cursor, so the delta is the cursor's motion this frame and
+                // not the whole distance from wherever it last was (same
+                // guard as the old RMB-pan's "held across BOTH frames").
+                switch (m_camGesture.kind)
+                {
+                case Gesture::Pan2D: m_camera.Pan2D(delta, ViewportSize()); break;
+                case Gesture::Look:  m_camera.Look(delta);                  break;
+                case Gesture::Orbit: m_camera.Orbit(delta);                 break;
+                case Gesture::Pan3D: m_camera.Pan3D(delta, ViewportSize()); break;
+                default: break;
+                }
+            }
+            // WASD/QE fly only while LOOKING (right button). Narrower than
+            // UE's WASD_RMBOnly default, which admits any held mouse button;
+            // and the Shift boost is OURS (Unity's) -- UE has no boost, its
+            // flight keys are DISABLED while Shift is held. The gizmo mode
+            // keys (HandleGizmoModeKeys) already stand down while RMB is held
+            // so W/E/Q cannot also switch the tool. dt is the frame's wall dt
+            // so flight speed is in m/s regardless of frame rate.
+            if (m_camGesture.kind == Gesture::Look)
+            {
+                glm::vec3 axis(0.0f);
+                if (snap.ScancodeDown(kScW)) axis.z += 1.0f;
+                if (snap.ScancodeDown(kScS)) axis.z -= 1.0f;
+                if (snap.ScancodeDown(kScD)) axis.x += 1.0f;
+                if (snap.ScancodeDown(kScA)) axis.x -= 1.0f;
+                if (snap.ScancodeDown(kScE)) axis.y += 1.0f;
+                if (snap.ScancodeDown(kScQ)) axis.y -= 1.0f;
+                if (axis != glm::vec3(0.0f))
+                    m_camera.Fly(glm::normalize(axis), dt, shift);
+                // The wheel WHILE looking steps the speed scalar (UE's
+                // CameraSpeedScalar via the wheel during RMB flight), never
+                // the zoom/dolly.
+                if (snap.wheelY != 0.0f)
+                    m_camera.AdjustSpeed(snap.wheelY);
+            }
+            // The wheel otherwise: 2D zoom anchored on the viewport-local
+            // cursor (the pixel space the resolved view maps to), or the
+            // Perspective dolly. Deliberately NOT gated on
+            // snap.wantCaptureMouse: it is true over the viewport image by
+            // design (see the pluginSnap comment above); inViewport already
+            // folds in m_viewportActive, which is false whenever another
+            // panel owns the cursor.
+            else if (inViewport && snap.wheelY != 0.0f)
+            {
+                if (m_camera.mode == ViewMode::TwoD)
+                    m_camera.ZoomAt2D(glm::vec2(lx, ly), snap.wheelY, ViewportSize());
+                else
+                    m_camera.Dolly(snap.wheelY);
             }
         }
         else
         {
-            m_camPan.panning = false;   // Play owns the pointer; drop any live pan
+            m_camGesture.kind  = Gesture::None;   // Play owns the pointer; drop any live gesture
+            m_camGesture.fresh = false;
         }
-        m_camPan.lastMouse = mouseWindow;
+        m_camGesture.lastMouse = mouse;
+
+        // Alt+G -> Perspective, Alt+J -> 2D. The two persisted transforms mean
+        // a switch RESTORES the other mode's framing rather than reprojecting
+        // (EditorCamera.hpp); the mode is persisted with them. Same gate as
+        // framing below (no viewport-focus requirement: the chord is
+        // unambiguous, and it acts on the viewport wherever focus sits). A
+        // live gesture is not cut short here: the next frame's `held` test
+        // ends it when its button lifts, and its deltas keep going to the
+        // op of the kind that started it, which is still meaningful.
+        m_edges.g.Update(alt && snap.ScancodeDown(kScG));
+        m_edges.j.Update(alt && snap.ScancodeDown(kScJ));
+        const bool modeKeysActive = ShortcutsLive(snap, false);
+        if (modeKeysActive && m_edges.g.pressed) m_camera.mode = ViewMode::Perspective;
+        if (modeKeysActive && m_edges.j.pressed) m_camera.mode = ViewMode::TwoD;
 
         // F / Home framing. Gated on wantCaptureKeyboard exactly like
         // the Ctrl+N/O/S shortcuts above, so F does not fire while a
@@ -948,14 +1061,14 @@ namespace Arcane::Editor
         // mouseScreen is viewport-local px (lx/ly computed above), the same
         // space the view's Affine2D registers in, so the gizmo aligns
         // pixel-for-pixel with the scene (mirrors the click-pick's PickView
-        // below). LMB edges are tracked unconditionally each frame (like the
-        // mode keys above) so a button already held before the cursor enters
-        // the viewport is never misread as a fresh press. Deliberately does
-        // NOT gate on snap.wantCaptureMouse -- it is true over the viewport
-        // image by design (see the pluginSnap comment above); `inViewport`
-        // already folds in m_viewportActive.
-        const bool lmbDown = (snap.mouseButtons & 0x1u) != 0;
-        m_edges.lmb.Update(lmbDown);
+        // below). The LMB edge is tracked by the camera phase just above
+        // (UpdateEditorCamera Updates all three button edges once per frame,
+        // unconditionally, so a button already held before the cursor enters
+        // the viewport is never misread as a fresh press); this phase only
+        // READS it -- a second Update with the same value would erase the
+        // press edge. Deliberately does NOT gate on snap.wantCaptureMouse --
+        // it is true over the viewport image by design (see the pluginSnap
+        // comment above); `inViewport` already folds in m_viewportActive.
         const bool mousePressedLeft  = m_edges.lmb.pressed;
         const bool mouseReleasedLeft = m_edges.lmb.released;
         const glm::vec2 mouseScreen(lx, ly);
@@ -1834,7 +1947,15 @@ namespace Arcane::Editor
         // just used above.
         if (!m_meshInstances.empty())
         {
-            // THE GUARDED PATH ONLY -- MeshSceneDesc's own comment
+            // WHICH CAMERA (F4 plan 1 T7): in EDIT mode the editor camera --
+            // the ViewTransform this frame's pre-SubmitRender push just put
+            // in ClientRuntime::View() (AdvanceSim's tail), which is
+            // always valid (EditorCamera::Resolve never hands back an
+            // identity: Ortho2D or a perspective from the clamped orbit),
+            // so meshes draw through the same view the sprites, the gizmo
+            // and the pick just used -- in 2D as an orthographic cut, in
+            // Perspective as the 3D scene the user orbits. In PLAY the
+            // guarded scene-camera path stands: MeshSceneDesc's own comment
             // (MeshNode.hpp) is explicit that the caller owes valid
             // matrices, and ActivePerspectiveSceneCamera is the one function
             // that either hands back a validated (view, projection) pair or
@@ -1845,12 +1966,22 @@ namespace Arcane::Editor
             // (SceneCamera.hpp).
             // The viewport is handed over whole (F4 plan 1 T3): the sweep
             // derives the aspect and answers nullopt for a zero height.
-            if (const auto cam = Arcane::ActivePerspectiveSceneCamera(
-                    m_runtime->Registry(), glm::uvec2{ ViewportWidth(), ViewportHeight() }))
+            std::optional<std::pair<glm::mat4, glm::mat4>> meshCam;
+            if (!InPlayMode())
+            {
+                const Arcane::ViewTransform& editorView = m_runtime->View();
+                meshCam.emplace(editorView.view, editorView.projection);
+            }
+            else if (const auto cam = Arcane::ActivePerspectiveSceneCamera(
+                         m_runtime->Registry(), glm::uvec2{ ViewportWidth(), ViewportHeight() }))
+            {
+                meshCam.emplace(cam->view, cam->projection);
+            }
+            if (meshCam)
             {
                 m_meshScene.instances = m_meshInstances;
-                m_meshScene.view       = cam->view;
-                m_meshScene.projection = cam->projection;
+                m_meshScene.view       = meshCam->first;
+                m_meshScene.projection = meshCam->second;
                 // NO SCENE LIGHT, DELIBERATELY: this engine has no light
                 // component anywhere -- Scene/Components.hpp declares none
                 // and SceneModule.hpp registers none -- so
@@ -1872,8 +2003,13 @@ namespace Arcane::Editor
         // mouse happens to be. See the predicate's own comment.
         const bool hoverLive = HoverLive();
         // PHASE 12'S GATE, VERBATIM: Edit mode, and something to outline
-        // (a selection, or a cursor in the viewport that might hover one).
-        const bool wantOutline = !InPlayMode()
+        // (a selection, or a cursor in the viewport that might hover one)
+        // -- AND a view with a 2D affine (F4 plan 1 T7): the id pass is fed
+        // through ViewTransform::AsAffine2D() (T3), which a perspective view
+        // does not have, so in Perspective there is nothing to outline and the
+        // chain is not armed for it. GizmoToolsEnabled() is that predicate.
+        // Plan 2 (mesh picking through the full ViewTransform) lifts this.
+        const bool wantOutline = !InPlayMode() && GizmoToolsEnabled()
                               && (m_selection.HasSelection() || hoverLive);
         // ...and phase 17's: a click whose readback has not landed keeps the
         // chain declared even when nothing wants an outline, because the
@@ -1881,7 +2017,13 @@ namespace Arcane::Editor
         // into. Dropping the chain mid-flight would strand that slot's pending
         // flag until the chain happened to come back. DeferredPick::Busy() is
         // true from the click until the answer lands or is abandoned, which is
-        // exactly the window this needs.
+        // exactly the window this needs. NOT additionally gated on the affine
+        // (unlike wantOutline): a request cannot START without one -- the ARM
+        // site in HandleViewportPick refuses a click in Perspective -- and a
+        // readback already in flight when the mode flips must still be
+        // drained, or that slot's pending flag is stranded exactly as this
+        // comment warns. It lands against the 2D table it was rasterised
+        // with, which is still the honest answer to the click it was.
         const bool wantPick = m_deferredPick.Busy();
         // NOTE THE ASYMMETRY WITH THE ENGINE: RgFrameShape::pickOutline is
         // deliberately independent of how the scene is sliced, because the
@@ -3263,7 +3405,14 @@ namespace Arcane::Editor
         // the older one's copy is dropped on arrival by its stale ticket.
         // The scene epoch and play mode recorded here describe the scene
         // the USER clicked on, which is what the landing compares against.
-        if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims)
+        // A FIFTH guard (F4 plan 1 T7): no click-pick without a 2D affine.
+        // In Perspective the id pass has no view to register its silhouettes
+        // through (CollectPickables is affine-gated, so the table would be
+        // EMPTY), and a request armed against an empty table would land as
+        // "background" and clear the selection on every Alt+LMB orbit press.
+        // Plan 2 lifts this with mesh picking through the full ViewTransform.
+        if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims
+            && GizmoToolsEnabled())
         {
             m_deferredPick.Arm(glm::ivec2((int)fs.vp.clickLocalX, (int)fs.vp.clickLocalY),
                                fs.vp.ctrlHeld, m_sceneEpoch, InPlayMode());

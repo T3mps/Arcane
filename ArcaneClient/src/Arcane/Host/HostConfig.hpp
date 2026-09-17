@@ -235,6 +235,17 @@ namespace Arcane
         // registration-time constraint that would reject every ordinary run.
         std::string     playAs = "";
 
+        // --view-mode: the editor viewport's mode at boot, "2d" | "perspective"
+        // (F4 plan 1 T7). EMPTY = no seed: the persisted [EditorViewport]
+        // [Camera] block (or its 2D default) stands. When supplied it is
+        // applied AFTER that block is read, so a scripted run's flag beats
+        // whatever a desk left persisted. A Cli::Choices() list, unlike
+        // --play-as above: Choices validates only a SUPPLIED value, so the
+        // empty default passes untouched and any other spelling is refused
+        // at parse time (rule 3). EDITOR ONLY, refused by ArcaneRuntime's
+        // main.cpp beside --play-as: the runtime has no editor camera to seed.
+        std::string     viewMode = "";
+
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have

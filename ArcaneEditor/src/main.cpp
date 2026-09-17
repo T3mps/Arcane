@@ -187,6 +187,16 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          that exe's main.cpp, beside --dump-layout's refusal):
 //                          a game host has no Edit mode to leave and no play
 //                          session to enter.
+//   --view-mode <mode>  -- HONOURED as of F4 plan 1 T7: seed the editor
+//                          viewport camera's mode (2d | perspective) at the end
+//                          of boot, AFTER the persisted [EditorViewport][Camera]
+//                          block has been read, so the flag beats the desk's
+//                          persisted mode (EditorApp::StageFinalize + the
+//                          settings handler's ReadLine). Absent = the persisted
+//                          mode, or the 2D default (the headless verify layout
+//                          carries no such block, so goldens run in 2D). THE
+//                          THIRD FLAG THIS HOST HONOURS THAT ArcaneRuntime
+//                          REFUSES OUTRIGHT: a game host has no editor camera.
 //   --settle / --report -- HONOURED as of Task 9 (the editor's verification
 //   --compare / --bless    surface): PresentChromeFrame's capture arm is the
 //                          SAME three-conjunct predicate (byte-equal &&

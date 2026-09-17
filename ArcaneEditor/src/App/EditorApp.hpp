@@ -39,6 +39,7 @@
 #include "App/ModalErrorQueue.hpp"
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
+#include "Viewport/ViewportSettings.hpp"
 #include "Panels/EditorPanels.hpp"
 #include "Project/CookQueue.hpp"
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
@@ -256,7 +257,7 @@ namespace Arcane::Editor
         void HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap, FrameState& fs);
         void HandleGizmoModeKeys(const Arcane::InputSnapshot& snap);
         void UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport,
-                                float lx, float ly);
+                                float lx, float ly, float dt);
         void UpdateGizmoInteraction(const Arcane::InputSnapshot& snap, bool inViewport,
                                     float lx, float ly, bool gameUiClaims);
         void AdvanceSim(LoopState& ls);
@@ -856,8 +857,24 @@ namespace Arcane::Editor
         // incidental, and one W keypress away from false. Reasoning of the
         // form "already false on a scripted run" is exactly what got the
         // outline chain wrong.
+        //
+        // F4 plan 1 T7: ALSO gated on the view having a 2D affine. The gizmo
+        // hit-tests and draws through ViewTransform::AsAffine2D() (T3), which
+        // a perspective view does not have -- so in Perspective the gizmo is
+        // OFF as a matter of state, not just skipped per site. Plan 2 (mesh
+        // picking + the 3D gizmo) lifts this; until then GizmoToolsEnabled()
+        // is what the tool overlay (Task 8) disables its W/E/R buttons on.
         [[nodiscard]] bool GizmoLive() const noexcept
-        { return m_gizmoEnabled; }
+        { return m_gizmoEnabled && GizmoToolsEnabled(); }
+
+        // Whether the transform-gizmo tools (Move/Rotate/Scale) and the
+        // click-pick can operate on the CURRENT view: true iff the pushed
+        // ViewTransform has a 2D affine (the Ortho2D view). Perspective =>
+        // false until plan 2 gives the gizmo and the id pass the full
+        // ViewTransform. Reads the runtime's view rather than m_camera.mode
+        // so it is exactly the predicate every affine-gated site tests.
+        [[nodiscard]] bool GizmoToolsEnabled() const noexcept
+        { return m_runtime && m_runtime->View().AsAffine2D().has_value(); }
 
         // THE VIEWPORT'S EXTENT: the offscreen graph output's surface size
         // (m_viewportTargets.graph).
@@ -903,6 +920,22 @@ namespace Arcane::Editor
         static void  PlayModeSettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                               ImGuiTextBuffer* buf);
         void RegisterPlayModeSettings();   // called from Init, beside RegisterLayoutSettings
+
+        // ImGuiSettingsHandler callbacks for m_camera + m_viewSettings
+        // ("[EditorViewport][Camera]", F4 plan 1 T7), mirroring the PlayMode
+        // handler above line for line; the line format and its refusal table
+        // are ViewportSettings::WriteIni / ReadIniLine (pure, unit-tested),
+        // and these callbacks only wrap them. Registered at the same Init
+        // site. ReadLine re-applies the --view-mode seed after each line so
+        // the ini's Mode can never overrule the flag (the ini is read at the
+        // FIRST NewFrame, which is after StageFinalize on a windowed run).
+        static void* ViewportSettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                              const char* name);
+        static void  ViewportSettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                              void* entry, const char* line);
+        static void  ViewportSettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
+                                              ImGuiTextBuffer* buf);
+        void RegisterViewportSettings();
 
         // ImGuiSettingsHandler callbacks for m_panelVis ("[EditorPanels]
         // [Visibility]", one name-keyed line per hideable panel), mirroring
@@ -1029,7 +1062,8 @@ namespace Arcane::Editor
             Edge n, o, s;               // Ctrl+N/O/S scene shortcuts
             Edge x, c, v, d;            // Ctrl+X/C/V/D clipboard shortcuts
             Edge f, home;                // camera framing
-            Edge lmb, rmb;               // gizmo press/release; camera pan
+            Edge g, j;                   // Alt+G / Alt+J view mode (F4 plan 1 T7)
+            Edge lmb, rmb, mmb;          // gizmo press/release; camera gestures
         };
         InputEdges m_edges;
 
@@ -1088,14 +1122,27 @@ namespace Arcane::Editor
         // destruction order is unchanged: it still destructs before m_runtime.
         std::optional<Arcane::Editor::EditModeSchedule> m_editSchedule;
         bool m_physicsOverlay = false;   // View -> Physics Overlay (spec s6.3, session-only)
-        // RMB-drag pan gesture (rules: starts only inside the viewport, keeps
-        // tracking once started -- see UpdateEditorCamera).
-        struct CameraPanGesture
+        // The persisted viewport preferences (grid, gizmo size) that ride the
+        // same [EditorViewport][Camera] ini block as m_camera -- see
+        // ViewportSettings.hpp and RegisterViewportSettings below. Task 8's
+        // settings popup edits these; the grids (Tasks 9/10) read them.
+        Arcane::Editor::ViewportSettings m_viewSettings;
+        // The ONE live mouse-drag camera gesture (F4 plan 1 T7): 2D RMB pan, or
+        // in Perspective RMB look / Alt+LMB orbit / MMB pan. Rules: a gesture
+        // may only START over the viewport, keeps tracking anywhere once
+        // started, and ends when its button lifts -- see UpdateEditorCamera.
+        struct CameraGesture
         {
-            bool      panning = false;
+            enum Kind : std::uint8_t { None, Pan2D, Look, Orbit, Pan3D };
+            Kind      kind = None;
             glm::vec2 lastMouse{0.0f, 0.0f};   // WINDOW px -- only the delta is used
+            // TRUE only on the frame the gesture STARTED (Ruling C): lastMouse
+            // is then whatever the cursor was last frame, possibly far away,
+            // so no delta is applied until the next frame, when it is a real
+            // previous cursor. False on every later frame of the gesture.
+            bool      fresh = false;
         };
-        CameraPanGesture m_camPan;
+        CameraGesture m_camGesture;
         // Records a frame request serviced after this frame's propagation
         // (selectionOnly) or at the whole scene. A no-op when there is nothing
         // framable, so the user's view is never thrown away by an F press that

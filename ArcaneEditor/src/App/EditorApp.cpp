@@ -195,6 +195,61 @@ namespace Arcane::Editor
         ImGui::AddSettingsHandler(&handler);
     }
 
+    // ---- [EditorViewport][Camera] (F4 plan 1 T7) ----------------------------
+    // The PlayMode handler above, line for line, over ViewportSettings::WriteIni
+    // / ReadIniLine (the pure, unit-tested line format -- see that header for
+    // the refusal table). The section name constants live on ViewportSettings
+    // so the test and the handler cannot drift apart.
+    void* EditorApp::ViewportSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
+                                              const char* name)
+    {
+        return std::strcmp(name, Arcane::Editor::ViewportSettings::kIniName) == 0 ? handler->UserData : nullptr;
+    }
+
+    void EditorApp::ViewportSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
+                                             void* entry, const char* line)
+    {
+        auto* self = static_cast<EditorApp*>(entry);
+        // A refused line (malformed, out of range, unknown key) leaves the
+        // defaults -- the return value is deliberately not acted on here.
+        Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_viewSettings);
+        // THE FLAG BEATS THE INI. On a windowed run ImGui reads io.IniFilename
+        // at the FIRST NewFrame (ImGui::NewFrame -> UpdateSettings), which is
+        // AFTER StageFinalize applied the seed -- so a persisted Mode= line
+        // would otherwise silently overrule --view-mode. Re-applying the seed
+        // after every line is cheap (a string compare) and makes the ini's
+        // read order irrelevant. Under --headless the seed layout is loaded
+        // explicitly in RetargetLayoutIni (inside StageFinalize) and carries
+        // no [EditorViewport] block anyway; StageFinalize's own call covers
+        // the "no block at all" case on both paths.
+        Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
+    }
+
+    void EditorApp::ViewportSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
+                                             ImGuiTextBuffer* buf)
+    {
+        auto* self = static_cast<EditorApp*>(handler->UserData);
+        // WriteIni appends the "[Type][Name]" header itself from the same
+        // constants handler.TypeName was registered from.
+        Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera, self->m_viewSettings);
+    }
+
+    void EditorApp::RegisterViewportSettings()
+    {
+        if (ImGui::GetCurrentContext() == nullptr ||
+            ImGui::FindSettingsHandler(Arcane::Editor::ViewportSettings::kIniType) != nullptr)
+            return;
+
+        ImGuiSettingsHandler handler;
+        handler.TypeName   = Arcane::Editor::ViewportSettings::kIniType;
+        handler.TypeHash   = ImHashStr(Arcane::Editor::ViewportSettings::kIniType);
+        handler.UserData   = this;   // one EditorApp per process (see m_playMode's decl)
+        handler.ReadOpenFn = &EditorApp::ViewportSettingsReadOpen;
+        handler.ReadLineFn = &EditorApp::ViewportSettingsReadLine;
+        handler.WriteAllFn = &EditorApp::ViewportSettingsWriteAll;
+        ImGui::AddSettingsHandler(&handler);
+    }
+
     namespace
     {
         constexpr const char* kPanelsIniType = "EditorPanels";
@@ -445,6 +500,7 @@ namespace Arcane::Editor
         ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
         RegisterPanelVisibilitySettings();
+        RegisterViewportSettings();
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
         // 8c, 2026-07-30 correction): that presenter's ImGui::NewFrame() now
@@ -1105,6 +1161,14 @@ namespace Arcane::Editor
         // reverted/project-less state, not "this boot's project"), so every
         // call site keeps its own RetargetLayoutIni() immediately after.
         RetargetLayoutIni();
+        // --view-mode (F4 plan 1 T7): seed the editor camera's mode AFTER the
+        // layout ini has been targeted (and, under --headless, already read
+        // by RetargetLayoutIni's explicit LoadIniSettingsFromDisk), so the
+        // flag beats a persisted [EditorViewport][Camera] Mode. On a windowed
+        // run the ini is read later still (the first NewFrame), which is why
+        // ViewportSettingsReadLine re-applies this same seed per line. Empty
+        // flag = no seed; every other spelling was refused at parse time.
+        Arcane::Editor::ApplyViewModeSeed(m_config.viewMode, m_camera);
         // Same call-site family (GPU crash diagnostics arc, Task 8): a crash/
         // hang report from THIS boot must land under THIS project's own
         // Saved/Diagnostics, not the exe-relative default a project-less
