@@ -386,10 +386,20 @@ TEST_CASE("pixel: a batched rect lands inside its own canvas rectangle (vulkan)"
 //     per-span `worldSpace` root-constant re-issue lands: without it the second
 //     span would be projected by the first span's mapping and miss its rectangle.
 //
-//     +Y UP IS ASSERTED: the world quad sits ABOVE the world origin and must
+//     +Y UP IS ASSERTED: the world quad sits ABOVE the camera centre and must
 //     land in the TOP half of the canvas. A shader (or a matrix) that mirrored
 //     Y would put it in the bottom half, where the "inside" sample below reads
 //     the clear.
+//
+//     THE CAMERA CENTRE IS OFF-ORIGIN (review round 1): with the centre at the
+//     origin the ortho matrix is diagonal but for m[3][2], and every vertex has
+//     z = 0, so a TRANSPOSED memcpy into the root constants renders pixel-
+//     identical output and the shaders' "column-major, no transpose" claim
+//     has no evidence. A translation makes the transpose visible: it moves
+//     the translation into the w row (w = 1 + 0.5 x - 0.083 y here, negative
+//     at every corner -> the quad is clipped away) and a matrix that merely
+//     DROPPED the translation lands the quad 40 px left / 4 px up of where it
+//     belongs -- a spot sampled below and required dark.
 // ---------------------------------------------------------------------------
 namespace
 {
@@ -399,18 +409,23 @@ namespace
         const std::uint64_t before = Arcane::RenderErrorCount();
         PixelVehicle v = MakeVehicle(backend);
 
-        // The engine's own orthographic producer: origin at the canvas centre,
-        // half-height 4.8 m over 96 px -> 10 px per metre, 16 m across.
+        // The engine's own orthographic producer: half-height 4.8 m over 96 px
+        // -> 10 px per metre, 16 m across, and the camera centred at world
+        // (-4, 0.4) -- NOT the origin, so the view-projection carries a real
+        // translation (see the banner: a transposed upload is invisible
+        // without one). Pixel = (80 + (x + 4) * 10, 48 - (y - 0.4) * 10).
+        constexpr glm::vec2 kCentre(-4.0f, 0.4f);
         const Arcane::ViewTransform view =
-            Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 4.8f, glm::uvec2(kW, kH));
+            Arcane::ViewTransform::Orthographic(kCentre, 4.8f, glm::uvec2(kW, kH));
 
         auto batcher = Arcane::Batcher2D::Create();
         REQUIRE(batcher != nullptr);
         batcher->Begin(kW, kH);
         batcher->SetViewProjection(view.ViewProjection());
         batcher->SetLayer(0, 0);
-        // World: x in [-6, -2], y in [1.6, 4] -> pixels x 20..60, y 8..32
-        // (top-left quadrant). Red.
+        // World: x in [-6, -2], y in [1.6, 4] -> pixels x 60..100, y 12..36
+        // (upper-middle; its centre is (80, 24)). Red. Without the camera's
+        // translation it would sit at x 20..60, y 8..32 (centre (40, 20)).
         const std::array<glm::vec3, 4> corners{ glm::vec3(-6.0f, 4.0f, 0.0f),
                                                 glm::vec3(-2.0f, 4.0f, 0.0f),
                                                 glm::vec3(-2.0f, 1.6f, 0.0f),
@@ -430,18 +445,21 @@ namespace
         std::vector<unsigned char> rgba;
         REQUIRE(v.ctx->ReadCapture(w, h, rgba));
 
-        const Rgba worldInside  = At(rgba, w, 40u, 20u);       // centre of the world quad
-        const Rgba worldMirror  = At(rgba, w, 40u, kH - 20u);  // where a Y-mirrored quad would land
+        const Rgba worldInside  = At(rgba, w, 80u, 24u);       // centre of the world quad
+        const Rgba worldMirror  = At(rgba, w, 80u, kH - 24u);  // where a Y-mirrored quad would land (80, 72)
+        const Rgba worldUntrans = At(rgba, w, 40u, 20u);       // where a translation-less matrix would land it
         const Rgba screenInside = At(rgba, w,
                                      static_cast<std::uint32_t>(kSx + kSw * 0.5f),
                                      static_cast<std::uint32_t>(kSy + kSh * 0.5f));
-        const Rgba outside      = At(rgba, w, kW / 2u, kH / 2u);   // the origin: neither quad
+        const Rgba outside      = At(rgba, w, kW / 2u, kH / 2u);   // (80, 48): neither quad, no decoy
 
-        // The world quad: red, bright, in the TOP-left -- and NOT mirrored.
+        // The world quad: red, bright, in the TOP half -- NOT mirrored, and
+        // NOT where a matrix without the camera's translation would put it.
         CHECK(worldInside.r > worldInside.g + 60);
         CHECK(worldInside.r > worldInside.b + 60);
         CHECK(Luma(worldInside) > Luma(outside) + 120);
         CHECK(Luma(worldMirror) < Luma(outside) + 16);
+        CHECK(Luma(worldUntrans) < Luma(outside) + 16);
         // The screen rect: green, bright, where the pixel path always put it.
         CHECK(screenInside.g > screenInside.r + 60);
         CHECK(screenInside.g > screenInside.b + 60);
