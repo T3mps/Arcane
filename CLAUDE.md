@@ -118,6 +118,15 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   (yes = T1's light grid moves up). Every design still states what Source 2
   does and why we match or diverge.
 
+## CI
+
+Self-hosted Jenkins on the same controller as Aphelyon (`windows && gpu`
+interactive agent). The `Jenkinsfile` is the full gate (3 configs, unfiltered
+suite including `[gpu]`, golden-gate, `--frames 180`). **The job itself is
+not created by checking in this file** -- stand it up once per
+`ci/README.md` (Script Console: `ci/create-arcane-job.groovy`). GitHub
+Actions (`.github/workflows/ci.yml`) is the hosted `~[gpu]` lane only.
+
 ## Tests
 
 - GPU-touching tests are tagged `[gpu]` -- exclude with `~[gpu]` on machines

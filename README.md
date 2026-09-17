@@ -75,7 +75,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Con
 type bin\Debug-windows-x86_64-md\golden-gate-summary.json
 ```
 
-It runs in CI from the `Jenkinsfile` on a GPU agent; GitHub Actions builds and runs `ArcaneTests`
+It runs in CI from the `Jenkinsfile` on a GPU agent (job setup: `ci/README.md`); GitHub Actions builds and runs `ArcaneTests`
 only.
 
 `golden-gate.ps1 -SelfTest` proves the gate is capable of failing: it deliberately breaks

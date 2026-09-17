@@ -201,5 +201,53 @@ pipeline {
                 }
             }
         }
+
+        stage('Linux lane check') {
+            // Same plumbing proof as Aphelyon's pipeline: skip when linux-1 is
+            // offline so the engine job never queues forever. Real Linux
+            // build/test is the Linux-port milestone (direction record step 7).
+            when { beforeAgent true; expression { !nodesByLabel(label: 'linux', offline: false).isEmpty() } }
+            agent { label 'linux' }
+            steps {
+                sh 'g++ --version | head -1 && clang++ --version | head -1 && premake5 --version && echo LINUX LANE READY'
+            }
+        }
+    }
+
+    post {
+        // OPTIONAL: the same discord-webhook credential Aphelyon uses. A
+        // missing plugin or secret must never turn a green engine build red.
+        failure {
+            script {
+                try {
+                    withCredentials([string(credentialsId: 'discord-webhook', variable: 'DISCORD_URL')]) {
+                        def sha = (env.GIT_COMMIT ?: 'unknown').take(8)
+                        discordSend webhookURL: env.DISCORD_URL,
+                                    title: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                                    description: "Branch `${env.BRANCH_NAME}` is red at `${sha}`.\nFollow the link -> Pipeline Overview shows the failing stage; commits below.",
+                                    showChangeset: true,
+                                    link: env.BUILD_URL, result: 'FAILURE'
+                    }
+                } catch (Exception e) {
+                    echo "Discord notification skipped (not configured): ${e.message}"
+                }
+            }
+        }
+        fixed {
+            script {
+                try {
+                    withCredentials([string(credentialsId: 'discord-webhook', variable: 'DISCORD_URL')]) {
+                        def sha = (env.GIT_COMMIT ?: 'unknown').take(8)
+                        discordSend webhookURL: env.DISCORD_URL,
+                                    title: "RECOVERED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                                    description: "Branch `${env.BRANCH_NAME}` is green again at `${sha}`.",
+                                    showChangeset: true,
+                                    link: env.BUILD_URL, result: 'SUCCESS'
+                    }
+                } catch (Exception e) {
+                    echo "Discord notification skipped (not configured): ${e.message}"
+                }
+            }
+        }
     }
 }
