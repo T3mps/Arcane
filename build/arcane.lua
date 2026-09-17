@@ -56,6 +56,14 @@ local ARCANE_BIN = ARCANE_SDK .. "/bin/%{cfg.buildcfg}-%{cfg.system}-%{cfg.archi
 -- The validation mirrors ProjectManifest::FromJson exactly (Source itself, or
 -- under Source/, no "..", no backslash, no leading slash); a bad value or an
 -- ambiguous root is an error(), never a guess.
+-- premake's json.decode maps a JSON null to nil, so an explicit "sourceDir":
+-- null reads as ABSENT here (the module builds from Source/) while
+-- ProjectManifest::FromJson rejects the whole manifest (the host refuses to
+-- open the project): the host is the stricter of the two, which is the safe
+-- direction. A consumer that overrides the workspace `location` would also
+-- split _MAIN_SCRIPT_DIR (where the manifest is looked up) from
+-- %{wks.location} (where the glob is rooted); neither in-repo nor external
+-- consumer does.
 local function arcane_module_source_dir()
     local root = _MAIN_SCRIPT_DIR
     local manifests = os.matchfiles(root .. "/*.arcproj")
@@ -65,6 +73,7 @@ local function arcane_module_source_dir()
         error("arcane_game_module: more than one .arcproj beside " .. root .. "/premake5.lua: " .. table.concat(manifests, ", "))
     end
     local text = io.readfile(manifests[1])
+    if not text then error("arcane_game_module: cannot read " .. manifests[1]) end
     local doc, err = json.decode(text)
     if not doc then
         error("arcane_game_module: cannot parse " .. manifests[1] .. ": " .. tostring(err))

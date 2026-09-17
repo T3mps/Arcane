@@ -269,6 +269,9 @@ namespace Arcane
         // existing, exactly like diag:// above: Project::Create scaffolds
         // Source/, but a content-only project (or one whose author removed it)
         // stays silent -- no mount, no scan, no warning.
+        // The source:// MOUNT -- deliberately NOT Manifest().sourceDir (2026-09-16 ruling S2:
+        // the browser shows every module under one Source/ root; the module's own subdirectory
+        // is the manifest's sourceDir, read by build/arcane.lua and the Create C++ Class default only).
         const std::filesystem::path sourceDir = root / "Source";
         if (std::filesystem::is_directory(sourceDir, ec))
         {

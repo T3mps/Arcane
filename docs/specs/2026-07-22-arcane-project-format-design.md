@@ -125,7 +125,7 @@ content-only project may omit `gameModule`).
 ```
 Aphelyon/                     <- project root (opened by the Arcane Editor)
 ├─ Aphelyon.arcproj           manifest / identity                    [commit]
-├─ Source/                    C++ game module -> Aphelyon.dll         [commit]
+├─ Source/                    project C++ (source:// mount); the module at the manifest's sourceDir, e.g. Source/Game/ [commit]
 ├─ Content/                   assets: scenes, sprites, prefabs...     [commit]  -> game:// mount
 ├─ Config/                    project settings (layered JSON)         [commit]
 ├─ Plugins/                   project-local plugins (fractal)         [commit]

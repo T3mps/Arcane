@@ -10,7 +10,7 @@ traits ("use what we've built with Astra and take the AAA pattern").
 
 ## 1. Why
 
-`ReferenceProject/Source/ReferenceGame.cpp` (155 lines) and the Gacha
+`ReferenceProject/Source/Game/ReferenceGame.cpp` (155 lines) and the Gacha
 Game's `Source/Aphelyon.cpp` (190 lines) differ in two places: which
 systems `Init` registers, and Aphelyon's `DrawUI` HUD. Everything else is
 the same ~110 lines, copied: a per-project `GameApi.hpp` for the export
@@ -248,7 +248,7 @@ system through static initialisation.
    kGamePluginABIVersion + HOTRELOAD_ABI_OFFSET)`; `PluginExport.hpp`
    deleted. Its `HotReloadTest.cpp` expectations (V1 → V2 reload with state
    carried, Bad refused and rolled back) do not change — that is the point.
-2. **`ReferenceProject/Source/ReferenceGame.cpp`** → the class with no
+2. **`ReferenceProject/Source/Game/ReferenceGame.cpp`** → the class with no
    overrides + the macro; `GameApi.hpp` deleted. The file's header comment
    keeps its role as the minimal end-to-end proof.
 3. **Gacha `Game/Source/Aphelyon.cpp`** → `OnUpdate` + `OnDrawUI` (the
