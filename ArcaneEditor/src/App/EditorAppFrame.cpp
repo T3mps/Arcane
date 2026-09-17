@@ -636,10 +636,60 @@ namespace Arcane::Editor
         // bug this write exists to kill.)
         m_editBinding.editMode = !InPlayMode();
 
-        const auto now = std::chrono::steady_clock::now();
-        const double wallDt = std::chrono::duration<double>(now - ls.lastFrameTime).count();
-        ls.lastFrameTime = now;
-        const double frameDt = wallDt;
+        // THE FRAME CLOCK (F4 plan 1 T12, Ruling N) -- RuntimeFrame.cpp's
+        // AdvanceSim input block, ported. FIXED under --headless, FROZEN during
+        // the settle hold, wall-clock otherwise -- and steady_clock::now() is
+        // not even CALLED in the fixed branches, deliberately: this frameDt
+        // does not stay local to input. It becomes m_gameUi.frameDt, which
+        // advances m_editorClock, which PrepareFrame hands the scene resolver as
+        // FrameInfo::dt/now -- the Time/DeltaTime the material globals report
+        // to every bound shader (SceneRenderResolver.cpp, Batcher2D::
+        // SetGlobals). A wall-clock frameDt here leaks straight into anything
+        // an .arcmat animates by time, so two --headless runs of the same
+        // `--frames N` render different pixels, and no two settle attempts can
+        // ever compare byte-equal.
+        //
+        // THE EDITOR NEVER HAD THIS, and the golden lane never noticed: the
+        // pre-F4 two-camera editor framed ReferenceProject's PulseBox (its
+        // `sin(Time * PulseSpeed)` material, Content/materials/pulse_sprite.
+        // arcmat) OFF-SCREEN, so no time-animated pixel was ever in the
+        // editor-ui capture and the wall clock was harmless. F4's SceneOpen
+        // framing (T6/T7) frames the whole scene, PulseBox included, and the
+        // very next gate run sat at settle-not-converged for its whole budget
+        // (T12's Finding A). The runtime host has carried this policy since
+        // its own --settle task for exactly this material; the comment there
+        // calls it load-bearing, not an optimisation.
+        //
+        // GATED to the capture mode only: `m_config.headless` is what selects
+        // the fixed branch, so a windowed editing session keeps wall-clock dt
+        // and nothing about normal editing changes. SettleHoldActive() is the
+        // hold (EditorApp.hpp), read here AND by AdvanceSim's simDt so the two
+        // clocks agree.
+        //
+        // ACCEPTED RISK (Ruling N): a frozen clock also freezes the compile
+        // service's clock -- m_editorClock is what ShaderCompiler::Poll's
+        // readyAt check and MaterialPreviewHarvester::Pump read -- so a compile
+        // SUBMITTED during the hold (readyAt = now + debounce) would never
+        // dispatch. Every scene material is requested at scene open, dozens of
+        // frames before the hold begins, so in practice nothing is pending by
+        // then; and if it ever is, the settle loop's idle conjunct keeps
+        // failing and the run exits settle-not-converged, LOUDLY -- never a
+        // wrong bless. That is the same contract RuntimeFrame.cpp accepts.
+        double frameDt;
+        if (SettleHoldActive())
+        {
+            frameDt = 0.0;   // see SettleHoldActive's own comment (EditorApp.hpp)
+        }
+        else if (m_config.headless)
+        {
+            frameDt = m_config.fixedDtSeconds;
+        }
+        else
+        {
+            const auto now = std::chrono::steady_clock::now();
+            frameDt = std::chrono::duration<double>(now - ls.lastFrameTime).count();
+            ls.lastFrameTime = now;
+        }
         const Arcane::InputSnapshot snap = m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(), m_gpu->Imgui().WantCaptureMouse());
 
         // The plugin only sees scene-relevant input when the Viewport panel
@@ -1343,10 +1393,34 @@ namespace Arcane::Editor
     void EditorApp::AdvanceSim(LoopState& ls)
     {
         // Sim advance through the RunLoop with the plugin callbacks interleaved.
-        const auto now = std::chrono::steady_clock::now();
-        double simDt = std::chrono::duration<double>(now - ls.simPrev).count();
-        ls.simPrev = now;
-        if (simDt > 0.25) simDt = 0.25;
+        // THE SIM CLOCK (F4 plan 1 T12, Ruling N) -- RuntimeFrame.cpp's simDt
+        // branch, ported alongside FrameInput's frameDt: FIXED under
+        // --headless, FROZEN during the settle hold, wall-clock otherwise. simDt
+        // reaches RunLoop::Advance -- FixedUpdateAll/UpdateAll, gameplay -- so a
+        // wall-clock simDt means `--frames N` advances a --play-as run's sim by
+        // however long N frames happened to take on THIS machine, and no two
+        // runs agree. The 0.25 s spiral-of-death clamp stays wall-clock-only:
+        // fixedDtSeconds is refused at parse time unless positive (HostConfig.
+        // cpp) and is a deliberate per-run choice, not a stall to guard against.
+        // Edit mode steps no physics either way (EditModeSchedule owns the
+        // edit pass), so the golden lane is unaffected by this half; it is
+        // here so the editor's two clocks tell one story.
+        double simDt;
+        if (SettleHoldActive())
+        {
+            simDt = 0.0;   // see SettleHoldActive's own comment (EditorApp.hpp)
+        }
+        else if (m_config.headless)
+        {
+            simDt = m_config.fixedDtSeconds;
+        }
+        else
+        {
+            const auto now = std::chrono::steady_clock::now();
+            simDt = std::chrono::duration<double>(now - ls.simPrev).count();
+            ls.simPrev = now;
+            if (simDt > 0.25) simDt = 0.25;
+        }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
         m_runtime->Loop().Advance(simDt,
             [&](double dt)          { if (m_plugin) m_plugin->FixedUpdateAll(dt); },

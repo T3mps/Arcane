@@ -198,6 +198,9 @@ namespace Arcane
     // to zero-length (an authored zero scale) falls back to this same
     // pinned forward/up rather than feeding lookAtRH a zero vector -- see the
     // ARC_WARN below for why that fallback is not deduplicated.
+    //
+    // F4 plan 1 lifted the 2D path onto ViewTransform; the ortho camera still
+    // frames XY by definition.
     inline std::optional<ViewTransform> ActivePerspectiveSceneCamera(Astra::Registry& reg,
                                                                      glm::uvec2 viewport,
                                                                      int* outCount = nullptr)

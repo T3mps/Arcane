@@ -179,8 +179,14 @@ namespace Arcane
         // entry per live Runtime (WorldFact above), because a process is no
         // longer one world. 3, 4 and 5 remain readable: every field a 3-, 4- or
         // 5-era consumer knows is still emitted with the same meaning, and
-        // `worlds` is ABSENT on any run that did not set it.
-        static constexpr int kSchemaVersion                = 6;
+        // `worlds` is ABSENT on any run that did not set it. 7 added
+        // `viewMode` (F4 plan 1 T12, spec s9) -- the editor viewport's
+        // resolved mode, "2d" | "perspective", so a perspective witness can
+        // assert the host actually booted into the mode --view-mode asked for
+        // rather than inferring it from pixels; ABSENT on every host that has
+        // no view mode (the runtime) and on any run that did not set it. 3..6
+        // remain readable by the same rule.
+        static constexpr int kSchemaVersion                = 7;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -427,6 +433,17 @@ namespace Arcane
         // server world when one is up.
         void SetWorlds(std::vector<WorldFact> worlds);
 
+        // The editor viewport's RESOLVED view mode (schemaVersion 7, F4 plan 1
+        // T12): "2d" | "perspective", the same spelling --view-mode takes
+        // (HostConfig.hpp), read from the editor camera AFTER the seed and
+        // every persisted layout have had their say -- so it is what the
+        // capture was actually rendered through, never what was asked for.
+        // Emitted as a top-level `viewMode` ONLY when this was called: the
+        // runtime host has no editor camera and must not report one, the same
+        // absence-must-be-absence contract every optional section above
+        // upholds.
+        void SetViewMode(std::string mode);
+
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
         // Callable more than once (specs accumulate) -- there is no reset,
@@ -510,6 +527,10 @@ namespace Arcane
         // way every other optional section's flag does.
         bool                   m_worldsSet = false;
         std::vector<WorldFact> m_worlds;
+
+        // The view mode (schemaVersion 7) -- m_viewModeSet gates emission.
+        bool        m_viewModeSet = false;
+        std::string m_viewMode;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

@@ -68,7 +68,7 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     // package, which parses this file without linking the engine -- so the
     // version is part of the contract, not decoration -- bumped to 2 by
     // Task 8's --compare/--bless block.
-    CHECK(doc["schemaVersion"] == 6);
+    CHECK(doc["schemaVersion"] == 7);
     CHECK(doc["backend"] == "D3D12");
     CHECK(doc["mode"] == "headless");
     CHECK(doc["framesRendered"] == 5);
@@ -656,7 +656,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
     in.close();
 
     const auto doc = nlohmann::json::parse(contents.str());
-    CHECK(doc["schemaVersion"] == 6);
+    CHECK(doc["schemaVersion"] == 7);
     CHECK(doc["framesRendered"] == 3);
 
     std::remove(path.c_str());
@@ -680,7 +680,7 @@ TEST_CASE("verify: the report schema is version 6 once settle facts exist", "[ve
     Arcane::VerifyReport r;
     r.SetRun("dx12", 60, "frames-complete");
     const auto doc = nlohmann::json::parse(r.ToJson());
-    CHECK(doc["schemaVersion"] == 6);
+    CHECK(doc["schemaVersion"] == 7);
 }
 
 TEST_CASE("verify: a run with no --compare emits NO compare block", "[verify]")
@@ -769,7 +769,7 @@ TEST_CASE("verify: a --bless run's compare block reports a pass at the level it 
 
 // ---- Task 3: schemaVersion 3 -- the settle facts, and the headless mode ----
 
-TEST_CASE("verify report: schemaVersion 6 carries settle facts and the headless mode", "[verify]")
+TEST_CASE("verify report: schemaVersion 7 carries settle facts and the headless mode", "[verify]")
 {
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
@@ -777,7 +777,7 @@ TEST_CASE("verify report: schemaVersion 6 carries settle facts and the headless 
                 /*captureFailed=*/false);
     const auto doc = nlohmann::json::parse(r.ToJson());
 
-    CHECK(doc["schemaVersion"] == 6);
+    CHECK(doc["schemaVersion"] == 7);
     // The MODE's machine-readable name, in the mode's own word. Changed on this
     // bump because a schemaVersion bump is exactly when a wire value may change.
     CHECK(doc["mode"] == "headless");
@@ -882,25 +882,26 @@ TEST_CASE("verify report: captureFailed alone is not a verdict", "[verify]")
     CHECK_FALSE(doc.contains("settleBailReason"));
 }
 
-TEST_CASE("verify report: schemaVersion is 6 and declares a supported range", "[host][verify]")
+TEST_CASE("verify report: schemaVersion is 7 and declares a supported range", "[host][verify]")
 {
     // A RANGE plus a predicate, not a bare number: a consumer across the
-    // Servitor boundary can then say "I understand 3..6" rather than "I
-    // understand 6", and an unreadable result can be marked deliberately.
-    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 6);
+    // Servitor boundary can then say "I understand 3..7" rather than "I
+    // understand 7", and an unreadable result can be marked deliberately.
+    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 7);
     STATIC_REQUIRE(Arcane::VerifyReport::kOldestSupportedSchemaVersion == 3);
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(3));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(4));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(5));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(6));
+    CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(7));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(2));
-    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(7));
+    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(8));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(0));
 
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
     const auto j = nlohmann::json::parse(r.ToJson());
-    CHECK(j.at("schemaVersion").get<int>() == 6);
+    CHECK(j.at("schemaVersion").get<int>() == 7);
 }
 
 TEST_CASE("verify report: compare carries maxLocalDifference", "[host][verify]")
@@ -936,7 +937,7 @@ TEST_CASE("schema 5: compare block carries triedPaths in try order", "[host][ver
                  { "Verify/References/vulkan/runtime-scene.png",
                    "Verify/References/runtime-scene.png" });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 6);
+    REQUIRE(j["schemaVersion"].get<int>() == 7);
     REQUIRE(j["compare"]["triedPaths"].size() == 2);
     REQUIRE(j["compare"]["triedPaths"][0].get<std::string>()
             == "Verify/References/vulkan/runtime-scene.png");
@@ -957,7 +958,7 @@ TEST_CASE("schema 6: worlds carries one entry per live world, in host order", "[
     r.SetRun("vulkan", 60, "frames-complete");
     r.SetWorlds({ { "Client", false, 3, 2 }, { "DedicatedServer", true, 3, 3 } });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 6);
+    REQUIRE(j["schemaVersion"].get<int>() == 7);
     REQUIRE(j.contains("worlds"));
     REQUIRE(j["worlds"].size() == 2);
     CHECK(j["worlds"][0].at("role") == "Client");
@@ -975,4 +976,24 @@ TEST_CASE("schema 6: worlds carries one entry per live world, in host order", "[
     Arcane::VerifyReport silent;
     silent.SetRun("dx12", 60, "frames-complete");
     CHECK_FALSE(nlohmann::json::parse(silent.ToJson()).contains("worlds"));
+}
+
+// ---- F4 plan 1 T12: schemaVersion 7 -- `viewMode` ----
+
+TEST_CASE("schema 7: viewMode carries the editor camera's resolved mode, absent when never set", "[host][verify]")
+{
+    Arcane::VerifyReport r;
+    r.SetRun("D3D12", 60, "frames-complete");
+    r.SetViewMode("perspective");
+    const auto j = nlohmann::json::parse(r.ToJson());
+    REQUIRE(j["schemaVersion"].get<int>() == 7);
+    REQUIRE(j.contains("viewMode"));
+    CHECK(j.at("viewMode") == "perspective");
+
+    // Absence must be absence: the runtime host has no editor camera and never
+    // calls SetViewMode, so its report must not carry a mode a consumer could
+    // mistake for a fact -- the same contract capture/compare/settle/worlds keep.
+    Arcane::VerifyReport silent;
+    silent.SetRun("Vulkan", 60, "frames-complete");
+    CHECK_FALSE(nlohmann::json::parse(silent.ToJson()).contains("viewMode"));
 }

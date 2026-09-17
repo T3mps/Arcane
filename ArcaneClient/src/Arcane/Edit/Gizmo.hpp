@@ -94,7 +94,7 @@ namespace Arcane
     // leaves the rotation taken from the other axis.
     //
     // Task 3 (F1) widened the matrix to a mat4; GizmoTransform stays 2D because
-    // THE GIZMO STAYS 2D (making it 3D is F4). So this reads only the XY block
+    // THE GIZMO STAYS 2D (making it 3D is F4 PLAN 2). So this reads only the XY block
     // and the Z-axis turn, and everything out of that plane -- position.z,
     // scale.z, any tilt -- is DROPPED. Round-tripping a pose through
     // Decompose->Compose is therefore lossy for a non-planar entity, which is

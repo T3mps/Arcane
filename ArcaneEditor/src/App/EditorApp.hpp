@@ -651,6 +651,20 @@ namespace Arcane::Editor
         FramePerf                         m_perf;
         std::uint64_t                     m_frameCount = 0;
 
+        // The settle HOLD (F4 plan 1 T12, Ruling N -- RuntimeFrame.cpp's
+        // `settleHold`, ported): true once a headless --settle run has spent
+        // its base --frames budget. From then on every extra frame exists only
+        // to give the async producers more REAL wall-clock time before the
+        // next capture attempt, not to advance content -- so both of this
+        // host's dt sources (FrameInput's frameDt, AdvanceSim's simDt) read
+        // 0 while this is true. ONE predicate, read by both, so the two
+        // clocks can never disagree about whether the hold is on.
+        [[nodiscard]] bool SettleHoldActive() const noexcept
+        {
+            return m_config.headless && m_config.settleAttempts != 0 &&
+                   m_config.maxFrames != 0 && m_frameCount >= m_config.maxFrames;
+        }
+
         // ---- --settle/--report/--compare (Task 9): the editor's
         // verification surface. Mirrors RuntimeApp.hpp's own block
         // field-for-field -- see that header's comments for the full

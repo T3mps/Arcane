@@ -2940,6 +2940,19 @@ namespace Arcane::Editor
                 report.SetWorlds(std::move(worlds));
             }
 
+            // The VIEW MODE (schemaVersion 7, F4 plan 1 T12). Read from the
+            // editor camera itself -- m_camera.mode, AFTER the --view-mode
+            // seed and any persisted [EditorViewport][Camera] have been
+            // applied -- never echoed from m_config.viewMode: the report
+            // states what the capture was rendered THROUGH, so a seed that
+            // silently failed to apply would show up here as "2d" against a
+            // witness expecting "perspective" (EditorWitnessTest E2). Spelled
+            // exactly as --view-mode takes it (HostConfig.cpp's Choices).
+            // Carried unconditionally, like the census and worlds above: the
+            // camera always has a mode, and only this host has a camera.
+            report.SetViewMode(m_camera.mode == Arcane::Editor::ViewMode::Perspective
+                                   ? "perspective" : "2d");
+
             // The --compare verdict (Task 9), ported from RuntimeApp::
             // ShutdownGraphPath verbatim (structure and field meanings
             // unchanged -- see that function's own comments for the full

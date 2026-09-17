@@ -1,7 +1,8 @@
 # F4 — editor authoring for 3D: +Y up, one view transform, the editor camera, grids, picking, the 3D gizmo
 
 **Date:** 2026-09-17
-**Status:** Design, approved in brainstorm 2026-09-17. Step 2 of the binding
+**Status:** Design, approved in brainstorm 2026-09-17; plan 1 closed at
+`<pending: this commit>` (2026-09-17). Step 2 of the binding
 order (`docs/research/2026-09-16-direction-and-sequencing.md`: F4 → F3 → F5);
 implementation plans follow this spec (§11). Two plans; F3 may start after
 plan 1.

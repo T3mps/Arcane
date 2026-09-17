@@ -730,6 +730,31 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
             runtime.Registry().GetComponent<Arcane::Transform>(byName["BoxB"]);
         REQUIRE(boxB != nullptr);
         CHECK(Arcane::RotationZ(boxB->rotation) == Catch::Approx(-0.35f).margin(1e-4));
+
+        // GoldenProp's ORIENTATION AS AUTHORED UNDER +Y UP (F4 plan 1 T12,
+        // Ruling O). golden_prop.glb is three SINGLE-SIDED quads in the XZ
+        // plane; the prop faces the +Z camera only when rotated +90 degrees
+        // about X (local +Y -> world +Z). The v5 file authored exactly that,
+        // and the +Y migration -- correctly -- conjugated it to -90 degrees
+        // (a reflection across XZ negates a rotation about X), which turned
+        // the prop's back to the camera and the mesh pass culled it out of
+        // every golden. The FIXTURE was re-authored, not the migration: this
+        // pin states the intent (+90 about X, visible bottom-right at world
+        // (2.5, -1.6)) so no future migration can silently re-hide it. The
+        // quaternion is read as its image of local +Y, the axis whose facing
+        // decides visibility.
+        REQUIRE(byName.count("GoldenProp") == 1);
+        const Arcane::Transform* goldenProp =
+            runtime.Registry().GetComponent<Arcane::Transform>(byName["GoldenProp"]);
+        REQUIRE(goldenProp != nullptr);
+        {
+            const glm::vec3 localUp = goldenProp->rotation * glm::vec3(0.0f, 1.0f, 0.0f);
+            CHECK(localUp.x == Catch::Approx(0.0f).margin(1e-4));
+            CHECK(localUp.y == Catch::Approx(0.0f).margin(1e-4));
+            CHECK(localUp.z == Catch::Approx(1.0f).margin(1e-4));   // faces the +Z camera
+            CHECK(goldenProp->position.x == Catch::Approx(2.5f));
+            CHECK(goldenProp->position.y == Catch::Approx(-1.6f));   // mirrored by the +Y flip (F4 plan 1 T2)
+        }
     }
 
     // Task 11 (F2a): the reference scene's new mesh content. Same discipline

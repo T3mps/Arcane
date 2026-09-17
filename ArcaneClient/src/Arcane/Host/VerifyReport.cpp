@@ -259,6 +259,12 @@ namespace Arcane
         m_worlds    = std::move(worlds);
     }
 
+    void VerifyReport::SetViewMode(std::string mode)
+    {
+        m_viewModeSet = true;
+        m_viewMode    = std::move(mode);
+    }
+
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
     {
         for (const auto& spec : specs)
@@ -559,6 +565,11 @@ namespace Arcane
         // 3, 4 and 5 remain readable -- see kOldestSupportedSchemaVersion above
         // -- every field a 3-, 4- or 5-era consumer knew is still emitted
         // with the same meaning.
+        //
+        // Bumped 6 -> 7 by F4 plan 1 T12: the report gained `viewMode` (see
+        // SetViewMode) -- the editor viewport's resolved "2d" | "perspective",
+        // the fact the perspective editor witness asserts on. Absent on the
+        // runtime host and on any run that never set it; 6 remains readable.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -643,6 +654,12 @@ namespace Arcane
             }
             j["worlds"] = std::move(worlds);
         }
+
+        // The view mode (schemaVersion 7). ABSENT unless SetViewMode was called
+        // -- the runtime host never calls it, so "this host has no view mode"
+        // never reads as a mode.
+        if (m_viewModeSet)
+            j["viewMode"] = m_viewMode;
 
         j["probes"] = m_probes;
 

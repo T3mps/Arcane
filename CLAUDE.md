@@ -87,6 +87,10 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   the vendored `premake5.lua` is THIS repo's consumer wrapper -- never
   overwrite it from the standalone repo). Threading is injected via
   `Arcane/Jobs/ArcaneWorkScheduler.hpp` -> `Manifold2D::IWorkScheduler`.
+- **+Y up everywhere (F4, 2026-09-17):** the world is right-handed, +Y up,
+  in 2D and 3D alike -- one `ViewTransform` for every consumer, gravity
+  defaults to `{0, -9.81}`. Spec: `docs/specs/2026-09-17-f4-editor-3d-authoring-design.md` §2
+  (supersedes the physics-wiring spec's "+Y is down").
 - **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
   Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
   engine-owned world. Do not teach `PhysicsSystem` to write 3D poses (it
