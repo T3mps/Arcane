@@ -144,9 +144,17 @@ their TCP protocol; GNS, if chosen, sits under the sim connection only.
   commit. Path coupling in the Gacha tree is four files (`scripts/setup.ps1`,
   the wizard's Result screen, `ci/docker-compose.ci.yml`, `Jenkinsfile`);
   the git pack is ~111 MB, the rest of the tree is gitignored build output.
-- **Still open (user's call):** fresh history vs `git filter-repo` copy;
-  whether Plan 3's eight unpushed commits are pushed before the move (Arcane
-  first) or ride the new repo's first push.
+- **Decided + executed (2026-09-16):** fresh history, not a `git filter-repo`
+  copy — `D:\dev\starworks\Aphelyon` is a new repo with one parentless root
+  commit (`d49282a`), built from a `git archive` of the Gacha tree, not a
+  filtered clone. The new directory inherits the remote
+  (`origin = https://github.com/StarworksDev/Aphelyon.git`), added but not
+  pushed. Arcane is pushed first — the unpushed commits (the `sourceDir`
+  reader, the `source://` fix at `788e19f4`, this closeout) go to
+  `github.com/T3mps/Arcane` before Aphelyon's history is published, so
+  windows-1's Jenkins agent can rebuild `ARCANE_SDK` against them. The new
+  repo's first push is the user's action, `--force` by nature (implementation
+  plan `docs/plans/2026-09-16-aphelyon-repo-relocation-plan.md`, Closeout).
 
 ## 6. Rulings ledger (2026-09-16)
 
