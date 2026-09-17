@@ -97,21 +97,25 @@ namespace Arcane::Editor
         if (finest > kMaxDecade)
             return plan;
 
-        // The finest level's ramp is THE crossfade parameter: the finest level
-        // fades in with it, and the major (two decades up) is promoted from a
-        // minor's 0.35 to the major's 0.55 with the same t, so the 8 px crossing
-        // changes no line's strength discontinuously.
+        // The finest level's ramp is THE crossfade parameter (ruling L-a): the
+        // finest level fades in with it, and the decade above it -- the MAJOR
+        // line, "every ten minors" (spec s5.1, ruling L-b) -- is promoted from
+        // the minor's 0.35 it had as the finest one tick ago to the major's
+        // 0.55 with the same t. The decade above THAT was already the major
+        // before the crossing and stays at 0.55 flat, so no line's strength
+        // moves discontinuously when a finer level qualifies.
         const float tFinest = Ramp(Decade(finest) * pixelsPerMetre);
 
         for (int i = 0; i < 3 && finest + i <= kMaxDecade; ++i)
         {
-            const float spacing = Decade(finest + i);
-            const float t       = Ramp(spacing * pixelsPerMetre);   // 1 for every level above the finest
             GridLevel& level    = plan.levels[static_cast<std::size_t>(i)];
-            level.spacingMetres = spacing;
-            level.alpha = (i == 2)
-                ? kGridMinorAlpha + tFinest * (kGridMajorAlpha - kGridMinorAlpha)
-                : t * kGridMinorAlpha;
+            level.spacingMetres = Decade(finest + i);
+            switch (i)
+            {
+                case 0:  level.alpha = tFinest * kGridMinorAlpha; break;                                       // the minor, fading in
+                case 1:  level.alpha = kGridMinorAlpha + tFinest * (kGridMajorAlpha - kGridMinorAlpha); break;  // the major, promoted
+                default: level.alpha = kGridMajorAlpha; break;                                                 // the decade above the major
+            }
             plan.count = i + 1;
         }
         return plan;

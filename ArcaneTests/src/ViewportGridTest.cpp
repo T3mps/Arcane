@@ -81,47 +81,58 @@ namespace
 
 TEST_CASE("PlanGrid2D picks decade levels by screen spacing and crossfades between 8 and 24 px", "[editor][grid]")
 {
-    // 1 m = 100 px: 0.1 m (10 px, faint -- 2 px into the 16 px ramp), 1 m
-    // (100 px, a full minor at 0.35), 10 m (the major).
+    // 1 m = 100 px: 0.1 m (10 px, faint -- 2 px into the 16 px ramp) is the
+    // minor, 1 m (100 px) is the MAJOR ("every ten minors", ruling L-b), 10 m
+    // is the decade above the major. t_finest = (10 - 8) / 16 = 0.125.
     const Grid2DPlan a = PlanGrid2D(100.0f);
     REQUIRE(a.count == 3);
     CHECK(a.levels[0].spacingMetres == Approx(0.1f));
     CHECK(a.levels[0].alpha > 0.0f);
     CHECK(a.levels[0].alpha < 0.35f);
-    CHECK(a.levels[0].alpha == Approx((10.0f - kGridFadeInPx) / (kGridFadeFullPx - kGridFadeInPx) * kGridMinorAlpha));
+    CHECK(a.levels[0].alpha == Approx(0.125f * kGridMinorAlpha));
     CHECK(a.levels[1].spacingMetres == Approx(1.0f));
-    CHECK(a.levels[1].alpha == Approx(kGridMinorAlpha));
+    // The major's promotion rides the finest level's ramp (ruling L-a -- a
+    // crossfade too, not a pop): 0.35 + 0.125 * (0.55 - 0.35) = 0.375.
+    CHECK(a.levels[1].alpha == Approx(kGridMinorAlpha + 0.125f * (kGridMajorAlpha - kGridMinorAlpha)));
+    CHECK(a.levels[1].alpha == Approx(0.375f));
     CHECK(a.levels[2].spacingMetres == Approx(10.0f));
-    // The major's promotion rides the finest level's ramp (a crossfade too,
-    // not a pop): at t = 0.125 it is 0.35 + 0.125 * (0.55 - 0.35).
-    CHECK(a.levels[2].alpha == Approx(kGridMinorAlpha + 0.125f * (kGridMajorAlpha - kGridMinorAlpha)));
+    CHECK(a.levels[2].alpha == Approx(kGridMajorAlpha));   // was the major before the crossing: 0.55 flat
     // Levels are finest first, each ten times the last.
     CHECK(a.levels[1].spacingMetres / a.levels[0].spacingMetres == Approx(10.0f));
     CHECK(a.levels[2].spacingMetres / a.levels[1].spacingMetres == Approx(10.0f));
 
     // 1 m = 5 px: 1 m is below fade-in; 10 m (50 px, past the ramp) is the
-    // finest, so the plan is 10 / 100 / 1000 m at 0.35 / 0.35 / 0.55.
+    // finest, so the plan is 10 / 100 / 1000 m at the saturated 0.35 / 0.55 /
+    // 0.55 (steady state: minor, major, the decade above the major).
     const Grid2DPlan b = PlanGrid2D(5.0f);
     REQUIRE(b.count == 3);
     CHECK(b.levels[0].spacingMetres == Approx(10.0f));
     CHECK(b.levels[0].alpha == Approx(kGridMinorAlpha));
     CHECK(b.levels[1].spacingMetres == Approx(100.0f));
-    CHECK(b.levels[1].alpha == Approx(kGridMinorAlpha));
+    CHECK(b.levels[1].alpha == Approx(kGridMajorAlpha));
     CHECK(b.levels[2].spacingMetres == Approx(1000.0f));
     CHECK(b.levels[2].alpha == Approx(kGridMajorAlpha));
 
     // Exactly at fade-in (0.1 m at 8 px = 80 ppm) the level qualifies at
     // alpha 0 -- continuous with "not there" one pixel earlier, which is the
-    // whole point of the ramp.
+    // whole point of the ramp -- and the 1 m level, the minor at 0.35 one
+    // pixel earlier, starts its promotion AT 0.35; the 10 m level, the major
+    // one pixel earlier, is still 0.55. No pop on either side.
     const Grid2DPlan e = PlanGrid2D(80.0f);
     REQUIRE(e.count == 3);
     CHECK(e.levels[0].spacingMetres == Approx(0.1f));
     CHECK(e.levels[0].alpha == Approx(0.0f).margin(1e-6f));
-    CHECK(e.levels[2].alpha == Approx(kGridMinorAlpha));   // the major is still 0.35 at t = 0: no pop on promotion
-    // One pixel below: 0.1 m does not qualify, 1 m is the finest.
+    CHECK(e.levels[1].alpha == Approx(kGridMinorAlpha).margin(1e-6f));
+    CHECK(e.levels[2].alpha == Approx(kGridMajorAlpha));
+    // One pixel below: 0.1 m does not qualify, 1 m is the finest (the minor,
+    // 0.35), 10 m the major (0.55), 100 m 0.55.
     const Grid2DPlan f = PlanGrid2D(79.0f);
     REQUIRE(f.count == 3);
     CHECK(f.levels[0].spacingMetres == Approx(1.0f));
+    CHECK(f.levels[0].alpha == Approx(kGridMinorAlpha));
+    CHECK(f.levels[1].spacingMetres == Approx(10.0f));
+    CHECK(f.levels[1].alpha == Approx(kGridMajorAlpha));
+    CHECK(f.levels[2].alpha == Approx(kGridMajorAlpha));
 
     // Degenerate: nothing.
     CHECK(PlanGrid2D(0.0f).count == 0);
@@ -267,11 +278,12 @@ TEST_CASE("DrawGrid2D: a view away from the origin draws no axes, and off-rect l
 
 TEST_CASE("DrawGrid2D: the decade above the plan keeps its major strength across the 8 px crossing (no pop)", "[editor][grid]")
 {
-    // One wheel tick apart: at 79 ppm the plan is 1 / 10 / 100 m (100 m the
-    // major, 0.55); at 80 ppm 0.1 m qualifies and the plan is 0.1 / 1 / 10 m,
-    // with 10 m promoted from 0.35 and 100 m no longer in it. The line at
-    // x = 100 m must read 0.55 on BOTH sides: it is the 100 m level's line
-    // before, and the 10 m level's held every-tenth line after.
+    // One wheel tick apart: at 79 ppm the plan is 1 / 10 / 100 m at 0.35 /
+    // 0.55 / 0.55; at 80 ppm 0.1 m qualifies and the plan is 0.1 / 1 / 10 m
+    // at ~0 / 0.35 (1 m starts its promotion) / 0.55, with 100 m no longer in
+    // it. The line at x = 100 m must read 0.55 on BOTH sides: it is the
+    // 100 m level's line before, and the 10 m level's held every-tenth line
+    // after (and the 10 m level itself is 0.55 after, as it was before).
     //
     // View centred on (100, 0) m, 400 x 300 px: at 80 ppm x in [97.5, 102.5];
     // at 79 ppm x in [97.47, 102.53]. Either way x = 100 is the only

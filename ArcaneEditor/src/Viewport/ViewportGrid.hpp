@@ -25,13 +25,15 @@
 //     t     = clamp((s - 8) / (24 - 8), 0, 1)
 //     alpha = t * 0.35                            (a minor level)
 //
-// Only the three finest qualifying levels are kept: the finest (the one that
-// may still be fading in), the next (its "every tenth line"), and the one ten
-// times coarser again, which is the MAJOR line at 0.55. UE's editor grid
-// toggles levels on and off at a threshold; the ramp is the improvement spec
-// s5.1 asks for, and the major's promotion rides the same ramp so nothing
-// pops at the 8 px crossing either: major alpha = 0.35 + t_finest * (0.55 -
-// 0.35), which is exactly 0.55 once the finest level is fully in.
+// Only the three finest qualifying levels are kept: the finest (the MINOR,
+// the one that may still be fading in), the decade above it (the MAJOR --
+// "a major line every ten minors", spec s5.1, ruling L-b -- at 0.55), and
+// the decade above that (also 0.55: its lines are the major's every tenth,
+// drawn once). UE's editor grid toggles levels on and off at a threshold; the
+// ramp is the improvement spec s5.1 asks for, and the major's promotion
+// rides the same ramp so nothing pops at the 8 px crossing either (ruling
+// L-a): major alpha = 0.35 + t_finest * (0.55 - 0.35), exactly 0.55 once the
+// finest level is fully in. Steady state is therefore 0.35 / 0.55 / 0.55.
 //
 // The grid unit is the METRE and nothing else: it is independent of the
 // gizmo's snap (R7) and of the scene's content.
