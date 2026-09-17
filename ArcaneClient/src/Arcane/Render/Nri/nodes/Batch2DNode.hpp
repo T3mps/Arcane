@@ -15,8 +15,9 @@
 //     mirroring Batcher2D::Init;
 //   * one linear/clamp sampler;
 //   * the BUILT-IN pipeline layout, registered in the vehicle's
-//     NriPipelineCache: root constants b0 (the 16-byte BatchConstants from
-//     data/shaders/sprite.hlsl) plus descriptor set space0 = { t0 texture,
+//     NriPipelineCache: root constants b0 (the 80-byte BatchConstants from
+//     data/shaders/sprite.hlsl -- view-projection + 2/viewport + the per-span
+//     worldSpace selector) plus descriptor set space0 = { t0 texture,
 //     s0 sampler }, and the ONE descriptor set that goes with it -- written
 //     once at Create (it binds the white texel for every built-in draw, see
 //     THE TEXTURE GAP below), never per frame;

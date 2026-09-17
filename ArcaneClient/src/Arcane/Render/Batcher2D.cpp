@@ -35,6 +35,9 @@ namespace Arcane
             // The image ASSET this quad samples, nil for the untextured
             // primitives -- Batch2DDrawSpan::textureId's source.
             Guid textureId{};
+            // World metres (view-projection path) or canvas pixels --
+            // Batch2DDrawSpan::worldSpace's source. Runs split on it.
+            bool worldSpace = false;
         };
 
         // One contiguous run of sorted records sharing material + texture.
@@ -131,6 +134,10 @@ namespace Arcane
                 m_layer = 0;
                 m_order = 0;
                 m_drained = false;
+                // Per-bracket, NOT per-process like m_globals: a frame that
+                // pushes no view projects its world spans through identity,
+                // never through last frame's camera.
+                m_viewProjection = glm::mat4(1.0f);
             }
 
             void SetLayer(uint16_t layer, uint16_t orderInLayer) override
@@ -199,13 +206,13 @@ namespace Arcane
                 const glm::vec2 normal =
                     glm::vec2(-delta.y, delta.x) * (0.5f * thickness / len);
                 // Oriented quad through the shared record path; reuses the
-                // sprite material untextured (uv constant).
+                // sprite material untextured (uv constant). Screen path: z = 0.
                 const glm::vec2 uv(0.5f);
                 PushQuadVertices(kMaterialSprite, Guid::Nil(),
-                                 { a - normal, uv, color },
-                                 { b - normal, uv, color },
-                                 { b + normal, uv, color },
-                                 { a + normal, uv, color });
+                                 { glm::vec3(a - normal, 0.0f), uv, color },
+                                 { glm::vec3(b - normal, 0.0f), uv, color },
+                                 { glm::vec3(b + normal, 0.0f), uv, color },
+                                 { glm::vec3(a + normal, 0.0f), uv, color });
             }
 
             void Circle(glm::vec2 center, float radius, glm::vec4 color) override
@@ -224,14 +231,53 @@ namespace Arcane
                 // Solid tri via the shared record path: a quad with v3 == v2, so
                 // the second sub-triangle (v0,v2,v3) is degenerate and draws
                 // nothing. Untextured + constant uv on the sprite material --
-                // the same solid-fill path Line/Rect use.
+                // the same solid-fill path Line/Rect use. Screen path: z = 0.
                 const glm::vec2 uv(0.5f);
                 PushQuadVertices(kMaterialSprite, Guid::Nil(),
-                                 { a, uv, color },
-                                 { b, uv, color },
-                                 { c, uv, color },
-                                 { c, uv, color });
+                                 { glm::vec3(a, 0.0f), uv, color },
+                                 { glm::vec3(b, 0.0f), uv, color },
+                                 { glm::vec3(c, 0.0f), uv, color },
+                                 { glm::vec3(c, 0.0f), uv, color });
             }
+
+            // ===== WORLD SPACE (F4 plan 1, Task 4) -- appended after the
+            // screen-space surface; see the header's vtable rule. =====
+
+            void QuadWorld(uint16_t material, const Guid& textureId,
+                           const std::array<glm::vec3, 4>& c,
+                           glm::vec2 uvMin, glm::vec2 uvMax, glm::vec4 color) override
+            {
+                if (material >= m_materials.size())
+                    material = kMaterialSprite;   // unknown id -> plain sprite, as QuadTextured
+                // The caller's corners VERBATIM -- no projection here, so the
+                // vertex shader's perspective-correct interpolation sees the
+                // real plane. Same corner/uv order as PushQuad (TL,TR,BR,BL).
+                PushQuadVertices(material, textureId,
+                    { c[0], uvMin, color },
+                    { c[1], { uvMax.x, uvMin.y }, color },
+                    { c[2], uvMax, color },
+                    { c[3], { uvMin.x, uvMax.y }, color },
+                    /*worldSpace=*/true);
+            }
+
+            void CircleWorld(glm::vec3 center, glm::vec3 right, glm::vec3 up,
+                             float radius, glm::vec4 color) override
+            {
+                if (radius <= 0.0f)
+                    return;
+                // The SDF quad in the (right, up) plane: uv spans [-1,1] with
+                // TL = (-1,-1), matching Circle()'s PushQuad uvMin-at-TL, and
+                // circle.hlsl's length(uv) does not care which way is up.
+                const glm::vec3 r = right * radius, u = up * radius;
+                PushQuadVertices(kMaterialCircle, Guid::Nil(),
+                    { center - r + u, {-1.0f, -1.0f}, color },
+                    { center + r + u, { 1.0f, -1.0f}, color },
+                    { center + r - u, { 1.0f,  1.0f}, color },
+                    { center - r - u, {-1.0f,  1.0f}, color },
+                    /*worldSpace=*/true);
+            }
+
+            void SetViewProjection(const glm::mat4& vp) override { m_viewProjection = vp; }
 
             void End() override
             {
@@ -278,6 +324,8 @@ namespace Arcane
                 // than re-fetched, so this frame's consumer reads exactly
                 // what was set for it.
                 out.globals  = &m_globals;
+                // The world -> clip matrix for this bracket's worldSpace spans.
+                out.viewProjection = m_viewProjection;
                 return out;
             }
 
@@ -320,16 +368,23 @@ namespace Arcane
                 m_indices.reserve(m_records.size() * 6);
                 for (const DrawRecord& record : m_records)
                 {
-                    // Split on (material, asset id). The `texture` pointer
-                    // this also compared until ABI v15 was null in every
-                    // record, so it never separated two runs the id did not:
-                    // dropping it is not a coalescing change.
+                    // Split on (material, asset id, projection path). The
+                    // `texture` pointer this also compared until ABI v15 was
+                    // null in every record, so it never separated two runs the
+                    // id did not: dropping it was not a coalescing change.
+                    // `worldSpace` IS one: a world quad and a screen rect on
+                    // the same material and texture are two draws, because
+                    // the recorder's root constants select the mapping per
+                    // span (it is not in the sort key, so a mixed layer keeps
+                    // its submission order and simply breaks more runs).
                     if (m_runs.empty() || m_runs.back().material != record.material ||
-                        m_runs.back().textureId != record.textureId)
+                        m_runs.back().textureId != record.textureId ||
+                        m_runs.back().worldSpace != record.worldSpace)
                     {
                         BatchRun run;
                         run.material = record.material;
                         run.textureId = record.textureId;
+                        run.worldSpace = record.worldSpace;
                         run.firstIndex = (uint32_t)m_indices.size();
                         m_runs.push_back(run);
                     }
@@ -356,9 +411,13 @@ namespace Arcane
                 return it->second;
             }
 
+            // `worldSpace` defaults false: every screen-space caller (Line,
+            // Triangle, PushQuad) leaves it, and only QuadWorld/CircleWorld
+            // set it -- the vertices they hand in are then world metres.
             void PushQuadVertices(uint16_t material, const Guid& textureId,
                                   const Vertex& v0, const Vertex& v1,
-                                  const Vertex& v2, const Vertex& v3)
+                                  const Vertex& v2, const Vertex& v3,
+                                  bool worldSpace = false)
             {
                 // Key layout: layer(16) | order(16) | material(16) | slot(16).
                 // Built-ins keep their old kind values as material 0..2, so
@@ -371,6 +430,7 @@ namespace Arcane
                 record.firstVertex = (uint32_t)m_vertices.size();
                 record.material = material;
                 record.textureId = textureId;
+                record.worldSpace = worldSpace;
                 m_records.push_back(record);
                 m_vertices.push_back(v0);
                 m_vertices.push_back(v1);
@@ -385,12 +445,14 @@ namespace Arcane
             {
                 // Corners in TL,TR,BR,BL order; rotation 0 is the axis-aligned
                 // (byte-identical) path. UVs map to the corner order unchanged.
+                // SCREEN path, always: z = 0 and the record's worldSpace stays
+                // false -- the world quads go through QuadWorld, not here.
                 const std::array<glm::vec2, 4> p = QuadCorners(pos, size, rotation);
                 PushQuadVertices(material, textureId,
-                    { p[0], uvMin, color },
-                    { p[1], { uvMax.x, uvMin.y }, color },
-                    { p[2], uvMax, color },
-                    { p[3], { uvMin.x, uvMax.y }, color });
+                    { glm::vec3(p[0], 0.0f), uvMin, color },
+                    { glm::vec3(p[1], 0.0f), { uvMax.x, uvMin.y }, color },
+                    { glm::vec3(p[2], 0.0f), uvMax, color },
+                    { glm::vec3(p[3], 0.0f), { uvMin.x, uvMax.y }, color });
             }
 
             // Build a registered entry into `out` (create-into-locals: a
@@ -437,6 +499,9 @@ namespace Arcane
             // Sticky globals: SetGlobals writes them and Drain() hands
             // their address out as Batch2DDrained::globals for the recorder.
             GlobalParams m_globals{};          // sticky, host-set per frame
+            // World -> clip for this bracket's worldSpace spans; identity at
+            // Begin(), SetViewProjection writes it, Drain() copies it out.
+            glm::mat4 m_viewProjection{ 1.0f };
 
             glm::vec2 m_viewport{ 0.0f };
             std::vector<Vertex> m_vertices;

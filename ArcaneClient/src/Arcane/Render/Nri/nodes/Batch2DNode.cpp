@@ -51,18 +51,40 @@ namespace Arcane
         // drift apart.
         constexpr nri::Format kCanvasFormat = kGraphCanvasFormat;
 
-        // data/shaders/sprite.hlsl's BatchConstants: float2 invHalfViewport +
-        // float2 pad. Mirrors Batcher2D.cpp's PushConstants exactly (b0 on
-        // D3D12, [[vk::push_constant]] on SPIR-V, which is what NRI's
-        // RootConstantDesc lowers to on each backend).
+        // data/shaders/sprite.hlsl's BatchConstants: float4x4 viewProj +
+        // float2 invHalfViewport + uint worldSpace + float pad = 80 bytes (b0
+        // on D3D12, [[vk::push_constant]] on SPIR-V, which is what NRI's
+        // RootConstantDesc lowers to on each backend; 80 <= Vulkan's 128-byte
+        // push-constant minimum). `viewProj` is the glm::mat4 memcpy'd in --
+        // column-major on both sides, no transpose (sprite.hlsl's packing
+        // note). `worldSpace` is PER SPAN and is why the block is re-issued
+        // inside the span loop (Record) and not once per frame.
         struct BatchRootConstants
         {
-            float invHalfViewportX = 0.0f;
-            float invHalfViewportY = 0.0f;
-            float padX = 0.0f;
-            float padY = 0.0f;
+            float         viewProj[16] = { 1.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 1.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 1.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 1.0f };
+            float         invHalfViewportX = 0.0f;
+            float         invHalfViewportY = 0.0f;
+            std::uint32_t worldSpace = 0u;
+            float         pad = 0.0f;
         };
-        static_assert(sizeof(BatchRootConstants) == 16, "must match sprite.hlsl's BatchConstants");
+        static_assert(sizeof(BatchRootConstants) == 80, "must match sprite.hlsl's BatchConstants");
+        static_assert(sizeof(glm::mat4) == sizeof(BatchRootConstants::viewProj),
+                      "viewProj is a glm::mat4 memcpy");
+
+        // The upload-ring alignment for the vertex stream. Batch2DVertex is 36
+        // bytes since its pos became vec3 (F4 plan 1, T4), and the ring
+        // ARC_ASSERTs a power-of-two alignment -- so this is CHOSEN, the way
+        // ImGuiNri.cpp chooses 16 for the 20-byte ImDrawVert, not
+        // sizeof(Batch2DVertex). Neither backend requires a vertex-buffer bind
+        // offset to be a multiple of the stride; each attribute only has to
+        // land on its natural boundary, which 16 guarantees for a stride that
+        // is a multiple of 4.
+        constexpr std::uint64_t kVertexAlign = 16;
+        static_assert((kVertexAlign & (kVertexAlign - 1)) == 0, "the ring wants a power of two");
+        static_assert(sizeof(Batch2DVertex) % 4 == 0, "every attribute is float-aligned");
 
         // The built-in shader pairs, in Batcher2D::kMaterial* order -- the
         // SAME offline bins Batcher2D's material table names by string
@@ -132,7 +154,7 @@ namespace Arcane
         m_attributes[0].d3d.semanticName = "POSITION";
         m_attributes[0].vk.location      = 0;
         m_attributes[0].offset           = offsetof(Batch2DVertex, pos);
-        m_attributes[0].format           = nri::Format::RG32_SFLOAT;
+        m_attributes[0].format           = nri::Format::RGB32_SFLOAT;   // vec3 since F4 plan 1 T4
         m_attributes[1].d3d.semanticName = "TEXCOORD";
         m_attributes[1].vk.location      = 1;
         m_attributes[1].offset           = offsetof(Batch2DVertex, uv);
@@ -390,7 +412,7 @@ namespace Arcane
         // reason.
         rootConstant = {};
         rootConstant.registerIndex = 0;
-        rootConstant.size          = 16;   // BatchConstants: float2 + float2
+        rootConstant.size          = sizeof(BatchRootConstants);   // the 80-byte b0 every 2D pipeline shares
         rootConstant.shaderStages  = nri::StageBits::VERTEX_SHADER;
 
         // Both stages: a material template's VERTEX_BODY may sample its declared
@@ -959,8 +981,9 @@ namespace Arcane
         // without a device.
         SpriteMaterialLayout layout2D;
         layout2D.Build(cbSize, textureCount);
-        static_assert(sizeof(BatchRootConstants) == 16,
-                      "SpriteMaterialLayout::Build hardcodes the b0 block size");
+        static_assert(sizeof(BatchRootConstants) == 80,
+                      "SpriteMaterialLayout::Build sizes its b0 block from BatchRootConstants -- "
+                      "sprite_material.hlsl's BatchConstants must match");
 
         const std::uint32_t previousLayout = slot.layoutId;
         slot.layoutId = m_pipelines->RegisterLayout(layout2D.desc);
@@ -1341,12 +1364,13 @@ namespace Arcane
         // against the GPU read, so they need no barrier and no declaration.
         //
         // Alignment is the caller's to supply (NriUploadRing::Allocate has no
-        // default): the vertex stride for the VB, the index size for the IB.
+        // default): kVertexAlign for the VB (the 36-byte stride is not a power
+        // of two -- see its definition), the index size for the IB.
         // ---------------------------------------------------------------
         const std::uint64_t vertexBytes = batch.vertices.size() * sizeof(Batch2DVertex);
         const std::uint64_t indexBytes  = batch.indices.size() * sizeof(std::uint32_t);
 
-        const NriUploadRing::Alloc vertexAlloc = context.ring.Allocate(vertexBytes, sizeof(Batch2DVertex));
+        const NriUploadRing::Alloc vertexAlloc = context.ring.Allocate(vertexBytes, kVertexAlign);
         const NriUploadRing::Alloc indexAlloc  = context.ring.Allocate(indexBytes, sizeof(std::uint32_t));
         if (!vertexAlloc.cpu || !indexAlloc.cpu)
         {
@@ -1394,12 +1418,15 @@ namespace Arcane
             }
         }
 
-        // Projection: canvas pixels (y down) -> clip space. The SAME block
-        // for every pipeline here -- sprite.hlsl and sprite_material.hlsl
-        // declare an identical b0.
+        // Projection: the SAME block for every pipeline here -- sprite.hlsl,
+        // circle/msdf and sprite_material.hlsl declare an identical b0. Both
+        // paths are filled once per frame (canvas pixels (y down) -> clip via
+        // 2/viewport; world metres -> clip via the batch's view-projection);
+        // which one a span takes is `push.worldSpace`, set in the loop below.
         BatchRootConstants push;
         push.invHalfViewportX = batch.viewport.x > 0.0f ? 2.0f / batch.viewport.x : 0.0f;
         push.invHalfViewportY = batch.viewport.y > 0.0f ? 2.0f / batch.viewport.y : 0.0f;
+        std::memcpy(push.viewProj, &batch.viewProjection, sizeof(push.viewProj));   // column-major, no transpose
 
         core.CmdSetDescriptorPool(context.cmd, *m_pool);
 
@@ -1424,8 +1451,18 @@ namespace Arcane
         // shape) re-binds only the set. Tracking BOTH is load-bearing: keying
         // the rebind on the layout alone would silently leave the previous
         // material's textures and constants bound.
-        nri::PipelineLayout* lastLayout = nullptr;
-        nri::DescriptorSet*  lastSet    = nullptr;
+        //
+        // The ROOT CONSTANTS are per-span too since F4 plan 1 T4: `worldSpace`
+        // selects the projection path, so the block is re-issued whenever the
+        // span's flag differs from what is currently pushed OR the layout
+        // changed (which invalidates the pushed block on both backends).
+        // `lastWorldSpace` starts as "nothing pushed" (-1) rather than 0 so
+        // the first span always pushes even under a fresh layout -- the
+        // layout branch pushes anyway, but the two conditions are kept
+        // independent so neither silently relies on the other.
+        nri::PipelineLayout* lastLayout     = nullptr;
+        nri::DescriptorSet*  lastSet        = nullptr;
+        int                  lastWorldSpace = -1;
         for (const Batch2DDrawSpan& span : batch.spans)
         {
             nri::Pipeline*       pipeline = nullptr;
@@ -1478,12 +1515,24 @@ namespace Arcane
             if (!pipeline)
                 continue;   // already logged + latched by the cache
 
+            bool pushRootConstants = false;
             if (layout != lastLayout)
             {
                 lastLayout = layout;
                 lastSet    = nullptr;   // a layout change invalidates the bound set
+                lastWorldSpace = -1;    // ...and the pushed root constants
                 core.CmdSetPipelineLayout(context.cmd, nri::BindPoint::GRAPHICS, *layout);
-
+                pushRootConstants = true;
+            }
+            const int spanWorldSpace = span.worldSpace ? 1 : 0;
+            if (spanWorldSpace != lastWorldSpace)
+            {
+                lastWorldSpace  = spanWorldSpace;
+                push.worldSpace = span.worldSpace ? 1u : 0u;
+                pushRootConstants = true;
+            }
+            if (pushRootConstants)
+            {
                 nri::SetRootConstantsDesc rootConstants = {};
                 rootConstants.rootConstantIndex = 0;
                 rootConstants.data              = &push;

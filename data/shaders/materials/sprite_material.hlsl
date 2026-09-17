@@ -15,27 +15,36 @@
 // and hands the result to the runtime ShaderCompiler (DXIL + SPIR-V).
 //
 // The vertex stage and push constants mirror sprite.hlsl EXACTLY -- the
-// Batcher2D feeds the same vertex stream (pos px, uv, linear color) and the
-// same b0 push-constant block to every 2D pipeline. The Globals cbuffer layout
-// MUST stay in lockstep with Arcane::GlobalParams (one 16-byte register), here
-// at b2 (b0 = push constants, b1 = material params). Reserved snippet names:
-// Time, DeltaTime, ViewportSize, MaterialSampler, SpriteTexture.
+// Batcher2D feeds the same vertex stream (pos vec3, uv, linear color) and the
+// same 80-byte b0 push-constant block to every 2D pipeline, and the same two
+// projection paths are selected per span by worldSpace (F4 plan 1, Task 4:
+// world metres through viewProj, or canvas pixels through 2/viewport). The
+// Globals cbuffer layout MUST stay in lockstep with Arcane::GlobalParams (one
+// 16-byte register), here at b2 (b0 = push constants, b1 = material params).
+// Reserved snippet names: Time, DeltaTime, ViewportSize, MaterialSampler,
+// SpriteTexture.
 
 struct BatchConstants
 {
-    float2 invHalfViewport;   // 2.0 / (canvasW, canvasH)
-    float2 pad;
+    float4x4 viewProj;         // world -> clip, WORLD-space spans only (column-major, glm layout)
+    float2   invHalfViewport;  // 2.0 / (canvasW, canvasH), SCREEN-space spans
+    uint     worldSpace;       // 1 = pos is world metres; 0 = canvas pixels (y down)
+    float    pad;
 };
 
 #if SPIRV
-[[vk::push_constant]] ConstantBuffer<BatchConstants> g_PC;
+[[vk::push_constant]] ConstantBuffer<BatchConstants> g_PC;   // 80 bytes <= Vulkan's 128 minimum
+#define g_viewProj        g_PC.viewProj
 #define g_invHalfViewport g_PC.invHalfViewport
+#define g_worldSpace      g_PC.worldSpace
 #else
 cbuffer BatchConstantsCB : register(b0)
 {
     BatchConstants g_PCData;
 }
+#define g_viewProj        g_PCData.viewProj
 #define g_invHalfViewport g_PCData.invHalfViewport
+#define g_worldSpace      g_PCData.worldSpace
 #endif
 
 %{MATERIAL_CBUFFER}
@@ -52,7 +61,7 @@ SamplerState MaterialSampler : register(s0);
 
 struct VSInput
 {
-    float2 pos   : POSITION;
+    float3 pos   : POSITION;
     float2 uv    : TEXCOORD0;
     float4 color : COLOR0;
 };
@@ -71,9 +80,11 @@ struct Varyings
 Varyings vs_main(VSInput input)
 {
     Varyings o;
-    o.pos = float4(input.pos.x * g_invHalfViewport.x - 1.0,
-                   1.0 - input.pos.y * g_invHalfViewport.y,
-                   0.0, 1.0);
+    if (g_worldSpace != 0)
+        o.pos = mul(g_viewProj, float4(input.pos, 1.0));
+    else
+        o.pos = float4(input.pos.x * g_invHalfViewport.x - 1.0,
+                       1.0 - input.pos.y * g_invHalfViewport.y, 0.0, 1.0);
     o.uv = input.uv;
     o.color = input.color;
     return displace(o);

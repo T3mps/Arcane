@@ -1,20 +1,24 @@
 // MSDF glyph shader: median-of-3 distance reconstruction with screen-space
 // AA (Chlumsky). The batcher emits a textured quad in canvas pixels; the
 // pixel shader samples the glyph atlas and reconstructs coverage. Shares
-// sprite.hlsl's vertex layout and clip transform (compiled separately so the
-// artifacts stay self-contained per pipeline).
+// sprite.hlsl's vertex layout and BatchConstants block (the ONE 80-byte b0
+// every 2D pipeline binds), but takes only the SCREEN path: Glyph() records
+// canvas pixels and no world-space text submission exists (F4 plan 1, T4).
+// Compiled separately so the artifacts stay self-contained per pipeline.
 //
 // kPxRange/kAtlasSize are compile-time constants MIRRORED in TextSystem.cpp
 // (the glyph atlas generator) -- change BOTH together or text edges break.
 
 struct BatchConstants
 {
-    float2 invHalfViewport;   // 2.0 / (canvasW, canvasH)
-    float2 pad;
+    float4x4 viewProj;         // world -> clip; declared for the shared b0 shape, unused here
+    float2   invHalfViewport;  // 2.0 / (canvasW, canvasH)
+    uint     worldSpace;       // always 0 for a glyph span
+    float    pad;
 };
 
 #if SPIRV
-[[vk::push_constant]] ConstantBuffer<BatchConstants> g_PC;
+[[vk::push_constant]] ConstantBuffer<BatchConstants> g_PC;   // 80 bytes <= Vulkan's 128 minimum
 #define g_invHalfViewport g_PC.invHalfViewport
 #else
 cbuffer BatchConstantsCB : register(b0)
@@ -32,7 +36,7 @@ static const float kAtlasSize = 1024.0;
 
 struct VSInput
 {
-    float2 pos   : POSITION;
+    float3 pos   : POSITION;   // Batch2DVertex::pos (vec3); z is 0 on the screen path
     float2 uv    : TEXCOORD0;
     float4 color : COLOR0;
 };

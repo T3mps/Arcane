@@ -5051,11 +5051,14 @@ TEST_CASE("nri batch2d material layout: root CONSTANTS only, so the root space a
     REQUIRE(layout.desc.descriptorSetNum == 1);
     CHECK(layout.set.registerSpace == 0);
 
-    // b0 push constants: the same 16-byte BatchConstants block every 2D
-    // pipeline reads, vertex-stage only (no ps_main reads it).
+    // b0 push constants: the same 80-byte BatchConstants block every 2D
+    // pipeline reads (float4x4 viewProj + float2 invHalfViewport + uint
+    // worldSpace + float pad, F4 plan 1 T4), vertex-stage only (no ps_main
+    // reads it). 80 <= 128, Vulkan's guaranteed push-constant minimum.
     REQUIRE(layout.desc.rootConstantNum == 1);
     CHECK(layout.rootConstant.registerIndex == 0);
-    CHECK(layout.rootConstant.size == 16);
+    CHECK(layout.rootConstant.size == 80);
+    CHECK(layout.rootConstant.size <= 128);
     CHECK(layout.rootConstant.shaderStages == nri::StageBits::VERTEX_SHADER);
 
     // The register map, and the ORDER that lets NRI's D3D12 backend merge the

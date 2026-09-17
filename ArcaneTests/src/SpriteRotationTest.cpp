@@ -137,6 +137,18 @@ namespace
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
+        // World-space surface (F4 plan 1 T4). Nothing submits through it until
+        // T5 moves sprites onto QuadWorld; recorded minimally so a T5 case can
+        // assert the corners it was handed.
+        std::vector<std::array<glm::vec3, 4>> worldQuads;
+        glm::mat4                             viewProjection{1.0f};
+        void QuadWorld(uint16_t, const Arcane::Guid&, const std::array<glm::vec3, 4>& corners,
+                       glm::vec2, glm::vec2, glm::vec4) override
+        {
+            worldQuads.push_back(corners);
+        }
+        void CircleWorld(glm::vec3, glm::vec3, glm::vec3, float, glm::vec4) override {}
+        void SetViewProjection(const glm::mat4& vp) override { viewProjection = vp; }
     };
 
     // F4 plan 1 T3: RenderContext2D carries a ViewTransform. This one's Affine2D

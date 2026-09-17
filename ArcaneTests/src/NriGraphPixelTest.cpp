@@ -72,6 +72,7 @@
 #include <Arcane/Render/Nri/NriTextureCache.hpp>  // ColorSpace -- Textures() is read directly, case 9
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>   // MeshInstance / MeshSceneDesc
 #include <Arcane/Scene/SceneCamera.hpp>           // PerspectiveProjection -- the camera under test
+#include <Arcane/Scene/ViewTransform.hpp>         // Orthographic -- the world-space batch case (3b)
 
 // Extensions/NRIHelper.h: HelperInterface::UploadData, used by the four-cube
 // bindless proof's own MakeSolidTexture (mirrors MeshNode::CreateWhiteTexel's
@@ -98,6 +99,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>           // lookAtRH, translate
 
+#include <array>        // the world quad's four corners (case 3b)
 #include <cstdint>
 #include <cstdlib>      // std::abs over the integer luma difference
 #include <filesystem>   // case 9's own temp artifact dir
@@ -374,6 +376,93 @@ TEST_CASE("pixel: a batched rect lands inside its own canvas rectangle (vulkan)"
           "[gpu][pixel][nri][vulkan]")
 {
     CheckBatchedRectLandsInItsRectangle(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// 3b. THE WORLD-SPACE PATH (F4 plan 1, Task 4). A QuadWorld quad carries WORLD
+//     vertices (metres, +Y up) and reaches clip space through the batch's
+//     view-projection in the vertex shader; a Rect in the SAME frame stays on
+//     the pixel path. One frame, both spans, so this is also the proof that the
+//     per-span `worldSpace` root-constant re-issue lands: without it the second
+//     span would be projected by the first span's mapping and miss its rectangle.
+//
+//     +Y UP IS ASSERTED: the world quad sits ABOVE the world origin and must
+//     land in the TOP half of the canvas. A shader (or a matrix) that mirrored
+//     Y would put it in the bottom half, where the "inside" sample below reads
+//     the clear.
+// ---------------------------------------------------------------------------
+namespace
+{
+    void CheckWorldQuadAndScreenRectShareOneFrame(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+        PixelVehicle v = MakeVehicle(backend);
+
+        // The engine's own orthographic producer: origin at the canvas centre,
+        // half-height 4.8 m over 96 px -> 10 px per metre, 16 m across.
+        const Arcane::ViewTransform view =
+            Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 4.8f, glm::uvec2(kW, kH));
+
+        auto batcher = Arcane::Batcher2D::Create();
+        REQUIRE(batcher != nullptr);
+        batcher->Begin(kW, kH);
+        batcher->SetViewProjection(view.ViewProjection());
+        batcher->SetLayer(0, 0);
+        // World: x in [-6, -2], y in [1.6, 4] -> pixels x 20..60, y 8..32
+        // (top-left quadrant). Red.
+        const std::array<glm::vec3, 4> corners{ glm::vec3(-6.0f, 4.0f, 0.0f),
+                                                glm::vec3(-2.0f, 4.0f, 0.0f),
+                                                glm::vec3(-2.0f, 1.6f, 0.0f),
+                                                glm::vec3(-6.0f, 1.6f, 0.0f) };
+        batcher->QuadWorld(Arcane::Batcher2D::kMaterialSprite, Arcane::Guid::Nil(), corners,
+                           glm::vec2(0.0f), glm::vec2(1.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+        // Screen: pixels x 100..140, y 56..80 (bottom-right quadrant). Green.
+        constexpr float kSx = 100.0f, kSy = 56.0f, kSw = 40.0f, kSh = 24.0f;
+        batcher->Rect(glm::vec2(kSx, kSy), glm::vec2(kSw, kSh), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+
+        Arcane::NriGraphContext::FrameDesc frame;
+        frame.capture = true;
+        frame.batch   = batcher.get();
+        RenderOne(*v.ctx, frame);
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(w, h, rgba));
+
+        const Rgba worldInside  = At(rgba, w, 40u, 20u);       // centre of the world quad
+        const Rgba worldMirror  = At(rgba, w, 40u, kH - 20u);  // where a Y-mirrored quad would land
+        const Rgba screenInside = At(rgba, w,
+                                     static_cast<std::uint32_t>(kSx + kSw * 0.5f),
+                                     static_cast<std::uint32_t>(kSy + kSh * 0.5f));
+        const Rgba outside      = At(rgba, w, kW / 2u, kH / 2u);   // the origin: neither quad
+
+        // The world quad: red, bright, in the TOP-left -- and NOT mirrored.
+        CHECK(worldInside.r > worldInside.g + 60);
+        CHECK(worldInside.r > worldInside.b + 60);
+        CHECK(Luma(worldInside) > Luma(outside) + 120);
+        CHECK(Luma(worldMirror) < Luma(outside) + 16);
+        // The screen rect: green, bright, where the pixel path always put it.
+        CHECK(screenInside.g > screenInside.r + 60);
+        CHECK(screenInside.g > screenInside.b + 60);
+        CHECK(Luma(screenInside) > Luma(outside) + 120);
+        CHECK(outside.r < 96);
+        CHECK(outside.g < 96);
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("pixel: a QuadWorld quad and a screen Rect land in their own rectangles in one frame (d3d12)",
+          "[gpu][pixel][nri][d3d12]")
+{
+    CheckWorldQuadAndScreenRectShareOneFrame(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("pixel: a QuadWorld quad and a screen Rect land in their own rectangles in one frame (vulkan)",
+          "[gpu][pixel][nri][vulkan]")
+{
+    CheckWorldQuadAndScreenRectShareOneFrame(Arcane::GraphicsBackend::Vulkan);
 }
 
 // ---------------------------------------------------------------------------

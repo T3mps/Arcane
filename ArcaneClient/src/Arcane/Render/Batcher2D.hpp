@@ -5,10 +5,14 @@
 // the same vertex stream and pipeline family. No bespoke draw paths grow
 // beside it (homogenized-rendering mandate).
 //
-// Coordinates are canvas pixels, y down. Colors are LINEAR floats and may
-// exceed 1.0 (HDR canvas). Blending is straight (non-premultiplied) alpha
-// to match the LOVE client's semantics for 1:1 screen ports; migrating to
-// premultiplied is a deliberate future decision.
+// Coordinates are canvas pixels, y down, for every primitive up to
+// QuadTextured. The WORLD-space submissions appended after it (QuadWorld /
+// CircleWorld, F4 plan 1) carry world METRES (+Y up) instead and reach clip
+// space through the frame's view-projection in the vertex shader; each drained
+// span says which path it is on (Batch2DDrawSpan::worldSpace). Colors are
+// LINEAR floats and may exceed 1.0 (HDR canvas). Blending is straight
+// (non-premultiplied) alpha to match the LOVE client's semantics for 1:1
+// screen ports; migrating to premultiplied is a deliberate future decision.
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
@@ -112,13 +116,19 @@ namespace Arcane
     // One vertex of the batch stream. THE WIRE FORMAT: it is what the
     // vertex buffer contains on both backends, and what data/shaders/
     // sprite.hlsl's VSInput (POSITION/TEXCOORD0/COLOR0) declares.
+    //
+    // `pos` is vec3 (F4 plan 1, Task 4): canvas pixels with z = 0 on the
+    // screen path, world metres on the world path. The span's `worldSpace`
+    // flag -- not the vertex -- says which mapping the shader applies. 36
+    // bytes, so NOT a power of two: the recorder picks its ring alignment
+    // (Batch2DNode.cpp's kVertexAlign) rather than using this size.
     struct Batch2DVertex
     {
-        glm::vec2 pos;
+        glm::vec3 pos;
         glm::vec2 uv;
         glm::vec4 color;
     };
-    static_assert(sizeof(Batch2DVertex) == 32, "vertex layout is the wire format");
+    static_assert(sizeof(Batch2DVertex) == 36, "vertex layout is the wire format");
 
     // One contiguous run of sorted quads sharing a material and a texture --
     // i.e. exactly one draw call. `firstIndex`/`indexCount` index the drained
@@ -137,6 +147,12 @@ namespace Arcane
         // checkerboard) all record nil and bind the white texel. Runs split on
         // it, so two distinct assets are two draws and one shared asset is one.
         Guid textureId{};
+        // THE PROJECTION SELECTOR (F4 plan 1, Task 4). true = this run's
+        // vertices are WORLD metres and the shader multiplies them by
+        // Batch2DDrained::viewProjection; false = canvas pixels (y down), the
+        // old 2/viewport mapping. Runs split on it beside material/texture,
+        // and the recorder re-issues its root constants when it changes.
+        bool worldSpace = false;
     };
 
     // A VIEW over the batcher's own storage -- it owns nothing. The spans stay
@@ -162,6 +178,10 @@ namespace Arcane
         // default-constructed Batch2DDrained -- e.g. a test double that never
         // overrides it. Built-in spans ignore it.
         const GlobalParams* globals = nullptr;
+        // What the host last SetViewProjection()'d inside this Begin() bracket
+        // -- world -> clip for the spans whose `worldSpace` is set. Identity
+        // when nothing set it. Screen-space spans ignore it.
+        glm::mat4 viewProjection{ 1.0f };
 
         [[nodiscard]] bool Empty() const noexcept { return spans.empty(); }
     };
@@ -367,5 +387,32 @@ namespace Arcane
             QuadMaterial(materialId, dstPos, dstSize, uvMin, uvMax,
                          color, rotation);
         }
+
+        // ===== WORLD SPACE (F4 plan 1, spec s3) =====
+        // A quad whose four corners are WORLD positions (metres, +Y up), in
+        // TL,TR,BR,BL order as the caller sees the sprite's own plane. The
+        // recorder multiplies these by the frame's view-projection in the
+        // vertex shader, so a tilted or distant quad interpolates its UVs with
+        // correct perspective -- which projecting the corners here on the CPU
+        // would NOT do. Sorting, materials and textures are exactly QuadTextured's.
+        // APPENDED (ABI v32): see Drain()'s comment for why every new virtual
+        // goes at the end of this class.
+        virtual void QuadWorld(uint16_t materialId, const Guid& textureId,
+                               const std::array<glm::vec3, 4>& corners,
+                               glm::vec2 uvMin, glm::vec2 uvMax, glm::vec4 color) = 0;
+
+        // The SDF disc in world space: an axis-aligned quad in the (right, up)
+        // plane about `center`, radius in metres. circle.hlsl's unit-disc SDF
+        // rides the uv exactly as Circle()'s does.
+        virtual void CircleWorld(glm::vec3 center, glm::vec3 right, glm::vec3 up,
+                                 float radius, glm::vec4 color) = 0;
+
+        // The frame's view-projection for WORLD-space spans. Sticky within one
+        // Begin() bracket (set it once after Begin(), before recording), and
+        // Begin() resets it to identity -- unlike SetGlobals it does NOT
+        // survive into the next frame, so a host that pushes no view this
+        // frame never projects through last frame's camera. Leaves through
+        // Batch2DDrained::viewProjection. Screen-space spans ignore it.
+        virtual void SetViewProjection(const glm::mat4& viewProjection) = 0;
     };
 }

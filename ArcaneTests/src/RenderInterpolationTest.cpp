@@ -150,6 +150,12 @@ namespace
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override {}
         void End() override {}
         Arcane::Batch2DStats Stats() const override { return {}; }
+        // World-space surface (F4 plan 1 T4): nothing submits through it until
+        // T5 moves sprites onto QuadWorld.
+        void QuadWorld(uint16_t, const Arcane::Guid&, const std::array<glm::vec3, 4>&,
+                       glm::vec2, glm::vec2, glm::vec4) override {}
+        void CircleWorld(glm::vec3, glm::vec3, glm::vec3, float, glm::vec4) override {}
+        void SetViewProjection(const glm::mat4&) override {}
 
         // Center of the last Rect/Quad (Batcher2D quads are top-left origin).
         glm::vec2 lastRectCenter() const { return lastRectPos + lastRectSize * 0.5f; }
