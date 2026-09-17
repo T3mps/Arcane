@@ -540,11 +540,22 @@ namespace Arcane::Editor
                     ready = ready && st.parent.IsValid();
                     break;
                 case CreateAssetKind::Mesh:
-                    // No kind-specific field: MeshAssetData's own defaults (a
+                    // No kind-specific INPUT: MeshAssetData's own defaults (a
                     // unit Cube) are already a complete, valid asset -- Name +
                     // Location above is everything EditorApp::MintMeshAsset
                     // needs (spec s7: "Mesh gets the dialog (name + location,
-                    // default cube data as today)").
+                    // default cube data as today)"). F4 plan 1 Task 11 (spec
+                    // s8): a `Create > Mesh > <primitive>` entry arrives with
+                    // the generator PRESET on the request; it is shown as a
+                    // read-only line (the choice was the menu entry itself --
+                    // the MeshDocument's Source combo is where it changes
+                    // after the fact) and rides the result to MintMeshAsset.
+                    if (st.request.prefillMeshSource >= 0)
+                    {
+                        const char* name = PrimitiveMeshName(
+                            static_cast<Arcane::MeshSource>(st.request.prefillMeshSource));
+                        ImGui::TextDisabled("Source: %s", name ? name : "Cube");
+                    }
                     break;
                 case CreateAssetKind::Sprite:
                 {
@@ -623,6 +634,7 @@ namespace Arcane::Editor
                                              static_cast<int>(folders.size()) - 1))].relative;
                 r.surface   = static_cast<int>(MaterialSurfaceForComboIndex(st.surface));
                 r.classTemplate = st.classTemplate;
+                r.meshSource = st.request.prefillMeshSource;
                 r.parent    = st.parent;
                 r.texture   = st.texture;
                 r.setAsBoot = st.setAsBoot;

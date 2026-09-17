@@ -2557,8 +2557,12 @@ namespace Arcane::Editor
         if (menuReq.requestCreateKind >= 0 &&
             menuReq.requestCreateKind < Arcane::Editor::kCreateAssetKindCount)
         {
-            BeginCreateAsset({ static_cast<Arcane::Editor::CreateAssetKind>(
-                                   menuReq.requestCreateKind) });
+            Arcane::Editor::CreateAssetRequest request;
+            request.kind = static_cast<Arcane::Editor::CreateAssetKind>(menuReq.requestCreateKind);
+            // Create -> Mesh -> <primitive> (F4 plan 1 Task 11): the preset
+            // rides the SAME request; -1 when the entry carried none.
+            request.prefillMeshSource = menuReq.requestMeshSource;
+            BeginCreateAsset(request);
         }
         if (menuReq.openMaterial)
         {
@@ -2626,9 +2630,13 @@ namespace Arcane::Editor
         if (panelActions.requestCreateKind >= 0 &&
             panelActions.requestCreateKind < Arcane::Editor::kCreateAssetKindCount)
         {
-            BeginCreateAsset({ static_cast<Arcane::Editor::CreateAssetKind>(
-                                   panelActions.requestCreateKind),
-                               panelActions.createPrefillParent });
+            Arcane::Editor::CreateAssetRequest request;
+            request.kind = static_cast<Arcane::Editor::CreateAssetKind>(panelActions.requestCreateKind);
+            request.prefillParent = panelActions.createPrefillParent;
+            // Create -> Mesh -> <primitive> (F4 plan 1 Task 11): the preset
+            // rides the SAME request; -1 when the entry carried none.
+            request.prefillMeshSource = panelActions.requestMeshSource;
+            BeginCreateAsset(request);
         }
         // "New Instance..." (a material row's context menu, and the preview
         // pane's kind-specific button): the same request with the clicked
@@ -2956,7 +2964,13 @@ namespace Arcane::Editor
                 created = CreateInstanceAt(target, r.parent);
                 break;
             case Arcane::Editor::CreateAssetKind::Mesh:
-                created = MintMeshAsset(target);
+                // The submenu's preset when the request carried one (Create >
+                // Mesh > <primitive>, F4 plan 1 Task 11); MeshAssetData's own
+                // Cube default otherwise.
+                created = MintMeshAsset(target,
+                                        r.meshSource >= 0
+                                            ? static_cast<Arcane::MeshSource>(r.meshSource)
+                                            : Arcane::MeshSource::Cube);
                 break;
             case Arcane::Editor::CreateAssetKind::Sprite:
                 created = MintOrReuseSpriteForTexture(r.texture, &target);
@@ -3477,6 +3491,11 @@ namespace Arcane::Editor
                                               *m_undo, m_editBinding, m_outliner,
                                               m_scene.SavedStateId(),
                                               m_panelVis.OpenFlag(Arcane::Editor::PanelId::Outliner));
+        // The Outliner's `Add 3D Object` latch (F4 plan 1 Task 11) -- the
+        // app performs it here, after the panel's draw, because the mint
+        // touches the project registry + disk and the spawn point is the
+        // editor camera's (OutlinerState::addPrimitivePending's own comment).
+        ConsumeAddPrimitive();
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Inspector))
             // F2b Task 13: the trailing fallback -- consulted only when
             // nothing is entity-selected (DrawInspectorPanel's own tie-break).

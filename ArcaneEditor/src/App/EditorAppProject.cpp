@@ -1345,7 +1345,11 @@ namespace Arcane::Editor
     // and its "-N" uniquify loop are gone, the same shortcut
     // MintOrReuseSpriteForTexture's own dialog branch takes above (Name+
     // Location already proved unique at Create-click time).
-    Arcane::Guid EditorApp::MintMeshAsset(const std::filesystem::path& target)
+    // F4 plan 1 Task 11: `source` is the generator saved into the file (the
+    // Create > Mesh > <primitive> preset); it defaults to Cube, MeshAssetData's
+    // own default, so every pre-existing caller mints exactly what it did.
+    Arcane::Guid EditorApp::MintMeshAsset(const std::filesystem::path& target,
+                                          Arcane::MeshSource source)
     {
         const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
         if (!project)
@@ -1353,10 +1357,13 @@ namespace Arcane::Editor
 
         // MeshAssetData's own defaults (source = Cube, everything else at its
         // struct default) are already a complete, valid asset -- see
-        // MeshAsset.hpp. Only identity needs setting here.
+        // MeshAsset.hpp. Identity and the preset generator are all this sets;
+        // rings/segments stay at the struct defaults, which validate for every
+        // generator (ValidateMeshAsset's floors are below them).
         Arcane::MeshAssetData data;
-        data.id   = Arcane::Guid::Generate();
-        data.name = target.stem().string();
+        data.id     = Arcane::Guid::Generate();
+        data.name   = target.stem().string();
+        data.source = source;
         if (!Arcane::SaveMeshAsset(target, data))
         {
             ARC_WARN("Arcane Editor: could not create a mesh at '{}'", target.generic_string());
@@ -1807,6 +1814,77 @@ namespace Arcane::Editor
         const std::filesystem::path basePath =
             project->Root() / "Content" / "mesh_import_base.arcmat";
         return CreateMaterialFileAt(basePath, Arcane::MaterialSurface::Mesh);
+    }
+
+    // F4 plan 1 Task 11 (spec s8): see this method's own declaration
+    // (EditorApp.hpp) for the full contract. The EnsureMeshImportBaseMaterial
+    // shape one function up: the path IS the identity. The registry is consulted
+    // by RESOLVED PATH (GuidForResolvedPath's scan, the same per-call linear
+    // walk every reuse-or-mint policy in this file uses, plus a weakly_canonical
+    // on both sides) rather than by mount string, so a project whose folder is
+    // spelled `Meshes/` on disk still finds its own file -- Windows resolves
+    // both spellings to one directory, and canonicalising both sides is what
+    // keeps two spellings from reading as two assets. The file is written under
+    // the ONE spelling the editor uses everywhere (PrimitiveMeshRelativePath:
+    // lowercase `meshes/`).
+    Arcane::Guid EditorApp::MintOrReusePrimitiveMesh(Arcane::MeshSource source)
+    {
+        const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+        if (!project)
+            return {};
+        const std::string relative = Arcane::Editor::PrimitiveMeshRelativePath(source);
+        if (relative.empty())
+        {
+            ARC_WARN("Arcane Editor: MeshSource {} is not a primitive -- nothing to spawn",
+                     static_cast<int>(source));
+            return {};
+        }
+
+        std::error_code ec;
+        const std::filesystem::path target = project->Root() / "Content" / relative;
+        const auto canon = std::filesystem::weakly_canonical(target, ec);
+        const std::filesystem::path& key = ec ? target : canon;
+
+        // Reuse: an asset already registered at this path, whatever the
+        // registry learned it as (Open()'s scan, an earlier mint, a hand-copied
+        // file the watcher picked up).
+        for (const auto& [guid, mount] : project->Registry().All())
+        {
+            const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(guid));
+            if (!p)
+                continue;
+            std::error_code pec;
+            const auto pCanon = std::filesystem::weakly_canonical(*p, pec);
+            if ((pec ? *p : pCanon) == key)
+                return guid;
+        }
+
+        // A file on disk the registry does not know yet (dropped in since the
+        // last watch poll): register it rather than overwrite it -- the mint
+        // below would clobber whatever the user put there.
+        if (std::filesystem::exists(target, ec))
+        {
+            if (const auto registered = m_runtime->RegisterCreatedAsset(target))
+            {
+                m_assetModel.MarkAllDirty();
+                return *registered;
+            }
+            ARC_WARN("Arcane Editor: '{}' exists but could not be registered -- not overwriting it",
+                     target.generic_string());
+            return {};
+        }
+
+        // First use: mint it. The folder is made on demand -- the same
+        // create_directories ConsumeCreateResult performs for a dialog create
+        // into a folder the project does not have yet.
+        std::filesystem::create_directories(target.parent_path(), ec);
+        if (ec)
+        {
+            ARC_WARN("Arcane Editor: could not create '{}': {}",
+                     target.parent_path().generic_string(), ec.message());
+            return {};
+        }
+        return MintMeshAsset(target, source);
     }
 
     // F2c Task 15 (spec s6, R4 steps 1-3): see this method's own declaration

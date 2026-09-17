@@ -28,6 +28,7 @@
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (the Material kind combo)
+#include <Arcane/Mesh/MeshAsset.hpp>            // MeshSource (the Create > Mesh > preset, F4 plan 1 T11)
 
 #include <cstddef>
 #include <cstdint>
@@ -65,12 +66,17 @@ namespace Arcane::Editor
     // asset-valued field (MaterialInstance -> the parent material; Sprite ->
     // the source texture, Task 13); `prefillSurface` pre-picks the Material
     // surface combo (a MaterialSurface value; -1 = none, let the dialog
-    // default).
+    // default); `prefillMeshSource` (F4 plan 1 Task 11, spec s8) pre-picks
+    // the Mesh kind's generator (a MeshSource value; -1 = none, MeshAssetData's
+    // own Cube default) -- `Create > Mesh > <primitive>` raises THIS request
+    // with the preset, so the submenu is five thin raisers of the one request
+    // rather than a second creation path.
     struct CreateAssetRequest
     {
         CreateAssetKind kind = CreateAssetKind::Material;
         Arcane::Guid    prefillParent;   // instance parent / sprite texture
         int             prefillSurface = -1; // pre-picked MaterialSurface, -1 none
+        int             prefillMeshSource = -1; // pre-picked MeshSource (Mesh kind), -1 none
         std::string     cppDefaultFolder;   // CppClass only: CppClassDefaultFolder(manifest.sourceDir), seeded by the app -- see CppClassDefaultFolder below
     };
 
@@ -166,6 +172,60 @@ namespace Arcane::Editor
         if (extension == ".arcscene")  return "scene";
         if (extension == ".hpp")       return "class";
         return "file";
+    }
+
+    // ---- the five mesh primitives (F4 plan 1 Task 11, spec s8) -------------
+    // ONE vocabulary read by three consumers: the `Create > Mesh >` submenu
+    // (its labels + the MeshSource each raises), the scene's `Add > 3D Object >`
+    // submenu (its labels, the Identity name of the spawned entity, and the
+    // `Content/meshes/<Name>.arcmesh` file EditorApp::MintOrReusePrimitiveMesh
+    // looks up by path and mints on first use), and the dispatcher. Spelled
+    // here, in the ImGui-free half, so the [editor][create] test pins it.
+    //
+    // Menu order is spec s8's (Cube / Plane / Sphere / Cylinder / Capsule),
+    // NOT MeshSource's persisted numbering (Plane = 0). Imported is not a
+    // primitive: nothing can generate it, so it has no name and no file here.
+    inline constexpr Arcane::MeshSource kPrimitiveMeshSources[] = {
+        Arcane::MeshSource::Cube,     Arcane::MeshSource::Plane,   Arcane::MeshSource::UvSphere,
+        Arcane::MeshSource::Cylinder, Arcane::MeshSource::Capsule,
+    };
+    inline constexpr int kPrimitiveMeshSourceCount = 5;
+
+    // The primitive's name: the submenu label, the .arcmesh stem, and the
+    // spawned entity's Identity name, all at once. "Sphere" for UvSphere (the
+    // file name the brief fixes; MeshDocument's combo says "UV Sphere", which is
+    // a display label for the generator, not a file stem). nullptr for a
+    // non-primitive source.
+    [[nodiscard]] inline const char* PrimitiveMeshName(Arcane::MeshSource s)
+    {
+        switch (s)
+        {
+            case Arcane::MeshSource::Cube:     return "Cube";
+            case Arcane::MeshSource::Plane:    return "Plane";
+            case Arcane::MeshSource::UvSphere: return "Sphere";
+            case Arcane::MeshSource::Cylinder: return "Cylinder";
+            case Arcane::MeshSource::Capsule:  return "Capsule";
+            case Arcane::MeshSource::Imported: return nullptr;
+        }
+        return nullptr;
+    }
+
+    // The primitive's file, relative to the project's Content/: the Mesh
+    // kind's own default folder + name + extension -- "meshes/Cube.arcmesh".
+    // FOLDER SPELLING: spec s8 writes `Content/Meshes/`, but the folder is
+    // spelled LOWERCASE `meshes/` everywhere the editor already touches it
+    // (CreateKindDefaultFolder(Mesh), ReferenceProject/Content/meshes/ with its
+    // golden_prop + reference_cube). Windows resolves either spelling to the one
+    // directory, but the registry keys on the path and a golden/witness pin
+    // must never see two spellings -- so this reuses CreateKindDefaultFolder
+    // rather than introducing a second one. Empty for a non-primitive source.
+    [[nodiscard]] inline std::string PrimitiveMeshRelativePath(Arcane::MeshSource s)
+    {
+        const char* name = PrimitiveMeshName(s);
+        if (!name)
+            return {};
+        return std::string(CreateKindDefaultFolder(CreateAssetKind::Mesh)) + name
+             + CreateKindExtension(CreateAssetKind::Mesh);
     }
 
     // ---- the Material "Kind" combo (spec s7: sprite / mesh / post) --------
@@ -356,6 +416,7 @@ namespace Arcane::Editor
         std::string name; std::string folder;    // relative to CreateKindRoot(kind)
         int surface = 0;                          // Material: MaterialSurface value
         int classTemplate = 0;                    // CppClass: ClassTemplates::Kind value
+        int meshSource = -1;                      // Mesh: the request's MeshSource preset (-1 = MeshAssetData's Cube default)
         Arcane::Guid parent, texture; bool setAsBoot = false;
         // Task 13: Sprite's mint-or-reuse notice carries an "Open existing"
         // button (spec s7: "it says so and offers to open it") -- when this

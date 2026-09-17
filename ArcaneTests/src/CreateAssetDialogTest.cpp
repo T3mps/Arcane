@@ -191,3 +191,60 @@ TEST_CASE("Create-kind vocabulary: C++ Class lands under Source/ and bridges fro
     CHECK(std::string(CreateKindRoot(CreateAssetKind::Material)) == "Content");
     CHECK(std::string(CreateKindRoot(CreateAssetKind::Scene))    == "Content");
 }
+
+// F4 plan 1 Task 11 (spec s8): `Create > Mesh >` is a submenu of the five
+// primitives, and each entry raises the ONE CreateAssetRequest with its
+// MeshSource preset -- the request grows a field, the dialog and MintMeshAsset
+// stay the single entry. There is no second creation path to test for; what
+// this pins is the vocabulary the submenu, the dispatcher, and the scene's
+// `Add > 3D Object` (which mints `Content/meshes/<Primitive>.arcmesh` by name)
+// all read from, so a label, a file stem, and a MeshSource can never drift.
+TEST_CASE("Create > Mesh > <primitive>: the request carries a MeshSource preset; "
+          "the five primitives name their .arcmesh files", "[editor][create]")
+{
+    // Default: no preset -- the dialog keeps MeshAssetData's own Cube default.
+    const CreateAssetRequest plain;
+    CHECK(plain.kind == CreateAssetKind::Material);
+    CHECK(plain.prefillMeshSource == -1);
+
+    // A submenu entry: the SAME request type, kind Mesh, plus the preset. The
+    // value is MeshSource's own persisted numbering (MeshAsset.hpp), never a
+    // menu index -- Cube is 1, Plane is 0.
+    CreateAssetRequest cube;
+    cube.kind              = CreateAssetKind::Mesh;
+    cube.prefillMeshSource = static_cast<int>(Arcane::MeshSource::Cube);
+    CHECK(cube.kind == CreateAssetKind::Mesh);
+    CHECK(cube.prefillMeshSource == 1);
+    CHECK(static_cast<Arcane::MeshSource>(cube.prefillMeshSource) == Arcane::MeshSource::Cube);
+    // The other request fields stay at their defaults -- a mesh preset does not
+    // smuggle a parent/surface prefill along.
+    CHECK_FALSE(cube.prefillParent.IsValid());
+    CHECK(cube.prefillSurface == -1);
+
+    // The roster, in menu order (spec s8: Cube / Plane / Sphere / Cylinder /
+    // Capsule). Five generator sources; Imported is NOT a primitive.
+    CHECK(kPrimitiveMeshSourceCount == 5);
+    CHECK(kPrimitiveMeshSources[0] == Arcane::MeshSource::Cube);
+    CHECK(kPrimitiveMeshSources[1] == Arcane::MeshSource::Plane);
+    CHECK(kPrimitiveMeshSources[2] == Arcane::MeshSource::UvSphere);
+    CHECK(kPrimitiveMeshSources[3] == Arcane::MeshSource::Cylinder);
+    CHECK(kPrimitiveMeshSources[4] == Arcane::MeshSource::Capsule);
+
+    // The name is the menu label, the file stem AND the spawned entity's
+    // Identity name. UvSphere spells "Sphere" (the brief's file name).
+    CHECK(std::string(PrimitiveMeshName(Arcane::MeshSource::Cube))     == "Cube");
+    CHECK(std::string(PrimitiveMeshName(Arcane::MeshSource::Plane))    == "Plane");
+    CHECK(std::string(PrimitiveMeshName(Arcane::MeshSource::UvSphere)) == "Sphere");
+    CHECK(std::string(PrimitiveMeshName(Arcane::MeshSource::Cylinder)) == "Cylinder");
+    CHECK(std::string(PrimitiveMeshName(Arcane::MeshSource::Capsule))  == "Capsule");
+    CHECK(PrimitiveMeshName(Arcane::MeshSource::Imported) == nullptr);
+
+    // The file, relative to Content/: the Mesh kind's own default folder
+    // (CreateKindDefaultFolder -- ONE spelling of "meshes/", lowercase, the
+    // folder ReferenceProject already carries) + the name + the kind's
+    // extension. The registry keys off this path, so it must never come out
+    // in two spellings.
+    CHECK(PrimitiveMeshRelativePath(Arcane::MeshSource::UvSphere) == "meshes/Sphere.arcmesh");
+    CHECK(PrimitiveMeshRelativePath(Arcane::MeshSource::Cube)     == "meshes/Cube.arcmesh");
+    CHECK(PrimitiveMeshRelativePath(Arcane::MeshSource::Imported).empty());
+}

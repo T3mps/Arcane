@@ -1148,6 +1148,18 @@ namespace Arcane::Editor
         // framable, so the user's view is never thrown away by an F press that
         // had no target.
         void FrameCamera(bool selectionOnly);
+        // F4 plan 1 Task 11 (spec s8): the scene's `Add > 3D Object >
+        // <primitive>`, consumed from OutlinerState's latch right after
+        // DrawOutlinerPanel returns. MintOrReusePrimitiveMesh(source) for the
+        // asset, then ONE ApplyStructural("Add 3D Object") around
+        // Edit::AddPrimitiveEntity at the view's focus point (m_camera.
+        // FocusPoint(): 2D = the centre at z = 0, perspective = the pivot;
+        // converted into the parent's local space when there is one), then
+        // select the new entity and request a frame of the selection
+        // (FrameCamera(true) -- serviced after this frame's propagation, so it
+        // reads the spawned entity's real world pose). One undo step; a failed
+        // mint spawns nothing and reports through the modal error queue.
+        void ConsumeAddPrimitive();
         // Set for the remainder of THIS frame when a gizmo drag starts or ends,
         // so the click-pick phase (later in the frame) does not also treat the
         // same click as a selection change. Reset at the top of FrameInput
@@ -1703,7 +1715,30 @@ namespace Arcane::Editor
         // ".../Content/New Mesh[-N].arcmesh", "-N" uniquify loop included) --
         // now it is the caller's (ConsumeCreateResult's) dialog-validated
         // Name+Location, unique already, so no loop survives here either.
-        Arcane::Guid MintMeshAsset(const std::filesystem::path& target);
+        //
+        // F4 plan 1 Task 11 (spec s8): `source` is the generator the file is
+        // saved with -- the `Create > Mesh > <primitive>` preset the request
+        // carried, or Cube (MeshAssetData's own default) when it carried none.
+        Arcane::Guid MintMeshAsset(const std::filesystem::path& target,
+                                   Arcane::MeshSource source = Arcane::MeshSource::Cube);
+
+        // F4 plan 1 Task 11 (spec s8): the scene's `Add > 3D Object > <primitive>`
+        // binds its MeshRenderer to `Content/meshes/<Name>.arcmesh`
+        // (CreateAssetDialog.hpp's PrimitiveMeshRelativePath -- lowercase
+        // `meshes/`, the folder ReferenceProject already carries; the spec's
+        // `Content/Meshes/` names the same directory on Windows and the registry
+        // must never key it two ways), MINTED ON FIRST USE AND REUSED BY PATH
+        // AFTER -- the EnsureMeshImportBaseMaterial shape (the path IS the
+        // identity: an asset already registered there is returned; else it is
+        // minted through MintMeshAsset(target, source) with the folder created
+        // on demand), in the MintOrReuseSpriteForTexture lineage. Nil on
+        // failure (no project, a non-primitive source, or the mint itself
+        // failing -- already ARC_WARN'd). Never opens a document: the caller
+        // is spawning an entity, not editing the asset. Registry/scene-time
+        // automation, not the user dialog path -- the "no creation path may
+        // bypass CreateAssetRequest" invariant governs the dialog only (spec
+        // s6's own note, the same reading MintImportMaterials takes).
+        Arcane::Guid MintOrReusePrimitiveMesh(Arcane::MeshSource source);
 
         // F2c Task 14 (spec s4.2, R3): the companion .arcmesh mint after the FIRST
         // successful cook of an imported model, and name-keyed slot reconciliation

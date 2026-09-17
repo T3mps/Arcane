@@ -8,6 +8,7 @@
 // every host reuse one implementation; zero editor/UI types.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Guid.hpp>
 
 #include <Astra/Entity/Entity.hpp>
 
@@ -18,6 +19,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Astra { class Registry; struct ComponentDescriptor; }
@@ -26,9 +28,12 @@ namespace Arcane { class CommandStack; }
 
 namespace Arcane::Edit
 {
-    // First of "Entity", "Entity_2", "Entity_3", ... not already used by an
-    // Identity in `reg`.
-    ARCANE_API std::string AutoEntityName(Astra::Registry& reg);
+    // First of `base`, "<base>_2", "<base>_3", ... not already used by an
+    // Identity in `reg` -- "Entity" by default (the plain create), the
+    // primitive's name for AddPrimitiveEntity ("Cube", "Cube_2"). The same
+    // "_N" scheme InstantiateSubtrees' paste uniquify applies.
+    ARCANE_API std::string AutoEntityName(Astra::Registry& reg,
+                                          std::string_view base = "Entity");
 
     // Identity.name when present and non-empty, else "Entity <id>".
     ARCANE_API std::string DisplayName(Astra::Registry& reg, Astra::Entity e);
@@ -58,6 +63,23 @@ namespace Arcane::Edit
     // then-lose is not.
     ARCANE_API Astra::Entity CreateEntityInScene(Astra::Registry& reg,
                                                  Astra::Entity parent);
+
+    // F4 plan 1 Task 11 (spec s8): the scene's `Add > 3D Object > <primitive>`.
+    // CreateEntityInScene(reg, parent) -- so the same SceneRoot fallback and
+    // the same no-SceneRoot refusal (Invalid, nothing created) -- whose
+    // Transform::position is set to `position` (the parent's LOCAL space; the
+    // editor converts the view's world focus point through ParentWorldMatrix
+    // before calling) and which carries a MeshRenderer bound to `mesh` (no
+    // material override: the asset's own). Named `name` uniquified by
+    // AutoEntityName ("Cube", then "Cube_2"). Every call is a NEW entity --
+    // reuse is the ASSET's policy (EditorApp::MintOrReusePrimitiveMesh), never
+    // the entity's. Undo is the caller's RegistryStateCommand, as for every
+    // mutator here.
+    ARCANE_API Astra::Entity AddPrimitiveEntity(Astra::Registry& reg,
+                                                Astra::Entity parent,
+                                                glm::vec3 position,
+                                                const Guid& mesh,
+                                                std::string_view name);
 
     // Delete every entity in `set` (duplicates tolerated). Children of a
     // deleted entity first splice up to its nearest NOT-being-deleted

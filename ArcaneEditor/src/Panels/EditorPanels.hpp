@@ -61,6 +61,11 @@ namespace Arcane::Editor
         // every other producer, raises a kind and nothing else, and
         // EditorApp::BeginCreateAsset is the one place a create dialog opens.
         int requestCreateKind = -1;
+        // F4 plan 1 Task 11 (spec s8): Assets -> Create -> Mesh -> <primitive>
+        // raises requestCreateKind = Mesh AND this MeshSource value (the app
+        // copies it into CreateAssetRequest::prefillMeshSource). -1 = none.
+        // Same pair AssetPanelActions carries for the panels' Create menus.
+        int requestMeshSource = -1;
         // NO MENU RAISES THIS TODAY (the restructure dropped File -> Open
         // Material...; the Assets panel double-click is the open path). The
         // request + its dialog handler stay wired for the wiring pass.
@@ -319,6 +324,17 @@ namespace Arcane::Editor
         // scope one step later: ImGui cannot open a popup from inside another
         // popup's scope.
         bool addComponentPending = false;
+        // F4 plan 1 Task 11 (spec s8): `Add 3D Object > <primitive>`, latched
+        // by the row menu (parent = the row) or the panel-scope menu (parent =
+        // Invalid -> SceneRoot, CreateEntityInScene's rule) and consumed by the
+        // APP right after DrawOutlinerPanel returns (EditorApp::
+        // ConsumeAddPrimitive) -- the "panel reports, app performs" split,
+        // because the two things the spawn needs live on the app, not the
+        // panel: the mesh asset (EditorApp::MintOrReusePrimitiveMesh touches
+        // the project registry + disk, which no panel draw may) and the spawn
+        // point (the editor camera's FocusPoint). A MeshSource value; -1 = none.
+        int           addPrimitivePending = -1;
+        Astra::Entity addPrimitiveParent  = Astra::Entity::Invalid();
     };
 
     // Promoted out of EditorPanels.cpp's anonymous namespace so the Edit

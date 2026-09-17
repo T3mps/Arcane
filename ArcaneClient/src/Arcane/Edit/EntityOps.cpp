@@ -13,6 +13,7 @@
 
 #include <new>
 #include <span>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -60,16 +61,17 @@ namespace Arcane::Edit
         }
     }
 
-    std::string AutoEntityName(Astra::Registry& reg)
+    std::string AutoEntityName(Astra::Registry& reg, std::string_view base)
     {
         std::unordered_set<std::string> taken;
         reg.CreateView<const Identity>().ForEach(
             [&](Astra::Entity, const Identity& info) { taken.insert(info.name); });
-        if (!taken.contains("Entity"))
-            return "Entity";
+        std::string first(base);
+        if (!taken.contains(first))
+            return first;
         for (int i = 2;; ++i)
         {
-            std::string candidate = "Entity_" + std::to_string(i);
+            std::string candidate = first + "_" + std::to_string(i);
             if (!taken.contains(candidate))
                 return candidate;
         }
@@ -102,6 +104,25 @@ namespace Arcane::Edit
         if (!sceneRoot)
             return Astra::Entity::Invalid();
         return CreateEntity(reg, sceneRoot->entity);
+    }
+
+    Astra::Entity AddPrimitiveEntity(Astra::Registry& reg, Astra::Entity parent,
+                                     glm::vec3 position, const Guid& mesh,
+                                     std::string_view name)
+    {
+        const Astra::Entity e = CreateEntityInScene(reg, parent);
+        if (!e.IsValid())
+            return e;   // no SceneRoot -- CreateEntityInScene's refusal, nothing created
+        if (Transform* t = reg.GetComponent<Transform>(e))
+            t->position = position;
+        // CreateEntity already minted the Identity with the plain "Entity"
+        // auto-name; re-name to the primitive's, uniquified against the
+        // registry the same way (the fresh entity's own "Entity" is in the
+        // taken set but never collides with a primitive name).
+        if (Identity* info = reg.GetComponent<Identity>(e))
+            info->name = AutoEntityName(reg, name);
+        reg.AddComponent<MeshRenderer>(e, MeshRenderer{ mesh, Guid{} });
+        return e;
     }
 
     std::size_t DeleteEntities(Astra::Registry& reg,

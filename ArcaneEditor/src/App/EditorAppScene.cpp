@@ -14,6 +14,7 @@
 #include "Project/ServerLaunch.hpp"   // DoLaunchServer's candidate list + argv
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Edit/EntityOps.hpp>   // AddPrimitiveEntity / WorldMatrix (ConsumeAddPrimitive, F4 plan 1 T11)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/SceneResources.hpp>   // Arcane::SceneRoot (DoSaveScene's empty-scene guard)
 #include <Arcane/Serialization/SceneAsset.hpp>   // .arcscene read/apply/save (New/Open/Save Scene)
@@ -428,6 +429,70 @@ namespace Arcane::Editor
             m_modalErrors.Push("Play with Separate Server Failed",
                                 "Failed to launch '" + resolved.string() +
                                 "'. See the Console for details.");
+    }
+
+    // F4 plan 1 Task 11 (spec s8): see the declaration's comment (EditorApp.hpp)
+    // for the contract. Mirrors the Outliner's own "New Child Entity" arm
+    // (EditorPanels.cpp) -- the same ApplyStructural, the same `made` list for
+    // the unsaved asterisks, the same collapsed-parent expand and Select --
+    // with the mint and the focus point, which only the app has, in front.
+    void EditorApp::ConsumeAddPrimitive()
+    {
+        if (m_outliner.addPrimitivePending < 0)
+            return;
+        const auto source = static_cast<Arcane::MeshSource>(m_outliner.addPrimitivePending);
+        const Astra::Entity parent = m_outliner.addPrimitiveParent;
+        m_outliner.addPrimitivePending = -1;
+        m_outliner.addPrimitiveParent  = Astra::Entity::Invalid();
+
+        const char* name = Arcane::Editor::PrimitiveMeshName(source);
+        if (!name)
+            return;   // not a primitive -- nothing the menu can raise
+
+        // The asset first, OUTSIDE the undo step: minting a file is not a
+        // registry edit and must not be undone with the entity (a second Add
+        // after an undo reuses it, which is the whole point of reuse-by-path).
+        const Arcane::Guid mesh = MintOrReusePrimitiveMesh(source);
+        if (!mesh.IsValid())
+        {
+            m_modalErrors.Push("Add 3D Object Failed",
+                               std::string("Could not find or create 'Content/")
+                                   + Arcane::Editor::PrimitiveMeshRelativePath(source)
+                                   + "' (see Console).");
+            return;
+        }
+
+        Astra::Registry& registry = m_runtime->Registry();
+        // The view's focus point is WORLD space; Transform::position is the
+        // parent's LOCAL space, so convert through the world matrix of the
+        // entity the spawn actually lands under -- `parent`, or SceneRoot for
+        // a root spawn (CreateEntityInScene's rule; SceneRoot carries a
+        // Transform the user can move, so it is not assumed identity). A dead
+        // `parent` falls back to root creation inside CreateEntity, and
+        // WorldMatrix(dead) is identity, which matches.
+        glm::vec3 position = m_camera.FocusPoint();
+        Astra::Entity under = parent;
+        if (!under.IsValid())
+            if (const Arcane::SceneRoot* root = registry.GetResource<Arcane::SceneRoot>())
+                under = root->entity;
+        if (under.IsValid() && registry.IsValid(under))
+            position = glm::vec3(glm::inverse(Arcane::Edit::WorldMatrix(registry, under))
+                                 * glm::vec4(position, 1.0f));
+
+        Astra::Entity created = Astra::Entity::Invalid();
+        std::vector<Astra::Entity> made;
+        if (Arcane::Editor::ApplyStructural(*m_undo, m_editBinding, "Add 3D Object",
+                [&] { created = Arcane::Edit::AddPrimitiveEntity(registry, parent, position,
+                                                                 mesh, name);
+                      if (created.IsValid()) made.push_back(created);
+                      return created.IsValid(); },
+                &made))
+        {
+            if (parent.IsValid())
+                m_outliner.collapsed.erase(static_cast<std::uint64_t>(parent.GetValue()));
+            m_selection.Select(created);
+            FrameCamera(/*selectionOnly=*/true);
+        }
     }
 
     void EditorApp::FrameCamera(bool selectionOnly)

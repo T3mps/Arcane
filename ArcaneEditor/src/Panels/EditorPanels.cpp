@@ -256,7 +256,23 @@ namespace Arcane::Editor
                     ImGui::Separator();
                     // Raise the request now; the dialog grows their fields in
                     // Task 13 (DrawCreateAssetDialog's own scope comment).
-                    entry("Mesh...",   Arcane::Editor::CreateAssetKind::Mesh);
+                    // F4 plan 1 Task 11 (spec s8): Mesh is a submenu of the
+                    // five primitives -- the same shape DrawCreateMenuEntries
+                    // draws, each entry the one request with its MeshSource
+                    // preset.
+                    if (ImGui::BeginMenu("Mesh"))
+                    {
+                        for (const Arcane::MeshSource source : Arcane::Editor::kPrimitiveMeshSources)
+                        {
+                            if (ImGui::MenuItem(Arcane::Editor::PrimitiveMeshName(source)))
+                            {
+                                requests.requestCreateKind =
+                                    static_cast<int>(Arcane::Editor::CreateAssetKind::Mesh);
+                                requests.requestMeshSource = static_cast<int>(source);
+                            }
+                        }
+                        ImGui::EndMenu();
+                    }
                     entry("Sprite...", Arcane::Editor::CreateAssetKind::Sprite);
                     entry("Scene...",  Arcane::Editor::CreateAssetKind::Scene);
                     ImGui::Separator();
@@ -1274,6 +1290,26 @@ namespace Arcane::Editor
         {
             return b.editMode && !undo.InTransaction();
         }
+
+        // F4 plan 1 Task 11 (spec s8): the `Add 3D Object >` submenu -- the
+        // five primitives in CreateAssetDialog.hpp's roster and spelling (the
+        // SAME names `Create > Mesh >` offers and the .arcmesh files carry).
+        // Latches the pick on OutlinerState for the app (see the field's own
+        // comment); nothing is created inside the draw.
+        void DrawAddPrimitiveSubmenu(OutlinerState& state, Astra::Entity parent)
+        {
+            if (!ImGui::BeginMenu("Add 3D Object"))
+                return;
+            for (const Arcane::MeshSource source : kPrimitiveMeshSources)
+            {
+                if (ImGui::MenuItem(PrimitiveMeshName(source)))
+                {
+                    state.addPrimitivePending = static_cast<int>(source);
+                    state.addPrimitiveParent  = parent;
+                }
+            }
+            ImGui::EndMenu();
+        }
     }
 
     // `touched` names the entities the edit affects, for the Outliner's
@@ -1947,6 +1983,9 @@ namespace Arcane::Editor
                                 sel.Select(created);
                             }
                         }
+                        // Spec s8: a primitive under THIS row (the app spawns
+                        // it at the view's focus point, selected and framed).
+                        DrawAddPrimitiveSubmenu(state, row.entity);
                         ImGui::Separator();
                         // Edit-menu parity via the shared functions above.
                         // Acts on the SELECTION -- the right-click already
@@ -2081,6 +2120,9 @@ namespace Arcane::Editor
                         &made))
                     sel.Select(created);
             }
+            // Spec s8: the scene-level `Add > 3D Object` -- a primitive under
+            // SceneRoot (the same Invalid-parent rule "New Entity" takes).
+            DrawAddPrimitiveSubmenu(state, Astra::Entity::Invalid());
             ImGui::Separator();
             if (ImGui::MenuItem("Paste", "Ctrl+V"))
                 PasteFromClipboard(registry, sel, undo, binding);

@@ -58,7 +58,24 @@ namespace Arcane::Editor
         entry(ICON_LC_PALETTE " Material...",         CreateAssetKind::Material);
         entry(ICON_LC_LAYERS  " Material Instance...", CreateAssetKind::MaterialInstance);
         ImGui::Separator();
-        entry(ICON_LC_BOX          " Mesh...",   CreateAssetKind::Mesh);
+        // F4 plan 1 Task 11 (spec s8): Mesh is a SUBMENU of the five
+        // primitives, each entry the same request with its MeshSource preset
+        // -- five thin raisers of the one CreateAssetRequest, never a second
+        // creation path. The roster + labels are CreateAssetDialog.hpp's
+        // (kPrimitiveMeshSources / PrimitiveMeshName), shared with the
+        // scene's `Add > 3D Object >`.
+        if (ImGui::BeginMenu(ICON_LC_BOX " Mesh"))
+        {
+            for (const Arcane::MeshSource source : kPrimitiveMeshSources)
+            {
+                if (ImGui::MenuItem(PrimitiveMeshName(source)))
+                {
+                    actions.requestCreateKind = static_cast<int>(CreateAssetKind::Mesh);
+                    actions.requestMeshSource = static_cast<int>(source);
+                }
+            }
+            ImGui::EndMenu();
+        }
         entry(ICON_LC_STICKER      " Sprite...", CreateAssetKind::Sprite);
         entry(ICON_LC_CLAPPERBOARD " Scene...",  CreateAssetKind::Scene);
         ImGui::Separator();

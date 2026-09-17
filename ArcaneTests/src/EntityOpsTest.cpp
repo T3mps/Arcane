@@ -715,3 +715,61 @@ TEST_CASE("a tilted entity loses its tilt, and the world-basis arm names it",
     CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, parent)));
     CHECK_FALSE(Arcane::IsPlanarBasis(Edit::WorldMatrix(w.reg, parent)));
 }
+
+// ---------------------------------------------------------------------------
+// F4 plan 1 Task 11 (spec s8): the scene's `Add > 3D Object > <primitive>`.
+// AddPrimitiveEntity is the pure half -- a CreateEntityInScene whose Transform
+// lands at the given LOCAL point and that carries a MeshRenderer bound to the
+// given mesh guid. The editor wraps it in ONE RegistryStateCommand
+// (ApplyStructural "Add 3D Object"), which is the same whole-registry memento
+// every mutator in this file relies on, so undo is not re-tested here.
+TEST_CASE("AddPrimitiveEntity: a scene child at the given point carrying a MeshRenderer "
+          "bound to the mesh; a second call is a second entity, never a reuse",
+          "[outliner]")
+{
+    World w;
+    const Astra::Entity root = Arcane::Scene::CreateEmpty(w.reg);
+    const Guid mesh = Guid::Generate();
+
+    const Astra::Entity a = Edit::AddPrimitiveEntity(w.reg, Astra::Entity::Invalid(),
+                                                     glm::vec3(1.0f, 2.0f, 3.0f), mesh, "Cube");
+    REQUIRE(a.IsValid());
+    CHECK(w.reg.GetParent(a) == root);   // no parent -> under SceneRoot (CreateEntityInScene's rule)
+
+    const Transform* t = w.reg.GetComponent<Transform>(a);
+    REQUIRE(t != nullptr);
+    CHECK_THAT(t->position.x, WithinAbs(1.0f, 1e-6f));
+    CHECK_THAT(t->position.y, WithinAbs(2.0f, 1e-6f));
+    CHECK_THAT(t->position.z, WithinAbs(3.0f, 1e-6f));
+    CHECK(t->scale == glm::vec3(1.0f));
+
+    const MeshRenderer* mr = w.reg.GetComponent<MeshRenderer>(a);
+    REQUIRE(mr != nullptr);
+    CHECK(mr->mesh == mesh);
+    CHECK_FALSE(mr->materialOverride.IsValid());   // the mesh asset's own material
+
+    const Identity* ia = w.reg.GetComponent<Identity>(a);
+    REQUIRE(ia != nullptr);
+    CHECK(ia->id.IsValid());
+    CHECK(ia->name == "Cube");
+
+    // A second spawn of the SAME primitive is a second entity referencing the
+    // same asset (the asset is what is reused by name -- the entity never is),
+    // parented where asked, with a creation-time-unique name.
+    const Astra::Entity b = Edit::AddPrimitiveEntity(w.reg, a, glm::vec3(0.0f), mesh, "Cube");
+    REQUIRE(b.IsValid());
+    CHECK(b != a);
+    CHECK(w.reg.GetParent(b) == a);
+    const MeshRenderer* mrb = w.reg.GetComponent<MeshRenderer>(b);
+    REQUIRE(mrb != nullptr);
+    CHECK(mrb->mesh == mesh);
+    const Identity* ib = w.reg.GetComponent<Identity>(b);
+    REQUIRE(ib != nullptr);
+    CHECK(ib->name == "Cube_2");
+    CHECK(ib->id != ia->id);
+
+    // Same refusal as CreateEntityInScene: no SceneRoot, nothing created.
+    World bare;
+    CHECK_FALSE(Edit::AddPrimitiveEntity(bare.reg, Astra::Entity::Invalid(), glm::vec3(0.0f),
+                                         mesh, "Cube").IsValid());
+}

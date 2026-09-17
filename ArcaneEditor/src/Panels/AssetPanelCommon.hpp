@@ -71,6 +71,10 @@ namespace Arcane::Editor
         // carries a raw AssetKind.
         int  requestCreateKind = -1;
         Arcane::Guid createPrefillParent;   // instance parent / sprite texture prefill
+        // F4 plan 1 Task 11 (spec s8): `Create > Mesh > <primitive>` raises
+        // requestCreateKind = Mesh AND this MeshSource value; the app copies
+        // it into CreateAssetRequest::prefillMeshSource. -1 = no preset.
+        int  requestMeshSource = -1;
 
         // Plan 2 Task 7 (Status lens): the two needs-attention card buttons,
         // reported under exactly the same split as every field above -- the
