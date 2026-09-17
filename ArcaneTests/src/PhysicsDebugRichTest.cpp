@@ -25,6 +25,7 @@
 #include <Manifold2D/Physics/Shapes.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>   // the mirrored-affine case (F4 plan 1 T3)
 
 #include <glm/glm.hpp>
 
@@ -175,6 +176,92 @@ TEST_CASE("PhysicsDebug rich: a resting body draws no velocity ray", "[render]")
 
     // 4 outline lines for the AABB, and NO velocity ray (static -> v == 0).
     CHECK(m.lines.size() == 4);
+}
+
+// F4 plan 1 T3 (fix round 1): the overlay under a MIRRORED affine -- the
+// orthographic +Y-up view on a y-down canvas (Affine2D scale (60,-60), offset
+// (400,300)). An oriented box is rotated in WORLD space and each corner is
+// projected; it must never be rotated about the projected centre in screen
+// space, which a mirrored map would spin the wrong way.
+TEST_CASE("PhysicsDebug projects an oriented box's WORLD corners through a mirrored affine",
+          "[render][physics][debug]")
+{
+    WorldDef wd;
+    wd.gravityX = Real(0);
+    wd.gravityY = Real(0);
+    PhysicsWorld w(wd);
+
+    // A 1 x 0.5 m box (polygon, so it can carry an angle) centred at world (0, +1),
+    // turned +0.3 rad. No step, so the pose stays exactly as authored.
+    const float     angle = 0.3f;
+    const glm::vec2 centre(0.0f, 1.0f);
+    const glm::vec2 local[4] = { {-0.5f, -0.25f}, {0.5f, -0.25f}, {0.5f, 0.25f}, {-0.5f, 0.25f} };
+    std::vector<Vec2> verts;
+    for (const glm::vec2& l : local) verts.emplace_back(Real(l.x), Real(l.y));
+    BodyDef bd;
+    bd.type     = BodyType::Dynamic;
+    bd.position = Vec2(Real(centre.x), Real(centre.y));
+    bd.shape    = MakePolygon(verts);
+    bd.density  = Real(1);
+    const BodyHandle h = w.AddBody(bd);
+    w.SetAngle(h, Real(angle));
+
+    const auto affine = Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}).AsAffine2D();
+    REQUIRE(affine.has_value());
+    REQUIRE(affine->scale.y < 0.0f);   // the mirror is what this case is about
+
+    RecMock rec;
+    Arcane::PhysicsDebugDrawOptions opts;
+    opts.view = *affine;
+    opts.drawVelocities = opts.drawComMarkers = opts.drawOrientations = opts.drawContacts = false;
+    Arcane::DrawPhysicsDebug(w, rec, opts);
+    REQUIRE(rec.lines.size() == 4);   // the four edges, nothing else
+
+    // Expected: rotate each local corner in WORLD, translate, THEN project.
+    const float c = std::cos(angle), s = std::sin(angle);
+    glm::vec2 worldCorner[4];
+    glm::vec2 expected[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        worldCorner[i] = centre + glm::vec2(c * local[i].x - s * local[i].y,
+                                            s * local[i].x + c * local[i].y);
+        expected[i]    = affine->Point(worldCorner[i]);
+    }
+    const auto same = [](glm::vec2 a, glm::vec2 b) {
+        return std::abs(a.x - b.x) < 1e-2f && std::abs(a.y - b.y) < 1e-2f;
+    };
+
+    // Every emitted endpoint is one of the projected WORLD corners, and every
+    // projected corner is emitted (as a line endpoint) at least once.
+    for (const auto& ln : rec.lines)
+    {
+        bool firstOk = false, secondOk = false;
+        for (const glm::vec2& e : expected)
+        {
+            firstOk  = firstOk  || same(ln.first,  e);
+            secondOk = secondOk || same(ln.second, e);
+        }
+        CHECK(firstOk);
+        CHECK(secondOk);
+        // ...and all of them sit ABOVE the viewport centre: world +1 m is UP.
+        CHECK(ln.first.y  < 300.0f);
+        CHECK(ln.second.y < 300.0f);
+    }
+    for (const glm::vec2& e : expected)
+    {
+        int hits = 0;
+        for (const auto& ln : rec.lines)
+            hits += (same(ln.first, e) ? 1 : 0) + (same(ln.second, e) ? 1 : 0);
+        CHECK(hits >= 1);
+    }
+
+    // The mirror itself: the corner HIGHEST in world (largest world y) has the
+    // SMALLEST canvas y. Under the old y-down map it would have had the largest.
+    int topWorld = 0;
+    for (int i = 1; i < 4; ++i)
+        if (worldCorner[i].y > worldCorner[topWorld].y) topWorld = i;
+    for (int i = 0; i < 4; ++i)
+        if (i != topWorld) CHECK(expected[topWorld].y < expected[i].y);
 }
 
 TEST_CASE("onlyBody draws exactly one outline and no other overlay", "[physics][debug]")

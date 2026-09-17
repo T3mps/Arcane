@@ -137,11 +137,15 @@ namespace Arcane
                 const glm::vec2 d1 = pCur - pivot;
                 const float a0 = std::atan2(d0.y, d0.x);
                 const float a1 = std::atan2(d1.y, d1.x);
-                // d0/d1 are WORLD offsets (Unpoint), so a1 - a0 is already a
-                // world-sense turn; AngleSign is applied so a mirrored map keeps
-                // the drag's on-screen sense (clockwise on screen = the same
-                // visible turn regardless of the mirror).
-                r.rotation = start.rotation + view.affine.AngleSign() * (a1 - a0);
+                // d0/d1 are WORLD offsets (pStart/pCur came through Unpoint), so
+                // a1 - a0 is already a WORLD-sense delta and needs NO mirror
+                // correction: a clockwise screen sweep unprojects to a negative
+                // world turn, the entity turns negative in world, and the
+                // renderer (which DOES apply AngleSign -- PickEmit, the sprite
+                // path) draws that as the clockwise canvas turn the mouse made.
+                // Multiplying by AngleSign here would turn the object AGAINST
+                // the mouse (F4 plan 1 T3 fix round 1, ruling H).
+                r.rotation = start.rotation + (a1 - a0);
                 if (snap.enabled)
                 {
                     const float step = snap.rotationDeg * 3.14159265358979323846f / 180.0f;

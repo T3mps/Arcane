@@ -111,6 +111,9 @@ namespace Arcane
         [[nodiscard]] std::optional<Affine2D> AsAffine2D() const noexcept
         {
             if (!IsOrthographic()) return std::nullopt;
+            // A zero viewport (the default-constructed "no view pushed" state) has no
+            // pixel map either: the scale would be 0 and every overlay would collapse.
+            if (viewport.x == 0u || viewport.y == 0u) return std::nullopt;
             const glm::mat4 vp = ViewProjection();
             if (std::abs(vp[0][1]) > 1e-6f || std::abs(vp[1][0]) > 1e-6f) return std::nullopt;
             Affine2D a;

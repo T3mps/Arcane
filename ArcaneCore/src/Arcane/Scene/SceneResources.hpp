@@ -101,8 +101,10 @@ namespace Arcane
         // THE ONE camera (F4 plan 1, spec s3): the ViewTransform the host pushed
         // through ClientRuntime::SetView. RenderSubmissionSystem AND the physics
         // overlay read the same one, so sprites + the overlay pan/zoom together.
-        // The default (identity matrices, viewport 0) is the "no camera" posture
-        // of a host that never pushed a view.
+        // The default (identity matrices, viewport 0) is a host that never pushed
+        // a view: it has no Affine2D (AsAffine2D() is nullopt), so the pixel
+        // overlays and (until F4 plan 1 Task 5 lands world-space sprites) the
+        // sprite shim skip drawing; RuntimeApp warns when no scene camera exists.
         class Batcher2D* batcher = nullptr;   // set by the host between Begin and Drain
         ViewTransform    view{};
         float            alpha = 0.0f;        // RunLoop::Alpha() in [0,1); host-set each frame

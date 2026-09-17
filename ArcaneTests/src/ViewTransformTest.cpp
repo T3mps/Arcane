@@ -71,4 +71,5 @@ TEST_CASE("AsAffine2D exists only for the orthographic view and carries the Y mi
     CHECK(a->Length(2.0f) == Approx(120.0f));
     const auto p = ViewTransform::Perspective({0,0,10},{0,0,0},{0,1,0},60.0f,{800,600},0.1f,100.0f);
     CHECK_FALSE(p.AsAffine2D().has_value());
+    CHECK_FALSE(Arcane::ViewTransform{}.AsAffine2D().has_value());   // zero viewport: no pixel map (never a zero scale)
 }

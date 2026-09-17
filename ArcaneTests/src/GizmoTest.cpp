@@ -72,21 +72,23 @@ TEST_CASE("Gizmo ApplyDrag: rotate delta-angle + snap", "[gizmo]")
     Arcane::GizmoTransform start;                 // rotation 0, pivot (0,0)
     Arcane::GizmoSnap noSnap;
 
-    // Mouse from world (1,0) [angle 0] to (0,-1) [angle -90deg in WORLD: 100 px
-    // DOWN on screen]. The drag's ON-SCREEN sense is what the user sees, and
-    // AngleSign keeps it: a clockwise screen sweep is a +90deg turn on the
-    // mirrored map, exactly the value the y-down map used to report.
+    // Mouse from world (1,0) [angle 0] to (0,-1) [100 px DOWN on screen is world
+    // -Y under the mirrored map]: a CLOCKWISE screen sweep is a NEGATIVE world
+    // delta, -90deg. The drag is computed on unprojected WORLD points, so no
+    // mirror correction applies here -- the renderer's AngleSign later draws
+    // that -90deg world turn as the clockwise canvas turn the mouse made.
     Arcane::GizmoTransform r = Arcane::ApplyDrag(
         Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
         start, v, glm::vec2(500, 300), glm::vec2(400, 400), noSnap);
-    CHECK_THAT(r.rotation, WithinAbs(3.14159265f * 0.5f, 1e-3f));
+    CHECK_THAT(r.rotation, WithinAbs(-3.14159265f * 0.5f, 1e-3f));
 
-    // Snap 15deg: rotate ~20deg (screen-clockwise) -> 15deg. cos/sin(20deg)=(0.9397,0.3420).
+    // Snap 15deg: a ~20deg screen-clockwise sweep is world -20deg -> snapped -15deg.
+    // cos/sin(20deg)=(0.9397,0.3420); +34.20 px is screen-down, i.e. world -0.342.
     Arcane::GizmoSnap snap; snap.enabled = true; snap.rotationDeg = 15.0f;
     Arcane::GizmoTransform rs = Arcane::ApplyDrag(
         Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
         start, v, glm::vec2(500, 300), glm::vec2(400 + 93.97f, 300 + 34.20f), snap);
-    CHECK_THAT(rs.rotation, WithinAbs(3.14159265f / 12.0f, 1e-3f));   // 15deg
+    CHECK_THAT(rs.rotation, WithinAbs(-3.14159265f / 12.0f, 1e-3f));   // -15deg
 }
 
 TEST_CASE("Gizmo ApplyDrag: scale ratio, uniform, clamp, snap", "[gizmo]")
