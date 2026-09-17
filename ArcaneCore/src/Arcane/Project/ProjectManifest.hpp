@@ -55,7 +55,7 @@ namespace Arcane
         // like this struct -- FromJson's lenient parse, as for splash.
         struct PhysicsConfig
         {
-            glm::vec2 gravity{0.0f, 9.81f};   // m/s^2; +Y is down
+            glm::vec2 gravity{0.0f, -9.81f};   // m/s^2; +Y is up (F4)
         };
 
         int                    formatVersion = 0;

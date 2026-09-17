@@ -146,7 +146,7 @@ TEST_CASE("a manifest physics block sets gravity; absent keeps the default", "[p
         "formatVersion": 1, "name": "T", "engine": { "abi": 28 }
     })"));
     REQUIRE(without.has_value());
-    CHECK(without->physics.gravity.y == Catch::Approx(9.81f));
+    CHECK(without->physics.gravity.y == Catch::Approx(-9.81f));   // +Y up (F4 plan 1 T2)
 }
 
 TEST_CASE("a malformed physics gravity leaves the default rather than failing the manifest", "[project]")
@@ -158,7 +158,7 @@ TEST_CASE("a malformed physics gravity leaves the default rather than failing th
         const auto m = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(
             std::string(R"({"formatVersion": 1, "name": "T", "engine": { "abi": 28 }, "physics": {)") + body + "}}"));
         REQUIRE(m.has_value());
-        CHECK(m->physics.gravity.y == Catch::Approx(9.81f));
+        CHECK(m->physics.gravity.y == Catch::Approx(-9.81f));   // +Y up (F4 plan 1 T2)
     }
 }
 

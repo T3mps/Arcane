@@ -21,7 +21,7 @@
         "Arcane::PhysicsSettings": {
           "gravity": [
             0.0,
-            9.8100004196167
+            -9.8100004196167
           ]
         },
         "Arcane::Transform": {
@@ -111,7 +111,7 @@
         "Arcane::Transform": {
           "position": [
             0.0,
-            1.0,
+            -1.0,
             0.0
           ],
           "rotation": [
@@ -195,7 +195,7 @@
         "Arcane::Transform": {
           "position": [
             0.0,
-            -1.0,
+            1.0,
             0.0
           ],
           "rotation": [
@@ -279,7 +279,7 @@
         "Arcane::Transform": {
           "position": [
             -2.0,
-            -1.0,
+            1.0,
             0.0
           ],
           "rotation": [
@@ -363,13 +363,13 @@
         "Arcane::Transform": {
           "position": [
             2.0,
-            -1.0,
+            1.0,
             0.0
           ],
           "rotation": [
             0.0,
             -0.0,
-            -0.7101853489875793,
+            0.7101853489875793,
             0.7040147185325623
           ],
           "scale": [
@@ -384,5 +384,5 @@
     }
   ],
   "id": "4f6a1c2e-7b3d-4e8a-9c1f-2d5b6e7a8f90",
-  "version": 5
+  "version": 6
 }

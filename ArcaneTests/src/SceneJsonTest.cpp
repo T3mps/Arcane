@@ -9,6 +9,7 @@
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Serialization/SceneAsset.hpp>       // CreateEmpty
 #include <Arcane/Serialization/SceneSerializer.hpp>
 
 #include <Astra/Registry/Registry.hpp>
@@ -349,6 +350,26 @@ TEST_CASE("the v4 load gate accepts v3 and still refuses v2", "[json][scene]")
     bool result = true;
     CHECK_NOTHROW(result = Arcane::Scene::LoadJson(reg, doc));
     CHECK_FALSE(result);
+}
+
+TEST_CASE("a v5 scene still loads after the v6 bump, migrated to +Y up", "[json][scene]")
+{
+    // v6 (F4 plan 1 T2) is neither a break nor a pure addition: a v5 body is
+    // still READABLE, it just means the mirror image of what it used to, so
+    // the loader migrates it (SceneSerializer's MigrateV5ToYUp) rather than
+    // refusing it. The sign work itself is pinned by SceneMigrationTest; what
+    // this pins is the GATE -- v5 did not become unloadable.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    Arcane::Scene::CreateEmpty(reg);
+    nlohmann::json doc = Arcane::Scene::SaveJson(reg);
+    doc["version"] = 5;
+
+    auto backComponents = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry back(backComponents);
+    Arcane::RegisterSceneComponents(back);
+    CHECK(Arcane::Scene::LoadJson(back, doc));
 }
 
 TEST_CASE("scene with a 3rd component type and a non-parent link round-trips", "[json][scene]")

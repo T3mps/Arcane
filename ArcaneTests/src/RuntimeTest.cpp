@@ -193,7 +193,7 @@ TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[
     const Manifold2D::Physics::PhysicsWorld* first = res->world.get();
     rt.EnsurePhysics();                                          // same frame, same settings: no re-mint
     CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>()->world.get() == first);
-    CHECK(static_cast<float>(first->Gravity().y) == Catch::Approx(9.81f));   // the engine default, no project
+    CHECK(static_cast<float>(first->Gravity().y) == Catch::Approx(-9.81f));   // the engine default, no project (+Y up, F4)
 
     auto bytes = rt.SnapshotRegistry();
     REQUIRE(bytes.IsOk());
@@ -211,7 +211,7 @@ TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[
 TEST_CASE("ResolvedGravity: the engine default, then the scene-root PhysicsSettings override", "[runtime][physics]")
 {
     Arcane::Runtime rt(Arcane::Test::Process());
-    CHECK(rt.ResolvedGravity().y == Catch::Approx(9.81f));      // no project open: PhysicsConfig's default
+    CHECK(rt.ResolvedGravity().y == Catch::Approx(-9.81f));      // no project open: PhysicsConfig's default (+Y up, F4)
 
     Astra::Registry& reg = rt.Registry();
     const Astra::Entity root  = reg.CreateEntity();
@@ -219,7 +219,7 @@ TEST_CASE("ResolvedGravity: the engine default, then the scene-root PhysicsSetti
     reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
     Arcane::PhysicsSettings ps; ps.gravity = glm::vec2(0.0f, 2.0f);
     reg.AddComponent<Arcane::PhysicsSettings>(other, ps);        // NOT the root: ignored
-    CHECK(rt.ResolvedGravity().y == Catch::Approx(9.81f));
+    CHECK(rt.ResolvedGravity().y == Catch::Approx(-9.81f));
     reg.AddComponent<Arcane::PhysicsSettings>(root, ps);
     CHECK(rt.ResolvedGravity().y == Catch::Approx(2.0f));
 
@@ -291,7 +291,7 @@ TEST_CASE("fixedUpdate runs physics BEFORE propagation whichever was added first
     rt.Loop().Advance(1.0 / 60.0);                               // exactly one fixed step at 60 Hz
     const float y  = reg.GetComponent<Arcane::Transform>(e)->position.y;
     const float wy = reg.GetComponent<Arcane::WorldTransform>(e)->matrix[3].y;
-    CHECK(y > 0.0f);                                             // it fell (+Y down)
+    CHECK(y < 0.0f);                                             // it fell (+Y UP since F4 plan 1 T2)
     CHECK(wy == Catch::Approx(y).margin(1e-6f));                 // propagation saw this step's write-back
 }
 

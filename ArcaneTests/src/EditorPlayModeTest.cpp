@@ -287,7 +287,10 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
     reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
     reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
     const Astra::Entity e = reg.CreateEntity();
-    Arcane::Transform lt; lt.position = glm::vec3(0.0f, -1.0f, 0.0f);
+    // +Y is UP since F4 plan 1 T2: the authored pose is a metre ABOVE the
+    // origin and gravity pulls it to MORE negative y (it used to be the
+    // mirror image of this -- y = -1 and a fall towards zero).
+    Arcane::Transform lt; lt.position = glm::vec3(0.0f, 1.0f, 0.0f);
     reg.AddComponent<Arcane::Transform>(e, lt);
     reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
     Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
@@ -306,12 +309,12 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
     for (int i = 0; i < 30; ++i) { runtime.EnsurePhysics(); runtime.Loop().Advance(1.0 / 60.0); }
     {
         Astra::Registry& live = runtime.Registry();
-        float y = -1.0f;
+        float y = 1.0f;
         for (Astra::Entity le : live.GetEntityManager())
             if (const auto* rbp = live.GetComponent<Arcane::RigidBody2D>(le))
                 if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
                     y = live.GetComponent<Arcane::Transform>(le)->position.y;
-        CHECK(y > -0.5f);                           // it fell during Play
+        CHECK(y < 0.5f);                            // it fell during Play
     }
 
     REQUIRE(play.Stop(runtime));                    // restore: the registry is replaced
@@ -333,7 +336,7 @@ TEST_CASE("Play lets a body fall; Stop returns it to the authored pose with a fr
             if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
             { ++dynamic; y = restored.GetComponent<Arcane::Transform>(le)->position.y; }
     REQUIRE(dynamic == 1);
-    CHECK(y == Catch::Approx(-1.0f));               // the authored pose
+    CHECK(y == Catch::Approx(1.0f));                // the authored pose
     CHECK(res->entityToBody.size() == 1);           // re-minted from it
 }
 
@@ -404,7 +407,8 @@ TEST_CASE("Play starts from the AUTHORED state, not the Edit world: an authored 
 namespace
 {
     // The physics demo's shape, built into whatever registry the Runtime holds
-    // NOW: a scene root and one dynamic circle a metre above the origin.
+    // NOW: a scene root and one dynamic circle a metre above the origin --
+    // y = +1 since the +Y flip (F4 plan 1 T2); it falls towards negative y.
     Astra::Entity BuildFallingBody(Arcane::Runtime& runtime)
     {
         Astra::Registry& reg = runtime.Registry();
@@ -415,7 +419,7 @@ namespace
         reg.AddComponent<Arcane::WorldTransform>(root, Arcane::WorldTransform{});
         reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
         const Astra::Entity e = reg.CreateEntity();
-        Arcane::Transform lt; lt.position = glm::vec3(0.0f, -1.0f, 0.0f);
+        Arcane::Transform lt; lt.position = glm::vec3(0.0f, 1.0f, 0.0f);
         reg.AddComponent<Arcane::Transform>(e, lt);
         reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{});
         Arcane::RigidBody2D rb; rb.type = Manifold2D::Physics::BodyType::Dynamic;
@@ -468,13 +472,13 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
     // would mint the body; AdvanceSim's loop must not step it).
     for (int i = 0; i < 30; ++i) EditorFrame(runtime);
     const float yEdit = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(e)->position.y;
-    CHECK(yEdit == Catch::Approx(-1.0f));           // it did NOT fall in Edit mode
+    CHECK(yEdit == Catch::Approx(1.0f));            // it did NOT fall in Edit mode
 
     // Play: NOW it falls.
     REQUIRE(play.Play(runtime));
     for (int i = 0; i < 30; ++i) EditorFrame(runtime);
     const float yPlay = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(e)->position.y;
-    CHECK(yPlay > -0.5f);
+    CHECK(yPlay < 0.5f);
 
     // Stop: back to the AUTHORED pose, not the fallen one -- and paused.
     REQUIRE(play.Stop(runtime));
@@ -486,7 +490,7 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
             if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
             { ++dynamic; yStop = std::as_const(restored).GetComponent<Arcane::Transform>(le)->position.y; }
     REQUIRE(dynamic == 1);
-    CHECK(yStop == Catch::Approx(-1.0f));
+    CHECK(yStop == Catch::Approx(1.0f));
     // And it STAYS put across further Edit-mode frames after the restore.
     for (int i = 0; i < 30; ++i) EditorFrame(runtime);
     yStop = 0.0f;
@@ -494,7 +498,7 @@ TEST_CASE("opening a scene in Edit mode does not simulate it: bodies hold their 
         if (const auto* rbp = std::as_const(runtime.Registry()).GetComponent<Arcane::RigidBody2D>(le))
             if (rbp->type == Manifold2D::Physics::BodyType::Dynamic)
                 yStop = std::as_const(runtime.Registry()).GetComponent<Arcane::Transform>(le)->position.y;
-    CHECK(yStop == Catch::Approx(-1.0f));
+    CHECK(yStop == Catch::Approx(1.0f));
 }
 
 // ---- Core-DLL split, plan 1 Task 7: the three play TOPOLOGIES ---------------

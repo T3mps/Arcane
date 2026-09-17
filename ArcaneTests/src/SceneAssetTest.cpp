@@ -432,7 +432,7 @@ TEST_CASE("SaveSceneFile emits a v4 assets manifest: distinct, sorted, identity-
 
     std::ifstream in(file, std::ios::binary);
     const nlohmann::json doc = nlohmann::json::parse(in);
-    REQUIRE(doc["version"].get<int>() == 5);
+    REQUIRE(doc["version"].get<int>() == 6);   // v6 = the +Y flip (F4 plan 1 T2)
     REQUIRE(doc.contains("assets"));
     REQUIRE(doc["assets"].is_array());
     REQUIRE(doc["assets"].size() == 2);   // `early` ONCE, despite its two mentions
@@ -519,6 +519,44 @@ TEST_CASE("a v4 scene still loads after the v5 bump", "[scene][json]")
     const Arcane::SceneRoot* sr = fresh.GetResource<Arcane::SceneRoot>();
     REQUIRE(sr != nullptr);
     CHECK(fresh.GetComponent<Arcane::Transform>(sr->entity)->position.x == 7.0f);
+}
+
+TEST_CASE("a v5 scene still loads after the v6 bump, mirrored to +Y up", "[scene][json]")
+{
+    // v6 (2026-09-17, F4 plan 1 T2, spec s2) is a THIRD class of bump: the
+    // bytes stay readable but they MEAN the mirror image, so the loader
+    // migrates instead of refusing. This is the FILE path (ReadSceneFile ->
+    // ApplySceneDocument), which is how the ReferenceProject scenes reached
+    // the new convention. LITERAL 5 -- see the v3 case above for why not the
+    // symbolic constant.
+    const std::filesystem::path dir  = TempDir("arcane_scene_asset_v5");
+    const std::filesystem::path file = dir / ("legacy5" + std::string(Arcane::Scene::kSceneExt));
+    const std::string tName(Astra::GetMeta<Arcane::Transform>()->typeName);
+
+    nlohmann::json e0;
+    e0["components"][tName]["position"] = { 7.0, 2.0, 0.0 };
+    e0["parent"] = -1;
+    nlohmann::json doc;
+    doc["id"]       = "00000000-0000-0000-0000-000000000003";
+    doc["version"]  = 5;   // LITERAL
+    doc["assets"]   = nlohmann::json::array();
+    doc["entities"] = nlohmann::json::array({ e0 });
+    std::ofstream(file, std::ios::binary) << doc.dump();
+
+    std::string err;
+    const auto read = Arcane::Scene::ReadSceneFile(file, &err);
+    REQUIRE(read.has_value());
+    CHECK(err.empty());
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry fresh{components};
+    Arcane::RegisterSceneComponents(fresh);
+    REQUIRE(Arcane::Scene::ApplySceneDocument(*read, fresh));
+    const Arcane::SceneRoot* sr = fresh.GetResource<Arcane::SceneRoot>();
+    REQUIRE(sr != nullptr);
+    const Arcane::Transform* t = fresh.GetComponent<Arcane::Transform>(sr->entity);
+    REQUIRE(t != nullptr);
+    CHECK(t->position.x == 7.0f);    // X is not a mirrored axis
+    CHECK(t->position.y == -2.0f);   // ...Y is
 }
 
 TEST_CASE("the scene loader never reads the assets manifest", "[scene][json]")

@@ -80,7 +80,17 @@ namespace Arcane::Scene
     // engine would refuse on read (its bridge had no container branch), so
     // the number says so; nothing a v4 file already said changed, and v4 (and
     // v3) keep loading -- kSceneJsonVersionMin stays 3.
-    inline constexpr int kSceneJsonVersion = 5;
+    //
+    // v6 (2026-09-17, F4 plan 1, spec 2026-09-17-f4-editor-3d-authoring s2): the
+    // world is +Y UP. A v5 (or older) file was authored +Y down, so the loader
+    // MIGRATES it on load -- MigrateV5ToYUp below -- and the next save writes
+    // it as v6. No file is refused for being old, and none is ever silently
+    // mirrored: the migration is the one place the sign changes. This is a
+    // THIRD class of bump, neither v3's break nor v4/v5's pure addition -- the
+    // bytes a v5 file already carries stay readable, but they MEAN the mirror
+    // image of what they used to, so the number is what tells the loader to
+    // rewrite them.
+    inline constexpr int kSceneJsonVersion = 6;
 
     // The OLDEST schema this build still loads. v4's addition is additive, so a
     // v3 file is read exactly as it always was (the loader simply never looks
@@ -223,6 +233,77 @@ namespace Arcane::Scene
 
     namespace Detail
     {
+        // The +Y flip for a pre-v6 scene document, IN PLACE. Reflecting the
+        // world across the XZ plane: y -> -y for positions/offsets/velocities/
+        // gravity, and a rotation quaternion (stored [x,y,z,w],
+        // ReflectionJson.hpp) conjugates to [-x, y, -z, w] -- a rotation about
+        // an axis IN the mirror plane keeps its sense, one about a
+        // perpendicular axis (X or Z) reverses.
+        //
+        // Scale is deliberately NOT touched: it is an extent, not a direction.
+        // Nothing else in a scene carries a world Y -- Camera has no pose
+        // fields (its entity's Transform places it) and SpriteRenderer has
+        // none.
+        //
+        // Every lookup is defensive because this runs over a file, not over
+        // something this build wrote: a missing key, a short array, a
+        // non-number element and a non-object entry all leave the document
+        // exactly as they found it rather than throwing. The engine is
+        // exception-free and LoadJson's contract is a clean false, never a
+        // throw through a migration.
+        inline void MigrateV5ToYUp(nlohmann::json& doc)
+        {
+            // ZERO is left exactly as it is, deliberately: negating it is a
+            // no-op mathematically but writes "-0.0" into the file, which would
+            // put a negative zero on most rows of every migrated scene for no
+            // reason and make the one-time re-save diff unreadable.
+            auto neg = [](nlohmann::json& v)
+            {
+                if (!v.is_number()) return;
+                const double d = v.get<double>();
+                if (d != 0.0) v = -d;
+            };
+            auto negAt = [&neg](nlohmann::json& arr, std::size_t i)
+            {
+                if (arr.is_array() && arr.size() > i) neg(arr[i]);
+            };
+            if (doc.contains("entities") && doc["entities"].is_array())
+            {
+                for (auto& entry : doc["entities"])
+                {
+                    if (!entry.is_object()) continue;
+                    auto cit = entry.find("components");
+                    if (cit == entry.end() || !cit->is_object()) continue;
+                    nlohmann::json& c = *cit;
+                    if (auto t = c.find("Arcane::Transform"); t != c.end() && t->is_object())
+                    {
+                        if (t->contains("position")) negAt((*t)["position"], 1);
+                        if (t->contains("rotation")) { negAt((*t)["rotation"], 0); negAt((*t)["rotation"], 2); }
+                    }
+                    if (auto col = c.find("Arcane::Collider2D"); col != c.end() && col->is_object()
+                        && col->contains("fixtures") && (*col)["fixtures"].is_array())
+                    {
+                        for (auto& fx : (*col)["fixtures"])
+                        {
+                            if (!fx.is_object()) continue;
+                            if (fx.contains("localPos"))   negAt(fx["localPos"], 1);
+                            if (fx.contains("localAngle")) neg(fx["localAngle"]);
+                        }
+                    }
+                    if (auto rb = c.find("Arcane::RigidBody2D"); rb != c.end() && rb->is_object()
+                        && rb->contains("velocity"))
+                        negAt((*rb)["velocity"], 1);
+                    if (auto ps = c.find("Arcane::PhysicsSettings"); ps != c.end() && ps->is_object()
+                        && ps->contains("gravity"))
+                        negAt((*ps)["gravity"], 1);
+                }
+            }
+            // Stamped unconditionally, including for an entity-less document:
+            // the version is a statement about the CONVENTION the file is in,
+            // and a scene with nothing to flip is in the new one either way.
+            doc["version"] = kSceneJsonVersion;
+        }
+
         // Outcome of AddComponentByTypeName. The two Skipped* values are both
         // "the type could not be instantiated at all" -- forward-compat, the
         // caller tolerates this and the scene still loads -- but split by
@@ -330,7 +411,24 @@ namespace Arcane::Scene
             const int version = vit->get<int>();
             if (version < kSceneJsonVersionMin || version > kSceneJsonVersion) return false;
 
-            const auto& entities = doc["entities"];
+            // v6 (F4 plan 1, spec s2): a pre-v6 file is +Y down. Migrate a COPY
+            // and load THAT -- `doc` is a const reference the caller still owns
+            // and keeps reading (SceneAsset's SceneDocument holds it past the
+            // apply), so rewriting it in place would mutate someone else's
+            // document as a side effect of a load.
+            nlohmann::json migrated;
+            const nlohmann::json* src = &doc;
+            if (version < kSceneJsonVersion)
+            {
+                migrated = doc;
+                Detail::MigrateV5ToYUp(migrated);
+                src = &migrated;
+                ARC_INFO("scene load: migrated a v{} (+Y down) scene to v{} (+Y up); "
+                         "it will be written as v{} on the next save",
+                         version, kSceneJsonVersion, kSceneJsonVersion);
+            }
+
+            const auto& entities = (*src)["entities"];
             if (!entities.is_array()) return false;
 
             Astra::ComponentRegistry* creg = reg.GetComponentRegistry();

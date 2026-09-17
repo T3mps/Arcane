@@ -304,7 +304,7 @@ namespace Arcane
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();
         // Scene-root PhysicsSettings when present, else the project's physics
-        // block, else PhysicsConfig's default (0, 9.81; +Y down).
+        // block, else PhysicsConfig's default (0, -9.81; +Y up, F4).
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:

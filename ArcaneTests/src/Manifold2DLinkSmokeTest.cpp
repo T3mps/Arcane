@@ -27,6 +27,10 @@ TEST_CASE("Manifold2D vendored lib links and a body falls under gravity", "[mani
     const Real y0 = world.Position(body).y;
     for (int i = 0; i < 30; ++i) world.Step(Real(1) / Real(60));
 
-    // Engine is y-down: gravity increases y. If the lib linked and stepped, it fell.
+    // The VENDORED LIB's own default gravity is Box2D's (0, +10), which this
+    // case leaves untouched -- so y increases. It is not a statement about the
+    // engine's world, which is +Y up since F4 plan 1 T2 (the engine supplies
+    // gravity from PhysicsSettings/PhysicsConfig, now (0, -9.81)). If the lib
+    // linked and stepped, it moved along its own gravity.
     CHECK(world.Position(body).y > y0);
 }

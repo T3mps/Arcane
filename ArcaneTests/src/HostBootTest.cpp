@@ -716,15 +716,20 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
         const Arcane::Transform* boxA =
             runtime.Registry().GetComponent<Arcane::Transform>(byName["BoxA"]);
         REQUIRE(boxA != nullptr);
+        // Y and the Z rotation MIRRORED by the +Y flip (F4 plan 1 T2): the
+        // scene file was re-saved at v6 with every Y negated, so the authored
+        // values these pin are the mirror image of the +Y-down ones. The
+        // magnitudes are unchanged, which is the point -- a defaulted vec3
+        // still fails them.
         CHECK(boxA->position.x == Catch::Approx(-1.0f));
-        CHECK(boxA->position.y == Catch::Approx(-0.5f));
+        CHECK(boxA->position.y == Catch::Approx(0.5f));
         CHECK(boxA->position.z == Catch::Approx(0.0f));
 
         REQUIRE(byName.count("BoxB") == 1);
         const Arcane::Transform* boxB =
             runtime.Registry().GetComponent<Arcane::Transform>(byName["BoxB"]);
         REQUIRE(boxB != nullptr);
-        CHECK(Arcane::RotationZ(boxB->rotation) == Catch::Approx(0.35f).margin(1e-4));
+        CHECK(Arcane::RotationZ(boxB->rotation) == Catch::Approx(-0.35f).margin(1e-4));
     }
 
     // Task 11 (F2a): the reference scene's new mesh content. Same discipline
@@ -742,7 +747,7 @@ TEST_CASE("ReferenceProject opens into its authored boot scene end to end", "[ho
             runtime.Registry().GetComponent<Arcane::Transform>(meshCube);
         REQUIRE(meshCubeTransform != nullptr);
         CHECK(meshCubeTransform->position.x == Catch::Approx(0.4f));
-        CHECK(meshCubeTransform->position.y == Catch::Approx(0.3f));
+        CHECK(meshCubeTransform->position.y == Catch::Approx(-0.3f));   // mirrored by the +Y flip (F4 plan 1 T2)
         CHECK(meshCubeTransform->position.z == Catch::Approx(0.0f));
 
         const Arcane::MeshRenderer* meshRenderer =

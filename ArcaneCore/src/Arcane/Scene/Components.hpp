@@ -179,10 +179,14 @@ namespace Arcane
     // and PostProcess, where scene-level facts already live; on any other
     // entity it is ignored (pinned by RuntimeTest). Presence IS the override:
     // add it to change gravity for this scene, remove it to fall back to the
-    // project. +Y is DOWN (screen-space world, Manifold2D's y-down default).
+    // project. +Y is UP (one right-handed world; the 2D plane is XY viewed
+    // down -Z) since F4 plan 1 (spec 2026-09-17-f4-editor-3d-authoring s2), so
+    // gravity points at NEGATIVE Y -- the physics-wiring era's "+Y down,
+    // Manifold2D's y-down default" is superseded. The vendored library's own
+    // WorldDef default is still Box2D's; the engine supplies this one.
     struct PhysicsSettings
     {
-        glm::vec2 gravity{0.0f, 9.81f};   // m/s^2; +Y down
+        glm::vec2 gravity{0.0f, -9.81f};   // m/s^2; +Y UP (F4, spec s2)
     };
 
     // The scene's post-processing stack (post arc): the Guid of a SAVED
@@ -282,7 +286,7 @@ namespace Arcane
     // where a component has several groups; SpriteRenderer below is that case.
     ASTRA_REFLECT_TYPE(Transform)
         ASTRA_REFLECT_FIELD(Transform, position)
-            ASTRA_REFLECT_ATTR(Tooltip, "World position in meters (MKS units). The renderer applies no Y-flip, so +Y moves an entity DOWN on screen, not up.")
+            ASTRA_REFLECT_ATTR(Tooltip, "World position in meters (MKS units). +Y is UP: the 2D plane is XY viewed down -Z, the same convention as the 3D camera.")
         // AngleFormat is EXPLICIT (not omitted) so this row's unit is
         // readable at the reflect block itself, without a trip to
         // AngleUnitForField's default (InspectorMeta.cpp) to confirm it.

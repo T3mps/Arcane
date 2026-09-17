@@ -375,9 +375,12 @@ TEST_CASE("body still steps after a scale rebuild", "[transform-sync]")
 {
     Astra::Registry reg;
     // Gravity on for this one: prove the rebuilt body is a live dynamic body.
+    // NEGATIVE y since the +Y flip (F4 plan 1 T2) -- this case authors its own
+    // WorldDef rather than going through the engine default, so the sign is
+    // the test's own statement of "down".
     RegisterSceneComponents(reg);
     RegisterPhysicsComponents(reg);
-    Phys::WorldDef wd; wd.gravityX = 0.0f; wd.gravityY = 10.0f;
+    Phys::WorldDef wd; wd.gravityX = 0.0f; wd.gravityY = -10.0f;
     reg.SetResource(PhysicsResource{ std::make_unique<Phys::PhysicsWorld>(wd), {} });
     Astra::Entity e = reg.CreateEntity();
     Transform lt; lt.position = glm::vec3(0.0f);
@@ -397,7 +400,7 @@ TEST_CASE("body still steps after a scale rebuild", "[transform-sync]")
 
     PhysicsSystem play(kDt, /*stepWorld=*/true);
     for (int i = 0; i < 10; ++i) play(reg);        // must fall under gravity
-    CHECK(reg.GetComponent<Transform>(e)->position.y > 0.1f);
+    CHECK(reg.GetComponent<Transform>(e)->position.y < -0.1f);
 }
 
 // ---- review-coverage follow-ups -------------------------------------------

@@ -60,5 +60,5 @@ TEST_CASE("PhysicsSettings is a reflected, roster-registered scene component", "
     REQUIRE(components->GetComponentDescriptor(Astra::TypeID<Arcane::PhysicsSettings>::Value()) != nullptr);
     Arcane::PhysicsSettings def;
     CHECK(def.gravity.x == 0.0f);
-    CHECK(def.gravity.y == Catch::Approx(9.81f));   // +Y is down
+    CHECK(def.gravity.y == Catch::Approx(-9.81f));   // +Y is UP (F4 plan 1 T2, spec s2)
 }
