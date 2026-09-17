@@ -7,6 +7,7 @@
 #include "Project/RecentProjects.hpp"   // RecentSelection (File -> Open Recent)
 #include "Project/SceneRecents.hpp"   // SceneRecents::List (File -> Open Recent Scene)
 #include "Viewport/ViewportInput.hpp"
+#include "Viewport/ViewportSettings.hpp"   // ViewportToolState (ViewMode + ViewportSettings)
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
@@ -246,14 +247,38 @@ namespace Arcane::Editor
     // its node (no tab bar) -- in every one of those there is no tab to select.
     void SelectDockTab(const char* windowName);
 
+    // Everything the Viewport's tool overlay reads and writes (F4 plan 1 T8).
+    // References into EditorApp's state, so a click on the overlay edits the
+    // host's member directly and the host reads the new value next frame:
+    // the view-mode segments assign `viewMode` exactly as the Alt+G / Alt+J
+    // keys do (EditorCamera::Resolve reads it), and the settings popup's
+    // fovYDeg / speedScalar / settings edits are live the same way. All of it
+    // persists through the [EditorViewport][Camera] ini block (Task 7's
+    // handler, ViewportSettings.hpp).
+    //
+    // gizmoToolsEnabled is EditorApp::GizmoToolsEnabled(): false in
+    // Perspective until plan 2 gives the gizmo the full ViewTransform, and
+    // the overlay greys Move/Rotate/Scale on it (Select stays live).
+    struct ViewportToolState
+    {
+        bool&                              gizmoEnabled;
+        Arcane::GizmoMode&                 mode;
+        Arcane::GizmoSpace&                space;
+        Arcane::Editor::ViewMode&          viewMode;
+        Arcane::Editor::ViewportSettings&  settings;
+        float&                             fovYDeg;
+        float&                             speedScalar;
+        bool                               gizmoToolsEnabled;   // false in Perspective until plan 2
+    };
+
     // Draw the scene texture into a dockable Viewport window; report its rect,
     // hover/focus, and the content-region size the offscreen canvas should match.
-    // showToolOverlay gates the top-right transform-tool buttons: the host passes
-    // false in Play mode, where the game owns the viewport and the edit tools
-    // (like the gizmo they drive) have no business on screen.
+    // showToolOverlay gates the top-right tool overlay (the 2D | Persp view
+    // control, the view-settings gear, and the transform-tool buttons): the
+    // host passes false in Play mode, where the game owns the viewport and
+    // the edit tools (like the gizmo they drive) have no business on screen.
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          bool& gizmoEnabled, Arcane::GizmoMode& mode,
-                                          Arcane::GizmoSpace& space, bool showToolOverlay);
+                                          ViewportToolState& tools, bool showToolOverlay);
 
     // The Outliner (replaces the flat Hierarchy panel). Pure row data comes
     // from BuildOutlinerRows (EntityList.hpp, headless-tested); this shell

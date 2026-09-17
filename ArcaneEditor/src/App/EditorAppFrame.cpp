@@ -3240,10 +3240,20 @@ namespace Arcane::Editor
         const std::uint64_t vpTexture = m_viewportTargets.graph
                                           ? m_viewportTargets.graph->OffscreenTextureId()
                                           : 0;
+        // The overlay's state, by reference (F4 plan 1 T8): the 2D | Persp
+        // segments assign m_camera.mode exactly as Alt+J / Alt+G do (Resolve
+        // reads it next frame); the settings popup edits m_viewSettings, the
+        // orbit fov and the speed scalar in place, and the camera reads them
+        // per frame. gizmoToolsEnabled greys Move/Rotate/Scale in Perspective.
+        Arcane::Editor::ViewportToolState tools{
+            m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
+            m_camera.mode, m_viewSettings,
+            m_camera.orbit.fovYDeg, m_camera.speedScalar,
+            GizmoToolsEnabled(),
+        };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
-                                            m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
-                                            /*showToolOverlay=*/!InPlayMode());
+                                            tools, /*showToolOverlay=*/!InPlayMode());
         m_viewportDockId = fs.vp.dockId;
         m_viewportTargets.pendingW = fs.vp.desiredW;
         m_viewportTargets.pendingH = fs.vp.desiredH;

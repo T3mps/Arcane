@@ -1055,23 +1055,38 @@ namespace Arcane::Editor
     }
 
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          bool& gizmoEnabled, Arcane::GizmoMode& mode,
-                                          Arcane::GizmoSpace& space, bool showToolOverlay)
+                                          ViewportToolState& tools, bool showToolOverlay)
     {
+        // The style alpha OUTSIDE any BeginDisabled scope, captured up front:
+        // BeginDisabled multiplies g.Style.Alpha (imgui.cpp:8899-8900) and a
+        // tooltip Begin()s under whatever alpha is current, so a greyed
+        // button's tooltip would itself come out at 60%. The helpers push
+        // this value back around SetTooltip so the explanation of WHY a tool
+        // is greyed is drawn at full strength.
+        const float tooltipAlpha = ImGui::GetStyle().Alpha;
+        auto tooltip = [tooltipAlpha](const char* tip)
+        {
+            // AllowWhenDisabled: the disabled Move/Rotate/Scale buttons still
+            // explain themselves on hover (imgui.cpp:4971 masks plain hover).
+            if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) return;
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, tooltipAlpha);
+            ImGui::SetTooltip("%s", tip);
+            ImGui::PopStyleVar();
+        };
         // Stateless icon-button helpers (mirrors the toolbar's).
-        auto iconBtn = [](const char* icon, const char* id, const char* tip) -> bool
+        auto iconBtn = [&tooltip](const char* icon, const char* id, const char* tip) -> bool
         {
             const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            tooltip(tip);
             return clicked;
         };
-        auto iconToggle = [](const char* icon, const char* id, bool active, const char* tip) -> bool
+        auto iconToggle = [&tooltip](const char* icon, const char* id, bool active, const char* tip) -> bool
         {
             if (active) ImGui::PushStyleColor(ImGuiCol_Button,
                                               ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
             if (active) ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            tooltip(tip);
             return clicked;
         };
 
@@ -1094,33 +1109,118 @@ namespace Arcane::Editor
         r.hovered = ImGui::IsWindowHovered();
         r.focused = ImGui::IsWindowFocused();
 
-        // UE5-style transform-tool overlay at the top-right of the viewport image:
-        // Select (no gizmo) / Move / Rotate / Scale + Local-World. Drawn over the
-        // image; a click on it changes the tool and must NOT also pick an entity.
-        // Hidden in Play mode (showToolOverlay=false): the game owns the viewport
-        // there, and with the overlay gone overlayHovered stays false, so clicks
-        // in that corner fall through to the game like anywhere else.
+        // UE5-style tool overlay at the top-right of the viewport image, two
+        // groups on one row (F4 plan 1 T8, spec s6):
+        //   [2D | Persp] [gear]   [Select] [Move] [Rotate] [Scale] [Local/World]
+        // The view control on the LEFT: a two-segment toggle for the editor
+        // camera's ViewMode (the same assignment Alt+J / Alt+G make) and a
+        // gear opening the view-settings popup (grid, grid plane, fov, camera
+        // speed, gizmo size). The transform tools on the right as before.
+        // Drawn over the image; a click on it changes the tool/view and must
+        // NOT also pick an entity. Hidden in Play mode (showToolOverlay=false):
+        // the game owns the viewport there, and with the overlay gone
+        // overlayHovered stays false, so clicks in that corner fall through to
+        // the game like anywhere else.
         bool overlayHovered = false;
         if (showToolOverlay)
         {
+            using Arcane::Editor::ViewMode;
+            using Arcane::Editor::GridPlane;
+            bool&               gizmoEnabled = tools.gizmoEnabled;
+            Arcane::GizmoMode&  mode         = tools.mode;
+            Arcane::GizmoSpace& space        = tools.space;
+
             const ImGuiStyle& st = ImGui::GetStyle();
             auto bw = [&](const char* ic){ return ImGui::CalcTextSize(ic).x + st.FramePadding.x * 2.0f; };
-            const float totalW = bw(ICON_LC_MOUSE_POINTER_2) + bw(ICON_LC_MOVE) + bw(ICON_LC_ROTATE_3D)
-                               + bw(ICON_LC_SCALE_3D) + bw(ICON_LC_BOX) + st.ItemSpacing.x * 4.0f;
+            // Eight buttons; the gap between the two groups is three item
+            // spacings (the other six joints are one each), so the row's
+            // right edge lands `pad` from the image's regardless of the font.
+            const float groupGap = st.ItemSpacing.x * 3.0f;
+            const float totalW = bw(ICON_LC_SQUARE) + bw(ICON_LC_BOX) + bw(ICON_LC_SETTINGS_2)
+                               + bw(ICON_LC_MOUSE_POINTER_2) + bw(ICON_LC_MOVE) + bw(ICON_LC_ROTATE_3D)
+                               + bw(ICON_LC_SCALE_3D) + bw(ICON_LC_BOX)
+                               + st.ItemSpacing.x * 6.0f + groupGap;
             const float pad = 8.0f;
             ImGui::SetCursorScreenPos(ImVec2(origin.x + (float)texW - totalW - pad, origin.y + pad));
             ImGui::BeginGroup();
+
+            // --- View control: 2D | Persp + the settings gear ----------------
+            // MarkIniSettingsDirty on every edit here and in the popup, as the
+            // shader editor's preferences do (:716): the [EditorViewport]
+            // handler only WRITES when ImGui next saves, and a camera or
+            // settings change on its own dirties nothing.
+            if (iconToggle(ICON_LC_SQUARE, "##view_2d", tools.viewMode == ViewMode::TwoD, "2D view (Alt+J)"))
+            { tools.viewMode = ViewMode::TwoD; ImGui::MarkIniSettingsDirty(); }
+            ImGui::SameLine();
+            if (iconToggle(ICON_LC_BOX, "##view_persp", tools.viewMode == ViewMode::Perspective, "Perspective view (Alt+G)"))
+            { tools.viewMode = ViewMode::Perspective; ImGui::MarkIniSettingsDirty(); }
+            ImGui::SameLine();
+            if (iconBtn(ICON_LC_SETTINGS_2, "##view_settings", "View settings"))
+                ImGui::OpenPopup("##viewsettings");
+            // Drop the popup from the gear's bottom edge, right-aligned to it:
+            // the row hugs the image's right edge, so a left-anchored popup of
+            // this width would run off it. Appearing only -- ImGui keeps the
+            // position while it stays open.
+            ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMax().x,
+                                           ImGui::GetItemRectMax().y + st.ItemSpacing.y),
+                                    ImGuiCond_Appearing, ImVec2(1.0f, 0.0f));
+            if (ImGui::BeginPopup("##viewsettings"))
+            {
+                Arcane::Editor::ViewportSettings& settings = tools.settings;
+                bool edited = false;
+                ImGui::PushItemWidth(ImGui::GetFontSize() * 10.0f);
+                edited |= ImGui::Checkbox("Show grid", &settings.showGrid);
+                {
+                    int plane = static_cast<int>(settings.gridPlane);
+                    if (ImGui::Combo("Grid plane", &plane, "XZ (ground)\0XY (2D plane)\0"))
+                    { settings.gridPlane = (plane == 1) ? GridPlane::XY : GridPlane::XZ; edited = true; }
+                }
+                // AlwaysClamp on every slider: a Ctrl+click typed value past the
+                // range would otherwise land in the persisted block, which
+                // ViewportSettings::ReadIniLine refuses WHOLE on the next boot.
+                edited |= ImGui::SliderFloat("Field of view", &tools.fovYDeg, 20.0f, 120.0f, "%.0f deg",
+                                             ImGuiSliderFlags_AlwaysClamp);
+                edited |= ImGui::SliderFloat("Camera speed", &tools.speedScalar,
+                                             Arcane::Editor::ViewportSettings::kMinSpeedScalar,
+                                             Arcane::Editor::ViewportSettings::kMaxSpeedScalar, "%.2fx",
+                                             ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+                edited |= ImGui::SliderFloat("Gizmo size", &settings.gizmoSize, 0.5f, 3.0f, "%.2f",
+                                             ImGuiSliderFlags_AlwaysClamp);
+                ImGui::PopItemWidth();
+                if (edited) ImGui::MarkIniSettingsDirty();
+                ImGui::EndPopup();
+            }
+            // The popup is a window of its own, so while the cursor is over it
+            // r.hovered is already false; this covers the click OUTSIDE it that
+            // closes it (processed at EndFrame, imgui.cpp's
+            // UpdateMouseMovingWindowEndFrame, so IsPopupOpen is still true
+            // here on that frame): dismissing the dropdown must not also pick.
+            const bool viewSettingsOpen = ImGui::IsPopupOpen("##viewsettings");
+
+            ImGui::SameLine(0.0f, groupGap);
+
+            // --- Transform tools ---------------------------------------------
             if (iconToggle(ICON_LC_MOUSE_POINTER_2, "##tool_sel", !gizmoEnabled, "Select (Q)"))
                 gizmoEnabled = false;
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_MOVE_3D, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, "Move (W)"))
+            // Move/Rotate/Scale are greyed while the view has no 2D affine
+            // (Perspective, until plan 2) -- the state EditorApp::GizmoLive()
+            // already folds in; the buttons just show it (Ruling K).
+            const bool toolsOff = !tools.gizmoToolsEnabled;
+            const char* offSuffix = " (2D mode only until plan 2)";
+            const std::string tipT = std::string("Move (W)")   + (toolsOff ? offSuffix : "");
+            const std::string tipR = std::string("Rotate (E)") + (toolsOff ? offSuffix : "");
+            const std::string tipS = std::string("Scale (R)")  + (toolsOff ? offSuffix : "");
+            ImGui::BeginDisabled(toolsOff);
+            if (iconToggle(ICON_LC_MOVE_3D, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, tipT.c_str()))
             { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
+            if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, tipR.c_str()))
             { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_SCALE_3D, "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale, "Scale (R)"))
+            if (iconToggle(ICON_LC_SCALE_3D, "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale, tipS.c_str()))
             { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
+            ImGui::EndDisabled();
             ImGui::SameLine();
             {
                 const bool local = (space == Arcane::GizmoSpace::Local);
@@ -1129,7 +1229,8 @@ namespace Arcane::Editor
                     space = local ? Arcane::GizmoSpace::World : Arcane::GizmoSpace::Local;
             }
             ImGui::EndGroup();
-            overlayHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+            overlayHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax())
+                          || viewSettingsOpen;
         }
 
         // Capture a left-click inside the image, in viewport-local px (origin = image
