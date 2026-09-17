@@ -103,6 +103,20 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   Valve talks + papers; Source 2 is Valve's own successor, not a third-party
   fork). Nanite/Lumen/scene-SDF-first are non-goals. No leaked Source 2
   source, ever -- including private Rubikon-Lite.
+- **Direction and sequencing (2026-09-16, binding):**
+  `docs/research/2026-09-16-direction-and-sequencing.md`. Aphelyon (2D) is
+  the product; Arcane must not foundationally change under it. Order:
+  replication v1 SPEC -> render foundations F4 -> F3 -> F5 -> hygiene wave
+  (artifact format stamp, Hub GUID healing) -> cvars -> replication v1
+  implementation -> Aphelyon feature work (UI, particles, animation) ->
+  Linux/CI -> renderer tiers T1 onward. The 3D renderer tiers are deferred
+  SAFELY only because four guards go into the foundation specs: F5 declares
+  the DEFERRED pass slots + shared-depth contract (implements forward/2D
+  only); F3/F5 reserve TAA jitter + per-object motion vectors; the cooked
+  artifact format gets a version stamp before content accumulates; and
+  whether Aphelyon needs dynamic 2D lighting is decided BEFORE feature work
+  (yes = T1's light grid moves up). Every design still states what Source 2
+  does and why we match or diverge.
 
 ## Tests
 
