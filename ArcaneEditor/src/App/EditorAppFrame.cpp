@@ -15,6 +15,7 @@
 #include "Panels/EditorPanels.hpp"
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
+#include "Viewport/ViewportGrid.hpp"   // the 2D reference grid (F4 plan 1 T9, spec s5.1)
 #include "Viewport/ViewportImGuiInput.hpp"
 
 #include <Arcane/AssetPipeline/CookSession.hpp>   // F2b Task 12: MainLoop's pre-loop cook gate
@@ -1742,6 +1743,20 @@ namespace Arcane::Editor
         // bracket only -- both callers (the viewport frame and the capture
         // re-Begin) reach this line right after their Begin.
         b.SetViewProjection(m_runtime->View().ViewProjection());
+
+        // The 2D reference grid (F4 plan 1 T9, spec s5.1), FIRST and at the
+        // BOTTOM batcher layer (0, 0) so every sprite paints over it: decade
+        // levels on the metre, chosen from this frame's pixels-per-metre and
+        // clipped to the view's own world rect (ViewportGrid.hpp). Edit mode,
+        // the 2D view mode and the Show grid setting gate it; the Persp view's
+        // grid is Task 10's depth-tested GridNode, not these lines. In Play
+        // the view is the scene camera's and the grid is an editor affordance,
+        // so it stays off.
+        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::TwoD && m_viewSettings.showGrid)
+        {
+            const Arcane::ViewTransform& view = m_runtime->View();
+            Arcane::Editor::DrawGrid2D(b, view, Arcane::Editor::PlanGrid2D(Arcane::Editor::PixelsPerMetre(view)));
+        }
 
         m_runtime->SetRenderContext(&b);
         m_runtime->Loop().SubmitRender();

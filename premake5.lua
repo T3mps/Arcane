@@ -986,6 +986,12 @@ project "ArcaneTests"
         -- refusal table with a bare ImGuiTextBuffer (no context needed), same
         -- pattern as EditorCamera above.
         "%{wks.location}/ArcaneEditor/src/Viewport/ViewportSettings.cpp",
+        -- F4 plan 1 T9: ViewportGrid (the PURE decade-level plan + the line
+        -- draw through a ViewTransform into any Batcher2D) source-compiles into
+        -- the test exe so the [editor][grid] units drive the LOD rule and the
+        -- rect-clipped line counts against a recording batcher double -- no
+        -- ImGui, no device, same pattern as EditorCamera above.
+        "%{wks.location}/ArcaneEditor/src/Viewport/ViewportGrid.cpp",
         -- Widget layer: EditGesture's PURE decision core (gesture ownership +
         -- close-path verdicts) source-compiles into the test exe so the
         -- [editor] units drive the full decision table headlessly -- the ImGui
