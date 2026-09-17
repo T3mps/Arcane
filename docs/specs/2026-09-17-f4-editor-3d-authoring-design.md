@@ -179,7 +179,7 @@ AABB projected onto XY.
 
 | Input | Action | Unreal reference |
 |---|---|---|
-| right-drag | mouselook (yaw/pitch), WASD fly, Q/E down/up, Shift ×2 | `IsFlightCameraInputModeActive`, `ConvertMovementToDragRot` |
+| right-drag | mouselook (yaw/pitch at 0.2°/px, UE's `MouseSensitivty` default), WASD fly, Q/E down/up; Shift ×2 boost is OURS (Unity's) — UE has no boost and disables its flight keys while Shift is held | `IsFlightCameraInputModeActive`, `ConvertMovementToDragRot` |
 | wheel while right-drag | camera speed ×1.1 / ÷1.1 per notch, clamped to a min/max (UE 5.8's continuous `OnChangeCameraSpeed`; the old 8-step ladder is deprecated there) | `OnChangeCameraSpeed`, `FEditorViewportCameraSpeedSettings` |
 | Alt + left-drag | orbit the stored pivot | `ShouldOrbitCamera` (Alt, no Ctrl/Shift, perspective-only) |
 | middle-drag | pan in the view plane (moves the pivot with the eye) | `MoveViewportCamera` camera-relative branch |
@@ -187,10 +187,15 @@ AABB projected onto XY.
 | `F` | frame selection: pivot = bounds centre; `radius` = the AABB's half-diagonal; `distance = radius / tan(fovY/2)`, radius widened by the aspect when it exceeds 1 | `FocusViewportOnBox` |
 | `Home` | frame scene | — |
 
-**Fly and pan speed scale with the distance to the pivot** (UE's
-`bUseDistanceScaledCameraSpeed`: `speed × clamp(distance / 10 m, 0.01, 1000)`
-in our units), which is what makes "F, then fly" feel right at every zoom; a
-per-user **speed scalar** multiplies on top (UE's `CameraSpeedScalar`). Pitch
+**Fly and pan speed scale with the distance to the pivot** — UE's
+`bUseDistanceScaledCameraSpeed` shape, `min(distance / 10 m, 1000)`, which UE
+ships OFF by default and without a floor; ours is ON by default with a 0.1
+floor so a camera parked on its pivot still moves. That is what makes "F,
+then fly" feel right at every zoom. A per-user **speed scalar** multiplies on
+top (UE's `CameraSpeedScalar`). Wheel dolly is multiplicative about the pivot
+(Unity's; UE's is additive along the view vector and can cross the pivot), and
+middle-drag pan is grab-style (the world follows the cursor, matching our 2D
+pan; UE's default is the opposite sign). Pitch
 clamps to ±90° minus an epsilon (UE's pitch lock). Fly moves the pivot along
 with the eye so a later orbit turns about what you are looking at (Unreal's
 `LookAt` semantics; a dolly does not move it). **Rejected:** UE's left-drag

@@ -254,9 +254,10 @@ namespace Arcane
 
         // Perspective: origin = the eye, direction through the pixel.
         // Orthographic: origin = the pixel's point on the NEAR plane, direction =
-        // the view axis (parallel rays). UE unprojects its ortho origin at NDC
-        // z = 0.5 under reversed-Z; with forward-Z [0,1] the near plane is the
-        // safe origin (spec s3).
+        // the view axis (parallel rays). UE does the same under reversed-Z: its
+        // DeprojectScreenToWorld starts the ray at projection-space z = 1 (its
+        // near plane) and ends at 0.01 (SceneView.cpp:1510); forward-Z [0,1]
+        // puts our near plane at z = 0, hence the 0 below.
         [[nodiscard]] Ray ScreenToRay(glm::vec2 pixel) const noexcept
         {
             const float nx = viewport.x ? (pixel.x / float(viewport.x)) * 2.0f - 1.0f : 0.0f;
@@ -1044,7 +1045,11 @@ Keep the existing `SelectionFramingBounds` / `SceneFramingBounds` cases at the e
             const float halfH = o.distance * std::tan(glm::radians(o.fovYDeg) * 0.5f);
             return halfH > 0.0f ? float(vp.y) * 0.5f / halfH : 0.0f;
         }
-        float DistanceScale(float distance) noexcept   // UE's bUseDistanceScaledCameraSpeed, in metres
+        // UE's shape (bUseDistanceScaledCameraSpeed: min(distance / 1000 uu, 1000),
+        // NO floor, and OFF by default). Ours is ON by default -- it is what makes
+        // "F, then fly" feel right at every zoom -- with a 0.1 floor so a camera
+        // parked on its pivot can still move. The floor is ours, not UE's.
+        float DistanceScale(float distance) noexcept
         {
             return std::clamp(distance / 10.0f, 0.1f, 1000.0f);
         }
@@ -1085,10 +1090,13 @@ Keep the existing `SelectionFramingBounds` / `SceneFramingBounds` cases at the e
         orbit.pitchDeg  = std::clamp(orbit.pitchDeg + d.y * 0.2f, -90.0f + 1e-3f, 90.0f - 1e-3f);
         orbit.pivot = eye - DirFrom(orbit.yawDeg, orbit.pitchDeg) * orbit.distance;   // the eye stays put
     }
+    // 0.2 deg per pixel for BOTH Look and Orbit: UE's one MouseSensitivty
+    // setting (default .2) feeds free-look and orbit alike
+    // (EditorViewportClient.cpp ConvertMovementToDragRot / ...OrbitDragRot).
     void EditorCamera::Orbit(glm::vec2 d) noexcept
     {
-        orbit.yawDeg   -= d.x * 0.4f;
-        orbit.pitchDeg  = std::clamp(orbit.pitchDeg + d.y * 0.4f, -90.0f + 1e-3f, 90.0f - 1e-3f);
+        orbit.yawDeg   -= d.x * 0.2f;
+        orbit.pitchDeg  = std::clamp(orbit.pitchDeg + d.y * 0.2f, -90.0f + 1e-3f, 90.0f - 1e-3f);
     }
     void EditorCamera::Fly(glm::vec3 local, float dt, bool boost) noexcept
     {
@@ -1097,16 +1105,27 @@ Keep the existing `SelectionFramingBounds` / `SceneFramingBounds` cases at the e
         const glm::vec3 delta = (Right() * local.x + glm::vec3(0, 1, 0) * local.y + Forward() * local.z) * (speed * dt);
         orbit.pivot += delta;   // eye = pivot + dir*distance, so the eye moves by the same delta
     }
+    // GRAB-style: the world follows the cursor, in the camera's plane. UE's
+    // default is the opposite sign (camera-relative, bInvertMiddleMousePan
+    // false: the camera moves with the cursor); the grab sense matches our 2D
+    // pan, which is why it is chosen.
     void EditorCamera::Pan3D(glm::vec2 d, glm::uvec2 vp) noexcept
     {
         const float ppm = PixelsPerMetreAtPivot(orbit, vp);
         if (!(ppm > 0.0f)) return;
         orbit.pivot += (Right() * -d.x + Up() * d.y) / ppm;
     }
+    // MULTIPLICATIVE about the pivot, so the eye can never reach or pass it.
+    // UE's OnDollyPerspectiveCamera is ADDITIVE along the view vector (~0.96 m
+    // per notch at its default scroll speed) and does not move the LookAt, so
+    // a UE dolly can cross the pivot; the pivot-relative form is Unity's, and
+    // it is what keeps a later orbit sane after a dolly. Deliberate divergence.
     void EditorCamera::Dolly(float ticks) noexcept
     {
         orbit.distance = std::clamp(orbit.distance / std::pow(kWheelStep, ticks), kMinDistance, kMaxDistance);
     }
+    // UE's wheel-while-flying step is additive +-10 % (down = x0.9); a symmetric
+    // x1.1 / /1.1 keeps up-then-down a no-op. Limits are ours.
     void EditorCamera::AdjustSpeed(float ticks) noexcept
     {
         speedScalar = std::clamp(speedScalar * std::pow(1.1f, ticks), 0.01f, 100.0f);
@@ -1228,7 +1247,11 @@ TEST_CASE("A malformed or out-of-range ini line leaves the defaults", "[editor][
                 default: break;
                 }
             }
-            if (m_camGesture.kind == CameraGesture::Look)   // WASD/QE fly only while looking (UE: WASD_RMBOnly)
+            // WASD/QE fly only while LOOKING (right button). Narrower than UE's
+            // WASD_RMBOnly default, which admits any held mouse button; and the
+            // Shift boost is OURS (Unity's) -- UE has no boost, its flight keys
+            // are DISABLED while Shift is held.
+            if (m_camGesture.kind == CameraGesture::Look)
             {
                 glm::vec3 axis(0.0f);
                 if (snap.ScancodeDown(kScW)) axis.z += 1; if (snap.ScancodeDown(kScS)) axis.z -= 1;
@@ -1364,15 +1387,19 @@ git commit -m "feat(editor): the 2D grid -- decade levels on the metre with an 8
       ViewTransform view;                       // the editor camera
       enum class Plane : std::uint8_t { XZ = 0, XY = 1 } plane = Plane::XZ;
       float minorSpacing = 1.0f, majorEvery = 10.0f;      // metres
-      float fadeDistance = 200.0f;                       // metres: alpha reaches 0 here
+      float fadeDistance = 200.0f;                       // metres: alpha reaches 0 here (ours; UE relies on extent)
       glm::vec4 minorColor{0.5f,0.5f,0.5f,0.35f}, majorColor{0.6f,0.6f,0.6f,0.6f};
+      // The two in-plane ORIGIN AXES, drawn in colour over the grid (UE's
+      // UAxisColor/VAxisColor in DrawNewGrid): XZ plane -> X red, Z blue;
+      // XY plane -> X red, Y green. Spec s5.2.
+      glm::vec4 axisUColor{0.85f,0.25f,0.25f,0.9f}, axisVColor{0.3f,0.4f,0.9f,0.9f};
   };
   ARCANE_API void AddGridNode(RenderGraph&, NriGraphContext*, RgTexture canvas, nri::Format canvasFormat,
                               RgTexture depth /*invalid = no depth test*/, const GridSceneDesc&, std::uint32_t w, std::uint32_t h);
   class ARCANE_API GridNode { static std::unique_ptr<GridNode> Create(NriGraphContext&); void Release(Graveyard&, std::uint64_t);
                               void Prepare(nri::Format canvasFormat, bool hasDepth); void Record(RenderGraphNodeContext&, const GridSceneDesc&, std::uint32_t frameSlot); };
   ```
-  Shader: `grid.hlsl` — VS generates a 4-vertex (2-triangle, `SV_VertexID`) quad of half-extent `kExtent = 2000 m` in the plane, centred under the camera at `floor(eye.xz / 10) * 10` (UE's `FmodFloor` wrap), pushes `viewProj` + `eye` + params via root constants (≤128 bytes: `float4x4 viewProj; float4 eyeAndPlane; float4 params; float4 minorColor; float4 majorColor;` = 128); PS computes the analytic grid:
+  Shader: `grid.hlsl` — VS generates a 4-vertex (2-triangle, `SV_VertexID`) quad in the plane, centred under the camera at `floor(eye.xz / 10) * 10` (UE's `FmodFloor` wrap), with half-extent `max(2000 m, 100 * |height of the eye above the plane|)` (UE scales its radii with camera altitude so the grid never ends in view when you fly up). The constants — `float4x4 viewProj; float4 eyeAndPlane /*xyz eye, w plane id*/; float4 params /*minor, majorEvery, fadeDistance, halfExtent*/; float4 minorColor; float4 majorColor; float4 axisUColor; float4 axisVColor;` = 160 bytes — exceed Vulkan's 128-byte push-constant minimum, so they travel in ONE ordinary per-frame constant buffer (`b1, space1`, the `MeshNode` frame-CB shape: a 256-byte region per frame slot, one descriptor set per slot written once at Create; copy `CreateConstantArena` / `CreateSets` from `MeshNode.cpp`). No root constants, no textures, no sampler. PS computes the analytic grid and the two origin axes (the V axis where `abs(coord.x) < d.x`, the U axis where `abs(coord.y) < d.y`, drawn over the grid lines in their colours):
   ```hlsl
   float2 coord = worldPos in-plane / minorSpacing;
   float2 d = fwidth(coord);
@@ -1400,7 +1427,7 @@ and the `[gpu][pixel]` case (`GridNodeTest.cpp`, modelled on `MeshNodeTest.cpp:2
 
 - [ ] **Step 2: Build to verify failure.**
 
-- [ ] **Step 3: Implement `GridNode`** by copying `MeshNode`'s skeleton for the parts it shares (Create → `Init` loads `grid_vs`/`grid_ps` from the vehicle's bin cache the way `MeshNode::Init` does; a pipeline layout with ONE root-constant block of 128 bytes and no descriptor sets, so the register-space rule is moot; `PipelineFor(canvasFormat, hasDepth)` keyed on both; `Release` buries the layout). No vertex buffer: `CmdDraw(6)` with `SV_VertexID`. `Prepare` resolves the pipeline at declaration time (never in `Record`). `AddGridNode`: `builder.Write(canvas, RgUsage::ColorWrite); if (depth valid) { builder.Write(depth, RgUsage::DepthWrite); graph.SetDepthAttachment(depth); } graph.SetColorAttachments(canvas)` — `DepthWrite` is the graph's barrier state for a bound depth attachment; the PSO's `depth.write = false` is what keeps the grid from writing. Record fills the root constants from the desc (`viewProj = projection * view`, `eye = inverse(view)[3]`), sets the viewport/scissor like MeshNode, binds the pipeline, draws 6.
+- [ ] **Step 3: Implement `GridNode`** by copying `MeshNode`'s skeleton for the parts it shares (Create → `Init` loads `grid_vs`/`grid_ps` from the vehicle's bin cache the way `MeshNode::Init` does; a pipeline layout with ONE descriptor set (`b1, space1`, the per-frame constant buffer) and no root constants, no root sampler, so the register-space rule is moot; `PipelineFor(canvasFormat, hasDepth)` keyed on both; `Release` buries the layout). No vertex buffer: `CmdDraw(6)` with `SV_VertexID`. `Prepare` resolves the pipeline at declaration time (never in `Record`). `AddGridNode`: `builder.Write(canvas, RgUsage::ColorWrite); if (depth valid) { builder.Write(depth, RgUsage::DepthWrite); graph.SetDepthAttachment(depth); } graph.SetColorAttachments(canvas)` — `DepthWrite` is the graph's barrier state for a bound depth attachment; the PSO's `depth.write = false` is what keeps the grid from writing. Record writes this frame slot's constant-buffer region from the desc (`viewProj = projection * view`, `eye = inverse(view)[3]`, `halfExtent = max(2000, 100 * |eye height above the plane|)`), binds that slot's set, sets the viewport/scissor like MeshNode, binds the pipeline, draws 6.
 
 - [ ] **Step 4: Wire the editor** — `m_gridScene.view = m_runtime->View(); m_gridScene.plane = settings.gridPlane == XY ? Plane::XY : Plane::XZ; vp.grid = (!InPlayMode() && m_camera.mode == Perspective && m_viewSettings.showGrid) ? &m_gridScene : nullptr;`.
 
