@@ -77,10 +77,23 @@ namespace Arcane
                 //
                 // On a hit the 2D pose is written BACK INTO THE MATRIX: the XY
                 // translation, and the upper-left 2x2 rotated to the blended
-                // angle while its column lengths (the scale) are preserved --
-                // Transform::ToMatrix's own layout for a Z turn, m[0] = (c*sx,
-                // s*sx), m[1] = (-s*sy, c*sy). The 2D physics pose lives in XY;
-                // the Z rows/column and the Z translation are left untouched.
+                // angle while its column lengths (the scale) AND its handedness
+                // (a mirror) are preserved -- Transform::ToMatrix's own layout
+                // for a Z turn, m[0] = (c*sx, s*sx), m[1] = (-s*sy, c*sy), with
+                // a SIGNED sx. The 2D physics pose lives in XY; the Z
+                // rows/column and the Z translation are left untouched.
+                //
+                // Handedness (F4 plan 1 T5 review, Ruling J): a negative 2x2
+                // determinant is a mirrored basis. The matrix alone cannot say
+                // WHICH axis was flipped (R(t)*diag(-a,b) == R(t+pi)*diag(a,-b)),
+                // so the convention here is THE MIRROR IS ON X: the basis is read
+                // as R(t)*diag(-|sx|, |sy|), t taken from the first column with
+                // its mirror undone, atan2(-m[0].y, -m[0].x), and re-baked with
+                // sx negated. Reading the raw column would give t+pi, and
+                // AngleLerp would then sweep a half-turn from the physics angle
+                // while the re-bake dropped the mirror -- the same entity would
+                // draw differently with and without a hit (the miss path hands
+                // the authored basis to SpriteWorldQuad untouched).
                 if (interp && interp->captured)
                 {
                     if (const InterpSlot* slot = interp->slotOf.TryGet(e))
@@ -89,11 +102,16 @@ namespace Arcane
                             && interp->prev[slot->index].generation == slot->generation)
                         {
                             const InterpPose& pp = interp->prev[slot->index];
+                            // Handedness of the XY basis: det < 0 is a mirror,
+                            // read as an X mirror (see above).
+                            const bool mirrored = (m[0].x * m[1].y - m[0].y * m[1].x) < 0.0f;
                             // World rotation from the first basis column (for a
-                            // Z-axis turn m[0] = (c*sx, s*sx, 0)).
-                            const float curRot = std::atan2(m[0].y, m[0].x);
+                            // Z-axis turn m[0] = (c*sx, s*sx, 0)), the mirror
+                            // undone first so t is the body's angle, not t+pi.
+                            const float curRot = mirrored ? std::atan2(-m[0].y, -m[0].x)
+                                                          : std::atan2( m[0].y,  m[0].x);
                             const float rot    = AngleLerp(pp.angle, curRot, ctx->alpha);
-                            const float sx = glm::length(glm::vec2(m[0]));
+                            const float sx = glm::length(glm::vec2(m[0])) * (mirrored ? -1.0f : 1.0f);
                             const float sy = glm::length(glm::vec2(m[1]));
                             const float c = std::cos(rot), s = std::sin(rot);
                             m[3].x = Lerp(pp.position.x, m[3].x, ctx->alpha);
