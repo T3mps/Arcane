@@ -110,7 +110,7 @@ struct ViewTransform
     glm::mat4  projection;   // view -> clip, [0,1] forward-Z (perspectiveRH_ZO / orthoRH_ZO)
     glm::uvec2 viewport;     // pixels
     glm::vec3  WorldToScreen(glm::vec3 world) const;   // .xy = pixels (y down on screen), .z = ndc depth; w-divide inside
-    Ray        ScreenToRay(glm::vec2 pixel) const;      // perspective: origin = eye; ortho: per-pixel origin on the view plane, constant direction
+    Ray        ScreenToRay(glm::vec2 pixel) const;      // perspective: origin = eye; ortho: per-pixel origin on the NEAR plane, constant direction (UE unprojects at NDC z = 0.5 under reversed-Z; with forward-Z [0,1] the near plane is the safe origin)
     bool       IsOrthographic() const;
 };
 ```
@@ -166,25 +166,37 @@ struct EditorCamera
 ```
 
 **2D mode** = the XY-plane orthographic view down −Z, near/far symmetric about
-z = 0 (±1000 m) so 2D content at any authored Z is visible. Navigation is
-today's: right-drag pans (starts in the viewport, keeps tracking outside),
-wheel zooms about the cursor (`kWheelStep = 1.12`), `F` frames the selection,
-`Home` frames the scene. `FramingBounds` becomes a 3D AABB projected onto XY.
+z = 0 (±1000 m) so 2D content at any authored Z is visible (UE auto-calculates
+ortho planes from a depth pass; ours are fixed because sprites write no depth
+until F5, which inherits the question). Navigation is today's: right-drag pans
+(starts in the viewport, keeps tracking outside), wheel zooms multiplicatively
+about the cursor (`kWheelStep = 1.12`; UE: `bCenterZoomAroundCursor`),
+`halfHeight` clamped to [0.01 m, 10⁶ m] (UE's `MIN_/MAX_ORTHOZOOM`), `F`
+frames the selection, `Home` frames the scene. `FramingBounds` becomes a 3D
+AABB projected onto XY.
 
 **Perspective mode** follows Unreal's input model (the UX directive):
 
 | Input | Action | Unreal reference |
 |---|---|---|
 | right-drag | mouselook (yaw/pitch), WASD fly, Q/E down/up, Shift ×2 | `IsFlightCameraInputModeActive`, `ConvertMovementToDragRot` |
-| wheel while right-drag | camera speed step (8 settings, 0.033 … 32) | `OnChangeCameraSpeed` |
-| Alt + left-drag | orbit the pivot | `ShouldOrbitCamera` (perspective-only) |
-| middle-drag | pan in the view plane (moves the pivot) | `ConvertMovementToDragRot` MMB |
-| wheel | dolly along the view vector toward the cursor | `OnDollyPerspectiveCamera` |
-| `F` | frame selection: pivot = bounds centre, `distance = radius / sin(fovY/2)` (aspect-corrected) | `FocusViewportOnBox` |
+| wheel while right-drag | camera speed ×1.1 / ÷1.1 per notch, clamped to a min/max (UE 5.8's continuous `OnChangeCameraSpeed`; the old 8-step ladder is deprecated there) | `OnChangeCameraSpeed`, `FEditorViewportCameraSpeedSettings` |
+| Alt + left-drag | orbit the stored pivot | `ShouldOrbitCamera` (Alt, no Ctrl/Shift, perspective-only) |
+| middle-drag | pan in the view plane (moves the pivot with the eye) | `MoveViewportCamera` camera-relative branch |
+| wheel | dolly along the view vector (never toward the cursor — UE centres zoom on the cursor only in ortho) | `OnDollyPerspectiveCamera` |
+| `F` | frame selection: pivot = bounds centre; `radius` = the AABB's half-diagonal; `distance = radius / tan(fovY/2)`, radius widened by the aspect when it exceeds 1 | `FocusViewportOnBox` |
 | `Home` | frame scene | — |
 
-Pitch clamps to ±89°. Fly moves the pivot along with the eye so a later orbit
-turns about what you are looking at (Unreal's `LookAt` semantics).
+**Fly and pan speed scale with the distance to the pivot** (UE's
+`bUseDistanceScaledCameraSpeed`: `speed × clamp(distance / 10 m, 0.01, 1000)`
+in our units), which is what makes "F, then fly" feel right at every zoom; a
+per-user **speed scalar** multiplies on top (UE's `CameraSpeedScalar`). Pitch
+clamps to ±90° minus an epsilon (UE's pitch lock). Fly moves the pivot along
+with the eye so a later orbit turns about what you are looking at (Unreal's
+`LookAt` semantics; a dolly does not move it). **Rejected:** UE's left-drag
+"move forward and yaw" — the left button is selection here; and UE's
+"orbit around selection" option — the pivot is always the stored one that
+`F` sets (Unity's model), with the option a later view setting if wanted.
 
 **Persistence:** an `ImGuiSettingsHandler` block `[EditorViewport][Camera]`
 per project, the `[EditorPlayMode][State]` pattern — `Mode`, both transforms,
@@ -208,8 +220,12 @@ math is ported from `GraphGridPhase.hpp` as pure functions:
 - **decade levels on the metre**: 0.1, 1, 10, 100 m …; a **major** line every
   ten minors;
 - a level becomes visible when its screen spacing passes **8 px** and its alpha
-  ramps to full by **24 px**, so levels crossfade instead of popping (Unreal's
-  `DrawGridSection` fractional crossfade, expressed as alpha on primitives);
+  ramps to full by **24 px**, so levels crossfade instead of popping. (UE's
+  `DrawGridSection` picks the level by a log of spacing against screen density
+  exactly like this, but toggles the minor lines **binary** at the half-way
+  point of the fraction — no crossfade; the ramp is our improvement.)
+- the **major-line period is fixed at ten minors** (UE makes it a user
+  setting, `GetGridInterval`); a setting if anyone asks;
 - the visible line range comes from the viewport's world-space extent (the
   orthographic inverse), never a fixed count;
 - the **axes** draw last at full colour: X red, Y green.
@@ -237,6 +253,9 @@ alpha-blended into the canvas. A cube occludes the grid and sits on it —
 - **`MeshNode` exposes its depth attachment as a graph resource** so
   `GridNode` can read it. A small step toward F5's shared depth; the pass
   order and the clear seam are untouched.
+- **The grid is never pickable**: `GridNode` draws only into the canvas and
+  contributes nothing to the pick pass (UE clears the hit proxy before drawing
+  its grid for the same reason).
 
 *Rejected:* a line-list pipeline (none exists; aliases; cannot fade) and
 `MeshBuilder` line geometry (same aliasing, and a mesh-sized draw for a
@@ -246,8 +265,10 @@ screen-space effect).
 
 The viewport tool overlay (`EditorPanels.cpp` `Select/Move/Rotate/Scale +
 Local/World`) gains, at its left, a segmented **`2D | Persp`** control —
-Unity's affordance — with Unreal's keys: **Alt+G** perspective, **Alt+H** the
-XY orthographic view (Unreal's Front). A **view-settings** dropdown beside it:
+Unity's affordance — with Unreal's keys: **Alt+G** perspective, **Alt+J** the
+XY orthographic view. (Alt+J is Unreal's **Top**, `LVT_OrthoXY`; UE is Z-up,
+so its "Front" (Alt+H) is the YZ plane and would be the wrong analogue for
+Arcane's 2D plane.) A **view-settings** dropdown beside it:
 show grid, grid plane (XZ / XY), field of view, camera speed. All persisted
 per §4. Hidden in Play.
 
@@ -283,7 +304,9 @@ editor-free, pure.
   plus a uniform centre. Global / Local unchanged (scale always local).
 - **Screen-constant size**: Unreal's formula — scale by the projected
   `w` of the gizmo origin (distance-proportional in perspective, collapses to
-  the orthographic zoom in 2D).
+  the orthographic zoom in 2D), plus a user gizmo-size setting added on top
+  (UE's `TransformGizmoSize`, Alt+[ / Alt+]) — the setting lands with the
+  view-settings dropdown, the shortcuts are deferred (§12).
 - **Hit testing stays in screen pixels** on the projected handle geometry
   (projection-independent, as today). **Dragging uses rays** from
   `ScreenToRay`: axis translate = closest point between the mouse ray and the
@@ -342,14 +365,19 @@ editor-free, pure.
 
 ## 10. Comparison (the standing rule)
 
-**Unreal (UX reference), matched:** the editor camera is never a scene actor;
-two persisted transforms by projection; hit-proxy picking; `F` focus sets the
-orbit pivot and solves distance from the bounding radius; right-drag fly with
-WASD and a stepped speed scalar; Alt+left orbit (perspective-only); an
-analytic material grid in perspective; an orthographic grid whose subdivision
-is a log of the base size against screen density with a fractional crossfade;
-screen-constant widget size by projected `w`; ray construction forked by
-projection type; Alt+G / Alt+H.
+**Unreal 5.8.2 (UX reference; every claim below verified against
+`D:\dev\_reference\UnrealEngine-5.8.2-release` on 2026-09-17), matched:** the
+editor camera is never a scene actor; two persisted transforms by projection
+(`GetViewTransform()`); hit-proxy picking with per-axis widget proxies; `F`
+focus sets the orbit pivot and solves `distance = radius / tan(fov/2)`;
+right-drag fly with WASD, a continuous wheel-adjusted speed with a user
+scalar, and distance-scaled speed; Alt+left orbit (perspective-only); a
+material grid in perspective (UE's default is texture-based; its analytic
+mode is `r.Editor.NewLevelGrid 1`) and a line grid in orthographic whose level
+is a log of spacing against screen density, decimating ×10 for non-power-of-
+two grid sizes; screen-constant widget size by projected `w` plus a size
+setting; ray construction forked by projection type; Alt+G perspective, Alt+J
+the XY (Top) view; per-map persistence of the last view (`UWorld::EditorViews`).
 
 **Source 2 (Hammer), matched:** a separate authoring camera; WASD fly; a
 metric grid with power-of-ten levels independent of the transform tool's snap.
@@ -359,10 +387,13 @@ metric grid with power-of-ten levels independent of the transform tool's snap.
 | Reference | Arcane | Why |
 |---|---|---|
 | Hammer's four panes / Unreal's per-viewport type menu | one viewport with a `2D \| Persp` toggle | the first product is 2D; Unity's affordance is what the user asked for |
-| six axis-aligned orthographic views | two modes (XY ortho, perspective) | Top and Side views are triggered by 3D level authoring, not by a 2D game |
-| Unreal's grid = the snap grid, ×8 levels for power-of-two sizes | decade levels on the metre; snap independent | units are metres (MKS); Hammer's shape |
-| Unreal's legacy perspective grid (64 fixed cells, no fade) | analytic fading grid | Unreal's own comment says perspective "looks better with the old grid" only because its material grid is 2D-tuned; ours is written for perspective |
-| Unreal reverse-Z | forward-Z [0,1] | pinned by F2a; reverse-Z is a renderer-tier decision (T1) |
+| six axis-aligned orthographic views | two modes (XY ortho = UE's Top, perspective) | Front/Side views are triggered by 3D level authoring, not by a 2D game |
+| Unreal's grid *is* the snap grid (`GEditor->GetGridSize()` feeds both), major period a user setting | grid on the metre, snap independent, major every ten | units are metres (MKS); Hammer's shape; one fewer setting until the two need to agree |
+| Unreal's ortho minor lines toggle binary at the level's half-way fraction | alpha crossfade between 8 and 24 px | popping is the thing the "good 2D grid" ask is about |
+| Unreal's perspective grid is texture-based by default, its ortho grid is line-drawn | analytic derivative-AA grid in perspective; primitive lines in ortho | no line pipeline exists; an analytic quad is one shader and fades cleanly |
+| Unreal's "orbit around selection" option; left-drag forward+yaw | stored pivot set by `F`; left button = selection | Unity's model; fewer modes |
+| Unreal auto-calculates ortho near/far from a depth pass | fixed ±1000 m | sprites write no depth until F5 |
+| Unreal reverse-Z (both projections) | forward-Z [0,1] | pinned by F2a; reverse-Z is a renderer-tier decision (T1) |
 
 ## 11. Plans
 
@@ -390,7 +421,10 @@ metric grid with power-of-ten levels independent of the transform tool's snap.
 | Top / Bottom / Side orthographic views | 3D level authoring |
 | Multiple viewports, view-mode buffers (wireframe, depth, ids) | later editor arcs |
 | The glTF Import-Mesh dialog | parked by F2c; unchanged |
-| Snap-to-grid affordances beyond the existing Ctrl snap; grid-size shortcuts | when the grid and the snap first need to agree |
+| Snap-to-grid affordances beyond the existing Ctrl snap; grid-size shortcuts (`[` `]` in UE); gizmo-size shortcuts (Alt+`[` `]`) | when the grid and the snap first need to agree; the settings exist in the dropdown from plan 1 |
+| Ortho near/far auto-calculation from scene depth | F5, once sprites carry depth |
+| A realtime / on-demand redraw toggle for the viewport | not an F4 concern; the editor's redraw policy is its own item |
+| "Orbit around selection" as an option | a view setting if asked; the stored pivot is the default |
 | Camera-relative sprite billboarding | F5 (the assessment's "billboarding as a per-sprite flag") |
 
 ## 13. Rulings ledger (2026-09-17)
@@ -451,17 +485,30 @@ metric grid with power-of-ten levels independent of the transform tool's snap.
 | settings persistence pattern (`[EditorPlayMode][State]`), the imgui.ini veto, `--headless` verify layout, `--dump-layout` | `ArcaneEditor/src/App/EditorApp.cpp`, `EditorApp.hpp`, `ArcaneEditor/src/main.cpp` |
 | gravity default `{0, 9.81}` (+Y down, superseded) | `ProjectManifest::PhysicsConfig`; `PhysicsSettings` component |
 
-## Appendix B — Unreal references consulted (the `.example/` dump, read-only)
+## Appendix B — Unreal references consulted
+
+Source: `D:\dev\_reference\UnrealEngine-5.8.2-release\Engine\Source` (the
+centralised reference checkout since 2026-09-17; the old in-repo `.example/`
+dump is gone). Every Unreal claim in this spec was verified against it on
+2026-09-17; the first draft's errors (Front vs Top, `sin` vs `tan`, wheel
+dolly "toward the cursor", the ortho grid "crossfade", the 8-step speed
+ladder, the ±89° clamp, "legacy perspective grid") were corrected in the same
+day's follow-up commit.
 
 `Editor/UnrealEd/Public/EditorViewportClient.h` (`FViewportCameraTransform`,
-`GetViewTransform`), `Editor/UnrealEd/Private/EditorViewportClient.cpp`
+`GetViewTransform`, realtime overrides), `Editor/UnrealEd/Private/EditorViewportClient.cpp`
 (`CalcSceneView`, `ShouldOrbitCamera`, `ConvertMovementToDragRot`,
 `MoveViewportCamera`, `OnOrthoZoom`, `OnDollyPerspectiveCamera`,
-`GetCameraSpeed`, `FocusViewportOnBox`, `FViewportCursorLocation`),
+`OnChangeCameraSpeed`, `GetCameraSpeed`, `FocusViewportOnBox`,
+`FViewportCursorLocation`, `GetPivotForOrbit`, distance-scaled speed, the
+pitch lock), `Editor/UnrealEd/Public/Settings/EditorViewportSettings.h`
+(`FEditorViewportCameraSpeedSettings`), `Editor/UnrealEd/Classes/Editor/UnrealEdTypes.h`
+(`ELevelViewportType`: `LVT_OrthoXY = Top`, `LVT_OrthoFront = NegativeYZ`),
 `Editor/UnrealEd/Private/EditorComponents.cpp` (`FGridWidget::DrawNewGrid`,
-`DrawOldGrid`, `DrawGridSection`, `DrawOriginAxisLine`),
+`DrawOldGrid`, `DrawGridSection`, `DrawOriginAxisLine`, `r.Editor.NewLevelGrid`),
 `Editor/UnrealEd/Private/UnrealWidget.cpp` (screen-constant scale by projected
-`w`, `HWidgetAxis`), `Editor/UnrealEd/Private/EditorViewportCommands.cpp`
-(Alt+G/H/J/K), `Editor/LevelEditor/Private/SLevelViewportToolBar.cpp`
-(`FillCameraMenu`), `Runtime/Engine/Classes/Engine/World.h` (`EditorViews`
+`w` + `TransformGizmoSize`, `HWidgetAxis`), `Editor/UnrealEd/Private/EditorViewportCommands.cpp`
+(Alt+G/H/J/K, `[` `]`, Alt+`[` `]`), `Editor/UnrealEd/Private/ViewportToolbar/UnrealEdViewportToolbar.cpp`
+(speed slider + scalar), `Runtime/Engine/Public/EngineDefines.h`
+(`MIN_/MAX_ORTHOZOOM`), `Runtime/Engine/Classes/Engine/World.h` (`EditorViews`
 per-map persistence). Shapes only; no code copied.
