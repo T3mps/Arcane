@@ -330,6 +330,22 @@ namespace Arcane
         // content root is refused before any id is minted or written back,
         // which is strictly better than minting an identity for a file that
         // is then never registered.
+        //
+        // Fifth rule, P6 (2026-09-16 relocation fix): the "source" scheme itself
+        // is a LISTING of code, never an import root. Project::Open mounts
+        // source:// at the WHOLE Source/ tree (S2 -- the Asset Browser shows
+        // every module under one root), so a project's non-engine files --
+        // backend data/config/fixture JSON, imported-binary-shaped assets,
+        // anything -- can sit under Source/ right beside the .cpp/.hpp. Those
+        // files must never be auto-imported just because they happen to live
+        // under a mount that also carries code: under scheme == "source", ONLY
+        // IsSourceFile files resolve an identity (ResolveSourceId, same as
+        // always); every other extension returns nullopt immediately, below,
+        // BEFORE the kind table -- not read, not minted, not written. (This is
+        // the bug the Aphelyon relocation exposed: Source/Services/**/*.json,
+        // plain backend data files, were getting a random id minted and WRITTEN
+        // BACK on every headless boot because the kind table used to route
+        // purely on extension, with no scheme check at all.)
 
         // Mount path: "<scheme>://<relative-to-contentDir, forward slashes>". The
         // ORIGINAL file is registered (the .meta only stores the id), so a resolved
@@ -360,7 +376,18 @@ namespace Arcane
 
         Guid id;
         bool idWriteFailed = false;
-        if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite" ||
+        if (scheme == "source")
+        {
+            // Fifth rule (see above): a source:// scan is a listing of code, full
+            // stop -- never an import root. Anything that is not C/C++ source is
+            // refused right here, before the ordinary kind table below ever runs,
+            // so no .json/.arcmat/.png/... under Source/ is ever read, minted, or
+            // written to.
+            if (!IsSourceFile(ext))
+                return std::nullopt;
+            id = ResolveSourceId(mountPath);   // derived, never written -- see IsSourceFile
+        }
+        else if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite" ||
             ext == ".arcmesh")
             id = ResolveNativeId(file, &idWriteFailed);
         else if (ext == ".arcdiag")

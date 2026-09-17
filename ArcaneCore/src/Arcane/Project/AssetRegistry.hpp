@@ -17,7 +17,10 @@
 // And a fourth rule for C/C++ source files (.cpp/.hpp/.h/...; Source/ in the Asset
 // Browser): the guid is DERIVED from the mount path (Guid::FromName), never minted and
 // never written -- no sidecar may ever land in a source tree. Same path, same guid,
-// across restarts; a rename is a new identity. See AddFile's IsSourceFile branch.
+// across restarts; a rename is a new identity. See AddFile's IsSourceFile branch. A
+// non-source file under the "source" scheme (a .json/.png/... sharing Source/ with the
+// code) is ignored outright -- never read, minted, or written -- since source:// is a
+// listing of code, not an import root; see AddFile's scheme == "source" guard.
 
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Base/Diagnostics.hpp>

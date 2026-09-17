@@ -372,6 +372,54 @@ TEST_CASE("AssetRegistry registers C++ source files by a path-derived guid and w
     std::filesystem::remove_all(dir, ec);
 }
 
+// P6 fix (2026-09-16 relocation defect): source:// is a LISTING of code, never
+// an import root. A project's Source/ tree can carry non-engine files right
+// beside the .cpp (Aphelyon's Source/Services/**/*.json backend data, in
+// particular) -- those must never be auto-imported the way the SAME files
+// would be under game://. Before this fix, AddFile's kind table routed purely
+// on extension with no scheme check, so a .json under a source:// scan got an
+// id minted and WRITTEN BACK to disk, and a .png got a minted ".meta"
+// sidecar -- exactly what landed on every Source/Services/*.json file during
+// the relocated project's first headless boot.
+TEST_CASE("source:// never auto-imports: a .json and a .png under a source scan are not registered and not written", "[project]")
+{
+    const auto dir = TempDir("source_no_autoimport");
+    std::ofstream(dir / "a.cpp", std::ios::binary) << "// cpp\n";
+
+    const std::string jsonBefore = R"({ "name": "not an engine asset" })";
+    std::ofstream(dir / "data.json", std::ios::binary) << jsonBefore;   // deliberately no "id"
+
+    const std::string pngBefore = "\x89PNG\r\n\x1a\nfakepixels";
+    std::ofstream(dir / "img.png", std::ios::binary) << pngBefore;
+
+    Arcane::AssetRegistry reg;
+    const std::size_t n = reg.ScanContent(dir, "source");
+
+    // Only the .cpp registers -- the .json and .png are invisible to a source:// scan.
+    CHECK(n == 1);
+    CHECK(reg.All().size() == 1);
+
+    // data.json's bytes are byte-for-byte unchanged -- no id was minted and written back.
+    std::ifstream jsonIn(dir / "data.json", std::ios::binary);
+    const std::string jsonAfter((std::istreambuf_iterator<char>(jsonIn)), std::istreambuf_iterator<char>());
+    CHECK(jsonAfter == jsonBefore);
+
+    // No sidecar was minted for the .png either.
+    CHECK_FALSE(std::filesystem::exists(dir / "img.png.meta"));
+
+    // Proves the SCHEME is what changed, not the extension table: the SAME two
+    // non-source files, scanned under a "game"-style scheme, still register
+    // exactly like any other native/imported asset -- existing, unchanged
+    // behaviour for every scheme other than "source".
+    Arcane::AssetRegistry gameReg;
+    const std::size_t nGame = gameReg.ScanContent(dir, "game");
+    CHECK(nGame == 3);   // a.cpp (source-kind, unaffected by scheme) + data.json + img.png
+    CHECK(std::filesystem::exists(dir / "img.png.meta"));
+
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
 // The Project-level half: Source/ mounts as source:// (a peer of game:// and
 // diag://) and its files are in the SAME registry the browser reads.
 TEST_CASE("Project::Open mounts source:// and registers Source/ files", "[project]")
