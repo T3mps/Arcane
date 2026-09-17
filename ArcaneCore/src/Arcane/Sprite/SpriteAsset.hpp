@@ -35,7 +35,14 @@ namespace Arcane
         float       ppu = 100.0f;               // pixels per meter
         glm::vec2   sourcePos{0.0f, 0.0f};      // sub-rect origin, pixels
         glm::vec2   sourceSize{0.0f, 0.0f};     // sub-rect dims, pixels; (0,0) = whole texture
-        glm::vec2   pivot{0.5f, 0.5f};          // normalized; (0,0) = BOTTOM-left of the image, (1,1) = top-right (+Y up world, F4)
+        // Normalized; (0,0) = BOTTOM-left of the image, (1,1) = top-right
+        // (+Y up world, F4 plan 1). PRE-F4 .arcsprite files with an
+        // off-centre pivot were authored y=0 = TOP: the same stored value now
+        // anchors on the OTHER side (a y=0 "top" pivot is a bottom pivot
+        // today). No .arcsprite format version exists, so NO migration is
+        // applied -- re-author the pivot in the Sprite document (the centre
+        // 0.5 is unaffected, which is every sprite the wizard mints).
+        glm::vec2   pivot{0.5f, 0.5f};
     };
 
     // Memberwise equality. It exists for the sprite editor's undo bracket,

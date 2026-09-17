@@ -1,7 +1,7 @@
 #include <Arcane/Project/ProjectManifest.hpp>
 
 #include <Arcane/Base/Diagnostics.hpp>
-#include <Arcane/Base/Log.hpp>   // ARC_WARN (defined at Log.hpp:40)
+#include <Arcane/Base/Log.hpp>   // ARC_WARN / ARC_INFO
 
 #include <Json.hpp>
 
@@ -125,6 +125,17 @@ namespace Arcane
                 && ph["gravity"][0].is_number() && ph["gravity"][1].is_number())
             {
                 cfg.gravity = glm::vec2(ph["gravity"][0].get<float>(), ph["gravity"][1].get<float>());
+                // v1 -> v2 (F4 plan 1 final review, F2a): a formatVersion 1
+                // manifest authored its gravity +Y DOWN (the Hub stamped
+                // [0, 9.81] from 2026-09-11); the engine is +Y up since F4, so
+                // the y component is negated on read. A v1 manifest WITHOUT
+                // the block never enters here and takes the v2 default above.
+                if (m.formatVersion < 2)
+                {
+                    cfg.gravity.y = -cfg.gravity.y;
+                    ARC_INFO("ProjectManifest: formatVersion 1 physics.gravity was authored +Y down; "
+                             "read as ({}, {}) (+Y up, format 2)", cfg.gravity.x, cfg.gravity.y);
+                }
             }
             m.physics = cfg;
         }

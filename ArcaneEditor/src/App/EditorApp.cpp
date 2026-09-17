@@ -211,8 +211,21 @@ namespace Arcane::Editor
     {
         auto* self = static_cast<EditorApp*>(entry);
         // A refused line (malformed, out of range, unknown key) leaves the
-        // defaults -- the return value is deliberately not acted on here.
-        Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_viewSettings);
+        // defaults; an ACCEPTED transform line (Ortho= / Orbit=) marks the
+        // camera as restored and cancels the boot-time SceneOpen framing
+        // (F4 plan 1 final review, F3 -- see m_cameraRestoredFromIni). The
+        // request always precedes this read: OnProjectOpened records it, and
+        // the ini is read afterwards (RetargetLayoutIni under --headless, the
+        // first NewFrame on a windowed run). The committed verify-layout.ini
+        // carries no [EditorViewport] block, so gate/witness runs still frame.
+        const bool accepted =
+            Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_viewSettings);
+        if (accepted && (std::strncmp(line, "Ortho=", 6) == 0 || std::strncmp(line, "Orbit=", 6) == 0))
+        {
+            self->m_cameraRestoredFromIni = true;
+            if (self->m_editSchedule)
+                self->m_editSchedule->CancelFrame(Arcane::Editor::FrameRequest::SceneOpen);
+        }
         // THE FLAG BEATS THE INI. On a windowed run ImGui reads io.IniFilename
         // at the FIRST NewFrame (ImGui::NewFrame -> UpdateSettings), which is
         // AFTER StageFinalize applied the seed -- so a persisted Mode= line
@@ -1230,6 +1243,9 @@ namespace Arcane::Editor
                 if (const auto boot = Arcane::HostBoot::BootScene(m_runtime->Core(), *proj))
                 {
                     m_scene.Adopt(boot->file, boot->id, *m_undo);
+                    // Cancelled again by ViewportSettingsReadLine if the
+                    // persisted [EditorViewport][Camera] restores a transform
+                    // (F3): the ini is read AFTER this on both boot paths.
                     m_editSchedule->RequestFrame(Arcane::Editor::FrameRequest::SceneOpen);
                 }
             }

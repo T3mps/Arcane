@@ -383,6 +383,68 @@ TEST_CASE("RenderSubmissionSystem keeps a mirrored sprite's handedness through t
     }
 }
 
+TEST_CASE("RenderSubmissionSystem reads a Y-mirrored basis by the nearer of {t, t+pi} to the physics angle",
+          "[interp]")
+{
+    // Final review F1: scale.y < 0 makes the XY basis R(theta) * diag(4, -4)
+    // == R(theta + pi) * diag(-4, 4). The T5 re-bake read every mirror as an
+    // X mirror, so curRot came out theta + pi against a physics angle of
+    // theta and AngleLerp swept a half-turn EVERY fixed step. The rule now:
+    // of the two readings {t, t+pi} take the one nearer pp.angle, and put the
+    // mirror sign on the column that reading implies. So: the quad's UP edge
+    // (BL -> TL) still runs -y (the Y mirror survives), its turn is the
+    // blended 0.2 (not 0.2 + pi), and the centre is the lerped position.
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{components};
+    Arcane::RegisterSceneComponents(reg);
+
+    const float theta = 0.3f, prevTheta = 0.1f;
+    Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f);
+    lt.rotation = Arcane::RotationAboutZ(theta);
+    lt.scale    = glm::vec3(4.0f, -4.0f, 1.0f);   // Y-mirrored
+    SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), prevTheta, 0 }, /*slot*/ 0, /*gen*/ 3);
+
+    reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{ nullptr, PixelView(), 0.5f });
+    auto submitAt = [&](float alpha)
+    {
+        RecBatcher rec;
+        Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
+        ctx->batcher = &rec;
+        ctx->alpha   = alpha;
+        Arcane::RenderSubmissionSystem{}(reg);
+        REQUIRE(rec.quadCalls == 1);
+        return rec;
+    };
+
+    const RecBatcher half = submitAt(0.5f);
+    const glm::vec3 top = half.lastCorners[1] - half.lastCorners[0];   // TL -> TR = local +x
+    const glm::vec3 up  = half.lastCorners[0] - half.lastCorners[3];   // BL -> TL = local +y, mirrored
+    const float blended = Arcane::AngleLerp(prevTheta, theta, 0.5f);
+    CHECK(blended == Approx(0.2f));
+    CHECK(up.y < 0.0f);                                               // the Y mirror survives...
+    CHECK(top.x == Approx( 4.0f * std::cos(blended)));                // ...the x axis turns by 0.2, unmirrored
+    CHECK(top.y == Approx( 4.0f * std::sin(blended)));
+    CHECK(up.x  == Approx( 4.0f * std::sin(blended)));                // -R(0.2) * (0, 4): the mirrored up axis
+    CHECK(up.y  == Approx(-4.0f * std::cos(blended)));
+    CHECK(std::atan2(top.y, top.x) == Approx(0.2f).margin(1e-5f));    // near 0.2, NOT 0.2 + pi
+    CHECK(top.x * up.y - top.y * up.x < 0.0f);                         // negative determinant kept
+    CHECK(half.lastQuadCentre().x == Approx(5.0f));                   // lerp(0, 10, 0.5)
+    CHECK(half.lastQuadCentre().y == Approx(0.0f).margin(1e-5f));
+
+    // A hit at alpha 1 from the CURRENT angle is the miss path's quad, corner
+    // for corner -- the Y reading re-bakes exactly, like the X one.
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->prev[0].angle = theta;
+    const RecBatcher hit = submitAt(1.0f);
+    reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured = false;
+    const RecBatcher miss = submitAt(1.0f);
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+        CHECK(hit.lastCorners[i].x == Approx(miss.lastCorners[i].x).margin(1e-5f));
+        CHECK(hit.lastCorners[i].y == Approx(miss.lastCorners[i].y).margin(1e-5f));
+        CHECK(hit.lastCorners[i].z == Approx(miss.lastCorners[i].z).margin(1e-5f));
+    }
+}
+
 TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss", "[interp]")
 {
     // Every miss path takes the snap: a generation mismatch (recycled slot), a

@@ -61,6 +61,27 @@ namespace Arcane
 
             edit(doc);
 
+            // Every rewrite upgrades the file it touches to the format this
+            // engine writes (ProjectManifest::kFormatVersion). v1 -> v2: the
+            // on-disk physics.gravity was authored +Y down, so its y is
+            // negated HERE too -- the file must mean under v2 what FromJson
+            // read it to mean under v1 (a bare stamp change would flip the
+            // project's gravity on the next open).
+            if (doc.contains("formatVersion") && doc["formatVersion"].is_number_integer()
+                && doc["formatVersion"].get<int>() < ProjectManifest::kFormatVersion)
+            {
+                const int from = doc["formatVersion"].get<int>();
+                if (from < 2 && doc.contains("physics") && doc["physics"].is_object()
+                    && doc["physics"].contains("gravity") && doc["physics"]["gravity"].is_array()
+                    && doc["physics"]["gravity"].size() >= 2 && doc["physics"]["gravity"][1].is_number())
+                {
+                    doc["physics"]["gravity"][1] = -doc["physics"]["gravity"][1].get<double>();
+                }
+                doc["formatVersion"] = ProjectManifest::kFormatVersion;
+                ARC_INFO("{}: {} upgraded from formatVersion {} to {}", who, file.generic_string(),
+                         from, ProjectManifest::kFormatVersion);
+            }
+
             // Temp + rename: a half-written .arcproj is a project that will not open.
             const std::filesystem::path tmp = file.string() + ".tmp";
             try
@@ -397,7 +418,7 @@ namespace Arcane
         // created project always targets the engine that created it. Built via nlohmann
         // so `name` is escaped correctly (rather than hand-concatenated into JSON text).
         nlohmann::json manifestJson;
-        manifestJson["formatVersion"] = 1;
+        manifestJson["formatVersion"] = ProjectManifest::kFormatVersion;
         manifestJson["name"]          = name;
         manifestJson["engine"]        = { { "abi", static_cast<int>(Arcane::kGamePluginABIVersion) } };
         manifestJson["gameModule"]    = "";

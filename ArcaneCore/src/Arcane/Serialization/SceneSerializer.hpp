@@ -237,8 +237,12 @@ namespace Arcane::Scene
         // world across the XZ plane: y -> -y for positions/offsets/velocities/
         // gravity, and a rotation quaternion (stored [x,y,z,w],
         // ReflectionJson.hpp) conjugates to [-x, y, -z, w] -- a rotation about
-        // an axis IN the mirror plane keeps its sense, one about a
-        // perpendicular axis (X or Z) reverses.
+        // an axis IN the mirror plane (X or Z) REVERSES its sense, one about
+        // the perpendicular axis (Y) keeps it. Note that this migration is a
+        // REFLECTION, not a rotation: it flips handedness, so a single-sided /
+        // backface-culled mesh rotated about X or Z comes out facing the other
+        // way (ReferenceProject's GoldenProp was the first instance) --
+        // re-author such content, do not "fix" the migration.
         //
         // Scale is deliberately NOT touched: it is an extent, not a direction.
         // Nothing else in a scene carries a world Y -- Camera has no pose

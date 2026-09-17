@@ -267,6 +267,10 @@ namespace Arcane::Editor
         ImGui::TextDisabled("(0, 0) = whole texture");
         changed |= ImGui::DragFloat2("Pivot", &m_data.pivot.x, 0.005f, 0.0f, 1.0f,
                                      "%.3f", ImGuiSliderFlags_ClampOnInput);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+            ImGui::SetTooltip("Normalized: (0, 0) = bottom-left, (1, 1) = top-right (+Y up).\n"
+                              "Sprites authored before F4 used y = 0 = top; an off-centre pivot\n"
+                              "from then now anchors on the other side -- re-author it here.");
         bracket("Edit Pivot");
         if (changed)
             m_dirty = true;

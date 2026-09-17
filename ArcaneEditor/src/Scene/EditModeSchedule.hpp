@@ -57,6 +57,12 @@ namespace Arcane::Editor
 
         void RequestFrame(FrameRequest request) noexcept { m_pending = request; }
         [[nodiscard]] FrameRequest Pending() const noexcept { return m_pending; }
+        // Drops the pending request iff it is `request` (a different pending
+        // request -- a Home press, say -- is left alone). F4 plan 1 final
+        // review, F3: the boot-time SceneOpen is cancelled when the persisted
+        // [EditorViewport][Camera] block restores a transform, so the user's
+        // camera survives a restart (spec s4) instead of being reframed.
+        void CancelFrame(FrameRequest request) noexcept { if (m_pending == request) m_pending = FrameRequest::None; }
 
         // Services and clears the pending request against the registry's
         // WorldTransforms AS THEY ARE NOW (call after RunFrame). A zero-sized

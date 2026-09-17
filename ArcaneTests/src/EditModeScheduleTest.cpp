@@ -175,3 +175,33 @@ TEST_CASE("SceneOpen on an empty scene centres the origin; Scene leaves the view
     CHECK(cam.ortho.center == before.center);
     CHECK(cam.ortho.halfHeight == before.halfHeight);
 }
+
+TEST_CASE("CancelFrame drops a pending SceneOpen so a camera restored from the ini survives boot; it leaves any other request alone",
+          "[editor][change-detection]")
+{
+    // F4 plan 1 final review, F3: EditorApp::ViewportSettingsReadLine calls
+    // CancelFrame(SceneOpen) when the persisted [EditorViewport][Camera]
+    // block restores an Ortho=/Orbit= transform, AFTER OnProjectOpened
+    // recorded the boot-time SceneOpen. The service that follows must then
+    // leave the restored transform exactly where the ini put it -- on an
+    // empty scene (where SceneOpen would CentreOrigin) as much as a full one.
+    Scene s;   // root only: SceneOpen would centre the origin
+    EditModeSchedule schedule;
+    Arcane::Editor::EditorCamera cam;
+    schedule.RunFrame(s.reg, false);
+
+    schedule.RequestFrame(FrameRequest::SceneOpen);
+    cam.ortho.center     = glm::vec2(12.0f, -7.0f);   // "restored from the ini"
+    cam.ortho.halfHeight = 42.0f;
+    schedule.CancelFrame(FrameRequest::SceneOpen);
+    CHECK(schedule.Pending() == FrameRequest::None);
+    CHECK_FALSE(schedule.ServicePendingFrame(s.reg, {}, cam, kViewport));
+    CHECK(cam.ortho.center == glm::vec2(12.0f, -7.0f));
+    CHECK(cam.ortho.halfHeight == Approx(42.0f));
+
+    // A different pending request is not the boot framing: a Home press
+    // recorded before the ini read is kept.
+    schedule.RequestFrame(FrameRequest::Scene);
+    schedule.CancelFrame(FrameRequest::SceneOpen);
+    CHECK(schedule.Pending() == FrameRequest::Scene);
+}

@@ -1141,6 +1141,14 @@ namespace Arcane::Editor
         // ViewportSettings.hpp and RegisterViewportSettings below. Task 8's
         // settings popup edits these; the grids (Tasks 9/10) read them.
         Arcane::Editor::ViewportSettings m_viewSettings;
+        // Set by ViewportSettingsReadLine when the persisted block restores a
+        // transform (an Ortho= or Orbit= line parsed). F4 plan 1 final
+        // review, F3: a restored camera cancels the boot-time SceneOpen
+        // framing (EditModeSchedule::CancelFrame) so centre/halfHeight/
+        // pivot/distance survive a restart as spec s4 says; a later File >
+        // Open still frames (the ini is read once, at the first NewFrame --
+        // or in RetargetLayoutIni under --headless -- never on a scene open).
+        bool m_cameraRestoredFromIni = false;
         // The ONE live mouse-drag camera gesture (F4 plan 1 T7): 2D RMB pan, or
         // in Perspective RMB look / Alt+LMB orbit / MMB pan. Rules: a gesture
         // may only START over the viewport, keeps tracking anywhere once

@@ -135,7 +135,7 @@ TEST_CASE("a splash block with a wrong-typed field fails the whole manifest, not
 TEST_CASE("a manifest physics block sets gravity; absent keeps the default", "[project]")
 {
     const auto with = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
-        "formatVersion": 1, "name": "T", "engine": { "abi": 28 },
+        "formatVersion": 2, "name": "T", "engine": { "abi": 28 },
         "physics": { "gravity": [0.0, 12.5] }
     })"));
     REQUIRE(with.has_value());
@@ -147,6 +147,38 @@ TEST_CASE("a manifest physics block sets gravity; absent keeps the default", "[p
     })"));
     REQUIRE(without.has_value());
     CHECK(without->physics.gravity.y == Catch::Approx(-9.81f));   // +Y up (F4 plan 1 T2)
+}
+
+TEST_CASE("formatVersion 2 negates a v1 physics.gravity stamp; v2 and an absent block read as-is", "[project]")
+{
+    // F4 plan 1 final review, F2a: the Hub stamped "physics": {"gravity":
+    // [0, 9.81]} (+Y DOWN) into every manifest it created between 2026-09-11
+    // and F4; the engine is +Y up since F4 plan 1 T2. A v1 manifest carrying
+    // the block is read with its y negated; a v2 manifest is read verbatim; a
+    // v1 manifest WITHOUT the block gets the +Y-up default.
+    const auto v1 = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 32 },
+        "physics": { "gravity": [0.0, 9.81] }
+    })"));
+    REQUIRE(v1.has_value());
+    CHECK(v1->formatVersion == 1);
+    CHECK(v1->physics.gravity.x == Catch::Approx(0.0f));
+    CHECK(v1->physics.gravity.y == Catch::Approx(-9.81f));
+
+    const auto v2 = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 2, "name": "T", "engine": { "abi": 32 },
+        "physics": { "gravity": [0.0, -9.81] }
+    })"));
+    REQUIRE(v2.has_value());
+    CHECK(v2->formatVersion == Arcane::ProjectManifest::kFormatVersion);
+    CHECK(v2->physics.gravity.y == Catch::Approx(-9.81f));
+
+    const auto v1Bare = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion": 1, "name": "T", "engine": { "abi": 32 }
+    })"));
+    REQUIRE(v1Bare.has_value());
+    CHECK(v1Bare->physics.gravity.x == Catch::Approx(0.0f));
+    CHECK(v1Bare->physics.gravity.y == Catch::Approx(-9.81f));
 }
 
 TEST_CASE("a malformed physics gravity leaves the default rather than failing the manifest", "[project]")

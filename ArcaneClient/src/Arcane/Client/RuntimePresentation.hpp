@@ -26,10 +26,10 @@ namespace Arcane
         Audio::AudioDevice     audio;
         // THE ONE camera (F4 plan 1): identity matrices + viewport 0 until a
         // host pushes one. A host that never pushes a view has no Affine2D
-        // (AsAffine2D() is nullopt for a zero viewport): the pixel overlays and
-        // (until F4 plan 1 Task 5 lands world-space sprites) the sprite shim
-        // skip drawing; RuntimeApp warns when no scene camera exists. There is
-        // deliberately no fallback camera.
+        // (AsAffine2D() is nullopt for a zero viewport): the pixel overlays
+        // skip drawing, while sprites -- world quads since F4 plan 1 T5 -- draw
+        // through the identity view-projection; RuntimeApp warns when no scene
+        // camera exists. There is deliberately no fallback camera.
         ViewTransform          view{};
         void* imguiContext  = nullptr;   // ImGuiContext*      -- all null in a headless host
         void* imguiAlloc    = nullptr;   // ImGuiMemAllocFunc

@@ -80,20 +80,27 @@ namespace Arcane
                 // angle while its column lengths (the scale) AND its handedness
                 // (a mirror) are preserved -- Transform::ToMatrix's own layout
                 // for a Z turn, m[0] = (c*sx, s*sx), m[1] = (-s*sy, c*sy), with
-                // a SIGNED sx. The 2D physics pose lives in XY; the Z
+                // a SIGNED sx OR sy. The 2D physics pose lives in XY; the Z
                 // rows/column and the Z translation are left untouched.
                 //
-                // Handedness (F4 plan 1 T5 review, Ruling J): a negative 2x2
-                // determinant is a mirrored basis. The matrix alone cannot say
-                // WHICH axis was flipped (R(t)*diag(-a,b) == R(t+pi)*diag(a,-b)),
-                // so the convention here is THE MIRROR IS ON X: the basis is read
-                // as R(t)*diag(-|sx|, |sy|), t taken from the first column with
-                // its mirror undone, atan2(-m[0].y, -m[0].x), and re-baked with
-                // sx negated. Reading the raw column would give t+pi, and
-                // AngleLerp would then sweep a half-turn from the physics angle
-                // while the re-bake dropped the mirror -- the same entity would
-                // draw differently with and without a hit (the miss path hands
-                // the authored basis to SpriteWorldQuad untouched).
+                // Handedness (F4 plan 1 T5 review, Ruling J; final review F1): a
+                // negative 2x2 determinant is a mirrored basis. The matrix alone
+                // cannot say WHICH axis was flipped -- R(t)*diag(-a,b) ==
+                // R(t+pi)*diag(a,-b) -- so the basis has TWO readings, {t, t+pi},
+                // and the rule is THE NEARER OF THE TWO TO THE PHYSICS ANGLE
+                // (pp.angle, the captured pose): the physics body's angle is the
+                // ground truth the author's Transform was baked from, so the
+                // reading within a quarter-turn of it is the un-mirrored turn and
+                // the other is the mirror's half-turn alias. That reading decides
+                // which column carries the mirror sign in the re-bake: the X
+                // reading (t from the first column with its sign undone) means
+                // diag(-|sx|, |sy|); the Y reading (t+pi) means diag(|sx|, -|sy|).
+                // Reading X unconditionally (the T5 form) gave a scale (1, -1)
+                // body curRot = t+pi against a physics angle of t, and AngleLerp
+                // then swept a half-turn EVERY fixed step; reading the raw column
+                // gave the same sweep for scale (-1, 1). Either way the same
+                // entity would draw differently with and without a hit (the miss
+                // path hands the authored basis to SpriteWorldQuad untouched).
                 if (interp && interp->captured)
                 {
                     if (const InterpSlot* slot = interp->slotOf.TryGet(e))
@@ -102,17 +109,26 @@ namespace Arcane
                             && interp->prev[slot->index].generation == slot->generation)
                         {
                             const InterpPose& pp = interp->prev[slot->index];
-                            // Handedness of the XY basis: det < 0 is a mirror,
-                            // read as an X mirror (see above).
+                            // Handedness of the XY basis: det < 0 is a mirror.
                             const bool mirrored = (m[0].x * m[1].y - m[0].y * m[1].x) < 0.0f;
                             // World rotation from the first basis column (for a
-                            // Z-axis turn m[0] = (c*sx, s*sx, 0)), the mirror
-                            // undone first so t is the body's angle, not t+pi.
-                            const float curRot = mirrored ? std::atan2(-m[0].y, -m[0].x)
-                                                          : std::atan2( m[0].y,  m[0].x);
+                            // Z-axis turn m[0] = (c*sx, s*sx, 0)), read first as
+                            // an X mirror (the column's sign undone).
+                            float curRot = mirrored ? std::atan2(-m[0].y, -m[0].x)
+                                                    : std::atan2( m[0].y,  m[0].x);
+                            // The nearer of {t, t+pi} to the physics angle: if
+                            // the X reading is more than a quarter-turn from it
+                            // (cos of the delta negative -- wrap-free), the
+                            // mirror is on Y and the turn is the other reading.
+                            bool mirrorOnY = false;
+                            if (mirrored && std::cos(curRot - pp.angle) < 0.0f)
+                            {
+                                curRot   = std::atan2(m[0].y, m[0].x);   // the raw column: t+pi of the X reading
+                                mirrorOnY = true;
+                            }
                             const float rot    = AngleLerp(pp.angle, curRot, ctx->alpha);
-                            const float sx = glm::length(glm::vec2(m[0])) * (mirrored ? -1.0f : 1.0f);
-                            const float sy = glm::length(glm::vec2(m[1]));
+                            const float sx = glm::length(glm::vec2(m[0])) * ((mirrored && !mirrorOnY) ? -1.0f : 1.0f);
+                            const float sy = glm::length(glm::vec2(m[1])) * (mirrorOnY ? -1.0f : 1.0f);
                             const float c = std::cos(rot), s = std::sin(rot);
                             m[3].x = Lerp(pp.position.x, m[3].x, ctx->alpha);
                             m[3].y = Lerp(pp.position.y, m[3].y, ctx->alpha);

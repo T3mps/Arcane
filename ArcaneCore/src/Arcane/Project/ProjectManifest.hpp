@@ -58,6 +58,16 @@ namespace Arcane
             glm::vec2 gravity{0.0f, -9.81f};   // m/s^2; +Y is up (F4)
         };
 
+        // The manifest format this engine WRITES (Project::Create, and every
+        // RewriteManifest edit upgrades the file it touches). History:
+        //   1  2026-07-22 .. 2026-09-17: physics.gravity authored +Y DOWN --
+        //      the Hub stamped [0, 9.81] into every manifest from 2026-09-11.
+        //   2  F4 plan 1 (+Y up everywhere): physics.gravity is +Y UP. Reading
+        //      a v1 manifest that carries a physics.gravity block NEGATES
+        //      gravity.y (FromJson, with an ARC_INFO); a v1 manifest without
+        //      the block gets the v2 default. Nothing else changed meaning.
+        static constexpr int   kFormatVersion = 2;
+
         int                    formatVersion = 0;
         std::string            name;
         std::string            description;

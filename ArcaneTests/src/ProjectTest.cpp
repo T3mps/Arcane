@@ -1,6 +1,7 @@
 // Arcane::Project: open/create a project + resolve assets through its mounts. CPU-only.
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <Arcane/Project/Project.hpp>
 
@@ -353,10 +354,39 @@ TEST_CASE("Project::Open self-heals a manifest without a guid", "[project]")
     std::ifstream in(file, std::ios::binary);
     const auto doc = nlohmann::json::parse(in);
     CHECK(doc["guid"].get<std::string>() == proj->Manifest().guid);
-    // The rewrite touched ONE field; the rest of the manifest is intact.
+    // The rewrite touched the guid (and, as every rewrite does, upgraded the
+    // format stamp to the one this engine writes); the rest is intact.
     CHECK(doc["name"] == "Legacy");
-    CHECK(doc["formatVersion"] == 1);
+    CHECK(doc["formatVersion"] == Arcane::ProjectManifest::kFormatVersion);
     CHECK(doc["engine"]["abi"] == 4);
+}
+
+TEST_CASE("a manifest rewrite upgrades a v1 file to formatVersion 2 and negates its on-disk gravity stamp", "[project]")
+{
+    // F4 plan 1 final review, F2a: the guid self-heal is a RewriteManifest
+    // edit, and every rewrite upgrades the file it touches. A v1 file that
+    // carries the Hub's +Y-down stamp must come out v2 with the SAME meaning:
+    // gravity (0, -9.81) in memory before AND after, and the file itself now
+    // says [0, -9.81] under formatVersion 2 (a bare stamp change would have
+    // flipped the project's gravity on the next open).
+    const auto dir = TempDir("format_upgrade");
+    const auto file = dir / "Legacy.arcproj";
+    WriteFile(file, R"({ "formatVersion": 1, "name": "Legacy", "engine": { "abi": 4 },)"
+                    R"( "physics": { "gravity": [0.0, 9.81] } })");
+
+    auto proj = Arcane::Project::Open(dir);
+    REQUIRE(proj.has_value());
+    CHECK(proj->Manifest().physics.gravity.y == Catch::Approx(-9.81f));
+    {
+        std::ifstream in(file, std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        CHECK(doc["formatVersion"] == 2);
+        CHECK(doc["physics"]["gravity"][1].get<double>() == Catch::Approx(-9.81));
+    }
+    auto again = Arcane::Project::Open(dir);
+    REQUIRE(again.has_value());
+    CHECK(again->Manifest().formatVersion == 2);
+    CHECK(again->Manifest().physics.gravity.y == Catch::Approx(-9.81f));
 }
 
 TEST_CASE("Project::Open keeps an existing guid and is stable across opens", "[project]")
