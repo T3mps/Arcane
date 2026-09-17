@@ -42,12 +42,12 @@ namespace Arcane::Editor
             : SceneFramingBounds(reg);
         if (bounds.Valid())
         {
-            camera.Frame(bounds.min, bounds.max, viewportSize);
+            camera.Frame(bounds, glm::uvec2(viewportSize));   // mode-aware (spec s4)
             return true;
         }
         if (request == FrameRequest::SceneOpen)
         {
-            camera.offset = viewportSize * 0.5f;   // an empty scene: centre the origin
+            camera.CentreOrigin();   // an empty scene: centre the origin
             return true;
         }
         return false;   // nothing framable: leave the user's view where it is

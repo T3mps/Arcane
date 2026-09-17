@@ -60,7 +60,8 @@ namespace
             return c ? c->runs : 0u;
         }
     };
-    const glm::vec2 kViewport(800.0f, 600.0f);
+    const glm::vec2  kViewport(800.0f, 600.0f);
+    const glm::uvec2 kViewportPx(800u, 600u);   // the same panel, as Resolve takes it
 }
 
 TEST_CASE("EditModeSchedule runs propagation exactly once per Edit-mode frame and never in Play",
@@ -119,9 +120,10 @@ TEST_CASE("a moved entity is framed at its NEW bounds on the next frame service"
     REQUIRE(schedule.RunFrame(s.reg, false));
     REQUIRE(schedule.ServicePendingFrame(s.reg, std::span<const Astra::Entity>{}, cam, kViewport));
 
-    const glm::vec2 centre = cam.WorldToScreen(glm::vec2(50.0f, 20.0f));
+    const glm::vec3 centre = cam.Resolve(kViewportPx).WorldToScreen(glm::vec3(50.0f, 20.0f, 0.0f));
     CHECK(centre.x == Approx(kViewport.x * 0.5f));
     CHECK(centre.y == Approx(kViewport.y * 0.5f));
+    CHECK(cam.ortho.center == glm::vec2(50.0f, 20.0f));
     CHECK(schedule.Pending() == FrameRequest::None);          // consumed
     CHECK_FALSE(schedule.ServicePendingFrame(s.reg, {}, cam, kViewport));   // nothing pending now
 }
@@ -142,8 +144,9 @@ TEST_CASE("the frame request is a single slot: last wins, and Selection frames t
     CHECK(schedule.Pending() == FrameRequest::Selection);
     const std::vector<Astra::Entity> sel{ b };
     REQUIRE(schedule.ServicePendingFrame(s.reg, sel, cam, kViewport));
-    const glm::vec2 centre = cam.WorldToScreen(glm::vec2(30.0f, 0.0f));   // b, not the scene's midpoint
+    const glm::vec3 centre = cam.Resolve(kViewportPx).WorldToScreen(glm::vec3(30.0f, 0.0f, 0.0f));   // b, not the scene's midpoint
     CHECK(centre.x == Approx(kViewport.x * 0.5f));
+    CHECK(cam.ortho.center.x == Approx(30.0f));
 }
 
 TEST_CASE("SceneOpen on an empty scene centres the origin; Scene leaves the view alone; zero viewport defers",
@@ -157,12 +160,18 @@ TEST_CASE("SceneOpen on an empty scene centres the origin; Scene leaves the view
     schedule.RequestFrame(FrameRequest::SceneOpen);
     CHECK_FALSE(schedule.ServicePendingFrame(s.reg, {}, cam, glm::vec2(0.0f)));   // not laid out yet
     CHECK(schedule.Pending() == FrameRequest::SceneOpen);                          // kept
+    cam.ortho.center = glm::vec2(9.0f, -9.0f);   // somewhere else, so the reset is visible
     REQUIRE(schedule.ServicePendingFrame(s.reg, {}, cam, kViewport));
-    CHECK(cam.offset.x == Approx(kViewport.x * 0.5f));
-    CHECK(cam.offset.y == Approx(kViewport.y * 0.5f));
+    CHECK(cam.ortho.center == glm::vec2(0.0f, 0.0f));
+    CHECK(cam.ortho.halfHeight == Approx(5.0f));   // CentreOrigin never rescales
+    const glm::vec3 origin = cam.Resolve(kViewportPx).WorldToScreen(glm::vec3(0.0f));
+    CHECK(origin.x == Approx(kViewport.x * 0.5f));
+    CHECK(origin.y == Approx(kViewport.y * 0.5f));
 
-    const glm::vec2 before = cam.offset;
+    cam.ortho.center = glm::vec2(3.0f, 4.0f);
+    const Arcane::Editor::Ortho2D before = cam.ortho;
     schedule.RequestFrame(FrameRequest::Scene);
     CHECK_FALSE(schedule.ServicePendingFrame(s.reg, {}, cam, kViewport));
-    CHECK(cam.offset == before);
+    CHECK(cam.ortho.center == before.center);
+    CHECK(cam.ortho.halfHeight == before.halfHeight);
 }

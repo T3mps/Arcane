@@ -871,6 +871,9 @@ namespace Arcane::Editor
         // defers a SceneOpen request until the panel has a real size.
         [[nodiscard]] std::uint32_t ViewportWidth()  const noexcept;
         [[nodiscard]] std::uint32_t ViewportHeight() const noexcept;
+        // Both, as the uvec2 EditorCamera::Resolve / Frame / Pan2D / ZoomAt2D
+        // take (F4 plan 1 T6).
+        [[nodiscard]] glm::uvec2 ViewportSize() const noexcept { return { ViewportWidth(), ViewportHeight() }; }
         // The one "may editor shortcuts fire" predicate (three near-duplicates
         // collapsed): Edit mode, ImGui not capturing the keyboard, and -- for keys
         // that switch a viewport TOOL rather than act on the selection -- viewport
@@ -1063,10 +1066,10 @@ namespace Arcane::Editor
 
         // The EDITOR's viewport camera (Edit mode). ClientRuntime::SetView is the
         // PLUGIN's seam, so a project whose game module never calls it would be
-        // stuck at the identity transform -- offset (0,0), zoom 1, i.e. 1 px per
-        // metre. EditorApp drives this from viewport input and pushes it into
-        // the Runtime in Edit mode only; in Play the plugin's camera wins.
-        // See EditorCamera.hpp for the transform convention.
+        // stuck at the identity view. EditorApp drives this from viewport input
+        // and pushes m_camera.Resolve(ViewportSize()) into the Runtime in Edit
+        // mode only; in Play the scene camera wins. Two persisted transforms
+        // (Ortho2D / Orbit3D) by ViewMode -- see EditorCamera.hpp (F4 spec s4).
         Arcane::Editor::EditorCamera m_camera;
         // Edit-mode propagation + the pending frame request (spec 2026-09-11 s7).
         //

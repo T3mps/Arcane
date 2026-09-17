@@ -43,7 +43,6 @@
 
 #include <imgui.h>
 
-#include <algorithm>   // std::max (EditorViewShim's viewport clamp)
 #include <cctype>
 #include <chrono>
 #include <cmath>       // std::isfinite (the camera-rect overlay's projected corners)
@@ -121,24 +120,6 @@ namespace Arcane::Editor
         // the selection, Home frames the whole scene.
         constexpr uint32_t kScF    = 9;    // SDL_SCANCODE_F
         constexpr uint32_t kScHome = 74;   // SDL_SCANCODE_HOME
-
-        // TEMPORARY shim (F4 plan 1 T3; Task 6 deletes it together with
-        // EditorCamera's offset/zoom pair): the legacy pixel camera expressed
-        // as the ONE ViewTransform the runtime now carries. halfH = viewportH
-        // / (2 * zoom); centre = (viewport/2 - offset) / zoom with the Y
-        // component NEGATED -- the old map was y-down in world terms, the
-        // world is +Y up now, so the affine this produces keeps the old X
-        // mapping byte-for-byte and mirrors Y (Affine2D scale.y = -zoom,
-        // offset unchanged). A collapsed (0 px) viewport is clamped to 1 px so
-        // the view stays finite (a zero half-height would divide by zero).
-        Arcane::ViewTransform EditorViewShim(const EditorCamera& cam, std::uint32_t w, std::uint32_t h)
-        {
-            const glm::uvec2 vp{ std::max(w, 1u), std::max(h, 1u) };
-            const float zoom  = (cam.zoom > 0.0f) ? cam.zoom : EditorCamera::kDefaultZoom;
-            const float halfH = float(vp.y) / (2.0f * zoom);
-            const glm::vec2 c = (glm::vec2(vp) * 0.5f - cam.offset) / zoom;
-            return Arcane::ViewTransform::Orthographic(glm::vec2(c.x, -c.y), halfH, vp);
-        }
 
         // ASCII-lowercased extension, for a case-insensitive suffix check: a
         // hand-typed "MyScene.ARCSCENE" already names an .arcscene, and stapling a
@@ -906,18 +887,18 @@ namespace Arcane::Editor
             // last frame".
             if (m_camPan.panning && m_edges.rmb.down && !m_edges.rmb.pressed)
             {
-                m_camera.Pan(mouseWindow - m_camPan.lastMouse);
+                m_camera.Pan2D(mouseWindow - m_camPan.lastMouse, ViewportSize());
             }
 
-            // Zoom anchors on the viewport-local cursor, the space
-            // the camera offset itself lives in. Deliberately NOT
+            // Zoom anchors on the viewport-local cursor, the pixel space
+            // the resolved view maps to. Deliberately NOT
             // gated on snap.wantCaptureMouse: it is true over the
             // viewport image by design (see the pluginSnap comment
             // above); inViewport already folds in m_viewportActive,
             // which is false whenever another panel owns the cursor.
             if (inViewport && snap.wheelY != 0.0f)
             {
-                m_camera.ZoomAt(glm::vec2(lx, ly), snap.wheelY);
+                m_camera.ZoomAt2D(glm::vec2(lx, ly), snap.wheelY, ViewportSize());
             }
         }
         else
@@ -952,7 +933,7 @@ namespace Arcane::Editor
         // sprite. The click-pick and gizmo DRAW sites run after the
         // later push and are already consistent with it.
         if (!InPlayMode())
-            m_runtime->SetView(EditorViewShim(m_camera, ViewportWidth(), ViewportHeight()));
+            m_runtime->SetView(m_camera.Resolve(ViewportSize()));
     }
 
     // Phase 6d: transform-gizmo hit-test + drag. Reads the camera the phase
@@ -1390,19 +1371,8 @@ namespace Arcane::Editor
             // the WorldTransforms this pass just refreshed and before the camera
             // push below, which every render path reads.
             m_editSchedule->RunFrame(m_runtime->Registry(), /*inPlayMode*/ false);
-            const float vh = (float)ViewportHeight();
-            if (m_editSchedule->ServicePendingFrame(m_runtime->Registry(), m_selection.Entities(), m_camera,
-                                                    glm::vec2((float)ViewportWidth(), vh)))
-            {
-                // TEMPORARY (F4 plan 1 T3; Task 6 deletes it with the legacy
-                // camera): EditorCamera::Frame centres a WORLD point in its own
-                // y-down space (offset.y = vh/2 - c.y*zoom), but EditorViewShim
-                // reads that space Y-NEGATED, so the framed point would land
-                // mirrored. Reflect the offset (vh/2 + c.y*zoom == vh - offset.y)
-                // so F/Home frame the real content. Done HERE, not in Frame, so
-                // EditorCamera/EditModeSchedule keep their own tested contract.
-                m_camera.offset.y = vh - m_camera.offset.y;
-            }
+            m_editSchedule->ServicePendingFrame(m_runtime->Registry(), m_selection.Entities(), m_camera,
+                                                glm::vec2(ViewportSize()));
         }
 
         // Editor camera -> the Runtime slot SetRenderContext reads, for
@@ -1422,7 +1392,7 @@ namespace Arcane::Editor
         // (a plugin that drives its own camera) working unchanged.
         if (!InPlayMode())
         {
-            m_runtime->SetView(EditorViewShim(m_camera, ViewportWidth(), ViewportHeight()));
+            m_runtime->SetView(m_camera.Resolve(ViewportSize()));
         }
         else if (const auto sceneCam = Arcane::ActiveSceneCamera(
                      m_runtime->Registry(),

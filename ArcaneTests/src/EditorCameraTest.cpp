@@ -1,36 +1,146 @@
-// Arcane Editor viewport camera: pure pan / anchored-zoom / framing math, plus
-// the framing-bounds sweep over the scene registry. CPU-only ([editor]).
+// Arcane Editor viewport camera (F4 plan 1 T6, spec s4): two persisted
+// transforms (Ortho2D / Orbit3D) selected by ViewMode, Resolve() to the ONE
+// ViewTransform the host pushes, the Unreal-shaped navigation ops, mode-aware
+// framing -- plus the 3D framing-bounds sweep over the scene registry.
+// CPU-only ([editor][camera]).
 //
-// The camera convention under test is the engine's: screen = world * zoom +
-// offset, with zoom in PIXELS PER METRE (world is MKS). Framing bounds must
-// agree with RenderSubmissionSystem's sprite placement -- if they disagree,
-// "frame selected" puts the thing off screen.
+// Every pixel expectation goes through ViewTransform::WorldToScreen on the
+// resolved view, because that is the map every consumer reads: if the camera
+// and the renderer disagree, "frame selected" puts the thing off screen.
 
 #include <cmath>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 // mat4x4, NOT mat3x3. WorldMat below returns a mat4 (Task 3, F1) and this file
-// carries no mat3 at all any more -- but the mat3x3 include survived the
-// widening, and it is exactly what let the implicit glm::mat4(glm::mat3)
-// conversion compile: a mat3 helper kept building into the widened
-// WorldTransform and silently put the translation in the Z basis column. The
-// trap is documented at WorldMat itself; removing its ingredient disarms it.
+// carries no mat3 at all -- the implicit glm::mat4(glm::mat3) conversion once
+// let a mat3 helper build into the widened WorldTransform and silently put the
+// translation in the Z basis column. Keeping mat3x3 out disarms the trap.
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <Arcane/Guid.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 
 #include <Viewport/EditorCamera.hpp>
 
 using Catch::Approx;
-using Arcane::Editor::EditorCamera;
+using namespace Arcane::Editor;
+
+static const glm::uvec2 kVp{800, 600};
+
+// ---------------------------------------------------------------------------
+// The camera itself
+// ---------------------------------------------------------------------------
+
+TEST_CASE("EditorCamera defaults: 2D mode, 5 m half-height at the origin, and Resolve is orthographic", "[editor][camera]")
+{
+    const EditorCamera cam;
+    CHECK(cam.mode == ViewMode::TwoD);
+    const auto v = cam.Resolve(kVp);
+    CHECK(v.IsOrthographic());
+    CHECK(v.WorldToScreen({0,0,0}).x == Approx(400.0f));
+    CHECK(v.WorldToScreen({0,1,0}).y == Approx(300.0f - 60.0f));
+}
+TEST_CASE("Pan2D: the world follows the cursor 1:1; dragging DOWN moves the world down", "[editor][camera]")
+{
+    EditorCamera cam;
+    const glm::vec3 before = cam.Resolve(kVp).WorldToScreen({1,1,0});
+    cam.Pan2D({30.0f, -12.0f}, kVp);
+    const glm::vec3 after = cam.Resolve(kVp).WorldToScreen({1,1,0});
+    CHECK(after.x - before.x == Approx(30.0f)); CHECK(after.y - before.y == Approx(-12.0f));
+}
+TEST_CASE("ZoomAt2D keeps the world point under the cursor fixed and clamps", "[editor][camera]")
+{
+    EditorCamera cam;
+    const glm::vec2 cursor{123.0f, 456.0f};
+    const Arcane::Ray r = cam.Resolve(kVp).ScreenToRay(cursor);
+    cam.ZoomAt2D(cursor, 3.0f, kVp);
+    const glm::vec3 s = cam.Resolve(kVp).WorldToScreen(r.origin);
+    CHECK(s.x == Approx(cursor.x).margin(1e-2f)); CHECK(s.y == Approx(cursor.y).margin(1e-2f));
+    CHECK(cam.ortho.halfHeight == Approx(5.0f / std::pow(EditorCamera::kWheelStep, 3.0f)));
+    cam.ZoomAt2D(cursor, -1000.0f, kVp); CHECK(cam.ortho.halfHeight == Approx(EditorCamera::kMaxHalfHeight));
+    cam.ZoomAt2D(cursor,  1000.0f, kVp); CHECK(cam.ortho.halfHeight == Approx(EditorCamera::kMinHalfHeight));
+}
+TEST_CASE("Perspective Resolve: the eye orbits the pivot at yaw/pitch/distance and looks at it", "[editor][camera]")
+{
+    EditorCamera cam; cam.mode = ViewMode::Perspective;
+    cam.orbit = { {1,2,3}, 0.0f, 0.0f, 10.0f, 60.0f };
+    CHECK(cam.Eye() == glm::vec3(1, 2, 13));                       // yaw 0 / pitch 0 sits on +Z looking down -Z
+    const auto v = cam.Resolve(kVp);
+    CHECK_FALSE(v.IsOrthographic());
+    const glm::vec3 c = v.WorldToScreen(cam.orbit.pivot);
+    CHECK(c.x == Approx(400.0f)); CHECK(c.y == Approx(300.0f));
+    CHECK(v.WorldToScreen({1, 3, 3}).y < 300.0f);                   // +Y up on screen
+    cam.orbit.pitchDeg = 90.0f - 1e-3f;                              // clamp holds
+    cam.Orbit({0.0f, -1000.0f}); CHECK(cam.orbit.pitchDeg <= 89.999f); CHECK(cam.orbit.pitchDeg >= -89.999f);
+}
+TEST_CASE("Orbit turns about the pivot; Look turns about the eye and moves the pivot", "[editor][camera]")
+{
+    EditorCamera cam; cam.mode = ViewMode::Perspective;
+    const glm::vec3 pivot = cam.orbit.pivot; const glm::vec3 eye = cam.Eye();
+    cam.Orbit({40.0f, 0.0f});
+    CHECK(cam.orbit.pivot == pivot); CHECK(glm::length(cam.Eye() - pivot) == Approx(10.0f));
+    EditorCamera cam2; cam2.mode = ViewMode::Perspective;
+    cam2.Look({40.0f, 0.0f});
+    CHECK(glm::length(cam2.Eye() - eye) < 1e-4f); CHECK(cam2.orbit.pivot != pivot);
+}
+TEST_CASE("Fly moves eye and pivot together along the camera axes, scaled by distance and the scalar", "[editor][camera]")
+{
+    EditorCamera cam; cam.mode = ViewMode::Perspective;   // distance 10 -> scale 1
+    const glm::vec3 eye0 = cam.Eye(), piv0 = cam.orbit.pivot;
+    cam.Fly({0,0,1}, 1.0f, false);                         // forward for one second
+    CHECK(glm::length(cam.Eye() - eye0) == Approx(EditorCamera::kBaseFlySpeed));
+    CHECK(glm::length(cam.orbit.pivot - piv0) == Approx(EditorCamera::kBaseFlySpeed));
+    CHECK(glm::dot(cam.Eye() - eye0, cam.Forward()) > 0.0f);
+    cam.speedScalar = 2.0f; cam.orbit.distance = 20.0f;
+    const glm::vec3 eye1 = cam.Eye();
+    cam.Fly({1,0,0}, 0.5f, true);                          // right, half a second, boosted x2
+    CHECK(glm::length(cam.Eye() - eye1) == Approx(EditorCamera::kBaseFlySpeed * 2.0f * 2.0f * 2.0f * 0.5f));
+}
+TEST_CASE("Dolly scales the distance about the pivot; AdjustSpeed steps x1.1 within limits", "[editor][camera]")
+{
+    EditorCamera cam; cam.mode = ViewMode::Perspective;
+    cam.Dolly(1.0f); CHECK(cam.orbit.distance == Approx(10.0f / EditorCamera::kWheelStep));
+    cam.Dolly(-1000.0f); CHECK(cam.orbit.distance == Approx(EditorCamera::kMaxDistance));
+    cam.AdjustSpeed(1.0f); CHECK(cam.speedScalar == Approx(1.1f));
+    cam.AdjustSpeed(-100.0f); CHECK(cam.speedScalar >= 0.01f);
+}
+TEST_CASE("Frame: 2D fits the tighter axis with the margin; perspective solves distance = radius / (tan(fov/2) * min(aspect,1))", "[editor][camera]")
+{
+    FramingBounds b; b.min = {-2, -1, 0}; b.max = {2, 1, 0}; b.count = 1;
+    EditorCamera cam;
+    cam.Frame(b, kVp);
+    CHECK(cam.ortho.center == glm::vec2(0, 0));
+    // width 4 m across 800 px * 0.9 = 180 px/m -> halfHeight = 300/180
+    CHECK(cam.ortho.halfHeight == Approx(300.0f / 180.0f));
+    cam.mode = ViewMode::Perspective;
+    cam.Frame(b, kVp);
+    CHECK(cam.orbit.pivot == glm::vec3(0, 0, 0));
+    const float radius = glm::length(glm::vec3(2, 1, 0));
+    CHECK(cam.orbit.distance == Approx(radius / (std::tan(glm::radians(30.0f)) * 1.0f) / EditorCamera::kFrameFill));
+}
+TEST_CASE("Frame ignores an invalid bounds and a zero viewport; CentreOrigin resets the 2D centre only", "[editor][camera]")
+{
+    EditorCamera cam; const EditorCamera before = cam;
+    cam.Frame(FramingBounds{}, kVp); CHECK(cam.ortho.halfHeight == before.ortho.halfHeight);
+    FramingBounds b; b.min = b.max = {3,3,3}; b.count = 1;
+    cam.Frame(b, {0, 0}); CHECK(cam.ortho.center == before.ortho.center);
+    cam.ortho.center = {9, 9}; cam.CentreOrigin(); CHECK(cam.ortho.center == glm::vec2(0, 0));
+}
+
+// ---------------------------------------------------------------------------
+// Framing bounds over the registry (3D AABB)
+// ---------------------------------------------------------------------------
 
 namespace
 {
@@ -52,259 +162,79 @@ namespace
     // implicit, so a mat3 helper still compiled into the widened
     // WorldTransform -- and silently landed the translation in the Z BASIS
     // COLUMN, framing every entity at the origin.
-    glm::mat4 WorldMat(glm::vec2 pos, glm::vec2 scale)
+    glm::mat4 WorldMat(glm::vec3 pos, glm::vec3 scale)
     {
         glm::mat4 m(1.0f);
         m[0] = glm::vec4(scale.x, 0.0f, 0.0f, 0.0f);
         m[1] = glm::vec4(0.0f, scale.y, 0.0f, 0.0f);
-        m[3] = glm::vec4(pos.x, pos.y, 0.0f, 1.0f);
+        m[2] = glm::vec4(0.0f, 0.0f, scale.z, 0.0f);
+        m[3] = glm::vec4(pos, 1.0f);
         return m;
     }
 
     // Sprite entity with a materialised WorldTransform (the editor refreshes
     // these before framing; the test sets them directly). With no .arcsprite
-    // asset a sprite draws a 1x1 m quad, so its `size` is carried by the world
-    // matrix's basis columns -- `scale` stays a separate argument to keep the
-    // "a scaled sprite grows by its world scale" case reading the same way.
+    // asset a sprite draws a 1x1 m quad at the centre pivot (SpriteEntry's
+    // default (0.5, 0.5)), so its `size` is carried by the world matrix's
+    // basis columns -- `scale` stays a separate argument to keep the "a scaled
+    // sprite grows by its world scale" case reading the same way.
     Astra::Entity MakeSprite(Astra::Registry& reg, glm::vec2 pos, glm::vec2 size,
                              glm::vec2 scale = glm::vec2(1.0f))
     {
         Astra::Entity e = reg.CreateEntity();
         reg.AddComponent<Arcane::WorldTransform>(e,
-            Arcane::WorldTransform{WorldMat(pos, size * scale)});
+            Arcane::WorldTransform{WorldMat(glm::vec3(pos, 0.0f), glm::vec3(size * scale, 1.0f))});
         Arcane::SpriteRenderer sr;
         reg.AddComponent<Arcane::SpriteRenderer>(e, sr);
         return e;
     }
-}
 
-TEST_CASE("EditorCamera defaults to 100 px per metre at the origin", "[editor]")
-{
-    // MKS content must be visible the moment a project opens, without the game
-    // module ever calling SetView -- zoom 1 would draw a 1 m body as 1 px.
-    const EditorCamera cam;
-    CHECK(cam.zoom == Approx(100.0f));
-    CHECK(cam.offset.x == Approx(0.0f));
-    CHECK(cam.offset.y == Approx(0.0f));
-    CHECK(cam.zoom == Approx(EditorCamera::kDefaultZoom));
-}
-
-TEST_CASE("EditorCamera::Pan translates by the screen delta", "[editor]")
-{
-    EditorCamera cam;
-    const glm::vec2 world(2.0f, -3.0f);
-    const glm::vec2 before = cam.WorldToScreen(world);
-
-    cam.Pan(glm::vec2(25.0f, -10.0f));
-
-    CHECK(cam.offset.x == Approx(25.0f));
-    CHECK(cam.offset.y == Approx(-10.0f));
-    // Content follows the drag 1:1 in screen px (the "grab the scene" feel).
-    CHECK(cam.WorldToScreen(world).x == Approx(before.x + 25.0f));
-    CHECK(cam.WorldToScreen(world).y == Approx(before.y - 10.0f));
-    CHECK(cam.zoom == Approx(100.0f));   // pan never rescales
-
-    cam.Pan(glm::vec2(-5.0f, 5.0f));     // deltas accumulate
-    CHECK(cam.offset.x == Approx(20.0f));
-    CHECK(cam.offset.y == Approx(-5.0f));
-}
-
-TEST_CASE("EditorCamera::ZoomAt keeps the world point under the cursor fixed", "[editor]")
-{
-    EditorCamera cam;
-    cam.offset = glm::vec2(-40.0f, 90.0f);   // deliberately not centred
-
-    const glm::vec2 cursor(317.0f, 208.0f);
-    const glm::vec2 anchored = cam.ScreenToWorld(cursor);
-
-    SECTION("zooming in")
+    // Mesh entity: a MeshRenderer naming `mesh`, placed by WorldMat.
+    Astra::Entity MakeMesh(Astra::Registry& reg, const Arcane::Guid& mesh, glm::vec3 pos, glm::vec3 scale)
     {
-        const float z0 = cam.zoom;
-        cam.ZoomAt(cursor, 3.0f);
-        CHECK(cam.zoom > z0);
-        // The round trip is the actual requirement: the same world point must
-        // still land on the same pixel.
-        CHECK(cam.WorldToScreen(anchored).x == Approx(cursor.x).margin(1e-3));
-        CHECK(cam.WorldToScreen(anchored).y == Approx(cursor.y).margin(1e-3));
+        Astra::Entity e = reg.CreateEntity();
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{WorldMat(pos, scale)});
+        Arcane::MeshRenderer mr;
+        mr.mesh = mesh;
+        reg.AddComponent<Arcane::MeshRenderer>(e, mr);
+        return e;
     }
 
-    SECTION("zooming out")
+    // A resolved mesh whose LOCAL bounds are the unit cube [-1, 1]^3 -- the
+    // table entry framing reads; the geometry itself is irrelevant here.
+    Arcane::MeshEntry UnitCubeEntry()
     {
-        const float z0 = cam.zoom;
-        cam.ZoomAt(cursor, -2.0f);
-        CHECK(cam.zoom < z0);
-        CHECK(cam.WorldToScreen(anchored).x == Approx(cursor.x).margin(1e-3));
-        CHECK(cam.WorldToScreen(anchored).y == Approx(cursor.y).margin(1e-3));
-    }
-
-    SECTION("a zero-tick wheel changes nothing")
-    {
-        const EditorCamera before = cam;
-        cam.ZoomAt(cursor, 0.0f);
-        CHECK(cam.zoom == before.zoom);
-        CHECK(cam.offset.x == before.offset.x);
-        CHECK(cam.offset.y == before.offset.y);
+        Arcane::MeshEntry entry;
+        entry.bounds.min = glm::vec3(-1.0f);
+        entry.bounds.max = glm::vec3( 1.0f);
+        return entry;
     }
 }
 
-TEST_CASE("EditorCamera::ZoomAt clamps at both ends", "[editor]")
-{
-    const glm::vec2 cursor(400.0f, 300.0f);
-
-    EditorCamera in;
-    in.ZoomAt(cursor, 10000.0f);          // far past the ceiling in one go
-    CHECK(in.zoom == Approx(EditorCamera::kMaxZoom));
-
-    EditorCamera out;
-    out.ZoomAt(cursor, -10000.0f);        // and past the floor
-    CHECK(out.zoom == Approx(EditorCamera::kMinZoom));
-
-    // Repeated notches at the clamp must not drift the offset -- the pinned
-    // camera would otherwise creep every frame the wheel is spun.
-    const glm::vec2 pinned = in.offset;
-    for (int i = 0; i < 8; ++i)
-        in.ZoomAt(cursor, 5.0f);
-    CHECK(in.zoom == Approx(EditorCamera::kMaxZoom));
-    CHECK(in.offset.x == Approx(pinned.x));
-    CHECK(in.offset.y == Approx(pinned.y));
-
-    // Many small notches accumulate to the same clamp, never past it.
-    EditorCamera step;
-    for (int i = 0; i < 500; ++i)
-        step.ZoomAt(cursor, 1.0f);
-    CHECK(step.zoom == Approx(EditorCamera::kMaxZoom));
-    CHECK(EditorCamera::kMinZoom > 0.0f);   // ScreenToWorld can never divide by zero
-    CHECK(EditorCamera::kMinZoom < EditorCamera::kDefaultZoom);
-    CHECK(EditorCamera::kMaxZoom > EditorCamera::kDefaultZoom);
-}
-
-TEST_CASE("EditorCamera ScreenToWorld and WorldToScreen are inverses", "[editor]")
-{
-    EditorCamera cam;
-    cam.zoom   = 250.0f;
-    cam.offset = glm::vec2(37.0f, -19.0f);
-
-    const glm::vec2 screen(123.5f, 456.25f);
-    const glm::vec2 world = cam.ScreenToWorld(screen);
-    const glm::vec2 back  = cam.WorldToScreen(world);
-    CHECK(back.x == Approx(screen.x).margin(1e-3));
-    CHECK(back.y == Approx(screen.y).margin(1e-3));
-
-    const glm::vec2 w2(-4.25f, 8.75f);
-    const glm::vec2 s2 = cam.WorldToScreen(w2);
-    const glm::vec2 w2back = cam.ScreenToWorld(s2);
-    CHECK(w2back.x == Approx(w2.x).margin(1e-5));
-    CHECK(w2back.y == Approx(w2.y).margin(1e-5));
-
-    // The convention itself: screen = world * zoom + offset.
-    CHECK(s2.x == Approx(w2.x * cam.zoom + cam.offset.x));
-    CHECK(s2.y == Approx(w2.y * cam.zoom + cam.offset.y));
-}
-
-TEST_CASE("EditorCamera::Frame centres an AABB and fits it with a margin", "[editor]")
-{
-    EditorCamera cam;
-    const glm::vec2 mn(-2.0f, -1.0f), mx(2.0f, 1.0f);   // 4 x 2 m
-    const glm::vec2 viewport(800.0f, 600.0f);
-
-    cam.Frame(mn, mx, viewport);
-
-    // The tighter axis wins: 800 * fill / 4 m == 180 px/m beats 600 * fill / 2 m.
-    const float expectZoom = viewport.x * EditorCamera::kFrameFill / 4.0f;
-    CHECK(cam.zoom == Approx(expectZoom));
-
-    // The AABB centre lands on the viewport centre.
-    const glm::vec2 centre = cam.WorldToScreen((mn + mx) * 0.5f);
-    CHECK(centre.x == Approx(viewport.x * 0.5f));
-    CHECK(centre.y == Approx(viewport.y * 0.5f));
-
-    // ...and the whole box is inside the viewport, with the margin actually
-    // left over on the fitted axis.
-    const glm::vec2 lo = cam.WorldToScreen(mn);
-    const glm::vec2 hi = cam.WorldToScreen(mx);
-    CHECK(lo.x > 0.0f);
-    CHECK(lo.y > 0.0f);
-    CHECK(hi.x < viewport.x);
-    CHECK(hi.y < viewport.y);
-    CHECK((hi.x - lo.x) == Approx(viewport.x * EditorCamera::kFrameFill));
-    CHECK(EditorCamera::kFrameFill < 1.0f);       // there IS a margin
-    CHECK(EditorCamera::kFrameFill > 0.0f);
-}
-
-TEST_CASE("EditorCamera::Frame handles the degenerate AABB and viewport", "[editor]")
-{
-    SECTION("a zero-size AABB (single point entity) centres without rescaling")
-    {
-        EditorCamera cam;
-        const float z0 = cam.zoom;
-        const glm::vec2 p(5.0f, -3.0f);
-        cam.Frame(p, p, glm::vec2(800.0f, 600.0f));
-
-        CHECK(cam.zoom == Approx(z0));            // a point cannot imply a scale
-        CHECK(std::isfinite(cam.offset.x));
-        CHECK(std::isfinite(cam.offset.y));
-        CHECK(cam.WorldToScreen(p).x == Approx(400.0f));
-        CHECK(cam.WorldToScreen(p).y == Approx(300.0f));
-    }
-
-    SECTION("one degenerate axis still fits on the other")
-    {
-        EditorCamera cam;
-        const glm::vec2 mn(-2.0f, 0.0f), mx(2.0f, 0.0f);   // a horizontal row
-        cam.Frame(mn, mx, glm::vec2(800.0f, 600.0f));
-        CHECK(cam.zoom == Approx(800.0f * EditorCamera::kFrameFill / 4.0f));
-        CHECK(cam.WorldToScreen(glm::vec2(0.0f, 0.0f)).x == Approx(400.0f));
-        CHECK(cam.WorldToScreen(glm::vec2(0.0f, 0.0f)).y == Approx(300.0f));
-    }
-
-    SECTION("a zero-size viewport leaves the camera untouched")
-    {
-        EditorCamera cam;
-        const EditorCamera before = cam;
-        cam.Frame(glm::vec2(-1.0f), glm::vec2(1.0f), glm::vec2(0.0f, 0.0f));
-        CHECK(cam.zoom == before.zoom);
-        CHECK(cam.offset.x == before.offset.x);
-        CHECK(cam.offset.y == before.offset.y);
-
-        cam.Frame(glm::vec2(-1.0f), glm::vec2(1.0f), glm::vec2(800.0f, 0.0f));
-        CHECK(cam.zoom == before.zoom);
-        CHECK(cam.offset.x == before.offset.x);
-        CHECK(cam.offset.y == before.offset.y);
-    }
-
-    SECTION("framing a huge AABB still clamps the zoom into range")
-    {
-        EditorCamera cam;
-        cam.Frame(glm::vec2(-1.0e6f), glm::vec2(1.0e6f), glm::vec2(800.0f, 600.0f));
-        CHECK(cam.zoom >= EditorCamera::kMinZoom);
-        CHECK(cam.zoom <= EditorCamera::kMaxZoom);
-    }
-}
-
-TEST_CASE("Framing bounds match how sprites are rendered", "[editor]")
+TEST_CASE("Framing bounds match how sprites are rendered", "[editor][camera]")
 {
     auto reg = MakeSceneRegistry();
     // World size = the sprite asset's base size (1x1 m unresolved) * world
-    // scale, about the pivot (the centre by default) -- the XY box of exactly
-    // the SpriteWorldQuad corners RenderSubmissionSystem submits.
+    // scale, about the pivot (the centre by default) -- the box of exactly
+    // the SpriteWorldQuad corners RenderSubmissionSystem submits, flat at z=0.
     const Astra::Entity a = MakeSprite(*reg, glm::vec2(3.0f, 4.0f), glm::vec2(2.0f, 1.0f));
     const std::vector<Astra::Entity> one{a};
 
-    const Arcane::Editor::FramingBounds b =
-        Arcane::Editor::SelectionFramingBounds(*reg, one);
+    const FramingBounds b = SelectionFramingBounds(*reg, one);
     REQUIRE(b.Valid());
     CHECK(b.count == 1);
     CHECK(b.min.x == Approx(2.0f));
     CHECK(b.min.y == Approx(3.5f));
+    CHECK(b.min.z == Approx(0.0f));
     CHECK(b.max.x == Approx(4.0f));
     CHECK(b.max.y == Approx(4.5f));
+    CHECK(b.max.z == Approx(0.0f));
 
     // A scaled sprite grows by its world scale, same as the drawn quad.
     const Astra::Entity s = MakeSprite(*reg, glm::vec2(-1.0f, 0.0f), glm::vec2(2.0f, 2.0f),
                                        glm::vec2(2.0f, 2.0f));
     const std::vector<Astra::Entity> two{a, s};
-    const Arcane::Editor::FramingBounds u =
-        Arcane::Editor::SelectionFramingBounds(*reg, two);
+    const FramingBounds u = SelectionFramingBounds(*reg, two);
     REQUIRE(u.Valid());
     CHECK(u.count == 2);
     CHECK(u.min.x == Approx(-3.0f));
@@ -313,14 +243,65 @@ TEST_CASE("Framing bounds match how sprites are rendered", "[editor]")
     CHECK(u.max.y == Approx(4.5f));
 }
 
-TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[editor]")
+TEST_CASE("A sprite at (2,3,0) with the default pivot frames as its 1x1 quad", "[editor][camera]")
+{
+    auto reg = MakeSceneRegistry();
+    const Astra::Entity a = MakeSprite(*reg, glm::vec2(2.0f, 3.0f), glm::vec2(1.0f, 1.0f));
+    const std::vector<Astra::Entity> sel{a};
+    const FramingBounds b = SelectionFramingBounds(*reg, sel);
+    REQUIRE(b.Valid());
+    CHECK(b.min == glm::vec3(1.5f, 2.5f, 0.0f));
+    CHECK(b.max == glm::vec3(2.5f, 3.5f, 0.0f));
+}
+
+TEST_CASE("Framing bounds take a mesh's table AABB through its world matrix", "[editor][camera]")
+{
+    auto reg = MakeSceneRegistry();
+    const Arcane::Guid meshId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    meshes.emplace(meshId, UnitCubeEntry());
+    reg->SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    SECTION("a resolved mesh contributes its transformed local bounds, all three axes")
+    {
+        const Astra::Entity m = MakeMesh(*reg, meshId, glm::vec3(5.0f, 0.0f, 2.0f), glm::vec3(2.0f, 1.0f, 3.0f));
+        const std::vector<Astra::Entity> sel{m};
+        const FramingBounds b = SelectionFramingBounds(*reg, sel);
+        REQUIRE(b.Valid());
+        CHECK(b.count == 1);
+        CHECK(b.min.x == Approx(3.0f));
+        CHECK(b.min.y == Approx(-1.0f));
+        CHECK(b.min.z == Approx(-1.0f));
+        CHECK(b.max.x == Approx(7.0f));
+        CHECK(b.max.y == Approx(1.0f));
+        CHECK(b.max.z == Approx(5.0f));
+
+        // The scene sweep sees it too, and Hidden excludes it.
+        CHECK(SceneFramingBounds(*reg).count == 1);
+        reg->AddComponent<Arcane::Hidden>(m, Arcane::Hidden{});
+        CHECK_FALSE(SceneFramingBounds(*reg).Valid());
+    }
+
+    SECTION("an UNRESOLVED mesh draws nothing: a point in a selection, absent from the scene sweep")
+    {
+        const Astra::Entity m = MakeMesh(*reg, Arcane::Guid::Generate(), glm::vec3(4.0f, -4.0f, 1.0f), glm::vec3(1.0f));
+        const std::vector<Astra::Entity> sel{m};
+        const FramingBounds b = SelectionFramingBounds(*reg, sel);
+        REQUIRE(b.Valid());
+        CHECK(b.count == 1);
+        CHECK(b.min == glm::vec3(4.0f, -4.0f, 1.0f));
+        CHECK(b.max == glm::vec3(4.0f, -4.0f, 1.0f));
+        CHECK_FALSE(SceneFramingBounds(*reg).Valid());
+    }
+}
+
+TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[editor][camera]")
 {
     auto reg = MakeSceneRegistry();
 
     SECTION("an empty selection is not framable")
     {
-        const Arcane::Editor::FramingBounds b =
-            Arcane::Editor::SelectionFramingBounds(*reg, {});
+        const FramingBounds b = SelectionFramingBounds(*reg, {});
         CHECK_FALSE(b.Valid());
         CHECK(b.count == 0);
     }
@@ -329,24 +310,25 @@ TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[ed
     {
         const Astra::Entity bare = reg->CreateEntity();
         const std::vector<Astra::Entity> sel{bare};
-        CHECK_FALSE(Arcane::Editor::SelectionFramingBounds(*reg, sel).Valid());
+        CHECK_FALSE(SelectionFramingBounds(*reg, sel).Valid());
     }
 
-    SECTION("a transform-only entity is framable as a zero-size AABB")
+    SECTION("a transform-only entity is framable as a zero-size AABB at its 3D position")
     {
         const Astra::Entity node = reg->CreateEntity();
         reg->AddComponent<Arcane::WorldTransform>(
-            node, Arcane::WorldTransform{WorldMat(glm::vec2(7.0f, -2.0f), glm::vec2(1.0f))});
+            node, Arcane::WorldTransform{WorldMat(glm::vec3(7.0f, -2.0f, 1.5f), glm::vec3(1.0f))});
         const std::vector<Astra::Entity> sel{node};
 
-        const Arcane::Editor::FramingBounds b =
-            Arcane::Editor::SelectionFramingBounds(*reg, sel);
+        const FramingBounds b = SelectionFramingBounds(*reg, sel);
         REQUIRE(b.Valid());          // framable...
         CHECK(b.count == 1);
         CHECK(b.min.x == Approx(7.0f));   // ...but with no extent
         CHECK(b.min.y == Approx(-2.0f));
+        CHECK(b.min.z == Approx(1.5f));
         CHECK(b.max.x == Approx(7.0f));
         CHECK(b.max.y == Approx(-2.0f));
+        CHECK(b.max.z == Approx(1.5f));
     }
 
     SECTION("a destroyed entity in the selection is skipped, not counted")
@@ -356,8 +338,7 @@ TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[ed
         reg->DestroyEntity(gone);
         const std::vector<Astra::Entity> sel{gone, live};
 
-        const Arcane::Editor::FramingBounds b =
-            Arcane::Editor::SelectionFramingBounds(*reg, sel);
+        const FramingBounds b = SelectionFramingBounds(*reg, sel);
         REQUIRE(b.Valid());
         CHECK(b.count == 1);
         CHECK(b.min.x == Approx(9.0f));
@@ -365,13 +346,13 @@ TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[ed
     }
 }
 
-TEST_CASE("Scene framing bounds sweep every visible sprite", "[editor]")
+TEST_CASE("Scene framing bounds sweep every visible sprite", "[editor][camera]")
 {
     auto reg = MakeSceneRegistry();
 
     SECTION("an empty scene is not framable")
     {
-        CHECK_FALSE(Arcane::Editor::SceneFramingBounds(*reg).Valid());
+        CHECK_FALSE(SceneFramingBounds(*reg).Valid());
     }
 
     SECTION("the union of all sprites, hidden ones excluded")
@@ -386,9 +367,9 @@ TEST_CASE("Scene framing bounds sweep every visible sprite", "[editor]")
         // the box back toward the origin either.
         const Astra::Entity root = reg->CreateEntity();
         reg->AddComponent<Arcane::WorldTransform>(
-            root, Arcane::WorldTransform{WorldMat(glm::vec2(0.0f, 0.0f), glm::vec2(1.0f))});
+            root, Arcane::WorldTransform{WorldMat(glm::vec3(0.0f), glm::vec3(1.0f))});
 
-        const Arcane::Editor::FramingBounds b = Arcane::Editor::SceneFramingBounds(*reg);
+        const FramingBounds b = SceneFramingBounds(*reg);
         REQUIRE(b.Valid());
         CHECK(b.count == 2);
         CHECK(b.min.x == Approx(-1.0f));
@@ -398,27 +379,52 @@ TEST_CASE("Scene framing bounds sweep every visible sprite", "[editor]")
     }
 }
 
-TEST_CASE("Framed bounds put the content inside the viewport", "[editor]")
+TEST_CASE("Framed bounds put the content inside the viewport", "[editor][camera]")
 {
     // The end-to-end contract the feature exists for: sweep -> frame -> every
-    // framed corner is on screen at the camera the editor will push.
+    // framed corner is on screen at the view the editor will push.
     auto reg = MakeSceneRegistry();
     MakeSprite(*reg, glm::vec2(-4.0f, 2.0f), glm::vec2(1.0f, 1.0f));
     MakeSprite(*reg, glm::vec2(9.0f, -6.0f), glm::vec2(3.0f, 2.0f));
 
-    const Arcane::Editor::FramingBounds b = Arcane::Editor::SceneFramingBounds(*reg);
+    const FramingBounds b = SceneFramingBounds(*reg);
     REQUIRE(b.Valid());
 
-    EditorCamera cam;
-    const glm::vec2 viewport(1280.0f, 720.0f);
-    cam.Frame(b.min, b.max, viewport);
+    const glm::uvec2 viewport{1280u, 720u};
+    const glm::vec3 corners[] = {
+        b.min, b.max, glm::vec3(b.min.x, b.max.y, 0.0f), glm::vec3(b.max.x, b.min.y, 0.0f)
+    };
 
-    for (glm::vec2 corner : { b.min, b.max, glm::vec2(b.min.x, b.max.y), glm::vec2(b.max.x, b.min.y) })
+    SECTION("2D")
     {
-        const glm::vec2 s = cam.WorldToScreen(corner);
-        CHECK(s.x >= 0.0f);
-        CHECK(s.y >= 0.0f);
-        CHECK(s.x <= viewport.x);
-        CHECK(s.y <= viewport.y);
+        EditorCamera cam;
+        cam.Frame(b, viewport);
+        const Arcane::ViewTransform v = cam.Resolve(viewport);
+        for (const glm::vec3& corner : corners)
+        {
+            const glm::vec3 s = v.WorldToScreen(corner);
+            CHECK(s.x >= 0.0f);
+            CHECK(s.y >= 0.0f);
+            CHECK(s.x <= float(viewport.x));
+            CHECK(s.y <= float(viewport.y));
+        }
+    }
+
+    SECTION("perspective")
+    {
+        EditorCamera cam;
+        cam.mode = ViewMode::Perspective;
+        cam.Frame(b, viewport);
+        const Arcane::ViewTransform v = cam.Resolve(viewport);
+        for (const glm::vec3& corner : corners)
+        {
+            const glm::vec3 s = v.WorldToScreen(corner);
+            CHECK(std::isfinite(s.x));
+            CHECK(s.x >= 0.0f);
+            CHECK(s.y >= 0.0f);
+            CHECK(s.x <= float(viewport.x));
+            CHECK(s.y <= float(viewport.y));
+            CHECK(s.z > 0.0f);   // in front of the near plane
+        }
     }
 }
