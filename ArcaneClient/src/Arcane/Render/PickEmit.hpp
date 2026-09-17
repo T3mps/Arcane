@@ -11,12 +11,15 @@
 // of the hit-proxy pass; PickBuffer (a later task) owns the R32_UINT target,
 // the entity_id.hlsl pipeline, and the readback.
 //
-// PickView is the world->canvas mapping the Sandbox scene camera uses
-// (Arcane/Sandbox/src/Camera.hpp): screen = world * worldToScreenScale + offset,
-// a single combined scale plus a screen-space offset in canvas px, y-down, no
-// y-flip. Width/height are NOT carried here -- PickBuffer owns those.
+// PickView is the world->canvas mapping the scene render uses: the ViewTransform's
+// orthographic Affine2D (ViewTransform.hpp) -- a PER-AXIS scale plus a screen-
+// space offset in canvas px. The y scale is NEGATIVE for the +Y-up world on the
+// y-down canvas, so every point goes through Affine2D::Point and every angle
+// carries AngleSign (F4 plan 1 T3; plan 2 replaces the affine with the
+// ViewTransform itself). Width/height are NOT carried here -- PickBuffer owns those.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>   // Affine2D
 
 #include <Astra/Entity/Entity.hpp>
 
@@ -31,12 +34,13 @@ namespace Astra { class Registry; }
 
 namespace Arcane
 {
-    // The world->canvas transform the scene render uses (matches Sandbox
-    // Camera::WorldToScreen): canvas_px = worldPoint * worldToScreenScale + offset.
+    // The world->canvas transform the scene render uses: the orthographic
+    // ViewTransform's Affine2D (canvas_px = world * scale + offset, scale.y < 0).
+    // Fill from ClientRuntime::View().AsAffine2D() -- and skip the pick emit
+    // when that is nullopt (a perspective view has no per-axis affine).
     struct PickView
     {
-        glm::vec2 offset{0.0f, 0.0f};        // screen-space translation, canvas px
-        float     worldToScreenScale = 1.0f; // px per world-meter (== Camera::WorldToScreenScale())
+        Affine2D affine{};
     };
 
     // A single pickable shape, already projected to CANVAS pixels (y-down),
@@ -56,7 +60,7 @@ namespace Arcane
         glm::vec2 halfExtents{0.0f, 0.0f};
         float     radius = 0.0f;
         float     halfLen = 0.0f;
-        float     angle = 0.0f;   // radians, world rotation (unaffected by the y-down canvas map)
+        float     angle = 0.0f;   // radians, world rotation, in CANVAS sense (AngleSign applied)
     };
 
     // Collect every pickable entity's silhouette geometry, appended to `out`

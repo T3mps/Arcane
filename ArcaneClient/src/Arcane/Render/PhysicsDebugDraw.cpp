@@ -70,36 +70,41 @@ namespace Arcane
 
         // ---- helpers --------------------------------------------------------
 
-        // Apply the camera to a world-space position -> canvas position.
-        // CANONICAL transform (matches RenderSubmissionSystem +
-        // Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
-        inline glm::vec2 ToScreen(const Phys::Vec2& wpos,
-                                  const glm::vec2& offset,
-                                  float zoom)
+        // Apply the camera to a world-space position -> canvas position, through
+        // the ONE affine (F4 plan 1 T3): per-axis scale (y NEGATIVE for the +Y-up
+        // world on the y-down canvas) plus a canvas-px offset. EVERY point the
+        // overlay emits goes through here (or Affine2D::Point directly); every
+        // length through Affine2D::Length. Nothing below rotates a shape in
+        // screen space by a world angle -- a mirrored map would reverse it.
+        inline glm::vec2 ToScreen(const Phys::Vec2& wpos, const Affine2D& view)
         {
-            return glm::vec2(static_cast<float>(wpos.x) * zoom + offset.x,
-                             static_cast<float>(wpos.y) * zoom + offset.y);
+            return view.Point(glm::vec2(static_cast<float>(wpos.x), static_cast<float>(wpos.y)));
         }
 
-        // Draw an AABB outline using four lines.
+        inline glm::vec2 ToVec2(const Phys::Vec2& v)
+        {
+            return glm::vec2(static_cast<float>(v.x), static_cast<float>(v.y));
+        }
+
+        // Draw an AABB outline using four lines: the four WORLD corners, each
+        // projected (under the mirror, world min.y is the canvas BOTTOM).
         inline void DrawAabbOutline(Batcher2D& b,
                                     const Phys::Aabb& aabb,
-                                    const glm::vec2& off,
-                                    float zoom,
+                                    const Affine2D& view,
                                     float thickness,
                                     const glm::vec4& color)
         {
-            const glm::vec2 mn = glm::vec2(static_cast<float>(aabb.min.x),
-                                           static_cast<float>(aabb.min.y)) * zoom + off;
-            const glm::vec2 mx = glm::vec2(static_cast<float>(aabb.max.x),
-                                           static_cast<float>(aabb.max.y)) * zoom + off;
-            const glm::vec2 bl = glm::vec2(mn.x, mx.y);
-            const glm::vec2 tr = glm::vec2(mx.x, mn.y);
+            const glm::vec2 mn = ToVec2(aabb.min);
+            const glm::vec2 mx = ToVec2(aabb.max);
+            const glm::vec2 c0 = view.Point(glm::vec2(mn.x, mn.y));
+            const glm::vec2 c1 = view.Point(glm::vec2(mx.x, mn.y));
+            const glm::vec2 c2 = view.Point(glm::vec2(mx.x, mx.y));
+            const glm::vec2 c3 = view.Point(glm::vec2(mn.x, mx.y));
 
-            b.Line(mn, tr, thickness, color); // top
-            b.Line(tr, mx, thickness, color); // right
-            b.Line(mx, bl, thickness, color); // bottom
-            b.Line(bl, mn, thickness, color); // left
+            b.Line(c0, c1, thickness, color);
+            b.Line(c1, c2, thickness, color);
+            b.Line(c2, c3, thickness, color);
+            b.Line(c3, c0, thickness, color);
         }
 
         // Rotate a 2D point by `angle` radians around the origin.
@@ -128,8 +133,8 @@ namespace Arcane
         constexpr glm::vec4 kColStaticGrid   { 0.35f, 0.55f, 1.00f, 0.35f }; // cool blue
         constexpr glm::vec4 kColResidencyGrid{ 1.00f, 0.70f, 0.20f, 0.35f }; // warm amber
 
-        // Manifold normal-arrow length (world units, pre-zoom) + contact-point
-        // disc radius (canvas px, post-zoom-independent for visibility).
+        // Manifold normal-arrow length (world units, projected) + contact-point
+        // disc radius (canvas px, view-independent for visibility).
         constexpr float kManifoldNormalLen = 20.0f; // world units
         constexpr float kManifoldPointPx   = 3.0f;   // canvas px
 
@@ -195,10 +200,10 @@ namespace Arcane
         // Phys::Transform (rotation + position) to world, then to screen.
         inline glm::vec2 ShapeLocalToScreen(const Phys::Vec2& local,
                                             const Phys::Transform& xf,
-                                            const glm::vec2& off, float zoom)
+                                            const Affine2D& view)
         {
             const Phys::Vec2 w = xf.position + Phys::RotateVec(xf.rotation, local);
-            return glm::vec2(static_cast<float>(w.x), static_cast<float>(w.y)) * zoom + off;
+            return ToScreen(w, view);
         }
 
         // Outline one trace shape (the unified core+radius model) in world space:
@@ -209,69 +214,74 @@ namespace Arcane
         // verts are local; xf places them in the world. A radius>0 on a poly is the
         // collision skin, drawn as end discs at each vert for visual fidelity.
         void DrawTraceShape(Batcher2D& b, const Phys::Shape& s,
-                            const Phys::Transform& xf, const glm::vec2& off,
-                            float zoom, float thick, const glm::vec4& col)
+                            const Phys::Transform& xf, const Affine2D& view,
+                            float thick, const glm::vec4& col)
         {
-            const float r = static_cast<float>(s.radius) * zoom;
+            const float r = view.Length(static_cast<float>(s.radius));
             const std::size_t vc = s.verts.size();
 
             if (vc >= 3)
             {
                 for (std::size_t e = 0; e < vc; ++e)
                 {
-                    const glm::vec2 a = ShapeLocalToScreen(s.verts[e], xf, off, zoom);
-                    const glm::vec2 c = ShapeLocalToScreen(s.verts[(e + 1) % vc], xf, off, zoom);
+                    const glm::vec2 a = ShapeLocalToScreen(s.verts[e], xf, view);
+                    const glm::vec2 c = ShapeLocalToScreen(s.verts[(e + 1) % vc], xf, view);
                     b.Line(a, c, thick, col);
                 }
             }
             else if (vc == 2)
             {
-                const glm::vec2 a = ShapeLocalToScreen(s.verts[0], xf, off, zoom);
-                const glm::vec2 c = ShapeLocalToScreen(s.verts[1], xf, off, zoom);
+                const glm::vec2 a = ShapeLocalToScreen(s.verts[0], xf, view);
+                const glm::vec2 c = ShapeLocalToScreen(s.verts[1], xf, view);
                 b.Line(a, c, thick, col);
                 if (r > 0.0f) { b.Circle(a, r, col); b.Circle(c, r, col); }
             }
             else
             {
                 const glm::vec2 ctr = (vc == 1)
-                    ? ShapeLocalToScreen(s.verts[0], xf, off, zoom)
-                    : (glm::vec2(static_cast<float>(xf.position.x),
-                                 static_cast<float>(xf.position.y)) * zoom + off);
+                    ? ShapeLocalToScreen(s.verts[0], xf, view)
+                    : ToScreen(xf.position, view);
                 b.Circle(ctr, (r > 0.0f) ? r : 2.0f, col);
             }
         }
 
         // Draw one shape's outline centered at world position `wc` (world units),
-        // rotated by `angle` (radians), in the world*zoom+offset screen space.
-        // EVERY kind rotates -- this is where the Aabb case was fixed (it used to
-        // draw an axis-aligned box regardless of the body angle, unlike the
-        // Capsule/Polygon cases). Matches the per-shape look of the old inline
-        // dispatch (circle disc / capsule end-caps + side lines / box + polygon
-        // edge loops); only the Aabb rotation is new.
+        // rotated by `angle` (radians). EVERY kind rotates -- this is where the
+        // Aabb case was fixed (it used to draw an axis-aligned box regardless of
+        // the body angle, unlike the Capsule/Polygon cases). Matches the per-
+        // shape look of the old inline dispatch (circle disc / capsule end-caps +
+        // side lines / box + polygon edge loops).
+        //
+        // F4 plan 1 T3: the rotation happens in WORLD space -- each local point
+        // is turned by `angle`, offset by `wc`, and THEN projected through the
+        // affine. It used to rotate in screen space about the projected centre,
+        // which is only right for a map with no mirror; the +Y-up canvas map
+        // mirrors Y, so a screen-space turn would spin every box the wrong way.
         void DrawShapeOutlineRotated(Batcher2D& b, const Phys::Shape& s,
                                      const Phys::Vec2& wc, float angle,
-                                     const glm::vec2& off, float zoom,
+                                     const Affine2D& view,
                                      float thick, const glm::vec4& col)
         {
-            const glm::vec2 spos = ToScreen(wc, off, zoom);
-            // Local point (shape frame) -> screen: rotate by `angle`, then scale
-            // by zoom (rotation + uniform scale commute) and offset by spos.
+            const glm::vec2 wcf  = ToVec2(wc);
+            const glm::vec2 spos = view.Point(wcf);
+            // Local point (shape frame) -> world (rotate by `angle`, translate
+            // by the centre) -> screen (project).
             const auto P = [&](float lx, float ly) {
-                return spos + Rotate2D(glm::vec2(lx, ly), angle) * zoom;
+                return view.Point(wcf + Rotate2D(glm::vec2(lx, ly), angle));
             };
 
             switch (s.kind)
             {
                 case Phys::ShapeKind::Circle:
                     // Rotation-invariant disc.
-                    b.Circle(spos, static_cast<float>(s.radius) * zoom, col);
+                    b.Circle(spos, view.Length(static_cast<float>(s.radius)), col);
                     break;
 
                 case Phys::ShapeKind::Capsule:
                 {
                     const float hl = static_cast<float>(s.halfLen);
                     const float rl = static_cast<float>(s.radius);
-                    const float r  = rl * zoom;
+                    const float r  = view.Length(rl);
                     b.Circle(P(-hl, 0.0f), r, col);  // rotated end caps
                     b.Circle(P( hl, 0.0f), r, col);
                     b.Line(P(-hl, -rl), P(hl, -rl), thick, col); // rotated side lines
@@ -281,17 +291,18 @@ namespace Arcane
 
                 case Phys::ShapeKind::Aabb:
                 {
-                    // Oriented box: rotate the four corners by `angle` (the fix).
+                    // Oriented box: the four WORLD corners, rotated by `angle`
+                    // and projected one by one.
                     const float hw = static_cast<float>(s.halfW);
                     const float hh = static_cast<float>(s.halfH);
-                    const glm::vec2 tl = P(-hw, -hh);
-                    const glm::vec2 tr = P( hw, -hh);
-                    const glm::vec2 br = P( hw,  hh);
-                    const glm::vec2 bl = P(-hw,  hh);
-                    b.Line(tl, tr, thick, col);
-                    b.Line(tr, br, thick, col);
-                    b.Line(br, bl, thick, col);
-                    b.Line(bl, tl, thick, col);
+                    const glm::vec2 c0 = P(-hw, -hh);
+                    const glm::vec2 c1 = P( hw, -hh);
+                    const glm::vec2 c2 = P( hw,  hh);
+                    const glm::vec2 c3 = P(-hw,  hh);
+                    b.Line(c0, c1, thick, col);
+                    b.Line(c1, c2, thick, col);
+                    b.Line(c2, c3, thick, col);
+                    b.Line(c3, c0, thick, col);
                     break;
                 }
 
@@ -323,8 +334,7 @@ namespace Arcane
     {
         using namespace Phys;
 
-        const glm::vec2& off     = opts.cameraOffset;
-        const float      zoom    = opts.zoom;
+        const Affine2D&  view    = opts.view;
         const float      thick   = opts.lineThickness;
         const std::uint32_t n    = world.Count();
 
@@ -407,7 +417,7 @@ namespace Arcane
             if (fxCount == 0u)
             {
                 DrawShapeOutlineRotated(batcher, s, wpos, bodyAngle,
-                                        off, zoom, thick, col);
+                                        view, thick, col);
             }
             else
             {
@@ -422,29 +432,30 @@ namespace Arcane
                     const Vec2   lp = world.GetFixtureLocalPos(fh);
                     const float  la = static_cast<float>(world.GetFixtureLocalAngle(fh));
                     // Fixture world center: interp-blended body pose + rotated
-                    // local offset (world units; DrawShapeOutlineRotated applies
-                    // zoom + offset).
+                    // local offset (world units; DrawShapeOutlineRotated projects
+                    // through the view).
                     const Vec2 fwc(static_cast<Real>(wpos.x + bc * lp.x - bs * lp.y),
                                    static_cast<Real>(wpos.y + bs * lp.x + bc * lp.y));
                     DrawShapeOutlineRotated(batcher, fs, fwc, bodyAngle + la,
-                                            off, zoom, thick, col);
+                                            view, thick, col);
                 }
             }
 
             // ---- optional AABB outline (opts.drawAabbs) --------------------
             if (!opts.onlyBody && opts.drawAabbs)
             {
-                DrawAabbOutline(batcher, world.SlotAabb(i), off, zoom, thick, kColAabb);
+                DrawAabbOutline(batcher, world.SlotAabb(i), view, thick, kColAabb);
             }
 
             // ---- rich per-body overlays (outline-unify pivot, Item A) ------
             //
             // All three overlays anchor on the body's WORLD center of mass so a
-            // compound (off-origin COM) body reads correctly. The COM is in the
-            // same world*zoom+offset screen space as the outline above.
+            // compound (off-origin COM) body reads correctly. Endpoints are
+            // computed in WORLD space and projected through the same view as
+            // the outline above (never "project, then add a world vector").
             const float     angle = bodyAngle;
             const glm::vec2 comW  = ComWorldF(wpos, angle, world.LocalCenterSlot(i));
-            const glm::vec2 comS  = comW * zoom + off;
+            const glm::vec2 comS  = view.Point(comW);
 
             // Velocity ray: COM -> COM + v * scale (DYNAMIC + awake only; a
             // resting/zero-velocity body draws nothing so the overlay stays clean).
@@ -457,7 +468,7 @@ namespace Arcane
                 if (spd > opts.velocityRayMinSpeed)
                 {
                     const glm::vec2 tip =
-                        comS + glm::vec2(vx, vy) * (opts.velocityScale * zoom);
+                        view.Point(comW + glm::vec2(vx, vy) * opts.velocityScale);
                     batcher.Line(comS, tip, thick, kColVelocity);
                     DrawArrowHead(batcher, comS, tip, thick, kColVelocity);
                 }
@@ -468,15 +479,17 @@ namespace Arcane
             if (!opts.onlyBody && opts.drawOrientations)
             {
                 const glm::vec2 dir = Rotate2D(glm::vec2(1.0f, 0.0f), angle);
-                const glm::vec2 tip = comS + dir * (opts.orientationTickLen * zoom);
+                const glm::vec2 tip = view.Point(comW + dir * opts.orientationTickLen);
                 batcher.Line(comS, tip, thick, kColOrient);
             }
 
             // COM marker: a small axis-aligned cross at the world COM (dynamic
             // bodies; statics/kinematics have COM == origin and add no insight).
+            // The cross is symmetric about its centre, so screen-space arms of
+            // a projected LENGTH are exact under the mirror.
             if (!opts.onlyBody && opts.drawComMarkers && btype == BodyType::Dynamic)
             {
-                const float r = opts.comMarkerSize * zoom;
+                const float r = view.Length(opts.comMarkerSize);
                 batcher.Line(glm::vec2(comS.x - r, comS.y),
                              glm::vec2(comS.x + r, comS.y), thick, kColCom);
                 batcher.Line(glm::vec2(comS.x, comS.y - r),
@@ -494,10 +507,10 @@ namespace Arcane
         {
             world.ForEachContact([&](std::uint32_t a, std::uint32_t b)
             {
-                const glm::vec2 pa = ToScreen(world.PosSlot(a), off, zoom);
-                const glm::vec2 pb = ToScreen(world.PosSlot(b), off, zoom);
+                const glm::vec2 pa = ToScreen(world.PosSlot(a), view);
+                const glm::vec2 pb = ToScreen(world.PosSlot(b), view);
                 batcher.Line(pa, pb, thick, kColContact);
-                batcher.Circle((pa + pb) * 0.5f, opts.contactMarkerSize * zoom, kColContact);
+                batcher.Circle((pa + pb) * 0.5f, view.Length(opts.contactMarkerSize), kColContact);
             });
         }
 
@@ -518,8 +531,8 @@ namespace Arcane
                 tree->ForEachLeaf(
                     [&](std::uint32_t id, const Aabb2& tight, const Aabb2& fat)
                     {
-                        DrawAabbOutline(batcher, fat,   off, zoom, thick, kColTreeFat);
-                        DrawAabbOutline(batcher, tight, off, zoom, thick, kColTreeTight);
+                        DrawAabbOutline(batcher, fat,   view, thick, kColTreeFat);
+                        DrawAabbOutline(batcher, tight, view, thick, kColTreeTight);
                         const glm::vec2 c(
                             (static_cast<float>(tight.min.x) + static_cast<float>(tight.max.x)) * 0.5f,
                             (static_cast<float>(tight.min.y) + static_cast<float>(tight.max.y)) * 0.5f);
@@ -537,8 +550,8 @@ namespace Arcane
                     if (ia == centers.end()) continue;
                     const auto ib = centers.find(p.b);
                     if (ib == centers.end()) continue;
-                    const glm::vec2 sa = ia->second * zoom + off;
-                    const glm::vec2 sb = ib->second * zoom + off;
+                    const glm::vec2 sa = view.Point(ia->second);
+                    const glm::vec2 sb = view.Point(ib->second);
                     batcher.Line(sa, sb, thick, kColTreePair);
                 }
             }
@@ -558,7 +571,7 @@ namespace Arcane
             world.StaticTree().ForEachLeaf(
                 [&](std::uint32_t, const Aabb2& /*tight*/, const Aabb2& fat)
                 {
-                    DrawAabbOutline(batcher, fat, off, zoom, thick, kColStaticGrid);
+                    DrawAabbOutline(batcher, fat, view, thick, kColStaticGrid);
                 });
         }
 
@@ -578,7 +591,7 @@ namespace Arcane
                     cell.min = Phys::Vec2(gorg.x + static_cast<float>(cx) * ts,
                                              gorg.y + static_cast<float>(cy) * ts);
                     cell.max = Phys::Vec2(cell.min.x + ts, cell.min.y + ts);
-                    DrawAabbOutline(batcher, cell, off, zoom, thick, kColResidencyGrid);
+                    DrawAabbOutline(batcher, cell, view, thick, kColResidencyGrid);
                 });
         }
 
@@ -616,11 +629,10 @@ namespace Arcane
                         const glm::vec2 wpt = comA
                             + glm::vec2(static_cast<float>(cp.anchorA.x),
                                         static_cast<float>(cp.anchorA.y));
-                        const glm::vec2 spt = wpt * zoom + off;
+                        const glm::vec2 spt = view.Point(wpt);
                         batcher.Circle(spt, kManifoldPointPx, col);
                         // Normal arrow: contact point -> point + normal * len.
-                        const glm::vec2 tip =
-                            (wpt + nrm * kManifoldNormalLen) * zoom + off;
+                        const glm::vec2 tip = view.Point(wpt + nrm * kManifoldNormalLen);
                         batcher.Line(spt, tip, thick, col);
                         DrawArrowHead(batcher, spt, tip, thick, col);
                     }
@@ -635,15 +647,13 @@ namespace Arcane
     void DrawNarrowphaseWorldOverlay(const Phys::NarrowphaseTrace& trace,
                                      int stepIndex,
                                      Batcher2D& batcher,
-                                     glm::vec2 cameraOffset,
-                                     float zoom,
+                                     const Affine2D& view,
                                      float lineThickness,
                                      float emphasis)
     {
         using namespace Phys;
 
-        const glm::vec2& off  = cameraOffset;
-        const float      thick = lineThickness;
+        const float thick = lineThickness;
 
         // Emphasis scales alpha so the SELECTED contact (emphasis 1) reads bold/bright and
         // the others (emphasis < 1) dim while staying visible. Clamp to a sane floor.
@@ -658,9 +668,9 @@ namespace Arcane
         // unmistakable across all its contacts; its alpha still rides the emphasis so the
         // focused contact's subject outline is the boldest.
         const glm::vec4 colSubject{ 1.00f, 0.95f, 0.35f, 1.0f }; // bright gold = subject
-        DrawTraceShape(batcher, trace.shapeA, trace.xfA, off, zoom,
+        DrawTraceShape(batcher, trace.shapeA, trace.xfA, view,
                        em >= 1.0f ? thick * 1.3f : thick, Dim(colSubject));
-        DrawTraceShape(batcher, trace.shapeB, trace.xfB, off, zoom, thick, Dim(kColTraceShapeB));
+        DrawTraceShape(batcher, trace.shapeB, trace.xfB, view, thick, Dim(kColTraceShapeB));
 
         // Anchor world point for axis/normal drawing: the first manifold contact
         // point (world space) when present, else the midpoint of the two shape
@@ -678,7 +688,7 @@ namespace Arcane
                             + glm::vec2(static_cast<float>(trace.xfB.position.x),
                                         static_cast<float>(trace.xfB.position.y)));
         }
-        const glm::vec2 anchorS = anchorW * zoom + off;
+        const glm::vec2 anchorS = view.Point(anchorW);
 
         // ---- SAT candidate axes (poly-poly): chosen axis bold ---------------
         //
@@ -701,9 +711,16 @@ namespace Arcane
                 const glm::vec2 dn = d / dl;
                 // The axis LINE runs perpendicular to the separating-axis direction
                 // (a separating axis is a normal; the face it represents is perp).
+                // `along` is a WORLD direction and the segment has a PIXEL
+                // half-length, so take the direction's SCREEN image (two projected
+                // points, which carries the mirror) and extend along that.
                 const glm::vec2 along(-dn.y, dn.x);
-                const glm::vec2 a = anchorS - along * kAxisHalfLenPx;
-                const glm::vec2 c = anchorS + along * kAxisHalfLenPx;
+                const glm::vec2 alongS = view.Point(anchorW + along) - anchorS;
+                const float     alongL = std::sqrt(alongS.x * alongS.x + alongS.y * alongS.y);
+                if (alongL < 1e-6f) continue;
+                const glm::vec2 alongN = alongS / alongL;
+                const glm::vec2 a = anchorS - alongN * kAxisHalfLenPx;
+                const glm::vec2 c = anchorS + alongN * kAxisHalfLenPx;
                 const bool hi = ax.chosen || i == sel;
                 batcher.Line(a, c, hi ? thick * 1.8f : thick,
                              Dim(hi ? kColTraceAxisHi : kColTraceAxis));
@@ -728,7 +745,7 @@ namespace Arcane
         if (nlen > 1e-5f)
         {
             constexpr float kNormalLen = 28.0f;  // world units
-            const glm::vec2 tip = (anchorW + (nrm / nlen) * kNormalLen) * zoom + off;
+            const glm::vec2 tip = view.Point(anchorW + (nrm / nlen) * kNormalLen);
             batcher.Line(anchorS, tip, thick * 1.4f, Dim(kColTraceNormal));
             DrawArrowHead(batcher, anchorS, tip, thick * 1.4f, Dim(kColTraceNormal));
         }
@@ -737,8 +754,7 @@ namespace Arcane
         for (int pi = 0; pi < trace.manifold.pointCount; ++pi)
         {
             const Vec2& p = trace.manifold.points[pi].point;
-            const glm::vec2 sp =
-                glm::vec2(static_cast<float>(p.x), static_cast<float>(p.y)) * zoom + off;
+            const glm::vec2 sp = ToScreen(p, view);
             batcher.Circle(sp, 3.0f, Dim(kColTracePoint));
         }
     }

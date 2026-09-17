@@ -19,6 +19,7 @@
 // struct itself; only Batcher2D.hpp is included here.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>   // Affine2D (PhysicsDebugDrawOptions::view)
 
 #include <Manifold2D/Physics/PhysicsTypes.hpp>   // BodyHandle -- optional<T> needs it complete
 
@@ -48,14 +49,16 @@ namespace Arcane
     // Options for DrawPhysicsDebug.
     struct PhysicsDebugDrawOptions
     {
-        // Camera transform applied to every emitted point + length: screen =
-        // world * zoom + offset.  This is the CANONICAL form shared with
-        // RenderContext2D / RenderSubmissionSystem / Sandbox::Camera::WorldToScreen,
-        // so the overlay lines up with the sprites under pan + zoom.  Defaults
-        // (offset (0,0), zoom 1) are the identity transform -- every existing
-        // caller that does not set a camera is unchanged.
-        glm::vec2 cameraOffset{ 0.0f, 0.0f };  // screen-space translation (canvas px)
-        float     zoom = 1.0f;                  // world->screen scale (1 == 1:1)
+        // Camera transform applied to every emitted point + length: the
+        // orthographic ViewTransform's Affine2D (F4 plan 1 T3) -- points go
+        // through view.Point (per-axis scale, y NEGATIVE for +Y up on a y-down
+        // canvas), lengths through view.Length. Every shape's corners are
+        // computed in WORLD space and projected one by one; nothing rotates in
+        // screen space by a world angle (a mirrored map would reverse it).
+        // Fill from RenderContext2D::view.AsAffine2D(), skipping the overlay
+        // when that is nullopt (a perspective view). Default: unit scale, zero
+        // offset -- a caller that sets no camera draws at 1 px per metre, y down.
+        Affine2D view{};
 
         // Thickness (canvas pixels) for Line primitives.
         float lineThickness = 1.0f;
@@ -65,7 +68,7 @@ namespace Arcane
         // in PhysicsDebug.lua.  A small disc marks the segment midpoint so the
         // contact reads clearly even when the two body centers are close.
         bool drawContacts = true;
-        // Radius (WORLD units, multiplied by zoom) of the contact-midpoint disc.
+        // Radius (WORLD units, through view.Length) of the contact-midpoint disc.
         // 0.03 m = 3 px apparent size at the sandbox's pixelsPerMeter=100.
         float contactMarkerSize = 0.03f;
 
@@ -87,7 +90,7 @@ namespace Arcane
         // arrow head.  Suppressed for bodies at rest (|v| ~ 0) to avoid clutter.
         bool  drawVelocities = true;
         // Seconds of look-ahead for the velocity ray length (world = v * scale,
-        // then * zoom).  0.15 s reads well at the sandbox scale.
+        // then projected).  0.15 s reads well at the sandbox scale.
         float velocityScale  = 0.15f;
         // Minimum world-space speed (m/s) for a body to draw a velocity ray; below
         // this the ray is suppressed as jitter. Defaults to the MKS sleep threshold
@@ -99,7 +102,7 @@ namespace Arcane
         // Center-of-mass marker: a small cross (two short lines) at each DYNAMIC
         // body's world COM.  Makes the off-origin COM of compound bodies visible.
         bool  drawComMarkers = true;
-        // Half-length (WORLD units, multiplied by zoom) of each COM cross arm.
+        // Half-length (WORLD units, through view.Length) of each COM cross arm.
         float comMarkerSize  = 0.05f;
 
         // Orientation tick: a short line from each body's COM along its local +x
@@ -200,8 +203,8 @@ namespace Arcane
     // contacts read while the focused one stands out. `emphasis` scales alpha + a subtle
     // brightness; shapeA (the subject) is always drawn at a recognisable highlight.
     //
-    // `cameraOffset` + `zoom` are the SAME canonical transform as DrawPhysicsDebug
-    // (screen = world * zoom + offset), so the overlay registers with the sprites.
+    // `view` is the SAME Affine2D DrawPhysicsDebug takes (PhysicsDebugDrawOptions::view),
+    // so the overlay registers with the sprites.
     // `stepIndex` selects the per-iteration snapshot to emphasize for stepped kinds
     // (Epa/Mpr/SatPolygon); pass -1 (or for analytic kinds) to draw no per-step
     // emphasis. The caller brackets batcher.Begin()..Drain() (this only submits primitives).
@@ -209,8 +212,7 @@ namespace Arcane
         const Manifold2D::Physics::NarrowphaseTrace& trace,
         int stepIndex,
         Batcher2D& batcher,
-        glm::vec2 cameraOffset,
-        float zoom,
+        const Affine2D& view,
         float lineThickness = 1.5f,
         float emphasis = 1.0f);
 

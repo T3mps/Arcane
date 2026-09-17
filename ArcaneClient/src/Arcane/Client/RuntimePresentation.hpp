@@ -2,7 +2,7 @@
 
 // RuntimePresentation: the presentation half of what Runtime's substrate used to be
 // -- the OS audio device, the host's per-frame input snapshot, the ImGui cross-DLL
-// handoff and the 2D camera the plugin drives. Lifted out of Runtime::Impl
+// handoff and the ONE ViewTransform the host/scene/plugin pushes. Lifted out of Runtime::Impl
 // (Core-DLL split, plan 1 Task 1; spec docs/specs/2026-09-15-core-dll-split-
 // design.md s1.3/s2) so that the headless Runtime carries NO Audio/Input include.
 // Task 4 made it ClientRuntime's member (Arcane/Client/ClientRuntime.hpp), which is
@@ -11,6 +11,7 @@
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>
 
 #include <glm/glm.hpp>
 
@@ -23,8 +24,10 @@ namespace Arcane
         InputSnapshot          input{};        // latest host-supplied snapshot; plugins read via Input()
         Audio::AudioDeviceDesc audioDesc{};
         Audio::AudioDevice     audio;
-        glm::vec2              cameraOffset{0.0f, 0.0f};
-        float                  cameraZoom = 1.0f;
+        // THE ONE camera (F4 plan 1): identity matrices + viewport 0 until a
+        // host pushes one -- the pre-existing "no camera" posture (RuntimeApp
+        // already warns when a scene has no Camera entity).
+        ViewTransform          view{};
         void* imguiContext  = nullptr;   // ImGuiContext*      -- all null in a headless host
         void* imguiAlloc    = nullptr;   // ImGuiMemAllocFunc
         void* imguiFree     = nullptr;   // ImGuiMemFreeFunc

@@ -10,19 +10,21 @@
 
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform::ToMatrix -- pins ComposeTRS against it
+#include <Arcane/Scene/ViewTransform.hpp>   // the view MakeView builds the GizmoView from (F4 plan 1 T3)
 
 using Catch::Matchers::WithinAbs;
 
 namespace
 {
-    // Simple view: origin (400,300), 100 px per world-unit, no Y-flip (matches the
-    // engine canonical screen = world*scale + offset). worldToScreen(w) = (400 + w.x*100, 300 + w.y*100).
+    // The view: an orthographic ViewTransform centred on the origin over an
+    // 800x600 viewport at 100 px per metre (halfH = 3 m), so its Affine2D is
+    // offset (400,300), scale (100, -100): worldToScreen(w) = (400 + w.x*100,
+    // 300 - w.y*100). +Y world is UP on screen (F4 plan 1 T3).
     Arcane::GizmoView MakeView()
     {
-        Arcane::GizmoView v;
-        v.cameraOffset        = glm::vec2(400.0f, 300.0f);
-        v.worldToScreenScale  = 100.0f;
-        return v;
+        const auto affine = Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 3.0f, {800u, 600u}).AsAffine2D();
+        REQUIRE(affine.has_value());
+        return Arcane::GizmoView{ *affine };
     }
 }
 
@@ -39,12 +41,13 @@ TEST_CASE("Gizmo ApplyDrag: translate world axis + center", "[gizmo]")
     CHECK_THAT(rx.position.x, WithinAbs(0.5f, 1e-4f));
     CHECK_THAT(rx.position.y, WithinAbs(0.0f, 1e-4f));
 
-    // Center: mouse (400,300)->(450,350) == world (0,0)->(0.5,0.5).
+    // Center: mouse (400,300)->(450,350) == world (0,0)->(0.5,-0.5): screen
+    // DOWN is world -Y under the mirrored map.
     Arcane::GizmoTransform rc = Arcane::ApplyDrag(
         Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
         start, v, glm::vec2(400, 300), glm::vec2(450, 350), noSnap);
     CHECK_THAT(rc.position.x, WithinAbs(0.5f, 1e-4f));
-    CHECK_THAT(rc.position.y, WithinAbs(0.5f, 1e-4f));
+    CHECK_THAT(rc.position.y, WithinAbs(-0.5f, 1e-4f));
 }
 
 TEST_CASE("Gizmo ApplyDrag: translate local axis rotates the direction", "[gizmo]")
@@ -54,12 +57,13 @@ TEST_CASE("Gizmo ApplyDrag: translate local axis rotates the direction", "[gizmo
     start.rotation = 3.14159265f * 0.5f;          // 90deg -> local X points +Y
     const Arcane::GizmoSnap noSnap;
 
-    // Drag world delta (0.5, 0.3); local-X = (0,1) so only the Y component projects.
+    // Drag world delta (0.5, -0.3) (30 px DOWN is world -0.3); local-X = (0,1)
+    // so only the Y component projects.
     Arcane::GizmoTransform r = Arcane::ApplyDrag(
         Arcane::GizmoMode::Translate, Arcane::GizmoSpace::Local, Arcane::GizmoAxis::X,
         start, v, glm::vec2(400, 300), glm::vec2(450, 330), noSnap);
     CHECK_THAT(r.position.x, WithinAbs(0.0f, 1e-4f));
-    CHECK_THAT(r.position.y, WithinAbs(0.3f, 1e-4f));
+    CHECK_THAT(r.position.y, WithinAbs(-0.3f, 1e-4f));
 }
 
 TEST_CASE("Gizmo ApplyDrag: rotate delta-angle + snap", "[gizmo]")
@@ -68,13 +72,16 @@ TEST_CASE("Gizmo ApplyDrag: rotate delta-angle + snap", "[gizmo]")
     Arcane::GizmoTransform start;                 // rotation 0, pivot (0,0)
     Arcane::GizmoSnap noSnap;
 
-    // Mouse from world (1,0) [angle 0] to (0,1) [angle +90deg].
+    // Mouse from world (1,0) [angle 0] to (0,-1) [angle -90deg in WORLD: 100 px
+    // DOWN on screen]. The drag's ON-SCREEN sense is what the user sees, and
+    // AngleSign keeps it: a clockwise screen sweep is a +90deg turn on the
+    // mirrored map, exactly the value the y-down map used to report.
     Arcane::GizmoTransform r = Arcane::ApplyDrag(
         Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
         start, v, glm::vec2(500, 300), glm::vec2(400, 400), noSnap);
     CHECK_THAT(r.rotation, WithinAbs(3.14159265f * 0.5f, 1e-3f));
 
-    // Snap 15deg: rotate ~20deg -> 15deg. cos/sin(20deg)=(0.9397,0.3420).
+    // Snap 15deg: rotate ~20deg (screen-clockwise) -> 15deg. cos/sin(20deg)=(0.9397,0.3420).
     Arcane::GizmoSnap snap; snap.enabled = true; snap.rotationDeg = 15.0f;
     Arcane::GizmoTransform rs = Arcane::ApplyDrag(
         Arcane::GizmoMode::Rotate, Arcane::GizmoSpace::World, Arcane::GizmoAxis::Center,
@@ -124,9 +131,13 @@ TEST_CASE("Gizmo HitTest: translate axes, center, and miss", "[gizmo]")
     // On the +X arrow (pivot .. pivot+~80px right).
     CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
                           glm::vec2(450, 300)) == Arcane::GizmoAxis::X);
-    // On the +Y arrow (screen-down = +Y screen, no flip).
+    // On the +Y arrow: world +Y points UP on screen under the mirrored map
+    // (AxisDirScreen projects two points), so the Y handle is ABOVE the pivot.
     CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
-                          glm::vec2(400, 340)) == Arcane::GizmoAxis::Y);
+                          glm::vec2(400, 260)) == Arcane::GizmoAxis::Y);
+    // ...and 40 px BELOW the pivot is off every handle now.
+    CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
+                          glm::vec2(400, 340)) == Arcane::GizmoAxis::None);
     // On the center handle (priority over axes).
     CHECK(Arcane::HitTest(Arcane::GizmoMode::Translate, Arcane::GizmoSpace::World, t, v,
                           glm::vec2(401, 301)) == Arcane::GizmoAxis::Center);

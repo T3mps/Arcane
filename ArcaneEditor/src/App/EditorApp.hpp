@@ -1061,7 +1061,7 @@ namespace Arcane::Editor
             Arcane::TransactionId txn = Arcane::TransactionId::None;
         } m_gizmoDrag;
 
-        // The EDITOR's viewport camera (Edit mode). ClientRuntime::SetCamera is the
+        // The EDITOR's viewport camera (Edit mode). ClientRuntime::SetView is the
         // PLUGIN's seam, so a project whose game module never calls it would be
         // stuck at the identity transform -- offset (0,0), zoom 1, i.e. 1 px per
         // metre. EditorApp drives this from viewport input and pushes it into

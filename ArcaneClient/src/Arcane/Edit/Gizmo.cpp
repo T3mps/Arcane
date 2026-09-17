@@ -11,16 +11,17 @@ namespace Arcane
         constexpr float kEps      = 1e-6f;
         constexpr float kMinScale = 0.01f;
 
+        // Through the affine (F4 plan 1 T3). No divide guard on the way back:
+        // Affine2D::Unpoint divides by the per-axis scale, which the producer
+        // (ViewTransform::AsAffine2D over a non-empty viewport) guarantees non-zero.
         glm::vec2 WorldToScreen(const GizmoView& v, glm::vec2 world)
         {
-            return world * v.worldToScreenScale + v.cameraOffset;
+            return v.affine.Point(world);
         }
 
         glm::vec2 ScreenToWorld(const GizmoView& v, glm::vec2 screen)
         {
-            return v.worldToScreenScale > kEps
-                       ? (screen - v.cameraOffset) / v.worldToScreenScale
-                       : glm::vec2(0.0f);
+            return v.affine.Unpoint(screen);
         }
 
         glm::vec2 AxisDirWorld(GizmoAxis axis)
@@ -60,7 +61,9 @@ namespace Arcane
         constexpr float kScaleBoxHalfPx      = 5.0f;    // scale end-handle box half-extent
         constexpr float kTau                 = 6.28318530717958647692f;
 
-        // Screen-space unit direction of a world axis at the pivot (handles Y-flip).
+        // Screen-space unit direction of a world axis at the pivot: two points
+        // projected, so the Y mirror comes out automatically (+Y world points UP
+        // on screen under the F4 view).
         glm::vec2 AxisDirScreen(const GizmoView& v, glm::vec2 pivotWorld, glm::vec2 dirWorld)
         {
             const glm::vec2 a = WorldToScreen(v, pivotWorld);
@@ -134,7 +137,11 @@ namespace Arcane
                 const glm::vec2 d1 = pCur - pivot;
                 const float a0 = std::atan2(d0.y, d0.x);
                 const float a1 = std::atan2(d1.y, d1.x);
-                r.rotation = start.rotation + (a1 - a0);
+                // d0/d1 are WORLD offsets (Unpoint), so a1 - a0 is already a
+                // world-sense turn; AngleSign is applied so a mirrored map keeps
+                // the drag's on-screen sense (clockwise on screen = the same
+                // visible turn regardless of the mirror).
+                r.rotation = start.rotation + view.affine.AngleSign() * (a1 - a0);
                 if (snap.enabled)
                 {
                     const float step = snap.rotationDeg * 3.14159265358979323846f / 180.0f;

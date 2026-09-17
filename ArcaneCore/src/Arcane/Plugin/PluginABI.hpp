@@ -866,7 +866,15 @@ namespace Arcane
     //     ReferenceProject.arcproj restamped with this change; Gacha's Game restamp
     //     (30 -> 31) is the paired commit in that repo, with the Aphelyon.dll
     //     rebuild -- not deferred.
-    inline constexpr uint32_t kGamePluginABIVersion = 31;
+    // v32 (2026-09-17, F4 plan 1): ClientRuntime::SetCamera(vec2,float)/CameraOffset/
+    //     CameraZoom REMOVED in favour of SetView(const ViewTransform&)/View();
+    //     RenderContext2D carries a ViewTransform; PickView/GizmoView carry Affine2D.
+    //     A module built against v31 calls a removed export -- refuse. Also
+    //     recorded under this bump: the scene file format moved v5 -> v6 (+Y up;
+    //     a <=v5 file migrates on load) in Task 2, which landed without a bump of
+    //     its own (a data-format change, not a shape change). ReferenceProject.arcproj
+    //     restamped with this change.
+    inline constexpr uint32_t kGamePluginABIVersion = 32;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

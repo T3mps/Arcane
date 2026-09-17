@@ -84,13 +84,8 @@ namespace Arcane
     void* ClientRuntime::ImGuiFree()     const noexcept { return m_pres.imguiFree; }
     void* ClientRuntime::ImGuiUserData() const noexcept { return m_pres.imguiUserData; }
 
-    void ClientRuntime::SetCamera(glm::vec2 offset, float zoom) noexcept
-    {
-        m_pres.cameraOffset = offset;
-        m_pres.cameraZoom   = zoom;
-    }
-    glm::vec2 ClientRuntime::CameraOffset() const noexcept { return m_pres.cameraOffset; }
-    float     ClientRuntime::CameraZoom()   const noexcept { return m_pres.cameraZoom; }
+    void ClientRuntime::SetView(const ViewTransform& view) noexcept { m_pres.view = view; }
+    const ViewTransform& ClientRuntime::View() const noexcept { return m_pres.view; }
 
     void ClientRuntime::SetRenderContext(Batcher2D* batcher)
     {
@@ -98,7 +93,7 @@ namespace Arcane
         // DrawPhysicsDebug can interpolate poses between fixed steps. The Runtime
         // owns the RunLoop, so this needs no plugin-ABI surface.
         m_core.Registry().SetResource<RenderContext2D>(
-            RenderContext2D{batcher, m_pres.cameraOffset, m_pres.cameraZoom,
+            RenderContext2D{batcher, m_pres.view,
                             static_cast<float>(m_core.Loop().Alpha())});
     }
 

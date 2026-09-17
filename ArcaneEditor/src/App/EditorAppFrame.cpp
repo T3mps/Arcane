@@ -43,8 +43,10 @@
 
 #include <imgui.h>
 
+#include <algorithm>   // std::max (EditorViewShim's viewport clamp)
 #include <cctype>
 #include <chrono>
+#include <cmath>       // std::isfinite (the camera-rect overlay's projected corners)
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -119,6 +121,24 @@ namespace Arcane::Editor
         // the selection, Home frames the whole scene.
         constexpr uint32_t kScF    = 9;    // SDL_SCANCODE_F
         constexpr uint32_t kScHome = 74;   // SDL_SCANCODE_HOME
+
+        // TEMPORARY shim (F4 plan 1 T3; Task 6 deletes it together with
+        // EditorCamera's offset/zoom pair): the legacy pixel camera expressed
+        // as the ONE ViewTransform the runtime now carries. halfH = viewportH
+        // / (2 * zoom); centre = (viewport/2 - offset) / zoom with the Y
+        // component NEGATED -- the old map was y-down in world terms, the
+        // world is +Y up now, so the affine this produces keeps the old X
+        // mapping byte-for-byte and mirrors Y (Affine2D scale.y = -zoom,
+        // offset unchanged). A collapsed (0 px) viewport is clamped to 1 px so
+        // the view stays finite (a zero half-height would divide by zero).
+        Arcane::ViewTransform EditorViewShim(const EditorCamera& cam, std::uint32_t w, std::uint32_t h)
+        {
+            const glm::uvec2 vp{ std::max(w, 1u), std::max(h, 1u) };
+            const float zoom  = (cam.zoom > 0.0f) ? cam.zoom : EditorCamera::kDefaultZoom;
+            const float halfH = float(vp.y) / (2.0f * zoom);
+            const glm::vec2 c = (glm::vec2(vp) * 0.5f - cam.offset) / zoom;
+            return Arcane::ViewTransform::Orthographic(glm::vec2(c.x, -c.y), halfH, vp);
+        }
 
         // ASCII-lowercased extension, for a case-insensitive suffix check: a
         // hand-typed "MyScene.ARCSCENE" already names an .arcscene, and stapling a
@@ -604,8 +624,8 @@ namespace Arcane::Editor
     // Phase 6: input sample + the editor's own keybinds + gizmo interaction.
     // Input sample (before ImGui BeginFrame so capture flags are set).
     // Runs before the sim advance, and the camera push at its tail is the FIRST
-    // of this frame's two -- the gizmo hit-test below it reads Runtime::
-    // CameraOffset/CameraZoom.
+    // of this frame's two -- the gizmo hit-test below it reads
+    // ClientRuntime::View().
     void EditorApp::FrameInput(LoopState& ls, FrameState& fs)
     {
         // Cleared here, set below if a gizmo drag starts or ends THIS frame --
@@ -848,7 +868,7 @@ namespace Arcane::Editor
     }
 
     // Phase 6c: editor viewport camera. Its tail holds the FIRST of the frame's
-    // two SetCamera pushes -- see the comment there; the gizmo phase below reads
+    // two SetView pushes -- see the comment there; the gizmo phase below reads
     // what it writes.
     void EditorApp::UpdateEditorCamera(const Arcane::InputSnapshot& snap, bool inViewport, float lx, float ly)
     {
@@ -924,7 +944,7 @@ namespace Arcane::Editor
             FrameCamera(false);
 
         // Push the editor camera BEFORE the gizmo block below reads
-        // Runtime::CameraOffset/CameraZoom. Those reads happen earlier
+        // ClientRuntime::View(). Those reads happen earlier
         // in the frame than the pre-SubmitRender push further down, so
         // without this the gizmo would hit-test against whatever camera
         // was stored LAST frame -- and on the very first frame against
@@ -932,7 +952,7 @@ namespace Arcane::Editor
         // sprite. The click-pick and gizmo DRAW sites run after the
         // later push and are already consistent with it.
         if (!InPlayMode())
-            m_runtime->SetCamera(m_camera.offset, m_camera.zoom);
+            m_runtime->SetView(EditorViewShim(m_camera, ViewportWidth(), ViewportHeight()));
     }
 
     // Phase 6d: transform-gizmo hit-test + drag. Reads the camera the phase
@@ -945,7 +965,7 @@ namespace Arcane::Editor
         // one undo step -- Begin/SnapshotComponent on press, Commit on release;
         // a no-move drag self-drops since Commit only pushes if bytes changed).
         // mouseScreen is viewport-local px (lx/ly computed above), the same
-        // space CameraOffset/CameraZoom register in, so the gizmo aligns
+        // space the view's Affine2D registers in, so the gizmo aligns
         // pixel-for-pixel with the scene (mirrors the click-pick's PickView
         // below). LMB edges are tracked unconditionally each frame (like the
         // mode keys above) so a button already held before the cursor enters
@@ -981,7 +1001,12 @@ namespace Arcane::Editor
             lt = std::as_const(*regPtr).GetComponent<Arcane::Transform>(m_selection.Primary());
         }
 
-        if (lt)
+        // The gizmo draws in pixels through the view's Affine2D (F4 plan 1
+        // T3); a view with none (perspective) skips the hit-test/drag this
+        // frame. Plan 2 gives the gizmo the ViewTransform itself.
+        const std::optional<Arcane::Affine2D> gizmoAffine =
+            lt ? m_runtime->View().AsAffine2D() : std::nullopt;
+        if (lt && gizmoAffine)
         {
             const Astra::Entity sel = m_selection.Primary();
             // WORLD pose, not local -- Transform is parent-local, so
@@ -991,7 +1016,7 @@ namespace Arcane::Editor
             // group-delta conversion below for the write-back half).
             const Arcane::GizmoTransform gt =
                 Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, sel));
-            const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+            const Arcane::GizmoView view{ *gizmoAffine };
 
             if (!m_gizmoDrag.active)
             {
@@ -1365,8 +1390,19 @@ namespace Arcane::Editor
             // the WorldTransforms this pass just refreshed and before the camera
             // push below, which every render path reads.
             m_editSchedule->RunFrame(m_runtime->Registry(), /*inPlayMode*/ false);
-            m_editSchedule->ServicePendingFrame(m_runtime->Registry(), m_selection.Entities(), m_camera,
-                                                glm::vec2((float)ViewportWidth(), (float)ViewportHeight()));
+            const float vh = (float)ViewportHeight();
+            if (m_editSchedule->ServicePendingFrame(m_runtime->Registry(), m_selection.Entities(), m_camera,
+                                                    glm::vec2((float)ViewportWidth(), vh)))
+            {
+                // TEMPORARY (F4 plan 1 T3; Task 6 deletes it with the legacy
+                // camera): EditorCamera::Frame centres a WORLD point in its own
+                // y-down space (offset.y = vh/2 - c.y*zoom), but EditorViewShim
+                // reads that space Y-NEGATED, so the framed point would land
+                // mirrored. Reflect the offset (vh/2 + c.y*zoom == vh - offset.y)
+                // so F/Home frame the real content. Done HERE, not in Frame, so
+                // EditorCamera/EditModeSchedule keep their own tested contract.
+                m_camera.offset.y = vh - m_camera.offset.y;
+            }
         }
 
         // Editor camera -> the Runtime slot SetRenderContext reads, for
@@ -1386,13 +1422,13 @@ namespace Arcane::Editor
         // (a plugin that drives its own camera) working unchanged.
         if (!InPlayMode())
         {
-            m_runtime->SetCamera(m_camera.offset, m_camera.zoom);
+            m_runtime->SetView(EditorViewShim(m_camera, ViewportWidth(), ViewportHeight()));
         }
         else if (const auto sceneCam = Arcane::ActiveSceneCamera(
                      m_runtime->Registry(),
-                     (float)ViewportWidth(), (float)ViewportHeight()))
+                     glm::uvec2{ ViewportWidth(), ViewportHeight() }))
         {
-            m_runtime->SetCamera(sceneCam->offset, sceneCam->zoom);
+            m_runtime->SetView(sceneCam->view);
         }
 
         // THE POST CHAIN'S HANDOFF IS NOT MADE HERE, and needs no statement:
@@ -1637,11 +1673,17 @@ namespace Arcane::Editor
                     selectedBody = it->second;
             const Arcane::Editor::PhysicsOverlayPlan plan =
                 Arcane::Editor::PlanPhysicsOverlay(InPlayMode(), m_physicsOverlay, selectedBody.has_value());
-            if (plan.draw && phys && phys->world)
+            // The overlay draws in pixels through the view's Affine2D (F4 plan 1
+            // T3): no context, or a view with no per-axis affine (perspective,
+            // Task 7), skips the overlay this frame.
+            const Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
+            const std::optional<Arcane::Affine2D> overlayAffine =
+                ctx ? ctx->view.AsAffine2D() : std::nullopt;
+            if (plan.draw && phys && phys->world && overlayAffine)
             {
-                const Arcane::RenderContext2D* ctx = reg.GetResource<Arcane::RenderContext2D>();
                 Arcane::PhysicsDebugDrawOptions opts;
-                if (ctx) { opts.cameraOffset = ctx->cameraOffset; opts.zoom = ctx->zoom; opts.alpha = ctx->alpha; }
+                opts.view   = *overlayAffine;
+                opts.alpha  = ctx->alpha;
                 opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer>();
                 opts.drawVelocities = opts.drawComMarkers = opts.drawOrientations = false;   // outlines + contacts (spec)
                 opts.drawContacts   = plan.wholeWorld;
@@ -1664,35 +1706,41 @@ namespace Arcane::Editor
         // viewport border.
         //
         // Asked for at the camera's OWN aspect (the viewport's), then drawn
-        // through the EDITOR's camera: ActiveSceneCamera reports the authored
+        // through the EDITOR's view: ActiveSceneCamera reports the authored
         // worldCenter/halfHeight precisely so a caller can draw the camera
-        // instead of looking through it.
+        // instead of looking through it. The four WORLD corners go through
+        // ViewTransform::WorldToScreen (F4 plan 1 T3), which works in both
+        // view modes; a corner that projects to a non-finite pixel (behind a
+        // perspective eye) skips the rect for the frame.
         if (!InPlayMode())
         {
-            const float vw = (float)ViewportWidth();
-            const float vh = (float)ViewportHeight();
-            if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vw, vh))
+            const glm::uvec2 vp{ ViewportWidth(), ViewportHeight() };
+            if (const auto cam = Arcane::ActiveSceneCamera(m_runtime->Registry(), vp))
             {
-                const float aspect = (vh > 0.0f) ? (vw / vh) : 1.0f;
-                const glm::vec2 halfWorld(cam->halfHeight * aspect, cam->halfHeight);
-                // screen = world * zoom + offset, the one canonical mapping
-                // (SceneResources.hpp) -- here with the EDITOR's view, which
-                // the phase above already pushed for this frame.
-                const glm::vec2 eo = m_runtime->CameraOffset();
-                const float     ez = m_runtime->CameraZoom();
-                const glm::vec2 c  = cam->worldCenter * ez + eo;
-                const glm::vec2 h  = halfWorld * ez;
-                const glm::vec2 tl(c.x - h.x, c.y - h.y);
-                const glm::vec2 br(c.x + h.x, c.y + h.y);
-                // A thin desaturated line stays legible over both bright and
-                // dark scene content without competing with the selection
-                // outline or the gizmo axes. (Dashed would read better still,
-                // but the batcher has no dash primitive.)
-                const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
-                b.Line(glm::vec2(tl.x, tl.y), glm::vec2(br.x, tl.y), 1.0f, col);
-                b.Line(glm::vec2(br.x, tl.y), glm::vec2(br.x, br.y), 1.0f, col);
-                b.Line(glm::vec2(br.x, br.y), glm::vec2(tl.x, br.y), 1.0f, col);
-                b.Line(glm::vec2(tl.x, br.y), glm::vec2(tl.x, tl.y), 1.0f, col);
+                const float aspect = (vp.y > 0u) ? (float(vp.x) / float(vp.y)) : 1.0f;
+                const float hw = cam->halfHeight * aspect;
+                const float hh = cam->halfHeight;
+                const glm::vec2 c = cam->worldCenter;
+                const Arcane::ViewTransform& ev = m_runtime->View();
+                const glm::vec3 p[4] = {
+                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y - hh, 0.0f)),
+                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y - hh, 0.0f)),
+                    ev.WorldToScreen(glm::vec3(c.x + hw, c.y + hh, 0.0f)),
+                    ev.WorldToScreen(glm::vec3(c.x - hw, c.y + hh, 0.0f)),
+                };
+                bool finite = true;
+                for (const glm::vec3& q : p)
+                    finite = finite && std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
+                if (finite)
+                {
+                    // A thin desaturated line stays legible over both bright and
+                    // dark scene content without competing with the selection
+                    // outline or the gizmo axes. (Dashed would read better still,
+                    // but the batcher has no dash primitive.)
+                    const glm::vec4 col(0.45f, 0.62f, 0.78f, 0.75f);
+                    for (int i = 0; i < 4; ++i)
+                        b.Line(glm::vec2(p[i]), glm::vec2(p[(i + 1) % 4]), 1.0f, col);
+                }
             }
         }
 
@@ -1705,14 +1753,17 @@ namespace Arcane::Editor
             Astra::Registry& drawReg = m_runtime->Registry();
             const Arcane::Transform* lt = std::as_const(drawReg).GetComponent<Arcane::Transform>(
                 m_selection.Primary());
-            if (lt)
+            // Same Affine2D guard as the interaction block (F4 plan 1 T3).
+            const std::optional<Arcane::Affine2D> drawAffine =
+                lt ? m_runtime->View().AsAffine2D() : std::nullopt;
+            if (lt && drawAffine)
             {
                 // WORLD pose, matching the interaction block's gt above --
                 // draws at the same place it hit-tests, including for a
                 // parented primary.
                 const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
                     Arcane::Edit::WorldMatrix(drawReg, m_selection.Primary()));
-                const Arcane::GizmoView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+                const Arcane::GizmoView view{ *drawAffine };
                 Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, view, m_gizmoHovered,
                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
             }
@@ -1814,10 +1865,10 @@ namespace Arcane::Editor
             // -- the same "leave it alone rather than invent a viewpoint"
             // contract ActiveSceneCamera documents for the 2D path
             // (SceneCamera.hpp).
-            const float vw = (float)ViewportWidth();
-            const float vh = (float)ViewportHeight();
-            const float aspect = (vh > 0.0f) ? (vw / vh) : 1.0f;   // same zero-height guard SubmitSceneToBatcher's camera-rect overlay uses
-            if (const auto cam = Arcane::ActivePerspectiveSceneCamera(m_runtime->Registry(), aspect))
+            // The viewport is handed over whole (F4 plan 1 T3): the sweep
+            // derives the aspect and answers nullopt for a zero height.
+            if (const auto cam = Arcane::ActivePerspectiveSceneCamera(
+                    m_runtime->Registry(), glm::uvec2{ ViewportWidth(), ViewportHeight() }))
             {
                 m_meshScene.instances = m_meshInstances;
                 m_meshScene.view       = cam->view;
@@ -1873,10 +1924,15 @@ namespace Arcane::Editor
         // THE ONE EMITTER (PickEmit.hpp) -- a pure registry walk through the
         // same world->canvas transform the scene render just used, so the id
         // silhouettes register pixel-for-pixel with what was drawn. The k-th
-        // entry IS hit-proxy id k+1.
-        const Arcane::PickView view{ m_runtime->CameraOffset(), m_runtime->CameraZoom() };
+        // entry IS hit-proxy id k+1. Guarded on the view's Affine2D (F4 plan
+        // 1 T3): a perspective view has no per-axis affine, and the id pass is
+        // fed an empty table for the frame (nothing to outline or pick).
         m_pickDrawables.clear();
-        Arcane::CollectPickables(m_runtime->Registry(), view, m_pickDrawables);
+        if (const auto pickAffine = m_runtime->View().AsAffine2D())
+        {
+            const Arcane::PickView view{ *pickAffine };
+            Arcane::CollectPickables(m_runtime->Registry(), view, m_pickDrawables);
+        }
 
         // Every selected entity that made it into THIS frame's id pass, over
         // the same drawables that were just handed to the pick node rather

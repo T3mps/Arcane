@@ -6,6 +6,7 @@
 // into a Batcher2D). Arcane Editor owns all interaction state and consumes these.
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>   // Affine2D
 
 #include <glm/glm.hpp>
 
@@ -28,14 +29,14 @@ namespace Arcane
         glm::vec2 scale{1.0f, 1.0f};
     };
 
-    // World<->screen for the viewport. MIRRORS Arcane::PickView (Render/PickEmit.hpp)
-    // and the engine's single canonical transform: screen_px = world * worldToScreenScale
-    // + cameraOffset (NO Y-flip, NO centering). Fill from the viewport camera:
-    // cameraOffset = Runtime::CameraOffset(), worldToScreenScale = Runtime::CameraZoom().
+    // World<->screen for the viewport. MIRRORS Arcane::PickView (Render/PickEmit.hpp):
+    // the orthographic ViewTransform's Affine2D -- per-axis scale (y NEGATIVE for
+    // the +Y-up world on the y-down canvas) plus a canvas-px offset. Fill from
+    // ClientRuntime::View().AsAffine2D(), skipping the gizmo when that is nullopt
+    // (a perspective view; plan 2 gives the gizmo the ViewTransform itself).
     struct GizmoView
     {
-        glm::vec2 cameraOffset{0.0f, 0.0f};       // screen-space translation, canvas px
-        float     worldToScreenScale = 1.0f;      // px per world-meter (== Runtime::CameraZoom())
+        Affine2D affine{};
     };
 
     struct GizmoSnap

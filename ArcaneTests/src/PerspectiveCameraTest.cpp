@@ -180,19 +180,19 @@ TEST_CASE("a Perspective camera is invisible to the ortho sweep, and an Orthogra
     // report none found, not silently derive a bogus 2D view from a camera
     // whose orthographicSize was never authored.
     int orthoCount = -1;
-    CHECK_FALSE(Arcane::ActiveSceneCamera(f.reg, 1280.0f, 720.0f, &orthoCount).has_value());
+    CHECK_FALSE(Arcane::ActiveSceneCamera(f.reg, glm::uvec2{1280u, 720u}, &orthoCount).has_value());
     CHECK(orthoCount == 0);
 
     // And the perspective sweep DOES find it.
     int perspCount = -1;
-    CHECK(Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f, &perspCount).has_value());
+    CHECK(Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{1280u, 720u}, &perspCount).has_value());
     CHECK(perspCount == 1);
 
     // Add an Orthographic camera too: the perspective sweep must keep
     // ignoring it.
     f.AddOrthoCamera(glm::vec2(5.0f, 5.0f), 5.0f);
     int perspCount2 = -1;
-    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f, &perspCount2);
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{1280u, 720u}, &perspCount2);
     REQUIRE(v.has_value());
     CHECK(perspCount2 == 1);   // still just the one Perspective camera
 }
@@ -201,11 +201,11 @@ TEST_CASE("no active Perspective camera means nullopt, not identity", "[scene][c
 {
     PerspectiveCameraFixture f;
     int count = -1;
-    CHECK_FALSE(Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f, &count).has_value());
+    CHECK_FALSE(Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{1280u, 720u}, &count).has_value());
     CHECK(count == 0);
 
     f.AddPerspectiveCamera(glm::vec2(0.0f, 0.0f), 60.0f, 0.1f, 1000.0f, /*active*/ false);
-    CHECK_FALSE(Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f, &count).has_value());
+    CHECK_FALSE(Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{1280u, 720u}, &count).has_value());
     CHECK(count == 0);
 }
 
@@ -216,7 +216,7 @@ TEST_CASE("ActivePerspectiveSceneCamera's view matrix places the camera's world 
     PerspectiveCameraFixture f;
     f.AddPerspectiveCamera(glm::vec2(3.0f, -2.0f));
 
-    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f);
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{1280u, 720u});
     REQUIRE(v.has_value());
 
     // The eye is the entity's world position. This case's fixture position
@@ -278,7 +278,7 @@ TEST_CASE("the perspective camera's eye is the entity's FULL world position, Z i
     cam.projection = Arcane::CameraProjection::Perspective;
     f.reg.AddComponent<Arcane::Camera>(e, cam);
 
-    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 16.0f / 9.0f);
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{1280u, 720u});
     REQUIRE(v.has_value());
 
     // inverse(view)[3] recovers the eye in world space -- the OLD code built
@@ -307,7 +307,7 @@ TEST_CASE("a perspective camera yawed 90 degrees about +Y looks down -X (Transfo
     cam.projection = Arcane::CameraProjection::Perspective;
     f.reg.AddComponent<Arcane::Camera>(e, cam);
 
-    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 1.0f);
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{720u, 720u});
     REQUIRE(v.has_value());
 
     // inverse(view)'s Z-basis column is the camera's local +Z axis in world
@@ -334,7 +334,7 @@ TEST_CASE("a degenerate (zero-scale) camera basis falls back to F1's pinned orie
     cam.projection = Arcane::CameraProjection::Perspective;
     f.reg.AddComponent<Arcane::Camera>(e, cam);
 
-    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, 1.0f);
+    const auto v = Arcane::ActivePerspectiveSceneCamera(f.reg, glm::uvec2{720u, 720u});
     REQUIRE(v.has_value());
     // lookAtRH would divide a zero-length forward/up by zero and hand every
     // later pass a NaN clip position (UB on the GPU, not merely a wrong
@@ -361,7 +361,7 @@ TEST_CASE("the ORTHOGRAPHIC path is untouched by the perspective pose change: a 
     f.reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{t.ToMatrix()});
     f.reg.AddComponent<Arcane::Camera>(e, Arcane::Camera{});   // default: Orthographic, active
 
-    const auto v = Arcane::ActiveSceneCamera(f.reg, 1280.0f, 720.0f);
+    const auto v = Arcane::ActiveSceneCamera(f.reg, glm::uvec2{1280u, 720u});
     REQUIRE(v.has_value());
     CHECK(glm::epsilonEqual(v->worldCenter.x, 4.0f, 1e-5f));
     CHECK(glm::epsilonEqual(v->worldCenter.y, 5.0f, 1e-5f));

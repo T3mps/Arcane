@@ -81,7 +81,7 @@ namespace
 TEST_CASE("EditorCamera defaults to 100 px per metre at the origin", "[editor]")
 {
     // MKS content must be visible the moment a project opens, without the game
-    // module ever calling SetCamera -- zoom 1 would draw a 1 m body as 1 px.
+    // module ever calling SetView -- zoom 1 would draw a 1 m body as 1 px.
     const EditorCamera cam;
     CHECK(cam.zoom == Approx(100.0f));
     CHECK(cam.offset.x == Approx(0.0f));

@@ -19,6 +19,7 @@
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 #include <Arcane/Render/MeshSubmissionSystem.hpp>     // CollectMeshInstances (RenderGraph's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
+#include <Arcane/Scene/ViewTransform.hpp>            // Affine2D (the pick emits' guard, F4 plan 1 T3)
 
 #include <imgui.h>
 
@@ -455,9 +456,13 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // In practice this block is windowed-only regardless: --pick-probe is
     // refused at parse time alongside --headless (HostConfig.cpp), because
     // an offscreen context declines to arm the fixed probe pixel.
-    if (io.config.pickProbe)
+    // Guarded on the view's Affine2D (F4 plan 1 T3): a perspective view has no
+    // per-axis affine and the pick emit is skipped for the frame.
+    const std::optional<Arcane::Affine2D> probeAffine =
+        io.config.pickProbe ? io.runtime->View().AsAffine2D() : std::nullopt;
+    if (io.config.pickProbe && probeAffine)
     {
-        const Arcane::PickView view{ io.runtime->CameraOffset(), io.runtime->CameraZoom() };
+        const Arcane::PickView view{ *probeAffine };
         io.pickDrawables.clear();
         Arcane::CollectPickables(io.runtime->Registry(), view, io.pickDrawables);
 
@@ -502,9 +507,13 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // combination neither mechanism was designed to share.
     if (!io.config.reportPath.empty())
     {
-        if (const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(io.config.probes))
+        const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(io.config.probes);
+        // Same Affine2D guard as the dev flag above (F4 plan 1 T3).
+        const std::optional<Arcane::Affine2D> pickAffine =
+            pickSpec ? io.runtime->View().AsAffine2D() : std::nullopt;
+        if (pickSpec && pickAffine)
         {
-            const Arcane::PickView view{ io.runtime->CameraOffset(), io.runtime->CameraZoom() };
+            const Arcane::PickView view{ *pickAffine };
             io.pickDrawables.clear();
             Arcane::CollectPickables(io.runtime->Registry(), view, io.pickDrawables);
 
@@ -564,15 +573,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         // "leave it alone rather than invent a viewpoint" contract
         // ActiveSceneCamera documents for the 2D path (SceneCamera.hpp).
         //
-        // Aspect ratio guarded the same way the editor's camera-rect overlay
-        // guards it (EditorAppFrame.cpp) rather than dividing raw: a 0-height
-        // frameHeight would otherwise hand ActivePerspectiveSceneCamera an
-        // Inf/NaN aspect that its own `aspectRatio <= 0.0f` check does not
-        // catch.
-        const float aspect = (frameHeight > 0)
-                            ? (float)frameWidth / (float)frameHeight
-                            : 1.0f;
-        if (const auto cam = Arcane::ActivePerspectiveSceneCamera(io.runtime->Registry(), aspect))
+        // The viewport is handed over whole (F4 plan 1 T3): the sweep derives
+        // the aspect itself and answers nullopt for a zero-height frame.
+        if (const auto cam = Arcane::ActivePerspectiveSceneCamera(
+                io.runtime->Registry(), glm::uvec2{ frameWidth, frameHeight }))
         {
             meshScene.instances = io.meshInstances;
             meshScene.view       = cam->view;

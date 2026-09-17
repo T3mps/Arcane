@@ -110,8 +110,9 @@ TEST_CASE("RenderSubmissionSystem skips Hidden entities", "[outliner][render]")
     std::shared_ptr<Astra::ComponentRegistry> creg;
     auto reg = FreshReg(creg);
     CountingBatcher batcher;
+    // Any orthographic view: the count is what this case measures (F4 plan 1 T3).
     reg->SetResource<Arcane::RenderContext2D>(
-        Arcane::RenderContext2D{ &batcher, glm::vec2(0.0f, 0.0f), 1.0f });
+        Arcane::RenderContext2D{ &batcher, Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}) });
 
     auto sprite = [&](bool hidden)
     {

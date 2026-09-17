@@ -42,6 +42,7 @@
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>   // F4 plan 1 T3: PickView carries an Affine2D
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -146,8 +147,16 @@ TEST_CASE("CollectPickables gathers sprites and physics colliders, ordered", "[p
 {
     auto reg = MakePickRegistry();
 
-    // Known camera view: offset (100,50) canvas px, 10 px per world-meter.
-    const Arcane::PickView view{ {100.0f, 50.0f}, 10.0f };
+    // Known camera view: an orthographic ViewTransform whose Affine2D is
+    // offset (100,50) canvas px, scale (10, -10) px per world-metre (F4 plan 1
+    // T3: y NEGATIVE, +Y up on a y-down canvas): Point(w) = (100 + 10x, 50 - 10y).
+    const auto affine = Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {200u, 100u}).AsAffine2D();
+    REQUIRE(affine.has_value());
+    REQUIRE(affine->offset.x == Approx(100.0f));
+    REQUIRE(affine->offset.y == Approx(50.0f));
+    REQUIRE(affine->scale.x == Approx(10.0f));
+    REQUIRE(affine->scale.y == Approx(-10.0f));
+    const Arcane::PickView view{ *affine };
 
     // Sprite entity: world pos (2,3), size (4,6) -> world half-extents (2,3).
     const Astra::Entity spriteEntity = SpawnSprite(*reg, {2.0f, 3.0f}, {4.0f, 6.0f});
@@ -164,21 +173,68 @@ TEST_CASE("CollectPickables gathers sprites and physics colliders, ordered", "[p
     CHECK(out[0].entity.GetValue() == spriteEntity.GetValue());
     CHECK(out[1].entity.GetValue() == colliderEntity.GetValue());
 
-    // Sprite -> Quad. Projected: center = (2,3)*10 + (100,50) = (120,80);
-    // half-extents = (2,3)*10 = (20,30) (world half-extents (2,3) from size*0.5).
+    // Sprite -> Quad. Projected: center = (100 + 2*10, 50 - 3*10) = (120,20);
+    // half-extents = (2,3)*10 = (20,30) (world half-extents (2,3) from size*0.5;
+    // LENGTHS, so positive on both axes).
     CHECK(out[0].kind == Arcane::PickDrawable::Kind::Quad);
     CHECK(out[0].center.x == Approx(120.0f));
-    CHECK(out[0].center.y == Approx(80.0f));
+    CHECK(out[0].center.y == Approx(20.0f));
     CHECK(out[0].halfExtents.x == Approx(20.0f));
     CHECK(out[0].halfExtents.y == Approx(30.0f));
 
-    // Collider -> Box. Projected: center = (5,-1)*10 + (100,50) = (150,40);
+    // Collider -> Box. Projected: center = (100 + 5*10, 50 - (-1)*10) = (150,60);
     // half-extents = (0.5,0.25)*10 = (5,2.5).
     CHECK(out[1].kind == Arcane::PickDrawable::Kind::Box);
     CHECK(out[1].center.x == Approx(150.0f));
-    CHECK(out[1].center.y == Approx(40.0f));
+    CHECK(out[1].center.y == Approx(60.0f));
     CHECK(out[1].halfExtents.x == Approx(5.0f));
     CHECK(out[1].halfExtents.y == Approx(2.5f));
+}
+
+// F4 plan 1 T3: the pick emitter projects through Affine2D -- a +Y-up world on
+// a y-down canvas. A sprite ABOVE the camera lands ABOVE the viewport centre,
+// and the canvas angle carries the mirror's sign (AngleSign): a +0.3 rad world
+// turn is a -0.3 rad turn on the mirrored canvas, so the id pass rasterises
+// the silhouette where the (mirrored) sprite actually is.
+TEST_CASE("CollectPickables projects +Y up and mirrors the canvas angle", "[pick]")
+{
+    auto reg = MakePickRegistry();
+    const auto affine = Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}).AsAffine2D();
+    REQUIRE(affine.has_value());
+    const Arcane::PickView view{ *affine };
+
+    // A unit sprite at world (0, +1): 60 px per metre, so 60 px ABOVE the centre.
+    const Astra::Entity above = SpawnSprite(*reg, {0.0f, 1.0f}, {1.0f, 1.0f});
+
+    // A unit sprite at the origin, turned +0.3 rad about +Z (a real TRS matrix).
+    const Astra::Entity turned = reg->CreateEntity();
+    {
+        Arcane::Transform lt;
+        lt.rotation = Arcane::RotationAboutZ(0.3f);
+        reg->AddComponent<Arcane::WorldTransform>(turned, Arcane::WorldTransform{ lt.ToMatrix() });
+        reg->AddComponent<Arcane::SpriteRenderer>(turned, Arcane::SpriteRenderer{});
+    }
+
+    std::vector<Arcane::PickDrawable> out;
+    Arcane::CollectPickables(*reg, view, out);
+    REQUIRE(out.size() == 2);
+
+    const auto find = [&](Astra::Entity e) -> const Arcane::PickDrawable&
+    {
+        for (const auto& d : out)
+            if (d.entity.GetValue() == e.GetValue()) return d;
+        FAIL("drawable missing");
+        return out[0];
+    };
+    const Arcane::PickDrawable& dAbove = find(above);
+    CHECK(dAbove.center.x == Approx(400.0f));
+    CHECK(dAbove.center.y < 300.0f);
+    CHECK(dAbove.center.y == Approx(240.0f));
+    CHECK(dAbove.halfExtents.x == Approx(30.0f));
+    CHECK(dAbove.halfExtents.y == Approx(30.0f));   // a LENGTH: positive on both axes
+
+    const Arcane::PickDrawable& dTurned = find(turned);
+    CHECK(dTurned.angle == Approx(-0.3f));
 }
 
 TEST_CASE("id->entity table maps 1-based, 0 is background", "[pick]")
@@ -205,8 +261,14 @@ TEST_CASE("CollectPickables scales a collider silhouette by the body's baked sca
 {
     auto reg = MakePickRegistry();
 
-    // 10 px per world-meter, no offset.
-    const Arcane::PickView view{ {0.0f, 0.0f}, 10.0f };
+    // 10 px per world-metre, no offset: a 200x100 viewport centred on world
+    // (10,-5) with a 5 m half-height has the Affine2D scale (10,-10), offset
+    // (0,0) -- Point(w) = (10x, -10y).
+    const auto affine = Arcane::ViewTransform::Orthographic({10.0f, -5.0f}, 5.0f, {200u, 100u}).AsAffine2D();
+    REQUIRE(affine.has_value());
+    REQUIRE(affine->offset.x == Approx(0.0f).margin(1e-4));
+    REQUIRE(affine->offset.y == Approx(0.0f).margin(1e-4));
+    const Arcane::PickView view{ *affine };
 
     // Aabb halfW=0.5 halfH=0.25 at body pos (1,1), authored scale (2,4). The
     // create pass bakes appliedScale=(2,4); the silhouette half-extents scale to
@@ -219,8 +281,8 @@ TEST_CASE("CollectPickables scales a collider silhouette by the body's baked sca
     REQUIRE(out.size() == 1);
     CHECK(out[0].entity.GetValue() == e.GetValue());
     CHECK(out[0].kind == Arcane::PickDrawable::Kind::Box);
-    CHECK(out[0].center.x == Approx(10.0f));       // (1,1)*10
-    CHECK(out[0].center.y == Approx(10.0f));
+    CHECK(out[0].center.x == Approx(10.0f));       // (1,1) -> (10, -10): y mirrored
+    CHECK(out[0].center.y == Approx(-10.0f));
     CHECK(out[0].halfExtents.x == Approx(10.0f));  // 0.5 * 2 * 10
     CHECK(out[0].halfExtents.y == Approx(10.0f));  // 0.25 * 4 * 10
 }
@@ -232,7 +294,8 @@ TEST_CASE("CollectPickables scales a collider silhouette by the body's baked sca
 TEST_CASE("CollectPickables orders sprites before colliders, deterministically", "[pick]")
 {
     auto reg = MakePickRegistry();
-    const Arcane::PickView view{ {0.0f, 0.0f}, 1.0f };
+    // Any orthographic view: only the ORDER is asserted here.
+    const Arcane::PickView view{ *Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}).AsAffine2D() };
 
     const Astra::Entity sprite    = SpawnSprite(*reg, {0.0f, 0.0f}, {1.0f, 1.0f});
     const Astra::Entity colliderA = SpawnAabbBody(*reg, {1.0f, 0.0f}, 0.5f, 0.5f);

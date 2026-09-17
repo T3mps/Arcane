@@ -7,6 +7,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>        // MeshSlot -- MeshEntry::slots' element type
 #include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
+#include <Arcane/Scene/ViewTransform.hpp>   // RenderContext2D::view (F4 plan 1 T3)
 
 #include <Astra/Container/FlatMap.hpp>
 #include <Astra/Entity/Entity.hpp>
@@ -97,14 +98,14 @@ namespace Arcane
 
     struct RenderContext2D
     {
-        // Camera transform applied by RenderSubmissionSystem AND DrawPhysicsDebug so
-        // sprites + the physics-debug overlay pan/zoom together. CANONICAL form
-        // (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
-        // Defaults (offset (0,0), zoom 1) are the identity transform.
+        // THE ONE camera (F4 plan 1, spec s3): the ViewTransform the host pushed
+        // through ClientRuntime::SetView. RenderSubmissionSystem AND the physics
+        // overlay read the same one, so sprites + the overlay pan/zoom together.
+        // The default (identity matrices, viewport 0) is the "no camera" posture
+        // of a host that never pushed a view.
         class Batcher2D* batcher = nullptr;   // set by the host between Begin and Drain
-        glm::vec2        cameraOffset{0.0f, 0.0f};  // screen-space translation (canvas px)
-        float            zoom = 1.0f;               // world->screen scale (1 == 1:1)
-        float            alpha = 0.0f;              // RunLoop::Alpha() in [0,1); host-set each frame
+        ViewTransform    view{};
+        float            alpha = 0.0f;        // RunLoop::Alpha() in [0,1); host-set each frame
     };
 
     // One .arcsprite asset, resolved for submission: the source texture's

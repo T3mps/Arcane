@@ -4,15 +4,16 @@
 // engine calls, so the [editor] units drive it headlessly (same split as
 // ViewportInput.hpp / SceneSession.hpp; the host performs every effect).
 //
-// WHY the editor owns a camera at all: ClientRuntime::SetCamera is the PLUGIN's seam
-// (ArcaneRuntime: "plugin drives via ClientRuntime::SetCamera, default identity if it never
-// does"), and a project whose game module never calls it gets offset (0,0) and
-// zoom 1. An authoring tool cannot depend on the game implementing navigation,
+// WHY the editor owns a camera at all: ClientRuntime::SetView is the PLUGIN's seam
+// (ArcaneRuntime: "plugin drives via ClientRuntime::SetView, default identity if it never
+// does"), and a project whose game module never calls it gets the identity view.
+// An authoring tool cannot depend on the game implementing navigation,
 // so EditorApp drives this camera from viewport input and pushes it in Edit
 // mode; in Play the plugin's camera wins so the game looks like the game.
 //
-// CANONICAL TRANSFORM (the engine's, byte-for-byte -- RenderContext2D,
-// RenderSubmissionSystem, GizmoView and PickView all apply exactly this):
+// LEGACY TRANSFORM (F4 plan 1 T3: the runtime now carries ONE ViewTransform;
+// EditorAppFrame's EditorViewShim converts this pair into it with the Y sign
+// negated, and Task 6 replaces this file with the Ortho2D/Orbit3D camera):
 //
 //     screen = world * zoom + offset
 //     world  = (screen - offset) / zoom

@@ -757,16 +757,17 @@ void RuntimeApp::PushSceneCamera(float viewportWidth, float viewportHeight)
     // Scene camera: the ACTIVE Camera entity owns the view. Pushed HERE, after
     // the plugin's update ran, so a scene that ships a camera beats a plugin
     // that also pushes one -- the scene is the authored artifact. No camera
-    // leaves the stored camera untouched (a plugin that drives the camera
-    // itself via ClientRuntime::SetCamera therefore still works) and says so
+    // leaves the stored view untouched (a plugin that drives the camera
+    // itself via ClientRuntime::SetView therefore still works) and says so
     // once, rather than substituting an identity view that would render an
     // older scene as an unexplained black window.
     int camCount = 0;
     const auto view = Arcane::ActiveSceneCamera(m_runtime->Registry(),
-                                                viewportWidth, viewportHeight,
+                                                glm::uvec2{ static_cast<std::uint32_t>(viewportWidth),
+                                                            static_cast<std::uint32_t>(viewportHeight) },
                                                 &camCount);
     if (view)
-        m_runtime->SetCamera(view->offset, view->zoom);
+        m_runtime->SetView(view->view);
     else if (!m_warnedNoSceneCamera)
     {
         // The old message said "no active Camera entity" for THREE

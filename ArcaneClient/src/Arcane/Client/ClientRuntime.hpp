@@ -3,7 +3,7 @@
 // ClientRuntime: the PRESENTATION half of what Runtime used to be (Core-DLL split,
 // spec docs/specs/2026-09-15-core-dll-split-design.md s2, plan 1 Task 4). It OWNS a
 // headless Arcane::Runtime (ArcaneCore.dll) and adds the audio device, the host's
-// per-frame input snapshot, the 2D camera, the cross-DLL ImGui handoff and the
+// per-frame input snapshot, the ViewTransform, the cross-DLL ImGui handoff and the
 // render bridge -- everything a server does not have. It also implements
 // Arcane::IClientHooks (privately) and attaches itself to its Runtime at
 // construction, which is the ONE way Core reaches back into presentation (P6):
@@ -90,17 +90,14 @@ namespace Arcane
         void* ImGuiFree()     const noexcept;
         void* ImGuiUserData() const noexcept;
 
-        // --- camera bridge: the plugin drives the 2D camera; the render bridge reads it ---
-        // CANONICAL transform (matches Sandbox::Camera::WorldToScreen): screen = world * zoom + offset.
-        // Defaults (offset (0,0), zoom 1) are the identity transform. RenderSubmissionSystem +
-        // DrawPhysicsDebug apply the SAME camera so sprites + the debug overlay move together.
-        void      SetCamera(glm::vec2 offset, float zoom) noexcept;
-        glm::vec2 CameraOffset() const noexcept;
-        float     CameraZoom()   const noexcept;
+        // --- camera bridge: ONE ViewTransform (F4 plan 1). The plugin, the scene camera
+        // or the editor pushes it; the render bridge, picking and the overlays read it.
+        void                 SetView(const ViewTransform& view) noexcept;
+        const ViewTransform& View() const noexcept;
 
         // --- render bridge: the host sets the live batcher each frame, IN this module ---
-        // SetRenderContext writes RenderContext2D using the STORED camera (offset+zoom),
-        // so the PLUGIN owns the camera (via SetCamera) and the host stays camera-agnostic.
+        // SetRenderContext writes RenderContext2D using the STORED view, so whoever
+        // pushed the view (via SetView) owns the camera and the host stays camera-agnostic.
         void SetRenderContext(Batcher2D* batcher);
 
         // Publish the sprite-material resolution map (Guid -> Batcher2D material

@@ -139,6 +139,15 @@ namespace
         Arcane::Batch2DStats Stats() const override { return {}; }
     };
 
+    // F4 plan 1 T3: RenderContext2D carries a ViewTransform. This one's Affine2D
+    // is the PIXEL IDENTITY up to the mirror -- scale (1, -1), offset (0, 0):
+    // Point(w) = (w.x, -w.y) -- so every x expectation below is the old one and
+    // every y expectation is its negation (+Y up on a y-down canvas).
+    Arcane::ViewTransform PixelView()
+    {
+        return Arcane::ViewTransform::Orthographic({500.0f, -500.0f}, 500.0f, {1000u, 1000u});
+    }
+
     // Spawn a single sprite of `shape` at an identity-rotation world transform
     // and run RenderSubmissionSystem against `mock`. `scale` is the entity's
     // Transform scale, which IS the sizing mechanism now that SpriteRenderer
@@ -157,7 +166,7 @@ namespace
         reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
 
         reg.SetResource<Arcane::RenderContext2D>(
-            Arcane::RenderContext2D{ &mock, glm::vec2(0.0f, 0.0f), 1.0f });
+            Arcane::RenderContext2D{ &mock, PixelView() });
         Arcane::RenderSubmissionSystem sys;
         sys(reg);
     }
@@ -172,7 +181,7 @@ TEST_CASE("RenderSubmissionSystem draws a Circle-shape sprite as a disc", "[rend
     CHECK(mock.rectCalls   == 0);                              // ...not a rect
     CHECK(mock.lastCircleRadius == Approx(20.0f));             // radius = dstSize.x / 2
     CHECK(mock.lastCircleCenter.x == Approx(200.0f));          // centered on the entity
-    CHECK(mock.lastCircleCenter.y == Approx(150.0f));
+    CHECK(mock.lastCircleCenter.y == Approx(-150.0f));         // y mirrored (PixelView)
 }
 
 TEST_CASE("RenderSubmissionSystem draws a Capsule-shape sprite as a rect + 2 discs",
@@ -211,15 +220,17 @@ TEST_CASE("RenderSubmissionSystem rotates the sprite quad by the WorldTransform"
 
     MockBatcher mock;
     reg.SetResource<Arcane::RenderContext2D>(
-        Arcane::RenderContext2D{ &mock, glm::vec2(0.0f, 0.0f), 1.0f });
+        Arcane::RenderContext2D{ &mock, PixelView() });
 
     Arcane::RenderSubmissionSystem sys;
     sys(reg);
 
     // The sprite was submitted, rotated by the body's angle (extracted from the
-    // WorldTransform matrix). The old axis-aligned path passed rotation 0.
+    // WorldTransform matrix). The old axis-aligned path passed rotation 0. The
+    // CANVAS angle is the world angle times the map's AngleSign: -theta under
+    // the mirrored (+Y up) map (F4 plan 1 T3).
     CHECK(mock.rectCalls == 1);
-    CHECK(static_cast<double>(mock.lastRotation) == Approx(static_cast<double>(theta)).margin(1e-4));
+    CHECK(static_cast<double>(mock.lastRotation) == Approx(static_cast<double>(-theta)).margin(1e-4));
 }
 
 // ============================================================================
@@ -254,7 +265,7 @@ TEST_CASE("Sprite with a resolved SpriteTable entry uses derived size and UVs",
 
     MockBatcher batcher;
     reg.SetResource<Arcane::RenderContext2D>(
-        Arcane::RenderContext2D{ &batcher, glm::vec2(0.0f, 0.0f), 1.0f });
+        Arcane::RenderContext2D{ &batcher, PixelView() });
     Arcane::RenderSubmissionSystem sys;
     sys(reg);
 
@@ -292,20 +303,24 @@ TEST_CASE("Non-center pivot offsets the quad and survives rotation", "[render][s
 
     MockBatcher batcher;
     reg.SetResource<Arcane::RenderContext2D>(
-        Arcane::RenderContext2D{ &batcher, glm::vec2(0.0f, 0.0f), 1.0f });
+        Arcane::RenderContext2D{ &batcher, PixelView() });
     Arcane::RenderSubmissionSystem sys;
     sys(reg);
 
-    // pivot (0,0) means the PIVOT sits at P and the quad extends +x/+y:
-    //   centerOff = (0.5-0.0, 0.5-0.0) * (2,2) = (1,1); dstPos = P + (1,1) - (1,1) = P.
+    // pivot (0,0) means the PIVOT sits at P and the quad extends +x/+y IN WORLD
+    // (+Y up: pivot y = 0 is the BOTTOM):
+    //   centerOffW = (0.5-0.0, 0.5-0.0) * (2,2) = (1,1); centerW = P + (1,1) = (11,21);
+    //   canvas centre = (11,-21) under PixelView; dstPos = (11,-21) - (1,1) = (10,-22),
+    // i.e. the top-left of a quad whose BOTTOM-left is the pivot's pixel (10,-20).
     // Exact equality: cos(0)==1 and sin(0)==0 exactly, so no transcendental
     // error enters the unrotated path.
     REQUIRE(batcher.rects.size() == 1);
-    CHECK(batcher.rects[0].pos == P);
+    CHECK(batcher.rects[0].pos == glm::vec2(10.0f, -22.0f));
 
     // Same entity rotated 90 deg (pi/2): the center must ORBIT the pivot.
-    //   rotated centerOff = R(pi/2)*(1,1) = (c-s, s+c) = (-1, 1)
-    //   -> dstPos = P + (-1,1) - (1,1) = P + (-2, 0).
+    //   rotated centerOffW = R(pi/2)*(1,1) = (c-s, s+c) = (-1, 1)
+    //   -> centerW = (9, 21) -> canvas (9, -21) -> dstPos = (8, -22).
+    // The canvas rotation is -pi/2 (AngleSign of the mirrored map).
     // Approx here, not ==: cos(half_pi<float>()) is -4.37e-8, not 0.
     Arcane::Transform rot; rot.position = glm::vec3(P, 0.0f);
     rot.rotation = Arcane::RotationAboutZ(glm::half_pi<float>());
@@ -313,7 +328,7 @@ TEST_CASE("Non-center pivot offsets the quad and survives rotation", "[render][s
     sys(reg);
 
     REQUIRE(batcher.rects.size() == 2);
-    CHECK(batcher.rects[1].pos.x == Approx(P.x - 2.0f).margin(1e-4));
-    CHECK(batcher.rects[1].pos.y == Approx(P.y).margin(1e-4));
-    CHECK(batcher.rects[1].rotation == Approx(glm::half_pi<float>()).margin(1e-4));
+    CHECK(batcher.rects[1].pos.x == Approx(8.0f).margin(1e-4));
+    CHECK(batcher.rects[1].pos.y == Approx(-22.0f).margin(1e-4));
+    CHECK(batcher.rects[1].rotation == Approx(-glm::half_pi<float>()).margin(1e-4));
 }

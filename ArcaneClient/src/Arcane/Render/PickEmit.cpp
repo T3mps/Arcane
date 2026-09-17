@@ -72,12 +72,17 @@ namespace Arcane
                 const glm::vec2 worldCenter =
                     worldPivot + RotateVec((glm::vec2(0.5f) - pivot) * worldSize, angle);
 
+                // Through the affine: the centre is a POINT (mirrored in Y), the
+                // half-extents are LENGTHS (positive), and the canvas angle is
+                // the world angle times the map's sign (a mirrored map reverses
+                // the sense of every rotation -- F4 plan 1 T3).
                 PickDrawable d;
                 d.entity      = e;
                 d.kind        = PickDrawable::Kind::Quad;
-                d.center      = worldCenter * view.worldToScreenScale + view.offset;
-                d.halfExtents = worldSize * 0.5f * view.worldToScreenScale;
-                d.angle       = angle;
+                d.center      = view.affine.Point(worldCenter);
+                d.halfExtents = glm::vec2(view.affine.Length(worldSize.x * 0.5f),
+                                          view.affine.Length(worldSize.y * 0.5f));
+                d.angle       = angle * view.affine.AngleSign();
                 out.push_back(d);
             });
         }
@@ -128,33 +133,35 @@ namespace Arcane
                 const glm::vec2 localScaled(fx.localPos.x * scale.x, fx.localPos.y * scale.y);
                 const glm::vec2 worldCenter  = bodyPos + RotateVec(localScaled, bodyAngle);
                 const float     fixtureAngle = bodyAngle + fx.localAngle;
-                const glm::vec2 canvasCenter = worldCenter * view.worldToScreenScale + view.offset;
+                const glm::vec2 canvasCenter = view.affine.Point(worldCenter);
 
                 PickDrawable d;
                 d.entity = entity;
                 d.center = canvasCenter;
-                d.angle  = fixtureAngle;
+                d.angle  = fixtureAngle * view.affine.AngleSign();   // canvas sense (F4 plan 1 T3)
 
                 switch (fx.kind)
                 {
                 case Phys::ShapeKind::Circle:
                     d.kind   = PickDrawable::Kind::Circle;
-                    d.radius = fx.radius * sMax * view.worldToScreenScale;
+                    d.radius = view.affine.Length(fx.radius * sMax);
                     break;
                 case Phys::ShapeKind::Capsule:
                     d.kind    = PickDrawable::Kind::Capsule;
-                    d.halfLen = fx.halfLen * sx * view.worldToScreenScale;
-                    d.radius  = fx.radius  * sy * view.worldToScreenScale;
+                    d.halfLen = view.affine.Length(fx.halfLen * sx);
+                    d.radius  = view.affine.Length(fx.radius  * sy);
                     break;
                 case Phys::ShapeKind::Aabb:
                     d.kind        = PickDrawable::Kind::Box;
-                    d.halfExtents = glm::vec2(fx.halfW * sx, fx.halfH * sy) * view.worldToScreenScale;
+                    d.halfExtents = glm::vec2(view.affine.Length(fx.halfW * sx),
+                                              view.affine.Length(fx.halfH * sy));
                     break;
                 case Phys::ShapeKind::Polygon:
                     // v1: no vertex data available -- fall back to the fixture's
                     // halfW/halfH box fields (scaled) as its AABB stand-in.
                     d.kind        = PickDrawable::Kind::Box;
-                    d.halfExtents = glm::vec2(fx.halfW * sx, fx.halfH * sy) * view.worldToScreenScale;
+                    d.halfExtents = glm::vec2(view.affine.Length(fx.halfW * sx),
+                                              view.affine.Length(fx.halfH * sy));
                     break;
                 }
 

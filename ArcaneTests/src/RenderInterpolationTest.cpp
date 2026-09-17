@@ -34,6 +34,16 @@ using Catch::Approx;
 namespace
 {
     constexpr float kPi = 3.14159265358979323846f;
+
+    // F4 plan 1 T3: RenderContext2D carries a ViewTransform. This one's
+    // Affine2D is the PIXEL IDENTITY up to the mirror -- scale (1, -1), offset
+    // (0, 0): Point(w) = (w.x, -w.y) -- so a world x lands on the same canvas x
+    // the old identity camera produced (the assertions below read x only, or
+    // measure y endpoints through the same submit).
+    Arcane::ViewTransform PixelView()
+    {
+        return Arcane::ViewTransform::Orthographic({500.0f, -500.0f}, 500.0f, {1000u, 1000u});
+    }
 }
 
 TEST_CASE("Lerp is the standard affine blend", "[interp]")
@@ -220,7 +230,7 @@ TEST_CASE("RenderSubmissionSystem interpolates a sprite by PhysicsInterpBuffer +
     SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f, 0.0f), 0.0f, 0 }, /*slot*/ 3, /*gen*/ 7);
 
     RecBatcher rec;
-    Arcane::RenderContext2D ctx{ &rec, glm::vec2(0.0f, 0.0f), 1.0f, 0.5f };  // alpha 0.5
+    Arcane::RenderContext2D ctx{ &rec, PixelView(), 0.5f };  // alpha 0.5
     reg.SetResource<Arcane::RenderContext2D>(std::move(ctx));
     Arcane::RenderSubmissionSystem{}(reg);
 
@@ -243,11 +253,12 @@ TEST_CASE("RenderSubmissionSystem interpolates sprite rotation on the shortest a
 
     RecBatcher rec;
     reg.SetResource<Arcane::RenderContext2D>(
-        Arcane::RenderContext2D{ &rec, glm::vec2(0.0f, 0.0f), 1.0f, 0.5f });
+        Arcane::RenderContext2D{ &rec, PixelView(), 0.5f });
     Arcane::RenderSubmissionSystem{}(reg);
 
     REQUIRE(rec.rectCalls == 1);
-    // Shortest arc 350 -> 10 midpoint is 0deg, NOT 180deg.
+    // Shortest arc 350 -> 10 midpoint is 0deg, NOT 180deg (the mirrored map
+    // negates the canvas angle, which leaves 0 at 0).
     CHECK(std::sin(rec.lastRotation) == Approx(0.0f).margin(1e-5));
     CHECK(std::cos(rec.lastRotation) == Approx(1.0f).margin(1e-5));
 }
@@ -262,7 +273,7 @@ TEST_CASE("RenderSubmissionSystem snaps to the current pose on any buffer miss",
     Arcane::Transform lt; lt.position = glm::vec3(10.0f, 0.0f, 0.0f); lt.scale = glm::vec3(4.0f, 4.0f, 1.0f);
     const Astra::Entity e = SpriteWithPrev(reg, lt, Arcane::InterpPose{ glm::vec2(0.0f), 0.0f, 0 }, 2, 5);
     (void)e;
-    reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{ nullptr, glm::vec2(0.0f), 1.0f, 0.5f });
+    reg.SetResource<Arcane::RenderContext2D>(Arcane::RenderContext2D{ nullptr, PixelView(), 0.5f });
 
     auto submit = [&]
     {
@@ -342,7 +353,7 @@ TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the curre
     REQUIRE(reg.GetResource<Arcane::PhysicsInterpBuffer>()->captured);
 
     reg.SetResource<Arcane::RenderContext2D>(
-        Arcane::RenderContext2D{ nullptr, glm::vec2(0.0f), 1.0f, 0.0f });
+        Arcane::RenderContext2D{ nullptr, PixelView(), 0.0f });
     auto submitAt = [&](float alpha)
     {
         RecBatcher rec;
@@ -358,9 +369,14 @@ TEST_CASE("RenderSubmissionSystem blends FROM the captured pose TOWARD the curre
     const float atCur  = submitAt(1.0f);
     REQUIRE(atPrev != Approx(atCur));   // the body moved this step: the endpoints differ
     const float span = atCur - atPrev;
-    CHECK(submitAt(0.25f) == Approx(atPrev + 0.25f * span));
-    CHECK(submitAt(0.75f) == Approx(atPrev + 0.75f * span));
+    // margin, not Approx's relative epsilon alone: the measured centre is the
+    // batcher's top-left + size/2, and that round trip through a 4 px half-size
+    // costs ~1 ulp at magnitude 2 (1.2e-7) on values of ~4e-4 px -- a 3e-4
+    // relative error, above the 1.2e-5 Approx allows. The blend under test is
+    // ~1.7e-3 px end to end, so a 1e-6 margin still separates 0.25 from 0.75.
+    CHECK(submitAt(0.25f) == Approx(atPrev + 0.25f * span).margin(1e-6f));
+    CHECK(submitAt(0.75f) == Approx(atPrev + 0.75f * span).margin(1e-6f));
     // And the reversed direction is what these two would read under a
     // swapped Lerp -- stated so the failure mode is named, not just implied.
-    CHECK(submitAt(0.25f) != Approx(atPrev + 0.75f * span));
+    CHECK(submitAt(0.25f) != Approx(atPrev + 0.75f * span).margin(1e-6f));
 }

@@ -30,6 +30,7 @@
 #include <glm/glm.hpp>
 
 #include <cmath>
+#include <optional>
 
 namespace Arcane
 {
@@ -41,6 +42,15 @@ namespace Arcane
         {
             RenderContext2D* ctx = reg.GetResource<RenderContext2D>();
             if (!ctx || !ctx->batcher) return;
+            // TEMPORARY shim (F4 plan 1 T3): Task 5 replaces this with world-space quads.
+            // Until the batcher takes world-space vertices, sprites still go through the
+            // pixel affine of the orthographic view: points through Point() (y mirrored),
+            // lengths through the uniform |scale.x|, and the canvas angle carries the
+            // mirror's sign. A view with no per-axis affine (perspective) draws no sprites.
+            const std::optional<Affine2D> affine = ctx->view.AsAffine2D();
+            if (!affine) return;
+            const float pxPerMetre = std::abs(affine->scale.x);
+            const float angleSign  = affine->AngleSign();
             const SpriteTable* spriteTable = reg.GetResource<SpriteTable>();
             const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
             const PhysicsInterpBuffer* interp = reg.GetResource<PhysicsInterpBuffer>();
@@ -62,9 +72,8 @@ namespace Arcane
                                            glm::length(glm::vec2(m[1])));
                 // World rotation from the first basis column (matches
                 // Transform::ToMatrix: for a Z-axis turn m[0] = (c*scale.x,
-                // s*scale.x, 0)). The camera applies a uniform zoom (no
-                // rotation), so the screen-space sprite rotates by the same
-                // angle as its physics body.
+                // s*scale.x, 0)). The canvas angle is this times the affine's
+                // AngleSign (see screenRot below).
                 float worldRot = std::atan2(m[0].y, m[0].x);
 
                 // Render interpolation (Epic 04.2, re-based 2026-09-11 spec s8): a
@@ -106,23 +115,28 @@ namespace Arcane
                 // sprite-asset spec.
                 const glm::vec2 baseSize = entry ? entry->sizeMeters : glm::vec2(1.0f);
                 const glm::vec2 pivot    = entry ? entry->pivot      : glm::vec2(0.5f);
-                // Apply the camera (screen = world * zoom + offset; matches
-                // Sandbox::Camera::WorldToScreen and DrawPhysicsDebug exactly, so
-                // sprites + the physics-debug overlay pan/zoom together): scale the
-                // quad by zoom and place it against the ZOOM-scaled screen position.
-                const glm::vec2 dstSize = baseSize * worldScale * ctx->zoom;
-                const glm::vec2 screenPos = worldPos * ctx->zoom + ctx->cameraOffset;
+                // Apply the camera through the affine (the same Affine2D the
+                // physics overlay projects through, so sprites + overlay pan/zoom
+                // together): the quad's size is a LENGTH, its centre a POINT.
+                const glm::vec2 worldSize = baseSize * worldScale;
+                const glm::vec2 dstSize   = worldSize * pxPerMetre;
+                const glm::vec2 screenPos = affine->Point(worldPos);
                 // The batcher rotates a quad about its CENTER (QuadCorners,
                 // Batcher2D.hpp:56-57: center = pos + half, corners rotated about
                 // center). The entity position is the PIVOT, so place the center at
-                // pivot + R(worldRot) * (pivot->center offset) -- which reduces to
-                // dstPos = screenPos - dstSize * 0.5f at the default center pivot
-                // (centerOff is then exactly zero), the historical placement.
-                const glm::vec2 centerOff = (glm::vec2(0.5f) - pivot) * dstSize;
+                // pivot + R(worldRot) * (pivot->center offset) IN WORLD SPACE and
+                // project it -- which reduces to dstPos = screenPos - dstSize * 0.5f
+                // at the default center pivot (centerOff is then exactly zero),
+                // the historical placement. (+Y up: pivot y = 0 is the BOTTOM.)
+                const glm::vec2 centerOffW = (glm::vec2(0.5f) - pivot) * worldSize;
                 const float cr = std::cos(worldRot), sr = std::sin(worldRot);
-                const glm::vec2 center(screenPos.x + cr * centerOff.x - sr * centerOff.y,
-                                       screenPos.y + sr * centerOff.x + cr * centerOff.y);
+                const glm::vec2 centerW(worldPos.x + cr * centerOffW.x - sr * centerOffW.y,
+                                        worldPos.y + sr * centerOffW.x + cr * centerOffW.y);
+                const glm::vec2 center = affine->Point(centerW);
                 const glm::vec2 dstPos = center - dstSize * 0.5f;
+                // The canvas-sense rotation the batcher applies (a mirrored map
+                // reverses every world turn).
+                const float screenRot = worldRot * angleSign;
 
                 ctx->batcher->SetLayer(static_cast<uint16_t>(sprite.sortingLayer),
                                        static_cast<uint16_t>(sprite.orderInLayer));
@@ -147,15 +161,12 @@ namespace Arcane
                     const float r = dstSize.y * 0.5f;
                     const glm::vec2 bandSize(dstSize.x - dstSize.y, dstSize.y);
                     ctx->batcher->Rect(screenPos - bandSize * 0.5f, bandSize,
-                                       sprite.tint, worldRot);
-                    const float halfLen = bandSize.x * 0.5f;
-                    const float c = std::cos(worldRot), s = std::sin(worldRot);
-                    ctx->batcher->Circle(glm::vec2(screenPos.x + c * halfLen,
-                                                   screenPos.y + s * halfLen),
-                                         r, sprite.tint);
-                    ctx->batcher->Circle(glm::vec2(screenPos.x - c * halfLen,
-                                                   screenPos.y - s * halfLen),
-                                         r, sprite.tint);
+                                       sprite.tint, screenRot);
+                    // End-disc centres along the body's local +x IN WORLD, projected.
+                    const float halfLenW = (worldSize.x - worldSize.y) * 0.5f;
+                    const glm::vec2 axisW(cr * halfLenW, sr * halfLenW);
+                    ctx->batcher->Circle(affine->Point(worldPos + axisW), r, sprite.tint);
+                    ctx->batcher->Circle(affine->Point(worldPos - axisW), r, sprite.tint);
                     break;
                 }
                 case SpriteShape::Rect:
@@ -186,14 +197,14 @@ namespace Arcane
                     if (materialId != 0)
                         ctx->batcher->QuadTextured(materialId, texId, dstPos, dstSize,
                                                    uvMin, uvMax,
-                                                   sprite.tint, worldRot);
+                                                   sprite.tint, screenRot);
                     else if (texId.IsValid())
                         ctx->batcher->QuadTextured(Batcher2D::kMaterialSprite, texId,
                                                    dstPos, dstSize,
                                                    uvMin, uvMax,
-                                                   sprite.tint, worldRot);
+                                                   sprite.tint, screenRot);
                     else
-                        ctx->batcher->Rect(dstPos, dstSize, sprite.tint, worldRot);
+                        ctx->batcher->Rect(dstPos, dstSize, sprite.tint, screenRot);
                     break;
                 }
                 }

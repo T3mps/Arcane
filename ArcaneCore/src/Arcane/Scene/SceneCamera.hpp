@@ -1,8 +1,9 @@
 #pragma once
 
-// The scene-camera sweep: resolves the ACTIVE Camera entity into the
-// screen = world * zoom + offset transform every host already applies
-// (RenderContext2D, SceneResources.hpp).
+// The scene-camera sweep: resolves the ACTIVE Camera entity into the ONE
+// camera type every consumer reads -- a ViewTransform (ViewTransform.hpp; F4
+// plan 1, spec s3) -- which the host pushes through ClientRuntime::SetView and
+// RenderContext2D carries to the render side.
 //
 // Deliberately a PURE function of (registry, viewport size) rather than a system
 // or a Runtime method. Three callers have to agree about the view or the feature
@@ -13,6 +14,7 @@
 
 #include <Arcane/Base/Log.hpp>              // ARC_WARN (degenerate-basis fallback, Task 7/F2a)
 #include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -32,12 +34,13 @@ namespace Arcane
         glm::vec2 worldCenter{0.0f, 0.0f};   // the camera entity's world position
         float     halfHeight = 0.0f;         // Camera::orthographicSize, meters
 
-        // Derived for the viewport that was asked about.
-        glm::vec2 offset{0.0f, 0.0f};        // screen-space translation, canvas px
-        float     zoom = 1.0f;               // px per world-meter
+        // Derived for the viewport that was asked about: the orthographic
+        // ViewTransform (+Y up; its AsAffine2D() is the pixel mapping the
+        // overlays still draw through, with a NEGATIVE y scale).
+        ViewTransform view{};
     };
 
-    // The active camera's view for a viewW x viewH viewport, or nullopt when the
+    // The active camera's view for a `viewport` (pixels), or nullopt when the
     // scene has no usable active Camera.
     //
     // A nullopt means "leave the stored camera ALONE" -- NOT "use identity". Every
@@ -51,7 +54,7 @@ namespace Arcane
     // can warn once that a scene is ambiguous -- the contract the PostProcess sweep
     // already set.
     inline std::optional<SceneCameraView> ActiveSceneCamera(Astra::Registry& reg,
-                                                            float viewW, float viewH,
+                                                            glm::uvec2 viewport,
                                                             int* outCount = nullptr)
     {
         int       found = 0;
@@ -92,24 +95,25 @@ namespace Arcane
 
         if (outCount)
             *outCount = found;
-        if (found == 0 || viewH <= 0.0f || halfH <= 0.0f)
+        if (found == 0 || viewport.y == 0u || halfH <= 0.0f)
             return std::nullopt;
 
         SceneCameraView v;
         v.worldCenter = center;
         v.halfHeight  = halfH;
-        v.zoom        = (viewH * 0.5f) / halfH;
-        // The camera's world position lands at the viewport CENTRE, which is what
-        // makes zoom resolution-independent: screen = world * zoom + offset.
-        v.offset      = glm::vec2(viewW, viewH) * 0.5f - center * v.zoom;
+        // The camera's world position lands at the viewport CENTRE and the
+        // half-height spans half the viewport, which is what makes the framing
+        // resolution-independent (F4 plan 1 T3: the ViewTransform replaces the
+        // zoom/offset pair; its AsAffine2D() recovers the same px-per-metre in X
+        // and the NEGATED one in Y -- +Y up on a y-down canvas).
+        v.view = ViewTransform::Orthographic(center, halfH, viewport);
         return v;
     }
 
-    // Task 5 (Phase 4): the perspective sibling. SceneCameraView above is
-    // glm::vec2-shaped end to end (a 2D screen = world * zoom + offset
-    // transform) and none of that math means anything to a lens, so a
-    // Perspective camera gets its own return type -- a 4x4 view and a 4x4
-    // projection -- rather than growing matrix fields no ortho caller reads.
+    // Task 5 (Phase 4): the perspective sibling. It used to return its own
+    // {view, projection} pair; F4 plan 1 T3 made that pair THE camera type --
+    // PerspectiveCameraView is now just ViewTransform (view + projection +
+    // the viewport it was fitted to), the same type the ortho sweep produces.
     //
     // DEPTH CONVENTION: [0,1], not [-1,1] and not reverse-Z. glm defaults to
     // OpenGL's [-1,1] convention, and GLM_FORCE_DEPTH_ZERO_TO_ONE is not
@@ -137,11 +141,7 @@ namespace Arcane
     // Under a LH camera (looking down +Z), that same point -- Z = -z < 0 --
     // would be BEHIND the camera and could not land on any clip plane of the
     // visible frustum at all.
-    struct PerspectiveCameraView
-    {
-        glm::mat4 view{1.0f};
-        glm::mat4 projection{1.0f};
-    };
+    using PerspectiveCameraView = ViewTransform;
 
     // The projection half in isolation: a pure numeric function of the lens
     // parameters alone (no Registry, no Camera, no WorldTransform), so its
@@ -154,7 +154,8 @@ namespace Arcane
         return glm::perspectiveRH_ZO(glm::radians(fovYDegrees), aspectRatio, nearZ, farZ);
     }
 
-    // The active PERSPECTIVE camera's view for an aspectRatio viewport, or
+    // The active PERSPECTIVE camera's view for a `viewport` (pixels; the aspect
+    // ratio is derived from it, and a zero height is nullopt), or
     // nullopt under the same "leave the stored camera ALONE" contract
     // ActiveSceneCamera documents above. Perspective cameras are swept
     // SEPARATELY from ActiveSceneCamera (which now skips any camera whose
@@ -197,9 +198,9 @@ namespace Arcane
     // to zero-length (an authored zero scale) falls back to this same
     // pinned forward/up rather than feeding lookAtRH a zero vector -- see the
     // ARC_WARN below for why that fallback is not deduplicated.
-    inline std::optional<PerspectiveCameraView> ActivePerspectiveSceneCamera(Astra::Registry& reg,
-                                                                              float aspectRatio,
-                                                                              int* outCount = nullptr)
+    inline std::optional<ViewTransform> ActivePerspectiveSceneCamera(Astra::Registry& reg,
+                                                                     glm::uvec2 viewport,
+                                                                     int* outCount = nullptr)
     {
         int       found = 0;
         glm::mat4 world{1.0f};   // identity: eye at origin, forward -Z, up +Y -- the F1 default
@@ -229,10 +230,12 @@ namespace Arcane
 
         if (outCount)
             *outCount = found;
-        if (found == 0 || aspectRatio <= 0.0f || nearZ <= 0.0f || farZ <= nearZ)
+        if (found == 0 || viewport.y == 0u || viewport.x == 0u || nearZ <= 0.0f || farZ <= nearZ)
             return std::nullopt;
+        const float aspectRatio = float(viewport.x) / float(viewport.y);
 
-        PerspectiveCameraView v;
+        ViewTransform v;
+        v.viewport = viewport;
 
         // Full-basis read (Task 7, F2a). Orthonormalize the columns rather than
         // glm::quat_cast(world): see the VIEW comment above for why a scaled
@@ -253,7 +256,7 @@ namespace Arcane
             // or OutlineNode's m_warnedIdOverflow bool dedupe theirs: those live on a
             // long-lived cache/node object that can hold an "already told you" flag
             // across calls, and this function is deliberately NOT that (see the
-            // file-top comment -- pure function of (registry, aspect), no host, no
+            // file-top comment -- pure function of (registry, viewport), no host, no
             // state, three independent callers per frame). A degenerate camera basis
             // is also an authored bug (a zero scale), not a transient miss like a
             // still-loading asset, so re-asserting it every frame it persists is an

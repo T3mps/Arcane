@@ -290,7 +290,7 @@ namespace Arcane
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
     Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }
     // The presentation surface -- AudioSystem/SetInputSnapshot/Input/SetImGui/
-    // ImGui*/SetCamera/CameraOffset/CameraZoom/SetRenderContext/SetSpriteMaterials/
+    // ImGui*/SetView/View (SetCamera/CameraOffset/CameraZoom until ABI v32)/SetRenderContext/SetSpriteMaterials/
     // SetSpriteTable/SetMeshTable/SetMeshMaterials/ResetAudio -- stood here. It moved
     // to ClientRuntime (Client/ClientRuntime.cpp) BODY-FOR-BODY at the Core-DLL split
     // (plan 1 Task 4): every SetResource call still runs in ArcaneClient.dll, whose
