@@ -32,6 +32,7 @@
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>   // SpriteMaterialLayout / the arena region math
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>  // FullscreenMaterialLayout / PostChainNode
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>       // AddMeshNode / MeshSceneDesc -- the opaque pass
+#include <Arcane/Render/Nri/nodes/GridNode.hpp>       // AddGridNode / GridSceneDesc -- the 3D reference grid (F4 plan 1 T10)
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp> // OutlineJfaStepCount / PickNode / OutlineNode
 #include <Arcane/Mesh/MeshBuilder.hpp>       // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
@@ -6548,6 +6549,180 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
     // ...and the node is a RASTER node that Compile() accepted, which is the
     // other half of "it attached them": NodeHasRequiredAttachments() refuses a
     // Raster node with no attachment at all.
+    CHECK(compiled.poolSlotCount == 2);
+}
+
+// =========================================================================
+// F4 plan 1 Task 10 (spec s5.2): THE 3D REFERENCE GRID -- GridNode, the
+// analytic depth-tested ground grid, declared AFTER the mesh pass and READING
+// its depth transient as a depth attachment it tests against but never writes
+// (the PSO's depth.write = false; the graph-level declaration is still
+// DepthWrite, the only barrier state a bound depth attachment has).
+//
+// THE SPEC S14 LIFETIME RISK, pinned here: GridNode consumes the depth
+// transient MeshNode minted, so that transient must outlive MeshNode's own
+// record. That is a DECLARATION fact, not an ownership one -- Compile()
+// derives every transient's lifetime as [first node that touches it, LAST
+// node that touches it] (RgCompiled::Lifetime), so the grid node's Write
+// alone extends the depth transient's pool tenancy through the grid node.
+// No resource moved and MeshNode is untouched; the cases below assert the
+// lifetime directly.
+// =========================================================================
+
+TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' after 'mesh', "
+          "reading the mesh depth as its depth attachment", "[nri][graph]")
+{
+    Arcane::MeshInstance one;
+    one.mesh = Arcane::Guid{ 1, 1 };
+    const Arcane::MeshInstance instances[] = { one };
+
+    Arcane::MeshSceneDesc scene;
+    scene.instances = instances;
+
+    Arcane::GridSceneDesc grid;   // defaults: XZ plane, 1 m / 10 m, the editor's view
+
+    SECTION("with a mesh scene: batch2d, mesh, grid, tonemap -- one shared depth transient")
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.mesh         = &scene;
+        shape.grid         = &grid;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        REQUIRE(graph.NodeCount() == 4);
+        CHECK(std::string(graph.NodeName(0)) == "batch2d");
+        CHECK(std::string(graph.NodeName(1)) == "mesh");
+        CHECK(std::string(graph.NodeName(2)) == "grid");
+        CHECK(std::string(graph.NodeName(3)) == "tonemap");
+
+        // ONE depth transient, minted by the mesh node; the grid node did not
+        // mint a second one.
+        REQUIRE(graph.IsHandleValid(handles.depth));
+        CHECK(std::string(graph.NameOf(handles.depth)) == "depth");
+        CHECK(graph.WasWritten(handles.depth));
+        CHECK(graph.WasWritten(handles.canvas));
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        REQUIRE(compiled.nodes.size() == 4);
+        REQUIRE(compiled.transients.size() == 2);   // canvas + the ONE depth
+
+        // THE LIFETIME (spec s14): the depth transient is texture slot 1 and
+        // its tenancy runs from the mesh node (first toucher) THROUGH the
+        // grid node (last toucher) -- which is the whole of "the depth
+        // outlives MeshNode's record".
+        CHECK(compiled.transients[1].resourceIndex == 1u);
+        CHECK(compiled.transientLifetimes[1].first == 1u);   // mesh
+        CHECK(compiled.transientLifetimes[1].last  == 2u);   // grid
+        CHECK(compiled.transientPoolSlot[1] != Arcane::kRgNoPoolSlot);
+        CHECK(compiled.poolSlotCount == 2);
+
+        // THE BARRIERS: the grid node declares the SAME state the mesh node
+        // left both targets in (canvas COLOR_ATTACHMENT, depth
+        // DEPTH_STENCIL_ATTACHMENT), and consecutive same-state declarations
+        // derive NO barrier -- so the grid node carries none. A grid node that
+        // read the depth as ShaderRead (a texture, not an attachment) would
+        // carry one, and that is exactly the shape spec s5.2 does NOT want.
+        CHECK(compiled.nodes[2].preBarriers.empty());
+    }
+
+    SECTION("with no mesh scene: 'grid' is still declared, with no depth attachment")
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.grid         = &grid;
+
+        const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
+
+        REQUIRE(graph.NodeCount() == 3);
+        CHECK(std::string(graph.NodeName(0)) == "batch2d");
+        CHECK(std::string(graph.NodeName(1)) == "grid");
+        CHECK(std::string(graph.NodeName(2)) == "tonemap");
+        CHECK_FALSE(graph.IsHandleValid(handles.depth));
+        CHECK(graph.WasWritten(handles.canvas));
+
+        const Arcane::RgCompiled compiled = CompileOk(graph);
+        REQUIRE(compiled.nodes.size() == 3);
+        CHECK(compiled.transients.size() == 1);   // the canvas, and nothing else
+        CHECK(compiled.poolSlotCount == 1);
+        CHECK(compiled.nodes[1].preBarriers.empty());   // canvas already COLOR_ATTACHMENT
+    }
+
+    SECTION("with no grid scene: the frame is byte-for-byte the pre-T10 mesh frame")
+    {
+        Arcane::RenderGraph graph;
+        Arcane::RgFrameShape shape;
+        shape.canvasWidth  = 320;
+        shape.canvasHeight = 200;
+        shape.mesh         = &scene;
+
+        (void)Arcane::DeclareGraphFrame(graph, shape, nullptr);
+        REQUIRE(graph.NodeCount() == 3);
+        CHECK(std::string(graph.NodeName(1)) == "mesh");
+        CHECK(std::string(graph.NodeName(2)) == "tonemap");
+    }
+}
+
+TEST_CASE("nri graph frame: (T10F4) driven directly, the grid node declares ColorWrite on the "
+          "canvas and DepthWrite on the depth it was handed", "[nri][graph]")
+{
+    // Driven directly (not through DeclareGraphFrame) so the grid node is the
+    // FIRST toucher of both targets and both declarations show up as barriers
+    // -- the same reason the (T7P4) direct-drive case gives.
+    Arcane::RenderGraph graph;
+
+    Arcane::RgTexture canvas{}, depth{};
+    graph.AddNode("test-targets", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            Arcane::RgTextureDesc desc;
+            desc.format = Arcane::kGraphCanvasFormat;
+            desc.width  = 320;
+            desc.height = 200;
+            canvas = builder.CreateTexture("canvas", desc);
+
+            Arcane::RgTextureDesc depthDesc;
+            depthDesc.format       = Arcane::kGraphDepthFormat;
+            depthDesc.width        = 320;
+            depthDesc.height       = 200;
+            depthDesc.depthStencil = true;
+            depth = builder.CreateTexture("depth", depthDesc);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+    REQUIRE(graph.IsHandleValid(canvas));
+    REQUIRE(graph.IsHandleValid(depth));
+
+    Arcane::GridSceneDesc grid;
+    Arcane::AddGridNode(graph, nullptr, canvas, Arcane::kGraphCanvasFormat, depth, grid, 320, 200);
+    REQUIRE(graph.NodeCount() == 2);
+    CHECK(std::string(graph.NodeName(1)) == "grid");
+    CHECK(graph.WasWritten(canvas));
+    CHECK(graph.WasWritten(depth));
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.nodes.size() == 2);
+    const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[1].preBarriers;
+    REQUIRE(barriers.size() == 2);
+
+    const auto barrierFor = [&](std::uint32_t resourceIndex) -> const Arcane::RgBarrier*
+    {
+        for (const Arcane::RgBarrier& barrier : barriers)
+            if (barrier.isTexture && barrier.resourceIndex == resourceIndex)
+                return &barrier;
+        return nullptr;
+    };
+    const Arcane::RgBarrier* colorBarrier = barrierFor(0u);
+    const Arcane::RgBarrier* depthBarrier = barrierFor(1u);
+    REQUIRE(colorBarrier != nullptr);
+    REQUIRE(depthBarrier != nullptr);
+    CheckState(colorBarrier->after, nri::AccessBits::COLOR_ATTACHMENT,
+               nri::Layout::COLOR_ATTACHMENT, nri::StageBits::COLOR_ATTACHMENT);
+    CheckState(depthBarrier->after, nri::AccessBits::DEPTH_STENCIL_ATTACHMENT,
+               nri::Layout::DEPTH_STENCIL_ATTACHMENT, nri::StageBits::DEPTH_STENCIL_ATTACHMENT);
     CHECK(compiled.poolSlotCount == 2);
 }
 

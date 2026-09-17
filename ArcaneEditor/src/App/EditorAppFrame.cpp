@@ -2011,6 +2011,27 @@ namespace Arcane::Editor
             }
         }
 
+        // ---- F4 plan 1 T10's content: the 3D reference grid ----------------
+        // EDITOR CHROME, gated three ways: Edit mode (an editor affordance,
+        // never the game's picture), the PERSPECTIVE view mode (the 2D view's
+        // grid is the batched ViewportGrid lines drawn in SubmitSceneToBatcher
+        // -- one grid per view mode, never both), and the Show grid setting.
+        // The plane is the view setting; SetPlane also picks the V-axis
+        // colour spec s5.2 pairs with it (Z blue on XZ, Y green on XY). The
+        // camera is the SAME ViewTransform the sprites, the mesh pass and the
+        // gizmo just used, so the grid sits under the meshes to the pixel.
+        // Nothing here reaches the pick chain below: the grid is canvas
+        // content only (GridNode.hpp).
+        if (!InPlayMode() && m_camera.mode == Arcane::Editor::ViewMode::Perspective
+            && m_viewSettings.showGrid)
+        {
+            m_gridScene.view = m_runtime->View();
+            m_gridScene.SetPlane(m_viewSettings.gridPlane == Arcane::Editor::GridPlane::XY
+                                     ? Arcane::GridSceneDesc::Plane::XY
+                                     : Arcane::GridSceneDesc::Plane::XZ);
+            vp.grid = &m_gridScene;
+        }
+
         // ---- phases 12 + 17's content: the pick + outline chain ----------
         // THE HOVER GOES THROUGH HoverLive(), not m_gameUi.inViewport
         // directly: that field is derived from the LIVE pointer, so reading it

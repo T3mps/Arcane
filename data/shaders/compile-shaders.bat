@@ -54,6 +54,9 @@ call :compile outline_composite ps_main ps_6_5 outline_composite_ps || exit /b 1
 :: The opaque 3D pass (NRI Phase 4, Task 7) -- Lambert + one albedo texture.
 call :compile mesh vs_main vs_6_5 mesh_vs || exit /b 1
 call :compile mesh ps_main ps_6_5 mesh_ps || exit /b 1
+:: The 3D reference grid (F4 plan 1 Task 10, spec s5.2) -- analytic, depth-tested after the mesh pass.
+call :compile grid vs_main vs_6_5 grid_vs || exit /b 1
+call :compile grid ps_main ps_6_5 grid_ps || exit /b 1
 :: graph_grid_vs/_ps were emitted here until the NRI Phase 5a final-review fix
 :: wave. Their only loader was GraphGridPass, deleted at Task 9.5a; the shader
 :: graph's backdrop is now drawn with ImGui primitives

@@ -437,6 +437,10 @@ namespace Arcane
         m_mesh = MeshNode::Create(*this);
         if (!m_mesh)
             return false;   // already logged
+        // The 3D reference grid (F4 plan 1 T10), eagerly like the rest -- see Grid().
+        m_grid = GridNode::Create(*this);
+        if (!m_grid)
+            return false;   // already logged
         m_post = PostChainNode::Create(*this);
         if (!m_post)
             return false;   // already logged
@@ -784,6 +788,8 @@ namespace Arcane
             m_tonemap->Release(graves, fence);
         if (m_post)
             m_post->Release(graves, fence);
+        if (m_grid)
+            m_grid->Release(graves, fence);
         if (m_mesh)
             m_mesh->Release(graves, fence);
         if (m_batch2D)
@@ -1315,6 +1321,38 @@ namespace Arcane
         }
 
         // ---------------------------------------------------------------
+        // THE 3D REFERENCE GRID (F4 plan 1 Task 10, spec s5.2). Declared
+        // AFTER both branches above -- after the mesh pass, before the post
+        // chain and the tonemap -- so it blends over the opaque geometry and
+        // is DEPTH-TESTED against the depth transient AddMeshNode returned
+        // (never writing it: GridNode's PSO has depth.write = false; the
+        // graph-level DepthWrite is just the barrier state of a bound depth
+        // attachment). A frame with no mesh pass hands it an INVALID handle
+        // and the grid draws unoccluded with no depth attachment at all. The
+        // Task 4 placeholder's depth (the `else` above) is deliberately NOT
+        // handed over: that resource is pinned as declared-and-unconsumed,
+        // and a grid attached to it would test against undefined contents.
+        //
+        // THE SPEC S14 LIFETIME RISK, SETTLED AS A DECLARATION FACT: the grid
+        // reads the depth transient MeshNode minted, which must therefore
+        // outlive MeshNode's record. It does, with NO ownership move and NO
+        // MeshNode change: RenderGraph::Compile derives every transient's
+        // pool tenancy as [first toucher, LAST toucher] (RgCompiled::
+        // Lifetime), so AddGridNode's Write(depth, DepthWrite) alone carries
+        // the depth's life through the grid node. RenderGraphTest.cpp's
+        // (T10F4) case pins that lifetime -- mesh first, grid last.
+        //
+        // GATED ON THE DESC ALONE, like `mesh`: null declares nothing, and a
+        // frame that never sets it is byte for byte the pre-T10 frame.
+        // ---------------------------------------------------------------
+        if (shape.grid)
+        {
+            AddGridNode(graph, context, handles.canvas, kGraphCanvasFormat,
+                        wantsMesh ? handles.depth : RgTexture{}, *shape.grid,
+                        shape.canvasWidth, shape.canvasHeight);
+        }
+
+        // ---------------------------------------------------------------
         // THE POST CHAIN (Task 10). One node per chain pass, between the
         // canvas and the tonemap; the tonemap then samples the LAST pass's
         // target instead of the canvas. Everything about the ping-pong -- two
@@ -1559,6 +1597,8 @@ namespace Arcane
         // vehicle whose MeshNode failed to build declares nothing rather than
         // declaring a node that does not exist.
         shape.mesh          = m_mesh ? frame.mesh : nullptr;
+        // The 3D reference grid (F4 plan 1 T10), belt-and-braces the same way.
+        shape.grid          = m_grid ? frame.grid : nullptr;
         // THE ONE LINE THAT MAKES A FRAME OFFSCREEN (Task 7). Null in
         // host-window mode, so the tonemap imports the swapchain exactly as it
         // always has; the vehicle's output texture otherwise. Nothing else in

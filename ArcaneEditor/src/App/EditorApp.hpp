@@ -1252,6 +1252,12 @@ namespace Arcane::Editor
         // that outlives the function that fills it.
         Arcane::MeshSceneDesc m_meshScene;
 
+        // THIS FRAME'S 3D REFERENCE GRID (F4 plan 1 T10, spec s5.2) -- a
+        // member for exactly m_meshScene's reason: FrameDesc::grid is a
+        // POINTER read by RenderFrameOffscreen after ArmGraphViewportFrame
+        // (which fills it) has returned.
+        Arcane::GridSceneDesc m_gridScene;
+
         // The click-pick, which cannot answer in the frame it is asked -- see
         // DeferredPick.hpp for the three hazards it closes.
         Arcane::Editor::DeferredPick m_deferredPick;

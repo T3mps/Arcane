@@ -243,6 +243,7 @@
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>
 #include <Arcane/Render/Nri/nodes/ImGuiNriNode.hpp>
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
+#include <Arcane/Render/Nri/nodes/GridNode.hpp>
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
 #include <cstdint>
@@ -355,8 +356,9 @@ namespace Arcane
         };
 
         // What one RenderFrame() call renders. FOUR fields change the graph's
-        // SHAPE -- `capture`, `pickOutline`, `imgui` and `gameUi` -- and every
-        // other one is content the already-declared nodes read. Anything a
+        // SHAPE -- `capture`, `pickOutline`, `imgui` and `gameUi` -- plus the
+        // two optional scene passes gated on their pointers (`mesh`, `grid`),
+        // and every other one is content the already-declared nodes read. Anything a
         // vehicle was not built with (NodeSet) is ignored rather than declared.
         struct FrameDesc
         {
@@ -414,6 +416,16 @@ namespace Arcane
             // only through RenderFrameOffscreen(FrameDesc). Task 9 is what
             // teaches the two HOSTS to fill it in from a real scene.
             const MeshSceneDesc* mesh = nullptr;
+
+            // ---- the 3D reference grid (F4 plan 1 T10, spec s5.2) --------
+            // THIS FRAME'S GRID -- the editor camera and the plane. Null (the
+            // default) is "no grid", the same slice-by-nulling rule as `mesh`.
+            // Declared AFTER the mesh pass and depth-tested against its depth
+            // transient (never writing it); with no mesh pass the grid draws
+            // unoccluded. Editor chrome: the editor arms it only in Edit mode
+            // with the Perspective view and Show grid on; the runtime never
+            // does. BORROWED for the duration of the RenderFrame call.
+            const GridSceneDesc* grid = nullptr;
 
             // This frame's scene POST CHAIN as bytecode + layout + values --
             // SceneRenderResolver::PostDesc(). Borrowed for the duration of the RenderFrame
@@ -933,6 +945,12 @@ namespace Arcane
         // pass.
         [[nodiscard]] MeshNode*      Mesh()      noexcept { return m_mesh.get(); }
 
+        // The 3D reference grid (F4 plan 1 T10). Built EAGERLY beside Mesh()
+        // for the same reason: a frame that carries no grid desc declares no
+        // node, so the cost of having it is one tiny descriptor pool and a
+        // two-region constant arena.
+        [[nodiscard]] GridNode*      Grid()      noexcept { return m_grid.get(); }
+
         // The pick + outline pair (Task 11). NULL on every run that neither
         // passed --pick-probe nor asked for them through NodeSet::pickOutline:
         // an ordinary --nri-graph run creates no readback buffer, no descriptor
@@ -1374,6 +1392,7 @@ namespace Arcane
         // -- these destructors are the safety net, not the path.
         std::unique_ptr<Batch2DNode>       m_batch2D;
         std::unique_ptr<MeshNode>          m_mesh;
+        std::unique_ptr<GridNode>          m_grid;
         std::unique_ptr<PostChainNode>     m_post;
         std::unique_ptr<TonemapNode>       m_tonemap;
         // Built only under --pick-probe or NodeSet::pickOutline (see
@@ -1629,6 +1648,15 @@ namespace Arcane
         // BORROWED for the duration of the RenderFrame call -- see
         // MeshSceneDesc::instances.
         const MeshSceneDesc* mesh = nullptr;
+
+        // F4 plan 1 Task 10 (spec s5.2): THE 3D REFERENCE GRID's desc, or null
+        // for none. Read for its PRESENCE here and for nothing else: the node
+        // is declared after the mesh block, reading the mesh pass's depth
+        // transient as its depth attachment when `mesh` above declared one
+        // (and with no depth attachment otherwise). The camera, the plane and
+        // the colours are consumed by GridNode at Record time. A device-less
+        // drive can point this at a default GridSceneDesc.
+        const GridSceneDesc* grid = nullptr;
     };
 
     struct RgFrameHandles
