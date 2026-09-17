@@ -22,10 +22,13 @@
 
 #include <Json.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 using Catch::Approx;
 
@@ -118,9 +121,53 @@ TEST_CASE("LoadJson migrates a v5 scene on load and leaves a v6 one untouched; S
     CHECK(v5 != v6);
 }
 
-// One-shot tool, not a test of the engine: re-saves the scenes in a directory at
-// the current schema (load applies the migration, save stamps v6). Runs only
-// when ARCANE_RESAVE_SCENES names the directory, so a normal suite run skips it.
+namespace
+{
+    // One entity's component ROSTER as a single comparable string: the keys
+    // under "components", sorted, joined. This is the thing a re-save can
+    // silently destroy -- LoadJson SKIPS a component type this process has not
+    // registered (it warns and carries on, by design: forward compatibility),
+    // and SaveJson then writes only the live roster, so the skipped component
+    // is gone from the file permanently.
+    std::vector<std::string> EntityRosters(const nlohmann::json& doc)
+    {
+        std::vector<std::string> rosters;
+        if (!doc.contains("entities") || !doc["entities"].is_array()) return rosters;
+        for (const auto& entry : doc["entities"])
+        {
+            std::vector<std::string> keys;
+            if (entry.is_object())
+            {
+                const auto cit = entry.find("components");
+                if (cit != entry.end() && cit->is_object())
+                    for (auto it = cit->begin(); it != cit->end(); ++it)
+                        keys.push_back(it.key());
+            }
+            std::sort(keys.begin(), keys.end());
+            std::string joined;
+            for (const std::string& k : keys) { if (!joined.empty()) joined += ", "; joined += k; }
+            rosters.push_back(joined.empty() ? "<none>" : joined);
+        }
+        return rosters;
+    }
+}
+
+// A TOOL, not a test of the engine: re-saves the scenes in a directory at the
+// current schema (load applies the migration, save stamps v6). Runs only when
+// ARCANE_RESAVE_SCENES names the directory, so a normal suite run skips it.
+//
+// It GUARDS ITSELF against the one way this can quietly cost data. A registry
+// built here knows the engine's components and nothing else, so a scene
+// carrying a GAME-MODULE or PLUGIN component would load with that component
+// skipped (an ARC_WARN nobody reads in a batch run) and be re-saved WITHOUT
+// it -- and a tool that only checks read/apply/save succeeded would report
+// success while doing it. So the roster of every entity is captured from the
+// document BEFORE the apply and compared against the candidate document
+// BEFORE the file is written: same entity count, same per-entity component
+// keys, or the case fails naming the file and the roster, with the file left
+// untouched. Rosters are compared as a SORTED MULTISET because re-saving
+// legitimately re-orders entities (SaveJson walks the SceneRoot subtree
+// root-first); losing one never is.
 TEST_CASE("resave scenes at the current schema (tool)", "[migration][tool]")
 {
     const char* dir = std::getenv("ARCANE_RESAVE_SCENES");
@@ -129,16 +176,51 @@ TEST_CASE("resave scenes at the current schema (tool)", "[migration][tool]")
     for (const auto& f : std::filesystem::directory_iterator(dir))
     {
         if (f.path().extension() != Arcane::Scene::kSceneExt) continue;
+        const std::string name = f.path().generic_string();
+        INFO("scene: " << name);
+
         std::string err;
         const auto read = Arcane::Scene::ReadSceneFile(f.path(), &err);
-        INFO(f.path().generic_string() << ": " << err);
+        INFO("read: " << err);
         REQUIRE(read.has_value());
+
+        std::vector<std::string> before = EntityRosters(read->doc);
 
         auto components = std::make_shared<Astra::ComponentRegistry>();
         Astra::Registry reg(components);
         Arcane::RegisterSceneComponents(reg);
         Arcane::RegisterPhysicsComponents(reg);
         REQUIRE(Arcane::Scene::ApplySceneDocument(*read, reg));
+
+        // The guard runs against the CANDIDATE document, in memory, BEFORE the
+        // file is touched: a tool that destroys a component and then reports
+        // the destruction has still destroyed it, and this one is pointed at
+        // authored content. SaveSceneFile writes the same SaveJson output, so
+        // checking it here checks exactly what would land.
+        std::vector<std::string> after = EntityRosters(Arcane::Scene::SaveJson(reg));
+        {
+            INFO("entity count: " << before.size() << " before, " << after.size()
+                 << " after -- NOT re-saved");
+            REQUIRE(after.size() == before.size());
+        }
+        std::sort(before.begin(), before.end());
+        std::sort(after.begin(), after.end());
+        for (std::size_t i = 0; i < before.size(); ++i)
+        {
+            INFO("entity roster would change -- before: [" << before[i] << "] after: ["
+                 << after[i] << "] -- NOT re-saved");
+            REQUIRE(after[i] == before[i]);
+        }
+
         REQUIRE(Arcane::Scene::SaveSceneFile(f.path(), reg, read->id, &err));
+        INFO("save: " << err);
+
+        // And what the next reader of the FILE sees is v6, read back off disk
+        // rather than trusted from the registry.
+        const auto reread = Arcane::Scene::ReadSceneFile(f.path(), &err);
+        INFO("re-read: " << err);
+        REQUIRE(reread.has_value());
+        CHECK(reread->doc.value("version", 0) == Arcane::Scene::kSceneJsonVersion);
+        CHECK(EntityRosters(reread->doc).size() == before.size());
     }
 }
