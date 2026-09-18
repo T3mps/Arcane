@@ -7,15 +7,15 @@
 // in WORLD space, ready for the id pass. The k-th appended drawable (0-based)
 // gets hit-proxy id k+1; PickEntityForId inverts that mapping (id 0 == background).
 //
-// Pure, device-less-testable: no GPU, no render device, and -- since F4 plan 2
-// -- NO VIEW. The emitter knows nothing about the camera: sprites are the four
+// Pure, device-less-testable: no GPU, no render device, and -- since F4 (spec
+// s7.1) -- NO VIEW. The emitter knows nothing about the camera: sprites are the four
 // world corners SpriteWorldQuad places, physics silhouettes are world shapes in
 // metres at the body pose, meshes are a world matrix + the asset guid. The id
 // pass (Render/Nri/nodes/PickOutlineNodes.hpp's PickNode) projects all of it
 // through the frame's ViewTransform (NriGraphContext::FrameDesc::pickView), so
 // the same drawables pick correctly under an orthographic 2D view, a tilted
-// one or a perspective one. PickView and its Affine2D are gone with plan 1's
-// per-axis mapping.
+// one or a perspective one. The orthographic-only view struct that carried
+// plan 1's per-axis pixel mapping into the emitter is gone (ABI 33).
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>

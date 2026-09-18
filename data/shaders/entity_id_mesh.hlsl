@@ -1,4 +1,4 @@
-// Entity-id pass, MESH half (F4 plan 2, spec s7.1): rasterise a resident mesh's
+// Entity-id pass, MESH half (F4 spec s7.1): rasterise a resident mesh's
 // triangles through mvp and write the drawable's 1-based id. Depth-tested
 // (LESS, write) against the pick pass's own D32 transient, AFTER the 2D
 // silhouettes drew depth-off -- so meshes resolve among themselves by depth

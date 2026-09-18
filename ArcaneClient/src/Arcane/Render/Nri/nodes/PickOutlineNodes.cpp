@@ -173,7 +173,7 @@ namespace Arcane
         // SHAPEPARAM covers (radius, halfLen) and KINDID covers (kind, id) --
         // two scalars each, packed as one two-component attribute, which is why
         // the offsets below name the FIRST member of each pair. POSITION is a
-        // WORLD-space vec3 (F4 plan 2).
+        // WORLD-space vec3 (F4 spec s7.1).
         m_attributes[0].d3d.semanticName = "POSITION";
         m_attributes[0].vk.location      = 0;
         m_attributes[0].offset           = offsetof(PickIdVertex, pos);
@@ -386,8 +386,8 @@ namespace Arcane
         // target clears it from its own exec fn (the seam DeclareGraphFrame
         // documents). 0 IS the background id, so the colour clear is not
         // cosmetic: every pixel no silhouette covers must read back as
-        // "nothing here". The depth plane is the pass's OWN transient (F4 plan
-        // 2), a fresh pool slot with undefined contents, cleared to the far
+        // "nothing here". The depth plane is the pass's OWN transient (F4 spec
+        // s7.1), a fresh pool slot with undefined contents, cleared to the far
         // value so the mesh half's LESS test starts from "nothing drawn".
         //
         // The UINT half of the colour union, not the float one -- the target is

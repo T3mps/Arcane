@@ -21,7 +21,7 @@
 // ===================================================================
 // Not from the batcher. `CollectPickables` (Render/PickEmit.hpp) is a PURE
 // walk of the Astra registry that appends one PickDrawable per pickable
-// silhouette in WORLD space (F4 plan 2), and the k-th appended drawable IS
+// silhouette in WORLD space (F4 spec s7.1), and the k-th appended drawable IS
 // hit-proxy id k+1 (`PickEntityForId` inverts it). The graph path consumes
 // exactly that vector -- handed in through NriGraphContext::FrameDesc::pickables
 // by the frame driver, which owns the registry, beside the ViewTransform the
@@ -560,7 +560,7 @@ namespace Arcane
         }
 
         // See Batch2DNode::kShaderPairBase: one shared cache, so the nodes'
-        // opaque id spaces must not overlap. PickNode is 0x4100.
+        // opaque id spaces must not overlap. PickNode is 0x4100-0x4101.
         static constexpr std::uint64_t kSeedPairId      = 0x4000;
         static constexpr std::uint64_t kJfaPairId       = 0x4001;
         static constexpr std::uint64_t kCompositePairId = 0x4002;

@@ -90,7 +90,12 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
 - **+Y up everywhere (F4, 2026-09-17):** the world is right-handed, +Y up,
   in 2D and 3D alike -- one `ViewTransform` for every consumer, gravity
   defaults to `{0, -9.81}`. Spec: `docs/specs/2026-09-17-f4-editor-3d-authoring-design.md` §2
-  (supersedes the physics-wiring spec's "+Y is down").
+  (supersedes the physics-wiring spec's "+Y is down"). The editor viewport
+  has a 2D | Persp toggle over one editor camera; meshes (and sprites) are
+  click-selectable in EVERY view mode (the id pass rasterises world-space
+  drawables through the frame's `ViewTransform`, spec §7.1), and the transform
+  gizmo is 3D -- one ray-based code path, the 2D view only masks its Z handles
+  (planar handles; spec §7.2).
 - **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
   Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
   engine-owned world. Do not teach `PhysicsSystem` to write 3D poses (it

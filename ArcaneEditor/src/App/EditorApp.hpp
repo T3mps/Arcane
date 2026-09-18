@@ -856,7 +856,7 @@ namespace Arcane::Editor
         // (see that predicate for why a NAMED predicate rather than "m_gizmoEnabled
         // defaults to false"): the gizmo draws INTO THE SCENE BATCH and its hover
         // comes from the live cursor, so both consequences are gated here. Since F4
-        // plan 2 the gizmo works in every view mode -- the 2D view only masks its
+        // (spec s7.2) the gizmo works in every view mode -- the 2D view only masks its
         // Z handles (GizmoHandles() below) -- so this is the tool state alone.
         [[nodiscard]] bool GizmoLive() const noexcept { return m_gizmoEnabled; }
 

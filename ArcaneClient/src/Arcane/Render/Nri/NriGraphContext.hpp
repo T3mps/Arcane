@@ -455,7 +455,7 @@ namespace Arcane
             // a probe over empty space must read back.
             std::span<const PickDrawable> pickables;
 
-            // THE VIEW THE ID PASS PROJECTS THROUGH (F4 plan 2). The drawables are
+            // THE VIEW THE ID PASS PROJECTS THROUGH (F4 spec s7.1). The drawables are
             // WORLD-space now, so the pass needs the same ViewTransform the scene
             // render just used -- the editor's camera in Edit, the scene camera in
             // Play. Copied, not borrowed (136 bytes; read at declaration time by
@@ -1696,7 +1696,7 @@ namespace Arcane
         // The pick + outline chain's handles (Task 11). All invalid, and
         // jfaStepCount 0, on a frame that did not declare it.
         RgTexture     pickIds{};        // the R32_UINT entity-id transient, at kPickSupersample x
-        RgTexture     pickDepth{};      // the id pass's OWN D32 transient (F4 plan 2), same extent
+        RgTexture     pickDepth{};      // the id pass's OWN D32 transient (F4 spec s7.1), same extent
         RgBuffer      pickReadback{};   // the imported HOST_READBACK staging buffer
         RgTexture     outlineField{};   // the LAST JFA target -- what the composite sampled
         // Thickness-derived, so it is the SAME on every surface size (D3c) --

@@ -1243,7 +1243,7 @@ namespace Arcane::Editor
                     // before writing the LOCAL Transform (Unreal's SetWorldTransform).
                     const Arcane::GizmoTransform w = Arcane::ApplyGroupDelta(startPose, gd);
                     const glm::mat4 localMat = glm::inverse(Arcane::Edit::ParentWorldMatrix(*regPtr, e)) * Arcane::ComposeTRS(w);
-                    // FULLY 3D since F4 plan 2: every component is the gizmo's to
+                    // FULLY 3D since F4 (spec s7.2): every component is the gizmo's to
                     // write. The only massaging is the mirror's home axis.
                     const Arcane::GizmoTransform r = Arcane::WithMirrorOn(Arcane::DecomposeTRS(localMat), mirrorAxis);
                     et->position = r.position;
@@ -1999,7 +1999,7 @@ namespace Arcane::Editor
         const bool hoverLive = HoverLive();
         // PHASE 12'S GATE, VERBATIM: Edit mode, and something to outline
         // (a selection, or a cursor in the viewport that might hover one).
-        // In EVERY view mode (F4 plan 2): the id pass projects world-space
+        // In EVERY view mode (F4 spec s7.1): the id pass projects world-space
         // drawables through FrameDesc::pickView, so a perspective view
         // outlines and picks exactly as the 2D one does -- plan 1's
         // AsAffine2D gate on this predicate is lifted.
@@ -2029,7 +2029,7 @@ namespace Arcane::Editor
         }
 
         // THE ONE EMITTER (PickEmit.hpp) -- a pure registry walk that emits
-        // WORLD-space silhouettes (F4 plan 2); the id pass projects them
+        // WORLD-space silhouettes (F4 spec s7.1); the id pass projects them
         // through the ViewTransform handed over below, so they register
         // pixel-for-pixel with what was drawn in EVERY view mode. The k-th
         // entry IS hit-proxy id k+1.
@@ -3414,7 +3414,7 @@ namespace Arcane::Editor
         // The scene epoch and play mode recorded here describe the scene
         // the USER clicked on, which is what the landing compares against.
         // A click in ANY view mode arms the pick: the id pass projects world
-        // drawables through FrameDesc::pickView (plan 2), so plan 1's fifth
+        // drawables through FrameDesc::pickView (F4 spec s7.1), so plan 1's fifth
         // guard (no click-pick without a 2D affine) is gone. ONE modifier
         // rule survives it: in EDIT mode's Perspective view an Alt+LMB press
         // is the ORBIT gesture (UpdateEditorCamera tests Alt+LMB first there,

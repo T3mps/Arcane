@@ -5,7 +5,7 @@
 // v1-simplest option per the plan); a Quad or Box drawable covers its whole
 // bounding quad.
 //
-// Positions arrive in WORLD space (F4 plan 2); the root block carries the
+// Positions arrive in WORLD space (F4 spec s7.1); the root block carries the
 // frame's view-projection. local/radius/halfLen are METRES -- the analytic
 // coverage test below is unit-agnostic, so it is unchanged. The depth test is
 // OFF for this half (PickOutlineNodes.cpp): the 2D silhouettes resolve a

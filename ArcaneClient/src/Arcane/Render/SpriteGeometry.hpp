@@ -3,8 +3,8 @@
 // SpriteWorldQuad: THE sprite corner rule (F4 plan 1 T5). One place derives
 // the four WORLD-space corners of a sprite from its world matrix, its base
 // size in metres and its pivot, so every consumer -- RenderSubmissionSystem
-// (the drawn quad), the editor's framing bounds, and in plan 2 the pick
-// emitter -- places the sprite identically.
+// (the drawn quad), the editor's framing bounds, and the pick emitter
+// (PickEmit.hpp's CollectPickables) -- places the sprite identically.
 //
 // Local corners live in the sprite's own XY plane, +Y up = the IMAGE TOP:
 //

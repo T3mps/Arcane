@@ -8,7 +8,7 @@
 // so orthographic and perspective share the math and differ only in the ray
 // constructor: Unreal's FViewportCursorLocation split), Draw (overlay pixels,
 // top layer, no depth: ImGuizmo's posture). The editor owns all interaction
-// state. (F4 plan 2, spec s7.2, R9.)
+// state. (F4 spec s7.2, R9; landed 2026-09-17, ABI 33.)
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>   // ViewTransform, Ray
@@ -31,7 +31,8 @@ namespace Arcane
     // Scale: X/Y/Z boxes + Center = uniform.
     enum class GizmoAxis : std::uint8_t { None, X, Y, Z, XY, YZ, XZ, Center, Screen };
 
-    // Decoupled from Scene so Edit/Gizmo has no Scene dependency; Arcane Editor
+    // Decoupled from Components so Edit/Gizmo has no Components/Transform
+    // dependency (ViewTransform is the one Scene header it takes); Arcane Editor
     // maps Transform <-> this (DecomposeTRS / ComposeTRS below).
     struct GizmoTransform
     {

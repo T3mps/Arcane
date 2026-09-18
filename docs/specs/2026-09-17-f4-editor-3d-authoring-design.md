@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-17
 **Status:** Design, approved in brainstorm 2026-09-17; plan 1 closed at
-`a5e4e3aa` (2026-09-17). Step 2 of the binding
+`a5e4e3aa` (2026-09-17); plan 2 closed at the commit after `733a2665` (T5
+close, 2026-09-17: mesh picking + the 3D gizmo). Step 2 of the binding
 order (`docs/research/2026-09-16-direction-and-sequencing.md`: F4 → F3 → F5);
 implementation plans follow this spec (§11). Two plans; F3 may start after
 plan 1.

@@ -449,6 +449,11 @@ automated signal in this repo can reach.
 - [ ] Drive the Release editor (`--project ReferenceProject`): the mesh renders,
       depth-sorts correctly when the camera orbits, and the four bindless cubes
       show four distinct textures.
+      (2026-09-17: the editor-side items this checkpoint could not perform when
+      it was written -- orbit a cube, click-select a mesh in perspective, move
+      it along X with the gizmo -- are performable since F4 and are booked at
+      spec `docs/specs/2026-09-17-f4-editor-3d-authoring-design.md` §9's desk
+      pass; run them there.)
 - [ ] Confirm the 2D path is untouched — sprites, the selection outline in Edit
       **and** Play, and the game UI in Play all still composite.
 - [ ] Confirm all 12 runtime goldens still compare at maxDelta 0. **A 3D slice
