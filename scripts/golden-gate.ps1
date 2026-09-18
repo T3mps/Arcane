@@ -8,11 +8,13 @@
 # it is the gate that covers what an agent actually runs. Do not let a green
 # [gpu][golden] Catch2 run stand in for a green run of this script.
 #
-# Four combinations, no --bless:
+# Six combinations, no --bless:
 #   ArcaneRuntime --backend dx12    --compare runtime-scene
 #   ArcaneRuntime --backend vulkan  --compare runtime-scene
 #   ArcaneEditor  --backend dx12    --compare editor-ui
 #   ArcaneEditor  --backend vulkan  --compare editor-ui
+#   ArcaneEditor  --backend dx12    --compare editor-ui-perspective  --view-mode perspective
+#   ArcaneEditor  --backend vulkan  --compare editor-ui-perspective  --view-mode perspective
 #
 # THE VERDICT IS `exitReason` OUT OF THE REPORT JSON, NEVER THE RAW PROCESS
 # EXIT CODE ALONE (ArcaneEditor/src/main.cpp's own exit-code table names the
@@ -42,11 +44,11 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Release
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -SelfTest
-#       Prove the gate can FAIL: break the scene, assert all four lanes go red,
+#       Prove the gate can FAIL: break the scene, assert all six lanes go red,
 #       restore. The ONE mode that writes to the tree -- Content/ only, never
 #       Verify/, never a bless. The mutation-to-restore window is a single
 #       try/finally (opened where the staging loop below begins) that covers
-#       restaging, all four host launches, and any crash or Ctrl-C in
+#       restaging, all six host launches, and any crash or Ctrl-C in
 #       between -- not just the tail after the lanes finish -- so the restore
 #       genuinely runs on every exit path out of that window, not only the
 #       happy one. Writes its verdict to golden-gate-selftest-summary.json
@@ -61,7 +63,7 @@
 #       automation-vocabulary.txt beside the exe, then diffs that against
 #       $script:VerdictNames / $script:ReportSchemaMin / $script:ReportSchemaMax
 #       below. A missing ArcaneTests.exe FAILS the self-test rather than
-#       warning past it -- by that point this mode has already launched four
+#       warning past it -- by that point this mode has already launched six
 #       hosts out of the same bin/<Config>/ tree, so its absence means the
 #       build is incomplete, not that the check does not apply.
 #
@@ -156,7 +158,7 @@
 # Exit 0 iff every HARD-GATING comparison resolves to a confirmed PASS. Exit 1
 # otherwise (a genuine mismatch, a missing/undecodable reference, or a run
 # whose outcome could not be determined at all). -SelfTest INVERTS this: it
-# exits 0 iff all four lanes launched and went FAIL as expected (see its own
+# exits 0 iff all six lanes launched and went FAIL as expected (see its own
 # exit block).
 #
 # Windows PowerShell 5.1 compatible.
@@ -164,8 +166,8 @@
 param(
     [string]$Configuration = 'Debug',
     # SELF-TEST: prove this gate is CAPABLE OF FAILING. A gate never observed
-    # failing is not a gate. Mutates ReferenceProject's scene, runs the four
-    # lanes, and asserts ALL FOUR go FAIL -- then restores. This is the ONE
+    # failing is not a gate. Mutates ReferenceProject's scene, runs the six
+    # lanes, and asserts ALL SIX go FAIL -- then restores. This is the ONE
     # mode in which this script writes to the tree; it touches Content/ only,
     # never Verify/, never blesses, and restores in a finally block so an
     # error or a Ctrl-C still leaves the tree clean.
@@ -298,17 +300,27 @@ function Exit-GateRefusal {
 #                          Errored branch's own comment.
 #     Passed            -- the ordinary green run
 #
-# ---- The four combinations. ----
+# ---- The six combinations. ----
 # ExpectedLevel: which reference this lane is SUPPOSED to resolve against.
 # Nothing in the report can infer this -- a resolvedLevel of "shared" looks
 # identical whether that was the design or an oversight -- so it is declared
 # here and compared in the verdict block below. A lane declaring "shared" and
 # resolving "shared" is a plain Passed, not PassedOnFallback.
+# ExtraArgs: extra CLI args appended after --compare and before the host is
+# launched (see the $exeArgs block below) -- how the perspective lanes below
+# ask for --view-mode perspective without every other lane having to declare
+# an empty axis it does not use.
 $combos = @(
-    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'dx12';   ExpectedLevel = 'backend' }
-    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'vulkan'; ExpectedLevel = 'backend' }
-    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'dx12';   ExpectedLevel = 'shared'  }
-    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'vulkan'; ExpectedLevel = 'shared'  }
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'dx12';   ExpectedLevel = 'backend'; ExtraArgs = @() }
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'vulkan'; ExpectedLevel = 'backend'; ExtraArgs = @() }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'dx12';   ExpectedLevel = 'shared';  ExtraArgs = @() }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'vulkan'; ExpectedLevel = 'shared';  ExtraArgs = @() }
+    # The perspective editor lane (F4 plan 1's witness E2, promoted to the gate
+    # by plan 2). Keyed by BACKEND like every other lane and never by build
+    # config -- UE keys screenshot references by Platform/RHI (Ruling P,
+    # docs/plans/2026-09-17-f4-plan1-rulings-ue-check.md).
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective') }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective') }
 )
 
 # THE VERDICT VOCABULARY. This literal set is the PowerShell half of a contract
@@ -548,7 +560,7 @@ if ($SelfTest) {
 #      the fix for the review finding that the mode's OWN header claimed
 #      "always restored in a finally" while the actual try opened 292 lines
 #      after the mutation, leaving the two restaging failures below, the
-#      Remove-Item/Copy-Item restaging itself, and all four
+#      Remove-Item/Copy-Item restaging itself, and all six
 #      Start-Process -Wait host launches -- the mode's entire wall clock --
 #      completely unprotected. When -SelfTest is set, the mutation now
 #      happens as the FIRST statement inside this try, so a hung host, a
@@ -641,7 +653,7 @@ try {
         #      to say "hosts do not consume artifacts yet, so there is nothing here for a
         #      missing source to silently break" -- false since Task 8's sprite cutover
         #      made content ARTIFACT-ONLY. An empty staged Artifacts tree now means every
-        #      content texture on all four lanes hits ArtifactMissing: ArcaneRuntime exits
+        #      content texture on all six lanes hits ArtifactMissing: ArcaneRuntime exits
         #      nonzero at the first refused texture (Task 6/8's refuse-never-limp
         #      contract) and the editor lane's captures fail loudly too -- a HARD LANE
         #      FAILURE, by design, not a silent nothing. This block's own tolerance is
@@ -818,14 +830,17 @@ try {
 
         # Report/stderr land in the exe's own Saved/ (project-gitignored, so a
         # local run never leaves a tracked artifact behind) and are named per
-        # combo so four runs in the same exe dir never clobber each other.
+        # combo so six runs in the same exe dir never clobber each other --
+        # $hostName-$backend ALONE stopped being a unique combo key the moment
+        # ArcaneEditor grew a second reference (editor-ui-perspective) on the
+        # same backend, so $reference joins the filename too.
         $savedVerifyDir = Join-Path $exeDir 'ReferenceProject\Saved\Verify'
         if (-not (Test-Path $savedVerifyDir)) {
             New-Item -ItemType Directory -Path $savedVerifyDir -Force | Out-Null
         }
-        $reportPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-report.json"
-        $stderrPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-stderr.txt"
-        $stdoutPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-stdout.txt"
+        $reportPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-$reference-report.json"
+        $stderrPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-$reference-stderr.txt"
+        $stdoutPath = Join-Path $savedVerifyDir "golden-gate-$hostName-$backend-$reference-stdout.txt"
         if (Test-Path $reportPath) { Remove-Item $reportPath -Force }
 
         # The STALE DIFF goes too, for the same reason the stale report does, and
@@ -850,6 +865,10 @@ try {
             # source-tree edit made before any host launches, and is restored
             # before this script exits -- it is not a --bless.)
         )
+        # Per-lane extras (e.g. the perspective editor lanes' --view-mode
+        # perspective), appended after --compare and before the host is
+        # launched -- an empty array for every lane that does not need one.
+        $exeArgs += $combo.ExtraArgs
 
         # Run from the exe's OWN directory: plugin DLLs, shaders and
         # ReferenceProject/ are all staged relative to it (launch.ps1's own
@@ -1265,7 +1284,7 @@ Write-GateSummaryFile -GatePassed $gatePassed -RefusalReason '' -Lanes @($result
 # ---- -SelfTest: every lane must have NOTICED. ----
 # R11: this block sits HERE -- after the summary is written above, before the
 # ordinary gatePassed check below -- and nowhere else. In -SelfTest mode all
-# four lanes FAIL by design, so an ordinary run would already have exited red;
+# six lanes FAIL by design, so an ordinary run would already have exited red;
 # placing this block after those exit paths would make it dead code that never
 # asserts anything. Placing it inside Write-GateSummaryFile's own try is worse:
 # that catch exists specifically to stop summary I/O from deciding the verdict,
@@ -1275,7 +1294,7 @@ Write-GateSummaryFile -GatePassed $gatePassed -RefusalReason '' -Lanes @($result
 # #1) -- it now happens in the finally around the staging+host-launch block
 # above, which protects the WHOLE mutation-to-restore window instead of just
 # this tail. By the time this block runs, main.arcscene is ALREADY back to
-# its committed state; this block only grades what the four lanes reported.
+# its committed state; this block only grades what the six lanes reported.
 if ($SelfTest) {
     # Review pass 2026-08-31, Important #2: the old umbrella 'FAIL' covered
     # things that did NOT mean "the gate noticed a broken render." The verdict
@@ -1317,7 +1336,7 @@ if ($SelfTest) {
     $vocabFile    = Join-Path $probeDir 'automation-vocabulary.txt'
     if (-not (Test-Path $verdictProbe)) {
         # A MISSING SUITE IS A FAILURE, NOT AN EXEMPTION. By this point
-        # -SelfTest has already launched four hosts out of this same
+        # -SelfTest has already launched six hosts out of this same
         # bin/$configDirName/ tree, so ArcaneTests.exe missing from it means the
         # BUILD IS INCOMPLETE -- not that the check does not apply here. This
         # used to print a yellow warning and leave $vocabOk true, so
