@@ -81,6 +81,40 @@ TEST_CASE("BoundsSystem: a resolved mesh gets its local box through the world ma
     CHECK(b->box.max == glm::vec3(11, 1, 1));
 }
 
+TEST_CASE("BoundsSystem: an entity carrying BOTH renderers gets the UNION of the mesh box and the sprite box", "[bounds]")
+{
+    // Review round 1: the sprite and mesh passes each draw their own row without
+    // excluding the other, so a both-renderer entity paints both, and a box that
+    // covered the mesh alone would let the visible set cull the sprite half.
+    // Geometry chosen so each drawable pokes out of the other: a 0.5 m cube
+    // (local [-0.25, 0.25]^3) is thinner than the 1x1 m unresolved sprite in X/Y,
+    // and the sprite's epsilon-thin Z is inside the cube's.
+    World w;
+    const Arcane::Guid small = Arcane::Guid::Generate();
+    Arcane::MeshEntry entry;
+    entry.data   = Arcane::BuildCube(0.5f);
+    entry.bounds = Arcane::ComputeMeshBounds(entry.data);
+    w.meshes.emplace(small, entry);
+
+    Astra::Entity e = w.Spawn(glm::vec3(10, 0, 0));
+    w.reg.AddComponent<Arcane::MeshRenderer>(e, Arcane::MeshRenderer{ small, {} });
+    Arcane::SpriteRenderer s; s.shape = Arcane::SpriteShape::Rect;   // unresolved: 1x1 m, centre pivot
+    w.reg.AddComponent<Arcane::SpriteRenderer>(e, s);
+    w.Tick();
+
+    const Arcane::WorldBounds* b = std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e);
+    REQUIRE(b);
+    // mesh:   [9.75, 10.25] x [-0.25, 0.25] x [-0.25, 0.25]
+    // sprite: [9.5 - eps, 10.5 + eps] x [-0.5 - eps, 0.5 + eps] x [-eps, +eps]
+    const float eps = Arcane::kSpriteDepthEpsilon;
+    CHECK(b->box.min.x == Catch::Approx(9.5f - eps));    // sprite wins X
+    CHECK(b->box.max.x == Catch::Approx(10.5f + eps));
+    CHECK(b->box.min.y == Catch::Approx(-0.5f - eps));   // sprite wins Y
+    CHECK(b->box.max.y == Catch::Approx(0.5f + eps));
+    CHECK(b->box.min.z == Catch::Approx(-0.25f));        // mesh wins Z
+    CHECK(b->box.max.z == Catch::Approx(0.25f));
+}
+
 TEST_CASE("BoundsSystem: an unresolved mesh gets NO WorldBounds", "[bounds]")
 {
     World w;

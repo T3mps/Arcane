@@ -52,16 +52,28 @@ namespace Arcane
                               Astra::Writes<WorldBounds>,
                               Astra::After<TransformPropagationSystem>>
     {
-        // The one rule for a drawable's local box; nullopt = not drawable.
+        // The one rule for a drawable's world box; nullopt = not drawable.
+        //
+        // The box covers EVERYTHING the entity paints. The sprite pass draws any
+        // <WorldTransform, SpriteRenderer> row and the mesh pass any
+        // <WorldTransform, MeshRenderer> row (neither excludes the other), so an
+        // entity carrying both renderers draws both, and its box is the UNION of
+        // the mesh box and the sprite box (review round 1). "Mesh beats sprite"
+        // is the PICK rule -- which drawable to report for a hit -- not a
+        // coverage rule; a visible set or GPU row culled on a mesh-only box
+        // would drop the sprite half wrongly. An unresolved mesh contributes
+        // nothing (it draws nothing), so mesh-only-and-unresolved is still
+        // nullopt and mesh-unresolved-plus-sprite is the sprite box alone.
         [[nodiscard]] static std::optional<Aabb> WorldBoxFor(const Astra::Registry& reg, Astra::Entity e,
                                                              const WorldTransform& world,
                                                              const MeshTable* meshes, const SpriteTable* sprites)
         {
+            std::optional<Aabb> box;
             if (const MeshRenderer* mr = reg.GetComponent<MeshRenderer>(e))
             {
                 const MeshEntry* entry = meshes ? meshes->Resolve(mr->mesh) : nullptr;
                 if (entry)
-                    return entry->bounds.Transformed(world.matrix);   // mesh beats sprite (the pick rule)
+                    box = entry->bounds.Transformed(world.matrix);
             }
             if (const SpriteRenderer* sr = reg.GetComponent<SpriteRenderer>(e))
             {
@@ -70,9 +82,10 @@ namespace Arcane
                 const SpriteQuad q = SpriteWorldQuad(world.matrix,
                                                      entry ? entry->sizeMeters : glm::vec2(1.0f),
                                                      entry ? entry->pivot      : glm::vec2(0.5f));
-                return Aabb::FromPoints(q.corners).Widened(kSpriteDepthEpsilon);
+                const Aabb sprite = Aabb::FromPoints(q.corners).Widened(kSpriteDepthEpsilon);
+                box = box ? box->Union(sprite) : sprite;
             }
-            return std::nullopt;
+            return box;
         }
 
         void operator()(Astra::Registry& reg)
