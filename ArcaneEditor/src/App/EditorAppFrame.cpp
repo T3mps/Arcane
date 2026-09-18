@@ -3533,12 +3533,15 @@ namespace Arcane::Editor
         // A click in ANY view mode arms the pick: the id pass projects world
         // drawables through FrameDesc::pickView (plan 2), so plan 1's fifth
         // guard (no click-pick without a 2D affine) is gone. ONE modifier
-        // rule survives it: in Perspective an Alt+LMB press is the ORBIT
-        // gesture (UpdateEditorCamera tests Alt+LMB first there) and must
-        // never arm a click-pick -- an orbit press over background would
-        // land as "background" and clear the selection. In the 2D view
-        // Alt+click stays the cycle-pick modifier, as today.
-        const bool orbitPress = fs.vp.altHeld && m_camera.mode == Arcane::Editor::ViewMode::Perspective;
+        // rule survives it: in EDIT mode's Perspective view an Alt+LMB press
+        // is the ORBIT gesture (UpdateEditorCamera tests Alt+LMB first there,
+        // under its own !InPlayMode() gate) and must never arm a click-pick
+        // -- an orbit press over background would land as "background" and
+        // clear the selection. In the 2D view, and in PLAY (where the scene
+        // camera drives and there is no orbit), Alt+click stays the
+        // cycle-pick modifier, as today.
+        const bool orbitPress = !InPlayMode() && fs.vp.altHeld
+                             && m_camera.mode == Arcane::Editor::ViewMode::Perspective;
         if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims
             && !orbitPress)
         {

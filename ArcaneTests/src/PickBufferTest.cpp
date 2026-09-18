@@ -216,10 +216,20 @@ TEST_CASE("CollectPickables emits sprites as WORLD quads from SpriteWorldQuad, c
     const Astra::Entity sprite = AddSprite(*reg, glm::vec3(3.0f, 1.0f, 0.5f),
                                            Arcane::RotationAboutZ(0.7f), glm::vec3(-1.5f, 1.0f, 1.0f));
     const Astra::Entity body   = AddCircleCollider(*reg, glm::vec2(-2.0f, 4.0f), /*radius=*/0.5f);
+    // The body has a Transform but no WorldTransform (the fixture runs no
+    // propagation), so its silhouette z is the emitter's 0 FALLBACK. A second
+    // body carries a WorldTransform lifted to z = 0.7 -- the branch that reads
+    // the translation column, built the way the sprite helper builds one.
+    const Astra::Entity lifted = AddCircleCollider(*reg, glm::vec2(1.0f, 1.0f), /*radius=*/0.25f);
+    {
+        Arcane::Transform lt;
+        lt.position = glm::vec3(1.0f, 1.0f, 0.7f);
+        reg->AddComponent<Arcane::WorldTransform>(lifted, Arcane::WorldTransform{ lt.ToMatrix() });
+    }
 
     std::vector<Arcane::PickDrawable> out;
     Arcane::CollectPickables(*reg, out);
-    REQUIRE(out.size() == 2);
+    REQUIRE(out.size() == 3);
 
     // 1. The sprite: kind Quad, corners == SpriteWorldQuad(world, base size, pivot).
     CHECK(out[0].entity == sprite);
@@ -230,14 +240,29 @@ TEST_CASE("CollectPickables emits sprites as WORLD quads from SpriteWorldQuad, c
         for (int c = 0; c < 3; ++c)
             CHECK_THAT(out[0].corners[i][c], WithinAbs(expected.corners[i][c], 1e-5f));
 
-    // 2. The collider: a world-space circle at the body's pose, in METRES, no
-    //    projection anywhere (the id pass projects).
-    CHECK(out[1].entity == body);
-    CHECK(out[1].kind == Arcane::PickDrawable::Kind::Circle);
-    CHECK_THAT(out[1].center.x, WithinAbs(-2.0f, 1e-5f));
-    CHECK_THAT(out[1].center.y, WithinAbs(4.0f, 1e-5f));
-    CHECK_THAT(out[1].center.z, WithinAbs(0.0f, 1e-5f));   // the entity's world z (its Transform is planar)
-    CHECK_THAT(out[1].radius,   WithinAbs(0.5f, 1e-5f));
+    // 2. The colliders: world-space circles at the body's pose, in METRES, no
+    //    projection anywhere (the id pass projects). Archetype order between
+    //    the two bodies is not asserted: find each by entity.
+    const auto find = [&](Astra::Entity e) -> const Arcane::PickDrawable&
+    {
+        for (const auto& d : out)
+            if (d.entity == e) return d;
+        FAIL("drawable missing");
+        return out[0];
+    };
+    const Arcane::PickDrawable& dBody = find(body);
+    CHECK(dBody.kind == Arcane::PickDrawable::Kind::Circle);
+    CHECK_THAT(dBody.center.x, WithinAbs(-2.0f, 1e-5f));
+    CHECK_THAT(dBody.center.y, WithinAbs(4.0f, 1e-5f));
+    CHECK_THAT(dBody.center.z, WithinAbs(0.0f, 1e-5f));   // no WorldTransform: the 0 fallback
+    CHECK_THAT(dBody.radius,   WithinAbs(0.5f, 1e-5f));
+
+    const Arcane::PickDrawable& dLifted = find(lifted);
+    CHECK(dLifted.kind == Arcane::PickDrawable::Kind::Circle);
+    CHECK_THAT(dLifted.center.x, WithinAbs(1.0f, 1e-5f));
+    CHECK_THAT(dLifted.center.y, WithinAbs(1.0f, 1e-5f));
+    CHECK_THAT(dLifted.center.z, WithinAbs(0.7f, 1e-5f));   // the WorldTransform's translation z
+    CHECK_THAT(dLifted.radius,   WithinAbs(0.25f, 1e-5f));
 }
 
 TEST_CASE("CollectPickables: a MeshRenderer entity emits ONE Mesh drawable carrying its world matrix and guid, after sprites and colliders", "[pick]")
