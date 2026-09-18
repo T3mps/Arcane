@@ -2114,27 +2114,19 @@ namespace Arcane::Editor
         // mouse happens to be. See the predicate's own comment.
         const bool hoverLive = HoverLive();
         // PHASE 12'S GATE, VERBATIM: Edit mode, and something to outline
-        // (a selection, or a cursor in the viewport that might hover one)
-        // -- AND a view with a 2D affine (F4 plan 1 T7): the id pass is fed
-        // through ViewTransform::AsAffine2D() (T3), which a perspective view
-        // does not have, so in Perspective there is nothing to outline and the
-        // chain is not armed for it. GizmoToolsEnabled() is that predicate.
-        // Plan 2 (mesh picking through the full ViewTransform) lifts this.
-        const bool wantOutline = !InPlayMode() && GizmoToolsEnabled()
-                              && (m_selection.HasSelection() || hoverLive);
+        // (a selection, or a cursor in the viewport that might hover one).
+        // In EVERY view mode (F4 plan 2): the id pass projects world-space
+        // drawables through FrameDesc::pickView, so a perspective view
+        // outlines and picks exactly as the 2D one does -- plan 1's
+        // AsAffine2D gate on this predicate is lifted.
+        const bool wantOutline = !InPlayMode() && (m_selection.HasSelection() || hoverLive);
         // ...and phase 17's: a click whose readback has not landed keeps the
         // chain declared even when nothing wants an outline, because the
         // readback node is the only thing that DRAINS the slot its copy went
         // into. Dropping the chain mid-flight would strand that slot's pending
         // flag until the chain happened to come back. DeferredPick::Busy() is
         // true from the click until the answer lands or is abandoned, which is
-        // exactly the window this needs. NOT additionally gated on the affine
-        // (unlike wantOutline): a request cannot START without one -- the ARM
-        // site in HandleViewportPick refuses a click in Perspective -- and a
-        // readback already in flight when the mode flips must still be
-        // drained, or that slot's pending flag is stranded exactly as this
-        // comment warns. It lands against the 2D table it was rasterised
-        // with, which is still the honest answer to the click it was.
+        // exactly the window this needs.
         const bool wantPick = m_deferredPick.Busy();
         // NOTE THE ASYMMETRY WITH THE ENGINE: RgFrameShape::pickOutline is
         // deliberately independent of how the scene is sliced, because the
@@ -2180,6 +2172,9 @@ namespace Arcane::Editor
 
         vp.pickOutline = true;
         vp.pickables   = m_pickDrawables;
+        // The same ViewTransform the sprites, the mesh pass and the gizmo just
+        // used -- Edit: the editor camera; Play: the scene camera SetView pushed.
+        vp.pickView    = m_runtime->View();
         vp.selectedIds = m_pickSelectedIds;
         // The HOVER cursor: the viewport-local pointer when it is over the
         // viewport, and the (-1,-1) "no hover" sentinel otherwise -- including
@@ -3535,14 +3530,10 @@ namespace Arcane::Editor
         // the older one's copy is dropped on arrival by its stale ticket.
         // The scene epoch and play mode recorded here describe the scene
         // the USER clicked on, which is what the landing compares against.
-        // A FIFTH guard (F4 plan 1 T7): no click-pick without a 2D affine.
-        // In Perspective the id pass has no view to register its silhouettes
-        // through (CollectPickables is affine-gated, so the table would be
-        // EMPTY), and a request armed against an empty table would land as
-        // "background" and clear the selection on every Alt+LMB orbit press.
-        // Plan 2 lifts this with mesh picking through the full ViewTransform.
-        if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims
-            && GizmoToolsEnabled())
+        // A click in ANY view mode arms the pick: the id pass projects world
+        // drawables through FrameDesc::pickView (plan 2), so plan 1's fifth
+        // guard (no click-pick without a 2D affine) is gone.
+        if (fs.vp.clicked && !m_gizmoCapturedClick && !m_gizmoDrag.active && !fs.gameUiClaims)
         {
             m_deferredPick.Arm(glm::ivec2((int)fs.vp.clickLocalX, (int)fs.vp.clickLocalY),
                                fs.vp.ctrlHeld, m_sceneEpoch, InPlayMode());

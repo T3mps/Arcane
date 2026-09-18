@@ -233,6 +233,7 @@
 #include <Arcane/Render/Nri/NriTextureCache.hpp>
 #include <Arcane/Render/Nri/NriUploadRing.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>       // FrameDesc::pickView (held by value)
 // The node types are held BY VALUE-OWNING unique_ptr below, and this class is
 // dllexported -- so every TU that sees this header must see complete node
 // types (MSVC instantiates the exported class's implicit members). Including
@@ -440,11 +441,11 @@ namespace Arcane
             const GlobalParams* globals = nullptr;
 
             // ---- the pick + outline chain (Task 11) ---------------------
-            // THIS FRAME'S PICKABLE SILHOUETTES, already projected to canvas
-            // pixels by CollectPickables (Render/PickEmit.hpp) -- the k-th
-            // entry IS hit-proxy id k+1. Collected by the FRAME DRIVER, which
-            // is the thing that owns a registry and a camera; this class must
-            // not grow either (it is a RENDER vehicle, the same reasoning
+            // THIS FRAME'S PICKABLE SILHOUETTES, in WORLD space, from
+            // CollectPickables (Render/PickEmit.hpp) -- the k-th entry IS
+            // hit-proxy id k+1. Collected by the FRAME DRIVER, which is the
+            // thing that owns a registry and a camera; this class must not
+            // grow either (it is a RENDER vehicle, the same reasoning
             // AssetResolveFn carries). Borrowed for the duration of the
             // RenderFrame call and never stored.
             //
@@ -453,6 +454,15 @@ namespace Arcane
             // simply produces an all-zero id target -- which is exactly what
             // a probe over empty space must read back.
             std::span<const PickDrawable> pickables;
+
+            // THE VIEW THE ID PASS PROJECTS THROUGH (F4 plan 2). The drawables are
+            // WORLD-space now, so the pass needs the same ViewTransform the scene
+            // render just used -- the editor's camera in Edit, the scene camera in
+            // Play. Copied, not borrowed (136 bytes; read at declaration time by
+            // PrepareDrawables). A default-constructed view (zero viewport)
+            // rasterises nothing, which is what a frame that armed the chain
+            // without a view must read back: background.
+            ViewTransform pickView{};
 
             // The hit-proxy ids the outline traces as ONE silhouette (their
             // union). Task 11's driver scripted this to the scene's first
@@ -483,8 +493,8 @@ namespace Arcane
             // when a click has to be resolved, and pointing the readback at the
             // cursor every frame would answer a question nobody asked.
             //
-            // Canvas pixels, y down -- the same space PickView projects into
-            // and the same one PickBuffer::Pick takes. (-1, -1) is the
+            // Canvas pixels, y down -- the space the id pass's ViewTransform
+            // (pickView) lands its drawables in. (-1, -1) is the
             // "no hover" convention the outline seed already understands.
             std::optional<glm::ivec2> pickPixel;    // the readback's texel
             std::optional<glm::ivec2> hoverPixel;   // the outline seed's cursor
@@ -997,6 +1007,10 @@ namespace Arcane
         { return m_currentPickables; }
         [[nodiscard]] std::span<const std::uint32_t> CurrentSelectedIds() const noexcept
         { return m_currentSelectedIds; }
+        // FrameDesc::pickView, by VALUE like the globals -- the view the pick
+        // declarator hands PickNode::PrepareDrawables beside CurrentPickables().
+        [[nodiscard]] const ViewTransform& CurrentPickView() const noexcept
+        { return m_currentPickView; }
 
         // The --pick-probe pixel, in canvas px (y down) -- the CONFIG's, fixed
         // at Create. On a probe run it doubles as the outline shader's HOVER
@@ -1460,6 +1474,9 @@ namespace Arcane
         // Reading either of these from an exec fn would read an empty span.
         std::span<const PickDrawable>  m_currentPickables;
         std::span<const std::uint32_t> m_currentSelectedIds;
+        // FrameDesc::pickView, copied beside the two spans (a value, so there
+        // is nothing to clear -- a later frame overwrites it).
+        ViewTransform                  m_currentPickView{};
 
         // FrameDesc::imgui, published for the whole of one RenderFrame call
         // (declaration AND execution) and re-published -- possibly as null --
@@ -1679,6 +1696,7 @@ namespace Arcane
         // The pick + outline chain's handles (Task 11). All invalid, and
         // jfaStepCount 0, on a frame that did not declare it.
         RgTexture     pickIds{};        // the R32_UINT entity-id transient, at kPickSupersample x
+        RgTexture     pickDepth{};      // the id pass's OWN D32 transient (F4 plan 2), same extent
         RgBuffer      pickReadback{};   // the imported HOST_READBACK staging buffer
         RgTexture     outlineField{};   // the LAST JFA target -- what the composite sampled
         // Thickness-derived, so it is the SAME on every surface size (D3c) --

@@ -881,12 +881,14 @@ namespace Arcane::Editor
         [[nodiscard]] bool GizmoLive() const noexcept
         { return m_gizmoEnabled && GizmoToolsEnabled(); }
 
-        // Whether the transform-gizmo tools (Move/Rotate/Scale) and the
-        // click-pick can operate on the CURRENT view: true iff the pushed
-        // ViewTransform has a 2D affine (the Ortho2D view). Perspective =>
-        // false until plan 2 gives the gizmo and the id pass the full
-        // ViewTransform. Reads the runtime's view rather than m_camera.mode
-        // so it is exactly the predicate every affine-gated site tests.
+        // Whether the transform-gizmo tools (Move/Rotate/Scale) can operate
+        // on the CURRENT view: true iff the pushed ViewTransform has a 2D
+        // affine (the Ortho2D view). Perspective => false until plan 2's
+        // Task 3 gives the gizmo the full ViewTransform. The click-pick and
+        // the outline no longer read this (plan 2 Task 1: the id pass
+        // projects through FrameDesc::pickView in every view mode). Reads the
+        // runtime's view rather than m_camera.mode so it is exactly the
+        // predicate every affine-gated gizmo site tests.
         [[nodiscard]] bool GizmoToolsEnabled() const noexcept
         { return m_runtime && m_runtime->View().AsAffine2D().has_value(); }
 

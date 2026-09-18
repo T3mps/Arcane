@@ -454,10 +454,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // registry and a camera -- NriGraphContext is a render vehicle and
     // must not grow either.
     //
-    // The view is the SCENE camera PushSceneCamera just installed, so
-    // the id pass rasterises the same silhouettes the batch node drew.
-    // They cannot disagree even in principle: both are fitted to
-    // frameWidth/frameHeight above, which IS the vehicle's own surface
+    // The view handed over (pickView) is the SCENE camera PushSceneCamera
+    // just installed, so the id pass projects the same world silhouettes the
+    // batch node drew. They cannot disagree even in principle: both are fitted
+    // to frameWidth/frameHeight above, which IS the vehicle's own surface
     // extent (FrameExtent -- the swapchain's, or the offscreen output's).
     // In practice this block is windowed-only regardless: --pick-probe is
     // refused at parse time alongside --headless (HostConfig.cpp), because
@@ -477,6 +477,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 
         graphFrame.pickOutline = true;
         graphFrame.pickables   = io.pickDrawables;
+        graphFrame.pickView    = io.runtime->View();
         graphFrame.selectedIds = io.pickSelectedIds;
     }
 #endif
@@ -516,6 +517,7 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
 
             graphFrame.pickOutline = true;
             graphFrame.pickables   = io.pickDrawables;
+            graphFrame.pickView    = io.runtime->View();   // the scene camera, as above
             graphFrame.pickPixel   = glm::ivec2(pickSpec->x, pickSpec->y);
             // selectedIds left empty (default): this probe reports FACTS, not
             // a visible outline -- a --screenshot cross-check must show the

@@ -1451,6 +1451,7 @@ namespace Arcane
             const RgPickHandles pick = AddPickNodes(graph, context,
                                                      shape.canvasWidth, shape.canvasHeight);
             handles.pickIds      = pick.ids;
+            handles.pickDepth    = pick.depth;
             handles.pickReadback = pick.readback;
             handles.outlineField = AddOutlineNodes(graph, context, pick.ids,
                                                     shape.canvasWidth, shape.canvasHeight);
@@ -1704,6 +1705,7 @@ namespace Arcane
         // frame's arena region at record time from the node's own storage.
         m_currentPickables   = effective.pickables;
         m_currentSelectedIds = effective.selectedIds;
+        m_currentPickView    = effective.pickView;
 
         // The HUD's draw data, published for the whole of THIS call rather
         // than only its declaration half -- the node's exec fn is what copies
@@ -1855,6 +1857,7 @@ namespace Arcane
         m_currentBatch       = effective.batch;
         m_currentPickables   = effective.pickables;
         m_currentSelectedIds = effective.selectedIds;
+        m_currentPickView    = effective.pickView;
         m_currentImGui       = effective.imgui;
         PublishFrameCoordinates(effective);
 

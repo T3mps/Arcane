@@ -5593,6 +5593,13 @@ TEST_CASE("nri graph frame: the pick + outline chain lands between the tonemap a
     CHECK(graph.IsTransient(handles.outlineField));
     CHECK(std::string(graph.NameOf(handles.pickIds)) == "pickids");
     CHECK(std::string(graph.NameOf(handles.pickReadback)) == "pickreadback");
+    // The id pass owns a DEPTH transient of its own (spec s7.1): meshes resolve
+    // among themselves by depth inside the pick pass, and NOT against the mesh
+    // node's depth -- that one belongs to the canvas, and the pick pass is
+    // supersampled anyway.
+    REQUIRE(graph.IsHandleValid(handles.pickDepth));
+    CHECK(graph.IsTransient(handles.pickDepth));
+    CHECK(std::string(graph.NameOf(handles.pickDepth)) == "pickdepth");
     // The field the composite sampled IS the last step's target, not the seed.
     CHECK(std::string(graph.NameOf(handles.outlineField))
           == "outlinejfa" + std::to_string(steps - 1));
@@ -5620,10 +5627,29 @@ TEST_CASE("nri graph frame: the pick chain's barriers are derived, including the
     constexpr nri::AccessLayoutStage kCopySrcState{
         nri::AccessBits::COPY_SOURCE, nri::Layout::COPY_SOURCE, nri::StageBits::COPY };
 
-    // Node 2 (pick): the id transient's pool slot -> colour attachment.
-    REQUIRE(compiled.nodes[2].preBarriers.size() == 1);
-    CHECK(compiled.nodes[2].preBarriers[0].isTexture);
-    CheckState(compiled.nodes[2].preBarriers[0].after, kColorState);
+    // Node 2 (pick): TWO pre-barriers -- the id transient's pool slot -> colour
+    // attachment, and the pass-local depth transient's -> depth write (F4 plan
+    // 2: the mesh half of the id pass is depth-tested against it).
+    REQUIRE(compiled.nodes[2].preBarriers.size() == 2);
+    bool sawIdWrite = false, sawDepthWrite = false;
+    for (const Arcane::RgBarrier& barrier : compiled.nodes[2].preBarriers)
+    {
+        REQUIRE(barrier.isTexture);
+        if (static_cast<std::uint32_t>(barrier.after.layout)
+            == static_cast<std::uint32_t>(nri::Layout::DEPTH_STENCIL_ATTACHMENT))
+        {
+            sawDepthWrite = true;
+            CheckState(barrier.after, nri::AccessBits::DEPTH_STENCIL_ATTACHMENT,
+                       nri::Layout::DEPTH_STENCIL_ATTACHMENT, nri::StageBits::DEPTH_STENCIL_ATTACHMENT);
+        }
+        else
+        {
+            sawIdWrite = true;
+            CheckState(barrier.after, kColorState);
+        }
+    }
+    CHECK(sawIdWrite);
+    CHECK(sawDepthWrite);
 
     // Node 3 (pickreadback): the id target becomes a copy SOURCE and the
     // IMPORTED staging buffer a copy DESTINATION. A buffer barrier's layout is
@@ -5727,12 +5753,13 @@ TEST_CASE("nri graph frame: the outline field ping-pongs through TWO pool slots 
     const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
     const Arcane::RgCompiled compiled = CompileOk(graph);
 
-    // canvas + pickids + outlineseed + N jfa targets.
-    REQUIRE(compiled.transients.size() == 3u + handles.jfaStepCount);
-    // ...in FOUR pool slots: the RGBA16F canvas, the R32_UINT id target (a
-    // different desc, so it can never share), and the two the whole SNORM field
-    // chain alternates through.
-    CHECK(compiled.poolSlotCount == 4);
+    // canvas + pickids + pickdepth + outlineseed + N jfa targets.
+    REQUIRE(compiled.transients.size() == 4u + handles.jfaStepCount);
+    // ...in FIVE pool slots: the RGBA16F canvas, the R32_UINT id target (a
+    // different desc, so it can never share), the id pass's own D32 depth (F4
+    // plan 2 -- a third desc), and the two the whole SNORM field chain
+    // alternates through.
+    CHECK(compiled.poolSlotCount == 5);
 
     // And the slot count is genuinely independent of the canvas -- a much
     // smaller one runs the SAME steps through the same two slots. The step
@@ -5748,7 +5775,7 @@ TEST_CASE("nri graph frame: the outline field ping-pongs through TWO pool slots 
         Arcane::DeclareGraphFrame(small, smallShape, nullptr);
     CHECK(smallHandles.jfaStepCount == handles.jfaStepCount);
     const Arcane::RgCompiled smallCompiled = CompileOk(small);
-    CHECK(smallCompiled.poolSlotCount == 4);
+    CHECK(smallCompiled.poolSlotCount == 5);
 }
 
 TEST_CASE("nri graph frame: a capture frame copies the backbuffer AFTER the outline composited "
@@ -5827,8 +5854,9 @@ TEST_CASE("nri graph frame: the pick + outline chain composes with a post chain"
     const Arcane::RgCompiled compiled = CompileOk(graph);
     // The two chains never share a slot, because their formats differ (RGBA16F
     // vs RGBA16_SNORM) and descsMatch is exact: 2 for the post ping-pong (the
-    // canvas hosts the even targets), 1 for the id target, 2 for the field.
-    CHECK(compiled.poolSlotCount == 5);
+    // canvas hosts the even targets), 1 for the id target, 1 for the id pass's
+    // own depth (F4 plan 2), 2 for the field.
+    CHECK(compiled.poolSlotCount == 6);
 }
 
 TEST_CASE("nri graph frame: the HUD node is absent unless the frame carries draw data", "[nri]")
@@ -6083,8 +6111,9 @@ TEST_CASE("nri graph frame: the HUD composes with the post chain and the outline
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
     // The HUD adds no pool slot however many chains are live: 2 for the post
-    // ping-pong, 1 for the id target, 2 for the outline field.
-    CHECK(compiled.poolSlotCount == 5);
+    // ping-pong, 1 for the id target, 1 for the id pass's depth (F4 plan 2),
+    // 2 for the outline field.
+    CHECK(compiled.poolSlotCount == 6);
     // Three consecutive ColorWrite declarations on the backbuffer (tonemap,
     // composite, HUD) still derive exactly one transition into it and one out
     // of it.
@@ -6186,9 +6215,9 @@ TEST_CASE("nri graph frame: the GAME UI node sits between the tonemap and the ou
         REQUIRE(compiled.exitBarriers.size() == 1);
         CheckState(compiled.exitBarriers[0].after, kPresentState);
         // The game HUD adds no pool slot -- its atlas is node-owned, not a
-        // graph transient. 1 for the canvas, 1 for the id target, 2 for the
-        // outline field's ping-pong.
-        CHECK(compiled.poolSlotCount == 4);
+        // graph transient. 1 for the canvas, 1 for the id target, 1 for the id
+        // pass's depth (F4 plan 2), 2 for the outline field's ping-pong.
+        CHECK(compiled.poolSlotCount == 5);
     }
 
     {

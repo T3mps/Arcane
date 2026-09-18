@@ -501,8 +501,29 @@ TEST_CASE("pixel: a QuadWorld quad and a screen Rect land in their own rectangle
 // ---------------------------------------------------------------------------
 namespace
 {
+    // A pixel-identity ORTHOGRAPHIC view over the vehicle's kW x kH canvas: world
+    // (x, y, 0) lands on pixel (x, kH - y). The pick cases below author their
+    // silhouettes in these units so the old canvas-pixel expectations read
+    // through unchanged: a quad "at pixel (40, 24)" is a world quad centred on
+    // (40, kH - 24).
+    Arcane::ViewTransform PixelIdentityView()
+    {
+        return Arcane::ViewTransform::Orthographic(glm::vec2(kW * 0.5f, kH * 0.5f), kH * 0.5f, { kW, kH });
+    }
+
+    Arcane::PickDrawable WorldQuadAtPixel(glm::vec2 pixelCentre, glm::vec2 halfPx)
+    {
+        Arcane::PickDrawable d;
+        d.kind = Arcane::PickDrawable::Kind::Quad;
+        const float cx = pixelCentre.x, cy = float(kH) - pixelCentre.y;
+        d.corners = { glm::vec3(cx - halfPx.x, cy + halfPx.y, 0.0f), glm::vec3(cx + halfPx.x, cy + halfPx.y, 0.0f),
+                      glm::vec3(cx + halfPx.x, cy - halfPx.y, 0.0f), glm::vec3(cx - halfPx.x, cy - halfPx.y, 0.0f) };
+        return d;
+    }
+
     // Renders the same pick frame repeatedly until the readback has had time to
-    // land, then returns what the probe read.
+    // land, then returns what the probe read. The drawables are WORLD-space
+    // (F4 plan 2) and the frame's pickView is what puts them on pixels.
     std::optional<std::uint32_t> ProbeAt(PixelVehicle& v,
                                          std::span<const Arcane::PickDrawable> drawables,
                                          glm::ivec2 pixel,
@@ -511,6 +532,7 @@ namespace
         Arcane::NriGraphContext::FrameDesc frame;
         frame.pickOutline = true;          // declares the pick node + readback + JFA chain
         frame.pickables   = drawables;
+        frame.pickView    = PixelIdentityView();
         frame.pickPixel   = pixel;
         frame.pickTicket  = ticket;
 
@@ -534,15 +556,8 @@ namespace
         nodes.pickOutline = true;
 
         // Two well-separated quads. Index 0 -> id 1, index 1 -> id 2.
-        Arcane::PickDrawable a;
-        a.kind    = Arcane::PickDrawable::Kind::Quad;
-        a.corners = { glm::vec3(24.0f, 14.0f, 0.0f), glm::vec3(56.0f, 14.0f, 0.0f),
-                      glm::vec3(56.0f, 34.0f, 0.0f), glm::vec3(24.0f, 34.0f, 0.0f) };
-
-        Arcane::PickDrawable b;
-        b.kind    = Arcane::PickDrawable::Kind::Quad;
-        b.corners = { glm::vec3(102.0f, 58.0f, 0.0f), glm::vec3(134.0f, 58.0f, 0.0f),
-                      glm::vec3(134.0f, 78.0f, 0.0f), glm::vec3(102.0f, 78.0f, 0.0f) };
+        const Arcane::PickDrawable a = WorldQuadAtPixel({ 40.0f, 24.0f }, { 16.0f, 10.0f });
+        const Arcane::PickDrawable b = WorldQuadAtPixel({ 118.0f, 68.0f }, { 16.0f, 10.0f });
 
         const Arcane::PickDrawable drawables[] = { a, b };
 
@@ -598,10 +613,7 @@ namespace
         Arcane::NriGraphContext::NodeSet nodes;
         nodes.pickOutline = true;
 
-        Arcane::PickDrawable a;
-        a.kind    = Arcane::PickDrawable::Kind::Quad;
-        a.corners = { glm::vec3(24.0f, 14.0f, 0.0f), glm::vec3(56.0f, 14.0f, 0.0f),
-                      glm::vec3(56.0f, 34.0f, 0.0f), glm::vec3(24.0f, 34.0f, 0.0f) };
+        const Arcane::PickDrawable a = WorldQuadAtPixel({ 40.0f, 24.0f }, { 16.0f, 10.0f });
         const Arcane::PickDrawable drawables[] = { a };
 
         PixelVehicle v = MakeVehicle(backend, nodes);
@@ -662,6 +674,7 @@ namespace
         frame.capture     = true;
         frame.pickOutline = true;
         frame.pickables   = drawables;
+        frame.pickView    = PixelIdentityView();
         frame.selectedIds = selected;
         // No hover: (-1,-1) is the "no hover" convention the outline seed
         // understands, so the ONLY thing that can produce an outline in these
@@ -705,10 +718,7 @@ namespace
         Arcane::NriGraphContext::NodeSet nodes;
         nodes.pickOutline = true;
 
-        Arcane::PickDrawable a;
-        a.kind    = Arcane::PickDrawable::Kind::Quad;
-        a.corners = { glm::vec3(40.0f, 26.0f, 0.0f), glm::vec3(80.0f, 26.0f, 0.0f),
-                      glm::vec3(80.0f, 54.0f, 0.0f), glm::vec3(40.0f, 54.0f, 0.0f) };
+        const Arcane::PickDrawable a = WorldQuadAtPixel({ 60.0f, 40.0f }, { 20.0f, 14.0f });
         const Arcane::PickDrawable drawables[] = { a };
 
         std::uint32_t w0 = 0, h0 = 0, w1 = 0, h1 = 0;
@@ -1100,6 +1110,82 @@ TEST_CASE("mesh: the nearer cube occludes the farther one whichever order they a
           "(vulkan)", "[gpu][pixel][mesh][nri][vulkan]")
 {
     CheckNearMeshOccludesFar(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// 8b. MESH PICKING (F4 plan 2, spec s7.1) -- the id pass's SECOND pipeline.
+//     Placed after the mesh cases because it borrows their supply helpers and
+//     their nested-cube geometry.
+// ---------------------------------------------------------------------------
+namespace
+{
+    // THE PROPERTY THIS PLAN EXISTS FOR: a mesh drawable rasterises into the id
+    // buffer through the frame's ViewTransform, depth-tested against the pick
+    // pass's OWN depth -- the nearer of two overlapping cubes wins the centre
+    // pixel whichever order they were emitted in, and a sprite quad under a
+    // mesh loses the pixel to it (the main pass's order, reproduced).
+    void CheckMeshPickThroughTheIdBuffer(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+        Arcane::NriGraphContext::NodeSet nodes;
+        nodes.pickOutline = true;
+
+        const Arcane::MeshData nearCube = Arcane::BuildCube(0.6f);
+        const Arcane::MeshData farCube  = Arcane::BuildCube(3.0f);
+        const Arcane::Guid nearId{ 1, 1 }, farId{ 2, 2 };
+
+        Arcane::ViewTransform view = Arcane::ViewTransform::Perspective(
+            glm::vec3(0.0f, 0.0f, kEyeZ), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f),
+            kFovYDegrees, { kW, kH }, kNearZ, kFarZ);
+
+        Arcane::PickDrawable nearD; nearD.kind = Arcane::PickDrawable::Kind::Mesh; nearD.mesh = nearId;
+        nearD.world = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        Arcane::PickDrawable farD;  farD.kind  = Arcane::PickDrawable::Kind::Mesh; farD.mesh  = farId;
+        farD.world  = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, -1.5f));
+        // A sprite quad covering the whole view at z = +2 (NEARER than both cubes):
+        // depth-off 2D drawables never occlude a mesh, by the pass's order rule.
+        Arcane::PickDrawable sprite; sprite.kind = Arcane::PickDrawable::Kind::Quad;
+        sprite.corners = { glm::vec3(-10, 10, 2), glm::vec3(10, 10, 2), glm::vec3(10, -10, 2), glm::vec3(-10, -10, 2) };
+
+        // Order 1: sprite(1), near(2), far(3). Order 2: sprite(1), far(2), near(3).
+        const Arcane::PickDrawable order1[] = { sprite, nearD, farD };
+        const Arcane::PickDrawable order2[] = { sprite, farD, nearD };
+
+        auto probe = [&](std::span<const Arcane::PickDrawable> drawables, glm::ivec2 pixel)
+        {
+            PixelVehicle v = MakeVehicle(backend, nodes);
+            v.ctx->SetMeshSupply(SupplyTwo(nearId, nearCube, farId, farCube));
+            Arcane::NriGraphContext::FrameDesc frame;
+            frame.pickOutline = true; frame.pickables = drawables; frame.pickPixel = pixel; frame.pickView = view;
+            for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight; ++i) RenderOne(*v.ctx, frame);
+            RenderOne(*v.ctx, frame);
+            const auto id = v.ctx->ProbeId();
+            REQUIRE(id.has_value());
+            return *id;
+        };
+
+        // The centre pixel is the NEAR cube in both orders -- depth, not order.
+        CHECK(probe(order1, glm::ivec2(kW / 2, kH / 2)) == 2u);
+        CHECK(probe(order2, glm::ivec2(kW / 2, kH / 2)) == 3u);
+        // x = 96 on the centre row is far-only (the mesh depth case's geometry).
+        CHECK(probe(order1, glm::ivec2(96, kH / 2)) == 3u);
+        // The corner is the SPRITE: no mesh there, and the sprite covers the view.
+        CHECK(probe(order1, glm::ivec2(4, 4)) == 1u);
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("pick: a mesh drawable rasterises depth-tested into the id buffer, over any 2D silhouette (d3d12)",
+          "[gpu][pixel][pick][nri][d3d12]")
+{
+    CheckMeshPickThroughTheIdBuffer(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("pick: a mesh drawable rasterises depth-tested into the id buffer, over any 2D silhouette (vulkan)",
+          "[gpu][pixel][pick][nri][vulkan]")
+{
+    CheckMeshPickThroughTheIdBuffer(Arcane::GraphicsBackend::Vulkan);
 }
 
 // ---------------------------------------------------------------------------

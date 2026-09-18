@@ -1,41 +1,51 @@
-// Entity-id (hit-proxy) pass: rasterize each pickable entity's BOUNDING QUAD
-// and, in the PS, discard fragments outside the analytic shape, writing the
-// drawable's 1-based uint id to an R32_UINT target (0 == background). Positions
-// arrive in canvas pixels (y-down); the push constant carries 2/viewport to
-// reach clip space (matches sprite.hlsl). NO tessellation -- circle/capsule
-// coverage is analytic in the PS (the v1-simplest option per the plan); a Quad
-// or Box drawable covers its whole bounding quad. Front-most wins by submission
-// order: PickBuffer draws back-to-front and the output merger is
-// primitive-ordered, so the last-drawn silhouette owns a contested pixel.
+// Entity-id (hit-proxy) pass, 2D half: rasterize each pickable silhouette's
+// BOUNDING QUAD and, in the PS, discard fragments outside the analytic shape,
+// writing the drawable's 1-based uint id to an R32_UINT target (0 == background).
+// NO tessellation -- circle/capsule coverage is analytic in the PS (the
+// v1-simplest option per the plan); a Quad or Box drawable covers its whole
+// bounding quad.
+//
+// Positions arrive in WORLD space (F4 plan 2); the root block carries the
+// frame's view-projection. local/radius/halfLen are METRES -- the analytic
+// coverage test below is unit-agnostic, so it is unchanged. The depth test is
+// OFF for this half (PickOutlineNodes.cpp): the 2D silhouettes resolve a
+// contested pixel by submission order (the output merger is primitive-ordered,
+// the drawables are emitted back to front), and the MESH half that follows
+// (entity_id_mesh.hlsl) is depth-tested against a cleared depth, so a mesh
+// always owns a pixel it shares with a sprite.
+//
+// MATRIX PACKING: float4x4 is COLUMN-MAJOR (dxc's default on both targets),
+// so glm's column-major mat4 uploads verbatim and mul(M, v) is the ordinary
+// M * v (mesh.hlsl's rule).
 //
 // Vertex inputs use DISTINCT custom semantics (POSITION / LOCAL / SHAPEPARAM /
-// KINDID), NOT TEXCOORD0/1/2: nvrhi uses the attribute name verbatim as the
-// D3D SemanticName at SemanticIndex 0 (it does not split trailing digits), and
-// assigns Vulkan input locations by declaration order -- so the C++ attribute
-// array order (PickBuffer.cpp) MUST match this struct's member order.
+// KINDID), NOT TEXCOORD0/1/2: the attribute name is used verbatim as the D3D
+// SemanticName at SemanticIndex 0, and Vulkan input locations are assigned by
+// declaration order -- so the C++ attribute array order (PickOutlineNodes.cpp)
+// MUST match this struct's member order.
 
 struct BatchConstants
 {
-    float2 invHalfViewport;   // 2.0 / (canvasW, canvasH)
-    float2 pad;
+    float4x4 viewProj;
+    float4   pad;        // 80 bytes total: the same block size as entity_id_mesh.hlsl's, ONE pipeline layout serves both
 };
 
 #if SPIRV
 [[vk::push_constant]] ConstantBuffer<BatchConstants> g_PC;
-#define g_invHalfViewport g_PC.invHalfViewport
+#define g_viewProj g_PC.viewProj
 #else
 cbuffer BatchConstantsCB : register(b0)
 {
     BatchConstants g_PCData;
 }
-#define g_invHalfViewport g_PCData.invHalfViewport
+#define g_viewProj g_PCData.viewProj
 #endif
 
 struct VSInput
 {
-    float2 pos   : POSITION;     // canvas px: the rotated bounding-quad corner
-    float2 local : LOCAL;        // shape-local coords (unrotated), canvas px
-    float2 rl    : SHAPEPARAM;   // (radius, halfLen), canvas px
+    float3 pos   : POSITION;     // WORLD-space corner of the bounding quad
+    float2 local : LOCAL;        // shape-local coords (unrotated), metres
+    float2 rl    : SHAPEPARAM;   // (radius, halfLen), metres
     uint2  ki    : KINDID;       // (kind, id): kind 0=Quad 1=Circle 2=Capsule 3=Box
 };
 
@@ -50,9 +60,7 @@ struct VSOutput
 VSOutput vs_main(VSInput input)
 {
     VSOutput output;
-    output.pos = float4(input.pos.x * g_invHalfViewport.x - 1.0,
-                        1.0 - input.pos.y * g_invHalfViewport.y,
-                        0.0, 1.0);
+    output.pos   = mul(g_viewProj, float4(input.pos, 1.0));
     output.local = input.local;
     output.rl    = input.rl;
     output.ki    = input.ki;

@@ -45,6 +45,9 @@ call :compile tonemap vs_main vs_6_5 tonemap_vs || exit /b 1
 call :compile tonemap ps_main ps_6_5 tonemap_ps || exit /b 1
 call :compile entity_id vs_main vs_6_5 entity_id_vs || exit /b 1
 call :compile entity_id ps_main ps_6_5 entity_id_ps || exit /b 1
+:: The id pass's MESH half (F4 plan 2, spec s7.1) -- MeshVertex in, id out, depth-tested inside the pick pass.
+call :compile entity_id_mesh vs_main vs_6_5 entity_id_mesh_vs || exit /b 1
+call :compile entity_id_mesh ps_main ps_6_5 entity_id_mesh_ps || exit /b 1
 call :compile outline_seed vs_main vs_6_5 outline_seed_vs || exit /b 1
 call :compile outline_seed ps_main ps_6_5 outline_seed_ps || exit /b 1
 call :compile outline_jfa vs_main vs_6_5 outline_jfa_vs || exit /b 1

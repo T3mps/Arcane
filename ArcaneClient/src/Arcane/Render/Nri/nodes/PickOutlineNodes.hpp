@@ -21,13 +21,21 @@
 // ===================================================================
 // Not from the batcher. `CollectPickables` (Render/PickEmit.hpp) is a PURE
 // walk of the Astra registry that appends one PickDrawable per pickable
-// silhouette in canvas pixels, and the k-th appended drawable IS hit-proxy id
-// k+1 (`PickEntityForId` inverts it). The graph path consumes exactly that
-// vector -- handed in through NriGraphContext::FrameDesc::pickables by the
-// frame driver, which owns the registry -- and turns it into vertices through
-// the SHARED `BuildPickIdGeometry`, the same function PickBuffer::RenderIdPass
-// calls. So there is one id assignment, not two that agree until one is
-// edited. No Batcher2D drain interface changed and no plugin ABI moved.
+// silhouette in WORLD space (F4 plan 2), and the k-th appended drawable IS
+// hit-proxy id k+1 (`PickEntityForId` inverts it). The graph path consumes
+// exactly that vector -- handed in through NriGraphContext::FrameDesc::pickables
+// by the frame driver, which owns the registry, beside the ViewTransform the
+// pass projects through (FrameDesc::pickView) -- and turns the 2D kinds into
+// vertices through the SHARED `BuildPickIdGeometry`. So there is one id
+// assignment, not two that agree until one is edited. The Mesh kind takes the
+// pass's SECOND pipeline (entity_id_mesh.hlsl) over the resident buffers
+// NriMeshBufferCache already holds for MeshNode, under the same id.
+//
+// THE ORDER RULE (spec s7.1): the 2D silhouettes draw first with the depth
+// test OFF, later-wins by submission order; then the meshes draw depth-tested
+// (LESS, write) against the pass's OWN cleared D32 transient -- so a mesh
+// always owns a pixel it shares with a sprite, and meshes resolve among
+// themselves by depth, which is the main pass's order reproduced.
 //
 // ===================================================================
 // THE READBACK, and why it does not stall.
@@ -64,10 +72,11 @@
 // is true of the ID pass and FALSE of the outline passes, and the difference is
 // in the HLSL, not in NRI:
 //
-//   * data/shaders/entity_id.hlsl declares its b0 block under
-//     `#if SPIRV [[vk::push_constant]]`, exactly like sprite.hlsl -- so
-//     PickNode's layout is ROOT CONSTANTS ONLY (16 bytes, VERTEX stage) and
-//     carries no descriptor set at all;
+//   * data/shaders/entity_id.hlsl and entity_id_mesh.hlsl declare their b0
+//     block under `#if SPIRV [[vk::push_constant]]`, exactly like sprite.hlsl
+//     -- so PickNode's layout is ROOT CONSTANTS ONLY (80 bytes, VERTEX +
+//     FRAGMENT: the mesh PS reads the id) and carries no descriptor set at
+//     all; both blocks are the same size, so ONE layout serves both pipelines;
 //   * data/shaders/outline_seed|jfa|composite.hlsl declare plain
 //     `cbuffer ... : register(b0)` with NO push-constant variant, and the
 //     SPIR-V build shifts b0 to set-0 binding 256 (compile-shaders.bat's
@@ -101,10 +110,15 @@
 #include <NRI.h>
 
 #include <Arcane/Base/Api.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>              // MeshVertex -- the mesh half's vertex layout
+#include <Arcane/Render/Nri/NriMeshBufferCache.hpp>  // Resident -- the mesh half's buffers
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 #include <Arcane/Render/PickEmit.hpp>        // PickDrawable, PickIdVertex, BuildPickIdGeometry
 #include <Arcane/Render/FramePacing.hpp>       // kSwapchainFramesInFlight
+#include <Arcane/Scene/ViewTransform.hpp>      // the view the id pass projects through
+
+#include <glm/mat4x4.hpp>
 
 #include <cstdint>
 #include <memory>
@@ -166,24 +180,30 @@ namespace Arcane
     // PickNode -- the entity-id (hit-proxy) pass plus its 1-pixel readback.
     //
     // WHAT IT OWNS, all created once at Create():
-    //   * the pipeline layout (root constants b0 only) registered in the
-    //     vehicle's NriPipelineCache -- no descriptor pool, no sets, no
-    //     sampler, because entity_id.hlsl binds nothing else;
-    //   * the vertex-input desc, held as MEMBERS because
+    //   * ONE pipeline layout (root constants b0 only, 80 bytes) registered in
+    //     the vehicle's NriPipelineCache and shared by BOTH pipelines -- no
+    //     descriptor pool, no sets, no sampler, because neither entity_id.hlsl
+    //     nor entity_id_mesh.hlsl binds anything else;
+    //   * TWO vertex-input descs, held as MEMBERS because
     //     GraphicsPipelineDesc::vertexInput is a pointer the cache
-    //     dereferences after the fill callback returns;
+    //     dereferences after the fill callback returns: PickIdVertex for the
+    //     2D half, MeshVertex (MeshNode's layout, verbatim) for the mesh half;
     //   * the HOST_READBACK buffer (one region per frame slot) and its
     //     persistent mapping.
-    // The vertex/index STREAMS are per-frame ring allocations made inside the
-    // exec fn, exactly like Batch2DNode's -- never at declaration time, since
-    // the vehicle calls ring.BeginFrame AFTER the frame is declared.
+    // The 2D vertex/index STREAMS are per-frame ring allocations made inside
+    // the exec fn, exactly like Batch2DNode's -- never at declaration time,
+    // since the vehicle calls ring.BeginFrame AFTER the frame is declared. The
+    // mesh half binds NriMeshBufferCache's RESIDENT buffers, resolved at
+    // declaration time (PrepareDrawables) exactly as MeshNode::Prepare does.
+    // The pass's colour target AND its own depth transient (RgPickHandles) are
+    // graph resources, minted by AddPickNodes.
     // =====================================================================
     class ARCANE_API PickNode
     {
     public:
-        // Loads entity_id_vs/ps through the vehicle, registers the layout and
-        // builds the readback buffer. Null (already logged + latched) on
-        // failure.
+        // Loads entity_id_vs/ps and entity_id_mesh_vs/ps through the vehicle,
+        // registers the one layout and builds the readback buffer. Null
+        // (already logged + latched) on failure.
         static std::unique_ptr<PickNode> Create(NriGraphContext& context);
 
         // SAFETY NET, NOT THE PATH -- see Batch2DNode's matching comment.
@@ -196,19 +216,25 @@ namespace Arcane
         // Idempotent.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
-        // Turns this frame's drawables into the id-pass vertex/index arrays.
-        // Called at DECLARATION time, for the same reason
-        // Batch2DNode::Prepare is: it is pure CPU work (a quad
-        // expansion over the scene's pickables) and the recording window must
-        // not carry it. `drawables` is borrowed only for this call.
-        void PrepareDrawables(std::span<const PickDrawable> drawables);
+        // Builds the 2D geometry AND resolves every Mesh drawable's resident
+        // buffers (declaration time, like MeshNode::Prepare -- never at record
+        // time: NriMeshBufferCache::Resolve may upload). Called at DECLARATION
+        // time for the same reason Batch2DNode::Prepare is: the 2D half is
+        // pure CPU work (a quad expansion over the scene's pickables) and the
+        // recording window must not carry it. `drawables` is borrowed only for
+        // this call; `view` is the ViewTransform every drawable projects
+        // through; `meshBuffers` is nullable (no mesh picks then).
+        void PrepareDrawables(std::span<const PickDrawable> drawables, const ViewTransform& view,
+                              NriMeshBufferCache* meshBuffers, std::uint64_t frameCounter);
 
         // Records the id pass into an ALREADY-OPEN raster pass whose single
-        // colour attachment is the R32_UINT id target. Clears it to 0 (the
-        // clear seam -- graph attachments are LOAD/STORE), then draws every
-        // prepared silhouette. Emits no barrier: the executor derives them.
-        void Record(RenderGraphNodeContext& context, std::uint32_t width, std::uint32_t height,
-                    std::uint32_t frameSlot);
+        // colour attachment is the R32_UINT id target and whose depth
+        // attachment is the pass's own D32 transient. Clears BOTH (the clear
+        // seam -- graph attachments are LOAD/STORE; 0 is the background id,
+        // 1.0 the far depth), then draws the 2D silhouettes depth-off and the
+        // meshes depth-tested -- the ORDER RULE at the top of this file.
+        // Emits no barrier: the executor derives them.
+        void Record(RenderGraphNodeContext& context, std::uint32_t frameSlot);
 
         // Records the 1-texel copy into `readback`'s region for `frameSlot`,
         // AFTER draining whatever the same region already held -- see THE
@@ -268,15 +294,14 @@ namespace Arcane
         // reader -- see PickEmit.hpp.
         static constexpr std::uint32_t kSuperSample = kPickSupersample;
 
-        // data/shaders/entity_id.hlsl's BatchConstants: float2 invHalfViewport
-        // + float2 pad, byte-identical to the deleted PickBuffer.cpp's IdPushConstants.
-        struct RootConstants
-        {
-            float invHalfViewportX = 0.0f;
-            float invHalfViewportY = 0.0f;
-            float padX = 0.0f;
-            float padY = 0.0f;
-        };
+        // entity_id.hlsl's BatchConstants and entity_id_mesh.hlsl's MeshIdConstants:
+        // BOTH 80 bytes, so ONE pipeline layout (root constants b0, vertex + fragment)
+        // serves the two pipelines. sizeof pinned because the layout registers the size.
+        struct IdRootConstants     { glm::mat4 viewProj{1.0f}; float pad[4]{}; };
+        struct MeshIdRootConstants { glm::mat4 mvp{1.0f}; std::uint32_t id = 0; std::uint32_t pad[3]{}; };
+        static_assert(sizeof(IdRootConstants) == 80 && sizeof(MeshIdRootConstants) == 80,
+                      "one layout, two shaders");
+        // (The HLSL pads are three scalar uints, deliberately -- see entity_id_mesh.hlsl.)
 
         // PURE and public so the [nri] tests can prove the property no device
         // can show: distinct frame slots own distinct, alignment-legal readback
@@ -297,10 +322,17 @@ namespace Arcane
         bool Init(NriGraphContext& context);
         bool CreateReadback();
 
+        // Record's two halves, in the ORDER RULE's order: the 2D silhouettes
+        // (depth-off, ring-streamed) and then the meshes (depth-tested, over
+        // the resident buffers PrepareDrawables resolved).
+        void Record2D(RenderGraphNodeContext& context);
+        void RecordMeshes(RenderGraphNodeContext& context);
+
         // See Batch2DNode::kShaderPairBase / TonemapNode::kShaderPairId: one
         // shared pipeline cache, so the nodes' opaque shader-pair id spaces
-        // must not overlap.
-        static constexpr std::uint64_t kShaderPairId = 0x4100;
+        // must not overlap. Two pairs here: the 2D half and the mesh half.
+        static constexpr std::uint64_t kShaderPairId     = 0x4100;
+        static constexpr std::uint64_t kMeshShaderPairId = 0x4101;
 
         NriDevice*        m_device    = nullptr;
         NriPipelineCache* m_pipelines = nullptr;
@@ -309,14 +341,21 @@ namespace Arcane
         // pipeline cache's fill contract (rule 2) requires.
         std::span<const std::uint8_t> m_vs;
         std::span<const std::uint8_t> m_ps;
+        std::span<const std::uint8_t> m_meshVs;
+        std::span<const std::uint8_t> m_meshPs;
 
         std::uint32_t m_layoutId = NriPipelineCache::kInvalidLayout;
 
         // MEMBERS, not locals: GraphicsPipelineDesc::vertexInput is a pointer
         // CreateGraphicsPipeline dereferences AFTER the fill callback returns.
+        // The 2D half's PickIdVertex layout, and the mesh half's MeshVertex
+        // layout (MeshNode.cpp's, attribute for attribute).
         nri::VertexAttributeDesc m_attributes[4]{};
         nri::VertexStreamDesc    m_stream{};
         nri::VertexInputDesc     m_vertexInput{};
+        nri::VertexAttributeDesc m_meshAttributes[3]{};
+        nri::VertexStreamDesc    m_meshStream{};
+        nri::VertexInputDesc     m_meshVertexInput{};
 
         // The readback staging buffer: kSwapchainFramesInFlight regions of
         // m_readbackStride bytes, persistently mapped (NRI's D3D12 UnmapBuffer
@@ -342,6 +381,22 @@ namespace Arcane
         // than per-frame vectors so a steady-state probe run allocates nothing.
         std::vector<PickIdVertex> m_vertices;
         std::vector<std::uint32_t> m_indices;
+        // The frame's view-projection (FrameDesc::pickView), the 2D half's
+        // root constant.
+        glm::mat4 m_viewProj{1.0f};
+
+        // The mesh half's draw list for the frame being declared: BORROWED
+        // pointers into NriMeshBufferCache's map, resolved by PrepareDrawables
+        // and cleared by Record (its last reader) -- the same discipline
+        // MeshNode::m_residents documents, for the same reason (an
+        // InvalidateMeshGeometry between two frames erases map nodes).
+        struct MeshDraw
+        {
+            const NriMeshBufferCache::Resident* resident = nullptr;
+            glm::mat4                           mvp{1.0f};
+            std::uint32_t                       id = 0;
+        };
+        std::vector<MeshDraw> m_meshDraws;
 
         std::uint32_t m_probeId     = 0;
         std::uint64_t m_probeTicket = 0;
@@ -560,14 +615,16 @@ namespace Arcane
     struct RgPickHandles
     {
         RgTexture ids{};        // the R32_UINT entity-id transient, at PickNode::kSuperSample x
+        RgTexture depth{};      // the pass-local D32 transient (spec s7.1), supersampled like ids
         RgBuffer  readback{};   // the imported HOST_READBACK staging buffer
     };
 
     // Declares "pick" (Raster, the id pass) and "pickreadback" (Copy, the
     // 1-texel probe copy) into `graph`. `width`/`height` are the LOGICAL 1x
-    // extent: the id target is created here at PickNode::kSuperSample times
-    // that, and is read by both the readback and the outline seed (which are
-    // told the factor rather than left to infer it).
+    // extent: the id target AND the pass's own depth are created here at
+    // PickNode::kSuperSample times that; the id target is read by both the
+    // readback and the outline seed (which are told the factor rather than
+    // left to infer it), the depth by nothing outside the pass.
     ARCANE_API RgPickHandles AddPickNodes(RenderGraph& graph, NriGraphContext* context,
                                           std::uint32_t width, std::uint32_t height);
 
