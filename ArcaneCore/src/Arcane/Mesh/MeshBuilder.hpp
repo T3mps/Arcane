@@ -36,6 +36,7 @@
 // rest of the engine.
 
 #include <Arcane/Core/Api.hpp>
+#include <Arcane/Math/Aabb.hpp>
 
 #include <glm/glm.hpp>
 
@@ -107,11 +108,10 @@ namespace Arcane
     // sentinel a min/max fold starts from -- a caller framing an empty mesh
     // needs a degenerate box it can still build a camera from, and the
     // sentinel would hand it infinities.
-    struct MeshBounds
-    {
-        glm::vec3 min{0.0f, 0.0f, 0.0f};
-        glm::vec3 max{0.0f, 0.0f, 0.0f};
-    };
+    // The mesh's local AABB (F3, spec s2.1): ONE box type for the whole tree.
+    // Keeps the name every mesh caller uses; see Aabb.hpp for the zero-box /
+    // Empty() distinction the comment above describes.
+    using MeshBounds = Aabb;
 
     [[nodiscard]] ARCANE_CORE_API MeshBounds ComputeMeshBounds(const MeshData& mesh);
 
