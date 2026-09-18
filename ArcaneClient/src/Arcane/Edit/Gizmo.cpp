@@ -30,7 +30,7 @@ namespace Arcane
         constexpr float kHeadLenPx          = 26.0f;   // DrawCone scaled -13
         constexpr float kHeadHalfPx         = 7.3f;    // 13 * tan(5 deg * pi): the cone's base radius
         constexpr float kShaftPx            = 5.0f;    // CylinderRadius 1.2 -> diameter 2.4 units
-        constexpr float kScaleShaftFromPx   = 10.0f;   // scale mode: AXIS_LENGTH_SCALE_OFFSET 5 in ...
+        constexpr float kScaleShaftFromPx   = 7.0f;    // scale mode: UE starts its rod at AXIS_LENGTH_SCALE_OFFSET 5 (10 px) and the lit sphere hides the seam; our flat disc (radius 8) does not, so the rod starts just inside it ...
         constexpr float kScaleShaftToPx     = 60.0f;   // ... to AXIS_LENGTH - 5
         constexpr float kScaleCubeCentrePx  = 66.0f;   // Render_Cube at AxisLength + CubeHeadOffset 3 + offset 5
         constexpr float kScaleCubeHalfPx    = 8.0f;    // Render_Cube(FVector(4)) scales a UNIT DrawBox: half-extent 4 units, so the cube (58..74 px) overlaps the rod's end at 60

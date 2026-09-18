@@ -169,7 +169,7 @@ TEST_CASE("Gizmo HitTest: 2D view, planar mask -- axes, the XY square, the centr
     const GizmoHandleMask ro = GizmoHandleMask::Planar(GizmoMode::Rotate);
     CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, ro, size, {504, 300}) == GizmoAxis::Z);
     CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, ro, size, {445, 300}) == GizmoAxis::None);   // 47 px inside the band
-    // Scale: the rod (10..60 px) with its 16 px cube (58..74 px) overlapping the rod's end.
+    // Scale: the rod (7..60 px, starting inside the centre disc) with its 16 px cube (58..74 px) overlapping the rod's end.
     const GizmoHandleMask sc = GizmoHandleMask::Planar(GizmoMode::Scale);
     CHECK(HitTest(GizmoMode::Scale, GizmoSpace::World, t, v, sc, size, {466, 301}) == GizmoAxis::X);
     // Gizmo size 2: the X cone tip is at 588 px; 556 is on the shaft and still X, 700 is a miss.
