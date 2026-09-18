@@ -74,6 +74,10 @@ TEST_CASE("Gizmo ApplyDrag: translate along X, in the XY plane and in the camera
     GizmoSnap snap; snap.enabled = true; snap.translate = 0.5f;
     GizmoTransform rs = ApplyDrag(GizmoMode::Translate, GizmoSpace::World, GizmoAxis::X, start, v, {400,300}, {437,300}, snap);
     CHECK_THAT(rs.position.x, WithinAbs(0.5f, 1e-4f));
+    // A SNAPPED Center drag snaps only the components the camera plane spans:
+    // (+0.37, -0.37) lands on (0.5, -0.5) and z stays 0.75 to the bit (fix round 1).
+    GizmoTransform rcs = ApplyDrag(GizmoMode::Translate, GizmoSpace::World, GizmoAxis::Center, start, v, {400,300}, {437,337}, snap);
+    CHECK_THAT(rcs.position.x, WithinAbs(0.5f, 1e-4f)); CHECK_THAT(rcs.position.y, WithinAbs(-0.5f, 1e-4f)); CHECK(rcs.position.z == 0.75f);
     // Rotation and scale untouched by a translate.
     CHECK(NearQuat(rx.rotation, start.rotation)); CHECK(rx.scale == start.scale);
 }
@@ -99,6 +103,11 @@ TEST_CASE("Gizmo ApplyDrag: the Z ring turns about +Z, world sense, with snap", 
     GizmoSnap snap; snap.enabled = true; snap.rotationDeg = 15.0f;
     GizmoTransform rs = ApplyDrag(GizmoMode::Rotate, GizmoSpace::World, GizmoAxis::Z, start, v, {500,300}, {400 + 93.97f, 300 + 34.20f}, snap);
     CHECK(NearQuat(rs.rotation, glm::angleAxis(-kPi / 12.0f, glm::vec3(0, 0, 1)), 1e-3f));
+    // A step that does not divide 360 (7 deg): the raw atan2 difference of the first sweep is +270,
+    // which would snap to 273; wrapped to -90 it snaps to -91 (fix round 1).
+    GizmoSnap snap7; snap7.enabled = true; snap7.rotationDeg = 7.0f;
+    GizmoTransform r7 = ApplyDrag(GizmoMode::Rotate, GizmoSpace::World, GizmoAxis::Z, start, v, {500,300}, {400,400}, snap7);
+    CHECK(NearQuat(r7.rotation, glm::angleAxis(glm::radians(-91.0f), glm::vec3(0, 0, 1)), 1e-4f));   // 1e-4: 273 vs -91 is 4 deg, |dot| = cos 2 deg = 1 - 6e-4
     // The X ring in an oblique view: the result is a turn about WORLD X (its axis), whatever the amount.
     const ViewTransform o = Oblique();
     const glm::vec2 a = Px(o, {0, 1, 0}), b = Px(o, {0, 0, 1});   // two points on the X ring
@@ -132,6 +141,9 @@ TEST_CASE("Gizmo ApplyDrag: scale by screen ratio along the projected axis, unif
     GizmoSnap snap; snap.enabled = true; snap.scale = 0.1f;
     GizmoTransform rsn = ApplyDrag(GizmoMode::Scale, GizmoSpace::Local, GizmoAxis::X, start, v, {500,300}, {400 + 137.0f, 300}, snap);
     CHECK_THAT(rsn.scale.x, WithinAbs(1.4f, 1e-4f));
+    // A snap that lands on -0 must not erase the mirror: the clamp takes the START's sign (fix round 1).
+    GizmoTransform rmz = ApplyDrag(GizmoMode::Scale, GizmoSpace::Local, GizmoAxis::X, mirrored, v, {300,300}, {403,300}, snap);
+    CHECK_THAT(rmz.scale.x, WithinAbs(-0.01f, 1e-6f));
     // The same X drag in PERSPECTIVE gives the same factor: the ratio is taken in pixels.
     const ViewTransform p = Persp();
     const glm::vec2 pv = Px(p, {0,0,0}), tip = Px(p, {1,0,0});
@@ -190,6 +202,26 @@ TEST_CASE("Gizmo HitTest: oblique perspective -- every handle is where it projec
     // LOCAL space with a turned entity: the X arrow follows the local X.
     GizmoTransform turned; turned.rotation = glm::angleAxis(kPi * 0.5f, glm::vec3(0, 0, 1));   // local X = world +Y
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::Local, turned, v, all, 1.0f, Px(v, {0, R * 0.6f, 0})) == GizmoAxis::X);
+}
+
+TEST_CASE("Gizmo: a pivot BEHIND the eye is neither hit nor scaled -- no phantom gizmo through the viewport centre", "[gizmo]")
+{
+    // Persp() has its eye at z = 6 looking down -Z; a pivot at z = 7 is behind it.
+    // WorldToScreen still returns a FINITE pixel for it (mirrored through the
+    // centre) -- that pixel must not be a gizmo (fix round 1).
+    const ViewTransform v = Persp();
+    GizmoTransform t; t.position = {0.5f, 0.25f, 7.0f};
+    const glm::vec2 phantom = Px(v, t.position);
+    REQUIRE(std::isfinite(phantom.x)); REQUIRE(std::isfinite(phantom.y));
+    const GizmoHandleMask all = GizmoHandleMask::All();
+    for (GizmoMode mode : { GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale })
+        for (const glm::vec2 probe : { phantom, phantom + glm::vec2(40.0f, 0.0f), phantom + glm::vec2(0.0f, -40.0f), phantom + glm::vec2(64.0f, 0.0f), phantom + glm::vec2(76.0f, 0.0f) })
+            CHECK(HitTest(mode, GizmoSpace::World, t, v, all, 1.0f, probe) == GizmoAxis::None);
+    const GizmoTransform rs = ApplyDrag(GizmoMode::Scale, GizmoSpace::Local, GizmoAxis::X, t, v, phantom + glm::vec2(50.0f, 0.0f), phantom + glm::vec2(100.0f, 0.0f), GizmoSnap{});
+    CHECK(rs.scale == t.scale);
+    // The same pivot in FRONT of the eye is an ordinary gizmo.
+    t.position.z = 0.0f;
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, t.position)) == GizmoAxis::Center);
 }
 
 TEST_CASE("Gizmo group delta: translate shared, rotate ORBITS about the pivot, scale moves along the pivot ray, replay reproduces", "[gizmo]")

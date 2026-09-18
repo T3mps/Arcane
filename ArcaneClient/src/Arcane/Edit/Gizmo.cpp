@@ -85,6 +85,16 @@ namespace Arcane
 
         bool Finite(glm::vec2 p) noexcept { return std::isfinite(p.x) && std::isfinite(p.y); }
 
+        // Is the point in FRONT of the eye? WorldToScreen NaNs only at |w| ~ 0;
+        // a point BEHIND a perspective eye (w < 0) projects to a finite pixel
+        // mirrored through the viewport centre, and a gizmo drawn there is a
+        // phantom the user can grab. Orthographic w is 1: always visible.
+        bool Visible(const ViewTransform& v, glm::vec3 world) noexcept
+        {
+            const glm::vec4 clip = v.projection * (v.view * glm::vec4(world, 1.0f));
+            return std::isfinite(clip.w) && clip.w > 0.0f && Finite(glm::vec2(clip));
+        }
+
         glm::vec2 Px(const ViewTransform& v, glm::vec3 world) noexcept
         {
             return glm::vec2(v.WorldToScreen(world));
@@ -240,6 +250,7 @@ namespace Arcane
     GizmoAxis HitTest(GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
                       GizmoHandleMask handles, float sizeScale, glm::vec2 mouse)
     {
+        if (!Visible(view, t.position)) return GizmoAxis::None;   // behind the eye: no phantom to grab
         const glm::vec2 pivotPx = Px(view, t.position);
         if (!Finite(pivotPx)) return GizmoAxis::None;
         const float R = Reach(view, t.position, sizeScale);
@@ -302,6 +313,7 @@ namespace Arcane
               GizmoHandleMask handles, float sizeScale, GizmoAxis hovered, GizmoAxis active)
     {
         batcher.SetLayer(0xFFFF, 0xFFFF);   // on top of the scene (max layer/order); overlay pixels, no depth
+        if (!Visible(view, t.position)) return;   // behind the eye: no phantom to draw
         const glm::vec2 pivotPx = Px(view, t.position);
         if (!Finite(pivotPx)) return;
         const float R = Reach(view, t.position, sizeScale);
@@ -420,7 +432,8 @@ namespace Arcane
                     {
                         glm::vec3 p = start.position + delta;
                         for (int i = 0; i < 3; ++i)
-                            if (axis == GizmoAxis::Center || std::abs(n[i]) < 0.5f)   // the components the plane spans
+                            if (std::abs(n[i]) < 0.5f)   // the components the plane spans -- for Center too, so the
+                                                         // camera-plane normal (Z in the 2D view) stays untouched
                                 p[i] = SnapScalar(p[i], snap.translate);
                         r.position = p;
                     }
@@ -447,7 +460,9 @@ namespace Arcane
             const glm::vec3 d0 = *p0 - start.position, d1 = *p1 - start.position;
             const float a0 = std::atan2(glm::dot(d0, v), glm::dot(d0, u));
             const float a1 = std::atan2(glm::dot(d1, v), glm::dot(d1, u));
-            float delta = a1 - a0;   // world-sense: u x v == n, so + is a right-hand turn about n
+            float delta = std::remainder(a1 - a0, kTau);   // world-sense: u x v == n, so + is a right-hand turn about n;
+                                                           // wrapped to (-pi, pi] so a snap step that does not divide 360
+                                                           // cannot pick a different representative across the atan2 seam
             if (snap.enabled) delta = SnapScalar(delta, snap.rotationDeg * kPi / 180.0f);
             // n is already the WORLD direction of the chosen axis -- AxisDir(Local,
             // rot, a) returns the local axis in world coordinates -- so the turn
@@ -457,6 +472,7 @@ namespace Arcane
         }
         case GizmoMode::Scale:
         {
+            if (!Visible(view, start.position)) break;   // behind the eye: no pixel geometry to measure against
             const glm::vec2 pivotPx = Px(view, start.position);
             if (!Finite(pivotPx)) break;
             if (axis == GizmoAxis::Center)
@@ -485,9 +501,10 @@ namespace Arcane
             for (int i = 0; i < 3; ++i)
             {
                 if (snap.enabled) r.scale[i] = SnapScalar(r.scale[i], snap.scale);
-                // Clamp the MAGNITUDE and keep the sign: a mirrored entity (a
-                // negative authored scale) stays mirrored through a scale drag.
-                const float sign = r.scale[i] < 0.0f ? -1.0f : 1.0f;
+                // Clamp the MAGNITUDE and keep the START's sign: a mirrored entity
+                // (a negative authored scale) stays mirrored through a scale drag,
+                // even when the snap lands on -0 (the snapped value has no sign to read).
+                const float sign = start.scale[i] < 0.0f ? -1.0f : 1.0f;
                 r.scale[i] = sign * std::max(std::abs(r.scale[i]), kMinScale);
             }
             break;
