@@ -294,6 +294,9 @@ namespace Arcane
                 if (!handles.Has(plane)) continue;
                 const auto [a, b] = PlaneAxes(plane);
                 const auto sq = PlaneSquareWorld(t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R);
+                // A corner behind the eye projects to a mirrored pixel: skip the
+                // whole square rather than test a quad with a folded-back corner.
+                if (!Visible(view, sq[0]) || !Visible(view, sq[1]) || !Visible(view, sq[2]) || !Visible(view, sq[3])) continue;
                 const std::array<glm::vec2, 4> q{ Px(view, sq[0]), Px(view, sq[1]), Px(view, sq[2]), Px(view, sq[3]) };
                 if (InsideQuad(mouse, q)) return plane;
             }
@@ -302,7 +305,9 @@ namespace Arcane
         for (GizmoAxis a : { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z })
         {
             if (!handles.Has(a)) continue;
-            const glm::vec2 tip = Px(view, t.position + AxisDir(axisSpace, t.rotation, a) * R);
+            const glm::vec3 tipWorld = t.position + AxisDir(axisSpace, t.rotation, a) * R;
+            if (!Visible(view, tipWorld)) continue;   // tip behind the eye: no phantom axis to grab
+            const glm::vec2 tip = Px(view, tipWorld);
             if (Finite(tip) && DistToSegment(mouse, pivotPx, tip) <= kHitThreshPx) return a;
         }
         return GizmoAxis::None;
@@ -347,6 +352,9 @@ namespace Arcane
                 if (!handles.Has(plane)) continue;
                 const auto [a, b] = PlaneAxes(plane);
                 const auto sq = PlaneSquareWorld(t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R);
+                // A corner behind the eye projects to a mirrored pixel: skip the
+                // whole square rather than draw a quad with a folded-back corner.
+                if (!Visible(view, sq[0]) || !Visible(view, sq[1]) || !Visible(view, sq[2]) || !Visible(view, sq[3])) continue;
                 const std::array<glm::vec2, 4> q{ Px(view, sq[0]), Px(view, sq[1]), Px(view, sq[2]), Px(view, sq[3]) };
                 if (!Finite(q[0]) || !Finite(q[1]) || !Finite(q[2]) || !Finite(q[3])) continue;
                 glm::vec4 c = HandleColor(plane, hovered, active);
@@ -359,7 +367,9 @@ namespace Arcane
         for (GizmoAxis a : { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z })
         {
             if (!handles.Has(a)) continue;
-            const glm::vec2 tip = Px(view, t.position + AxisDir(axisSpace, t.rotation, a) * R);
+            const glm::vec3 tipWorld = t.position + AxisDir(axisSpace, t.rotation, a) * R;
+            if (!Visible(view, tipWorld)) continue;   // tip behind the eye: no phantom axis to draw
+            const glm::vec2 tip = Px(view, tipWorld);
             if (!Finite(tip)) continue;
             const glm::vec4 c = HandleColor(a, hovered, active);
             batcher.Line(pivotPx, tip, kShaftThicknessPx, c);

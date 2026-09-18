@@ -32,8 +32,10 @@ namespace Arcane
     // +Y-up world on a y-down canvas. Overlay code must project POINTS through
     // Point() (never "project the centre, then rotate in screen space with the
     // world angle"): a mirrored map reverses the sense of every angle, which
-    // AngleSign() reports for the one place that needs it (a canvas-space
-    // rotation in the id pass).
+    // AngleSign() reports. The id pass is world-space now (F4 plan 2 Task 1)
+    // and has no Affine2D of its own, so AngleSign() currently has no engine
+    // consumer; it stays part of Affine2D's contract for the pixel overlays
+    // that still carry one (the physics debug overlay, the camera rect).
     struct Affine2D
     {
         glm::vec2 offset{0.0f, 0.0f};

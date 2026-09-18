@@ -143,6 +143,12 @@ namespace Arcane
     // back as an X-mirror with a half turn in its Inspector. Assumes no shear
     // (any product of TRS matrices). A zero-length column yields scale 0 on
     // that axis and the identity direction for it.
+    //
+    // For a MIRRORED entity, the half turn above folds into `rotation`, so a
+    // GizmoSpace::Local draw/hit-test's arrows point along the DECOMPOSED
+    // basis, not the authored one -- the X arrow of a Y-mirrored sprite points
+    // the "other" way. That is Unreal's own behaviour for a mirrored actor's
+    // local gizmo, not a defect here.
     ARCANE_API GizmoTransform DecomposeTRS(const glm::mat4& m);
 
     // translate * rotate * scale: identical to Transform::ToMatrix for the

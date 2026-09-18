@@ -885,6 +885,12 @@ namespace Arcane
     //     PickView (Render/PickEmit.hpp) is REMOVED and PickDrawable is world-space
     //     (same bump, plan 2 Task 1). A module built against v32 references removed
     //     exports -- refuse. ReferenceProject.arcproj restamped.
+    //     Also under this bump (plan 2 Task 1): CollectPickables(Registry&,
+    //     std::vector<PickDrawable>&) lost its view parameter; PickIdVertex grew
+    //     32 -> 36 bytes (vec3 pos); NriGraphContext::FrameDesc gained
+    //     ViewTransform pickView; RgPickHandles gained depth; PickNode::
+    //     PrepareDrawables/Record changed signature; GizmoHandleMask is NEW
+    //     (Task 2).
     inline constexpr uint32_t kGamePluginABIVersion = 33;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

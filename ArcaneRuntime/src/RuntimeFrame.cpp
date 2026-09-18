@@ -19,7 +19,6 @@
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
 #include <Arcane/Render/MeshSubmissionSystem.hpp>     // CollectMeshInstances (RenderGraph's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
-#include <Arcane/Scene/ViewTransform.hpp>            // Affine2D (the pick emits' guard, F4 plan 1 T3)
 
 #include <imgui.h>
 
