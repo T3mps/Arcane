@@ -875,7 +875,17 @@ namespace Arcane
     //     its own (a data-format change, not a shape change). ReferenceProject.arcproj
     //     restamped with this change.
     //     Task 4, same bump: Batcher2D gained QuadWorld/CircleWorld/SetViewProjection APPENDED at the end of its vtable, and Batch2DVertex::pos is vec3 (36-byte wire vertex; Batch2DDrawSpan::worldSpace, Batch2DDrained::viewProjection).
-    inline constexpr uint32_t kGamePluginABIVersion = 32;
+    // v33 (2026-09-17, F4 plan 2): Edit/Gizmo.hpp is 3D. GizmoTransform is
+    //     { vec3, quat, vec3 }; GizmoView is REMOVED (HitTest/Draw/ApplyDrag take
+    //     a ViewTransform, a GizmoHandleMask and the size scale); GizmoAxis gained
+    //     Z/XY/YZ/XZ/Screen; DecomposeTRS/ComposeTRS/MakeGroupDelta/ApplyGroupDelta
+    //     changed signature; IsPlanarBasis is REMOVED (its whole reason -- a planar
+    //     decomposition demoting through a tilted parent -- no longer exists);
+    //     WithMirrorOn, WorldUnitsPerPixel, ClosestLineParam, RayPlane are NEW.
+    //     PickView (Render/PickEmit.hpp) is REMOVED and PickDrawable is world-space
+    //     (same bump, plan 2 Task 1). A module built against v32 references removed
+    //     exports -- refuse. ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 33;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

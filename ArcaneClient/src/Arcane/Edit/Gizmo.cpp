@@ -1,8 +1,15 @@
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 
+#include <glm/gtc/matrix_access.hpp>     // glm::row
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <span>
+#include <utility>
 
 namespace Arcane
 {
@@ -10,70 +17,85 @@ namespace Arcane
     {
         constexpr float kEps      = 1e-6f;
         constexpr float kMinScale = 0.01f;
+        constexpr float kPi       = 3.14159265358979323846f;
+        constexpr float kTau      = 2.0f * kPi;
 
-        // Through the affine (F4 plan 1 T3). No divide guard on the way back:
-        // Affine2D::Unpoint divides by the per-axis scale, which the producer
-        // (ViewTransform::AsAffine2D over a non-empty viewport) guarantees non-zero.
-        glm::vec2 WorldToScreen(const GizmoView& v, glm::vec2 world)
+        // Handle geometry in PIXELS at gizmo size 1 (the world radius follows
+        // from WorldUnitsPerPixel at the pivot). Unreal's proportions.
+        constexpr float kAxisLenPx          = 80.0f;   // arrow / scale-box reach
+        constexpr float kRingFrac           = 0.8f;    // axis ring radius as a fraction of the reach (64 px)
+        constexpr float kScreenRingRadiusPx = 76.0f;   // the camera-facing ring, a pixel circle
+        constexpr float kPlaneMinFrac       = 0.35f;   // plane square from 0.35R to 0.65R along both axes
+        constexpr float kPlaneMaxFrac       = 0.65f;
+        constexpr float kHitThreshPx        = 8.0f;    // axis segment pick radius
+        constexpr float kCenterHalfPx       = 8.0f;    // centre box half-extent
+        constexpr float kRingBandPx         = 8.0f;    // ring pick band
+        constexpr float kMinQuadAreaPx2     = 4.0f;    // an edge-on plane square is not a target
+        constexpr float kShaftThicknessPx   = 2.0f;
+        constexpr float kRingThicknessPx    = 2.0f;
+        constexpr int   kRingSegments       = 48;
+        constexpr float kArrowHeadLenPx     = 14.0f;
+        constexpr float kArrowHeadHalfPx    = 6.0f;
+        constexpr float kScaleBoxHalfPx     = 5.0f;
+
+        glm::vec3 AxisUnit(GizmoAxis a) noexcept
         {
-            return v.affine.Point(world);
+            switch (a)
+            {
+            case GizmoAxis::X: case GizmoAxis::YZ: return { 1.0f, 0.0f, 0.0f };   // a plane is named by its NORMAL here
+            case GizmoAxis::Y: case GizmoAxis::XZ: return { 0.0f, 1.0f, 0.0f };
+            case GizmoAxis::Z: case GizmoAxis::XY: return { 0.0f, 0.0f, 1.0f };
+            default: return { 0.0f, 0.0f, 1.0f };
+            }
         }
 
-        glm::vec2 ScreenToWorld(const GizmoView& v, glm::vec2 screen)
+        // The axis (or plane normal) in WORLD space for the chosen frame.
+        glm::vec3 AxisDir(GizmoSpace space, const glm::quat& rot, GizmoAxis a) noexcept
         {
-            return v.affine.Unpoint(screen);
+            const glm::vec3 u = AxisUnit(a);
+            return space == GizmoSpace::Local ? glm::normalize(rot * u) : u;
         }
 
-        glm::vec2 AxisDirWorld(GizmoAxis axis)
+        // The two axes a plane handle spans.
+        std::pair<GizmoAxis, GizmoAxis> PlaneAxes(GizmoAxis plane) noexcept
         {
-            return axis == GizmoAxis::Y ? glm::vec2(0.0f, 1.0f) : glm::vec2(1.0f, 0.0f);
+            switch (plane)
+            {
+            case GizmoAxis::XY: return { GizmoAxis::X, GizmoAxis::Y };
+            case GizmoAxis::YZ: return { GizmoAxis::Y, GizmoAxis::Z };
+            default:            return { GizmoAxis::X, GizmoAxis::Z };
+            }
         }
 
-        glm::vec2 AxisDirLocal(float rot, GizmoAxis axis)
+        // The camera's forward in world space: the view matrix's rows are the
+        // camera basis (right, up, BACK), so forward is minus the third row.
+        glm::vec3 ViewForward(const ViewTransform& v) noexcept
         {
-            const float c = std::cos(rot), s = std::sin(rot);
-            return axis == GizmoAxis::Y ? glm::vec2(-s, c) : glm::vec2(c, s);
+            return -glm::normalize(glm::vec3(glm::row(v.view, 2)));
         }
 
-        // Translate uses space; scale is always local.
-        glm::vec2 AxisDir(GizmoSpace space, float rot, GizmoAxis axis)
+        // An orthonormal (u, v) in the plane normal to n with u x v == n, so a
+        // positive angle from u toward v IS a right-hand turn about n.
+        std::pair<glm::vec3, glm::vec3> PlaneBasis(glm::vec3 n) noexcept
         {
-            return space == GizmoSpace::Local ? AxisDirLocal(rot, axis) : AxisDirWorld(axis);
+            const glm::vec3 a = std::abs(n.x) < 0.9f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+            const glm::vec3 u = glm::normalize(glm::cross(n, a));
+            return { u, glm::cross(n, u) };
         }
 
-        float SnapScalar(float v, float step)
+        bool Finite(glm::vec2 p) noexcept { return std::isfinite(p.x) && std::isfinite(p.y); }
+
+        glm::vec2 Px(const ViewTransform& v, glm::vec3 world) noexcept
+        {
+            return glm::vec2(v.WorldToScreen(world));
+        }
+
+        float SnapScalar(float v, float step) noexcept
         {
             return step > kEps ? std::round(v / step) * step : v;
         }
 
-        constexpr float kAxisLenPx    = 80.0f;   // arrow / scale-handle length
-        constexpr float kHitThreshPx  = 8.0f;    // axis segment pick radius
-        constexpr float kCenterHalfPx = 8.0f;    // center box half-extent
-        constexpr float kRingRadiusPx = 64.0f;   // rotate ring radius
-        constexpr float kRingBandPx   = 8.0f;    // rotate ring pick band
-
-        // Draw-only screen-constant pixel sizes.
-        constexpr float kShaftThicknessPx    = 2.0f;    // axis shaft line
-        constexpr float kRingThicknessPx     = 2.0f;    // rotate ring polyline
-        constexpr int   kRingSegments        = 48;      // ring polyline segment count
-        constexpr float kArrowHeadLenPx      = 14.0f;   // translate arrowhead length (tip to base)
-        constexpr float kArrowHeadHalfWidthPx = 6.0f;   // translate arrowhead base half-width
-        constexpr float kScaleBoxHalfPx      = 5.0f;    // scale end-handle box half-extent
-        constexpr float kTau                 = 6.28318530717958647692f;
-
-        // Screen-space unit direction of a world axis at the pivot: two points
-        // projected, so the Y mirror comes out automatically (+Y world points UP
-        // on screen under the F4 view).
-        glm::vec2 AxisDirScreen(const GizmoView& v, glm::vec2 pivotWorld, glm::vec2 dirWorld)
-        {
-            const glm::vec2 a = WorldToScreen(v, pivotWorld);
-            const glm::vec2 b = WorldToScreen(v, pivotWorld + dirWorld);
-            const glm::vec2 d = b - a;
-            const float len = glm::length(d);
-            return len > kEps ? d / len : glm::vec2(1.0f, 0.0f);
-        }
-
-        float DistToSegment(glm::vec2 p, glm::vec2 a, glm::vec2 b)
+        float DistToSegment(glm::vec2 p, glm::vec2 a, glm::vec2 b) noexcept
         {
             const glm::vec2 ab = b - a;
             const float len2 = glm::dot(ab, ab);
@@ -81,312 +103,461 @@ namespace Arcane
             return glm::length(p - (a + u * ab));
         }
 
-        // X=red, Y=green, Center=yellow; brightened when hovered/active.
-        glm::vec4 AxisColor(GizmoAxis axis, GizmoAxis hovered, GizmoAxis active)
+        // Point-in-convex-quad in pixels (corners in order). A degenerate
+        // (edge-on) quad is never inside.
+        bool InsideQuad(glm::vec2 p, const std::array<glm::vec2, 4>& q) noexcept
         {
-            glm::vec4 base(0.85f, 0.2f, 0.2f, 1.0f);            // X
-            if (axis == GizmoAxis::Y)      base = glm::vec4(0.2f, 0.85f, 0.2f, 1.0f);
-            if (axis == GizmoAxis::Center) base = glm::vec4(0.9f, 0.85f, 0.2f, 1.0f);
-            const bool hot = (axis == hovered) || (axis == active);
-            return hot ? glm::vec4(glm::min(base.x * 1.4f, 1.0f),
-                                   glm::min(base.y * 1.4f, 1.0f),
-                                   glm::min(base.z * 1.4f, 1.0f), 1.0f)
-                       : base;
+            float area = 0.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                if (!Finite(q[i])) return false;
+                const glm::vec2 a = q[i], b = q[(i + 1) % 4];
+                area += a.x * b.y - b.x * a.y;
+            }
+            if (std::abs(area) * 0.5f < kMinQuadAreaPx2) return false;
+            const float sign = area > 0.0f ? 1.0f : -1.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                const glm::vec2 a = q[i], b = q[(i + 1) % 4];
+                const glm::vec2 e = b - a, d = p - a;
+                if ((e.x * d.y - e.y * d.x) * sign < 0.0f) return false;
+            }
+            return true;
+        }
+
+        // World radius of the handle set at the pivot.
+        float Reach(const ViewTransform& v, glm::vec3 pivot, float sizeScale) noexcept
+        {
+            return kAxisLenPx * sizeScale * WorldUnitsPerPixel(v, pivot);
+        }
+
+        // The four world corners of a plane square (fractions of the reach).
+        std::array<glm::vec3, 4> PlaneSquareWorld(glm::vec3 pivot, glm::vec3 a, glm::vec3 b, float R) noexcept
+        {
+            const float lo = kPlaneMinFrac * R, hi = kPlaneMaxFrac * R;
+            return { pivot + a * lo + b * lo, pivot + a * hi + b * lo, pivot + a * hi + b * hi, pivot + a * lo + b * hi };
+        }
+
+        // The ring's world polyline (kRingSegments + 1 points, closed).
+        std::array<glm::vec3, kRingSegments + 1> RingWorld(glm::vec3 pivot, glm::vec3 n, float radius) noexcept
+        {
+            const auto [u, w] = PlaneBasis(n);
+            std::array<glm::vec3, kRingSegments + 1> pts{};
+            for (int i = 0; i <= kRingSegments; ++i)
+            {
+                const float a = kTau * static_cast<float>(i) / static_cast<float>(kRingSegments);
+                pts[static_cast<std::size_t>(i)] = pivot + (u * std::cos(a) + w * std::sin(a)) * radius;
+            }
+            return pts;
+        }
+
+        glm::vec4 Brighten(glm::vec4 c) noexcept
+        {
+            return { std::min(c.x * 1.4f, 1.0f), std::min(c.y * 1.4f, 1.0f), std::min(c.z * 1.4f, 1.0f), c.w };
+        }
+
+        // X red, Y green, Z blue; a plane takes the colour of its NORMAL axis
+        // (Unreal / Blender); Center yellow; Screen light grey.
+        glm::vec4 HandleColor(GizmoAxis a, GizmoAxis hovered, GizmoAxis active) noexcept
+        {
+            glm::vec4 base(0.85f, 0.2f, 0.2f, 1.0f);
+            switch (a)
+            {
+            case GizmoAxis::Y: case GizmoAxis::XZ: base = { 0.2f, 0.85f, 0.2f, 1.0f }; break;
+            case GizmoAxis::Z: case GizmoAxis::XY: base = { 0.25f, 0.4f, 0.95f, 1.0f }; break;
+            case GizmoAxis::Center:                base = { 0.9f, 0.85f, 0.2f, 1.0f }; break;
+            case GizmoAxis::Screen:                base = { 0.85f, 0.85f, 0.85f, 1.0f }; break;
+            default: break;
+            }
+            return (a == hovered || a == active) ? Brighten(base) : base;
+        }
+
+        void Polyline(Batcher2D& b, const ViewTransform& v, std::span<const glm::vec3> pts, float thickness, glm::vec4 color)
+        {
+            for (std::size_t i = 0; i + 1 < pts.size(); ++i)
+            {
+                const glm::vec2 p0 = Px(v, pts[i]), p1 = Px(v, pts[i + 1]);
+                if (Finite(p0) && Finite(p1)) b.Line(p0, p1, thickness, color);
+            }
         }
     }
 
-    GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis,
-                             const GizmoTransform& start, const GizmoView& view,
-                             glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
-                             const GizmoSnap& snap)
-    {
-        GizmoTransform r = start;
-        const glm::vec2 pStart = ScreenToWorld(view, mouseStartScreen);
-        const glm::vec2 pCur   = ScreenToWorld(view, mouseCurScreen);
-        const glm::vec2 pivot  = start.position;
+    // ---- GizmoHandleMask -------------------------------------------------------
+    GizmoHandleMask GizmoHandleMask::All() noexcept { return {}; }
 
+    GizmoHandleMask GizmoHandleMask::Planar(GizmoMode mode) noexcept
+    {
+        GizmoHandleMask m; m.bits = 0;
         switch (mode)
         {
-            case GizmoMode::Translate:
-            {
-                const glm::vec2 delta = pCur - pStart;
-                if (axis == GizmoAxis::Center)
-                {
-                    r.position = start.position + delta;
-                    if (snap.enabled)
-                    {
-                        r.position.x = SnapScalar(r.position.x, snap.translate);
-                        r.position.y = SnapScalar(r.position.y, snap.translate);
-                    }
-                }
-                else
-                {
-                    const glm::vec2 dir = AxisDir(space, start.rotation, axis);
-                    r.position = start.position + glm::dot(delta, dir) * dir;
-                    if (snap.enabled)   // snap only the moved axis component
-                    {
-                        if (axis == GizmoAxis::X) r.position.x = SnapScalar(r.position.x, snap.translate);
-                        else                      r.position.y = SnapScalar(r.position.y, snap.translate);
-                    }
-                }
-                break;
-            }
-            case GizmoMode::Rotate:
-            {
-                const glm::vec2 d0 = pStart - pivot;
-                const glm::vec2 d1 = pCur - pivot;
-                const float a0 = std::atan2(d0.y, d0.x);
-                const float a1 = std::atan2(d1.y, d1.x);
-                // d0/d1 are WORLD offsets (pStart/pCur came through Unpoint), so
-                // a1 - a0 is already a WORLD-sense delta and needs NO mirror
-                // correction: a clockwise screen sweep unprojects to a negative
-                // world turn, the entity turns negative in world, and the
-                // renderer (which DOES apply AngleSign -- PickEmit, the sprite
-                // path) draws that as the clockwise canvas turn the mouse made.
-                // Multiplying by AngleSign here would turn the object AGAINST
-                // the mouse (F4 plan 1 T3 fix round 1, ruling H).
-                r.rotation = start.rotation + (a1 - a0);
-                if (snap.enabled)
-                {
-                    const float step = snap.rotationDeg * 3.14159265358979323846f / 180.0f;
-                    r.rotation = SnapScalar(r.rotation, step);
-                }
-                break;
-            }
-            case GizmoMode::Scale:
-            {
-                if (axis == GizmoAxis::Center)
-                {
-                    const float l0 = glm::length(pStart - pivot);
-                    const float l1 = glm::length(pCur - pivot);
-                    const float f = (l0 > kEps) ? (l1 / l0) : 1.0f;
-                    r.scale = start.scale * f;
-                }
-                else
-                {
-                    const glm::vec2 dir = AxisDirLocal(start.rotation, axis);   // scale is local
-                    const float d0 = glm::dot(pStart - pivot, dir);
-                    const float d1 = glm::dot(pCur - pivot, dir);
-                    const float f = (std::fabs(d0) > kEps) ? (d1 / d0) : 1.0f;
-                    if (axis == GizmoAxis::X) r.scale.x = start.scale.x * f;
-                    else                      r.scale.y = start.scale.y * f;
-                }
-                if (snap.enabled)
-                {
-                    r.scale.x = SnapScalar(r.scale.x, snap.scale);
-                    r.scale.y = SnapScalar(r.scale.y, snap.scale);
-                }
-                r.scale.x = std::max(r.scale.x, kMinScale);
-                r.scale.y = std::max(r.scale.y, kMinScale);
-                break;
-            }
+        case GizmoMode::Translate: m.Set(GizmoAxis::X, true); m.Set(GizmoAxis::Y, true); m.Set(GizmoAxis::XY, true); m.Set(GizmoAxis::Center, true); break;
+        case GizmoMode::Rotate:    m.Set(GizmoAxis::Z, true); break;
+        case GizmoMode::Scale:     m.Set(GizmoAxis::X, true); m.Set(GizmoAxis::Y, true); m.Set(GizmoAxis::Center, true); break;
         }
-        return r;
+        return m;
     }
 
-    GizmoAxis HitTest(GizmoMode mode, GizmoSpace space,
-                      const GizmoTransform& t, const GizmoView& view, glm::vec2 mouseScreen)
+    bool GizmoHandleMask::Has(GizmoAxis a) const noexcept { return ((bits >> static_cast<unsigned>(a)) & 1u) != 0u; }
+    void GizmoHandleMask::Set(GizmoAxis a, bool on) noexcept
     {
-        const glm::vec2 pivot = WorldToScreen(view, t.position);
+        const std::uint16_t bit = static_cast<std::uint16_t>(1u << static_cast<unsigned>(a));
+        bits = on ? static_cast<std::uint16_t>(bits | bit) : static_cast<std::uint16_t>(bits & ~bit);
+    }
+
+    // ---- geometry ----------------------------------------------------------------
+    float WorldUnitsPerPixel(const ViewTransform& view, glm::vec3 worldPoint) noexcept
+    {
+        const glm::vec4 clip = view.projection * (view.view * glm::vec4(worldPoint, 1.0f));
+        const float w  = std::max(std::abs(clip.w), 1e-4f);
+        const float py = view.projection[1][1];
+        if (view.viewport.y == 0u || std::abs(py) < kEps) return 1.0f;
+        return (2.0f * w) / (py * static_cast<float>(view.viewport.y));
+    }
+
+    float ClosestLineParam(glm::vec3 lineOrigin, glm::vec3 lineDir, const Ray& ray) noexcept
+    {
+        // Two-lines closest points (Ericson 5.1.8) with both directions unit.
+        const glm::vec3 w0 = lineOrigin - ray.origin;
+        const float b  = glm::dot(lineDir, ray.direction);
+        const float d0 = glm::dot(lineDir, w0);
+        const float e0 = glm::dot(ray.direction, w0);
+        const float denom = 1.0f - b * b;
+        if (denom < 1e-5f)
+            return -d0;   // parallel: the projection of the ray origin onto the line
+        return (b * e0 - d0) / denom;
+    }
+
+    std::optional<glm::vec3> RayPlane(const Ray& ray, glm::vec3 planePoint, glm::vec3 planeNormal) noexcept
+    {
+        const float denom = glm::dot(planeNormal, ray.direction);
+        if (std::abs(denom) < 1e-5f) return std::nullopt;                 // grazing
+        const float s = glm::dot(planeNormal, planePoint - ray.origin) / denom;
+        if (s < 0.0f) return std::nullopt;                                 // behind the ray
+        return ray.origin + ray.direction * s;
+    }
+
+    // ---- HitTest ---------------------------------------------------------------
+    GizmoAxis HitTest(GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
+                      GizmoHandleMask handles, float sizeScale, glm::vec2 mouse)
+    {
+        const glm::vec2 pivotPx = Px(view, t.position);
+        if (!Finite(pivotPx)) return GizmoAxis::None;
+        const float R = Reach(view, t.position, sizeScale);
+        const GizmoSpace axisSpace = (mode == GizmoMode::Scale) ? GizmoSpace::Local : space;
 
         if (mode == GizmoMode::Rotate)
         {
-            const float d = glm::length(mouseScreen - pivot);
-            return std::fabs(d - kRingRadiusPx) <= kRingBandPx ? GizmoAxis::Center : GizmoAxis::None;
+            // Rings first, the most camera-facing first: an edge-on ring is a
+            // line through the pivot that would otherwise steal every hit.
+            const glm::vec3 fwd = ViewForward(view);
+            std::array<GizmoAxis, 3> order{ GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z };
+            std::sort(order.begin(), order.end(), [&](GizmoAxis a, GizmoAxis b)
+            {
+                return std::abs(glm::dot(AxisDir(space, t.rotation, a), fwd)) > std::abs(glm::dot(AxisDir(space, t.rotation, b), fwd));
+            });
+            for (GizmoAxis a : order)
+            {
+                if (!handles.Has(a)) continue;
+                const auto ring = RingWorld(t.position, AxisDir(space, t.rotation, a), R * kRingFrac);
+                for (int i = 0; i < kRingSegments; ++i)
+                {
+                    const glm::vec2 p0 = Px(view, ring[static_cast<std::size_t>(i)]), p1 = Px(view, ring[static_cast<std::size_t>(i + 1)]);
+                    if (Finite(p0) && Finite(p1) && DistToSegment(mouse, p0, p1) <= kRingBandPx) return a;
+                }
+            }
+            if (handles.Has(GizmoAxis::Screen) &&
+                std::abs(glm::length(mouse - pivotPx) - kScreenRingRadiusPx * sizeScale) <= kRingBandPx)
+                return GizmoAxis::Screen;
+            return GizmoAxis::None;
         }
 
-        // Center handle wins on overlap.
-        if (std::fabs(mouseScreen.x - pivot.x) <= kCenterHalfPx &&
-            std::fabs(mouseScreen.y - pivot.y) <= kCenterHalfPx)
+        // Centre wins on overlap.
+        if (handles.Has(GizmoAxis::Center) &&
+            std::abs(mouse.x - pivotPx.x) <= kCenterHalfPx && std::abs(mouse.y - pivotPx.y) <= kCenterHalfPx)
             return GizmoAxis::Center;
 
-        // Scale axes are always local; translate axes follow `space`.
-        const GizmoSpace axisSpace = (mode == GizmoMode::Scale) ? GizmoSpace::Local : space;
-        const glm::vec2 dirX = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::X));
-        const glm::vec2 dirY = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::Y));
+        if (mode == GizmoMode::Translate)
+        {
+            for (GizmoAxis plane : { GizmoAxis::XY, GizmoAxis::YZ, GizmoAxis::XZ })
+            {
+                if (!handles.Has(plane)) continue;
+                const auto [a, b] = PlaneAxes(plane);
+                const auto sq = PlaneSquareWorld(t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R);
+                const std::array<glm::vec2, 4> q{ Px(view, sq[0]), Px(view, sq[1]), Px(view, sq[2]), Px(view, sq[3]) };
+                if (InsideQuad(mouse, q)) return plane;
+            }
+        }
 
-        if (DistToSegment(mouseScreen, pivot, pivot + dirX * kAxisLenPx) <= kHitThreshPx) return GizmoAxis::X;
-        if (DistToSegment(mouseScreen, pivot, pivot + dirY * kAxisLenPx) <= kHitThreshPx) return GizmoAxis::Y;
+        for (GizmoAxis a : { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z })
+        {
+            if (!handles.Has(a)) continue;
+            const glm::vec2 tip = Px(view, t.position + AxisDir(axisSpace, t.rotation, a) * R);
+            if (Finite(tip) && DistToSegment(mouse, pivotPx, tip) <= kHitThreshPx) return a;
+        }
         return GizmoAxis::None;
     }
 
-    void Draw(Batcher2D& batcher, GizmoMode mode, GizmoSpace space,
-              const GizmoTransform& t, const GizmoView& view,
-              GizmoAxis hovered, GizmoAxis active)
+    // ---- Draw --------------------------------------------------------------------
+    void Draw(Batcher2D& batcher, GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
+              GizmoHandleMask handles, float sizeScale, GizmoAxis hovered, GizmoAxis active)
     {
-        batcher.SetLayer(0xFFFF, 0xFFFF);   // gizmo composites on top of the scene (max layer/order)
-
-        const glm::vec2 pivot = WorldToScreen(view, t.position);
+        batcher.SetLayer(0xFFFF, 0xFFFF);   // on top of the scene (max layer/order); overlay pixels, no depth
+        const glm::vec2 pivotPx = Px(view, t.position);
+        if (!Finite(pivotPx)) return;
+        const float R = Reach(view, t.position, sizeScale);
         const GizmoSpace axisSpace = (mode == GizmoMode::Scale) ? GizmoSpace::Local : space;
-        const glm::vec2 dirX = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::X));
-        const glm::vec2 dirY = AxisDirScreen(view, t.position, AxisDir(axisSpace, t.rotation, GizmoAxis::Y));
 
         if (mode == GizmoMode::Rotate)
         {
-            // Ring outline: no ring/circle-outline primitive exists, so approximate
-            // the outline as a closed polyline of thin Line segments.
-            const glm::vec4 ringColor = AxisColor(GizmoAxis::Center, hovered, active);
-            for (int i = 0; i < kRingSegments; ++i)
+            for (GizmoAxis a : { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z })
             {
-                const float a0 = kTau * static_cast<float>(i) / static_cast<float>(kRingSegments);
-                const float a1 = kTau * static_cast<float>(i + 1) / static_cast<float>(kRingSegments);
-                const glm::vec2 p0 = pivot + glm::vec2(std::cos(a0), std::sin(a0)) * kRingRadiusPx;
-                const glm::vec2 p1 = pivot + glm::vec2(std::cos(a1), std::sin(a1)) * kRingRadiusPx;
-                batcher.Line(p0, p1, kRingThicknessPx, ringColor);
+                if (!handles.Has(a)) continue;
+                const auto ring = RingWorld(t.position, AxisDir(space, t.rotation, a), R * kRingFrac);
+                Polyline(batcher, view, ring, kRingThicknessPx, HandleColor(a, hovered, active));
+            }
+            if (handles.Has(GizmoAxis::Screen))
+            {
+                const glm::vec4 c = HandleColor(GizmoAxis::Screen, hovered, active);
+                const float r = kScreenRingRadiusPx * sizeScale;
+                for (int i = 0; i < kRingSegments; ++i)
+                {
+                    const float a0 = kTau * static_cast<float>(i) / kRingSegments, a1 = kTau * static_cast<float>(i + 1) / kRingSegments;
+                    batcher.Line(pivotPx + glm::vec2(std::cos(a0), std::sin(a0)) * r, pivotPx + glm::vec2(std::cos(a1), std::sin(a1)) * r, kRingThicknessPx, c);
+                }
             }
             return;
         }
 
-        // Axis X + Y: shaft line + head (arrow for Translate, box for Scale).
-        const glm::vec2 tipX = pivot + dirX * kAxisLenPx;
-        const glm::vec2 tipY = pivot + dirY * kAxisLenPx;
-        const glm::vec4 colorX = AxisColor(GizmoAxis::X, hovered, active);
-        const glm::vec4 colorY = AxisColor(GizmoAxis::Y, hovered, active);
-        batcher.Line(pivot, tipX, kShaftThicknessPx, colorX);
-        batcher.Line(pivot, tipY, kShaftThicknessPx, colorY);
-
         if (mode == GizmoMode::Translate)
         {
-            // Solid triangle arrowhead: apex at the axis tip, base kArrowHeadLenPx
-            // back along the axis and kArrowHeadHalfWidthPx to each side.
-            const glm::vec2 perpX(-dirX.y, dirX.x);
-            const glm::vec2 perpY(-dirY.y, dirY.x);
-            const glm::vec2 baseX = tipX - dirX * kArrowHeadLenPx;
-            const glm::vec2 baseY = tipY - dirY * kArrowHeadLenPx;
-            batcher.Triangle(tipX, baseX + perpX * kArrowHeadHalfWidthPx,
-                             baseX - perpX * kArrowHeadHalfWidthPx, colorX);
-            batcher.Triangle(tipY, baseY + perpY * kArrowHeadHalfWidthPx,
-                             baseY - perpY * kArrowHeadHalfWidthPx, colorY);
-        }
-        else   // Scale
-        {
-            const glm::vec2 boxHalf(kScaleBoxHalfPx, kScaleBoxHalfPx);
-            batcher.Rect(tipX - boxHalf, boxHalf * 2.0f, colorX);
-            batcher.Rect(tipY - boxHalf, boxHalf * 2.0f, colorY);
+            for (GizmoAxis plane : { GizmoAxis::XY, GizmoAxis::YZ, GizmoAxis::XZ })
+            {
+                if (!handles.Has(plane)) continue;
+                const auto [a, b] = PlaneAxes(plane);
+                const auto sq = PlaneSquareWorld(t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R);
+                const std::array<glm::vec2, 4> q{ Px(view, sq[0]), Px(view, sq[1]), Px(view, sq[2]), Px(view, sq[3]) };
+                if (!Finite(q[0]) || !Finite(q[1]) || !Finite(q[2]) || !Finite(q[3])) continue;
+                glm::vec4 c = HandleColor(plane, hovered, active);
+                c.w = (plane == hovered || plane == active) ? 0.6f : 0.35f;
+                batcher.Triangle(q[0], q[1], q[2], c);
+                batcher.Triangle(q[0], q[2], q[3], c);
+            }
         }
 
-        // Center box.
-        const glm::vec2 centerHalf(kCenterHalfPx, kCenterHalfPx);
-        batcher.Rect(pivot - centerHalf, centerHalf * 2.0f, AxisColor(GizmoAxis::Center, hovered, active));
+        for (GizmoAxis a : { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z })
+        {
+            if (!handles.Has(a)) continue;
+            const glm::vec2 tip = Px(view, t.position + AxisDir(axisSpace, t.rotation, a) * R);
+            if (!Finite(tip)) continue;
+            const glm::vec4 c = HandleColor(a, hovered, active);
+            batcher.Line(pivotPx, tip, kShaftThicknessPx, c);
+            const glm::vec2 d = tip - pivotPx;
+            const float len = glm::length(d);
+            if (len < 2.0f) continue;   // pointing at the camera: a dot, no head
+            const glm::vec2 dir = d / len, perp(-dir.y, dir.x);
+            if (mode == GizmoMode::Translate)
+            {
+                const glm::vec2 base = tip - dir * kArrowHeadLenPx;
+                batcher.Triangle(tip, base + perp * kArrowHeadHalfPx, base - perp * kArrowHeadHalfPx, c);
+            }
+            else
+            {
+                const glm::vec2 half(kScaleBoxHalfPx, kScaleBoxHalfPx);
+                batcher.Rect(tip - half, half * 2.0f, c);
+            }
+        }
+
+        if (handles.Has(GizmoAxis::Center))
+        {
+            const glm::vec2 half(kCenterHalfPx, kCenterHalfPx);
+            batcher.Rect(pivotPx - half, half * 2.0f, HandleColor(GizmoAxis::Center, hovered, active));
+        }
     }
 
+    // ---- ApplyDrag ---------------------------------------------------------------
+    GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis, const GizmoTransform& start,
+                             const ViewTransform& view, glm::vec2 mouseStart, glm::vec2 mouseCur, const GizmoSnap& snap)
+    {
+        GizmoTransform r = start;
+        const Ray ray0 = view.ScreenToRay(mouseStart);
+        const Ray ray1 = view.ScreenToRay(mouseCur);
+        const GizmoSpace axisSpace = (mode == GizmoMode::Scale) ? GizmoSpace::Local : space;
+
+        switch (mode)
+        {
+        case GizmoMode::Translate:
+        {
+            if (axis == GizmoAxis::X || axis == GizmoAxis::Y || axis == GizmoAxis::Z)
+            {
+                // Closest point between the mouse ray and the axis LINE, before and after.
+                const glm::vec3 dir = AxisDir(axisSpace, start.rotation, axis);
+                const float d = ClosestLineParam(start.position, dir, ray1) - ClosestLineParam(start.position, dir, ray0);
+                if (snap.enabled && axisSpace == GizmoSpace::Local)
+                    r.position = start.position + SnapScalar(d, snap.translate) * dir;
+                else
+                {
+                    r.position = start.position + d * dir;
+                    if (snap.enabled)   // world axis: snap the moved COMPONENT so it lands on the grid
+                    {
+                        const int i = axis == GizmoAxis::X ? 0 : axis == GizmoAxis::Y ? 1 : 2;
+                        r.position[i] = SnapScalar(r.position[i], snap.translate);
+                    }
+                }
+            }
+            else if (axis == GizmoAxis::XY || axis == GizmoAxis::YZ || axis == GizmoAxis::XZ || axis == GizmoAxis::Center)
+            {
+                // Ray-plane, before and after. Center is the CAMERA plane (in the
+                // 2D view that is the XY plane, so it is the old free move).
+                const glm::vec3 n = axis == GizmoAxis::Center ? ViewForward(view) : AxisDir(axisSpace, start.rotation, axis);
+                const auto p0 = RayPlane(ray0, start.position, n);
+                const auto p1 = RayPlane(ray1, start.position, n);
+                if (!p0 || !p1) break;   // grazing / behind the eye: hold the start
+                glm::vec3 delta = *p1 - *p0;
+                delta -= n * glm::dot(delta, n);   // EXACTLY in the plane: a 2D drag leaves z untouched to the bit
+                if (snap.enabled)
+                {
+                    if (axis == GizmoAxis::Center || axisSpace == GizmoSpace::World)
+                    {
+                        glm::vec3 p = start.position + delta;
+                        for (int i = 0; i < 3; ++i)
+                            if (axis == GizmoAxis::Center || std::abs(n[i]) < 0.5f)   // the components the plane spans
+                                p[i] = SnapScalar(p[i], snap.translate);
+                        r.position = p;
+                    }
+                    else
+                    {
+                        const auto [a, b] = PlaneAxes(axis);
+                        const glm::vec3 da = AxisDir(axisSpace, start.rotation, a), db = AxisDir(axisSpace, start.rotation, b);
+                        r.position = start.position + SnapScalar(glm::dot(delta, da), snap.translate) * da
+                                                    + SnapScalar(glm::dot(delta, db), snap.translate) * db;
+                    }
+                }
+                else
+                    r.position = start.position + delta;
+            }
+            break;
+        }
+        case GizmoMode::Rotate:
+        {
+            const glm::vec3 n = axis == GizmoAxis::Screen ? ViewForward(view) : AxisDir(space, start.rotation, axis);
+            const auto p0 = RayPlane(ray0, start.position, n);
+            const auto p1 = RayPlane(ray1, start.position, n);
+            if (!p0 || !p1) break;
+            const auto [u, v] = PlaneBasis(n);
+            const glm::vec3 d0 = *p0 - start.position, d1 = *p1 - start.position;
+            const float a0 = std::atan2(glm::dot(d0, v), glm::dot(d0, u));
+            const float a1 = std::atan2(glm::dot(d1, v), glm::dot(d1, u));
+            float delta = a1 - a0;   // world-sense: u x v == n, so + is a right-hand turn about n
+            if (snap.enabled) delta = SnapScalar(delta, snap.rotationDeg * kPi / 180.0f);
+            // n is already the WORLD direction of the chosen axis -- AxisDir(Local,
+            // rot, a) returns the local axis in world coordinates -- so the turn
+            // PRE-multiplies in every case: there is no separate local-space form.
+            r.rotation = glm::normalize(glm::angleAxis(delta, n) * start.rotation);
+            break;
+        }
+        case GizmoMode::Scale:
+        {
+            const glm::vec2 pivotPx = Px(view, start.position);
+            if (!Finite(pivotPx)) break;
+            if (axis == GizmoAxis::Center)
+            {
+                const float l0 = glm::length(mouseStart - pivotPx), l1 = glm::length(mouseCur - pivotPx);
+                const float f = l0 > kEps ? l1 / l0 : 1.0f;
+                r.scale = start.scale * f;
+            }
+            else if (axis == GizmoAxis::X || axis == GizmoAxis::Y || axis == GizmoAxis::Z)
+            {
+                // Screen delta along the PROJECTED local axis, as a ratio of the
+                // grab distance -- projection-independent, and the box the user
+                // grabbed stays under the cursor along that axis.
+                const glm::vec3 dir = AxisDir(GizmoSpace::Local, start.rotation, axis);
+                const glm::vec2 tip = Px(view, start.position + dir * (10.0f * WorldUnitsPerPixel(view, start.position)));
+                if (!Finite(tip)) break;
+                const glm::vec2 d = tip - pivotPx;
+                const float len = glm::length(d);
+                if (len < kEps) break;   // the axis points at the camera: no screen direction to measure along
+                const glm::vec2 dpx = d / len;
+                const float s0 = glm::dot(mouseStart - pivotPx, dpx), s1 = glm::dot(mouseCur - pivotPx, dpx);
+                const float f = std::abs(s0) > kEps ? s1 / s0 : 1.0f;
+                const int i = axis == GizmoAxis::X ? 0 : axis == GizmoAxis::Y ? 1 : 2;
+                r.scale[i] = start.scale[i] * f;
+            }
+            for (int i = 0; i < 3; ++i)
+            {
+                if (snap.enabled) r.scale[i] = SnapScalar(r.scale[i], snap.scale);
+                // Clamp the MAGNITUDE and keep the sign: a mirrored entity (a
+                // negative authored scale) stays mirrored through a scale drag.
+                const float sign = r.scale[i] < 0.0f ? -1.0f : 1.0f;
+                r.scale[i] = sign * std::max(std::abs(r.scale[i]), kMinScale);
+            }
+            break;
+        }
+        }
+        return r;
+    }
+
+    // ---- group delta ---------------------------------------------------------------
     GizmoGroupDelta MakeGroupDelta(const GizmoTransform& start, const GizmoTransform& end)
     {
         GizmoGroupDelta d;
         d.translate = end.position - start.position;
-        d.rotate    = end.rotation - start.rotation;
+        d.rotate    = glm::normalize(end.rotation * glm::inverse(start.rotation));   // the WORLD turn that takes start to end
         d.pivot     = start.position;
-        d.scale.x   = std::abs(start.scale.x) > 1e-6f ? end.scale.x / start.scale.x : 1.0f;
-        d.scale.y   = std::abs(start.scale.y) > 1e-6f ? end.scale.y / start.scale.y : 1.0f;
+        for (int i = 0; i < 3; ++i)
+            d.scale[i] = std::abs(start.scale[i]) > 1e-6f ? end.scale[i] / start.scale[i] : 1.0f;
         return d;
     }
 
     GizmoTransform ApplyGroupDelta(const GizmoTransform& t, const GizmoGroupDelta& d)
     {
-        // Scale then rotate the member's offset from the pivot, then shift.
-        // (Equivalent to the mat3 T*R*S about the pivot, written directly:
-        // the 2x2 has no shear, so composing matrices would only obscure it.)
-        glm::vec2 rel = t.position - d.pivot;
-        rel *= d.scale;
-        const float c = std::cos(d.rotate);
-        const float s = std::sin(d.rotate);
-        rel = glm::vec2(rel.x * c - rel.y * s, rel.x * s + rel.y * c);
-
+        // Scale then turn the member's offset from the pivot, then shift: T*R*S about the pivot.
+        const glm::vec3 rel = d.rotate * ((t.position - d.pivot) * d.scale);
         GizmoTransform r;
         r.position = d.pivot + rel + d.translate;
-        r.rotation = t.rotation + d.rotate;
+        r.rotation = glm::normalize(d.rotate * t.rotation);
         r.scale    = t.scale * d.scale;
         return r;
     }
 
+    // ---- decompose / compose ------------------------------------------------------
     GizmoTransform DecomposeTRS(const glm::mat4& m)
     {
         GizmoTransform t;
-        t.position = glm::vec2(m[3]);   // mat4 translation column (was column 2 in the mat3)
-
-        const glm::vec2 col0(m[0]);
-        const glm::vec2 col1(m[1]);
-        const float len0 = glm::length(col0);
-        const float len1 = glm::length(col1);
-        t.scale = glm::vec2(len0, len1);
-
-        if (len0 > kEps)
+        t.position = glm::vec3(m[3]);
+        glm::mat3 basis{ glm::vec3(m[0]), glm::vec3(m[1]), glm::vec3(m[2]) };   // braces: the paren form is a function declaration
+        for (int i = 0; i < 3; ++i)
         {
-            t.rotation = std::atan2(col0.y, col0.x);
+            const float len = glm::length(basis[i]);
+            t.scale[i] = len;
+            basis[i] = len > kEps ? basis[i] / len : glm::vec3(i == 0, i == 1, i == 2);   // a dead axis keeps its identity direction
         }
-        else if (len1 > kEps)
+        if (glm::determinant(basis) < 0.0f)
         {
-            // col1 = R(rotation) applied to (0,1), i.e. col0's direction rotated
-            // +90deg -- back out rotation by undoing that quarter turn.
-            t.rotation = std::atan2(col1.y, col1.x) - 1.57079632679489661923f;
+            // A mirror. Negate X (UE's convention); the caller re-homes it if the
+            // author put the mirror elsewhere (WithMirrorOn).
+            t.scale.x = -t.scale.x;
+            basis[0]  = -basis[0];
         }
-        else
-        {
-            t.rotation = 0.0f;   // both axes degenerate: no orientation info, stay finite
-        }
+        t.rotation = glm::normalize(glm::quat_cast(basis));
         return t;
     }
 
     glm::mat4 ComposeTRS(const GizmoTransform& t)
     {
-        // The planar pose written into a mat4: identical to
-        // Transform::ToMatrix (Scene/Components.hpp) for a pose whose rotation
-        // is about +Z, whose position.z is 0 and whose scale.z is 1. The Z
-        // column is left as the untouched identity axis -- the gizmo has no
-        // handle that could have produced anything else.
-        const float c = std::cos(t.rotation);
-        const float s = std::sin(t.rotation);
-        glm::mat4 m(1.0f);
-        m[0] = glm::vec4(c * t.scale.x,  s * t.scale.x, 0.0f, 0.0f);
-        m[1] = glm::vec4(-s * t.scale.y, c * t.scale.y, 0.0f, 0.0f);
-        m[2] = glm::vec4(0.0f,           0.0f,          1.0f, 0.0f);
-        m[3] = glm::vec4(t.position.x,   t.position.y,  0.0f, 1.0f);
-        return m;
+        // translate * rotate * scale -- Transform::ToMatrix's order (pinned in GizmoTest.cpp).
+        return glm::translate(glm::mat4(1.0f), t.position) * glm::mat4_cast(t.rotation) * glm::scale(glm::mat4(1.0f), t.scale);
     }
 
-    bool IsPlanarBasis(const glm::mat4& m)
+    GizmoTransform WithMirrorOn(const GizmoTransform& t, int axis)
     {
-        // See Gizmo.hpp for WHY. Relative to each column's own length, because
-        // these columns carry scale.
-        constexpr float kPlanarTolerance = 1e-3f;
-
-        // A column whose length is at or below kEps carries no orientation at
-        // all -- DecomposeTRS already has explicit degenerate-axis handling
-        // (scale 0, rotation from the other axis), so refusing here would
-        // reject a case the decomposition is already honest about.
-        const auto inPlane = [](const glm::vec3& c)
-        {
-            const float len = glm::length(c);
-            return len <= kEps || std::fabs(c.z) <= kPlanarTolerance * len;
-        };
-
-        // Columns 0 and 1 in the plane is the NECESSARY AND SUFFICIENT
-        // condition for the caller's actual question, and the derivation is
-        // short enough to record: the demoted matrix is inverse(L) * C, where
-        // C is ComposeTRS's output and therefore already planar. inverse(L)
-        // maps the z = 0 plane into itself exactly when L's image of that plane
-        // IS that plane -- i.e. when L's first two columns span it -- so
-        // columns 0 and 1 having no z component is the whole test.
-        //
-        // Column 2 is checked anyway, and deliberately as a CONSERVATIVE extra
-        // rather than a necessity: it is what makes the predicate mean what its
-        // NAME says, so a later caller (F4 deciding whether 2D handles are
-        // honest, say) gets "this basis is planar" and not "this basis happens
-        // not to break one particular decomposition". It cannot cost a real
-        // drag today -- a single TRS with a unit quaternion has an orthogonal
-        // basis, so columns 0 and 1 lying in the plane forces column 2 onto
-        // +/-Z -- and where a long chain of composes could in principle shear
-        // Z into the plane while keeping the first two clean, refusing is the
-        // safe answer for a gizmo that cannot express that pose either way.
-        //
-        // A NEGATIVE z scale keeps column 2 ALONG the normal and both XY axes
-        // in the plane, so a mirrored parent stays planar -- as it must, or an
-        // ordinary mirror would refuse every drag beneath it.
-        const glm::vec3 c2(m[2]);
-        const float len2 = glm::length(c2);
-        const bool zAligned = len2 <= kEps ||
-                              glm::length(glm::vec2(c2)) <= kPlanarTolerance * len2;
-
-        return inPlane(glm::vec3(m[0])) && inPlane(glm::vec3(m[1])) && zAligned;
+        if (t.scale.x >= 0.0f || axis < 1 || axis > 2) return t;
+        // S' = S * D, R' = R * D, D = diag with -1 on X and on `axis`: a half turn
+        // about the remaining axis, so R * D is still a rotation and the matrix is unchanged.
+        GizmoTransform r = t;
+        r.scale.x     = -t.scale.x;
+        r.scale[axis] = -t.scale[axis];
+        const glm::vec3 third = axis == 1 ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+        r.rotation = glm::normalize(t.rotation * glm::angleAxis(kPi, third));
+        return r;
     }
 }

@@ -16,7 +16,10 @@
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <glm/gtc/quaternion.hpp>
+
 #include <array>
+#include <cmath>
 #include <memory>
 #include <span>
 
@@ -402,7 +405,7 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
     // parents are rotated.
     auto runGroupTranslate = [](Astra::Registry& reg,
                                 std::span<const Astra::Entity> roots,
-                                Astra::Entity primary, glm::vec2 worldDelta)
+                                Astra::Entity primary, glm::vec3 worldDelta)
     {
         const GizmoTransform startPrimary = DecomposeTRS(Edit::WorldMatrix(reg, primary));
         GizmoTransform endPrimary = startPrimary;
@@ -417,12 +420,11 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
                 glm::inverse(Edit::ParentWorldMatrix(reg, e)) * ComposeTRS(w);
             const GizmoTransform r = DecomposeTRS(localMat);
             Transform* t = reg.GetComponent<Transform>(e);
-            // Mirrors EditorAppFrame.cpp's write-back exactly, INCLUDING its
-            // Task 3 (F1) merge: the 2D gizmo carries position.z/scale.z
-            // through untouched and can only express a turn about +Z.
-            t->position = glm::vec3(r.position, t->position.z);
-            t->rotation = Arcane::RotationAboutZ(r.rotation);
-            t->scale    = glm::vec3(r.scale, t->scale.z);
+            // Mirrors EditorAppFrame.cpp's write-back exactly: the 3D gizmo
+            // (F4 plan 2) expresses the whole pose, so nothing is re-merged.
+            t->position = r.position;
+            t->rotation = r.rotation;
+            t->scale    = r.scale;
         }
     };
 
@@ -444,13 +446,13 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
         const std::vector<Astra::Entity> roots = Edit::SelectionRoots(w.reg, sel);
         REQUIRE(roots.size() == 2);
 
-        const glm::vec2 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[3]);
-        const glm::vec2 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[3]);
+        const glm::vec3 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec3 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[3]);
 
-        runGroupTranslate(w.reg, roots, childA, glm::vec2(5.0f, 0.0f));
+        runGroupTranslate(w.reg, roots, childA, glm::vec3(5.0f, 0.0f, 0.0f));
 
-        const glm::vec2 worldAfterA(Edit::WorldMatrix(w.reg, childA)[3]);
-        const glm::vec2 worldAfterB(Edit::WorldMatrix(w.reg, childB)[3]);
+        const glm::vec3 worldAfterA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec3 worldAfterB(Edit::WorldMatrix(w.reg, childB)[3]);
         CHECK_THAT(worldAfterA.x, WithinAbs(worldBeforeA.x + 5.0f, 1e-4f));
         CHECK_THAT(worldAfterA.y, WithinAbs(worldBeforeA.y, 1e-4f));
         CHECK_THAT(worldAfterB.x, WithinAbs(worldBeforeB.x + 5.0f, 1e-4f));
@@ -475,13 +477,13 @@ TEST_CASE("Gizmo group delta crosses differently-parented roots correctly in WOR
         const std::vector<Astra::Entity> roots = Edit::SelectionRoots(w.reg, sel);
         REQUIRE(roots.size() == 2);
 
-        const glm::vec2 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[3]);
-        const glm::vec2 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[3]);
+        const glm::vec3 worldBeforeA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec3 worldBeforeB(Edit::WorldMatrix(w.reg, childB)[3]);
 
-        runGroupTranslate(w.reg, roots, childA, glm::vec2(5.0f, 0.0f));
+        runGroupTranslate(w.reg, roots, childA, glm::vec3(5.0f, 0.0f, 0.0f));
 
-        const glm::vec2 worldAfterA(Edit::WorldMatrix(w.reg, childA)[3]);
-        const glm::vec2 worldAfterB(Edit::WorldMatrix(w.reg, childB)[3]);
+        const glm::vec3 worldAfterA(Edit::WorldMatrix(w.reg, childA)[3]);
+        const glm::vec3 worldAfterB(Edit::WorldMatrix(w.reg, childB)[3]);
         // Under the OLD local-space code, childB's local +5 X would have moved
         // it along world +Y instead (parent B is rotated 90deg) -- this makes
         // the old behaviour impossible to pass accidentally.
@@ -545,175 +547,25 @@ TEST_CASE("CreateEntityInScene refuses when there is no SceneRoot at all",
     CHECK_FALSE(created.IsValid());
 }
 
-// ---------------------------------------------------------------------------
-// Final-review finding 4 (F1): the tilted-parent scale corruption.
-//
-// DecomposeTRS reads the 2D PROJECTION of the basis columns -- scale =
-// (|vec2(m[0])|, |vec2(m[1])|). Under an ancestor with an out-of-plane
-// rotation those projections are SHORTER than the true axis lengths, and
-// EditorApp's write-back assigns that shortened pair as the child's scale.
-// So a PURE TRANSLATE drag on a child of a tilted parent silently shrinks it.
-//
-// This is F1's problem, not F4's: before this phase a float `rotation` could
-// not express a tilted parent, so the state was unreachable. The quaternion
-// widening made it authorable -- the new Quat Inspector row will set a 45
-// degree pitch happily -- while leaving the planar assumption in place. The
-// group-drag case above uses a Z-ROTATED parent, which is precisely the
-// family that does NOT trip this, so the gap was untested by construction.
-//
-// The chosen mechanism is REFUSAL, not repair: see IsPlanarBasis in Gizmo.hpp.
-TEST_CASE("a tilted parent corrupts the planar decomposition, and IsPlanarBasis names it",
-          "[outliner][gizmo]")
+TEST_CASE("a tilted parent is an ordinary parent for the 3D gizmo: a pure translate leaves the child's scale and tilt alone", "[outliner][gizmo]")
 {
     World w;
     Astra::Entity parent = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
     Astra::Entity child  = Edit::CreateEntity(w.reg, parent);
-
-    Transform* tp = w.reg.GetComponent<Transform>(parent);
-    // 45 degrees about +X: an OUT-OF-PLANE tilt, not the Z turn the 2D gizmo
-    // is built for. Authorable today through the Inspector's Euler row.
-    tp->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-
+    w.reg.GetComponent<Transform>(parent)->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
     Transform* tc = w.reg.GetComponent<Transform>(child);
-    tc->position = glm::vec3(2.0f, 0.0f, 0.0f);
-    tc->scale    = glm::vec3(1.0f, 1.0f, 1.0f);
-
-    // 1. The corruption is REAL, and exactly reproducible. Run EditorApp's
-    //    write-back math (EditorAppFrame.cpp:940-963) for a PURE TRANSLATE.
+    tc->position = glm::vec3(2.0f, 0.0f, 0.0f); tc->scale = glm::vec3(1.0f, 2.0f, 3.0f);
+    tc->rotation = glm::angleAxis(0.3f, glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::quat authored = tc->rotation;
     const GizmoTransform startWorld = DecomposeTRS(Edit::WorldMatrix(w.reg, child));
-    GizmoTransform moved = startWorld;
-    moved.position += glm::vec2(1.0f, 0.0f);   // translate only -- no scale handle touched
-    const glm::mat4 localMat =
-        glm::inverse(Edit::ParentWorldMatrix(w.reg, child)) * ComposeTRS(moved);
+    GizmoTransform moved = startWorld; moved.position += glm::vec3(1.0f, 0.0f, 0.0f);
+    const glm::mat4 localMat = glm::inverse(Edit::ParentWorldMatrix(w.reg, child)) * ComposeTRS(moved);
     const GizmoTransform r = DecomposeTRS(localMat);
-
-    // The Y axis is projected onto the plane TWICE -- once reading the world
-    // pose, once reading the demoted local one -- so a unit scale comes back
-    // as cos^2(45 deg) = 0.5. Half. From a drag that only moved the entity.
-    CHECK_THAT(r.scale.y, WithinAbs(0.5f, 1e-5f));
-    CHECK_THAT(tc->scale.y, WithinAbs(1.0f, 1e-6f));   // ... and this is what it should be
-    // The X axis lies in the plane under an X-tilt, so it survives -- which is
-    // why this fails SILENTLY: half the pose still looks right.
-    CHECK_THAT(r.scale.x, WithinAbs(1.0f, 1e-5f));
-
-    // 2. IsPlanarBasis is DecomposeTRS's precondition written down, and it
-    //    names this parent as one the 2D gizmo must not demote through.
-    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-
-    // 3. It must NOT fire on the family the 2D gizmo genuinely handles, or it
-    //    would refuse every ordinary drag in the tree. A Z turn with
-    //    non-uniform, non-unit scale is the general planar parent.
-    tp->rotation = Arcane::RotationAboutZ(0.6f);
-    tp->scale    = glm::vec3(2.0f, 3.0f, 1.0f);
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-
-    // A root's parent matrix is the identity -- planar by construction, and the
-    // case every unparented drag in the editor takes.
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, parent)));
-
-    // A negative Z scale mirrors the plane but keeps both XY axes IN it, so the
-    // planar decomposition is still exact. Refusing it would be over-broad.
-    tp->scale = glm::vec3(2.0f, 3.0f, -1.0f);
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-
-    // A tilt small enough to be float noise from a chain of planar composes
-    // must not refuse a legitimate drag; a tilt a human could author must.
-    tp->rotation = glm::angleAxis(glm::radians(0.001f), glm::vec3(1.0f, 0.0f, 0.0f));
-    tp->scale    = glm::vec3(1.0f, 1.0f, 1.0f);
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-    tp->rotation = glm::angleAxis(glm::radians(1.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-
-    // A tilt about +Y is the other out-of-plane axis, and it corrupts scale.x
-    // rather than scale.y -- the guard must not have been written for X alone.
-    tp->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-}
-
-// ---------------------------------------------------------------------------
-// The same corruption one level down: the tilted ENTITY (2026-08-22).
-//
-// F1 shipped the guard above asking only about ParentWorldMatrix, which left a
-// tilted entity under a PLANAR parent passing it and losing its tilt silently.
-// Two situations that look identical in the viewport -- a tilted thing you try
-// to drag -- and the editor warned about one and quietly corrupted the other.
-// A guard that fires inconsistently teaches a false lesson about when the gizmo
-// can be trusted, so the drag-start check now asks about BOTH matrices.
-//
-// This pins why neither arm can be dropped for the other. The cost is real and
-// accepted: translate is refused on a tilted entity too, and F4's 3D gizmo is
-// what lifts the restriction rather than a repair here.
-TEST_CASE("a tilted entity loses its tilt, and the world-basis arm names it",
-          "[outliner][gizmo]")
-{
-    World w;
-    Astra::Entity parent = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
-    Astra::Entity child  = Edit::CreateEntity(w.reg, parent);
-
-    Transform* tp = w.reg.GetComponent<Transform>(parent);
-    Transform* tc = w.reg.GetComponent<Transform>(child);
-    // A PLANAR parent -- the ordinary case the F1 guard waved through -- with
-    // the tilt on the child instead. Authorable through the Inspector's Euler
-    // row exactly as the parent tilt above is.
-    tp->rotation = Arcane::RotationAboutZ(0.6f);
-    tc->position = glm::vec3(2.0f, 0.0f, 0.0f);
-    tc->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-
-    // 1. The loss is REAL, and it is two losses, not one. Run EditorApp's
-    //    write-back math for a PURE TRANSLATE.
-    const GizmoTransform startWorld = DecomposeTRS(Edit::WorldMatrix(w.reg, child));
-    GizmoTransform moved = startWorld;
-    moved.position += glm::vec2(1.0f, 0.0f);   // translate only -- no other handle touched
-    const GizmoTransform r =
-        DecomposeTRS(glm::inverse(Edit::ParentWorldMatrix(w.reg, child)) * ComposeTRS(moved));
-
-    // Scale: the Y axis is projected onto the plane ONCE here (the parent is
-    // planar, so the demotion adds no second projection the way a tilted parent
-    // does) -- cos(45 deg), not the cos^2 of the case above. Still wrong, still
-    // from a drag that touched no scale handle.
-    CHECK_THAT(r.scale.y, WithinAbs(0.70710678f, 1e-5f));
-    CHECK_THAT(tc->scale.y, WithinAbs(1.0f, 1e-6f));   // ... and this is what it should be
-
-    // Orientation: the write-back assigns RotationAboutZ(r.rotation) wholesale,
-    // so the X tilt is not merely shortened, it is GONE. This is the half the
-    // scale check cannot see, and the reason the entity arm is not redundant
-    // with a scale-only concern.
-    const glm::quat rebuilt = Arcane::RotationAboutZ(r.rotation);
-    // sin(22.5 deg) -- half the 45 degree tilt, quaternions being half-angle.
-    CHECK_THAT(tc->rotation.x, WithinAbs(0.38268343f, 1e-5f));
-    CHECK_THAT(rebuilt.x, WithinAbs(0.0f, 1e-6f));   // a Z-only quat has no X term
-
-    // 2. The F1 guard said YES here -- that is the bug -- and the world arm
-    //    says no.
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::WorldMatrix(w.reg, child)));
-
-    // 3. Neither arm subsumes the other, so the check is a CONJUNCTION rather
-    //    than a swap. Tilt the parent 45 degrees and the child -45: the two
-    //    cancel, the world basis is planar again -- and the demotion still runs
-    //    through a non-planar inverse, so the parent arm is what refuses it.
-    tp->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    tc->rotation = glm::angleAxis(glm::radians(-45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    CHECK(Arcane::IsPlanarBasis(Edit::WorldMatrix(w.reg, child)));
-    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-
-    // 4. And the family the 2D gizmo genuinely handles must still pass BOTH,
-    //    or every ordinary drag in the tree would now be refused: Z turns and
-    //    non-uniform planar scale at both levels.
-    tp->rotation = Arcane::RotationAboutZ(0.6f);
-    tp->scale    = glm::vec3(2.0f, 3.0f, 1.0f);
-    tc->rotation = Arcane::RotationAboutZ(-0.2f);
-    tc->scale    = glm::vec3(0.5f, 1.5f, 1.0f);
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, child)));
-    CHECK(Arcane::IsPlanarBasis(Edit::WorldMatrix(w.reg, child)));
-
-    // A root drags through the same conjunction with an identity parent matrix,
-    // so the world arm is the only one carrying information there.
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, parent)));
-    CHECK(Arcane::IsPlanarBasis(Edit::WorldMatrix(w.reg, parent)));
-    tp->rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    CHECK(Arcane::IsPlanarBasis(Edit::ParentWorldMatrix(w.reg, parent)));
-    CHECK_FALSE(Arcane::IsPlanarBasis(Edit::WorldMatrix(w.reg, parent)));
+    CHECK_THAT(r.scale.x, WithinAbs(1.0f, 1e-4f)); CHECK_THAT(r.scale.y, WithinAbs(2.0f, 1e-4f)); CHECK_THAT(r.scale.z, WithinAbs(3.0f, 1e-4f));
+    CHECK(std::abs(std::abs(glm::dot(r.rotation, authored)) - 1.0f) < 1e-4f);   // the tilt survived
+    // The world motion is the requested (1,0,0): the parent's tilt is undone by the demotion.
+    const glm::vec3 worldAfter = glm::vec3((Edit::ParentWorldMatrix(w.reg, child) * ComposeTRS(r))[3]);
+    CHECK_THAT(glm::length(worldAfter - (startWorld.position + glm::vec3(1.0f, 0.0f, 0.0f))), WithinAbs(0.0f, 1e-4f));
 }
 
 // ---------------------------------------------------------------------------

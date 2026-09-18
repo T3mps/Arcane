@@ -1,14 +1,23 @@
 #pragma once
 
-// Arcane/Edit: 2D transform gizmo core (ARCANE_API, editor-free, STATELESS).
-// Pure functions over value inputs: HitTest (which handle is under the cursor),
-// ApplyDrag (new transform from the drag start), Draw (screen-constant geometry
-// into a Batcher2D). Arcane Editor owns all interaction state and consumes these.
+// Arcane/Edit: THE transform gizmo (ARCANE_API, editor-free, STATELESS, ONE
+// code path for every view). Pure functions over value inputs: HitTest (which
+// handle is under the cursor -- in PIXELS on the projected handle geometry, so
+// a projection change cannot change what is grabbable), ApplyDrag (new
+// transform from the drag start -- RAY-based through ViewTransform::ScreenToRay,
+// so orthographic and perspective share the math and differ only in the ray
+// constructor: Unreal's FViewportCursorLocation split), Draw (overlay pixels,
+// top layer, no depth: ImGuizmo's posture). The editor owns all interaction
+// state. (F4 plan 2, spec s7.2, R9.)
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Scene/ViewTransform.hpp>   // Affine2D
+#include <Arcane/Scene/ViewTransform.hpp>   // ViewTransform, Ray
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+
+#include <cstdint>
+#include <optional>
 
 namespace Arcane
 {
@@ -16,50 +25,86 @@ namespace Arcane
 
     enum class GizmoMode  { Translate, Rotate, Scale };
     enum class GizmoSpace { World, Local };
-    // Center = free-move (Translate) / uniform (Scale); in Rotate the ring is the
-    // sole handle and is reported as Center (ApplyDrag ignores the axis there).
-    enum class GizmoAxis  { None, X, Y, Center };
 
-    // Decoupled from Scene so Edit/Gizmo has no Scene dependency; Arcane Editor maps
-    // Transform <-> this.
+    // Translate: X/Y/Z arrows, XY/YZ/XZ plane squares, Center = camera-plane
+    // free move. Rotate: X/Y/Z rings + Screen (the camera-facing ring).
+    // Scale: X/Y/Z boxes + Center = uniform.
+    enum class GizmoAxis : std::uint8_t { None, X, Y, Z, XY, YZ, XZ, Center, Screen };
+
+    // Decoupled from Scene so Edit/Gizmo has no Scene dependency; Arcane Editor
+    // maps Transform <-> this (DecomposeTRS / ComposeTRS below).
     struct GizmoTransform
     {
-        glm::vec2 position{0.0f, 0.0f};
-        float     rotation = 0.0f;      // radians
-        glm::vec2 scale{1.0f, 1.0f};
+        glm::vec3 position{0.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};   // identity; glm's ctor is (w, x, y, z)
+        glm::vec3 scale{1.0f};
     };
 
-    // World<->screen for the viewport. MIRRORS Arcane::PickView (Render/PickEmit.hpp):
-    // the orthographic ViewTransform's Affine2D -- per-axis scale (y NEGATIVE for
-    // the +Y-up world on the y-down canvas) plus a canvas-px offset. Fill from
-    // ClientRuntime::View().AsAffine2D(), skipping the gizmo when that is nullopt
-    // (a perspective view; plan 2 gives the gizmo the ViewTransform itself).
-    struct GizmoView
+    // Which handles exist this frame -- HOST-SIDE. The 2D view is NOT a gizmo
+    // mode. It is the host hiding the handles that leave the XY plane --
+    // Translate: the Z arrow and the YZ/XZ squares; Rotate: the X and Y rings
+    // and the screen ring; Scale: the Z box -- and nothing else changes: a
+    // masked-out handle cannot be hit, is not drawn, and the drags that remain
+    // leave Z exactly where it was (an axis drag along X or Y has no Z
+    // component; a plane drag in XY zeroes its normal component explicitly).
+    // The user's ruling 2026-09-17: the old 2D path is deleted, not kept as a
+    // fast path.
+    struct ARCANE_API GizmoHandleMask   // exported: the members live in Arcane.dll
     {
-        Affine2D affine{};
+        std::uint16_t bits = 0xFFFF;   // bit i <=> GizmoAxis(i) exists
+
+        static GizmoHandleMask All() noexcept;
+        static GizmoHandleMask Planar(GizmoMode mode) noexcept;   // Translate: X Y XY Center; Rotate: Z; Scale: X Y Center
+
+        bool Has(GizmoAxis a) const noexcept;
+        void Set(GizmoAxis a, bool on) noexcept;
     };
 
     struct GizmoSnap
     {
         bool  enabled = false;   // Ctrl held during the drag
-        float translate = 0.5f;  // world units grid
+        float translate = 0.5f;  // metres
         float rotationDeg = 15.0f;
         float scale = 0.1f;
     };
 
-    // Which handle is under mouseScreen (None if off-gizmo). Center-priority.
+    // Screen-constant sizing, Unreal's rule (UnrealWidget.cpp): the handle
+    // radius in world units is kAxisLenPx x the gizmo-size setting x this --
+    // the clip-space w of the point over the projection's vertical scale and
+    // the viewport height. Collapses to the orthographic zoom in 2D (w = 1),
+    // grows with distance in perspective, so a handle is always the same size
+    // on screen and an axis pointing at the camera foreshortens the way a real
+    // object would.
+    ARCANE_API float WorldUnitsPerPixel(const ViewTransform& view, glm::vec3 worldPoint) noexcept;
+
+    // The parameter t along the LINE (origin + t * dir, dir unit) closest to
+    // the ray; the parallel case projects the ray origin onto the line. The
+    // axis drag: the difference of this before and after is the slide.
+    ARCANE_API float ClosestLineParam(glm::vec3 lineOrigin, glm::vec3 lineDir, const Ray& ray) noexcept;
+
+    // Where the ray meets the plane; nullopt when grazing or when the plane is
+    // behind the ray. The plane and rotate drags.
+    ARCANE_API std::optional<glm::vec3> RayPlane(const Ray& ray, glm::vec3 planePoint, glm::vec3 planeNormal) noexcept;
+
+    // Which handle is under mouseScreen (None if off-gizmo), in pixels on the
+    // projected geometry. Centre wins on overlap; rings are tried most
+    // camera-facing first (an edge-on ring is a line through the pivot).
     ARCANE_API GizmoAxis HitTest(GizmoMode mode, GizmoSpace space,
-                                 const GizmoTransform& t, const GizmoView& view,
+                                 const GizmoTransform& t, const ViewTransform& view,
+                                 GizmoHandleMask handles, float sizeScale,
                                  glm::vec2 mouseScreen);
 
-    // Screen-constant gizmo geometry for the current state; hovered/active brighten.
+    // Screen-constant gizmo geometry for the current state; hovered/active
+    // brighten. Overlay pixels on the top layer, no depth.
     ARCANE_API void Draw(Batcher2D& batcher, GizmoMode mode, GizmoSpace space,
-                         const GizmoTransform& t, const GizmoView& view,
+                         const GizmoTransform& t, const ViewTransform& view,
+                         GizmoHandleMask handles, float sizeScale,
                          GizmoAxis hovered, GizmoAxis active);
 
-    // New transform, computed from `start` (no accumulation drift).
+    // New transform, computed from `start` (no accumulation drift). Ray-based:
+    // the same math in every projection.
     ARCANE_API GizmoTransform ApplyDrag(GizmoMode mode, GizmoSpace space, GizmoAxis axis,
-                                        const GizmoTransform& start, const GizmoView& view,
+                                        const GizmoTransform& start, const ViewTransform& view,
                                         glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
                                         const GizmoSnap& snap);
 
@@ -69,10 +114,10 @@ namespace Arcane
     // members rather than spinning each in place.
     struct GizmoGroupDelta
     {
-        glm::vec2 translate{0.0f, 0.0f};
-        float     rotate = 0.0f;        // radians
-        glm::vec2 scale{1.0f, 1.0f};    // ratio, component-wise
-        glm::vec2 pivot{0.0f, 0.0f};    // the primary's PRE-drag position
+        glm::vec3 translate{0.0f};
+        glm::quat rotate{1.0f, 0.0f, 0.0f, 0.0f};   // the WORLD turn
+        glm::vec3 scale{1.0f};                       // ratio, component-wise
+        glm::vec3 pivot{0.0f};                       // the primary's PRE-drag position
     };
 
     // Delta from the primary's pre-drag pose to its post-drag pose. A start
@@ -87,64 +132,25 @@ namespace Arcane
     ARCANE_API GizmoTransform ApplyGroupDelta(const GizmoTransform& t,
                                               const GizmoGroupDelta& d);
 
-    // The PLANAR slice of a TRS mat4 (the shape Transform::ToMatrix produces)
-    // split into position/rotation/scale. Assumes no shear -- true for any
-    // product of TRS matrices with non-negative scale, which is what the scene
-    // graph builds. A zero-length basis axis yields scale 0 on that axis and
-    // leaves the rotation taken from the other axis.
-    //
-    // Task 3 (F1) widened the matrix to a mat4; GizmoTransform stays 2D because
-    // THE GIZMO STAYS 2D (making it 3D is F4 PLAN 2). So this reads only the XY block
-    // and the Z-axis turn, and everything out of that plane -- position.z,
-    // scale.z, any tilt -- is DROPPED. Round-tripping a pose through
-    // Decompose->Compose is therefore lossy for a non-planar entity, which is
-    // why EditorApp's write-back re-merges the components the gizmo cannot
-    // express instead of assigning the decomposed pose wholesale.
+    // Scale from the column lengths, rotation from the normalised basis
+    // (polar-decomposition-free; the same read ActivePerspectiveSceneCamera
+    // does). A NEGATIVE determinant is a mirror: one scale component is
+    // negative, and the decomposition cannot know which the author chose -- it
+    // negates X, UE's convention (FMatrix::ExtractScaling / GetScaleVector).
+    // The editor re-homes it with WithMirrorOn onto the axis the entity's
+    // authored scale carries, so a Y-mirrored sprite dragged once does not come
+    // back as an X-mirror with a half turn in its Inspector. Assumes no shear
+    // (any product of TRS matrices). A zero-length column yields scale 0 on
+    // that axis and the identity direction for it.
     ARCANE_API GizmoTransform DecomposeTRS(const glm::mat4& m);
 
-    // Inverse of DecomposeTRS: the planar pose embedded in a mat4 at z = 0 with
-    // unit Z scale. Identical to Transform::ToMatrix for the equivalent
-    // position/rotation/scale (pinned in GizmoTest.cpp).
+    // translate * rotate * scale: identical to Transform::ToMatrix for the
+    // equivalent position/rotation/scale (pinned in GizmoTest.cpp).
     ARCANE_API glm::mat4 ComposeTRS(const GizmoTransform& t);
 
-    // DecomposeTRS's PRECONDITION, written down so a caller can check it before
-    // trusting the result: does this matrix's linear part keep the XY plane in
-    // the XY plane?
-    //
-    // Why it has to exist (final-review finding 4, F1). DecomposeTRS takes
-    // scale from the 2D PROJECTION of the basis columns -- |vec2(m[0])|,
-    // |vec2(m[1])| -- which equals the true axis length only while the axis
-    // lies in the plane. Under an ancestor with an out-of-plane rotation it is
-    // strictly SHORTER, so EditorApp's world->local demotion
-    // (DecomposeTRS(inverse(ParentWorldMatrix) * ComposeTRS(w))) returns a
-    // scale that is not the entity's scale -- and a PURE TRANSLATE drag on a
-    // child of a tilted parent silently shrinks it. A 45 degree pitch costs
-    // half (the projection is applied twice: once reading the world pose, once
-    // reading the demoted local one).
-    //
-    // Before F1 the state was unreachable: a float `rotation` could not express
-    // a tilted parent. The quaternion widening made it authorable -- the Quat
-    // Inspector row will set a pitch happily -- while leaving the planar
-    // assumption in place, which is the same shape as the quaternion-norm
-    // hazard Task 3 caught at the LOAD boundary, one seam over at the AUTHORING
-    // boundary.
-    //
-    // EditorApp asks it TWICE per drag target, of ParentWorldMatrix and of
-    // WorldMatrix, because the demotion above and the world-pose READ that
-    // precedes it fail independently -- and because a gizmo that refuses a
-    // tilted parent but silently flattens a tilted entity teaches a false
-    // lesson about when it can be trusted. Neither answer implies the other:
-    // an entity tilted opposite its parent has a planar world basis and a
-    // non-planar parent. See the targets loop in EditorAppFrame.cpp.
-    //
-    // The tolerance is RELATIVE to each column's own length, because these
-    // columns carry SCALE: an absolute epsilon would refuse a 1000x-scaled
-    // planar parent and accept a 0.001x-scaled tilted one. 1e-3 of a column's
-    // length is ~0.06 degrees of tilt -- orders of magnitude above the ~1e-7
-    // float noise a chain of planar composes accumulates, and far below
-    // anything a human authors.
-    //
-    // NOT a general "is this matrix decomposable" test, and deliberately not a
-    // shear test: it answers only the question the 2D gizmo asks.
-    ARCANE_API bool IsPlanarBasis(const glm::mat4& m);
+    // Moves a negative X scale onto `axis` (1 = Y, 2 = Z) WITHOUT changing the
+    // matrix: S' = S.D and R' = R.D with D the diagonal flipping X and `axis`
+    // -- a proper rotation (a half turn about the third axis), so the pose is
+    // identical. Identity when scale.x >= 0 or axis is 0.
+    ARCANE_API GizmoTransform WithMirrorOn(const GizmoTransform& t, int axis);
 }
