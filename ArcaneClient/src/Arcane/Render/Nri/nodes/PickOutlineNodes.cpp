@@ -335,7 +335,12 @@ namespace Arcane
         const std::uint64_t vertexBytes = m_vertices.size() * sizeof(PickIdVertex);
         const std::uint64_t indexBytes  = m_indices.size() * sizeof(std::uint32_t);
 
-        const NriUploadRing::Alloc vertexAlloc = context.ring.Allocate(vertexBytes, sizeof(PickIdVertex));
+        // The VB's alignment is CHOSEN (16), not sizeof(PickIdVertex): the ring
+        // asserts a power of two and the 36-byte stride is not one -- Batch2DNode's
+        // kVertexAlign reasoning, verbatim (no backend wants a bind offset that is
+        // a multiple of the stride; every attribute lands on its natural boundary).
+        constexpr std::uint64_t kVertexAlign = 16;
+        const NriUploadRing::Alloc vertexAlloc = context.ring.Allocate(vertexBytes, kVertexAlign);
         const NriUploadRing::Alloc indexAlloc  = context.ring.Allocate(indexBytes, sizeof(std::uint32_t));
         if (!vertexAlloc.cpu || !indexAlloc.cpu)
         {

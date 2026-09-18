@@ -6940,27 +6940,35 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
     // vertex carries IS the id<->entity mapping every consumer inverts, and two
     // copies of this loop would be two id assignments that agree until one is
     // edited. These are the properties both recorders depend on.
-    std::vector<Arcane::PickDrawable> drawables(3);
+    //
+    // WORLD-SPACE inputs (F4 plan 2): a sprite Quad carries its four world
+    // corners verbatim, the physics shapes a world centre + metre radii, and a
+    // Mesh drawable is the id pass's OTHER pipeline's business -- it emits no
+    // quad here, but it still OWNS its slot in the k+1 numbering.
+    std::vector<Arcane::PickDrawable> drawables(4);
     drawables[0].kind        = Arcane::PickDrawable::Kind::Quad;
-    drawables[0].center      = { 10.0f, 20.0f };
-    drawables[0].halfExtents = { 4.0f, 2.0f };
+    drawables[0].corners     = { glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(4.0f, 2.0f, 0.0f),
+                                 glm::vec3(4.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 0.0f) };
     drawables[1].kind        = Arcane::PickDrawable::Kind::Circle;
-    drawables[1].center      = { 50.0f, 60.0f };
+    drawables[1].center      = { 50.0f, 60.0f, 0.0f };
     drawables[1].radius      = 7.0f;
     drawables[2].kind        = Arcane::PickDrawable::Kind::Capsule;
-    drawables[2].center      = { 90.0f, 5.0f };
+    drawables[2].center      = { 90.0f, 5.0f, 0.0f };
     drawables[2].radius      = 3.0f;
     drawables[2].halfLen     = 11.0f;
+    drawables[3].kind        = Arcane::PickDrawable::Kind::Mesh;
+    drawables[3].mesh        = Arcane::Guid{ 7, 7 };
 
     std::vector<Arcane::PickIdVertex> vertices;
     std::vector<std::uint32_t>        indices;
     Arcane::BuildPickIdGeometry(drawables, vertices, indices);
 
-    // One quad per drawable: 4 vertices, 6 indices.
+    // One quad per 2D drawable: 4 vertices, 6 indices -- and NOTHING for the
+    // mesh, whose triangles the pick node rasterises from its resident buffers.
     REQUIRE(vertices.size() == 12);
     REQUIRE(indices.size() == 18);
 
-    for (std::size_t d = 0; d < drawables.size(); ++d)
+    for (std::size_t d = 0; d < 3; ++d)
     {
         for (std::size_t v = 0; v < 4; ++v)
         {
@@ -6970,17 +6978,24 @@ TEST_CASE("pick geometry: ONE emitter feeds both recorders -- id k+1, back-to-fr
             CHECK(vertices[d * 4 + v].kind == Arcane::PickKindCode(drawables[d].kind));
         }
         // ...and the indices are per-quad and in submission order, so the
-        // LAST-drawn silhouette wins a contested pixel (there is no depth
-        // buffer on either path).
+        // LAST-drawn 2D silhouette wins a contested pixel (the 2D half draws
+        // with the depth test OFF; only the meshes after it are depth-tested).
         CHECK(indices[d * 6] == (std::uint32_t)d * 4u);
     }
 
+    // The Quad's corners pass through VERBATIM (its first vertex is the TL
+    // corner), and a shape's bound is placed about its world centre with the
+    // UNROTATED local the PS tests coverage against.
+    CHECK(vertices[0].pos   == glm::vec3(0.0f, 2.0f, 0.0f));
+    CHECK(vertices[4].local == glm::vec2(-7.0f, -7.0f));
+    CHECK(vertices[4].pos   == drawables[1].center + glm::vec3(-7.0f, -7.0f, 0.0f));
+
     // The rasterized quad is the drawable's BOUND, not its shape: a circle
     // covers radius x radius, a capsule (halfLen + radius) x radius. The PS
-    // discards the rest analytically.
+    // discards the rest analytically. A Quad's bound is half its edge lengths.
     CHECK(Arcane::PickBoundHalfExtents(drawables[1]) == glm::vec2(7.0f, 7.0f));
     CHECK(Arcane::PickBoundHalfExtents(drawables[2]) == glm::vec2(14.0f, 3.0f));
-    CHECK(Arcane::PickBoundHalfExtents(drawables[0]) == glm::vec2(4.0f, 2.0f));
+    CHECK(Arcane::PickBoundHalfExtents(drawables[0]) == glm::vec2(2.0f, 1.0f));
 
     // Both output vectors are CLEARED, not appended to -- a caller that reuses
     // its buffers every frame (both recorders do) must not accumulate.

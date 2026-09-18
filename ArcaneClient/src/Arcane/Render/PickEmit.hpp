@@ -2,29 +2,31 @@
 
 // PickEmit: the CPU "which entities are pickable" seam for GPU entity-id
 // picking (see docs/superpowers/specs/2026-07-19-arcane-entity-id-picking-design.md,
-// SS3b/3c). CollectPickables walks the registry for pickable entities (sprites
-// + physics colliders) and appends one PickDrawable per pickable shape, in
-// canvas pixels, ready for the id-pass VS. The k-th appended drawable (0-based)
+// SS3b/3c). CollectPickables walks the registry for pickable entities (sprites,
+// physics colliders, meshes) and appends one PickDrawable per pickable shape,
+// in WORLD space, ready for the id pass. The k-th appended drawable (0-based)
 // gets hit-proxy id k+1; PickEntityForId inverts that mapping (id 0 == background).
 //
-// Pure, device-less-testable: no GPU, no render device. This is the emitter half
-// of the hit-proxy pass; PickBuffer (a later task) owns the R32_UINT target,
-// the entity_id.hlsl pipeline, and the readback.
-//
-// PickView is the world->canvas mapping the scene render uses: the ViewTransform's
-// orthographic Affine2D (ViewTransform.hpp) -- a PER-AXIS scale plus a screen-
-// space offset in canvas px. The y scale is NEGATIVE for the +Y-up world on the
-// y-down canvas, so every point goes through Affine2D::Point and every angle
-// carries AngleSign (F4 plan 1 T3; plan 2 replaces the affine with the
-// ViewTransform itself). Width/height are NOT carried here -- PickBuffer owns those.
+// Pure, device-less-testable: no GPU, no render device, and -- since F4 plan 2
+// -- NO VIEW. The emitter knows nothing about the camera: sprites are the four
+// world corners SpriteWorldQuad places, physics silhouettes are world shapes in
+// metres at the body pose, meshes are a world matrix + the asset guid. The id
+// pass (Render/Nri/nodes/PickOutlineNodes.hpp's PickNode) projects all of it
+// through the frame's ViewTransform (NriGraphContext::FrameDesc::pickView), so
+// the same drawables pick correctly under an orthographic 2D view, a tilted
+// one or a perspective one. PickView and its Affine2D are gone with plan 1's
+// per-axis mapping.
 
 #include <Arcane/Base/Api.hpp>
-#include <Arcane/Scene/ViewTransform.hpp>   // Affine2D
+#include <Arcane/Guid.hpp>
 
 #include <Astra/Entity/Entity.hpp>
 
+#include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -34,63 +36,74 @@ namespace Astra { class Registry; }
 
 namespace Arcane
 {
-    // The world->canvas transform the scene render uses: the orthographic
-    // ViewTransform's Affine2D (canvas_px = world * scale + offset, scale.y < 0).
-    // Fill from ClientRuntime::View().AsAffine2D() -- and skip the pick emit
-    // when that is nullopt (a perspective view has no per-axis affine).
-    struct PickView
-    {
-        Affine2D affine{};
-    };
-
-    // A single pickable shape, already projected to CANVAS pixels (y-down),
-    // ready for the id-pass vertex shader. `entity` is the owning entity;
+    // A single pickable shape in WORLD space. `entity` is the owning entity;
     // `kind` selects which of the geometry fields are meaningful:
-    //   Quad/Box -- center, halfExtents, angle
-    //   Circle   -- center, radius
+    //   Quad     -- corners
+    //   Circle   -- center, radius, angle
     //   Capsule  -- center, halfLen, radius, angle
+    //   Box      -- center, halfExtents, angle
+    //   Mesh     -- world, mesh
     struct PickDrawable
     {
         Astra::Entity entity{};
 
-        enum class Kind : uint8_t { Quad, Circle, Capsule, Box };
+        enum class Kind : uint8_t { Quad, Circle, Capsule, Box, Mesh };
         Kind kind = Kind::Quad;
 
-        glm::vec2 center{0.0f, 0.0f};
-        glm::vec2 halfExtents{0.0f, 0.0f};
-        float     radius = 0.0f;
-        float     halfLen = 0.0f;
-        float     angle = 0.0f;   // radians, world rotation, in CANVAS sense (AngleSign applied)
+        // Quad (sprites): the four WORLD corners, TL, TR, BR, BL (SpriteWorldQuad's
+        // order -- Render/SpriteGeometry.hpp, THE corner rule the drawn quad uses).
+        std::array<glm::vec3, 4> corners{};
+
+        // Circle / Capsule / Box (physics fixtures): a WORLD-space shape in the XY
+        // plane at `center` (metres; z = the entity's world z, 0 without a
+        // WorldTransform), turned by `angle` (radians, world sense, about +Z).
+        glm::vec3 center{0.0f};
+        glm::vec2 halfExtents{0.0f};   // Box
+        float     radius  = 0.0f;      // Circle / Capsule
+        float     halfLen = 0.0f;      // Capsule
+        float     angle   = 0.0f;
+
+        // Mesh: the whole resident mesh, rasterised by the pick node's second
+        // pipeline through `world` (the entity's WorldTransform matrix).
+        glm::mat4 world{1.0f};
+        Guid      mesh{};
     };
 
     // Collect every pickable entity's silhouette geometry, appended to `out`
     // (NOT cleared -- caller controls accumulation; pass an empty vector to
-    // start fresh, matching how tests and PickBuffer both use it).
+    // start fresh, matching how tests and the hosts both use it).
     //
     // ORDERING (this IS the hit-proxy id assignment: id = index+1):
-    //   1. Sprites  -- entities with (WorldTransform, SpriteRenderer), in the
-    //      registry's view iteration order (archetype-stable). One Quad per
-    //      entity, derived from the world matrix + the sprite ASSET's base size
-    //      (SpriteTable, 1x1 m when unresolved) (same OBB math the retired CPU
-    //      sprite-OBB pick used: angle = atan2 of the local-x column,
-    //      half-extents = base size*0.5 scaled by the column magnitudes --
-    //      Transform.scale baked into the world matrix -- and the centre offset
-    //      from the translation column by the asset's pivot, zero at the
-    //      default centre), then projected to canvas via `view`.
+    //   1. Sprites   -- View<WorldTransform, SpriteRenderer, Not<Hidden>>: the
+    //      DRAWN set, RenderSystems.hpp's own filter, in the registry's view
+    //      iteration order (archetype-stable). One Quad per entity whose
+    //      corners are SpriteWorldQuad(world matrix, the sprite ASSET's base
+    //      size, its pivot) -- the SpriteTable resolves both exactly as
+    //      submission does (1x1 m at the centre pivot when unresolved) -- so
+    //      the silhouette is the drawn quad under ANY projection, a mirrored
+    //      or off-centre pivot included.
     //   2. Colliders -- one PickDrawable per Fixture, iterated via an
     //      archetype-stable View<Collider2D, PhysicsBodyRef> (DETERMINISTIC:
     //      the id assignment id=index+1 must not depend on unordered_map hash
     //      order -- the same rule PhysicsSystem's create pass follows). The body
     //      pose comes from the live PhysicsWorld via PhysicsBodyRef::handle;
     //      fixture dims + local offset are scaled by PhysicsBodyRef::appliedScale
-    //      so a scaled body's silhouette matches its drawn collider.
-    // Documented choice: sprites are collected first (back), then colliders
-    // (front) -- later drawables win a contested pixel in the id pass, so a
-    // collider picks over an underlying sprite. Physics colliders are read via
-    // registry.GetResource<PhysicsResource>(); if absent (no physics world on
-    // this registry), only sprites are collected -- not an error.
-    ARCANE_API void CollectPickables(Astra::Registry& registry, const PickView& view,
-                                     std::vector<PickDrawable>& out);
+    //      so a scaled body's silhouette matches its drawn collider. Physics
+    //      colliders are read via registry.GetResource<PhysicsResource>(); if
+    //      absent (no physics world on this registry), none are collected --
+    //      not an error.
+    //   3. Meshes    -- View<WorldTransform, MeshRenderer, Not<Hidden>>, resolved
+    //      through the registry's MeshTable; a nil, unresolved or EMPTY mesh
+    //      (no sections) emits nothing, exactly what CollectMeshInstances
+    //      (Render/MeshSubmissionSystem.hpp) draws. ONE drawable per entity
+    //      whatever its section count: sections carry materials, not identity.
+    //
+    // THE ORDER RULE FOR THE ID PASS (spec s7.1): the 2D kinds draw first with
+    // the depth test OFF in submission order (later wins, so a collider picks
+    // over an underlying sprite), then the meshes draw depth-tested against a
+    // cleared depth -- so a mesh always owns a pixel it shares with a sprite,
+    // and meshes resolve among themselves by depth: the main pass's order.
+    ARCANE_API void CollectPickables(Astra::Registry& registry, std::vector<PickDrawable>& out);
 
     // The pass id assigned to `e` under the k+1 convention CollectPickables emits
     // (the k-th entity in `ordered` gets id k+1; 0 = background). Reverse of the
@@ -164,14 +177,16 @@ namespace Arcane
     inline constexpr uint32_t kPickSupersample = 2;
 
     // =====================================================================
-    // THE ID PASS'S GEOMETRY -- ONE emitter.
+    // THE ID PASS'S 2D GEOMETRY -- ONE emitter.
     //
     // A recorder MUST build these vertices from these drawables in this
     // order, because the 1-based id a vertex carries IS the id<->entity
     // mapping every consumer inverts (PickEntityForId). A second copy of this
     // loop would be a second id assignment that agrees until one of them is
     // edited -- the same reasoning that keeps ONE Batcher2D feeding the 2D
-    // path.
+    // path. Mesh drawables emit NO quad here (the pick node rasterises their
+    // resident triangles through its second pipeline) but they still OWN their
+    // index in the numbering, so the two pipelines share one id space.
     //
     // Pure and device-less: no render device, no graphics API at all.
     // =====================================================================
@@ -180,31 +195,41 @@ namespace Arcane
     // C++ attribute array order at the recorder MUST match that struct's
     // member order (NRI takes an explicit vk.location, and D3D matches the
     // custom semantic name at SemanticIndex 0).
+    //
+    // pos is WORLD space; entity_id.hlsl multiplies by the frame's
+    // view-projection. local/radius/halfLen are METRES (the PS coverage test
+    // is unit-agnostic: it compares a local offset against a radius in
+    // whatever unit both arrived in).
     struct PickIdVertex
     {
-        glm::vec2 pos;      // canvas px: the rotated bounding-quad corner
-        glm::vec2 local;    // shape-local coords (unrotated), canvas px
-        float     radius;   // canvas px (circle/capsule)
-        float     halfLen;  // canvas px (capsule)
+        glm::vec3 pos;      // world: the rotated bounding-quad corner
+        glm::vec2 local;    // shape-local coords (unrotated), metres
+        float     radius;   // metres (circle/capsule)
+        float     halfLen;  // metres (capsule)
         uint32_t  kind;     // 0=Quad 1=Circle 2=Capsule 3=Box
         uint32_t  id;       // 1-based hit-proxy id
     };
-    static_assert(sizeof(PickIdVertex) == 32, "id vertex is the wire format");
+    static_assert(sizeof(PickIdVertex) == 36, "id vertex is the wire format");
 
-    // kind -> the shader code entity_id.hlsl's PS switches on.
+    // kind -> the shader code entity_id.hlsl's PS switches on. Mesh -> 4 is
+    // never emitted to the 2D path (BuildPickIdGeometry skips the kind); the
+    // code exists so the switch is total.
     ARCANE_API uint32_t PickKindCode(PickDrawable::Kind kind);
 
-    // Bounding half-extents (canvas px) of a drawable's silhouette: the quad the
+    // Bounding half-extents (metres) of a drawable's silhouette: the quad the
     // id pass rasterizes. The PS analytically discards fragments outside
-    // circle/capsule shapes; Quad/Box fill the whole bound.
+    // circle/capsule shapes; Box fills the whole bound. A Quad's bound is half
+    // its edge lengths (its corners ARE its geometry); a Mesh has no 2D bound
+    // and reports zero.
     ARCANE_API glm::vec2 PickBoundHalfExtents(const PickDrawable& drawable);
 
     // Build the id-pass vertex + index arrays from `drawables` (both vectors are
-    // CLEARED first). One quad (4 verts / 6 indices) per drawable; the k-th
-    // drawable (0-based) gets id k+1. Drawables are already ordered back-to-
-    // front, so index order = draw order = front-most last (the output merger,
-    // primitive-ordered, makes the last-drawn silhouette win a contested pixel
-    // -- no depth buffer anywhere on this path).
+    // CLEARED first). One quad (4 verts / 6 indices) per 2D drawable, NONE per
+    // Mesh; the k-th drawable (0-based) gets id k+1 either way. Drawables are
+    // already ordered back-to-front, so index order = draw order = front-most
+    // last (the 2D half draws depth-off, so the output merger's primitive
+    // order decides a contested pixel among the 2D silhouettes; the meshes
+    // that follow are depth-tested -- see CollectPickables' ORDER RULE).
     ARCANE_API void BuildPickIdGeometry(std::span<const PickDrawable> drawables,
                                         std::vector<PickIdVertex>& outVertices,
                                         std::vector<uint32_t>& outIndices);

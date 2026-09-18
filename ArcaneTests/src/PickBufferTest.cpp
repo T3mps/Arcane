@@ -1,7 +1,8 @@
 // Arcane pickable-collection emitter (Task 2 of the entity-id picking design,
 // docs/superpowers/specs/2026-07-19-arcane-entity-id-picking-design.md SS3b/3c).
-// CPU-only ([pick]), no GPU: exercises CollectPickables (sprite + collider
-// emitters) and the id<->entity table (PickEntityForId).
+// CPU-only ([pick]), no GPU: exercises CollectPickables (sprite + collider +
+// mesh emitters, WORLD-space since F4 plan 2) and the id<->entity table
+// (PickEntityForId).
 
 // THE GRAPH'S PickNode (Render/Nri/nodes/PickOutlineNodes.*) is the only pick
 // implementation, and its structural, GPU-free coverage lives in
@@ -23,10 +24,12 @@
 // real render + readback.
 
 #include <memory>
+#include <unordered_map>
+#include <utility>   // std::as_const
 #include <vector>
 
-#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <glm/glm.hpp>
 
@@ -37,21 +40,47 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>        // BuildCube for the mesh drawable case
 #include <Arcane/Render/PickEmit.hpp>
+#include <Arcane/Render/SpriteGeometry.hpp>   // SpriteWorldQuad -- THE corner rule the pick quad must match
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
-#include <Arcane/Scene/ViewTransform.hpp>   // F4 plan 1 T3: PickView carries an Affine2D
+#include <Arcane/Scene/SceneResources.hpp>    // SpriteTable / MeshTable -- the resolution the emitter reads
 
 #include "Helpers/TestTypeContext.hpp"
 
-using Catch::Approx;
+using Catch::Matchers::WithinAbs;
 
 namespace
 {
-    // Fresh registry with Scene + Physics components registered and a
-    // zero-gravity PhysicsResource attached.
+    // The one sprite asset the fixture's SpriteTable resolves: every sprite the
+    // helpers spawn names it, so the emitter reads a REAL base size + pivot
+    // (the unresolved fallback is 1x1 m at the centre and would hide a pivot
+    // bug). The maps are owned HERE, beside the registry, because the tables
+    // are transient pointer resources (SceneResources.hpp) that never own.
+    constexpr Arcane::Guid kSpriteId{ 5, 5 };
+
+    struct PickFixture
+    {
+        std::unordered_map<Arcane::Guid, Arcane::SpriteEntry> sprites;
+        std::unordered_map<Arcane::Guid, Arcane::MeshEntry>   meshes;
+        std::unique_ptr<Astra::Registry>                       reg;
+
+        // The registry, the way the cases spell it.
+        Astra::Registry& operator*()  const noexcept { return *reg; }
+        Astra::Registry* operator->() const noexcept { return reg.get(); }
+
+        // Publishes `meshes` as the registry's MeshTable, the way the host's
+        // MeshCache does (the SpriteTable is published the same way by the
+        // maker below).
+        void PublishMeshTable() { reg->SetResource(Arcane::MeshTable{ &meshes }); }
+    };
+
+    // Fresh registry with Scene + Physics components registered, a
+    // zero-gravity PhysicsResource attached, and a SpriteTable resolving
+    // kSpriteId to (`sizeMeters`, `pivot`).
     //
     // Cross-DLL note (mirrors EntityPickTest.cpp's MakeSceneRegistry):
     // CollectPickables is compiled into Arcane.dll (Arcane/Render/PickEmit.cpp),
@@ -61,7 +90,7 @@ namespace
     // test context once (a throwaway Runtime installs it in Arcane.dll; the
     // slot persists after the Runtime is destroyed) so both modules agree on
     // component IDs -- otherwise [pick] run in isolation would see 0 sprites.
-    std::unique_ptr<Astra::Registry> MakePickRegistry()
+    PickFixture MakeRegistryWithSpriteTable(glm::vec2 sizeMeters, glm::vec2 pivot)
     {
         // Belt-and-braces: test_main pins Arcane.dll's TypeContext slot once
         // before any test runs, which is the real guarantee (per-type IDs are
@@ -71,49 +100,70 @@ namespace
         // one anywhere in this suite.
         Arcane::Runtime pin(Arcane::Test::Process());
 
+        PickFixture fx;
         auto components = std::make_shared<Astra::ComponentRegistry>();
-        auto reg = std::make_unique<Astra::Registry>(components);
-        Arcane::RegisterSceneComponents(*reg);
-        Arcane::RegisterPhysicsComponents(*reg);
+        fx.reg = std::make_unique<Astra::Registry>(components);
+        Arcane::RegisterSceneComponents(*fx.reg);
+        Arcane::RegisterPhysicsComponents(*fx.reg);
 
         Manifold2D::Physics::WorldDef wd;
         wd.gravityY = 0.0f;
         wd.gravityX = 0.0f;
-        reg->SetResource(Arcane::PhysicsResource{
+        fx.reg->SetResource(Arcane::PhysicsResource{
             std::make_unique<Manifold2D::Physics::PhysicsWorld>(wd),
             {}
         });
 
-        return reg;
+        Arcane::SpriteEntry entry;
+        entry.sizeMeters = sizeMeters;
+        entry.pivot      = pivot;
+        fx.sprites[kSpriteId] = entry;
+        fx.reg->SetResource(Arcane::SpriteTable{ &fx.sprites });
+        return fx;
     }
 
-    // `size` is the DRAWN size in world units. A sprite with no .arcsprite asset
-    // draws a 1x1 m quad times the world scale, so the size rides the basis
-    // columns of the world matrix (what Transform::ToMatrix bakes scale into).
-    Astra::Entity SpawnSprite(Astra::Registry& reg, glm::vec2 pos, glm::vec2 size)
+    // A sprite naming the fixture's asset, posed by a full TRS: the WorldTransform
+    // is written directly (Transform::ToMatrix -- what TransformPropagationSystem
+    // would bake for a root entity), so no propagation pass is needed.
+    Astra::Entity AddSprite(Astra::Registry& reg, glm::vec3 pos, glm::quat rot, glm::vec3 scale)
     {
         const Astra::Entity e = reg.CreateEntity();
-        // Task 3 (F1): the world matrix is a mat4 -- columns 0/1 still carry
-        // rotation*scale, but the world position moved to column 3.
-        Arcane::WorldTransform wt;
-        wt.matrix = glm::mat4(1.0f);
-        wt.matrix[0] = glm::vec4(size.x, 0.0f, 0.0f, 0.0f); // columns 0/1 = rotation*scale
-        wt.matrix[1] = glm::vec4(0.0f, size.y, 0.0f, 0.0f);
-        wt.matrix[3] = glm::vec4(pos, 0.0f, 1.0f);         // column 3 = world position
-        reg.AddComponent<Arcane::WorldTransform>(e, wt);
+        Arcane::Transform lt;
+        lt.position = pos;
+        lt.rotation = rot;
+        lt.scale    = scale;
+        reg.AddComponent<Arcane::Transform>(e, lt);
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{ lt.ToMatrix() });
         Arcane::SpriteRenderer sp;
+        sp.sprite = kSpriteId;
         reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
         return e;
     }
 
-    // Mints a kinematic body with a single Aabb fixture at `pos`, via the real
+    // Transform + WorldTransform + MeshRenderer{ mesh } at `pos`, unturned, unit
+    // scale -- the MeshRenderer entity CollectMeshInstances would draw once the
+    // guid resolves through the MeshTable.
+    Astra::Entity AddMesh(Astra::Registry& reg, Arcane::Guid mesh, glm::vec3 pos)
+    {
+        const Astra::Entity e = reg.CreateEntity();
+        Arcane::Transform lt;
+        lt.position = pos;
+        reg.AddComponent<Arcane::Transform>(e, lt);
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{ lt.ToMatrix() });
+        Arcane::MeshRenderer mr;
+        mr.mesh = mesh;
+        reg.AddComponent<Arcane::MeshRenderer>(e, mr);
+        return e;
+    }
+
+    // Mints a kinematic body with a single fixture at `pos`, via the real
     // PhysicsSystem create pass (stepWorld=false: registers the body and
     // writes it back without stepping, so it stays exactly at `pos`).
     // `scale` is baked into the body's fixtures by the create pass (it sets
     // PhysicsBodyRef::appliedScale = lt.scale) -- used to prove CollectPickables
     // scales the silhouette to match the drawn collider.
-    Astra::Entity SpawnAabbBody(Astra::Registry& reg, glm::vec2 pos, float halfW, float halfH,
-                                glm::vec2 scale = glm::vec2(1.0f, 1.0f))
+    Astra::Entity AddBody(Astra::Registry& reg, glm::vec2 pos, const Arcane::Fixture& fx,
+                          glm::vec2 scale = glm::vec2(1.0f, 1.0f))
     {
         const Astra::Entity e = reg.CreateEntity();
 
@@ -127,10 +177,6 @@ namespace
         reg.AddComponent<Arcane::RigidBody2D>(e, rb);
 
         Arcane::Collider2D col;
-        Arcane::Fixture fx;
-        fx.kind  = Manifold2D::Physics::ShapeKind::Aabb;
-        fx.halfW = halfW;
-        fx.halfH = halfH;
         col.fixtures.push_back(fx);
         reg.AddComponent<Arcane::Collider2D>(e, col);
 
@@ -141,105 +187,96 @@ namespace
 
         return e;
     }
-}
 
-TEST_CASE("CollectPickables gathers sprites and physics colliders, ordered", "[pick]")
-{
-    auto reg = MakePickRegistry();
-
-    // Known camera view: an orthographic ViewTransform whose Affine2D is
-    // offset (100,50) canvas px, scale (10, -10) px per world-metre (F4 plan 1
-    // T3: y NEGATIVE, +Y up on a y-down canvas): Point(w) = (100 + 10x, 50 - 10y).
-    const auto affine = Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {200u, 100u}).AsAffine2D();
-    REQUIRE(affine.has_value());
-    REQUIRE(affine->offset.x == Approx(100.0f));
-    REQUIRE(affine->offset.y == Approx(50.0f));
-    REQUIRE(affine->scale.x == Approx(10.0f));
-    REQUIRE(affine->scale.y == Approx(-10.0f));
-    const Arcane::PickView view{ *affine };
-
-    // Sprite entity: world pos (2,3), size (4,6) -> world half-extents (2,3).
-    const Astra::Entity spriteEntity = SpawnSprite(*reg, {2.0f, 3.0f}, {4.0f, 6.0f});
-
-    // Physics entity: Aabb fixture halfW=0.5 halfH=0.25, body pos (5,-1).
-    const Astra::Entity colliderEntity = SpawnAabbBody(*reg, {5.0f, -1.0f}, 0.5f, 0.25f);
-
-    std::vector<Arcane::PickDrawable> out;
-    Arcane::CollectPickables(*reg, view, out);
-
-    REQUIRE(out.size() == 2);
-
-    // Each entity appears exactly once, sprites-then-colliders order.
-    CHECK(out[0].entity.GetValue() == spriteEntity.GetValue());
-    CHECK(out[1].entity.GetValue() == colliderEntity.GetValue());
-
-    // Sprite -> Quad. Projected: center = (100 + 2*10, 50 - 3*10) = (120,20);
-    // half-extents = (2,3)*10 = (20,30) (world half-extents (2,3) from size*0.5;
-    // LENGTHS, so positive on both axes).
-    CHECK(out[0].kind == Arcane::PickDrawable::Kind::Quad);
-    CHECK(out[0].center.x == Approx(120.0f));
-    CHECK(out[0].center.y == Approx(20.0f));
-    CHECK(out[0].halfExtents.x == Approx(20.0f));
-    CHECK(out[0].halfExtents.y == Approx(30.0f));
-
-    // Collider -> Box. Projected: center = (100 + 5*10, 50 - (-1)*10) = (150,60);
-    // half-extents = (0.5,0.25)*10 = (5,2.5).
-    CHECK(out[1].kind == Arcane::PickDrawable::Kind::Box);
-    CHECK(out[1].center.x == Approx(150.0f));
-    CHECK(out[1].center.y == Approx(60.0f));
-    CHECK(out[1].halfExtents.x == Approx(5.0f));
-    CHECK(out[1].halfExtents.y == Approx(2.5f));
-}
-
-// F4 plan 1 T3: the pick emitter projects through Affine2D -- a +Y-up world on
-// a y-down canvas. A sprite ABOVE the camera lands ABOVE the viewport centre,
-// and the canvas angle carries the mirror's sign (AngleSign): a +0.3 rad world
-// turn is a -0.3 rad turn on the mirrored canvas, so the id pass rasterises
-// the silhouette where the (mirrored) sprite actually is.
-TEST_CASE("CollectPickables projects +Y up and mirrors the canvas angle", "[pick]")
-{
-    auto reg = MakePickRegistry();
-    const auto affine = Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}).AsAffine2D();
-    REQUIRE(affine.has_value());
-    const Arcane::PickView view{ *affine };
-
-    // A unit sprite at world (0, +1): 60 px per metre, so 60 px ABOVE the centre.
-    const Astra::Entity above = SpawnSprite(*reg, {0.0f, 1.0f}, {1.0f, 1.0f});
-
-    // A unit sprite at the origin, turned +0.3 rad about +Z (a real TRS matrix).
-    const Astra::Entity turned = reg->CreateEntity();
+    Astra::Entity AddCircleCollider(Astra::Registry& reg, glm::vec2 pos, float radius)
     {
-        Arcane::Transform lt;
-        lt.rotation = Arcane::RotationAboutZ(0.3f);
-        reg->AddComponent<Arcane::WorldTransform>(turned, Arcane::WorldTransform{ lt.ToMatrix() });
-        reg->AddComponent<Arcane::SpriteRenderer>(turned, Arcane::SpriteRenderer{});
+        Arcane::Fixture fx;
+        fx.kind   = Manifold2D::Physics::ShapeKind::Circle;
+        fx.radius = radius;
+        return AddBody(reg, pos, fx);
     }
 
+    Astra::Entity AddScaledBoxCollider(Astra::Registry& reg, glm::vec2 pos, float halfW, float halfH,
+                                       glm::vec2 scale)
+    {
+        Arcane::Fixture fx;
+        fx.kind  = Manifold2D::Physics::ShapeKind::Aabb;
+        fx.halfW = halfW;
+        fx.halfH = halfH;
+        return AddBody(reg, pos, fx, scale);
+    }
+}
+
+TEST_CASE("CollectPickables emits sprites as WORLD quads from SpriteWorldQuad, colliders as world shapes, meshes last", "[pick]")
+{
+    // A sprite with an off-centre pivot, a mirrored X scale and a Z turn -- the
+    // pose PickEmit's old "centre + angle" rule got wrong for a mirrored
+    // off-centre pivot (plan 2 handoff). SpriteWorldQuad is the one rule.
+    auto reg = MakeRegistryWithSpriteTable(/*sizeMeters=*/{2.0f, 1.0f}, /*pivot=*/{0.25f, 0.0f});
+    const Astra::Entity sprite = AddSprite(*reg, glm::vec3(3.0f, 1.0f, 0.5f),
+                                           Arcane::RotationAboutZ(0.7f), glm::vec3(-1.5f, 1.0f, 1.0f));
+    const Astra::Entity body   = AddCircleCollider(*reg, glm::vec2(-2.0f, 4.0f), /*radius=*/0.5f);
+
     std::vector<Arcane::PickDrawable> out;
-    Arcane::CollectPickables(*reg, view, out);
+    Arcane::CollectPickables(*reg, out);
     REQUIRE(out.size() == 2);
 
-    const auto find = [&](Astra::Entity e) -> const Arcane::PickDrawable&
-    {
-        for (const auto& d : out)
-            if (d.entity.GetValue() == e.GetValue()) return d;
-        FAIL("drawable missing");
-        return out[0];
-    };
-    const Arcane::PickDrawable& dAbove = find(above);
-    CHECK(dAbove.center.x == Approx(400.0f));
-    CHECK(dAbove.center.y < 300.0f);
-    CHECK(dAbove.center.y == Approx(240.0f));
-    CHECK(dAbove.halfExtents.x == Approx(30.0f));
-    CHECK(dAbove.halfExtents.y == Approx(30.0f));   // a LENGTH: positive on both axes
+    // 1. The sprite: kind Quad, corners == SpriteWorldQuad(world, base size, pivot).
+    CHECK(out[0].entity == sprite);
+    CHECK(out[0].kind == Arcane::PickDrawable::Kind::Quad);
+    const glm::mat4 world = std::as_const(*reg).GetComponent<Arcane::WorldTransform>(sprite)->matrix;
+    const Arcane::SpriteQuad expected = Arcane::SpriteWorldQuad(world, {2.0f, 1.0f}, {0.25f, 0.0f});
+    for (int i = 0; i < 4; ++i)
+        for (int c = 0; c < 3; ++c)
+            CHECK_THAT(out[0].corners[i][c], WithinAbs(expected.corners[i][c], 1e-5f));
 
-    const Arcane::PickDrawable& dTurned = find(turned);
-    CHECK(dTurned.angle == Approx(-0.3f));
+    // 2. The collider: a world-space circle at the body's pose, in METRES, no
+    //    projection anywhere (the id pass projects).
+    CHECK(out[1].entity == body);
+    CHECK(out[1].kind == Arcane::PickDrawable::Kind::Circle);
+    CHECK_THAT(out[1].center.x, WithinAbs(-2.0f, 1e-5f));
+    CHECK_THAT(out[1].center.y, WithinAbs(4.0f, 1e-5f));
+    CHECK_THAT(out[1].center.z, WithinAbs(0.0f, 1e-5f));   // the entity's world z (its Transform is planar)
+    CHECK_THAT(out[1].radius,   WithinAbs(0.5f, 1e-5f));
+}
+
+TEST_CASE("CollectPickables: a MeshRenderer entity emits ONE Mesh drawable carrying its world matrix and guid, after sprites and colliders", "[pick]")
+{
+    auto reg = MakeRegistryWithSpriteTable({1.0f, 1.0f}, {0.5f, 0.5f});
+    // A MeshTable resource resolving one guid to a cube; an unresolved guid and
+    // an empty mesh must NOT emit (nothing is drawn for them either).
+    const Arcane::Guid cubeId{ 7, 7 };
+    const Arcane::Guid emptyId{ 8, 8 };
+    reg.meshes[cubeId].data  = Arcane::BuildCube(1.0f);
+    reg.meshes[emptyId].data = Arcane::MeshData{};            // sections empty == empty mesh
+    reg.PublishMeshTable();
+
+    const Astra::Entity sprite = AddSprite(*reg, glm::vec3(0.0f), glm::quat(1,0,0,0), glm::vec3(1.0f));
+    const Astra::Entity cube   = AddMesh(*reg, cubeId, glm::vec3(1.0f, 2.0f, 3.0f));
+    const Astra::Entity empty  = AddMesh(*reg, emptyId, glm::vec3(0.0f));
+    const Astra::Entity broken = AddMesh(*reg, Arcane::Guid{ 9, 9 }, glm::vec3(0.0f));
+    const Astra::Entity hidden = AddMesh(*reg, cubeId, glm::vec3(5.0f, 0.0f, 0.0f));
+    reg->AddComponent<Arcane::Hidden>(hidden, Arcane::Hidden{});
+
+    std::vector<Arcane::PickDrawable> out;
+    Arcane::CollectPickables(*reg, out);
+    REQUIRE(out.size() == 2);   // the sprite, then the ONE drawable cube
+    CHECK(out[0].entity == sprite);
+    CHECK(out[1].entity == cube);
+    CHECK(out[1].kind == Arcane::PickDrawable::Kind::Mesh);
+    CHECK(out[1].mesh == cubeId);
+    CHECK_THAT(out[1].world[3].x, WithinAbs(1.0f, 1e-6f));
+    CHECK_THAT(out[1].world[3].y, WithinAbs(2.0f, 1e-6f));
+    CHECK_THAT(out[1].world[3].z, WithinAbs(3.0f, 1e-6f));
+    (void)empty; (void)broken;
+    // ...and the id table still inverts through the same k+1 rule.
+    CHECK(Arcane::PickPassIdOf(out, cube) == 2u);
+    CHECK(Arcane::PickEntityForId(out, 2u) == cube);
 }
 
 TEST_CASE("id->entity table maps 1-based, 0 is background", "[pick]")
 {
-    auto reg = MakePickRegistry();
+    auto reg = MakeRegistryWithSpriteTable({1.0f, 1.0f}, {0.5f, 0.5f});
     const Astra::Entity e0 = reg->CreateEntity();
     const Astra::Entity e1 = reg->CreateEntity();
 
@@ -257,68 +294,41 @@ TEST_CASE("id->entity table maps 1-based, 0 is background", "[pick]")
 // bakes at lt.scale (MakeScaledShape) -- so a scaled body has to pick at its
 // scaled size, not its authored size. Aabb scales per-axis (halfW*|sx|,
 // halfH*|sy|), mirroring PhysicsSystem::MakeScaledShape.
-TEST_CASE("CollectPickables scales a collider silhouette by the body's baked scale", "[pick]")
+TEST_CASE("CollectPickables scales a collider silhouette by the body's baked scale, in metres", "[pick]")
 {
-    auto reg = MakePickRegistry();
-
-    // 10 px per world-metre, no offset: a 200x100 viewport centred on world
-    // (10,-5) with a 5 m half-height has the Affine2D scale (10,-10), offset
-    // (0,0) -- Point(w) = (10x, -10y).
-    const auto affine = Arcane::ViewTransform::Orthographic({10.0f, -5.0f}, 5.0f, {200u, 100u}).AsAffine2D();
-    REQUIRE(affine.has_value());
-    REQUIRE(affine->offset.x == Approx(0.0f).margin(1e-4));
-    REQUIRE(affine->offset.y == Approx(0.0f).margin(1e-4));
-    const Arcane::PickView view{ *affine };
-
-    // Aabb halfW=0.5 halfH=0.25 at body pos (1,1), authored scale (2,4). The
-    // create pass bakes appliedScale=(2,4); the silhouette half-extents scale to
-    //   world half = (0.5*2, 0.25*4) = (1.0, 1.0); canvas = *10 = (10, 10).
-    const Astra::Entity e = SpawnAabbBody(*reg, {1.0f, 1.0f}, 0.5f, 0.25f, {2.0f, 4.0f});
-
+    // PhysicsBodyRef::appliedScale = (2, 3); the box half-extents come out as
+    // fixture metres times the baked scale -- no pixels anywhere.
+    auto reg = MakeRegistryWithSpriteTable({1.0f, 1.0f}, {0.5f, 0.5f});
+    const Astra::Entity body = AddScaledBoxCollider(*reg, glm::vec2(0.0f), /*halfW=*/1.0f, /*halfH=*/0.5f, /*scale=*/{2.0f, 3.0f});
     std::vector<Arcane::PickDrawable> out;
-    Arcane::CollectPickables(*reg, view, out);
-
+    Arcane::CollectPickables(*reg, out);
     REQUIRE(out.size() == 1);
-    CHECK(out[0].entity.GetValue() == e.GetValue());
+    CHECK(out[0].entity == body);
     CHECK(out[0].kind == Arcane::PickDrawable::Kind::Box);
-    CHECK(out[0].center.x == Approx(10.0f));       // (1,1) -> (10, -10): y mirrored
-    CHECK(out[0].center.y == Approx(-10.0f));
-    CHECK(out[0].halfExtents.x == Approx(10.0f));  // 0.5 * 2 * 10
-    CHECK(out[0].halfExtents.y == Approx(10.0f));  // 0.25 * 4 * 10
+    CHECK_THAT(out[0].halfExtents.x, WithinAbs(2.0f, 1e-5f));
+    CHECK_THAT(out[0].halfExtents.y, WithinAbs(1.5f, 1e-5f));
 }
 
 // The drawable index IS the hit-proxy id (id = index+1), so the collection order
 // must be DETERMINISTIC and must not depend on unordered_map hash layout. Pins
-// the documented contract: sprites first (back), then colliders (front), stable
-// across repeated collections.
-TEST_CASE("CollectPickables orders sprites before colliders, deterministically", "[pick]")
+// the documented contract: sprites, then colliders, then meshes, stable across
+// repeated collections.
+TEST_CASE("CollectPickables orders sprites, then colliders, then meshes, deterministically", "[pick]")
 {
-    auto reg = MakePickRegistry();
-    // Any orthographic view: only the ORDER is asserted here.
-    const Arcane::PickView view{ *Arcane::ViewTransform::Orthographic({0.0f, 0.0f}, 5.0f, {800u, 600u}).AsAffine2D() };
-
-    const Astra::Entity sprite    = SpawnSprite(*reg, {0.0f, 0.0f}, {1.0f, 1.0f});
-    const Astra::Entity colliderA = SpawnAabbBody(*reg, {1.0f, 0.0f}, 0.5f, 0.5f);
-    const Astra::Entity colliderB = SpawnAabbBody(*reg, {2.0f, 0.0f}, 0.5f, 0.5f);
-
-    std::vector<Arcane::PickDrawable> out;
-    Arcane::CollectPickables(*reg, view, out);
-
-    REQUIRE(out.size() == 3);
-    CHECK(out[0].entity.GetValue() == sprite.GetValue());   // sprite first (back)
-
-    // Both colliders appear exactly once, after the sprite (order between the two
-    // is archetype-stable; assert set membership to stay robust to that detail).
-    const bool colsPresent =
-        (out[1].entity.GetValue() == colliderA.GetValue() && out[2].entity.GetValue() == colliderB.GetValue()) ||
-        (out[1].entity.GetValue() == colliderB.GetValue() && out[2].entity.GetValue() == colliderA.GetValue());
-    CHECK(colsPresent);
-
-    // Determinism: a second collection yields the identical ordering.
-    std::vector<Arcane::PickDrawable> out2;
-    Arcane::CollectPickables(*reg, view, out2);
-    REQUIRE(out2.size() == 3);
-    CHECK(out2[0].entity.GetValue() == out[0].entity.GetValue());
-    CHECK(out2[1].entity.GetValue() == out[1].entity.GetValue());
-    CHECK(out2[2].entity.GetValue() == out[2].entity.GetValue());
+    // Two of each, collected twice: identical order both times, and the three
+    // groups in that sequence (id = index+1 is the contract every consumer inverts).
+    auto reg = MakeRegistryWithSpriteTable({1.0f, 1.0f}, {0.5f, 0.5f});
+    const Arcane::Guid cubeId{ 7, 7 };
+    reg.meshes[cubeId].data = Arcane::BuildCube(1.0f);
+    reg.PublishMeshTable();
+    AddMesh(*reg, cubeId, glm::vec3(0.0f)); AddSprite(*reg, glm::vec3(1.0f), glm::quat(1,0,0,0), glm::vec3(1.0f));
+    AddCircleCollider(*reg, glm::vec2(2.0f), 0.5f); AddMesh(*reg, cubeId, glm::vec3(3.0f));
+    AddSprite(*reg, glm::vec3(4.0f), glm::quat(1,0,0,0), glm::vec3(1.0f)); AddCircleCollider(*reg, glm::vec2(5.0f), 0.5f);
+    std::vector<Arcane::PickDrawable> a, b;
+    Arcane::CollectPickables(*reg, a); Arcane::CollectPickables(*reg, b);
+    REQUIRE(a.size() == 6); REQUIRE(b.size() == 6);
+    for (std::size_t i = 0; i < 6; ++i) CHECK(a[i].entity == b[i].entity);
+    CHECK(a[0].kind == Arcane::PickDrawable::Kind::Quad);   CHECK(a[1].kind == Arcane::PickDrawable::Kind::Quad);
+    CHECK(a[2].kind == Arcane::PickDrawable::Kind::Circle); CHECK(a[3].kind == Arcane::PickDrawable::Kind::Circle);
+    CHECK(a[4].kind == Arcane::PickDrawable::Kind::Mesh);   CHECK(a[5].kind == Arcane::PickDrawable::Kind::Mesh);
 }

@@ -1111,8 +1111,9 @@ namespace Arcane::Editor
         // a no-move drag self-drops since Commit only pushes if bytes changed).
         // mouseScreen is viewport-local px (lx/ly computed above), the same
         // space the view's Affine2D registers in, so the gizmo aligns
-        // pixel-for-pixel with the scene (mirrors the click-pick's PickView
-        // below). The LMB edge is tracked by the camera phase just above
+        // pixel-for-pixel with the scene (the click-pick below projects its
+        // world drawables through the same ViewTransform, on the GPU). The
+        // LMB edge is tracked by the camera phase just above
         // (UpdateEditorCamera Updates all three button edges once per frame,
         // unconditionally, so a button already held before the cursor enters
         // the viewport is never misread as a fresh press); this phase only
@@ -2151,18 +2152,13 @@ namespace Arcane::Editor
             return;
         }
 
-        // THE ONE EMITTER (PickEmit.hpp) -- a pure registry walk through the
-        // same world->canvas transform the scene render just used, so the id
-        // silhouettes register pixel-for-pixel with what was drawn. The k-th
-        // entry IS hit-proxy id k+1. Guarded on the view's Affine2D (F4 plan
-        // 1 T3): a perspective view has no per-axis affine, and the id pass is
-        // fed an empty table for the frame (nothing to outline or pick).
+        // THE ONE EMITTER (PickEmit.hpp) -- a pure registry walk that emits
+        // WORLD-space silhouettes (F4 plan 2); the id pass projects them
+        // through the ViewTransform handed over below, so they register
+        // pixel-for-pixel with what was drawn in EVERY view mode. The k-th
+        // entry IS hit-proxy id k+1.
         m_pickDrawables.clear();
-        if (const auto pickAffine = m_runtime->View().AsAffine2D())
-        {
-            const Arcane::PickView view{ *pickAffine };
-            Arcane::CollectPickables(m_runtime->Registry(), view, m_pickDrawables);
-        }
+        Arcane::CollectPickables(m_runtime->Registry(), m_pickDrawables);
 
         // Every selected entity that made it into THIS frame's id pass, over
         // the same drawables that were just handed to the pick node rather

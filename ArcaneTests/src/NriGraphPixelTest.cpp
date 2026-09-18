@@ -535,14 +535,14 @@ namespace
 
         // Two well-separated quads. Index 0 -> id 1, index 1 -> id 2.
         Arcane::PickDrawable a;
-        a.kind        = Arcane::PickDrawable::Kind::Quad;
-        a.center      = glm::vec2(40.0f, 24.0f);
-        a.halfExtents = glm::vec2(16.0f, 10.0f);
+        a.kind    = Arcane::PickDrawable::Kind::Quad;
+        a.corners = { glm::vec3(24.0f, 14.0f, 0.0f), glm::vec3(56.0f, 14.0f, 0.0f),
+                      glm::vec3(56.0f, 34.0f, 0.0f), glm::vec3(24.0f, 34.0f, 0.0f) };
 
         Arcane::PickDrawable b;
-        b.kind        = Arcane::PickDrawable::Kind::Quad;
-        b.center      = glm::vec2(118.0f, 68.0f);
-        b.halfExtents = glm::vec2(16.0f, 10.0f);
+        b.kind    = Arcane::PickDrawable::Kind::Quad;
+        b.corners = { glm::vec3(102.0f, 58.0f, 0.0f), glm::vec3(134.0f, 58.0f, 0.0f),
+                      glm::vec3(134.0f, 78.0f, 0.0f), glm::vec3(102.0f, 78.0f, 0.0f) };
 
         const Arcane::PickDrawable drawables[] = { a, b };
 
@@ -599,9 +599,9 @@ namespace
         nodes.pickOutline = true;
 
         Arcane::PickDrawable a;
-        a.kind        = Arcane::PickDrawable::Kind::Quad;
-        a.center      = glm::vec2(40.0f, 24.0f);
-        a.halfExtents = glm::vec2(16.0f, 10.0f);
+        a.kind    = Arcane::PickDrawable::Kind::Quad;
+        a.corners = { glm::vec3(24.0f, 14.0f, 0.0f), glm::vec3(56.0f, 14.0f, 0.0f),
+                      glm::vec3(56.0f, 34.0f, 0.0f), glm::vec3(24.0f, 34.0f, 0.0f) };
         const Arcane::PickDrawable drawables[] = { a };
 
         PixelVehicle v = MakeVehicle(backend, nodes);
@@ -706,9 +706,9 @@ namespace
         nodes.pickOutline = true;
 
         Arcane::PickDrawable a;
-        a.kind        = Arcane::PickDrawable::Kind::Quad;
-        a.center      = glm::vec2(60.0f, 40.0f);
-        a.halfExtents = glm::vec2(20.0f, 14.0f);
+        a.kind    = Arcane::PickDrawable::Kind::Quad;
+        a.corners = { glm::vec3(40.0f, 26.0f, 0.0f), glm::vec3(80.0f, 26.0f, 0.0f),
+                      glm::vec3(80.0f, 54.0f, 0.0f), glm::vec3(40.0f, 54.0f, 0.0f) };
         const Arcane::PickDrawable drawables[] = { a };
 
         std::uint32_t w0 = 0, h0 = 0, w1 = 0, h1 = 0;

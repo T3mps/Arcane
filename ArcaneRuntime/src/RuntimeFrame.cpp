@@ -462,15 +462,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // In practice this block is windowed-only regardless: --pick-probe is
     // refused at parse time alongside --headless (HostConfig.cpp), because
     // an offscreen context declines to arm the fixed probe pixel.
-    // Guarded on the view's Affine2D (F4 plan 1 T3): a perspective view has no
-    // per-axis affine and the pick emit is skipped for the frame.
-    const std::optional<Arcane::Affine2D> probeAffine =
-        io.config.pickProbe ? io.runtime->View().AsAffine2D() : std::nullopt;
-    if (io.config.pickProbe && probeAffine)
+    if (io.config.pickProbe)
     {
-        const Arcane::PickView view{ *probeAffine };
         io.pickDrawables.clear();
-        Arcane::CollectPickables(io.runtime->Registry(), view, io.pickDrawables);
+        Arcane::CollectPickables(io.runtime->Registry(), io.pickDrawables);
 
         // THE SCRIPTED SELECTION -- a stand-in for the editor selection
         // this host does not have: the FIRST pickable entity in the
@@ -514,14 +509,10 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     if (!io.config.reportPath.empty())
     {
         const std::optional<Arcane::ProbeSpec> pickSpec = Arcane::FirstPickProbe(io.config.probes);
-        // Same Affine2D guard as the dev flag above (F4 plan 1 T3).
-        const std::optional<Arcane::Affine2D> pickAffine =
-            pickSpec ? io.runtime->View().AsAffine2D() : std::nullopt;
-        if (pickSpec && pickAffine)
+        if (pickSpec)
         {
-            const Arcane::PickView view{ *pickAffine };
             io.pickDrawables.clear();
-            Arcane::CollectPickables(io.runtime->Registry(), view, io.pickDrawables);
+            Arcane::CollectPickables(io.runtime->Registry(), io.pickDrawables);
 
             graphFrame.pickOutline = true;
             graphFrame.pickables   = io.pickDrawables;
