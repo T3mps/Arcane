@@ -33,7 +33,7 @@ namespace Arcane
         constexpr float kScaleShaftFromPx   = 10.0f;   // scale mode: AXIS_LENGTH_SCALE_OFFSET 5 in ...
         constexpr float kScaleShaftToPx     = 60.0f;   // ... to AXIS_LENGTH - 5
         constexpr float kScaleCubeCentrePx  = 66.0f;   // Render_Cube at AxisLength + CubeHeadOffset 3 + offset 5
-        constexpr float kScaleCubeHalfPx    = 4.0f;    // cube 4 units
+        constexpr float kScaleCubeHalfPx    = 8.0f;    // Render_Cube(FVector(4)) scales a UNIT DrawBox: half-extent 4 units, so the cube (58..74 px) overlaps the rod's end at 60
         constexpr float kPlaneCornerPx      = 14.0f;   // CornerPos 7
         constexpr float kPlaneBarPx         = 24.0f;   // AxisSize 12 along each spanning axis
         constexpr float kPlaneBarWidthPx    = 3.0f;    // bar thickness 1.2 (rounded up so it survives AA)
@@ -606,7 +606,7 @@ namespace Arcane
             }
             else
             {
-                // Scale: the shorter rod (5..30 units) with a 4-unit cube at 33.
+                // Scale: the shorter rod (5..30 units) with the 8-unit cube centred at 33 (it overlaps the rod's end).
                 const glm::vec3 w0 = t.position + dir * M(kScaleShaftFromPx), w1 = t.position + dir * M(kScaleShaftToPx);
                 const glm::vec3 wc = t.position + dir * M(kScaleCubeCentrePx);
                 if (!Visible(view, w0) || !Visible(view, w1) || !Visible(view, wc)) continue;
