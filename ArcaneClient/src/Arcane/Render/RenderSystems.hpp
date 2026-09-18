@@ -30,6 +30,7 @@
 
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/SpriteGeometry.hpp>
+#include <Arcane/Render/VisibilitySystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
@@ -44,7 +45,7 @@ namespace Arcane
 {
     // Reads<> is honest now: the view below is const (Astra adoption 2026-09-11).
     struct RenderSubmissionSystem
-        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, Hidden>>
+        : Astra::SystemTraits<Astra::Reads<WorldTransform, SpriteRenderer, Hidden, WorldBounds>>
     {
         void operator()(Astra::Registry& reg)
         {
@@ -53,10 +54,14 @@ namespace Arcane
             const SpriteTable* spriteTable = reg.GetResource<SpriteTable>();
             const SpriteMaterialTable* materials = reg.GetResource<SpriteMaterialTable>();
             const PhysicsInterpBuffer* interp = reg.GetResource<PhysicsInterpBuffer>();
+            const VisibleSet* vis = MainVisibleSet(reg);   // nullptr: cull nothing (spec s4)
 
             auto view = reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>();
             view.ForEach([&](Astra::Entity e, const WorldTransform& world, const SpriteRenderer& sprite)
             {
+                if (vis && !vis->Contains(e))
+                    return;   // off-screen this frame (the CPU coarse stage)
+
                 // A WORKING COPY of the world matrix: the interpolated pose is
                 // re-baked into it below, and everything after reads `m` --
                 // the full basis, translation in column 3.

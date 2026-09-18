@@ -1,6 +1,7 @@
 #include <Arcane/Render/PickEmit.hpp>
 
 #include <Arcane/Render/SpriteGeometry.hpp>   // SpriteWorldQuad -- THE sprite corner rule
+#include <Arcane/Render/VisibilitySystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
@@ -38,9 +39,13 @@ namespace Arcane
         // keeps matching the drawn quad.
         {
             const SpriteTable* spriteTable = registry.GetResource<SpriteTable>();
+            const VisibleSet* vis = MainVisibleSet(registry);   // nullptr: cull nothing (spec s4)
             auto spriteView = registry.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>();
             spriteView.ForEach([&](Astra::Entity e, const WorldTransform& xf, const SpriteRenderer& sp)
             {
+                if (vis && !vis->Contains(e))
+                    return;   // off-screen this frame (the CPU coarse stage)
+
                 const SpriteEntry* entry =
                     (sp.shape == SpriteShape::Rect && spriteTable)
                         ? spriteTable->Resolve(sp.sprite)
@@ -159,9 +164,13 @@ namespace Arcane
         // gets ONE id whatever its section count.
         {
             const MeshTable* meshTable = registry.GetResource<MeshTable>();
+            const VisibleSet* vis = MainVisibleSet(registry);   // nullptr: cull nothing (spec s4)
             auto meshView = registry.CreateView<const WorldTransform, const MeshRenderer, Astra::Not<Hidden>>();
             meshView.ForEach([&](Astra::Entity e, const WorldTransform& xf, const MeshRenderer& mr)
             {
+                if (vis && !vis->Contains(e))
+                    return;   // off-screen this frame (the CPU coarse stage)
+
                 const MeshEntry* entry = meshTable ? meshTable->Resolve(mr.mesh) : nullptr;
                 if (!entry || entry->data.sections.empty())
                     return;

@@ -43,11 +43,14 @@
 #include <Arcane/Mesh/MeshBuilder.hpp>        // BuildCube for the mesh drawable case
 #include <Arcane/Render/PickEmit.hpp>
 #include <Arcane/Render/SpriteGeometry.hpp>   // SpriteWorldQuad -- THE corner rule the pick quad must match
+#include <Arcane/Render/VisibilitySystem.hpp>
+#include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>    // SpriteTable / MeshTable -- the resolution the emitter reads
+#include <Arcane/Scene/TransformSystems.hpp>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -356,4 +359,68 @@ TEST_CASE("CollectPickables orders sprites, then colliders, then meshes, determi
     CHECK(a[0].kind == Arcane::PickDrawable::Kind::Quad);   CHECK(a[1].kind == Arcane::PickDrawable::Kind::Quad);
     CHECK(a[2].kind == Arcane::PickDrawable::Kind::Circle); CHECK(a[3].kind == Arcane::PickDrawable::Kind::Circle);
     CHECK(a[4].kind == Arcane::PickDrawable::Kind::Mesh);   CHECK(a[5].kind == Arcane::PickDrawable::Kind::Mesh);
+}
+
+// F3 plan 1 T3: CollectPickables reads MainVisibleSet() the same way the
+// sprite sweep does -- nullptr (no SceneVisibility resource) culls nothing,
+// which is why the FIRST collection below (before any resource is set) still
+// emits both sprites. The fixture needs a SceneRoot + parenting for
+// TransformPropagationSystem (VisibilityTest.cpp's World shape); WorldTransform
+// is also written directly at spawn (matching what propagation over an
+// identity-root subtree would compute) so the first, pre-propagation
+// CollectPickables call already sees it -- CollectPickables requires one.
+TEST_CASE("CollectPickables: with a SceneVisibility resource only members are emitted; without one everything is", "[pick]")
+{
+    // Cross-DLL pin (see MakeRegistryWithSpriteTable's note above):
+    // CollectPickables/BuildVisibleSet's CreateView<> calls resolve component
+    // ids through Arcane.dll's per-module TypeContext slot.
+    Arcane::Runtime pin(Arcane::Test::Process());
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg{ components };
+    Arcane::RegisterSceneComponents(reg);
+
+    std::unordered_map<Arcane::Guid, Arcane::SpriteEntry> sprites;
+    Arcane::SpriteEntry entry;
+    entry.sizeMeters = { 1.0f, 1.0f };
+    entry.pivot      = { 0.5f, 0.5f };
+    sprites[kSpriteId] = entry;
+    reg.SetResource(Arcane::SpriteTable{ &sprites });
+
+    const Astra::Entity root = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ root });
+
+    const auto addSprite = [&](glm::vec3 pos) -> Astra::Entity
+    {
+        const Astra::Entity e = reg.CreateEntity();
+        Arcane::Transform t; t.position = pos;
+        reg.AddComponent<Arcane::Transform>(e, t);
+        reg.AddComponent<Arcane::WorldTransform>(e, Arcane::WorldTransform{ t.ToMatrix() });
+        reg.SetParent(e, root);
+        Arcane::SpriteRenderer sp;
+        sp.sprite = kSpriteId;
+        reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
+        return e;
+    };
+
+    // One sprite at the origin, one far outside any reasonable frustum.
+    const Astra::Entity nearEntity = addSprite(glm::vec3(0.0f));
+    addSprite(glm::vec3(1000.0f, 0.0f, 0.0f));
+
+    std::vector<Arcane::PickDrawable> all;
+    Arcane::CollectPickables(reg, all);
+    REQUIRE(all.size() == 2);
+
+    Arcane::TransformPropagationSystem{}(reg);
+    Arcane::BoundsSystem{}(reg);
+    Arcane::SceneVisibility* sv = reg.EmplaceResource<Arcane::SceneVisibility>();
+    REQUIRE(sv);
+    sv->views.emplace_back();
+    Arcane::BuildVisibleSet(reg, Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 5.0f, glm::uvec2{ 800, 600 }), sv->views[0]);
+
+    std::vector<Arcane::PickDrawable> some;
+    Arcane::CollectPickables(reg, some);
+    REQUIRE(some.size() == 1);
+    CHECK(some[0].entity == nearEntity);
 }
