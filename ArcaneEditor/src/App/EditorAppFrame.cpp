@@ -1109,11 +1109,11 @@ namespace Arcane::Editor
         // entity's Transform, bracketed into the undo stack (one drag =
         // one undo step -- Begin/SnapshotComponent on press, Commit on release;
         // a no-move drag self-drops since Commit only pushes if bytes changed).
-        // mouseScreen is viewport-local px (lx/ly computed above), the same
-        // space the view's Affine2D registers in, so the gizmo aligns
-        // pixel-for-pixel with the scene (the click-pick below projects its
-        // world drawables through the same ViewTransform, on the GPU). The
-        // LMB edge is tracked by the camera phase just above
+        // mouseScreen is viewport-local px (lx/ly computed above), the space
+        // ViewTransform::WorldToScreen projects into, so the gizmo aligns
+        // pixel-for-pixel with the scene in EVERY view mode (the id pass
+        // projects through the same view). The LMB edge is tracked by the
+        // camera phase just above
         // (UpdateEditorCamera Updates all three button edges once per frame,
         // unconditionally, so a button already held before the cursor enters
         // the viewport is never misread as a fresh press); this phase only
@@ -1147,29 +1147,21 @@ namespace Arcane::Editor
             lt = std::as_const(*regPtr).GetComponent<Arcane::Transform>(m_selection.Primary());
         }
 
-        // The gizmo draws in pixels through the view's Affine2D (F4 plan 1
-        // T3); a view with none (perspective) skips the hit-test/drag this
-        // frame. Plan 2 gives the gizmo the ViewTransform itself.
-        const std::optional<Arcane::Affine2D> gizmoAffine =
-            lt ? m_runtime->View().AsAffine2D() : std::nullopt;
-        if (lt && gizmoAffine)
+        if (lt)
         {
             const Astra::Entity sel = m_selection.Primary();
-            // WORLD pose, not local -- Transform is parent-local, so
-            // anchoring/hit-testing the gizmo at the local values would
-            // misplace it for any parented entity (Unreal parity: the
-            // gizmo pivot is the primary's world location; see the
-            // group-delta conversion below for the write-back half).
-            const Arcane::GizmoTransform gt =
-                Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, sel));
-            const Arcane::GizmoView view{ *gizmoAffine };
+            // WORLD pose (Transform is parent-local; the gizmo anchors at the primary's world location).
+            const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(*regPtr, sel));
+            const Arcane::ViewTransform& view = m_runtime->View();
+            const Arcane::GizmoHandleMask handles = GizmoHandles();
+            const float gizmoSize = m_viewSettings.gizmoSize;
 
             if (!m_gizmoDrag.active)
             {
                 // Hover + drag-start only when the cursor is over the viewport.
                 if (inViewport)
                 {
-                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, mouseScreen);
+                    m_gizmoHovered = Arcane::HitTest(m_gizmoMode, m_gizmoSpace, gt, view, handles, gizmoSize, mouseScreen);
                     if (m_gizmoHovered != Arcane::GizmoAxis::None && mousePressedLeft)
                     {
                         // A press on a handle owns the click regardless of
@@ -1200,91 +1192,13 @@ namespace Arcane::Editor
                                     FindTransformDescriptor(*regPtr, e);
                                 if (!ed)
                                     continue;
-                                // REFUSE a drag the 2D gizmo cannot express
-                                // (final-review finding 4, F1). The write-back
-                                // below reads the entity's WORLD pose through
-                                // DecomposeTRS and demotes the dragged result
-                                // through inverse(ParentWorldMatrix), and
-                                // DecomposeTRS takes scale from the 2D
-                                // PROJECTION of the basis columns -- which
-                                // equals the true axis length only while those
-                                // axes lie in the XY plane. Every other
-                                // component of the pose is wrong off-plane too:
-                                // `w` already lost the entity's world z, so even
-                                // the translation is not world-exact.
-                                //
-                                // BOTH matrices, not just the parent's, and
-                                // neither implies the other (all three cases
-                                // pinned in EntityOpsTest.cpp):
-                                //   * a tilted PARENT shortens the demoted local
-                                //     basis, so a PURE TRANSLATE drag silently
-                                //     rescales the child -- a 45 degree pitch
-                                //     halves it, the projection being applied
-                                //     once on the way in and once on the way
-                                //     back out;
-                                //   * a tilted ENTITY under a planar parent
-                                //     reads short on the way IN and has its tilt
-                                //     replaced outright by RotationAboutZ below,
-                                //     so a translate drag flattens an
-                                //     orientation it never touched;
-                                //   * a tilted entity under an oppositely-tilted
-                                //     parent has a PLANAR world basis and still
-                                //     demotes through a non-planar inverse.
-                                // Refusing on the parent alone (as F1 shipped)
-                                // meant the gizmo warned in one of two visually
-                                // identical situations and silently corrupted
-                                // the other, which teaches a false lesson about
-                                // when it can be trusted. Uniform restriction
-                                // beats inconsistent safety; the cost is that
-                                // translate is blocked on a tilted entity, and
-                                // that is accepted -- you cannot meaningfully
-                                // author a tilted pose with a 2D gizmo anyway.
-                                //
-                                // Before F1 none of this was reachable -- a float
-                                // `rotation` cannot express a tilt -- and the
-                                // widening made it authorable through the new
-                                // Quat Inspector row while leaving the planar
-                                // assumption in place. The honest answer is to
-                                // decline, not to repair: repairing means
-                                // carrying z, tilt and z-scale through the whole
-                                // pipeline, which IS the 3D gizmo, which is F4.
-                                //
-                                // Declined per TARGET, not per drag, so a
-                                // multi-selection still moves the members that
-                                // ARE planar; skipping before SnapshotComponent
-                                // keeps the refusal out of the undo step too.
-                                // Checked once here rather than per frame in the
-                                // write-back so the warning fires once per drag
-                                // attempt, and because neither matrix can change
-                                // mid-drag.
-                                const glm::mat4 parentMat =
-                                    Arcane::Edit::ParentWorldMatrix(*regPtr, e);
-                                const glm::mat4 worldMat =
-                                    Arcane::Edit::WorldMatrix(*regPtr, e);
-                                const bool planarParent = Arcane::IsPlanarBasis(parentMat);
-                                if (!planarParent || !Arcane::IsPlanarBasis(worldMat))
-                                {
-                                    const Arcane::Identity* id =
-                                        std::as_const(*regPtr).GetComponent<Arcane::Identity>(e);
-                                    // Which of the two failed is the difference
-                                    // between "fix the parent" and "fix this
-                                    // entity", so the message names it rather
-                                    // than covering both vaguely.
-                                    const char* what = planarParent
-                                        ? "has a basis that leaves the XY plane"
-                                        : "sits under a parent whose basis leaves the XY plane";
-                                    ARC_WARN("gizmo: \"{}\" (id {}) {} -- the 2D gizmo cannot "
-                                             "move it without corrupting scale and orientation, "
-                                             "so this drag leaves it alone (a 3D gizmo is F4)",
-                                             id ? id->name : std::string("<unnamed>"), e.GetID(),
-                                             what);
-                                    continue;
-                                }
+                                const glm::mat4 worldMat = Arcane::Edit::WorldMatrix(*regPtr, e);
                                 m_undo->SnapshotComponent(e, ed);
-                                // Stored WORLD pose (see gt above) -- the group
-                                // delta below composes/replays in world space.
-                                // Reuses the matrix the guard already walked.
-                                m_gizmoDrag.targets.push_back({ e, Arcane::DecomposeTRS(worldMat) });
+                                // The mirror axis the AUTHOR chose, if any (first negative component).
+                                int mirrorAxis = 0;
+                                if      (et->scale.y < 0.0f && et->scale.x >= 0.0f) mirrorAxis = 1;
+                                else if (et->scale.z < 0.0f && et->scale.x >= 0.0f && et->scale.y >= 0.0f) mirrorAxis = 2;
+                                m_gizmoDrag.targets.push_back({ e, Arcane::DecomposeTRS(worldMat), mirrorAxis });
                             }
                             m_gizmoDrag.active           = true;
                             m_gizmoDrag.axis             = m_gizmoHovered;
@@ -1321,48 +1235,20 @@ namespace Arcane::Editor
                 // exactly (see ApplyGroupDelta).
                 const Arcane::GizmoGroupDelta gd =
                     Arcane::MakeGroupDelta(m_gizmoDrag.start, nt);
-                for (const auto& [e, startPose] : m_gizmoDrag.targets)
+                for (const auto& [e, startPose, mirrorAxis] : m_gizmoDrag.targets)
                 {
                     Arcane::Transform* et = regPtr->GetComponent<Arcane::Transform>(e);
-                    if (!et)
-                        continue;   // destroyed mid-drag
-                    // startPose/gd are WORLD; convert the new world pose back
-                    // through the parent's inverse before writing the LOCAL
-                    // Transform (Unreal's SetWorldTransform demotes to relative
-                    // when attached -- this is that demotion).
+                    if (!et) continue;   // destroyed mid-drag
+                    // startPose/gd are WORLD; demote through the parent's inverse
+                    // before writing the LOCAL Transform (Unreal's SetWorldTransform).
                     const Arcane::GizmoTransform w = Arcane::ApplyGroupDelta(startPose, gd);
-                    const glm::mat4 localMat =
-                        glm::inverse(Arcane::Edit::ParentWorldMatrix(*regPtr, e)) * Arcane::ComposeTRS(w);
-                    const Arcane::GizmoTransform r = Arcane::DecomposeTRS(localMat);
-                    // Task 3 (F1): Transform is 3D but THE GIZMO IS STILL 2D
-                    // (F4 makes it 3D), so only the components it actually has
-                    // a handle for are written. position.z and scale.z are
-                    // carried through UNCHANGED rather than being zeroed by a
-                    // decomposition that never looked at them -- a translate
-                    // drag must not silently flatten an entity's depth.
-                    //
-                    // rotation is the exception, and it WOULD be a real loss:
-                    // RotationAboutZ replaces the whole quaternion, so any
-                    // out-of-plane orientation on a dragged entity is discarded
-                    // outright rather than preserved through the drag.
-                    // Preserving it would mean a swing-twist split of the
-                    // authored quaternion, which is 3D-gizmo work and belongs
-                    // with the task that gives the user 3D handles.
-                    //
-                    // What keeps it from being a loss at all: the drag-start
-                    // guard (see the targets loop) refuses any `e` whose WORLD
-                    // basis leaves the XY plane, so every entity reaching this
-                    // line has a rotation RotationAboutZ can express exactly.
-                    // The same guard's parent arm is what makes the demotion
-                    // above sound -- inverse(ParentWorldMatrix) is only a planar
-                    // matrix while the parent is one, and without that check a
-                    // tilted parent turned the projection in DecomposeTRS into
-                    // silent scale corruption on a drag that touched no scale
-                    // handle at all (final-review finding 4). Do not relax
-                    // either arm without making this line 3D-exact first.
-                    et->position = glm::vec3(r.position, et->position.z);
-                    et->rotation = Arcane::RotationAboutZ(r.rotation);
-                    et->scale    = glm::vec3(r.scale, et->scale.z);
+                    const glm::mat4 localMat = glm::inverse(Arcane::Edit::ParentWorldMatrix(*regPtr, e)) * Arcane::ComposeTRS(w);
+                    // FULLY 3D since F4 plan 2: every component is the gizmo's to
+                    // write. The only massaging is the mirror's home axis.
+                    const Arcane::GizmoTransform r = Arcane::WithMirrorOn(Arcane::DecomposeTRS(localMat), mirrorAxis);
+                    et->position = r.position;
+                    et->rotation = r.rotation;
+                    et->scale    = r.scale;
                 }
                 m_gizmoHovered = m_gizmoDrag.axis;   // keep the active handle highlighted
 
@@ -1934,19 +1820,17 @@ namespace Arcane::Editor
             Astra::Registry& drawReg = m_runtime->Registry();
             const Arcane::Transform* lt = std::as_const(drawReg).GetComponent<Arcane::Transform>(
                 m_selection.Primary());
-            // Same Affine2D guard as the interaction block (F4 plan 1 T3).
-            const std::optional<Arcane::Affine2D> drawAffine =
-                lt ? m_runtime->View().AsAffine2D() : std::nullopt;
-            if (lt && drawAffine)
+            if (lt)
             {
                 // WORLD pose, matching the interaction block's gt above --
                 // draws at the same place it hit-tests, including for a
-                // parented primary.
+                // parented primary. The SAME handle mask and size as the
+                // hit-test this frame (GizmoHandles() reads the same members).
                 const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
                     Arcane::Edit::WorldMatrix(drawReg, m_selection.Primary()));
-                const Arcane::GizmoView view{ *drawAffine };
-                Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, view, m_gizmoHovered,
-                            m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
+                Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
+                             m_viewSettings.gizmoSize, m_gizmoHovered,
+                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
             }
         }
     }
@@ -3359,12 +3243,11 @@ namespace Arcane::Editor
         // segments assign m_camera.mode exactly as Alt+J / Alt+G do (Resolve
         // reads it next frame); the settings popup edits m_viewSettings, the
         // orbit fov and the speed scalar in place, and the camera reads them
-        // per frame. gizmoToolsEnabled greys Move/Rotate/Scale in Perspective.
+        // per frame.
         Arcane::Editor::ViewportToolState tools{
             m_gizmoEnabled, m_gizmoMode, m_gizmoSpace,
             m_camera.mode, m_viewSettings,
             m_camera.orbit.fovYDeg, m_camera.speedScalar,
-            GizmoToolsEnabled(),
         };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),

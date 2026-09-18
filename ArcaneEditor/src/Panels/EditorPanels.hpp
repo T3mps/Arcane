@@ -260,10 +260,6 @@ namespace Arcane::Editor
     // fovYDeg / speedScalar / settings edits are live the same way. All of it
     // persists through the [EditorViewport][Camera] ini block (Task 7's
     // handler, ViewportSettings.hpp).
-    //
-    // gizmoToolsEnabled is EditorApp::GizmoToolsEnabled(): false in
-    // Perspective until plan 2 gives the gizmo the full ViewTransform, and
-    // the overlay greys Move/Rotate/Scale on it (Select stays live).
     struct ViewportToolState
     {
         bool&                              gizmoEnabled;
@@ -273,7 +269,6 @@ namespace Arcane::Editor
         Arcane::Editor::ViewportSettings&  settings;
         float&                             fovYDeg;
         float&                             speedScalar;
-        bool                               gizmoToolsEnabled;   // false in Perspective until plan 2
     };
 
     // Draw the scene texture into a dockable Viewport window; report its rect,

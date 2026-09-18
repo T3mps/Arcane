@@ -1219,24 +1219,14 @@ namespace Arcane::Editor
             if (iconToggle(ICON_LC_MOUSE_POINTER_2, "##tool_sel", !gizmoEnabled, "Select (Q)"))
                 gizmoEnabled = false;
             ImGui::SameLine();
-            // Move/Rotate/Scale are greyed while the view has no 2D affine
-            // (Perspective, until plan 2) -- the state EditorApp::GizmoLive()
-            // already folds in; the buttons just show it (Ruling K).
-            const bool toolsOff = !tools.gizmoToolsEnabled;
-            const char* offSuffix = " (2D mode only until plan 2)";
-            const std::string tipT = std::string("Move (W)")   + (toolsOff ? offSuffix : "");
-            const std::string tipR = std::string("Rotate (E)") + (toolsOff ? offSuffix : "");
-            const std::string tipS = std::string("Scale (R)")  + (toolsOff ? offSuffix : "");
-            ImGui::BeginDisabled(toolsOff);
-            if (iconToggle(ICON_LC_MOVE_3D, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, tipT.c_str()))
+            if (iconToggle(ICON_LC_MOVE_3D, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, "Move (W)"))
             { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, tipR.c_str()))
+            if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
             { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_SCALE_3D, "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale, tipS.c_str()))
+            if (iconToggle(ICON_LC_SCALE_3D, "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale, "Scale (R)"))
             { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
-            ImGui::EndDisabled();
             ImGui::SameLine();
             {
                 const bool local = (space == Arcane::GizmoSpace::Local);

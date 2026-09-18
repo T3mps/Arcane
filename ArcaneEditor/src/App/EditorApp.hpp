@@ -852,45 +852,25 @@ namespace Arcane::Editor
         { return m_gameUi.inViewport; }
 
         // ---- THE GIZMO predicate --------------------------------------------
-        // "The transform gizmo may interact and draw." HoverLive()'s sibling,
-        // and it exists for the same reason at one remove -- a gizmo needs
-        // only a SELECTION to arm, and once armed it has two mouse-shaped
-        // consequences:
-        //   * it is drawn by SubmitSceneToBatcher -- i.e. into the SCENE BATCH
-        //     -- and there is no downstream gate that could confine it: the
-        //     batcher's content IS the scene;
-        //   * m_gizmoHovered comes from a hit-test against the LIVE cursor
-        //     (UpdateGizmoInteraction), so which axis is highlighted -- and
-        //     whether a stray press starts a drag that MOVES the entity
-        //     mid-run -- depends on where the mouse was left. That is the
-        //     hover-dependency class HoverLive() closes, arriving by a
-        //     different door.
-        //
-        // A NAMED PREDICATE rather than "m_gizmoEnabled defaults to false (the
-        // Select tool), so a scripted run has no gizmo anyway": that is true,
-        // incidental, and one W keypress away from false. Reasoning of the
-        // form "already false on a scripted run" is exactly what got the
-        // outline chain wrong.
-        //
-        // F4 plan 1 T7: ALSO gated on the view having a 2D affine. The gizmo
-        // hit-tests and draws through ViewTransform::AsAffine2D() (T3), which
-        // a perspective view does not have -- so in Perspective the gizmo is
-        // OFF as a matter of state, not just skipped per site. Plan 2 (mesh
-        // picking + the 3D gizmo) lifts this; until then GizmoToolsEnabled()
-        // is what the tool overlay (Task 8) disables its W/E/R buttons on.
-        [[nodiscard]] bool GizmoLive() const noexcept
-        { return m_gizmoEnabled && GizmoToolsEnabled(); }
+        // "The transform gizmo may interact and draw." HoverLive()'s sibling
+        // (see that predicate for why a NAMED predicate rather than "m_gizmoEnabled
+        // defaults to false"): the gizmo draws INTO THE SCENE BATCH and its hover
+        // comes from the live cursor, so both consequences are gated here. Since F4
+        // plan 2 the gizmo works in every view mode -- the 2D view only masks its
+        // Z handles (GizmoHandles() below) -- so this is the tool state alone.
+        [[nodiscard]] bool GizmoLive() const noexcept { return m_gizmoEnabled; }
 
-        // Whether the transform-gizmo tools (Move/Rotate/Scale) can operate
-        // on the CURRENT view: true iff the pushed ViewTransform has a 2D
-        // affine (the Ortho2D view). Perspective => false until plan 2's
-        // Task 3 gives the gizmo the full ViewTransform. The click-pick and
-        // the outline no longer read this (plan 2 Task 1: the id pass
-        // projects through FrameDesc::pickView in every view mode). Reads the
-        // runtime's view rather than m_camera.mode so it is exactly the
-        // predicate every affine-gated gizmo site tests.
-        [[nodiscard]] bool GizmoToolsEnabled() const noexcept
-        { return m_runtime && m_runtime->View().AsAffine2D().has_value(); }
+        // The handles the current view offers: everything in Perspective; in the
+        // 2D view the planar set for the current mode (spec s7.2 -- the Z arrow,
+        // the YZ/XZ squares, the X/Y rings, the Z box and the screen ring hide,
+        // and Z components pass through the drags untouched). A HOST decision,
+        // not a gizmo mode: Arcane::Gizmo has one code path.
+        [[nodiscard]] Arcane::GizmoHandleMask GizmoHandles() const noexcept
+        {
+            return m_camera.mode == Arcane::Editor::ViewMode::TwoD
+                 ? Arcane::GizmoHandleMask::Planar(m_gizmoMode)
+                 : Arcane::GizmoHandleMask::All();
+        }
 
         // THE VIEWPORT'S EXTENT: the offscreen graph output's surface size
         // (m_viewportTargets.graph).
@@ -1103,9 +1083,13 @@ namespace Arcane::Editor
             Arcane::GizmoTransform start;                    // the PRIMARY's pre-drag WORLD pose (gizmo anchor)
             glm::vec2              mouseStartScreen{0.0f, 0.0f};
             // Every selection ROOT carrying a Transform, with its pre-drag WORLD
-            // pose. Rebuilt on press. Roots only: a selected child already rides
+            // pose and the axis (1 = Y, 2 = Z, else 0) its AUTHORED scale carries a
+            // mirror on -- DecomposeTRS reads any mirror as a negative X, and the
+            // write-back re-homes it (WithMirrorOn) so a Y-mirrored sprite's
+            // Inspector numbers survive a drag. Roots only: a selected child rides
             // its selected parent through WorldTransform propagation.
-            std::vector<std::pair<Astra::Entity, Arcane::GizmoTransform>> targets;
+            struct Target { Astra::Entity entity; Arcane::GizmoTransform startWorld; int mirrorAxis; };
+            std::vector<Target> targets;
             // Ownership token for the drag's undo transaction, minted on press
             // and spent on release (CommandStack::Begin). Parked here because the
             // gesture spans frames and the Inspector shares the same stack: only
