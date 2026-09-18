@@ -38,6 +38,17 @@ namespace Arcane
         virtual void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 rgba) = 0;
         virtual void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec4 rgba) = 0;
         virtual void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 rgba) = 0;   // axis-aligned, filled
+        virtual void Circle(glm::vec2 center, float radius, glm::vec4 rgba) = 0;   // filled disc
+    };
+
+    // A rotate drag's sweep in the ring's own frame (the PlaneBasis of its
+    // axis): the angle the grab started at and the (snapped) turn since. Draw
+    // paints it as UE's swept sector inside the full ring; RotateSweep derives
+    // it from exactly the inputs ApplyDrag reads, so the pie matches the turn.
+    struct GizmoRotateSweep
+    {
+        float start = 0.0f;   // radians
+        float delta = 0.0f;   // radians, wrapped to (-pi, pi], snapped when the drag snaps
     };
 
     enum class GizmoMode  { Translate, Rotate, Scale };
@@ -112,8 +123,11 @@ namespace Arcane
                                  GizmoHandleMask handles, float sizeScale,
                                  glm::vec2 mouseScreen);
 
-    // Screen-constant gizmo geometry for the current state; hovered/active
-    // brighten. Pixels into the host's foreground sink (see GizmoDrawSink):
+    // Screen-constant gizmo geometry for the current state, UNREAL'S WIDGET
+    // (UnrealWidgetRender.cpp) in pixels: shaded rods with cone heads (cubes
+    // in Scale), the centre disc, camera-facing quarter bands for Rotate (the
+    // full band plus the swept sector while dragging), UE's axis colours with
+    // the hot handle in yellow. Pixels into the host's foreground sink (see GizmoDrawSink):
     // over everything, no depth. The plane handles are Unreal's L-corners
     // (two bars along the two spanning axes, each in that axis's colour);
     // the filled square between them is the hit region and is painted only
@@ -121,7 +135,15 @@ namespace Arcane
     ARCANE_API void Draw(GizmoDrawSink& sink, GizmoMode mode, GizmoSpace space,
                          const GizmoTransform& t, const ViewTransform& view,
                          GizmoHandleMask handles, float sizeScale,
-                         GizmoAxis hovered, GizmoAxis active);
+                         GizmoAxis hovered, GizmoAxis active,
+                         const GizmoRotateSweep* sweep = nullptr);   // the active rotate drag, if any
+
+    // The sweep of an in-progress rotate drag on `axis` (X/Y/Z/Screen) --
+    // nullopt for any other axis or when a mouse ray misses the ring's plane.
+    ARCANE_API std::optional<GizmoRotateSweep> RotateSweep(GizmoSpace space, GizmoAxis axis,
+                                                            const GizmoTransform& start, const ViewTransform& view,
+                                                            glm::vec2 mouseStartScreen, glm::vec2 mouseCurScreen,
+                                                            const GizmoSnap& snap);
 
     // New transform, computed from `start` (no accumulation drift). Ray-based:
     // the same math in every projection.

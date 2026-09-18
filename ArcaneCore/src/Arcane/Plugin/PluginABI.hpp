@@ -897,7 +897,11 @@ namespace Arcane
     //     finished frame (Unreal's SDPG_Foreground) rather than into the scene
     //     batch the mesh pass overpaints. A module built against v33 references
     //     the removed overload -- refuse. ReferenceProject.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 34;
+    // v35 (2026-09-18, F4 plan 2 desk pass, UE parity): GizmoDrawSink gained
+    //     Circle; Draw gained a trailing `const GizmoRotateSweep*`; RotateSweep
+    //     and GizmoRotateSweep are NEW. A module built against v34 calls the old
+    //     Draw signature -- refuse. ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 35;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

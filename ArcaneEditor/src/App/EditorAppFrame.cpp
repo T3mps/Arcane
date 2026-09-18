@@ -1229,6 +1229,11 @@ namespace Arcane::Editor
                 const Arcane::GizmoTransform nt = Arcane::ApplyDrag(
                     m_gizmoMode, m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
                     m_gizmoDrag.mouseStartScreen, dragMouse, gsnap);
+                // The sector Draw paints for a rotate drag -- the same inputs.
+                m_gizmoDrag.sweep = m_gizmoMode == Arcane::GizmoMode::Rotate
+                    ? Arcane::RotateSweep(m_gizmoSpace, m_gizmoDrag.axis, m_gizmoDrag.start, view,
+                                          m_gizmoDrag.mouseStartScreen, dragMouse, gsnap)
+                    : std::nullopt;
                 // One delta from the primary's drag, replayed onto every
                 // target's PRE-drag pose -- recomputed from `start` each
                 // frame, so nothing accumulates drift. The primary is in
@@ -3255,7 +3260,8 @@ namespace Arcane::Editor
                 Arcane::Editor::ImGuiGizmoSink sink(list, origin);
                 Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
                              m_viewSettings.gizmoSize, m_gizmoHovered,
-                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
+                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None,
+                             m_gizmoDrag.active && m_gizmoDrag.sweep ? &*m_gizmoDrag.sweep : nullptr);
             };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),

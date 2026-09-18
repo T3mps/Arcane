@@ -35,6 +35,10 @@ namespace Arcane::Editor
         {
             m_list.AddRectFilled(At(pos), At(pos + size), Col(rgba));
         }
+        void Circle(glm::vec2 center, float radius, glm::vec4 rgba) override
+        {
+            m_list.AddCircleFilled(At(center), radius, Col(rgba));
+        }
 
     private:
         [[nodiscard]] ImVec2 At(glm::vec2 p) const noexcept { return ImVec2(m_origin.x + p.x, m_origin.y + p.y); }

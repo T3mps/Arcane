@@ -1096,6 +1096,10 @@ namespace Arcane::Editor
             // the token holder may Commit/Cancel, so an Inspector edit landing in
             // the same frame can no longer close this drag out from under it.
             Arcane::TransactionId txn = Arcane::TransactionId::None;
+            // The active ROTATE drag's sweep (start angle + turn in the ring's
+            // frame), recomputed each drag frame from the same inputs ApplyDrag
+            // reads; Draw paints it as UE's swept sector. Empty otherwise.
+            std::optional<Arcane::GizmoRotateSweep> sweep;
         } m_gizmoDrag;
 
         // The EDITOR's viewport camera (Edit mode). ClientRuntime::SetView is the

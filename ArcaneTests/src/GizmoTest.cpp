@@ -38,8 +38,8 @@ TEST_CASE("Gizmo: WorldUnitsPerPixel is the ortho zoom in 2D and grows with dist
     // A handle of kAxisLenPx (80) at size 1 projects to 80 px in EITHER view.
     for (const ViewTransform& v : { Ortho(), Persp() })
     {
-        const float R = 80.0f * WorldUnitsPerPixel(v, {0,0,0});
-        CHECK_THAT(glm::length(Px(v, {R,0,0}) - Px(v, {0,0,0})), WithinAbs(80.0f, 0.5f));
+        const float R = 70.0f * WorldUnitsPerPixel(v, {0,0,0});
+        CHECK_THAT(glm::length(Px(v, {R,0,0}) - Px(v, {0,0,0})), WithinAbs(70.0f, 0.5f));
     }
 }
 
@@ -160,19 +160,19 @@ TEST_CASE("Gizmo HitTest: 2D view, planar mask -- axes, the XY square, the centr
     const GizmoHandleMask tr = GizmoHandleMask::Planar(GizmoMode::Translate);
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, size, {460, 302}) == GizmoAxis::X);
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, size, {398, 240}) == GizmoAxis::Y);
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, size, {440, 260}) == GizmoAxis::XY);   // the square spans 0.35R..0.65R on both axes
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, size, {426, 274}) == GizmoAxis::XY);   // UE's corner: 14..38 px along both axes
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, size, {403, 297}) == GizmoAxis::Center);
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, size, {600, 100}) == GizmoAxis::None);
     // The Z arrow is MASKED in 2D (it would project onto the pivot anyway).
     CHECK_FALSE(tr.Has(GizmoAxis::Z)); CHECK_FALSE(tr.Has(GizmoAxis::YZ)); CHECK_FALSE(tr.Has(GizmoAxis::XZ)); CHECK_FALSE(tr.Has(GizmoAxis::Screen));
-    // Rotate: only the Z ring (radius 0.8R = 64 px) exists in 2D.
+    // Rotate: only the Z ring (UE's band, 96..112 px) exists in 2D -- FULL, the view looks down its axis.
     const GizmoHandleMask ro = GizmoHandleMask::Planar(GizmoMode::Rotate);
-    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, ro, size, {464, 300}) == GizmoAxis::Z);
-    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, ro, size, {445, 300}) == GizmoAxis::None);   // 19 px inside the band
-    // Scale: X box at the tip.
+    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, ro, size, {504, 300}) == GizmoAxis::Z);
+    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, ro, size, {445, 300}) == GizmoAxis::None);   // 47 px inside the band
+    // Scale: the rod (10..60 px) with its cube (62..70 px).
     const GizmoHandleMask sc = GizmoHandleMask::Planar(GizmoMode::Scale);
-    CHECK(HitTest(GizmoMode::Scale, GizmoSpace::World, t, v, sc, size, {478, 301}) == GizmoAxis::X);
-    // Gizmo size 2: the X tip is at 560 px; 460 is now mid-shaft and still X, 700 is a miss.
+    CHECK(HitTest(GizmoMode::Scale, GizmoSpace::World, t, v, sc, size, {466, 301}) == GizmoAxis::X);
+    // Gizmo size 2: the X cone tip is at 588 px; 556 is on the shaft and still X, 700 is a miss.
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, 2.0f, {556, 300}) == GizmoAxis::X);
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, tr, 2.0f, {700, 300}) == GizmoAxis::None);
 }
@@ -182,27 +182,28 @@ TEST_CASE("Gizmo HitTest: oblique perspective -- every handle is where it projec
     const ViewTransform v = Oblique();
     const GizmoTransform t;
     const GizmoHandleMask all = GizmoHandleMask::All();
-    const float R = 80.0f * WorldUnitsPerPixel(v, {0,0,0});
-    // Each arrow's projected mid-shaft hits its axis.
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {R * 0.6f, 0, 0})) == GizmoAxis::X);
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, R * 0.6f, 0})) == GizmoAxis::Y);
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, 0, R * 0.6f})) == GizmoAxis::Z);
-    // Each plane square's projected centre hits its plane.
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {R * 0.5f, R * 0.5f, 0})) == GizmoAxis::XY);
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, R * 0.5f, R * 0.5f})) == GizmoAxis::YZ);
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {R * 0.5f, 0, R * 0.5f})) == GizmoAxis::XZ);
-    // A point on each ring hits that ring (ring radius 0.8R).
-    const GizmoAxis onXZ = HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, 0.8f * R, 0}));
-    CHECK((onXZ == GizmoAxis::X || onXZ == GizmoAxis::Z));   // (0,0.8R,0) lies on BOTH the X and Z rings; the more camera-facing wins (Catch2 cannot decompose an || of ==s)
-    // (-0.57R, 0, +0.57R): only the Y ring passes here -- the (+,0,+) point is
-    // 7 px from the PROJECTED X ring in this view, inside the 8 px band, and
-    // the more camera-facing X ring is tried first.
-    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {-0.8f * R * 0.7071f, 0, 0.8f * R * 0.7071f})) == GizmoAxis::Y);
-    // The screen ring: a pixel circle of kScreenRingRadiusPx (76) around the pivot.
-    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0,0,0}) + glm::vec2(76.0f, 0.0f)) == GizmoAxis::Screen);
+    const float px = WorldUnitsPerPixel(v, {0,0,0});   // metres per screen pixel at the pivot
+    // Each arrow's projected mid-shaft (42 px of UE's 70) hits its axis.
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {42 * px, 0, 0})) == GizmoAxis::X);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, 42 * px, 0})) == GizmoAxis::Y);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, 0, 42 * px})) == GizmoAxis::Z);
+    // Each plane corner's projected centre (26 px, inside UE's 14..38) hits its plane.
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {26 * px, 26 * px, 0})) == GizmoAxis::XY);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, 26 * px, 26 * px})) == GizmoAxis::YZ);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {26 * px, 0, 26 * px})) == GizmoAxis::XZ);
+    // The camera-facing QUARTER band of each ring (centreline 104 px). The eye
+    // is at (+,+,+), so the X arc runs +Y..+Z, the Y arc +X..+Z, the Z arc +X..+Y.
+    const float r = 104.0f * px * 0.7071f;
+    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0, r, r})) == GizmoAxis::X);
+    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {r, 0, r})) == GizmoAxis::Y);
+    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {r, r, 0})) == GizmoAxis::Z);
+    // ...and the FAR quadrant of the Z ring is not a target (UE draws only the near quarter).
+    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {-r, -r, 0})) != GizmoAxis::Z);
+    // The screen ring: a pixel circle of 140 px (OUTER_AXIS_CIRCLE_RADIUS * 1.25) around the pivot.
+    CHECK(HitTest(GizmoMode::Rotate, GizmoSpace::World, t, v, all, 1.0f, Px(v, {0,0,0}) + glm::vec2(140.0f, 0.0f)) == GizmoAxis::Screen);
     // LOCAL space with a turned entity: the X arrow follows the local X.
     GizmoTransform turned; turned.rotation = glm::angleAxis(kPi * 0.5f, glm::vec3(0, 0, 1));   // local X = world +Y
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::Local, turned, v, all, 1.0f, Px(v, {0, R * 0.6f, 0})) == GizmoAxis::X);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::Local, turned, v, all, 1.0f, Px(v, {0, 42 * px, 0})) == GizmoAxis::X);
 }
 
 TEST_CASE("Gizmo HitTest: the plane squares sit in the quadrant FACING the camera and hide when edge-on", "[gizmo]")
@@ -215,23 +216,23 @@ TEST_CASE("Gizmo HitTest: the plane squares sit in the quadrant FACING the camer
     const GizmoHandleMask all = GizmoHandleMask::All();
     // Eye at (-4, 3, 6): the XY square must sit at (-x, +y), not (+x, +y).
     const ViewTransform left = ViewTransform::Perspective({-4.0f, 3.0f, 6.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, 60.0f, {800u, 600u}, 0.1f, 100.0f);
-    const float R = 80.0f * WorldUnitsPerPixel(left, {0,0,0});
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {-R * 0.5f, R * 0.5f, 0})) == GizmoAxis::XY);
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, { R * 0.5f, R * 0.5f, 0})) != GizmoAxis::XY);
+    const float c = 26.0f * WorldUnitsPerPixel(left, {0,0,0});   // inside UE's 14..38 px corner
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {-c, c, 0})) == GizmoAxis::XY);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, { c, c, 0})) != GizmoAxis::XY);
     // ...and the XZ square at (-x, +z), the YZ square at (+y, +z).
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {-R * 0.5f, 0, R * 0.5f})) == GizmoAxis::XZ);
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {0, R * 0.5f, R * 0.5f})) == GizmoAxis::YZ);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {-c, 0, c})) == GizmoAxis::XZ);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {0, c, c})) == GizmoAxis::YZ);
     // Looking straight down -Z the XZ and YZ planes are edge-on: never a target.
     const ViewTransform front = Persp();
-    const float Rf = 80.0f * WorldUnitsPerPixel(front, {0,0,0});
+    const float cf = 26.0f * WorldUnitsPerPixel(front, {0,0,0});
     for (float sx : { -1.0f, 1.0f })
     {
-        CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, front, all, 1.0f, Px(front, {sx * Rf * 0.5f, 0, Rf * 0.5f})) != GizmoAxis::XZ);
-        CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, front, all, 1.0f, Px(front, {0, sx * Rf * 0.5f, Rf * 0.5f})) != GizmoAxis::YZ);
+        CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, front, all, 1.0f, Px(front, {sx * cf, 0, cf})) != GizmoAxis::XZ);
+        CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, front, all, 1.0f, Px(front, {0, sx * cf, cf})) != GizmoAxis::YZ);
     }
     // The 2D view is unchanged: the XY square stays at (+x, +y) (the eye is on +Z, nothing flips).
     const ViewTransform o = Ortho();
-    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, o, GizmoHandleMask::Planar(GizmoMode::Translate), 1.0f, {440, 260}) == GizmoAxis::XY);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, o, GizmoHandleMask::Planar(GizmoMode::Translate), 1.0f, {426, 274}) == GizmoAxis::XY);
 }
 
 namespace
@@ -239,53 +240,86 @@ namespace
     // A recording sink: the pixels Draw would paint, counted by primitive.
     struct RecordingSink final : Arcane::GizmoDrawSink
     {
-        int lines = 0, triangles = 0, rects = 0;
+        int lines = 0, triangles = 0, rects = 0, circles = 0;
         std::vector<glm::vec2> lineEnds;
         void Line(glm::vec2 a, glm::vec2 b, float, glm::vec4) override { ++lines; lineEnds.push_back(a); lineEnds.push_back(b); }
         void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override { ++triangles; }
         void Rect(glm::vec2, glm::vec2, glm::vec4) override { ++rects; }
+        void Circle(glm::vec2, float, glm::vec4) override { ++circles; }
     };
 }
 
 TEST_CASE("Gizmo Draw: the planar mask paints only the planar handles; nothing is painted for a pivot behind the eye", "[gizmo]")
 {
     const GizmoTransform t;
-    // Oblique perspective, every handle visible: 3 arrows (shaft + head), 3
-    // plane L-corners (2 bars each, no fill when cold), 1 centre rect.
+    // Oblique perspective, every handle visible (UE's widget): 3 arrows (a
+    // 3-line shaded rod + a 2-triangle cone), 3 plane L-corners (2 bars each,
+    // no fill when cold), the centre disc.
     const ViewTransform v = Oblique();
     RecordingSink all;
     Draw(all, GizmoMode::Translate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(all.lines == 3 + 6);
-    CHECK(all.triangles == 3);
-    CHECK(all.rects == 1);
+    CHECK(all.lines == 3 * 3 + 3 * 2);
+    CHECK(all.triangles == 3 * 2);
+    CHECK(all.rects == 0);
+    CHECK(all.circles == 1);
     // Hovering a plane paints its fill (two triangles) on top of the bars.
     RecordingSink hot;
     Draw(hot, GizmoMode::Translate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::XY, GizmoAxis::None);
-    CHECK(hot.triangles == 3 + 2);
+    CHECK(hot.triangles == 3 * 2 + 2);
     // The 2D view with the planar mask: X, Y, the XY corner, the centre -- and no Z anything.
     RecordingSink planar;
     Draw(planar, GizmoMode::Translate, GizmoSpace::World, t, Ortho(), GizmoHandleMask::Planar(GizmoMode::Translate), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(planar.lines == 2 + 2);
-    CHECK(planar.triangles == 2);
-    CHECK(planar.rects == 1);
+    CHECK(planar.lines == 2 * 3 + 2);
+    CHECK(planar.triangles == 2 * 2);
+    CHECK(planar.circles == 1);
     // Every painted pixel is inside the 800x600 viewport for the 2D case.
     for (const glm::vec2& p : planar.lineEnds) { CHECK(p.x >= 0.0f); CHECK(p.x <= 800.0f); CHECK(p.y >= 0.0f); CHECK(p.y <= 600.0f); }
-    // Rotate: three rings of kRingSegments lines each plus the screen ring; planar = the Z ring only.
+    // Rotate: three camera-facing QUARTER bands (16 segments x 2 triangles)
+    // plus the 48-line screen ring; the 2D planar mask = the Z ring only, FULL
+    // (the ortho view looks down its axis): 48 x 2 triangles, no lines.
     RecordingSink rot;
     Draw(rot, GizmoMode::Rotate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(rot.lines == 4 * 48);
+    CHECK(rot.triangles == 3 * 16 * 2);
+    CHECK(rot.lines == 48);
     RecordingSink rotPlanar;
     Draw(rotPlanar, GizmoMode::Rotate, GizmoSpace::World, t, Ortho(), GizmoHandleMask::Planar(GizmoMode::Rotate), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(rotPlanar.lines == 48);
-    // Scale: three shafts with boxes plus the centre.
+    CHECK(rotPlanar.triangles == 48 * 2);
+    CHECK(rotPlanar.lines == 0);
+    // A rotate DRAG on Z: only the Z ring, full, plus the swept sector (a
+    // quarter turn = 12 of the 48 fan steps) -- UE's Render_Rotate under bDragging.
+    const GizmoRotateSweep sweep{ 0.0f, kPi * 0.5f };
+    RecordingSink drag;
+    Draw(drag, GizmoMode::Rotate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::Z, GizmoAxis::Z, &sweep);
+    CHECK(drag.triangles == 48 * 2 + 12);
+    CHECK(drag.lines == 0);
+    // Scale: three shaded rods with a two-rect cube each, plus the centre disc.
     RecordingSink sc;
     Draw(sc, GizmoMode::Scale, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(sc.lines == 3); CHECK(sc.rects == 3 + 1); CHECK(sc.triangles == 0);
+    CHECK(sc.lines == 3 * 3); CHECK(sc.rects == 3 * 2); CHECK(sc.triangles == 0); CHECK(sc.circles == 1);
     // Behind the eye: nothing at all.
     GizmoTransform behind; behind.position = {0.0f, 0.0f, 7.0f};
     RecordingSink none;
     Draw(none, GizmoMode::Translate, GizmoSpace::World, behind, Persp(), GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(none.lines == 0); CHECK(none.triangles == 0); CHECK(none.rects == 0);
+    CHECK(none.lines == 0); CHECK(none.triangles == 0); CHECK(none.rects == 0); CHECK(none.circles == 0);
+}
+
+TEST_CASE("Gizmo RotateSweep: the sweep Draw paints is the turn ApplyDrag applies", "[gizmo]")
+{
+    const ViewTransform v = Ortho();
+    GizmoTransform start; GizmoSnap noSnap;
+    // The Z ring in 2D: (500,300) -> (400,400) is a -90 deg turn.
+    const auto sw = RotateSweep(GizmoSpace::World, GizmoAxis::Z, start, v, {500,300}, {400,400}, noSnap);
+    REQUIRE(sw);
+    CHECK_THAT(sw->delta, WithinAbs(-kPi * 0.5f, 1e-3f));
+    const GizmoTransform r = ApplyDrag(GizmoMode::Rotate, GizmoSpace::World, GizmoAxis::Z, start, v, {500,300}, {400,400}, noSnap);
+    CHECK(NearQuat(r.rotation, glm::angleAxis(sw->delta, glm::vec3(0, 0, 1)), 1e-3f));
+    // Snapped the same way as the drag.
+    GizmoSnap snap; snap.enabled = true; snap.rotationDeg = 15.0f;
+    const auto sws = RotateSweep(GizmoSpace::World, GizmoAxis::Z, start, v, {500,300}, {400 + 93.97f, 300 + 34.20f}, snap);
+    REQUIRE(sws);
+    CHECK_THAT(sws->delta, WithinAbs(-kPi / 12.0f, 1e-3f));
+    // Not a ring: no sweep.
+    CHECK_FALSE(RotateSweep(GizmoSpace::World, GizmoAxis::XY, start, v, {500,300}, {400,400}, noSnap));
 }
 
 TEST_CASE("Gizmo: a pivot BEHIND the eye is neither hit nor scaled -- no phantom gizmo through the viewport centre", "[gizmo]")
@@ -299,7 +333,7 @@ TEST_CASE("Gizmo: a pivot BEHIND the eye is neither hit nor scaled -- no phantom
     REQUIRE(std::isfinite(phantom.x)); REQUIRE(std::isfinite(phantom.y));
     const GizmoHandleMask all = GizmoHandleMask::All();
     for (GizmoMode mode : { GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale })
-        for (const glm::vec2 probe : { phantom, phantom + glm::vec2(40.0f, 0.0f), phantom + glm::vec2(0.0f, -40.0f), phantom + glm::vec2(64.0f, 0.0f), phantom + glm::vec2(76.0f, 0.0f) })
+        for (const glm::vec2 probe : { phantom, phantom + glm::vec2(40.0f, 0.0f), phantom + glm::vec2(0.0f, -40.0f), phantom + glm::vec2(104.0f, 0.0f), phantom + glm::vec2(140.0f, 0.0f) })
             CHECK(HitTest(mode, GizmoSpace::World, t, v, all, 1.0f, probe) == GizmoAxis::None);
     const GizmoTransform rs = ApplyDrag(GizmoMode::Scale, GizmoSpace::Local, GizmoAxis::X, t, v, phantom + glm::vec2(50.0f, 0.0f), phantom + glm::vec2(100.0f, 0.0f), GizmoSnap{});
     CHECK(rs.scale == t.scale);
