@@ -95,7 +95,10 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   click-selectable in EVERY view mode (the id pass rasterises world-space
   drawables through the frame's `ViewTransform`, spec §7.1), and the transform
   gizmo is 3D -- one ray-based code path, the 2D view only masks its Z handles
-  (planar handles; spec §7.2).
+  (planar handles; spec §7.2). It paints as viewport FOREGROUND chrome (an ImGui
+  sink over the image, `Viewport/GizmoOverlay.hpp` -- never into the scene
+  batch, which the mesh pass overpaints) and its look is Unreal's widget
+  (`UnrealWidgetRender.cpp` proportions and colours, in pixels).
 - **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
   Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
   engine-owned world. Do not teach `PhysicsSystem` to write 3D poses (it

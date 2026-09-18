@@ -3,7 +3,11 @@
 **Date:** 2026-09-17
 **Status:** Design, approved in brainstorm 2026-09-17; plan 1 closed at
 `a5e4e3aa` (2026-09-17); plan 2 closed at `3e53798d` (T5
-close, 2026-09-17: mesh picking + the 3D gizmo). Step 2 of the binding
+close, 2026-09-17: mesh picking + the 3D gizmo); the desk pass closed the arc
+2026-09-18 (`a4c8d05c`..`6513a5bb`: the gizmo paints as viewport FOREGROUND
+chrome through `GizmoDrawSink` -- it vanished inside meshes when drawn into the
+scene batch -- and takes Unreal's widget as its look, `UnrealWidgetRender.cpp`
+in pixels; ABI 35). **F4 CLOSED.** Step 2 of the binding
 order (`docs/research/2026-09-16-direction-and-sequencing.md`: F4 → F3 → F5);
 implementation plans follow this spec (§11). Two plans; F3 may start after
 plan 1.
