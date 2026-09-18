@@ -261,7 +261,7 @@ TEST_CASE("Gizmo Draw: the planar mask paints only the planar handles; nothing i
     CHECK(all.lines == 3 * 3 + 3 * 2);
     CHECK(all.triangles == 3 * 2);
     CHECK(all.rects == 0);
-    CHECK(all.circles == 1);
+    CHECK(all.circles == 2);   // disc + inner pip
     // Hovering a plane paints its fill (two triangles) on top of the bars.
     RecordingSink hot;
     Draw(hot, GizmoMode::Translate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::XY, GizmoAxis::None);
@@ -271,15 +271,15 @@ TEST_CASE("Gizmo Draw: the planar mask paints only the planar handles; nothing i
     Draw(planar, GizmoMode::Translate, GizmoSpace::World, t, Ortho(), GizmoHandleMask::Planar(GizmoMode::Translate), 1.0f, GizmoAxis::None, GizmoAxis::None);
     CHECK(planar.lines == 2 * 3 + 2);
     CHECK(planar.triangles == 2 * 2);
-    CHECK(planar.circles == 1);
+    CHECK(planar.circles == 2);
     // Every painted pixel is inside the 800x600 viewport for the 2D case.
     for (const glm::vec2& p : planar.lineEnds) { CHECK(p.x >= 0.0f); CHECK(p.x <= 800.0f); CHECK(p.y >= 0.0f); CHECK(p.y <= 600.0f); }
-    // Rotate: three camera-facing QUARTER bands (16 segments x 2 triangles)
+    // Rotate: three camera-facing QUARTER bands (24 segments x 2 triangles)
     // plus the 48-line screen ring; the 2D planar mask = the Z ring only, FULL
     // (the ortho view looks down its axis): 48 x 2 triangles, no lines.
     RecordingSink rot;
     Draw(rot, GizmoMode::Rotate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(rot.triangles == 3 * 16 * 2);
+    CHECK(rot.triangles == 3 * 24 * 2);
     CHECK(rot.lines == 48);
     RecordingSink rotPlanar;
     Draw(rotPlanar, GizmoMode::Rotate, GizmoSpace::World, t, Ortho(), GizmoHandleMask::Planar(GizmoMode::Rotate), 1.0f, GizmoAxis::None, GizmoAxis::None);
@@ -295,7 +295,7 @@ TEST_CASE("Gizmo Draw: the planar mask paints only the planar handles; nothing i
     // Scale: three shaded rods with a two-rect cube each, plus the centre disc.
     RecordingSink sc;
     Draw(sc, GizmoMode::Scale, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
-    CHECK(sc.lines == 3 * 3); CHECK(sc.rects == 3 * 2); CHECK(sc.triangles == 0); CHECK(sc.circles == 1);
+    CHECK(sc.lines == 3 * 3); CHECK(sc.rects == 3 * 2); CHECK(sc.triangles == 0); CHECK(sc.circles == 2);
     // Behind the eye: nothing at all.
     GizmoTransform behind; behind.position = {0.0f, 0.0f, 7.0f};
     RecordingSink none;

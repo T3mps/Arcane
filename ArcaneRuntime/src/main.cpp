@@ -93,6 +93,18 @@ int main(int argc, char** argv)
                              "ArcaneEditor.exe.\n");
         return 2;
     }
+    if (!parsed.config->selectName.empty())
+    {
+        std::fprintf(stderr, "error: --select-name is an EDITOR-only flag (this host has no "
+                             "editor selection). Use ArcaneEditor.exe.\n");
+        return 2;
+    }
+    if (!parsed.config->tool.empty())
+    {
+        std::fprintf(stderr, "error: --tool is an EDITOR-only flag (this host has no viewport "
+                             "tool). Use ArcaneEditor.exe.\n");
+        return 2;
+    }
 
     // Same arming as the editor, same reasoning, same position relative to the
     // probe -- see ArcaneEditor/src/main.cpp. The two hosts must not diverge on

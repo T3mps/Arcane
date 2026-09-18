@@ -187,6 +187,13 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          that exe's main.cpp, beside --dump-layout's refusal):
 //                          a game host has no Edit mode to leave and no play
 //                          session to enter.
+//   --select-name <n>   -- HONOURED: select the entity with that Identity.name
+//                          at the end of boot and frame it. Missing name is a
+//                          loud error, not a silent skip.
+//   --tool <tool>       -- HONOURED: viewport tool at boot (select | move |
+//                          rotate | scale). Pairs with --select-name for a
+//                          scripted gizmo capture. THE FOURTH/FIFTH FLAGS
+//                          THIS HOST HONOURS THAT ArcaneRuntime REFUSES.
 //   --view-mode <mode>  -- HONOURED as of F4 plan 1 T7: seed the editor
 //                          viewport camera's mode (2d | perspective) at the end
 //                          of boot, AFTER the persisted [EditorViewport][Camera]

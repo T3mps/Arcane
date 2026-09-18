@@ -51,6 +51,7 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved (Run()'s exit-code tail)
 #include <Arcane/Render/Nri/NriCommon.hpp>   // ARC_NRI_CHECK (TeardownGraphForSwitch's idle)
 #include <Arcane/Sprite/SpriteAsset.hpp>  // Save/LoadSpriteAsset (SpriteDocument factory + peek)
+#include <Arcane/Scene/Components.hpp>    // Identity (--select-name boot seed)
 
 #include <Astra/Core/TypeContext.hpp>
 #include <Astra/Registry/Registry.hpp>
@@ -1182,6 +1183,41 @@ namespace Arcane::Editor
         // ViewportSettingsReadLine re-applies this same seed per line. Empty
         // flag = no seed; every other spelling was refused at parse time.
         Arcane::Editor::ApplyViewModeSeed(m_config.viewMode, m_camera);
+        // --select-name / --tool: scripted selection + viewport tool, AFTER
+        // the boot scene is in the registry (OnProjectOpened above). A gizmo
+        // capture is `--select-name MeshCube --tool move --view-mode perspective`.
+        if (!m_config.selectName.empty() && m_runtime)
+        {
+            Astra::Entity found = Astra::Entity::Invalid();
+            m_runtime->Registry().CreateView<Arcane::Identity>().ForEach(
+                [&](Astra::Entity e, Arcane::Identity& id)
+                {
+                    if (id.name == m_config.selectName)
+                        found = e;
+                });
+            if (!found.IsValid())
+            {
+                ARC_ERROR("--select-name '{}': no entity with that Identity.name in the boot scene",
+                          m_config.selectName);
+            }
+            else
+            {
+                m_selection.Select(found);
+                FrameCamera(/*selectionOnly=*/true);
+            }
+        }
+        if (!m_config.tool.empty())
+        {
+            if (m_config.tool == "select")
+                m_gizmoEnabled = false;
+            else
+            {
+                m_gizmoEnabled = true;
+                m_gizmoMode = m_config.tool == "rotate" ? Arcane::GizmoMode::Rotate
+                            : m_config.tool == "scale"  ? Arcane::GizmoMode::Scale
+                                                        : Arcane::GizmoMode::Translate;
+            }
+        }
         // Same call-site family (GPU crash diagnostics arc, Task 8): a crash/
         // hang report from THIS boot must land under THIS project's own
         // Saved/Diagnostics, not the exe-relative default a project-less

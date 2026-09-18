@@ -28,7 +28,7 @@ namespace Arcane
         constexpr float kAxisLenPx          = 70.0f;   // AXIS_LENGTH 35: the translate cylinder
         constexpr float kAxisTipPx          = 94.0f;   // cone apex: root at AXIS_LENGTH + ConeHeadOffset 12
         constexpr float kHeadLenPx          = 26.0f;   // DrawCone scaled -13
-        constexpr float kHeadHalfPx         = 7.3f;    // 13 * tan(5 deg * pi): the cone's base radius
+        constexpr float kHeadHalfPx         = 8.6f;    // a touch wider than UE's 5-deg cone so the head reads at thumbnail size
         constexpr float kShaftPx            = 5.0f;    // CylinderRadius 1.2 -> diameter 2.4 units
         constexpr float kScaleShaftFromPx   = 7.0f;    // scale mode: UE starts its rod at AXIS_LENGTH_SCALE_OFFSET 5 (10 px) and the lit sphere hides the seam; our flat disc (radius 8) does not, so the rod starts just inside it ...
         constexpr float kScaleShaftToPx     = 60.0f;   // ... to AXIS_LENGTH - 5
@@ -36,7 +36,7 @@ namespace Arcane
         constexpr float kScaleCubeHalfPx    = 8.0f;    // Render_Cube(FVector(4)) scales a UNIT DrawBox: half-extent 4 units, so the cube (58..74 px) overlaps the rod's end at 60
         constexpr float kPlaneCornerPx      = 14.0f;   // CornerPos 7
         constexpr float kPlaneBarPx         = 24.0f;   // AxisSize 12 along each spanning axis
-        constexpr float kPlaneBarWidthPx    = 3.0f;    // bar thickness 1.2 (rounded up so it survives AA)
+        constexpr float kPlaneBarWidthPx    = 4.0f;    // a touch over UE's 1.2 units so the L-corner survives the halo
         constexpr float kPlaneEdgeOnCos     = 0.2f;    // a corner within ~78 deg of edge-on is hidden (unusable as a target)
         constexpr float kCentrePx           = 8.0f;    // DrawSphere radius 4
         constexpr float kRingInnerPx        = 96.0f;   // INNER_AXIS_CIRCLE_RADIUS 48
@@ -47,20 +47,21 @@ namespace Arcane
         constexpr float kRingHitSlackPx     = 4.0f;    // the band half-width plus this is the ring pick radius
         constexpr float kMinQuadAreaPx2     = 4.0f;    // an edge-on plane corner is not a target
         constexpr int   kRingSegments       = 48;      // full ring
-        constexpr int   kArcSegments        = 16;      // a quarter band
+        constexpr int   kArcSegments        = 24;      // a quarter band (smooth enough that the facets don't read as a saw)
 
-        // UE's axis colours (AxisDisplayInfo::GetAxisColor, LINEAR) converted
-        // to display space, because the sink paints display-referred pixels;
-        // the hot handle is FColor::Yellow (CurrentColor); the screen-space
-        // ring is (196,196,196); the screen-axis rotate colour is
-        // (0.76, 0.72, 0.14) linear.
-        constexpr glm::vec4 kColorX      { 0.79f, 0.15f, 0.00f, 1.0f };   // (0.594, 0.0197, 0)
-        constexpr glm::vec4 kColorY      { 0.40f, 0.66f, 0.00f, 1.0f };   // (0.1349, 0.3959, 0)
-        constexpr glm::vec4 kColorZ      { 0.17f, 0.49f, 0.93f, 1.0f };   // (0.0251, 0.207, 0.85)
-        constexpr glm::vec4 kColorHot    { 1.00f, 1.00f, 0.00f, 1.0f };
-        constexpr glm::vec4 kColorScreen { 0.77f, 0.77f, 0.77f, 1.0f };
-        constexpr glm::vec4 kColorScreenArc { 0.89f, 0.86f, 0.41f, 1.0f };
-        constexpr glm::vec4 kColorCentre { 0.92f, 0.92f, 0.92f, 1.0f };
+        // Axis colours keep UE's RGB assignment (X red, Y green, Z blue, hot
+        // yellow) but sit a notch more saturated in display space so they
+        // still read after the overlay halo and against the lit cube / sky.
+        // Linear UE values were (0.594, 0.0197, 0) / (0.1349, 0.3959, 0) /
+        // (0.0251, 0.207, 0.85); these are the punched display cousins, not
+        // a second palette.
+        constexpr glm::vec4 kColorX      { 0.96f, 0.28f, 0.22f, 1.0f };
+        constexpr glm::vec4 kColorY      { 0.48f, 0.84f, 0.16f, 1.0f };
+        constexpr glm::vec4 kColorZ      { 0.24f, 0.58f, 0.98f, 1.0f };
+        constexpr glm::vec4 kColorHot    { 1.00f, 0.86f, 0.18f, 1.0f };
+        constexpr glm::vec4 kColorScreen { 0.90f, 0.91f, 0.93f, 1.0f };
+        constexpr glm::vec4 kColorScreenArc { 0.96f, 0.90f, 0.42f, 1.0f };
+        constexpr glm::vec4 kColorCentre { 0.97f, 0.97f, 0.98f, 1.0f };
 
         glm::vec3 AxisUnit(GizmoAxis a) noexcept
         {
@@ -620,7 +621,11 @@ namespace Arcane
         }
 
         if (handles.Has(GizmoAxis::Center))
-            sink.Circle(pivotPx, kCentrePx * sizeScale, HandleColor(GizmoAxis::Center, hovered, active));
+        {
+            const glm::vec4 c = HandleColor(GizmoAxis::Center, hovered, active);
+            sink.Circle(pivotPx, kCentrePx * sizeScale, c);
+            sink.Circle(pivotPx, kCentrePx * sizeScale * 0.42f, Brighten(c));   // specular pip, reads on a white mesh
+        }
     }
 
     // ---- ApplyDrag ---------------------------------------------------------------

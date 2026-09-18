@@ -246,6 +246,20 @@ namespace Arcane
         // main.cpp beside --play-as: the runtime has no editor camera to seed.
         std::string     viewMode = "";
 
+        // --select-name: editor only. Select the entity whose Identity.name
+        // matches at the end of boot (after the boot scene is loaded), then
+        // frame it. Empty = no seed. A missing name is a loud boot WARN, not
+        // a silent skip -- scripted gizmo/outline captures would otherwise
+        // look like a "no selection" golden. ArcaneRuntime refuses the flag
+        // (no editor selection).
+        std::string     selectName = "";
+
+        // --tool: editor only. Viewport tool at boot: select | move | rotate |
+        // scale. Empty = Select (the ordinary default). Same Choices() empty-
+        // default rule as --view-mode. Pairs with --select-name for a scripted
+        // gizmo capture. ArcaneRuntime refuses the flag.
+        std::string     tool = "";
+
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have
