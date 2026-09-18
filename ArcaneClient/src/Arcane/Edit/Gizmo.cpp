@@ -27,6 +27,7 @@ namespace Arcane
         constexpr float kScreenRingRadiusPx = 76.0f;   // the camera-facing ring, a pixel circle
         constexpr float kPlaneMinFrac       = 0.35f;   // plane square from 0.35R to 0.65R along both axes
         constexpr float kPlaneMaxFrac       = 0.65f;
+        constexpr float kPlaneEdgeOnCos     = 0.2f;    // a plane square within ~78 deg of edge-on is hidden (unusable as a target)
         constexpr float kHitThreshPx        = 8.0f;    // axis segment pick radius
         constexpr float kCenterHalfPx       = 8.0f;    // centre box half-extent
         constexpr float kRingBandPx         = 8.0f;    // ring pick band
@@ -141,11 +142,35 @@ namespace Arcane
             return kAxisLenPx * sizeScale * WorldUnitsPerPixel(v, pivot);
         }
 
-        // The four world corners of a plane square (fractions of the reach).
-        std::array<glm::vec3, 4> PlaneSquareWorld(glm::vec3 pivot, glm::vec3 a, glm::vec3 b, float R) noexcept
+        // The direction from the pivot TOWARD the eye: the eye position in
+        // perspective, the (parallel) view direction reversed in orthographic.
+        glm::vec3 ToEye(const ViewTransform& v, glm::vec3 pivot) noexcept
         {
+            if (v.IsOrthographic()) return -ViewForward(v);
+            const glm::vec3 eye = glm::vec3(glm::inverse(v.view)[3]);
+            const glm::vec3 d = eye - pivot;
+            const float len = glm::length(d);
+            return len > kEps ? d / len : -ViewForward(v);
+        }
+
+        // The four world corners of a plane square (fractions of the reach), in
+        // the QUADRANT THAT FACES THE CAMERA: each spanning axis is flipped
+        // toward the eye, so orbiting never puts the square behind the pivot
+        // or under the arrows (Unreal's translate widget does the same). False
+        // when the plane is close to edge-on -- a sliver is not a target, and
+        // hiding it is what keeps the three squares readable from any angle.
+        bool PlaneSquareFacing(const ViewTransform& v, glm::vec3 pivot, glm::vec3 a, glm::vec3 b, float R,
+                               std::array<glm::vec3, 4>& sq) noexcept
+        {
+            const glm::vec3 toEye = ToEye(v, pivot);
+            const glm::vec3 n = glm::cross(a, b);
+            const float nLen = glm::length(n);
+            if (nLen < kEps || std::abs(glm::dot(n / nLen, toEye)) < kPlaneEdgeOnCos) return false;
+            if (glm::dot(a, toEye) < 0.0f) a = -a;
+            if (glm::dot(b, toEye) < 0.0f) b = -b;
             const float lo = kPlaneMinFrac * R, hi = kPlaneMaxFrac * R;
-            return { pivot + a * lo + b * lo, pivot + a * hi + b * lo, pivot + a * hi + b * hi, pivot + a * lo + b * hi };
+            sq = { pivot + a * lo + b * lo, pivot + a * hi + b * lo, pivot + a * hi + b * hi, pivot + a * lo + b * hi };
+            return true;
         }
 
         // The ring's world polyline (kRingSegments + 1 points, closed).
@@ -293,7 +318,8 @@ namespace Arcane
             {
                 if (!handles.Has(plane)) continue;
                 const auto [a, b] = PlaneAxes(plane);
-                const auto sq = PlaneSquareWorld(t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R);
+                std::array<glm::vec3, 4> sq{};
+                if (!PlaneSquareFacing(view, t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R, sq)) continue;
                 // A corner behind the eye projects to a mirrored pixel: skip the
                 // whole square rather than test a quad with a folded-back corner.
                 if (!Visible(view, sq[0]) || !Visible(view, sq[1]) || !Visible(view, sq[2]) || !Visible(view, sq[3])) continue;
@@ -351,7 +377,8 @@ namespace Arcane
             {
                 if (!handles.Has(plane)) continue;
                 const auto [a, b] = PlaneAxes(plane);
-                const auto sq = PlaneSquareWorld(t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R);
+                std::array<glm::vec3, 4> sq{};
+                if (!PlaneSquareFacing(view, t.position, AxisDir(axisSpace, t.rotation, a), AxisDir(axisSpace, t.rotation, b), R, sq)) continue;
                 // A corner behind the eye projects to a mirrored pixel: skip the
                 // whole square rather than draw a quad with a folded-back corner.
                 if (!Visible(view, sq[0]) || !Visible(view, sq[1]) || !Visible(view, sq[2]) || !Visible(view, sq[3])) continue;

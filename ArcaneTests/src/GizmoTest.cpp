@@ -204,6 +204,35 @@ TEST_CASE("Gizmo HitTest: oblique perspective -- every handle is where it projec
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::Local, turned, v, all, 1.0f, Px(v, {0, R * 0.6f, 0})) == GizmoAxis::X);
 }
 
+TEST_CASE("Gizmo HitTest: the plane squares sit in the quadrant FACING the camera and hide when edge-on", "[gizmo]")
+{
+    // The desk finding (2026-09-18): world-anchored +,+ squares wandered behind
+    // the pivot and under the arrows as the camera orbited. Unreal's answer:
+    // flip each spanning axis toward the eye, hide a square whose plane is
+    // nearly edge-on.
+    const GizmoTransform t;
+    const GizmoHandleMask all = GizmoHandleMask::All();
+    // Eye at (-4, 3, 6): the XY square must sit at (-x, +y), not (+x, +y).
+    const ViewTransform left = ViewTransform::Perspective({-4.0f, 3.0f, 6.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, 60.0f, {800u, 600u}, 0.1f, 100.0f);
+    const float R = 80.0f * WorldUnitsPerPixel(left, {0,0,0});
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {-R * 0.5f, R * 0.5f, 0})) == GizmoAxis::XY);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, { R * 0.5f, R * 0.5f, 0})) != GizmoAxis::XY);
+    // ...and the XZ square at (-x, +z), the YZ square at (+y, +z).
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {-R * 0.5f, 0, R * 0.5f})) == GizmoAxis::XZ);
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, left, all, 1.0f, Px(left, {0, R * 0.5f, R * 0.5f})) == GizmoAxis::YZ);
+    // Looking straight down -Z the XZ and YZ planes are edge-on: never a target.
+    const ViewTransform front = Persp();
+    const float Rf = 80.0f * WorldUnitsPerPixel(front, {0,0,0});
+    for (float sx : { -1.0f, 1.0f })
+    {
+        CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, front, all, 1.0f, Px(front, {sx * Rf * 0.5f, 0, Rf * 0.5f})) != GizmoAxis::XZ);
+        CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, front, all, 1.0f, Px(front, {0, sx * Rf * 0.5f, Rf * 0.5f})) != GizmoAxis::YZ);
+    }
+    // The 2D view is unchanged: the XY square stays at (+x, +y) (the eye is on +Z, nothing flips).
+    const ViewTransform o = Ortho();
+    CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, o, GizmoHandleMask::Planar(GizmoMode::Translate), 1.0f, {440, 260}) == GizmoAxis::XY);
+}
+
 TEST_CASE("Gizmo: a pivot BEHIND the eye is neither hit nor scaled -- no phantom gizmo through the viewport centre", "[gizmo]")
 {
     // Persp() has its eye at z = 6 looking down -Z; a pivot at z = 7 is behind it.
