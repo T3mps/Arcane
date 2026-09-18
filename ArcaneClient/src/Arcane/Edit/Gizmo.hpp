@@ -7,8 +7,9 @@
 // transform from the drag start -- RAY-based through ViewTransform::ScreenToRay,
 // so orthographic and perspective share the math and differ only in the ray
 // constructor: Unreal's FViewportCursorLocation split), Draw (overlay pixels,
-// top layer, no depth: ImGuizmo's posture). The editor owns all interaction
-// state. (F4 spec s7.2, R9; landed 2026-09-17, ABI 33.)
+// top layer, no depth: ImGuizmo's posture, through a host-owned GizmoDrawSink
+// since ABI 34). The editor owns all interaction state. (F4 spec s7.2, R9;
+// landed 2026-09-17, ABI 33.)
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>   // ViewTransform, Ray
@@ -21,7 +22,23 @@
 
 namespace Arcane
 {
-    class Batcher2D;
+    // Where Draw's pixels go. A PIXEL sink, deliberately not Batcher2D: the
+    // scene batch is painted BEFORE the mesh pass (F5's compositing contract),
+    // so a gizmo drawn into it disappears inside any mesh whose silhouette
+    // covers the handles -- the desk finding of 2026-09-18. Unreal draws its
+    // widget in SDPG_Foreground (UnrealWidgetRender.cpp: every primitive),
+    // i.e. after the world with depth cleared; ImGuizmo draws into ImGui's
+    // draw list. This interface is that posture: the host owns a sink that
+    // paints over the finished frame (the editor's viewport chrome), and the
+    // gizmo core stays editor-free and device-free. Coordinates are viewport
+    // pixels (y down), colours linear RGBA in [0,1].
+    struct ARCANE_API GizmoDrawSink
+    {
+        virtual ~GizmoDrawSink() = default;
+        virtual void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 rgba) = 0;
+        virtual void Triangle(glm::vec2 a, glm::vec2 b, glm::vec2 c, glm::vec4 rgba) = 0;
+        virtual void Rect(glm::vec2 pos, glm::vec2 size, glm::vec4 rgba) = 0;   // axis-aligned, filled
+    };
 
     enum class GizmoMode  { Translate, Rotate, Scale };
     enum class GizmoSpace { World, Local };
@@ -96,8 +113,12 @@ namespace Arcane
                                  glm::vec2 mouseScreen);
 
     // Screen-constant gizmo geometry for the current state; hovered/active
-    // brighten. Overlay pixels on the top layer, no depth.
-    ARCANE_API void Draw(Batcher2D& batcher, GizmoMode mode, GizmoSpace space,
+    // brighten. Pixels into the host's foreground sink (see GizmoDrawSink):
+    // over everything, no depth. The plane handles are Unreal's L-corners
+    // (two bars along the two spanning axes, each in that axis's colour);
+    // the filled square between them is the hit region and is painted only
+    // while hovered/active.
+    ARCANE_API void Draw(GizmoDrawSink& sink, GizmoMode mode, GizmoSpace space,
                          const GizmoTransform& t, const ViewTransform& view,
                          GizmoHandleMask handles, float sizeScale,
                          GizmoAxis hovered, GizmoAxis active);

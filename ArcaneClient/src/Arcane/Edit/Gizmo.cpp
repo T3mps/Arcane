@@ -1,5 +1,4 @@
 #include <Arcane/Edit/Gizmo.hpp>
-#include <Arcane/Render/Batcher2D.hpp>
 
 #include <glm/gtc/matrix_access.hpp>     // glm::row
 #include <glm/gtc/matrix_transform.hpp>
@@ -207,7 +206,7 @@ namespace Arcane
             return (a == hovered || a == active) ? Brighten(base) : base;
         }
 
-        void Polyline(Batcher2D& b, const ViewTransform& v, std::span<const glm::vec3> pts, float thickness, glm::vec4 color)
+        void Polyline(GizmoDrawSink& b, const ViewTransform& v, std::span<const glm::vec3> pts, float thickness, glm::vec4 color)
         {
             for (std::size_t i = 0; i + 1 < pts.size(); ++i)
             {
@@ -340,10 +339,11 @@ namespace Arcane
     }
 
     // ---- Draw --------------------------------------------------------------------
-    void Draw(Batcher2D& batcher, GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
+    void Draw(GizmoDrawSink& batcher, GizmoMode mode, GizmoSpace space, const GizmoTransform& t, const ViewTransform& view,
               GizmoHandleMask handles, float sizeScale, GizmoAxis hovered, GizmoAxis active)
     {
-        batcher.SetLayer(0xFFFF, 0xFFFF);   // on top of the scene (max layer/order); overlay pixels, no depth
+        // Into the host's FOREGROUND sink (GizmoDrawSink): over the finished
+        // frame, no depth -- Unreal's SDPG_Foreground for its widget.
         if (!Visible(view, t.position)) return;   // behind the eye: no phantom to draw
         const glm::vec2 pivotPx = Px(view, t.position);
         if (!Finite(pivotPx)) return;
@@ -384,10 +384,24 @@ namespace Arcane
                 if (!Visible(view, sq[0]) || !Visible(view, sq[1]) || !Visible(view, sq[2]) || !Visible(view, sq[3])) continue;
                 const std::array<glm::vec2, 4> q{ Px(view, sq[0]), Px(view, sq[1]), Px(view, sq[2]), Px(view, sq[3]) };
                 if (!Finite(q[0]) || !Finite(q[1]) || !Finite(q[2]) || !Finite(q[3])) continue;
-                glm::vec4 c = HandleColor(plane, hovered, active);
-                c.w = (plane == hovered || plane == active) ? 0.6f : 0.35f;
-                batcher.Triangle(q[0], q[1], q[2], c);
-                batcher.Triangle(q[0], q[2], q[3], c);
+                // Unreal's DrawDualAxis: an L of two bars meeting at the corner
+                // nearest the pivot (sq[0]), one along each spanning axis in
+                // THAT axis's colour -- a plane handle reads as "these two
+                // axes", not as an object in the scene. The square between the
+                // bars is the hit region; it is painted only while the handle
+                // is hot, so the grab area is visible exactly when it matters.
+                const bool hot = (plane == hovered || plane == active);
+                const glm::vec4 ca = hot ? Brighten(HandleColor(a, GizmoAxis::None, GizmoAxis::None)) : HandleColor(a, GizmoAxis::None, GizmoAxis::None);
+                const glm::vec4 cb = hot ? Brighten(HandleColor(b, GizmoAxis::None, GizmoAxis::None)) : HandleColor(b, GizmoAxis::None, GizmoAxis::None);
+                if (hot)
+                {
+                    glm::vec4 fill = HandleColor(plane, hovered, active);
+                    fill.w = 0.35f;
+                    batcher.Triangle(q[0], q[1], q[2], fill);
+                    batcher.Triangle(q[0], q[2], q[3], fill);
+                }
+                batcher.Line(q[0], q[1], kShaftThicknessPx, ca);   // along a
+                batcher.Line(q[0], q[3], kShaftThicknessPx, cb);   // along b
             }
         }
 

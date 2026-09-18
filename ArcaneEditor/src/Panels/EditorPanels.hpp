@@ -9,6 +9,7 @@
 #include "Viewport/ViewportInput.hpp"
 #include "Viewport/ViewportSettings.hpp"   // ViewportToolState (ViewMode + ViewportSettings)
 #include <Arcane/Edit/CommandStack.hpp>
+#include <imgui.h>   // ImDrawList / ImVec2 (ViewportImageOverlayFn)
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
 #include <Arcane/Guid.hpp>   // InspectorServices::mintSpriteForTexture
@@ -277,8 +278,15 @@ namespace Arcane::Editor
     // control, the view-settings gear, and the transform-tool buttons): the
     // host passes false in Play mode, where the game owns the viewport and
     // the edit tools (like the gizmo they drive) have no business on screen.
+    // imageOverlay, when set, is called right after the image is drawn with
+    // the Viewport window's draw list (clipped to the image) and the image's
+    // screen origin -- the editor's FOREGROUND: the transform gizmo paints
+    // here, over the finished frame, under the tool overlay's buttons
+    // (Viewport/GizmoOverlay.hpp). Skipped when there is no image.
+    using ViewportImageOverlayFn = std::function<void(ImDrawList& list, ImVec2 origin)>;
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          ViewportToolState& tools, bool showToolOverlay);
+                                          ViewportToolState& tools, bool showToolOverlay,
+                                          const ViewportImageOverlayFn& imageOverlay = {});
 
     // The Outliner (replaces the flat Hierarchy panel). Pure row data comes
     // from BuildOutlinerRows (EntityList.hpp, headless-tested); this shell

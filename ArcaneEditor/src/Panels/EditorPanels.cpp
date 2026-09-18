@@ -1071,7 +1071,8 @@ namespace Arcane::Editor
     }
 
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          ViewportToolState& tools, bool showToolOverlay)
+                                          ViewportToolState& tools, bool showToolOverlay,
+                                          const ViewportImageOverlayFn& imageOverlay)
     {
         // The style alpha OUTSIDE any BeginDisabled scope, captured up front:
         // BeginDisabled multiplies g.Style.Alpha (imgui.cpp:8899-8900) and a
@@ -1122,6 +1123,16 @@ namespace Arcane::Editor
         if (textureId != 0 && texW > 0 && texH > 0)
             ImGui::Image((ImTextureID)textureId, ImVec2((float)texW, (float)texH));
         r.imageRect = ViewportRect{ origin.x, origin.y, (float)texW, (float)texH };
+        // The FOREGROUND overlay (the gizmo): over the image, under the tool
+        // buttons drawn below, clipped to the image so nothing leaks into the
+        // window chrome.
+        if (imageOverlay && textureId != 0 && texW > 0 && texH > 0)
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->PushClipRect(origin, ImVec2(origin.x + (float)texW, origin.y + (float)texH), true);
+            imageOverlay(*dl, origin);
+            dl->PopClipRect();
+        }
         r.hovered = ImGui::IsWindowHovered();
         r.focused = ImGui::IsWindowFocused();
 

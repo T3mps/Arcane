@@ -26,6 +26,7 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
+#include "Viewport/GizmoOverlay.hpp"   // ImGuiGizmoSink (the gizmo as foreground chrome)
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -1811,28 +1812,11 @@ namespace Arcane::Editor
             }
         }
 
-        // GizmoLive() rather than m_gizmoEnabled: this draw goes into the
-        // SCENE BATCH, so there is no downstream gate that could confine it --
-        // the batcher's content IS the scene. Anything that must not appear in
-        // the scene has to be excluded HERE.
-        if (!InPlayMode() && GizmoLive() && m_selection.HasSelection())
-        {
-            Astra::Registry& drawReg = m_runtime->Registry();
-            const Arcane::Transform* lt = std::as_const(drawReg).GetComponent<Arcane::Transform>(
-                m_selection.Primary());
-            if (lt)
-            {
-                // WORLD pose, matching the interaction block's gt above --
-                // draws at the same place it hit-tests, including for a
-                // parented primary. The SAME handle mask and size as the
-                // hit-test this frame (GizmoHandles() reads the same members).
-                const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
-                    Arcane::Edit::WorldMatrix(drawReg, m_selection.Primary()));
-                Arcane::Draw(b, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
-                             m_viewSettings.gizmoSize, m_gizmoHovered,
-                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
-            }
-        }
+        // The gizmo is NOT drawn here any more (F4 plan 2, desk finding
+        // 2026-09-18): the scene batch is painted before the mesh pass, so a
+        // gizmo in it vanished inside any mesh covering its handles. It paints
+        // as viewport FOREGROUND chrome instead -- see the gizmoOverlay lambda
+        // handed to DrawViewportPanel.
     }
 
     // Phase 11's CPU HALF -- see the declaration. The GPU composite is a NODE
@@ -3249,9 +3233,34 @@ namespace Arcane::Editor
             m_camera.mode, m_viewSettings,
             m_camera.orbit.fovYDeg, m_camera.speedScalar,
         };
+        // The gizmo as FOREGROUND chrome over the rendered image (Unreal's
+        // SDPG_Foreground for its widget): drawn by the panel right after the
+        // image, under the tool buttons, through an ImGui sink. Edit mode with
+        // a live gizmo and a selection only -- the same gate the hit-test uses,
+        // and the SAME handle mask, size and view as this frame's hit-test.
+        const Arcane::Editor::ViewportImageOverlayFn gizmoOverlay =
+            [this](ImDrawList& list, ImVec2 origin)
+            {
+                if (InPlayMode() || !GizmoLive() || !m_selection.HasSelection() || !m_runtime)
+                    return;
+                Astra::Registry& reg = m_runtime->Registry();
+                const Arcane::Transform* lt =
+                    std::as_const(reg).GetComponent<Arcane::Transform>(m_selection.Primary());
+                if (!lt)
+                    return;
+                // WORLD pose, matching the interaction block's -- the gizmo draws
+                // where it hit-tests, including for a parented primary.
+                const Arcane::GizmoTransform gt = Arcane::DecomposeTRS(
+                    Arcane::Edit::WorldMatrix(reg, m_selection.Primary()));
+                Arcane::Editor::ImGuiGizmoSink sink(list, origin);
+                Arcane::Draw(sink, m_gizmoMode, m_gizmoSpace, gt, m_runtime->View(), GizmoHandles(),
+                             m_viewSettings.gizmoSize, m_gizmoHovered,
+                             m_gizmoDrag.active ? m_gizmoDrag.axis : Arcane::GizmoAxis::None);
+            };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
-                                            tools, /*showToolOverlay=*/!InPlayMode());
+                                            tools, /*showToolOverlay=*/!InPlayMode(),
+                                            gizmoOverlay);
         m_viewportDockId = fs.vp.dockId;
         m_viewportTargets.pendingW = fs.vp.desiredW;
         m_viewportTargets.pendingH = fs.vp.desiredH;

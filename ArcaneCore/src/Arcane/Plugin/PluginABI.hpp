@@ -891,7 +891,13 @@ namespace Arcane
     //     ViewTransform pickView; RgPickHandles gained depth; PickNode::
     //     PrepareDrawables/Record changed signature; GizmoHandleMask is NEW
     //     (Task 2).
-    inline constexpr uint32_t kGamePluginABIVersion = 33;
+    // v34 (2026-09-18, F4 plan 2 desk pass): Edit/Gizmo.hpp's Draw takes a
+    //     GizmoDrawSink (a NEW exported pixel-sink interface) instead of a
+    //     Batcher2D -- the gizmo is painted as host FOREGROUND chrome over the
+    //     finished frame (Unreal's SDPG_Foreground) rather than into the scene
+    //     batch the mesh pass overpaints. A module built against v33 references
+    //     the removed overload -- refuse. ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 34;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

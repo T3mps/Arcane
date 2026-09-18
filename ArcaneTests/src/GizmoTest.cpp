@@ -1,6 +1,7 @@
 // Arcane 3D transform-gizmo core ([gizmo], CPU-only): pure value tests over
 // GizmoTransform + ViewTransform -- no Registry, no graphics device.
 #include <cmath>
+#include <vector>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <rapidcheck/catch.h>
@@ -231,6 +232,60 @@ TEST_CASE("Gizmo HitTest: the plane squares sit in the quadrant FACING the camer
     // The 2D view is unchanged: the XY square stays at (+x, +y) (the eye is on +Z, nothing flips).
     const ViewTransform o = Ortho();
     CHECK(HitTest(GizmoMode::Translate, GizmoSpace::World, t, o, GizmoHandleMask::Planar(GizmoMode::Translate), 1.0f, {440, 260}) == GizmoAxis::XY);
+}
+
+namespace
+{
+    // A recording sink: the pixels Draw would paint, counted by primitive.
+    struct RecordingSink final : Arcane::GizmoDrawSink
+    {
+        int lines = 0, triangles = 0, rects = 0;
+        std::vector<glm::vec2> lineEnds;
+        void Line(glm::vec2 a, glm::vec2 b, float, glm::vec4) override { ++lines; lineEnds.push_back(a); lineEnds.push_back(b); }
+        void Triangle(glm::vec2, glm::vec2, glm::vec2, glm::vec4) override { ++triangles; }
+        void Rect(glm::vec2, glm::vec2, glm::vec4) override { ++rects; }
+    };
+}
+
+TEST_CASE("Gizmo Draw: the planar mask paints only the planar handles; nothing is painted for a pivot behind the eye", "[gizmo]")
+{
+    const GizmoTransform t;
+    // Oblique perspective, every handle visible: 3 arrows (shaft + head), 3
+    // plane L-corners (2 bars each, no fill when cold), 1 centre rect.
+    const ViewTransform v = Oblique();
+    RecordingSink all;
+    Draw(all, GizmoMode::Translate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
+    CHECK(all.lines == 3 + 6);
+    CHECK(all.triangles == 3);
+    CHECK(all.rects == 1);
+    // Hovering a plane paints its fill (two triangles) on top of the bars.
+    RecordingSink hot;
+    Draw(hot, GizmoMode::Translate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::XY, GizmoAxis::None);
+    CHECK(hot.triangles == 3 + 2);
+    // The 2D view with the planar mask: X, Y, the XY corner, the centre -- and no Z anything.
+    RecordingSink planar;
+    Draw(planar, GizmoMode::Translate, GizmoSpace::World, t, Ortho(), GizmoHandleMask::Planar(GizmoMode::Translate), 1.0f, GizmoAxis::None, GizmoAxis::None);
+    CHECK(planar.lines == 2 + 2);
+    CHECK(planar.triangles == 2);
+    CHECK(planar.rects == 1);
+    // Every painted pixel is inside the 800x600 viewport for the 2D case.
+    for (const glm::vec2& p : planar.lineEnds) { CHECK(p.x >= 0.0f); CHECK(p.x <= 800.0f); CHECK(p.y >= 0.0f); CHECK(p.y <= 600.0f); }
+    // Rotate: three rings of kRingSegments lines each plus the screen ring; planar = the Z ring only.
+    RecordingSink rot;
+    Draw(rot, GizmoMode::Rotate, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
+    CHECK(rot.lines == 4 * 48);
+    RecordingSink rotPlanar;
+    Draw(rotPlanar, GizmoMode::Rotate, GizmoSpace::World, t, Ortho(), GizmoHandleMask::Planar(GizmoMode::Rotate), 1.0f, GizmoAxis::None, GizmoAxis::None);
+    CHECK(rotPlanar.lines == 48);
+    // Scale: three shafts with boxes plus the centre.
+    RecordingSink sc;
+    Draw(sc, GizmoMode::Scale, GizmoSpace::World, t, v, GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
+    CHECK(sc.lines == 3); CHECK(sc.rects == 3 + 1); CHECK(sc.triangles == 0);
+    // Behind the eye: nothing at all.
+    GizmoTransform behind; behind.position = {0.0f, 0.0f, 7.0f};
+    RecordingSink none;
+    Draw(none, GizmoMode::Translate, GizmoSpace::World, behind, Persp(), GizmoHandleMask::All(), 1.0f, GizmoAxis::None, GizmoAxis::None);
+    CHECK(none.lines == 0); CHECK(none.triangles == 0); CHECK(none.rects == 0);
 }
 
 TEST_CASE("Gizmo: a pivot BEHIND the eye is neither hit nor scaled -- no phantom gizmo through the viewport centre", "[gizmo]")
