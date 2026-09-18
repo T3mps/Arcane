@@ -1,7 +1,10 @@
 # F3 — visibility and the GPU scene: world bounds, frustum culling, a GPU-driven mesh pass, draw ordering
 
 **Date:** 2026-09-18
-**Status:** Design, approved in brainstorm 2026-09-18. Step 2 of the binding
+**Status:** Design, approved in brainstorm 2026-09-18; **vetted against UE
+5.8.2 source 2026-09-18** (Appendix B: two mechanisms amended to UE's shape —
+the prior pose via CPU history + re-dirty, the normal matrix in the row — and
+three statements sharpened). Step 2 of the binding
 order (`docs/research/2026-09-16-direction-and-sequencing.md`: F4 → **F3** → F5);
 F4 closed at `e95de920` (2026-09-18). Implementation plans follow this spec
 (§12): two plans.
@@ -230,14 +233,15 @@ Shadow views (T1/T5) and document previews append.
 ### 5.1 The row
 
 One row per **(entity, mesh section)** — the same granularity `MeshInstance`
-has today, because the material travels per section. `GpuInstance`, 192 bytes,
-std430, mirrored by a `static_assert(sizeof == 192)` and an HLSL struct in
+has today, because the material travels per section. `GpuInstance`, 240 bytes,
+std430, mirrored by a `static_assert(sizeof == 240)` and an HLSL struct in
 `data/shaders/gpu_scene.hlsli` that `mesh.hlsl` and `mesh_cull.hlsl` share:
 
 | Field | Type | Bytes | Written by |
 |---|---|---|---|
 | `model` | `float4x4` | 64 | Sync (dirty) |
-| `prevModel` | `float4x4` | 64 | the GPU row-writer (from the row's old `model`) |
+| `prevModel` | `float4x4` | 64 | Sync, from the mirror's CPU history (§5.3) |
+| `normal0..2` | `float4` × 3 (xyz = the normal matrix's columns; w unused) | 48 | Sync, `NormalMatrixFor(model)` — the guarded CPU function stays the one producer (UE stores `InvNonUniformScale` + `DeterminantSign` for the same reason: nobody inverts a 3×3 per vertex, `SceneData.ush:233-235`) |
 | `boundsMin` | `float4` (w unused) | 16 | Sync |
 | `boundsMax` | `float4` (w = `alphaCutoff` for masked rows) | 16 | Sync |
 | `baseColor` | `float4` | 16 | Sync |
@@ -250,9 +254,14 @@ The rows live in **one persistent structured buffer** owned by `GpuScene`
 (`Render/Nri/GpuScene.{hpp,cpp}`, a member of `NriGraphContext` beside the
 mesh-buffer cache), grown by doubling; the old buffer is buried in the
 `Graveyard` with the frame fence, the `NriMeshBufferCache` discipline. The
-normal matrix is **computed in the vertex shader** from `model`
-(`NormalMatrixFor` stays in C++ for tests and tools); the 128-byte
-`MeshConstants` root block is retired.
+128-byte `MeshConstants` root block is retired; everything it carried now
+travels in the row.
+
+**World bounds on the row, not local (a stated divergence):** UE keeps
+`LocalBoundsCenter/Extent` per instance and transforms in the cull shader
+(`SceneData.ush:236,242`) because its bounds are shared per primitive. Ours
+are already world-space on `WorldBounds` for the CPU stage, a moved row is
+re-uploaded anyway, and a pure plane test in the shader is cheaper.
 
 ### 5.2 Slot identity
 
@@ -267,6 +276,12 @@ struct GpuSceneMirror
     std::uint32_t rowCount = 0;
     std::uint64_t generation = 0;                                  // fresh per registry
     std::uint64_t lastSyncTick = 0;
+    // The prior-pose history (§5.3). `lastModel` is the matrix each row was
+    // last uploaded with (the one CPU matrix copy per resident row);
+    // `dirtyLastFrame` is the re-dirty list. A static row's GPU prevModel
+    // already equals its model.
+    std::vector<glm::mat4>     lastModel;        // by row
+    std::vector<std::uint32_t> dirtyLastFrame;
 };
 ```
 
@@ -293,26 +308,31 @@ after the scene schedule (so `WorldBounds` is current):
    `Changed<MeshRenderer>` since `lastSyncTick` ∪ rows allocated in step 1 ∪
    rows whose material resolution changed (the resolver's per-frame refresh
    marks the `MeshMaterialTable` generation; a changed generation dirties every
-   row — rare, cheap). The dirty row's full `GpuInstance` (minus `prevModel`)
-   is staged through the upload ring together with a `{row, isNew}` list.
-3. **The row-writer dispatch** (`gpu_scene_write.hlsl`, one thread per staged
-   row) copies the staged fields into the persistent buffer and sets
-   `prevModel = isNew ? staged.model : existing.model`. **No CPU copy of any
-   matrix is kept.**
-4. **The advance dispatch** runs over the *previous* frame's dirty list
-   (kept by row index, CPU side, one `uint` each) and sets `prevModel = model`
-   for rows that were NOT re-dirtied this frame — so a row moved on frame N
-   has `prev ≠ model` on frame N (velocity) and `prev == model` on frame N+1
-   (at rest). Rows dirty two frames running are written by step 3 alone.
-   Static rows cost nothing in either dispatch.
+   row — rare, cheap) ∪ **`dirtyLastFrame`** (the re-dirty, step 4).
+3. **The upload.** For each dirty row: `prevModel = isNew ? model :
+   lastModel[row]`; then `lastModel[row] = model`. The full `GpuInstance` —
+   `model`, `prevModel`, the normal matrix (`NormalMatrixFor(model)`), bounds,
+   material — is staged through the upload ring and copied into the
+   persistent buffer (per-row `CmdCopyBuffer` in plan 1; a scatter compute
+   when the copy count is measured to matter — UE's
+   `FRDGAsyncScatterUploadBuffer`). **No compute pass in `Sync`.**
+4. **The re-dirty.** Rows uploaded this frame with `prevModel ≠ model` go
+   into `dirtyLastFrame`; next frame step 2 uploads them once more, and since
+   `lastModel[row] == model` by then the row lands with `prev == model` — so
+   a row moved on frame N has `prev ≠ model` on frame N (velocity) and `prev
+   == model` on frame N+1 (at rest). A row moved on N and again on N+1 is
+   simply dirty on N+1 with N's pose as prev. This is UE's exact shape:
+   `FSceneVelocityData::StartFrame` advances the CPU history and marks the
+   primitive `ChangedTransform` the frame after it moved
+   (`RendererScene.cpp:3329-3336`). Static rows cost nothing.
 
 The G2 contract, for the record: **a row's `prevModel` is the `model` it was
 drawn with on the previous frame; a new row, a rebuilt scene, or a
 `teleported` row has `prev == model`.** `MeshRenderer` gains no field for
 `teleported` in F3; the bit is named in the layout and left unset.
 
-Both dispatches are recorded by `GpuSceneSyncNode` (§8), reading the ring
-slice the host staged.
+The copies are recorded by `GpuSceneSyncNode` (§8), a transfer-only node
+reading the ring slice the host staged.
 
 ### 5.4 Batches — CPU per frame, from the mirror
 
@@ -374,8 +394,8 @@ row  = direct ? firstOutput : visibleIndices[firstOutput + SV_InstanceID];
 inst = instances[row];
 ```
 
-then `model`, the normal matrix from `model`, `baseColor`, `materialSlot`
-exactly as `MeshConstants` carried them. A zero-`instanceNum` batch is a
+then `model`, `normal0..2`, `baseColor`, `materialSlot` exactly as
+`MeshConstants` carried them. A zero-`instanceNum` batch is a
 no-op draw; **no count buffer**, so the `drawIndirectCount` cap is not
 required and `baseInstance` is never used (no dependence on NRI's
 draw-parameters emulation). Pipeline layout: root constants b0 (8 bytes),
@@ -429,7 +449,10 @@ anything; opaque rows ignore it as they do now. The mesh shader's flat path
 1. **Opaque batches**, nearest-first by batch (§5.4), indirect.
 2. **Masked batches**, same order, after every opaque batch: a `clip` disables
    early-Z for that draw, so masked geometry goes last among the depth
-   writers.
+   writers. **This flips when the prepass slot is filled**: UE orders masked
+   *last* with no prepass and *first* with one
+   (`BasePassRendering.cpp:335-342`, `EarlyZPassMode`); whoever mints the
+   prepass flips the batch order in the same change.
 3. **Transparent rows**, direct: the CPU takes the `VisibleSet` entries whose
    entity has transparent rows (the mirror knows the rows; the material knows
    the mode), sorts them **back-to-front by the box centre's view-space
@@ -449,7 +472,7 @@ anything; opaque rows ignore it as they do now. The mesh shader's flat path
 mesh draw:
 
 ```
-batch2d → GpuSceneSyncNode (row-writer + advance dispatches) → MeshCullNode → MeshNode (indirect + direct) → GridNode → post → tonemap → …
+batch2d → GpuSceneSyncNode (the row copies; transfer only) → MeshCullNode → MeshNode (indirect + direct) → GridNode → post → tonemap → …
 ```
 
 Three node types (`GpuSceneSyncNode`, `MeshCullNode`, the rewritten
@@ -521,11 +544,15 @@ In order of authority:
 | Source 2: world AABB on every scene object; CPU per-view frustum + precomputed voxel visibility; per-view render lists | `WorldBounds` on every drawable; CPU `VisibleSet` per view; no voxel vis | Match on the CPU layer. Voxel vis is a bake-time structure (T7) |
 | CS2/Deadlock: GPU-side cull + draw for *aggregate* static props only; ordinary objects CPU-culled | GPU scene + compute cull for **every** mesh | Diverge: no aggregate concept exists and a solo tree wants one mesh path; aggregates become a batching optimisation on top when T7 asks |
 | Deadlock: depth-pyramid GPU occlusion | not in F3; the predicate slot in `MeshCullNode` is where it lands | Needs the prior frame's depth = F5's shared-depth contract; building the handshake before F5 builds it twice |
-| UE: `FPrimitiveBounds` + `ComputeViewVisibility` (CPU) → `GPUScene` (persistent, dirty-tracked, `PreviousLocalToWorld`) → `InstanceCullingManager` → indirect draws | the same two-layer shape, one row per section | Match |
-| UE base pass: sort by PSO then mesh; depth prepass supplies early-Z | batches sorted opaque → masked, nearest-first; no prepass | Diverge for now: prepass value scales with overdraw and shading cost; declared slot |
+| UE: `FPrimitiveBounds` + `ComputeViewVisibility` (CPU, **linear by default** — `GFrustumCullUseOctree = false`, `SceneVisibility.cpp:343`) → `GPUScene` (persistent `FSpanAllocator` slots, `EPrimitiveDirtyState`) → `InstanceCullingManager` (`InterlockedAdd` on `instanceNum`, ids at a per-draw prefix offset — `BuildInstanceDrawCommands.usf:302,352`) → indirect draws | the same two-layer shape, one row per section | Match |
+| UE: prior pose = `FSceneVelocityData` CPU history for moved primitives, advanced at `StartFrame`, primitive re-dirtied the frame after it moved (`ScenePrivate.h:1274-1352`, `RendererScene.cpp:3320-3348`) | the same (§5.3): `lastModel` + `dirtyLastFrame` in the mirror | Match (amended from a GPU row-writer after the vet) |
+| UE: per-draw instance-id offset via an instance-stepped vertex stream (`VertexFactoryCommon.ush:40,54`) because many draws share one indirect call | one root constant per batch | Diverge: one draw per batch; a root constant is the simpler equivalent until draws are merged |
+| UE base pass key: shader hashes + a Masked bit, **no depth term** (`FMeshDrawCommandSortKey::BasePass`, `MeshPassProcessor.h:1545-1548`); early-Z is the prepass alone | batches opaque → masked, then nearest-first by batch; no prepass | Diverge: nearest-first is an early-Z stand-in while the prepass slot is empty; the masked bit's order matches UE's no-prepass branch |
 | UE translucency: CPU-sorted back-to-front, separate pass | the same | Match |
-| UE / Source 2: Opaque / Masked / Translucent (`F_ALPHA_TEST`, `F_TRANSLUCENT`) | the same trio | Match |
-| UE Paper2D sprites: CPU everything | sprites CPU-culled through `VisibleSet`, drawn by `Batcher2D` as today | Match; sprites join the GPU scene only on a measured 2D-perf trigger |
+| UE / Source 2: Opaque / Masked / Translucent (`EngineTypes.h:247-249`; `F_ALPHA_TEST`, `F_TRANSLUCENT`) | the same trio | Match. UE's default `OpacityMaskClipValue` is 0.3333 (`Material.cpp:1170`); ours is 0.5, Source 2's `g_flAlphaTestReference` / Unity's default |
+| UE translucency key: `Priority` then `Distance` (`BasePassRendering.cpp:322-324`) | back-to-front by box-centre view depth | Match (no priority field until something needs one) |
+| UE instance record: `PrevLocalToWorld`, `InvNonUniformScale` + `DeterminantSign`, LOCAL bounds (`SceneData.ush:229-243`) | `prevModel`, the normal matrix, WORLD bounds | Match on prev and on precomputing the normal transform; diverge on bounds space (§5.1) |
+| UE Paper2D sprites: CPU everything (`FDynamicMeshBuilder` per frame, `PaperRenderSceneProxy.cpp:372`) | sprites CPU-culled through `VisibleSet`, drawn by `Batcher2D` as today | Match; sprites join the GPU scene only on a measured 2D-perf trigger |
 | UE `GPUScene`: per-instance `bCastShadow`, LOD, custom data | none | YAGNI; the row has a `pad` and a `flags` word |
 
 ---
@@ -534,7 +561,8 @@ In order of authority:
 
 - **G1** — the pass-slot list is declared (§8); F3 implements forward/masked/
   transparent only.
-- **G2** — the prior pose is `GpuInstance::prevModel` (§5.3), the velocity
+- **G2** — the prior pose is `GpuInstance::prevModel`, sourced from the
+  mirror's CPU history for moved rows (§5.3, UE's shape), the velocity
   target is a declared slot (§8), the culling frustum is unjittered (§3).
   The direction doc's "`PreviousTransform` already carries the data" is
   superseded by this spec; no ECS history component is recreated.
@@ -549,7 +577,7 @@ In order of authority:
    `Aabb`; `WorldBounds` + `BoundsSystem`; `Frustum`; `VisibleSet` /
    `SceneVisibility` + `BuildVisibleSet`; the sprite sweep and `PickEmit`
    consume it; the editor framing lift; `GpuSceneMirror`, `GpuScene` rows /
-   slots / `Sync` / the row-writer and advance dispatches; the batch builder;
+   slots / `Sync` with the `lastModel` history and the re-dirty; the batch builder;
    the rewritten `MeshNode` drawing every emitted batch **indirect with
    `instanceNum` written by the CPU** (`= capacity`, identity indices — the
    indirect path is proven before the compute pass exists); `MeshSceneDesc`
@@ -594,7 +622,8 @@ In order of authority:
 | R3 | GPU scene for meshes + CPU coarse (UE's shape); sprites stay CPU; Hi-Z declared, not built | a full GPU scene including sprites; Hi-Z now |
 | R4 | Opaque early-Z from **batch state-sort + CPU nearest-first by batch**; the depth prepass is a declared slot | a prepass now; a GPU depth sort |
 | R5 | Build the transparent path **and** masked: `blend` on the mesh material, three pipeline variants; transparent rows CPU-sorted back-to-front, direct draws after the indirect batches | reserve only |
-| R6 | Prior pose = `GpuInstance::prevModel`, maintained on the GPU by the row-writer and the advance dispatch; no ECS history component | `PreviousWorldTransform` + a system; defer to F5 |
+| R6 | Prior pose = `GpuInstance::prevModel`; no ECS history component. **Mechanism amended after the UE vet (user, 2026-09-18):** a CPU history in the mirror + a re-dirty the frame after a move (UE's `FSceneVelocityData`), replacing the GPU row-writer + advance dispatch | `PreviousWorldTransform` + a system; defer to F5; the GPU row-writer |
+| R8 | The row carries the normal matrix from `NormalMatrixFor` (240 B), not a per-vertex 3×3 inverse (UE vet, 2026-09-18) | computing it in the vertex shader |
 | R7 | Persistent slots with dirty-tracked uploads (`Changed<>` + reconciliation); a registry generation stamp forces the full rebuild | full re-upload every frame; transient per-frame rows |
 
 ---
@@ -605,14 +634,16 @@ In order of authority:
   per-draw `NormalMatrixFor` push and the `instances` span all go. Plan 1
   proves the indirect path with CPU-written counts before any compute exists,
   so a wrong picture bisects to one of two halves.
-- **First production compute pass and first indirect draw.** A D3D12-vs-Vulkan
+- **First production compute pass (the cull, plan 2) and first indirect draw (plan 1).** A D3D12-vs-Vulkan
   disagreement on the args layout, the UAV → indirect-argument barrier, or
   structured-buffer packing is the real risk; NRI abstracts all three and the
   oracle test runs on both backends. `static_assert`s pin the row size and
   the `DrawIndexedDesc` stride against the HLSL side.
-- **`Sync`'s prev-advance is the subtle piece** (a row moved on N must be at
-  rest on N+1). It has its own unit test and the G2 contract sentence in §5.3
-  is the thing T5 will read.
+- **`Sync`'s re-dirty is the subtle piece** (a row moved on N must be at
+  rest on N+1; a row moved on N and N+1 must carry N's pose as prev on N+1).
+  It is pure CPU logic now and has its own unit test; the G2 contract
+  sentence in §5.3 is the thing T5 will read. The one CPU matrix copy per
+  resident row (`lastModel`, 64 B) is the price of never reading the GPU back.
 - **The registry-swap generation** must fire on every swap path (scene open,
   `RestoreRegistry`, Play → Edit, the module hot-reload's registry rebuild).
   The desk pass's Play → Edit round trip and a unit test cover the first
@@ -648,12 +679,22 @@ In order of authority:
 
 ## Appendix B — references consulted
 
-- UE 5.8.2 (`D:\dev\_reference\UnrealEngine-5.8.2-release`): `GPUScene.cpp/h`
-  (`FGPUScene::Update`, `PreviousLocalToWorld`, dirty primitive tracking),
-  `InstanceCullingManager.cpp`, `SceneVisibility.cpp` (`ComputeViewVisibility`,
-  the frustum p-vertex test in `FConvexVolume::IntersectBox`),
-  `MeshDrawCommands.cpp` (`FMeshDrawCommandSortKey`: base pass = PSO then
-  mesh; translucency = depth), `Paper2D` (CPU sprites).
+- UE 5.8.2 (`D:\dev\_reference\UnrealEngine-5.8.2-release\Engine`), **read
+  2026-09-18, line-cited above**: `Source/Runtime/Renderer/Private/ScenePrivate.h:1274-1352`
+  + `RendererScene.cpp:3320-3348` (`FSceneVelocityData`: CPU prior pose,
+  advance, re-dirty); `GPUScene.h:341-415` (`FSpanAllocator` slots,
+  `FRDGAsyncScatterUploadBuffer`), `Source/Runtime/Engine/Public/PrimitiveDirtyState.h`,
+  `SpanAllocator.h:23-67`; `InstanceCulling/InstanceCullingContext.cpp:94-115,253-278`
+  and `Shaders/Private/InstanceCulling/BuildInstanceDrawCommands.usf:99-109,302-352,378`
+  (the cull → args → id list); `Shaders/Private/VertexFactoryCommon.ush:33-65`
+  (the per-draw offset stream); `Source/Runtime/Engine/Private/ConvexVolume.cpp:217-300,714-770`
+  (box push-out test, plane extraction); `SceneVisibility.cpp:325-360,531-625`
+  (linear default, `IntersectBox8Plane`); `Public/MeshPassProcessor.h:1541-1561`
+  and `Private/BasePassRendering.cpp:318-343` (sort keys, the masked flip);
+  `Shaders/Private/SceneData.ush:229-243` (`FInstanceSceneData`);
+  `Source/Runtime/Engine/Classes/Engine/EngineTypes.h:247-249` (blend modes),
+  `Source/Runtime/Engine/Private/Materials/Material.cpp:1170` (cutoff default);
+  `Plugins/2D/Paper2D/.../PaperRenderSceneProxy.cpp:292-372` (CPU sprites).
 - Source 2 (public evidence via VRF and the Deadlock render target doc,
   `docs/research/2026-08-12-deadlock-render-target.md` T7 row): per-object
   AABBs, CPU frustum + voxel visibility, aggregate static props culled and
