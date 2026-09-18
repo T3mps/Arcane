@@ -98,6 +98,7 @@ namespace
 TEST_CASE("IsHiddenInInspector covers the derived caches and the eye's marker", "[editor][outliner]")
 {
     CHECK(IsHiddenInInspector("Arcane::WorldTransform"));
+    CHECK(IsHiddenInInspector("Arcane::WorldBounds"));   // F3 plan 1 T2: engine-written like WorldTransform
     CHECK(IsHiddenInInspector("Arcane::PhysicsBodyRef"));
     // 2026-07-29 (user call): Hidden is a MECHANISM marker -- the Outliner
     // eye is its entire interface, so it surfaces nowhere else. Riding the

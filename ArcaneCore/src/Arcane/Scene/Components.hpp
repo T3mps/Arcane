@@ -7,6 +7,7 @@
 // idempotent), and the simulation Registry is owned by the host module.
 
 #include <Arcane/Guid.hpp>
+#include <Arcane/Math/Aabb.hpp>   // WorldBounds::box (F3 plan 1 T2)
 
 #include <Astra/Reflection/Reflection.hpp>
 
@@ -52,8 +53,10 @@ namespace Arcane
         // {added, changed} ticks so Changed<Transform> is EXACT per entity --
         // TransformPropagationSystem's pre-pass and PhysicsSystem's paused
         // reconcile both need entity precision, and a coarse chunk stamp would
-        // recompose every row of a touched chunk. Nothing else is tracked
-        // (WorldTransform's readers all rebuild per frame; Hidden is a tag).
+        // recompose every row of a touched chunk. Three other components are
+        // tracked (F3 plan 1 T2): WorldTransform, MeshRenderer and WorldBounds
+        // -- BoundsSystem and GpuSceneSync re-walk only the rows that moved.
+        // Hidden is a tag and has no column to track.
         static constexpr bool AstraChangeTracked = true;
 
         glm::vec3 position{0.0f, 0.0f, 0.0f};
@@ -83,7 +86,20 @@ namespace Arcane
 
     struct WorldTransform
     {
+        static constexpr bool AstraChangeTracked = true;   // F3: Changed<> is exact per entity -- BoundsSystem and GpuSceneSync re-walk only the rows that moved
         glm::mat4 matrix{1.0f};             // computed by TransformPropagationSystem; never authored
+    };
+
+    // The drawable's WORLD-space box (F3, spec s2.2): engine-written by
+    // BoundsSystem after transform propagation, never authored, never
+    // serialized. Mesh = the artifact AABB through the world matrix; sprite =
+    // the SpriteWorldQuad corners, Z widened by kSpriteDepthEpsilon. An entity
+    // with nothing drawable (or an unresolved mesh) carries none. Read by the
+    // CPU visible set, the GPU scene rows, the editor's framing.
+    struct WorldBounds
+    {
+        static constexpr bool AstraChangeTracked = true;   // exact per entity: the GPU scene re-uploads exactly the moved rows
+        Aabb box;
     };
 
     // The planar bridge (Task 3, F1). Three subsystems are deliberately still
@@ -156,6 +172,8 @@ namespace Arcane
     // which is the two-spellings defect the unit rule exists to prevent.
     struct MeshRenderer
     {
+        static constexpr bool AstraChangeTracked = true;   // F3: Changed<> is exact per entity -- BoundsSystem and GpuSceneSync re-walk only the rows that moved
+
         // The .arcmesh asset drawn. Nil (the default) or unresolved -> draws
         // NOTHING. That is not an error: a scene may legitimately carry a slot
         // with no geometry yet, exactly as MeshInstance::mesh documents.
@@ -310,6 +328,14 @@ namespace Arcane
     // Unity and UE both hide derived caches outright.
     ASTRA_REFLECT_TYPE(WorldTransform)
         ASTRA_REFLECT_FIELD(WorldTransform, matrix)
+            ASTRA_REFLECT_ATTR(Serializable, false)
+            ASTRA_REFLECT_ATTR(Hidden)
+    ASTRA_END_REFLECT_TYPE()
+
+    // Same shape as WorldTransform: engine-written by BoundsSystem, never
+    // authored, never serialized (F3 plan 1 T2).
+    ASTRA_REFLECT_TYPE(WorldBounds)
+        ASTRA_REFLECT_FIELD(WorldBounds, box)
             ASTRA_REFLECT_ATTR(Serializable, false)
             ASTRA_REFLECT_ATTR(Hidden)
     ASTRA_END_REFLECT_TYPE()

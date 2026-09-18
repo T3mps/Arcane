@@ -114,7 +114,7 @@ namespace Arcane::ProjectHost
 
     // The boot check every host calls FROM ITS OWN TRANSLATION UNIT (being inline,
     // it asks about the calling module's caches and no other -- ArcaneClient.dll's
-    // call in ProjectBoot.cpp cannot answer for ArcaneEditor.exe). Checks all twelve
+    // call in ProjectBoot.cpp cannot answer for ArcaneEditor.exe). Checks all thirteen
     // engine component types named in Scene/EngineRoster.hpp.
     inline bool VerifySharedTypeContext(const Astra::Registry& reg, const char* moduleName)
     {

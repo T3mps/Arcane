@@ -32,6 +32,7 @@ namespace Arcane
         creg.RegisterComponent<Camera>();
         creg.RegisterComponent<MeshRenderer>();
         creg.RegisterComponent<PhysicsSettings>();   // 2026-09-11 physics wiring -- APPENDED (see the note above)
+        creg.RegisterComponent<WorldBounds>();       // F3 plan 1 -- APPENDED (see the note above)
     }
 
     inline void RegisterSceneComponents(Astra::Registry& reg)

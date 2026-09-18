@@ -901,7 +901,15 @@ namespace Arcane
     //     Circle; Draw gained a trailing `const GizmoRotateSweep*`; RotateSweep
     //     and GizmoRotateSweep are NEW. A module built against v34 calls the old
     //     Draw signature -- refuse. ReferenceProject.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 35;
+    // v36 (2026-09-18, F3 plan 1): Scene/Components.hpp gains WorldBounds (a
+    //     new engine component; RegisterSceneComponents and the
+    //     EngineComponentRoster append it after PhysicsSettings), WorldTransform
+    //     and MeshRenderer become AstraChangeTracked (their reflected layout is
+    //     unchanged, their column ticks are not); Scene/SpriteGeometry.hpp is
+    //     new in Core; Scene/BoundsSystem.hpp is NEW (the engine's third
+    //     fixedUpdate system). A module built against v35 registers one
+    //     component fewer -- refuse. ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 36;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

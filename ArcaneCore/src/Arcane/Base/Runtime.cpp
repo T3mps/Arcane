@@ -10,6 +10,7 @@
 #include <Arcane/Plugin/ClientHooks.hpp>   // IClientHooks -- the ONE Core->Client reach-back (plan 1 P6)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Scene/BoundsSystem.hpp>        // BoundsSystem (engine-owned, instantiated IN this module; F3 plan 1 T2)
 #include <Arcane/Scene/Components.hpp>          // Transform / .../MeshRenderer (engine roster types)
 #include <Arcane/Scene/EngineRoster.hpp>        // EngineComponentRoster -- THE roster list (registered below, verified in ProjectHost.hpp)
 #include <Arcane/Scene/PhysicsComponents.hpp>   // RigidBody2D/Collider2D/PhysicsBodyRef (engine roster types)
@@ -201,7 +202,7 @@ namespace Arcane
             ARC_ASSERT(*engineModule, "Runtime: ComponentModule::Open refused -- the slot above must be installed first");
             // The roster -- and the ORDER that is the id numbering -- is named
             // once, in Scene/EngineRoster.hpp, because ProjectHost.hpp's
-            // VerifySharedTypeContext must check the same twelve types this
+            // VerifySharedTypeContext must check the same thirteen types this
             // registers (2026-09-16: a one-type probe missed the editor's
             // early WorldTransform resolve). Ids are a first-touch counter, so
             // same order == same numbering as before.
@@ -397,14 +398,16 @@ namespace Arcane
 
     void Runtime::InstallEngineSystems()
     {
-        // The engine's HEADLESS pair, owned here (spec docs/specs/2026-09-13-
+        // The engine's HEADLESS trio, owned here (spec docs/specs/2026-09-13-
         // game-module-boilerplate-design.md s4.1) -- the UE/DOTS shape: the engine
         // ticks the world; a game module registers only its own systems and
         // places them with Astra::Before/After against these types. Each behind
         // its own HasSystem guard: AlreadyRegistered is the only failure and
         // this runs from the ctor AND after every ClearSystems. Order within a
-        // scheduler: PhysicsSystem declares Before<TransformPropagationSystem>;
-        // insertion order carries the rest (Astra's reorder is stable).
+        // scheduler: PhysicsSystem declares Before<TransformPropagationSystem>,
+        // BoundsSystem declares After<TransformPropagationSystem> (F3 plan 1 T2:
+        // it reads the composed WorldTransform); insertion order carries the
+        // rest (Astra's reorder is stable).
         // RenderSubmissionSystem was the third; it is presentation, so it is
         // ClientRuntime's now (Client/ClientRuntime.cpp installs it at
         // construction and on every OnSystemsCleared) and a Core-only host has
@@ -417,6 +420,8 @@ namespace Arcane
         }
         if (!fixed.HasSystem<TransformPropagationSystem>())
             std::ignore = fixed.AddSystem<TransformPropagationSystem>();
+        if (!fixed.HasSystem<BoundsSystem>())
+            std::ignore = fixed.AddSystem<BoundsSystem>();
     }
 
     glm::vec2 Runtime::ResolvedGravity() const

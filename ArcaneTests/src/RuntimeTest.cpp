@@ -10,6 +10,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
+#include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
@@ -150,12 +151,13 @@ TEST_CASE("Runtime ClearSystems empties the module's systems and re-installs the
     REQUIRE(rt.Schedulers().render.AddSystem<NoOpSystem>().IsOk());        // same type across them is fine
     rt.ClearSystems();
     // The engine-owned STANDARD systems come back (PhysicsSystem 2026-09-11;
-    // TransformPropagation 2026-09-13, game-module boilerplate spec s4.1); the
-    // module's NoOpSystems are gone. RenderSubmissionSystem was the third until
-    // the Core-DLL split moved it to ClientRuntime, so on a BARE Runtime the
+    // TransformPropagation 2026-09-13, game-module boilerplate spec s4.1;
+    // BoundsSystem 2026-09-18, F3 plan 1 T2); the module's NoOpSystems are
+    // gone. RenderSubmissionSystem was a fixedUpdate sibling until the
+    // Core-DLL split moved it to ClientRuntime, so on a BARE Runtime the
     // render scheduler comes back empty -- the client's half of this is
     // ClientRuntimeTest's "keeps render submission across ClearSystems".
-    CHECK(rt.Schedulers().fixedUpdate.Size() == 2);
+    CHECK(rt.Schedulers().fixedUpdate.Size() == 3);
     CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<NoOpSystem>());
     CHECK(rt.Schedulers().update.Empty());
     CHECK(rt.Schedulers().render.Empty());
@@ -169,11 +171,12 @@ TEST_CASE("Runtime installs PhysicsSystem into fixedUpdate and re-installs after
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
     CHECK_FALSE(rt.Schedulers().update.HasSystem<Arcane::PhysicsSystem>());
     rt.InstallEngineSystems();                                   // idempotent
-    CHECK(rt.Schedulers().fixedUpdate.Size() == 2);              // Physics + TransformPropagation, both engine-owned (2026-09-13)
+    CHECK(rt.Schedulers().fixedUpdate.Size() == 3);              // Physics + TransformPropagation + Bounds, all engine-owned (F3 plan 1 T2)
     REQUIRE(rt.Schedulers().fixedUpdate.AddSystem<NoOpSystem>().IsOk());   // "the module's"
     rt.ClearSystems();                                           // what PluginHost does on every unload/reload
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem>());
     CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>());
+    CHECK(rt.Schedulers().fixedUpdate.HasSystem<Arcane::BoundsSystem>());   // F3 plan 1 T2: the third engine-owned system
     CHECK_FALSE(rt.Schedulers().fixedUpdate.HasSystem<NoOpSystem>());
     CHECK(rt.Schedulers().update.Empty());
     // Headless: RenderSubmissionSystem is the client's since the Core-DLL split.

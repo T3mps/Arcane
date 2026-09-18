@@ -1,5 +1,6 @@
 #include "Scene/EditModeSchedule.hpp"
 
+#include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
 
 #include <tuple>
@@ -8,9 +9,10 @@ namespace Arcane::Editor
 {
     EditModeSchedule::EditModeSchedule()
     {
-        // The one Edit-mode system. AddSystem's Result is [[nodiscard]]; its only
+        // The two Edit-mode systems. AddSystem's Result is [[nodiscard]]; its only
         // failure is a duplicate registration, impossible on a fresh scheduler.
         std::ignore = m_schedule.AddSystem<Arcane::TransformPropagationSystem>();
+        std::ignore = m_schedule.AddSystem<Arcane::BoundsSystem>();   // F3: boxes follow the Edit-mode propagation
     }
 
     bool EditModeSchedule::RunFrame(Astra::Registry& reg, bool inPlayMode)
@@ -18,7 +20,7 @@ namespace Arcane::Editor
         if (inPlayMode)
             return false;
         if (m_physicsEditPass) m_physicsEditPass();   // mint / destroy / reconcile; propagation composes the result
-        m_schedule.Execute(reg);   // sequential executor; one system, one group
+        m_schedule.Execute(reg);   // sequential executor; two exclusive systems, propagation then bounds
         return true;
     }
 

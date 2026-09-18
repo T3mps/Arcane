@@ -51,7 +51,8 @@ namespace Arcane::Editor
     public:
         EditModeSchedule();
 
-        // Phase 9. Runs the Edit-mode systems (today: TransformPropagationSystem)
+        // Phase 9. Runs the Edit-mode systems (today: TransformPropagationSystem
+        // then BoundsSystem, F3 plan 1 T2)
         // exactly once when !inPlayMode; a no-op in Play. Returns true iff it ran.
         bool RunFrame(Astra::Registry& reg, bool inPlayMode);
 
