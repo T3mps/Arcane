@@ -4,6 +4,7 @@
 // nearest-first, CPU-written visible indices + indirect args). Device-free,
 // under ~[gpu]. The [gpuscene][material] cases absorb the retired
 // CollectMeshInstances pins that used to live in MeshSubmissionTest.cpp.
+#include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): the host-side [gpuscene][host] case
 #include <Arcane/Render/GpuSceneSync.hpp>
 #include <Arcane/Render/GpuSceneTypes.hpp>
 #include <Arcane/Render/VisibilitySystem.hpp>
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 
 namespace
@@ -413,4 +415,36 @@ TEST_CASE("RowSpanAllocator: first-fit reuse, split, and high water", "[gpuscene
     CHECK(a.Allocate(2) == 1);
     CHECK(a.Allocate(1) == 5);   // nothing free fits -> bump
     CHECK(a.HighWater() == 6);
+}
+
+// ---- F3 plan 1 T8: the host helper (Host/GpuSceneHost.hpp) ----------------
+// PrepareSceneForRender is the three calls every host makes between the
+// schedulers and the render scheduler; it is header-only so this case can
+// drive it without a device (a null GpuScene* reads as "never synced").
+
+TEST_CASE("PrepareSceneForRender: fills views[0] from the main view and views[1] from a differing mesh view; the frame culls against the mesh view", "[gpuscene][host]")
+{
+    World w;
+    Astra::Entity e = w.Spawn(glm::vec3(0, 0, -5), w.Mesh());
+    Arcane::TransformPropagationSystem{}(w.reg);
+    Arcane::BoundsSystem{}(w.reg);
+    const Arcane::ViewTransform main = Arcane::ViewTransform::Orthographic(glm::vec2(0.0f), 10.0f, glm::uvec2{ 800, 600 });
+    const Arcane::ViewTransform mesh = Arcane::ViewTransform::Perspective(glm::vec3(0, 0, 10), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0),
+                                                                          60.0f, glm::uvec2{ 800, 600 }, 0.1f, 100.0f);
+    Arcane::GpuSceneFrame frame;
+    Arcane::PrepareSceneForRender(w.reg, main, mesh, nullptr, frame);
+    const Arcane::SceneVisibility* sv = w.reg.GetResource<Arcane::SceneVisibility>();
+    REQUIRE(sv);
+    REQUIRE(sv->views.size() == 2);
+    CHECK(sv->views[0].Contains(e));
+    CHECK(sv->views[1].Contains(e));
+    CHECK(frame.stats.coarseVisible == 1);
+    CHECK(frame.HasDraws());
+    // The same main view twice: one view only, and the frame reads views[0].
+    Arcane::PrepareSceneForRender(w.reg, main, main, nullptr, frame);
+    CHECK(w.reg.GetResource<Arcane::SceneVisibility>()->views.size() == 1);
+    // No mesh view: the frame has no draws but views[0] is still built (sprites and picking cull).
+    Arcane::PrepareSceneForRender(w.reg, main, std::nullopt, nullptr, frame);
+    CHECK_FALSE(frame.HasDraws());
+    CHECK(w.reg.GetResource<Arcane::SceneVisibility>()->views.size() == 1);
 }

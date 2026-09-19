@@ -40,6 +40,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>       // dev-only --crash-gpu N (kPassName only; RenderGraph fires through NriDiagnostics::FireFault)
+#include <Arcane/Render/GpuSceneTypes.hpp>          // GpuSceneFrame (FrameIo::gpuSceneFrame, F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>    // the graph vehicle (RenderGraph); unconditional
 #include <Arcane/Render/PickEmit.hpp>                // PickDrawable (--pick-probe)
 #include <Arcane/Render/ShaderCompiler.hpp>          // --settle N's IsIdle() quiescence check (Task 10 fix round 1)
@@ -100,16 +101,16 @@ namespace Arcane::RuntimeFrame
         std::vector<Arcane::PickDrawable>& pickDrawables;
         std::vector<std::uint32_t>&        pickSelectedIds;
 
-        // THIS FRAME'S MESH INSTANCES (F2a Task 10) -- the same "member, not
-        // a RenderGraph local" reasoning as pickDrawables above: MeshSceneDesc
-        // ::instances is BORROWED for the duration of the RenderFrame call
-        // (MeshNode.hpp), and RenderGraph is a free function with nothing of
-        // its own to hold that storage, so it has to be a RuntimeApp member
-        // reached through here. Rebuilt every frame by CollectMeshInstances,
-        // which clears it on entry (MeshSubmissionSystem.hpp) -- so, again
-        // like pickDrawables, a steady-state frame with a static scene
-        // allocates nothing after the first.
-        std::vector<Arcane::MeshInstance>& meshInstances;
+        // THIS FRAME'S GPU-SCENE FRAME (F2a Task 10; F3 plan 1 T8) -- the
+        // same "member, not a RenderGraph local" reasoning as pickDrawables
+        // above: MeshSceneDesc::scene is BORROWED for the duration of the
+        // RenderFrame call (MeshNode.hpp), and RenderGraph is a free function
+        // with nothing of its own to hold that storage, so it has to be a
+        // RuntimeApp member reached through here. Rebuilt every frame by
+        // PrepareSceneForRender (Host/GpuSceneHost.hpp), whose containers are
+        // reused -- so, again like pickDrawables, a steady-state frame with a
+        // static scene allocates nothing after the first.
+        Arcane::GpuSceneFrame& gpuSceneFrame;
 
         // ---- THE LAST-FRAME CAPTURE (Task 8: --report wiring) ---------------
         // CaptureTail fills these on the run's LAST frame whenever --screenshot

@@ -212,8 +212,8 @@ namespace Arcane
         // MeshCache has resolved. Table() IS the MeshTable payload
         // (SceneRenderResolver publishes &meshes->Table() every Refresh), so
         // present == this MeshRenderer has geometry to draw and
-        // CollectMeshInstances will emit an instance for it; absent == the
-        // sweep skips the entity entirely (MeshTable's own comment,
+        // GpuSceneSync (Render/GpuSceneSync.hpp) allocates its rows; absent ==
+        // the sync skips the entity entirely (MeshTable's own comment,
         // Scene/SceneResources.hpp -- there is no placeholder mesh).
         //
         // A SEPARATE view from the sprite one, not a folded pair: MeshRenderer
@@ -280,8 +280,8 @@ namespace Arcane
         // AS ONE TUPLE, and that is the fix for final-review C3: the pre-fix compare
         // read {source, importedSource} only, so editing a UvSphere's `segments` and
         // saving took the KEEP arm -- the CPU entry rebuilt with a new index count
-        // while the GPU buffers still held the old one, and CollectMeshInstances then
-        // emitted the new count against the old index buffer (an out-of-bounds read
+        // while the GPU buffers still held the old one, and the per-frame mesh sweep
+        // (now GpuSceneSync) then emitted the new count against the old index buffer (an out-of-bounds read
         // on a densification). MeshEntry::GeometryIdentity() is the single definition
         // of what counts, so a future generator parameter cannot be half-covered here.
         std::optional<MeshEntry::GeometryId> before;
@@ -473,17 +473,14 @@ namespace Arcane
             // defaults) is unchanged.
             if (mr.materialOverride.IsValid())
                 im.meshMaterials->Request(mr.materialOverride);
-            // F2c Task 10: EVERY slot's material, not just slots[0] -- unlike
-            // CollectMeshInstances (Render/MeshSubmissionSystem.hpp), which
-            // defers per-section submission to Plan 2 Task 5 and only ever
-            // reads slots[0], this cache-population sweep has no such excuse
-            // to under-request: a slot this loop skips today is a slot whose
-            // material never lands in MeshMaterialTable, so the frame Plan 2
-            // turns per-section submission on, that section renders white
-            // for one full Request cycle while THIS sweep catches up -- a
-            // regression with no test to catch it, because nothing here
-            // would be wrong until that later task changes what reads this
-            // table.
+            // F2c Task 10: EVERY slot's material, not just slots[0]. The
+            // GPU scene stages ONE ROW PER SECTION and resolves each row's
+            // material through slots[section.slotIndex] (GpuSceneSync's
+            // ResolveRowMaterial, Render/GpuSceneSync.hpp), so this
+            // cache-population sweep must not under-request: a slot this
+            // loop skips is a slot whose material never lands in
+            // MeshMaterialTable, and that section renders white for one
+            // full Request cycle while THIS sweep catches up.
             for (const MeshSlot& slot : it->second.slots)
                 if (slot.material.IsValid())
                     im.meshMaterials->Request(slot.material);

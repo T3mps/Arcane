@@ -65,6 +65,7 @@
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only Build -> Diagnostics -> Crash GPU (kPassName only; the injector is NriDiagnostics::FireFault)
+#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrame -- the viewport's per-frame GPU-scene frame (F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle (chrome + viewport); unconditional
 #include <Arcane/Render/PickEmit.hpp>   // PickDrawable -- the frame's pickables
 #include <Arcane/Render/ShaderCompiler.hpp>
@@ -1249,20 +1250,31 @@ namespace Arcane::Editor
         std::vector<Arcane::PickDrawable> m_pickDrawables;
         std::vector<std::uint32_t>        m_pickSelectedIds;
 
-        // ---- The viewport's opaque 3D pass (F2a Task 10) --------------------
-        // THIS FRAME's mesh instances, held as a MEMBER for the identical
-        // reason m_pickDrawables above is one: FrameDesc::mesh ->
-        // MeshSceneDesc::instances is a span borrowed for the duration of the
-        // RenderFrame call, so a per-frame temporary would dangle the moment
-        // the declaration outlives the statement that filled it.
+        // ---- The viewport's opaque 3D pass (F2a Task 10; F3 plan 1 T8) -----
+        // THIS FRAME's GPU-scene frame -- the staged rows, the batch table,
+        // the indirect args and the CPU-written visible-index list -- held as
+        // a MEMBER for the identical reason m_pickDrawables above is one:
+        // FrameDesc::mesh -> MeshSceneDesc::scene BORROWS it for the duration
+        // of the RenderFrame call, so a per-frame temporary would dangle the
+        // moment the declaration outlives the statement that filled it.
         //
-        // Rebuilt every frame by CollectMeshInstances (MeshSubmissionSystem.
-        // hpp), which clears it on entry -- so, again like m_pickDrawables, a
-        // steady-state frame with a static scene allocates nothing after the
-        // first. Filled inside ArmGraphViewportFrame, the same function that
-        // fills m_pickDrawables, for the same "one place fills the spans one
-        // declaration borrows" reason.
-        std::vector<Arcane::MeshInstance> m_meshInstances;
+        // Rebuilt every frame by PrepareSceneForRender (Host/GpuSceneHost.hpp)
+        // from RenderSceneToViewport, between the schedulers and the sprite
+        // sweep -- the visible set(s) it builds are what that sweep and the
+        // pick pass cull against, so it cannot run later, inside
+        // ArmGraphViewportFrame where the pick spans are filled. Its
+        // containers are reused, so a steady-state frame with a static scene
+        // allocates nothing after the first.
+        Arcane::GpuSceneFrame m_gpuSceneFrame;
+
+        // THE VIEW THE MESH PASS DRAWS WITH this frame -- the editor view in
+        // Edit, the perspective scene camera in Play (RuntimeFrame.cpp's
+        // rule), nullopt when Play has no such camera (no mesh batches then;
+        // the pass still declares itself for any staged rows, ruling R-D).
+        // Resolved beside the PrepareSceneForRender call (it culls against
+        // this view) and read again by ArmGraphViewportFrame for the
+        // MeshSceneDesc's matrices, so the two cannot disagree.
+        std::optional<Arcane::ViewTransform> m_meshView;
 
         // THIS FRAME'S MESH SCENE. Unlike m_pickDrawables/m_pickSelectedIds
         // (borrowed by FrameDesc as spans, stored inline in `vp` the moment

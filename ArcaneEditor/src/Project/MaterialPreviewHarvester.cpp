@@ -878,8 +878,8 @@ namespace Arcane::Editor
     // Resolves SYNCHRONOUSLY, like the mesh-kind MATERIAL branch just above (a mesh
     // asset compiles nothing either) -- straight from `queue` to `ready`, with no
     // `pending` stage at all. PER SECTION, the same material chain
-    // CollectMeshInstances resolves for a scene's MeshRenderer
-    // (Render/MeshSubmissionSystem.hpp): slots[section.slotIndex]'s material -> the
+    // GpuSceneSync resolves for a scene's MeshRenderer
+    // (Render/GpuSceneSync.hpp, ResolveRowMaterial): slots[section.slotIndex]'s material -> the
     // resolved baseColor/materialSlot, or white when the slot is empty/unresolved.
     // There is no materialOverride here -- a thumbnail has no entity, only the
     // asset's own default slots.

@@ -265,6 +265,16 @@ namespace Arcane
         m_viewMode    = std::move(mode);
     }
 
+    void VerifyReport::SetVisibility(std::uint32_t total, std::uint32_t coarseVisible,
+                                     std::uint32_t batches, std::uint32_t draws)
+    {
+        m_visibilitySet = true;
+        m_visTotal      = total;
+        m_visCoarse     = coarseVisible;
+        m_visBatches    = batches;
+        m_visDraws      = draws;
+    }
+
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
     {
         for (const auto& spec : specs)
@@ -570,6 +580,11 @@ namespace Arcane
         // SetViewMode) -- the editor viewport's resolved "2d" | "perspective",
         // the fact the perspective editor witness asserts on. Absent on the
         // runtime host and on any run that never set it; 6 remains readable.
+        //
+        // Bumped 7 -> 8 by F3 plan 1 T8: the report gained `visibility` (see
+        // SetVisibility) -- the GPU scene's per-frame counts, the fact a 3D
+        // witness asserts on. Absent on any run that never set it; 7 remains
+        // readable.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -600,6 +615,20 @@ namespace Arcane
                              { "postBound",        m_postBound },
                              { "meshReferenced",   m_meshReferenced },
                              { "meshBound",        m_meshBound } };
+        }
+
+        // The visibility counts (schemaVersion 8). ABSENT unless SetVisibility
+        // was called -- the same absence-must-be-absence contract as the
+        // census above. gpuVisible == coarseVisible until plan 2's GPU cull
+        // reads its count back; carried now so the key's consumers need no
+        // schema change then.
+        if (m_visibilitySet)
+        {
+            j["visibility"] = { { "total",         m_visTotal },
+                                 { "coarseVisible", m_visCoarse },
+                                 { "gpuVisible",    m_visCoarse },
+                                 { "batches",       m_visBatches },
+                                 { "draws",         m_visDraws } };
         }
 
         if (m_compareSet)

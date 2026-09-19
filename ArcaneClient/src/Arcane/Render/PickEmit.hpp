@@ -94,8 +94,8 @@ namespace Arcane
     //      not an error.
     //   3. Meshes    -- View<WorldTransform, MeshRenderer, Not<Hidden>>, resolved
     //      through the registry's MeshTable; a nil, unresolved or EMPTY mesh
-    //      (no sections) emits nothing, exactly what CollectMeshInstances
-    //      (Render/MeshSubmissionSystem.hpp) draws. ONE drawable per entity
+    //      (no sections) emits nothing, exactly what GpuSceneSync
+    //      (Render/GpuSceneSync.hpp) stages. ONE drawable per entity
     //      whatever its section count: sections carry materials, not identity.
     //
     // THE ORDER RULE FOR THE ID PASS (spec s7.1): the 2D kinds draw first with

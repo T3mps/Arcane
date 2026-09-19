@@ -148,7 +148,7 @@ namespace Arcane
         // indistinguishable symptom, and a white mesh is exactly what a
         // BROKEN reference looks like too. Refusing here turns all of that
         // into one diagnosable log line, and the refusal falls through the
-        // same way any other failure does -- MeshSubmissionSystem's chain
+        // same way any other failure does -- GpuSceneSync's material chain
         // simply moves on to its next link (MeshMaterialCache.hpp's FAILURE
         // DISCIPLINE block).
         const MaterialAssetData& base = chain.empty() ? *data : chain.back();

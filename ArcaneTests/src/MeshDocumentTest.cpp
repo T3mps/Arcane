@@ -399,7 +399,7 @@ TEST_CASE("MeshDocument::Save writes the asset and clears dirty", "[editor][mesh
 // registered .arcmesh, a MeshRenderer referencing it, a real
 // SceneRenderResolver, and a document whose invalidateMesh routes into it) --
 // and then asserting on the PUBLISHED MeshTable, which is what
-// CollectMeshInstances (and therefore the viewport) actually reads.
+// GpuSceneSync (and therefore the viewport) actually reads.
 TEST_CASE("MeshDocument::Save reaches the scene's MeshTable through the editor's own "
           "invalidateMesh wiring",
           "[editor][mesh][host]")
@@ -470,7 +470,7 @@ TEST_CASE("MeshDocument::Save reaches the scene's MeshTable through the editor's
     REQUIRE(doc.Save());
 
     // NO Refresh IN BETWEEN, deliberately: the save has to be visible to the
-    // very next frame's CollectMeshInstances, and a host may render before its
+    // very next frame's GpuSceneSync, and a host may render before its
     // next sweep.
     CHECK(vertexCount() == 16);
 

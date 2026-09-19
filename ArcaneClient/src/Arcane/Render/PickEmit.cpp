@@ -157,8 +157,8 @@ namespace Arcane
         }
 
         // ---- PASS 3: meshes -------------------------------------------------
-        // One drawable per MeshRenderer entity that CollectMeshInstances would draw
-        // (Render/MeshSubmissionSystem.hpp: WorldTransform + MeshRenderer, not Hidden,
+        // One drawable per MeshRenderer entity that GpuSceneSync would stage
+        // (Render/GpuSceneSync.hpp: WorldTransform + MeshRenderer, not Hidden,
         // resolved through the MeshTable to a mesh with sections). The whole mesh is
         // one silhouette -- sections carry materials, not identity -- so an entity
         // gets ONE id whatever its section count.

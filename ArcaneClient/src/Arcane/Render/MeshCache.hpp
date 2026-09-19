@@ -22,7 +22,7 @@
 // quad); a mesh does not -- there is no meaningful "wrong shape" to draw
 // instead of the right one, and drawing one would be worse than drawing
 // nothing. So a nullptr Resolve() is the correct outcome, and
-// MeshSubmissionSystem (Task 5) is expected to skip the entity entirely, the
+// GpuSceneSync (Render/GpuSceneSync.hpp) is expected to skip the entity entirely, the
 // same way it would for a nil MeshRenderer::mesh.
 //
 // PendingCook (F2c Task 11) is a THIRD outcome, neither success nor failure:

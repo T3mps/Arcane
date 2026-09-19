@@ -670,7 +670,7 @@ void RuntimeApp::MainLoop()
         .lastFrameDt     = m_lastFrameDt,
         .pickDrawables   = m_pickDrawables,
         .pickSelectedIds = m_pickSelectedIds,
-        .meshInstances   = m_meshInstances,
+        .gpuSceneFrame   = m_gpuSceneFrame,
         .captureRead     = m_captureRead,
         .captureWidth    = m_captureWidth,
         .captureHeight   = m_captureHeight,
@@ -1253,6 +1253,16 @@ void RuntimeApp::ShutdownGraphPath()
                               census.postReferenced, census.postBound,
                               census.meshReferenced, census.meshBound);
         }
+
+        // THE VISIBILITY COUNTS (schemaVersion 8, F3 plan 1 T8): the last
+        // frame's GpuSceneFrame::Stats -- every live GPU-scene row, the
+        // coarse-visible ones against the mesh view, the batches and draws
+        // emitted. Carried unconditionally like the census: a 2D scene
+        // honestly reports zeros, and so does a scene with no active
+        // perspective camera -- no mesh view means no frame was built at
+        // all (PrepareSceneForRender's early return), not "everything culled".
+        report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
+                             m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws);
 
         // The pick@x,y readback (Task 9), captured above while the vehicle
         // was still alive. Only set when a `pick@` probe was actually

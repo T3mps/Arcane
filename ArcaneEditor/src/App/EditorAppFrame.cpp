@@ -27,6 +27,7 @@
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include "Viewport/GizmoOverlay.hpp"   // ImGuiGizmoSink (the gizmo as foreground chrome)
+#include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame, once per viewport frame
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -34,7 +35,6 @@
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
 #include <Arcane/Render/ShaderCompiler.hpp>   // --settle N's IsIdle() quiescence check (Task 9, mirrors RuntimeFrame.cpp)
 #include <Arcane/Scene/Components.hpp>   // Arcane::Transform (gizmo drag target)
-#include <Arcane/Render/MeshSubmissionSystem.hpp>   // CollectMeshInstances (ArmGraphViewportFrame's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/PhysicsSystem.hpp>   // Arcane::PhysicsResource (physics overlay)
 #include <Arcane/Scene/SceneCamera.hpp>  // Arcane::ActiveSceneCamera (Play view + camera rect); Arcane::ActivePerspectiveSceneCamera (the mesh pass's camera)
 #include <Arcane/Serialization/SceneAsset.hpp>   // Arcane::Scene::kSceneExt (Save-dialog suffix)
@@ -1544,6 +1544,30 @@ namespace Arcane::Editor
             const std::uint32_t w = ViewportWidth();
             const std::uint32_t h = ViewportHeight();
 
+            // F3 (plan 1 T8): the CPU visible set(s), the GPU-scene sync and
+            // the frame's batches -- between the schedulers (phase 9's
+            // Advance left WorldTransform + WorldBounds current) and the
+            // sprite sweep inside SubmitSceneToBatcher (which reads views[0]
+            // through MainVisibleSet). The mesh view is the editor view in
+            // Edit and the perspective scene camera in Play (RuntimeFrame.cpp's
+            // rule); nullopt when Play has none, and then no batch is built --
+            // the pass still declares itself for any staged rows (R-D).
+            //
+            // HERE, not inside SubmitSceneToBatcher next to its SubmitRender:
+            // that function is also CaptureGraphViewportPng's (a scene save's
+            // cover, shutdown), and a second GpuSceneSync there would stage
+            // rows into m_gpuSceneFrame that no mesh pass uploads -- the
+            // mirror's lastModel history having already advanced past them,
+            // the next viewport frame would never re-stage them. One sync per
+            // viewport frame, from the one function that declares the frame.
+            m_meshView.reset();
+            if (!InPlayMode())
+                m_meshView = m_runtime->View();
+            else
+                m_meshView = Arcane::ActivePerspectiveSceneCamera(m_runtime->Registry(), glm::uvec2{ w, h });
+            Arcane::PrepareSceneForRender(m_runtime->Registry(), m_runtime->View(), m_meshView,
+                                          m_viewportTargets.graph->Scene(), m_gpuSceneFrame);
+
             Arcane::Batcher2D& b = m_gpu->Batch();
             b.Begin(w, h);
             SubmitSceneToBatcher(b);
@@ -1889,75 +1913,45 @@ namespace Arcane::Editor
             vp.gameUi = m_gameImgui->RenderToDrawData();
         }
 
-        // ---- F2a Task 10's content: the opaque 3D pass --------------------
+        // ---- F2a Task 10's content: the opaque 3D pass (F3 plan 1 T8) -----
         // UNCONDITIONAL, unlike the pick + outline chain below: a scene's
-        // mesh instances are ordinary scene content, and SubmitSceneToBatcher
-        // (the 2D equivalent, called from RenderSceneToViewport just before
-        // this function) draws in Edit AND Play alike -- neither is gated on
+        // meshes are ordinary scene content, and SubmitSceneToBatcher (the 2D
+        // equivalent, called from RenderSceneToViewport just before this
+        // function) draws in Edit AND Play alike -- neither is gated on
         // InPlayMode(). This section has to sit ABOVE the pick chain's early
         // return just below, or a frame with no selection and no hover would
         // silently stop submitting meshes too.
         //
-        // m_meshInstances is a MEMBER for the same "FrameDesc borrows this
-        // past the statement that fills it" reason m_pickDrawables is (see
-        // EditorApp.hpp). CollectMeshInstances is the TESTED sweep
-        // (MeshSubmissionSystem.hpp); this call site stays thin on purpose,
-        // since EditorAppFrame.cpp is not compiled into ArcaneTests.
-        Arcane::CollectMeshInstances(m_runtime->Registry(), m_meshInstances);
-        // vp.mesh is left at FrameDesc's own default (null) unless both an
-        // instance and a camera exist below -- the same "ask for the frame
-        // WITHOUT this stage by leaving the field null" mechanism vp.gameUi
-        // just used above.
-        if (!m_meshInstances.empty())
+        // m_gpuSceneFrame was built by PrepareSceneForRender in
+        // RenderSceneToViewport (see the comment there for why it runs
+        // BEFORE the sprite sweep rather than here); this site only hands
+        // it to the graph. THE GATE IS Empty(), NOT HasDraws() (ruling R-D):
+        // a frame whose meshes are all culled -- or that has no mesh view at
+        // all (Play with no perspective scene camera) -- can still carry
+        // staged rows or a full rebuild, and the mirror's lastModel history
+        // has already advanced past them, so the pass must declare itself
+        // for GpuSceneSyncNode's upload; MeshNode then records only its
+        // depth clear. Without a mesh view the matrices are left as they
+        // were (no batch reads them).
+        m_meshScene.scene = &m_gpuSceneFrame;
+        if (m_meshView)
         {
-            // WHICH CAMERA (F4 plan 1 T7): in EDIT mode the editor camera --
-            // the ViewTransform this frame's pre-SubmitRender push just put
-            // in ClientRuntime::View() (AdvanceSim's tail), which is
-            // always valid (EditorCamera::Resolve never hands back an
-            // identity: Ortho2D or a perspective from the clamped orbit),
-            // so meshes draw through the same view the sprites, the gizmo
-            // and the pick just used -- in 2D as an orthographic cut, in
-            // Perspective as the 3D scene the user orbits. In PLAY the
-            // guarded scene-camera path stands: MeshSceneDesc's own comment
-            // (MeshNode.hpp) is explicit that the caller owes valid
-            // matrices, and ActivePerspectiveSceneCamera is the one function
-            // that either hands back a validated (view, projection) pair or
-            // nullopt, never identity. No active perspective camera means
-            // there is nothing to draw the pass WITH, so vp.mesh stays null
-            // -- the same "leave it alone rather than invent a viewpoint"
-            // contract ActiveSceneCamera documents for the 2D path
-            // (SceneCamera.hpp).
-            // The viewport is handed over whole (F4 plan 1 T3): the sweep
-            // derives the aspect and answers nullopt for a zero height.
-            std::optional<std::pair<glm::mat4, glm::mat4>> meshCam;
-            if (!InPlayMode())
-            {
-                const Arcane::ViewTransform& editorView = m_runtime->View();
-                meshCam.emplace(editorView.view, editorView.projection);
-            }
-            else if (const auto cam = Arcane::ActivePerspectiveSceneCamera(
-                         m_runtime->Registry(), glm::uvec2{ ViewportWidth(), ViewportHeight() }))
-            {
-                meshCam.emplace(cam->view, cam->projection);
-            }
-            if (meshCam)
-            {
-                m_meshScene.instances = m_meshInstances;
-                m_meshScene.view       = meshCam->first;
-                m_meshScene.projection = meshCam->second;
-                // NO SCENE LIGHT, DELIBERATELY: this engine has no light
-                // component anywhere -- Scene/Components.hpp declares none
-                // and SceneModule.hpp registers none -- so
-                // lightDirection/lightColor/ambient are left at
-                // MeshSceneDesc's own documented defaults (MeshNode.hpp:
-                // 237-239). A light component is future work and out of
-                // scope for F2a; inventing one here would land an
-                // unreviewed scene-schema change in a host .cpp with zero
-                // test coverage rather than in a reviewed, tested
-                // component.
-                vp.mesh = &m_meshScene;
-            }
+            m_meshScene.view       = m_meshView->view;
+            m_meshScene.projection = m_meshView->projection;
         }
+        // NO SCENE LIGHT, DELIBERATELY: this engine has no light component
+        // anywhere -- Scene/Components.hpp declares none and SceneModule.hpp
+        // registers none -- so lightDirection/lightColor/ambient are left at
+        // MeshSceneDesc's own documented defaults (MeshNode.hpp). A light
+        // component is future work; inventing one here would land an
+        // unreviewed scene-schema change in a host .cpp with zero test
+        // coverage rather than in a reviewed, tested component.
+        //
+        // vp.mesh is left at FrameDesc's own default (null) for an Empty()
+        // scene -- the same "ask for the frame WITHOUT this stage by leaving
+        // the field null" mechanism vp.gameUi just used above.
+        if (!m_meshScene.Empty())
+            vp.mesh = &m_meshScene;
 
         // ---- F4 plan 1 T10's content: the 3D reference grid ----------------
         // EDITOR CHROME, gated three ways: Edit mode (an editor affordance,

@@ -170,15 +170,15 @@ namespace Arcane
     // MeshCache::Request from BuildMeshData, plus its local-space bounds
     // (ComputeMeshBounds). MeshInstance::mesh is the asset Guid (F2c s7.2);
     // NriMeshBufferCache makes `data` resident at declaration time. The table
-    // lookup in CollectMeshInstances still decides whether the entity is
+    // lookup in GpuSceneSync still decides whether the entity is
     // drawable -- MeshCache::Invalidate/Clear erase that entry.
     //
     // `slots` (F2a Task 5; grown from a scalar `material` to a named-slot array in
     // F2c Task 10) is a COPY of the loaded .arcmesh's own `MeshAssetData::slots` --
     // the mesh's default material Guid PER SECTION, resolved through the index the
     // section carries (MeshSection::slotIndex, Mesh/MeshBuilder.hpp), the second
-    // link in MeshSubmissionSystem's `materialOverride` -> per-section default ->
-    // white chain. It rides along here because MeshSubmissionSystem is
+    // link in GpuSceneSync's `materialOverride` -> per-section default ->
+    // white chain. It rides along here because GpuSceneSync is
     // host-published-resource-only by design (it reads MeshTable/MeshMaterialTable
     // and never touches a cache pointer, matching RenderSubmissionSystem's rule of
     // never touching the Assets facade). Name and generated topology still re-read
@@ -200,7 +200,7 @@ namespace Arcane
         // are the generators' topology (MeshAsset.hpp's own TOPOLOGY and SHAPE RATIO
         // blocks), and editing one of them while `source` stayed put used to take the
         // KEEP arm: the CPU entry rebuilt with a new index count while the GPU
-        // buffers still held the old one, which CollectMeshInstances then drew past.
+        // buffers still held the old one, which the per-frame mesh sweep then drew past.
         // MeshAssetData::operator== is the authoritative field list; the only members
         // it carries that are NOT geometry are id, name and slots. A new generator
         // parameter belongs here the day it is added.
@@ -232,7 +232,7 @@ namespace Arcane
     // rules as SpriteTable above: the map is OWNED by the host's MeshCache
     // (transient pointer resource, set each frame, never serialized).
     // Unresolved (nil / absent / failed to load or validate) -> null, and
-    // MeshSubmissionSystem (Task 5) skips the entity entirely -- unlike a
+    // GpuSceneSync (Render/GpuSceneSync.hpp) skips the entity entirely -- unlike a
     // sprite's 1x1 m untextured placeholder, there is no meaningful
     // placeholder mesh, so a broken reference draws nothing rather than the
     // wrong shape.
@@ -266,8 +266,8 @@ namespace Arcane
         // -- a Texture-typed value read off the .arcmat chain by
         // MeshMaterialCache::Request exactly like baseColor. Nil (the
         // default) is legal and means "no texture, the flat baseColor path"
-        // -- CollectMeshInstances (Render/MeshSubmissionSystem.hpp) needs
-        // this only to know WHICH texture `materialSlot` below names; nothing
+        // -- the resolver needs this only to know WHICH texture
+        // `materialSlot` below names (GpuSceneSync copies the slot per row); nothing
         // reads it directly at draw time.
         Guid albedo{};
 
@@ -289,8 +289,8 @@ namespace Arcane
         // NRI-free consumers (Base/Runtime.hpp, Plugin/PluginABI.hpp, most
         // of Scene/ and every Astra-registry CPU test that never touches a
         // device). The two literals MUST stay numerically identical --
-        // MeshSubmissionSystem.hpp's static_assert, where both BindlessTable
-        // and this struct are visible together, is the compiled half of
+        // Render/Nri/GpuScene.cpp's static_assert, where both BindlessTable
+        // and kGpuInvalidMaterialSlot are visible together, is the compiled half of
         // that contract; this comment is the other half, matching the
         // discipline mesh.hlsl's own kMeshInvalidMaterialSlot restatement
         // already uses for the identical reason.

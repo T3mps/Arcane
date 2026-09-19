@@ -294,11 +294,11 @@ namespace Arcane
     //         (Base/Runtime.hpp:162,169). `MeshTable`'s value type,
     //         `MeshEntry` (geometry + bounds + a `material` Guid copied off
     //         the loaded .arcmesh), crosses too, not just the resource
-    //         wrapping it: MeshSubmissionSystem.hpp is HEADER-ONLY and
+    //         wrapping it: the mesh sweep (F2a's MeshSubmissionSystem.hpp,
+    //         since F3 plan 1 Render/GpuSceneSync.hpp) is HEADER-ONLY and
     //         plugin-compiled, and reads `MeshEntry` straight off the
-    //         resolved table (Render/MeshSubmissionSystem.hpp:113), including
-    //         `MeshEntry::material` for the override -> mesh-default
-    //         fallback (:58) -- the v8/v15 class of plugin-crossing surface,
+    //         resolved table, including `MeshEntry::slots` for the override
+    //         -> mesh-default fallback -- the v8/v15 class of plugin-crossing surface,
     //         additive here only because the type is brand new. Runtime
     //         crosses the boundary by POINTER (EngineContext::engine) and,
     //         unlike Batcher2D (v6/v11/v12/v13 above), declares no virtual

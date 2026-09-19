@@ -228,8 +228,8 @@ namespace Arcane
             // (see the block above -- both halves read the live registry, so a
             // resolver that has never swept reports everything unbound and
             // nothing un-REFERENCED). A MeshRenderer's effective material is
-            // the materialOverride -> MeshEntry::material -> white chain
-            // (Render/MeshSubmissionSystem.hpp), and its middle link is only
+            // the materialOverride -> MeshEntry::slots -> white chain
+            // (GpuSceneSync's ResolveRowMaterial, Render/GpuSceneSync.hpp), and its middle link is only
             // knowable AFTER MeshCache has resolved the mesh -- so a
             // material-shaped `meshReferenced` would answer 0 cold and 1 warm,
             // breaking exactly that property. The mesh half of the material
@@ -261,10 +261,10 @@ namespace Arcane
         // the re-resolve draws NOTHING rather than a wrong-looking quad.
         //
         // WHEN THIS MAY BE CALLED IS A LIFETIME CONTRACT, not a preference.
-        // CollectMeshInstances still looks the Guid up in MeshTable to decide
+        // GpuSceneSync still looks the Guid up in MeshTable to decide
         // whether the entity is drawable; MeshCache::Invalidate ERASES that
-        // entry. So this must never land between a host's CollectMeshInstances
-        // sweep and the RenderFrame call that consumes its output. Both call
+        // entry. So this must never land between a host's PrepareSceneForRender
+        // call (Host/GpuSceneHost.hpp) and the RenderFrame call that consumes its output. Both call
         // sites today satisfy that by construction: MeshDocument::Save and
         // MeshDocument::ApplyMeshData run from the editor's document phases
         // (PumpEditorDocuments / DrawEditorUi), which are strictly AFTER phase

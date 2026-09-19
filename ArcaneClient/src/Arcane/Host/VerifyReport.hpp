@@ -186,7 +186,13 @@ namespace Arcane
         // rather than inferring it from pixels; ABSENT on every host that has
         // no view mode (the runtime) and on any run that did not set it. 3..6
         // remain readable by the same rule.
-        static constexpr int kSchemaVersion                = 7;
+        //
+        // Bumped 7 -> 8 by F3 plan 1 T8: the report gained `visibility` (see
+        // SetVisibility) -- the last frame's GPU-scene counts (every live
+        // row, the coarse-visible ones, batches, draws), the fact a 3D
+        // witness asserts on. ABSENT on any run that never set it; 3..7
+        // remain readable by the same rule.
+        static constexpr int kSchemaVersion                = 8;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -444,6 +450,20 @@ namespace Arcane
         // upholds.
         void SetViewMode(std::string mode);
 
+        // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5): the
+        // last frame's GpuSceneFrame::Stats as the host saw them -- `total`
+        // live rows in the GPU-scene mirror (one per drawable mesh section),
+        // `coarseVisible` of them inside the mesh view's widened frustum,
+        // and the `batches` / `draws` the frame emitted. Emitted as a
+        // top-level `visibility` block ONLY when this was called (the same
+        // absence-must-be-absence contract every optional section above
+        // upholds); `gpuVisible` is carried alongside and EQUALS coarseVisible
+        // until plan 2's GPU cull reads its count back. VerifyReport does not
+        // compute these itself: it has no scene to look at, only whatever a
+        // host hands it -- AddCensus's own rule.
+        void SetVisibility(std::uint32_t total, std::uint32_t coarseVisible,
+                           std::uint32_t batches, std::uint32_t draws);
+
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
         // Callable more than once (specs accumulate) -- there is no reset,
@@ -531,6 +551,10 @@ namespace Arcane
         // The view mode (schemaVersion 7) -- m_viewModeSet gates emission.
         bool        m_viewModeSet = false;
         std::string m_viewMode;
+
+        // The visibility counts (schemaVersion 8) -- m_visibilitySet gates emission.
+        bool          m_visibilitySet = false;
+        std::uint32_t m_visTotal = 0, m_visCoarse = 0, m_visBatches = 0, m_visDraws = 0;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

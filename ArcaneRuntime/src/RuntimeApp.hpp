@@ -26,6 +26,7 @@
 #include <Arcane/Material/GlobalParams.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Render/GpuFaultInjector.hpp>   // dev-only --crash-gpu N (kPassName only; the injector is NriDiagnostics::FireFault)
+#include <Arcane/Render/GpuSceneTypes.hpp>   // GpuSceneFrame -- the opaque 3D pass's per-frame frame (F3 plan 1 T8)
 #include <Arcane/Render/Nri/NriGraphContext.hpp>   // the graph vehicle; unconditional
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
@@ -171,16 +172,17 @@ private:
     std::vector<Arcane::PickDrawable>    m_pickDrawables;
     std::vector<std::uint32_t>           m_pickSelectedIds;
 
-    // THE OPAQUE 3D PASS'S PER-FRAME INSTANCE LIST (F2a Task 10). Same
-    // ownership shape as m_pickDrawables just above and for the identical
-    // reason: FrameDesc::mesh -> MeshSceneDesc::instances is a std::span
-    // BORROWED for the duration of the RenderFrame call (MeshNode.hpp), so
-    // the vector it points into must outlive that call -- and RenderGraph
-    // (RuntimeFrame.cpp) is a free function, not a method, so it has nowhere
-    // of its own to keep one. Rebuilt every frame by CollectMeshInstances
-    // (which clears it on entry), reached from RenderGraph through
-    // FrameIo::meshInstances.
-    std::vector<Arcane::MeshInstance>    m_meshInstances;
+    // THE OPAQUE 3D PASS'S PER-FRAME GPU-SCENE FRAME (F2a Task 10; F3 plan 1
+    // T8): the staged rows, the batch table, the indirect args and the
+    // CPU-written visible-index list. Same ownership shape as m_pickDrawables
+    // just above and for the identical reason: FrameDesc::mesh ->
+    // MeshSceneDesc::scene is a POINTER BORROWED for the duration of the
+    // RenderFrame call (MeshNode.hpp), so the object it names must outlive
+    // that call -- and RenderGraph (RuntimeFrame.cpp) is a free function, not
+    // a method, so it has nowhere of its own to keep one. Rebuilt every frame
+    // by PrepareSceneForRender (Host/GpuSceneHost.hpp; its containers are
+    // reused), reached from RenderGraph through FrameIo::gpuSceneFrame.
+    Arcane::GpuSceneFrame                m_gpuSceneFrame;
 
     // THE LAST-FRAME CAPTURE (Task 8: --report wiring). CaptureTail
     // (RuntimeFrame.cpp) fills these on the run's last frame whenever

@@ -9,6 +9,7 @@
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -17,7 +18,6 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
-#include <Arcane/Render/MeshSubmissionSystem.hpp>     // CollectMeshInstances (RenderGraph's opaque 3D pass, F2a Task 10)
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
 
 #include <imgui.h>
@@ -436,6 +436,21 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     // frame's view -- before it the stored view is last frame's -- and before
     // the submit that records against it. Sticky within this Begin() bracket.
     io.gpu->Batch().SetViewProjection(io.runtime->View().ViewProjection());
+
+    // F3 (plan 1 T8): the CPU visible set(s), the GPU-scene sync and the
+    // frame's batches -- AFTER the schedulers (AdvanceSim left WorldTransform
+    // + WorldBounds current) and PushSceneCamera (View() is this frame's),
+    // and BEFORE the SubmitRender just below, whose sprite sweep reads
+    // views[0] through MainVisibleSet. The mesh pass draws with the
+    // perspective scene camera (the SAME guarded path the mesh block below
+    // has always used: a validated ViewTransform or nullopt, never identity),
+    // and culls against it as views[1] when it differs from the sprites'
+    // orthographic view; nullopt = no batch this frame, though the stage
+    // still lands (ruling R-D, see the mesh block).
+    const std::optional<Arcane::ViewTransform> meshView =
+        Arcane::ActivePerspectiveSceneCamera(io.runtime->Registry(), glm::uvec2{ frameWidth, frameHeight });
+    Arcane::PrepareSceneForRender(io.runtime->Registry(), io.runtime->View(), meshView,
+                                  io.graph->Scene(), io.gpuSceneFrame);
     {
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->SetRenderContext(&io.gpu->Batch());
@@ -541,55 +556,41 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
     }
 
     // ============================================================
-    // THE OPAQUE 3D PASS (F2a Task 10) -- this frame's mesh scene, if the
-    // scene the plugin just submitted has one. CollectMeshInstances is the
-    // TESTED sweep (MeshSubmissionSystem.hpp); this call site stays thin on
-    // purpose -- RuntimeFrame.cpp is not compiled into ArcaneTests, so
-    // anything beyond "call the sweep, ask for a camera, decide whether to
-    // arm the pass" would be untested logic living in a host TU.
+    // THE OPAQUE 3D PASS (F2a Task 10; F3 plan 1 T8) -- this frame's mesh
+    // scene: the GpuSceneFrame PrepareSceneForRender built above (a RuntimeApp
+    // member reached through FrameIo, the SAME "must outlive the RenderFrame
+    // call" storage io.pickDrawables is, because MeshSceneDesc::scene is a
+    // pointer borrowed for the duration of that call). This site only hands
+    // it to the graph; RuntimeFrame.cpp is not compiled into ArcaneTests, so
+    // the logic that decides what the frame holds lives in the tested header.
     //
-    // io.meshInstances (a RuntimeApp member reached through FrameIo -- see
-    // that field's own comment) is the SAME "must outlive the RenderFrame
-    // call" storage io.pickDrawables is just above, for the same reason:
-    // MeshSceneDesc::instances is a span borrowed for the duration of that
-    // call.
-    Arcane::CollectMeshInstances(io.runtime->Registry(), io.meshInstances);
-
     // `meshScene` only needs to outlive `io.graph->RenderFrame(graphFrame)`
-    // below, which happens inside THIS function call -- unlike the instance
-    // vector above, a RenderGraph-local is enough for it, and graphFrame.mesh
-    // is left null (its default) unless both an instance and a camera exist.
+    // below, which happens inside THIS function call -- a RenderGraph-local
+    // is enough for it. THE GATE IS Empty(), NOT HasDraws() (ruling R-D): a
+    // frame whose meshes are all culled, or with no perspective camera at
+    // all, can still carry staged rows or a full rebuild, and the mirror's
+    // lastModel history has already advanced past them -- the pass must
+    // declare itself so GpuSceneSyncNode uploads them; MeshNode then records
+    // only its depth clear. Without a mesh view the matrices stay at their
+    // defaults (no batch reads them). graphFrame.mesh is left null (its
+    // default) for an Empty() scene, the "ask for the frame WITHOUT this
+    // stage" mechanism FrameDesc documents.
     Arcane::MeshSceneDesc meshScene;
-    if (!io.meshInstances.empty())
+    meshScene.scene = &io.gpuSceneFrame;
+    if (meshView)
     {
-        // THE GUARDED PATH ONLY -- MeshSceneDesc's own comment (MeshNode.hpp)
-        // is explicit that the caller owes valid matrices, and
-        // ActivePerspectiveSceneCamera is the one function that either hands
-        // back a validated (view, projection) pair or nullopt, never
-        // identity. No active perspective camera means there is nothing to
-        // draw the pass WITH, so graphFrame.mesh stays null below -- the same
-        // "leave it alone rather than invent a viewpoint" contract
-        // ActiveSceneCamera documents for the 2D path (SceneCamera.hpp).
-        //
-        // The viewport is handed over whole (F4 plan 1 T3): the sweep derives
-        // the aspect itself and answers nullopt for a zero-height frame.
-        if (const auto cam = Arcane::ActivePerspectiveSceneCamera(
-                io.runtime->Registry(), glm::uvec2{ frameWidth, frameHeight }))
-        {
-            meshScene.instances = io.meshInstances;
-            meshScene.view       = cam->view;
-            meshScene.projection = cam->projection;
-            // NO SCENE LIGHT, DELIBERATELY: this engine has no light
-            // component anywhere -- Scene/Components.hpp declares none and
-            // SceneModule.hpp registers none -- so lightDirection/
-            // lightColor/ambient are left at MeshSceneDesc's own documented
-            // defaults (MeshNode.hpp:237-239). A light component is future
-            // work and out of scope for F2a; inventing one here would land
-            // an unreviewed scene-schema change in a host .cpp with zero
-            // test coverage rather than in a reviewed, tested component.
-            graphFrame.mesh = &meshScene;
-        }
+        meshScene.view       = meshView->view;
+        meshScene.projection = meshView->projection;
     }
+    // NO SCENE LIGHT, DELIBERATELY: this engine has no light component
+    // anywhere -- Scene/Components.hpp declares none and SceneModule.hpp
+    // registers none -- so lightDirection/lightColor/ambient are left at
+    // MeshSceneDesc's own documented defaults (MeshNode.hpp). A light
+    // component is future work; inventing one here would land an unreviewed
+    // scene-schema change in a host .cpp with zero test coverage rather than
+    // in a reviewed, tested component.
+    if (!meshScene.Empty())
+        graphFrame.mesh = &meshScene;
 
     graphFrame.batch = &io.gpu->Batch();
     // The scene post chain as BYTES (SceneRenderResolver::PostDesc).

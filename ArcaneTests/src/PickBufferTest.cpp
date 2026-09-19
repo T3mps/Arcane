@@ -144,7 +144,7 @@ namespace
     }
 
     // Transform + WorldTransform + MeshRenderer{ mesh } at `pos`, unturned, unit
-    // scale -- the MeshRenderer entity CollectMeshInstances would draw once the
+    // scale -- the MeshRenderer entity GpuSceneSync would stage once the
     // guid resolves through the MeshTable.
     Astra::Entity AddMesh(Astra::Registry& reg, Arcane::Guid mesh, glm::vec3 pos)
     {

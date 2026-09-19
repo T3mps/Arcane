@@ -68,7 +68,7 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     // package, which parses this file without linking the engine -- so the
     // version is part of the contract, not decoration -- bumped to 2 by
     // Task 8's --compare/--bless block.
-    CHECK(doc["schemaVersion"] == 7);
+    CHECK(doc["schemaVersion"] == 8);
     CHECK(doc["backend"] == "D3D12");
     CHECK(doc["mode"] == "headless");
     CHECK(doc["framesRendered"] == 5);
@@ -207,6 +207,32 @@ TEST_CASE("verify: a census probe reads AddCensus's data when set, and refuses w
         CHECK(probeValue["spriteReferenced"] == 4);
         CHECK(probeValue["meshBound"] == 1);
     }
+}
+
+// ---- F3 plan 1 T8: schemaVersion 8 -- `visibility` ----
+// The hosts' GpuSceneFrame::Stats, carried beside the census so a headless
+// witness can assert "the 3D scene had N drawables, M coarse-visible, K
+// batches". gpuVisible == coarseVisible until plan 2's GPU cull reads back.
+
+TEST_CASE("VerifyReport: SetVisibility emits the visibility block", "[verify]")
+{
+    Arcane::VerifyReport report;
+    report.SetRun("d3d12", 1, "frames");
+    report.SetVisibility(12, 7, 3, 3);
+    const nlohmann::json j = nlohmann::json::parse(report.ToJson());
+    REQUIRE(j.contains("visibility"));
+    CHECK(j["visibility"]["total"] == 12);
+    CHECK(j["visibility"]["coarseVisible"] == 7);
+    CHECK(j["visibility"]["gpuVisible"] == 7);
+    CHECK(j["visibility"]["batches"] == 3);
+    CHECK(j["visibility"]["draws"] == 3);
+
+    // Absence must be absence (the contract capture/census/compare/settle/
+    // viewMode keep): a report that never saw a frame carries no block a
+    // consumer could mistake for a measured empty scene.
+    Arcane::VerifyReport silent;
+    silent.SetRun("d3d12", 1, "frames");
+    CHECK_FALSE(nlohmann::json::parse(silent.ToJson()).contains("visibility"));
 }
 
 TEST_CASE("verify: a pick probe is an honest refusal when SetPick was never called -- no fabricated entity id", "[verify]")
@@ -656,7 +682,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
     in.close();
 
     const auto doc = nlohmann::json::parse(contents.str());
-    CHECK(doc["schemaVersion"] == 7);
+    CHECK(doc["schemaVersion"] == 8);
     CHECK(doc["framesRendered"] == 3);
 
     std::remove(path.c_str());
@@ -680,7 +706,7 @@ TEST_CASE("verify: the report schema is version 6 once settle facts exist", "[ve
     Arcane::VerifyReport r;
     r.SetRun("dx12", 60, "frames-complete");
     const auto doc = nlohmann::json::parse(r.ToJson());
-    CHECK(doc["schemaVersion"] == 7);
+    CHECK(doc["schemaVersion"] == 8);
 }
 
 TEST_CASE("verify: a run with no --compare emits NO compare block", "[verify]")
@@ -769,7 +795,7 @@ TEST_CASE("verify: a --bless run's compare block reports a pass at the level it 
 
 // ---- Task 3: schemaVersion 3 -- the settle facts, and the headless mode ----
 
-TEST_CASE("verify report: schemaVersion 7 carries settle facts and the headless mode", "[verify]")
+TEST_CASE("verify report: schemaVersion 8 carries settle facts and the headless mode", "[verify]")
 {
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
@@ -777,7 +803,7 @@ TEST_CASE("verify report: schemaVersion 7 carries settle facts and the headless 
                 /*captureFailed=*/false);
     const auto doc = nlohmann::json::parse(r.ToJson());
 
-    CHECK(doc["schemaVersion"] == 7);
+    CHECK(doc["schemaVersion"] == 8);
     // The MODE's machine-readable name, in the mode's own word. Changed on this
     // bump because a schemaVersion bump is exactly when a wire value may change.
     CHECK(doc["mode"] == "headless");
@@ -882,26 +908,27 @@ TEST_CASE("verify report: captureFailed alone is not a verdict", "[verify]")
     CHECK_FALSE(doc.contains("settleBailReason"));
 }
 
-TEST_CASE("verify report: schemaVersion is 7 and declares a supported range", "[host][verify]")
+TEST_CASE("verify report: schemaVersion is 8 and declares a supported range", "[host][verify]")
 {
     // A RANGE plus a predicate, not a bare number: a consumer across the
-    // Servitor boundary can then say "I understand 3..7" rather than "I
-    // understand 7", and an unreadable result can be marked deliberately.
-    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 7);
+    // Servitor boundary can then say "I understand 3..8" rather than "I
+    // understand 8", and an unreadable result can be marked deliberately.
+    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 8);
     STATIC_REQUIRE(Arcane::VerifyReport::kOldestSupportedSchemaVersion == 3);
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(3));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(4));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(5));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(6));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(7));
+    CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(8));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(2));
-    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(8));
+    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(9));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(0));
 
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
     const auto j = nlohmann::json::parse(r.ToJson());
-    CHECK(j.at("schemaVersion").get<int>() == 7);
+    CHECK(j.at("schemaVersion").get<int>() == 8);
 }
 
 TEST_CASE("verify report: compare carries maxLocalDifference", "[host][verify]")
@@ -937,7 +964,7 @@ TEST_CASE("schema 5: compare block carries triedPaths in try order", "[host][ver
                  { "Verify/References/vulkan/runtime-scene.png",
                    "Verify/References/runtime-scene.png" });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 7);
+    REQUIRE(j["schemaVersion"].get<int>() == 8);
     REQUIRE(j["compare"]["triedPaths"].size() == 2);
     REQUIRE(j["compare"]["triedPaths"][0].get<std::string>()
             == "Verify/References/vulkan/runtime-scene.png");
@@ -958,7 +985,7 @@ TEST_CASE("schema 6: worlds carries one entry per live world, in host order", "[
     r.SetRun("vulkan", 60, "frames-complete");
     r.SetWorlds({ { "Client", false, 3, 2 }, { "DedicatedServer", true, 3, 3 } });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 7);
+    REQUIRE(j["schemaVersion"].get<int>() == 8);
     REQUIRE(j.contains("worlds"));
     REQUIRE(j["worlds"].size() == 2);
     CHECK(j["worlds"][0].at("role") == "Client");
@@ -986,7 +1013,7 @@ TEST_CASE("schema 7: viewMode carries the editor camera's resolved mode, absent 
     r.SetRun("D3D12", 60, "frames-complete");
     r.SetViewMode("perspective");
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 7);
+    REQUIRE(j["schemaVersion"].get<int>() == 8);
     REQUIRE(j.contains("viewMode"));
     CHECK(j.at("viewMode") == "perspective");
 

@@ -222,7 +222,7 @@ namespace Arcane
         // albedo` now lives on `Arcane::ResolvedMeshMaterial`
         // (Scene/SceneResources.hpp), resolved into a slot by
         // NriGraphContext::ResolveMeshAlbedoSlot and copied onto this field
-        // by CollectMeshInstances (Render/MeshSubmissionSystem.hpp).
+        // by the retired CollectMeshInstances sweep (F2a Task 5, gone in F3 plan 1 T8).
         //
         // SINCE F3 PLAN 1 T7 this travels as the row's own `materialSlot`
         // field (GpuInstance, a plain uint the shader reads by row) -- the

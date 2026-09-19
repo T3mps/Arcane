@@ -17,7 +17,7 @@
 // widened by kVisibilitySlack metres before every test -- conservative, one
 // constant. Plan 2's GPU cull uses the SAME widened planes (VisibleSet::frustum).
 //
-// HEADER-ONLY, device-free (the CollectMeshInstances idiom): ArcaneTests
+// HEADER-ONLY, device-free (the GpuSceneSync idiom): ArcaneTests
 // drives it under ~[gpu]. No spatial structure -- the trigger is a measured
 // BuildVisibleSet above 0.5 ms (spec s4).
 #include <Arcane/Math/Aabb.hpp>

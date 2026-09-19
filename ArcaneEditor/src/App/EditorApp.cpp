@@ -2967,6 +2967,15 @@ namespace Arcane::Editor
                                   census.meshReferenced, census.meshBound);
             }
 
+            // THE VISIBILITY COUNTS (schemaVersion 8, F3 plan 1 T8): the last
+            // viewport frame's GpuSceneFrame::Stats -- every live GPU-scene
+            // row, the coarse-visible ones against the mesh view, the batches
+            // and draws emitted. Carried unconditionally like the census: a
+            // 2D scene honestly reports zeros, and a 3D scene that culled
+            // everything reports total > 0 with coarseVisible == 0.
+            report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
+                                 m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws);
+
             // The WORLD SET (schemaVersion 6, Core-DLL split plan 1 Task 7). A
             // process is no longer a world: --play-as embedded-server runs the
             // editor's world as a Client beside a DedicatedServer one, and from

@@ -26,8 +26,8 @@
 // this window the instant it lands. The SCENE is the other story, and it is
 // not this document's preview at all: SceneRenderResolver owns a live
 // MeshCache (Host/SceneRenderResolver.cpp) whose published MeshTable both
-// hosts sweep every frame through CollectMeshInstances (EditorAppFrame.cpp:
-// 1586, RuntimeFrame.cpp:379), and MeshCache::Request memoises per Guid --
+// hosts sweep every frame through GpuSceneSync (PrepareSceneForRender in
+// EditorAppFrame.cpp / RuntimeFrame.cpp), and MeshCache::Request memoises per Guid --
 // entries leave only via Invalidate/Clear. So a save or an undo that
 // invalidates nothing leaves every MeshRenderer in the open scene drawing the
 // PRE-edit geometry until the project is switched.
@@ -38,8 +38,8 @@
 // undo the user cannot see in the scene is indistinguishable from an undo
 // that did not happen."
 //
-// This block used to argue the opposite -- that CollectMeshInstances had no
-// call site outside tests and no live cache existed. Both were true when
+// This block used to argue the opposite -- that the mesh sweep (then
+// CollectMeshInstances) had no call site outside tests and no live cache existed. Both were true when
 // Task 9 wrote it and Task 10 falsified both; the note stays so the old
 // conclusion is not re-derived from the same (now wrong) premise.
 //
