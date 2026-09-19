@@ -632,7 +632,15 @@ In order of authority:
 **Executor rulings, plan 1 (2026-09-18, ledgered in the plan's progress notes):**
 R-A `AddMeshNode` declares `gpuscene-sync` before `mesh` itself, so the
 copy -> read barriers are the graph's; R-B the scene grows at declaration time
-(`GpuScene::Reserve`, before the imports), never inside `Record`; R-C
+(`GpuScene::Reserve`, before the imports), never inside `Record` -- amended in
+T6: `Reserve` PARKS the retired buffers stamped with `CurrentFence()`
+(`DebugSubmitCount() + 1`, the fence this frame's submit signals) and
+`GpuScene::FlushGraves` buries them right after a successful `Execute`, since
+`Graveyard::Bury` asserts nondecreasing fences and `Execute` itself buries at
+`DebugSubmitCount()` mid-run; the old -> new live-row copy is issued at the
+top of `Apply` behind an explicit SHADER_RESOURCE -> COPY_SOURCE barrier on
+the old buffer and a COPY_DST -> COPY_DST barrier on the new one before the
+staged rows land; R-C
 `GpuScene.hpp` carries the `ARCANE_API` declaration of `GpuSceneSyncedGeneration`
 so its definition exports; R-D the mesh node is declared whenever the stage has rows
 (or a full rebuild is pending), not only when a batch emits -- a drawless
