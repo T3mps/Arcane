@@ -790,16 +790,23 @@ namespace Arcane
         // 2. The ad-hoc instances (F3 plan 1 T7): resolved the same way, AND
         //    staged as GpuInstance rows for the sync node's scratch region --
         //    built even with a null cache, since they are the sync node's
-        //    input regardless of whether anything can be drawn. Capped at the
-        //    scratch capacity: GpuScene::Reserve warns once for the overflow
-        //    and Apply clamps to the same count, so row i here IS scratch row
-        //    i on the device (Record's pushRoot depends on that).
+        //    input regardless of whether anything can be drawn. CAPPED at the
+        //    scratch capacity HERE, and the overflow WARNED HERE, once: the
+        //    sync node only ever sees the capped span, so GpuScene::Reserve's
+        //    own `adHocCount > kScratchRows` guard can never fire on this
+        //    path (it stays as a second line of defence for any other
+        //    caller). Row i here IS scratch row i on the device -- Apply
+        //    copies the span contiguously and Record's pushRoot depends on it.
+        std::size_t dropped = 0;
         for (const MeshInstance& instance : scene.instances)
         {
             if (instance.mesh.IsNil())
                 continue;   // an empty slot is not an error -- see MeshInstance::mesh
             if (m_adHocRows.size() >= GpuScene::kScratchRows)
-                break;
+            {
+                ++dropped;
+                continue;   // counted, not staged -- the WARN below names the total
+            }
             resolveOnce(instance.mesh);
 
             GpuInstance row;
@@ -816,6 +823,14 @@ namespace Arcane
             row.materialSlot = instance.materialSlot;
             m_adHocRows.push_back(row);
             m_adHocDraws.push_back(AdHocDraw{ instance.mesh, instance.indexOffset, instance.indexCount });
+        }
+        if (dropped > 0 && !m_warnedScratchOverflow)
+        {
+            m_warnedScratchOverflow = true;
+            ARC_WARN("[nri-graph] MeshNode: {} ad-hoc instance(s) exceed the {} scratch rows per frame slot "
+                     "(GpuScene::kScratchRows) and are DROPPED this frame -- the first {} are drawn; further "
+                     "occurrences are silent",
+                     dropped, GpuScene::kScratchRows, GpuScene::kScratchRows);
         }
     }
 

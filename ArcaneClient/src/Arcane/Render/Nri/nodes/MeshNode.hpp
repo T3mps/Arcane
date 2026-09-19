@@ -157,7 +157,9 @@ namespace Arcane
     // converts each one into a GpuInstance (AdHocRows()), AddMeshNode hands
     // that span to GpuSceneSyncNode, which copies it into the slot's scratch
     // region ahead of the pass. Beyond kScratchRows per frame the rest are
-    // DROPPED (GpuScene::Reserve warns once).
+    // DROPPED -- by Prepare, which is also what WARNS, once per node (the
+    // sync node only ever sees the capped span, so GpuScene::Reserve's own
+    // overflow guard cannot fire on this path).
     //
     // Registry-backed entities do NOT come through here any more: they are
     // rows of the GPU scene (GpuSceneSync -> BuildGpuSceneFrame ->
@@ -421,7 +423,8 @@ namespace Arcane
         // "missing pipeline" warning that named the wrong cause.
         //
         // SINCE F3 PLAN 1 T7 this ALSO builds AdHocRows(): every ad-hoc
-        // instance (`scene.instances`, capped at GpuScene::kScratchRows) is
+        // instance (`scene.instances`, capped at GpuScene::kScratchRows --
+        // the overflow is dropped and WARNED once, here, naming the count) is
         // converted to a GpuInstance -- model, NormalMatrixFor(model)'s
         // columns, baseColor, materialSlot -- and its draw range remembered,
         // so AddMeshNode can hand the rows to GpuSceneSyncNode (which copies
@@ -699,8 +702,9 @@ namespace Arcane
 
         // One WARN/ERROR each, not one per instance per frame, for the
         // degradations a reader must be able to see.
-        bool m_warnedNoPipeline    = false;
-        bool m_warnedBadCamera     = false;
+        bool m_warnedNoPipeline      = false;
+        bool m_warnedBadCamera       = false;
+        bool m_warnedScratchOverflow = false;   // Prepare: ad-hoc instances past kScratchRows dropped
     };
 
     // Declares the opaque mesh node into `graph` and hands back the

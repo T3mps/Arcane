@@ -36,9 +36,19 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>
 #include <Arcane/Scene/SceneCamera.hpp>
 
+#include <Arcane/Render/Nri/GpuScene.hpp>   // GpuScene::kScratchRows -- the ad-hoc overflow pin
+
+#include <spdlog/sinks/callback_sink.h>
+#include <Arcane/Base/Log.hpp>
+
+#undef ERROR
+
 #include <glm/glm.hpp>
 #include <glm/gtc/epsilon.hpp>
 #include <glm/gtc/matrix_transform.hpp>   // glm::scale
+
+#include <algorithm>
+#include <string>
 
 #include <cmath>
 #include <cstddef>       // offsetof -- the MeshRootConstants pin
@@ -307,6 +317,76 @@ TEST_CASE("pixel: a cube drawn from the resident cache matches the ring's own pi
                        << result.errorMessage);
     CHECK(result.passed);
     CHECK(Arcane::RenderErrorCount() == before);
+}
+
+// F3 plan 1 T7, review round 1: ad-hoc instances past GpuScene::kScratchRows
+// are DROPPED by MeshNode::Prepare (the sync node only ever sees the capped
+// span, so GpuScene::Reserve's own overflow guard cannot fire on this path)
+// and Prepare WARNS for it exactly ONCE per node, naming the dropped count.
+// NOT device-free: MeshNode is only constructible through Create(context),
+// so this rides the D3D12 parity vehicle and asserts on the log directly
+// (the AttachLogCapture idiom from BindlessTableTest.cpp).
+TEST_CASE("mesh node: ad-hoc instances past kScratchRows are dropped by Prepare with ONE warn",
+          "[gpu][meshnode][mesh][node]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto ctx = MakeParityContext();
+    const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+    const Arcane::Guid cubeId{ 1, 1 };
+    ctx->SetMeshSupply(
+        [&](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+        {
+            if (id == cubeId)
+                return { &cube, Arcane::MeshResolveState::Ready };
+            return { nullptr, Arcane::MeshResolveState::Failed };
+        });
+
+    constexpr std::size_t kOver = 3;
+    std::vector<Arcane::MeshInstance> instances(Arcane::GpuScene::kScratchRows + kOver);
+    for (Arcane::MeshInstance& i : instances)
+        i.mesh = cubeId;
+    // A nil-mesh instance is skipped BEFORE the cap and must not count as dropped.
+    instances.push_back(Arcane::MeshInstance{});
+
+    Arcane::MeshSceneDesc scene;
+    scene.instances = instances;
+    const float aspect = static_cast<float>(kParityW) / static_cast<float>(kParityH);
+    scene.view = glm::lookAtRH(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    scene.projection = Arcane::PerspectiveProjection(60.0f, aspect, 0.1f, 100.0f);
+
+    int overflowWarns = 0;
+    std::string lastOverflow;
+    auto sink = std::make_shared<spdlog::sinks::callback_sink_mt>(
+        [&](const spdlog::details::log_msg& m)
+        {
+            const std::string text(m.payload.data(), m.payload.size());
+            if (text.find("scratch rows") != std::string::npos && text.find("MeshNode") != std::string::npos)
+            {
+                ++overflowWarns;
+                lastOverflow = text;
+            }
+        });
+    Arcane::Log::Engine()->sinks().push_back(sink);
+
+    // TWO frames with the same overflow: the WARN is once per NODE, not per frame.
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        Arcane::NriGraphContext::FrameDesc fd;
+        fd.mesh = &scene;
+        REQUIRE(ctx->RenderFrameOffscreen(fd) == Arcane::NriGraphContext::FrameOutcome::Presented);
+        REQUIRE(ctx->Mesh() != nullptr);
+        CHECK(ctx->Mesh()->AdHocRows().size() == Arcane::GpuScene::kScratchRows);   // capped, never more
+    }
+
+    auto& sinks = Arcane::Log::Engine()->sinks();
+    sinks.erase(std::remove(sinks.begin(), sinks.end(), sink), sinks.end());
+
+    CHECK(overflowWarns == 1);
+    CHECK(lastOverflow.find(std::to_string(kOver) + " ad-hoc instance") != std::string::npos);
+    CHECK(lastOverflow.find(std::to_string(Arcane::GpuScene::kScratchRows) + " scratch rows") != std::string::npos);
+    CHECK(Arcane::RenderErrorCount() == before);   // a drop is a WARN, never a latched error
 }
 
 TEST_CASE("pixel: an instance whose mesh is not resident is SKIPPED, not drawn wrong",
