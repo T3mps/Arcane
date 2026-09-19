@@ -34,6 +34,7 @@
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/RenderDeviceDesc.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
+#include <Arcane/Render/ShaderPaths.hpp>
 #include <Arcane/Scene/SceneCamera.hpp>
 
 #include <Arcane/Render/Nri/GpuScene.hpp>   // GpuScene::kScratchRows -- the ad-hoc overflow pin
@@ -52,6 +53,7 @@
 
 #include <cmath>
 #include <cstddef>       // offsetof -- the MeshRootConstants pin
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -233,6 +235,38 @@ TEST_CASE("MeshRootConstants is the 8-byte {firstOutput, flags} block", "[mesh][
     CHECK(defaults.flags == 0u);
 }
 
+TEST_CASE("mesh node: blend and sidedness select all six fixed pipeline states", "[mesh][node]")
+{
+    using Blend = Arcane::MaterialBlendMode;
+    using Pixel = Arcane::MeshPixelShader;
+
+    const struct
+    {
+        Blend blend;
+        bool twoSided;
+        Pixel pixel;
+        Arcane::NriPipelineCache::GraphicsKey::Blend pipelineBlend;
+        bool depthWrite;
+        nri::CullMode cull;
+    } cases[] = {
+        { Blend::Opaque, false, Pixel::Opaque,      Arcane::NriPipelineCache::GraphicsKey::Blend::Opaque,    true,  nri::CullMode::BACK },
+        { Blend::Opaque, true,  Pixel::Opaque,      Arcane::NriPipelineCache::GraphicsKey::Blend::Opaque,    true,  nri::CullMode::NONE },
+        { Blend::Masked, false, Pixel::Masked,      Arcane::NriPipelineCache::GraphicsKey::Blend::Opaque,    true,  nri::CullMode::BACK },
+        { Blend::Masked, true,  Pixel::Masked,      Arcane::NriPipelineCache::GraphicsKey::Blend::Opaque,    true,  nri::CullMode::NONE },
+        { Blend::Transparent, false, Pixel::Transparent, Arcane::NriPipelineCache::GraphicsKey::Blend::AlphaOver, false, nri::CullMode::BACK },
+        { Blend::Transparent, true,  Pixel::Transparent, Arcane::NriPipelineCache::GraphicsKey::Blend::AlphaOver, false, nri::CullMode::NONE },
+    };
+
+    for (const auto& c : cases)
+    {
+        const Arcane::MeshPipelineState state = Arcane::MeshNode::PipelineStateFor(c.blend, c.twoSided);
+        CHECK(state.pixel == c.pixel);
+        CHECK(state.blend == c.pipelineBlend);
+        CHECK(state.depthWrite == c.depthWrite);
+        CHECK(state.cullMode == c.cull);
+    }
+}
+
 namespace
 {
     constexpr std::uint32_t kParityW = 160;
@@ -259,6 +293,61 @@ namespace
         REQUIRE(ctx != nullptr);
         return ctx;
     }
+
+    class ScopedEnvironmentValue
+    {
+    public:
+        ScopedEnvironmentValue(const char* name, const std::string& value) : m_name(name)
+        {
+            if (const char* old = std::getenv(name))
+            {
+                m_hadOld = true;
+                m_old = old;
+            }
+            _putenv_s(name, value.c_str());
+        }
+
+        ~ScopedEnvironmentValue()
+        {
+            _putenv_s(m_name, m_hadOld ? m_old.c_str() : "");
+        }
+
+    private:
+        const char* m_name = nullptr;
+        bool m_hadOld = false;
+        std::string m_old;
+    };
+}
+
+TEST_CASE("mesh node: creation refuses when a fixed required shader artifact is missing", "[gpu][meshnode]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+
+    const std::filesystem::path source = Arcane::ShaderPaths::ResolveFlavorDir(
+        Arcane::GraphicsBackend::D3D12, "data/shaders");
+    REQUIRE_FALSE(source.empty());
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "arcane-task3-missing-mesh-artifact";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root / "dxil");
+    std::filesystem::copy(source, root / "dxil", std::filesystem::copy_options::recursive);
+    REQUIRE(std::filesystem::remove(root / "dxil" / "mesh_masked_ps.bin"));
+
+    Arcane::RenderDeviceDesc desc;
+    desc.backend = Arcane::GraphicsBackend::D3D12;
+    auto native = Arcane::NativeDeviceOwner::Create(desc);
+    REQUIRE(native != nullptr);
+    auto nri = Arcane::NriDevice::Wrap(*native);
+    REQUIRE(nri != nullptr);
+    Arcane::HostConfig config;
+    config.backend = Arcane::GraphicsBackend::D3D12;
+    {
+        const ScopedEnvironmentValue shaderDir("ARCANE_SHADER_DIR", root.string());
+        CHECK(Arcane::NriGraphContext::CreateOffscreen(config, *nri, 16, 16, {}) == nullptr);
+    }
+
+    std::filesystem::remove_all(root, ec);
 }
 
 TEST_CASE("pixel: a cube drawn from the resident cache matches the ring's own pixels",

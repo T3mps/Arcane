@@ -695,6 +695,8 @@ namespace Arcane
         // Straight (non-premultiplied) alpha: SrcAlpha/InvSrcAlpha colour,
         // One/InvSrcAlpha alpha.
         key.blend           = NriPipelineCache::GraphicsKey::Blend::AlphaOver;
+        key.depthWrite      = false;
+        key.cullMode        = nri::CullMode::NONE;
 
         // `stages` lives in THIS frame, which encloses the GetGraphics call --
         // the fill contract's rule 2. The bytecode it points at is owned by the
@@ -718,7 +720,6 @@ namespace Arcane
             // own sort key, and Triangle()/Line() deliberately emit whatever
             // winding the caller's points imply (Batcher2D.hpp).
             desc.rasterization.fillMode = nri::FillMode::SOLID;
-            desc.rasterization.cullMode = nri::CullMode::NONE;
         });
     }
 
@@ -1257,6 +1258,8 @@ namespace Arcane
             key.depthFormat     = nri::Format::UNKNOWN;
             key.topology        = nri::Topology::TRIANGLE_LIST;
             key.blend           = NriPipelineCache::GraphicsKey::Blend::AlphaOver;
+            key.depthWrite      = false;
+            key.cullMode        = nri::CullMode::NONE;
 
             nri::ShaderDesc stages[2] = {};
             stages[0].stage          = nri::StageBits::VERTEX_SHADER;
@@ -1274,7 +1277,6 @@ namespace Arcane
                     desc.shaders     = stages;
                     desc.shaderNum   = 2;
                     desc.rasterization.fillMode = nri::FillMode::SOLID;
-                    desc.rasterization.cullMode = nri::CullMode::NONE;
                 });
             if (!slot->pipeline)
             {

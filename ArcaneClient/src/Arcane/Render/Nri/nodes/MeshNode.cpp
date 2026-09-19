@@ -40,6 +40,35 @@ namespace Arcane
         // INVARIANT compile-shaders.bat states at the top of itself.
         constexpr const char* kMeshVs = "mesh_vs";
         constexpr const char* kMeshPs = "mesh_ps";
+        constexpr const char* kMeshMaskedPs = "mesh_masked_ps";
+        constexpr const char* kMeshTransparentPs = "mesh_transparent_ps";
+        constexpr const char* kMeshMaskedPsEntry = "ps_masked_main";
+        constexpr const char* kMeshTransparentPsEntry = "ps_transparent_main";
+
+        [[nodiscard]] constexpr std::uint64_t ShaderPairId(MeshPixelShader pixel) noexcept
+        {
+            // One vertex artifact plus the concrete offline pixel artifact.
+            // These ids are stable labels for the actual bytecode identity,
+            // not a runtime blend/cull define folded into an opaque value.
+            switch (pixel)
+            {
+                case MeshPixelShader::Opaque:      return 0x50000001ull; // mesh_vs + mesh_ps
+                case MeshPixelShader::Masked:      return 0x50000002ull; // mesh_vs + mesh_masked_ps
+                case MeshPixelShader::Transparent: return 0x50000003ull; // mesh_vs + mesh_transparent_ps
+            }
+            return 0x50000001ull;
+        }
+
+        [[nodiscard]] constexpr const char* PixelEntry(MeshPixelShader pixel) noexcept
+        {
+            switch (pixel)
+            {
+                case MeshPixelShader::Opaque:      return kPsEntry;
+                case MeshPixelShader::Masked:      return kMeshMaskedPsEntry;
+                case MeshPixelShader::Transparent: return kMeshTransparentPsEntry;
+            }
+            return kPsEntry;
+        }
 
         // THE DEPTH CLEAR. 1.0 is "far" under the engine's FORWARD-Z, [0,1]
         // convention (SceneCamera.hpp's DEPTH CONVENTION block -- reverse-Z is
@@ -122,6 +151,42 @@ namespace Arcane
         return node;
     }
 
+    MeshPipelineState MeshNode::PipelineStateFor(MaterialBlendMode blend, bool twoSided) noexcept
+    {
+        MeshPipelineState state;
+        state.cullMode = twoSided ? nri::CullMode::NONE : nri::CullMode::BACK;
+        switch (blend)
+        {
+            case MaterialBlendMode::Opaque:
+                state.pixel      = MeshPixelShader::Opaque;
+                state.blend      = NriPipelineCache::GraphicsKey::Blend::Opaque;
+                state.depthWrite = true;
+                break;
+            case MaterialBlendMode::Masked:
+                state.pixel      = MeshPixelShader::Masked;
+                state.blend      = NriPipelineCache::GraphicsKey::Blend::Opaque;
+                state.depthWrite = true;
+                break;
+            case MaterialBlendMode::Transparent:
+                state.pixel      = MeshPixelShader::Transparent;
+                state.blend      = NriPipelineCache::GraphicsKey::Blend::AlphaOver;
+                state.depthWrite = false;
+                break;
+        }
+        return state;
+    }
+
+    std::size_t MeshNode::PipelineIndex(MaterialBlendMode blend, bool twoSided) noexcept
+    {
+        switch (blend)
+        {
+            case MaterialBlendMode::Opaque:      return twoSided ? 1u : 0u;
+            case MaterialBlendMode::Masked:      return twoSided ? 3u : 2u;
+            case MaterialBlendMode::Transparent: return twoSided ? 5u : 4u;
+        }
+        return 0;
+    }
+
     bool MeshNode::Init(NriGraphContext& context)
     {
         m_device    = &context.Device();
@@ -149,11 +214,16 @@ namespace Arcane
         }
 
         m_vs = context.ShaderBytecode(kMeshVs);
-        m_ps = context.ShaderBytecode(kMeshPs);
-        if (m_vs.empty() || m_ps.empty())
+        m_ps[static_cast<std::size_t>(MeshPixelShader::Opaque)] = context.ShaderBytecode(kMeshPs);
+        m_ps[static_cast<std::size_t>(MeshPixelShader::Masked)] = context.ShaderBytecode(kMeshMaskedPs);
+        m_ps[static_cast<std::size_t>(MeshPixelShader::Transparent)] = context.ShaderBytecode(kMeshTransparentPs);
+        if (m_vs.empty()
+            || m_ps[static_cast<std::size_t>(MeshPixelShader::Opaque)].empty()
+            || m_ps[static_cast<std::size_t>(MeshPixelShader::Masked)].empty()
+            || m_ps[static_cast<std::size_t>(MeshPixelShader::Transparent)].empty())
         {
-            ARC_ERROR("[nri-graph] MeshNode: shader bin '{}'/'{}' is missing -- the opaque mesh "
-                      "pass cannot be built", kMeshVs, kMeshPs);
+            ARC_ERROR("[nri-graph] MeshNode: required shader artifact is missing -- expected '{}', '{}', '{}', and '{}'",
+                      kMeshVs, kMeshPs, kMeshMaskedPs, kMeshTransparentPs);
             return false;
         }
 
@@ -669,13 +739,15 @@ namespace Arcane
             m_arena = nullptr;
         }
 
-        m_pipeline = nullptr;   // owned by the shared cache; the vehicle clears it
+        for (nri::Pipeline*& pipeline : m_pipeline)
+            pipeline = nullptr;   // owned by the shared cache; the vehicle clears it
     }
 
-    nri::Pipeline* MeshNode::PipelineFor(nri::Format canvasFormat)
+    nri::Pipeline* MeshNode::PipelineFor(nri::Format canvasFormat, MaterialBlendMode blend, bool twoSided)
     {
+        const MeshPipelineState state = PipelineStateFor(blend, twoSided);
         NriPipelineCache::GraphicsKey key = {};
-        key.shaderPairId    = kShaderPairId;
+        key.shaderPairId    = ShaderPairId(state.pixel);
         key.layoutId        = m_layoutId;
         key.colorFormats[0] = canvasFormat;
         key.colorCount      = 1;
@@ -686,10 +758,9 @@ namespace Arcane
         // backends.
         key.depthFormat     = kGraphDepthFormat;
         key.topology        = nri::Topology::TRIANGLE_LIST;
-        // OPAQUE. The pass writes depth, so blending would be order-dependent
-        // against a depth test that is order-INdependent -- the two do not
-        // combine. Transparency is a separate pass, and not this slice's.
-        key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
+        key.blend           = state.blend;
+        key.depthWrite      = state.depthWrite;
+        key.cullMode        = state.cullMode;
 
         // `stages` lives in THIS frame, which encloses the GetGraphics call --
         // the fill contract's rule 2. The bytecode it points at is owned by the
@@ -701,9 +772,10 @@ namespace Arcane
         stages[0].size           = m_vs.size();
         stages[0].entryPointName = kVsEntry;   // SPIR-V matches by name; DXIL ignores it
         stages[1].stage          = nri::StageBits::FRAGMENT_SHADER;
-        stages[1].bytecode       = m_ps.data();
-        stages[1].size           = m_ps.size();
-        stages[1].entryPointName = kPsEntry;
+        const std::span<const std::uint8_t> ps = m_ps[static_cast<std::size_t>(state.pixel)];
+        stages[1].bytecode       = ps.data();
+        stages[1].size           = ps.size();
+        stages[1].entryPointName = PixelEntry(state.pixel);
 
         return m_pipelines->GetGraphics(key, [&](nri::GraphicsPipelineDesc& desc)
         {
@@ -738,7 +810,6 @@ namespace Arcane
             // disappears entirely rather than rendering subtly wrong. There is
             // no plausible-looking failure mode here.
             desc.rasterization.fillMode              = nri::FillMode::SOLID;
-            desc.rasterization.cullMode              = nri::CullMode::BACK;
             desc.rasterization.frontCounterClockwise = true;
 
             // ============ THE DEPTH TEST ============
@@ -746,9 +817,8 @@ namespace Arcane
             // (SceneCamera.hpp's DEPTH CONVENTION -- reverse-Z is a
             // separately-decided-against choice), so LESS is "nearer wins" and
             // the clear value is 1.0 (kDepthClear above). The pass is opaque,
-            // so it writes depth as well as testing it.
+            // so it tests depth. The cache stamps the mode's keyed write bit.
             desc.outputMerger.depth.compareOp = nri::CompareOp::LESS;
-            desc.outputMerger.depth.write     = true;
         });
     }
 
@@ -761,7 +831,10 @@ namespace Arcane
         // and a differently-formatted canvas must be a cache MISS rather than
         // a silent attachment mismatch) and a cache HIT is a linear scan over
         // a handful of entries.
-        m_pipeline = PipelineFor(canvasFormat);
+        for (MaterialBlendMode blend : { MaterialBlendMode::Opaque, MaterialBlendMode::Masked,
+                                         MaterialBlendMode::Transparent })
+            for (const bool twoSided : { false, true })
+                m_pipeline[PipelineIndex(blend, twoSided)] = PipelineFor(canvasFormat, blend, twoSided);
 
         // Residency at DECLARATION time -- UploadData submits and waits
         // internally. Record only looks this table up.
@@ -786,6 +859,9 @@ namespace Arcane
         if (scene.scene)
             for (const GpuBatchDraw& batch : scene.scene->batches)
                 resolveOnce(batch.mesh);
+        if (scene.scene)
+            for (const TransparentDraw& draw : scene.scene->transparentDraws)
+                resolveOnce(draw.mesh);
 
         // 2. The ad-hoc instances (F3 plan 1 T7): resolved the same way, AND
         //    staged as GpuInstance rows for the sync node's scratch region --
@@ -877,7 +953,7 @@ namespace Arcane
         if (!hasBatches && m_adHocDraws.empty())
             return;
 
-        if (!m_pipeline)
+        if (!m_pipeline[PipelineIndex(MaterialBlendMode::Opaque, false)])
         {
             if (!m_warnedNoPipeline)
             {
@@ -1020,7 +1096,19 @@ namespace Arcane
         bindlessSetDesc.descriptorSet = m_bindlessSet;
         core.CmdSetDescriptorSet(context.cmd, bindlessSetDesc);
 
-        core.CmdSetPipeline(context.cmd, *m_pipeline);
+        nri::Pipeline* boundPipeline = nullptr;
+        const auto bindPipeline = [&](MaterialBlendMode blend, bool twoSided) -> bool
+        {
+            nri::Pipeline* pipeline = m_pipeline[PipelineIndex(blend, twoSided)];
+            if (!pipeline)
+                return false;   // Prepare/cache already reported the failed variant.
+            if (pipeline != boundPipeline)
+            {
+                core.CmdSetPipeline(context.cmd, *pipeline);
+                boundPipeline = pipeline;
+            }
+            return true;
+        };
 
         // Binds a mesh's resident vertex + index buffers if it is resident and
         // not already bound; null means SKIP THE DRAW -- never a stale bind
@@ -1083,6 +1171,8 @@ namespace Arcane
             {
                 for (const GpuBatchDraw& batch : scene.scene->batches)
                 {
+                    if (!bindPipeline(batch.blend, batch.twoSided))
+                        continue;
                     if (!bindMesh(batch.mesh))
                         continue;   // not resident: skip, never a stale bind
                     pushRoot(batch.firstOutput, 0);
@@ -1103,6 +1193,8 @@ namespace Arcane
         const std::uint32_t scratchFirst = gpuScene->ScratchFirstRow(frameSlot);
         for (std::size_t i = 0; i < m_adHocDraws.size(); ++i)
         {
+            if (!bindPipeline(MaterialBlendMode::Opaque, false))
+                break;
             const AdHocDraw& d = m_adHocDraws[i];
             const NriMeshBufferCache::Resident* resident = bindMesh(d.mesh);
             if (!resident)
@@ -1115,6 +1207,22 @@ namespace Arcane
             draw.instanceNum = 1;
             core.CmdDrawIndexed(context.cmd, draw);
         }
+
+        // 3. Ordered transparent rows. They never enter indirect batches:
+        // Task 2 already sorted these direct records back-to-front, so retain
+        // that exact order while switching only the independent sidedness PSO.
+        if (scene.scene)
+            for (const TransparentDraw& draw : scene.scene->transparentDraws)
+            {
+                if (!bindPipeline(draw.blend, draw.twoSided) || !bindMesh(draw.mesh))
+                    continue;
+                pushRoot(draw.row, kMeshRootDirect);
+                nri::DrawIndexedDesc direct = {};
+                direct.baseIndex   = draw.indexOffset;
+                direct.indexNum    = draw.indexCount;
+                direct.instanceNum = 1;
+                core.CmdDrawIndexed(context.cmd, direct);
+            }
     }
 
     RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,

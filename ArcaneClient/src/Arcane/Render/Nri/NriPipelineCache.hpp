@@ -14,7 +14,7 @@
 //     (RegisterLayout returns a small dense id; registering an identical desc
 //     twice returns the SAME id and creates nothing);
 //   * graphics PIPELINES, keyed by GraphicsKey -- {shader pair, layout id,
-//     attachment formats, colour count, topology, blend} -- with the actual
+//     attachment formats, colour count, topology, blend, depth-write, cull} -- with the actual
 //     nri::GraphicsPipelineDesc filled by a caller callback on a MISS only;
 //   * compute PIPELINES, keyed by ComputeKey -- {shader id, layout id}, no
 //     format/blend block since a compute pipeline bakes no attachment state
@@ -35,8 +35,9 @@
 // and the two after it are the ones that bite.
 //
 // 1. EVERYTHING IN THE KEY BELONGS TO THE CACHE, structurally. After `fill`
-//    returns, GetGraphics RE-STAMPS pipelineLayout, inputAssembly.topology and
-//    the whole outputMerger colour/format block from the key -- so a callback
+//    returns, GetGraphics RE-STAMPS pipelineLayout, inputAssembly.topology,
+//    raster cull, depth write, and the whole outputMerger colour/format block
+//    from the key -- so a callback
 //    that tried to set them can neither desynchronise the cache from what it
 //    actually created, nor leave outputMerger.colors pointing at an array that
 //    died with its own stack frame.
@@ -59,8 +60,8 @@
 //
 // 3. EVERYTHING THE CALLBACK SETS MUST BE A PURE FUNCTION OF THE KEY. The
 //    cache compares keys and nothing else, so any state that is NOT keyed --
-//    `vertexInput`, `rasterization`, the depth/stencil TEST state,
-//    `multisample`, `robustness` -- must be folded into `shaderPairId`, which
+//    `vertexInput`, raster front-facing convention, the depth/stencil TEST
+//    state, `multisample`, `robustness` -- must be folded into `shaderPairId`, which
 //    is opaque to the cache and exists precisely to be the caller's
 //    discriminator. Otherwise two genuinely different pipelines collide on one
 //    entry and the second silently gets the first's PSO.
@@ -136,6 +137,12 @@ namespace Arcane
                 Additive              // 1, 1
             };
             Blend blend = Blend::Opaque;
+
+            // Safe defaults deliberately preserve the pre-F3 mesh PSO:
+            // forward-Z depth writes with back-face culling. These are key
+            // fields because both states are baked into graphics pipelines.
+            bool          depthWrite = true;
+            nri::CullMode cullMode   = nri::CullMode::BACK;
 
             [[nodiscard]] bool operator==(const GraphicsKey&) const noexcept = default;
         };

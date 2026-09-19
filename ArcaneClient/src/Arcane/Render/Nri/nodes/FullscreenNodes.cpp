@@ -774,6 +774,8 @@ namespace Arcane
             // OPAQUE: a fullscreen pass overwrites every pixel of its target
             // (which is also why no pass clears one).
             key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
+            key.depthWrite      = false;
+            key.cullMode        = nri::CullMode::NONE;
 
             // `stages` lives in THIS frame, which encloses GetGraphics -- the
             // cache's fill contract, rule 2.
@@ -795,7 +797,6 @@ namespace Arcane
                 pipelineDesc.shaders     = stages;
                 pipelineDesc.shaderNum   = 2;
                 pipelineDesc.rasterization.fillMode = nri::FillMode::SOLID;
-                pipelineDesc.rasterization.cullMode = nri::CullMode::NONE;
             });
             if (!pass.pipeline)
                 return refuse("pass " + std::to_string(p) + " has no pipeline for the canvas format");
@@ -1394,6 +1395,8 @@ namespace Arcane
         key.depthFormat     = nri::Format::UNKNOWN;
         key.topology        = nri::Topology::TRIANGLE_LIST;
         key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
+        key.depthWrite      = false;
+        key.cullMode        = nri::CullMode::NONE;
 
         // `stages` lives in THIS frame, which encloses GetGraphics -- the fill
         // contract's rule 2.
@@ -1415,7 +1418,6 @@ namespace Arcane
             desc.shaders     = stages;
             desc.shaderNum   = 2;
             desc.rasterization.fillMode = nri::FillMode::SOLID;
-            desc.rasterization.cullMode = nri::CullMode::NONE;
         });
         if (!pipeline)
             return;   // already logged + latched by the cache

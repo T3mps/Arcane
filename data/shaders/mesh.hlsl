@@ -110,6 +110,9 @@ struct VSOutput
     // shader, uniform across one instance's triangles.
     nointerpolation float4 baseColor : COLOR0;
     nointerpolation uint   slot      : TEXCOORD1;
+    // Task 3/F3: the resolved material cutoff travels in boundsMax.w. It is
+    // row state, not another root constant, preserving MeshRoot's 8-byte ABI.
+    nointerpolation float   alphaCutoff : TEXCOORD2;
 };
 
 VSOutput vs_main(VSInput input, uint instanceId : SV_InstanceID)
@@ -142,6 +145,7 @@ VSOutput vs_main(VSInput input, uint instanceId : SV_InstanceID)
     output.uv        = input.uv;
     output.baseColor = inst.baseColor;
     output.slot      = inst.materialSlot;
+    output.alphaCutoff = inst.boundsMax.w;
     return output;
 }
 
@@ -170,7 +174,14 @@ SamplerState g_Sampler : register(s0);
 // header. Keep numerically identical.
 #define kMeshInvalidMaterialSlot 0xFFFFFFFFu
 
-float4 ps_main(VSOutput input) : SV_Target0
+float4 SampledAlbedo(VSOutput input)
+{
+    return input.slot == kMeshInvalidMaterialSlot
+        ? float4(1.0, 1.0, 1.0, 1.0)
+        : g_BindlessTextures[NonUniformResourceIndex(input.slot)].Sample(g_Sampler, input.uv);
+}
+
+float4 LitAlbedo(VSOutput input)
 {
     const float3 n      = normalize(input.normal);
     // NOT normalized here -- see g_lightDirection's comment. The zero vector is
@@ -189,10 +200,38 @@ float4 ps_main(VSOutput input) : SV_Target0
     // compile-time constant, which is the standard bindless-indexing idiom
     // on both backends -- and, now that the slot is a per-row value read by
     // SV_InstanceID, genuinely non-uniform across one indirect draw.
-    const float4 albedo = (input.slot == kMeshInvalidMaterialSlot)
-        ? input.baseColor
-        : g_BindlessTextures[NonUniformResourceIndex(input.slot)].Sample(g_Sampler, input.uv) * input.baseColor;
+    const float4 albedo = SampledAlbedo(input) * input.baseColor;
 
     const float3 lit    = albedo.rgb * (g_ambient.rgb + g_lightColor.rgb * ndotl);
     return float4(lit, albedo.a);
+}
+
+// Opaque stays byte-for-byte on the pre-F3 lighting path: it is its own
+// offline artifact, with no runtime define selecting a material mode.
+float4 ps_main(VSOutput input) : SV_Target0
+{
+    return LitAlbedo(input);
+}
+
+// Alpha-tested mesh artifact. The sampled albedo's alpha combines with the
+// instance tint's alpha; boundsMax.w is GpuSceneSync's resolved cutoff.
+float4 ps_masked_main(VSOutput input) : SV_Target0
+{
+    const float4 sampledAlbedo = SampledAlbedo(input);
+    const float alpha = input.baseColor.a * sampledAlbedo.a;
+    clip(alpha - input.alphaCutoff);
+
+    const float3 n = normalize(input.normal);
+    const float ndotl = saturate(dot(n, g_lightDirection.xyz));
+    const float3 lit = (input.baseColor.rgb * sampledAlbedo.rgb)
+                     * (g_ambient.rgb + g_lightColor.rgb * ndotl);
+    return float4(lit, alpha);
+}
+
+// Ordered transparent mesh artifact. Straight alpha is preserved for the
+// cache-owned AlphaOver blend state to consume; it deliberately writes no
+// depth (that pipeline state lives in GraphicsKey, not here).
+float4 ps_transparent_main(VSOutput input) : SV_Target0
+{
+    return LitAlbedo(input);
 }

@@ -4709,6 +4709,8 @@ namespace
         key.colorFormats[0] = nri::Format::RGBA8_UNORM;
         key.colorCount      = 1;
         key.blend           = Arcane::NriPipelineCache::GraphicsKey::Blend::AlphaOver;
+        key.depthWrite      = true;
+        key.cullMode        = nri::CullMode::BACK;
         return key;
     }
 
@@ -4764,6 +4766,10 @@ TEST_CASE("nri pipeline cache: GetGraphics creates once per key and serves the r
 {
     const std::uint64_t before = Arcane::RenderErrorCount();
 
+    const Arcane::NriPipelineCache::GraphicsKey safeDefaults = {};
+    CHECK(safeDefaults.depthWrite);
+    CHECK(safeDefaults.cullMode == nri::CullMode::BACK);
+
     auto device = Arcane::NriDevice::CreateNoneForTests();
     REQUIRE(device != nullptr);
 
@@ -4782,7 +4788,6 @@ TEST_CASE("nri pipeline cache: GetGraphics creates once per key and serves the r
     {
         ++fills;
         desc.rasterization.fillMode = nri::FillMode::SOLID;
-        desc.rasterization.cullMode = nri::CullMode::NONE;
         desc.outputMerger.colors    = nullptr;
         desc.outputMerger.colorNum  = 0;
         desc.inputAssembly.topology = nri::Topology::POINT_LIST;
@@ -4816,6 +4821,21 @@ TEST_CASE("nri pipeline cache: GetGraphics creates once per key and serves the r
     REQUIRE(cache.GetGraphics(additive, fill) != nullptr);
     CHECK(fills == 3);
     CHECK(cache.PipelineCount() == 3);
+
+    // Raster depth-write and face-cull are baked PSO state just like blend.
+    // They must therefore be part of the cache identity: the mesh path uses
+    // all four combinations independently of its three blend modes.
+    Arcane::NriPipelineCache::GraphicsKey noDepthWrite = key;
+    noDepthWrite.depthWrite = false;
+    REQUIRE(cache.GetGraphics(noDepthWrite, fill) != nullptr);
+    CHECK(fills == 4);
+    CHECK(cache.PipelineCount() == 4);
+
+    Arcane::NriPipelineCache::GraphicsKey noCull = key;
+    noCull.cullMode = nri::CullMode::NONE;
+    REQUIRE(cache.GetGraphics(noCull, fill) != nullptr);
+    CHECK(fills == 5);
+    CHECK(cache.PipelineCount() == 5);
 
     cache.Clear(device->Graves(), 0);
     device->Graves().Drain();

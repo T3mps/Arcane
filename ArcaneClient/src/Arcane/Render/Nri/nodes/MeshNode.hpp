@@ -76,9 +76,10 @@
 // GpuScene.hpp, owned by NriGraphContext) holds the instance / args /
 // visible-index buffers, GpuSceneSyncNode writes them ahead of this pass,
 // and Record receives the GpuScene* as a parameter.
-// The PIPELINE is not owned here: it comes from the vehicle's shared
+// The PIPELINES are not owned here: they come from the vehicle's shared
 // NriPipelineCache, keyed by (shader pair, layout, canvas format, DEPTH
-// format, blend), so a format change is a cache miss rather than a stale PSO.
+// format, blend, depth-write, cull), so a format or material-state change is
+// a cache miss rather than a stale PSO.
 //
 // THE REGISTER-SPACE RULE (Batch2DNode.hpp states it in full, verified
 // against Source/Validation/DeviceVal.hpp's `rootDescriptorNum ||
@@ -334,6 +335,25 @@ namespace Arcane
     inline constexpr std::uint32_t kMeshRootDirect = 1u;
     static_assert(sizeof(MeshRootConstants) == 8, "mesh.hlsl's MeshRoot is two uints");
 
+    // The three fixed offline pixel artifacts. No runtime shader define chooses
+    // among them: every blend mode owns a separately compiled DXIL/SPIR-V blob.
+    enum class MeshPixelShader : std::uint8_t
+    {
+        Opaque,
+        Masked,
+        Transparent,
+    };
+
+    // The complete material-derived state of one mesh PSO. Public for the
+    // device-free six-combination pin; MeshNode is the sole production caller.
+    struct MeshPipelineState
+    {
+        MeshPixelShader                          pixel      = MeshPixelShader::Opaque;
+        NriPipelineCache::GraphicsKey::Blend     blend      = NriPipelineCache::GraphicsKey::Blend::Opaque;
+        bool                                     depthWrite = true;
+        nri::CullMode                            cullMode   = nri::CullMode::BACK;
+    };
+
     class ARCANE_API MeshNode
     {
     public:
@@ -348,6 +368,12 @@ namespace Arcane
         // it, so it does not get built at all rather than rendering wrong
         // pixels or silently falling back.
         static std::unique_ptr<MeshNode> Create(NriGraphContext& context);
+
+        // Maps blend and sidedness independently to one of the six fixed mesh
+        // PSOs. Opaque/masked write depth; transparent alpha-blends without a
+        // depth write; one/two-sided selects BACK/NONE culling respectively.
+        [[nodiscard]] static MeshPipelineState PipelineStateFor(MaterialBlendMode blend,
+                                                                 bool twoSided) noexcept;
 
         // SAFETY NET, NOT THE PATH -- same shape as ~Batch2DNode. The
         // sanctioned release is Release() at a fence the owner knows.
@@ -573,9 +599,12 @@ namespace Arcane
         // discipline already covers.
         bool CreateSets();
 
-        // The opaque pipeline for this frame's attachment formats, from the
-        // shared cache. Null (already logged) if the cache refused it.
-        [[nodiscard]] nri::Pipeline* PipelineFor(nri::Format canvasFormat);
+        // One fixed material state for this frame's attachment formats, from
+        // the shared cache. Null (already logged) if the cache refused it.
+        [[nodiscard]] nri::Pipeline* PipelineFor(nri::Format canvasFormat,
+                                                  MaterialBlendMode blend, bool twoSided);
+
+        [[nodiscard]] static std::size_t PipelineIndex(MaterialBlendMode blend, bool twoSided) noexcept;
 
         // How many distinct mesh guids m_residents reserves room for. Prepare
         // builds that table once per frame so a scene of twenty cubes resolves
@@ -588,15 +617,6 @@ namespace Arcane
         {
             return CbRegionOffset(m_arenaStride, frameSlot);
         }
-
-        // NriPipelineCache::GraphicsKey::shaderPairId is opaque to the cache
-        // and is the CALLER's discriminator for everything the key does not
-        // carry (that class's fill-contract rule 3) -- here the vertex input,
-        // the rasterizer state and the depth TEST state, none of which are
-        // keyed. One shared cache, so the node id spaces must not overlap:
-        // Batch2DNode is 0x2000..0x2002, TonemapNode 0x3000, the outline chain
-        // 0x4000..0x4002, PickNode 0x4100.
-        static constexpr std::uint64_t kShaderPairId = 0x5000;
 
         NriDevice*        m_device       = nullptr;
         NriPipelineCache* m_pipelines    = nullptr;
@@ -616,7 +636,8 @@ namespace Arcane
         // outlives this node -- which the pipeline cache's fill contract
         // (rule 2) requires, since CreateGraphicsPipeline runs after the fill
         // callback returns.
-        std::span<const std::uint8_t> m_vs, m_ps;
+        std::span<const std::uint8_t> m_vs;
+        std::span<const std::uint8_t> m_ps[3];
 
         // THE BINDLESS MATERIAL TABLE (Task 8/10) and the ONE descriptor set
         // its array lives in -- allocated once, at Create, and written
@@ -665,10 +686,9 @@ namespace Arcane
         nri::VertexStreamDesc    m_stream{};
         nri::VertexInputDesc     m_vertexInput{};
 
-        // Resolved by Prepare for the canvas format of the frame being
-        // declared, so Record never reaches the pipeline cache from inside an
-        // open command buffer. Owned by the cache; borrowed here.
-        nri::Pipeline* m_pipeline = nullptr;
+        // Resolved by Prepare for every blend/sidedness combination before a
+        // command buffer opens. Owned by the cache; borrowed here.
+        nri::Pipeline* m_pipeline[6]{};
 
         // This frame's distinct-guid residency -- filled by Prepare, looked
         // up by Record. Never resolved at record time.

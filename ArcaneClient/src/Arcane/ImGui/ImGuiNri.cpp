@@ -841,6 +841,8 @@ namespace Arcane
         key.topology        = nri::Topology::TRIANGLE_LIST;
         // SrcAlpha/InvSrcAlpha + One/InvSrcAlpha -- ImGui's own blend state.
         key.blend           = NriPipelineCache::GraphicsKey::Blend::AlphaOver;
+        key.depthWrite      = false;
+        key.cullMode        = nri::CullMode::NONE;
 
         // `stages` lives in THIS frame, which encloses GetGraphics -- the fill
         // contract's rule 2, same as m_vertexInput being a member.
@@ -861,7 +863,6 @@ namespace Arcane
             desc.shaderNum   = 2;
             desc.rasterization.fillMode = nri::FillMode::SOLID;
             // ImGui emits both windings; culling would drop half the glyphs.
-            desc.rasterization.cullMode = nri::CullMode::NONE;
         });
         if (!pipeline)
             return;   // already logged + latched by the cache

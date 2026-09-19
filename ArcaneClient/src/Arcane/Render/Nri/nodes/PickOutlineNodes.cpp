@@ -465,6 +465,8 @@ namespace Arcane
         // primitive-ordered and the drawables are emitted back to front. The
         // meshes that follow (RecordMeshes) are the depth-tested half.
         key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
+        key.depthWrite      = false;
+        key.cullMode        = nri::CullMode::NONE;
 
         // `stages` lives in THIS frame, which encloses GetGraphics -- the fill
         // contract's rule 2.
@@ -484,11 +486,9 @@ namespace Arcane
             desc.shaders     = stages;
             desc.shaderNum   = 2;
             desc.rasterization.fillMode = nri::FillMode::SOLID;
-            desc.rasterization.cullMode = nri::CullMode::NONE;
             // Depth-OFF: neither tested nor written. The attachment is bound
             // (the key names its format) so the mesh half can use it after.
             desc.outputMerger.depth.compareOp = nri::CompareOp::NONE;
-            desc.outputMerger.depth.write     = false;
         });
         if (!pipeline)
             return;   // already logged + latched by the cache
@@ -553,6 +553,8 @@ namespace Arcane
         key.depthFormat     = kGraphDepthFormat;
         key.topology        = nri::Topology::TRIANGLE_LIST;
         key.blend           = NriPipelineCache::GraphicsKey::Blend::Opaque;
+        key.depthWrite      = true;
+        key.cullMode        = nri::CullMode::BACK;
 
         nri::ShaderDesc stages[2] = {};
         stages[0].stage          = nri::StageBits::VERTEX_SHADER;
@@ -574,13 +576,11 @@ namespace Arcane
             // THE WINDING block; get the pair backwards and every closed convex
             // mesh becomes unpickable rather than subtly wrong).
             desc.rasterization.fillMode              = nri::FillMode::SOLID;
-            desc.rasterization.cullMode              = nri::CullMode::BACK;
             desc.rasterization.frontCounterClockwise = true;
             // Depth-tested AND written, forward-Z [0,1] -- LESS is "nearer wins"
             // against the 1.0 the pass cleared to. This is what makes two
             // overlapping meshes resolve by depth, not by emission order.
             desc.outputMerger.depth.compareOp = nri::CompareOp::LESS;
-            desc.outputMerger.depth.write     = true;
         });
         if (!pipeline)
             return;   // already logged + latched by the cache
@@ -1127,6 +1127,8 @@ namespace Arcane
         key.depthFormat     = nri::Format::UNKNOWN;
         key.topology        = nri::Topology::TRIANGLE_LIST;
         key.blend           = blend;
+        key.depthWrite      = false;
+        key.cullMode        = nri::CullMode::NONE;
 
         // `stages` lives in THIS frame, which encloses GetGraphics -- rule 2.
         nri::ShaderDesc stages[2] = {};
@@ -1147,7 +1149,6 @@ namespace Arcane
             desc.shaders     = stages;
             desc.shaderNum   = 2;
             desc.rasterization.fillMode = nri::FillMode::SOLID;
-            desc.rasterization.cullMode = nri::CullMode::NONE;
         });
         if (!pipeline)
             return false;   // already logged + latched by the cache

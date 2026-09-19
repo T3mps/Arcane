@@ -339,6 +339,8 @@ namespace Arcane
         // canvas keeps the mesh pass's colour underneath -- the grid is a
         // translucent overlay, which is why it does not write depth either.
         key.blend           = NriPipelineCache::GraphicsKey::Blend::AlphaOver;
+        key.depthWrite      = false;
+        key.cullMode        = nri::CullMode::NONE;
 
         // `stages` lives in THIS frame, which encloses the GetGraphics call
         // (fill contract rule 2); the bytecode is the vehicle's.
@@ -364,7 +366,6 @@ namespace Arcane
             // (orbit below the XZ ground, or behind the XY plane), and a
             // single quad has one winding.
             desc.rasterization.fillMode              = nri::FillMode::SOLID;
-            desc.rasterization.cullMode              = nri::CullMode::NONE;
             desc.rasterization.frontCounterClockwise = true;
 
             // THE DEPTH TEST, and NOT a depth write (spec s5.2). FORWARD-Z
@@ -380,7 +381,6 @@ namespace Arcane
             if (hasDepth)
             {
                 desc.outputMerger.depth.compareOp = nri::CompareOp::LESS_EQUAL;
-                desc.outputMerger.depth.write     = false;
             }
         });
     }

@@ -309,9 +309,11 @@ namespace Arcane
             }
             desc.pipelineLayout            = layout;
             desc.inputAssembly.topology    = key.topology;
+            desc.rasterization.cullMode    = key.cullMode;
             desc.outputMerger.colors       = key.colorCount != 0 ? colors.data() : nullptr;
             desc.outputMerger.colorNum     = key.colorCount;
             desc.outputMerger.depthStencilFormat = key.depthFormat;
+            desc.outputMerger.depth.write  = key.depthWrite;
         };
 
         nri::GraphicsPipelineDesc desc = {};

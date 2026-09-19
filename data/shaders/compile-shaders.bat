@@ -23,10 +23,10 @@
 :: and visible-index SRVs at t0/t1 in space1 land at set 1 bindings 0/1,
 :: beside b1's 257).
 ::
-:: INVARIANT: the output stem's _vs/_ps/_cs suffix (4th arg) must agree with
-:: the entry point's <type>_main prefix (2nd arg) -- a loader derives the entry
-:: name from the stem suffix (_vs -> vs_main, ...), per the entry/profile
-:: conventions in ShaderConventions.hpp:15-23. Mismatch = late Vulkan failure.
+:: INVARIANT: every output artifact's entry point is explicit in this file and
+:: must match the NRI loader's entryPointName. Most use <type>_main; the fixed
+:: mesh pixel variants deliberately use distinct source entry points while all
+:: retain the conventional _ps output suffix.
 setlocal
 set DXC=%~dp0..\..\ThirdParty\tools\dxc\dxc.exe
 set SRC=%~dp0
@@ -60,6 +60,8 @@ call :compile outline_composite ps_main ps_6_5 outline_composite_ps || exit /b 1
 :: The opaque 3D pass (NRI Phase 4, Task 7) -- Lambert + one albedo texture.
 call :compile mesh vs_main vs_6_5 mesh_vs || exit /b 1
 call :compile mesh ps_main ps_6_5 mesh_ps || exit /b 1
+call :compile mesh ps_masked_main ps_6_5 mesh_masked_ps || exit /b 1
+call :compile mesh ps_transparent_main ps_6_5 mesh_transparent_ps || exit /b 1
 :: The 3D reference grid (F4 plan 1 Task 10, spec s5.2) -- analytic, depth-tested after the mesh pass.
 call :compile grid vs_main vs_6_5 grid_vs || exit /b 1
 call :compile grid ps_main ps_6_5 grid_ps || exit /b 1
