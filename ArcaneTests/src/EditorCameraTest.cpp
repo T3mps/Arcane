@@ -219,8 +219,9 @@ TEST_CASE("Framing bounds match how sprites are rendered", "[editor][camera]")
     // World size = the sprite asset's base size (1x1 m unresolved) * world
     // scale, about the pivot (the centre by default) -- the box of exactly
     // the SpriteWorldQuad corners RenderSubmissionSystem submits, widened by
-    // kSpriteDepthEpsilon on every axis by BoundsSystem (F3: this box comes
-    // from WorldBounds, the same one culling and picking read).
+    // kSpriteDepthEpsilon in Z ONLY by BoundsSystem (F3 spec s2.3; X/Y are
+    // exact -- this box comes from WorldBounds, the same one culling and
+    // picking read, and a millimetre in X/Y would move the framed camera).
     const Astra::Entity a = MakeSprite(*reg, glm::vec2(3.0f, 4.0f), glm::vec2(2.0f, 1.0f));
     const std::vector<Astra::Entity> one{a};
 
@@ -229,11 +230,11 @@ TEST_CASE("Framing bounds match how sprites are rendered", "[editor][camera]")
     REQUIRE(b.Valid());
     CHECK(b.count == 1);
     const float eps = Arcane::kSpriteDepthEpsilon;
-    CHECK(b.min.x == Approx(2.0f - eps));
-    CHECK(b.min.y == Approx(3.5f - eps));
+    CHECK(b.min.x == Approx(2.0f));
+    CHECK(b.min.y == Approx(3.5f));
     CHECK(b.min.z == Approx(0.0f - eps));
-    CHECK(b.max.x == Approx(4.0f + eps));
-    CHECK(b.max.y == Approx(4.5f + eps));
+    CHECK(b.max.x == Approx(4.0f));
+    CHECK(b.max.y == Approx(4.5f));
     CHECK(b.max.z == Approx(0.0f + eps));
 
     // A scaled sprite grows by its world scale, same as the drawn quad.
@@ -244,10 +245,10 @@ TEST_CASE("Framing bounds match how sprites are rendered", "[editor][camera]")
     const FramingBounds u = SelectionFramingBounds(*reg, two);
     REQUIRE(u.Valid());
     CHECK(u.count == 2);
-    CHECK(u.min.x == Approx(-3.0f - eps));
-    CHECK(u.min.y == Approx(-2.0f - eps));
-    CHECK(u.max.x == Approx(4.0f + eps));
-    CHECK(u.max.y == Approx(4.5f + eps));
+    CHECK(u.min.x == Approx(-3.0f));
+    CHECK(u.min.y == Approx(-2.0f));
+    CHECK(u.max.x == Approx(4.0f));
+    CHECK(u.max.y == Approx(4.5f));
 }
 
 TEST_CASE("A sprite at (2,3,0) with the default pivot frames as its 1x1 quad", "[editor][camera]")
@@ -258,7 +259,7 @@ TEST_CASE("A sprite at (2,3,0) with the default pivot frames as its 1x1 quad", "
     Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
     const FramingBounds b = SelectionFramingBounds(*reg, sel);
     REQUIRE(b.Valid());
-    const glm::vec3 eps(Arcane::kSpriteDepthEpsilon);   // WorldBounds widens a flat sprite box on every axis
+    const glm::vec3 eps(0.0f, 0.0f, Arcane::kSpriteDepthEpsilon);   // WorldBounds widens a flat sprite box in Z only (spec s2.3)
     CHECK(b.min == glm::vec3(1.5f, 2.5f, 0.0f) - eps);
     CHECK(b.max == glm::vec3(2.5f, 3.5f, 0.0f) + eps);
 }
@@ -354,9 +355,8 @@ TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[ed
         const FramingBounds b = SelectionFramingBounds(*reg, sel);
         REQUIRE(b.Valid());
         CHECK(b.count == 1);
-        const float eps = Arcane::kSpriteDepthEpsilon;
-        CHECK(b.min.x == Approx(9.0f - eps));
-        CHECK(b.max.x == Approx(11.0f + eps));
+        CHECK(b.min.x == Approx(9.0f));    // X/Y exact: the epsilon is Z only (spec s2.3)
+        CHECK(b.max.x == Approx(11.0f));
     }
 }
 
@@ -387,11 +387,10 @@ TEST_CASE("Scene framing bounds sweep every visible sprite", "[editor][camera]")
         const FramingBounds b = SceneFramingBounds(*reg);
         REQUIRE(b.Valid());
         CHECK(b.count == 2);
-        const float eps = Arcane::kSpriteDepthEpsilon;
-        CHECK(b.min.x == Approx(-1.0f - eps));
-        CHECK(b.min.y == Approx(-1.0f - eps));
-        CHECK(b.max.x == Approx(7.0f + eps));
-        CHECK(b.max.y == Approx(1.0f + eps));
+        CHECK(b.min.x == Approx(-1.0f));   // X/Y exact: the epsilon is Z only (spec s2.3)
+        CHECK(b.min.y == Approx(-1.0f));
+        CHECK(b.max.x == Approx(7.0f));
+        CHECK(b.max.y == Approx(1.0f));
     }
 }
 

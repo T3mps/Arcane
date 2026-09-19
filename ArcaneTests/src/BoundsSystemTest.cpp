@@ -105,12 +105,11 @@ TEST_CASE("BoundsSystem: an entity carrying BOTH renderers gets the UNION of the
     const Arcane::WorldBounds* b = std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e);
     REQUIRE(b);
     // mesh:   [9.75, 10.25] x [-0.25, 0.25] x [-0.25, 0.25]
-    // sprite: [9.5 - eps, 10.5 + eps] x [-0.5 - eps, 0.5 + eps] x [-eps, +eps]
-    const float eps = Arcane::kSpriteDepthEpsilon;
-    CHECK(b->box.min.x == Catch::Approx(9.5f - eps));    // sprite wins X
-    CHECK(b->box.max.x == Catch::Approx(10.5f + eps));
-    CHECK(b->box.min.y == Catch::Approx(-0.5f - eps));   // sprite wins Y
-    CHECK(b->box.max.y == Catch::Approx(0.5f + eps));
+    // sprite: [9.5, 10.5] x [-0.5, 0.5] x [-eps, +eps]   (Z widened ONLY, spec s2.3)
+    CHECK(b->box.min.x == Catch::Approx(9.5f));    // sprite wins X
+    CHECK(b->box.max.x == Catch::Approx(10.5f));
+    CHECK(b->box.min.y == Catch::Approx(-0.5f));   // sprite wins Y
+    CHECK(b->box.max.y == Catch::Approx(0.5f));
     CHECK(b->box.min.z == Catch::Approx(-0.25f));        // mesh wins Z
     CHECK(b->box.max.z == Catch::Approx(0.25f));
 }
@@ -124,7 +123,7 @@ TEST_CASE("BoundsSystem: an unresolved mesh gets NO WorldBounds", "[bounds]")
     CHECK_FALSE(w.reg.HasComponent<Arcane::WorldBounds>(e));
 }
 
-TEST_CASE("BoundsSystem: a sprite gets the SpriteWorldQuad box widened by the depth epsilon", "[bounds]")
+TEST_CASE("BoundsSystem: a sprite gets the SpriteWorldQuad box widened by the depth epsilon in Z ONLY", "[bounds]")
 {
     World w;
     Astra::Entity e = w.Spawn(glm::vec3(2, 3, 0));
@@ -133,10 +132,12 @@ TEST_CASE("BoundsSystem: a sprite gets the SpriteWorldQuad box widened by the de
     w.Tick();
     const Arcane::WorldBounds* b = std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e);
     REQUIRE(b);
-    CHECK(b->box.min.x == Catch::Approx(1.5f - Arcane::kSpriteDepthEpsilon));
-    CHECK(b->box.max.x == Catch::Approx(2.5f + Arcane::kSpriteDepthEpsilon));
-    CHECK(b->box.min.y == Catch::Approx(2.5f - Arcane::kSpriteDepthEpsilon));
-    CHECK(b->box.max.y == Catch::Approx(3.5f + Arcane::kSpriteDepthEpsilon));
+    // X/Y are the EXACT quad corners (spec s2.3 widens Z only; the editor's
+    // boot framing reads this box, so a millimetre in X/Y moves the camera).
+    CHECK(b->box.min.x == Catch::Approx(1.5f));
+    CHECK(b->box.max.x == Catch::Approx(2.5f));
+    CHECK(b->box.min.y == Catch::Approx(2.5f));
+    CHECK(b->box.max.y == Catch::Approx(3.5f));
     CHECK(b->box.min.z == Catch::Approx(-Arcane::kSpriteDepthEpsilon));
     CHECK(b->box.max.z == Catch::Approx(+Arcane::kSpriteDepthEpsilon));
 }

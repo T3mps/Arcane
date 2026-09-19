@@ -31,7 +31,11 @@
 namespace Arcane
 {
     // A sprite is a zero-thickness quad; a zero-extent axis is a degenerate
-    // frustum input, so the box gets a millimetre of Z.
+    // frustum input, so the box gets a millimetre of Z -- and ONLY Z (spec
+    // 2026-09-18-f3-visibility-and-gpu-scene-design s2.3: "Z widened by
+    // kSpriteDepthEpsilon"). X/Y stay the exact SpriteWorldQuad extents: the
+    // editor's framing reads this box, and a uniform Widened() moved the
+    // boot-framed camera sub-pixel and broke both editor golden lanes (R-E).
     inline constexpr float kSpriteDepthEpsilon = 0.001f;
 
     // The last-run tick, a registry resource like TransformOrder (both hosts'
@@ -82,7 +86,9 @@ namespace Arcane
                 const SpriteQuad q = SpriteWorldQuad(world.matrix,
                                                      entry ? entry->sizeMeters : glm::vec2(1.0f),
                                                      entry ? entry->pivot      : glm::vec2(0.5f));
-                const Aabb sprite = Aabb::FromPoints(q.corners).Widened(kSpriteDepthEpsilon);
+                Aabb sprite = Aabb::FromPoints(q.corners);
+                sprite.min.z -= kSpriteDepthEpsilon;   // Z only (spec s2.3); X/Y are the exact corners
+                sprite.max.z += kSpriteDepthEpsilon;
                 box = box ? box->Union(sprite) : sprite;
             }
             return box;
