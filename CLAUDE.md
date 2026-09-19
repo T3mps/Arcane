@@ -99,7 +99,7 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   sink over the image, `Viewport/GizmoOverlay.hpp` -- never into the scene
   batch, which the mesh pass overpaints) and its look is Unreal's widget
   (`UnrealWidgetRender.cpp` proportions and colours, in pixels).
-- **Bounds, visibility and the GPU scene (F3 plan 1, 2026-09-18, ABI 36):**
+- **Bounds, visibility and the GPU scene (F3 plan 1, 2026-09-18, ABI 36, raised to 37 by the review fix 4363b825 -- MeshTable/SpriteTable carry the cache's publish generation):**
   every drawable carries `WorldBounds` (`BoundsSystem`, after transform
   propagation; sprites widen Z only), and each view's `VisibleSet` is the one
   CPU coarse-cull seam sprites, picking, framing and tests share. Meshes draw

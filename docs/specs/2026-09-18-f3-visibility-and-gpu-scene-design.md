@@ -6,7 +6,7 @@
 the prior pose via CPU history + re-dirty, the normal matrix in the row — and
 three statements sharpened). **Plan 1 closed at `3b50ff3d`
 (2026-09-18, the T8 head; the close booking is the commit after it): bounds,
-visibility, the GPU scene with CPU-written indices + indirect draws; ABI 36.**
+visibility, the GPU scene with CPU-written indices + indirect draws; ABI 36, raised to 37 by the review fix 4363b825 -- MeshTable/SpriteTable carry the cache's publish generation.**
 Step 2 of the binding
 order (`docs/research/2026-09-16-direction-and-sequencing.md`: F4 → **F3** → F5);
 F4 closed at `e95de920` (2026-09-18). Implementation plans follow this spec
