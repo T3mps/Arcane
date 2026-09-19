@@ -275,8 +275,11 @@ namespace Arcane
             const MeshEntry* entry = meshes ? meshes->Resolve(key.mesh) : nullptr;
             if (!entry || key.section >= entry->data.sections.size()) continue;
             const MeshSection& section = entry->data.sections[key.section];
-            const std::uint32_t indexCount = section.indexCount ? section.indexCount
-                                                                : static_cast<std::uint32_t>(entry->data.indices.size());
+            // The section's range VERBATIM (the retired CollectMeshInstances rule):
+            // MeshData's contract (Mesh/MeshBuilder.hpp) has no "empty section
+            // draws everything" fallback, and inventing one here would read past
+            // the index buffer for a zero-count section with a non-zero offset.
+            const std::uint32_t indexCount = section.indexCount;
             GpuBatchDraw d;
             d.mesh = key.mesh; d.section = key.section;
             d.indexOffset = section.indexOffset; d.indexCount = indexCount;

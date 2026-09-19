@@ -345,6 +345,63 @@ TEST_CASE("BuildGpuSceneFrame: no VisibleSet means every row is written", "[gpus
     CHECK(frame.batches.size() == 2);
 }
 
+TEST_CASE("BuildGpuSceneFrame: each batch's draw range is the MESH TABLE's section (indexOffset / indexCount / baseIndex), the single-section cube is the whole index range", "[gpuscene][frame]")
+{
+    // The successor of the retired per-slot pins: the section -> draw-range
+    // mapping is asserted against the mesh table's own section values, never
+    // against the frame's other fields.
+    World w;
+    const Arcane::Guid cube  = w.Mesh(1);
+    const Arcane::Guid split = w.Mesh(1);
+    {
+        // Three sections with DIFFERENT offsets and counts (0/6, 6/3, 9/3).
+        Arcane::MeshEntry& entry = w.meshes[split];
+        entry.data.sections = { Arcane::MeshSection{ "a", 0, 6, 0 },
+                                Arcane::MeshSection{ "b", 6, 3, 1 },
+                                Arcane::MeshSection{ "c", 9, 3, 2 } };
+        entry.slots = { Arcane::MeshSlot{ "a", {} }, Arcane::MeshSlot{ "b", {} }, Arcane::MeshSlot{ "c", {} } };
+    }
+    w.Spawn(glm::vec3(0, 0, -2), split);
+    w.Spawn(glm::vec3(0, 0, -5), cube);
+    w.Frame();
+    Arcane::GpuSceneFrame frame;
+    Arcane::BuildGpuSceneFrame(w.mirror, nullptr, w.reg.GetResource<Arcane::MeshTable>(), Arcane::ViewTransform{}, frame);
+    REQUIRE(frame.batches.size() == 4);
+    REQUIRE(frame.args.size() == 4);
+
+    const std::vector<Arcane::MeshSection>& sections = w.meshes[split].data.sections;
+    const std::uint32_t cubeIndices = static_cast<std::uint32_t>(w.meshes[cube].data.indices.size());
+    REQUIRE(cubeIndices == 36);
+    std::uint32_t seen = 0;
+    for (const Arcane::GpuBatchDraw& b : frame.batches)
+    {
+        REQUIRE(b.argIndex < frame.args.size());
+        const Arcane::DrawIndexedArgs& a = frame.args[b.argIndex];
+        if (b.mesh == split)
+        {
+            REQUIRE(b.section < sections.size());
+            const Arcane::MeshSection& s = sections[b.section];
+            CHECK(b.indexOffset == s.indexOffset);
+            CHECK(b.indexCount  == s.indexCount);
+            CHECK(a.baseIndex   == s.indexOffset);
+            CHECK(a.indexNum    == s.indexCount);
+            CHECK(a.instanceNum == 1);
+            seen |= 1u << b.section;
+        }
+        else
+        {
+            CHECK(b.mesh == cube);
+            CHECK(b.section == 0);
+            CHECK(b.indexOffset == 0);
+            CHECK(b.indexCount  == cubeIndices);
+            CHECK(a.baseIndex   == 0);
+            CHECK(a.indexNum    == cubeIndices);
+            seen |= 1u << 3;
+        }
+    }
+    CHECK(seen == 0b1111u);   // all three split sections and the cube were each emitted once
+}
+
 TEST_CASE("RowSpanAllocator: first-fit reuse, split, and high water", "[gpuscene]")
 {
     Arcane::RowSpanAllocator a;
