@@ -25,12 +25,14 @@
 #include <imgui_node_editor.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // AssetGraphPanel (panel-split arc): the "Asset Graph" window. Task 5 moved
@@ -102,19 +104,199 @@ namespace Arcane::Editor
         constexpr float kGraphFocusComboWidth = 280.0f;
         constexpr int   kGraphFocusHitCap     = 12;   // files in the popup; keywords always fit
 
+        enum class FocusPick : std::uint8_t { Everything, Kind, Guid };
+        struct FocusRow
+        {
+            FocusPick    pick = FocusPick::Everything;
+            AssetKind    kind = AssetKind::Other;
+            Arcane::Guid guid;
+            std::string  label;
+        };
+
+        struct FocusComboLive
+        {
+            const AssetPanelModel* model = nullptr;
+            std::vector<FocusRow>  rows;
+            int* nav = nullptr;
+            int* prevLen = nullptr;
+        };
+        FocusComboLive* g_focusLive = nullptr;
+
+        bool StartsWithI(std::string_view hay, std::string_view needle)
+        {
+            if (needle.size() > hay.size())
+                return false;
+            for (std::size_t i = 0; i < needle.size(); ++i)
+            {
+                const unsigned char a = static_cast<unsigned char>(hay[i]);
+                const unsigned char b = static_cast<unsigned char>(needle[i]);
+                if (std::tolower(a) != std::tolower(b))
+                    return false;
+            }
+            return true;
+        }
+
+        void BuildFocusRows(const GraphFocusQuery& q, const AssetPanelModel& model,
+                            std::vector<FocusRow>& rows)
+        {
+            rows.clear();
+            auto addEverything = [&]()
+            {
+                rows.push_back({ FocusPick::Everything, AssetKind::Other, {}, "@everything" });
+            };
+            auto addKind = [&](const GraphFocusKindKeyword& kw)
+            {
+                rows.push_back({ FocusPick::Kind, kw.kind, {}, std::string("@") + kw.token });
+            };
+            auto addGuid = [&](const AssetPanelEntry& e)
+            {
+                rows.push_back({ FocusPick::Guid, e.kind, e.guid, e.fileName });
+            };
+
+            if (q.mode == GraphFocusQuery::Mode::Everything)
+            {
+                addEverything();
+                for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
+                    addKind(kw);
+            }
+            else if (q.mode == GraphFocusQuery::Mode::KindPrefix)
+            {
+                if (std::string_view("everything").starts_with(q.text))
+                    addEverything();
+                for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
+                {
+                    const std::string_view tok{ kw.token };
+                    if (q.text.empty() || tok.starts_with(q.text))
+                        addKind(kw);
+                }
+            }
+            else if (q.mode == GraphFocusQuery::Mode::Kind)
+            {
+                for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
+                    if (kw.kind == q.kind)
+                        addKind(kw);
+            }
+
+            if (q.mode == GraphFocusQuery::Mode::KindPrefix)
+                return;
+
+            std::vector<const AssetPanelEntry*> prefixHits;
+            std::vector<const AssetPanelEntry*> otherHits;
+            for (const auto& [g, e] : model.Entries())
+            {
+                (void)g;
+                if (q.mode == GraphFocusQuery::Mode::Everything)
+                {
+                    if (e.kind != AssetKind::Scene)
+                        continue;
+                    prefixHits.push_back(&e);
+                    continue;
+                }
+                if (!MatchesGraphFocusQuery(q, e))
+                    continue;
+                const bool prefix = StartsWithI(e.fileName, q.text) || StartsWithI(e.name, q.text);
+                (prefix ? prefixHits : otherHits).push_back(&e);
+            }
+            auto byName = [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+            {
+                return a->fileName != b->fileName ? a->fileName < b->fileName
+                                                  : a->mountPath < b->mountPath;
+            };
+            std::sort(prefixHits.begin(), prefixHits.end(), byName);
+            std::sort(otherHits.begin(), otherHits.end(), byName);
+            int n = 0;
+            for (const AssetPanelEntry* e : prefixHits)
+            {
+                if (n++ >= kGraphFocusHitCap)
+                    break;
+                addGuid(*e);
+            }
+            for (const AssetPanelEntry* e : otherHits)
+            {
+                if (n++ >= kGraphFocusHitCap)
+                    break;
+                addGuid(*e);
+            }
+        }
+
+        void ApplyFocusFill(ImGuiInputTextCallbackData* data, const FocusRow& row, bool selectSuffix)
+        {
+            const int prefix = selectSuffix ? data->BufTextLen : 0;
+            data->DeleteChars(0, data->BufTextLen);
+            data->InsertChars(0, row.label.c_str());
+            if (selectSuffix && prefix < data->BufTextLen)
+            {
+                data->CursorPos = prefix;
+                data->SelectionStart = prefix;
+                data->SelectionEnd = data->BufTextLen;
+            }
+            else
+            {
+                data->CursorPos = data->BufTextLen;
+                data->SelectionStart = data->SelectionEnd = data->BufTextLen;
+            }
+        }
+
         int GraphFocusFilterCallback(ImGuiInputTextCallbackData* data)
         {
-            if (data->EventFlag != ImGuiInputTextFlags_CallbackCompletion)
+            FocusComboLive* live = g_focusLive;
+            if (!live || !live->model || !live->nav)
                 return 0;
-            std::string_view buf(data->Buf, static_cast<std::size_t>(data->BufTextLen));
-            if (buf.empty() || buf.front() != '@')
+
+            auto rebuild = [&]()
+            {
+                const GraphFocusQuery q = ParseGraphFocusQuery(
+                    std::string_view(data->Buf, static_cast<std::size_t>(data->BufTextLen)));
+                BuildFocusRows(q, *live->model, live->rows);
+                if (*live->nav < 0)
+                    *live->nav = 0;
+                if (!live->rows.empty() && *live->nav >= static_cast<int>(live->rows.size()))
+                    *live->nav = static_cast<int>(live->rows.size()) - 1;
+            };
+
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion)
+            {
+                rebuild();
+                if (!live->rows.empty())
+                    ApplyFocusFill(data, live->rows[static_cast<std::size_t>(*live->nav)],
+                                   /*selectSuffix=*/false);
                 return 0;
-            const auto done = CompleteGraphFocusKindPrefix(buf.substr(1));
-            if (!done)
+            }
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory)
+            {
+                rebuild();
+                if (live->rows.empty())
+                    return 0;
+                if (data->EventKey == ImGuiKey_DownArrow)
+                    *live->nav = std::min(*live->nav + 1, static_cast<int>(live->rows.size()) - 1);
+                else if (data->EventKey == ImGuiKey_UpArrow)
+                    *live->nav = std::max(*live->nav - 1, 0);
+                ApplyFocusFill(data, live->rows[static_cast<std::size_t>(*live->nav)],
+                               /*selectSuffix=*/false);
+                if (live->prevLen)
+                    *live->prevLen = data->BufTextLen;
                 return 0;
-            const std::string filled = std::string("@") + std::string(*done);
-            data->DeleteChars(0, data->BufTextLen);
-            data->InsertChars(0, filled.c_str());
+            }
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackEdit)
+            {
+                const int len = data->BufTextLen;
+                const bool shrinking = live->prevLen && len < *live->prevLen;
+                if (live->prevLen)
+                    *live->prevLen = len;
+                *live->nav = 0;
+                rebuild();
+                if (!shrinking && len > 0 && !live->rows.empty())
+                {
+                    const FocusRow& best = live->rows.front();
+                    const std::string_view typed(data->Buf, static_cast<std::size_t>(len));
+                    if (StartsWithI(best.label, typed) && best.label.size() > typed.size())
+                    {
+                        ApplyFocusFill(data, best, /*selectSuffix=*/true);
+                        if (live->prevLen)
+                            *live->prevLen = data->BufTextLen;
+                    }
+                }
+            }
             return 0;
         }
 
@@ -2250,125 +2432,66 @@ namespace Arcane::Editor
                 if (ImGui::IsWindowAppearing())
                 {
                     state.graphFocusFilter[0] = '\0';
+                    state.graphFocusNav = 0;
+                    state.graphFocusFilterLen = 0;
                     ImGui::SetKeyboardFocusHere();
                 }
                 ImGui::SetNextItemWidth(-FLT_MIN);
+                FocusComboLive live;
+                live.model = &model;
+                live.nav = &state.graphFocusNav;
+                live.prevLen = &state.graphFocusFilterLen;
+                g_focusLive = &live;
                 ImGui::InputTextWithHint("##graphfocusfilter", "@kind or name...",
                                          state.graphFocusFilter, sizeof(state.graphFocusFilter),
-                                         ImGuiInputTextFlags_CallbackCompletion,
+                                         ImGuiInputTextFlags_CallbackCompletion
+                                             | ImGuiInputTextFlags_CallbackHistory
+                                             | ImGuiInputTextFlags_CallbackEdit,
                                          GraphFocusFilterCallback);
-                const GraphFocusQuery query = ParseGraphFocusQuery(state.graphFocusFilter);
+                g_focusLive = nullptr;
 
-                auto pickEverything = [&]()
+                const GraphFocusQuery query = ParseGraphFocusQuery(state.graphFocusFilter);
+                BuildFocusRows(query, model, live.rows);
+                if (state.graphFocusNav < 0)
+                    state.graphFocusNav = 0;
+                if (!live.rows.empty()
+                    && state.graphFocusNav >= static_cast<int>(live.rows.size()))
+                    state.graphFocusNav = static_cast<int>(live.rows.size()) - 1;
+
+                auto applyRow = [&](const FocusRow& row)
                 {
-                    state.graphFocus = Arcane::Guid{};
-                    state.graphKindFilter.reset();
-                    ImGui::CloseCurrentPopup();
-                };
-                auto pickKind = [&](AssetKind k)
-                {
-                    state.graphFocus = Arcane::Guid{};
-                    state.graphKindFilter = k;
-                    ImGui::CloseCurrentPopup();
-                };
-                auto pickGuid = [&](const Arcane::Guid& g)
-                {
-                    state.graphFocus = g;
-                    state.graphKindFilter.reset();
+                    if (row.pick == FocusPick::Everything)
+                    {
+                        state.graphFocus = Arcane::Guid{};
+                        state.graphKindFilter.reset();
+                    }
+                    else if (row.pick == FocusPick::Kind)
+                    {
+                        state.graphFocus = Arcane::Guid{};
+                        state.graphKindFilter = row.kind;
+                    }
+                    else
+                    {
+                        state.graphFocus = row.guid;
+                        state.graphKindFilter.reset();
+                    }
                     ImGui::CloseCurrentPopup();
                 };
 
                 const bool enter = ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false);
-                if (enter && query.mode == GraphFocusQuery::Mode::Kind)
-                    pickKind(query.kind);
-                else if (enter && query.mode == GraphFocusQuery::Mode::KindPrefix)
-                {
-                    if (const auto done = CompleteGraphFocusKindPrefix(query.text))
-                    {
-                        if (auto k = ParseGraphFocusQuery(std::string("@") + std::string(*done));
-                            k.mode == GraphFocusQuery::Mode::Kind)
-                            pickKind(k.kind);
-                    }
-                }
-                else if (enter && query.mode == GraphFocusQuery::Mode::Everything
-                         && state.graphFocusFilter[0] != '\0')
-                    pickEverything();
+                if (enter && !live.rows.empty())
+                    applyRow(live.rows[static_cast<std::size_t>(state.graphFocusNav)]);
 
-                if (query.mode == GraphFocusQuery::Mode::Everything)
+                for (int i = 0; i < static_cast<int>(live.rows.size()); ++i)
                 {
-                    if (ImGui::Selectable(kGraphFocusEverything, !state.graphFocus.IsValid()
-                                                                && !state.graphKindFilter)
-                        && !enter)
-                        pickEverything();
-                }
-                if (query.mode == GraphFocusQuery::Mode::Everything
-                    || query.mode == GraphFocusQuery::Mode::KindPrefix
-                    || query.mode == GraphFocusQuery::Mode::Kind)
-                {
-                    const std::string prefix = query.mode == GraphFocusQuery::Mode::KindPrefix
-                        ? query.text : std::string{};
-                    for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
+                    const FocusRow& row = live.rows[static_cast<std::size_t>(i)];
+                    ImGui::PushID(i);
+                    if (ImGui::Selectable(row.label.c_str(), i == state.graphFocusNav))
                     {
-                        if (query.mode == GraphFocusQuery::Mode::Kind && kw.kind != query.kind)
-                            continue;
-                        if (!prefix.empty())
-                        {
-                            const std::string_view tok{ kw.token };
-                            if (tok.size() < prefix.size() || tok.substr(0, prefix.size()) != prefix)
-                                continue;
-                        }
-                        char line[48];
-                        std::snprintf(line, sizeof(line), "@%s", kw.token);
-                        const bool sel = !state.graphFocus.IsValid()
-                            && state.graphKindFilter == kw.kind;
-                        ImGui::PushID(kw.token);
-                        if (ImGui::Selectable(line, sel))
-                            pickKind(kw.kind);
-                        ImGui::PopID();
+                        state.graphFocusNav = i;
+                        applyRow(row);
                     }
-                }
-
-                std::vector<const AssetPanelEntry*> hits;
-                if (query.mode != GraphFocusQuery::Mode::KindPrefix)
-                {
-                    for (const auto& [g, e] : model.Entries())
-                    {
-                        (void)g;
-                        if (query.mode == GraphFocusQuery::Mode::Everything)
-                        {
-                            if (e.kind != AssetKind::Scene)
-                                continue;   // empty box: scenes only, not the whole Source tree
-                        }
-                        else if (!MatchesGraphFocusQuery(query, e))
-                            continue;
-                        hits.push_back(&e);
-                    }
-                    std::sort(hits.begin(), hits.end(),
-                              [](const AssetPanelEntry* a, const AssetPanelEntry* b)
-                              {
-                                  return a->fileName != b->fileName
-                                      ? a->fileName < b->fileName
-                                      : a->mountPath < b->mountPath;
-                              });
-                }
-                if (enter && query.mode == GraphFocusQuery::Mode::Text && !hits.empty())
-                    pickGuid(hits.front()->guid);
-
-                const int shown = std::min(static_cast<int>(hits.size()), kGraphFocusHitCap);
-                for (int i = 0; i < shown; ++i)
-                {
-                    const AssetPanelEntry* s = hits[static_cast<std::size_t>(i)];
-                    ImGui::PushID(s->guid.ToString().c_str());
-                    if (ImGui::Selectable(s->fileName.c_str(), s->guid == state.graphFocus))
-                        pickGuid(s->guid);
                     ImGui::PopID();
-                }
-                if (static_cast<int>(hits.size()) > kGraphFocusHitCap)
-                {
-                    ImGui::BeginDisabled();
-                    ImGui::TextDisabled("+%d more -- keep typing",
-                                        static_cast<int>(hits.size()) - kGraphFocusHitCap);
-                    ImGui::EndDisabled();
                 }
                 ImGui::EndCombo();
             }
@@ -2514,6 +2637,8 @@ namespace Arcane::Editor
         state.graphBuiltKindFilter.reset();
         state.graphKindFilter.reset();
         state.graphFocusFilter[0] = '\0';
+        state.graphFocusNav = 0;
+        state.graphFocusFilterLen = 0;
         state.graphLayoutDirty = false;
         state.graphFocus = Arcane::Guid{};
         // ...and re-arm the boot-scene seed with it (Task 5): the incoming

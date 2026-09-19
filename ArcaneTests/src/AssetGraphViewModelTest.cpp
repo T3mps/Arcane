@@ -665,6 +665,9 @@ TEST_CASE("ParseGraphFocusQuery: everything, @kind, and substring", "[editor]")
     CHECK(q.text == "player");
     CHECK(CompleteGraphFocusKindPrefix("s") == "source");
     CHECK(CompleteGraphFocusKindPrefix("sp") == "sprite");
+    CHECK(CompleteGraphFocusKindPrefix("e") == "everything");
+    q = ParseGraphFocusQuery("@everything");
+    CHECK(q.mode == GraphFocusQuery::Mode::Everything);
     CHECK_FALSE(CompleteGraphFocusKindPrefix("z").has_value());
 
     AssetPanelEntry src = MakeEntry(GuidN(9, 1), "NetClient", AssetKind::Source);

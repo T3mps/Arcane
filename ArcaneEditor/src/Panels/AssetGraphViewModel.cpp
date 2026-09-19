@@ -311,6 +311,9 @@ namespace Arcane::Editor
         if (s.front() == '@')
         {
             const std::string_view rest = Trim(s.substr(1));
+            const std::string restLower = LowerCopy(rest);
+            if (restLower == "everything" || restLower == "all")
+                return q;   // @everything == everything
             if (auto k = KindFromFocusToken(rest))
             {
                 q.mode = GraphFocusQuery::Mode::Kind;
@@ -318,7 +321,7 @@ namespace Arcane::Editor
                 return q;
             }
             q.mode = GraphFocusQuery::Mode::KindPrefix;
-            q.text = LowerCopy(rest);
+            q.text = std::move(restLower);
             return q;
         }
         q.mode = GraphFocusQuery::Mode::Text;
@@ -342,10 +345,12 @@ namespace Arcane::Editor
     std::optional<std::string_view> CompleteGraphFocusKindPrefix(std::string_view typed)
     {
         const std::string prefix = LowerCopy(Trim(typed));
+        if (prefix.empty() || std::string_view("everything").starts_with(prefix))
+            return std::string_view{ "everything" };
         for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
         {
             const std::string tok = LowerCopy(kw.token);
-            if (prefix.empty() || tok.starts_with(prefix))
+            if (tok.starts_with(prefix))
                 return std::string_view{ kw.token };
         }
         if (auto k = KindFromFocusToken(prefix))
