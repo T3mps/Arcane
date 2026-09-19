@@ -4,7 +4,10 @@
 **Status:** Design, approved in brainstorm 2026-09-18; **vetted against UE
 5.8.2 source 2026-09-18** (Appendix B: two mechanisms amended to UE's shape —
 the prior pose via CPU history + re-dirty, the normal matrix in the row — and
-three statements sharpened). Step 2 of the binding
+three statements sharpened). **Plan 1 closed at `3b50ff3d`
+(2026-09-18, the T8 head; the close booking is the commit after it): bounds,
+visibility, the GPU scene with CPU-written indices + indirect draws; ABI 36.**
+Step 2 of the binding
 order (`docs/research/2026-09-16-direction-and-sequencing.md`: F4 → **F3** → F5);
 F4 closed at `e95de920` (2026-09-18). Implementation plans follow this spec
 (§12): two plans.
@@ -625,6 +628,19 @@ In order of authority:
 | R6 | Prior pose = `GpuInstance::prevModel`; no ECS history component. **Mechanism amended after the UE vet (user, 2026-09-18):** a CPU history in the mirror + a re-dirty the frame after a move (UE's `FSceneVelocityData`), replacing the GPU row-writer + advance dispatch | `PreviousWorldTransform` + a system; defer to F5; the GPU row-writer |
 | R8 | The row carries the normal matrix from `NormalMatrixFor` (240 B), not a per-vertex 3×3 inverse (UE vet, 2026-09-18) | computing it in the vertex shader |
 | R7 | Persistent slots with dirty-tracked uploads (`Changed<>` + reconciliation); a registry generation stamp forces the full rebuild | full re-upload every frame; transient per-frame rows |
+
+**Executor rulings, plan 1 (2026-09-18, ledgered in the plan's progress notes):**
+R-A `AddMeshNode` declares `gpuscene-sync` before `mesh` itself, so the
+copy -> read barriers are the graph's; R-B the scene grows at declaration time
+(`GpuScene::Reserve`, before the imports), never inside `Record`; R-C
+`GpuScene.hpp` carries the `ARCANE_API` declaration of `GpuSceneSyncedGeneration`
+so its definition exports; R-D the mesh node is declared whenever the stage has rows
+(or a full rebuild is pending), not only when a batch emits -- a drawless
+frame still uploads; R-E the sprite `WorldBounds` widens Z ONLY, per s2.3's
+table (the plan's uniform `Widened()` moved the framed editor camera
+sub-pixel and diffed both editor golden lanes); R-F a Skipped or Failed
+graph frame invalidates the mirror (`GpuSceneInvalidate`) -- the rows it
+staged never reached the device and no re-dirty would repeat them.
 
 ---
 

@@ -99,6 +99,18 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   sink over the image, `Viewport/GizmoOverlay.hpp` -- never into the scene
   batch, which the mesh pass overpaints) and its look is Unreal's widget
   (`UnrealWidgetRender.cpp` proportions and colours, in pixels).
+- **Bounds, visibility and the GPU scene (F3 plan 1, 2026-09-18, ABI 36):**
+  every drawable carries `WorldBounds` (`BoundsSystem`, after transform
+  propagation; sprites widen Z only), and each view's `VisibleSet` is the one
+  CPU coarse-cull seam sprites, picking, framing and tests share. Meshes draw
+  from a persistent GPU instance scene (`GpuSceneMirror` -> `GpuSceneSync` ->
+  `GpuScene`, 240-byte rows, dirty-tracked uploads through `gpuscene-sync`)
+  through indirect batches, culled on the CPU per view until plan 2's compute
+  cull takes over the visible-index loop. Spec:
+  `docs/specs/2026-09-18-f3-visibility-and-gpu-scene-design.md`. `Nri/nodes/`
+  holds 9 pass types in 7 files (Batch2D, PostChain, Tonemap, Grid, ImGui,
+  Mesh, Pick, Outline, GpuSceneSync) against the 10+ domain-reorg trigger --
+  plan 2's `MeshCullNode` is the tenth.
 - **3D physics is Box3D** (github.com/erincatto/box3d), not Jolt, not a 3D
   Manifold2D. Vendor indefinitely behind a C++ façade; keep a parallel
   engine-owned world. Do not teach `PhysicsSystem` to write 3D poses (it

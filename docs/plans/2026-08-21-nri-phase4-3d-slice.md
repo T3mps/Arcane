@@ -359,6 +359,10 @@ one to reconcile.
 - [ ] **Step 4: Implement `MeshNode`** — vertex/index buffer upload through
   `NriUploadRing`, pipeline through `NriPipelineCache::GetGraphics` with
   `depthFormat = D32_SFLOAT`, per-frame camera constants.
+  *(Superseded 2026-09-18 by F3 plan 1: the 128-byte per-instance
+  `MeshConstants` root block this grew into is gone -- `MeshNode` reads its
+  rows from the persistent GPU scene by `SV_InstanceID` and draws indirect per
+  batch; `docs/specs/2026-09-18-f3-visibility-and-gpu-scene-design.md` §5.)*
 - [ ] **Step 5: Run the structural tests, then the full gate.** State the delta.
 - [ ] **Step 6: Write the `[gpu][pixel]` case** in `NriGraphPixelTest.cpp` on an
   offscreen `NriGraphContext` + `ReadCapture`: a cube at the origin under a
