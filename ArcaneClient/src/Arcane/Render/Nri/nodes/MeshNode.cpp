@@ -12,6 +12,7 @@
 
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/Nri/nodes/GpuSceneSyncNode.hpp>   // AddGpuSceneSyncNode -- declared ahead of the mesh node (F3 plan 1 T6)
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
@@ -1022,6 +1023,15 @@ namespace Arcane
                               context->PresentedFrames());
         }
 
+        // THE GPU SCENE'S WRITER, FIRST (F3 plan 1 T6, ruling R-A): the sync
+        // node imports the persistent instance / args / visible-index buffers
+        // as CopyDst and copies this frame's rows into them; the mesh node
+        // below Reads the same handles, so the graph derives the copy -> read
+        // barriers. The ad-hoc rows (`scene.instances`) are NOT handed over
+        // yet -- Task 7 routes them through the scratch rows when it rewrites
+        // the draw; until then Record draws them the old way.
+        const GpuSceneNodeInputs gpuScene = AddGpuSceneSyncNode(graph, context, scene.scene, /*adHoc*/ {});
+
         // `depth` is captured by reference ([&]) below, not shared_ptr -- safe
         // here only because the SETUP lambda is the one that mutates it and
         // AddNode runs setup synchronously (before this function returns), so
@@ -1046,6 +1056,13 @@ namespace Arcane
                 builder.Write(depth, RgUsage::DepthWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(&canvas, 1));
                 graph.SetDepthAttachment(depth);
+
+                // The GPU scene's buffers, as this pass consumes them: the
+                // instance rows and the visible indices from the vertex
+                // shader, the args by CmdDrawIndexedIndirect (Task 7).
+                builder.Read(gpuScene.instances, RgUsage::ShaderRead);
+                builder.Read(gpuScene.visibleIndices, RgUsage::ShaderRead);
+                builder.Read(gpuScene.args, RgUsage::IndirectArgs);
             },
             [context, scene](RenderGraphNodeContext& nodeContext)
             {
@@ -1054,6 +1071,11 @@ namespace Arcane
                 if (MeshNode* node = context->Mesh())
                     node->Record(nodeContext, scene, context->FrameSlot());
             });
+
+        // TEST-ONLY, and declared only when a test armed it (GpuScene::
+        // EnableDebugReadback): the instance buffer read back after this pass
+        // consumed it. A no-op on every production frame.
+        AddGpuSceneDebugReadbackNode(graph, context, gpuScene);
         return depth;
     }
 }

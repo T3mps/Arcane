@@ -130,7 +130,8 @@ namespace Arcane
     enum class RgUsage : std::uint8_t
     {
         ColorWrite, DepthWrite, ShaderRead, ShaderWriteCs, // (UAV, compute)
-        CopySrc, CopyDst, Present, ReadbackHost
+        CopySrc, CopyDst, Present, ReadbackHost,
+        IndirectArgs   // an indirect-draw argument buffer (buffers only) -- F3 plan 1 T6
     };
 
     // Handed to a node's Setup function. A thin wrapper over its owning

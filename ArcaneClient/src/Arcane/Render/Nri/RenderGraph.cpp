@@ -35,6 +35,7 @@ namespace
     //  CopyDst        COPY_DESTINATION  (bit 19)        COPY_DESTINATION            COPY               (bit 20)
     //  Present        NONE              (0)             PRESENT                     NONE               (0x7FFFFFFF)
     //  ReadbackHost   COPY_DESTINATION  (bit 19)        COPY_DESTINATION            COPY               (bit 20)
+    //  IndirectArgs   ARGUMENT_BUFFER   (bit 3)         --  (buffers only)          INDIRECT           (bit 23)
     //
     // Notes a reviewer should check the table against:
     //
@@ -109,6 +110,13 @@ namespace
             break;
         case Arcane::RgUsage::Present:
             state = { nri::AccessBits::NONE, nri::Layout::PRESENT, nri::StageBits::NONE };
+            break;
+        case Arcane::RgUsage::IndirectArgs:
+            // Buffers only (an indirect-draw argument buffer has no texture
+            // reading); ARGUMENT_BUFFER's one compatible stage is INDIRECT
+            // (NRIDescs.h's AccessBits table). The layout is forced UNDEFINED
+            // below like every other buffer state.
+            state = { nri::AccessBits::ARGUMENT_BUFFER, nri::Layout::UNDEFINED, nri::StageBits::INDIRECT };
             break;
         }
 

@@ -227,6 +227,7 @@
 #include <Arcane/Material/GlobalParams.hpp>    // GlobalParams (held by value)
 #include <Arcane/Platform/Window.hpp>
 #include <Arcane/Render/Nri/NriDevice.hpp>
+#include <Arcane/Render/Nri/GpuScene.hpp>           // GpuScene -- the GPU scene's device half (F3 plan 1 T6); after NriDevice.hpp (ERROR clash, see NriCommon.hpp)
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/NriSwapChain.hpp>
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
@@ -955,6 +956,30 @@ namespace Arcane
         // pass.
         [[nodiscard]] MeshNode*      Mesh()      noexcept { return m_mesh.get(); }
 
+        // THE GPU SCENE's device half (F3 plan 1 T6): the persistent instance
+        // buffer, the per-slot indirect-args + visible-index buffers and the
+        // scratch rows, written by GpuSceneSyncNode (declared by AddMeshNode,
+        // ahead of the mesh node) and read by the mesh pass. Built EAGERLY
+        // beside Mesh(), for the same reason. Null only if Create() failed.
+        [[nodiscard]] GpuScene*      Scene()     noexcept { return m_scene.get(); }
+
+        // THE FENCE VALUE THIS FRAME's SUBMIT WILL SIGNAL -- i.e. the value a
+        // resource still referenced by the command list being recorded (or
+        // declared) THIS frame must be buried against. RenderGraph::Execute
+        // signals m_submitValue + 1 per submit and increments afterwards
+        // (RenderGraphExec.cpp), and DebugSubmitCount() returns m_submitValue,
+        // so mid-frame the pending submit's value is DebugSubmitCount() + 1.
+        //
+        // NOT A VALUE TO Bury() AT BEFORE Execute RETURNS: Graveyard::Bury
+        // requires nondecreasing values, and Execute itself buries at
+        // DebugSubmitCount() while it runs. Stamp the retirement with this and
+        // bury it right after the successful Execute (GpuScene::Reserve ->
+        // FlushGraves is the shape), when the two are equal.
+        [[nodiscard]] std::uint64_t CurrentFence() const noexcept
+        {
+            return m_graph ? m_graph->DebugSubmitCount() + 1 : 0;
+        }
+
         // The 3D reference grid (F4 plan 1 T10). Built EAGERLY beside Mesh()
         // for the same reason: a frame that carries no grid desc declares no
         // node, so the cost of having it is one tiny descriptor pool and a
@@ -1399,6 +1424,10 @@ namespace Arcane
         // every mesh on a viewport drag would be the ring cliff through a
         // different door.
         std::unique_ptr<NriMeshBufferCache> m_meshBuffers;
+        // The GPU scene's device half (F3 plan 1 T6), beside the mesh cache
+        // for the same reason: recorded command buffers name its buffers, so
+        // it is destroyed AFTER the nodes (declaration order). Persistent.
+        std::unique_ptr<GpuScene>           m_scene;
         std::unique_ptr<RenderGraph>       m_graph;
         // The nodes, after everything they borrow (device, cache) and after the
         // graph whose transient pool the tonemap's source view names. Their
@@ -1652,10 +1681,12 @@ namespace Arcane
         bool depth = false;
 
         // Task 7 (Phase 4): THE OPAQUE 3D PASS's scene, or null for none.
-        // Read for its INSTANCE COUNT here (an empty scene declares nothing,
+        // Read for MeshSceneDesc::Empty() here (an empty scene -- no ad-hoc
+        // instances and no registry scene with draws -- declares nothing,
         // exactly as a null one does) and for nothing else -- the geometry, the
         // per-instance transforms and tints, the camera and the one directional
-        // light are all consumed by MeshNode at Record time.
+        // light are all consumed by MeshNode at Record time; the registry
+        // scene's rows by GpuSceneSyncNode's (F3 plan 1 T6).
         //
         // A device-less drive can point this at a MeshSceneDesc carrying one
         // instance with a null `mesh`: the DECLARATIONS depend on the scene

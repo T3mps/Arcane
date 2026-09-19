@@ -414,6 +414,12 @@ namespace Arcane
         if (!m_meshBuffers)
             return false;   // already logged
 
+        // The GPU scene's device half (F3 plan 1 T6), eagerly like the cache
+        // above -- see Scene().
+        m_scene = GpuScene::Create(*m_device);
+        if (!m_scene)
+            return false;   // already logged
+
         m_graph = std::make_unique<RenderGraph>();
 
         // The offline artifacts the nodes below need as RAW BYTECODE (NRI's
@@ -802,6 +808,8 @@ namespace Arcane
             m_textures->Release(graves, fence);
         if (m_meshBuffers)
             m_meshBuffers->Release(graves, fence);
+        if (m_scene)
+            m_scene->Release(graves, fence);
 
         // The sanctioned cache release (see NriPipelineCache.hpp): explicit,
         // at a fence the caller knows, rather than the destructor's direct-
@@ -1256,7 +1264,9 @@ namespace Arcane
         // FrameDesc's own banner states. A frame that asks for no mesh pass is
         // byte for byte the frame this function built before Task 7 existed.
         // ---------------------------------------------------------------
-        const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->instances.empty();
+        // Since F3 plan 1 T6 "non-empty" is MeshSceneDesc::Empty(): ad-hoc
+        // instances OR a registry-backed scene with draws.
+        const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->Empty();
         if (wantsMesh)
         {
             // kGraphCanvasFormat is passed EXPLICITLY because it is the format
@@ -1781,6 +1791,12 @@ namespace Arcane
         if (m_meshBuffers)
             m_meshBuffers->EvictToBudget(m_frameIndex, m_graves,
                                          m_graph ? m_graph->DebugSubmitCount() : 0);
+        // The GPU scene's retirements (a grown instance buffer, a grown slot
+        // buffer), stamped at declaration with the value this submit just
+        // signalled -- see NriGraphContext::CurrentFence for why they wait
+        // until here.
+        if (m_scene)
+            m_scene->FlushGraves(m_graves);
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, after the frame's present and
@@ -1929,6 +1945,8 @@ namespace Arcane
         if (m_meshBuffers)
             m_meshBuffers->EvictToBudget(m_frameIndex, m_graves,
                                          m_graph ? m_graph->DebugSubmitCount() : 0);
+        if (m_scene)
+            m_scene->FlushGraves(m_graves);   // same contract as RenderFrame() above
         ++m_frameIndex;
 
         // THE GPU-PROGRESS HEARTBEAT, published ONLY when the caller has said

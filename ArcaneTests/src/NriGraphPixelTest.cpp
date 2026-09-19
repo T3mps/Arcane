@@ -66,6 +66,7 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
 #include <Arcane/Mesh/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
 #include <Arcane/Render/Nri/BindlessTable.hpp>    // kInvalidSlot -- the four-cube bindless proof
+#include <Arcane/Render/Nri/GpuScene.hpp>         // GpuScene -- the instance-buffer round trip (F3 plan 1 T6)
 #include <Arcane/Render/Nri/NriDevice.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
@@ -102,6 +103,7 @@
 #include <array>        // the world quad's four corners (case 3b)
 #include <cstdint>
 #include <cstdlib>      // std::abs over the integer luma difference
+#include <cstring>      // std::memcmp -- the byte-exact instance-row check
 #include <filesystem>   // case 9's own temp artifact dir
 #include <memory>
 #include <optional>
@@ -1819,4 +1821,181 @@ TEST_CASE("mesh: a cooked artifact resolves through NriTextureCache into a bindl
           "[gpu][pixel][mesh][bindless][nri][vulkan]")
 {
     CheckCookedAlbedoRendersThroughBindlessSlot(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// 10. THE GPU SCENE'S DEVICE HALF (F3 plan 1 T6): staged GpuInstance rows land
+//     BYTE-EXACT in the persistent instance buffer, through GpuSceneSyncNode's
+//     upload-ring copies, and SURVIVE a growth -- the buffer doubling at
+//     declaration time (GpuScene::Reserve) with the live rows copied old -> new
+//     behind an explicit barrier at record time (GpuScene::Apply).
+//
+//     The frame carries a registry-backed scene (MeshSceneDesc::scene) with ONE
+//     emitted batch and NO ad-hoc instances, so the mesh node is DECLARED
+//     (reading the three imported buffers -- the copy -> read barriers the
+//     validation layers judge) and records nothing but its depth clear (Task 7
+//     rewrites the draw). The bytes come back through GpuScene's TEST-ONLY
+//     readback: a HOST_READBACK buffer a Copy node after the mesh node fills
+//     from the imported instances handle (the `pickreadback` idiom).
+//
+//     RenderErrorCount() is the validation gate: a missing barrier on the grown
+//     buffer, or on the retired one the grow-copy reads, is a sync-validation /
+//     debug-layer message -- and every one of those lands in the latch.
+// ---------------------------------------------------------------------------
+namespace
+{
+    // Every field non-default and distinct per seed, so a row copied to the
+    // wrong offset, a partial copy, or a stale row from the previous frame all
+    // fail the memcmp rather than passing on zeros.
+    Arcane::GpuInstance MakeInstanceRow(float seed)
+    {
+        Arcane::GpuInstance v;
+        v.model        = glm::translate(glm::mat4(1.0f), glm::vec3(seed, 2.0f * seed, 3.0f * seed));
+        v.prevModel    = glm::translate(glm::mat4(1.0f), glm::vec3(-seed, seed, 0.5f * seed));
+        v.normal0      = glm::vec4(seed, 0.1f, 0.2f, 0.3f);
+        v.normal1      = glm::vec4(0.4f, seed, 0.5f, 0.6f);
+        v.normal2      = glm::vec4(0.7f, 0.8f, seed, 0.9f);
+        v.boundsMin    = glm::vec4(-seed, -2.0f * seed, -3.0f * seed, 0.0f);
+        v.boundsMax    = glm::vec4(seed, 2.0f * seed, 3.0f * seed, 0.25f);
+        v.baseColor    = glm::vec4(0.1f * seed, 0.2f * seed, 0.3f * seed, 1.0f);
+        v.materialSlot = static_cast<std::uint32_t>(seed) * 7u;
+        v.batch        = static_cast<std::uint32_t>(seed);
+        v.flags        = Arcane::kGpuInstanceFlagTeleported;
+        v.pad          = 0xA5A5A5A5u + static_cast<std::uint32_t>(seed);
+        return v;
+    }
+
+    // One batch, whose args + visible indices ride the same sync node -- so the
+    // args buffer's copy -> ARGUMENT_BUFFER/INDIRECT edge is judged too.
+    void FillOneBatch(Arcane::GpuSceneFrame& frame, std::uint32_t rowCapacity,
+                      std::span<const std::uint32_t> visibleRows)
+    {
+        frame.rowCount = rowCapacity;
+        frame.visibleIndices.assign(rowCapacity, 0xFFFFFFFFu);
+        for (std::size_t i = 0; i < visibleRows.size(); ++i)
+            frame.visibleIndices[i] = visibleRows[i];
+        Arcane::GpuBatchDraw batch;
+        batch.mesh       = Arcane::Guid{ 1, 1 };
+        batch.indexCount = 36;
+        batch.capacity   = static_cast<std::uint32_t>(visibleRows.size());
+        frame.batches.push_back(batch);
+        frame.args.push_back(Arcane::DrawIndexedArgs{ 36u, static_cast<std::uint32_t>(visibleRows.size()), 0u, 0, 0u });
+    }
+
+    void CheckRowBytes(const std::vector<std::uint8_t>& bytes, std::uint32_t row, const Arcane::GpuInstance& expected)
+    {
+        constexpr std::size_t kRow = sizeof(Arcane::GpuInstance);
+        INFO("instance row " << row);
+        REQUIRE(bytes.size() >= (static_cast<std::size_t>(row) + 1u) * kRow);
+        CHECK(std::memcmp(bytes.data() + static_cast<std::size_t>(row) * kRow, &expected, kRow) == 0);
+    }
+
+    void CheckGpuSceneRoundTrip(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+        PixelVehicle v = MakeVehicle(backend);
+
+        Arcane::GpuScene* device = v.ctx->Scene();
+        REQUIRE(device != nullptr);
+        REQUIRE(device->RowCapacity() == Arcane::GpuScene::kInitialRows);
+        REQUIRE(device->EnableDebugReadback());
+        const std::uint64_t generationBefore = device->InstanceBufferGeneration();
+        CHECK(Arcane::GpuSceneSyncedGeneration(device) == 0u);
+        CHECK(Arcane::GpuSceneSyncedGeneration(nullptr) == 0u);
+
+        constexpr std::uint32_t kRowA = 0u;
+        constexpr std::uint32_t kRowB = 5u;                               // NOT adjacent: per-row copies, not one span
+        constexpr std::uint32_t kRowC = Arcane::GpuScene::kInitialRows;   // the row that forces the growth
+        const Arcane::GpuInstance rowA = MakeInstanceRow(1.0f);
+        const Arcane::GpuInstance rowB = MakeInstanceRow(2.0f);
+        const Arcane::GpuInstance rowC = MakeInstanceRow(3.0f);
+
+        // ---- frame 1: two staged rows inside the initial capacity ----------
+        {
+            Arcane::GpuSceneFrame frame;
+            frame.stage.rows        = { kRowA, kRowB };
+            frame.stage.values      = { rowA, rowB };
+            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows;
+            frame.stage.fullRebuild = true;
+            frame.stage.generation  = 42u;
+            const std::uint32_t visible[] = { kRowA, kRowB };
+            FillOneBatch(frame, Arcane::GpuScene::kInitialRows, visible);
+
+            Arcane::MeshSceneDesc scene;
+            scene.scene = &frame;
+            FillCamera(scene);
+            REQUIRE(scene.instances.empty());
+            REQUIRE_FALSE(scene.Empty());
+
+            Arcane::NriGraphContext::FrameDesc fd;
+            fd.mesh = &scene;
+            RenderOne(*v.ctx, fd);
+
+            std::vector<std::uint8_t> bytes;
+            REQUIRE(device->ReadDebugInstances(bytes));
+            CHECK(bytes.size() == device->InstanceBytes());
+            CheckRowBytes(bytes, kRowA, rowA);
+            CheckRowBytes(bytes, kRowB, rowB);
+            CHECK(device->RowCapacity() == Arcane::GpuScene::kInitialRows);
+            CHECK(device->InstanceBufferGeneration() == generationBefore);
+            CHECK(device->SyncedGeneration() == 42u);
+            CHECK(Arcane::GpuSceneSyncedGeneration(device) == 42u);
+        }
+
+        // ---- frame 2: GROWTH. The mirror's high water is kInitialRows + 1 and
+        // the stage is NOT a full rebuild, so Reserve doubles the buffer and
+        // Apply copies the live rows old -> new before writing the new row.
+        // Rows A and B must SURVIVE the move; row C lands past the old end.
+        {
+            Arcane::GpuSceneFrame frame;
+            frame.stage.rows        = { kRowC };
+            frame.stage.values      = { rowC };
+            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows + 1u;
+            frame.stage.fullRebuild = false;
+            frame.stage.generation  = 42u;
+            const std::uint32_t visible[] = { kRowA, kRowB, kRowC };
+            FillOneBatch(frame, Arcane::GpuScene::kInitialRows + 1u, visible);
+
+            Arcane::MeshSceneDesc scene;
+            scene.scene = &frame;
+            FillCamera(scene);
+
+            Arcane::NriGraphContext::FrameDesc fd;
+            fd.mesh = &scene;
+            RenderOne(*v.ctx, fd);
+
+            std::vector<std::uint8_t> bytes;
+            REQUIRE(device->ReadDebugInstances(bytes));
+            CHECK(device->RowCapacity() == 2u * Arcane::GpuScene::kInitialRows);
+            CHECK(bytes.size() == device->InstanceBytes());
+            CheckRowBytes(bytes, kRowA, rowA);
+            CheckRowBytes(bytes, kRowB, rowB);
+            CheckRowBytes(bytes, kRowC, rowC);
+            CHECK(device->InstanceBufferGeneration() == generationBefore + 1u);
+            CHECK(device->SyncedGeneration() == 42u);
+        }
+
+        // ---- frame 3: a frame with NO mesh scene at all, so the retired
+        // buffer's burial retires behind a real submit and the vehicle tears
+        // down with nothing pending but what every frame leaves.
+        {
+            Arcane::NriGraphContext::FrameDesc fd;
+            RenderOne(*v.ctx, fd);
+        }
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("gpuscene: staged rows land byte-exact in the instance buffer and survive a growth (d3d12)",
+          "[gpu][gpuscene][nri][d3d12]")
+{
+    CheckGpuSceneRoundTrip(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("gpuscene: staged rows land byte-exact in the instance buffer and survive a growth (vulkan)",
+          "[gpu][gpuscene][nri][vulkan]")
+{
+    CheckGpuSceneRoundTrip(Arcane::GraphicsBackend::Vulkan);
 }

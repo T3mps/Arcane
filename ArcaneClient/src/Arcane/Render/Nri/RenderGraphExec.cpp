@@ -219,7 +219,8 @@ namespace Arcane
             case RgUsage::CopySrc:
             case RgUsage::CopyDst:
             case RgUsage::ReadbackHost:
-            case RgUsage::Present:       break;
+            case RgUsage::Present:
+            case RgUsage::IndirectArgs:  break;   // buffers only: no texture usage bit exists for it
             }
             return nri::TextureUsageBits::NONE;
         }

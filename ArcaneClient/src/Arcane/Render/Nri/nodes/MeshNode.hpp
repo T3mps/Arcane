@@ -101,11 +101,13 @@
 // (Extensions/NRIDeviceCreation.h declares nri::Message::ERROR and
 // <windows.h> #defines ERROR via wingdi.h).
 #include <NRI.h>
+#include <Extensions/NRIDeviceCreation.h>   // explicitly: GpuSceneTypes.hpp below reaches <windows.h> (GpuScene.hpp explains)
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Math/NormalMatrix.hpp>      // NormalMatrixFor (moved here from this file, F3 plan 1 T5)
 #include <Arcane/Mesh/MeshBuilder.hpp>      // MeshData / MeshVertex -- the CPU geometry
+#include <Arcane/Render/GpuSceneTypes.hpp>     // GpuSceneFrame -- MeshSceneDesc::scene (F3 plan 1 T6)
 #include <Arcane/Render/Nri/BindlessTable.hpp> // MeshInstance::materialSlot's kInvalidSlot default
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
@@ -260,6 +262,20 @@ namespace Arcane
         glm::vec3 lightDirection{0.0f, 0.0f, 1.0f};
         glm::vec3 lightColor{1.0f, 1.0f, 1.0f};
         glm::vec3 ambient{0.05f, 0.05f, 0.05f};
+
+        // THE REGISTRY-BACKED SCENE (F3 plan 1 T6): what GpuSceneSync +
+        // BuildGpuSceneFrame produced for this frame -- the staged rows,
+        // batches, indirect args and visible indices GpuSceneSyncNode copies
+        // to the device ahead of this pass. BORROWED for the RenderFrame call
+        // like `instances`. Null is "no registry scene"; `instances` above
+        // are the AD-HOC rows (a preview, a thumbnail, a test) and the two
+        // are independent. Task 7 teaches Record to draw from it.
+        const GpuSceneFrame* scene = nullptr;
+
+        // "No mesh pass this frame" -- neither ad-hoc instances nor a
+        // registry scene with draws. DeclareGraphFrame declares no node for
+        // an Empty() scene, exactly as it did for an empty `instances`.
+        [[nodiscard]] bool Empty() const noexcept { return instances.empty() && !(scene && scene->HasDraws()); }
     };
 
     class ARCANE_API MeshNode
@@ -597,6 +613,15 @@ namespace Arcane
     //
     // `scene` is BORROWED at declaration time and its SPAN is copied into the
     // exec fn -- see MeshSceneDesc::instances for the lifetime rule.
+    //
+    // SINCE F3 PLAN 1 T6 this declares TWO nodes: "gpuscene-sync" first
+    // (GpuSceneSyncNode.hpp -- the GPU scene's writer, importing the three
+    // persistent buffers as CopyDst), then "mesh", which Reads the same
+    // handles (instances + visible indices ShaderRead, args IndirectArgs) so
+    // the graph derives the copy -> read barriers. The returned handle is
+    // still the depth transient. Record does not draw from the GPU scene yet
+    // (Task 7); with `scene.scene` set and no `instances`, it clears depth
+    // and returns.
     ARCANE_API RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
                                       RgTexture canvas, nri::Format canvasFormat,
                                       const MeshSceneDesc& scene,
