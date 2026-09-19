@@ -18,7 +18,10 @@
 :: ShaderConventions.hpp's header comment for the full account. mesh.hlsl
 :: (Task 8/10) is the first source with registers outside space0 (b1 moved
 :: to space1, the bindless material array sits at t0/space2), which is why
-:: SPIRV_FLAGS below carries two extra shift pairs beyond space0's.
+:: SPIRV_FLAGS below carries extra shift pairs beyond space0's: b/space1 and
+:: t/space2 (Task 8/10), and t/space1 (F3 plan 1 T7 -- mesh.hlsl's instance
+:: and visible-index SRVs at t0/t1 in space1 land at set 1 bindings 0/1,
+:: beside b1's 257).
 ::
 :: INVARIANT: the output stem's _vs/_ps/_cs suffix (4th arg) must agree with
 :: the entry point's <type>_main prefix (2nd arg) -- a loader derives the entry
@@ -31,7 +34,7 @@ set OUT=%~dp0generated
 if not exist "%OUT%\dxil"  mkdir "%OUT%\dxil"
 if not exist "%OUT%\spirv" mkdir "%OUT%\spirv"
 
-set SPIRV_FLAGS=-spirv -D SPIRV=1 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -fvk-b-shift 256 1 -fvk-t-shift 0 2
+set SPIRV_FLAGS=-spirv -D SPIRV=1 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -fvk-b-shift 256 1 -fvk-t-shift 0 2 -fvk-t-shift 0 1
 
 call :compile sprite  vs_main vs_6_5 sprite_vs  || exit /b 1
 call :compile sprite  ps_main ps_6_5 sprite_ps  || exit /b 1

@@ -62,6 +62,13 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/FramePacing.hpp>          // kSwapchainFramesInFlight -- the probe latency
+#include <Arcane/Render/GpuSceneSync.hpp>         // GpuSceneSync / BuildGpuSceneFrame -- the registry-backed draw (F3 plan 1 T7)
+#include <Arcane/Render/VisibilitySystem.hpp>     // BuildVisibleSet / VisibleSet -- what the indirect path draws from
+#include <Arcane/Scene/BoundsSystem.hpp>          // WorldBounds for the GPU scene's rows
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneModule.hpp>           // RegisterSceneComponents
+#include <Arcane/Scene/SceneResources.hpp>        // MeshTable / MeshEntry
+#include <Arcane/Scene/TransformSystems.hpp>      // TransformPropagationSystem
 #include <Arcane/Render/PickEmit.hpp>             // PickDrawable -- the id pass's input
 #include <Arcane/Render/RenderErrorLatch.hpp>     // the shared 0/0 latch every case guards
 #include <Arcane/Mesh/MeshBuilder.hpp>          // BuildCube -- the opaque pass's geometry
@@ -97,6 +104,9 @@
 
 #include <stb_image_write.h>
 
+#include <Astra/Component/ComponentRegistry.hpp>  // the registry the T7 draws-and-culls case builds
+#include <Astra/Registry/Registry.hpp>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>           // lookAtRH, translate
 
@@ -109,6 +119,7 @@
 #include <optional>
 #include <span>         // FrameDesc::pickables / ::selectedIds are spans
 #include <system_error> // case 9's own temp-dir cleanup
+#include <unordered_map> // the T7 case's MeshTable backing store
 #include <vector>
 
 #include "Helpers/GpuCapability.hpp"
@@ -2003,4 +2014,197 @@ TEST_CASE("gpuscene: staged rows land byte-exact in the instance buffer and surv
           "[gpu][gpuscene][nri][vulkan]")
 {
     CheckGpuSceneRoundTrip(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// 11. THE INDIRECT PATH DRAWS, AND DRAWS ONLY THE VISIBLE ROWS (F3 plan 1 T7):
+//     a registry-backed cube (Transform + MeshRenderer -> TransformPropagation
+//     -> Bounds -> BuildVisibleSet -> GpuSceneSync -> BuildGpuSceneFrame) goes
+//     through GpuSceneSyncNode's copies and ONE CmdDrawIndexedIndirect whose
+//     vertex shader reads row = g_VisibleIndices[firstOutput + SV_InstanceID].
+//     Two cubes share the batch: one at the origin, one at (1000, 0, 0) that the
+//     CPU coarse test rejects -- so the args carry instanceNum 1 and the centre
+//     pixel is the origin cube, red and lit.
+//
+//     Then a VisibleSet that admits ONLY the far cube: the instance buffer still
+//     holds the origin cube's row (the stage is the same full rebuild), but the
+//     visible-index list names only the far row, so the indirect draw's one
+//     instance is off-screen and the centre is BACKGROUND. That is the pin that
+//     the draw takes its rows from the visible-index list and not from the
+//     instance buffer's order.
+//
+//     Finally an EMPTY VisibleSet (ruling R-D): nothing emitted, but the stage
+//     still has rows, so the pass is declared (MeshSceneDesc::Empty() is false),
+//     the rows upload, and the mesh node records only its depth clear -- no
+//     draw, no error, centre background.
+//
+//     Every capture is a FRESH vehicle (CaptureMesh), so every frame is a full
+//     rebuild against a device that synced nothing -- deviceSyncedGeneration 0.
+// ---------------------------------------------------------------------------
+namespace
+{
+    struct GpuSceneWorld
+    {
+        std::shared_ptr<Astra::ComponentRegistry> components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{ components };
+        std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+        Astra::Entity root{};
+
+        GpuSceneWorld()
+        {
+            Arcane::RegisterSceneComponents(reg);
+            root = reg.CreateEntity();
+            reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
+            reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ root });
+            reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+        }
+        void AddMesh(Arcane::Guid id, const Arcane::MeshData& data)
+        {
+            Arcane::MeshEntry entry;
+            entry.data   = data;
+            entry.bounds = Arcane::ComputeMeshBounds(entry.data);
+            entry.slots.push_back(Arcane::MeshSlot{});
+            meshes.emplace(id, entry);
+        }
+        Astra::Entity Spawn(glm::vec3 pos, Arcane::Guid mesh)
+        {
+            Astra::Entity e = reg.CreateEntity();
+            Arcane::Transform t;
+            t.position = pos;
+            reg.AddComponent<Arcane::Transform>(e, t);
+            reg.SetParent(e, root);
+            reg.AddComponent<Arcane::MeshRenderer>(e, Arcane::MeshRenderer{ mesh, Arcane::Guid{} });
+            return e;
+        }
+        void Schedulers()
+        {
+            Arcane::TransformPropagationSystem{}(reg);
+            Arcane::BoundsSystem{}(reg);
+        }
+    };
+
+    void CheckGpuSceneDrawsAndCulls(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+        const Arcane::Guid cubeId{ 1, 1 };
+        GpuSceneWorld w;
+        w.AddMesh(cubeId, cube);
+        const Astra::Entity nearE = w.Spawn(glm::vec3(0.0f), cubeId);
+        const Astra::Entity farE  = w.Spawn(glm::vec3(1000.0f, 0.0f, 0.0f), cubeId);   // outside the frustum
+        w.Schedulers();
+
+        // The camera the mesh pass renders with IS the camera the CPU coarse
+        // test uses -- one ViewTransform built from FillCamera's matrices.
+        Arcane::MeshSceneDesc scene;
+        FillCamera(scene);
+        Arcane::ViewTransform view;
+        view.view       = scene.view;
+        view.projection = scene.projection;
+        view.viewport   = glm::uvec2{ kW, kH };
+
+        Arcane::VisibleSet vis;
+        Arcane::BuildVisibleSet(w.reg, view, vis);
+        CHECK(vis.Contains(nearE));
+        CHECK_FALSE(vis.Contains(farE));
+
+        Arcane::GpuSceneMirror mirror;
+        Arcane::GpuSceneFrame  frame;
+        Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, frame.stage);
+        Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, frame);
+        REQUIRE(frame.stage.fullRebuild);
+        REQUIRE(frame.stage.rows.size() == 2);
+        REQUIRE(frame.batches.size() == 1);
+        REQUIRE(frame.args.size() == 1);
+        CHECK(frame.stats.total == 2);
+        CHECK(frame.stats.coarseVisible == 1);          // the (1000,0,0) cube is outside the frustum
+        CHECK(frame.args[0].instanceNum == 1);
+        CHECK(frame.args[0].indexNum == static_cast<std::uint32_t>(cube.indices.size()));
+        CHECK(frame.batches[0].mesh == cubeId);
+        const Arcane::GpuSceneMirror::Rows* nearRows = mirror.slots.TryGet(nearE);
+        const Arcane::GpuSceneMirror::Rows* farRows  = mirror.slots.TryGet(farE);
+        REQUIRE(nearRows != nullptr);
+        REQUIRE(farRows != nullptr);
+        CHECK(frame.visibleIndices[frame.batches[0].firstOutput] == nearRows->first);
+
+        // The rows are staged white (no material table) -- paint them red so the
+        // channel assertions below separate the cube from the clear cleanly.
+        for (Arcane::GpuInstance& row : frame.stage.values)
+            row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+
+        scene.scene = &frame;
+        REQUIRE(scene.instances.empty());
+        REQUIRE_FALSE(scene.Empty());
+        std::uint32_t w0 = 0, h0 = 0;
+        const std::vector<unsigned char> lit = CaptureMesh(backend, scene, w0, h0, SupplyOne(cubeId, cube));
+        const Rgba centre = At(lit, w0, w0 / 2u, h0 / 2u);
+        const Rgba corner = At(lit, w0, 10u, 10u);
+        CHECK(centre.r > centre.g + 60);
+        CHECK(centre.r > centre.b + 60);
+        CHECK(centre.r > corner.r + 120);
+        CHECK(corner.r < 96);
+
+        // ---- a VisibleSet admitting ONLY the far cube: the same stage (every
+        // row, red), but the visible-index list names the far row alone. The
+        // indirect draw carries ONE instance, off-screen; the origin cube's
+        // row is in the instance buffer and is NOT drawn.
+        Arcane::VisibleSet onlyFar;
+        onlyFar.view    = view;
+        onlyFar.frustum = vis.frustum;
+        onlyFar.Clear();
+        onlyFar.Insert(farE, w.reg.GetComponent<Arcane::WorldBounds>(farE)->box, 0.0f);
+        Arcane::GpuSceneFrame culled;
+        culled.stage = frame.stage;   // the same full rebuild: the origin cube's row IS resident
+        Arcane::BuildGpuSceneFrame(mirror, &onlyFar, w.reg.GetResource<Arcane::MeshTable>(), view, culled);
+        REQUIRE(culled.batches.size() == 1);
+        REQUIRE(culled.args.size() == 1);
+        CHECK(culled.stats.coarseVisible == 1);
+        CHECK(culled.args[0].instanceNum == 1);
+        CHECK(culled.visibleIndices[culled.batches[0].firstOutput] == farRows->first);
+        scene.scene = &culled;
+        REQUIRE_FALSE(scene.Empty());
+        std::uint32_t w1 = 0, h1 = 0;
+        const std::vector<unsigned char> dark = CaptureMesh(backend, scene, w1, h1, SupplyOne(cubeId, cube));
+        REQUIRE(w1 == w0);
+        REQUIRE(h1 == h0);
+        const Rgba centreDark = At(dark, w1, w1 / 2u, h1 / 2u);
+        CHECK(centreDark.r < 96);
+        CHECK(std::abs(Luma(centreDark) - Luma(corner)) < 24);   // background, same as a corner
+
+        // ---- an EMPTY VisibleSet (R-D): nothing emitted, rows still staged.
+        // Declared (not Empty()), uploaded, and the mesh node records only the
+        // depth clear -- no draw, no error.
+        Arcane::VisibleSet none;
+        none.view    = view;
+        none.frustum = vis.frustum;
+        none.Clear();
+        Arcane::GpuSceneFrame nothing;
+        nothing.stage = frame.stage;
+        Arcane::BuildGpuSceneFrame(mirror, &none, w.reg.GetResource<Arcane::MeshTable>(), view, nothing);
+        CHECK(nothing.batches.empty());
+        CHECK(nothing.args.empty());
+        CHECK_FALSE(nothing.HasDraws());
+        scene.scene = &nothing;
+        CHECK_FALSE(scene.Empty());   // R-D: staged rows keep the pass declared
+        std::uint32_t w2 = 0, h2 = 0;
+        const std::vector<unsigned char> empty = CaptureMesh(backend, scene, w2, h2, SupplyOne(cubeId, cube));
+        const Rgba centreEmpty = At(empty, w2, w2 / 2u, h2 / 2u);
+        CHECK(centreEmpty.r < 96);
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+}
+
+TEST_CASE("gpuscene: a registry-backed cube draws through the indirect path and a culled one does not (d3d12)",
+          "[gpu][gpuscene][mesh][nri][d3d12]")
+{
+    CheckGpuSceneDrawsAndCulls(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("gpuscene: a registry-backed cube draws through the indirect path and a culled one does not (vulkan)",
+          "[gpu][gpuscene][mesh][nri][vulkan]")
+{
+    CheckGpuSceneDrawsAndCulls(Arcane::GraphicsBackend::Vulkan);
 }

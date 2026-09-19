@@ -6711,18 +6711,24 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads three imported buffers w
     }
 }
 
-TEST_CASE("nri graph frame (T6F3): a mesh scene with draws and no instances declares "
-          "'gpuscene-sync' then 'mesh'; one with neither declares no mesh pass", "[nri][rendergraph]")
+TEST_CASE("nri graph frame (T6F3/T7): a registry-backed scene declares 'gpuscene-sync' then 'mesh'; "
+          "so does an ad-hoc-only one, and one with staged rows but nothing emitted; "
+          "one with none of those declares no mesh pass", "[nri][rendergraph][mesh]")
 {
     Arcane::GpuSceneFrame withDraws;
     withDraws.batches.push_back(Arcane::GpuBatchDraw{});
     withDraws.args.push_back(Arcane::DrawIndexedArgs{});
     Arcane::GpuSceneFrame noDraws;
+    // R-D (T7): every entity culled this frame, but the mirror STAGED rows --
+    // they must still be uploaded, so the pass is declared (sync + mesh) and
+    // the mesh node records only its depth clear.
+    Arcane::GpuSceneFrame stagedNotEmitted;
+    stagedNotEmitted.stage.rows.push_back(3u);
+    stagedNotEmitted.stage.values.push_back(Arcane::GpuInstance{});
+    stagedNotEmitted.stage.rowCapacity = 4u;
 
-    SECTION("draws, no instances: the pass is declared, sync ahead of mesh")
+    const auto declaredSyncThenMesh = [](const Arcane::MeshSceneDesc& scene)
     {
-        Arcane::MeshSceneDesc scene;
-        scene.scene = &withDraws;
         Arcane::RenderGraph graph;
         Arcane::RgFrameShape shape;
         shape.canvasWidth  = 320;
@@ -6731,12 +6737,40 @@ TEST_CASE("nri graph frame (T6F3): a mesh scene with draws and no instances decl
         (void)Arcane::DeclareGraphFrame(graph, shape, nullptr);
         REQUIRE(graph.NodeCount() == 4);
         CHECK(std::string(graph.NodeName(0)) == "batch2d");
-        CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");
+        CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");   // IMMEDIATELY before mesh
         CHECK(std::string(graph.NodeName(2)) == "mesh");
         CHECK(std::string(graph.NodeName(3)) == "tonemap");
+    };
+
+    SECTION("(a) draws, no instances: the pass is declared, sync ahead of mesh")
+    {
+        Arcane::MeshSceneDesc scene;
+        scene.scene = &withDraws;
+        CHECK_FALSE(scene.Empty());
+        declaredSyncThenMesh(scene);
     }
 
-    SECTION("no draws, no instances: Empty() -- the frame is the no-mesh frame")
+    SECTION("(b) one ad-hoc instance, no scene: the SAME two nodes -- the ad-hoc rows ride the sync node's scratch region (T7)")
+    {
+        Arcane::MeshInstance one;
+        one.mesh = Arcane::Guid{ 7, 7 };
+        const Arcane::MeshInstance instances[] = { one };
+        Arcane::MeshSceneDesc scene;
+        scene.instances = instances;
+        CHECK_FALSE(scene.Empty());
+        declaredSyncThenMesh(scene);
+    }
+
+    SECTION("(d) staged rows, nothing emitted (R-D): NOT Empty() -- declared, so the rows upload")
+    {
+        Arcane::MeshSceneDesc scene;
+        scene.scene = &stagedNotEmitted;
+        CHECK_FALSE(scene.Empty());
+        CHECK_FALSE(stagedNotEmitted.HasDraws());
+        declaredSyncThenMesh(scene);
+    }
+
+    SECTION("(c) no draws, no instances, nothing staged: Empty() -- the frame is the no-mesh frame")
     {
         Arcane::MeshSceneDesc scene;
         scene.scene = &noDraws;
@@ -7024,11 +7058,18 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     CHECK(pool.textureMaxNum        == Arcane::MeshNode::kBindlessCapacity);
     CHECK(pool.samplerMaxNum        == 0);
 
-    // Nothing else is claimed: this node binds no storage buffers and no
+    // F3 plan 1 T7: each per-frame set ALSO carries the GPU scene's two
+    // structured SRVs -- t0 (the instance rows) and t1 (this slot's visible
+    // indices), space1 -- rewritten per slot when the scene's buffers change.
+    // Two per frame set, no more.
+    CHECK(pool.structuredBufferMaxNum == 2 * kFrameSets);
+
+    // Nothing else is claimed: this node binds no raw/storage buffers and no
     // acceleration structures, so a nonzero here would mean the pool was
     // sized for a shape mesh.hlsl does not declare.
     CHECK(pool.bufferMaxNum        == 0);
-    CHECK(pool.structuredBufferMaxNum == 0);
+    CHECK(pool.storageBufferMaxNum == 0);
+    CHECK(pool.storageStructuredBufferMaxNum == 0);
     CHECK(pool.storageTextureMaxNum   == 0);
 }
 

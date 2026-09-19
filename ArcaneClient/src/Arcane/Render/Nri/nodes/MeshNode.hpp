@@ -46,23 +46,36 @@
 //     materialSlot's default) now selects a FLAT path in mesh.hlsl that
 //     skips sampling entirely, bit-for-bit F2a's old white-times-tint
 //     arithmetic;
-//   * the pipeline layout -- root constants b0 (the 128-byte MeshConstants
-//     from mesh.hlsl: model + tint + the per-instance normal matrix, Task 8/
-//     F2a) at the implicit rootRegisterSpace, ONE immutable ROOT SAMPLER at
-//     s0 (Task 10's slice-one trilinear sampler -- also rootRegisterSpace;
-//     THE REGISTER-SPACE RULE below is why that space can no longer be
-//     shared with either descriptor set), plus TWO ordinary descriptor sets:
-//     space1 = { b1 frame CB }, space2 = { t0 bindless material array };
-//   * one descriptor pool, and ONE descriptor set PER FRAME SLOT for the b1
-//     CB (CreateSets) -- written ONCE each, at Create, and never rewritten.
-//     That is the same discipline Batch2DNode keeps, and stronger: the sets
-//     exist before the first frame does, so there is no window in which the
-//     GPU could be reading one (and NRI cannot free a single set anyway).
-//     The bindless set is DIFFERENT: allocated ONCE (not per frame slot,
-//     since its contents do not vary by frame) and written INCREMENTALLY by
-//     AddMaterial as slots are Added -- see that method's own comment for
-//     the synchronization contract that discipline costs;
+//   * the pipeline layout -- root constants b0 (the 8-byte MeshRootConstants
+//     {firstOutput, flags}, F3 plan 1 T7 -- the 128-byte per-instance
+//     MeshConstants block of Task 8/F2a is GONE; every per-instance value is
+//     a field of the GPU scene's row now) at the implicit rootRegisterSpace,
+//     ONE immutable ROOT SAMPLER at s0 (Task 10's slice-one trilinear
+//     sampler -- also rootRegisterSpace; THE REGISTER-SPACE RULE below is
+//     why that space can no longer be shared with either descriptor set),
+//     plus TWO ordinary descriptor sets: space1 = { b1 frame CB, t0 the
+//     instance rows, t1 this slot's visible indices }, space2 = { t0
+//     bindless material array };
+//   * one descriptor pool, and ONE descriptor set PER FRAME SLOT for space1
+//     (CreateSets). Its b1 range is written ONCE, at Create, and never
+//     rewritten; its t0/t1 ranges (F3) are REWRITTEN per slot, in Record,
+//     whenever the GPU scene's buffers changed under it -- the instance
+//     buffer grew (GpuScene::InstanceBufferGeneration) or the slot's
+//     visible-index buffer was re-created (GpuScene::VisibleIndicesView).
+//     That rewrite is safe for the same reason the arena write is: the
+//     slot's PREVIOUS frame retired at BeginFrame (the swapchain's fence
+//     wait), so nothing in flight reads that slot's set. Batch2DNode's sets
+//     are never rewritten at all; this one is rewritten only for the
+//     CURRENT slot, only when a buffer moved, under ALLOW_UPDATE_AFTER_SET.
+//     The bindless set is DIFFERENT again: allocated ONCE (not per frame
+//     slot, since its contents do not vary by frame) and written
+//     INCREMENTALLY by AddMaterial as slots are Added -- see that method's
+//     own comment for the synchronization contract that discipline costs;
 //   * the per-frame-slot constant-buffer arena the b1 views name.
+// The GPU SCENE's buffers are NOT owned here: GpuScene (Render/Nri/
+// GpuScene.hpp, owned by NriGraphContext) holds the instance / args /
+// visible-index buffers, GpuSceneSyncNode writes them ahead of this pass,
+// and Record receives the GpuScene* as a parameter.
 // The PIPELINE is not owned here: it comes from the vehicle's shared
 // NriPipelineCache, keyed by (shader pair, layout, canvas format, DEPTH
 // format, blend), so a format change is a cache miss rather than a stale PSO.
@@ -126,6 +139,7 @@
 
 namespace Arcane
 {
+    class GpuScene;
     class Graveyard;
     class NriDevice;
     class NriGraphContext;
@@ -135,13 +149,23 @@ namespace Arcane
     // name here exactly as before. MeshNodeTest.cpp still pins it.
 
     // =====================================================================
-    // THE CPU-SIDE SCENE, and the whole of what a host has to build.
+    // THE AD-HOC INSTANCE (F3 plan 1 T7): a REGISTRY-LESS caller's row --
+    // MeshDocument's preview, the thumbnail harvester, a [gpu] test. Drawn
+    // DIRECT (one CmdDrawIndexed each, root flags & kMeshRootDirect),
+    // UNCULLED, in submission order, from the GpuScene::kScratchRows scratch
+    // rows this frame slot owns in the instance buffer: MeshNode::Prepare
+    // converts each one into a GpuInstance (AdHocRows()), AddMeshNode hands
+    // that span to GpuSceneSyncNode, which copies it into the slot's scratch
+    // region ahead of the pass. Beyond kScratchRows per frame the rest are
+    // DROPPED (GpuScene::Reserve warns once).
+    //
+    // Registry-backed entities do NOT come through here any more: they are
+    // rows of the GPU scene (GpuSceneSync -> BuildGpuSceneFrame ->
+    // MeshSceneDesc::scene), drawn INDIRECT per batch. Fields unchanged.
     //
     // Deliberately NOT an ECS view, a Registry walk or a Scene pointer: this
     // is a RENDER vehicle's input, the same shape and the same borrowing rules
-    // FrameDesc::pickables carries (Render/PickEmit.hpp is its sibling). The
-    // thing that owns a registry and a camera is the FRAME DRIVER, and Task 9
-    // is what teaches both hosts to fill this in.
+    // FrameDesc::pickables carries (Render/PickEmit.hpp is its sibling).
     // =====================================================================
     struct MeshInstance
     {
@@ -157,10 +181,11 @@ namespace Arcane
         Guid mesh{};
 
         // Model -> world, METERS (MKS). Rotation, translation AND a
-        // NON-UNIFORM scale are all safe here (Task 8/F2a): MeshNode::Record
-        // derives NormalMatrixFor(model) fresh for every instance and pushes
-        // it alongside `model`, so mesh.hlsl's vs_main transforms normals by
-        // the inverse transpose rather than the upper 3x3. (Before Task 8 this
+        // NON-UNIFORM scale are all safe here (Task 8/F2a): MeshNode::Prepare
+        // derives NormalMatrixFor(model) fresh for every instance and stages
+        // it in the row alongside `model` (F3: GpuInstance::normal0..2), so
+        // mesh.hlsl's vs_main transforms normals by the inverse transpose
+        // rather than the upper 3x3. (Before Task 8 this
         // comment stated a UNIFORM-scale-only restriction -- F1 gave Transform
         // a glm::vec3 scale the Inspector authors freely, so the first
         // non-uniform scale-handle drag on a mesh hit the old shortcut.
@@ -197,37 +222,33 @@ namespace Arcane
         // NriGraphContext::ResolveMeshAlbedoSlot and copied onto this field
         // by CollectMeshInstances (Render/MeshSubmissionSystem.hpp).
         //
-        // PACKED INTO THE ROOT CONSTANTS' `normalMatrixCol0.w` by
-        // MeshNode::Record (the 128-byte MeshRootConstants budget has ZERO
-        // headroom -- see PackedNormalMatrix's comment in MeshNode.cpp --
-        // so this field does not grow that struct). `col0.w` is otherwise
-        // unused (the shader reads only `.xyz` off every normal-matrix
-        // column, mesh.hlsl:111-113, and C++ zeroes every column's `.w` at
-        // PackedNormalMatrix construction, MeshNode.cpp), so writing the
-        // slot there and reading it back via asuint/asfloat is safe --
-        // `kInvalidSlot` (0xFFFFFFFF) is a NaN bit pattern, which is only
-        // ever safe as RAW BITS. Never route `col0` through float
-        // arithmetic once the slot has been written into it.
+        // SINCE F3 PLAN 1 T7 this travels as the row's own `materialSlot`
+        // field (GpuInstance, a plain uint the shader reads by row) -- the
+        // bit-packing into `normalMatrixCol0.w` that the 128-byte root block
+        // forced (Task 8/10) is gone with that block. `kInvalidSlot` ==
+        // kGpuInvalidMaterialSlot (GpuSceneTypes.hpp; GpuScene.cpp
+        // static_asserts the two agree).
         std::uint32_t materialSlot = BindlessTable::kInvalidSlot;
 
         // WHICH SECTION of `mesh` this instance draws (F2c s7.4). A multi-section prop
         // becomes sections.size() instances, one per section, each carrying the
-        // material its slot resolved to -- which is why the 128-byte zero-headroom
-        // MeshConstants block (mesh.hlsl:20-28) is UNTOUCHED by sections: the material
-        // identity already travels per draw, in materialSlot.
+        // material its slot resolved to -- the material identity travels per row, in
+        // materialSlot, so a section adds nothing to the root block.
         std::uint32_t indexOffset = 0;
         std::uint32_t indexCount  = 0;   // 0 == "the whole mesh", the F2a shape
     };
 
     struct MeshSceneDesc
     {
+        // THE AD-HOC ROWS (see MeshInstance's header): drawn direct, unculled,
+        // in order, at most GpuScene::kScratchRows of them per frame.
         // BORROWED SPAN for the duration of the RenderFrame call, exactly like
         // FrameDesc::pickables: the declaration copies the SPAN into the
         // node's exec fn, never the elements, and the exec fn runs inside the
         // same call. The elements name meshes by Guid; they no longer point at
-        // CPU geometry. EMPTY IS LEGAL and means "no mesh pass this frame" --
-        // DeclareGraphFrame declares no node for it, so an empty scene costs
-        // the same as no scene at all.
+        // CPU geometry. EMPTY IS LEGAL; see Empty() -- a registry-backed scene
+        // needs none of these, and DeclareGraphFrame declares no mesh pass
+        // for a scene that is Empty(), so one costs the same as no scene.
         std::span<const MeshInstance> instances;
 
         // The camera, already resolved by the frame driver. TWO matrices
@@ -266,17 +287,50 @@ namespace Arcane
         // THE REGISTRY-BACKED SCENE (F3 plan 1 T6): what GpuSceneSync +
         // BuildGpuSceneFrame produced for this frame -- the staged rows,
         // batches, indirect args and visible indices GpuSceneSyncNode copies
-        // to the device ahead of this pass. BORROWED for the RenderFrame call
-        // like `instances`. Null is "no registry scene"; `instances` above
-        // are the AD-HOC rows (a preview, a thumbnail, a test) and the two
-        // are independent. Task 7 teaches Record to draw from it.
+        // to the device ahead of this pass, and (T7) the batches Record
+        // draws INDIRECT, one CmdDrawIndexedIndirect each, in the frame's
+        // order. BORROWED for the RenderFrame call like `instances`. Null is
+        // "no registry scene"; `instances` above are the AD-HOC rows (a
+        // preview, a thumbnail, a test) and the two are independent.
         const GpuSceneFrame* scene = nullptr;
 
-        // "No mesh pass this frame" -- neither ad-hoc instances nor a
-        // registry scene with draws. DeclareGraphFrame declares no node for
-        // an Empty() scene, exactly as it did for an empty `instances`.
-        [[nodiscard]] bool Empty() const noexcept { return instances.empty() && !(scene && scene->HasDraws()); }
+        // "No mesh pass this frame" -- no ad-hoc instances AND a registry
+        // scene (if any) that neither EMITTED a batch nor STAGED anything.
+        // DeclareGraphFrame declares no node for an Empty() scene, exactly
+        // as it did for an empty `instances`.
+        //
+        // WHY A STAGE COUNTS (ruling R-D, T7): a frame whose entities are all
+        // culled emits no batch but may still carry dirty rows (a move, a
+        // spawn, a full rebuild after a registry swap). The mirror's
+        // lastModel history has ALREADY advanced past them (GpuSceneSync
+        // stages and records in one step), so skipping the pass -- and with
+        // it GpuSceneSyncNode's upload -- would leave those rows never
+        // written; the moment one came into view it would draw stale (or
+        // never-initialised) bytes. Such a frame declares the pass, the sync
+        // node uploads, and MeshNode::Record records only its depth clear.
+        // `fullRebuild` with no rows still counts: Apply stamps the synced
+        // generation, which is what stops the next frame from being a full
+        // rebuild too.
+        [[nodiscard]] bool Empty() const noexcept
+        {
+            return instances.empty()
+                && !(scene && (scene->HasDraws() || !scene->stage.rows.empty() || scene->stage.fullRebuild));
+        }
     };
+
+    // THE 8-BYTE ROOT BLOCK (F3): `firstOutput` is the batch's start in the
+    // visible-index buffer for an indirect draw, or THE ROW ITSELF when
+    // `flags & kMeshRootDirect`. mesh.hlsl's MeshRoot. Public for the
+    // MeshNodeTest pin; the 128-byte MeshConstants block (model + tint + the
+    // packed normal matrix) this replaces lived in MeshNode.cpp's anonymous
+    // namespace and is gone -- every per-instance value is a row field now.
+    struct MeshRootConstants
+    {
+        std::uint32_t firstOutput = 0;
+        std::uint32_t flags       = 0;
+    };
+    inline constexpr std::uint32_t kMeshRootDirect = 1u;
+    static_assert(sizeof(MeshRootConstants) == 8, "mesh.hlsl's MeshRoot is two uints");
 
     class ARCANE_API MeshNode
     {
@@ -365,27 +419,60 @@ namespace Arcane
         // both on the cache (the pre-fix call-site shape) meant a hypothetically
         // cache-less context also lost its pipeline and drew nothing behind a
         // "missing pipeline" warning that named the wrong cause.
+        //
+        // SINCE F3 PLAN 1 T7 this ALSO builds AdHocRows(): every ad-hoc
+        // instance (`scene.instances`, capped at GpuScene::kScratchRows) is
+        // converted to a GpuInstance -- model, NormalMatrixFor(model)'s
+        // columns, baseColor, materialSlot -- and its draw range remembered,
+        // so AddMeshNode can hand the rows to GpuSceneSyncNode (which copies
+        // them into this slot's scratch region) before the mesh node is
+        // declared. The residency loop resolves each batch mesh AND each
+        // ad-hoc mesh once. The ad-hoc rows are built whether or not
+        // `meshBuffers` is null: they are the sync node's input either way.
         void Prepare(nri::Format canvasFormat, const MeshSceneDesc& scene,
                      NriMeshBufferCache* meshBuffers, std::uint64_t frameCounter);
+
+        // The ad-hoc rows Prepare staged this frame, in submission order --
+        // what AddMeshNode passes to AddGpuSceneSyncNode as `adHoc`. A view
+        // into this node's own storage: valid until the next Prepare.
+        [[nodiscard]] std::span<const GpuInstance> AdHocRows() const noexcept { return m_adHocRows; }
 
         // Records one scene's opaque geometry into an ALREADY-OPEN raster pass
         // whose colour attachment is the canvas and whose depth attachment is
         // this node's depth target. In order: clear the DEPTH plane (the clear
         // seam -- graph attachments are LOAD/STORE, see
-        // NriGraphContext::DeclareGraphFrame), bind each distinct mesh's
-        // already-resident vertex/index buffers, then one CmdDrawIndexed per
-        // instance. Never uploads; never touches the frame ring for geometry.
+        // NriGraphContext::DeclareGraphFrame); rewrite this slot's t0/t1
+        // views if the GPU scene's buffers moved (the header block); bind the
+        // layout, the two sets and the pipeline; then (F3 plan 1 T7):
+        //   1. the registry-backed BATCHES, in the frame's order -- for each,
+        //      bind the mesh's already-resident vertex/index buffers, push
+        //      {batch.firstOutput, 0}, one CmdDrawIndexedIndirect reading
+        //      argIndex's nri::DrawIndexedDesc from GpuScene::Args(slot);
+        //   2. the AD-HOC rows, in submission order -- push {scratchFirst +
+        //      i, kMeshRootDirect}, one CmdDrawIndexed each.
+        // A mesh that is not resident is SKIPPED, never a stale bind. A frame
+        // with no batches and no ad-hoc rows (R-D: staged rows only) records
+        // the depth clear and nothing else -- no draw, no error. Never
+        // uploads; never touches the frame ring for geometry.
         //
         // IT DOES NOT CLEAR THE COLOUR PLANE. batch2d already cleared and drew
         // into the canvas; clearing it here would erase that.
         //
         // Emits NO barrier: the executor derives and batches every one of them
-        // from the declarations.
+        // from the declarations (the sync node's CopyDst writes -> this
+        // node's ShaderRead / IndirectArgs reads).
         //
         // `frameSlot` is the vehicle's own per-frame slot -- the SAME number it
         // gave the upload ring, so this node's constant-buffer arena is
         // double-buffered against exactly the fence the swapchain already waits
         // on.
+        //
+        // `gpuScene` is the vehicle's GpuScene (NriGraphContext::Scene()),
+        // passed in rather than held: this node keeps no context pointer
+        // (see m_device's comment), and the scene is the one per-frame thing
+        // Record reads that Prepare's parameters do not carry. Null is an
+        // ERROR (logged, latched, nothing recorded) -- a vehicle without a
+        // GPU scene cannot draw either path.
         //
         // NO canvasFormat PARAMETER, unlike Batch2DNode::Record: that node
         // resolves a pipeline PER SPAN at record time and needs the format
@@ -393,7 +480,7 @@ namespace Arcane
         // keyed it. A parameter this function did not read would just be
         // something for a reader to reason about.
         void Record(RenderGraphNodeContext& context, const MeshSceneDesc& scene,
-                    std::uint32_t frameSlot);
+                    std::uint32_t frameSlot, GpuScene* gpuScene);
 
         // The b1 block's region size BEFORE alignment. mesh.hlsl's MeshFrameCB
         // is 112 bytes; 256 is also D3D12's constant-buffer placement
@@ -451,10 +538,12 @@ namespace Arcane
         // compile error and not a wrong pixel -- it is an
         // AllocateDescriptorSets failure part-way through Create at the
         // desk. TWO dimensions now (Task 8/10): kSwapchainFramesInFlight
-        // frame-CB sets (one CONSTANT_BUFFER descriptor each) plus ONE
-        // bindless set (kBindlessCapacity TEXTURE descriptors, MeshNode.cpp).
-        // The root sampler consumes NO pool budget at all -- RootSamplerDesc
-        // is "not allocated from a descriptor pool" (NRIDescs.h:1077).
+        // frame sets (one CONSTANT_BUFFER descriptor each, plus -- F3 plan 1
+        // T7 -- two STRUCTURED_BUFFER descriptors each: the instance rows
+        // and the slot's visible indices) plus ONE bindless set
+        // (kBindlessCapacity TEXTURE descriptors, MeshNode.cpp). The root
+        // sampler consumes NO pool budget at all -- RootSamplerDesc is "not
+        // allocated from a descriptor pool" (NRIDescs.h:1077).
         [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
 
     private:
@@ -469,14 +558,16 @@ namespace Arcane
         bool CreateBindless();
         bool CreateBindings();
         bool CreateConstantArena();
-        // Allocates the per-frame-slot descriptor sets (one b1 CONSTANT_
-        // BUFFER range each, written once) and the ONE bindless descriptor
-        // set (its range left UNWRITTEN here -- AddMaterial writes it
-        // incrementally, and CreateBindings' PARTIALLY_BOUND flag is what
-        // makes allocating it with an empty range legal). Written ONCE, at
-        // Create, and never again for the per-frame sets -- which is what
-        // keeps ResetDescriptorPool and its fence discipline out of this
-        // node entirely.
+        // Allocates the per-frame-slot descriptor sets (the b1 CONSTANT_
+        // BUFFER range written once here; the t0/t1 STRUCTURED_BUFFER ranges
+        // left for Record to write per slot, lazily, when the GPU scene's
+        // buffers change -- the header block) and the ONE bindless
+        // descriptor set (its range left UNWRITTEN here -- AddMaterial
+        // writes it incrementally, and CreateBindings' PARTIALLY_BOUND flag
+        // is what makes allocating it with an empty range legal). No
+        // ResetDescriptorPool anywhere: nothing is ever freed, only
+        // rewritten under ALLOW_UPDATE_AFTER_SET at points the fence
+        // discipline already covers.
         bool CreateSets();
 
         // The opaque pipeline for this frame's attachment formats, from the
@@ -543,13 +634,25 @@ namespace Arcane
         std::uint64_t    m_arenaStride = 0;
         nri::Descriptor* m_frameCbView[kSwapchainFramesInFlight]{};
 
-        // THE PER-FRAME descriptor sets, one per frame slot. Each binds only
-        // that slot's b1 region now (Task 8/10 moved the white texel/sampler
-        // out -- see m_bindless/m_bindlessSet above and the root sampler in
-        // CreateBindings), written ONCE at Create and never again. One
-        // dimension only (the frame slot), because b1 is the only thing in
-        // a set that differs frame to frame.
+        // THE PER-FRAME descriptor sets, one per frame slot. Each binds that
+        // slot's b1 region (written ONCE at Create -- Task 8/10 moved the
+        // white texel/sampler out; see m_bindless/m_bindlessSet above and
+        // the root sampler in CreateBindings) and, since F3 plan 1 T7, the
+        // GPU scene's t0 instance view + t1 the slot's visible-index view,
+        // rewritten by Record when either moved. One dimension only (the
+        // frame slot), because the slot is the only thing a set differs by.
         nri::DescriptorSet* m_sets[kSwapchainFramesInFlight]{};
+
+        // WHAT EACH SLOT'S SET CURRENTLY NAMES at t0/t1 (F3 plan 1 T7), so
+        // Record rewrites the two ranges only when the GPU scene's buffers
+        // actually moved: the instance buffer's generation (bumped by every
+        // GpuScene growth; the view object is replaced with it) and the
+        // slot's visible-index view pointer (replaced when GpuScene re-
+        // creates the slot's buffer -- there is NO generation counter for
+        // those, so the pointer itself is the identity). Zero / null until
+        // the slot's first Record, which therefore always writes.
+        std::uint64_t          m_setInstanceGen[kSwapchainFramesInFlight] = {};
+        const nri::Descriptor* m_setVisibleView[kSwapchainFramesInFlight] = {};
 
         // MEMBERS, not locals, and that is load-bearing:
         // nri::GraphicsPipelineDesc::vertexInput is a POINTER into caller
@@ -575,6 +678,24 @@ namespace Arcane
         // live member. Nothing dereferences them today; clearing costs nothing and
         // removes the trap rather than documenting it.
         std::vector<std::pair<Guid, const NriMeshBufferCache::Resident*>> m_residents;
+
+        // THE AD-HOC ROWS (F3 plan 1 T7), built by Prepare from
+        // scene.instances (at most GpuScene::kScratchRows) and read twice:
+        // by AddMeshNode, which hands AdHocRows() to the sync node (copied
+        // into this slot's scratch region), and by Record, which draws
+        // m_adHocDraws[i] direct from scratch row i. Parallel vectors: row i
+        // of one is draw i of the other. MEMBERS, not locals, because the
+        // span the sync node's exec fn captures has to outlive the
+        // declaration window -- both exec fns run inside the same RenderFrame
+        // call, before the next Prepare rebuilds them.
+        struct AdHocDraw
+        {
+            Guid          mesh{};
+            std::uint32_t indexOffset = 0;
+            std::uint32_t indexCount  = 0;   // 0 == the whole mesh (MeshInstance::indexCount's contract)
+        };
+        std::vector<GpuInstance> m_adHocRows;
+        std::vector<AdHocDraw>   m_adHocDraws;
 
         // One WARN/ERROR each, not one per instance per frame, for the
         // degradations a reader must be able to see.
@@ -619,9 +740,10 @@ namespace Arcane
     // persistent buffers as CopyDst), then "mesh", which Reads the same
     // handles (instances + visible indices ShaderRead, args IndirectArgs) so
     // the graph derives the copy -> read barriers. The returned handle is
-    // still the depth transient. Record does not draw from the GPU scene yet
-    // (Task 7); with `scene.scene` set and no `instances`, it clears depth
-    // and returns.
+    // still the depth transient. Since T7 the sync node is ALSO handed the
+    // ad-hoc rows Prepare built (MeshNode::AdHocRows) for its scratch
+    // region, and Record draws both halves -- the batches indirect, the
+    // ad-hoc rows direct -- with the context's GpuScene passed in.
     ARCANE_API RgTexture AddMeshNode(RenderGraph& graph, NriGraphContext* context,
                                       RgTexture canvas, nri::Format canvasFormat,
                                       const MeshSceneDesc& scene,

@@ -10,6 +10,7 @@
 
 #include "MeshNode.hpp"
 
+#include <Arcane/Render/Nri/GpuScene.hpp>                  // the instance / args / visible-index buffers Record draws from (F3 plan 1 T7)
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/nodes/GpuSceneSyncNode.hpp>   // AddGpuSceneSyncNode -- declared ahead of the mesh node (F3 plan 1 T6)
@@ -20,7 +21,6 @@
 
 #undef ERROR
 
-#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -48,63 +48,20 @@ namespace Arcane
         // exactly the mistake that renders an empty frame.
         constexpr float kDepthClear = 1.0f;
 
-        // data/shaders/mesh.hlsl's MeshConstants (b0 / the VK push-constant
-        // block): a 4x4 model matrix, a float4 tint, and (Task 8/F2a) the
-        // per-instance NORMAL MATRIX -- Arcane::NormalMatrixFor(model)'s
-        // result (a free function in MeshNode.hpp, not a member of this
-        // class), packed as three float4 COLUMNS rather than a bare
-        // glm::mat3: HLSL packs each column of a float3x3 onto its own
-        // 16-byte boundary (the same std140-style rule MeshFrameConstants'
-        // comment below states for a plain vec3), whereas glm::mat3 is a
-        // tightly-packed 36 bytes with no such padding -- memcpying one
-        // straight in would misalign baseColor against mesh.hlsl's layout.
-        // Each column therefore gets an explicit glm::vec4 (xyz used, w
-        // padding), matching mesh.hlsl's MeshConstants field-for-field.
-        //
-        // THE BUDGET: 64 (model) + 16 (baseColor) + 3*16 (normal matrix) =
-        // 128 bytes EXACTLY -- which is precisely Vulkan's GUARANTEED MINIMUM
-        // maxPushConstantsSize (VkPhysicalDeviceLimits), so this fits with
-        // ZERO headroom on the worst-case device this engine has to run on.
-        // mesh.hlsl's own header comment already calls root/push-constant
-        // budget "the scarcest thing in a pipeline layout" for exactly this
-        // reason. THE NEXT PER-DRAW FIELD ADDED AFTER THIS ONE WILL NOT FIT
-        // without either shrinking something already here or moving a field
-        // out to a per-instance descriptor-bound buffer instead -- read this
-        // comment before adding one.
-        //
-        // TASK 8/10 SPENT THE ONE HEADROOM THIS BUDGET HAD WITHOUT GROWING
-        // IT: `col0.w` is otherwise always zero (every column's constructor
-        // below sets `w` to exactly 0.0f, matching mesh.hlsl's own "used /
-        // w padding" comment on col1/col2), so MeshNode::Record writes
-        // MeshInstance::materialSlot into it AFTER construction, as RAW
-        // BITS (asuint/asfloat symmetry with mesh.hlsl) -- never through
-        // this struct's own float-valued constructor or any float
-        // arithmetic on `col0` afterward, because `BindlessTable::
-        // kInvalidSlot` (0xFFFFFFFF) is a NaN bit pattern.
-        struct PackedNormalMatrix
-        {
-            glm::vec4 col0{1.0f, 0.0f, 0.0f, 0.0f};
-            glm::vec4 col1{0.0f, 1.0f, 0.0f, 0.0f};
-            glm::vec4 col2{0.0f, 0.0f, 1.0f, 0.0f};
+        // THE ROOT BLOCK is MeshRootConstants (MeshNode.hpp, 8 bytes) since
+        // F3 plan 1 T7. The 128-byte per-instance MeshConstants block that
+        // lived here -- model + tint + NormalMatrixFor's three columns packed
+        // as float4s, with the material slot bit-cast into col0.w because the
+        // block sat at EXACTLY Vulkan's guaranteed-minimum push-constant
+        // budget with zero headroom -- is gone: every one of those values is
+        // now a field of the GPU scene's 240-byte row (GpuInstance), staged
+        // by GpuSceneSync (registry rows) or by Prepare below (ad-hoc rows),
+        // and read by the vertex shader through t0/space1. The root block
+        // carries only WHICH row(s): a visible-index start for an indirect
+        // batch, or the row itself for a direct draw. See `git log` for the
+        // old struct if the packing account is ever needed again.
 
-            PackedNormalMatrix() = default;
-            explicit PackedNormalMatrix(const glm::mat3& m) noexcept
-                : col0(m[0], 0.0f), col1(m[1], 0.0f), col2(m[2], 0.0f) {}
-        };
-        static_assert(sizeof(PackedNormalMatrix) == 48,
-                      "three 16-byte-padded columns -- see the comment above");
-
-        struct MeshRootConstants
-        {
-            glm::mat4          model{1.0f};
-            glm::vec4          baseColor{1.0f, 1.0f, 1.0f, 1.0f};
-            PackedNormalMatrix normalMatrix{};
-        };
-        static_assert(sizeof(MeshRootConstants) == 128,
-                      "must match mesh.hlsl's MeshConstants -- and IS Vulkan's guaranteed-minimum "
-                      "maxPushConstantsSize; see PackedNormalMatrix's comment above before growing this");
-
-        // ...and its MeshFrameCB (b1). std140/HLSL cbuffer packing rules put
+        // mesh.hlsl's MeshFrameCB (b1). std140/HLSL cbuffer packing rules put
         // each float4 on its own 16-byte boundary, which is what the three
         // glm::vec4s below are for -- a glm::vec3 member would pack to 12
         // bytes here and misalign everything after it.
@@ -260,15 +217,17 @@ namespace Arcane
         constexpr std::uint32_t kFrameSets = kSwapchainFramesInFlight;
 
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum  = kFrameSets + 1;      // +1: the one bindless set
-        poolDesc.constantBufferMaxNum = kFrameSets;          // b1, one per frame slot
-        poolDesc.textureMaxNum        = kBindlessCapacity;   // the bindless array's own budget
+        poolDesc.descriptorSetMaxNum      = kFrameSets + 1;      // +1: the one bindless set
+        poolDesc.constantBufferMaxNum     = kFrameSets;          // b1, one per frame slot
+        poolDesc.structuredBufferMaxNum   = 2 * kFrameSets;      // t0 instances + t1 visible indices, per frame slot (F3 plan 1 T7)
+        poolDesc.textureMaxNum            = kBindlessCapacity;   // the bindless array's own budget
         // ALLOW_UPDATE_AFTER_SET (Task 11): a POOL-level permission bit only --
         // it lets a set ALLOCATED from this pool opt into update-after-bind
-        // (below, the bindless set only; the per-frame b1 sets do not ask for
-        // it and are unaffected). See AddMaterial's own synchronization
-        // comment for why this node needs it at all.
-        poolDesc.flags                = nri::DescriptorPoolBits::ALLOW_UPDATE_AFTER_SET;
+        // (the bindless set since Task 11; the per-frame sets too since F3
+        // plan 1 T7, for the t0/t1 rewrite Record does when the GPU scene's
+        // buffers move). See AddMaterial's own synchronization comment and
+        // the header's WHAT THIS NODE OWNS block.
+        poolDesc.flags                    = nri::DescriptorPoolBits::ALLOW_UPDATE_AFTER_SET;
         return poolDesc;
     }
 
@@ -276,12 +235,14 @@ namespace Arcane
     {
         const nri::CoreInterface& core = m_device->Core();
 
-        // THE LAYOUT (Task 8/10 rewrote this in full). mesh.hlsl's register
-        // map: b0 root constants (model, tint, the packed per-instance
-        // normal matrix -- see MeshRootConstants above and its 128-byte
-        // budget) plus ONE immutable ROOT SAMPLER at s0, both at the
-        // implicit rootRegisterSpace; and TWO ordinary descriptor sets --
-        // space1 = { b1 frame CB }, space2 = { t0 bindless material array }.
+        // THE LAYOUT (Task 8/10 rewrote this in full; F3 plan 1 T7 shrank
+        // the root block and grew the frame set). mesh.hlsl's register map:
+        // b0 root constants (the 8-byte MeshRootConstants {firstOutput,
+        // flags} -- MeshNode.hpp) plus ONE immutable ROOT SAMPLER at s0,
+        // both at the implicit rootRegisterSpace; and TWO ordinary
+        // descriptor sets -- space1 = { b1 frame CB, t0 the GPU scene's
+        // instance rows, t1 this slot's visible indices }, space2 = { t0
+        // bindless material array }.
         //
         // THE REGISTER-SPACE RULE (Batch2DNode.hpp's header states it in
         // full, verified against Source/Validation/DeviceVal.hpp's
@@ -303,17 +264,23 @@ namespace Arcane
         // kSpirvArgs): NRI adds the SAME per-resource-type binding offset
         // to a range regardless of which space it is in
         // (Source/VK/PipelineLayoutVK.hpp's `bindingOffsets` array), so
-        // dxc must shift b-registers in space1 and t-registers in space2 by
-        // the same amounts it already shifts space0's -- both files gained
-        // a `-fvk-b-shift 256 1` / `-fvk-t-shift 0 2` pair for exactly that
-        // reason.
+        // dxc must shift b-registers in space1 and t-registers in space1/
+        // space2 by the same amounts it already shifts space0's -- both
+        // files carry `-fvk-b-shift 256 1` / `-fvk-t-shift 0 2` (Task 8/10)
+        // and `-fvk-t-shift 0 1` (F3 plan 1 T7) for exactly that reason:
+        // in SPIR-V, set 1 = { b1 at binding 257, t0 at 0, t1 at 1 }.
         nri::RootConstantDesc rootConstant = {};
         rootConstant.registerIndex = 0;                       // b0
-        rootConstant.size          = sizeof(MeshRootConstants);
-        // BOTH stages: the vertex shader reads `model`, the pixel shader reads
-        // `baseColor` (and, since Task 10, the packed material slot).
-        // Narrowing this to VERTEX would break the tint on D3D12, where
-        // root-parameter visibility is a hard root-signature property.
+        rootConstant.size          = sizeof(MeshRootConstants);   // 8 (the header static_asserts it)
+        // BOTH stages, unchanged from Task 8/10 -- though only vs_main reads
+        // the root block now (the tint and the material slot travel per row
+        // and reach ps_main as varyings; spirv-dis of mesh_ps.bin shows no
+        // push-constant block at all). A stage set that is a SUPERSET of the
+        // readers is legal on both backends (a VK push-constant range may
+        // name a stage that declares none; a D3D12 root parameter visible
+        // to more stages than read it is merely unoptimised), and two
+        // dwords of root budget is not worth narrowing something that has
+        // been right on both backends since F2a.
         rootConstant.shaderStages  = nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
 
         // THE ONE IMMUTABLE SAMPLER (Task 10's slice-one sampler strategy,
@@ -340,19 +307,40 @@ namespace Arcane
         rootSampler.desc.mipMax       = 16.0f;
         rootSampler.shaderStages      = nri::StageBits::FRAGMENT_SHADER;   // only ps_main samples
 
-        // set (array index 0, space1): b1, the per-frame-slot frame CB --
-        // read by both stages (viewProjection in the VS, the light in the
-        // PS).
-        nri::DescriptorRangeDesc frameRange = {};
-        frameRange.baseRegisterIndex = 1;                     // b1
-        frameRange.descriptorNum     = 1;
-        frameRange.descriptorType    = nri::DescriptorType::CONSTANT_BUFFER;
-        frameRange.shaderStages      = nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
+        // set (array index 0, space1), THREE ranges: b1, the per-frame-slot
+        // frame CB -- read by both stages (viewProjection in the VS, the
+        // light in the PS); then (F3 plan 1 T7) t0, the GPU scene's ONE
+        // instance buffer (a STRUCTURED_BUFFER view, stride 240 --
+        // GpuScene::InstancesView), and t1, THIS slot's visible-index buffer
+        // (stride 4 -- GpuScene::VisibleIndicesView(slot)), both vertex-
+        // only. Range indices 0/1/2 are what Record's UpdateDescriptorRanges
+        // names. ALL THREE carry ALLOW_UPDATE_AFTER_SET (with the set-level
+        // flag below): ranges 1-2 are rewritten by Record for a slot whose
+        // buffers moved, and range 0 asks for it too so the set's ranges are
+        // uniform (NRI maps the range flag to VK's per-binding UPDATE_AFTER_
+        // BIND bit and D3D12's DATA_VOLATILE/DESCRIPTORS_VOLATILE -- either
+        // is legal on a range that is never rewritten).
+        nri::DescriptorRangeDesc frameRanges[3] = {};
+        frameRanges[0].baseRegisterIndex = 1;                 // b1
+        frameRanges[0].descriptorNum     = 1;
+        frameRanges[0].descriptorType    = nri::DescriptorType::CONSTANT_BUFFER;
+        frameRanges[0].shaderStages      = nri::StageBits::VERTEX_SHADER | nri::StageBits::FRAGMENT_SHADER;
+        frameRanges[1].baseRegisterIndex = 0;                 // t0 -- the instance rows
+        frameRanges[1].descriptorNum     = 1;
+        frameRanges[1].descriptorType    = nri::DescriptorType::STRUCTURED_BUFFER;
+        frameRanges[1].shaderStages      = nri::StageBits::VERTEX_SHADER;
+        frameRanges[2].baseRegisterIndex = 1;                 // t1 -- this slot's visible indices
+        frameRanges[2].descriptorNum     = 1;
+        frameRanges[2].descriptorType    = nri::DescriptorType::STRUCTURED_BUFFER;
+        frameRanges[2].shaderStages      = nri::StageBits::VERTEX_SHADER;
+        for (nri::DescriptorRangeDesc& r : frameRanges)
+            r.flags = nri::DescriptorRangeBits::ALLOW_UPDATE_AFTER_SET;
 
         nri::DescriptorSetDesc frameSetDesc = {};
         frameSetDesc.registerSpace = 1;
-        frameSetDesc.ranges        = &frameRange;
-        frameSetDesc.rangeNum      = 1;
+        frameSetDesc.ranges        = frameRanges;
+        frameSetDesc.rangeNum      = 3;
+        frameSetDesc.flags         = nri::DescriptorSetBits::ALLOW_UPDATE_AFTER_SET;
 
         // set (array index 1, space2): the bindless material array at t0 --
         // a FIXED size (kBindlessCapacity, matched by mesh.hlsl's own
@@ -401,9 +389,8 @@ namespace Arcane
         bindlessSetDesc.rangeNum      = 1;
         // The SET-level counterpart the range's flag requires (NRIDescs.h:
         // "ALLOW_UPDATE_AFTER_SET ... allows DescriptorRangeBits::
-        // ALLOW_UPDATE_AFTER_SET") -- the per-frame frameSetDesc above is
-        // left without it, unaffected: b1 is still written exactly once, at
-        // Create, and never again.
+        // ALLOW_UPDATE_AFTER_SET") -- the per-frame frameSetDesc above
+        // carries it too since F3 plan 1 T7 (its t0/t1 ranges).
         bindlessSetDesc.flags         = nri::DescriptorSetBits::ALLOW_UPDATE_AFTER_SET;
 
         nri::DescriptorSetDesc setDescs[2] = { frameSetDesc, bindlessSetDesc };
@@ -429,13 +416,13 @@ namespace Arcane
         }
 
         // The pool. NOTHING IN IT IS EVER REWRITTEN WHILE THE GPU MIGHT READ
-        // IT -- every per-frame set is written once, at Create, and never
-        // again -- which is what keeps ResetDescriptorPool and its fence
-        // discipline out of this file, exactly as in Batch2DNode. Here it is
-        // stronger than there: the per-frame sets are allocated and written
-        // before the first frame exists, so there is no window at all. The
-        // bindless set is the one exception -- see AddMaterial's own
-        // synchronization comment.
+        // IT: a per-frame set's b1 is written once, at Create; its t0/t1 are
+        // rewritten only for the CURRENT slot, whose previous frame retired
+        // at BeginFrame (the header's WHAT THIS NODE OWNS block); and the
+        // bindless set only ever gains slots nothing has read yet (see
+        // AddMaterial's own synchronization comment). Nothing is ever FREED,
+        // which is what keeps ResetDescriptorPool and its fence discipline
+        // out of this file, exactly as in Batch2DNode.
         const nri::DescriptorPoolDesc poolDesc = PoolSizes();
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
@@ -542,7 +529,7 @@ namespace Arcane
 
             nri::UpdateDescriptorRangeDesc update = {};
             update.descriptorSet = m_sets[slot];
-            update.rangeIndex    = 0;   // b1 -- the only range in this set now
+            update.rangeIndex    = 0;   // b1 -- ranges 1-2 (t0/t1, the GPU scene) are Record's, per slot
             update.descriptors   = &cb;
             update.descriptorNum = 1;
             core.UpdateDescriptorRanges(&update, 1);
@@ -783,30 +770,57 @@ namespace Arcane
         // context still gets its pipeline and still reports the real reason it drew
         // nothing, instead of a "missing pipeline" warning naming the wrong cause.
         m_residents.clear();
-        if (!meshBuffers)
-            return;
+        m_adHocRows.clear();
+        m_adHocDraws.clear();
+        const auto resolveOnce = [&](const Guid& id)
+        {
+            if (id.IsNil() || !meshBuffers)
+                return;
+            for (const auto& e : m_residents)
+                if (e.first == id)
+                    return;
+            m_residents.push_back({ id, meshBuffers->Resolve(id, frameCounter) });
+        };
+
+        // 1. The registry-backed batches: one resolve per distinct mesh.
+        if (scene.scene)
+            for (const GpuBatchDraw& batch : scene.scene->batches)
+                resolveOnce(batch.mesh);
+
+        // 2. The ad-hoc instances (F3 plan 1 T7): resolved the same way, AND
+        //    staged as GpuInstance rows for the sync node's scratch region --
+        //    built even with a null cache, since they are the sync node's
+        //    input regardless of whether anything can be drawn. Capped at the
+        //    scratch capacity: GpuScene::Reserve warns once for the overflow
+        //    and Apply clamps to the same count, so row i here IS scratch row
+        //    i on the device (Record's pushRoot depends on that).
         for (const MeshInstance& instance : scene.instances)
         {
             if (instance.mesh.IsNil())
-                continue;
-            bool seen = false;
-            for (const auto& e : m_residents)
-            {
-                if (e.first == instance.mesh)
-                {
-                    seen = true;
-                    break;
-                }
-            }
-            if (seen)
-                continue;
-            m_residents.push_back({ instance.mesh,
-                                    meshBuffers->Resolve(instance.mesh, frameCounter) });
+                continue;   // an empty slot is not an error -- see MeshInstance::mesh
+            if (m_adHocRows.size() >= GpuScene::kScratchRows)
+                break;
+            resolveOnce(instance.mesh);
+
+            GpuInstance row;
+            row.model     = instance.model;
+            row.prevModel = instance.model;   // an ad-hoc row has no history: prev == model (the G2 contract's "new row")
+            // NormalMatrixFor's singular guard means a degenerate instance
+            // gets identity here rather than NaN reaching the GPU -- the same
+            // product the old root block carried, now three row columns.
+            const glm::mat3 n = NormalMatrixFor(instance.model);
+            row.normal0      = glm::vec4(n[0], 0.0f);
+            row.normal1      = glm::vec4(n[1], 0.0f);
+            row.normal2      = glm::vec4(n[2], 0.0f);
+            row.baseColor    = instance.baseColor;
+            row.materialSlot = instance.materialSlot;
+            m_adHocRows.push_back(row);
+            m_adHocDraws.push_back(AdHocDraw{ instance.mesh, instance.indexOffset, instance.indexCount });
         }
     }
 
     void MeshNode::Record(RenderGraphNodeContext& context, const MeshSceneDesc& scene,
-                          std::uint32_t frameSlot)
+                          std::uint32_t frameSlot, GpuScene* gpuScene)
     {
         const nri::CoreInterface& core = context.core;
 
@@ -839,8 +853,14 @@ namespace Arcane
         clear.value.depthStencil.stencil = 0;
         core.CmdClearAttachments(context.cmd, &clear, 1, nullptr, 0);
 
-        if (scene.instances.empty())
-            return;   // a scene with no geometry is a cleared depth buffer, not an error
+        // NOTHING TO DRAW is a cleared depth buffer, not an error: no emitted
+        // batch and no ad-hoc row. That includes ruling R-D's frame -- rows
+        // STAGED but everything culled (MeshSceneDesc::Empty explains why
+        // such a frame is declared at all): the sync node ahead of this one
+        // uploaded them, and this pass has no draw to record.
+        const bool hasBatches = scene.scene && scene.scene->HasDraws();
+        if (!hasBatches && m_adHocDraws.empty())
+            return;
 
         if (!m_pipeline)
         {
@@ -872,6 +892,11 @@ namespace Arcane
         if (!layout)
         {
             GraphError("MeshNode: the pipeline layout is gone -- nothing recorded");
+            return;
+        }
+        if (!gpuScene)   // AddMeshNode passes context->Scene(); null means the vehicle has no GPU scene
+        {
+            GraphError("MeshNode: no GpuScene on the context -- nothing recorded");
             return;
         }
 
@@ -923,6 +948,42 @@ namespace Arcane
             return;
         }
 
+        // ---------------------------------------------------------------
+        // THE FRAME SET's t0/t1 VIEWS (F3 plan 1 T7): rewritten for THIS slot
+        // when the GPU scene's buffers changed -- EITHER the instance buffer
+        // grew (its generation moved; the view object was replaced with it)
+        // OR this slot's visible-index buffer was re-created (its view
+        // pointer moved; GpuScene keeps no generation for those). Both
+        // halves of the compare are load-bearing. Safe: this slot's previous
+        // frame retired at BeginFrame, so nothing in flight reads the set;
+        // the ranges carry ALLOW_UPDATE_AFTER_SET regardless. The first
+        // Record for a slot always writes (the members start at 0 / null).
+        // ---------------------------------------------------------------
+        if (m_setInstanceGen[frameSlot] != gpuScene->InstanceBufferGeneration()
+            || m_setVisibleView[frameSlot] != gpuScene->VisibleIndicesView(frameSlot))
+        {
+            // `views` must outlive the UpdateDescriptorRanges call -- the same
+            // rule CreateSets' `cb` follows: `descriptors` is a pointer to an
+            // array dereferenced inside the call.
+            const nri::Descriptor* views[2] = { gpuScene->InstancesView(), gpuScene->VisibleIndicesView(frameSlot) };
+            if (!views[0] || !views[1])
+            {
+                GraphError("MeshNode: the GPU scene has no instance / visible-index view for this frame slot -- nothing recorded");
+                return;
+            }
+            nri::UpdateDescriptorRangeDesc updates[2] = {};
+            for (std::uint32_t i = 0; i < 2; ++i)
+            {
+                updates[i].descriptorSet = set;
+                updates[i].rangeIndex    = 1 + i;   // CreateBindings' frameRanges[1] (t0) / [2] (t1)
+                updates[i].descriptors   = &views[i];
+                updates[i].descriptorNum = 1;
+            }
+            core.UpdateDescriptorRanges(updates, 2);
+            m_setInstanceGen[frameSlot] = gpuScene->InstanceBufferGeneration();
+            m_setVisibleView[frameSlot] = gpuScene->VisibleIndicesView(frameSlot);
+        }
+
         core.CmdSetDescriptorPool(context.cmd, *m_pool);
         // ONE layout for the whole pass, so this is bound once. CmdSetPipeline
         // Layout invalidates the bound sets and root constants on both
@@ -946,20 +1007,20 @@ namespace Arcane
 
         core.CmdSetPipeline(context.cmd, *m_pipeline);
 
+        // Binds a mesh's resident vertex + index buffers if it is resident and
+        // not already bound; null means SKIP THE DRAW -- never a stale bind
+        // from the previous one. Offset is always 0: dedicated buffers, not a
+        // ring.
         Guid lastMesh{};
         bool lastBound = false;
-        for (const MeshInstance& instance : scene.instances)
+        const auto bindMesh = [&](const Guid& id) -> const NriMeshBufferCache::Resident*
         {
-            if (instance.mesh.IsNil())
-                continue;   // an empty slot is not an error -- see MeshInstance::mesh
-
-            const NriMeshBufferCache::Resident* resident = residentFor(instance.mesh);
+            const NriMeshBufferCache::Resident* resident = residentFor(id);
             if (!resident || !resident->ready || !resident->vertexBuffer || !resident->indexBuffer)
-                continue;   // not resident -- skip, never a stale bind from the last draw
-
-            if (!lastBound || instance.mesh != lastMesh)
+                return nullptr;
+            if (!lastBound || id != lastMesh)
             {
-                lastMesh  = instance.mesh;
+                lastMesh  = id;
                 lastBound = true;
                 nri::VertexBufferDesc vertexBuffer = {};
                 vertexBuffer.buffer = resident->vertexBuffer;
@@ -969,34 +1030,73 @@ namespace Arcane
                 core.CmdSetIndexBuffer(context.cmd, *resident->indexBuffer, 0,
                                         nri::IndexType::UINT32);
             }
-
-            MeshRootConstants push;
-            push.model       = instance.model;
-            push.baseColor   = instance.baseColor;
-            // Derived from `model` alone, every instance, every frame --
-            // MeshInstance carries no field for this (see its own comment).
-            // NormalMatrixFor's singular guard means a degenerate instance
-            // gets identity here rather than NaN reaching the GPU.
-            push.normalMatrix = PackedNormalMatrix(NormalMatrixFor(instance.model));
-            // THE MATERIAL SLOT (Task 8/10), packed into col0.w AFTER the
-            // line above and as RAW BITS ONLY -- PackedNormalMatrix's
-            // constructor just zeroed every column's `.w` (MeshInstance::
-            // materialSlot's own comment states the contract in full); this
-            // is the one write, and nothing may run `col0` through float
-            // arithmetic after it. `kInvalidSlot` (0xFFFFFFFF) is a NaN bit
-            // pattern, safe only as bytes -- std::bit_cast, never a numeric
-            // conversion (which would try to produce the FLOAT VALUE
-            // 4294967295.0f, not reinterpret the bits).
-            push.normalMatrix.col0.w = std::bit_cast<float>(instance.materialSlot);
+            return resident;
+        };
+        // THE ROOT BLOCK, once per draw: {firstOutput, flags} -- the whole of
+        // what a draw carries now (MeshRootConstants, MeshNode.hpp).
+        const auto pushRoot = [&](std::uint32_t firstOutput, std::uint32_t flags)
+        {
+            const MeshRootConstants push{ firstOutput, flags };
             nri::SetRootConstantsDesc rootConstants = {};
             rootConstants.rootConstantIndex = 0;
             rootConstants.data              = &push;
             rootConstants.size              = sizeof(push);
             core.CmdSetRootConstants(context.cmd, rootConstants);
+        };
+
+        // ---------------------------------------------------------------
+        // 1. THE REGISTRY-BACKED BATCHES, INDIRECT, in the frame's order
+        //    (BuildGpuSceneFrame: opaque before masked, nearest first). One
+        //    CmdDrawIndexedIndirect per batch, its nri::DrawIndexedDesc at
+        //    argIndex in this slot's args buffer (GpuSceneSyncNode copied
+        //    the frame's DrawIndexedArgs there -- GpuScene.cpp static_asserts
+        //    the two layouts agree). instanceNum is the CPU coarse count
+        //    (plan 2: the cull dispatch writes it), and the vertex shader
+        //    maps SV_InstanceID through the visible-index list from
+        //    batch.firstOutput. An indirect draw with instanceNum 0 is legal
+        //    and draws nothing; a batch is only EMITTED with >= 1 visible row
+        //    anyway.
+        // ---------------------------------------------------------------
+        if (hasBatches)
+        {
+            nri::Buffer* args = gpuScene->Args(frameSlot);
+            if (!args)
+            {
+                GraphError("MeshNode: the GPU scene has no indirect-args buffer for this frame slot -- the batches are dropped");
+            }
+            else
+            {
+                for (const GpuBatchDraw& batch : scene.scene->batches)
+                {
+                    if (!bindMesh(batch.mesh))
+                        continue;   // not resident: skip, never a stale bind
+                    pushRoot(batch.firstOutput, 0);
+                    core.CmdDrawIndexedIndirect(context.cmd, *args,
+                                                std::uint64_t(batch.argIndex) * sizeof(nri::DrawIndexedDesc),
+                                                1, sizeof(nri::DrawIndexedDesc), nullptr, 0);
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // 2. THE AD-HOC ROWS, DIRECT, in submission order, from this slot's
+        //    scratch region: Prepare staged row i as m_adHocRows[i], the sync
+        //    node copied it to scratch row ScratchFirstRow(slot) + i, and the
+        //    root block names that row outright (kMeshRootDirect). One
+        //    CmdDrawIndexed each -- the F2a shape, minus the 128-byte push.
+        // ---------------------------------------------------------------
+        const std::uint32_t scratchFirst = gpuScene->ScratchFirstRow(frameSlot);
+        for (std::size_t i = 0; i < m_adHocDraws.size(); ++i)
+        {
+            const AdHocDraw& d = m_adHocDraws[i];
+            const NriMeshBufferCache::Resident* resident = bindMesh(d.mesh);
+            if (!resident)
+                continue;
+            pushRoot(scratchFirst + static_cast<std::uint32_t>(i), kMeshRootDirect);
 
             nri::DrawIndexedDesc draw = {};
-            draw.baseIndex   = instance.indexOffset;
-            draw.indexNum    = instance.indexCount ? instance.indexCount : resident->indexCount;
+            draw.baseIndex   = d.indexOffset;
+            draw.indexNum    = d.indexCount ? d.indexCount : resident->indexCount;
             draw.instanceNum = 1;
             core.CmdDrawIndexed(context.cmd, draw);
         }
@@ -1013,24 +1113,29 @@ namespace Arcane
         // `canvasFormat` is the CALLER's, not kGraphCanvasFormat assumed --
         // see AddMeshNode's header comment for why this function cannot derive
         // it and what a wrong one costs.
+        std::span<const GpuInstance> adHoc;
         if (context)
         {
             // UNCONDITIONAL once a node exists: MeshBuffers() may be null, and
             // Prepare's own residency half is what skips then -- the PIPELINE half
-            // must still run (see Prepare's declaration comment).
+            // must still run (see Prepare's declaration comment). Prepare ALSO
+            // stages the ad-hoc rows (F3 plan 1 T7), which the sync node below
+            // needs BEFORE the mesh node is declared -- so it runs first.
             if (MeshNode* node = context->Mesh())
+            {
                 node->Prepare(canvasFormat, scene, context->MeshBuffers(),
                               context->PresentedFrames());
+                adHoc = node->AdHocRows();
+            }
         }
 
         // THE GPU SCENE'S WRITER, FIRST (F3 plan 1 T6, ruling R-A): the sync
         // node imports the persistent instance / args / visible-index buffers
-        // as CopyDst and copies this frame's rows into them; the mesh node
-        // below Reads the same handles, so the graph derives the copy -> read
-        // barriers. The ad-hoc rows (`scene.instances`) are NOT handed over
-        // yet -- Task 7 routes them through the scratch rows when it rewrites
-        // the draw; until then Record draws them the old way.
-        const GpuSceneNodeInputs gpuScene = AddGpuSceneSyncNode(graph, context, scene.scene, /*adHoc*/ {});
+        // as CopyDst and copies this frame's rows into them -- the registry
+        // scene's staged rows and (T7) the ad-hoc rows into this slot's
+        // scratch region; the mesh node below Reads the same handles, so the
+        // graph derives the copy -> read barriers.
+        const GpuSceneNodeInputs gpuScene = AddGpuSceneSyncNode(graph, context, scene.scene, adHoc);
 
         // `depth` is captured by reference ([&]) below, not shared_ptr -- safe
         // here only because the SETUP lambda is the one that mutates it and
@@ -1059,7 +1164,7 @@ namespace Arcane
 
                 // The GPU scene's buffers, as this pass consumes them: the
                 // instance rows and the visible indices from the vertex
-                // shader, the args by CmdDrawIndexedIndirect (Task 7).
+                // shader, the args by CmdDrawIndexedIndirect.
                 builder.Read(gpuScene.instances, RgUsage::ShaderRead);
                 builder.Read(gpuScene.visibleIndices, RgUsage::ShaderRead);
                 builder.Read(gpuScene.args, RgUsage::IndirectArgs);
@@ -1069,7 +1174,7 @@ namespace Arcane
                 if (!context)
                     return;   // device-less declaration-shape drive: no device, nothing to record
                 if (MeshNode* node = context->Mesh())
-                    node->Record(nodeContext, scene, context->FrameSlot());
+                    node->Record(nodeContext, scene, context->FrameSlot(), context->Scene());
             });
 
         // TEST-ONLY, and declared only when a test armed it (GpuScene::

@@ -1,5 +1,22 @@
-// Mesh shader: the OPAQUE 3D pass. One directional light, LAMBERT diffuse plus
-// a constant ambient term, one albedo texture.
+// mesh.hlsl -- the OPAQUE 3D pass, reading its per-instance data from the GPU
+// SCENE (F3 plan 1 T7). One directional light, LAMBERT diffuse plus a constant
+// ambient term, one albedo texture through the bindless table or the flat
+// baseColor path -- the lighting arithmetic is UNCHANGED from the F2a pass;
+// only WHERE the per-instance data comes from moved.
+//
+// THE ROOT BLOCK is ONE 8-byte {firstOutput, flags} (MeshNode.hpp's
+// MeshRootConstants), pushed once per draw:
+//   * an INDIRECT batch draw (flags == 0) reads
+//         row = g_VisibleIndices[firstOutput + SV_InstanceID]
+//     -- firstOutput is the batch's start in this frame slot's visible-index
+//     list (GpuBatchDraw::firstOutput), and SV_InstanceID walks the rows the
+//     CPU coarse test (plan 2: the cull dispatch) admitted;
+//   * a DIRECT draw (flags & kMeshRootDirect) reads row = firstOutput ITSELF
+//     -- the ad-hoc scratch rows (MeshSceneDesc::instances), and plan 2's
+//     transparent rows drawn back-to-front one at a time.
+// The 128-byte per-instance MeshConstants block this replaces is GONE: the
+// model matrix, the tint, the normal matrix and the material slot are all
+// fields of the row (gpu_scene.hlsli's GpuInstance).
 //
 // DELIBERATELY NOT PBR. The GGX/metallic-roughness material model belongs to
 // the Deadlock-class renderer arc, and a half-version here would be a second
@@ -11,54 +28,39 @@
 //
 // MATRIX PACKING. Every float4x4 here is COLUMN-MAJOR, which is dxc's default
 // for both the DXIL and SPIR-V targets and is exactly glm::mat4's memory layout
-// (m[c] is column c), so the C++ side memcpys a glm::mat4 in with no transpose.
+// (m[c] is column c), so the C++ side stages a glm::mat4 in with no transpose.
 // mul(M, v) is therefore the ordinary M * v.
 //
 // UNITS are METERS (MKS) -- MeshBuilder emits meters and the camera's nearZ/
 // farZ are meters.
-
-// THE NORMAL MATRIX (normalMatrixCol0/1/2), Task 8/F2a. Packed as three
-// float4 COLUMNS rather than a bare float3x3 for the same reason
-// MeshFrameCB below packs g_lightDirection etc. as float4 instead of float3:
-// each column gets its own explicit 16-byte slot (12 bytes used, 4 padding)
-// so the C++ struct (MeshNode.cpp's PackedNormalMatrix) and this layout agree
-// byte-for-byte with no compiler-packing ambiguity between the two. Together
-// with `model` and `baseColor` this is EXACTLY 128 bytes -- Vulkan's
-// GUARANTEED MINIMUM maxPushConstantsSize, with ZERO headroom left. See
-// MeshNode.cpp's MeshRootConstants comment before adding another field here.
 //
-// Task 8/10 spent the one headroom this budget had without growing it:
-// normalMatrixCol0.w -- otherwise always zero, like col1/col2's own `.w` --
-// carries the per-instance MATERIAL SLOT into this bindless array below, as
-// RAW BITS (asuint/asfloat). See ps_main.
-struct MeshConstants
+// REGISTER MAP (MeshNode.cpp's CreateBindings, THE REGISTER-SPACE RULE):
+//   root (implicit space0): b0 the root block, s0 the immutable sampler;
+//   space1 = { b1 MeshFrameCB, t0 g_Instances, t1 g_VisibleIndices };
+//   space2 = { t0 g_BindlessTextures[kMeshBindlessCapacity] }.
+// The SPIR-V register-shift table (compile-shaders.bat's SPIRV_FLAGS /
+// ShaderConventions.hpp::kSpirvArgs) carries a `-fvk-t-shift 0 1` entry for
+// the two space1 SRVs: t0/t1 land at set 1 bindings 0/1, b1 at binding 257.
+#include "gpu_scene.hlsli"
+
+struct MeshRoot
 {
-    float4x4 model;             // model -> world
-    float4   baseColor;         // linear tint; the WHOLE albedo when the material
-                                 // slot below is kMeshInvalidMaterialSlot (the flat path)
-    float4   normalMatrixCol0;  // xyz: NormalMatrixFor(model) col0. w: the packed
-                                 // MATERIAL SLOT (Task 8/10) -- raw bits, never a float
-    float4   normalMatrixCol1;  // xyz used / w padding, always zero
-    float4   normalMatrixCol2;  // xyz used / w padding, always zero
+    uint firstOutput;
+    uint flags;
 };
+#define kMeshRootDirect 1u
 
 #if SPIRV
-[[vk::push_constant]] ConstantBuffer<MeshConstants> g_PC;
-#define g_model            g_PC.model
-#define g_baseColor        g_PC.baseColor
-#define g_normalMatrixCol0 g_PC.normalMatrixCol0
-#define g_normalMatrixCol1 g_PC.normalMatrixCol1
-#define g_normalMatrixCol2 g_PC.normalMatrixCol2
+[[vk::push_constant]] ConstantBuffer<MeshRoot> g_PC;
+#define g_firstOutput g_PC.firstOutput
+#define g_flags       g_PC.flags
 #else
-cbuffer MeshConstantsCB : register(b0)
+cbuffer MeshRootCB : register(b0)
 {
-    MeshConstants g_PCData;
+    MeshRoot g_PCData;
 }
-#define g_model            g_PCData.model
-#define g_baseColor        g_PCData.baseColor
-#define g_normalMatrixCol0 g_PCData.normalMatrixCol0
-#define g_normalMatrixCol1 g_PCData.normalMatrixCol1
-#define g_normalMatrixCol2 g_PCData.normalMatrixCol2
+#define g_firstOutput g_PCData.firstOutput
+#define g_flags       g_PCData.flags
 #endif
 
 // PER-FRAME, and an ordinary descriptor-set constant buffer rather than more
@@ -84,6 +86,14 @@ cbuffer MeshFrameCB : register(b1, space1)
     float4   g_ambient;          // rgb: the constant ambient term
 };
 
+// THE GPU SCENE (F3): the ONE persistent instance buffer (every registry row
+// plus each frame slot's scratch rows) and THIS frame slot's visible-index
+// list, both written by GpuSceneSyncNode ahead of this pass. Same set as b1
+// (space1); MeshNode::Record rewrites their descriptors for a slot when the
+// scene's buffers change (growth, or a slot's visible buffer re-created).
+StructuredBuffer<GpuInstance> g_Instances      : register(t0, space1);
+StructuredBuffer<uint>        g_VisibleIndices : register(t1, space1);
+
 struct VSInput
 {
     float3 pos    : POSITION;
@@ -96,32 +106,42 @@ struct VSOutput
     float4 pos    : SV_Position;
     float3 normal : NORMAL;
     float2 uv     : TEXCOORD0;
+    // Per-ROW now (they were root constants): carried flat to the pixel
+    // shader, uniform across one instance's triangles.
+    nointerpolation float4 baseColor : COLOR0;
+    nointerpolation uint   slot      : TEXCOORD1;
 };
 
-VSOutput vs_main(VSInput input)
+VSOutput vs_main(VSInput input, uint instanceId : SV_InstanceID)
 {
+    const uint row = (g_flags & kMeshRootDirect) ? g_firstOutput
+                                                 : g_VisibleIndices[g_firstOutput + instanceId];
+    const GpuInstance inst = g_Instances[row];
+
     VSOutput output;
-    const float4 world = mul(g_model, float4(input.pos, 1.0));
+    const float4 world = mul(inst.model, float4(input.pos, 1.0));
     output.pos = mul(g_viewProjection, world);
     // THE INVERSE TRANSPOSE (Task 8/F2a), not the upper 3x3: a surface
     // tangent scales WITH the object, so for dot(normal, tangent) to stay
     // zero after a NON-UNIFORM scale the normal has to scale by the INVERSE
     // along each axis, not the same factor `model` applies to a position.
-    // Arcane::NormalMatrixFor (a free function in MeshNode.hpp, not a member
-    // of MeshNode) computes this once per instance on the CPU
-    // (glm::transpose(glm::inverse(upper 3x3)), with a singular-model guard
-    // that returns identity rather than feeding this shader a NaN) and
-    // MeshNode::Record pushes its three columns above -- built as an explicit
-    // weighted sum of those columns, NOT float3x3(col0,col1,col2), because
-    // HLSL's matrix-from-vectors constructor fills ROWS from its arguments,
-    // which would silently transpose this: mul(M,v) == v.x*col0 + v.y*col1 +
-    // v.z*col2 is the definition of a column-major matrix-vector product, and
-    // stating it this way is correct on BOTH the SPIR-V and DXIL targets with
-    // no dependence on either compiler's matrix-packing defaults.
-    output.normal = input.normal.x * g_normalMatrixCol0.xyz
-                   + input.normal.y * g_normalMatrixCol1.xyz
-                   + input.normal.z * g_normalMatrixCol2.xyz;
-    output.uv     = input.uv;
+    // Arcane::NormalMatrixFor (Math/NormalMatrix.hpp) computes this once per
+    // row on the CPU at staging (glm::transpose(glm::inverse(upper 3x3)),
+    // with a singular-model guard that returns identity rather than feeding
+    // this shader a NaN) and the row carries its three columns -- consumed as
+    // an explicit weighted sum of those columns, NOT float3x3(col0,col1,col2),
+    // because HLSL's matrix-from-vectors constructor fills ROWS from its
+    // arguments, which would silently transpose this: mul(M,v) == v.x*col0 +
+    // v.y*col1 + v.z*col2 is the definition of a column-major matrix-vector
+    // product, and stating it this way is correct on BOTH the SPIR-V and DXIL
+    // targets with no dependence on either compiler's matrix-packing defaults.
+    // The SAME product the F2a pass computed from its root-constant columns.
+    output.normal = input.normal.x * inst.normal0.xyz
+                  + input.normal.y * inst.normal1.xyz
+                  + input.normal.z * inst.normal2.xyz;
+    output.uv        = input.uv;
+    output.baseColor = inst.baseColor;
+    output.slot      = inst.materialSlot;
     return output;
 }
 
@@ -145,8 +165,9 @@ Texture2D<float4> g_BindlessTextures[kMeshBindlessCapacity] : register(t0, space
 // layout carries a root sampler.
 SamplerState g_Sampler : register(s0);
 
-// BindlessTable::kInvalidSlot (BindlessTable.hpp), restated here because
-// HLSL cannot include a C++ header. Keep numerically identical.
+// BindlessTable::kInvalidSlot (BindlessTable.hpp) == kGpuInvalidMaterialSlot
+// (GpuSceneTypes.hpp), restated here because HLSL cannot include a C++
+// header. Keep numerically identical.
 #define kMeshInvalidMaterialSlot 0xFFFFFFFFu
 
 float4 ps_main(VSOutput input) : SV_Target0
@@ -157,27 +178,20 @@ float4 ps_main(VSOutput input) : SV_Target0
     // not.
     const float  ndotl  = saturate(dot(n, g_lightDirection.xyz));
 
-    // THE MATERIAL SLOT (Task 8/10), unpacked as RAW BITS from
-    // normalMatrixCol0.w -- see MeshConstants' own comment (and
-    // MeshNode.hpp's MeshInstance::materialSlot) for why this is asuint,
-    // never a float read: `kMeshInvalidMaterialSlot` is a NaN bit pattern
-    // and only ever safe reinterpreted, not converted.
-    const uint slot = asuint(g_normalMatrixCol0.w);
-
     // kMeshInvalidMaterialSlot selects F2a's ORIGINAL flat path BIT-FOR-
     // BIT: the old code sampled a 1x1 opaque-white texel and multiplied it
-    // by g_baseColor, and 1.0 * x is exact under IEEE-754, so using
-    // g_baseColor directly is that same result with the now-redundant
-    // sample removed, not an approximation of it. Any other slot must have
-    // come from THIS pipeline's own MeshNode::AddMaterial. The index is
-    // wrapped in NonUniformResourceIndex even though it is uniform across
-    // one draw's invocations (a root/push-constant value, not a per-pixel
-    // varying): it is still a SHADER-COMPUTED index into the array rather
-    // than a compile-time constant, which is the standard bindless-
-    // indexing idiom on both backends.
-    const float4 albedo = (slot == kMeshInvalidMaterialSlot)
-        ? g_baseColor
-        : g_BindlessTextures[NonUniformResourceIndex(slot)].Sample(g_Sampler, input.uv) * g_baseColor;
+    // by the tint, and 1.0 * x is exact under IEEE-754, so using baseColor
+    // directly is that same result with the now-redundant sample removed,
+    // not an approximation of it. Any other slot must have come from THIS
+    // pipeline's own MeshNode::AddMaterial. The index is wrapped in
+    // NonUniformResourceIndex: it is uniform across one instance's
+    // invocations but a SHADER-COMPUTED index into the array rather than a
+    // compile-time constant, which is the standard bindless-indexing idiom
+    // on both backends -- and, now that the slot is a per-row value read by
+    // SV_InstanceID, genuinely non-uniform across one indirect draw.
+    const float4 albedo = (input.slot == kMeshInvalidMaterialSlot)
+        ? input.baseColor
+        : g_BindlessTextures[NonUniformResourceIndex(input.slot)].Sample(g_Sampler, input.uv) * input.baseColor;
 
     const float3 lit    = albedo.rgb * (g_ambient.rgb + g_lightColor.rgb * ndotl);
     return float4(lit, albedo.a);

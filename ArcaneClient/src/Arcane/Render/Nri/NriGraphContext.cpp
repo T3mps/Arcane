@@ -1265,7 +1265,10 @@ namespace Arcane
         // byte for byte the frame this function built before Task 7 existed.
         // ---------------------------------------------------------------
         // Since F3 plan 1 T6 "non-empty" is MeshSceneDesc::Empty(): ad-hoc
-        // instances OR a registry-backed scene with draws.
+        // instances OR a registry-backed scene with draws OR (T7, ruling R-D)
+        // a registry-backed scene with STAGED rows and nothing emitted --
+        // the upload still has to happen; the mesh node records only its
+        // depth clear then.
         const bool wantsMesh = shape.mesh != nullptr && !shape.mesh->Empty();
         if (wantsMesh)
         {

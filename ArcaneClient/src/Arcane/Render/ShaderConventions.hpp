@@ -53,6 +53,8 @@ namespace Arcane
         // why each (type, space) pair needs its own entry.
         "-fvk-b-shift", "256", "1",
         "-fvk-t-shift", "0",   "2",
+        // mesh.hlsl (F3): the instance and visible-index SRVs at t0/t1 in space1
+        "-fvk-t-shift", "0",   "1",
     };
     inline constexpr std::size_t kSpirvArgCount = sizeof(kSpirvArgs) / sizeof(kSpirvArgs[0]);
 }

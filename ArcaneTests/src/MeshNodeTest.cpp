@@ -41,9 +41,11 @@
 #include <glm/gtc/matrix_transform.hpp>   // glm::scale
 
 #include <cmath>
+#include <cstddef>       // offsetof -- the MeshRootConstants pin
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>          // MeshSceneDesc::instances
 #include <type_traits>
 #include <vector>
 
@@ -171,6 +173,54 @@ TEST_CASE("mesh node: an instance names its mesh by GUID, not by borrowed pointe
     instance.mesh = Arcane::Guid{ 1, 0 };
     CHECK(instance.mesh.IsValid());
     static_assert(std::is_same_v<decltype(Arcane::MeshInstance::mesh), Arcane::Guid>);
+}
+
+// F3 plan 1 T7: MeshSceneDesc::Empty() is "no mesh pass this frame". NOT
+// empty when there are ad-hoc rows, when the registry scene EMITTED a batch,
+// or (ruling R-D) when the registry scene STAGED rows even though nothing was
+// emitted -- a frame whose entities are all culled still has to upload its
+// dirty rows, because the mirror's lastModel history has already advanced
+// past them and a never-written row would draw stale (or never-written)
+// bytes the moment it comes into view. That frame declares the pass and
+// records only its depth clear.
+TEST_CASE("MeshSceneDesc::Empty: no ad-hoc rows, no scene draws, no staged rows", "[mesh][node]")
+{
+    Arcane::MeshSceneDesc d;
+    CHECK(d.Empty());
+    Arcane::GpuSceneFrame f;
+    d.scene = &f;
+    CHECK(d.Empty());                       // a frame with no emitted batches AND no staged rows is empty
+    f.batches.push_back(Arcane::GpuBatchDraw{});
+    CHECK_FALSE(d.Empty());                 // an emitted batch: draws
+    f.batches.clear();
+    CHECK(d.Empty());
+    f.stage.rows.push_back(0u);             // R-D: staged rows with nothing emitted (everything culled)
+    f.stage.values.push_back(Arcane::GpuInstance{});
+    CHECK_FALSE(d.Empty());
+    f.stage.Clear();
+    CHECK(d.Empty());
+    f.stage.fullRebuild = true;             // R-D: a full rebuild uploads (and stamps the generation) even with no rows
+    CHECK_FALSE(d.Empty());
+    f.stage.Clear();
+    d.scene = nullptr;
+    const Arcane::MeshInstance one{};
+    d.instances = std::span<const Arcane::MeshInstance>(&one, 1);
+    CHECK_FALSE(d.Empty());                 // an ad-hoc row, no scene
+}
+
+TEST_CASE("MeshRootConstants is the 8-byte {firstOutput, flags} block", "[mesh][node]")
+{
+    // mesh.hlsl's MeshRoot, pushed once per draw: an indirect batch draw reads
+    // row = g_VisibleIndices[firstOutput + SV_InstanceID]; a DIRECT draw
+    // (flags & kMeshRootDirect) reads row = firstOutput itself. The 128-byte
+    // MeshConstants block this replaces is gone with the per-instance push.
+    CHECK(sizeof(Arcane::MeshRootConstants) == 8);
+    CHECK(offsetof(Arcane::MeshRootConstants, firstOutput) == 0);
+    CHECK(offsetof(Arcane::MeshRootConstants, flags) == 4);
+    CHECK(Arcane::kMeshRootDirect == 1u);
+    const Arcane::MeshRootConstants defaults{};
+    CHECK(defaults.firstOutput == 0u);
+    CHECK(defaults.flags == 0u);
 }
 
 namespace
