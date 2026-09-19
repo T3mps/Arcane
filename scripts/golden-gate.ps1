@@ -344,10 +344,11 @@ $script:VerdictNames = @(
 # hand-maintained copy nothing compares is what this arc exists to abolish.
 $script:ReportSchemaMin = 3
 # 6 since the Core-DLL split's plan 1 Task 7 added the report's `worlds` array;
-# 7 since F4 plan 1 T12 added `viewMode` (VerifyReport::kSchemaVersion).
+# 7 since F4 plan 1 T12 added `viewMode`; 8 since F3 plan 1 T8 added the
+# `visibility` block (VerifyReport::kSchemaVersion).
 # -SelfTest is what makes this a failure rather than a hope if the two halves
 # ever drift again.
-$script:ReportSchemaMax = 7
+$script:ReportSchemaMax = 8
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.
