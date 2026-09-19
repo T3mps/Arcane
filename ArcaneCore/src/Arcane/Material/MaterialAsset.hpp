@@ -14,6 +14,7 @@
 
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Material/MaterialBlendMode.hpp>
 #include <Arcane/Material/MaterialGraph.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
@@ -69,6 +70,12 @@ namespace Arcane
         // chains share it): an optional `Varyings displace(Varyings v)` body
         // for %{VERTEX_BODY}. Empty = identity. Text-authored.
         std::string vertexSnippet;
+        // Mesh render metadata. Optional at every level so a material
+        // instance can override one field without resetting the others.
+        // Concrete defaults live on ResolvedMeshMaterial.
+        std::optional<MaterialBlendMode> blend;
+        std::optional<float> alphaCutoff;
+        std::optional<bool> twoSided;
         // Pass chain (fullscreen BASE materials only; additive schema: absent =
         // single-pass, exactly the pre-chain format). Passes run in order after
         // the main snippet; each reads the previous pass's output through the

@@ -150,6 +150,66 @@ TEST_CASE("A mesh document binds baseColor/albedo with no compiler and round-tri
     CHECK(foundAlbedo);
 }
 
+TEST_CASE("ShaderEditorDocument authors bounded mesh metadata only on mesh surfaces",
+          "[editor][material][mesh]")
+{
+    const fs::path dir = TempDir("mesh_metadata");
+    const fs::path meshFile = dir / "mesh.arcmat";
+
+    Arcane::MaterialAssetData mesh;
+    mesh.id = Arcane::Guid::Generate();
+    mesh.name = "Mesh metadata";
+    mesh.kind = "mesh";
+    REQUIRE(Arcane::SaveMaterialAsset(meshFile, mesh));
+    const auto loadedMesh = Arcane::LoadMaterialAsset(meshFile);
+    REQUIRE(loadedMesh.has_value());
+
+    ShaderEditorDocument meshDoc(DocServices{}, meshFile, *loadedMesh);
+    auto state = meshDoc.CaptureMeshMaterialMetadata();
+    REQUIRE(state.has_value());
+    CHECK_FALSE(state->blend.has_value());
+    CHECK_FALSE(state->alphaCutoff.has_value());
+    CHECK_FALSE(state->twoSided.has_value());
+
+    state->blend = Arcane::MaterialBlendMode::Transparent;
+    state->alphaCutoff = 2.0f;
+    state->twoSided = true;
+    meshDoc.ApplyMeshMaterialMetadata(*state);
+    state = meshDoc.CaptureMeshMaterialMetadata();
+    REQUIRE(state.has_value());
+    REQUIRE(state->alphaCutoff.has_value());
+    CHECK(*state->alphaCutoff == 1.0f);
+    REQUIRE(meshDoc.Save());
+
+    const auto savedMesh = Arcane::LoadMaterialAsset(meshFile);
+    REQUIRE(savedMesh.has_value());
+    CHECK(savedMesh->blend == Arcane::MaterialBlendMode::Transparent);
+    CHECK(savedMesh->alphaCutoff == 1.0f);
+    CHECK(savedMesh->twoSided == true);
+
+    state->alphaCutoff = -3.0f;
+    meshDoc.ApplyMeshMaterialMetadata(*state);
+    state = meshDoc.CaptureMeshMaterialMetadata();
+    REQUIRE(state.has_value());
+    REQUIRE(state->alphaCutoff.has_value());
+    CHECK(*state->alphaCutoff == 0.0f);
+
+    for (const char* kind : { "fullscreen", "sprite" })
+    {
+        const fs::path file = dir / (std::string(kind) + ".arcmat");
+        Arcane::MaterialAssetData data;
+        data.id = Arcane::Guid::Generate();
+        data.name = kind;
+        data.kind = kind;
+        data.snippet = kSnippet;
+        REQUIRE(Arcane::SaveMaterialAsset(file, data));
+        const auto loaded = Arcane::LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        ShaderEditorDocument doc(DocServices{}, file, *loaded);
+        CHECK_FALSE(doc.CaptureMeshMaterialMetadata().has_value());
+    }
+}
+
 TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", "[editor][material]")
 {
     const fs::path dir = TempDir("chains");

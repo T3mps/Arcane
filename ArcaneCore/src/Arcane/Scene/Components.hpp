@@ -189,6 +189,12 @@ namespace Arcane
         // default and WARNS ONCE -- it must not silently render white, which
         // would hide the broken reference.
         Guid materialOverride{};
+
+        // Transparent meshes sort by this explicit author priority first,
+        // then by biased projected depth. Higher order draws later; the bias
+        // is in world meters and is independent of material blend mode.
+        std::int32_t translucencyRenderOrder = 0;
+        float translucencyDepthSortBias = 0.0f;
     };
 
     // PhysicsSettings (2026-09-11, 2D physics wiring, spec s5): the PER-SCENE
@@ -386,6 +392,12 @@ namespace Arcane
         ASTRA_REFLECT_FIELD(MeshRenderer, materialOverride)
             ASTRA_REFLECT_ATTR(Category, "Appearance")
             ASTRA_REFLECT_ATTR(Tooltip, "Overrides the mesh asset's own material for this entity only. Nil uses the mesh's default.")
+        ASTRA_REFLECT_FIELD(MeshRenderer, translucencyRenderOrder)
+            ASTRA_REFLECT_ATTR(Category, "Translucency")
+            ASTRA_REFLECT_ATTR(Tooltip, "Transparent draw priority. Higher values draw later.")
+        ASTRA_REFLECT_FIELD(MeshRenderer, translucencyDepthSortBias)
+            ASTRA_REFLECT_ATTR(Category, "Translucency")
+            ASTRA_REFLECT_ATTR(Tooltip, "Bias added to transparent projected depth, in meters.")
     ASTRA_END_REFLECT_TYPE()
 
     ASTRA_REFLECT_TYPE(PhysicsSettings)

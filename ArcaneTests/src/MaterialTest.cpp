@@ -7,12 +7,18 @@
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/GlobalParams.hpp>
+#include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Material/MaterialTypes.hpp>
+#include <Arcane/Render/MeshMaterialCache.hpp>
+#include <Arcane/Scene/SceneResources.hpp>
 
 #include <cstring>
+#include <filesystem>
 #include <memory>
+#include <optional>
+#include <unordered_map>
 #include <vector>
 
 using namespace Arcane;
@@ -326,4 +332,72 @@ TEST_CASE("GlobalParams stays one cbuffer register", "[material]")
     const GlobalParams g;
     CHECK(g.time == 0.0f);
     CHECK(g.deltaTime == 0.0f);
+}
+
+TEST_CASE("Mesh material metadata resolves defaults and sparse base-instance overrides",
+          "[mesh][material]")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_mesh_material_metadata_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+
+    const auto write = [&](const fs::path& path, const Guid& parent,
+                           std::optional<MaterialBlendMode> blend,
+                           std::optional<float> cutoff,
+                           std::optional<bool> twoSided)
+    {
+        MaterialAssetData data;
+        data.id = Guid::Generate();
+        data.parent = parent;
+        data.name = path.stem().string();
+        data.kind = "mesh";
+        data.blend = blend;
+        data.alphaCutoff = cutoff;
+        data.twoSided = twoSided;
+        REQUIRE(SaveMaterialAsset(path, data));
+        return data.id;
+    };
+
+    const fs::path defaultsFile = dir / "defaults.arcmat";
+    const fs::path baseFile = dir / "base.arcmat";
+    const fs::path inheritFile = dir / "inherit.arcmat";
+    const fs::path overrideFile = dir / "override.arcmat";
+    const Guid defaultsId = write(defaultsFile, {}, std::nullopt, std::nullopt, std::nullopt);
+    const Guid baseId = write(baseFile, {}, MaterialBlendMode::Masked, 0.25f, true);
+    const Guid inheritId = write(inheritFile, baseId, std::nullopt, std::nullopt, std::nullopt);
+    const Guid overrideId = write(overrideFile, baseId, MaterialBlendMode::Transparent,
+                                  std::nullopt, false);
+
+    const std::unordered_map<Guid, fs::path> registry{
+        { defaultsId, defaultsFile }, { baseId, baseFile },
+        { inheritId, inheritFile }, { overrideId, overrideFile } };
+    MeshMaterialCache::Services services;
+    services.resolveAsset = [&](const Guid& id) -> std::optional<fs::path>
+    {
+        const auto it = registry.find(id);
+        return it == registry.end() ? std::nullopt : std::optional<fs::path>(it->second);
+    };
+    MeshMaterialCache cache(std::move(services));
+
+    cache.Request(defaultsId);
+    const ResolvedMeshMaterial& defaults = cache.Table().at(defaultsId);
+    CHECK(defaults.blend == MaterialBlendMode::Opaque);
+    CHECK(defaults.alphaCutoff == 0.5f);
+    CHECK_FALSE(defaults.twoSided);
+
+    cache.Request(inheritId);
+    const ResolvedMeshMaterial& inherited = cache.Table().at(inheritId);
+    CHECK(inherited.blend == MaterialBlendMode::Masked);
+    CHECK(inherited.alphaCutoff == 0.25f);
+    CHECK(inherited.twoSided);
+
+    cache.Request(overrideId);
+    const ResolvedMeshMaterial& overridden = cache.Table().at(overrideId);
+    CHECK(overridden.blend == MaterialBlendMode::Transparent);
+    CHECK(overridden.alphaCutoff == 0.25f);
+    CHECK_FALSE(overridden.twoSided);
+
+    fs::remove_all(dir, ec);
 }

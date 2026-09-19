@@ -918,7 +918,12 @@ namespace Arcane
     //     defaulted parameter. A module built against v36 reads an 8-byte
     //     resource the host publishes as 16 -- refuse. ReferenceProject.arcproj
     //     restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 37;
+    // v38 (2026-09-19, F3 plan 2): ResolvedMeshMaterial (a Core resource
+    //     visible to game modules) gains blend/alphaCutoff/twoSided, and
+    //     MeshRenderer gains translucencyRenderOrder/translucencyDepthSortBias.
+    //     A v37 module reads either header-defined layout at stale offsets;
+    //     reject the pairing. ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 38;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

@@ -104,6 +104,50 @@ TEST_CASE("scene round-trips through JSON (typed roster)", "[json][scene]")
     CHECK(foundChild);
 }
 
+TEST_CASE("SceneJson round-trips MeshRenderer translucency controls and defaults",
+          "[json][scene][mesh]")
+{
+    nlohmann::json doc;
+    {
+        auto components = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg(components);
+        Arcane::RegisterSceneComponents(reg);
+
+        const Astra::Entity root = reg.CreateEntity();
+        Arcane::MeshRenderer authored;
+        authored.translucencyRenderOrder = 17;
+        authored.translucencyDepthSortBias = -2.25f;
+        reg.AddComponent<Arcane::MeshRenderer>(root, authored);
+        reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
+        doc = Arcane::Scene::SaveJson(reg);
+    }
+
+    const std::string meshName(Astra::GetMeta<Arcane::MeshRenderer>()->typeName);
+    REQUIRE(doc["entities"].size() == 1);
+    const auto& body = doc["entities"][0]["components"][meshName];
+    CHECK(body["translucencyRenderOrder"] == 17);
+    CHECK(body["translucencyDepthSortBias"] == -2.25f);
+
+    auto components = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg(components);
+    Arcane::RegisterSceneComponents(reg);
+    REQUIRE(Arcane::Scene::LoadJson(reg, doc));
+
+    int count = 0;
+    reg.CreateView<Arcane::MeshRenderer>().ForEach(
+        [&](Astra::Entity, Arcane::MeshRenderer& mesh)
+        {
+            ++count;
+            CHECK(mesh.translucencyRenderOrder == 17);
+            CHECK(mesh.translucencyDepthSortBias == -2.25f);
+        });
+    CHECK(count == 1);
+
+    const Arcane::MeshRenderer defaults;
+    CHECK(defaults.translucencyRenderOrder == 0);
+    CHECK(defaults.translucencyDepthSortBias == 0.0f);
+}
+
 TEST_CASE("scene JSON loader rejects malformed input without throwing", "[json][scene]")
 {
     auto FreshReg = []

@@ -49,6 +49,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -281,6 +282,21 @@ namespace Arcane::Editor
         // forwarding by name hash here is what lets history survive rebinds.
         void ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
                             const Arcane::MatParamValue& value);
+
+        // Mesh render metadata stays on MaterialAssetData rather than joining
+        // the shader-param/template state. nullopt from Capture means this
+        // document's resolved surface is not Mesh, so no metadata controls are
+        // exposed. Apply is the shared headless/UI write path and clamps the
+        // cutoff before it can become an unauthorable invalid asset state.
+        struct MeshMaterialMetadataState
+        {
+            std::optional<Arcane::MaterialBlendMode> blend;
+            std::optional<float> alphaCutoff;
+            std::optional<bool> twoSided;
+        };
+        [[nodiscard]] std::optional<MeshMaterialMetadataState>
+            CaptureMeshMaterialMetadata() const;
+        void ApplyMeshMaterialMetadata(MeshMaterialMetadataState state);
 
         // Assisted param rename (design 2026-07-24): the BASE document's
         // propagation rewrote this INSTANCE's file on disk -- keep this open

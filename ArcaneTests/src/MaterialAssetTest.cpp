@@ -15,6 +15,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 
 using namespace Arcane;
@@ -78,6 +79,118 @@ TEST_CASE("MaterialAsset save/load round-trips snippet and typed params", "[mate
     CHECK(v.f[0] == 2.5f);
     REQUIRE(inst.GetParam("Noise", v));
     CHECK(v.tex == noiseTex);
+}
+
+TEST_CASE("MaterialAsset mesh metadata is sparse and round-trips exactly", "[material][mesh]")
+{
+    const auto dir = TempDir("mesh_metadata_roundtrip");
+
+    SECTION("absent fields remain absent")
+    {
+        const auto file = dir / "sparse.arcmat";
+        MaterialAssetData data;
+        data.id = Guid::Generate();
+        data.name = "Sparse";
+        data.kind = "mesh";
+        REQUIRE(SaveMaterialAsset(file, data));
+
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        CHECK_FALSE(loaded->blend.has_value());
+        CHECK_FALSE(loaded->alphaCutoff.has_value());
+        CHECK_FALSE(loaded->twoSided.has_value());
+
+        std::ifstream in(file, std::ios::binary);
+        const auto json = nlohmann::json::parse(in);
+        CHECK_FALSE(json.contains("blend"));
+        CHECK_FALSE(json.contains("alphaCutoff"));
+        CHECK_FALSE(json.contains("twoSided"));
+    }
+
+    SECTION("authored fields preserve their exact values")
+    {
+        const auto file = dir / "authored.arcmat";
+        MaterialAssetData data;
+        data.id = Guid::Generate();
+        data.name = "Authored";
+        data.kind = "mesh";
+        data.blend = MaterialBlendMode::Transparent;
+        data.alphaCutoff = 0.375f;
+        data.twoSided = true;
+        REQUIRE(SaveMaterialAsset(file, data));
+
+        const auto loaded = LoadMaterialAsset(file);
+        REQUIRE(loaded.has_value());
+        REQUIRE(loaded->blend.has_value());
+        REQUIRE(loaded->alphaCutoff.has_value());
+        REQUIRE(loaded->twoSided.has_value());
+        CHECK(*loaded->blend == MaterialBlendMode::Transparent);
+        CHECK(*loaded->alphaCutoff == 0.375f);
+        CHECK(*loaded->twoSided);
+
+        std::ifstream in(file, std::ios::binary);
+        const auto json = nlohmann::json::parse(in);
+        CHECK(json["blend"] == "transparent");
+        CHECK(json["alphaCutoff"] == 0.375f);
+        CHECK(json["twoSided"] == true);
+    }
+}
+
+TEST_CASE("MaterialAsset refuses invalid mesh metadata and names blend", "[material][mesh]")
+{
+    const auto dir = TempDir("mesh_metadata_invalid");
+
+    SECTION("unknown blend")
+    {
+        Arcane::Editor::DiagnosticStore store;
+        store.InstallAsEngineSink();
+
+        const auto file = dir / "blend.arcmat";
+        nlohmann::json json{
+            { "id", Guid::Generate().ToString() },
+            { "type", "material" },
+            { "name", "Invalid blend" },
+            { "kind", "mesh" },
+            { "snippet", "" },
+            { "blend", "additive" },
+            { "params", nlohmann::json::object() } };
+        std::ofstream out(file, std::ios::binary);
+        out << json.dump(2);
+        out.close();
+
+        CHECK_FALSE(LoadMaterialAsset(file).has_value());
+        const auto rows = store.Snapshot();
+        REQUIRE_FALSE(rows.empty());
+        CHECK(rows[0].message.find("blend") != std::string::npos);
+        store.UninstallEngineSink();
+    }
+
+    SECTION("cutoff outside the closed unit interval")
+    {
+        for (const float cutoff : { -0.01f, 1.01f })
+        {
+            const auto file = dir / (cutoff < 0.0f ? "cutoff_low.arcmat" : "cutoff_high.arcmat");
+            MaterialAssetData data;
+            data.id = Guid::Generate();
+            data.name = "Invalid cutoff";
+            data.kind = "mesh";
+            data.alphaCutoff = cutoff;
+            REQUIRE(SaveMaterialAsset(file, data));
+            CHECK_FALSE(LoadMaterialAsset(file).has_value());
+        }
+    }
+
+    SECTION("non-finite cutoff")
+    {
+        const auto file = dir / "cutoff_nonfinite.arcmat";
+        MaterialAssetData data;
+        data.id = Guid::Generate();
+        data.name = "Invalid cutoff";
+        data.kind = "mesh";
+        data.alphaCutoff = (std::numeric_limits<float>::infinity)();
+        REQUIRE(SaveMaterialAsset(file, data));
+        CHECK_FALSE(LoadMaterialAsset(file).has_value());
+    }
 }
 
 TEST_CASE(".arcmat pass chains: round-trip, sprite/instance refusal", "[material]")

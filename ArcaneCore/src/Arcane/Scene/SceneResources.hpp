@@ -5,6 +5,7 @@
 // marks the subtree that IS the scene.
 
 #include <Arcane/Guid.hpp>
+#include <Arcane/Material/MaterialBlendMode.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>        // MeshSlot -- MeshEntry::slots' element type
 #include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 #include <Arcane/Scene/ViewTransform.hpp>   // RenderContext2D::view (F4 plan 1 T3)
@@ -279,6 +280,9 @@ namespace Arcane
     struct ResolvedMeshMaterial
     {
         glm::vec4 baseColor{1.0f};
+        MaterialBlendMode blend = MaterialBlendMode::Opaque;
+        float alphaCutoff = 0.5f;
+        bool twoSided = false;
 
         // The mesh material's declared "albedo" param, if any (F2b Task 11)
         // -- a Texture-typed value read off the .arcmat chain by

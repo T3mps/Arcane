@@ -5,6 +5,7 @@
 
 #include <Json.hpp>
 
+#include <cmath>
 #include <fstream>
 
 namespace Arcane
@@ -61,6 +62,25 @@ namespace Arcane
         bool KindIgnoresSnippetGraph(std::string_view kind)
         {
             return kind == "mesh";
+        }
+
+        const char* BlendName(MaterialBlendMode blend)
+        {
+            switch (blend)
+            {
+                case MaterialBlendMode::Opaque:      return "opaque";
+                case MaterialBlendMode::Masked:      return "masked";
+                case MaterialBlendMode::Transparent: return "transparent";
+            }
+            return "opaque";
+        }
+
+        std::optional<MaterialBlendMode> BlendFromName(std::string_view name)
+        {
+            if (name == "opaque") return MaterialBlendMode::Opaque;
+            if (name == "masked") return MaterialBlendMode::Masked;
+            if (name == "transparent") return MaterialBlendMode::Transparent;
+            return std::nullopt;
         }
     }
 
@@ -146,6 +166,12 @@ namespace Arcane
         doc["id"] = data.id.ToString();
         doc["type"] = "material";           // self-describing (browser/routing hint)
         doc["name"] = data.name;
+        if (data.blend)
+            doc["blend"] = BlendName(*data.blend);
+        if (data.alphaCutoff)
+            doc["alphaCutoff"] = *data.alphaCutoff;
+        if (data.twoSided)
+            doc["twoSided"] = *data.twoSided;
         if (data.IsInstance())
         {
             // Instance shape: parent + sparse overrides; snippet/kind come from
@@ -253,6 +279,7 @@ namespace Arcane
         // still open). "material-load:" is a distinct namespace precisely so
         // the two producers can never collide.
         std::vector<Diagnostic> diagnostics;
+        const std::string diagKey = "material-load:" + path.generic_string();
 
         if (doc.contains("id") && doc["id"].is_string())
             if (auto g = Guid::FromString(doc["id"].get<std::string>()))
@@ -268,6 +295,60 @@ namespace Arcane
         data.kind = doc.contains("kind") && doc["kind"].is_string()
                         ? doc["kind"].get<std::string>()
                         : std::string("fullscreen");
+
+        const auto refuseField = [&](const char* field, const std::string& detail)
+        {
+            ARC_WARN("LoadMaterialAsset: '{}' has invalid '{}' -- {}",
+                     path.generic_string(), field, detail);
+            Diagnostic d;
+            d.severity = DiagSeverity::Error;
+            d.scope = DiagScope::Material;
+            d.code = "material.field.invalid";
+            d.message = "'" + path.generic_string() + "' has an invalid '" + field + "' field.";
+            d.detail = detail;
+            d.locator = DiagLocator::Asset(data.id);
+            diagnostics.push_back(std::move(d));
+            Diagnostics::Publish(diagKey, diagnostics);
+        };
+
+        if (doc.contains("blend"))
+        {
+            if (!doc["blend"].is_string())
+            {
+                refuseField("blend", "Expected one of: opaque, masked, transparent.");
+                return std::nullopt;
+            }
+            data.blend = BlendFromName(doc["blend"].get<std::string>());
+            if (!data.blend)
+            {
+                refuseField("blend", "Expected one of: opaque, masked, transparent.");
+                return std::nullopt;
+            }
+        }
+        if (doc.contains("alphaCutoff"))
+        {
+            if (!doc["alphaCutoff"].is_number())
+            {
+                refuseField("alphaCutoff", "Expected a finite number in [0, 1].");
+                return std::nullopt;
+            }
+            const double cutoff = doc["alphaCutoff"].get<double>();
+            if (!std::isfinite(cutoff) || cutoff < 0.0 || cutoff > 1.0)
+            {
+                refuseField("alphaCutoff", "Expected a finite number in [0, 1].");
+                return std::nullopt;
+            }
+            data.alphaCutoff = static_cast<float>(cutoff);
+        }
+        if (doc.contains("twoSided"))
+        {
+            if (!doc["twoSided"].is_boolean())
+            {
+                refuseField("twoSided", "Expected a boolean.");
+                return std::nullopt;
+            }
+            data.twoSided = doc["twoSided"].get<bool>();
+        }
         if (hasSnippet)
             data.snippet = doc["snippet"].get<std::string>();
         if (doc.contains("vertexSnippet") && doc["vertexSnippet"].is_string())
@@ -547,7 +628,6 @@ namespace Arcane
         // future load of this file will ever publish under that old key
         // again. The Asset locator below still carries the guid when one
         // parsed (data.id may be nil), so per-asset navigation is unaffected.
-        const std::string diagKey = "material-load:" + path.generic_string();
         Diagnostics::Publish(diagKey, diagnostics);
         return data;
     }

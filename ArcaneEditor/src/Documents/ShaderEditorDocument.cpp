@@ -1710,6 +1710,37 @@ namespace Arcane::Editor
                (m_instance && m_instance->EffectiveSerial() != m_savedParamSerial);
     }
 
+    std::optional<ShaderEditorDocument::MeshMaterialMetadataState>
+    ShaderEditorDocument::CaptureMeshMaterialMetadata() const
+    {
+        if (SurfaceOf(m_surface) != Arcane::MaterialSurface::Mesh)
+            return std::nullopt;
+        return MeshMaterialMetadataState{ m_data.blend, m_data.alphaCutoff, m_data.twoSided };
+    }
+
+    void ShaderEditorDocument::ApplyMeshMaterialMetadata(MeshMaterialMetadataState state)
+    {
+        if (SurfaceOf(m_surface) != Arcane::MaterialSurface::Mesh)
+            return;
+
+        if (state.alphaCutoff)
+        {
+            if (!std::isfinite(*state.alphaCutoff))
+                *state.alphaCutoff = 0.5f;
+            *state.alphaCutoff = std::clamp(*state.alphaCutoff, 0.0f, 1.0f);
+        }
+
+        if (m_data.blend == state.blend &&
+            m_data.alphaCutoff == state.alphaCutoff &&
+            m_data.twoSided == state.twoSided)
+            return;
+
+        m_data.blend = state.blend;
+        m_data.alphaCutoff = state.alphaCutoff;
+        m_data.twoSided = state.twoSided;
+        m_dirty = true;
+    }
+
     void ShaderEditorDocument::ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
                                               const Arcane::MatParamValue& value)
     {
@@ -5584,6 +5615,88 @@ namespace Arcane::Editor
         // state on activation, one undo step at close -- one drag = one step.
         if (IsInstance())
             ImGui::Checkbox("Only overridden", &m_showOnlyOverridden);
+
+        if (auto metadata = CaptureMeshMaterialMetadata())
+        {
+            Arcane::MaterialBlendMode inheritedBlend = Arcane::MaterialBlendMode::Opaque;
+            float inheritedCutoff = 0.5f;
+            bool inheritedTwoSided = false;
+            const auto applyLayer = [&](const Arcane::MaterialAssetData& layer)
+            {
+                if (layer.blend) inheritedBlend = *layer.blend;
+                if (layer.alphaCutoff) inheritedCutoff = *layer.alphaCutoff;
+                if (layer.twoSided) inheritedTwoSided = *layer.twoSided;
+            };
+            for (auto it = m_parentChain.rbegin(); it != m_parentChain.rend(); ++it)
+                applyLayer(*it);
+
+            ImGui::SeparatorText("Rendering");
+
+            bool blendOverride = metadata->blend.has_value();
+            if (IsInstance())
+            {
+                if (ImGui::Checkbox("##blend_override", &blendOverride))
+                {
+                    metadata->blend = blendOverride
+                        ? std::optional<Arcane::MaterialBlendMode>(inheritedBlend)
+                        : std::nullopt;
+                    ApplyMeshMaterialMetadata(*metadata);
+                }
+                ImGui::SameLine();
+            }
+            int blend = static_cast<int>(metadata->blend.value_or(inheritedBlend));
+            if (IsInstance() && !blendOverride) ImGui::BeginDisabled();
+            if (ImGui::Combo("Blend", &blend, "Opaque\0Masked\0Transparent\0"))
+            {
+                metadata->blend = static_cast<Arcane::MaterialBlendMode>(blend);
+                ApplyMeshMaterialMetadata(*metadata);
+            }
+            if (IsInstance() && !blendOverride) ImGui::EndDisabled();
+
+            bool cutoffOverride = metadata->alphaCutoff.has_value();
+            if (IsInstance())
+            {
+                if (ImGui::Checkbox("##cutoff_override", &cutoffOverride))
+                {
+                    metadata->alphaCutoff = cutoffOverride
+                        ? std::optional<float>(inheritedCutoff)
+                        : std::nullopt;
+                    ApplyMeshMaterialMetadata(*metadata);
+                }
+                ImGui::SameLine();
+            }
+            float cutoff = metadata->alphaCutoff.value_or(inheritedCutoff);
+            if (IsInstance() && !cutoffOverride) ImGui::BeginDisabled();
+            if (ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f,
+                                 "%.3f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                metadata->alphaCutoff = cutoff;
+                ApplyMeshMaterialMetadata(*metadata);
+            }
+            if (IsInstance() && !cutoffOverride) ImGui::EndDisabled();
+
+            bool twoSidedOverride = metadata->twoSided.has_value();
+            if (IsInstance())
+            {
+                if (ImGui::Checkbox("##twosided_override", &twoSidedOverride))
+                {
+                    metadata->twoSided = twoSidedOverride
+                        ? std::optional<bool>(inheritedTwoSided)
+                        : std::nullopt;
+                    ApplyMeshMaterialMetadata(*metadata);
+                }
+                ImGui::SameLine();
+            }
+            bool twoSided = metadata->twoSided.value_or(inheritedTwoSided);
+            if (IsInstance() && !twoSidedOverride) ImGui::BeginDisabled();
+            if (ImGui::Checkbox("Two sided", &twoSided))
+            {
+                metadata->twoSided = twoSided;
+                ApplyMeshMaterialMetadata(*metadata);
+            }
+            if (IsInstance() && !twoSidedOverride) ImGui::EndDisabled();
+            ImGui::Separator();
+        }
 
         const auto& params = m_boundTemplate->Params();
         for (std::size_t i = 0; i < params.size(); ++i)

@@ -170,11 +170,23 @@ namespace Arcane
                 resolved.baseColor = *c;
             if (auto a = OwnAlbedo(*it))
                 resolved.albedo = *a;
+            if (it->blend)
+                resolved.blend = *it->blend;
+            if (it->alphaCutoff)
+                resolved.alphaCutoff = *it->alphaCutoff;
+            if (it->twoSided)
+                resolved.twoSided = *it->twoSided;
         }
         if (auto c = OwnBaseColor(*data))
             resolved.baseColor = *c;
         if (auto a = OwnAlbedo(*data))
             resolved.albedo = *a;
+        if (data->blend)
+            resolved.blend = *data->blend;
+        if (data->alphaCutoff)
+            resolved.alphaCutoff = *data->alphaCutoff;
+        if (data->twoSided)
+            resolved.twoSided = *data->twoSided;
 
         // F2b Task 11: resolve the declared albedo into a bindless slot
         // through the injected device seam -- see Services::
