@@ -2,7 +2,8 @@
 
 **Date:** 2026-09-18
 **Status:** Design, approved in brainstorm 2026-09-18; **vetted against UE
-5.8.2 source 2026-09-18** (Appendix B: two mechanisms amended to UE's shape —
+5.8.2 source 2026-09-18 and amended against Deadlock build 25379491 on
+2026-09-19** (Appendix B: two mechanisms amended to UE's shape —
 the prior pose via CPU history + re-dirty, the normal matrix in the row — and
 three statements sharpened). **Plan 1 closed at `3b50ff3d`
 (2026-09-18, the T8 head; the close booking is the commit after it): bounds,
@@ -16,7 +17,10 @@ F4 closed at `e95de920` (2026-09-18). Implementation plans follow this spec
 does not reorder, cull") — **widened by the user 2026-09-18** to every world
 drawable (meshes AND sprites) through one bounds path, and to a **GPU-driven
 mesh pass** (a persistent GPU instance scene, a compute cull, indirect draws)
-with a CPU per-view coarse stage in front of it. G2 of the direction doc
+with a CPU per-view coarse stage in front of it. The 2026-09-19 amendment
+adopts Deadlock's hybrid transparency shape: conventional ordered
+translucency is the baseline, while moment-based OIT and refraction remain
+separate later passes. G2 of the direction doc
 (TAA's frame contract) is co-owned here: this spec names the prior-pose source
 the replication spec found stale.
 **Prior law this builds on:** F1 (`Transform`/`WorldTransform`, the
@@ -45,8 +49,12 @@ with stable slots; a **compute cull** tests every resident row against the
 frustum and appends survivors into per-batch lists, writing `instanceNum` into
 **indirect draw arguments**; the mesh pass draws one indirect call per batch,
 batches ordered opaque → masked, nearest-first. Materials gain **opaque /
-masked / transparent**; transparent rows bypass the cull and are drawn last,
-CPU-sorted back-to-front. `prevModel` on the row is the named prior-pose
+masked / transparent** plus an independent **two-sided** raster flag;
+transparent rows bypass the cull and are drawn last using an explicit
+render-order, biased projected-depth and stable-identity key. This conventional
+ordered path is the required F3 baseline, not Arcane's permanent transparency
+ceiling: the pass contract reserves a later Deadlock-shaped moment-based OIT
+(MBOIT) path and a separate refraction pass. `prevModel` on the row is the named prior-pose
 source for TAA's motion vectors (G2); the velocity target and the depth
 prepass are declared pass slots nobody mints yet.
 
@@ -61,7 +69,7 @@ prepass are declared pass slots nobody mints yet.
 | No culling anywhere. `CollectMeshInstances` emits every non-Hidden `(WorldTransform, MeshRenderer)` in registry order; the graph "does not reorder, cull" | `Render/MeshSubmissionSystem.hpp`, `Render/Nri/RenderGraph.hpp:33` |
 | `Batcher2D` sorts sprites by `sortingLayer` only; no sprite is ever skipped for being off-screen | `Render/RenderSystems.hpp:154`, `Batcher2D.hpp` |
 | No draw sorting: `MeshNode::Record` walks `scene.instances` in submission order, one 128-byte root-constant block (`MeshConstants`: model + tint + normal matrix + packed slot) per draw | `Render/Nri/nodes/MeshNode.cpp:787,950`, `MeshNode.hpp` (THE MATERIAL SLOT block) |
-| No transparent mesh path: the mesh pipeline is fixed opaque + back-face cull; the `.arcmat` mesh kind carries no blend mode | `MeshNode.hpp` WINDING AND CULLING, `Material/MaterialSource.hpp:71` |
+| No transparent mesh path: the mesh pipeline is fixed opaque + back-face cull; the `.arcmat` mesh kind carries no blend mode | `MeshNode.hpp` WINDING AND CULLING, `Material/MaterialAsset.hpp` |
 | `ViewTransform` has view/projection/`IsOrthographic()`, no frustum | `ArcaneCore/src/Arcane/Scene/ViewTransform.hpp:50` |
 | `PreviousTransform` is gone (Astra adoption Plan 2, ABI 27); `PhysicsInterpBuffer` is physics-only. G2's "already carries the data" is stale | `2026-09-17-replication-v1-design.md` (the stale-line note), `Scene/SceneResources.hpp:85` |
 | Astra has change detection: `Changed<T>` views with `Since(tick)`; `TransformSystems` already runs a `Changed<Transform>` pre-pass | `Scene/TransformSystems.hpp:28-104,341` |
@@ -255,7 +263,7 @@ std430, mirrored by a `static_assert(sizeof == 240)` and an HLSL struct in
 | `baseColor` | `float4` | 16 | Sync |
 | `materialSlot` | `uint` | 4 | Sync |
 | `batch` | `uint` | 4 | Sync (see 5.4: the batch KEY id, stable per (mesh, section, blend)) |
-| `flags` | `uint` | 4 | bit0 `teleported` (reserved, never set in F3); bits1–2 blend mode (0 opaque, 1 masked, 2 transparent) |
+| `flags` | `uint` | 4 | bit0 `teleported` (reserved, never set in F3); bits1–2 blend mode (0 opaque, 1 masked, 2 transparent); bit3 `twoSided` |
 | `pad` | `uint` | 4 | 0 |
 
 The rows live in **one persistent structured buffer** owned by `GpuScene`
@@ -344,7 +352,7 @@ reading the ring slice the host staged.
 
 ### 5.4 Batches — CPU per frame, from the mirror
 
-Key = `(mesh Guid, section index, blend mode)`. The row's `batch` field holds
+Key = `(mesh Guid, section index, blend mode, twoSided)`. The row's `batch` field holds
 a stable **key id** (a `FlatMap<key, id>` in `GpuScene`, ids reused on free).
 Per frame the CPU builds:
 
@@ -355,15 +363,20 @@ Per frame the CPU builds:
 - **The emitted list** — keys with at least one row whose entity is in
   `SceneVisibility.views[0]` (the coarse pass prunes whole batches; a batch
   entirely off-screen never reaches the cull or the draw), **excluding
-  transparent keys** (§7). Ordered: **opaque before masked**, and within each
+  transparent keys** (§7). A row whose resolved material changes blend mode
+  or two-sided state is removed from its old key and inserted into the new key
+  in the same reconciliation; merely rewriting its GPU flags is insufficient.
+  Ordered: **opaque before masked**, and within each
   by the minimum `nearDepth` of the batch's coarse-visible entities,
   ascending (nearest first — the early-Z key). The order is a CPU sort over
   tens of batches.
 - **The indirect args array** — one `nri::DrawIndexedDesc` per emitted batch,
   in emitted order: `indexNum = section.indexCount`, `baseIndex =
   section.indexOffset`, `baseVertex = 0` (a resident mesh's buffers are its
-  own — §1), **`instanceNum = 0`**, `baseInstance = 0`. Uploaded through the
-  ring into a transient the cull writes and the draw reads.
+  own — §1), **`instanceNum = 0`**, `baseInstance = 0`. Every frame starts
+  from these zeroed counters before dispatch; stale counts may never survive
+  a frame. Uploaded through the ring into a UAV-capable transient the cull
+  writes and the draw reads.
 
 ### 5.5 `MeshCullNode` — the compute cull
 
@@ -381,7 +394,10 @@ Inputs: the instance buffer (SRV), the batch table, the frustum CB (six
 `float4` = `Frustum::planes`, already widened by `kVisibilitySlack`, §4). Outputs: `visibleIndices` (`uint` × rowCount,
 partitioned by batch capacity) and the args buffer (UAV). The graph declares
 the args buffer's transition to the indirect-argument state as an edge into
-the draw node.
+the draw node. The HLSL mirrors `GpuInstance`, `GpuBatch` and
+`nri::DrawIndexedDesc` field-for-field; it guards `id >= rowCount` before any
+structured-buffer read, uses the interlocked operation's out parameter, and
+never casts an argument buffer to a byte-address layout with invented offsets.
 
 The GPU test is **the fine stage**: in F3 it repeats the frustum test the
 coarse pass already did per entity (harmless — the coarse pass prunes
@@ -413,7 +429,7 @@ space2 = the bindless material array — the register-space rule from
 
 `MeshSceneDesc` (in `FrameDesc`) loses `instances` and gains
 `const GpuSceneFrame*` — `{ emitted batches (ordered), args (ring slice),
-transparent rows (ordered, §7), frustum, rowCount }`, host-owned for the
+transparent draw records (ordered, §7), frustum, rowCount }`, host-owned for the
 duration of `RenderFrame` exactly as the span was. `CollectMeshInstances` is
 retired; its tests move to the batch builder and `Sync`'s reconciliation,
 both split from the device writes so ArcaneTests covers them under `~[gpu]`.
@@ -428,23 +444,31 @@ The `.arcmat` **mesh kind** gains:
 |---|---|---|
 | `blend` | `"opaque"`, `"masked"`, `"transparent"` | `"opaque"` |
 | `alphaCutoff` | float in [0, 1] | 0.5 (meaningful for masked only; stored regardless so a mode switch keeps it) |
+| `twoSided` | boolean | `false` (independent of blend mode) |
 
 Source 2 carries the trio as `F_ALPHA_TEST` / `F_TRANSLUCENT` on the material;
-UE as Blend Mode Opaque / Masked / Translucent. `MaterialSource` parses them
+UE as Blend Mode Opaque / Masked / Translucent. `MaterialAsset` parses them
 into `enum class MaterialBlendMode : uint8_t { Opaque, Masked, Transparent }`;
 an unknown string **refuses** with the field named (the loader's posture).
 `ResolvedMeshMaterial` (Core, backend-agnostic) carries `blend` and
-`alphaCutoff` beside `baseColor` / `albedo`; `Sync` copies them into the row's
-`flags` / `boundsMax.w`. `MaterialDocument`'s mesh panel gets the dropdown and
-a bounded `alphaCutoff` drag (the F2a "unauthorable invalid state" idiom).
+`alphaCutoff` plus `twoSided` beside `baseColor` / `albedo`; `Sync` copies them
+into the row's `flags` / `boundsMax.w`. `ShaderEditorDocument`'s mesh panel
+gets the dropdown, two-sided checkbox and a bounded `alphaCutoff` drag (the
+F2a "unauthorable invalid state" idiom). Because `ResolvedMeshMaterial` is a
+Core type visible to game modules, this change raises the plugin ABI from 37
+to 38 and restamps both in-tree project manifests.
 
 **Pipeline variants** — `NriPipelineCache`'s key gains the blend mode:
 
 | Variant | Depth | Blend | Cull | Shader |
 |---|---|---|---|---|
-| Opaque | test + write | off | back | as today |
-| Masked | test + write | off | back | `MESH_MASKED` define: `clip(alpha - cutoff)` |
-| Transparent | test, **no write** | `SrcAlpha / InvSrcAlpha`, add | **none** (a thin shell wants both faces) | as opaque, alpha through |
+| Opaque | test + write | off | back unless `twoSided` | precompiled opaque pixel shader |
+| Masked | test + write | off | back unless `twoSided` | precompiled masked pixel shader: `clip(alpha - cutoff)` |
+| Transparent | test, **no write** | `SrcAlpha / InvSrcAlpha`, add | back unless `twoSided` | precompiled transparent pixel shader, alpha through |
+
+The shader variants are offline build outputs and pipeline-cache keys; runtime
+pipeline creation does not attempt to inject preprocessor defines into already
+compiled bytecode.
 
 Alpha = `baseColor.a × albedo.a` — the first time `baseColor.a` means
 anything; opaque rows ignore it as they do now. The mesh shader's flat path
@@ -462,12 +486,17 @@ anything; opaque rows ignore it as they do now. The mesh shader's flat path
    (`BasePassRendering.cpp:335-342`, `EarlyZPassMode`); whoever mints the
    prepass flips the batch order in the same change.
 3. **Transparent rows**, direct: the CPU takes the `VisibleSet` entries whose
-   entity has transparent rows (the mirror knows the rows; the material knows
-   the mode), sorts them **back-to-front by the box centre's view-space
-   depth**, and issues one `CmdDrawIndexed` per row on the transparent
-   pipeline with the root block `{ row, direct=1 }`. They never enter the
-   cull: their `batch` is not emitted (§5.5), and the CPU coarse test is their
-   whole culling.
+   entity has transparent rows and emits a complete draw record containing
+   row id, mesh Guid, section index/range, render order, depth bias and stable
+   identity. `MeshRenderer` supplies `translucencyRenderOrder` (default 0) and
+   `translucencyDepthSortBias` (default 0 m). For Arcane's right-handed camera
+   looking down -Z, `projectedDepth = -viewSpaceCenter.z + bias`; records sort
+   by render order ascending (higher values draw later), projected depth
+   descending (far-to-near), then `(entity, mesh, section)` ascending. The
+   final identity term makes equal-depth frames deterministic. The renderer
+   issues one `CmdDrawIndexed` per record on the transparent pipeline with the
+   root block `{ row, direct=1 }`. Transparent rows never enter the cull: their
+   batch is not emitted (§5.5), and the CPU coarse test is their whole culling.
 4. `GridNode` stays after the mesh pass, depth-tested against the same depth,
    as F4 left it; the sprite batch, the post chain, the tonemap and the
    overlay are unchanged. Sprites-over-meshes and shared depth remain F5's.
@@ -499,8 +528,10 @@ graph property.
 | `sharedDepth` | the mesh pass's D32 | F4's `MeshNode` (today) | F5 makes it the frame's one depth |
 
 The full list F5 inherits: `prepass → G-buffer → lighting → forward/masked →
-transparent → 2D-world → post → overlay` (G1). F3 implements the forward,
-masked and transparent slots only.
+transparent-ordered → transparent-mboit → mboit-combine → refraction →
+2D-world → post → overlay` (G1). F3 implements the forward, masked and
+ordered-transparent slots only. The MBOIT accumulation/combination targets and
+the refraction source/destination contract are named seams, not F3 resources.
 
 **Debug switch:** a compile-time `kMeshCullEnabled` (default on) that makes
 the cull pass every emitted row (`instanceNum = capacity`, identity indices)
@@ -516,8 +547,10 @@ In order of authority:
    rows fully inside, fully outside, straddling each of the six planes, at
    every blend mode, several sections per mesh, two meshes. After one frame,
    read back the args' `instanceNum` per batch and the `visibleIndices`
-   contents; they must equal the CPU `VisibleSet`'s answer for the same rows
-   (set-equal per batch — the atomic order is arbitrary). Runs on D3D12 and
+   contents; they must equal the CPU `VisibleSet`'s exact row-id answer for the
+   same rows (set-equal per batch — the atomic order is arbitrary), including
+   each batch partition's bounds and excluding stale tail data. The readback
+   is delayed/asynchronous and never inserts a per-frame device flush. Runs on D3D12 and
    Vulkan. **The CPU pass is the oracle by construction.**
 2. **Witness.** `VerifyReport` gains `visibility { coarseVisible, total,
    gpuVisible, batches, draws }`; the servitor lanes assert them for
@@ -556,9 +589,11 @@ In order of authority:
 | UE: prior pose = `FSceneVelocityData` CPU history for moved primitives, advanced at `StartFrame`, primitive re-dirtied the frame after it moved (`ScenePrivate.h:1274-1352`, `RendererScene.cpp:3320-3348`) | the same (§5.3): `lastModel` + `dirtyLastFrame` in the mirror | Match (amended from a GPU row-writer after the vet) |
 | UE: per-draw instance-id offset via an instance-stepped vertex stream (`VertexFactoryCommon.ush:40,54`) because many draws share one indirect call | one root constant per batch | Diverge: one draw per batch; a root constant is the simpler equivalent until draws are merged |
 | UE base pass key: shader hashes + a Masked bit, **no depth term** (`FMeshDrawCommandSortKey::BasePass`, `MeshPassProcessor.h:1545-1548`); early-Z is the prepass alone | batches opaque → masked, then nearest-first by batch; no prepass | Diverge: nearest-first is an early-Z stand-in while the prepass slot is empty; the masked bit's order matches UE's no-prepass branch |
-| UE translucency: CPU-sorted back-to-front, separate pass | the same | Match |
+| Deadlock build 25379491: conventional `Translucent` passes coexist with `Moments` → `Translucent Color` → `MBOIT Combine`; refraction is a later separate pass. Particle systems still expose depth/creation/nearest sorting, sort bias and sort override position | ordered direct translucency in F3; named MBOIT accumulation/combine and refraction seams for the effects tier | Match the hybrid architecture without paying for its extra targets and moments before Arcane has the effects workload |
+| UE translucency: multiple policies, including priority plus distance; conventional translucency remains order-dependent | explicit render order, biased projected depth and stable identity | Similar control surface, deliberately smaller policy set |
 | UE / Source 2: Opaque / Masked / Translucent (`EngineTypes.h:247-249`; `F_ALPHA_TEST`, `F_TRANSLUCENT`) | the same trio | Match. UE's default `OpacityMaskClipValue` is 0.3333 (`Material.cpp:1170`); ours is 0.5, Source 2's `g_flAlphaTestReference` / Unity's default |
-| UE translucency key: `Priority` then `Distance` (`BasePassRendering.cpp:322-324`) | back-to-front by box-centre view depth | Match (no priority field until something needs one) |
+| UE translucency key: `Priority` then `Distance` (`BasePassRendering.cpp:322-324`) | render order, then `-viewSpaceCenter.z + depthSortBias`, then stable identity | Match the useful control shape and make ties deterministic |
+| UE and Source 2 treat two-sidedness independently from blend mode | `twoSided` is an independent material field and pipeline key | Match; transparent does not imply two-sided |
 | UE instance record: `PrevLocalToWorld`, `InvNonUniformScale` + `DeterminantSign`, LOCAL bounds (`SceneData.ush:229-243`) | `prevModel`, the normal matrix, WORLD bounds | Match on prev and on precomputing the normal transform; diverge on bounds space (§5.1) |
 | UE Paper2D sprites: CPU everything (`FDynamicMeshBuilder` per frame, `PaperRenderSceneProxy.cpp:372`) | sprites CPU-culled through `VisibleSet`, drawn by `Batcher2D` as today | Match; sprites join the GPU scene only on a measured 2D-perf trigger |
 | UE `GPUScene`: per-instance `bCastShadow`, LOD, custom data | none | YAGNI; the row has a `pad` and a `flags` word |
@@ -568,14 +603,14 @@ In order of authority:
 ## 11. G2 and the greedy-ordering guards, restated
 
 - **G1** — the pass-slot list is declared (§8); F3 implements forward/masked/
-  transparent only.
+  ordered transparent only, with MBOIT/combine/refraction seams left unminted.
 - **G2** — the prior pose is `GpuInstance::prevModel`, sourced from the
   mirror's CPU history for moved rows (§5.3, UE's shape), the velocity
   target is a declared slot (§8), the culling frustum is unjittered (§3).
   The direction doc's "`PreviousTransform` already carries the data" is
   superseded by this spec; no ECS history component is recreated.
 - **G3** — untouched here (the hygiene wave's artifact stamp); the `.arcmat`
-  gains two fields with defaults, so existing materials load unchanged.
+  gains three fields with defaults, so existing materials load unchanged.
 
 ---
 
@@ -594,9 +629,9 @@ In order of authority:
    until plan 2).
 2. **Plan 2 — the cull, the modes, the order.** `MeshCullNode` and
    `mesh_cull.hlsl`; the oracle test on both backends; `blend` /
-   `alphaCutoff` through `.arcmat` → `MaterialSource` →
-   `ResolvedMeshMaterial` → the row; the three pipeline variants; masked and
-   transparent order; the stats overlay line and readback ring; the new
+   `alphaCutoff` / `twoSided` through `.arcmat` → `MaterialAsset` →
+   `ResolvedMeshMaterial` → the row; the pipeline variants; masked and
+   deterministic transparent order; the stats overlay line and readback ring; the new
    golden pair; the declared slots and the `RenderGraph.hpp` rewording;
    `kMeshCullEnabled`; the desk pass; the pass-type recount.
 
@@ -618,6 +653,8 @@ In order of authority:
 | Runtime cull toggles | the cvar arc (`kMeshCullEnabled` is compile-time) |
 | Aggregate / merged static batches | T7 |
 | Sprite depth, 2D-over-3D, the clear-op, jitter | F5 |
+| MBOIT moments, accumulation targets and combine pass | T5/effects tier, when intersecting translucent effects justify the memory and bandwidth |
+| Refraction | T5/effects tier; remains after conventional and MBOIT transparency so it samples a defined composed scene |
 
 ---
 
@@ -629,10 +666,11 @@ In order of authority:
 | R2 | **GPU-driven** for meshes: persistent GPU scene, compute cull, indirect draws — with a CPU per-view coarse stage in front as the one seam for sprites, picking, framing and tests | inline per-sweep culling; a CPU-only `VisibleSet` stage |
 | R3 | GPU scene for meshes + CPU coarse (UE's shape); sprites stay CPU; Hi-Z declared, not built | a full GPU scene including sprites; Hi-Z now |
 | R4 | Opaque early-Z from **batch state-sort + CPU nearest-first by batch**; the depth prepass is a declared slot | a prepass now; a GPU depth sort |
-| R5 | Build the transparent path **and** masked: `blend` on the mesh material, three pipeline variants; transparent rows CPU-sorted back-to-front, direct draws after the indirect batches | reserve only |
+| R5 | Build the ordered transparent path **and** masked: `blend` plus independent `twoSided` on the mesh material; transparent rows sort by render order, biased projected depth and stable identity, then draw directly after indirect batches | reserve only; transparent-implies-two-sided |
 | R6 | Prior pose = `GpuInstance::prevModel`; no ECS history component. **Mechanism amended after the UE vet (user, 2026-09-18):** a CPU history in the mirror + a re-dirty the frame after a move (UE's `FSceneVelocityData`), replacing the GPU row-writer + advance dispatch | `PreviousWorldTransform` + a system; defer to F5; the GPU row-writer |
 | R8 | The row carries the normal matrix from `NormalMatrixFor` (240 B), not a per-vertex 3×3 inverse (UE vet, 2026-09-18) | computing it in the vertex shader |
 | R7 | Persistent slots with dirty-tracked uploads (`Changed<>` + reconciliation); a registry generation stamp forces the full rebuild | full re-upload every frame; transient per-frame rows |
+| R9 | Deadlock-shaped hybrid transparency contract: ordered translucency now; MBOIT accumulation/combine and refraction are distinct later pass seams | projected-Z as Arcane's permanent transparency solution; MBOIT in F3 |
 
 **Executor rulings, plan 1 (2026-09-18, ledgered in the plan's progress notes):**
 R-A `AddMeshNode` declares `gpuscene-sync` before `mesh` itself, so the
@@ -702,7 +740,7 @@ staged never reached the device and no re-dirty would repeat them.
 | `NriUploadRing`, `Graveyard`, `NriPipelineCache` | `Render/Nri/` | the staging, burial and variant-key mechanisms reused |
 | `DeclareGraphFrame`, `FrameDesc`, THE CLEAR SEAM block | `Render/Nri/NriGraphContext.{hpp,cpp}:1239-1400` | the three new nodes and the declared slots |
 | `RenderGraph.hpp:33` "does not reorder, cull" | `Render/Nri/RenderGraph.hpp` | reworded |
-| `MaterialSurface`, `MaterialSource` parsing | `ArcaneCore/src/Arcane/Material/MaterialSource.hpp:71` | `blend`, `alphaCutoff` |
+| `MaterialAsset` parsing and mesh inheritance | `ArcaneCore/src/Arcane/Material/MaterialAsset.hpp`, `ArcaneClient/src/Arcane/Render/MeshMaterialCache.cpp` | `blend`, `alphaCutoff`, `twoSided` |
 | `VerifyReport` | `ArcaneClient/src/Arcane/Host/VerifyReport.hpp` | the `visibility` block |
 | NRI indirect + dispatch | `ThirdParty/NRI/Include/NRI.h:197-204`, `NRIDescs.h:1659` | consumed as-is |
 
@@ -729,5 +767,11 @@ staged never reached the device and no re-dirty would repeat them.
   AABBs, CPU frustum + voxel visibility, aggregate static props culled and
   drawn GPU-side, depth-pyramid occlusion in Deadlock; `F_ALPHA_TEST` /
   `F_TRANSLUCENT` material features.
+- Deadlock installed build 25379491 (inspected 2026-09-19): render passes and
+  target strings for conventional `Translucent`, `Moments`, `Translucent
+  Color`, `MBOIT Combine`, and later refraction; MBOIT enable/quality/bias/
+  overestimation controls; particle depth/creation/nearest sorting, bias,
+  disable-sort and sort-position controls. These observations establish the
+  hybrid contract; they do not imply every material enters MBOIT.
 - Gribb & Hartmann, *Fast Extraction of Viewing Frustum Planes from the
   World-View-Projection Matrix* (2001).
