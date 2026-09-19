@@ -27,6 +27,8 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <Arcane/Guid.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
+#include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
@@ -216,31 +218,36 @@ TEST_CASE("Framing bounds match how sprites are rendered", "[editor][camera]")
     auto reg = MakeSceneRegistry();
     // World size = the sprite asset's base size (1x1 m unresolved) * world
     // scale, about the pivot (the centre by default) -- the box of exactly
-    // the SpriteWorldQuad corners RenderSubmissionSystem submits, flat at z=0.
+    // the SpriteWorldQuad corners RenderSubmissionSystem submits, widened by
+    // kSpriteDepthEpsilon on every axis by BoundsSystem (F3: this box comes
+    // from WorldBounds, the same one culling and picking read).
     const Astra::Entity a = MakeSprite(*reg, glm::vec2(3.0f, 4.0f), glm::vec2(2.0f, 1.0f));
     const std::vector<Astra::Entity> one{a};
 
+    Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
     const FramingBounds b = SelectionFramingBounds(*reg, one);
     REQUIRE(b.Valid());
     CHECK(b.count == 1);
-    CHECK(b.min.x == Approx(2.0f));
-    CHECK(b.min.y == Approx(3.5f));
-    CHECK(b.min.z == Approx(0.0f));
-    CHECK(b.max.x == Approx(4.0f));
-    CHECK(b.max.y == Approx(4.5f));
-    CHECK(b.max.z == Approx(0.0f));
+    const float eps = Arcane::kSpriteDepthEpsilon;
+    CHECK(b.min.x == Approx(2.0f - eps));
+    CHECK(b.min.y == Approx(3.5f - eps));
+    CHECK(b.min.z == Approx(0.0f - eps));
+    CHECK(b.max.x == Approx(4.0f + eps));
+    CHECK(b.max.y == Approx(4.5f + eps));
+    CHECK(b.max.z == Approx(0.0f + eps));
 
     // A scaled sprite grows by its world scale, same as the drawn quad.
     const Astra::Entity s = MakeSprite(*reg, glm::vec2(-1.0f, 0.0f), glm::vec2(2.0f, 2.0f),
                                        glm::vec2(2.0f, 2.0f));
+    Arcane::BoundsSystem{}(*reg);
     const std::vector<Astra::Entity> two{a, s};
     const FramingBounds u = SelectionFramingBounds(*reg, two);
     REQUIRE(u.Valid());
     CHECK(u.count == 2);
-    CHECK(u.min.x == Approx(-3.0f));
-    CHECK(u.min.y == Approx(-2.0f));
-    CHECK(u.max.x == Approx(4.0f));
-    CHECK(u.max.y == Approx(4.5f));
+    CHECK(u.min.x == Approx(-3.0f - eps));
+    CHECK(u.min.y == Approx(-2.0f - eps));
+    CHECK(u.max.x == Approx(4.0f + eps));
+    CHECK(u.max.y == Approx(4.5f + eps));
 }
 
 TEST_CASE("A sprite at (2,3,0) with the default pivot frames as its 1x1 quad", "[editor][camera]")
@@ -248,10 +255,12 @@ TEST_CASE("A sprite at (2,3,0) with the default pivot frames as its 1x1 quad", "
     auto reg = MakeSceneRegistry();
     const Astra::Entity a = MakeSprite(*reg, glm::vec2(2.0f, 3.0f), glm::vec2(1.0f, 1.0f));
     const std::vector<Astra::Entity> sel{a};
+    Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
     const FramingBounds b = SelectionFramingBounds(*reg, sel);
     REQUIRE(b.Valid());
-    CHECK(b.min == glm::vec3(1.5f, 2.5f, 0.0f));
-    CHECK(b.max == glm::vec3(2.5f, 3.5f, 0.0f));
+    const glm::vec3 eps(Arcane::kSpriteDepthEpsilon);   // WorldBounds widens a flat sprite box on every axis
+    CHECK(b.min == glm::vec3(1.5f, 2.5f, 0.0f) - eps);
+    CHECK(b.max == glm::vec3(2.5f, 3.5f, 0.0f) + eps);
 }
 
 TEST_CASE("Framing bounds take a mesh's table AABB through its world matrix", "[editor][camera]")
@@ -266,6 +275,7 @@ TEST_CASE("Framing bounds take a mesh's table AABB through its world matrix", "[
     {
         const Astra::Entity m = MakeMesh(*reg, meshId, glm::vec3(5.0f, 0.0f, 2.0f), glm::vec3(2.0f, 1.0f, 3.0f));
         const std::vector<Astra::Entity> sel{m};
+        Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
         const FramingBounds b = SelectionFramingBounds(*reg, sel);
         REQUIRE(b.Valid());
         CHECK(b.count == 1);
@@ -286,6 +296,7 @@ TEST_CASE("Framing bounds take a mesh's table AABB through its world matrix", "[
     {
         const Astra::Entity m = MakeMesh(*reg, Arcane::Guid::Generate(), glm::vec3(4.0f, -4.0f, 1.0f), glm::vec3(1.0f));
         const std::vector<Astra::Entity> sel{m};
+        Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
         const FramingBounds b = SelectionFramingBounds(*reg, sel);
         REQUIRE(b.Valid());
         CHECK(b.count == 1);
@@ -320,6 +331,7 @@ TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[ed
             node, Arcane::WorldTransform{WorldMat(glm::vec3(7.0f, -2.0f, 1.5f), glm::vec3(1.0f))});
         const std::vector<Astra::Entity> sel{node};
 
+        Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
         const FramingBounds b = SelectionFramingBounds(*reg, sel);
         REQUIRE(b.Valid());          // framable...
         CHECK(b.count == 1);
@@ -335,14 +347,16 @@ TEST_CASE("Framing bounds distinguish nothing-to-frame from an empty AABB", "[ed
     {
         const Astra::Entity gone = MakeSprite(*reg, glm::vec2(0.0f), glm::vec2(1.0f));
         const Astra::Entity live = MakeSprite(*reg, glm::vec2(10.0f, 10.0f), glm::vec2(2.0f));
+        Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
         reg->DestroyEntity(gone);
         const std::vector<Astra::Entity> sel{gone, live};
 
         const FramingBounds b = SelectionFramingBounds(*reg, sel);
         REQUIRE(b.Valid());
         CHECK(b.count == 1);
-        CHECK(b.min.x == Approx(9.0f));
-        CHECK(b.max.x == Approx(11.0f));
+        const float eps = Arcane::kSpriteDepthEpsilon;
+        CHECK(b.min.x == Approx(9.0f - eps));
+        CHECK(b.max.x == Approx(11.0f + eps));
     }
 }
 
@@ -369,13 +383,15 @@ TEST_CASE("Scene framing bounds sweep every visible sprite", "[editor][camera]")
         reg->AddComponent<Arcane::WorldTransform>(
             root, Arcane::WorldTransform{WorldMat(glm::vec3(0.0f), glm::vec3(1.0f))});
 
+        Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
         const FramingBounds b = SceneFramingBounds(*reg);
         REQUIRE(b.Valid());
         CHECK(b.count == 2);
-        CHECK(b.min.x == Approx(-1.0f));
-        CHECK(b.min.y == Approx(-1.0f));
-        CHECK(b.max.x == Approx(7.0f));
-        CHECK(b.max.y == Approx(1.0f));
+        const float eps = Arcane::kSpriteDepthEpsilon;
+        CHECK(b.min.x == Approx(-1.0f - eps));
+        CHECK(b.min.y == Approx(-1.0f - eps));
+        CHECK(b.max.x == Approx(7.0f + eps));
+        CHECK(b.max.y == Approx(1.0f + eps));
     }
 }
 
@@ -387,6 +403,7 @@ TEST_CASE("Framed bounds put the content inside the viewport", "[editor][camera]
     MakeSprite(*reg, glm::vec2(-4.0f, 2.0f), glm::vec2(1.0f, 1.0f));
     MakeSprite(*reg, glm::vec2(9.0f, -6.0f), glm::vec2(3.0f, 2.0f));
 
+    Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
     const FramingBounds b = SceneFramingBounds(*reg);
     REQUIRE(b.Valid());
 
@@ -427,4 +444,32 @@ TEST_CASE("Framed bounds put the content inside the viewport", "[editor][camera]
             CHECK(s.z > 0.0f);   // in front of the near plane
         }
     }
+}
+
+TEST_CASE("framing reads WorldBounds: a box the renderer would draw is the box that frames", "[editor][camera][framing]")
+{
+    // A cube [-1,1]^3 at (10,0,0) -> WorldBounds [9,11]x[-1,1]x[-1,1]; a bare node at (-3,0,0) contributes its position.
+    auto reg = MakeSceneRegistry();
+    const Arcane::Guid cubeId = Arcane::Guid::Generate();
+    std::unordered_map<Arcane::Guid, Arcane::MeshEntry> meshes;
+    Arcane::MeshEntry entry;
+    entry.data   = Arcane::BuildCube(2.0f);          // local box [-1, 1]^3
+    entry.bounds = Arcane::ComputeMeshBounds(entry.data);
+    meshes.emplace(cubeId, entry);
+    reg->SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+
+    const Astra::Entity a = MakeMesh(*reg, cubeId, glm::vec3(10.0f, 0.0f, 0.0f), glm::vec3(1.0f));
+    const Astra::Entity b = reg->CreateEntity();
+    reg->AddComponent<Arcane::WorldTransform>(
+        b, Arcane::WorldTransform{WorldMat(glm::vec3(-3.0f, 0.0f, 0.0f), glm::vec3(1.0f))});
+
+    Arcane::BoundsSystem{}(*reg);   // F3: framing reads WorldBounds, which this pass writes from WorldTransform + the renderer
+    const Astra::Entity sel[] = { a, b };
+    const FramingBounds fb = SelectionFramingBounds(*reg, sel);
+    REQUIRE(fb.count == 2);
+    CHECK(fb.min == glm::vec3(-3, -1, -1));
+    CHECK(fb.max == glm::vec3(11, 1, 1));
+    const FramingBounds scene = SceneFramingBounds(*reg);
+    REQUIRE(scene.count == 1);   // the bare node is not drawn, so Frame All ignores it
+    CHECK(scene.min == glm::vec3(9, -1, -1));
 }

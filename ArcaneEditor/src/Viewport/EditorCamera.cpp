@@ -1,8 +1,6 @@
 #include "Viewport/EditorCamera.hpp"
 
-#include <Arcane/Render/SpriteGeometry.hpp>
 #include <Arcane/Scene/Components.hpp>
-#include <Arcane/Scene/SceneResources.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
@@ -142,98 +140,21 @@ namespace Arcane::Editor
 
     namespace
     {
-        // One entity's world-space box, accumulated corner by corner and then
-        // folded into the FramingBounds ONCE -- so an entity that is both a
-        // sprite and a mesh still counts as one contributor.
-        struct EntityBox
+        void Grow(FramingBounds& b, const Aabb& box) noexcept
         {
-            glm::vec3 min{0.0f}, max{0.0f};
-            bool      any = false;
-
-            void Add(glm::vec3 p) noexcept
-            {
-                if (!any) { min = max = p; any = true; }
-                else      { min = glm::min(min, p); max = glm::max(max, p); }
-            }
-        };
-
-        void Grow(FramingBounds& b, const EntityBox& box) noexcept
-        {
-            if (!box.any)
-                return;
-            if (b.count == 0)
-            {
-                b.min = box.min;
-                b.max = box.max;
-            }
-            else
-            {
-                b.min = glm::min(b.min, box.min);
-                b.max = glm::max(b.max, box.max);
-            }
+            if (b.count == 0) { b.min = box.min; b.max = box.max; }
+            else              { b.min = glm::min(b.min, box.min); b.max = glm::max(b.max, box.max); }
             ++b.count;
-        }
-
-        // Task 3 (F1): mat4 world matrix -- the translation is column 3.
-        glm::vec3 WorldPositionOf(const glm::mat4& m) noexcept
-        {
-            return glm::vec3(m[3]);
-        }
-
-        // The drawn quad's bounding box: the SAME four world corners
-        // RenderSubmissionSystem submits (SpriteWorldQuad -- the full basis
-        // about the pivot, F4 plan 1 T5), min/max'd over xyz. One corner rule
-        // for drawing and framing, so the two cannot disagree; a rotated or
-        // tilted sprite frames as the exact AABB of its turned quad, and a
-        // negative scale/size simply lands its corners on the other side
-        // (min <= max holds by construction).
-        void AddSprite(EntityBox& box, const glm::mat4& world, const SpriteEntry* entry) noexcept
-        {
-            const SpriteQuad q = SpriteWorldQuad(world,
-                                                 entry ? entry->sizeMeters : glm::vec2(1.0f),
-                                                 entry ? entry->pivot      : glm::vec2(0.5f));
-            for (const glm::vec3& c : q.corners)
-                box.Add(c);
-        }
-
-        // The mesh's LOCAL AABB (MeshEntry::bounds, ComputeMeshBounds at
-        // resolve time), all eight corners through the world matrix -- a
-        // rotated mesh's world box is the AABB of its turned local box, which
-        // over-covers a little but never under-covers.
-        void AddMesh(EntityBox& box, const glm::mat4& world, const MeshBounds& local) noexcept
-        {
-            for (int i = 0; i < 8; ++i)
-            {
-                const glm::vec3 c((i & 1) ? local.max.x : local.min.x,
-                                  (i & 2) ? local.max.y : local.min.y,
-                                  (i & 4) ? local.max.z : local.min.z);
-                box.Add(glm::vec3(world * glm::vec4(c, 1.0f)));
-            }
-        }
-
-        // The sprite asset a SpriteRenderer resolves to, on submission's rules:
-        // only a Rect consults the table, and an unresolved sprite is a 1x1 m
-        // quad at the centre pivot (RenderSystems.hpp).
-        const SpriteEntry* ResolveSprite(const SpriteTable* table, const SpriteRenderer& sprite) noexcept
-        {
-            return (sprite.shape == SpriteShape::Rect && table) ? table->Resolve(sprite.sprite)
-                                                                : nullptr;
-        }
-
-        // The mesh a MeshRenderer resolves to, on MeshSubmissionSystem's rule:
-        // nil / absent -> null, and the entity draws nothing.
-        const MeshEntry* ResolveMesh(const MeshTable* table, const MeshRenderer& mesh) noexcept
-        {
-            return table ? table->Resolve(mesh.mesh) : nullptr;
         }
     }
 
+    // F3 (spec s2.3): framing is a CONSUMER of WorldBounds -- the same box the
+    // renderer culls with and the pick pass emits, so the three can never
+    // disagree. A bare node (no WorldBounds) frames as its position.
     FramingBounds SelectionFramingBounds(Astra::Registry& reg,
                                          std::span<const Astra::Entity> entities)
     {
         FramingBounds b;
-        const SpriteTable* sprites = reg.GetResource<SpriteTable>();
-        const MeshTable*   meshes  = reg.GetResource<MeshTable>();
         for (Astra::Entity e : entities)
         {
             // No WorldTransform => a dead handle or a non-spatial node: there is
@@ -241,16 +162,13 @@ namespace Arcane::Editor
             const WorldTransform* world = std::as_const(reg).GetComponent<WorldTransform>(e);
             if (!world)
                 continue;
-
-            EntityBox box;
-            if (const SpriteRenderer* sprite = std::as_const(reg).GetComponent<SpriteRenderer>(e))
-                AddSprite(box, world->matrix, ResolveSprite(sprites, *sprite));
-            if (const MeshRenderer* mesh = std::as_const(reg).GetComponent<MeshRenderer>(e))
-                if (const MeshEntry* entry = ResolveMesh(meshes, *mesh))
-                    AddMesh(box, world->matrix, entry->bounds);
-            if (!box.any)
-                box.Add(WorldPositionOf(world->matrix));   // a non-drawn node frames as its bare position
-            Grow(b, box);
+            if (const WorldBounds* wb = std::as_const(reg).GetComponent<WorldBounds>(e))
+                Grow(b, wb->box);
+            else
+            {
+                const glm::vec3 p(world->matrix[3]);   // a non-drawn node frames as its bare position
+                Grow(b, Aabb{ p, p });
+            }
         }
         return b;
     }
@@ -258,27 +176,10 @@ namespace Arcane::Editor
     FramingBounds SceneFramingBounds(Astra::Registry& reg)
     {
         FramingBounds b;
-        const SpriteTable* sprites = reg.GetResource<SpriteTable>();
-        const MeshTable*   meshes  = reg.GetResource<MeshTable>();
-        // The SAME views RenderSubmissionSystem and MeshSubmissionSystem submit
-        // from, so "frame everything" frames exactly what is on screen.
-        reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<Hidden>>().ForEach(
-            [&](Astra::Entity, const WorldTransform& world, const SpriteRenderer& sprite)
-            {
-                EntityBox box;
-                AddSprite(box, world.matrix, ResolveSprite(sprites, sprite));
-                Grow(b, box);
-            });
-        reg.CreateView<const WorldTransform, const MeshRenderer, Astra::Not<Hidden>>().ForEach(
-            [&](Astra::Entity, const WorldTransform& world, const MeshRenderer& mesh)
-            {
-                const MeshEntry* entry = ResolveMesh(meshes, mesh);
-                if (!entry)
-                    return;   // unresolved: nothing is drawn, so nothing is framed
-                EntityBox box;
-                AddMesh(box, world.matrix, entry->bounds);
-                Grow(b, box);
-            });
+        // The SAME box the CPU visible set and the GPU scene rows read, so
+        // "frame everything" frames exactly what is on screen.
+        reg.CreateView<const WorldBounds, Astra::Not<Hidden>>().ForEach(
+            [&](Astra::Entity, const WorldBounds& wb) { Grow(b, wb.box); });
         return b;
     }
 }
