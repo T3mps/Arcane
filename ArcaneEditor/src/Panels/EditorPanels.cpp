@@ -465,6 +465,19 @@ namespace Arcane::Editor
             ImGui::TabBarQueueFocus(w->DockNode->TabBar, tab);
     }
 
+    void FocusDockTab(const char* windowName)
+    {
+        SelectDockTab(windowName);
+        // After a context-menu click ImGui restores NavWindow to the menu's
+        // owner (the Browser). QueueFocus then loses to 19611-19613 unless
+        // NavWindow is the window whose tab we want. SetWindowFocus is the
+        // Inspector/Material-forbidden call; it is correct HERE because the
+        // user asked to go to this panel, and ConsumeAssetPanelActions runs
+        // BEFORE DocumentHost::DrawAll, so a center SetNextWindowFocus later
+        // in the same frame can still win the center node.
+        ImGui::SetWindowFocus(windowName);
+    }
+
     void EndDockSpace(bool resetLayout)
     {
         const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");

@@ -2671,7 +2671,7 @@ namespace Arcane::Editor
         // lens.
         if (panelActions.showStatus &&
             m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus))
-            Arcane::Editor::SelectDockTab("Asset Status");
+            Arcane::Editor::FocusDockTab("Asset Status");
         // `focusInGraph` (Status's scene card -> Graph) -- write the focus,
         // select, surface the tab. The old focus-BEFORE-select-BEFORE-lens
         // ordering dance dissolves with the lens (spec s7.1): both writes
@@ -2685,7 +2685,7 @@ namespace Arcane::Editor
         {
             m_assetGraphUi.graphFocus = panelActions.focusInGraph;
             m_assetModel.Select(panelActions.focusInGraph);
-            Arcane::Editor::SelectDockTab("Asset Graph");
+            Arcane::Editor::FocusDockTab("Asset Graph");
         }
         // `revealInBrowse` (Status's Unreferenced card -> Browser) -- the
         // shared helper (AssetPanelCommon.*) carries the exact Ruling-10
@@ -2698,7 +2698,7 @@ namespace Arcane::Editor
         {
             Arcane::Editor::RevealAssetInBrowser(m_assetBrowserUi, m_assetModel,
                                                  panelActions.revealInBrowse);
-            Arcane::Editor::SelectDockTab("Asset Browser");
+            Arcane::Editor::FocusDockTab("Asset Browser");
         }
 
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----

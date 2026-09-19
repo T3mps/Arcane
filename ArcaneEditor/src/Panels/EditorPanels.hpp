@@ -253,6 +253,18 @@ namespace Arcane::Editor
     // its node (no tab bar) -- in every one of those there is no tab to select.
     void SelectDockTab(const char* windowName);
 
+    // User-initiated jump to a side panel (Focus in Graph, Reveal in Browser,
+    // digest -> Status). SelectDockTab alone is not enough when the SOURCE
+    // window shares the dock node: imgui.cpp:19611-19613 reapplies NavWindow
+    // as the node's selected tab every frame, so a QueueFocus from a Browser
+    // context menu flashes Graph then snaps back. Moving NavWindow to the
+    // TARGET is what makes the tab stick -- the same NavWindow rule the
+    // Inspector/Material auto-follow must NOT trip, because that path runs
+    // after a center document's SetNextWindowFocus and would steal the
+    // center tab. Auto-follow stays SelectDockTab; a click that means
+    // "take me there" uses this.
+    void FocusDockTab(const char* windowName);
+
     // Everything the Viewport's tool overlay reads and writes (F4 plan 1 T8).
     // References into EditorApp's state, so a click on the overlay edits the
     // host's member directly and the host reads the new value next frame:
