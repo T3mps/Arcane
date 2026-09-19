@@ -658,6 +658,12 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         io.graph->IsOffscreen() ? io.graph->RenderFrameOffscreen(graphFrame)
                                 : io.graph->RenderFrame(graphFrame);
     io.perf.Add(io.perf.accPresent, graphT0, io.perf.Now());
+    // Any outcome but Presented means GpuSceneSyncNode did not run, so the
+    // rows PrepareSceneForRender staged above never reached the GPU and would
+    // otherwise never be re-staged (ruling R-F): give the mirror a new
+    // generation so the next sync is a full rebuild.
+    if (outcome != Arcane::NriGraphContext::FrameOutcome::Presented)
+        Arcane::GpuSceneInvalidate(io.runtime->Registry());
     if (outcome == Arcane::NriGraphContext::FrameOutcome::Failed)
     {
         // Already reported through the "nri-graph" seam (so the latch

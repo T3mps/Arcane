@@ -448,3 +448,71 @@ TEST_CASE("PrepareSceneForRender: fills views[0] from the main view and views[1]
     CHECK_FALSE(frame.HasDraws());
     CHECK(w.reg.GetResource<Arcane::SceneVisibility>()->views.size() == 1);
 }
+
+// A viewport frame the graph SKIPPED (a collapsed panel, a zero-sized surface)
+// or FAILED never ran GpuSceneSyncNode, but GpuSceneSync had already recorded
+// lastModel / lastSyncTick for the rows it staged -- so the next frame's
+// out.Clear() would drop them for good. The host's remedy (ruling R-F):
+// GpuSceneInvalidate on every outcome other than Presented, which gives the
+// mirror a new generation so the next sync is a full rebuild.
+TEST_CASE("GpuSceneInvalidate: a dropped stage is recovered by the next sync as a full rebuild (every live row, prev == model)", "[gpuscene][host]")
+{
+    World w;
+    Astra::Entity a = w.Spawn(glm::vec3(0, 0, -5), w.Mesh(2));
+    Arcane::GpuSceneMirror* mirror = w.reg.EmplaceResource<Arcane::GpuSceneMirror>();
+    Arcane::GpuSceneStage stage;
+    auto sync = [&](std::uint64_t deviceGen)
+    {
+        Arcane::TransformPropagationSystem{}(w.reg);
+        Arcane::BoundsSystem{}(w.reg);
+        Arcane::GpuSceneSync(w.reg, *mirror, deviceGen, stage);
+    };
+    // Frame 1: presented -- the device acknowledges the mirror's generation.
+    sync(0);
+    REQUIRE(stage.fullRebuild);
+    REQUIRE(stage.rows.size() == 2);
+    const std::uint64_t synced = mirror->generation;
+
+    // Frame 2: a mesh is created while the panel is collapsed -- a NEW row,
+    // staged once with prev == model (so no re-dirty will ever repeat it) --
+    // and the frame is Skipped: the stage is dropped without reaching the device.
+    Astra::Entity c = w.Spawn(glm::vec3(3, 0, -5), w.Mesh());
+    sync(synced);
+    REQUIRE_FALSE(stage.fullRebuild);
+    REQUIRE(mirror->slots.TryGet(c));
+    const std::uint32_t rowC = mirror->slots.TryGet(c)->first;
+    // (a's rows may ride along: the re-parent under the root re-propagated
+    // them; what matters is that c's row is in THIS stage and no later one.)
+    CHECK(std::find(stage.rows.begin(), stage.rows.end(), rowC) != stage.rows.end());
+    stage.Clear();
+
+    // Without the invalidate the loss is permanent: c's row is live, yet
+    // nothing is dirty any more.
+    sync(synced);
+    CHECK_FALSE(stage.fullRebuild);
+    CHECK(stage.rows.empty());
+    CHECK(mirror->rows[rowC].live);
+
+    // The host's remedy: invalidate, and the next sync re-stages EVERY live
+    // row with prev == model under a generation the device has not synced.
+    Arcane::GpuSceneInvalidate(w.reg);
+    CHECK(mirror->generation != synced);
+    sync(synced);
+    CHECK(stage.fullRebuild);
+    CHECK(stage.generation == mirror->generation);
+    REQUIRE(stage.rows.size() == 3);
+    for (const Arcane::GpuInstance& v : stage.values)
+        CHECK(v.prevModel == v.model);
+    bool sawC = false;
+    for (std::size_t i = 0; i < stage.rows.size(); ++i)
+        if (stage.rows[i] == rowC) { sawC = true; CHECK(stage.values[i].model[3].x == 3.0f); }
+    CHECK(sawC);
+    // Spans and batch ids survived the invalidate (a's rows are where they were).
+    CHECK(mirror->slots.TryGet(a)->first == 0);
+    CHECK(mirror->slots.TryGet(a)->count == 2);
+
+    // A registry with no mirror yet: a no-op, never a crash.
+    Astra::Registry bare{ w.components };
+    Arcane::GpuSceneInvalidate(bare);
+    CHECK(bare.GetResource<Arcane::GpuSceneMirror>() == nullptr);
+}

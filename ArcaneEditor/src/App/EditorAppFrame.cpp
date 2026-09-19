@@ -1626,7 +1626,14 @@ namespace Arcane::Editor
 
             const Arcane::NriGraphContext::FrameOutcome outcome =
                 m_viewportTargets.graph->RenderFrameOffscreen(vp);
-            // Skipped stays UNACTED-ON, and that is the routine case: a
+            // Any outcome but Presented means GpuSceneSyncNode did not run, so
+            // the rows PrepareSceneForRender staged above never reached the
+            // GPU and would otherwise never be re-staged (ruling R-F): give
+            // the mirror a new generation so the next sync is a full rebuild.
+            if (outcome != Arcane::NriGraphContext::FrameOutcome::Presented)
+                Arcane::GpuSceneInvalidate(m_runtime->Registry());
+            // Skipped stays UNACTED-ON (beyond the invalidate just above), and
+            // that is the routine case: a
             // collapsed panel, or a resize whose replacement could not be
             // created -- OffscreenTextureId() is 0 then and phase 16 draws no
             // Image, which IS the signal. A run whose last frame lands Skipped

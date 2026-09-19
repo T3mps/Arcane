@@ -80,4 +80,23 @@ namespace Arcane
         const VisibleSet* meshVis = twoViews ? &sv->views[1] : &sv->views[0];
         BuildGpuSceneFrame(*mirror, meshVis, reg.GetResource<MeshTable>(), *meshView, out);
     }
+
+    // THE DROPPED-STAGE REMEDY (ruling R-F). GpuSceneSync records lastModel and
+    // lastSyncTick in the same step it stages a row, and the device only
+    // stamps the synced generation inside GpuScene::Apply -- so a frame whose
+    // graph outcome was anything but Presented (Skipped: a collapsed viewport
+    // panel, a zero-sized surface, an OUT_OF_DATE acquire; Failed) has a stage
+    // that never reached the GPU and would never be re-staged: the next
+    // frame's out.Clear() drops it, and the rows draw stale (or never-written)
+    // bytes when they come into view. A host calls this on every such outcome
+    // AFTER PrepareSceneForRender ran for that frame. It hands the mirror a
+    // NEW generation, so the next GpuSceneSync sees the device's stamp
+    // mismatch and re-stages every live row with prev == model -- spans and
+    // batch ids stay put (cheaper and safer than dropping the resource). A
+    // registry with no mirror yet has nothing to lose: no-op.
+    inline void GpuSceneInvalidate(Astra::Registry& reg)
+    {
+        if (GpuSceneMirror* m = reg.GetResource<GpuSceneMirror>())
+            m->generation = GpuSceneMirror::NextGeneration();
+    }
 }
