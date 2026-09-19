@@ -237,7 +237,11 @@ namespace Arcane::Editor
     // no popup bracket of its own. A Browser row's context menu and the
     // Graph panel's node context menu both call this, one copy.
     void DrawAssetMenuItems(AssetPanelActions& actions, const AssetPanelEntry& e,
-                            bool kindSpecific);
+                            bool kindSpecific, const AssetPanelServices& services);
+
+    // Source entries, name-sorted -- Graph focus combo lists these under a
+    // "Source" heading so a .cpp's include neighborhood is a one-pick scope.
+    std::vector<const AssetPanelEntry*> SourcesByName(const AssetPanelModel& model);
 
     // Materials-only subkind pill text (spec s3.1/s6) -- see the
     // definition's own comment (AssetPanelCommon.cpp). A Browser row's pill,

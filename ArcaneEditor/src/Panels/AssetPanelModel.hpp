@@ -348,14 +348,14 @@ namespace Arcane::Editor
     }
 
     // An asset's cook-pipeline status, as the panel shows it (row markers +
-    // the digest bar). Textures/sprites are the only kinds with a real cook
-    // pipeline today; everything else defaults to Cooked (CookStateOf, Task 5)
-    // unless a permanent refusal diagnostic exists for it.
+    // the digest bar). Texture, Sprite, and Mesh (imported .glb companions)
+    // have a real cook pipeline; everything else defaults to Cooked
+    // (CookStateOf) unless a permanent refusal diagnostic exists for it.
     enum class CookState : std::uint8_t { Cooked, Queued, Refused, Unknown };
 
     // The pure cook-state mapping (Task 5): permanentDiag (a permanent cook-
     // diagnostic row exists for the guid -- a refusal) always wins, regardless
-    // of kind or pending. Otherwise only Texture/Sprite have a real cook
+    // of kind or pending. Otherwise only Texture/Sprite/Mesh have a real cook
     // pipeline of their own -- pending is meaningless for every other kind,
     // which reports Cooked unconditionally (an unrecognized kind with no
     // diagnostic also defaults to Cooked, never Unknown -- Unknown is

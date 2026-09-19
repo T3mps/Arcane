@@ -222,7 +222,8 @@ namespace Arcane::Editor
         // ---- Task 10: shared row context menu (spec s6) --------------------
         // The Browse-side bracket around DrawAssetMenuItems above.
         void DrawRowContextMenu(AssetPanelModel& model, AssetPanelActions& actions,
-                                const AssetPanelEntry& e, bool kindSpecific)
+                                const AssetPanelServices& services, const AssetPanelEntry& e,
+                                bool kindSpecific)
         {
             if (!ImGui::BeginPopupContextItem())
                 return;
@@ -234,7 +235,7 @@ namespace Arcane::Editor
             // the selection), so re-running it every open frame is free.
             model.Select(e.guid);
 
-            DrawAssetMenuItems(actions, e, kindSpecific);
+            DrawAssetMenuItems(actions, e, kindSpecific, services);
 
             ImGui::EndPopup();
         }
@@ -270,7 +271,7 @@ namespace Arcane::Editor
                 ImGui::EndDragDropSource();
             }
 
-            DrawRowContextMenu(model, actions, e, kindSpecificMenu);
+            DrawRowContextMenu(model, actions, services, e, kindSpecificMenu);
         }
 
         // ---- Task 10: the rail (spec s6/s11.2) -----------------------------
@@ -683,19 +684,20 @@ namespace Arcane::Editor
             // rendered pixels inside the 18px thumb cell EVEN IF the offset
             // does not shrink with the font size -- worst case its bottom
             // edge lands exactly at the thumb boundary, never past it.
-            if (refused)
+            if (refused || e.cook == CookState::Queued)
             {
                 constexpr float kBadgeFontSize = 10.0f;
                 constexpr float kBadgeMargin    = 3.0f;
+                const char* badge = refused ? ICON_LC_TRIANGLE_ALERT : ICON_LC_CLOCK;
                 ImGui::PushFont(GetEditorFonts().interRegular, kBadgeFontSize);
-                const ImVec2 badgeSize = ImGui::CalcTextSize(ICON_LC_TRIANGLE_ALERT);
+                const ImVec2 badgeSize = ImGui::CalcTextSize(badge);
                 const float thumbY      = rowMin.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
                 const float thumbRight  = rowMin.x + indent + kAssetRowThumbSize;
                 const float thumbBottom = thumbY + kAssetRowThumbSize;
                 const ImVec2 badgePos(thumbRight  - badgeSize.x - kBadgeMargin,
                                       thumbBottom - badgeSize.y - kBadgeMargin);
-                ImGui::GetWindowDrawList()->AddText(badgePos, ImGui::GetColorU32(Theme::kAmber),
-                                                    ICON_LC_TRIANGLE_ALERT);
+                ImGui::GetWindowDrawList()->AddText(badgePos,
+                    ImGui::GetColorU32(refused ? Theme::kAmber : Theme::kTextDim), badge);
                 ImGui::PopFont();
             }
 

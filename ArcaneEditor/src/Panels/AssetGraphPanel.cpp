@@ -1374,6 +1374,10 @@ namespace Arcane::Editor
                     body.meta = KindLabel(entry->kind);
                 if (entry->kind == AssetKind::Scene && bootGuid.IsValid() && n.guid == bootGuid)
                     headerPill = "boot";
+                if (entry->cook == CookState::Refused)
+                    body.pills.push_back({ "refused", 1 });
+                else if (entry->cook == CookState::Queued)
+                    body.pills.push_back({ "queued", 0 });
             }
             else
             {
@@ -1447,17 +1451,27 @@ namespace Arcane::Editor
             // alike (its AssetKind is Other by construction, so the §11.3
             // table has nothing to say about it either way).
             const ImVec4 amber  = Theme::kAmber;
+            const ImVec4 dim    = Theme::kTextDim;
             const ImVec4 accent = GraphNodeAccentColor(n);
             const bool ghost = n.isOverflow || n.isTombstone;
             DrawGraphNode(nodeId, v, body, headerIcon, headerLabel, headerPill,
                           accent, ghost);
 
             // Chrome, after EndNode -- see DrawGraphNodeChrome.
+            // Tombstones and refused cooks share amber; queued wears dim
+            // so a cook-in-flight node is marked without looking broken.
+            const ImVec4* borderAccent = nullptr;
+            if (n.isTombstone)
+                borderAccent = &amber;
+            else if (entry && entry->cook == CookState::Refused)
+                borderAccent = &amber;
+            else if (entry && entry->cook == CookState::Queued)
+                borderAccent = &dim;
             DrawGraphNodeChrome(nodeId, v,
                                 /*drawBand=*/!n.isOverflow,
                                 /*accent=*/n.isOverflow ? nullptr : &accent,
                                 /*wash=*/ghost ? kGraphGhostWash : 0.0f,
-                                /*borderAccent=*/n.isTombstone ? &amber : nullptr);
+                                borderAccent);
         }
         state.graphLayoutDirty = false;
 
@@ -1990,7 +2004,7 @@ namespace Arcane::Editor
             {
                 menuOpen = true;
                 if (const AssetPanelEntry* e = model.Find(state.graphMenuGuid))
-                    DrawAssetMenuItems(actions, *e, /*kindSpecific=*/true);
+                    DrawAssetMenuItems(actions, *e, /*kindSpecific=*/true, services);
                 else
                     // The asset went away underneath an open menu (deleted
                     // on disk, or a rebuild dropped it): close rather than
@@ -2231,6 +2245,19 @@ namespace Arcane::Editor
                         state.graphFocus = s->guid;
                     ImGui::PopID();
                 }
+                const std::vector<const AssetPanelEntry*> sources = SourcesByName(model);
+                if (!sources.empty())
+                {
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Source");
+                    for (const AssetPanelEntry* s : sources)
+                    {
+                        ImGui::PushID(s->guid.ToString().c_str());
+                        if (ImGui::Selectable(s->fileName.c_str(), s->guid == state.graphFocus))
+                            state.graphFocus = s->guid;
+                        ImGui::PopID();
+                    }
+                }
                 ImGui::EndCombo();
             }
 
@@ -2247,7 +2274,9 @@ namespace Arcane::Editor
         ImGui::PopStyleVar();
 
         // ---- body band -----------------------------------------------
-        if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
+        constexpr float kSelectionStripH = 52.0f;
+        if (ImGui::BeginChild("##assetgraphbody",
+                              ImVec2(0.0f, -(kAssetPanelBottomBarHeight + kSelectionStripH))))
         {
             if (!project)
                 DrawAssetPanelNoProjectMessage();
@@ -2255,6 +2284,52 @@ namespace Arcane::Editor
                 DrawAssetGraphBody(state, model, project, docs, services, actions);
         }
         ImGui::EndChild();
+
+        // Selection strip: the Browser preview's facts (thumb, name, cook)
+        // when this window is the one that holds the selection -- Graph-only
+        // layouts otherwise had only the peek tooltip.
+        {
+            if (ImGui::BeginChild("##graphsel", ImVec2(0.0f, kSelectionStripH), ImGuiChildFlags_Borders))
+            {
+                const AssetPanelEntry* e = model.selected.IsValid() ? model.Find(model.selected) : nullptr;
+                if (!e)
+                    ImGui::TextDisabled("No selection");
+                else
+                {
+                    const float thumb = 36.0f;
+                    const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    const std::uint64_t tex = services.resolveAssetThumb
+                        ? services.resolveAssetThumb(e->guid) : 0;
+                    if (tex != 0)
+                        dl->AddImage(static_cast<ImTextureID>(tex), thumbMin,
+                                     ImVec2(thumbMin.x + thumb, thumbMin.y + thumb));
+                    else
+                    {
+                        dl->AddRectFilled(thumbMin, ImVec2(thumbMin.x + thumb, thumbMin.y + thumb),
+                                          ImGui::GetColorU32(Theme::kWell));
+                        const char* icon = KindIcon(e->kind);
+                        const ImVec2 ks = ImGui::CalcTextSize(icon);
+                        dl->AddText(ImVec2(thumbMin.x + (thumb - ks.x) * 0.5f,
+                                           thumbMin.y + (thumb - ks.y) * 0.5f),
+                                    ImGui::GetColorU32(ImGuiCol_Text), icon);
+                    }
+                    ImGui::Dummy(ImVec2(thumb, thumb));
+                    ImGui::SameLine();
+                    ImGui::BeginGroup();
+                    ImGui::TextUnformatted(e->fileName.c_str());
+                    if (e->cook == CookState::Refused)
+                        ImGui::TextColored(Theme::kAmber, "%s", CookStateLabel(e->cook));
+                    else
+                        ImGui::TextDisabled("%s", CookStateLabel(e->cook));
+                    ImGui::EndGroup();
+                    ImGui::SameLine();
+                    if (project && ImGui::Button("Open"))
+                        OpenAssetRow(*e, project, docs, actions);
+                }
+            }
+            ImGui::EndChild();
+        }
 
         // ---- bottom bar band (spec s9.2) -----------------------------
         // LEFT: what the SCOPED projection is showing out of the whole

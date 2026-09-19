@@ -79,9 +79,9 @@ namespace Arcane::Editor
         if (permanentDiag)
             return CookState::Refused;
 
-        // Only Texture/Sprite have a real cook pipeline of their own (see
+        // Texture/Sprite/Mesh have a real cook pipeline of their own (see
         // this function's own header comment) -- everything else (materials,
-        // scenes, meshes, data, ...) has nothing to be "pending" about, so
+        // scenes, data, ...) has nothing to be "pending" about, so
         // this gate keeps a `pending` answer from leaking through as a
         // permanent Queued state for a kind that never cooks. This function
         // stays PURE and self-sufficient: it does not assume the host gated
@@ -89,7 +89,9 @@ namespace Arcane::Editor
         // the expensive artifact-store ask is never paid for a kind whose
         // answer this line discards -- but that is the host's performance
         // concern, not this function's correctness contract.)
-        const bool cooks = (kind == AssetKind::Texture) || (kind == AssetKind::Sprite);
+        const bool cooks = (kind == AssetKind::Texture)
+                        || (kind == AssetKind::Sprite)
+                        || (kind == AssetKind::Mesh);
         if (!cooks)
             return CookState::Cooked;
 

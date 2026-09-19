@@ -28,6 +28,7 @@
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
 #include "Project/IdeLaunch.hpp"   // Build -> Open Visual Studio / open source in VS
 #include "Project/MeshImportWave.hpp"   // F2c Task 13: embedded-texture extraction at discovery
+#include "Project/SourceIncludes.hpp"   // Asset Graph: #include edges for source:// files
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
 #include <Arcane/AssetPipeline/CookSession.hpp>   // IsCookPending's artifact-store oracle (2026-09-08 desk fix)
@@ -47,6 +48,8 @@
 
 #include <algorithm>   // std::ranges::find (SwitchProject's take() cherry-pick)
 #include <chrono>      // Asset-manager Plan 2 Task 5: m_assetActivity's now() stamp
+#include <fstream>
+#include <iterator>
 #include <cstddef>     // std::size_t (project_open's switch-local scan-progress callback)
 #include <filesystem>
 #include <fstream>     // F2c Task 15: ReadWholeGltfSource (MintOrUpdateCompanionMesh's survey read)
@@ -1068,12 +1071,18 @@ namespace Arcane::Editor
         if (it != m_cookDiagnostics.end())
             return !it->second.permanent;
 
-        // THE GATE: only Texture/Sprite have a cook pipeline at all
-        // (CookStateOf's own kind list, and CookSession's enumeration is the
-        // authority behind it), so for every other kind there is nothing to
-        // be pending about and nothing worth walking Content/ to discover.
-        // CookStateOf discards this answer for those kinds regardless; false
-        // is simply the honest value to discard.
+        // THE GATE: Texture/Sprite have the classic cook pipeline; Mesh
+        // (imported companions) cooks through the same CookQueue. Generated
+        // primitives are not pending -- Assets::CookPending is false for
+        // them. CookStateOf discards this answer for every other kind.
+        if (kind == Arcane::Editor::AssetKind::Mesh)
+        {
+            if (!m_runtime)
+                return false;
+            // AssetsFacade() is non-const; CookPending itself is const.
+            return const_cast<Arcane::ClientRuntime&>(*m_runtime).AssetsFacade().CookPending(id);
+        }
+
         const bool cooks = (kind == Arcane::Editor::AssetKind::Texture)
                         || (kind == Arcane::Editor::AssetKind::Sprite);
         if (!cooks)
@@ -1151,7 +1160,35 @@ namespace Arcane::Editor
         };
         p.refsFor = [this](const Arcane::Guid& g) -> std::optional<std::vector<Arcane::AssetRef>>
         {
-            return m_runtime ? m_runtime->AssetsFacade().ListAssetReferences(g) : std::nullopt;
+            if (!m_runtime)
+                return std::nullopt;
+            auto refs = m_runtime->AssetsFacade().ListAssetReferences(g);
+            const Arcane::Project* project = m_runtime->CurrentProject();
+            if (!project || !refs)
+                return refs;
+            const auto mount = project->Registry().Resolve(g);
+            if (!mount || mount->rfind("source://", 0) != 0)
+                return refs;
+            const auto disk = project->ResolveAsset(Arcane::AssetId::FromGuid(g));
+            if (!disk)
+                return refs;
+            std::ifstream in(*disk, std::ios::binary);
+            if (!in)
+                return refs;
+            const std::string text((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+            const auto all = project->Registry().All();
+            for (const std::string& inc : Arcane::Editor::ParseIncludeDirectives(text))
+            {
+                const auto target = Arcane::Editor::ResolveSourceInclude(*mount, inc, all);
+                if (!target)
+                    continue;
+                const bool dup = std::any_of(refs->begin(), refs->end(),
+                    [&](const Arcane::AssetRef& r) { return r.target == *target; });
+                if (!dup)
+                    refs->push_back({ *target, Arcane::AssetRefKind::References });
+            }
+            return refs;
         };
         p.cookStateFor = [this](const Arcane::Guid& g) -> Arcane::Editor::CookState
         {

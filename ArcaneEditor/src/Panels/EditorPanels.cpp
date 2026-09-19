@@ -414,7 +414,14 @@ namespace Arcane::Editor
         ImGuiID central = dockspaceId;
         const ImGuiID leftId   = ImGui::DockBuilderSplitNode(central, ImGuiDir_Left,  0.18f, nullptr, &central);
         const ImGuiID rightId  = ImGui::DockBuilderSplitNode(central, ImGuiDir_Right, 0.22f, nullptr, &central);
-        const ImGuiID bottomId = ImGui::DockBuilderSplitNode(central, ImGuiDir_Down,  0.25f, nullptr, &central);
+        const ImGuiID bottomId = ImGui::DockBuilderSplitNode(central, ImGuiDir_Down,  0.32f, nullptr, &central);
+        // AAA interoperability: Browser | Graph side by side on a fresh
+        // layout (the panel-split's reason for existing). Status tabs with
+        // Graph; Console/Problems tab with Browser. Graph is the selected
+        // tab on the right so the derivation web is visible without a click.
+        ImGuiID bottomRightId = 0;
+        const ImGuiID bottomLeftId = ImGui::DockBuilderSplitNode(bottomId, ImGuiDir_Left, 0.48f,
+                                                                 nullptr, &bottomRightId);
 
         ImGui::DockBuilderDockWindow("Outliner", leftId);
         // Inspector and Material share the right node as TABS: the scene's
@@ -424,16 +431,11 @@ namespace Arcane::Editor
         // fresh layout opens on it.
         ImGui::DockBuilderDockWindow("Inspector", rightId);
         ImGui::DockBuilderDockWindow("Material",  rightId);
-        // Panel-split spec s10: the three asset windows join the bottom node
-        // as tabs where the single "Assets" tab used to be, Asset Browser
-        // FIRST so a fresh layout opens on it. The G board's side-by-side
-        // arrangement (Browser + Status tabbed left, Graph right) is a USER
-        // arrangement the split makes possible, not the shipped default.
-        ImGui::DockBuilderDockWindow("Asset Browser", bottomId);   // Asset Browser tab first...
-        ImGui::DockBuilderDockWindow("Asset Graph",   bottomId);   // ...then Asset Graph...
-        ImGui::DockBuilderDockWindow("Asset Status",  bottomId);   // ...then Asset Status...
-        ImGui::DockBuilderDockWindow("Console",       bottomId);   // ...then Console...
-        ImGui::DockBuilderDockWindow("Problems",      bottomId);   // ...then Problems, all tabbed together
+        ImGui::DockBuilderDockWindow("Asset Browser", bottomLeftId);
+        ImGui::DockBuilderDockWindow("Console",       bottomLeftId);
+        ImGui::DockBuilderDockWindow("Problems",      bottomLeftId);
+        ImGui::DockBuilderDockWindow("Asset Graph",   bottomRightId);
+        ImGui::DockBuilderDockWindow("Asset Status",  bottomRightId);
         ImGui::DockBuilderDockWindow("Viewport",      central);
         ImGui::DockBuilderFinish(dockspaceId);
     }

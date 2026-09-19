@@ -616,6 +616,13 @@ TEST_CASE("CookStateOf: a pending texture is Queued", "[editor]")
     CHECK(CookStateOf(AssetKind::Texture, /*permanentDiag=*/false, /*pending=*/false) == CookState::Cooked);
 }
 
+TEST_CASE("CookStateOf: a pending imported mesh is Queued", "[editor]")
+{
+    CHECK(CookStateOf(AssetKind::Mesh, /*permanentDiag=*/false, /*pending=*/true) == CookState::Queued);
+    CHECK(CookStateOf(AssetKind::Mesh, /*permanentDiag=*/false, /*pending=*/false) == CookState::Cooked);
+    CHECK(CookStateOf(AssetKind::Mesh, /*permanentDiag=*/true, /*pending=*/true) == CookState::Refused);
+}
+
 TEST_CASE("CookStateOf: a material never reports Queued -- it has no cook pipeline of its own", "[editor]")
 {
     CHECK(CookStateOf(AssetKind::Material, /*permanentDiag=*/false, /*pending=*/true) == CookState::Cooked);

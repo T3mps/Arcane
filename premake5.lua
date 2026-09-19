@@ -1108,6 +1108,9 @@ project "ArcaneTests"
         -- drive the whole text half directly. Writing/registering/regenerating
         -- is EditorApp's (MintCppClass) and desk-verify.
         "%{wks.location}/ArcaneEditor/src/Project/ClassTemplates.cpp",
+        -- Source include graph: ParseIncludeDirectives / ResolveSourceInclude
+        -- are pure, so the [editor] units drive them directly.
+        "%{wks.location}/ArcaneEditor/src/Project/SourceIncludes.cpp",
         -- arcbuild (the game-project build driver, spec docs/specs/
         -- 2026-09-13-arcbuild-driver-design.md): the PURE core -- Request.cpp
         -- (CLI), Slot.cpp (s4.3 CRT table, game-module only), Compose.cpp

@@ -198,6 +198,18 @@ namespace Arcane::Editor
         return scenes;
     }
 
+    std::vector<const AssetPanelEntry*> SourcesByName(const AssetPanelModel& model)
+    {
+        std::vector<const AssetPanelEntry*> sources;
+        for (const auto& [guid, entry] : model.Entries())
+            if (entry.kind == AssetKind::Source)
+                sources.push_back(&entry);
+        std::sort(sources.begin(), sources.end(),
+                  [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                  { return a->name != b->name ? a->name < b->name : a->mountPath < b->mountPath; });
+        return sources;
+    }
+
     // Materials-only subkind pill text (spec s3.1/s6: Fullscreen -> "post",
     // Sprite -> "sprite", Mesh -> "mesh"). nullptr when there is nothing to
     // show (non-material, or a material whose surface could not be read).
@@ -283,7 +295,7 @@ namespace Arcane::Editor
     // opens, not on every frame the popup is drawn), so each caller does
     // it at its own open site.
     void DrawAssetMenuItems(AssetPanelActions& actions, const AssetPanelEntry& e,
-                            bool kindSpecific)
+                            bool kindSpecific, const AssetPanelServices& services)
     {
         if (kindSpecific)
         {
@@ -324,6 +336,22 @@ namespace Arcane::Editor
             actions.copyPath = e.guid;
         if (ImGui::MenuItem("Copy Guid"))
             actions.copyGuid = e.guid;
+        ImGui::Separator();
+        // AAA interoperability: the same Find-in-other-lens verbs Status
+        // cards already had. R1 -- grey + tooltip when the target is closed;
+        // the Window menu is the only opener.
+        ImGui::BeginDisabled(!services.graphOpen);
+        if (ImGui::MenuItem("Focus in Graph"))
+            actions.focusInGraph = e.guid;
+        ImGui::EndDisabled();
+        if (!services.graphOpen && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Asset Graph is closed \xE2\x80\x94 open it from Window \xE2\x96\xB8");
+        ImGui::BeginDisabled(!services.browserOpen);
+        if (ImGui::MenuItem("Reveal in Browser"))
+            actions.revealInBrowse = e.guid;
+        ImGui::EndDisabled();
+        if (!services.browserOpen && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Asset Browser is closed \xE2\x80\x94 open it from Window \xE2\x96\xB8");
     }
 
     namespace
