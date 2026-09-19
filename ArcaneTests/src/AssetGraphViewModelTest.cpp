@@ -654,9 +654,18 @@ TEST_CASE("ParseGraphFocusQuery: everything, @kind, and substring", "[editor]")
     q = ParseGraphFocusQuery("@mesh");
     CHECK(q.mode == GraphFocusQuery::Mode::Kind);
     CHECK(q.kind == AssetKind::Mesh);
+    q = ParseGraphFocusQuery("@");
+    CHECK(q.mode == GraphFocusQuery::Mode::KindPrefix);
+    CHECK(q.text == "");
+    q = ParseGraphFocusQuery("@s");
+    CHECK(q.mode == GraphFocusQuery::Mode::KindPrefix);
+    CHECK(q.text == "s");
     q = ParseGraphFocusQuery("Player");
     CHECK(q.mode == GraphFocusQuery::Mode::Text);
     CHECK(q.text == "player");
+    CHECK(CompleteGraphFocusKindPrefix("s") == "source");
+    CHECK(CompleteGraphFocusKindPrefix("sp") == "sprite");
+    CHECK_FALSE(CompleteGraphFocusKindPrefix("z").has_value());
 
     AssetPanelEntry src = MakeEntry(GuidN(9, 1), "NetClient", AssetKind::Source);
     src.fileName = "NetClient.cpp";

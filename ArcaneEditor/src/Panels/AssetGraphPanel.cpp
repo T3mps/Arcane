@@ -100,6 +100,23 @@ namespace Arcane::Editor
         // (`width: 230px`) rather than guessed -- longer names ellipsize
         // inside the combo rather than widening it.
         constexpr float kGraphFocusComboWidth = 280.0f;
+        constexpr int   kGraphFocusHitCap     = 12;   // files in the popup; keywords always fit
+
+        int GraphFocusFilterCallback(ImGuiInputTextCallbackData* data)
+        {
+            if (data->EventFlag != ImGuiInputTextFlags_CallbackCompletion)
+                return 0;
+            std::string_view buf(data->Buf, static_cast<std::size_t>(data->BufTextLen));
+            if (buf.empty() || buf.front() != '@')
+                return 0;
+            const auto done = CompleteGraphFocusKindPrefix(buf.substr(1));
+            if (!done)
+                return 0;
+            const std::string filled = std::string("@") + std::string(*done);
+            data->DeleteChars(0, data->BufTextLen);
+            data->InsertChars(0, filled.c_str());
+            return 0;
+        }
 
         // The "no scope root" label -- spelled ONCE, because the combo's
         // preview, the combo's own first entry and the bottom bar's "focus:"
@@ -2227,7 +2244,7 @@ namespace Arcane::Editor
                 std::snprintf(focusPreview, sizeof(focusPreview), "focus: %s",
                               GraphFocusLabel(model, state.graphFocus));
             const bool comboOpen = ImGui::BeginCombo("##graphfocus", focusPreview,
-                                                     ImGuiComboFlags_HeightLargest);
+                                                     ImGuiComboFlags_HeightRegular);
             if (comboOpen)
             {
                 if (ImGui::IsWindowAppearing())
@@ -2237,7 +2254,9 @@ namespace Arcane::Editor
                 }
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputTextWithHint("##graphfocusfilter", "@kind or name...",
-                                         state.graphFocusFilter, sizeof(state.graphFocusFilter));
+                                         state.graphFocusFilter, sizeof(state.graphFocusFilter),
+                                         ImGuiInputTextFlags_CallbackCompletion,
+                                         GraphFocusFilterCallback);
                 const GraphFocusQuery query = ParseGraphFocusQuery(state.graphFocusFilter);
 
                 auto pickEverything = [&]()
@@ -2262,55 +2281,94 @@ namespace Arcane::Editor
                 const bool enter = ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false);
                 if (enter && query.mode == GraphFocusQuery::Mode::Kind)
                     pickKind(query.kind);
+                else if (enter && query.mode == GraphFocusQuery::Mode::KindPrefix)
+                {
+                    if (const auto done = CompleteGraphFocusKindPrefix(query.text))
+                    {
+                        if (auto k = ParseGraphFocusQuery(std::string("@") + std::string(*done));
+                            k.mode == GraphFocusQuery::Mode::Kind)
+                            pickKind(k.kind);
+                    }
+                }
                 else if (enter && query.mode == GraphFocusQuery::Mode::Everything
                          && state.graphFocusFilter[0] != '\0')
                     pickEverything();
 
-                const bool showEverything = query.mode != GraphFocusQuery::Mode::Kind
-                    && query.mode != GraphFocusQuery::Mode::Text;
-                if (showEverything)
+                if (query.mode == GraphFocusQuery::Mode::Everything)
                 {
                     if (ImGui::Selectable(kGraphFocusEverything, !state.graphFocus.IsValid()
                                                                 && !state.graphKindFilter)
                         && !enter)
                         pickEverything();
                 }
-                else if (query.mode == GraphFocusQuery::Mode::Kind)
+                if (query.mode == GraphFocusQuery::Mode::Everything
+                    || query.mode == GraphFocusQuery::Mode::KindPrefix
+                    || query.mode == GraphFocusQuery::Mode::Kind)
                 {
-                    char kindLine[64];
-                    std::snprintf(kindLine, sizeof(kindLine), "@%s (all)",
-                                  KindLabel(query.kind));
-                    if (ImGui::Selectable(kindLine, !state.graphFocus.IsValid()
-                                                    && state.graphKindFilter == query.kind)
-                        || enter)
-                        pickKind(query.kind);
+                    const std::string prefix = query.mode == GraphFocusQuery::Mode::KindPrefix
+                        ? query.text : std::string{};
+                    for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
+                    {
+                        if (query.mode == GraphFocusQuery::Mode::Kind && kw.kind != query.kind)
+                            continue;
+                        if (!prefix.empty())
+                        {
+                            const std::string_view tok{ kw.token };
+                            if (tok.size() < prefix.size() || tok.substr(0, prefix.size()) != prefix)
+                                continue;
+                        }
+                        char line[48];
+                        std::snprintf(line, sizeof(line), "@%s", kw.token);
+                        const bool sel = !state.graphFocus.IsValid()
+                            && state.graphKindFilter == kw.kind;
+                        ImGui::PushID(kw.token);
+                        if (ImGui::Selectable(line, sel))
+                            pickKind(kw.kind);
+                        ImGui::PopID();
+                    }
                 }
 
                 std::vector<const AssetPanelEntry*> hits;
-                for (const auto& [g, e] : model.Entries())
+                if (query.mode != GraphFocusQuery::Mode::KindPrefix)
                 {
-                    (void)g;
-                    if (MatchesGraphFocusQuery(query, e))
+                    for (const auto& [g, e] : model.Entries())
+                    {
+                        (void)g;
+                        if (query.mode == GraphFocusQuery::Mode::Everything)
+                        {
+                            if (e.kind != AssetKind::Scene)
+                                continue;   // empty box: scenes only, not the whole Source tree
+                        }
+                        else if (!MatchesGraphFocusQuery(query, e))
+                            continue;
                         hits.push_back(&e);
+                    }
+                    std::sort(hits.begin(), hits.end(),
+                              [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                              {
+                                  return a->fileName != b->fileName
+                                      ? a->fileName < b->fileName
+                                      : a->mountPath < b->mountPath;
+                              });
                 }
-                std::sort(hits.begin(), hits.end(),
-                          [](const AssetPanelEntry* a, const AssetPanelEntry* b)
-                          {
-                              return a->fileName != b->fileName
-                                  ? a->fileName < b->fileName
-                                  : a->mountPath < b->mountPath;
-                          });
-                if (enter && query.mode == GraphFocusQuery::Mode::Text && hits.size() == 1)
-                    pickGuid(hits.front()->guid);
-                else if (enter && query.mode == GraphFocusQuery::Mode::Text && !hits.empty())
+                if (enter && query.mode == GraphFocusQuery::Mode::Text && !hits.empty())
                     pickGuid(hits.front()->guid);
 
-                for (const AssetPanelEntry* s : hits)
+                const int shown = std::min(static_cast<int>(hits.size()), kGraphFocusHitCap);
+                for (int i = 0; i < shown; ++i)
                 {
+                    const AssetPanelEntry* s = hits[static_cast<std::size_t>(i)];
                     ImGui::PushID(s->guid.ToString().c_str());
                     if (ImGui::Selectable(s->fileName.c_str(), s->guid == state.graphFocus))
                         pickGuid(s->guid);
                     ImGui::PopID();
+                }
+                if (static_cast<int>(hits.size()) > kGraphFocusHitCap)
+                {
+                    ImGui::BeginDisabled();
+                    ImGui::TextDisabled("+%d more -- keep typing",
+                                        static_cast<int>(hits.size()) - kGraphFocusHitCap);
+                    ImGui::EndDisabled();
                 }
                 ImGui::EndCombo();
             }

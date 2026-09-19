@@ -117,18 +117,38 @@ namespace Arcane::Editor
     };
 
     // Power-user focus box. `everything` / empty -> all content (no Source).
-    // `@source` / `@mesh` / ... -> everything of that kind. Anything else is
+    // `@source` / `@mesh` / ... -> everything of that kind. A bare `@` or
+    // `@s` is KindPrefix (keyword picker, not a file dump). Anything else is
     // a case-insensitive substring over fileName/name. A leading `focus:` is
     // stripped so the preview string pastes back as a query.
+    struct GraphFocusKindKeyword
+    {
+        const char* token;   // without '@'
+        AssetKind   kind;
+    };
+    inline constexpr GraphFocusKindKeyword kGraphFocusKindKeywords[] = {
+        { "source",   AssetKind::Source   },
+        { "mesh",     AssetKind::Mesh     },
+        { "scene",    AssetKind::Scene    },
+        { "texture",  AssetKind::Texture  },
+        { "material", AssetKind::Material },
+        { "sprite",   AssetKind::Sprite   },
+        { "model",    AssetKind::Model    },
+    };
+
     struct GraphFocusQuery
     {
-        enum class Mode : std::uint8_t { Everything, Kind, Text };
+        enum class Mode : std::uint8_t { Everything, Kind, KindPrefix, Text };
         Mode      mode = Mode::Everything;
         AssetKind kind = AssetKind::Other;
-        std::string text;
+        std::string text;   // KindPrefix: typed rest after '@'; Text: needle
     };
     [[nodiscard]] GraphFocusQuery ParseGraphFocusQuery(std::string_view raw);
     [[nodiscard]] bool MatchesGraphFocusQuery(const GraphFocusQuery& q, const AssetPanelEntry& e);
+    // Tab-complete `@s` -> `source`. First canonical token that starts with
+    // the typed prefix (aliases in KindFromFocusToken still parse). nullopt
+    // when nothing matches.
+    [[nodiscard]] std::optional<std::string_view> CompleteGraphFocusKindPrefix(std::string_view typed);
 
     struct AssetGraphViewModel
     {

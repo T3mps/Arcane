@@ -310,12 +310,16 @@ namespace Arcane::Editor
             return q;
         if (s.front() == '@')
         {
-            if (auto k = KindFromFocusToken(Trim(s.substr(1))))
+            const std::string_view rest = Trim(s.substr(1));
+            if (auto k = KindFromFocusToken(rest))
             {
                 q.mode = GraphFocusQuery::Mode::Kind;
                 q.kind = *k;
                 return q;
             }
+            q.mode = GraphFocusQuery::Mode::KindPrefix;
+            q.text = LowerCopy(rest);
+            return q;
         }
         q.mode = GraphFocusQuery::Mode::Text;
         q.text = LowerCopy(s);
@@ -328,9 +332,29 @@ namespace Arcane::Editor
             return true;
         if (q.mode == GraphFocusQuery::Mode::Kind)
             return e.kind == q.kind;
+        if (q.mode == GraphFocusQuery::Mode::KindPrefix)
+            return false;   // '@' / '@s' lists keywords, not files
         const std::string name = LowerCopy(e.name);
         const std::string file = LowerCopy(e.fileName);
         return name.find(q.text) != std::string::npos || file.find(q.text) != std::string::npos;
+    }
+
+    std::optional<std::string_view> CompleteGraphFocusKindPrefix(std::string_view typed)
+    {
+        const std::string prefix = LowerCopy(Trim(typed));
+        for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
+        {
+            const std::string tok = LowerCopy(kw.token);
+            if (prefix.empty() || tok.starts_with(prefix))
+                return std::string_view{ kw.token };
+        }
+        if (auto k = KindFromFocusToken(prefix))
+        {
+            for (const GraphFocusKindKeyword& kw : kGraphFocusKindKeywords)
+                if (kw.kind == *k)
+                    return std::string_view{ kw.token };
+        }
+        return std::nullopt;
     }
 
     void AssetGraphViewModel::Clear()
