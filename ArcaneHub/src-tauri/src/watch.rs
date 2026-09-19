@@ -8,7 +8,9 @@
 // on every read). Emits only on transitions, so an idle Hub sends nothing
 // and the frontend never repaints for no reason.
 
-use crate::{launch, state};
+use crate::{editorlock, launch, resolve, state};
+
+use std::path::Path;
 
 pub fn spawn_disk_watch(app: tauri::AppHandle) {
     std::thread::spawn(move || {
@@ -25,6 +27,11 @@ pub fn spawn_disk_watch(app: tauri::AppHandle) {
             if now != last {
                 last = now;
                 let _ = app.emit("state-changed", &s);
+            }
+            // Hand-launched (or previous-session) editors that died while
+            // this Hub sat open: same predicate as startup/wait-thread.
+            for e in &s.recents {
+                let _ = editorlock::sweep_stale(&resolve::project_dir(Path::new(&e.path)));
             }
             let now_running = launch::running_keys(&app);
             if now_running != last_running {

@@ -330,9 +330,14 @@ pub fn do_open_project(
         let app = app.clone();
         let shown = project::display_name(&project_path);
         let key = project_key.clone();
+        let lock_root = resolve::project_dir(&proj);
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
             let status = child.wait().ok();
+            // Handle still held (`child` is in scope): tell 3 is why sweep
+            // can delete the file the editor may not have Clear'd (crash,
+            // kill, Init-failed-after-write). A live rival is untouched.
+            let _ = editorlock::sweep_stale(&lock_root);
 
             use tauri::Emitter;
             let none_left = {

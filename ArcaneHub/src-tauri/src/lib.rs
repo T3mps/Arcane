@@ -649,6 +649,13 @@ pub fn run() {
                 if n > 0 {
                     let _ = state::save(&s);
                 }
+                // Close-mode leftover: this Hub process did not spawn the
+                // editor, so there is no wait thread to sweep after wait().
+                // A crash's editor.lock is deleted only when read_live has
+                // proven it dead (tell 3 included).
+                for e in &s.recents {
+                    let _ = editorlock::sweep_stale(&resolve::project_dir(Path::new(&e.path)));
+                }
             });
             // The window is created HIDDEN (tauri.conf.json): a cold start
             // via the file association used to flash the Hub for a moment

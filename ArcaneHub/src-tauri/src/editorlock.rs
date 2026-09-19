@@ -10,6 +10,14 @@
 // exact pid with that exact birth is alive. A crash's stale lock fails the
 // check and is ignored -- never a false "already open"; a recycled pid has
 // a different birth and fails the same way.
+//
+// THREE tells, matching C++ EditorLock::ReadLive (Project.cpp). Tells 1+2
+// (pid opens, birth matches) are not enough: a process OBJECT outlives the
+// process while any handle remains, and the Hub's wait thread holds exactly
+// that handle (`Child`). Exit time is the tell that cannot be faked by a
+// lingering handle -- nonzero means it exited. sweep_stale then deletes a
+// file read_live has proven dead, so Saved/ does not keep a crash's lock
+// forever (the Hub never owned Clear; only the editor did).
 
 use std::path::Path;
 
@@ -32,9 +40,20 @@ pub fn parse(text: &str) -> Option<Lock> {
     Some(Lock { pid, start })
 }
 
-/// The creation time of a live process, or None when it does not exist (or
-/// cannot be asked, which for this purpose is the same answer).
-pub fn process_start_time(pid: u32) -> Option<u64> {
+pub fn lock_path(project_root: &Path) -> std::path::PathBuf {
+    project_root.join("Saved").join("editor.lock")
+}
+
+struct ProcessTimes {
+    start: u64,
+    /// Nonzero FILETIME means the process has exited; the object may still
+    /// be queryable because a handle (the Hub's Child) is keeping it around.
+    exited: bool,
+}
+
+/// Times of a live-or-zombie process object, or None when it does not exist
+/// (or cannot be asked, which for this purpose is the same answer).
+fn process_times(pid: u32) -> Option<ProcessTimes> {
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -53,28 +72,54 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
         if ok == 0 {
             return None;
         }
-        Some(((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64)
+        Some(ProcessTimes {
+            start: ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64,
+            exited: exited.dwHighDateTime != 0 || exited.dwLowDateTime != 0,
+        })
     }
 }
 
 /// Some(pid) only when the project's lock names a process that is still the
 /// process it described. Every other shape -- no file, unparseable, dead
-/// pid, recycled pid with a different birth -- reads as "not running".
+/// pid, recycled pid with a different birth, exited-but-handle-held --
+/// reads as "not running".
 pub fn read_live(project_root: &Path) -> Option<u32> {
-    let file = project_root.join("Saved").join("editor.lock");
-    let text = std::fs::read_to_string(file).ok()?;
+    let text = std::fs::read_to_string(lock_path(project_root)).ok()?;
     let lock = parse(&text)?;
-    let start = process_start_time(lock.pid)?;
-    if lock.start != 0 && lock.start != start {
+    let times = process_times(lock.pid)?;
+    if lock.start != 0 && lock.start != times.start {
+        return None;
+    }
+    if times.exited {
         return None;
     }
     Some(lock.pid)
 }
 
+/// Delete `editor.lock` only when read_live has proven it dead. Never
+/// touches a lock a live editor still holds. Returns true when a file was
+/// removed. Called on Hub start (close-mode leftover) and after the wait
+/// thread's child.wait() (the handle is still held -- tell 3 is why this
+/// is safe then).
+pub fn sweep_stale(project_root: &Path) -> bool {
+    let file = lock_path(project_root);
+    if !file.is_file() {
+        return false;
+    }
+    if read_live(project_root).is_some() {
+        return false;
+    }
+    std::fs::remove_file(&file).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::windows::process::CommandExt;
     use std::path::PathBuf;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     #[test]
     fn parse_mirrors_the_engine_side_format() {
@@ -99,7 +144,7 @@ mod tests {
 
     fn write_lock(root: &Path, pid: u32, start: u64) {
         std::fs::write(
-            root.join("Saved").join("editor.lock"),
+            lock_path(root),
             format!(r#"{{"pid":{pid},"start":{start}}}"#),
         )
         .unwrap();
@@ -109,9 +154,12 @@ mod tests {
     fn a_lock_naming_this_live_process_reads_as_running() {
         let root = scratch("live");
         let pid = std::process::id();
-        let start = process_start_time(pid).expect("own process must be queryable");
-        write_lock(&root, pid, start);
+        let times = process_times(pid).expect("own process must be queryable");
+        assert!(!times.exited, "the test process has not exited");
+        write_lock(&root, pid, times.start);
         assert_eq!(read_live(&root), Some(pid));
+        assert!(!sweep_stale(&root), "must not delete a live editor's lock");
+        assert!(lock_path(&root).is_file());
     }
 
     #[test]
@@ -121,14 +169,40 @@ mod tests {
         // reason to refuse a launch.
         let root = scratch("stale");
         let pid = std::process::id();
-        let start = process_start_time(pid).unwrap();
-        write_lock(&root, pid, start ^ 1);
+        let times = process_times(pid).unwrap();
+        write_lock(&root, pid, times.start ^ 1);
         assert_eq!(read_live(&root), None);
+        assert!(sweep_stale(&root), "a birth-mismatch lock is dead; delete it");
+        assert!(!lock_path(&root).is_file());
     }
 
     #[test]
     fn no_lock_file_reads_as_not_running() {
         let root = scratch("none");
         assert_eq!(read_live(&root), None);
+        assert!(!sweep_stale(&root));
+    }
+
+    #[test]
+    fn an_exited_process_is_stale_even_while_a_handle_keeps_the_pid_reserved() {
+        // The 2026-09-08 desk-pass zombie, Hub-side. C++ ReadLive grew tell 3
+        // (nonzero exit time); this file did not, so a Hub holding `Child`
+        // after the editor died kept OpenProcess succeeding with the original
+        // birth and the project read as open forever.
+        let root = scratch("zombie");
+        let mut child = Command::new("cmd.exe")
+            .args(["/C", "exit", "0"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .expect("cmd.exe /C exit");
+        let pid = child.id();
+        child.wait().expect("child exits");
+        // `child` is still in scope -- that handle is the zombie.
+        let times = process_times(pid).expect("handle keeps the process object queryable");
+        assert!(times.exited, "it really did exit");
+        write_lock(&root, pid, times.start);
+        assert_eq!(read_live(&root), None, "tell 3: exited is not live");
+        assert!(sweep_stale(&root));
+        assert!(!lock_path(&root).is_file());
     }
 }
