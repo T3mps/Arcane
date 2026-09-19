@@ -29,6 +29,11 @@ namespace
         Astra::Registry reg{ components };
         std::unordered_map<Arcane::Guid, Arcane::MeshEntry>   meshes;
         std::unordered_map<Arcane::Guid, Arcane::SpriteEntry> sprites;
+        // The fixture plays the owning caches: MeshTable/SpriteTable::generation
+        // point at these, and a test that edits an entry in place bumps them the
+        // way MeshCache/SpriteCache do on every publish.
+        std::uint64_t meshGen   = 1;
+        std::uint64_t spriteGen = 1;
         Astra::Entity root{};
 
         World()
@@ -37,8 +42,8 @@ namespace
             root = reg.CreateEntity();
             reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
             reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ root });
-            reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
-            reg.SetResource<Arcane::SpriteTable>(Arcane::SpriteTable{ &sprites });
+            reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes, &meshGen });
+            reg.SetResource<Arcane::SpriteTable>(Arcane::SpriteTable{ &sprites, &spriteGen });
         }
 
         Astra::Entity Spawn(glm::vec3 pos)
@@ -183,4 +188,69 @@ TEST_CASE("BoundsSystem: a Hidden entity keeps its box (Hidden is a draw decisio
     w.reg.AddComponent<Arcane::Hidden>(e, Arcane::Hidden{});
     w.Tick();
     CHECK(w.reg.HasComponent<Arcane::WorldBounds>(e));
+}
+
+TEST_CASE("BoundsSystem: a mesh asset re-published with new bounds (MeshTable::generation) re-boxes an unmoved entity; no bump, no rewrite", "[bounds]")
+{
+    // Review fix (Important #1): MeshDocument::Save / a reimport goes
+    // MeshCache::Invalidate -> re-resolve -- the ENTRY changes, nothing on the
+    // entity does, so none of the three Changed<> producers fires. The owning
+    // cache bumps its generation on every publish and the system re-walks.
+    World w;
+    const Arcane::Guid cube = AddCube(w);                    // [-1, 1]^3
+    Astra::Entity e = w.Spawn(glm::vec3(10, 0, 0));
+    w.reg.AddComponent<Arcane::MeshRenderer>(e, Arcane::MeshRenderer{ cube, {} });
+    w.Tick();
+    REQUIRE(std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e)->box.max == glm::vec3(11, 1, 1));
+
+    // The asset grew (a primitive parameter edit): replace the entry, bump.
+    Arcane::MeshEntry bigger;
+    bigger.data   = Arcane::BuildCube(4.0f);                 // [-2, 2]^3
+    bigger.bounds = Arcane::ComputeMeshBounds(bigger.data);
+    w.meshes[cube] = bigger;
+    ++w.meshGen;
+    const Astra::Tick before = w.reg.CurrentTick();
+    w.Tick();
+    const Arcane::WorldBounds* b = std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e);
+    REQUIRE(b);
+    CHECK(b->box.min == glm::vec3(8, -2, -2));
+    CHECK(b->box.max == glm::vec3(12, 2, 2));
+    CHECK(w.reg.IsChanged<Arcane::WorldBounds>(e, before));
+
+    // Without a bump the walk is the ordinary dirty set: nothing is rewritten.
+    const Astra::Tick after = w.reg.CurrentTick();
+    w.Tick();
+    CHECK_FALSE(w.reg.IsChanged<Arcane::WorldBounds>(e, after));
+    CHECK(std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e)->box.max == glm::vec3(12, 2, 2));
+}
+
+TEST_CASE("BoundsSystem: a sprite asset whose sizeMeters changed (SpriteTable::generation) re-boxes an unmoved entity; no bump, no rewrite", "[bounds]")
+{
+    World w;
+    const Arcane::Guid sprite = Arcane::Guid::Generate();
+    Arcane::SpriteEntry entry;
+    entry.sizeMeters = glm::vec2(1.0f, 1.0f);
+    w.sprites.emplace(sprite, entry);
+    Astra::Entity e = w.Spawn(glm::vec3(2, 3, 0));
+    Arcane::SpriteRenderer s; s.shape = Arcane::SpriteShape::Rect; s.sprite = sprite;
+    w.reg.AddComponent<Arcane::SpriteRenderer>(e, s);
+    w.Tick();
+    REQUIRE(std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e)->box.max.x == Catch::Approx(2.5f));
+
+    // The .arcsprite was re-saved 4 m wide: the entry is replaced, the cache bumps.
+    w.sprites[sprite].sizeMeters = glm::vec2(4.0f, 1.0f);
+    ++w.spriteGen;
+    const Astra::Tick before = w.reg.CurrentTick();
+    w.Tick();
+    const Arcane::WorldBounds* b = std::as_const(w.reg).GetComponent<Arcane::WorldBounds>(e);
+    REQUIRE(b);
+    CHECK(b->box.min.x == Catch::Approx(0.0f));
+    CHECK(b->box.max.x == Catch::Approx(4.0f));
+    CHECK(b->box.min.y == Catch::Approx(2.5f));   // height unchanged
+    CHECK(b->box.max.y == Catch::Approx(3.5f));
+    CHECK(w.reg.IsChanged<Arcane::WorldBounds>(e, before));
+
+    const Astra::Tick after = w.reg.CurrentTick();
+    w.Tick();
+    CHECK_FALSE(w.reg.IsChanged<Arcane::WorldBounds>(e, after));
 }

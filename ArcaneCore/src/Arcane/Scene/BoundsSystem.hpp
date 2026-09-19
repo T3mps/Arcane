@@ -8,8 +8,13 @@
 // Changed<WorldTransform> / Changed<MeshRenderer> / Changed<SpriteRenderer>
 // since the last run (WorldTransform and MeshRenderer are change-tracked --
 // exact per entity; SpriteRenderer is chunk-coarse, which only recomputes a
-// few boxes), every drawable with no WorldBounds yet, and the removal
-// reconciliation. A static scene does no work.
+// few boxes), every drawable with no WorldBounds yet, the removal
+// reconciliation, and -- the ASSET-side producer -- every mesh drawable when
+// MeshTable::generation moved, every sprite drawable when
+// SpriteTable::generation moved (the owning cache bumps its counter on any
+// publish: a primitive parameter edit or a reimport re-resolves the entry with
+// new bounds, a sprite's sizeMeters changes, and nothing on the entity does).
+// A static scene does no work.
 //
 // Hidden is NOT consulted: it is a draw decision (the sweeps skip it), not a
 // bounds one -- the editor frames what exists, and a hidden entity unhidden
@@ -24,6 +29,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -43,6 +49,10 @@ namespace Arcane
     struct BoundsSystemState
     {
         Astra::Tick lastRun = 0;
+        // The table generations seen at the last run (0 = never read, which a
+        // cache's first publish -- its counter starts at 1 -- always differs from).
+        std::uint64_t lastMeshGen   = 0;
+        std::uint64_t lastSpriteGen = 0;
         std::vector<Astra::Entity> scratch;
 
         // Transient derived state; Registry::Save excludes resources entirely.
@@ -106,8 +116,10 @@ namespace Arcane
             std::vector<Astra::Entity>& todo = state->scratch;
             todo.clear();
 
-            // 1. Changed since last run (the three producers), 2. drawables with
-            //    no box yet (first sight, or a registry just loaded).
+            // 1. Changed since last run (the three component producers), 1b. the
+            //    asset-side producer: a table whose generation moved re-walks every
+            //    drawable of its kind, 2. drawables with no box yet (first sight, or
+            //    a registry just loaded).
             const Astra::Tick since = state->lastRun;
             reg.CreateView<const WorldTransform, Astra::Changed<WorldTransform>>().Since(since)
                 .ForEach([&](Astra::Entity e, const WorldTransform&) { todo.push_back(e); });
@@ -115,6 +127,20 @@ namespace Arcane
                 .ForEach([&](Astra::Entity e, const WorldTransform&, const MeshRenderer&) { todo.push_back(e); });
             reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Changed<SpriteRenderer>>().Since(since)
                 .ForEach([&](Astra::Entity e, const WorldTransform&, const SpriteRenderer&) { todo.push_back(e); });
+            const std::uint64_t meshGen   = meshes  ? (meshes->generation  ? *meshes->generation  : 0) : 0;
+            const std::uint64_t spriteGen = sprites ? (sprites->generation ? *sprites->generation : 0) : 0;
+            if (meshGen != state->lastMeshGen)
+            {
+                reg.CreateView<const WorldTransform, const MeshRenderer>()
+                    .ForEach([&](Astra::Entity e, const WorldTransform&, const MeshRenderer&) { todo.push_back(e); });
+                state->lastMeshGen = meshGen;
+            }
+            if (spriteGen != state->lastSpriteGen)
+            {
+                reg.CreateView<const WorldTransform, const SpriteRenderer>()
+                    .ForEach([&](Astra::Entity e, const WorldTransform&, const SpriteRenderer&) { todo.push_back(e); });
+                state->lastSpriteGen = spriteGen;
+            }
             reg.CreateView<const WorldTransform, const MeshRenderer, Astra::Not<WorldBounds>>()
                 .ForEach([&](Astra::Entity e, const WorldTransform&, const MeshRenderer&) { todo.push_back(e); });
             reg.CreateView<const WorldTransform, const SpriteRenderer, Astra::Not<WorldBounds>>()
@@ -137,8 +163,16 @@ namespace Arcane
                         reg.RemoveComponent<WorldBounds>(e);
                     continue;
                 }
-                if (WorldBounds* wb = reg.GetComponent<WorldBounds>(e))   // non-const: stamps the change
-                    wb->box = *box;
+                // Compare BEFORE the non-const fetch: the table-generation re-walk
+                // visits every drawable of a kind, and stamping an unchanged box
+                // would re-upload every GPU row (GpuSceneSync's Changed<WorldBounds>)
+                // on each mesh resolve during a scene load. Same inputs give the
+                // same bits, so exact equality is the right test.
+                if (const WorldBounds* cur = std::as_const(reg).GetComponent<WorldBounds>(e))
+                {
+                    if (cur->box != *box)
+                        reg.GetComponent<WorldBounds>(e)->box = *box;   // non-const: stamps the change
+                }
                 else
                     reg.AddComponent<WorldBounds>(e, WorldBounds{ *box });
             }

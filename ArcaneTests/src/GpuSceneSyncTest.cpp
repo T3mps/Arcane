@@ -33,6 +33,7 @@ namespace
         Astra::Registry reg{ components };
         std::unordered_map<Arcane::Guid, Arcane::MeshEntry>            meshes;
         std::unordered_map<Arcane::Guid, Arcane::ResolvedMeshMaterial> materials;
+        std::uint64_t meshGen = 1;   // the fixture plays MeshCache: MeshTable::generation, bumped on a re-publish
         Astra::Entity root{};
         Arcane::GpuSceneMirror mirror;
         Arcane::GpuSceneStage  stage;
@@ -44,7 +45,7 @@ namespace
             root = reg.CreateEntity();
             reg.AddComponent<Arcane::Transform>(root, Arcane::Transform{});
             reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ root });
-            reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes });
+            reg.SetResource<Arcane::MeshTable>(Arcane::MeshTable{ &meshes, &meshGen });
             reg.SetResource<Arcane::MeshMaterialTable>(Arcane::MeshMaterialTable{ &materials });
         }
         Arcane::Guid Mesh(std::uint32_t sections = 1, Arcane::Guid slotMaterial = {})
@@ -254,6 +255,46 @@ TEST_CASE("GpuSceneSync: a material whose resolved colour changed re-stages the 
     REQUIRE(w.stage.rows.size() == 1);
     CHECK(w.Staged(w.RowOf(e))->baseColor == glm::vec4(0, 0, 1, 1));
     CHECK(w.Staged(w.RowOf(e))->prevModel == w.Staged(w.RowOf(e))->model);   // a material change is not a move
+}
+
+TEST_CASE("GpuSceneSync: a mesh asset re-published with new bounds re-stages exactly that entity's rows with the new box and prev == model (Changed<WorldBounds>)", "[gpuscene]")
+{
+    // Review fix (Important #1, the device half): BoundsSystem re-walks on
+    // MeshTable::generation and rewrites WorldBounds -- change-tracked, so the
+    // Sync's dirty union must query it, or the rows' boundsMin/Max go stale
+    // the moment the CPU side is fixed. Not a move: lastModel == model, so
+    // prev == model with no special case.
+    World w;
+    const Arcane::Guid grown = w.Mesh(2);                         // [-1, 1]^3, two sections
+    Astra::Entity e     = w.Spawn(glm::vec3(1, 2, 3), grown);
+    Astra::Entity other = w.Spawn(glm::vec3(-5, 0, 0), w.Mesh());   // a different asset: untouched
+    w.Frame();
+    w.Frame();                                                     // at rest
+    REQUIRE(w.stage.rows.empty());
+
+    Arcane::MeshEntry& entry = w.meshes[grown];
+    entry.data   = Arcane::BuildCube(4.0f);                        // [-2, 2]^3
+    entry.bounds = Arcane::ComputeMeshBounds(entry.data);
+    const std::uint32_t per = static_cast<std::uint32_t>(entry.data.indices.size()) / 2u;
+    entry.data.sections = { Arcane::MeshSection{ std::string(), 0u, per, 0u },
+                            Arcane::MeshSection{ std::string(), per, per, 1u } };
+    ++w.meshGen;
+    w.Frame();
+
+    REQUIRE(w.stage.rows.size() == 2);
+    CHECK_FALSE(w.stage.fullRebuild);
+    for (std::uint32_t sIdx = 0; sIdx < 2; ++sIdx)
+    {
+        const Arcane::GpuInstance* v = w.Staged(w.RowOf(e, sIdx));
+        REQUIRE(v);
+        CHECK(v->boundsMin == glm::vec4(-1, 0, 1, 0));
+        CHECK(v->boundsMax == glm::vec4(3, 4, 5, 0));
+        CHECK(v->model[3] == glm::vec4(1, 2, 3, 1));
+        CHECK(v->prevModel == v->model);
+    }
+    CHECK(w.Staged(w.RowOf(other)) == nullptr);
+    w.Frame();                                                     // no re-dirty: it was not a move
+    CHECK(w.stage.rows.empty());
 }
 
 TEST_CASE("GpuSceneSync: materialSlot copies the resolved bindless slot; override repaints every section", "[gpuscene][material]")

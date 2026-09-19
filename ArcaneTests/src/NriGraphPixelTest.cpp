@@ -2016,6 +2016,98 @@ TEST_CASE("gpuscene: staged rows land byte-exact in the instance buffer and surv
     CheckGpuSceneRoundTrip(Arcane::GraphicsBackend::Vulkan);
 }
 
+// An Apply REFUSAL forgets the synced generation (F3 plan 1 review fix,
+// Important #2). Before the fix a refused stage in steady state was lost for
+// good: the host's next Sync saw synced == generation, and the dropped rows
+// (a spawn, a material change -- only moved rows get the re-dirty) were never
+// re-staged. The cheap forcing is a stage whose `rows` and `values` disagree,
+// which CopyRows must refuse before it touches the ring (a plain ARC_ERROR:
+// the 0/0 latch is not fed, and the mesh node draws nothing -- the frame
+// carries no batches). The row that DID land in frame 1 must survive
+// untouched, and the next frame's full-rebuild stage restores the stamp.
+namespace
+{
+    void CheckGpuSceneRefusalForgetsTheSyncedGeneration(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+        PixelVehicle v = MakeVehicle(backend);
+
+        Arcane::GpuScene* device = v.ctx->Scene();
+        REQUIRE(device != nullptr);
+        REQUIRE(device->EnableDebugReadback());
+        REQUIRE(device->SyncedGeneration() == 0u);
+
+        constexpr std::uint32_t kRowA = 0u;
+        const Arcane::GpuInstance rowA  = MakeInstanceRow(1.0f);
+        const Arcane::GpuInstance rowA2 = MakeInstanceRow(7.0f);
+
+        auto renderStage = [&](std::vector<std::uint32_t> rows, std::vector<Arcane::GpuInstance> values,
+                               bool fullRebuild, std::uint64_t generation)
+        {
+            Arcane::GpuSceneFrame frame;
+            frame.stage.rows        = std::move(rows);
+            frame.stage.values      = std::move(values);
+            frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows;
+            frame.stage.fullRebuild = fullRebuild;
+            frame.stage.generation  = generation;
+            frame.rowCount          = Arcane::GpuScene::kInitialRows;   // no batches: nothing draws
+            Arcane::MeshSceneDesc scene;
+            scene.scene = &frame;
+            FillCamera(scene);
+            REQUIRE_FALSE(scene.Empty());   // the stage alone keeps the sync node in the graph
+            Arcane::NriGraphContext::FrameDesc fd;
+            fd.mesh = &scene;
+            RenderOne(*v.ctx, fd);
+        };
+
+        // Frame 1: a full rebuild lands and is acknowledged.
+        renderStage({ kRowA }, { rowA }, /*fullRebuild*/ true, 42u);
+        CHECK(device->SyncedGeneration() == 42u);
+
+        // Frame 2: steady state, and the stage is malformed -- Apply refuses
+        // and must FORGET the acknowledgement, or the next Sync (synced ==
+        // generation) would stage nothing and the refused rows would be lost.
+        renderStage({ kRowA }, { rowA2, rowA2 }, /*fullRebuild*/ false, 42u);
+        CHECK(device->SyncedGeneration() == 0u);
+        CHECK(Arcane::GpuSceneSyncedGeneration(device) == 0u);
+        {
+            std::vector<std::uint8_t> bytes;
+            REQUIRE(device->ReadDebugInstances(bytes));
+            CheckRowBytes(bytes, kRowA, rowA);   // the refusal wrote nothing
+        }
+
+        // Frame 3: what the host's GpuSceneSync does on 0 != generation -- a
+        // full rebuild of every live row -- restores the stamp.
+        renderStage({ kRowA }, { rowA2 }, /*fullRebuild*/ true, 42u);
+        CHECK(device->SyncedGeneration() == 42u);
+        {
+            std::vector<std::uint8_t> bytes;
+            REQUIRE(device->ReadDebugInstances(bytes));
+            CheckRowBytes(bytes, kRowA, rowA2);
+        }
+
+        // Frame 4: no mesh scene, so the vehicle tears down with nothing pending.
+        {
+            Arcane::NriGraphContext::FrameDesc fd;
+            RenderOne(*v.ctx, fd);
+        }
+        CHECK(Arcane::RenderErrorCount() == before);   // a refusal is an ARC_ERROR, not a latch error
+    }
+}
+
+TEST_CASE("gpuscene: an Apply refusal resets the synced generation to 0 and the next full rebuild restores it (d3d12)",
+          "[gpu][gpuscene][nri][d3d12]")
+{
+    CheckGpuSceneRefusalForgetsTheSyncedGeneration(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("gpuscene: an Apply refusal resets the synced generation to 0 and the next full rebuild restores it (vulkan)",
+          "[gpu][gpuscene][nri][vulkan]")
+{
+    CheckGpuSceneRefusalForgetsTheSyncedGeneration(Arcane::GraphicsBackend::Vulkan);
+}
+
 // ---------------------------------------------------------------------------
 // 11. THE INDIRECT PATH DRAWS, AND DRAWS ONLY THE VISIBLE ROWS (F3 plan 1 T7):
 //     a registry-backed cube (Transform + MeshRenderer -> TransformPropagation

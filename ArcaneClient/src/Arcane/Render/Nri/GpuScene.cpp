@@ -306,8 +306,23 @@ namespace Arcane
     bool GpuScene::Apply(const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc, std::uint32_t frameSlot,
                          RenderGraphNodeContext& ctx)
     {
-        if (frameSlot >= kSwapchainFramesInFlight || !m_instances)
+        // EVERY refusal forgets the synced generation (F3 plan 1 review fix,
+        // Important #2): the next GpuSceneSync starts by clearing this frame's
+        // stage (out.Clear()), so rows staged ONCE -- a spawn, a material
+        // change; only moved rows get the re-dirty -- are gone unless that
+        // Sync rebuilds, and it rebuilds only when what the device
+        // acknowledged differs from the mirror's generation. 0 never matches
+        // (GpuSceneMirror::NextGeneration starts at 1), so the next
+        // GpuSceneSync stages every live row with prev == model through the
+        // machinery that already exists. The early refusals below count too: a
+        // refusal anywhere means the stage did not land.
+        auto refuse = [&]() noexcept
+        {
+            m_syncedGeneration = 0;
             return false;
+        };
+        if (frameSlot >= kSwapchainFramesInFlight || !m_instances)
+            return refuse();
         const nri::CoreInterface& core = ctx.core;
 
         // 1. The pending grow-copy: the live rows, old -> new, on this command
@@ -351,14 +366,14 @@ namespace Arcane
 
         // 2. The staged rows (dirty this frame), then the scratch rows for this slot.
         if (frame && !CopyRows(ctx, frame->stage.rows, frame->stage.values, 0, /*contiguous*/ false))
-            return false;
+            return refuse();
         if (!adHoc.empty())
         {
             std::span<const GpuInstance> rows = adHoc;
             if (rows.size() > kScratchRows)
                 rows = rows.subspan(0, kScratchRows);   // Reserve warned, once
             if (!CopyRows(ctx, {}, rows, ScratchFirstRow(frameSlot), /*contiguous*/ true))
-                return false;
+                return refuse();
         }
 
         // 3. This slot's indirect args and visible indices, whole arrays.
@@ -370,7 +385,7 @@ namespace Arcane
                           "({} / {}) -- Reserve did not run for this frame",
                           frameSlot, m_argCapacity[frameSlot], m_visibleCapacity[frameSlot],
                           frame->args.size(), frame->visibleIndices.size());
-                return false;
+                return refuse();
             }
             const std::uint64_t argBytes = frame->args.size() * sizeof(DrawIndexedArgs);
             const std::uint64_t visBytes = frame->visibleIndices.size() * sizeof(std::uint32_t);
@@ -379,7 +394,7 @@ namespace Arcane
             if (!a.buffer || !a.cpu || (visBytes && (!v.buffer || !v.cpu)))
             {
                 ARC_ERROR("[nri-graph] GpuScene: the upload ring refused the args/visible arrays ({} + {} bytes)", argBytes, visBytes);
-                return false;
+                return refuse();
             }
             std::memcpy(a.cpu, frame->args.data(), argBytes);
             core.CmdCopyBuffer(ctx.cmd, *m_args[frameSlot], 0, *a.buffer, a.offset, argBytes);

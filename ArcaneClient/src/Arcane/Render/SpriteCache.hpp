@@ -83,6 +83,17 @@ namespace Arcane
         // between mutating calls.
         const std::unordered_map<Guid, SpriteEntry>& Table() const;
 
+        // SpriteTable::generation's storage (SceneResources.hpp): a counter
+        // this cache bumps on EVERY mutation of Table() -- both emplaces in
+        // Request (the resolved entry and the placeholder), Invalidate's erase,
+        // Clear -- so BoundsSystem can tell that a resolved record's
+        // sizeMeters/pivot changed under an entity that itself did not.
+        // Published beside the map by SceneRenderResolver through
+        // ClientRuntime::SetSpriteTable; the pointer is as stable as this
+        // object. Starts at 1 so a consumer whose stored value is 0 ("never
+        // read") sees the first publish as a change.
+        [[nodiscard]] const std::uint64_t* Generation() const noexcept;
+
     private:
         struct Impl;
         Impl* m_impl = nullptr;

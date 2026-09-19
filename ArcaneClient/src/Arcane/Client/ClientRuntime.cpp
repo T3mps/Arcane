@@ -102,14 +102,16 @@ namespace Arcane
         m_core.Registry().SetResource<SpriteMaterialTable>(SpriteMaterialTable{materials});
     }
 
-    void ClientRuntime::SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites)
+    void ClientRuntime::SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites,
+                                       const std::uint64_t* generation)
     {
-        m_core.Registry().SetResource<SpriteTable>(SpriteTable{sprites});
+        m_core.Registry().SetResource<SpriteTable>(SpriteTable{sprites, generation});
     }
 
-    void ClientRuntime::SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes)
+    void ClientRuntime::SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes,
+                                     const std::uint64_t* generation)
     {
-        m_core.Registry().SetResource<MeshTable>(MeshTable{meshes});
+        m_core.Registry().SetResource<MeshTable>(MeshTable{meshes, generation});
     }
 
     void ClientRuntime::SetMeshMaterials(const std::unordered_map<Guid, ResolvedMeshMaterial>* materials)

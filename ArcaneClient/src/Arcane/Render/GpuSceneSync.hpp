@@ -149,7 +149,12 @@ namespace Arcane
         }
 
         // 2. Dirty: moved (exact -- WorldTransform is change-tracked), a component
-        //    write on MeshRenderer, the re-dirty list, or every live row on a rebuild.
+        //    write on MeshRenderer, a re-boxed row (WorldBounds is change-tracked:
+        //    BoundsSystem rewrote it because the MESH ASSET's bounds changed under
+        //    an unmoved entity -- MeshTable::generation -- and the row's
+        //    boundsMin/Max must follow; it ran earlier this host frame, so its
+        //    write is strictly newer than the previous Sync's lastSyncTick), the
+        //    re-dirty list, or every live row on a rebuild.
         if (full)
         {
             for (std::uint32_t row = 0; row < m.rows.size(); ++row)
@@ -166,6 +171,8 @@ namespace Arcane
                 .ForEach([&](Astra::Entity e, const WorldTransform&) { markEntity(e); });
             reg.CreateView<const MeshRenderer, Astra::Changed<MeshRenderer>>().Since(m.lastSyncTick)
                 .ForEach([&](Astra::Entity e, const MeshRenderer&) { markEntity(e); });
+            reg.CreateView<const WorldBounds, Astra::Changed<WorldBounds>>().Since(m.lastSyncTick)
+                .ForEach([&](Astra::Entity e, const WorldBounds&) { markEntity(e); });
             for (std::uint32_t row : m.dirtyLastFrame)
                 if (row < m.rows.size() && m.rows[row].live) markDirty(row);
         }

@@ -16,6 +16,9 @@ namespace Arcane
     {
         Services services;
         std::unordered_map<Guid, SpriteEntry> table;
+        // SpriteTable::generation's storage (see Generation()): ++ at every
+        // site below that inserts into, erases from, or clears `table`.
+        std::uint64_t generation = 1;
     };
 
     SpriteCache::SpriteCache(Services services)
@@ -29,6 +32,11 @@ namespace Arcane
     const std::unordered_map<Guid, SpriteEntry>& SpriteCache::Table() const
     {
         return m_impl->table;
+    }
+
+    const std::uint64_t* SpriteCache::Generation() const noexcept
+    {
+        return &m_impl->generation;
     }
 
     void SpriteCache::Request(const Guid& id)
@@ -51,6 +59,7 @@ namespace Arcane
         {
             ARC_WARN("SpriteCache: sprite {} unavailable -- {}", id.ToString(), why);
             m_impl->table.emplace(id, SpriteEntry{});
+            ++m_impl->generation;   // a publish (the placeholder): SpriteTable::generation
         };
 
         if (!m_impl->services.resolveAsset)
@@ -123,6 +132,7 @@ namespace Arcane
         entry.sizeMeters = g.sizeMeters;
 
         m_impl->table.emplace(id, entry);
+        ++m_impl->generation;   // a publish: BoundsSystem re-walks (SpriteTable::generation)
     }
 
     // NO EVICT-BEFORE-RELEASE HOOK IS OWED: this cache holds no GPU object,
@@ -131,10 +141,12 @@ namespace Arcane
     void SpriteCache::Invalidate(const Guid& id)
     {
         m_impl->table.erase(id);
+        ++m_impl->generation;   // the entry is gone; the re-resolve bumps again
     }
 
     void SpriteCache::Clear()
     {
         m_impl->table.clear();
+        ++m_impl->generation;   // every entry is gone (SpriteTable::generation)
     }
 }

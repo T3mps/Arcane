@@ -140,6 +140,14 @@ namespace Arcane
     {
         const std::unordered_map<Guid, SpriteEntry>* sprites = nullptr;
 
+        // A counter OWNED by the cache that owns the map (SpriteCache), bumped
+        // by the owning cache on any publish -- an entry emplaced or replaced
+        // by a resolve, Invalidate, Clear; BoundsSystem re-walks every drawable
+        // when it changes (spec s2.3): a sprite asset whose sizeMeters/pivot
+        // changed touches no component, so no Changed<> view would otherwise
+        // ever see it. Null = never changes (a fixture with a static map).
+        const std::uint64_t* generation = nullptr;
+
         const SpriteEntry* Resolve(const Guid& g) const
         {
             if (!sprites || !g.IsValid()) return nullptr;
@@ -239,6 +247,16 @@ namespace Arcane
     struct MeshTable
     {
         const std::unordered_map<Guid, MeshEntry>* meshes = nullptr;
+
+        // A counter OWNED by the cache that owns the map (MeshCache), bumped by
+        // the owning cache on any publish -- an entry emplaced on a Ready
+        // resolve, Invalidate, Clear; BoundsSystem re-walks every drawable when
+        // it changes (spec s2.3): a primitive parameter edit or a reimport
+        // (MeshDocument::Save -> MeshCache::Invalidate -> re-resolve) changes
+        // `bounds` without touching any component, so no Changed<> view would
+        // otherwise ever see it. Null = never changes (a fixture with a static
+        // map).
+        const std::uint64_t* generation = nullptr;
 
         const MeshEntry* Resolve(const Guid& g) const
         {

@@ -27,6 +27,11 @@ namespace Arcane
         // hot path.
         std::unordered_set<Guid> requested;
         bool warnedNeverRequested = false;   // one-shot, the house latch idiom
+        // MeshTable::generation's storage (see Generation()): ++ at every site
+        // below that inserts into, erases from, or clears `table`. `failed` and
+        // `requested` are NOT table mutations -- Resolve() answers null for a
+        // guid both before and after it enters `failed`, so no box changes.
+        std::uint64_t generation = 1;
     };
 
     MeshCache::MeshCache(Services services)
@@ -40,6 +45,11 @@ namespace Arcane
     const std::unordered_map<Guid, MeshEntry>& MeshCache::Table() const
     {
         return m_impl->table;
+    }
+
+    const std::uint64_t* MeshCache::Generation() const noexcept
+    {
+        return &m_impl->generation;
     }
 
     // PRECONDITION: `id` has been Request()ed -- by the per-frame sweep, or by a
@@ -142,6 +152,7 @@ namespace Arcane
             entry.capsuleLengthRatio = data->capsuleLengthRatio;
             entry.slots              = std::move(data->slots);
             im.table.emplace(id, std::move(entry));
+            ++im.generation;   // a publish: BoundsSystem re-walks (MeshTable::generation)
             return;
         }
         case MeshResolveState::PendingCook:
@@ -179,12 +190,14 @@ namespace Arcane
         // broken forever.
         m_impl->table.erase(id);
         m_impl->failed.erase(id);
+        ++m_impl->generation;   // the entry (and its bounds) is gone; the re-resolve bumps again
     }
 
     void MeshCache::Clear()
     {
         m_impl->table.clear();
         m_impl->failed.clear();
+        ++m_impl->generation;   // every entry is gone (MeshTable::generation)
         // A Guid resolves through the CURRENT project's registry, so "was requested"
         // is a claim about the outgoing project and goes with the rest of the state.
         m_impl->requested.clear();

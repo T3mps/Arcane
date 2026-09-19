@@ -119,8 +119,13 @@ scheduler with `Astra::After<TransformPropagationSystem>`** (it reads
 two siblings). Dirty-driven, the `TransformSystems` idiom: the rows visited are the union of `Changed<WorldTransform>`,
 `Changed<MeshRenderer>`, `Changed<SpriteRenderer>` since its last run, plus
 every entity that has no `WorldBounds` yet, plus the removal reconciliation
-(a `WorldBounds` whose entity lost its renderer is removed). A static scene
-does no work.
+(a `WorldBounds` whose entity lost its renderer is removed), plus — the
+asset-side producer — every mesh drawable when `MeshTable::generation` moved and
+every sprite drawable when `SpriteTable::generation` moved (a counter the owning
+cache bumps on any publish: a primitive parameter edit, a reimport, a sprite
+resize re-resolves the entry with new bounds while nothing on the entity
+changes; an unchanged box is not rewritten, so `Changed<WorldBounds>` stays
+exact). A static scene does no work.
 
 Producers, in priority order when both components are present (the pick pass's
 mesh-beats-sprite rule):

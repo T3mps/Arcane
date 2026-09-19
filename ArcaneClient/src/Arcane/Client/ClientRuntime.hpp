@@ -111,8 +111,12 @@ namespace Arcane
         // resolved texture/UVs/size/pivot record, owned by the host) into the
         // registry's SpriteTable resource. Same module rule and null semantics
         // as SetSpriteMaterials above: null clears the table, and every sprite
-        // falls back to the untextured 1x1 m quad.
-        void SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites);
+        // falls back to the untextured 1x1 m quad. `generation` is the owning
+        // cache's publish counter (SpriteCache::Generation), carried on the
+        // resource as SpriteTable::generation so BoundsSystem re-walks when an
+        // ASSET changed under an unchanged entity; null = never changes.
+        void SetSpriteTable(const std::unordered_map<Guid, SpriteEntry>* sprites,
+                            const std::uint64_t* generation = nullptr);
 
         // F2a (Task 6) siblings of the two methods above, ONE dimension up:
         // .arcmesh Guid -> owned CPU geometry + bounds (MeshTable), and
@@ -121,8 +125,10 @@ namespace Arcane
         // comment) and null semantics: null clears the table, and every
         // MeshRenderer draws nothing (there is no untextured-quad-shaped
         // fallback for a mesh -- see MeshTable's own comment,
-        // Scene/SceneResources.hpp).
-        void SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes);
+        // Scene/SceneResources.hpp). `generation` as SetSpriteTable's:
+        // MeshCache::Generation, carried as MeshTable::generation.
+        void SetMeshTable(const std::unordered_map<Guid, MeshEntry>* meshes,
+                          const std::uint64_t* generation = nullptr);
         void SetMeshMaterials(const std::unordered_map<Guid, ResolvedMeshMaterial>* materials);
 
         // --- headless aliases (plan 1 ruling P5) ---------------------------------

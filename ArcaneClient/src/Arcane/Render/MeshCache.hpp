@@ -117,6 +117,16 @@ namespace Arcane
         // them).
         const std::unordered_map<Guid, MeshEntry>& Table() const;
 
+        // MeshTable::generation's storage (SceneResources.hpp): a counter this
+        // cache bumps on EVERY mutation of Table() -- the Ready emplace in
+        // Request, Invalidate's erase, Clear -- so BoundsSystem can tell that a
+        // resolved record changed under an entity that itself did not (a
+        // primitive parameter edit, a reimport). Published beside the map by
+        // SceneRenderResolver through ClientRuntime::SetMeshTable; the pointer
+        // is as stable as this object. Starts at 1 so a consumer whose stored
+        // value is 0 ("never read") sees the first publish as a change.
+        [[nodiscard]] const std::uint64_t* Generation() const noexcept;
+
         // F2c Plan 2 Task 3: the GPU cache's supply needs Pending vs Failed
         // without re-resolving. Ready = in Table(); Failed = known-failed set;
         // PendingCook = neither (never requested, or Imported still cooking).

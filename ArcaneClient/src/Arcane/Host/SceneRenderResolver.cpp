@@ -595,10 +595,13 @@ namespace Arcane
         // stable, but re-setting keeps the resources honest across project
         // switches and registry swaps (play-in-editor restores a snapshot into a
         // fresh registry, which drops resources with it).
-        im.services.runtime->SetSpriteTable(&im.sprites->Table());
+        // The generation pointers ride along (F3 review fix): BoundsSystem
+        // re-walks every drawable when a cache re-published an entry under an
+        // unchanged entity (a primitive edit, a reimport, a sprite resize).
+        im.services.runtime->SetSpriteTable(&im.sprites->Table(), im.sprites->Generation());
         im.services.runtime->SetSpriteMaterials(&im.materials->Table());
         // F2a (Task 6) siblings -- same every-frame reasoning.
-        im.services.runtime->SetMeshTable(&im.meshes->Table());
+        im.services.runtime->SetMeshTable(&im.meshes->Table(), im.meshes->Generation());
         im.services.runtime->SetMeshMaterials(&im.meshMaterials->Table());
     }
 }

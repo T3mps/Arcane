@@ -81,7 +81,11 @@ namespace Arcane
         // RECORD time, from GpuSceneSyncNode's exec fn. Issues the pending
         // grow-copy (if Reserve left one), copies the staged rows and the
         // scratch rows through the ring, copies this slot's args + visible
-        // indices, and stamps the synced generation. False (logged) on refusal.
+        // indices, and stamps the synced generation. False (logged) on
+        // refusal -- and EVERY refusal resets SyncedGeneration() to 0, so the
+        // host's next GpuSceneSync sees a generation it never acknowledged
+        // and stages a full rebuild: the dropped stage's once-staged rows (a
+        // spawn, a material change) have no re-dirty to rescue them.
         bool Apply(const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc, std::uint32_t frameSlot,
                    RenderGraphNodeContext& ctx);
 
@@ -98,7 +102,7 @@ namespace Arcane
         [[nodiscard]] std::uint32_t    RowCapacity() const noexcept { return m_rowCapacity; }
         [[nodiscard]] std::uint32_t    ScratchFirstRow(std::uint32_t slot) const noexcept { return m_rowCapacity + slot * kScratchRows; }
         [[nodiscard]] std::uint64_t    InstanceBufferGeneration() const noexcept { return m_instanceGeneration; }   // bumps on every grow
-        [[nodiscard]] std::uint64_t    SyncedGeneration() const noexcept { return m_syncedGeneration; }
+        [[nodiscard]] std::uint64_t    SyncedGeneration() const noexcept { return m_syncedGeneration; }   // the mirror generation the last SUCCESSFUL Apply stamped; 0 after a refusal (or never)
         void SetSyncedGeneration(std::uint64_t g) noexcept { m_syncedGeneration = g; }
         [[nodiscard]] std::uint64_t    InstanceBytes() const noexcept;                     // the whole buffer incl. scratch
         [[nodiscard]] std::uint64_t    ArgBytes(std::uint32_t slot) const noexcept;        // the slot's args buffer, whole

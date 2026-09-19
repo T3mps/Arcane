@@ -909,7 +909,16 @@ namespace Arcane
     //     new in Core; Scene/BoundsSystem.hpp is NEW (the engine's third
     //     fixedUpdate system). A module built against v35 registers one
     //     component fewer -- refuse. ReferenceProject.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 36;
+    // v37 (2026-09-19, F3 plan 1 review fix): Scene/SceneResources.hpp's
+    //     MeshTable and SpriteTable -- registry resources read by
+    //     plugin-compiled header-only code -- each gain a trailing
+    //     `const std::uint64_t* generation` (the owning cache's publish
+    //     counter; BoundsSystem re-walks every drawable when it moves), and
+    //     ClientRuntime::SetMeshTable/SetSpriteTable gain the matching
+    //     defaulted parameter. A module built against v36 reads an 8-byte
+    //     resource the host publishes as 16 -- refuse. ReferenceProject.arcproj
+    //     restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 37;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
