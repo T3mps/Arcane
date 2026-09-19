@@ -2684,6 +2684,7 @@ namespace Arcane::Editor
             m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph))
         {
             m_assetGraphUi.graphFocus = panelActions.focusInGraph;
+            m_assetGraphUi.graphKindFilter.reset();
             m_assetModel.Select(panelActions.focusInGraph);
             Arcane::Editor::FocusDockTab("Asset Graph");
         }

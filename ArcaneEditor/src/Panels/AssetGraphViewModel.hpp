@@ -52,7 +52,9 @@
 #include <Arcane/Guid.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -106,9 +108,27 @@ namespace Arcane::Editor
         const std::unordered_map<Arcane::Guid, AssetPanelEntry>* entries = nullptr;
         const AssetReferenceIndex* index = nullptr;
         Arcane::Guid focus;                // nil = "everything" (ruling 6)
+        // When focus is nil, an optional kind keeps "everything" from dumping
+        // the whole project: `@source` in the focus box sets Source, and a
+        // plain everything omits Source (include graphs are a focused view).
+        std::optional<AssetKind> kindFilter;
         int depthLimit = 2;                // per direction, from focus
         int breadthCap = 20;               // per node per direction
     };
+
+    // Power-user focus box. `everything` / empty -> all content (no Source).
+    // `@source` / `@mesh` / ... -> everything of that kind. Anything else is
+    // a case-insensitive substring over fileName/name. A leading `focus:` is
+    // stripped so the preview string pastes back as a query.
+    struct GraphFocusQuery
+    {
+        enum class Mode : std::uint8_t { Everything, Kind, Text };
+        Mode      mode = Mode::Everything;
+        AssetKind kind = AssetKind::Other;
+        std::string text;
+    };
+    [[nodiscard]] GraphFocusQuery ParseGraphFocusQuery(std::string_view raw);
+    [[nodiscard]] bool MatchesGraphFocusQuery(const GraphFocusQuery& q, const AssetPanelEntry& e);
 
     struct AssetGraphViewModel
     {

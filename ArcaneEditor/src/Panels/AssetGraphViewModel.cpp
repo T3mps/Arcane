@@ -1,11 +1,14 @@
 #include <Panels/AssetGraphViewModel.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -36,6 +39,111 @@ namespace Arcane::Editor
         {
             auto it = entries.find(g);
             return it != entries.end() ? it->second.name : ShortGuid(g);
+        }
+
+        std::string LowerCopy(std::string_view s)
+        {
+            std::string out(s);
+            for (char& c : out)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return out;
+        }
+
+        std::string_view Trim(std::string_view s)
+        {
+            while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+                s.remove_prefix(1);
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))
+                s.remove_suffix(1);
+            return s;
+        }
+
+        std::optional<AssetKind> KindFromFocusToken(std::string_view tok)
+        {
+            const std::string t = LowerCopy(tok);
+            if (t == "source" || t == "src" || t == "cpp" || t == "hpp")
+                return AssetKind::Source;
+            if (t == "mesh")
+                return AssetKind::Mesh;
+            if (t == "scene")
+                return AssetKind::Scene;
+            if (t == "texture" || t == "tex")
+                return AssetKind::Texture;
+            if (t == "material" || t == "mat")
+                return AssetKind::Material;
+            if (t == "sprite")
+                return AssetKind::Sprite;
+            if (t == "model" || t == "glb")
+                return AssetKind::Model;
+            return std::nullopt;
+        }
+
+        // Sugiyama barycentric crossing reduction. Layers are already the
+        // longest-path columns (sources left). Name-sort alone crosses wires
+        // whenever two edges invert relative to alphabet order; a few
+        // left-to-right / right-to-left sweeps pull connected nodes toward
+        // each other's rows. Nodes with no neighbor in the compared layer
+        // keep their current index so they do not all pile at the bottom.
+        void ReduceCrossings(std::map<int, std::vector<Arcane::Guid>>& byLayer,
+                             const std::vector<GraphEdge>& edges)
+        {
+            std::unordered_map<Arcane::Guid, std::vector<Arcane::Guid>> fwd, rev;
+            for (const GraphEdge& e : edges)
+            {
+                fwd[e.from].push_back(e.to);
+                rev[e.to].push_back(e.from);
+            }
+
+            std::vector<int> layers;
+            layers.reserve(byLayer.size());
+            for (const auto& [layer, _] : byLayer)
+                layers.push_back(layer);
+
+            auto orderAgainst = [&](int layer, int otherLayer, bool useFwd)
+            {
+                auto it = byLayer.find(layer);
+                auto jt = byLayer.find(otherLayer);
+                if (it == byLayer.end() || jt == byLayer.end())
+                    return;
+                std::unordered_map<Arcane::Guid, int> pos;
+                pos.reserve(jt->second.size());
+                for (int i = 0; i < static_cast<int>(jt->second.size()); ++i)
+                    pos[jt->second[static_cast<std::size_t>(i)]] = i;
+
+                const auto& nbrs = useFwd ? fwd : rev;
+                std::vector<std::pair<float, Arcane::Guid>> scored;
+                scored.reserve(it->second.size());
+                for (int i = 0; i < static_cast<int>(it->second.size()); ++i)
+                {
+                    const Arcane::Guid& g = it->second[static_cast<std::size_t>(i)];
+                    float sum = 0.0f;
+                    int n = 0;
+                    if (auto nit = nbrs.find(g); nit != nbrs.end())
+                        for (const Arcane::Guid& nb : nit->second)
+                            if (auto pit = pos.find(nb); pit != pos.end())
+                            {
+                                sum += static_cast<float>(pit->second);
+                                ++n;
+                            }
+                    const float key = n > 0 ? sum / static_cast<float>(n)
+                                            : static_cast<float>(i);
+                    scored.push_back({ key, g });
+                }
+                std::stable_sort(scored.begin(), scored.end(),
+                                 [](const auto& a, const auto& b) { return a.first < b.first; });
+                for (std::size_t i = 0; i < scored.size(); ++i)
+                    it->second[i] = scored[i].second;
+            };
+
+            for (int sweep = 0; sweep < 4; ++sweep)
+            {
+                // Higher layer (referencers) looks at targets via outbound.
+                for (std::size_t i = 0; i + 1 < layers.size(); ++i)
+                    orderAgainst(layers[i + 1], layers[i], /*useFwd=*/true);
+                // Lower layer (targets) looks at referencers via inbound.
+                for (std::size_t i = layers.size(); i > 1; --i)
+                    orderAgainst(layers[i - 2], layers[i - 1], /*useFwd=*/false);
+            }
         }
 
         // The AssetRefKind of the edge `from` -> `to`, read off `from`'s own
@@ -189,6 +297,42 @@ namespace Arcane::Editor
         }
     }
 
+    GraphFocusQuery ParseGraphFocusQuery(std::string_view raw)
+    {
+        GraphFocusQuery q;
+        std::string_view s = Trim(raw);
+        const std::string lower = LowerCopy(s);
+        if (lower.starts_with("focus:"))
+        {
+            s = Trim(s.substr(6));
+        }
+        if (s.empty() || LowerCopy(s) == "everything" || s == "*")
+            return q;
+        if (s.front() == '@')
+        {
+            if (auto k = KindFromFocusToken(Trim(s.substr(1))))
+            {
+                q.mode = GraphFocusQuery::Mode::Kind;
+                q.kind = *k;
+                return q;
+            }
+        }
+        q.mode = GraphFocusQuery::Mode::Text;
+        q.text = LowerCopy(s);
+        return q;
+    }
+
+    bool MatchesGraphFocusQuery(const GraphFocusQuery& q, const AssetPanelEntry& e)
+    {
+        if (q.mode == GraphFocusQuery::Mode::Everything)
+            return true;
+        if (q.mode == GraphFocusQuery::Mode::Kind)
+            return e.kind == q.kind;
+        const std::string name = LowerCopy(e.name);
+        const std::string file = LowerCopy(e.fileName);
+        return name.find(q.text) != std::string::npos || file.find(q.text) != std::string::npos;
+    }
+
     void AssetGraphViewModel::Clear()
     {
         nodes.clear();
@@ -221,12 +365,14 @@ namespace Arcane::Editor
         // ---- Step 1: scope -- which guids become nodes at all. ----
         //
         // Everything-mode (nil focus, ruling 6: "there is no root to
-        // measure from"): every entry is unconditionally in scope; a
-        // breadth-capped expansion pass still runs (over every entry, then
-        // over whatever it newly discovers) so tombstones are found and
-        // every node's own overflow accounting is computed exactly like
-        // focus-mode's -- the cap just can never evict an entry here, since
-        // entries are roots by construction, not BFS discoveries.
+        // measure from"): every CONTENT entry is in scope. Source files are
+        // omitted unless kindFilter is Source (`@source`) -- an include graph
+        // of every .cpp/.hpp in a game project is a hairball, not a map.
+        // kindFilter on any other kind seeds that kind only; BFS still
+        // discovers their edges (a mesh still shows its materials). A
+        // breadth-capped expansion pass still runs so tombstones and overflow
+        // accounting match focus-mode's -- the cap just can never evict a
+        // seeded entry here.
         //
         // Focus-mode (non-nil): BFS from `focus`, both directions expanded
         // from the SAME frontier each hop, each hop's fan-out already
@@ -240,7 +386,13 @@ namespace Arcane::Editor
             frontier.reserve(entries.size());
             for (const auto& [g, e] : entries)
             {
-                (void)e;
+                if (in.kindFilter)
+                {
+                    if (e.kind != *in.kindFilter)
+                        continue;
+                }
+                else if (e.kind == AssetKind::Source)
+                    continue;
                 scope.insert(g);
                 frontier.push_back(g);
             }
@@ -422,6 +574,7 @@ namespace Arcane::Editor
                          return ka != kb ? ka < kb : a.ToString() < b.ToString();
                      });
         }
+        ReduceCrossings(byLayer, edges);
 
         std::unordered_map<int, int> nextRowInLayer;   // seeded below, then also used as the overflow placement cursor
         for (const auto& [layer, guids] : byLayer)

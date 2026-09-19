@@ -641,3 +641,87 @@ TEST_CASE("AssetGraphViewModel: a Model node wears a distinct accent, not grab-g
     REQUIRE(n != nullptr);
     CHECK(n->kind == AssetKind::Model);
 }
+
+TEST_CASE("ParseGraphFocusQuery: everything, @kind, and substring", "[editor]")
+{
+    auto q = ParseGraphFocusQuery("");
+    CHECK(q.mode == GraphFocusQuery::Mode::Everything);
+    q = ParseGraphFocusQuery("  everything  ");
+    CHECK(q.mode == GraphFocusQuery::Mode::Everything);
+    q = ParseGraphFocusQuery("focus: @source");
+    CHECK(q.mode == GraphFocusQuery::Mode::Kind);
+    CHECK(q.kind == AssetKind::Source);
+    q = ParseGraphFocusQuery("@mesh");
+    CHECK(q.mode == GraphFocusQuery::Mode::Kind);
+    CHECK(q.kind == AssetKind::Mesh);
+    q = ParseGraphFocusQuery("Player");
+    CHECK(q.mode == GraphFocusQuery::Mode::Text);
+    CHECK(q.text == "player");
+
+    AssetPanelEntry src = MakeEntry(GuidN(9, 1), "NetClient", AssetKind::Source);
+    src.fileName = "NetClient.cpp";
+    CHECK(MatchesGraphFocusQuery(ParseGraphFocusQuery("@source"), src));
+    CHECK(MatchesGraphFocusQuery(ParseGraphFocusQuery("net"), src));
+    CHECK_FALSE(MatchesGraphFocusQuery(ParseGraphFocusQuery("@mesh"), src));
+}
+
+TEST_CASE("AssetGraphViewModel everything-mode omits Source unless @source", "[editor]")
+{
+    const auto tex = GuidN(10, 1);
+    const auto src = GuidN(10, 2);
+    std::unordered_map<Arcane::Guid, AssetPanelEntry> entries;
+    entries[tex] = MakeEntry(tex, "albedo", AssetKind::Texture);
+    entries[src] = MakeEntry(src, "Main", AssetKind::Source);
+
+    AssetReferenceIndex index;
+    index.Update(tex, true, Refs({}));
+    index.Update(src, true, Refs({}));
+
+    GraphBuildInput in;
+    in.entries = &entries;
+    in.index = &index;
+
+    AssetGraphViewModel vm;
+    vm.Build(in);
+    CHECK(FindReal(vm.nodes, tex) != nullptr);
+    CHECK(FindReal(vm.nodes, src) == nullptr);
+
+    in.kindFilter = AssetKind::Source;
+    vm.Build(in);
+    CHECK(FindReal(vm.nodes, src) != nullptr);
+    CHECK(FindReal(vm.nodes, tex) == nullptr);
+}
+
+TEST_CASE("AssetGraphViewModel barycentric uncrosses inverted edges", "[editor]")
+{
+    // A->Y and B->X cross under name-sort (A,B / X,Y). After ReduceCrossings
+    // the two columns share an order so the wires do not invert.
+    const auto A = GuidN(11, 1);
+    const auto B = GuidN(11, 2);
+    const auto X = GuidN(11, 3);
+    const auto Y = GuidN(11, 4);
+    std::unordered_map<Arcane::Guid, AssetPanelEntry> entries;
+    entries[A] = MakeEntry(A, "A", AssetKind::Scene);
+    entries[B] = MakeEntry(B, "B", AssetKind::Scene);
+    entries[X] = MakeEntry(X, "X", AssetKind::Texture);
+    entries[Y] = MakeEntry(Y, "Y", AssetKind::Texture);
+
+    AssetReferenceIndex index;
+    index.Update(A, true, Refs({ { Y, Arcane::AssetRefKind::References } }));
+    index.Update(B, true, Refs({ { X, Arcane::AssetRefKind::References } }));
+    index.Update(X, true, Refs({}));
+    index.Update(Y, true, Refs({}));
+
+    GraphBuildInput in;
+    in.entries = &entries;
+    in.index = &index;
+
+    AssetGraphViewModel vm;
+    vm.Build(in);
+    const GraphNode* nA = FindReal(vm.nodes, A);
+    const GraphNode* nB = FindReal(vm.nodes, B);
+    const GraphNode* nX = FindReal(vm.nodes, X);
+    const GraphNode* nY = FindReal(vm.nodes, Y);
+    REQUIRE(nA); REQUIRE(nB); REQUIRE(nX); REQUIRE(nY);
+    CHECK((nA->row < nB->row) == (nY->row < nX->row));
+}

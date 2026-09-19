@@ -99,7 +99,7 @@ namespace Arcane::Editor
         // the BOARD's own value, read off `OptionD.dc.html`'s focus well
         // (`width: 230px`) rather than guessed -- longer names ellipsize
         // inside the combo rather than widening it.
-        constexpr float kGraphFocusComboWidth = 230.0f;
+        constexpr float kGraphFocusComboWidth = 280.0f;
 
         // The "no scope root" label -- spelled ONCE, because the combo's
         // preview, the combo's own first entry and the bottom bar's "focus:"
@@ -1078,16 +1078,19 @@ namespace Arcane::Editor
         // is not acceptable (it is a whole BFS + layering pass).
         if (!state.graphBuilt ||
             state.graphBuiltStamp != model.entriesStamp ||
-            state.graphBuiltFocus != state.graphFocus)
+            state.graphBuiltFocus != state.graphFocus ||
+            state.graphBuiltKindFilter != state.graphKindFilter)
         {
             GraphBuildInput in;
-            in.entries = &model.Entries();
-            in.index   = &model.RefIndex();
-            in.focus   = state.graphFocus;
+            in.entries    = &model.Entries();
+            in.index      = &model.RefIndex();
+            in.focus      = state.graphFocus;
+            in.kindFilter = state.graphKindFilter;
             state.graph.Build(in);
-            state.graphBuilt      = true;
-            state.graphBuiltStamp = model.entriesStamp;
-            state.graphBuiltFocus = state.graphFocus;
+            state.graphBuilt           = true;
+            state.graphBuiltStamp      = model.entriesStamp;
+            state.graphBuiltFocus      = state.graphFocus;
+            state.graphBuiltKindFilter = state.graphKindFilter;
             state.graphLayoutDirty = true;
         }
 
@@ -2216,50 +2219,103 @@ namespace Arcane::Editor
                                 ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
 
             ImGui::SetNextItemWidth(kGraphFocusComboWidth);
-            // "focus: <name>" -- the BOARD's exact preview string
-            // (`OptionD.dc.html`: `<span>focus:</span> main.arcscene`), per
-            // the controller's board-strings-win ruling. The board paints its
-            // "focus:" half in kTextDim and the name in kText; BeginCombo's
-            // preview is a single string in a single colour, so the two-tone
-            // half of that is not expressible here without replacing the
-            // combo with a hand-drawn widget -- not invented, see the Task 5
-            // fix report.
             char focusPreview[160];
-            std::snprintf(focusPreview, sizeof(focusPreview), "focus: %s",
-                          GraphFocusLabel(model, state.graphFocus));
-            if (ImGui::BeginCombo("##graphfocus", focusPreview))
+            if (!state.graphFocus.IsValid() && state.graphKindFilter)
+                std::snprintf(focusPreview, sizeof(focusPreview), "focus: @%s",
+                              KindLabel(*state.graphKindFilter));
+            else
+                std::snprintf(focusPreview, sizeof(focusPreview), "focus: %s",
+                              GraphFocusLabel(model, state.graphFocus));
+            const bool comboOpen = ImGui::BeginCombo("##graphfocus", focusPreview,
+                                                     ImGuiComboFlags_HeightLargest);
+            if (comboOpen)
             {
-                if (ImGui::Selectable(kGraphFocusEverything, !state.graphFocus.IsValid()))
+                if (ImGui::IsWindowAppearing())
+                {
+                    state.graphFocusFilter[0] = '\0';
+                    ImGui::SetKeyboardFocusHere();
+                }
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputTextWithHint("##graphfocusfilter", "@kind or name...",
+                                         state.graphFocusFilter, sizeof(state.graphFocusFilter));
+                const GraphFocusQuery query = ParseGraphFocusQuery(state.graphFocusFilter);
+
+                auto pickEverything = [&]()
+                {
                     state.graphFocus = Arcane::Guid{};
-                // PushID per row, keyed by the guid: two scenes may share a
-                // stem ("main.arcscene" in two folders), and ImGui would
-                // otherwise give both Selectables the SAME id -- clicking
-                // either would activate the first.
-                for (const AssetPanelEntry* s : ScenesByName(model))
+                    state.graphKindFilter.reset();
+                    ImGui::CloseCurrentPopup();
+                };
+                auto pickKind = [&](AssetKind k)
+                {
+                    state.graphFocus = Arcane::Guid{};
+                    state.graphKindFilter = k;
+                    ImGui::CloseCurrentPopup();
+                };
+                auto pickGuid = [&](const Arcane::Guid& g)
+                {
+                    state.graphFocus = g;
+                    state.graphKindFilter.reset();
+                    ImGui::CloseCurrentPopup();
+                };
+
+                const bool enter = ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+                if (enter && query.mode == GraphFocusQuery::Mode::Kind)
+                    pickKind(query.kind);
+                else if (enter && query.mode == GraphFocusQuery::Mode::Everything
+                         && state.graphFocusFilter[0] != '\0')
+                    pickEverything();
+
+                const bool showEverything = query.mode != GraphFocusQuery::Mode::Kind
+                    && query.mode != GraphFocusQuery::Mode::Text;
+                if (showEverything)
+                {
+                    if (ImGui::Selectable(kGraphFocusEverything, !state.graphFocus.IsValid()
+                                                                && !state.graphKindFilter)
+                        && !enter)
+                        pickEverything();
+                }
+                else if (query.mode == GraphFocusQuery::Mode::Kind)
+                {
+                    char kindLine[64];
+                    std::snprintf(kindLine, sizeof(kindLine), "@%s (all)",
+                                  KindLabel(query.kind));
+                    if (ImGui::Selectable(kindLine, !state.graphFocus.IsValid()
+                                                    && state.graphKindFilter == query.kind)
+                        || enter)
+                        pickKind(query.kind);
+                }
+
+                std::vector<const AssetPanelEntry*> hits;
+                for (const auto& [g, e] : model.Entries())
+                {
+                    (void)g;
+                    if (MatchesGraphFocusQuery(query, e))
+                        hits.push_back(&e);
+                }
+                std::sort(hits.begin(), hits.end(),
+                          [](const AssetPanelEntry* a, const AssetPanelEntry* b)
+                          {
+                              return a->fileName != b->fileName
+                                  ? a->fileName < b->fileName
+                                  : a->mountPath < b->mountPath;
+                          });
+                if (enter && query.mode == GraphFocusQuery::Mode::Text && hits.size() == 1)
+                    pickGuid(hits.front()->guid);
+                else if (enter && query.mode == GraphFocusQuery::Mode::Text && !hits.empty())
+                    pickGuid(hits.front()->guid);
+
+                for (const AssetPanelEntry* s : hits)
                 {
                     ImGui::PushID(s->guid.ToString().c_str());
-                    // fileName for the same reason GraphFocusLabel uses it:
-                    // this list and the Status panel's scene cards are the
-                    // same scenes, and they read identically there.
                     if (ImGui::Selectable(s->fileName.c_str(), s->guid == state.graphFocus))
-                        state.graphFocus = s->guid;
+                        pickGuid(s->guid);
                     ImGui::PopID();
-                }
-                const std::vector<const AssetPanelEntry*> sources = SourcesByName(model);
-                if (!sources.empty())
-                {
-                    ImGui::Separator();
-                    ImGui::TextDisabled("Source");
-                    for (const AssetPanelEntry* s : sources)
-                    {
-                        ImGui::PushID(s->guid.ToString().c_str());
-                        if (ImGui::Selectable(s->fileName.c_str(), s->guid == state.graphFocus))
-                            state.graphFocus = s->guid;
-                        ImGui::PopID();
-                    }
                 }
                 ImGui::EndCombo();
             }
+            else
+                state.graphFocusFilter[0] = '\0';
 
             ImGui::PopStyleVar();
         }
@@ -2274,22 +2330,24 @@ namespace Arcane::Editor
         ImGui::PopStyleVar();
 
         // ---- body band -----------------------------------------------
-        constexpr float kSelectionStripH = 52.0f;
-        if (ImGui::BeginChild("##assetgraphbody",
-                              ImVec2(0.0f, -(kAssetPanelBottomBarHeight + kSelectionStripH))))
+        // Bottom bar reservation is UNCHANGED (24px). The selection strip
+        // overlays the canvas child's bottom so it cannot push the digest
+        // off the window -- a sibling child of 48px plus ItemSpacing was
+        // clipping the bar (and missing the digest-chip click test).
+        constexpr float kSelectionStripH = 48.0f;
+        if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
             if (!project)
                 DrawAssetPanelNoProjectMessage();
             else
                 DrawAssetGraphBody(state, model, project, docs, services, actions);
-        }
-        ImGui::EndChild();
 
-        // Selection strip: the Browser preview's facts (thumb, name, cook)
-        // when this window is the one that holds the selection -- Graph-only
-        // layouts otherwise had only the peek tooltip.
-        {
-            if (ImGui::BeginChild("##graphsel", ImVec2(0.0f, kSelectionStripH), ImGuiChildFlags_Borders))
+            const ImVec2 bodyPos  = ImGui::GetWindowPos();
+            const ImVec2 bodySize = ImGui::GetWindowSize();
+            ImGui::SetCursorScreenPos(ImVec2(bodyPos.x, bodyPos.y + bodySize.y - kSelectionStripH));
+            if (ImGui::BeginChild("##graphsel", ImVec2(bodySize.x, kSelectionStripH),
+                                 ImGuiChildFlags_None,
+                                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
             {
                 const AssetPanelEntry* e = model.selected.IsValid() ? model.Find(model.selected) : nullptr;
                 if (!e)
@@ -2328,8 +2386,9 @@ namespace Arcane::Editor
                         OpenAssetRow(*e, project, docs, actions);
                 }
             }
-            ImGui::EndChild();
+            ImGui::EndChild();   // ##graphsel
         }
+        ImGui::EndChild();       // ##assetgraphbody
 
         // ---- bottom bar band (spec s9.2) -----------------------------
         // LEFT: what the SCOPED projection is showing out of the whole
@@ -2394,6 +2453,9 @@ namespace Arcane::Editor
         state.graphBuilt = false;
         state.graphBuiltStamp = 0;
         state.graphBuiltFocus = Arcane::Guid{};
+        state.graphBuiltKindFilter.reset();
+        state.graphKindFilter.reset();
+        state.graphFocusFilter[0] = '\0';
         state.graphLayoutDirty = false;
         state.graphFocus = Arcane::Guid{};
         // ...and re-arm the boot-scene seed with it (Task 5): the incoming

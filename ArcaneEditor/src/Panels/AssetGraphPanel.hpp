@@ -27,6 +27,7 @@
 #include <Arcane/Guid.hpp>
 
 #include <cstdint>
+#include <optional>
 
 namespace Arcane { class Project; }
 
@@ -59,6 +60,12 @@ namespace Arcane::Editor
         // root to measure from). Seeded from the boot scene by
         // SeedAssetGraphFocus; edited by the toolbar combo.
         Arcane::Guid graphFocus;
+        // Nil-focus kind gate (`@source` etc.). Ignored when graphFocus is a
+        // real guid. Cleared by picking "everything" or a named asset.
+        std::optional<AssetKind> graphKindFilter;
+        // Filter buffer for the typeable focus combo. Lives only while the
+        // popup is open; zeroed when it closes.
+        char graphFocusFilter[128] = {};
         // Task 5: has `graphFocus` been seeded from THIS project's boot scene
         // yet? A separate flag rather than "is graphFocus nil": nil is a
         // LEGITIMATE user choice (the combo's own "everything" entry), and
@@ -145,6 +152,7 @@ namespace Arcane::Editor
         AssetGraphViewModel graph;
         std::uint32_t graphBuiltStamp = 0;
         Arcane::Guid  graphBuiltFocus;
+        std::optional<AssetKind> graphBuiltKindFilter;
         bool          graphBuilt = false;
         // Set whenever `graph` was rebuilt (or the canvas context was just
         // created) and consumed by the next canvas frame's
