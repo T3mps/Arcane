@@ -5,6 +5,7 @@
 // device-free (GpuSceneSync.hpp), and ArcaneTests drives them under ~[gpu].
 // Render/Nri/GpuScene.{hpp,cpp} is the device half.
 #include <Arcane/Guid.hpp>
+#include <Arcane/Material/MaterialBlendMode.hpp>
 #include <Arcane/Math/Aabb.hpp>
 #include <Arcane/Scene/Frustum.hpp>
 
@@ -28,8 +29,12 @@ namespace Arcane
     // GpuScene.cpp static_asserts the two agree.
     inline constexpr std::uint32_t kGpuInvalidMaterialSlot = 0xFFFFFFFFu;
 
-    // Row flags (bit0 reserved for `teleported`, bits 1-2 the blend mode -- plan 2).
+    // Row flags: blend and cull are independent pipeline facts. Keep these in
+    // lockstep with data/shaders/gpu_scene.hlsli without changing the 240-byte row.
     inline constexpr std::uint32_t kGpuInstanceFlagTeleported = 1u << 0;
+    inline constexpr std::uint32_t kGpuInstanceFlagBlendShift = 1u;
+    inline constexpr std::uint32_t kGpuInstanceFlagBlendMask  = 0x3u << kGpuInstanceFlagBlendShift;
+    inline constexpr std::uint32_t kGpuInstanceFlagTwoSided   = 1u << 3;
 
     // ONE ROW PER (entity, mesh section). 240 bytes, std430; data/shaders/
     // gpu_scene.hlsli carries the same field order -- change both or neither.
@@ -44,10 +49,10 @@ namespace Arcane
         glm::vec4     normal1{0.0f, 1.0f, 0.0f, 0.0f};
         glm::vec4     normal2{0.0f, 0.0f, 1.0f, 0.0f};
         glm::vec4     boundsMin{0.0f};                  // world AABB; w unused
-        glm::vec4     boundsMax{0.0f};                  // w = alphaCutoff for masked rows (plan 2)
+        glm::vec4     boundsMax{0.0f};                  // w = resolved alphaCutoff (stored across blend switches)
         glm::vec4     baseColor{1.0f};
         std::uint32_t materialSlot = kGpuInvalidMaterialSlot;
-        std::uint32_t batch        = 0;                 // the batch KEY id (stable per (mesh, section, blend))
+        std::uint32_t batch        = 0;                 // the batch KEY id (stable per (mesh, section, blend, twoSided))
         std::uint32_t flags        = 0;
         std::uint32_t pad          = 0;
     };
@@ -56,8 +61,9 @@ namespace Arcane
     struct GpuBatchKey
     {
         Guid          mesh{};
-        std::uint32_t section = 0;
-        std::uint32_t blend   = 0;   // 0 opaque (plan 1); 1 masked, 2 transparent (plan 2)
+        std::uint32_t     section = 0;
+        MaterialBlendMode blend = MaterialBlendMode::Opaque;
+        bool              twoSided = false;
         [[nodiscard]] bool operator==(const GpuBatchKey&) const noexcept = default;
     };
     struct GpuBatchKeyHash
@@ -66,7 +72,10 @@ namespace Arcane
         {
             std::size_t h = std::hash<std::uint64_t>{}(k.mesh.hi);
             h ^= std::hash<std::uint64_t>{}(k.mesh.lo) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
-            h ^= std::hash<std::uint64_t>{}((std::uint64_t(k.section) << 32) | k.blend) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+            const std::uint64_t state = (std::uint64_t(k.section) << 32)
+                                      | (std::uint64_t(static_cast<std::uint8_t>(k.blend)) << 1)
+                                      | std::uint64_t(k.twoSided);
+            h ^= std::hash<std::uint64_t>{}(state) + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
             return h;
         }
     };
@@ -110,6 +119,12 @@ namespace Arcane
         glm::mat4     lastModel{1.0f};          // the matrix last uploaded -- the prior-pose history (spec s5.3)
         glm::vec4     lastBaseColor{1.0f};      // what the row was last staged with: a resolved material that
         std::uint32_t lastSlot = kGpuInvalidMaterialSlot;   //   changed under it re-stages the row (no generation plumbing)
+        MaterialBlendMode lastBlend = MaterialBlendMode::Opaque;
+        float             lastAlphaCutoff = 0.5f;
+        bool              lastTwoSided = false;
+        glm::vec3         boundsCenter{0.0f};   // current WorldBounds centre for CPU transparent sorting
+        std::int32_t      renderOrder = 0;
+        float             depthSortBias = 0.0f;
         bool          live    = false;
         std::uint64_t touched = 0;              // the sync counter that last saw the entity
     };
@@ -178,8 +193,26 @@ namespace Arcane
         std::uint32_t firstOutput = 0;   // where this batch's visible rows start in visibleIndices
         std::uint32_t capacity    = 0;   // resident rows with this key
         std::uint32_t argIndex    = 0;   // position in `args`
-        std::uint32_t blend       = 0;
+        MaterialBlendMode blend   = MaterialBlendMode::Opaque;
+        bool          twoSided    = false;
         float         nearDepth   = 0.0f;
+    };
+
+    // One visible transparent row, already fully resolved by the CPU frame
+    // builder. MeshNode must draw this record directly; it never needs to
+    // look up a mesh section or material state again.
+    struct TransparentDraw
+    {
+        std::uint32_t     row = 0;
+        Guid              mesh{};
+        std::uint32_t     section = 0;
+        std::uint32_t     indexOffset = 0;
+        std::uint32_t     indexCount = 0;
+        MaterialBlendMode blend = MaterialBlendMode::Transparent;
+        bool              twoSided = false;
+        std::int32_t      renderOrder = 0;
+        float             projectedDepth = 0.0f;
+        Astra::Entity     entity{};
     };
 
     struct GpuSceneFrame
@@ -187,11 +220,13 @@ namespace Arcane
         GpuSceneStage              stage;
         std::vector<GpuBatchDraw>  batches;          // EMITTED, in draw order
         std::vector<DrawIndexedArgs> args;           // by argIndex
-        std::vector<std::uint32_t> visibleIndices;   // rowCapacity entries, partitioned by batch capacity
+        std::vector<std::uint32_t> visibleIndices;   // device output: rowCapacity entries, initially invalid each frame
+        std::vector<std::uint32_t> oracleVisibleIndices; // CPU expectation for later GPU readback comparison
+        std::vector<TransparentDraw> transparentDraws; // direct records, ordered far-to-near within render order
         std::uint32_t              rowCount = 0;     // == stage.rowCapacity
         Frustum                    frustum;          // the widened planes the CPU test used (plan 2's cull CB)
         struct Stats { std::uint32_t total = 0, coarseVisible = 0, batches = 0, draws = 0; } stats;
 
-        [[nodiscard]] bool HasDraws() const noexcept { return !batches.empty(); }
+        [[nodiscard]] bool HasDraws() const noexcept { return !batches.empty() || !transparentDraws.empty(); }
     };
 }

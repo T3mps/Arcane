@@ -1,7 +1,8 @@
 // GpuSceneSyncTest.cpp -- the GPU scene's CPU half (F3 plan 1 T5, spec s5):
 // GpuSceneSync (reconcile + exact dirty + the lastModel prior-pose history
 // with the re-dirty + the material chain) and BuildGpuSceneFrame (batches
-// nearest-first, CPU-written visible indices + indirect args). Device-free,
+// nearest-first, GPU-owned visible indices + zeroed indirect args, and ordered
+// direct transparent records). Device-free,
 // under ~[gpu]. The [gpuscene][material] cases absorb the retired
 // CollectMeshInstances pins that used to live in MeshSubmissionTest.cpp.
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): the host-side [gpuscene][host] case
@@ -111,7 +112,7 @@ TEST_CASE("GpuSceneSync: a new entity allocates one row per section, staged with
         CHECK(v->model[3] == glm::vec4(1, 2, 3, 1));
         CHECK(v->prevModel == v->model);
         CHECK(v->boundsMin == glm::vec4(0, 1, 2, 0));
-        CHECK(v->boundsMax == glm::vec4(2, 3, 4, 0));
+        CHECK(v->boundsMax == glm::vec4(2, 3, 4, 0.5f));
         CHECK(v->materialSlot == Arcane::kGpuInvalidMaterialSlot);
         CHECK(v->baseColor == glm::vec4(1.0f));
     }
@@ -257,6 +258,56 @@ TEST_CASE("GpuSceneSync: a material whose resolved colour changed re-stages the 
     CHECK(w.Staged(w.RowOf(e))->prevModel == w.Staged(w.RowOf(e))->model);   // a material change is not a move
 }
 
+TEST_CASE("GpuSceneSync: material-only blend and cull changes re-key the row and stage resolved flags", "[gpuscene][material]")
+{
+    // Break caught: changing a resolved material's pipeline state only rewrites
+    // flags, leaving a live row in its old batch (or fails to upload the cutoff).
+    World w;
+    const Arcane::Guid material = Arcane::Guid::Generate();
+    w.materials.emplace(material, Arcane::ResolvedMeshMaterial{ glm::vec4(1.0f) });
+    const Astra::Entity entity = w.Spawn(glm::vec3(0), w.Mesh(1, material));
+    w.Frame();
+    const std::uint32_t row = w.RowOf(entity);
+    const std::uint32_t opaque = w.mirror.rows[row].batch;
+
+    w.materials[material].blend = Arcane::MaterialBlendMode::Masked;
+    w.materials[material].alphaCutoff = 0.25f;
+    w.Frame();
+    REQUIRE(w.stage.rows == std::vector<std::uint32_t>{ row });
+    const Arcane::GpuInstance* masked = w.Staged(row);
+    REQUIRE(masked);
+    const std::uint32_t maskedBatch = masked->batch;
+    CHECK(w.mirror.batchRowCount[opaque] == 0);
+    CHECK(w.mirror.batchRowCount[maskedBatch] == 1);
+    CHECK(w.mirror.batchKeys[maskedBatch].blend == Arcane::MaterialBlendMode::Masked);
+    CHECK_FALSE(w.mirror.batchKeys[maskedBatch].twoSided);
+    CHECK(masked->flags == 2u);                   // blend is stored independently in bits 1-2
+    CHECK(masked->boundsMax.w == 0.25f);
+
+    w.materials[material].blend = Arcane::MaterialBlendMode::Transparent;
+    w.Frame();
+    REQUIRE(w.stage.rows == std::vector<std::uint32_t>{ row });
+    const Arcane::GpuInstance* transparent = w.Staged(row);
+    REQUIRE(transparent);
+    const std::uint32_t transparentBatch = transparent->batch;
+    CHECK(w.mirror.batchRowCount[maskedBatch] == 0);
+    CHECK(w.mirror.batchRowCount[transparentBatch] == 1);
+    CHECK(w.mirror.batchKeys[transparentBatch].blend == Arcane::MaterialBlendMode::Transparent);
+    CHECK(transparent->flags == 4u);
+
+    w.materials[material].twoSided = true;
+    w.Frame();
+    REQUIRE(w.stage.rows == std::vector<std::uint32_t>{ row });
+    const Arcane::GpuInstance* twoSided = w.Staged(row);
+    REQUIRE(twoSided);
+    const std::uint32_t twoSidedBatch = twoSided->batch;
+    CHECK(w.mirror.batchRowCount[transparentBatch] == 0);
+    CHECK(w.mirror.batchRowCount[twoSidedBatch] == 1);
+    CHECK(w.mirror.batchKeys[twoSidedBatch].blend == Arcane::MaterialBlendMode::Transparent);
+    CHECK(w.mirror.batchKeys[twoSidedBatch].twoSided);
+    CHECK(twoSided->flags == 12u);                // transparent bits plus the independent two-sided bit
+}
+
 TEST_CASE("GpuSceneSync: a mesh asset re-published with new bounds re-stages exactly that entity's rows with the new box and prev == model (Changed<WorldBounds>)", "[gpuscene]")
 {
     // Review fix (Important #1, the device half): BoundsSystem re-walks on
@@ -288,7 +339,7 @@ TEST_CASE("GpuSceneSync: a mesh asset re-published with new bounds re-stages exa
         const Arcane::GpuInstance* v = w.Staged(w.RowOf(e, sIdx));
         REQUIRE(v);
         CHECK(v->boundsMin == glm::vec4(-1, 0, 1, 0));
-        CHECK(v->boundsMax == glm::vec4(3, 4, 5, 0));
+        CHECK(v->boundsMax == glm::vec4(3, 4, 5, 0.5f));
         CHECK(v->model[3] == glm::vec4(1, 2, 3, 1));
         CHECK(v->prevModel == v->model);
     }
@@ -355,20 +406,22 @@ TEST_CASE("BuildGpuSceneFrame: capacities prefix-sum by batch id; only coarse-vi
     CHECK(frame.batches[1].mesh == other);                 // nearDepth 4
     CHECK(frame.batches[0].argIndex == 0);
     CHECK(frame.batches[1].argIndex == 1);
-    CHECK(frame.args[0].instanceNum == 2);
-    CHECK(frame.args[1].instanceNum == 1);
+    CHECK(frame.args[0].instanceNum == 0);
+    CHECK(frame.args[1].instanceNum == 0);
     CHECK(frame.args[0].indexNum == frame.batches[0].indexCount);
     CHECK(frame.batches[0].capacity == 2);
     CHECK(frame.batches[1].capacity == 2);                 // `other` has two resident rows (mid + off), one visible
     CHECK(frame.batches[1].firstOutput == 2);
     CHECK(frame.rowCount == 5);
     // The visible index region of the cube batch holds exactly nearest's and farthest's rows (any order).
-    std::vector<std::uint32_t> cubeRows{ frame.visibleIndices[0], frame.visibleIndices[1] };
+    std::vector<std::uint32_t> cubeRows{ frame.oracleVisibleIndices[0], frame.oracleVisibleIndices[1] };
     std::sort(cubeRows.begin(), cubeRows.end());
     std::vector<std::uint32_t> expected{ w.RowOf(nearest), w.RowOf(farthest) };
     std::sort(expected.begin(), expected.end());
     CHECK(cubeRows == expected);
-    CHECK(frame.visibleIndices[2] == w.RowOf(mid));
+    CHECK(frame.oracleVisibleIndices[2] == w.RowOf(mid));
+    CHECK(std::all_of(frame.visibleIndices.begin(), frame.visibleIndices.end(),
+                      [](std::uint32_t row) { return row == 0xFFFFFFFFu; }));
     CHECK(frame.stats.total == 5);
     CHECK(frame.stats.coarseVisible == 3);
     CHECK(frame.stats.batches == 2);
@@ -428,7 +481,7 @@ TEST_CASE("BuildGpuSceneFrame: each batch's draw range is the MESH TABLE's secti
             CHECK(b.indexCount  == s.indexCount);
             CHECK(a.baseIndex   == s.indexOffset);
             CHECK(a.indexNum    == s.indexCount);
-            CHECK(a.instanceNum == 1);
+            CHECK(a.instanceNum == 0);
             seen |= 1u << b.section;
         }
         else
@@ -443,6 +496,95 @@ TEST_CASE("BuildGpuSceneFrame: each batch's draw range is the MESH TABLE's secti
         }
     }
     CHECK(seen == 0b1111u);   // all three split sections and the cube were each emitted once
+}
+
+TEST_CASE("BuildGpuSceneFrame: transparent sections are direct records only with complete resolved metadata", "[gpuscene][frame][transparent]")
+{
+    // Break caught: transparent rows enter the compute-owned indirect inputs,
+    // or the direct record makes MeshNode re-resolve mesh/section/material state.
+    World w;
+    const Arcane::Guid material = Arcane::Guid::Generate();
+    Arcane::ResolvedMeshMaterial resolved{ glm::vec4(0.2f, 0.4f, 0.6f, 0.8f) };
+    resolved.blend = Arcane::MaterialBlendMode::Transparent;
+    resolved.twoSided = true;
+    w.materials.emplace(material, resolved);
+    const Arcane::Guid mesh = w.Mesh(2, material);
+    const Astra::Entity visible = w.Spawn(glm::vec3(0, 0, -5), mesh);
+    w.Spawn(glm::vec3(100, 0, -5), mesh);       // outside the narrow camera view
+    w.Frame();
+    const Arcane::ViewTransform view = Arcane::ViewTransform::Perspective(
+        glm::vec3(0), glm::vec3(0, 0, -1), glm::vec3(0, 1, 0), 60.0f, glm::uvec2{ 800, 600 }, 0.1f, 100.0f);
+    Arcane::VisibleSet vis;
+    Arcane::BuildVisibleSet(w.reg, view, vis);
+    Arcane::GpuSceneFrame frame;
+    Arcane::BuildGpuSceneFrame(w.mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, frame);
+
+    REQUIRE(frame.batches.empty());
+    REQUIRE(frame.args.empty());
+    CHECK(std::all_of(frame.visibleIndices.begin(), frame.visibleIndices.end(),
+                      [](std::uint32_t row) { return row == 0xFFFFFFFFu; }));
+    REQUIRE(frame.transparentDraws.size() == 2);
+    for (std::uint32_t section = 0; section < 2; ++section)
+    {
+        const Arcane::TransparentDraw& draw = frame.transparentDraws[section];
+        const Arcane::MeshSection& source = w.meshes[mesh].data.sections[section];
+        CHECK(draw.row == w.RowOf(visible, section));
+        CHECK(draw.mesh == mesh);
+        CHECK(draw.section == section);
+        CHECK(draw.indexOffset == source.indexOffset);
+        CHECK(draw.indexCount == source.indexCount);
+        CHECK(draw.blend == Arcane::MaterialBlendMode::Transparent);
+        CHECK(draw.twoSided);
+        CHECK(draw.renderOrder == 0);
+        CHECK(draw.projectedDepth == 5.0f);
+        CHECK(draw.entity == visible);
+    }
+    CHECK(frame.stats.coarseVisible == 2);
+    CHECK(frame.stats.draws == 2);
+    CHECK(frame.HasDraws());
+}
+
+TEST_CASE("BuildGpuSceneFrame: transparent records sort deterministically by order, biased depth, and stable identity", "[gpuscene][frame][transparent]")
+{
+    // Break caught: direct transparency uses insertion/hash order, ignores the
+    // per-renderer bias, or lets equal-depth rows flicker between frames.
+    World w;
+    const Arcane::Guid transparent = Arcane::Guid::Generate();
+    Arcane::ResolvedMeshMaterial material{ glm::vec4(1.0f) };
+    material.blend = Arcane::MaterialBlendMode::Transparent;
+    w.materials.emplace(transparent, material);
+    const Arcane::Guid mesh = w.Mesh(2, transparent);
+    const Astra::Entity farther = w.Spawn(glm::vec3(0, 0, -10), mesh);
+    const Astra::Entity biased = w.Spawn(glm::vec3(0, 0, -8), mesh);
+    const Astra::Entity tieA = w.Spawn(glm::vec3(0, 0, -5), mesh);
+    const Astra::Entity tieB = w.Spawn(glm::vec3(0, 0, -5), mesh);
+    const Astra::Entity later = w.Spawn(glm::vec3(0, 0, -20), mesh);
+    w.reg.GetComponent<Arcane::MeshRenderer>(biased)->translucencyDepthSortBias = 3.0f;
+    w.reg.GetComponent<Arcane::MeshRenderer>(later)->translucencyRenderOrder = 1;
+    w.Frame();
+    const Arcane::ViewTransform view = Arcane::ViewTransform::Perspective(
+        glm::vec3(0), glm::vec3(0, 0, -1), glm::vec3(0, 1, 0), 60.0f, glm::uvec2{ 800, 600 }, 0.1f, 100.0f);
+    Arcane::VisibleSet vis;
+    Arcane::BuildVisibleSet(w.reg, view, vis);
+    Arcane::GpuSceneFrame frame, repeat;
+    Arcane::BuildGpuSceneFrame(w.mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, frame);
+    Arcane::BuildGpuSceneFrame(w.mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, repeat);
+
+    const std::vector<std::uint32_t> expected{
+        w.RowOf(biased, 0), w.RowOf(biased, 1),
+        w.RowOf(farther, 0), w.RowOf(farther, 1),
+        w.RowOf(tieA, 0), w.RowOf(tieA, 1),
+        w.RowOf(tieB, 0), w.RowOf(tieB, 1),
+        w.RowOf(later, 0), w.RowOf(later, 1),
+    };
+    std::vector<std::uint32_t> rows, repeatedRows;
+    for (const Arcane::TransparentDraw& draw : frame.transparentDraws) rows.push_back(draw.row);
+    for (const Arcane::TransparentDraw& draw : repeat.transparentDraws) repeatedRows.push_back(draw.row);
+    CHECK(rows == expected);
+    CHECK(repeatedRows == expected);              // exact, repeatable row-order bytes for the same frame input
+    CHECK(frame.transparentDraws[0].projectedDepth == 11.0f);
+    CHECK(frame.transparentDraws[2].projectedDepth == 10.0f);
+    CHECK(frame.transparentDraws[8].renderOrder == 1);
 }
 
 TEST_CASE("RowSpanAllocator: first-fit reuse, split, and high water", "[gpuscene]")

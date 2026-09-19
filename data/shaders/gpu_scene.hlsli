@@ -20,7 +20,7 @@ struct GpuInstance
     float4   normal1;
     float4   normal2;
     float4   boundsMin;      // world AABB; w unused
-    float4   boundsMax;      // w = alphaCutoff for masked rows (plan 2)
+    float4   boundsMax;      // w = resolved alphaCutoff (stored across blend switches)
     float4   baseColor;
     uint     materialSlot;   // kMeshInvalidMaterialSlot = the flat path
     uint     batch;
@@ -29,5 +29,8 @@ struct GpuInstance
 };
 
 #define kGpuInstanceFlagTeleported 1u
+#define kGpuInstanceFlagBlendShift 1u
+#define kGpuInstanceFlagBlendMask  (0x3u << kGpuInstanceFlagBlendShift)
+#define kGpuInstanceFlagTwoSided   (1u << 3)
 
 #endif

@@ -62,7 +62,14 @@ namespace Arcane
 
         // The material chain (the retired CollectMeshInstances' rule, verbatim):
         // override, if it resolves, wins; else the section slot's material; else white.
-        struct RowMaterial { glm::vec4 baseColor{1.0f}; std::uint32_t slot = kGpuInvalidMaterialSlot; };
+        struct RowMaterial
+        {
+            glm::vec4         baseColor{1.0f};
+            std::uint32_t     slot = kGpuInvalidMaterialSlot;
+            MaterialBlendMode blend = MaterialBlendMode::Opaque;
+            float             alphaCutoff = 0.5f;
+            bool              twoSided = false;
+        };
         inline RowMaterial ResolveRowMaterial(const MeshMaterialTable* mats, const MeshEntry& entry,
                                               const MeshSection& section, const Guid& override)
         {
@@ -74,7 +81,8 @@ namespace Arcane
                     slotMat = entry.slots[section.slotIndex].material;
                 mat = mats ? mats->Resolve(slotMat) : nullptr;
             }
-            return mat ? RowMaterial{ mat->baseColor, mat->materialSlot } : RowMaterial{};
+            return mat ? RowMaterial{ mat->baseColor, mat->materialSlot, mat->blend, mat->alphaCutoff, mat->twoSided }
+                       : RowMaterial{};
         }
     }
 
@@ -123,7 +131,7 @@ namespace Arcane
                         row.entity  = e;
                         row.mesh    = mr.mesh;
                         row.section = s;
-                        row.batch   = detail::BatchIdFor(m, GpuBatchKey{ mr.mesh, s, 0 });
+                        row.batch   = detail::BatchIdFor(m, GpuBatchKey{ mr.mesh, s, MaterialBlendMode::Opaque, false });
                         row.live    = true;
                         row.lastModel = glm::mat4(0.0f);   // "never uploaded": step 3 sets prev = model
                         ++m.batchRowCount[row.batch];
@@ -178,9 +186,11 @@ namespace Arcane
         }
         m.dirtyLastFrame.clear();
 
-        // 3. Stage. A material re-resolve per live row is the same hash lookup
-        //    the retired per-frame sweep did; a changed colour/slot dirties the
-        //    row without a component write (the resolver re-read the .arcmat).
+        // 3. Re-key then stage. A material re-resolve per live row is the same
+        //    hash lookup the retired per-frame sweep did. Blend and two-sided
+        //    state define batch membership, so a material-only change must move
+        //    the row before its device value is staged -- flags alone are not a
+        //    substitute for that membership update.
         for (std::uint32_t row = 0; row < m.rows.size(); ++row)
         {
             GpuSceneRow& r = m.rows[row];
@@ -193,8 +203,20 @@ namespace Arcane
             if (!mr || !wt || !wb) continue;
             const detail::RowMaterial mat =
                 detail::ResolveRowMaterial(mats, *entry, entry->data.sections[r.section], mr->materialOverride);
+            const GpuBatchKey key{ r.mesh, r.section, mat.blend, mat.twoSided };
+            bool rekeyed = false;
+            if (m.batchKeys[r.batch] != key)
+            {
+                --m.batchRowCount[r.batch];
+                r.batch = detail::BatchIdFor(m, key);
+                ++m.batchRowCount[r.batch];
+                rekeyed = true;
+            }
             const bool isDirty = (row < dirty.size() && dirty[row])
-                              || mat.baseColor != r.lastBaseColor || mat.slot != r.lastSlot;
+                              || rekeyed
+                              || mat.baseColor != r.lastBaseColor || mat.slot != r.lastSlot
+                              || mat.blend != r.lastBlend || mat.alphaCutoff != r.lastAlphaCutoff
+                              || mat.twoSided != r.lastTwoSided;
             if (!isDirty) continue;
 
             const bool neverUploaded = (r.lastModel == glm::mat4(0.0f));
@@ -206,16 +228,23 @@ namespace Arcane
             v.normal1 = glm::vec4(n[1], 0.0f);
             v.normal2 = glm::vec4(n[2], 0.0f);
             v.boundsMin    = glm::vec4(wb->box.min, 0.0f);
-            v.boundsMax    = glm::vec4(wb->box.max, 0.0f);
+            v.boundsMax    = glm::vec4(wb->box.max, mat.alphaCutoff);
             v.baseColor    = mat.baseColor;
             v.materialSlot = mat.slot;
             v.batch        = r.batch;
-            v.flags        = 0;
+            v.flags        = static_cast<std::uint32_t>(mat.blend) << kGpuInstanceFlagBlendShift;
+            if (mat.twoSided) v.flags |= kGpuInstanceFlagTwoSided;
             if (v.prevModel != v.model)
                 m.dirtyLastFrame.push_back(row);   // settle it next frame (the re-dirty)
             r.lastModel     = v.model;
             r.lastBaseColor = v.baseColor;
             r.lastSlot      = v.materialSlot;
+            r.lastBlend = mat.blend;
+            r.lastAlphaCutoff = mat.alphaCutoff;
+            r.lastTwoSided = mat.twoSided;
+            r.boundsCenter = (wb->box.min + wb->box.max) * 0.5f;
+            r.renderOrder = mr->translucencyRenderOrder;
+            r.depthSortBias = mr->translucencyDepthSortBias;
             out.rows.push_back(row);
             out.values.push_back(v);
         }
@@ -232,8 +261,10 @@ namespace Arcane
     {
         out.batches.clear();
         out.args.clear();
+        out.transparentDraws.clear();
         out.rowCount = m.allocator.HighWater();
         out.visibleIndices.assign(out.rowCount, 0xFFFFFFFFu);
+        out.oracleVisibleIndices.assign(out.rowCount, 0xFFFFFFFFu);
         out.frustum = vis ? vis->frustum : Frustum::From(view).Widened(kVisibilitySlack);
         out.stats   = {};
 
@@ -243,7 +274,10 @@ namespace Arcane
         std::uint32_t prefix = 0;
         for (std::size_t b = 0; b < nb; ++b) { firstOutput[b] = prefix; prefix += m.batchRowCount[b]; }
 
-        // The coarse pass: every live row whose entity is a member (or every row, no set).
+        // The coarse pass: every live row whose entity is a member (or every
+        // row, no set). Indirect storage is device-owned from this point on:
+        // retain CPU answers in oracleVisibleIndices, while transparent rows
+        // bypass both lists entirely and become complete direct draw records.
         for (std::uint32_t row = 0; row < m.rows.size(); ++row)
         {
             const GpuSceneRow& r = m.rows[row];
@@ -251,7 +285,21 @@ namespace Arcane
             ++out.stats.total;
             if (vis && !vis->Contains(r.entity)) continue;
             ++out.stats.coarseVisible;
-            out.visibleIndices[firstOutput[r.batch] + cursor[r.batch]++] = row;
+            const GpuBatchKey& key = m.batchKeys[r.batch];
+            if (key.blend == MaterialBlendMode::Transparent)
+            {
+                const MeshEntry* entry = meshes ? meshes->Resolve(key.mesh) : nullptr;
+                if (!entry || key.section >= entry->data.sections.size()) continue;
+                const MeshSection& section = entry->data.sections[key.section];
+                const glm::vec3 viewCenter = glm::vec3(view.view * glm::vec4(r.boundsCenter, 1.0f));
+                out.transparentDraws.push_back(TransparentDraw{
+                    row, key.mesh, key.section, section.indexOffset, section.indexCount,
+                    key.blend, key.twoSided, r.renderOrder,
+                    -viewCenter.z + r.depthSortBias, r.entity,
+                });
+                continue;
+            }
+            out.oracleVisibleIndices[firstOutput[r.batch] + cursor[r.batch]++] = row;
         }
         // nearDepth per batch = the minimum over its visible entities' VisibleEntry::nearDepth.
         if (vis)
@@ -261,7 +309,8 @@ namespace Arcane
                     for (std::uint32_t s = 0; s < r->count; ++s)
                     {
                         const std::uint32_t b = m.rows[r->first + s].batch;
-                        nearDepth[b] = std::min(nearDepth[b], e.nearDepth);
+                        if (m.batchKeys[b].blend != MaterialBlendMode::Transparent)
+                            nearDepth[b] = std::min(nearDepth[b], e.nearDepth);
                     }
         }
         else
@@ -270,7 +319,7 @@ namespace Arcane
         // Emit: batches with >= 1 visible row, opaque before masked (blend asc), nearest first.
         std::vector<std::uint32_t> emitted;
         for (std::uint32_t b = 0; b < nb; ++b)
-            if (cursor[b] > 0 && m.batchKeys[b].blend != 2u) emitted.push_back(b);
+            if (cursor[b] > 0 && m.batchKeys[b].blend != MaterialBlendMode::Transparent) emitted.push_back(b);
         std::stable_sort(emitted.begin(), emitted.end(), [&](std::uint32_t a, std::uint32_t b)
         {
             if (m.batchKeys[a].blend != m.batchKeys[b].blend) return m.batchKeys[a].blend < m.batchKeys[b].blend;
@@ -292,11 +341,20 @@ namespace Arcane
             d.indexOffset = section.indexOffset; d.indexCount = indexCount;
             d.firstOutput = firstOutput[b]; d.capacity = m.batchRowCount[b];
             d.argIndex = static_cast<std::uint32_t>(out.args.size());
-            d.blend = key.blend; d.nearDepth = nearDepth[b];
+            d.blend = key.blend; d.twoSided = key.twoSided; d.nearDepth = nearDepth[b];
             out.batches.push_back(d);
-            out.args.push_back(DrawIndexedArgs{ indexCount, cursor[b], section.indexOffset, 0, 0 });
+            out.args.push_back(DrawIndexedArgs{ indexCount, 0, section.indexOffset, 0, 0 });
         }
+        std::sort(out.transparentDraws.begin(), out.transparentDraws.end(), [](const TransparentDraw& a, const TransparentDraw& b)
+        {
+            if (a.renderOrder != b.renderOrder) return a.renderOrder < b.renderOrder;
+            if (a.projectedDepth != b.projectedDepth) return a.projectedDepth > b.projectedDepth;
+            if (a.entity.GetID() != b.entity.GetID()) return a.entity.GetID() < b.entity.GetID();
+            if (a.mesh.hi != b.mesh.hi) return a.mesh.hi < b.mesh.hi;
+            if (a.mesh.lo != b.mesh.lo) return a.mesh.lo < b.mesh.lo;
+            return a.section < b.section;
+        });
         out.stats.batches = static_cast<std::uint32_t>(out.batches.size());
-        out.stats.draws   = out.stats.batches;   // + transparent rows in plan 2
+        out.stats.draws   = out.stats.batches + static_cast<std::uint32_t>(out.transparentDraws.size());
     }
 }
