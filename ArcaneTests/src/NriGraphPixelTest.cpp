@@ -1907,9 +1907,10 @@ namespace
         constexpr std::uint32_t kRowA = 0u;
         constexpr std::uint32_t kRowB = 5u;                               // NOT adjacent: per-row copies, not one span
         constexpr std::uint32_t kRowC = Arcane::GpuScene::kInitialRows;   // the row that forces the growth
-        const Arcane::GpuInstance rowA = MakeInstanceRow(1.0f);
-        const Arcane::GpuInstance rowB = MakeInstanceRow(2.0f);
-        const Arcane::GpuInstance rowC = MakeInstanceRow(3.0f);
+        const Arcane::GpuInstance rowA  = MakeInstanceRow(1.0f);
+        const Arcane::GpuInstance rowB  = MakeInstanceRow(2.0f);
+        const Arcane::GpuInstance rowB2 = MakeInstanceRow(4.0f);   // row B re-staged INSIDE the copied range, in the growth frame
+        const Arcane::GpuInstance rowC  = MakeInstanceRow(3.0f);
 
         // ---- frame 1: two staged rows inside the initial capacity ----------
         {
@@ -1945,12 +1946,16 @@ namespace
 
         // ---- frame 2: GROWTH. The mirror's high water is kInitialRows + 1 and
         // the stage is NOT a full rebuild, so Reserve doubles the buffer and
-        // Apply copies the live rows old -> new before writing the new row.
-        // Rows A and B must SURVIVE the move; row C lands past the old end.
+        // Apply copies the live rows old -> new before writing the staged
+        // rows. Row A must SURVIVE the move untouched; row B is RE-STAGED with
+        // new bytes in the same frame -- a transfer write INSIDE the range the
+        // grow-copy just wrote, the write-after-write the copy -> copy barrier
+        // in Apply orders (sync validation would flag its absence); row C
+        // lands past the old end.
         {
             Arcane::GpuSceneFrame frame;
-            frame.stage.rows        = { kRowC };
-            frame.stage.values      = { rowC };
+            frame.stage.rows        = { kRowB, kRowC };
+            frame.stage.values      = { rowB2, rowC };
             frame.stage.rowCapacity = Arcane::GpuScene::kInitialRows + 1u;
             frame.stage.fullRebuild = false;
             frame.stage.generation  = 42u;
@@ -1969,8 +1974,8 @@ namespace
             REQUIRE(device->ReadDebugInstances(bytes));
             CHECK(device->RowCapacity() == 2u * Arcane::GpuScene::kInitialRows);
             CHECK(bytes.size() == device->InstanceBytes());
-            CheckRowBytes(bytes, kRowA, rowA);
-            CheckRowBytes(bytes, kRowB, rowB);
+            CheckRowBytes(bytes, kRowA, rowA);    // survived the grow-copy
+            CheckRowBytes(bytes, kRowB, rowB2);   // the re-stage won over the grow-copy
             CheckRowBytes(bytes, kRowC, rowC);
             CHECK(device->InstanceBufferGeneration() == generationBefore + 1u);
             CHECK(device->SyncedGeneration() == 42u);

@@ -207,6 +207,13 @@ namespace Arcane
         //    anything; the old one is parked (alive until this frame's fence
         //    retires) and, unless the stage rewrites every row anyway, Apply
         //    copies its live rows across on the command list.
+        //
+        //    A FULL RESTAGE DROPS ANY PENDING GROW-COPY, whether or not this
+        //    frame grows: a growth frame that never submitted (Skipped) leaves
+        //    its copy pending, and issuing it under a full rebuild would be a
+        //    second transfer write over every row this frame stages anyway.
+        if (frame && frame->stage.fullRebuild)
+            m_pendingGrowCopy = {};
         const std::uint32_t needRows = frame ? frame->stage.rowCapacity : 0;
         if (needRows > m_rowCapacity)
         {
@@ -229,12 +236,11 @@ namespace Arcane
             });
             ++m_instanceGeneration;
 
-            if (frame->stage.fullRebuild)
-                m_pendingGrowCopy = {};                        // every live row is re-staged this frame
-            else if (!m_pendingGrowCopy.source)
+            if (!frame->stage.fullRebuild && !m_pendingGrowCopy.source)
                 m_pendingGrowCopy = { oldBuf, oldCap };        // the rows live in the buffer just retired
-            // else: a growth before Apply ran -- the ORIGINAL source still holds
-            // the rows and stays parked until this frame's fence, so keep it.
+            // else: a full rebuild re-stages every live row (cleared above), or
+            // a growth before Apply ran -- the ORIGINAL source still holds the
+            // rows and stays parked until this frame's fence, so keep it.
         }
 
         // 2. This slot's args + visible indices, when the frame draws. The
@@ -325,6 +331,22 @@ namespace Arcane
             const std::uint64_t bytes = std::min<std::uint64_t>(std::uint64_t(m_pendingGrowCopy.rows), m_rowCapacity) * kRowBytes;
             core.CmdCopyBuffer(ctx.cmd, *m_instances, 0, *m_pendingGrowCopy.source, 0, bytes);
             m_pendingGrowCopy = {};
+
+            // THE WRITE-AFTER-WRITE ORDER on the NEW buffer: the staged rows
+            // copied next land INSIDE the range the grow-copy just wrote (an
+            // entity that moved in the frame the high water rose is the
+            // common case), and two transfer writes to the same bytes carry no
+            // ordering of their own -- Vulkan's sync validation reports it as
+            // WRITE-AFTER-WRITE. One more barrier at the same sanctioned site,
+            // copy -> copy, on the buffer the graph already holds in CopyDst.
+            nri::BufferBarrierDesc copyAfterCopy = {};
+            copyAfterCopy.buffer = m_instances;
+            copyAfterCopy.before = { nri::AccessBits::COPY_DESTINATION, nri::StageBits::COPY };
+            copyAfterCopy.after  = { nri::AccessBits::COPY_DESTINATION, nri::StageBits::COPY };
+            nri::BarrierDesc order = {};
+            order.buffers   = &copyAfterCopy;
+            order.bufferNum = 1;
+            core.CmdBarrier(ctx.cmd, order);
         }
 
         // 2. The staged rows (dirty this frame), then the scratch rows for this slot.
