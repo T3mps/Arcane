@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -119,6 +120,7 @@ namespace Arcane::Editor
             std::vector<FocusRow>  rows;
             int* nav = nullptr;
             int* prevLen = nullptr;
+            int* typedLen = nullptr;   // query length; Buf may be longer from autofill
         };
         FocusComboLive* g_focusLive = nullptr;
 
@@ -243,10 +245,13 @@ namespace Arcane::Editor
             if (!live || !live->model || !live->nav)
                 return 0;
 
-            auto rebuild = [&]()
+            auto rebuildFromTyped = [&]()
             {
+                int n = data->BufTextLen;
+                if (live->typedLen && *live->typedLen >= 0 && *live->typedLen < n)
+                    n = *live->typedLen;
                 const GraphFocusQuery q = ParseGraphFocusQuery(
-                    std::string_view(data->Buf, static_cast<std::size_t>(data->BufTextLen)));
+                    std::string_view(data->Buf, static_cast<std::size_t>(n)));
                 BuildFocusRows(q, *live->model, live->rows);
                 if (*live->nav < 0)
                     *live->nav = 0;
@@ -256,23 +261,31 @@ namespace Arcane::Editor
 
             if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion)
             {
-                rebuild();
+                rebuildFromTyped();
                 if (!live->rows.empty())
+                {
                     ApplyFocusFill(data, live->rows[static_cast<std::size_t>(*live->nav)],
                                    /*selectSuffix=*/false);
+                    if (live->typedLen)
+                        *live->typedLen = data->BufTextLen;
+                    if (live->prevLen)
+                        *live->prevLen = data->BufTextLen;
+                }
                 return 0;
             }
             if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory)
             {
-                rebuild();
+                // Restore the typed prefix so the list does not refilter on
+                // the highlighted label, then move the highlight only.
+                if (live->typedLen && *live->typedLen >= 0 && *live->typedLen < data->BufTextLen)
+                    data->DeleteChars(*live->typedLen, data->BufTextLen - *live->typedLen);
+                rebuildFromTyped();
                 if (live->rows.empty())
                     return 0;
                 if (data->EventKey == ImGuiKey_DownArrow)
                     *live->nav = std::min(*live->nav + 1, static_cast<int>(live->rows.size()) - 1);
                 else if (data->EventKey == ImGuiKey_UpArrow)
                     *live->nav = std::max(*live->nav - 1, 0);
-                ApplyFocusFill(data, live->rows[static_cast<std::size_t>(*live->nav)],
-                               /*selectSuffix=*/false);
                 if (live->prevLen)
                     *live->prevLen = data->BufTextLen;
                 return 0;
@@ -283,8 +296,10 @@ namespace Arcane::Editor
                 const bool shrinking = live->prevLen && len < *live->prevLen;
                 if (live->prevLen)
                     *live->prevLen = len;
+                if (live->typedLen)
+                    *live->typedLen = len;
                 *live->nav = 0;
-                rebuild();
+                rebuildFromTyped();
                 if (!shrinking && len > 0 && !live->rows.empty())
                 {
                     const FocusRow& best = live->rows.front();
@@ -2434,6 +2449,7 @@ namespace Arcane::Editor
                     state.graphFocusFilter[0] = '\0';
                     state.graphFocusNav = 0;
                     state.graphFocusFilterLen = 0;
+                    state.graphFocusTypedLen = 0;
                     ImGui::SetKeyboardFocusHere();
                 }
                 ImGui::SetNextItemWidth(-FLT_MIN);
@@ -2441,6 +2457,7 @@ namespace Arcane::Editor
                 live.model = &model;
                 live.nav = &state.graphFocusNav;
                 live.prevLen = &state.graphFocusFilterLen;
+                live.typedLen = &state.graphFocusTypedLen;
                 g_focusLive = &live;
                 ImGui::InputTextWithHint("##graphfocusfilter", "@kind or name...",
                                          state.graphFocusFilter, sizeof(state.graphFocusFilter),
@@ -2450,7 +2467,10 @@ namespace Arcane::Editor
                                          GraphFocusFilterCallback);
                 g_focusLive = nullptr;
 
-                const GraphFocusQuery query = ParseGraphFocusQuery(state.graphFocusFilter);
+                const int typed = std::max(0, std::min(state.graphFocusTypedLen,
+                    static_cast<int>(std::strlen(state.graphFocusFilter))));
+                const GraphFocusQuery query = ParseGraphFocusQuery(
+                    std::string_view(state.graphFocusFilter, static_cast<std::size_t>(typed)));
                 BuildFocusRows(query, model, live.rows);
                 if (state.graphFocusNav < 0)
                     state.graphFocusNav = 0;
@@ -2639,6 +2659,7 @@ namespace Arcane::Editor
         state.graphFocusFilter[0] = '\0';
         state.graphFocusNav = 0;
         state.graphFocusFilterLen = 0;
+        state.graphFocusTypedLen = 0;
         state.graphLayoutDirty = false;
         state.graphFocus = Arcane::Guid{};
         // ...and re-arm the boot-scene seed with it (Task 5): the incoming

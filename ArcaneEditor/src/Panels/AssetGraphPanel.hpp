@@ -68,6 +68,7 @@ namespace Arcane::Editor
         char graphFocusFilter[128] = {};
         int  graphFocusNav = 0;        // highlighted row in the open combo
         int  graphFocusFilterLen = 0;  // BufTextLen last callback; shrinking skips autofill
+        int  graphFocusTypedLen = 0;   // characters the user actually typed; autofill suffix is not query
         // Task 5: has `graphFocus` been seeded from THIS project's boot scene
         // yet? A separate flag rather than "is graphFocus nil": nil is a
         // LEGITIMATE user choice (the combo's own "everything" entry), and
