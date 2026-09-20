@@ -55,6 +55,8 @@ namespace Arcane
         "-fvk-t-shift", "0",   "2",
         // mesh.hlsl (F3): the instance and visible-index SRVs at t0/t1 in space1
         "-fvk-t-shift", "0",   "1",
+        // mesh_cull.hlsl: its two UAVs are in space1 alongside its SRVs.
+        "-fvk-u-shift", "384", "1",
     };
     inline constexpr std::size_t kSpirvArgCount = sizeof(kSpirvArgs) / sizeof(kSpirvArgs[0]);
 }

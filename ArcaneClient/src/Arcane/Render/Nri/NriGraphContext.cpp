@@ -439,6 +439,9 @@ namespace Arcane
         m_batch2D = Batch2DNode::Create(*this);
         if (!m_batch2D)
             return false;   // already logged
+        m_meshCull = MeshCullNode::Create(*this);
+        if (!m_meshCull)
+            return false;
         // The opaque 3D pass (Task 7), eagerly like the rest -- see Mesh().
         m_mesh = MeshNode::Create(*this);
         if (!m_mesh)
@@ -796,6 +799,8 @@ namespace Arcane
             m_post->Release(graves, fence);
         if (m_grid)
             m_grid->Release(graves, fence);
+        if (m_meshCull)
+            m_meshCull->Release(graves, fence);
         if (m_mesh)
             m_mesh->Release(graves, fence);
         if (m_batch2D)

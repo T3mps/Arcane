@@ -32,6 +32,7 @@
 #include <Arcane/Render/Nri/nodes/Batch2DNode.hpp>   // SpriteMaterialLayout / the arena region math
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>  // FullscreenMaterialLayout / PostChainNode
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>       // AddMeshNode / MeshSceneDesc -- the opaque pass
+#include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>   // AddMeshCullNode -- F3 compute fine cull
 #include <Arcane/Render/Nri/nodes/GridNode.hpp>       // AddGridNode / GridSceneDesc -- the 3D reference grid (F4 plan 1 T10)
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp> // OutlineJfaStepCount / PickNode / OutlineNode
 #include <Arcane/Mesh/MeshBuilder.hpp>       // BuildCube -- the opaque pass's geometry
@@ -6479,11 +6480,10 @@ TEST_CASE("nri graph frame: (T7P4) a frame with no mesh scene is byte-for-byte T
 TEST_CASE("nri graph frame: (T7P4) a mesh scene declares 'mesh' between the canvas and the "
           "tonemap, and that node owns the depth target", "[nri]")
 {
-    // SINCE F3 PLAN 1 T6 the mesh pass is TWO nodes: "gpuscene-sync" (the GPU
-    // scene's writer, declared by AddMeshNode itself) then "mesh". The
-    // depth-target ownership pinned here is unchanged; the indices moved by
-    // one and the mesh node's barrier batch gained the three imported buffers
-    // (the T6F3 declaration-shape case pins those).
+    // Since F3 plan 2 Task 4 the mesh pass is three nodes:
+    // "gpuscene-sync" (the GPU scene's writer), "mesh-cull", then "mesh".
+    // The depth-target ownership pinned here is unchanged; the T6F3
+    // declaration-shape case pins the buffer edges.
     // BORROWED BY THE SHAPE, so both live in this frame -- exactly the
     // lifetime rule MeshSceneDesc::instances documents.
     Arcane::MeshInstance one;
@@ -6501,11 +6501,12 @@ TEST_CASE("nri graph frame: (T7P4) a mesh scene declares 'mesh' between the canv
 
     const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
 
-    REQUIRE(graph.NodeCount() == 4);
+    REQUIRE(graph.NodeCount() == 5);
     CHECK(std::string(graph.NodeName(0)) == "batch2d");
     CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");
-    CHECK(std::string(graph.NodeName(2)) == "mesh");
-    CHECK(std::string(graph.NodeName(3)) == "tonemap");
+    CHECK(std::string(graph.NodeName(2)) == "mesh-cull");
+    CHECK(std::string(graph.NodeName(3)) == "mesh");
+    CHECK(std::string(graph.NodeName(4)) == "tonemap");
 
     // ONE "depth" texture in the graph, minted by the mesh node itself -- not
     // by Task 4's placeholder, which is not declared at all on this frame
@@ -6518,17 +6519,17 @@ TEST_CASE("nri graph frame: (T7P4) a mesh scene declares 'mesh' between the canv
     CHECK(graph.WasWritten(handles.canvas));
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
-    REQUIRE(compiled.nodes.size() == 4);
+    REQUIRE(compiled.nodes.size() == 5);
 
     // THE DERIVED CHAIN. batch2d took the canvas UNDEFINED ->
     // COLOR_ATTACHMENT; the mesh node declares the SAME state for it, and
     // consecutive same-state declarations produce no barrier (RenderGraph.cpp)
     // -- so the mesh node's ONE TEXTURE barrier is the depth target's first
-    // use (its three BUFFER barriers are the GPU scene's, T6F3). A mesh node
+    // use (its visible/args BUFFER barriers come from the cull output). A mesh node
     // that declared the canvas as ShaderRead instead would carry two.
-    REQUIRE(compiled.nodes[2].preBarriers.size() == 4);
+    REQUIRE(compiled.nodes[3].preBarriers.size() == 3);
     const Arcane::RgBarrier* depthBarrier = nullptr;
-    for (const Arcane::RgBarrier& barrier : compiled.nodes[2].preBarriers)
+    for (const Arcane::RgBarrier& barrier : compiled.nodes[3].preBarriers)
         if (barrier.isTexture)
         {
             CHECK(depthBarrier == nullptr);   // exactly one texture barrier
@@ -6588,19 +6589,20 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
                                                         Arcane::kGraphCanvasFormat,
                                                         scene, 320, 200);
     REQUIRE(graph.IsHandleValid(depth));
-    CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");   // F3 plan 1 T6: declared by AddMeshNode, ahead of mesh
-    CHECK(std::string(graph.NodeName(2)) == "mesh");
+    CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");   // declared by AddMeshNode, ahead of cull + mesh
+    CHECK(std::string(graph.NodeName(2)) == "mesh-cull");
+    CHECK(std::string(graph.NodeName(3)) == "mesh");
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
-    REQUIRE(compiled.nodes.size() == 3);
+    REQUIRE(compiled.nodes.size() == 4);
 
     // TWO TEXTURE barriers, one per declared attachment access (the three
     // buffer ones beside them are the GPU scene's -- the T6F3 case pins
     // those). Looked up by resource rather than by position: the order inside
     // one node's batch is the declaration order, which is not a contract this
     // case has any business pinning.
-    const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[2].preBarriers;
-    REQUIRE(barriers.size() == 5);
+    const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[3].preBarriers;
+    REQUIRE(barriers.size() == 4);
 
     const auto barrierFor = [&](std::uint32_t resourceIndex) -> const Arcane::RgBarrier*
     {
@@ -6677,18 +6679,19 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads three imported buffers w
 
     // THE SEAM SHAPE (R-A): the sync node is declared FIRST, by AddMeshNode
     // itself, so the graph sees copy -> read on every buffer.
-    REQUIRE(graph.NodeCount() == 3);
+    REQUIRE(graph.NodeCount() == 4);
     CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");
-    CHECK(std::string(graph.NodeName(2)) == "mesh");
+    CHECK(std::string(graph.NodeName(2)) == "mesh-cull");
+    CHECK(std::string(graph.NodeName(3)) == "mesh");
 
     const Arcane::RgCompiled compiled = CompileOk(graph);
-    REQUIRE(compiled.nodes.size() == 3);
+    REQUIRE(compiled.nodes.size() == 4);
 
     // The sync node: three first-use barriers, one per imported buffer, all
     // to COPY_DESTINATION, none a texture.
     {
         const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[1].preBarriers;
-        REQUIRE(barriers.size() == 3);
+        REQUIRE(barriers.size() == 4);
         for (const Arcane::RgBarrier& barrier : barriers)
         {
             CHECK_FALSE(barrier.isTexture);
@@ -6698,13 +6701,22 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads three imported buffers w
         }
     }
 
-    // The mesh node: the canvas + depth attachment barriers (the T7P4 case
-    // pins those) PLUS one buffer barrier per imported buffer. Buffer slots
-    // are assigned in creation order -- instances 0, args 1, visible 2 --
-    // and the args one lands in ARGUMENT_BUFFER at the INDIRECT stage.
+    // The compute node makes the CopyDst -> StorageWrite seam explicit.
     {
         const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[2].preBarriers;
-        REQUIRE(barriers.size() == 5);
+        REQUIRE(barriers.size() == 4);
+        for (const Arcane::RgBarrier& barrier : barriers)
+        {
+            CHECK_FALSE(barrier.isTexture);
+            CheckState(barrier.before, nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
+        }
+    }
+
+    // The mesh node reads the cull's output; args reach IndirectArgs only
+    // after the compute writer, while instances/batches are not read here.
+    {
+        const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[3].preBarriers;
+        REQUIRE(barriers.size() == 4);
 
         const auto bufferBarrierFor = [&](std::uint32_t resourceIndex) -> const Arcane::RgBarrier*
         {
@@ -6713,20 +6725,16 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads three imported buffers w
                     return &barrier;
             return nullptr;
         };
-        const Arcane::RgBarrier* instances = bufferBarrierFor(0u);
         const Arcane::RgBarrier* args      = bufferBarrierFor(1u);
         const Arcane::RgBarrier* visible   = bufferBarrierFor(2u);
-        REQUIRE(instances != nullptr);
         REQUIRE(args != nullptr);
         REQUIRE(visible != nullptr);
 
         const nri::AccessLayoutStage copyDst{ nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED,
                                               nri::StageBits::COPY };
-        CheckState(instances->before, copyDst);
-        CheckState(instances->after, nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
-        CheckState(visible->before, copyDst);
+        CheckState(visible->before, nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::UNDEFINED, nri::StageBits::COMPUTE_SHADER);
         CheckState(visible->after, nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
-        CheckState(args->before, copyDst);
+        CheckState(args->before, nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::UNDEFINED, nri::StageBits::COMPUTE_SHADER);
         CheckState(args->after, nri::AccessBits::ARGUMENT_BUFFER, nri::Layout::UNDEFINED, nri::StageBits::INDIRECT);
     }
 }
@@ -6755,11 +6763,12 @@ TEST_CASE("nri graph frame (T6F3/T7): a registry-backed scene declares 'gpuscene
         shape.canvasHeight = 200;
         shape.mesh         = &scene;
         (void)Arcane::DeclareGraphFrame(graph, shape, nullptr);
-        REQUIRE(graph.NodeCount() == 4);
+        REQUIRE(graph.NodeCount() == 5);
         CHECK(std::string(graph.NodeName(0)) == "batch2d");
         CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");   // IMMEDIATELY before mesh
-        CHECK(std::string(graph.NodeName(2)) == "mesh");
-        CHECK(std::string(graph.NodeName(3)) == "tonemap");
+        CHECK(std::string(graph.NodeName(2)) == "mesh-cull");
+        CHECK(std::string(graph.NodeName(3)) == "mesh");
+        CHECK(std::string(graph.NodeName(4)) == "tonemap");
     };
 
     SECTION("(a) draws, no instances: the pass is declared, sync ahead of mesh")
@@ -6836,7 +6845,7 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
 
     Arcane::GridSceneDesc grid;   // defaults: XZ plane, 1 m / 10 m, the editor's view
 
-    SECTION("with a mesh scene: batch2d, gpuscene-sync, mesh, grid, tonemap -- one shared depth transient")
+    SECTION("with a mesh scene: batch2d, gpuscene-sync, mesh-cull, mesh, grid, tonemap -- one shared depth transient")
     {
         Arcane::RenderGraph graph;
         Arcane::RgFrameShape shape;
@@ -6848,12 +6857,13 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         const Arcane::RgFrameHandles handles = Arcane::DeclareGraphFrame(graph, shape, nullptr);
 
         // F3 plan 1 T6: the GPU scene's Copy node rides ahead of mesh.
-        REQUIRE(graph.NodeCount() == 5);
+        REQUIRE(graph.NodeCount() == 6);
         CHECK(std::string(graph.NodeName(0)) == "batch2d");
         CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");
-        CHECK(std::string(graph.NodeName(2)) == "mesh");
-        CHECK(std::string(graph.NodeName(3)) == "grid");
-        CHECK(std::string(graph.NodeName(4)) == "tonemap");
+        CHECK(std::string(graph.NodeName(2)) == "mesh-cull");
+        CHECK(std::string(graph.NodeName(3)) == "mesh");
+        CHECK(std::string(graph.NodeName(4)) == "grid");
+        CHECK(std::string(graph.NodeName(5)) == "tonemap");
 
         // ONE depth transient, minted by the mesh node; the grid node did not
         // mint a second one.
@@ -6863,7 +6873,7 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         CHECK(graph.WasWritten(handles.canvas));
 
         const Arcane::RgCompiled compiled = CompileOk(graph);
-        REQUIRE(compiled.nodes.size() == 5);
+        REQUIRE(compiled.nodes.size() == 6);
         REQUIRE(compiled.transients.size() == 2);   // canvas + the ONE depth (imported buffers are not transients)
 
         // THE LIFETIME (spec s14): the depth transient is texture slot 1 and
@@ -6871,8 +6881,8 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         // grid node (last toucher) -- which is the whole of "the depth
         // outlives MeshNode's record".
         CHECK(compiled.transients[1].resourceIndex == 1u);
-        CHECK(compiled.transientLifetimes[1].first == 2u);   // mesh
-        CHECK(compiled.transientLifetimes[1].last  == 3u);   // grid
+        CHECK(compiled.transientLifetimes[1].first == 3u);   // mesh
+        CHECK(compiled.transientLifetimes[1].last  == 4u);   // grid
         CHECK(compiled.transientPoolSlot[1] != Arcane::kRgNoPoolSlot);
         CHECK(compiled.poolSlotCount == 2);
 
@@ -6882,7 +6892,7 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         // derive NO barrier -- so the grid node carries none. A grid node that
         // read the depth as ShaderRead (a texture, not an attachment) would
         // carry one, and that is exactly the shape spec s5.2 does NOT want.
-        CHECK(compiled.nodes[3].preBarriers.empty());
+        CHECK(compiled.nodes[4].preBarriers.empty());
     }
 
     SECTION("with no mesh scene: 'grid' is still declared, with no depth attachment")
@@ -6918,10 +6928,11 @@ TEST_CASE("nri graph frame: (T10F4) a frame with a grid scene declares 'grid' af
         shape.mesh         = &scene;
 
         (void)Arcane::DeclareGraphFrame(graph, shape, nullptr);
-        REQUIRE(graph.NodeCount() == 4);   // batch2d, gpuscene-sync (F3 plan 1 T6), mesh, tonemap
+        REQUIRE(graph.NodeCount() == 5);   // batch2d, gpuscene-sync, mesh-cull, mesh, tonemap
         CHECK(std::string(graph.NodeName(1)) == "gpuscene-sync");
-        CHECK(std::string(graph.NodeName(2)) == "mesh");
-        CHECK(std::string(graph.NodeName(3)) == "tonemap");
+        CHECK(std::string(graph.NodeName(2)) == "mesh-cull");
+        CHECK(std::string(graph.NodeName(3)) == "mesh");
+        CHECK(std::string(graph.NodeName(4)) == "tonemap");
     }
 }
 

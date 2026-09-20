@@ -245,6 +245,7 @@
 #include <Arcane/Render/Nri/nodes/FullscreenNodes.hpp>
 #include <Arcane/Render/Nri/nodes/ImGuiNriNode.hpp>
 #include <Arcane/Render/Nri/nodes/MeshNode.hpp>
+#include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 #include <Arcane/Render/Nri/nodes/GridNode.hpp>
 #include <Arcane/Render/Nri/nodes/PickOutlineNodes.hpp>
 
@@ -955,6 +956,7 @@ namespace Arcane
         // is one small descriptor pool and a two-region constant arena, not a
         // pass.
         [[nodiscard]] MeshNode*      Mesh()      noexcept { return m_mesh.get(); }
+        [[nodiscard]] MeshCullNode*  MeshCull()  noexcept { return m_meshCull.get(); }
 
         // THE GPU SCENE's device half (F3 plan 1 T6): the persistent instance
         // buffer, the per-slot indirect-args + visible-index buffers and the
@@ -1434,6 +1436,7 @@ namespace Arcane
         // objects are RELEASED explicitly in ~NriGraphContext, before the drain
         // -- these destructors are the safety net, not the path.
         std::unique_ptr<Batch2DNode>       m_batch2D;
+        std::unique_ptr<MeshCullNode>      m_meshCull;
         std::unique_ptr<MeshNode>          m_mesh;
         std::unique_ptr<GridNode>          m_grid;
         std::unique_ptr<PostChainNode>     m_post;

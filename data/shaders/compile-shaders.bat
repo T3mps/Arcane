@@ -34,7 +34,7 @@ set OUT=%~dp0generated
 if not exist "%OUT%\dxil"  mkdir "%OUT%\dxil"
 if not exist "%OUT%\spirv" mkdir "%OUT%\spirv"
 
-set SPIRV_FLAGS=-spirv -D SPIRV=1 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -fvk-b-shift 256 1 -fvk-t-shift 0 2 -fvk-t-shift 0 1
+set SPIRV_FLAGS=-spirv -D SPIRV=1 -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -fvk-b-shift 256 1 -fvk-t-shift 0 2 -fvk-t-shift 0 1 -fvk-u-shift 384 1
 
 call :compile sprite  vs_main vs_6_5 sprite_vs  || exit /b 1
 call :compile sprite  ps_main ps_6_5 sprite_ps  || exit /b 1
@@ -62,6 +62,8 @@ call :compile mesh vs_main vs_6_5 mesh_vs || exit /b 1
 call :compile mesh ps_main ps_6_5 mesh_ps || exit /b 1
 call :compile mesh ps_masked_main ps_6_5 mesh_masked_ps || exit /b 1
 call :compile mesh ps_transparent_main ps_6_5 mesh_transparent_ps || exit /b 1
+:: F3 fine cull: UAV visible indices + indirect argument counters.
+call :compile mesh_cull cs_main cs_6_5 mesh_cull_cs || exit /b 1
 :: The 3D reference grid (F4 plan 1 Task 10, spec s5.2) -- analytic, depth-tested after the mesh pass.
 call :compile grid vs_main vs_6_5 grid_vs || exit /b 1
 call :compile grid ps_main ps_6_5 grid_ps || exit /b 1

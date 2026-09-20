@@ -2212,14 +2212,18 @@ namespace
         REQUIRE(frame.args.size() == 1);
         CHECK(frame.stats.total == 2);
         CHECK(frame.stats.coarseVisible == 1);          // the (1000,0,0) cube is outside the frustum
-        CHECK(frame.args[0].instanceNum == 1);
+        CHECK(frame.args[0].instanceNum == 0);           // compute is the sole counter writer
         CHECK(frame.args[0].indexNum == static_cast<std::uint32_t>(cube.indices.size()));
         CHECK(frame.batches[0].mesh == cubeId);
+        REQUIRE(frame.cullBatches.size() == 1);
+        CHECK(frame.cullBatches[0].emitted == 1u);
+        CHECK(frame.cullBatches[0].capacity == 2u);
         const Arcane::GpuSceneMirror::Rows* nearRows = mirror.slots.TryGet(nearE);
         const Arcane::GpuSceneMirror::Rows* farRows  = mirror.slots.TryGet(farE);
         REQUIRE(nearRows != nullptr);
         REQUIRE(farRows != nullptr);
-        CHECK(frame.visibleIndices[frame.batches[0].firstOutput] == nearRows->first);
+        CHECK(frame.visibleIndices[frame.batches[0].firstOutput] == 0xFFFFFFFFu);
+        CHECK(frame.oracleVisibleIndices[frame.batches[0].firstOutput] == nearRows->first);
 
         // The rows are staged white (no material table) -- paint them red so the
         // channel assertions below separate the cube from the clear cleanly.
@@ -2238,23 +2242,36 @@ namespace
         CHECK(centre.r > corner.r + 120);
         CHECK(corner.r < 96);
 
-        // ---- a VisibleSet admitting ONLY the far cube: the same stage (every
-        // row, red), but the visible-index list names the far row alone. The
-        // indirect draw carries ONE instance, off-screen; the origin cube's
-        // row is in the instance buffer and is NOT drawn.
-        Arcane::VisibleSet onlyFar;
-        onlyFar.view    = view;
-        onlyFar.frustum = vis.frustum;
-        onlyFar.Clear();
-        onlyFar.Insert(farE, w.reg.GetComponent<Arcane::WorldBounds>(farE)->box, 0.0f);
+        // ---- A single off-screen row whose batch is deliberately emitted by
+        // the CPU coarse stage. The indirect args still start at zero; the
+        // compute cull repeats the frustum test and leaves the draw empty.
+        GpuSceneWorld offscreen;
+        offscreen.AddMesh(cubeId, cube);
+        const Astra::Entity offscreenE = offscreen.Spawn(glm::vec3(1000.0f, 0.0f, 0.0f), cubeId);
+        offscreen.Schedulers();
+        Arcane::GpuSceneMirror offscreenMirror;
+        Arcane::GpuSceneFrame  offscreenFrame;
+        Arcane::GpuSceneSync(offscreen.reg, offscreenMirror, /*deviceSyncedGeneration*/ 0u, offscreenFrame.stage);
+        for (Arcane::GpuInstance& row : offscreenFrame.stage.values)
+            row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+        Arcane::VisibleSet coarseOffscreen;
+        coarseOffscreen.view    = view;
+        coarseOffscreen.frustum = vis.frustum;
+        coarseOffscreen.Clear();
+        const Arcane::WorldBounds* offscreenBounds = offscreen.reg.GetComponent<Arcane::WorldBounds>(offscreenE);
+        REQUIRE(offscreenBounds != nullptr);
+        coarseOffscreen.Insert(offscreenE, offscreenBounds->box, 0.0f);
         Arcane::GpuSceneFrame culled;
-        culled.stage = frame.stage;   // the same full rebuild: the origin cube's row IS resident
-        Arcane::BuildGpuSceneFrame(mirror, &onlyFar, w.reg.GetResource<Arcane::MeshTable>(), view, culled);
+        Arcane::BuildGpuSceneFrame(offscreenMirror, &coarseOffscreen,
+                                   offscreen.reg.GetResource<Arcane::MeshTable>(), view, culled);
         REQUIRE(culled.batches.size() == 1);
         REQUIRE(culled.args.size() == 1);
         CHECK(culled.stats.coarseVisible == 1);
-        CHECK(culled.args[0].instanceNum == 1);
-        CHECK(culled.visibleIndices[culled.batches[0].firstOutput] == farRows->first);
+        CHECK(culled.args[0].instanceNum == 0);
+        const Arcane::GpuSceneMirror::Rows* offscreenRows = offscreenMirror.slots.TryGet(offscreenE);
+        REQUIRE(offscreenRows != nullptr);
+        CHECK(culled.visibleIndices[culled.batches[0].firstOutput] == 0xFFFFFFFFu);
+        CHECK(culled.oracleVisibleIndices[culled.batches[0].firstOutput] == offscreenRows->first);
         scene.scene = &culled;
         REQUIRE_FALSE(scene.Empty());
         std::uint32_t w1 = 0, h1 = 0;

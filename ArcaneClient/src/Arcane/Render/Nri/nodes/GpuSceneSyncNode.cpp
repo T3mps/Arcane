@@ -34,9 +34,12 @@ namespace Arcane
                                                          scene ? scene->ArgBytes(slot) : 0);
                 in.visibleIndices = builder.ImportBuffer("gpuscene.visible", scene ? scene->VisibleIndices(slot) : nullptr,
                                                          scene ? scene->VisibleBytes(slot) : 0);
+                in.cullBatches = builder.ImportBuffer("gpuscene.cull-batches", scene ? scene->CullBatches(slot) : nullptr,
+                                                       scene ? scene->CullBatchBytes(slot) : 0);
                 builder.Write(in.instances, RgUsage::CopyDst);
                 builder.Write(in.args, RgUsage::CopyDst);
                 builder.Write(in.visibleIndices, RgUsage::CopyDst);
+                builder.Write(in.cullBatches, RgUsage::CopyDst);
             },
             [context, frame, adHoc](RenderGraphNodeContext& nodeContext)
             {

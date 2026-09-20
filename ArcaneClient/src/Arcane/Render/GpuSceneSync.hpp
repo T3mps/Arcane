@@ -261,6 +261,7 @@ namespace Arcane
     {
         out.batches.clear();
         out.args.clear();
+        out.cullBatches.clear();
         out.transparentDraws.clear();
         out.rowCount = m.allocator.HighWater();
         out.visibleIndices.assign(out.rowCount, 0xFFFFFFFFu);
@@ -273,6 +274,9 @@ namespace Arcane
         std::vector<float> nearDepth(nb, std::numeric_limits<float>::infinity());
         std::uint32_t prefix = 0;
         for (std::size_t b = 0; b < nb; ++b) { firstOutput[b] = prefix; prefix += m.batchRowCount[b]; }
+        out.cullBatches.resize(nb);
+        for (std::size_t b = 0; b < nb; ++b)
+            out.cullBatches[b] = GpuCullBatch{ firstOutput[b], m.batchRowCount[b], 0u, 0u };
 
         // The coarse pass: every live row whose entity is a member (or every
         // row, no set). Indirect storage is device-owned from this point on:
@@ -344,6 +348,8 @@ namespace Arcane
             d.blend = key.blend; d.twoSided = key.twoSided; d.nearDepth = nearDepth[b];
             out.batches.push_back(d);
             out.args.push_back(DrawIndexedArgs{ indexCount, 0, section.indexOffset, 0, 0 });
+            out.cullBatches[b].argIndex = d.argIndex;
+            out.cullBatches[b].emitted  = 1u;
         }
         std::sort(out.transparentDraws.begin(), out.transparentDraws.end(), [](const TransparentDraw& a, const TransparentDraw& b)
         {

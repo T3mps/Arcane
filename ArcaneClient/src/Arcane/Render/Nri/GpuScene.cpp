@@ -66,6 +66,21 @@ namespace Arcane
             }
             return true;
         }
+
+        bool CreateStorageStructuredView(NriDevice& device, nri::Buffer* buffer, std::uint32_t stride, nri::Descriptor*& out)
+        {
+            nri::BufferViewDesc view = {};
+            view.buffer = buffer; view.type = nri::BufferView::STORAGE_STRUCTURED_BUFFER;
+            view.offset = 0; view.size = nri::WHOLE_SIZE; view.structureStride = stride;
+            out = nullptr;
+            if (!ARC_NRI_CHECK(device.Core().CreateBufferView(view, out)) || !out)
+            {
+                out = nullptr;
+                ARC_ERROR("[nri-graph] GpuScene: could not create a stride-{} storage structured view", stride);
+                return false;
+            }
+            return true;
+        }
     }
 
     std::unique_ptr<GpuScene> GpuScene::Create(NriDevice& device)
@@ -75,7 +90,7 @@ namespace Arcane
         if (!s->CreateInstances(kInitialRows))
             return nullptr;
         for (std::uint32_t slot = 0; slot < kSwapchainFramesInFlight; ++slot)
-            if (!s->CreateSlotBuffers(slot, kInitialRows, kScratchRows))
+            if (!s->CreateSlotBuffers(slot, kInitialRows, kScratchRows, kInitialRows))
                 return nullptr;   // ~GpuScene destroys what got made
         return s;
     }
@@ -94,8 +109,12 @@ namespace Arcane
         if (m_instances)     core.DestroyBuffer(m_instances);
         for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s)
         {
+            if (m_cullBatchesView[s]) core.DestroyDescriptor(m_cullBatchesView[s]);
+            if (m_cullBatches[s])     core.DestroyBuffer(m_cullBatches[s]);
+            if (m_visibleStorageView[s]) core.DestroyDescriptor(m_visibleStorageView[s]);
             if (m_visibleView[s]) core.DestroyDescriptor(m_visibleView[s]);
             if (m_visible[s])     core.DestroyBuffer(m_visible[s]);
+            if (m_argsStorageView[s]) core.DestroyDescriptor(m_argsStorageView[s]);
             if (m_args[s])        core.DestroyBuffer(m_args[s]);
         }
         if (m_debugReadback) core.DestroyBuffer(m_debugReadback);
@@ -138,18 +157,33 @@ namespace Arcane
         return std::uint64_t(m_visibleCapacity[slot]) * sizeof(std::uint32_t);
     }
 
-    bool GpuScene::CreateSlotBuffers(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount)
+    std::uint64_t GpuScene::CullBatchBytes(std::uint32_t slot) const noexcept
     {
-        if (!CreateBuffer(*m_device, nri::MemoryLocation::DEVICE, std::uint64_t(argCount) * sizeof(DrawIndexedArgs), 0,
-                          nri::BufferUsageBits::ARGUMENT_BUFFER, "gpuscene args", m_args[slot]))
+        return std::uint64_t(m_cullBatchCapacity[slot]) * sizeof(GpuCullBatch);
+    }
+
+    bool GpuScene::CreateSlotBuffers(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount)
+    {
+        if (!CreateBuffer(*m_device, nri::MemoryLocation::DEVICE, std::uint64_t(argCount) * sizeof(DrawIndexedArgs), sizeof(DrawIndexedArgs),
+                          nri::BufferUsageBits::ARGUMENT_BUFFER | nri::BufferUsageBits::SHADER_RESOURCE | nri::BufferUsageBits::SHADER_RESOURCE_STORAGE, "gpuscene args", m_args[slot]))
+            return false;
+        if (!CreateStorageStructuredView(*m_device, m_args[slot], sizeof(DrawIndexedArgs), m_argsStorageView[slot]))
             return false;
         m_argCapacity[slot] = argCount;
         if (!CreateBuffer(*m_device, nri::MemoryLocation::DEVICE, std::uint64_t(rows) * sizeof(std::uint32_t), sizeof(std::uint32_t),
-                          nri::BufferUsageBits::SHADER_RESOURCE, "gpuscene visible", m_visible[slot]))
+                          nri::BufferUsageBits::SHADER_RESOURCE | nri::BufferUsageBits::SHADER_RESOURCE_STORAGE, "gpuscene visible", m_visible[slot]))
             return false;
         if (!CreateStructuredView(*m_device, m_visible[slot], sizeof(std::uint32_t), m_visibleView[slot]))
             return false;
+        if (!CreateStorageStructuredView(*m_device, m_visible[slot], sizeof(std::uint32_t), m_visibleStorageView[slot]))
+            return false;
         m_visibleCapacity[slot] = rows;
+        if (!CreateBuffer(*m_device, nri::MemoryLocation::DEVICE, std::uint64_t(batchCount) * sizeof(GpuCullBatch), sizeof(GpuCullBatch),
+                          nri::BufferUsageBits::SHADER_RESOURCE, "gpuscene cull batches", m_cullBatches[slot]))
+            return false;
+        if (!CreateStructuredView(*m_device, m_cullBatches[slot], sizeof(GpuCullBatch), m_cullBatchesView[slot]))
+            return false;
+        m_cullBatchCapacity[slot] = batchCount;
         return true;
     }
 
@@ -158,36 +192,47 @@ namespace Arcane
         m_parked.emplace_back(fence, std::move(destroy));
     }
 
-    bool GpuScene::EnsureSlotCapacity(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint64_t fence)
+    bool GpuScene::EnsureSlotCapacity(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount, std::uint64_t fence)
     {
-        if (rows <= m_visibleCapacity[slot] && argCount <= m_argCapacity[slot])
+        if (rows <= m_visibleCapacity[slot] && argCount <= m_argCapacity[slot] && batchCount <= m_cullBatchCapacity[slot])
             return true;
 
-        std::uint32_t newRows = std::max(m_visibleCapacity[slot], 1u), newArgs = std::max(m_argCapacity[slot], 1u);
+        std::uint32_t newRows = std::max(m_visibleCapacity[slot], 1u), newArgs = std::max(m_argCapacity[slot], 1u), newBatches = std::max(m_cullBatchCapacity[slot], 1u);
         while (newRows < rows) newRows *= 2;
         while (newArgs < argCount) newArgs *= 2;
+        while (newBatches < batchCount) newBatches *= 2;
 
         // Build the replacements FIRST, so a refusal leaves the slot exactly as
         // it was (still drawable, still the size the last frame used).
-        nri::Buffer* oldArgs = m_args[slot]; nri::Buffer* oldVis = m_visible[slot]; nri::Descriptor* oldView = m_visibleView[slot];
-        const std::uint32_t oldArgCap = m_argCapacity[slot], oldVisCap = m_visibleCapacity[slot];
-        m_args[slot] = nullptr; m_visible[slot] = nullptr; m_visibleView[slot] = nullptr;
-        if (!CreateSlotBuffers(slot, newRows, newArgs))
+        nri::Buffer* oldArgs = m_args[slot]; nri::Descriptor* oldArgsView = m_argsStorageView[slot];
+        nri::Buffer* oldVis = m_visible[slot]; nri::Descriptor* oldView = m_visibleView[slot]; nri::Descriptor* oldVisStorage = m_visibleStorageView[slot];
+        nri::Buffer* oldBatches = m_cullBatches[slot]; nri::Descriptor* oldBatchView = m_cullBatchesView[slot];
+        const std::uint32_t oldArgCap = m_argCapacity[slot], oldVisCap = m_visibleCapacity[slot], oldBatchCap = m_cullBatchCapacity[slot];
+        m_args[slot] = nullptr; m_argsStorageView[slot] = nullptr; m_visible[slot] = nullptr; m_visibleView[slot] = nullptr; m_visibleStorageView[slot] = nullptr; m_cullBatches[slot] = nullptr; m_cullBatchesView[slot] = nullptr;
+        if (!CreateSlotBuffers(slot, newRows, newArgs, newBatches))
         {
             const nri::CoreInterface& core = m_device->Core();
+            if (m_cullBatchesView[slot]) core.DestroyDescriptor(m_cullBatchesView[slot]);
+            if (m_cullBatches[slot]) core.DestroyBuffer(m_cullBatches[slot]);
+            if (m_visibleStorageView[slot]) core.DestroyDescriptor(m_visibleStorageView[slot]);
             if (m_visibleView[slot]) core.DestroyDescriptor(m_visibleView[slot]);
             if (m_visible[slot])     core.DestroyBuffer(m_visible[slot]);
+            if (m_argsStorageView[slot]) core.DestroyDescriptor(m_argsStorageView[slot]);
             if (m_args[slot])        core.DestroyBuffer(m_args[slot]);
-            m_args[slot] = oldArgs; m_visible[slot] = oldVis; m_visibleView[slot] = oldView;
-            m_argCapacity[slot] = oldArgCap; m_visibleCapacity[slot] = oldVisCap;
+            m_args[slot] = oldArgs; m_argsStorageView[slot] = oldArgsView; m_visible[slot] = oldVis; m_visibleView[slot] = oldView; m_visibleStorageView[slot] = oldVisStorage; m_cullBatches[slot] = oldBatches; m_cullBatchesView[slot] = oldBatchView;
+            m_argCapacity[slot] = oldArgCap; m_visibleCapacity[slot] = oldVisCap; m_cullBatchCapacity[slot] = oldBatchCap;
             return false;
         }
 
         const nri::CoreInterface* core = &m_device->Core();
-        Park(fence, [core, oldArgs, oldVis, oldView]
+        Park(fence, [core, oldArgs, oldArgsView, oldVis, oldView, oldVisStorage, oldBatches, oldBatchView]
         {
+            if (oldBatchView) core->DestroyDescriptor(oldBatchView);
+            if (oldBatches) core->DestroyBuffer(oldBatches);
+            if (oldVisStorage) core->DestroyDescriptor(oldVisStorage);
             if (oldView) core->DestroyDescriptor(oldView);
             if (oldVis)  core->DestroyBuffer(oldVis);
+            if (oldArgsView) core->DestroyDescriptor(oldArgsView);
             if (oldArgs) core->DestroyBuffer(oldArgs);
         });
         return true;
@@ -246,10 +291,11 @@ namespace Arcane
         // 2. This slot's args + visible indices, when the frame draws. The
         //    visible list is rowCount entries by BuildGpuSceneFrame's contract;
         //    sized to whichever is larger so Apply's whole-array copy fits.
-        if (frame && frame->HasDraws())
+        if (frame && frame->rowCount != 0)
         {
             const std::uint32_t rows = std::max(frame->rowCount, static_cast<std::uint32_t>(frame->visibleIndices.size()));
-            if (!EnsureSlotCapacity(frameSlot, rows, static_cast<std::uint32_t>(frame->args.size()), fence))
+            if (!EnsureSlotCapacity(frameSlot, rows, std::max(static_cast<std::uint32_t>(frame->args.size()), 1u),
+                                    std::max(static_cast<std::uint32_t>(frame->cullBatches.size()), 1u), fence))
                 return false;
         }
 
@@ -376,32 +422,35 @@ namespace Arcane
                 return refuse();
         }
 
-        // 3. This slot's indirect args and visible indices, whole arrays.
-        if (frame && frame->HasDraws())
+        // 3. Zeroed args plus one batch record for every stable key. The cull
+        // pass is the sole counter writer; visible indices are deliberately
+        // not CPU-populated, even when culling is compiled to its identity path.
+        if (frame && frame->rowCount != 0)
         {
-            if (frame->args.size() > m_argCapacity[frameSlot] || frame->visibleIndices.size() > m_visibleCapacity[frameSlot])
+            if (frame->args.size() > m_argCapacity[frameSlot] || frame->cullBatches.size() > m_cullBatchCapacity[frameSlot])
             {
-                ARC_ERROR("[nri-graph] GpuScene: the slot {} buffers ({} args / {} rows) are smaller than the frame "
-                          "({} / {}) -- Reserve did not run for this frame",
-                          frameSlot, m_argCapacity[frameSlot], m_visibleCapacity[frameSlot],
-                          frame->args.size(), frame->visibleIndices.size());
+                ARC_ERROR("[nri-graph] GpuScene: slot {} buffers are smaller than this frame's args or cull batches -- Reserve did not run",
+                          frameSlot);
                 return refuse();
             }
             const std::uint64_t argBytes = frame->args.size() * sizeof(DrawIndexedArgs);
-            const std::uint64_t visBytes = frame->visibleIndices.size() * sizeof(std::uint32_t);
-            const NriUploadRing::Alloc a = ctx.ring.Allocate(argBytes, kRingAlign);
-            const NriUploadRing::Alloc v = visBytes ? ctx.ring.Allocate(visBytes, kRingAlign) : NriUploadRing::Alloc{};
-            if (!a.buffer || !a.cpu || (visBytes && (!v.buffer || !v.cpu)))
+            const std::uint64_t batchBytes = frame->cullBatches.size() * sizeof(GpuCullBatch);
+            const NriUploadRing::Alloc a = argBytes ? ctx.ring.Allocate(argBytes, kRingAlign) : NriUploadRing::Alloc{};
+            const NriUploadRing::Alloc b = batchBytes ? ctx.ring.Allocate(batchBytes, kRingAlign) : NriUploadRing::Alloc{};
+            if ((argBytes && (!a.buffer || !a.cpu)) || (batchBytes && (!b.buffer || !b.cpu)))
             {
-                ARC_ERROR("[nri-graph] GpuScene: the upload ring refused the args/visible arrays ({} + {} bytes)", argBytes, visBytes);
+                ARC_ERROR("[nri-graph] GpuScene: the upload ring refused the args/cull-batch arrays ({} + {} bytes)", argBytes, batchBytes);
                 return refuse();
             }
-            std::memcpy(a.cpu, frame->args.data(), argBytes);
-            core.CmdCopyBuffer(ctx.cmd, *m_args[frameSlot], 0, *a.buffer, a.offset, argBytes);
-            if (visBytes)
+            if (argBytes)
             {
-                std::memcpy(v.cpu, frame->visibleIndices.data(), visBytes);
-                core.CmdCopyBuffer(ctx.cmd, *m_visible[frameSlot], 0, *v.buffer, v.offset, visBytes);
+                std::memcpy(a.cpu, frame->args.data(), argBytes);
+                core.CmdCopyBuffer(ctx.cmd, *m_args[frameSlot], 0, *a.buffer, a.offset, argBytes);
+            }
+            if (batchBytes)
+            {
+                std::memcpy(b.cpu, frame->cullBatches.data(), batchBytes);
+                core.CmdCopyBuffer(ctx.cmd, *m_cullBatches[frameSlot], 0, *b.buffer, b.offset, batchBytes);
             }
         }
 
@@ -429,23 +478,27 @@ namespace Arcane
         const nri::CoreInterface* core = &m_device->Core();
         nri::Buffer* inst = m_instances; nri::Descriptor* instView = m_instancesView;
         nri::Buffer* readback = m_debugReadback;
-        nri::Buffer* args[kSwapchainFramesInFlight]; nri::Buffer* vis[kSwapchainFramesInFlight]; nri::Descriptor* visView[kSwapchainFramesInFlight];
-        for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s) { args[s] = m_args[s]; vis[s] = m_visible[s]; visView[s] = m_visibleView[s]; }
-        graves.Bury(fence, [core, inst, instView, readback, args, vis, visView]
+        nri::Buffer* args[kSwapchainFramesInFlight]; nri::Descriptor* argsView[kSwapchainFramesInFlight]; nri::Buffer* vis[kSwapchainFramesInFlight]; nri::Descriptor* visView[kSwapchainFramesInFlight]; nri::Descriptor* visStorage[kSwapchainFramesInFlight]; nri::Buffer* batches[kSwapchainFramesInFlight]; nri::Descriptor* batchViews[kSwapchainFramesInFlight];
+        for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s) { args[s] = m_args[s]; argsView[s] = m_argsStorageView[s]; vis[s] = m_visible[s]; visView[s] = m_visibleView[s]; visStorage[s] = m_visibleStorageView[s]; batches[s] = m_cullBatches[s]; batchViews[s] = m_cullBatchesView[s]; }
+        graves.Bury(fence, [core, inst, instView, readback, args, argsView, vis, visView, visStorage, batches, batchViews]
         {
             if (instView) core->DestroyDescriptor(instView);
             if (inst)     core->DestroyBuffer(inst);
             if (readback) core->DestroyBuffer(readback);
             for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s)
             {
+                if (batchViews[s]) core->DestroyDescriptor(batchViews[s]);
+                if (batches[s]) core->DestroyBuffer(batches[s]);
+                if (visStorage[s]) core->DestroyDescriptor(visStorage[s]);
                 if (visView[s]) core->DestroyDescriptor(visView[s]);
                 if (vis[s])     core->DestroyBuffer(vis[s]);
+                if (argsView[s]) core->DestroyDescriptor(argsView[s]);
                 if (args[s])    core->DestroyBuffer(args[s]);
             }
         });
         m_instances = nullptr; m_instancesView = nullptr; m_debugReadback = nullptr; m_debugReadbackBytes = 0;
         m_pendingGrowCopy = {};
-        for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s) { m_args[s] = nullptr; m_visible[s] = nullptr; m_visibleView[s] = nullptr; }
+        for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s) { m_args[s] = nullptr; m_argsStorageView[s] = nullptr; m_visible[s] = nullptr; m_visibleView[s] = nullptr; m_visibleStorageView[s] = nullptr; m_cullBatches[s] = nullptr; m_cullBatchesView[s] = nullptr; }
 
         // Anything still parked was retired by a frame that never submitted
         // (its stamp is fence + 1, and nothing in flight names it). Buried AT

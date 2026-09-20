@@ -123,7 +123,9 @@ namespace Arcane
         bool          depthStencil = false;   // chooses attachment vs shader usage bits (Task 4)
     };
 
-    // Per-declaration usage: what THIS Read/Write means, not a resource-wide
+    // Per-declaration usage: what THIS Read/Write means, not a resource-wide.
+    // Culling is an ordinary Compute node declaring these usages, never an
+    // implicit graph property or an execution-time reordering rule.
     // flag (the same resource can be ColorWrite in one node and ShaderRead
     // in the next). Task 4 maps each value to an (access, layout, stage)
     // triple for barrier derivation.

@@ -184,6 +184,18 @@ namespace Arcane
     };
     static_assert(sizeof(DrawIndexedArgs) == 20);
 
+    // One record for every stable batch-key id, including keys which are not
+    // emitted this view (and transparent keys). Keep this order in sync with
+    // mesh_cull.hlsl: the shader indexes it with GpuInstance::batch.
+    struct GpuCullBatch
+    {
+        std::uint32_t firstOutput = 0;
+        std::uint32_t capacity    = 0;
+        std::uint32_t argIndex    = 0;
+        std::uint32_t emitted     = 0;
+    };
+    static_assert(sizeof(GpuCullBatch) == 16);
+
     struct GpuBatchDraw
     {
         Guid          mesh{};
@@ -220,6 +232,7 @@ namespace Arcane
         GpuSceneStage              stage;
         std::vector<GpuBatchDraw>  batches;          // EMITTED, in draw order
         std::vector<DrawIndexedArgs> args;           // by argIndex
+        std::vector<GpuCullBatch> cullBatches;        // by stable batch key id; consumed by MeshCullNode
         std::vector<std::uint32_t> visibleIndices;   // device output: rowCapacity entries, initially invalid each frame
         std::vector<std::uint32_t> oracleVisibleIndices; // CPU expectation for later GPU readback comparison
         std::vector<TransparentDraw> transparentDraws; // direct records, ordered far-to-near within render order

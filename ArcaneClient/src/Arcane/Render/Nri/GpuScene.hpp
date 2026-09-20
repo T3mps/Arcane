@@ -97,8 +97,12 @@ namespace Arcane
         [[nodiscard]] nri::Buffer*     Instances() const noexcept { return m_instances; }
         [[nodiscard]] nri::Descriptor* InstancesView() const noexcept { return m_instancesView; }   // STRUCTURED_BUFFER, stride 240
         [[nodiscard]] nri::Buffer*     Args(std::uint32_t slot) const noexcept { return m_args[slot]; }
+        [[nodiscard]] nri::Descriptor* ArgsStorageView(std::uint32_t slot) const noexcept { return m_argsStorageView[slot]; }
         [[nodiscard]] nri::Buffer*     VisibleIndices(std::uint32_t slot) const noexcept { return m_visible[slot]; }
         [[nodiscard]] nri::Descriptor* VisibleIndicesView(std::uint32_t slot) const noexcept { return m_visibleView[slot]; }   // STRUCTURED_BUFFER, stride 4
+        [[nodiscard]] nri::Descriptor* VisibleIndicesStorageView(std::uint32_t slot) const noexcept { return m_visibleStorageView[slot]; }
+        [[nodiscard]] nri::Buffer*     CullBatches(std::uint32_t slot) const noexcept { return m_cullBatches[slot]; }
+        [[nodiscard]] nri::Descriptor* CullBatchesView(std::uint32_t slot) const noexcept { return m_cullBatchesView[slot]; }
         [[nodiscard]] std::uint32_t    RowCapacity() const noexcept { return m_rowCapacity; }
         [[nodiscard]] std::uint32_t    ScratchFirstRow(std::uint32_t slot) const noexcept { return m_rowCapacity + slot * kScratchRows; }
         [[nodiscard]] std::uint64_t    InstanceBufferGeneration() const noexcept { return m_instanceGeneration; }   // bumps on every grow
@@ -107,6 +111,7 @@ namespace Arcane
         [[nodiscard]] std::uint64_t    InstanceBytes() const noexcept;                     // the whole buffer incl. scratch
         [[nodiscard]] std::uint64_t    ArgBytes(std::uint32_t slot) const noexcept;        // the slot's args buffer, whole
         [[nodiscard]] std::uint64_t    VisibleBytes(std::uint32_t slot) const noexcept;    // the slot's visible-index buffer, whole
+        [[nodiscard]] std::uint64_t    CullBatchBytes(std::uint32_t slot) const noexcept;
 
         void Release(Graveyard& graves, std::uint64_t fence);
 
@@ -129,8 +134,8 @@ namespace Arcane
     private:
         GpuScene() = default;
         bool CreateInstances(std::uint32_t rowCapacity);            // buffer + view for rowCapacity + kScratchRows * frames
-        bool CreateSlotBuffers(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount);
-        bool EnsureSlotCapacity(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint64_t fence);
+        bool CreateSlotBuffers(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount);
+        bool EnsureSlotCapacity(std::uint32_t slot, std::uint32_t rows, std::uint32_t argCount, std::uint32_t batchCount, std::uint64_t fence);
         bool CopyRows(RenderGraphNodeContext& ctx, std::span<const std::uint32_t> rows,
                       std::span<const GpuInstance> values, std::uint32_t firstRowOverride, bool contiguous);
         void Park(std::uint64_t fence, std::function<void()> destroy);
@@ -142,10 +147,15 @@ namespace Arcane
         std::uint64_t    m_instanceGeneration = 1;
         std::uint64_t    m_syncedGeneration = 0;
         nri::Buffer*     m_args[kSwapchainFramesInFlight] = {};
+        nri::Descriptor* m_argsStorageView[kSwapchainFramesInFlight] = {};
         std::uint32_t    m_argCapacity[kSwapchainFramesInFlight] = {};
         nri::Buffer*     m_visible[kSwapchainFramesInFlight] = {};
         nri::Descriptor* m_visibleView[kSwapchainFramesInFlight] = {};
+        nri::Descriptor* m_visibleStorageView[kSwapchainFramesInFlight] = {};
         std::uint32_t    m_visibleCapacity[kSwapchainFramesInFlight] = {};
+        nri::Buffer*     m_cullBatches[kSwapchainFramesInFlight] = {};
+        nri::Descriptor* m_cullBatchesView[kSwapchainFramesInFlight] = {};
+        std::uint32_t    m_cullBatchCapacity[kSwapchainFramesInFlight] = {};
         bool             m_warnedScratchOverflow = false;
 
         // The grow-copy Reserve leaves for Apply: the retired buffer holding

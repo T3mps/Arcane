@@ -14,6 +14,7 @@
 #include <Arcane/Render/Nri/NriCommon.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/Nri/nodes/GpuSceneSyncNode.hpp>   // AddGpuSceneSyncNode -- declared ahead of the mesh node (F3 plan 1 T6)
+#include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/RenderErrorLatch.hpp>
@@ -1259,6 +1260,7 @@ namespace Arcane
         // scratch region; the mesh node below Reads the same handles, so the
         // graph derives the copy -> read barriers.
         const GpuSceneNodeInputs gpuScene = AddGpuSceneSyncNode(graph, context, scene.scene, adHoc);
+        AddMeshCullNode(graph, context, gpuScene, scene.scene);
 
         // `depth` is captured by reference ([&]) below, not shared_ptr -- safe
         // here only because the SETUP lambda is the one that mutates it and

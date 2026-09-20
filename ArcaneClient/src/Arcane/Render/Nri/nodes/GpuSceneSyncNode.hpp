@@ -32,6 +32,7 @@ namespace Arcane
         RgBuffer instances{};
         RgBuffer args{};
         RgBuffer visibleIndices{};
+        RgBuffer cullBatches{};
     };
 
     // `frame` may be null (no registry-backed scene this frame); `adHoc` may be
