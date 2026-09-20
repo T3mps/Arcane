@@ -35,6 +35,7 @@ namespace Arcane
     inline constexpr std::uint32_t kGpuInstanceFlagBlendShift = 1u;
     inline constexpr std::uint32_t kGpuInstanceFlagBlendMask  = 0x3u << kGpuInstanceFlagBlendShift;
     inline constexpr std::uint32_t kGpuInstanceFlagTwoSided   = 1u << 3;
+    inline constexpr std::uint32_t kGpuInstanceFlagLive       = 1u << 4;
 
     // ONE ROW PER (entity, mesh section). 240 bytes, std430; data/shaders/
     // gpu_scene.hlsli carries the same field order -- change both or neither.
@@ -241,5 +242,22 @@ namespace Arcane
         struct Stats { std::uint32_t total = 0, coarseVisible = 0, batches = 0, draws = 0; } stats;
 
         [[nodiscard]] bool HasDraws() const noexcept { return !batches.empty() || !transparentDraws.empty(); }
+    };
+
+    // Mutable execution-order state shared by the sync, cull, and mesh graph
+    // callbacks for one declared frame. Reserve runs before graph declaration;
+    // Apply updates the ready bits inside the sync callback, and later callbacks
+    // must read them there rather than snapshotting them during declaration.
+    struct GpuSceneFrameReadiness
+    {
+        bool registryReserved = false;
+        bool registryReady    = false;
+        bool adHocReady       = false;
+    };
+
+    struct GpuSceneApplyResult
+    {
+        bool registryReady = false;
+        bool adHocReady    = false;
     };
 }

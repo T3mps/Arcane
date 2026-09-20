@@ -15,6 +15,7 @@ namespace Arcane
                                            const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc)
     {
         GpuSceneNodeInputs in;
+        in.readiness = std::make_shared<GpuSceneFrameReadiness>();
         GpuScene* scene = context ? context->Scene() : nullptr;
         const std::uint32_t slot = context ? context->FrameSlot() : 0;
 
@@ -22,7 +23,12 @@ namespace Arcane
         // name the buffer this frame writes and reads. A refusal is logged and
         // the previous buffers stay -- the record then refuses too, loudly.
         if (scene)
-            (void)scene->Reserve(frame, adHoc.size(), slot, context->CurrentFence());
+        {
+            const bool reserved = scene->Reserve(frame, adHoc.size(), slot, context->CurrentFence());
+            in.readiness->registryReserved = frame && reserved;
+            if (frame && !reserved)
+                ARC_ERROR("[nri-graph] GpuSceneSyncNode: GpuScene::Reserve refused this frame's registry buffers");
+        }
 
         graph.AddNode("gpuscene-sync", RenderGraph::NodeKind::Copy,
             [&in, scene, slot](RenderGraphBuilder& builder)
@@ -41,14 +47,21 @@ namespace Arcane
                 builder.Write(in.visibleIndices, RgUsage::CopyDst);
                 builder.Write(in.cullBatches, RgUsage::CopyDst);
             },
-            [context, frame, adHoc](RenderGraphNodeContext& nodeContext)
+            [context, frame, adHoc, readiness = in.readiness](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
                     return;   // device-less declaration-shape drive
                 GpuScene* s = context->Scene();
                 if (!s)
                     return;
-                if (!s->Apply(frame, adHoc, context->FrameSlot(), nodeContext))
+                // A Reserve refusal still permits the independent scratch
+                // upload. Registry data is omitted so stale slot buffers can
+                // never reach the later compute/mesh callbacks.
+                const GpuSceneFrame* registryFrame = readiness->registryReserved ? frame : nullptr;
+                const GpuSceneApplyResult applied = s->Apply(registryFrame, adHoc, context->FrameSlot(), nodeContext);
+                readiness->registryReady = readiness->registryReserved && applied.registryReady;
+                readiness->adHocReady = applied.adHocReady;
+                if (frame && readiness->registryReserved && !readiness->registryReady)
                     ARC_ERROR("[nri-graph] GpuSceneSyncNode: GpuScene::Apply refused this frame's rows");
             });
         return in;

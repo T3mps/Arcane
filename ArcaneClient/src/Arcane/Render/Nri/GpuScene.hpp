@@ -74,20 +74,22 @@ namespace Arcane
         // FlushGraves). `adHocCount` is the ad-hoc instance count the record
         // will be handed -- it decides the one-shot scratch-overflow WARN here,
         // where the drop is decided. False (logged) if a buffer could not be
-        // created; the previous buffers stay in place and drawable.
+        // created; the previous buffers stay in place, but registry consumers
+        // are suppressed for this frame.
         bool Reserve(const GpuSceneFrame* frame, std::size_t adHocCount, std::uint32_t frameSlot,
                      std::uint64_t fence);
 
         // RECORD time, from GpuSceneSyncNode's exec fn. Issues the pending
         // grow-copy (if Reserve left one), copies the staged rows and the
         // scratch rows through the ring, copies this slot's args + visible
-        // indices, and stamps the synced generation. False (logged) on
-        // refusal -- and EVERY refusal resets SyncedGeneration() to 0, so the
-        // host's next GpuSceneSync sees a generation it never acknowledged
-        // and stages a full rebuild: the dropped stage's once-staged rows (a
-        // spawn, a material change) have no re-dirty to rescue them.
-        bool Apply(const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc, std::uint32_t frameSlot,
-                   RenderGraphNodeContext& ctx);
+        // indices + cull batches, and stamps the synced generation. The result
+        // reports registry and ad-hoc readiness independently. Every registry
+        // refusal resets SyncedGeneration() to 0, so the host's next
+        // GpuSceneSync sees a generation it never acknowledged and stages a
+        // full rebuild: the dropped stage's once-staged rows (a spawn, a
+        // material change) have no re-dirty to rescue them.
+        GpuSceneApplyResult Apply(const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc,
+                                  std::uint32_t frameSlot, RenderGraphNodeContext& ctx);
 
         // AFTER a successful Execute (NriGraphContext, beside the mesh cache's
         // eviction): buries everything Reserve retired, at the fence values it

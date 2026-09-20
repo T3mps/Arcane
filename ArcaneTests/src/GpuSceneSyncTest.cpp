@@ -88,6 +88,13 @@ namespace
                 if (stage.rows[i] == row) return &stage.values[i];
             return nullptr;
         }
+        std::vector<const Arcane::GpuInstance*> StagedAll(std::uint32_t row) const
+        {
+            std::vector<const Arcane::GpuInstance*> out;
+            for (std::size_t i = 0; i < stage.rows.size(); ++i)
+                if (stage.rows[i] == row) out.push_back(&stage.values[i]);
+            return out;
+        }
         std::uint32_t RowOf(Astra::Entity e, std::uint32_t section = 0) const
         {
             const Arcane::GpuSceneMirror::Rows* r = mirror.slots.TryGet(e);
@@ -95,6 +102,15 @@ namespace
             return r->first + section;
         }
     };
+
+    void CheckGpuSceneTombstone(const Arcane::GpuInstance& row)
+    {
+        CHECK(row.batch == 0xFFFFFFFFu);
+        CHECK(row.flags == 0u);
+        CHECK(row.materialSlot == Arcane::kGpuInvalidMaterialSlot);
+        CHECK(row.boundsMin == glm::vec4(0.0f));
+        CHECK(row.boundsMax == glm::vec4(0.0f));
+    }
 }
 
 TEST_CASE("GpuSceneSync: a new entity allocates one row per section, staged with prev == model", "[gpuscene]")
@@ -181,6 +197,32 @@ TEST_CASE("GpuSceneSync: a destroyed entity frees its rows and a later spawn reu
     CHECK(w.mirror.allocator.HighWater() == 2);
 }
 
+TEST_CASE("GpuSceneSync: destroyed rows stage inactive tombstones before their slots become holes", "[gpuscene]")
+{
+    // Review round 1, Critical #1: the GPU dispatch spans allocator high water.
+    // Freeing a CPU row must therefore write an inactive row to the persistent
+    // GPU buffer; otherwise the shader can keep seeing the old live row while
+    // another entity sharing its batch still emits that batch.
+    World w;
+    const Arcane::Guid mesh = w.Mesh();
+    Astra::Entity dead = w.Spawn(glm::vec3(0), mesh);
+    Astra::Entity live = w.Spawn(glm::vec3(3, 0, 0), mesh);
+    w.Frame();
+    const std::uint32_t deadRow = w.RowOf(dead);
+    const std::uint32_t liveRow = w.RowOf(live);
+
+    w.reg.DestroyEntity(dead);
+    w.Frame();
+
+    CHECK(w.mirror.slots.TryGet(dead) == nullptr);
+    REQUIRE(w.mirror.slots.TryGet(live) != nullptr);
+    CHECK(w.RowOf(live) == liveRow);
+    CHECK(w.mirror.batchRowCount == std::vector<std::uint32_t>{ 1u });
+    const std::vector<const Arcane::GpuInstance*> staged = w.StagedAll(deadRow);
+    REQUIRE(staged.size() == 1u);
+    CheckGpuSceneTombstone(*staged[0]);
+}
+
 TEST_CASE("GpuSceneSync: Hidden frees the rows; unhiding re-allocates them as new (prev == model)", "[gpuscene]")
 {
     World w;
@@ -197,6 +239,26 @@ TEST_CASE("GpuSceneSync: Hidden frees the rows; unhiding re-allocates them as ne
     CHECK(v->prevModel == v->model);
 }
 
+TEST_CASE("GpuSceneSync: hidden rows stage inactive tombstones even when the freed row is not reused that frame", "[gpuscene]")
+{
+    World w;
+    const Arcane::Guid mesh = w.Mesh();
+    Astra::Entity hidden = w.Spawn(glm::vec3(0), mesh);
+    Astra::Entity live = w.Spawn(glm::vec3(3, 0, 0), mesh);
+    w.Frame();
+    const std::uint32_t hiddenRow = w.RowOf(hidden);
+    const std::uint32_t liveRow = w.RowOf(live);
+
+    w.reg.AddComponent<Arcane::Hidden>(hidden, Arcane::Hidden{});
+    w.Frame();
+
+    CHECK(w.mirror.slots.TryGet(hidden) == nullptr);
+    CHECK(w.RowOf(live) == liveRow);
+    const std::vector<const Arcane::GpuInstance*> staged = w.StagedAll(hiddenRow);
+    REQUIRE(staged.size() == 1u);
+    CheckGpuSceneTombstone(*staged[0]);
+}
+
 TEST_CASE("GpuSceneSync: reassigning the mesh to one with a different section count reallocates", "[gpuscene]")
 {
     World w;
@@ -204,10 +266,17 @@ TEST_CASE("GpuSceneSync: reassigning the mesh to one with a different section co
     const Arcane::Guid three = w.Mesh(3);
     Astra::Entity e = w.Spawn(glm::vec3(0), one);
     w.Frame();
+    const std::uint32_t oldRow = w.RowOf(e);
     w.reg.GetComponent<Arcane::MeshRenderer>(e)->mesh = three;
     w.Frame();
     CHECK(w.mirror.slots.TryGet(e)->count == 3);
-    CHECK(w.stage.rows.size() == 3);
+    CHECK(std::count_if(w.stage.values.begin(), w.stage.values.end(), [](const Arcane::GpuInstance& row)
+    {
+        return (row.flags & Arcane::kGpuInstanceFlagLive) != 0;
+    }) == 3);
+    const std::vector<const Arcane::GpuInstance*> old = w.StagedAll(oldRow);
+    REQUIRE(old.size() == 1u);
+    CheckGpuSceneTombstone(*old[0]);
 }
 
 TEST_CASE("GpuSceneSync: a generation mismatch (registry swap) re-stages every live row with prev == model", "[gpuscene]")
@@ -222,6 +291,33 @@ TEST_CASE("GpuSceneSync: a generation mismatch (registry swap) re-stages every l
     REQUIRE(w.stage.rows.size() == 1);
     CHECK(w.stage.fullRebuild);
     CHECK(w.Staged(w.RowOf(e))->prevModel == w.Staged(w.RowOf(e))->model);
+}
+
+TEST_CASE("GpuSceneSync: a full rebuild clears allocator holes as inactive rows", "[gpuscene]")
+{
+    // Review round 1, Critical #1: a registry/context generation mismatch
+    // rebuilds live rows, but high-water holes must also be overwritten. A
+    // stale GPU row in such a hole can carry an old batch id that is beyond
+    // the rebuilt batch table.
+    World w;
+    const Arcane::Guid mesh = w.Mesh();
+    Astra::Entity removed = w.Spawn(glm::vec3(0), mesh);
+    Astra::Entity live = w.Spawn(glm::vec3(3, 0, 0), mesh);
+    w.Frame();
+    const std::uint32_t removedRow = w.RowOf(removed);
+    const std::uint32_t liveRow = w.RowOf(live);
+    w.reg.DestroyEntity(removed);
+    w.Frame();
+
+    w.deviceGen = 0;
+    w.Frame();
+
+    CHECK(w.stage.fullRebuild);
+    REQUIRE(w.Staged(liveRow) != nullptr);
+    const std::vector<const Arcane::GpuInstance*> stagedHole = w.StagedAll(removedRow);
+    REQUIRE(stagedHole.size() == 1u);
+    CheckGpuSceneTombstone(*stagedHole[0]);
+    CHECK(w.stage.rowCapacity == 2u);
 }
 
 TEST_CASE("GpuSceneSync: the material chain -- override wins, else the slot's material, else white; an unresolvable override falls to the slot", "[gpuscene][material]")
@@ -281,7 +377,7 @@ TEST_CASE("GpuSceneSync: material-only blend and cull changes re-key the row and
     CHECK(w.mirror.batchRowCount[maskedBatch] == 1);
     CHECK(w.mirror.batchKeys[maskedBatch].blend == Arcane::MaterialBlendMode::Masked);
     CHECK_FALSE(w.mirror.batchKeys[maskedBatch].twoSided);
-    CHECK(masked->flags == 2u);                   // blend is stored independently in bits 1-2
+    CHECK(masked->flags == (Arcane::kGpuInstanceFlagLive | 2u)); // validity preserves blend bits 1-2
     CHECK(masked->boundsMax.w == 0.25f);
 
     w.materials[material].blend = Arcane::MaterialBlendMode::Transparent;
@@ -293,7 +389,7 @@ TEST_CASE("GpuSceneSync: material-only blend and cull changes re-key the row and
     CHECK(w.mirror.batchRowCount[maskedBatch] == 0);
     CHECK(w.mirror.batchRowCount[transparentBatch] == 1);
     CHECK(w.mirror.batchKeys[transparentBatch].blend == Arcane::MaterialBlendMode::Transparent);
-    CHECK(transparent->flags == 4u);
+    CHECK(transparent->flags == (Arcane::kGpuInstanceFlagLive | 4u));
 
     w.materials[material].twoSided = true;
     w.Frame();
@@ -305,7 +401,7 @@ TEST_CASE("GpuSceneSync: material-only blend and cull changes re-key the row and
     CHECK(w.mirror.batchRowCount[twoSidedBatch] == 1);
     CHECK(w.mirror.batchKeys[twoSidedBatch].blend == Arcane::MaterialBlendMode::Transparent);
     CHECK(w.mirror.batchKeys[twoSidedBatch].twoSided);
-    CHECK(twoSided->flags == 12u);                // transparent bits plus the independent two-sided bit
+    CHECK(twoSided->flags == (Arcane::kGpuInstanceFlagLive | 12u)); // live + transparent + two-sided
 }
 
 TEST_CASE("GpuSceneSync: a mesh asset re-published with new bounds re-stages exactly that entity's rows with the new box and prev == model (Changed<WorldBounds>)", "[gpuscene]")

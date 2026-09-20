@@ -32,5 +32,6 @@ struct GpuInstance
 #define kGpuInstanceFlagBlendShift 1u
 #define kGpuInstanceFlagBlendMask  (0x3u << kGpuInstanceFlagBlendShift)
 #define kGpuInstanceFlagTwoSided   (1u << 3)
+#define kGpuInstanceFlagLive       (1u << 4)
 
 #endif

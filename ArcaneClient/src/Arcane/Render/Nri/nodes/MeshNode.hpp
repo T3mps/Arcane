@@ -335,6 +335,19 @@ namespace Arcane
     inline constexpr std::uint32_t kMeshRootDirect = 1u;
     static_assert(sizeof(MeshRootConstants) == 8, "mesh.hlsl's MeshRoot is two uints");
 
+    struct MeshDrawSelection
+    {
+        bool registry = false;
+        bool adHoc    = false;
+    };
+    [[nodiscard]] constexpr MeshDrawSelection SelectMeshDrawPaths(
+        bool registryHasDraws, bool adHocHasDraws,
+        const GpuSceneFrameReadiness& readiness) noexcept
+    {
+        return { readiness.registryReady && registryHasDraws,
+                 readiness.adHocReady && adHocHasDraws };
+    }
+
     // The three fixed offline pixel artifacts. No runtime shader define chooses
     // among them: every blend mode owns a separately compiled DXIL/SPIR-V blob.
     enum class MeshPixelShader : std::uint8_t
@@ -509,7 +522,8 @@ namespace Arcane
         // keyed it. A parameter this function did not read would just be
         // something for a reader to reason about.
         void Record(RenderGraphNodeContext& context, const MeshSceneDesc& scene,
-                    std::uint32_t frameSlot, GpuScene* gpuScene);
+                    std::uint32_t frameSlot, GpuScene* gpuScene,
+                    const GpuSceneFrameReadiness& readiness);
 
         // The b1 block's region size BEFORE alignment. mesh.hlsl's MeshFrameCB
         // is 112 bytes; 256 is also D3D12's constant-buffer placement

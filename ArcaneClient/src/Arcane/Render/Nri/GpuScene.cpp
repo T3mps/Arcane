@@ -241,10 +241,16 @@ namespace Arcane
     bool GpuScene::Reserve(const GpuSceneFrame* frame, std::size_t adHocCount, std::uint32_t frameSlot,
                            std::uint64_t fence)
     {
+        const auto refuse = [&]() noexcept
+        {
+            if (frame)
+                m_syncedGeneration = 0;
+            return false;
+        };
         if (frameSlot >= kSwapchainFramesInFlight)
         {
             ARC_ERROR("[nri-graph] GpuScene::Reserve: frame slot {} is out of range", frameSlot);
-            return false;
+            return refuse();
         }
 
         // 1. The instance buffer: grow to the mirror's high water, doubling.
@@ -271,7 +277,7 @@ namespace Arcane
             if (!CreateInstances(newCap))
             {
                 m_instances = oldBuf; m_instancesView = oldView; m_rowCapacity = oldCap;   // keep drawing the old one
-                return false;
+                return refuse();
             }
             const nri::CoreInterface* core = &m_device->Core();
             Park(fence, [core, oldBuf, oldView]
@@ -296,7 +302,7 @@ namespace Arcane
             const std::uint32_t rows = std::max(frame->rowCount, static_cast<std::uint32_t>(frame->visibleIndices.size()));
             if (!EnsureSlotCapacity(frameSlot, rows, std::max(static_cast<std::uint32_t>(frame->args.size()), 1u),
                                     std::max(static_cast<std::uint32_t>(frame->cullBatches.size()), 1u), fence))
-                return false;
+                return refuse();
         }
 
         // 3. The scratch overflow is decided here and clamped in Apply.
@@ -349,8 +355,8 @@ namespace Arcane
         return true;
     }
 
-    bool GpuScene::Apply(const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc, std::uint32_t frameSlot,
-                         RenderGraphNodeContext& ctx)
+    GpuSceneApplyResult GpuScene::Apply(const GpuSceneFrame* frame, std::span<const GpuInstance> adHoc,
+                                        std::uint32_t frameSlot, RenderGraphNodeContext& ctx)
     {
         // EVERY refusal forgets the synced generation (F3 plan 1 review fix,
         // Important #2): the next GpuSceneSync starts by clearing this frame's
@@ -362,13 +368,18 @@ namespace Arcane
         // GpuSceneSync stages every live row with prev == model through the
         // machinery that already exists. The early refusals below count too: a
         // refusal anywhere means the stage did not land.
-        auto refuse = [&]() noexcept
+        GpuSceneApplyResult result;
+        auto refuseRegistry = [&]() noexcept
         {
             m_syncedGeneration = 0;
-            return false;
+            result.registryReady = false;
         };
         if (frameSlot >= kSwapchainFramesInFlight || !m_instances)
-            return refuse();
+        {
+            if (frame)
+                refuseRegistry();
+            return result;
+        }
         const nri::CoreInterface& core = ctx.core;
 
         // 1. The pending grow-copy: the live rows, old -> new, on this command
@@ -410,16 +421,29 @@ namespace Arcane
             core.CmdBarrier(ctx.cmd, order);
         }
 
-        // 2. The staged rows (dirty this frame), then the scratch rows for this slot.
-        if (frame && !CopyRows(ctx, frame->stage.rows, frame->stage.values, 0, /*contiguous*/ false))
-            return refuse();
+        // 2. Scratch rows are independent of the registry stage. Upload them
+        // first and retain their result even if the registry data below is
+        // refused; preview/ad-hoc drawing must not disappear because a
+        // registry frame was malformed or could not reserve its buffers.
+        result.adHocReady = adHoc.empty();
         if (!adHoc.empty())
         {
             std::span<const GpuInstance> rows = adHoc;
             if (rows.size() > kScratchRows)
                 rows = rows.subspan(0, kScratchRows);   // Reserve warned, once
-            if (!CopyRows(ctx, {}, rows, ScratchFirstRow(frameSlot), /*contiguous*/ true))
-                return refuse();
+            result.adHocReady = CopyRows(ctx, {}, rows, ScratchFirstRow(frameSlot), /*contiguous*/ true);
+        }
+
+        // No registry frame is a valid ad-hoc-only application. It does not
+        // acknowledge or invalidate any mirror generation.
+        if (!frame)
+            return result;
+
+        // The staged registry rows (dirty or tombstoned this frame).
+        if (!CopyRows(ctx, frame->stage.rows, frame->stage.values, 0, /*contiguous*/ false))
+        {
+            refuseRegistry();
+            return result;
         }
 
         // 3. Zeroed args plus one batch record for every stable key. The cull
@@ -431,7 +455,8 @@ namespace Arcane
             {
                 ARC_ERROR("[nri-graph] GpuScene: slot {} buffers are smaller than this frame's args or cull batches -- Reserve did not run",
                           frameSlot);
-                return refuse();
+                refuseRegistry();
+                return result;
             }
             const std::uint64_t argBytes = frame->args.size() * sizeof(DrawIndexedArgs);
             const std::uint64_t batchBytes = frame->cullBatches.size() * sizeof(GpuCullBatch);
@@ -440,7 +465,8 @@ namespace Arcane
             if ((argBytes && (!a.buffer || !a.cpu)) || (batchBytes && (!b.buffer || !b.cpu)))
             {
                 ARC_ERROR("[nri-graph] GpuScene: the upload ring refused the args/cull-batch arrays ({} + {} bytes)", argBytes, batchBytes);
-                return refuse();
+                refuseRegistry();
+                return result;
             }
             if (argBytes)
             {
@@ -456,9 +482,9 @@ namespace Arcane
 
         // 4. Acknowledge the mirror this frame wrote (spec s5.2): the next Sync
         //    against a DIFFERENT mirror generation (a swapped registry) rebuilds.
-        if (frame)
-            m_syncedGeneration = frame->stage.generation;
-        return true;
+        m_syncedGeneration = frame->stage.generation;
+        result.registryReady = true;
+        return result;
     }
 
     void GpuScene::FlushGraves(Graveyard& graves)

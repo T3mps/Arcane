@@ -22,8 +22,9 @@ struct DrawIndexedArgs
 struct MeshCullConstants
 {
     uint rowCount;
+    uint batchCount;
     uint cullEnabled;
-    uint2 pad;
+    uint pad;
     float4 planes[6];
 };
 
@@ -62,6 +63,8 @@ void cs_main(uint id : SV_DispatchThreadID)
     if (id >= g_Cull.rowCount)
         return;
     const GpuInstance instance = instances[id];
+    if ((instance.flags & kGpuInstanceFlagLive) == 0 || instance.batch >= g_Cull.batchCount)
+        return;
     const GpuCullBatch batch = batches[instance.batch];
     if (batch.emitted == 0)
         return;

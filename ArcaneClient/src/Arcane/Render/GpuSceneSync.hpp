@@ -47,14 +47,17 @@ namespace Arcane
             return id;
         }
 
-        inline void FreeEntityRows(GpuSceneMirror& m, Astra::Entity e, const GpuSceneMirror::Rows& r)
+        inline void FreeEntityRows(GpuSceneMirror& m, Astra::Entity e, const GpuSceneMirror::Rows& r,
+                                   std::vector<std::uint32_t>& freedRows)
         {
             for (std::uint32_t i = 0; i < r.count; ++i)
             {
-                GpuSceneRow& row = m.rows[r.first + i];
+                const std::uint32_t rowIndex = r.first + i;
+                GpuSceneRow& row = m.rows[rowIndex];
                 if (row.live)
                     --m.batchRowCount[row.batch];
                 row = GpuSceneRow{};
+                freedRows.push_back(rowIndex);
             }
             m.allocator.Free(r.first, r.count);
             m.slots.Erase(e);
@@ -96,6 +99,7 @@ namespace Arcane
         ++m.syncCounter;
 
         std::vector<std::uint8_t> dirty(m.rows.size(), 0);
+        std::vector<std::uint32_t> freedRows;
         auto markDirty = [&](std::uint32_t row)
         {
             if (row >= dirty.size()) dirty.resize(row + 1, 0);
@@ -112,12 +116,12 @@ namespace Arcane
                 GpuSceneMirror::Rows* r = m.slots.TryGet(e);
                 if (sections == 0)
                 {
-                    if (r) detail::FreeEntityRows(m, e, *r);
+                    if (r) detail::FreeEntityRows(m, e, *r, freedRows);
                     return;
                 }
                 if (r && (r->count != sections || m.rows[r->first].mesh != mr.mesh))
                 {
-                    detail::FreeEntityRows(m, e, *r);
+                    detail::FreeEntityRows(m, e, *r, freedRows);
                     r = nullptr;
                 }
                 if (!r)
@@ -153,8 +157,28 @@ namespace Arcane
                     victims.push_back(kv.first);
             for (Astra::Entity e : victims)
                 if (const GpuSceneMirror::Rows* r = m.slots.TryGet(e))
-                    detail::FreeEntityRows(m, e, *r);
+                    detail::FreeEntityRows(m, e, *r, freedRows);
         }
+
+        // Dispatch spans allocator high water, not only live mirror rows. A
+        // freed row that remains a hole therefore needs an explicit inactive
+        // device value. Defer until reconciliation is complete so a row freed
+        // and reused in the same sync receives only its new live upload (two
+        // transfer writes to the same bytes would otherwise need a WAW barrier).
+        std::vector<std::uint8_t> tombstoned(m.rows.size(), 0);
+        const auto stageTombstone = [&](std::uint32_t row)
+        {
+            if (row >= m.allocator.HighWater() || m.rows[row].live || tombstoned[row])
+                return;
+            GpuInstance inactive;
+            inactive.batch = std::numeric_limits<std::uint32_t>::max();
+            inactive.flags = 0;
+            out.rows.push_back(row);
+            out.values.push_back(inactive);
+            tombstoned[row] = 1;
+        };
+        for (std::uint32_t row : freedRows)
+            stageTombstone(row);
 
         // 2. Dirty: moved (exact -- WorldTransform is change-tracked), a component
         //    write on MeshRenderer, a re-boxed row (WorldBounds is change-tracked:
@@ -167,6 +191,7 @@ namespace Arcane
         {
             for (std::uint32_t row = 0; row < m.rows.size(); ++row)
                 if (m.rows[row].live) markDirty(row);
+                else stageTombstone(row);
         }
         else
         {
@@ -232,7 +257,8 @@ namespace Arcane
             v.baseColor    = mat.baseColor;
             v.materialSlot = mat.slot;
             v.batch        = r.batch;
-            v.flags        = static_cast<std::uint32_t>(mat.blend) << kGpuInstanceFlagBlendShift;
+            v.flags        = kGpuInstanceFlagLive
+                           | (static_cast<std::uint32_t>(mat.blend) << kGpuInstanceFlagBlendShift);
             if (mat.twoSided) v.flags |= kGpuInstanceFlagTwoSided;
             if (v.prevModel != v.model)
                 m.dirtyLastFrame.push_back(row);   // settle it next frame (the re-dirty)

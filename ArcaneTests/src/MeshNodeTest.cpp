@@ -220,6 +220,26 @@ TEST_CASE("MeshSceneDesc::Empty: no ad-hoc rows, no scene draws, no staged rows"
     CHECK_FALSE(d.Empty());                 // an ad-hoc row, no scene
 }
 
+TEST_CASE("mesh node: registry refusal suppresses indirect and transparent draws without suppressing ad-hoc draws",
+          "[mesh][node]")
+{
+    Arcane::GpuSceneFrameReadiness readiness;
+    Arcane::MeshDrawSelection selected = Arcane::SelectMeshDrawPaths(
+        /*registryHasDraws*/ true, /*adHocHasDraws*/ true, readiness);
+    CHECK_FALSE(selected.registry);
+    CHECK_FALSE(selected.adHoc);
+
+    readiness.adHocReady = true;
+    selected = Arcane::SelectMeshDrawPaths(true, true, readiness);
+    CHECK_FALSE(selected.registry);
+    CHECK(selected.adHoc);   // preview/scratch rendering is independent
+
+    readiness.registryReady = true;
+    selected = Arcane::SelectMeshDrawPaths(true, true, readiness);
+    CHECK(selected.registry);
+    CHECK(selected.adHoc);
+}
+
 TEST_CASE("MeshRootConstants is the 8-byte {firstOutput, flags} block", "[mesh][node]")
 {
     // mesh.hlsl's MeshRoot, pushed once per draw: an indirect batch draw reads

@@ -6633,14 +6633,14 @@ TEST_CASE("nri graph frame: (T7P4) the mesh node declares ColorWrite on its colo
 
 // =========================================================================
 // F3 plan 1 Task 6: THE GPU SCENE'S DEVICE HALF -- GpuSceneSyncNode ahead of
-// the mesh node, the three imported persistent buffers (instances, indirect
-// args, visible indices), and the copy -> read edges the graph derives
+// the mesh node, the four imported persistent buffers (instances, indirect
+// args, visible indices, cull batches), and the copy -> read edges the graph derives
 // between them. Device-less: a null context imports null buffers, which the
 // executor's barrier walk skips (RenderGraphExec.cpp), so the DECLARATIONS
 // are exactly the production ones.
 // =========================================================================
 
-TEST_CASE("declaration shape (T6F3): sync -> mesh reads three imported buffers with a "
+TEST_CASE("declaration shape (T6F3): sync -> mesh reads four imported buffers with a "
           "copy-to-indirect edge", "[nri][rendergraph]")
 {
     // A registry-backed scene with ONE emitted batch and NO ad-hoc instances:
@@ -6705,11 +6705,34 @@ TEST_CASE("declaration shape (T6F3): sync -> mesh reads three imported buffers w
     {
         const std::vector<Arcane::RgBarrier>& barriers = compiled.nodes[2].preBarriers;
         REQUIRE(barriers.size() == 4);
-        for (const Arcane::RgBarrier& barrier : barriers)
+        const auto bufferBarrierFor = [&](std::uint32_t resourceIndex) -> const Arcane::RgBarrier*
         {
-            CHECK_FALSE(barrier.isTexture);
-            CheckState(barrier.before, nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
+            for (const Arcane::RgBarrier& barrier : barriers)
+                if (!barrier.isTexture && barrier.resourceIndex == resourceIndex)
+                    return &barrier;
+            return nullptr;
+        };
+
+        const Arcane::RgBarrier* instances = bufferBarrierFor(0u);
+        const Arcane::RgBarrier* args      = bufferBarrierFor(1u);
+        const Arcane::RgBarrier* visible   = bufferBarrierFor(2u);
+        const Arcane::RgBarrier* batches   = bufferBarrierFor(3u);
+        REQUIRE(instances != nullptr);
+        REQUIRE(args != nullptr);
+        REQUIRE(visible != nullptr);
+        REQUIRE(batches != nullptr);
+        for (const Arcane::RgBarrier* barrier : { instances, args, visible, batches })
+        {
+            CHECK_FALSE(barrier->isTexture);
+            CheckState(barrier->before, nri::AccessBits::COPY_DESTINATION, nri::Layout::UNDEFINED, nri::StageBits::COPY);
         }
+        // ShaderRead is deliberately valid for every shader stage; instances
+        // and the cull-batch table therefore carry that full read mask. The
+        // storage writes remain compute-only until the mesh-node transition.
+        CheckState(instances->after, nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
+        CheckState(batches->after, nri::AccessBits::SHADER_RESOURCE, nri::Layout::UNDEFINED, kShaderReadStages);
+        CheckState(visible->after, nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::UNDEFINED, nri::StageBits::COMPUTE_SHADER);
+        CheckState(args->after, nri::AccessBits::SHADER_RESOURCE_STORAGE, nri::Layout::UNDEFINED, nri::StageBits::COMPUTE_SHADER);
     }
 
     // The mesh node reads the cull's output; args reach IndirectArgs only

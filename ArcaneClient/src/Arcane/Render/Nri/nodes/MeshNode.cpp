@@ -912,7 +912,8 @@ namespace Arcane
     }
 
     void MeshNode::Record(RenderGraphNodeContext& context, const MeshSceneDesc& scene,
-                          std::uint32_t frameSlot, GpuScene* gpuScene)
+                          std::uint32_t frameSlot, GpuScene* gpuScene,
+                          const GpuSceneFrameReadiness& readiness)
     {
         const nri::CoreInterface& core = context.core;
 
@@ -950,8 +951,9 @@ namespace Arcane
         // STAGED but everything culled (MeshSceneDesc::Empty explains why
         // such a frame is declared at all): the sync node ahead of this one
         // uploaded them, and this pass has no draw to record.
-        const bool hasBatches = scene.scene && scene.scene->HasDraws();
-        if (!hasBatches && m_adHocDraws.empty())
+        const MeshDrawSelection draws = SelectMeshDrawPaths(
+            scene.scene && scene.scene->HasDraws(), !m_adHocDraws.empty(), readiness);
+        if (!draws.registry && !draws.adHoc)
             return;
 
         if (!m_pipeline[PipelineIndex(MaterialBlendMode::Opaque, false)])
@@ -1161,7 +1163,7 @@ namespace Arcane
         //    and draws nothing; a batch is only EMITTED with >= 1 visible row
         //    anyway.
         // ---------------------------------------------------------------
-        if (hasBatches)
+        if (draws.registry)
         {
             nri::Buffer* args = gpuScene->Args(frameSlot);
             if (!args)
@@ -1192,7 +1194,7 @@ namespace Arcane
         //    CmdDrawIndexed each -- the F2a shape, minus the 128-byte push.
         // ---------------------------------------------------------------
         const std::uint32_t scratchFirst = gpuScene->ScratchFirstRow(frameSlot);
-        for (std::size_t i = 0; i < m_adHocDraws.size(); ++i)
+        for (std::size_t i = 0; draws.adHoc && i < m_adHocDraws.size(); ++i)
         {
             if (!bindPipeline(MaterialBlendMode::Opaque, false))
                 break;
@@ -1212,7 +1214,7 @@ namespace Arcane
         // 3. Ordered transparent rows. They never enter indirect batches:
         // Task 2 already sorted these direct records back-to-front, so retain
         // that exact order while switching only the independent sidedness PSO.
-        if (scene.scene)
+        if (draws.registry && scene.scene)
             for (const TransparentDraw& draw : scene.scene->transparentDraws)
             {
                 if (!bindPipeline(draw.blend, draw.twoSided) || !bindMesh(draw.mesh))
@@ -1294,12 +1296,12 @@ namespace Arcane
                 builder.Read(gpuScene.visibleIndices, RgUsage::ShaderRead);
                 builder.Read(gpuScene.args, RgUsage::IndirectArgs);
             },
-            [context, scene](RenderGraphNodeContext& nodeContext)
+            [context, scene, readiness = gpuScene.readiness](RenderGraphNodeContext& nodeContext)
             {
                 if (!context)
                     return;   // device-less declaration-shape drive: no device, nothing to record
-                if (MeshNode* node = context->Mesh())
-                    node->Record(nodeContext, scene, context->FrameSlot(), context->Scene());
+                if (MeshNode* node = context->Mesh(); node && readiness)
+                    node->Record(nodeContext, scene, context->FrameSlot(), context->Scene(), *readiness);
             });
 
         // TEST-ONLY, and declared only when a test armed it (GpuScene::

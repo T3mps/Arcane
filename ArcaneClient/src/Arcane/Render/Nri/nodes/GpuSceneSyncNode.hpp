@@ -1,9 +1,10 @@
 #pragma once
 
 // GpuSceneSyncNode -- the GPU scene's per-frame writer as a graph node (F3,
-// spec s8): imports the three persistent buffers, declares them CopyDst,
+// spec s8): imports the four persistent buffers, declares them CopyDst,
 // and in Record hands GpuScene::Apply the frame's staged rows, this slot's
-// args + visible indices, and the ad-hoc rows. Transfer only; no shader.
+// args + visible indices + cull batches, and the ad-hoc rows. Transfer only;
+// no shader.
 // Declared BEFORE the mesh node -- by AddMeshNode itself (plan 1 T6, ruling
 // R-A) -- which Reads the same handles (ShaderRead / IndirectArgs), so the
 // graph derives the copy -> read barriers.
@@ -21,6 +22,7 @@
 #include <Arcane/Render/GpuSceneTypes.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
 
+#include <memory>
 #include <span>
 
 namespace Arcane
@@ -33,6 +35,7 @@ namespace Arcane
         RgBuffer args{};
         RgBuffer visibleIndices{};
         RgBuffer cullBatches{};
+        std::shared_ptr<GpuSceneFrameReadiness> readiness;
     };
 
     // `frame` may be null (no registry-backed scene this frame); `adHoc` may be

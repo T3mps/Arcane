@@ -29,12 +29,21 @@ namespace Arcane
     {
         return (rowCount + kMeshCullThreads - 1u) / kMeshCullThreads;
     }
+    [[nodiscard]] inline std::uint32_t MeshCullBatchCount(const GpuSceneFrame& frame) noexcept
+    {
+        return static_cast<std::uint32_t>(frame.cullBatches.size());
+    }
+    [[nodiscard]] inline bool MeshCullShouldDispatch(const GpuSceneFrame* frame,
+                                                     const GpuSceneFrameReadiness& readiness) noexcept
+    {
+        return readiness.registryReady && frame && frame->rowCount != 0;
+    }
 
     class ARCANE_API MeshCullNode
     {
     public:
         static std::unique_ptr<MeshCullNode> Create(NriGraphContext& context);
-        ~MeshCullNode() = default;
+        ~MeshCullNode();
         MeshCullNode(const MeshCullNode&) = delete;
         MeshCullNode& operator=(const MeshCullNode&) = delete;
 

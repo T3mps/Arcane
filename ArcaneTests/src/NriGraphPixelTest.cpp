@@ -2175,6 +2175,88 @@ namespace
         }
     };
 
+    // A refused registry stage must stop the registry-backed cull + mesh
+    // consumers for THAT frame. Otherwise the sync node leaves the previous
+    // slot buffers intact, mesh-cull dispatches with this frame's rowCount
+    // against stale args/visible/cull-batch data, and MeshNode can draw a
+    // ghost from the previous registry frame. Ad-hoc direct rows are
+    // independent; this case has none, so the refused frame should be
+    // background.
+    void CheckGpuSceneApplyRefusalSuppressesRegistryDraws(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        const Arcane::MeshData cube = Arcane::BuildCube(2.0f);
+        const Arcane::Guid cubeId{ 1, 1 };
+        GpuSceneWorld w;
+        w.AddMesh(cubeId, cube);
+        w.Spawn(glm::vec3(0.0f), cubeId);
+        w.Schedulers();
+
+        Arcane::MeshSceneDesc scene;
+        FillCamera(scene);
+        Arcane::ViewTransform view;
+        view.view       = scene.view;
+        view.projection = scene.projection;
+        view.viewport   = glm::uvec2{ kW, kH };
+
+        Arcane::VisibleSet vis;
+        Arcane::BuildVisibleSet(w.reg, view, vis);
+
+        Arcane::GpuSceneMirror mirror;
+        Arcane::GpuSceneFrame frame;
+        Arcane::GpuSceneSync(w.reg, mirror, /*deviceSyncedGeneration*/ 0u, frame.stage);
+        Arcane::BuildGpuSceneFrame(mirror, &vis, w.reg.GetResource<Arcane::MeshTable>(), view, frame);
+        REQUIRE(frame.stage.rows.size() == 1u);
+        REQUIRE(frame.stage.values.size() == 1u);
+        REQUIRE(frame.batches.size() == 1u);
+        REQUIRE(frame.cullBatches.size() == 1u);
+        REQUIRE(frame.args.size() == 1u);
+        for (Arcane::GpuInstance& row : frame.stage.values)
+            row.baseColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+
+        PixelVehicle v = MakeVehicle(backend);
+        v.ctx->SetMeshSupply(SupplyOne(cubeId, cube));
+        Arcane::GpuScene* device = v.ctx->Scene();
+        REQUIRE(device != nullptr);
+
+        scene.scene = &frame;
+        Arcane::NriGraphContext::FrameDesc first;
+        first.capture = true;
+        first.mesh = &scene;
+        RenderOne(*v.ctx, first);
+        // Prime both frame slots, then reuse one. This exercises the per-frame
+        // zero-args upload on a previously computed slot before the refusal
+        // rotates to the other stale slot. Without execution-time readiness,
+        // that refused slot draws the old row.
+        RenderOne(*v.ctx, first);
+        RenderOne(*v.ctx, first);
+        std::uint32_t width = 0, height = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(width, height, rgba));
+        const Rgba lit = At(rgba, width, width / 2u, height / 2u);
+        const Rgba corner = At(rgba, width, 10u, 10u);
+        CHECK(lit.r > lit.g + 60);
+        CHECK(device->SyncedGeneration() == frame.stage.generation);
+
+        Arcane::GpuSceneFrame refused = frame;
+        refused.stage.values.push_back(frame.stage.values[0]);   // rows/values mismatch: Apply must refuse before uploads
+        scene.scene = &refused;
+        Arcane::NriGraphContext::FrameDesc second;
+        second.capture = true;
+        second.mesh = &scene;
+        RenderOne(*v.ctx, second);
+        rgba.clear();
+        REQUIRE(v.ctx->ReadCapture(width, height, rgba));
+        const Rgba refusedCentre = At(rgba, width, width / 2u, height / 2u);
+        CHECK(device->SyncedGeneration() == 0u);
+        CHECK(refusedCentre.r < 96);
+        CHECK(std::abs(Luma(refusedCentre) - Luma(corner)) < 24);
+
+        CHECK(Arcane::RenderErrorCount() == before);
+    }
+
     void CheckGpuSceneDrawsAndCulls(Arcane::GraphicsBackend backend)
     {
         ARC_REQUIRE_BACKEND(backend);
@@ -2316,4 +2398,16 @@ TEST_CASE("gpuscene: a registry-backed cube draws through the indirect path and 
           "[gpu][gpuscene][mesh][nri][vulkan]")
 {
     CheckGpuSceneDrawsAndCulls(Arcane::GraphicsBackend::Vulkan);
+}
+
+TEST_CASE("gpuscene: an Apply refusal suppresses registry cull and mesh draws for that frame (d3d12)",
+          "[gpu][gpuscene][mesh][nri][d3d12]")
+{
+    CheckGpuSceneApplyRefusalSuppressesRegistryDraws(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("gpuscene: an Apply refusal suppresses registry cull and mesh draws for that frame (vulkan)",
+          "[gpu][gpuscene][mesh][nri][vulkan]")
+{
+    CheckGpuSceneApplyRefusalSuppressesRegistryDraws(Arcane::GraphicsBackend::Vulkan);
 }

@@ -21,8 +21,9 @@ namespace Arcane
         struct CullConstants
         {
             std::uint32_t rowCount = 0;
+            std::uint32_t batchCount = 0;
             std::uint32_t enabled = kMeshCullEnabled ? 1u : 0u;
-            std::uint32_t pad[2]{};
+            std::uint32_t pad = 0;
             glm::vec4 planes[6]{};
         };
         static_assert(sizeof(CullConstants) == 112);
@@ -34,6 +35,20 @@ namespace Arcane
         if (!node->Init(context))
             return nullptr;
         return node;
+    }
+
+    MeshCullNode::~MeshCullNode()
+    {
+        if (!m_device || !m_pool)
+            return;
+        ARC_WARN("[nri-graph] MeshCullNode destroyed with a live descriptor pool -- either Create() "
+                 "failed part way or its owner never called Release(). Destroying directly behind a DeviceWaitIdle.");
+        const nri::CoreInterface& core = m_device->Core();
+        (void)ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device()));
+        core.DestroyDescriptorPool(m_pool);
+        m_pool = nullptr;
+        for (nri::DescriptorSet*& set : m_sets)
+            set = nullptr;
     }
 
     bool MeshCullNode::Init(NriGraphContext& context)
@@ -89,6 +104,7 @@ namespace Arcane
         if (!UpdateSet(slot, scene)) { ARC_ERROR("[nri-graph] MeshCullNode: missing GPU-scene descriptors"); return; }
         CullConstants constants;
         constants.rowCount = frame->rowCount;
+        constants.batchCount = MeshCullBatchCount(*frame);
         for (std::size_t i = 0; i < frame->frustum.planes.size(); ++i)
         {
             const Plane& p = frame->frustum.planes[i];
@@ -124,9 +140,11 @@ namespace Arcane
                 builder.Write(inputs.visibleIndices, RgUsage::ShaderWriteCs);
                 builder.Write(inputs.args, RgUsage::ShaderWriteCs);
             },
-            [context, frame](RenderGraphNodeContext& nodeContext)
+            [context, frame, readiness = inputs.readiness](RenderGraphNodeContext& nodeContext)
             {
-                if (context && context->MeshCull() && context->Scene()) context->MeshCull()->Record(nodeContext, *context->Scene(), frame, context->FrameSlot());
+                if (context && readiness && MeshCullShouldDispatch(frame, *readiness)
+                    && context->MeshCull() && context->Scene())
+                    context->MeshCull()->Record(nodeContext, *context->Scene(), frame, context->FrameSlot());
             });
     }
 }
