@@ -1112,16 +1112,20 @@ project "ArcaneTests"
         -- are pure, so the [editor] units drive them directly.
         "%{wks.location}/ArcaneEditor/src/Project/SourceIncludes.cpp",
         -- arcbuild (the game-project build driver, spec docs/specs/
-        -- 2026-09-13-arcbuild-driver-design.md): the PURE core -- Request.cpp
-        -- (CLI), Slot.cpp (s4.3 CRT table, game-module only), Compose.cpp
-        -- (premake/msbuild lines). Source-compiles into the test exe so the
+        -- 2026-09-13-arcbuild-driver-design.md): the PURE core -- Action.cpp
+        -- (host/action/backend policy), Request.cpp (CLI), Slot.cpp (s4.3 CRT
+        -- table, game-module only), ProjectLayout.cpp (path policy), and
+        -- Compose.cpp (string child-command composition). Source-compiles into
+        -- the test exe so the
         -- [build] units drive it directly, same "pure logic, no spawn" pattern
         -- as ModuleBuild.cpp above. main.cpp (the spawn + PE probe half) is
         -- NOT compiled here; the opt-in [build-desk] cases run the built
         -- arcbuild.exe instead. `--engine` (spec §6) will add a sibling TU,
         -- not grow Slot.cpp.
+        "%{wks.location}/arcbuild/src/Action.cpp",
         "%{wks.location}/arcbuild/src/Request.cpp",
         "%{wks.location}/arcbuild/src/Slot.cpp",
+        "%{wks.location}/arcbuild/src/ProjectLayout.cpp",
         "%{wks.location}/arcbuild/src/Compose.cpp",
         -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
         -- over the same Arcane::Cli arcbuild's Request.cpp above already

@@ -33,20 +33,24 @@ namespace
         char** argv()       { return ptrs.data(); }
     };
 
-    Layout AphelyonLayout()
+    ProjectLayout AphelyonProject()
     {
-        Layout l;
-        l.root       = "D:/dev/starworks/Gacha/Game";
-        l.manifest   = "D:/dev/starworks/Gacha/Game/Aphelyon.arcproj";
-        l.name       = "Aphelyon";
-        l.gameModule = "Aphelyon.dll";
-        return l;
+        ProjectLayout project;
+        project.root       = "D:/dev/starworks/Gacha/Game";
+        project.manifest   = "D:/dev/starworks/Gacha/Game/Aphelyon.arcproj";
+        project.name       = "Aphelyon";
+        project.gameModule = "Aphelyon.dll";
+        return project;
     }
 
-    Tools SdkTools()
+    fs::path PremakePath()
     {
-        return { "D:/dev/starworks/Arcane/ThirdParty/premake5/premake5.exe",
-                 "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe" };
+        return "D:/dev/starworks/Arcane/ThirdParty/premake5/premake5.exe";
+    }
+
+    fs::path MsBuildPath()
+    {
+        return "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe";
     }
 }
 
@@ -65,6 +69,25 @@ TEST_CASE("arcbuild::ParseCommand knows the five commands and nothing else", "[b
     // Round-trip: the name printed in the log is the word that parses.
     for (Command c : { Command::Generate, Command::Build, Command::Rebuild, Command::Clean, Command::Probe })
         CHECK(ParseCommand(CommandName(c)) == c);
+}
+
+TEST_CASE("arcbuild action mapping only promises verified build backends", "[build]")
+{
+    CHECK(BackendForAction("vs2022") == BuildBackend::MsBuild);
+    CHECK(BackendForAction("vs2026") == BuildBackend::MsBuild);
+    CHECK(BackendForAction("gmake") == BuildBackend::Make);
+    CHECK(BackendForAction("gmakelegacy") == BuildBackend::Make);
+    CHECK(BackendForAction("ninja") == BuildBackend::Ninja);
+    CHECK(BackendForAction("xcode4") == BuildBackend::XcodeBuild);
+    CHECK(BackendForAction("vs2019") == BuildBackend::None);
+    CHECK(BackendForAction("compilecommands") == BuildBackend::None);
+}
+
+TEST_CASE("arcbuild default action is host-specific", "[build]")
+{
+    CHECK(DefaultActionFor(HostPlatform::Windows) == "vs2026");
+    CHECK(DefaultActionFor(HostPlatform::Linux) == "gmake");
+    CHECK(DefaultActionFor(HostPlatform::MacOS) == "xcode4");
 }
 
 TEST_CASE("arcbuild::MakeCli + RequestFromCli carry every flag of spec s3", "[build]")
@@ -86,17 +109,25 @@ TEST_CASE("arcbuild::MakeCli + RequestFromCli carry every flag of spec s3", "[bu
         CHECK(req.forceRebuild);
         CHECK(req.quiet);
     }
-    SECTION("defaults: Debug, vs2026, no sdk, no force, not quiet")
+    SECTION("defaults: Debug, host action, no sdk, no force, not quiet")
     {
         Argv a{ "probe", "--project", "X" };
         const Arcane::Cli::Result r = cli.Parse(a.argc(), a.argv());
         REQUIRE(r.ok);
         const Request req = RequestFromCli(Command::Probe, r);
         CHECK(req.config == "Debug");
-        CHECK(req.action == "vs2026");
+        CHECK(req.action == DefaultActionFor(CurrentHostPlatform()));
         CHECK_FALSE(req.sdk.has_value());
         CHECK_FALSE(req.forceRebuild);
         CHECK_FALSE(req.quiet);
+    }
+    SECTION("an injected default action is carried through parsing")
+    {
+        Arcane::Cli linuxCli = MakeCli("gmake");
+        Argv a{ "build", "--project", "X" };
+        const Arcane::Cli::Result r = linuxCli.Parse(a.argc(), a.argv());
+        REQUIRE(r.ok);
+        CHECK(RequestFromCli(Command::Build, r).action == "gmake");
     }
     SECTION("--project is required")
     {
@@ -208,7 +239,7 @@ TEST_CASE("arcbuild::ClassifySlot lands on exactly one s4.3 row", "[build]")
     CHECK(ClassifySlot(true, CrtFlavor::Unknown, "Release") == SlotState::Unreadable);
 }
 
-TEST_CASE("arcbuild::Decide: plain for absent/match, /t:Rebuild for mismatch/unreadable, forced by --force-rebuild or `rebuild`",
+TEST_CASE("arcbuild::Decide: plain for absent/match and rebuild for mismatch/unreadable",
           "[build]")
 {
     // THE INCREMENTAL RULE (spec s4.3) -- the reason the driver exists now. A
@@ -219,34 +250,23 @@ TEST_CASE("arcbuild::Decide: plain for absent/match, /t:Rebuild for mismatch/unr
     // still failed to load"). The editor used to force /t:Rebuild on every
     // build to close that; the driver forces it ONLY when the slot's CRT
     // flavor says it must, so a wizard-made component costs one TU + a link.
-    SECTION("build follows the slot")
+    SECTION("the decision follows the slot")
     {
-        CHECK_FALSE(Decide(Command::Build, false, SlotState::Absent).rebuild);
-        CHECK_FALSE(Decide(Command::Build, false, SlotState::Match).rebuild);
-        CHECK(Decide(Command::Build, false, SlotState::Mismatch).rebuild);
-        CHECK(Decide(Command::Build, false, SlotState::Unreadable).rebuild);
-    }
-    SECTION("--force-rebuild bypasses the probe on every row")
-    {
-        for (SlotState s : { SlotState::Absent, SlotState::Match, SlotState::Mismatch, SlotState::Unreadable })
-            CHECK(Decide(Command::Build, true, s).rebuild);
-    }
-    SECTION("the rebuild command is unconditional")
-    {
-        for (SlotState s : { SlotState::Absent, SlotState::Match, SlotState::Mismatch, SlotState::Unreadable })
-            CHECK(Decide(Command::Rebuild, false, s).rebuild);
+        CHECK_FALSE(Decide(SlotState::Absent).rebuild);
+        CHECK_FALSE(Decide(SlotState::Match).rebuild);
+        CHECK(Decide(SlotState::Mismatch).rebuild);
+        CHECK(Decide(SlotState::Unreadable).rebuild);
     }
     SECTION("every verdict says why, and the unreadable one says so in words")
     {
         for (SlotState s : { SlotState::Absent, SlotState::Match, SlotState::Mismatch, SlotState::Unreadable })
         {
-            const Verdict v = Decide(Command::Build, false, s);
+            const Verdict v = Decide(s);
             REQUIRE(v.reason != nullptr);
             CHECK(std::string(v.reason).size() > 10);
         }
-        CHECK(std::string(Decide(Command::Build, false, SlotState::Unreadable).reason).find("unreadable") != std::string::npos);
-        CHECK(std::string(Decide(Command::Build, true,  SlotState::Match).reason).find("--force-rebuild") != std::string::npos);
-        CHECK(std::string(Decide(Command::Rebuild, false, SlotState::Match).reason).find("rebuild") != std::string::npos);
+        CHECK(std::string(Decide(SlotState::Unreadable).reason).find("unreadable") != std::string::npos);
+        CHECK(std::string(Decide(SlotState::Mismatch).reason).find("rebuild") != std::string::npos);
     }
 }
 
@@ -272,20 +292,20 @@ TEST_CASE("arcbuild exit codes: probe 0 on the plain rows, 3 on the rebuild rows
 
 TEST_CASE("arcbuild::SlotPath is <root>/Binaries/<gameModule>, empty for a content-only project", "[build]")
 {
-    Layout l = AphelyonLayout();
-    CHECK(SlotPath(l) == fs::path("D:/dev/starworks/Gacha/Game") / "Binaries" / "Aphelyon.dll");
-    l.gameModule.clear();
-    CHECK(SlotPath(l).empty());
+    ProjectLayout project = AphelyonProject();
+    CHECK(SlotPath(project) == fs::path("D:/dev/starworks/Gacha/Game") / "Binaries" / "Aphelyon.dll");
+    project.gameModule.clear();
+    CHECK(SlotPath(project).empty());
 }
 
 TEST_CASE("arcbuild::SolutionPath: a discovered workspace file wins over the <name>.slnx convention", "[build]")
 {
-    const Layout l = AphelyonLayout();
-    CHECK(SolutionPath(l, "D:/dev/starworks/Gacha/Game/Other.sln") == fs::path("D:/dev/starworks/Gacha/Game/Other.sln"));
-    CHECK(SolutionPath(l, {}) == fs::path("D:/dev/starworks/Gacha/Game") / "Aphelyon.slnx");
+    const ProjectLayout project = AphelyonProject();
+    CHECK(SolutionPath(project, "D:/dev/starworks/Gacha/Game/Other.sln") == fs::path("D:/dev/starworks/Gacha/Game/Other.sln"));
+    CHECK(SolutionPath(project, {}) == fs::path("D:/dev/starworks/Gacha/Game") / "Aphelyon.slnx");
     // ComposeMsBuild does not cd: a relative discovery is joined onto root
     // rather than assumed absolute (DiscoverSolution is absolute iff projectRoot is).
-    CHECK(SolutionPath(l, fs::path("Other.sln")) ==
+    CHECK(SolutionPath(project, fs::path("Other.sln")) ==
           (fs::path("D:/dev/starworks/Gacha/Game") / "Other.sln").lexically_normal());
 }
 
@@ -293,32 +313,33 @@ TEST_CASE("arcbuild::SolutionPath: a discovered workspace file wins over the <na
 
 TEST_CASE("arcbuild::ComposeGenerate is cd-first, parenthesised, stderr-folded premake", "[build]")
 {
-    const std::string cmd = ComposeGenerate(AphelyonLayout(), SdkTools(), "vs2026");
+    const std::string cmd = ComposeGenerate(AphelyonProject(), PremakePath(), "vs2026");
     CHECK(cmd == "( cd /d \"D:/dev/starworks/Gacha/Game\" && "
                  "\"D:/dev/starworks/Arcane/ThirdParty/premake5/premake5.exe\" vs2026 ) 2>&1");
     // The action is the Linux seam (spec s6): it is a parameter, not a constant.
-    CHECK(ComposeGenerate(AphelyonLayout(), SdkTools(), "gmake2").find("premake5.exe\" gmake2 )") != std::string::npos);
+    CHECK(ComposeGenerate(AphelyonProject(), PremakePath(), "gmake2").find("premake5.exe\" gmake2 )") != std::string::npos);
 }
 
 TEST_CASE("arcbuild::ComposeMsBuild: /t:Rebuild ONLY when asked, /t:Clean for clean, no cd, absolute solution", "[build]")
 {
     const fs::path sln = "D:/dev/starworks/Gacha/Game/Aphelyon.slnx";
-    const std::string plain = ComposeMsBuild(SdkTools(), sln, "Debug", MsBuildTarget::Build);
+    const BackendContext context { sln };
+    const std::string plain = ComposeMsBuild(MsBuildPath(), context, "Debug", BuildOperation::Build);
     CHECK(plain == "( \"C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe\" "
                    "\"D:/dev/starworks/Gacha/Game/Aphelyon.slnx\" /p:Configuration=Debug /m /nologo ) 2>&1");
     CHECK(plain.find("/t:") == std::string::npos);
     CHECK(plain.find("cd /d") == std::string::npos);
 
-    const std::string rebuild = ComposeMsBuild(SdkTools(), sln, "Release", MsBuildTarget::Rebuild);
+    const std::string rebuild = ComposeMsBuild(MsBuildPath(), context, "Release", BuildOperation::Rebuild);
     CHECK(rebuild.find("/p:Configuration=Release /t:Rebuild /m /nologo") != std::string::npos);
 
-    const std::string clean = ComposeMsBuild(SdkTools(), sln, "Dist", MsBuildTarget::Clean);
+    const std::string clean = ComposeMsBuild(MsBuildPath(), context, "Dist", BuildOperation::Clean);
     CHECK(clean.find("/p:Configuration=Dist /t:Clean /m /nologo") != std::string::npos);
 }
 
 TEST_CASE("arcbuild::CleanTargets is exactly Binaries/ and Intermediate/<config>/", "[build]")
 {
-    const std::vector<fs::path> t = CleanTargets(AphelyonLayout(), "Debug");
+    const std::vector<fs::path> t = CleanTargets(AphelyonProject(), "Debug");
     REQUIRE(t.size() == 2);
     CHECK(t[0] == fs::path("D:/dev/starworks/Gacha/Game") / "Binaries");
     CHECK(t[1] == fs::path("D:/dev/starworks/Gacha/Game") / "Intermediate" / "Debug");
