@@ -8,6 +8,7 @@
 // opt-in [build-desk] cases at the bottom (Task 3) are the only tests that
 // reach it, SKIPping unless ARCANE_BUILD_DESK names a project directory.
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -38,6 +39,11 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+// Task 6: SIGTERM, for the POSIX "128 + signal" case at the bottom of the
+// process-execution section (<csignal> is portable, but only that branch
+// needs it).
+#include <csignal>
 #endif
 
 namespace
@@ -1114,6 +1120,13 @@ TEST_CASE("arcbuild::ExecutePlan maps a real launch failure to kExitRefused, nev
     CHECK(sawError);
 }
 
+// Task 6: the three fixture-spawning cases below are Windows-only, not
+// because of the Win32 APIs two of them call, but because the fixture itself
+// is (wmain + windows.h -- and premake5.lua only emits the
+// arcbuild-process-fixture project for a Windows target). The POSIX
+// equivalents live at the bottom of this section and use /bin/sh as their
+// child instead.
+#ifdef _WIN32
 TEST_CASE("arcbuild::ProcessRunner: exact argv, merged stdout+stderr, cwd, and a child's exit code round-trip through a real CreateProcessW launch",
           "[build]")
 {
@@ -1172,7 +1185,6 @@ TEST_CASE("arcbuild::ProcessRunner: exact argv, merged stdout+stderr, cwd, and a
     CHECK(sawStderrLine);   // stderr is MERGED into the very same stream Child() sees
 }
 
-#ifdef _WIN32
 TEST_CASE("arcbuild::ProcessRunner: lpApplicationName pins the exact binary despite a same-named decoy earlier on PATH",
           "[build]")
 {
@@ -1256,6 +1268,236 @@ TEST_CASE("arcbuild::ProcessRunner: PROC_THREAD_ATTRIBUTE_HANDLE_LIST inherits o
         if (m == "[fixture]:HANDLE:invalid")
             sawInvalid = true;
     CHECK(sawInvalid);
+}
+#endif
+
+// ---- POSIX process execution (Task 6, multibackend hardening) --------------
+//
+// DescribeChildSetupError is the one PORTABLE piece of the POSIX runner: a
+// pure {stage, errno} -> ProcessError decode with no syscall of its own, so it
+// is compiled and directly tested on EVERY platform, including this Windows
+// desk (ENOENT/ENOTDIR are standard <cerrno> macros, not POSIX-only ones).
+// That matters because it owns the invariant the error pipe exists for -- a
+// child that never managed to exec is a LAUNCH FAILURE, never the child exit
+// code 127 the failed child happens to _exit with.
+
+TEST_CASE("arcbuild::DescribeChildSetupError makes a child setup failure a launch error, never child exit 127",
+          "[build]")
+{
+    // ENOENT at Exec -- the missing-executable case -- is an error side, and
+    // nothing in it exposes the 127 the child _exit()s with: a real tool that
+    // genuinely ran and exited 127 must stay distinguishable from one that
+    // never started at all.
+    const ProcessError missingExecutable =
+        DescribeChildSetupError(ChildSetupError{ ChildSetupStage::Exec, ENOENT });
+
+    const ProcessResult asResult = ProcessResult(std::unexpected(missingExecutable));
+    REQUIRE_FALSE(asResult.has_value());
+    CHECK(asResult.error().message.find("127") == std::string::npos);
+
+    // The message names the stage and carries the real errno through, so a
+    // diagnostic distinguishes "no such file" from "permission denied".
+    CHECK(missingExecutable.message.find("exec") != std::string::npos);
+    CHECK(missingExecutable.message.find(std::to_string(ENOENT)) != std::string::npos);
+
+    const ProcessError deniedExecutable =
+        DescribeChildSetupError(ChildSetupError{ ChildSetupStage::Exec, EACCES });
+    CHECK(deniedExecutable.message != missingExecutable.message);
+
+    // Every stage reads differently: a chdir failure and a dup2 failure must
+    // never produce the same diagnostic, or the error pipe's whole point
+    // (saying WHICH child-side step failed) is lost.
+    const ProcessError chdir =
+        DescribeChildSetupError(ChildSetupError{ ChildSetupStage::Chdir, ENOENT });
+    const ProcessError dupStdout =
+        DescribeChildSetupError(ChildSetupError{ ChildSetupStage::DupStdout, EBADF });
+    const ProcessError dupStderr =
+        DescribeChildSetupError(ChildSetupError{ ChildSetupStage::DupStderr, EBADF });
+
+    CHECK(chdir.message.find("working directory") != std::string::npos);
+    CHECK(dupStdout.message.find("stdout") != std::string::npos);
+    CHECK(dupStderr.message.find("stderr") != std::string::npos);
+    CHECK(dupStdout.message != dupStderr.message);
+    CHECK(chdir.message != missingExecutable.message);
+}
+
+TEST_CASE("arcbuild::ExecutePlan maps a POSIX child-setup failure to kExitRefused, never to 127", "[build]")
+{
+    ProcessSpec step;
+    step.executable = fs::path("/definitely/not/a/real/tool-arcbuild-should-never-find");
+
+    ProcessPlan plan;
+    plan.steps = { step };
+
+    RecordingOutput  output;
+    FakeProcessRunner fake;
+    fake.results =
+    {
+        ProcessResult(std::unexpected(
+            DescribeChildSetupError(ChildSetupError{ ChildSetupStage::Exec, ENOENT })))
+    };
+
+    // kExitRefused is the driver's own "never launched" verdict; 127 is a
+    // value a real child could legitimately return, so the two must not be
+    // the same answer.
+    CHECK(ExecutePlan(plan, fake, output, "[posix]") == kExitRefused);
+    CHECK(kExitRefused != 127);
+}
+
+#if !defined(_WIN32)
+namespace
+{
+    // /bin/sh is the child EXECUTABLE in the cases below -- never an
+    // intermediary. ProcessRunner launches it directly, exactly the way it
+    // launches make/ninja/xcodebuild, and the script it runs is one ordinary
+    // argv entry. No arcbuild command is ever routed through a shell; these
+    // cases only need a program that is guaranteed present on every POSIX
+    // host and can be told to exit with a chosen code, signal itself, and
+    // echo its own argv back (the Task 5 process fixture is Win32-only --
+    // wmain + windows.h -- so it cannot serve here).
+    fs::path PosixShell()
+    {
+        return fs::path("/bin/sh");
+    }
+}
+
+TEST_CASE("arcbuild::ProcessRunner: exact argv, merged stdout+stderr, cwd, and a child's exit code round-trip through a real fork/execvp launch",
+          "[build]")
+{
+    REQUIRE(fs::exists(PosixShell()));
+
+    TempDir cwdDir("process_runner_posix_cwd");
+
+    RecordingOutput output;
+    ProcessRunner   runner(output);
+
+    ProcessSpec spec;
+    spec.executable       = PosixShell();
+    spec.workingDirectory = cwdDir.path;
+    spec.arguments        =
+    {
+        "-c",
+        // With sh -c, the argument after the script is $0 and everything
+        // after that is "$@" -- printed back one line each, so the parent can
+        // compare every entry byte for byte with what it passed.
+        "for a in \"$@\"; do printf 'ARG:%s\\n' \"$a\"; done; "
+        "printf 'CWD:%s\\n' \"$(pwd -P)\"; "
+        "printf 'to-stderr\\n' >&2; "
+        "exit 5",
+        "arcbuild-posix-argv0",
+        "",                          // an empty argv entry survives as an entry
+        "has space",                 // no quoting layer exists on this side
+        "has\"quote",
+        "$HOME;echo second-parse|cat",  // shell metacharacters, never re-parsed
+        "café",                 // non-ASCII bytes, passed through as bytes
+    };
+
+    const ProcessResult result = runner.Run(spec, "[posix]");
+    REQUIRE(result.has_value());
+    CHECK(*result == 5);   // WEXITSTATUS, not a fabricated code
+
+    std::vector<std::string> childLines;
+    for (const std::string& m : output.messages)
+        if (m.rfind("[posix]:", 0) == 0)
+            childLines.push_back(m.substr(std::string("[posix]:").size()));
+
+    // argv arrives EXACTLY as passed: execvp takes an array, so spaces,
+    // quotes and `$`/`;`/`|` are ordinary bytes with no second parse to
+    // survive -- "$HOME" is still the four literal characters, and
+    // "echo second-parse" never ran.
+    REQUIRE(childLines.size() >= 6);
+    CHECK(childLines[0] == "ARG:");
+    CHECK(childLines[1] == "ARG:has space");
+    CHECK(childLines[2] == "ARG:has\"quote");
+    CHECK(childLines[3] == "ARG:$HOME;echo second-parse|cat");
+    CHECK(childLines[4] == std::string("ARG:") + "café");
+
+    bool sawCwd         = false;
+    bool sawStderrLine  = false;
+    for (const std::string& line : childLines)
+    {
+        if (line.rfind("CWD:", 0) == 0)
+        {
+            sawCwd = true;
+            // `pwd -P` resolves symlinks, so this compares the physical
+            // directory the child's chdir landed in (macOS /var -> /private/var).
+            CHECK(fs::equivalent(fs::path(line.substr(4)), cwdDir.path));
+        }
+        if (line == "to-stderr")
+            sawStderrLine = true;
+    }
+    CHECK(sawCwd);
+    CHECK(sawStderrLine);   // stderr is MERGED into the very same stream Child() sees
+}
+
+TEST_CASE("arcbuild::ProcessRunner: a child killed by a signal reports 128 + signal", "[build]")
+{
+    REQUIRE(fs::exists(PosixShell()));
+
+    RecordingOutput output;
+    ProcessRunner   runner(output);
+
+    ProcessSpec spec;
+    spec.executable = PosixShell();
+    // `kill` is a shell BUILTIN and $$ is the shell's own pid, so the very
+    // process this runner forked is the one that dies by SIGTERM -- which is
+    // what makes waitpid report WIFSIGNALED rather than WIFEXITED.
+    spec.arguments  = { "-c", "kill -TERM $$" };
+
+    const ProcessResult result = runner.Run(spec, "[posix]");
+
+    // A signalled child is a child that RAN -- an ordinary result value, not
+    // a launch error.
+    REQUIRE(result.has_value());
+    CHECK(*result == 128 + SIGTERM);
+    CHECK(*result == 143);   // the number every shell and CI log shows for a SIGTERM'd child
+}
+
+TEST_CASE("arcbuild::ProcessRunner: a missing executable is a launch refusal carrying ENOENT, never child exit 127",
+          "[build]")
+{
+    RecordingOutput output;
+    ProcessRunner   runner(output);
+
+    ProcessSpec spec;
+    spec.executable = fs::path("/definitely/not/a/real/tool-arcbuild-should-never-find");
+
+    const ProcessResult result = runner.Run(spec, "[posix]");
+
+    // execvp failed in the child, which reported {Exec, ENOENT} over the
+    // error pipe and _exit(127)'d. That 127 must NOT be what the caller sees.
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message.find("exec") != std::string::npos);
+    CHECK(result.error().message.find(std::to_string(ENOENT)) != std::string::npos);
+    CHECK(result.error().message.find("127") == std::string::npos);
+
+    ProcessPlan plan;
+    plan.steps = { spec };
+    CHECK(ExecutePlan(plan, runner, output, "[posix]") == kExitRefused);
+}
+
+TEST_CASE("arcbuild::ProcessRunner: a missing working directory refuses the launch at the chdir stage", "[build]")
+{
+    REQUIRE(fs::exists(PosixShell()));
+
+    RecordingOutput output;
+    ProcessRunner   runner(output);
+
+    ProcessSpec spec;
+    spec.executable       = PosixShell();
+    spec.arguments        = { "-c", "exit 0" };
+    spec.workingDirectory = fs::path("/definitely/not/a/real/directory-arcbuild-should-never-enter");
+
+    const ProcessResult result = runner.Run(spec, "[posix]");
+
+    // The executable itself is perfectly fine here -- the chdir BEFORE exec
+    // is what failed, and the error pipe is the only way the parent could
+    // know that, since the failure happens after fork() already succeeded.
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message.find("working directory") != std::string::npos);
+    CHECK(result.error().message.find(std::to_string(ENOENT)) != std::string::npos);
+    // Never mistaken for "the shell ran and exited 0".
+    CHECK(result.error().message.find("exec") == std::string::npos);
 }
 #endif
 

@@ -432,7 +432,15 @@ project "arcbuild"
 -- Deliberately its OWN project, never part of ArcaneTests' file glob (a
 -- second wmain/main in that binary would not link) -- plain Win32
 -- (windows.h) only, no ArcaneCore/engine dependency of any kind.
+--
+-- Task 6 (multibackend hardening): emitted for a WINDOWS target only. Its one
+-- source file is wmain + windows.h by design (that is what lets it prove
+-- CreateProcessW's exact argv reconstruction and Win32 handle inheritance), so
+-- a gmake generation on Linux/macOS must not carry it -- the POSIX process
+-- cases spawn /bin/sh directly instead. ArcaneTests' matching dependson is
+-- gated the same way.
 -- ============================================================================
+if os.target() == "windows" then
 project "arcbuild-process-fixture"
     location "ArcaneTests/process-fixture"
     kind "ConsoleApp"
@@ -465,6 +473,7 @@ project "arcbuild-process-fixture"
         optimize "speed"
         symbols "off"
     filter {}
+end   -- arcbuild-process-fixture: Windows target only (Task 6)
 
 -- ============================================================================
 -- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
@@ -1392,7 +1401,16 @@ project "ArcaneTests"
     -- `/t:arcbuild,ArcaneTests` build (the fixture is not itself a named
     -- target there).
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad",
-                "HotReloadPluginInitFail", "arccook", "arcbuild-process-fixture" }
+                "HotReloadPluginInitFail", "arccook" }
+
+    -- Task 6 (multibackend hardening): the fixture project exists only for a
+    -- Windows target (see its own gate below), so only a Windows generation
+    -- may depend on it -- a gmake generation on Linux/macOS would otherwise
+    -- name a target that was never emitted. The POSIX process cases in
+    -- BuildDriverTest.cpp spawn /bin/sh instead and need no build dependency.
+    if os.target() == "windows" then
+        dependson { "arcbuild-process-fixture" }
+    end
 
     -- The test exe loads ArcaneClient.dll from its own directory.
     postbuildcommands {
