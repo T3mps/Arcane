@@ -113,7 +113,18 @@ function arcane_game_module(name)
         -- structurally impossible, and the host's CRT-flavor gate refuses a
         -- module that breaks it at load. Every exported engine class that holds
         -- an STL member would otherwise warn at every consumer call site.
-        disablewarnings { "4251" }
+        --
+        -- 4251 is an MSVC warning NUMBER, so this is scoped to the MSVC
+        -- compiler: `action:vs*` (the vs* generators do not expose a toolset
+        -- to filter on) OR `toolset:msc` (the `ninja` action's default on a
+        -- native Windows target). Unscoped, beta8's `gmake` action -- whose
+        -- default toolset is GCC on every host, Windows included -- emits a
+        -- meaningless `-Wno-4251` that GCC warns about on every TU
+        -- (multibackend hardening, review F2). Every filter here is
+        -- verified against real generated output for all three actions.
+        filter "action:vs* or toolset:msc"
+            disablewarnings { "4251" }
+        filter {}
 
         targetname(name)
         -- Flat Binaries/ (config-agnostic, matching the manifest's gameModule name).
@@ -127,18 +138,37 @@ function arcane_game_module(name)
         -- `build Binaries/Fixture.dll` edges, one per Debug/Release/Dist,
         -- all targeting the identical path -- arcbuild multibackend
         -- hardening plan, Task 4). Give Ninja a configuration-unique link
-        -- location instead, then copy the freshly-linked module into the
-        -- canonical single slot every host expects (Binaries/<name>, the
-        -- manifest's gameModule) so the generated .ninja has unique link
-        -- outputs while a successful `ninja -C ... <target>` still updates
-        -- the real slot. Every other action (vs2026, gmake, xcode4, ...)
-        -- keeps the flat targetdir above untouched.
+        -- location instead; arcbuild's Ninja backend then copies the
+        -- freshly-linked module into the canonical single slot every host
+        -- expects (Binaries/<name>, the manifest's gameModule) after a
+        -- successful build (arcbuild/src/Stage.cpp). Every other action
+        -- (vs2026, gmake, xcode4, ...) keeps the flat targetdir above
+        -- untouched.
+        --
+        -- The copy is arcbuild's, NOT a postbuildcommands entry, because
+        -- beta8's ninja module cannot run one on Windows: it wraps the
+        -- post-build in `cmd /C "..."` and escapes every inner quote as
+        -- `\"`, which cmd.exe does not understand -- `\"Binaries\"` resolves
+        -- to `\Binaries\`, the DRIVE ROOT (the first live run of the old
+        -- {MKDIR}+{COPYFILE} pair created C:\Binaries and failed; every
+        -- later run had its whole `&&` chain swallowed into `IF NOT EXIST`
+        -- and did nothing while exiting 0), and the module's own appended
+        -- stamp touch fails identically. Characterized live, review F4. A
+        -- raw `ninja <stem>_<Config>` therefore links and stops;
+        -- `arcbuild build/rebuild` is what updates the slot.
+        --
+        -- The unique location lives INSIDE Intermediate/<Config>/ (the
+        -- objdir above) on purpose: that directory is one of the two
+        -- filesystem clean targets arcbuild removes unconditionally
+        -- (arcbuild/src/ProjectLayout.cpp CleanTargets -- Binaries/ and
+        -- Intermediate/<config>/), so the linked DLL/PDB cannot survive an
+        -- `arcbuild clean` whose backend step soft-skipped or failed. The
+        -- earlier Intermediate/Ninja/<Config>/ spelling sat OUTSIDE that
+        -- contract (review F4). ProjectLayout.cpp's NinjaLinkOutput is the
+        -- driver-side spelling of THIS path; the [build-generator] case pins
+        -- the generated link edges against it.
         filter "action:ninja"
-            targetdir "%{wks.location}/Intermediate/Ninja/%{cfg.buildcfg}/Binaries"
-            postbuildcommands {
-                '{MKDIR} "%{wks.location}/Binaries"',
-                '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/Binaries/%{cfg.buildtarget.name}"',
-            }
+            targetdir "%{wks.location}/Intermediate/%{cfg.buildcfg}/Ninja/Binaries"
         filter {}
 
         files { "%{wks.location}/" .. sourceDir .. "/**.cpp", "%{wks.location}/" .. sourceDir .. "/**.hpp" }
@@ -181,10 +211,32 @@ function arcane_game_module(name)
 
         filter "system:windows"
             systemversion "latest"
+            -- The Windows system import libs a game module's engine-header
+            -- closure reaches (advapi32: Astra::IsHugePagesAvailable's
+            -- OpenProcessToken/PrivilegeCheck/LookupPrivilegeValueA; the rest
+            -- are MSBuild's own default AdditionalDependencies set, minus the
+            -- printer/ODBC ones nothing here touches). Under vs* MSBuild's
+            -- project system supplies that default list implicitly, which is
+            -- why this was never missed; Premake's `ninja` action drives
+            -- `cl.exe /link` with an EXPLICIT list and gets none of it, so the
+            -- fixture link failed on the advapi32 imports (multibackend
+            -- hardening, review F1). Listed for every action -- redundant but
+            -- harmless under vs*, `-l<lib>` against MinGW's import libs under
+            -- gmake, `<lib>.lib` under ninja.
+            links { "kernel32", "user32", "gdi32", "advapi32", "shell32", "ole32", "oleaut32", "uuid" }
+        -- MSVC-only flags, scoped to the MSVC compiler (see the 4251 note
+        -- above for why `action:vs* or toolset:msc`): beta8's `gmake` action
+        -- hands g++ these verbatim otherwise, where a `/utf-8` is an input
+        -- file name, not a switch.
+        filter { "system:windows", "action:vs* or toolset:msc" }
             -- /arch:AVX2 matches the engine's x86 min-spec (Arcane::Simd) so inline
             -- header codegen shared across the DLL boundary agrees. /utf-8 for fmt/spdlog.
             buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
+        -- The same AVX2 min-spec for a GCC/Clang toolset -- on Linux/macOS
+        -- (their default toolsets) and for `gmake` on Windows (MinGW).
         filter { "system:linux or system:macosx", "architecture:x86_64" }
+            buildoptions { "-mavx2", "-mfma" }
+        filter { "system:windows", "toolset:gcc or toolset:clang", "architecture:x86_64" }
             buildoptions { "-mavx2", "-mfma" }
 
         -- Per-config: runtime + NDEBUG must match ArcaneClient.dll's flavor (the vulkan.hpp
@@ -253,7 +305,11 @@ function arcane_core_consumer()
     -- structurally impossible, and the host's CRT-flavor gate refuses a
     -- module that breaks it at load. Every exported engine class that holds
     -- an STL member would otherwise warn at every consumer call site.
-    disablewarnings { "4251" }
+    -- MSVC-scoped for the same reason as arcane_game_module's (an MSVC
+    -- warning number is meaningless to GCC).
+    filter "action:vs* or toolset:msc"
+        disablewarnings { "4251" }
+    filter {}
 
     includedirs {
         ARCANE_SDK .. "/ArcaneCore/src",
@@ -267,9 +323,14 @@ function arcane_core_consumer()
     libdirs { ARCANE_BIN .. "/ArcaneCore" }
     links   { "ArcaneCore" }
 
-    filter "system:windows"
+    -- Same toolset scoping as arcane_game_module: MSVC flags only reach the
+    -- MSVC compiler; a GCC/Clang toolset (gmake on Windows) gets the -m
+    -- spelling of the AVX2 min-spec instead.
+    filter { "system:windows", "action:vs* or toolset:msc" }
         buildoptions { "/utf-8", "/arch:AVX2" }
     filter { "system:linux or system:macosx", "architecture:x86_64" }
+        buildoptions { "-mavx2", "-mfma" }
+    filter { "system:windows", "toolset:gcc or toolset:clang", "architecture:x86_64" }
         buildoptions { "-mavx2", "-mfma" }
 
     filter "configurations:Debug"

@@ -28,4 +28,16 @@ namespace arcbuild
     std::vector<std::filesystem::path> CleanTargets(
         const ProjectLayout& project,
         std::string_view config);
+
+    // Where the Ninja backend LINKS the module before arcbuild stages it into
+    // the slot: <root>/Intermediate/<config>/Ninja/Binaries/<gameModule>.
+    // This mirrors build/arcane.lua's `filter "action:ninja"` targetdir --
+    // the two are one contract and the [build-generator] case pins the
+    // generated Fixture.ninja's link edges against THIS function. Inside
+    // Intermediate/<config>/ on purpose, so CleanTargets above removes it.
+    // Empty when the project names no game module.
+    [[nodiscard]]
+    std::filesystem::path NinjaLinkOutput(
+        const ProjectLayout& project,
+        std::string_view config);
 }

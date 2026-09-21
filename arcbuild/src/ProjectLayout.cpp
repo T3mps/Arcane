@@ -36,4 +36,15 @@ namespace arcbuild
             project.root / "Intermediate" / std::string(config)
         };
     }
+
+    std::filesystem::path NinjaLinkOutput(
+        const ProjectLayout& project,
+        std::string_view config)
+    {
+        if (project.gameModule.empty())
+            return {};
+
+        return project.root / "Intermediate" / std::string(config) /
+               "Ninja" / "Binaries" / project.gameModule;
+    }
 }

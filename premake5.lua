@@ -1167,7 +1167,8 @@ project "ArcaneTests"
         -- 2026-09-13-arcbuild-driver-design.md): the PURE core -- Action.cpp
         -- (host/action/backend policy), Request.cpp (CLI), Slot.cpp (s4.3 CRT
         -- table, game-module only), ProjectLayout.cpp (path policy), and
-        -- Compose.cpp (string child-command composition). Source-compiles into
+        -- Compose.cpp (structured ProcessSpec/ProcessPlan composition -- executable
+        -- + argv + cwd per child, never a shell string). Source-compiles into
         -- the test exe so the
         -- [build] units drive it directly, same "pure logic, no spawn" pattern
         -- as ModuleBuild.cpp above. main.cpp (the spawn + PE probe half) is
@@ -1189,6 +1190,14 @@ project "ArcaneTests"
         "%{wks.location}/arcbuild/src/Pipeline.cpp",
         "%{wks.location}/arcbuild/src/Probe.cpp",
         "%{wks.location}/arcbuild/src/ProjectCleaner.cpp",
+        -- Multibackend hardening review F4: the Ninja single-slot staging
+        -- copy (Stage.cpp -- a filesystem op driven over a temp dir) and
+        -- BuildExecutor.cpp, whose Build() now runs it after a successful
+        -- Ninja plan; the executor is driven through the FakeProcessRunner
+        -- + a fake ninja.exe on an overridden PATH, so it still spawns
+        -- nothing.
+        "%{wks.location}/arcbuild/src/Stage.cpp",
+        "%{wks.location}/arcbuild/src/BuildExecutor.cpp",
         -- Multibackend hardening Task 3: BackendResolver wraps Arcane::
         -- Toolchain's real tool discovery in std::expected, no process spawn
         -- of its own, so it source-compiles the same "pure logic" way as its

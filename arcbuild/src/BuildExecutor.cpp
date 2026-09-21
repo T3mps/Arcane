@@ -1,11 +1,53 @@
 #include "BuildExecutor.hpp"
 
 #include "Exit.hpp"
+#include "ProjectLayout.hpp"
+#include "Stage.hpp"
 
 #include <string>
 
 namespace arcbuild
 {
+    namespace
+    {
+        // Ninja is the one backend whose link output is NOT the slot (see
+        // Stage.hpp for why the copy lives here and not in a post-build
+        // step). Runs only after the backend's own Build/Rebuild plan
+        // succeeded -- never after a Clean, which produced nothing to stage;
+        // a staging failure is the driver's own refusal (kExitRefused),
+        // never dressed up as a child exit code.
+        int StageIfNinja(
+            const DriverContext& context,
+            BuildOperation operation,
+            IOutput& output)
+        {
+            if (context.backend != BuildBackend::Ninja ||
+                operation == BuildOperation::Clean)
+            {
+                return kExitOk;
+            }
+
+            const auto staged =
+                StageBuiltModule(
+                    NinjaLinkOutput(
+                        context.project,
+                        context.request.config),
+                    SlotPath(
+                        context.project));
+
+            if (!staged)
+            {
+                output.Error(staged.error());
+                return kExitRefused;
+            }
+
+            for (const std::filesystem::path& copied : staged->copied)
+                output.Info("staged " + copied.generic_string());
+
+            return kExitOk;
+        }
+    }
+
     int BuildExecutor::Generate(
         const DriverContext& context) const
     {
@@ -84,12 +126,22 @@ namespace arcbuild
             return kExitRefused;
         }
 
-        return ExecutePlan(
-            plan,
-            processes_,
-            output_,
-            BuildBackendPrefix(
-                context.backend));
+        if (const int exit =
+            ExecutePlan(
+                plan,
+                processes_,
+                output_,
+                BuildBackendPrefix(
+                    context.backend));
+            exit != kExitOk)
+        {
+            return exit;
+        }
+
+        return StageIfNinja(
+            context,
+            operation,
+            output_);
     }
 
     int BuildExecutor::CleanBackend(

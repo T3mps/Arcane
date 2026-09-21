@@ -37,7 +37,20 @@ namespace Arcane
             int    maxStepsPerFrame = 5;   // clamp to avoid the spiral of death
         };
 
-        RunLoop(Astra::Registry& registry, SystemSchedulers& schedulers, Config cfg = {})
+        // Two constructors rather than one with `Config cfg = {}`: GCC (16)
+        // rejects a default argument that default-constructs the NESTED
+        // Config here ("default member initializer for 'Config::fixedHz'
+        // required before the end of its enclosing class" -- it processes
+        // the outer class's default arguments before the nested class's
+        // member initializers; `= Config{}` fails the same way). A
+        // delegating constructor's mem-initializer is evaluated where GCC,
+        // MSVC and Clang all agree Config is complete; the call sites
+        // (`RunLoop(reg, sched)` / `RunLoop(reg, sched, cfg)`) are unchanged
+        // (multibackend hardening, review F2).
+        RunLoop(Astra::Registry& registry, SystemSchedulers& schedulers)
+            : RunLoop(registry, schedulers, Config{}) {}
+
+        RunLoop(Astra::Registry& registry, SystemSchedulers& schedulers, Config cfg)
             : m_registry(&registry), m_schedulers(&schedulers), m_cfg(cfg) {}
 
         // ---- sim-time control -------------------------------------------------
