@@ -2313,10 +2313,15 @@ namespace Arcane::Editor
 
         // THE VISIBILITY READBACK RING (F3 plan 2 T5), armed ONLY on a
         // --report run -- the run whose report carries visibility.gpuVisible.
+        // UNLIKE THE RUNTIME HOST, which arms on every run: that one prints the
+        // count in its HUD on every frame, and this one has no such line yet,
+        // so outside a report nothing here would read the answer
+        // (Host/GpuSceneHost.hpp states the split). An unarmed run declares no
+        // copy node and pays nothing.
+        //
         // Owed again on every rebuild of this context, like the adoption above:
-        // the ring belongs to the GpuScene this vehicle owns, and a switch
-        // builds a new one. An unarmed run declares no copy node and pays
-        // nothing (Host/GpuSceneHost.hpp).
+        // the ring belongs to the GpuScene this vehicle owns, and a backend
+        // switch builds a new one.
         if (!m_config.reportPath.empty()
             && !Arcane::GpuSceneArmVisibilityReadback(m_viewportTargets.graph->Scene()))
         {

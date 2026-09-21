@@ -46,8 +46,18 @@ namespace Arcane
     // Arm opts THIS device scene into the delayed readback ring -- a per-frame
     // copy of the cull pass's args + visible indices, published once the owning
     // frame's fence has retired (GpuScene.hpp's ring block states the whole
-    // contract). False for a null device. Both hosts arm it on a --report run,
-    // where the report is what carries the count; an unarmed run pays nothing.
+    // contract). False for a null device, and IDEMPOTENT: a host that arms the
+    // same scene twice (the editor rebuilds its viewport context) keeps
+    // whatever has already landed.
+    //
+    // WHO ARMS, and why the two hosts differ: the RUNTIME arms at boot on
+    // EVERY run, because its HUD prints the count every frame whether or not a
+    // report was asked for (RuntimeFrame.cpp's BuildHud, and spec s9.5's desk
+    // pass reads exactly that line). The EDITOR arms only on a --report run:
+    // it has no such line, so outside a report nothing would read the answer.
+    // Every other consumer -- MeshDocument's preview, the thumbnail harvester,
+    // the [gpu] cases that never ask -- leaves it unarmed, declares no copy
+    // node, and pays nothing.
     //
     // GpuSceneVisibleRows answers the most recently COMPLETED readback's
     // GPU-visible row count -- every emitted batch's instanceNum, summed -- or

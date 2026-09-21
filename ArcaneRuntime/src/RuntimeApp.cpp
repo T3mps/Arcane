@@ -641,15 +641,27 @@ void RuntimeApp::MainLoop()
     // also gate convergence.
     const bool compareRequested = !m_config.compareReference.empty() && !m_config.bless;
 
-    // THE VISIBILITY READBACK RING (F3 plan 2 T5), armed ONLY on a --report
-    // run -- the run whose report is what carries `visibility.gpuVisible`.
-    // Opt-in by construction (Host/GpuSceneHost.hpp): an unarmed run declares
-    // no copy node and pays nothing, and a run that arms it and never gets a
-    // result reports `null` rather than the CPU's count. Same guard shape as
-    // the pick chain's above -- "not asking costs nothing".
-    if (!m_config.reportPath.empty() && !Arcane::GpuSceneArmVisibilityReadback(graph.Scene()))
-        ARC_WARN("--report: the GPU-scene visibility readback could not be armed -- "
-                  "the report's visibility.gpuVisible will be null");
+    // THE VISIBILITY READBACK RING (F3 plan 2 T5), armed UNCONDITIONALLY on
+    // this host -- and the unconditional part is the ruling, not an oversight.
+    // This host has TWO consumers of the count and both are live on every run:
+    // the HUD line (BuildHud, below -- built on every frame of every run,
+    // windowed and headless alike) and, when one was asked for, the report's
+    // `visibility.gpuVisible`. Spec s9.5's desk pass is "orbit a scene and
+    // watch the stats line", which is not a --report run at all, so gating the
+    // ring on --report would leave the overlay permanently reading
+    // "unavailable" for the exact workflow it exists to serve.
+    //
+    // "Opt-in" still holds where it matters: the ring is armed by a CALL, and
+    // an unarmed GpuScene (every other consumer of this engine -- the editor
+    // outside --report, MeshDocument's preview, the thumbnail harvester, the
+    // [gpu] tests) declares no copy node and pays nothing. What this line says
+    // is that a host which SHOWS the number is a legitimate place to ask for
+    // it. The cost on this host is one small copy per frame (the slot's args
+    // plus rowCount * 4 bytes) into a HOST_READBACK buffer, published from the
+    // graveyard with no wait of any kind.
+    if (!Arcane::GpuSceneArmVisibilityReadback(graph.Scene()))
+        ARC_WARN("the GPU-scene visibility readback could not be armed -- the HUD's "
+                  "\"GPU visible\" line, and any --report's visibility.gpuVisible, stay unavailable");
 
     // Boot is over; anything the watchdog reports from here on belongs to the
     // frame loop, not to a stale boot stage.

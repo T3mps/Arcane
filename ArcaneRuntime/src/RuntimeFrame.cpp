@@ -302,11 +302,16 @@ void BuildHud(FrameIo& io)
         // GPU's answer is asynchronous by construction -- which is the same
         // one-frame lag the batcher's counts above already carry.
         //
-        // The second line reads "unavailable" whenever no readback has
-        // completed: the ring is opt-in (--report arms it), and a HUD that
-        // printed the coarse count there would be showing the CPU's
-        // expectation under the GPU's name -- exactly the conflation this arc
-        // removed from the report.
+        // This host arms the ring at boot, UNCONDITIONALLY (RuntimeApp's own
+        // comment carries the reasoning), so on an ordinary run -- windowed,
+        // no --report -- the second line carries a real number within a couple
+        // of frames of the first draw. That is what spec s9.5's desk pass
+        // ("orbit a scene with meshes leaving and entering the view and watch
+        // the stats line") reads. It says "unavailable" only while nothing has
+        // completed yet: the opening frames, or a scene with no mesh pass at
+        // all. A HUD that printed the coarse count there instead would be
+        // showing the CPU's expectation under the GPU's name -- exactly the
+        // conflation this arc removed from the report.
         const Arcane::GpuSceneFrame::Stats& vis = io.gpuSceneFrame.stats;
         ImGui::Text("Rows: %u  Coarse: %u  Batches: %u  Draws: %u (+%u transparent)",
                     vis.total, vis.coarseVisible, vis.batches, vis.draws,

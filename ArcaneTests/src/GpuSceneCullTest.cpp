@@ -407,6 +407,14 @@ namespace
         REQUIRE(frame.batches.size() >= 3);            // meshA's two sections + the variants
         REQUIRE(frame.transparentDraws.size() == 2);   // never emitted, always direct
         REQUIRE(frame.stats.coarseVisible < frame.stats.total);   // something really is culled
+        // THE IDENTITY THE WITNESS LANES ASSERT, on a LIVE frame: a frame's
+        // draws are its indirect batches plus its direct transparent records,
+        // and nothing else. This is the fact `visibility.transparentRows`
+        // exists to let a report consumer check -- asserted here, where
+        // BuildGpuSceneFrame's own numbers can disagree, rather than against a
+        // report's literals, where it could only ever be arithmetic.
+        CHECK(frame.stats.draws == frame.stats.batches
+                                     + static_cast<std::uint32_t>(frame.transparentDraws.size()));
         {
             bool sharedBatch = false, maskedBatch = false, twoSidedBatch = false;
             for (const Arcane::GpuBatchDraw& b : frame.batches)
@@ -460,6 +468,14 @@ namespace
         REQUIRE(seam.has_value());
         CHECK(*seam == landed->VisibleRows());
 
+        // ARMING IS IDEMPOTENT, and that matters now that hosts arm without
+        // asking whether they already did: the runtime arms at boot on every
+        // run, and the editor arms again every time it rebuilds its viewport
+        // context. A second arm must not discard what has already landed.
+        REQUIRE(Arcane::GpuSceneArmVisibilityReadback(device));
+        REQUIRE(device->LatestVisibility() == landed);
+        CHECK(Arcane::GpuSceneVisibleRows(device) == seam);
+
         // ---- PHASE 2: THE VISIBLE SET SHRINKS --------------------------
         // One of the two rows sharing meshA's batches leaves the frustum. The
         // device's visible-index buffer still holds the previous frame's ids in
@@ -475,6 +491,12 @@ namespace
         Arcane::BuildGpuSceneFrame(world.mirror, &shrunk,
                                    world.reg.GetResource<Arcane::MeshTable>(), view, frame2);
         REQUIRE(frame2.stats.coarseVisible < frame.stats.coarseVisible);
+        // ...and the identity again, on a DIFFERENT live frame: the rebuild
+        // dropped rows from shared batches while the transparent records stayed,
+        // which is exactly the shape that would expose `draws` being counted
+        // from the wrong side.
+        CHECK(frame2.stats.draws == frame2.stats.batches
+                                      + static_cast<std::uint32_t>(frame2.transparentDraws.size()));
 
         scene.scene = &frame2;
         for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 2u; ++i)

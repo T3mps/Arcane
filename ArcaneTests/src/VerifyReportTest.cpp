@@ -232,12 +232,14 @@ TEST_CASE("VerifyReport: SetVisibility emits the visibility block", "[verify]")
     CHECK(j["visibility"]["batches"] == 3);
     CHECK(j["visibility"]["draws"] == 5);
     CHECK(j["visibility"]["transparentRows"] == 2);
-    // The identity every witness lane asserts, and the reason transparentRows
-    // is its own field: the indirect batches plus the direct transparent
-    // records ARE the frame's draws.
-    CHECK(j["visibility"]["draws"].get<std::uint32_t>()
-              == j["visibility"]["batches"].get<std::uint32_t>()
-                   + j["visibility"]["transparentRows"].get<std::uint32_t>());
+    // The six values above are what this case can pin: that each argument
+    // reaches its own key, distinctly (hence six different literals -- a
+    // transposed pair would show up here). The `draws == batches +
+    // transparentRows` IDENTITY is a fact about BuildGpuSceneFrame, not about
+    // this component -- VerifyReport is handed those numbers and states them.
+    // Asserting it here would be arithmetic on this case's own literals; it is
+    // asserted where it can actually fail, against live frames, in
+    // GpuSceneCullTest.cpp's fixture-shape block.
 
     // Absence must be absence (the contract capture/census/compare/settle/
     // viewMode keep): a report that never saw a frame carries no block a
