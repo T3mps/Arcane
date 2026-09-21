@@ -19,6 +19,10 @@ namespace arcbuild
     std::filesystem::path SlotPath(
         const ProjectLayout& project);
 
+    // The MSBuild workspace file BackendResolver drives: a `discovered` file
+    // (Toolchain::DiscoverSolution) wins, made absolute against the root when
+    // relative; else the <name>.slnx convention. The one implementation of
+    // this rule -- Backend.cpp calls it rather than carrying its own copy.
     [[nodiscard]]
     std::filesystem::path SolutionPath(
         const ProjectLayout& project,

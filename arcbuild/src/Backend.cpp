@@ -25,23 +25,6 @@ namespace arcbuild
 
             return path;
         }
-
-        std::filesystem::path ResolveSolutionPath(
-            const ProjectLayout& project,
-            const std::filesystem::path& discovered)
-        {
-            if (!discovered.empty())
-            {
-                return discovered.is_absolute()
-                    ? discovered
-                    : (project.root / discovered)
-                    .lexically_normal();
-            }
-
-            return
-                project.root /
-                (project.name + ".slnx");
-        }
     }
 
     std::expected<std::filesystem::path, std::string>
@@ -110,7 +93,7 @@ namespace arcbuild
                     project.root);
 
             const auto solution =
-                ResolveSolutionPath(
+                SolutionPath(
                     project,
                     discovered);
 
