@@ -68,9 +68,15 @@ repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 cd "$repo_root"
 
 syntax_only=0
-if [ "${1:-}" = "--syntax-only" ]; then
-    syntax_only=1
-fi
+case "$#:${1:-}" in
+    0:) ;;
+    1:--syntax-only) syntax_only=1 ;;
+    *)
+        echo "usage: $0 [--syntax-only]" >&2
+        echo "  (unrecognized argument(s): $*)" >&2
+        exit 2
+        ;;
+esac
 
 CXX=${CXX:-c++}
 PREMAKE5=${PREMAKE5:-premake5}

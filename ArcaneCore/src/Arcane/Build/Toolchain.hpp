@@ -54,12 +54,14 @@ namespace Arcane::Toolchain
         std::string_view pathExt = {});
 
     // The engine's bundled premake: <sdkRoot>/ThirdParty/premake5/premake5[.exe]
-    // (the repo layout build/arcane.lua documents), lexically normalised,
-    // falling back to a concrete FindOnPath() hit over the process PATH (and,
-    // on Windows, PATHEXT) when the bundled copy is not there -- a packaged
-    // SDK may ship it elsewhere. Empty when neither the bundled copy nor PATH
-    // has one; callers refuse rather than shell out to an optimistic bare
-    // name (ledger ruling, Task 2/3).
+    // (the repo layout build/arcane.lua documents), made absolute and
+    // lexically normalised exactly like a FindOnPath() result (a relative
+    // `sdkRoot` does not leak out as a relative answer), falling back to a
+    // concrete FindOnPath() hit over the process PATH (and, on Windows,
+    // PATHEXT) when the bundled copy is not there -- a packaged SDK may ship
+    // it elsewhere. Empty when neither the bundled copy nor PATH has one;
+    // callers refuse rather than shell out to an optimistic bare name (ledger
+    // ruling, Task 2/3).
     ARCANE_CORE_API std::filesystem::path ResolvePremake(const std::filesystem::path& sdkRoot);
 
     // The one VS-install-aware query Microsoft documents: run

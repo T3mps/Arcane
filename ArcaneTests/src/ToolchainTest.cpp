@@ -17,77 +17,25 @@
 
 #include <Arcane/Build/Toolchain.hpp>
 
+// TempDir (unique temp dir per SECTION run, removed by the guard) and
+// EnvOverride (the Resolve* wrappers, unlike FindOnPath itself, read
+// PATH/PATHEXT live via std::getenv, so proving their fallback precedence
+// needs a real, restored-on-scope-exit env mutation rather than a mock) --
+// shared with BuildDriverTest.cpp.
+#include "Helpers/TestEnvironment.hpp"
+
 namespace
 {
     namespace fs = std::filesystem;
 
-    // Unique temp dir per SECTION run; removed by the guard so a failing
-    // assertion cannot strand files for the next run to trip on.
-    struct TempDir
-    {
-        fs::path path;
-        explicit TempDir(const char* tag)
-        {
-            path = fs::temp_directory_path() /
-                   (std::string("arcane_toolchain_") + tag + "_" +
-                    std::to_string(static_cast<unsigned>(
-                        std::hash<const void*>{}(this))));
-            fs::create_directories(path);
-        }
-        ~TempDir()
-        {
-            std::error_code ec;
-            fs::remove_all(path, ec);
-        }
-    };
+    using Arcane::Test::TempDir;
+    using Arcane::Test::EnvOverride;
 
     void Touch(const fs::path& p)
     {
         fs::create_directories(p.parent_path());
         std::ofstream(p.string()) << "x";
     }
-
-    // RAII process-environment override: the Resolve* wrappers (unlike
-    // FindOnPath itself) read PATH/PATHEXT live via std::getenv, so proving
-    // their fallback precedence needs a real, restored-on-scope-exit env
-    // mutation rather than a mock.
-    class EnvOverride
-    {
-    public:
-        EnvOverride(const char* name, const std::string& value)
-            : name_(name)
-        {
-            if (const char* existing = std::getenv(name))
-                previous_ = existing;
-            Set(value);
-        }
-
-        ~EnvOverride()
-        {
-            Set(previous_.value_or(std::string()));
-        }
-
-        EnvOverride(const EnvOverride&) = delete;
-        EnvOverride& operator=(const EnvOverride&) = delete;
-
-    private:
-        void Set(const std::string& value)
-        {
-#ifdef _WIN32
-            // An empty value REMOVES the variable (documented _putenv_s
-            // behaviour) -- exactly "unset" when there was no previous value.
-            _putenv_s(name_.c_str(), value.c_str());
-#else
-            if (value.empty())
-                unsetenv(name_.c_str());
-            else
-                setenv(name_.c_str(), value.c_str(), 1);
-#endif
-        }
-
-        std::string name_;
-        std::optional<std::string> previous_;
-    };
 }
 
 TEST_CASE("Toolchain::DiscoverSolution prefers .slnx over .sln, first lexicographic within a bucket",
@@ -142,6 +90,22 @@ TEST_CASE("Toolchain::ResolvePremake returns the SDK's bundled premake, else a c
         CHECK(found.is_absolute());
         // lexically_normal'd: no "." / ".." elements survive.
         CHECK(found == found.lexically_normal());
+    }
+    SECTION("bundled copy present, sdkRoot given RELATIVE -- the answer is still absolute (the file's 'absolute or empty' contract)")
+    {
+        Touch(sdk.path / "ThirdParty" / "premake5" / "premake5.exe");
+
+        // A relative sdkRoot only makes sense against the process cwd, so
+        // enter the temp dir's parent for the scope and hand in the leaf.
+        const fs::path previousCwd = fs::current_path();
+        fs::current_path(sdk.path.parent_path());
+        const fs::path found = Arcane::Toolchain::ResolvePremake(sdk.path.filename());
+        fs::current_path(previousCwd);
+
+        REQUIRE_FALSE(found.empty());
+        CHECK(found.is_absolute());
+        CHECK(found == found.lexically_normal());
+        CHECK(found == (sdk.path / "ThirdParty" / "premake5" / "premake5.exe").lexically_normal());
     }
     SECTION("bundled copy absent -> the concrete PATH hit, never a bare 'premake5'")
     {

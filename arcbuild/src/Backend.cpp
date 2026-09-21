@@ -8,15 +8,19 @@ namespace arcbuild
 {
     namespace
     {
+        // `describe` is a callable, not a string: the descriptive text (which
+        // for Premake concatenates the checked path) is only built on the
+        // failure path, never on the success path that discards it.
+        template <typename Describe>
         std::expected<std::filesystem::path, std::string> RequireTool(
             std::filesystem::path path,
-            std::string_view description)
+            Describe&& describe)
         {
             if (path.empty())
             {
                 return std::unexpected(
                     "could not locate " +
-                    std::string(description));
+                    std::string(describe()));
             }
 
             return path;
@@ -47,9 +51,12 @@ namespace arcbuild
         return RequireTool(
             Arcane::Toolchain::ResolvePremake(
                 sdkRoot),
-            "Premake (checked '" +
-                (sdkRoot / "ThirdParty" / "premake5").generic_string() +
-                "' and PATH)");
+            [&]
+            {
+                return "Premake (checked '" +
+                    (sdkRoot / "ThirdParty" / "premake5").generic_string() +
+                    "' and PATH)";
+            });
     }
 
     std::expected<std::filesystem::path, std::string>
@@ -61,22 +68,22 @@ namespace arcbuild
         case BuildBackend::MsBuild:
             return RequireTool(
                 Arcane::Toolchain::ResolveMsBuild(),
-                "MSBuild (checked vswhere and PATH)");
+                [] { return "MSBuild (checked vswhere and PATH)"; });
 
         case BuildBackend::Make:
             return RequireTool(
                 Arcane::Toolchain::ResolveMake(),
-                "Make (checked PATH)");
+                [] { return "Make (checked PATH)"; });
 
         case BuildBackend::Ninja:
             return RequireTool(
                 Arcane::Toolchain::ResolveNinja(),
-                "Ninja (checked PATH)");
+                [] { return "Ninja (checked PATH)"; });
 
         case BuildBackend::XcodeBuild:
             return RequireTool(
                 Arcane::Toolchain::ResolveXcodeBuild(),
-                "xcodebuild (macOS only)");
+                [] { return "xcodebuild (macOS only)"; });
 
         case BuildBackend::None:
             return std::unexpected(
@@ -169,7 +176,7 @@ namespace arcbuild
             // needs the stem to derive the real workspace target
             // (<module-stem>_<Config>, see ComposeNinja), so both files
             // must exist before this context is usable. The stem rides in
-            // BackendContext::scheme for Compose to read back.
+            // BackendContext::target for Compose to read back.
             const auto moduleNinja =
                 project.root / (project.name + ".ninja");
 
@@ -210,7 +217,7 @@ namespace arcbuild
 
             // beta8's xcode4 generator creates no shared scheme (Global
             // Constraints, multibackend hardening plan) -- the module stem
-            // rides in BackendContext::scheme so Compose can drive
+            // rides in BackendContext::target so Compose can drive
             // `-target <stem>` instead of a scheme that does not exist.
             return BackendContext
             {

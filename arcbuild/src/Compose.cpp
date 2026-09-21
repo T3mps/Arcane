@@ -195,15 +195,16 @@ namespace arcbuild
         // naming for a workspace's per-configuration aggregate target --
         // build/arcane.lua's `action:ninja` filter is the matching link-
         // location half of this). BackendResolver stashes the module stem
-        // in BackendContext::scheme once it confirms <module-stem>.ninja
-        // exists alongside build.ninja (Backend.cpp).
-        const std::string stem =
-            context.scheme
-                ? *context.scheme
-                : std::string();
+        // in BackendContext::target once it confirms <module-stem>.ninja
+        // exists alongside build.ninja (Backend.cpp). A context without it
+        // cannot name a target at all: an empty plan (BuildExecutor refuses
+        // it as "cannot compose this operation") rather than a malformed
+        // "_Debug" that ninja would reject one process later.
+        if (!context.target || context.target->empty())
+            return {};
 
         const std::string target =
-            stem + "_" + std::string(config);
+            *context.target + "_" + std::string(config);
 
         auto invocation =
             [&](bool clean)
@@ -256,12 +257,12 @@ namespace arcbuild
     {
         // beta8's xcode4 generator creates a .xcworkspace + .xcodeproj but no
         // shared scheme (Global Constraints, multibackend hardening plan) --
-        // BackendResolver stores the module stem in BackendContext::scheme
-        // and it is composed here as `-target`, never `-scheme`.
-        const std::string target =
-            context.scheme
-                ? *context.scheme
-                : std::string();
+        // BackendResolver stores the module stem in BackendContext::target
+        // and it is composed here as `-target`, never `-scheme`. Same
+        // refusal as ComposeNinja: no target, no plan (an empty `-target`
+        // argument is not a build xcodebuild could run).
+        if (!context.target || context.target->empty())
+            return {};
 
         ProcessSpec spec;
         spec.executable = xcodebuild;
@@ -270,7 +271,7 @@ namespace arcbuild
             "-project",
             PathArgument(context.path),
             "-target",
-            target,
+            *context.target,
             "-configuration",
             std::string(config)
         };

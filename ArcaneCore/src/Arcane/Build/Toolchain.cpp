@@ -218,7 +218,14 @@ namespace Arcane::Toolchain
 #endif
         std::error_code ec;
         if (std::filesystem::is_regular_file(bundled, ec))
-            return bundled.lexically_normal();
+        {
+            // Through AbsoluteNormal, same as every PATH hit below: this
+            // file's contract is "absolute or empty", and a caller-relative
+            // sdkRoot (Bootstrap absolutises its own, but nothing forces the
+            // next caller to) would otherwise leak out as a relative path.
+            if (const std::filesystem::path found = AbsoluteNormal(bundled); !found.empty())
+                return found;
+        }
         return FindOnPath("premake5", EnvOrEmpty("PATH"), EnvOrEmpty("PATHEXT"));
     }
 

@@ -51,6 +51,19 @@ data/shaders/generated/
 # generated IDE files + build output are derived.
 ReferenceProject/ReferenceProject.slnx
 ReferenceProject/*.vcxproj*
+# The non-MSBuild generator actions arcbuild drives (multibackend hardening):
+# `arcbuild generate --action gmake|ninja|xcode4 --project ReferenceProject`
+# drops these beside the .slnx above -- derived output, same as the .slnx/
+# .vcxproj rules, and the same shapes the arcbuild-fixture block below
+# ignores. Deliberately scoped to ReferenceProject/ (and the fixture): the
+# ENGINE tree must never have Make/Ninja output generated in place, so a
+# stray root-level Makefile/build.ninja stays visible to `git status`.
+ReferenceProject/Makefile
+ReferenceProject/*.make
+ReferenceProject/build.ninja
+ReferenceProject/*.ninja
+ReferenceProject/*.xcodeproj/
+ReferenceProject/*.xcworkspace/
 ReferenceProject/Binaries/
 ReferenceProject/Intermediate/
 # Task 12a: a bless run points --project at this SOURCE tree, so a harvest

@@ -13,8 +13,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -23,6 +25,12 @@
 #include <Bootstrap.hpp>
 #include <Output.hpp>
 #include <Pipeline.hpp>
+
+// TempDir + EnvOverride (shared with ToolchainTest.cpp).
+#include "Helpers/TestEnvironment.hpp"
+
+// Review F4 (multibackend hardening): the Ninja single-slot staging copy.
+#include <Stage.hpp>
 
 // Task 5 (multibackend hardening): ExeDir() locates the process-fixture exe
 // beside this test exe, the same "../<project>/<project>.exe" convention
@@ -142,68 +150,13 @@ namespace
         }
     };
 
-    // A plain, empty scratch directory -- BackendResolver's tool-lookup
-    // tests use this both as a bare "no bundled Premake here" SDK root and
-    // as a controlled, empty PATH entry.
-    struct TempDir
-    {
-        fs::path path;
-        explicit TempDir(std::string_view tag)
-            : path(fs::temp_directory_path() / "arcbuild_orchestration_test" /
-                   (std::string("dir_") + std::string(tag)))
-        {
-            std::error_code ec;
-            fs::remove_all(path, ec);
-            fs::create_directories(path);
-        }
-        ~TempDir()
-        {
-            std::error_code ec;
-            fs::remove_all(path, ec);
-        }
-    };
-
-    // RAII process-environment override. BackendResolver::ResolveBuilder and
-    // ::ResolvePremake ultimately call into Arcane::Toolchain's Resolve*
-    // functions, which read PATH/PATHEXT live via std::getenv -- so proving
-    // "nothing on PATH" (and therefore a descriptive std::unexpected rather
-    // than an optimistic bare name) needs a real, restored-on-scope-exit
-    // environment mutation, same technique as ToolchainTest.cpp.
-    class EnvOverride
-    {
-    public:
-        EnvOverride(const char* name, const std::string& value)
-            : name_(name)
-        {
-            if (const char* existing = std::getenv(name))
-                previous_ = existing;
-            Set(value);
-        }
-
-        ~EnvOverride()
-        {
-            Set(previous_.value_or(std::string()));
-        }
-
-        EnvOverride(const EnvOverride&) = delete;
-        EnvOverride& operator=(const EnvOverride&) = delete;
-
-    private:
-        void Set(const std::string& value)
-        {
-#ifdef _WIN32
-            _putenv_s(name_.c_str(), value.c_str());
-#else
-            if (value.empty())
-                unsetenv(name_.c_str());
-            else
-                setenv(name_.c_str(), value.c_str(), 1);
-#endif
-        }
-
-        std::string name_;
-        std::optional<std::string> previous_;
-    };
+    // A plain, empty scratch directory (BackendResolver's tool-lookup tests
+    // use it both as a bare "no bundled Premake here" SDK root and as a
+    // controlled, empty PATH entry) and the restored-on-scope-exit
+    // environment override the "nothing on PATH" cases need -- both from
+    // Helpers/TestEnvironment.hpp, shared with ToolchainTest.cpp.
+    using Arcane::Test::TempDir;
+    using Arcane::Test::EnvOverride;
 
     struct FakeEnvironment final : IEnvironment
     {
@@ -634,14 +587,8 @@ TEST_CASE("arcbuild exit codes: probe 0 on the plain rows, 3 on the rebuild rows
     CHECK(ProbeExitCode(SlotState::Unreadable) == kExitProbeRebuild);
     CHECK(kExitRefused == 2);
     CHECK(kExitProbeRebuild == 3);
-    // A child's own status passes through untouched (premake and msbuild
-    // both exit 1 on failure; 9009 is cmd's "not found"), and a launch
-    // failure (missing executable, a bad UTF-16 conversion, ...) is a
-    // refusal -- ExecutePlan's own tests below cover both, now that
-    // ProcessResult (std::expected<int, ProcessError>) has replaced the old
-    // std::optional<int> this test used to check directly via a since-
-    // retired ExitFromChild(std::optional<int>) (Task 5, multibackend
-    // hardening).
+    // Child exit pass-through and launch-failure -> kExitRefused: the
+    // arcbuild::ExecutePlan cases in the process-execution section below.
 }
 
 TEST_CASE("filesystem clean failure outranks backend clean failure", "[build]")
@@ -902,6 +849,43 @@ TEST_CASE("arcbuild::ComposeNinja: {-C, root, <stem>_<Config>}; clean inserts -t
     CHECK(release.steps[0].arguments == std::vector<std::string>{ "-C", root.string(), "Fixture_Release" });
 }
 
+TEST_CASE("arcbuild::ComposeNinja/ComposeXcodeBuild refuse (empty plan) a context with no target -- never a malformed '_Debug' or empty -target",
+          "[build]")
+{
+    // BackendContext::target is what names the thing to build for these two
+    // backends (Build.hpp). A context without it -- unreachable through the
+    // real BackendResolver, which always stores the module stem, but trivially
+    // constructible -- must not compose a target ninja/xcodebuild would only
+    // reject one process later: an EMPTY plan is what BuildExecutor already
+    // refuses with "cannot compose this operation" (kExitRefused).
+    const fs::path root         = "D:/dev/starworks/Gacha/Game";
+    const fs::path xcodeProject = root / "Fixture.xcodeproj";
+
+    const BackendContext unset  { root, std::nullopt };
+    const BackendContext blank  { root, std::string() };
+    const BackendContext xUnset { xcodeProject, std::nullopt };
+    const BackendContext xBlank { xcodeProject, std::string() };
+
+    for (const BuildOperation operation : { BuildOperation::Build, BuildOperation::Rebuild, BuildOperation::Clean })
+    {
+        CHECK(ComposeNinja(NinjaPath(), unset, "Debug", operation).steps.empty());
+        CHECK(ComposeNinja(NinjaPath(), blank, "Debug", operation).steps.empty());
+        CHECK(ComposeXcodeBuild(XcodeBuildPath(), xUnset, "Debug", operation).steps.empty());
+        CHECK(ComposeXcodeBuild(XcodeBuildPath(), xBlank, "Debug", operation).steps.empty());
+
+        // ComposeBuild's dispatch carries the same refusal through.
+        CHECK(ComposeBuild(BuildBackend::Ninja,      NinjaPath(),      unset,  "Debug", operation).steps.empty());
+        CHECK(ComposeBuild(BuildBackend::XcodeBuild, XcodeBuildPath(), xUnset, "Debug", operation).steps.empty());
+    }
+
+    // And the positive control: WITH a target the same calls compose one
+    // step per operation (the sibling cases above pin the exact argv).
+    const BackendContext named { root, std::string("Fixture") };
+    CHECK_FALSE(ComposeNinja(NinjaPath(), named, "Debug", BuildOperation::Build).steps.empty());
+    const BackendContext xNamed { xcodeProject, std::string("Fixture") };
+    CHECK_FALSE(ComposeXcodeBuild(XcodeBuildPath(), xNamed, "Debug", BuildOperation::Build).steps.empty());
+}
+
 TEST_CASE("arcbuild::ComposeXcodeBuild: -target (no shared scheme in beta8); rebuild is ONE invocation ending 'clean build'",
           "[build]")
 {
@@ -969,6 +953,102 @@ TEST_CASE("arcbuild::CleanTargets is exactly Binaries/ and Intermediate/<config>
         CHECK(s.find(".slnx") == std::string::npos);
     }
 }
+
+// ---- Ninja single-slot staging (multibackend hardening, review F4) ----------
+//
+// beta8's ninja action links each configuration to its own
+// Intermediate/<Config>/Ninja/Binaries/<gameModule> (build/arcane.lua) and
+// arcbuild copies the result into the slot itself -- a Premake post-build
+// step cannot do it on Windows (Stage.hpp has the characterization). Three
+// layers, each pinned: the PATH policy (NinjaLinkOutput), the copy
+// (StageBuiltModule), and the executor hooking the copy onto a successful
+// Ninja plan and nothing else.
+
+TEST_CASE("arcbuild::NinjaLinkOutput is Intermediate/<config>/Ninja/Binaries/<gameModule>, inside a CleanTargets entry",
+          "[build]")
+{
+    const ProjectLayout project = AphelyonProject();
+
+    const fs::path debug = NinjaLinkOutput(project, "Debug");
+    CHECK(debug == fs::path("D:/dev/starworks/Gacha/Game") / "Intermediate" / "Debug" / "Ninja" / "Binaries" / "Aphelyon.dll");
+    CHECK(NinjaLinkOutput(project, "Release").generic_string().find("/Intermediate/Release/Ninja/Binaries/") != std::string::npos);
+
+    // Inside Intermediate/<config>/ -- the clean contract that makes a
+    // soft-skipped/failed backend clean unable to strand the linked module.
+    const std::vector<fs::path> clean = CleanTargets(project, "Debug");
+    REQUIRE(clean.size() == 2);
+    const std::string cleanIntermediate = clean[1].generic_string() + "/";
+    CHECK(debug.generic_string().rfind(cleanIntermediate, 0) == 0);
+
+    // Never the slot itself (that is what the unique location exists to
+    // avoid), never the retired Intermediate/Ninja/<Config> spelling.
+    CHECK(debug != SlotPath(project));
+    CHECK(debug.generic_string().find("Intermediate/Ninja/") == std::string::npos);
+
+    // No game module, no link output -- same shape as SlotPath.
+    ProjectLayout noModule = project;
+    noModule.gameModule.clear();
+    CHECK(NinjaLinkOutput(noModule, "Debug").empty());
+}
+
+TEST_CASE("arcbuild::StageBuiltModule copies the built module (and its .pdb) over the slot, and refuses what it cannot stage",
+          "[build]")
+{
+    TempDir root("stage_built_module");
+    const fs::path built = root.path / "Intermediate" / "Debug" / "Ninja" / "Binaries" / "Fixture.dll";
+    const fs::path slot  = root.path / "Binaries" / "Fixture.dll";
+
+    SECTION("built module + pdb -> slot + pdb, Binaries/ created on the way")
+    {
+        fs::create_directories(built.parent_path());
+        std::ofstream(built, std::ios::binary) << "dll-bytes-v1";
+        std::ofstream(fs::path(built).replace_extension(".pdb"), std::ios::binary) << "pdb-bytes";
+
+        const auto staged = StageBuiltModule(built, slot);
+        REQUIRE(staged.has_value());
+        REQUIRE(staged->copied.size() == 2);
+        CHECK(staged->copied[0] == slot);
+        CHECK(staged->copied[1] == fs::path(slot).replace_extension(".pdb"));
+
+        std::ifstream slotFile(slot, std::ios::binary);
+        std::string slotBytes((std::istreambuf_iterator<char>(slotFile)), std::istreambuf_iterator<char>());
+        CHECK(slotBytes == "dll-bytes-v1");
+        CHECK(fs::is_regular_file(fs::path(slot).replace_extension(".pdb")));
+
+        // The single-slot rule: a second build OVERWRITES the slot.
+        std::ofstream(built, std::ios::binary | std::ios::trunc) << "dll-bytes-v2";
+        REQUIRE(StageBuiltModule(built, slot).has_value());
+        std::ifstream slotFile2(slot, std::ios::binary);
+        std::string slotBytes2((std::istreambuf_iterator<char>(slotFile2)), std::istreambuf_iterator<char>());
+        CHECK(slotBytes2 == "dll-bytes-v2");
+    }
+
+    SECTION("no pdb is fine -- only the module is staged")
+    {
+        fs::create_directories(built.parent_path());
+        std::ofstream(built, std::ios::binary) << "dll-bytes";
+
+        const auto staged = StageBuiltModule(built, slot);
+        REQUIRE(staged.has_value());
+        CHECK(staged->copied == std::vector<fs::path>{ slot });
+        CHECK_FALSE(fs::exists(fs::path(slot).replace_extension(".pdb")));
+    }
+
+    SECTION("the backend said success but linked nothing -> a named refusal, slot untouched")
+    {
+        const auto staged = StageBuiltModule(built, slot);
+        REQUIRE_FALSE(staged.has_value());
+        CHECK(staged.error().find(built.generic_string()) != std::string::npos);
+        CHECK_FALSE(fs::exists(slot));
+    }
+
+    SECTION("empty paths are refused, not silently no-op'd")
+    {
+        CHECK_FALSE(StageBuiltModule({}, slot).has_value());
+        CHECK_FALSE(StageBuiltModule(built, {}).has_value());
+    }
+}
+
 
 // ---- process execution (Task 5, multibackend hardening) --------------------
 //
@@ -1118,6 +1198,139 @@ TEST_CASE("arcbuild::ExecutePlan maps a real launch failure to kExitRefused, nev
         if (m.rfind("error:", 0) == 0)
             sawError = true;
     CHECK(sawError);
+}
+
+TEST_CASE("arcbuild::BuildExecutor stages the Ninja module into the slot after a successful Build/Rebuild plan -- and only then, only for Ninja, never for Clean",
+          "[build]")
+{
+    // A real BuildExecutor over a FAKE runner (review F4, see the Ninja
+    // single-slot staging section above for the layers under it): the fake
+    // ninja.exe on an overridden PATH satisfies BackendResolver::
+    // ResolveBuilder (a PATH hit is a regular file on Windows), the two
+    // touched .ninja files satisfy ResolveBackendContext, and the
+    // FakeProcessRunner scripts the `ninja Fixture_Debug` step's exit code
+    // -- nothing is ever spawned.
+    TempArcProject fixture("executor_ninja_staging");
+    TempDir        toolDir("executor_ninja_staging_tool");
+
+#ifdef _WIN32
+    std::ofstream(toolDir.path / "ninja.exe", std::ios::binary) << "not really";
+#else
+    const fs::path fakeNinja = toolDir.path / "ninja";
+    std::ofstream(fakeNinja, std::ios::binary) << "#!/bin/sh\n";
+    fs::permissions(fakeNinja, fs::perms::owner_all, fs::perm_options::replace);
+#endif
+    EnvOverride path("PATH", toolDir.path.string());
+    EnvOverride pathExt("PATHEXT", ".EXE");
+
+    std::ofstream(fixture.root / "build.ninja", std::ios::binary) << "";
+    std::ofstream(fixture.root / "Fixture.ninja", std::ios::binary) << "";
+
+    DriverContext context;
+    context.request.command    = Command::Build;
+    context.request.action     = "ninja";
+    context.request.config     = "Debug";
+    context.backend            = BuildBackend::Ninja;
+    context.sdkRoot            = fs::path("D:/sdk");
+    context.project.root       = fixture.root;
+    context.project.manifest   = fixture.root / "Fixture.arcproj";
+    context.project.name       = "Fixture";
+    context.project.gameModule = "Fixture.dll";
+
+    const fs::path built = NinjaLinkOutput(context.project, "Debug");
+    const fs::path slot  = SlotPath(context.project);
+
+    BackendResolver   backends;
+    RecordingOutput   output;
+    FakeProcessRunner fake;
+    BuildExecutor     executor(backends, fake, output);
+
+    SECTION("plan succeeds and the module was linked -> staged into the slot, exit 0")
+    {
+        fs::create_directories(built.parent_path());
+        std::ofstream(built, std::ios::binary) << "linked";
+
+        fake.results = { ProcessResult{0} };
+        CHECK(executor.Build(context, BuildOperation::Build) == kExitOk);
+        REQUIRE(fake.seen.size() == 1);
+        CHECK(fake.seen[0].arguments.back() == "Fixture_Debug");
+        CHECK(fs::is_regular_file(slot));
+
+        bool sawStaged = false;
+        for (const std::string& m : output.messages)
+            if (m.rfind("info:staged ", 0) == 0)
+                sawStaged = true;
+        CHECK(sawStaged);
+    }
+
+    SECTION("a two-step rebuild stages once, after the build step")
+    {
+        fs::create_directories(built.parent_path());
+        std::ofstream(built, std::ios::binary) << "linked";
+
+        fake.results = { ProcessResult{0}, ProcessResult{0} };
+        CHECK(executor.Build(context, BuildOperation::Rebuild) == kExitOk);
+        CHECK(fake.seen.size() == 2);
+        CHECK(fs::is_regular_file(slot));
+    }
+
+    SECTION("the child failed -> its exit code passes through unchanged and NOTHING is staged")
+    {
+        fs::create_directories(built.parent_path());
+        std::ofstream(built, std::ios::binary) << "stale-from-an-earlier-link";
+
+        fake.results = { ProcessResult{7} };
+        CHECK(executor.Build(context, BuildOperation::Build) == 7);
+        CHECK_FALSE(fs::exists(slot));
+    }
+
+    SECTION("the child exited 0 but linked nothing -> the driver's own refusal (2), never a fabricated success")
+    {
+        fake.results = { ProcessResult{0} };
+        CHECK(executor.Build(context, BuildOperation::Build) == kExitRefused);
+        CHECK_FALSE(fs::exists(slot));
+
+        bool sawError = false;
+        for (const std::string& m : output.messages)
+            if (m.rfind("error:", 0) == 0 && m.find(built.generic_string()) != std::string::npos)
+                sawError = true;
+        CHECK(sawError);
+    }
+
+    SECTION("a Clean operation never stages, even on success (nothing was linked to stage)")
+    {
+        fs::create_directories(built.parent_path());
+        std::ofstream(built, std::ios::binary) << "left-over";
+
+        fake.results = { ProcessResult{0} };
+        CHECK(executor.Build(context, BuildOperation::Clean) == kExitOk);
+        CHECK(fake.seen.size() == 1);
+        CHECK_FALSE(fs::exists(slot));
+    }
+
+    SECTION("MSBuild's plan is left alone: no staging hook (its link output IS the slot)")
+    {
+        // Same executor, the MSBuild backend: a touched .slnx for the
+        // context, and a fake msbuild on the same overridden PATH so
+        // ResolveMsBuild resolves SOMETHING on every desk (vswhere's answer
+        // wins where a Visual Studio exists; the PATH fake elsewhere). The
+        // scripted success must not invent a slot the fake never linked.
+        std::ofstream(fixture.root / "Fixture.slnx", std::ios::binary) << "";
+#ifdef _WIN32
+        std::ofstream(toolDir.path / "msbuild.exe", std::ios::binary) << "not really";
+#else
+        const fs::path fakeMsBuild = toolDir.path / "msbuild";
+        std::ofstream(fakeMsBuild, std::ios::binary) << "#!/bin/sh\n";
+        fs::permissions(fakeMsBuild, fs::perms::owner_all, fs::perm_options::replace);
+#endif
+        context.request.action = "vs2026";
+        context.backend        = BuildBackend::MsBuild;
+
+        fake.results = { ProcessResult{0} };
+        CHECK(executor.Build(context, BuildOperation::Build) == kExitOk);
+        CHECK(fake.seen.size() == 1);
+        CHECK_FALSE(fs::exists(slot));
+    }
 }
 
 // Task 6: the three fixture-spawning cases below are Windows-only, not
@@ -1624,7 +1837,7 @@ TEST_CASE("arcbuild::BackendResolver reports a missing generated build context d
     }
 }
 
-TEST_CASE("arcbuild::BackendResolver requires the module-stem .ninja file alongside build.ninja, and stores the stem in BackendContext::scheme",
+TEST_CASE("arcbuild::BackendResolver requires the module-stem .ninja file alongside build.ninja, and stores the stem in BackendContext::target",
           "[build]")
 {
     TempArcProject fixture("backend_resolver_ninja_module_stem");
@@ -1649,19 +1862,19 @@ TEST_CASE("arcbuild::BackendResolver requires the module-stem .ninja file alongs
         CHECK(result.error().find("Fixture.ninja") != std::string::npos);
     }
 
-    SECTION("both files exist -- resolves with the module stem riding in scheme")
+    SECTION("both files exist -- resolves with the module stem riding in target")
     {
         std::ofstream(project.root / "build.ninja", std::ios::binary) << "";
         std::ofstream(project.root / "Fixture.ninja", std::ios::binary) << "";
         const auto result = resolver.ResolveBackendContext(BuildBackend::Ninja, project);
         REQUIRE(result.has_value());
         CHECK(result->path == project.root);
-        REQUIRE(result->scheme.has_value());
-        CHECK(*result->scheme == "Fixture");
+        REQUIRE(result->target.has_value());
+        CHECK(*result->target == "Fixture");
     }
 }
 
-TEST_CASE("arcbuild::BackendResolver stores the module stem in BackendContext::scheme for Xcode (composed as -target, never -scheme)",
+TEST_CASE("arcbuild::BackendResolver stores the module stem in BackendContext::target for Xcode (composed as -target, never -scheme)",
           "[build]")
 {
     TempArcProject fixture("backend_resolver_xcode_module_stem");
@@ -1676,8 +1889,8 @@ TEST_CASE("arcbuild::BackendResolver stores the module stem in BackendContext::s
     const auto result = resolver.ResolveBackendContext(BuildBackend::XcodeBuild, project);
     REQUIRE(result.has_value());
     CHECK(result->path == project.root / "Fixture.xcodeproj");
-    REQUIRE(result->scheme.has_value());
-    CHECK(*result->scheme == "Fixture");
+    REQUIRE(result->target.has_value());
+    CHECK(*result->target == "Fixture");
 }
 
 // ---------------------------------------------------------------------------
@@ -1875,12 +2088,20 @@ TEST_CASE("arcbuild's bundled Premake characterizes real gmake/ninja/xcode4 outp
     // Self-hosting SDK root: this repo IS an Arcane checkout, so the same
     // <sdk>/bin/<cfg>-<system>-<arch>-md/<Project> inversion the editor uses
     // to find "the SDK the running exe belongs to" gives the fixture's
-    // premake5.lua a real $ARCANE_SDK/build/arcane.lua to include, with no
-    // environment variable and no dependence on what ARCANE_SDK happens to
-    // be set to in this process.
+    // premake5.lua a real $ARCANE_SDK/build/arcane.lua to include.
     const fs::path repoRoot =
         Arcane::Editor::ModuleBuild::SdkRootFromExeDir(
             Arcane::Editor::ModuleBuild::ExeDir());
+
+    // ... and that arcane.lua must be THIS checkout's. The fixture's
+    // premake5.lua includes os.getenv("ARCANE_SDK") .. "/build/arcane.lua"
+    // (the external-project contract), and the spawned premake inherits
+    // this process's environment -- so without this override a desk whose
+    // ARCANE_SDK names some OTHER engine checkout (the main one, while this
+    // runs from a worktree) would characterize that checkout's arcane.lua,
+    // not the one under test, and the link-location pin below would be
+    // pinning a stranger. Scoped to this case; restored on exit.
+    const EnvOverride sdkForFixture("ARCANE_SDK", repoRoot.string());
 
     const fs::path fixtureSource =
         repoRoot / "ArcaneTests" / "data" / "arcbuild-fixture";
@@ -1910,7 +2131,7 @@ TEST_CASE("arcbuild's bundled Premake characterizes real gmake/ninja/xcode4 outp
 
         // ninja: BackendResolver::ResolveBackendContext(Ninja, ...) requires
         // BOTH build.ninja and <name>.ninja (the module stem's own rules,
-        // read back as BackendContext::scheme -- Task 4).
+        // read back as BackendContext::target -- Task 4).
         { "ninja", { "ninja" },
           { "build.ninja", "Fixture.ninja" } },
 
@@ -1958,5 +2179,78 @@ TEST_CASE("arcbuild's bundled Premake characterizes real gmake/ninja/xcode4 outp
         CHECK_FALSE(fs::exists(fixtureSource / "Makefile"));
         CHECK_FALSE(fs::exists(fixtureSource / "build.ninja"));
         CHECK_FALSE(fs::exists(fixtureSource / "Fixture.xcodeproj"));
+
+        // Ninja only: build/arcane.lua's `action:ninja` filter links each
+        // configuration to a UNIQUE location (beta8 would otherwise emit
+        // three identical `build Binaries/Fixture.dll` edges -- Task 4).
+        // That location is ALSO what arcbuild's own staging copy reads
+        // (NinjaLinkOutput -> StageBuiltModule, review F4), and it must sit
+        // INSIDE one of arcbuild's two filesystem clean targets (Binaries/,
+        // Intermediate/<config>/ -- CleanTargets), or a `clean` whose backend
+        // step soft-skipped/failed would leave the linked DLL behind. Pinned
+        // against NinjaLinkOutput and CleanTargets themselves, never a
+        // hand-copied string, so arcane.lua and the driver cannot drift
+        // apart silently.
+        if (std::string_view(generatorCase.label) == "ninja")
+        {
+            std::ifstream ninjaFile(tempDir.path / "Fixture.ninja", std::ios::binary);
+            REQUIRE(ninjaFile.is_open());
+
+            std::vector<std::string> linkEdges;
+            for (std::string line; std::getline(ninjaFile, line);)
+            {
+                if (line.rfind("build ", 0) == 0 &&
+                    line.find("Fixture.dll") != std::string::npos &&
+                    line.find(": link_") != std::string::npos)
+                {
+                    // "build <output> | <implicit outputs>: link_msc ..."
+                    const std::size_t start = std::string("build ").size();
+                    const std::size_t end   = line.find_first_of(" |:", start);
+                    linkEdges.push_back(line.substr(start, end - start));
+                }
+            }
+
+            ProjectLayout layout;
+            layout.root       = tempDir.path;
+            layout.name       = "Fixture";
+            layout.gameModule = "Fixture.dll";
+
+            const std::vector<std::string> configs = { "Debug", "Release", "Dist" };
+            REQUIRE(linkEdges.size() == configs.size());
+
+            for (const std::string& config : configs)
+            {
+                INFO("configuration: " << config);
+
+                // The generated .ninja spells its paths relative to the
+                // project root; so are these two, for the comparison.
+                const std::string expectedEdge =
+                    fs::relative(NinjaLinkOutput(layout, config), layout.root).generic_string();
+
+                const std::vector<fs::path> cleanTargets = CleanTargets(layout, config);
+                REQUIRE(cleanTargets.size() == 2);
+                const std::string intermediateForConfig =
+                    fs::relative(cleanTargets[1], layout.root).generic_string() + "/";
+
+                bool foundExactEdge = false;
+                for (const std::string& edge : linkEdges)
+                {
+                    if (edge == expectedEdge)
+                        foundExactEdge = true;
+                }
+                CHECK(foundExactEdge);
+                CHECK(expectedEdge.rfind(intermediateForConfig, 0) == 0);
+            }
+
+            // Three DISTINCT link outputs (the Task 4 workaround's whole
+            // point), and none at the retired Intermediate/Ninja/<Config>/
+            // spelling that sat outside the clean contract.
+            for (std::size_t i = 0; i < linkEdges.size(); ++i)
+            {
+                CHECK(linkEdges[i].find("Intermediate/Ninja/") == std::string::npos);
+                for (std::size_t j = i + 1; j < linkEdges.size(); ++j)
+                    CHECK(linkEdges[i] != linkEdges[j]);
+            }
+        }
     }
 }

@@ -375,6 +375,13 @@ namespace arcbuild
                     break;
                 }
 
+                // POSIX all but forbids a 0-byte return from write() on a
+                // pipe with remaining > 0, but "all but" is not "never":
+                // treated as a failed write (truncated record, parent still
+                // refuses) rather than a loop that would spin forever.
+                if (written == 0)
+                    break;
+
                 bytes     += written;
                 remaining -= static_cast<std::size_t>(written);
             }
@@ -489,6 +496,14 @@ namespace arcbuild
         // The executable's own UTF-8 form, for THIS argv[0] token only --
         // never for lpApplicationName (ProcessRunner::Run takes that
         // directly from the path's native UTF-16, see the comment there).
+        // argv[0] is quoted with the ARGUMENT rules deliberately: a CRT-
+        // parsed child re-splits argv[0] the same way it splits every other
+        // token, and because lpApplicationName (not this token) selects the
+        // binary, an exotic path here (an embedded quote) can at worst make
+        // the child's own argv[0] read oddly -- never launch a different
+        // program. CreateProcess's program-name-field rules (no backslash
+        // escaping) apply only when lpApplicationName is null, which this
+        // runner never does.
         std::string commandLine = QuoteWindowsArgument(Narrow(spec.executable.wstring()));
 #else
         std::string commandLine = QuoteWindowsArgument(spec.executable.string());
@@ -751,9 +766,24 @@ namespace arcbuild
         FileDescriptor outputWrite(outputPipe[1]);
 
         // ---- the close-on-exec error pipe -------------------------------
+        //
+        // On Linux, pipe2(O_CLOEXEC) sets close-on-exec on BOTH ends in the
+        // same call that creates them -- there is no window between
+        // creation and the fcntl(F_SETFD) below during which another thread
+        // could fork+exec and hand a child a copy of this pipe. Elsewhere
+        // (macOS/BSD without pipe2), plain pipe() plus the fcntl below is
+        // the best available; the window is real but tiny, and this process
+        // spawns from one thread today. The read end's own FD_CLOEXEC is
+        // moot either way (the child closes it explicitly before exec).
         int errorPipe[2] = { -1, -1 };
 
-        if (::pipe(errorPipe) != 0)
+#if defined(__linux__)
+        const int errorPipeResult = ::pipe2(errorPipe, O_CLOEXEC);
+#else
+        const int errorPipeResult = ::pipe(errorPipe);
+#endif
+
+        if (errorPipeResult != 0)
         {
             return std::unexpected(ProcessError{
                 "pipe failed for the child's setup-error channel (" +
@@ -785,31 +815,44 @@ namespace arcbuild
 
             if (relocated < 0)
             {
+                // Captured before anything else runs, matching the read-
+                // loop's own capture-before-close discipline below.
+                const int dupError = errno;
+
                 return std::unexpected(ProcessError{
                     "fcntl(F_DUPFD_CLOEXEC) failed while moving the child's "
                     "setup-error channel clear of stdin/stdout/stderr (" +
-                    DescribeErrorNumber(errno) + ")" });
+                    DescribeErrorNumber(dupError) + ")" });
             }
 
             errorWrite.reset(relocated);   // closes the low descriptor
         }
 
-        // FD_CLOEXEC on the error pipe's WRITE end, set in the PARENT before
-        // fork() -- three reasons, all of them load-bearing:
+        // FD_CLOEXEC on the error pipe's WRITE end, set (or, on Linux, re-
+        // confirmed -- pipe2 above already set it, and F_DUPFD_CLOEXEC keeps
+        // it across the relocation) in the PARENT before fork() -- three
+        // reasons, all of them load-bearing:
         //
         //  1. It is what makes EOF on the read end MEAN "execv succeeded":
-        //     a successful execv closes this descriptor for us, atomically,
-        //     as part of replacing the process image. The parent needs no
-        //     handshake and no timeout.
+        //     a successful execv closes this descriptor for us as part of
+        //     replacing the process image. The parent needs no handshake and
+        //     no timeout.
         //  2. The flag is a property of the descriptor, so the forked child
         //     inherits it already set -- the post-fork window stays free of
         //     any work that could itself fail (and of any fcntl call that
         //     would have to be async-signal-safe).
-        //  3. Before fork, nothing else in this process can leak the
-        //     descriptor: were it set only in the child, a concurrent thread
-        //     spawning some other process in between would hand that process
-        //     a copy of this pipe's write end, and this parent's read would
-        //     then never see EOF.
+        //  3. Setting it BEFORE fork (rather than in the child) narrows the
+        //     leak window to the span between the pipe's creation and this
+        //     fcntl -- zero on Linux (pipe2), a few instructions elsewhere.
+        //     Were it set only in the child, a concurrent thread spawning
+        //     some other process any time before that child's own fcntl
+        //     would hand that process a copy of this pipe's write end, and
+        //     this parent's read would then never see EOF. This is a
+        //     narrowing, not an atomicity guarantee: the OUTPUT pipe's ends
+        //     carry no FD_CLOEXEC at all (the child must inherit its write
+        //     end), so a concurrent spawner could still hold that pipe open
+        //     and delay the output loop's EOF. This process spawns from one
+        //     thread today; a multi-threaded caller would need a spawn lock.
         const int errorWriteFlags = ::fcntl(errorWrite.get(), F_GETFD);
 
         if (errorWriteFlags < 0 ||
