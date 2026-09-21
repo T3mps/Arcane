@@ -130,9 +130,9 @@ namespace arcbuild
         }
 
         if (request.forceRebuild &&
-            request.command != Command::Build)
+            request.command == Command::Probe)
         {
-            return "--force-rebuild is only valid with build";
+            return "--force-rebuild is not valid on probe";
         }
 
         return std::nullopt;

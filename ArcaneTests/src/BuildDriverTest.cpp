@@ -169,7 +169,7 @@ TEST_CASE("arcbuild::IsValidAction is a premake identifier, not a shell fragment
     CHECK_FALSE(IsValidAction("vs 2026"));
 }
 
-TEST_CASE("arcbuild::ValidateRequest refuses empty --sdk, a non-identifier --action, and probe --force-rebuild",
+TEST_CASE("arcbuild::ValidateRequest refuses empty --sdk, a non-identifier --action, and probe-only --force-rebuild",
           "[build]")
 {
     Request ok;
@@ -194,9 +194,13 @@ TEST_CASE("arcbuild::ValidateRequest refuses empty --sdk, a non-identifier --act
     REQUIRE(ValidateRequest(probeForce).has_value());
     CHECK(ValidateRequest(probeForce)->find("--force-rebuild") != std::string::npos);
 
-    Request buildForce = ok;
-    buildForce.forceRebuild = true;
-    CHECK_FALSE(ValidateRequest(buildForce).has_value());   // flag is legal on build
+    for (const Command command : { Command::Generate, Command::Build, Command::Rebuild, Command::Clean })
+    {
+        Request force = ok;
+        force.command = command;
+        force.forceRebuild = true;
+        CHECK_FALSE(ValidateRequest(force).has_value());
+    }
 }
 
 // ---- SDK precedence ---------------------------------------------------------
