@@ -62,6 +62,21 @@ namespace
         return "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe";
     }
 
+    fs::path MakePath()
+    {
+        return "/usr/bin/make";
+    }
+
+    fs::path NinjaPath()
+    {
+        return "/usr/bin/ninja";
+    }
+
+    fs::path XcodeBuildPath()
+    {
+        return "/usr/bin/xcodebuild";
+    }
+
     struct TempArcProject
     {
         fs::path root;
@@ -753,31 +768,148 @@ TEST_CASE("arcbuild::SolutionPath: a discovered workspace file wins over the <na
 }
 
 // ---- composition --------------------------------------------------------------
+//
+// Multibackend hardening Task 4: Compose* returns STRUCTURED process plans
+// (ProcessSpec/ProcessPlan, Process.hpp) rather than shell strings -- these
+// tests assert on the structure directly, never on a rendered command line.
+// RenderProcess (below) is display-only and is never re-parsed.
 
-TEST_CASE("arcbuild::ComposeGenerate is cd-first, parenthesised, stderr-folded premake", "[build]")
+TEST_CASE("arcbuild::ComposeGenerate is a structured premake invocation, cwd project root", "[build]")
 {
-    const std::string cmd = ComposeGenerate(AphelyonProject(), PremakePath(), "vs2026");
-    CHECK(cmd == "( cd /d \"D:/dev/starworks/Gacha/Game\" && "
-                 "\"D:/dev/starworks/Arcane/ThirdParty/premake5/premake5.exe\" vs2026 ) 2>&1");
+    const ProcessSpec spec = ComposeGenerate(AphelyonProject(), PremakePath(), "vs2026");
+    CHECK(spec.executable == PremakePath());
+    CHECK(spec.arguments == std::vector<std::string>{ "vs2026" });
+    REQUIRE(spec.workingDirectory.has_value());
+    CHECK(*spec.workingDirectory == AphelyonProject().root);
+
     // The action is the Linux seam (spec s6): it is a parameter, not a constant.
-    CHECK(ComposeGenerate(AphelyonProject(), PremakePath(), "gmake2").find("premake5.exe\" gmake2 )") != std::string::npos);
+    CHECK(ComposeGenerate(AphelyonProject(), PremakePath(), "gmake2").arguments
+          == std::vector<std::string>{ "gmake2" });
 }
 
-TEST_CASE("arcbuild::ComposeMsBuild: /t:Rebuild ONLY when asked, /t:Clean for clean, no cd, absolute solution", "[build]")
+TEST_CASE("arcbuild::ComposeMsBuild: {solution, /p:Configuration=<config>, /m, /nologo}; /t:Rebuild or /t:Clean inserted only when asked",
+          "[build]")
 {
     const fs::path sln = "D:/dev/starworks/Gacha/Game/Aphelyon.slnx";
     const BackendContext context { sln };
-    const std::string plain = ComposeMsBuild(MsBuildPath(), context, "Debug", BuildOperation::Build);
-    CHECK(plain == "( \"C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe\" "
-                   "\"D:/dev/starworks/Gacha/Game/Aphelyon.slnx\" /p:Configuration=Debug /m /nologo ) 2>&1");
-    CHECK(plain.find("/t:") == std::string::npos);
-    CHECK(plain.find("cd /d") == std::string::npos);
 
-    const std::string rebuild = ComposeMsBuild(MsBuildPath(), context, "Release", BuildOperation::Rebuild);
-    CHECK(rebuild.find("/p:Configuration=Release /t:Rebuild /m /nologo") != std::string::npos);
+    const ProcessPlan plain = ComposeMsBuild(MsBuildPath(), context, "Debug", BuildOperation::Build);
+    REQUIRE(plain.steps.size() == 1);
+    CHECK(plain.steps[0].executable == MsBuildPath());
+    CHECK(plain.steps[0].arguments == std::vector<std::string>{
+        sln.generic_string(), "/p:Configuration=Debug", "/m", "/nologo" });
+    CHECK_FALSE(plain.steps[0].workingDirectory.has_value());   // no cd -- the solution path is already absolute
 
-    const std::string clean = ComposeMsBuild(MsBuildPath(), context, "Dist", BuildOperation::Clean);
-    CHECK(clean.find("/p:Configuration=Dist /t:Clean /m /nologo") != std::string::npos);
+    const ProcessPlan rebuild = ComposeMsBuild(MsBuildPath(), context, "Release", BuildOperation::Rebuild);
+    REQUIRE(rebuild.steps.size() == 1);
+    CHECK(rebuild.steps[0].arguments == std::vector<std::string>{
+        sln.generic_string(), "/p:Configuration=Release", "/t:Rebuild", "/m", "/nologo" });
+
+    const ProcessPlan clean = ComposeMsBuild(MsBuildPath(), context, "Dist", BuildOperation::Clean);
+    REQUIRE(clean.steps.size() == 1);
+    CHECK(clean.steps[0].arguments == std::vector<std::string>{
+        sln.generic_string(), "/p:Configuration=Dist", "/t:Clean", "/m", "/nologo" });
+}
+
+TEST_CASE("arcbuild::ComposeMake: {-C, root, config=debug}; clean appends 'clean'; rebuild is clean then build",
+          "[build]")
+{
+    const fs::path root = "D:/dev/starworks/Gacha/Game";
+    const BackendContext context { root };
+
+    const ProcessPlan build = ComposeMake(MakePath(), context, "Debug", BuildOperation::Build);
+    REQUIRE(build.steps.size() == 1);
+    CHECK(build.steps[0].executable == MakePath());
+    CHECK(build.steps[0].arguments == std::vector<std::string>{ "-C", root.string(), "config=debug" });
+
+    // Config is lower-cased for make's own convention regardless of the
+    // engine's Debug/Release/Dist spelling.
+    const ProcessPlan releaseBuild = ComposeMake(MakePath(), context, "Release", BuildOperation::Build);
+    CHECK(releaseBuild.steps[0].arguments == std::vector<std::string>{ "-C", root.string(), "config=release" });
+
+    const ProcessPlan clean = ComposeMake(MakePath(), context, "Debug", BuildOperation::Clean);
+    REQUIRE(clean.steps.size() == 1);
+    CHECK(clean.steps[0].arguments == std::vector<std::string>{ "-C", root.string(), "config=debug", "clean" });
+
+    const ProcessPlan rebuild = ComposeMake(MakePath(), context, "Debug", BuildOperation::Rebuild);
+    REQUIRE(rebuild.steps.size() == 2);
+    CHECK(rebuild.steps[0].arguments.back() == "clean");
+    CHECK(rebuild.steps[1].arguments == std::vector<std::string>{ "-C", root.string(), "config=debug" });
+}
+
+TEST_CASE("arcbuild::ComposeNinja: {-C, root, <stem>_<Config>}; clean inserts -t clean; rebuild is clean then build",
+          "[build]")
+{
+    const fs::path root = "D:/dev/starworks/Gacha/Game";
+    const BackendContext context { root, std::string("Fixture") };
+
+    const ProcessPlan build = ComposeNinja(NinjaPath(), context, "Debug", BuildOperation::Build);
+    REQUIRE(build.steps.size() == 1);
+    CHECK(build.steps[0].executable == NinjaPath());
+    CHECK(build.steps[0].arguments == std::vector<std::string>{ "-C", root.string(), "Fixture_Debug" });
+
+    const ProcessPlan clean = ComposeNinja(NinjaPath(), context, "Debug", BuildOperation::Clean);
+    REQUIRE(clean.steps.size() == 1);
+    CHECK(clean.steps[0].arguments == std::vector<std::string>{ "-C", root.string(), "-t", "clean", "Fixture_Debug" });
+
+    const ProcessPlan rebuild = ComposeNinja(NinjaPath(), context, "Debug", BuildOperation::Rebuild);
+    REQUIRE(rebuild.steps.size() == 2);
+    CHECK(rebuild.steps[0].arguments == clean.steps[0].arguments);
+    CHECK(rebuild.steps[1].arguments == build.steps[0].arguments);
+
+    // The Config seam: a different --config produces a different target.
+    const ProcessPlan release = ComposeNinja(NinjaPath(), context, "Release", BuildOperation::Build);
+    CHECK(release.steps[0].arguments == std::vector<std::string>{ "-C", root.string(), "Fixture_Release" });
+}
+
+TEST_CASE("arcbuild::ComposeXcodeBuild: -target (no shared scheme in beta8); rebuild is ONE invocation ending 'clean build'",
+          "[build]")
+{
+    const fs::path xcodeProject = "D:/dev/starworks/Gacha/Game/Fixture.xcodeproj";
+    const BackendContext context { xcodeProject, std::string("Fixture") };
+
+    const ProcessPlan build = ComposeXcodeBuild(XcodeBuildPath(), context, "Debug", BuildOperation::Build);
+    REQUIRE(build.steps.size() == 1);
+    CHECK(build.steps[0].executable == XcodeBuildPath());
+    CHECK(build.steps[0].arguments == std::vector<std::string>{
+        "-project", xcodeProject.string(), "-target", "Fixture", "-configuration", "Debug", "build" });
+
+    const ProcessPlan rebuild = ComposeXcodeBuild(XcodeBuildPath(), context, "Debug", BuildOperation::Rebuild);
+    REQUIRE(rebuild.steps.size() == 1);   // ONE Xcode invocation, unlike Make/Ninja's two-step rebuild
+    CHECK(rebuild.steps[0].arguments == std::vector<std::string>{
+        "-project", xcodeProject.string(), "-target", "Fixture", "-configuration", "Debug", "clean", "build" });
+
+    const ProcessPlan clean = ComposeXcodeBuild(XcodeBuildPath(), context, "Debug", BuildOperation::Clean);
+    REQUIRE(clean.steps.size() == 1);
+    CHECK(clean.steps[0].arguments == std::vector<std::string>{
+        "-project", xcodeProject.string(), "-target", "Fixture", "-configuration", "Debug", "clean" });
+}
+
+TEST_CASE("arcbuild::RenderProcess is readable, whitespace-triggered quoting -- never re-parsed, never shell-escaped",
+          "[build]")
+{
+    ProcessSpec spec;
+    spec.executable        = fs::path("C:/Program Files/premake5/premake5.exe");
+    spec.arguments         = { "vs2026", "/p:Configuration=Debug", "an arg with spaces" };
+    spec.workingDirectory  = fs::path("D:/dev/starworks/Gacha/Game");
+
+    const std::string rendered = RenderProcess(spec);
+
+    CHECK(rendered.find("\"C:/Program Files/premake5/premake5.exe\"") != std::string::npos);
+    CHECK(rendered.find(" vs2026 ") != std::string::npos);              // bare -- no internal whitespace
+    CHECK(rendered.find("/p:Configuration=Debug") != std::string::npos);
+    CHECK(rendered.find("\"/p:Configuration=Debug\"") == std::string::npos);  // bare -- no internal whitespace
+    CHECK(rendered.find("\"an arg with spaces\"") != std::string::npos);
+
+    // No shell metacharacter is ever escaped: an embedded quote (or `&`,
+    // `|`, `;`) passes straight through, proving this text is for a human
+    // reading a log, never for a shell to execute.
+    ProcessSpec withQuote;
+    withQuote.executable = fs::path("tool");
+    withQuote.arguments  = { "value\"with\"quotes", "a&b|c;d" };
+    const std::string renderedQuote = RenderProcess(withQuote);
+    CHECK(renderedQuote.find("value\"with\"quotes") != std::string::npos);
+    CHECK(renderedQuote.find("a&b|c;d") != std::string::npos);
 }
 
 TEST_CASE("arcbuild::CleanTargets is exactly Binaries/ and Intermediate/<config>/", "[build]")
@@ -892,6 +1024,62 @@ TEST_CASE("arcbuild::BackendResolver reports a missing generated build context d
         REQUIRE_FALSE(result.has_value());
         CHECK_FALSE(result.error().empty());
     }
+}
+
+TEST_CASE("arcbuild::BackendResolver requires the module-stem .ninja file alongside build.ninja, and stores the stem in BackendContext::scheme",
+          "[build]")
+{
+    TempArcProject fixture("backend_resolver_ninja_module_stem");
+    ProjectLayout project;
+    project.root = fixture.root;
+    project.name = "Fixture";
+
+    const BackendResolver resolver;
+
+    SECTION("neither build.ninja nor the module .ninja exists")
+    {
+        const auto result = resolver.ResolveBackendContext(BuildBackend::Ninja, project);
+        REQUIRE_FALSE(result.has_value());
+        CHECK_FALSE(result.error().empty());
+    }
+
+    SECTION("build.ninja exists but Fixture.ninja does not -- still a descriptive refusal")
+    {
+        std::ofstream(project.root / "build.ninja", std::ios::binary) << "";
+        const auto result = resolver.ResolveBackendContext(BuildBackend::Ninja, project);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().find("Fixture.ninja") != std::string::npos);
+    }
+
+    SECTION("both files exist -- resolves with the module stem riding in scheme")
+    {
+        std::ofstream(project.root / "build.ninja", std::ios::binary) << "";
+        std::ofstream(project.root / "Fixture.ninja", std::ios::binary) << "";
+        const auto result = resolver.ResolveBackendContext(BuildBackend::Ninja, project);
+        REQUIRE(result.has_value());
+        CHECK(result->path == project.root);
+        REQUIRE(result->scheme.has_value());
+        CHECK(*result->scheme == "Fixture");
+    }
+}
+
+TEST_CASE("arcbuild::BackendResolver stores the module stem in BackendContext::scheme for Xcode (composed as -target, never -scheme)",
+          "[build]")
+{
+    TempArcProject fixture("backend_resolver_xcode_module_stem");
+    ProjectLayout project;
+    project.root = fixture.root;
+    project.name = "Fixture";
+
+    std::error_code ec;
+    fs::create_directories(project.root / "Fixture.xcodeproj", ec);
+
+    const BackendResolver resolver;
+    const auto result = resolver.ResolveBackendContext(BuildBackend::XcodeBuild, project);
+    REQUIRE(result.has_value());
+    CHECK(result->path == project.root / "Fixture.xcodeproj");
+    REQUIRE(result->scheme.has_value());
+    CHECK(*result->scheme == "Fixture");
 }
 
 // ---------------------------------------------------------------------------

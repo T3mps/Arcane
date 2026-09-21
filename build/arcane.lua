@@ -121,6 +121,26 @@ function arcane_game_module(name)
         targetdir "%{wks.location}/Binaries"
         objdir "%{wks.location}/Intermediate/%{cfg.buildcfg}"
 
+        -- Ninja-only: beta8 emits a DUPLICATE link edge per configuration when
+        -- every configuration links directly to the same Binaries/<name>
+        -- output (characterized RED: ninja on this fixture emits three
+        -- `build Binaries/Fixture.dll` edges, one per Debug/Release/Dist,
+        -- all targeting the identical path -- arcbuild multibackend
+        -- hardening plan, Task 4). Give Ninja a configuration-unique link
+        -- location instead, then copy the freshly-linked module into the
+        -- canonical single slot every host expects (Binaries/<name>, the
+        -- manifest's gameModule) so the generated .ninja has unique link
+        -- outputs while a successful `ninja -C ... <target>` still updates
+        -- the real slot. Every other action (vs2026, gmake, xcode4, ...)
+        -- keeps the flat targetdir above untouched.
+        filter "action:ninja"
+            targetdir "%{wks.location}/Intermediate/Ninja/%{cfg.buildcfg}/Binaries"
+            postbuildcommands {
+                '{MKDIR} "%{wks.location}/Binaries"',
+                '{COPYFILE} "%{cfg.buildtarget.abspath}" "%{wks.location}/Binaries/%{cfg.buildtarget.name}"',
+            }
+        filter {}
+
         files { "%{wks.location}/" .. sourceDir .. "/**.cpp", "%{wks.location}/" .. sourceDir .. "/**.hpp" }
 
         -- Public engine header surface (in-place) + the header-only ThirdParty deps a

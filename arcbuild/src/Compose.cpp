@@ -1,22 +1,20 @@
 #include "Compose.hpp"
 
 #include <cctype>
+#include <utility>
 
 namespace arcbuild
 {
     namespace
     {
-        void Quote(
-            std::string& output,
+        std::string PathArgument(
             const std::filesystem::path& path)
         {
-            const auto utf8 = path.u8string();
-
-            output += '"';
-            output.append(
-                reinterpret_cast<const char*>(utf8.data()),
-                utf8.size());
-            output += '"';
+            // generic_string() (forward slashes) rather than string(): these
+            // are argv entries handed to a real process, never a shell, so
+            // the separator style is cosmetic -- forward slashes read the
+            // same on every host this driver targets.
+            return path.generic_string();
         }
 
         std::string LowerAscii(
@@ -33,29 +31,36 @@ namespace arcbuild
 
             return result;
         }
+
+        bool NeedsDisplayQuoting(
+            const std::string& token)
+        {
+            if (token.empty())
+                return true;
+
+            for (const char c : token)
+            {
+                if (std::isspace(static_cast<unsigned char>(c)))
+                    return true;
+            }
+
+            return false;
+        }
     }
 
-    std::string ComposeGenerate(
+    ProcessSpec ComposeGenerate(
         const ProjectLayout& project,
         const std::filesystem::path& premake,
         std::string_view action)
     {
-        std::string command = "( cd /d ";
-
-        Quote(command, project.root);
-
-        command += " && ";
-
-        Quote(command, premake);
-
-        command += ' ';
-        command += action;
-        command += " ) 2>&1";
-
-        return command;
+        ProcessSpec spec;
+        spec.executable       = premake;
+        spec.arguments        = { std::string(action) };
+        spec.workingDirectory = project.root;
+        return spec;
     }
 
-    std::string ComposeBuild(
+    ProcessPlan ComposeBuild(
         BuildBackend backend,
         const std::filesystem::path& builder,
         const BackendContext& context,
@@ -82,6 +87,7 @@ namespace arcbuild
             return ComposeNinja(
                 builder,
                 context,
+                config,
                 operation);
 
         case BuildBackend::XcodeBuild:
@@ -98,22 +104,16 @@ namespace arcbuild
         return {};
     }
 
-    std::string ComposeMsBuild(
+    ProcessPlan ComposeMsBuild(
         const std::filesystem::path& msbuild,
         const BackendContext& context,
         std::string_view config,
         BuildOperation operation)
     {
-        std::string command = "( ";
-
-        Quote(command, msbuild);
-
-        command += ' ';
-
-        Quote(command, context.path);
-
-        command += " /p:Configuration=";
-        command += config;
+        ProcessSpec spec;
+        spec.executable = msbuild;
+        spec.arguments.push_back(PathArgument(context.path));
+        spec.arguments.push_back("/p:Configuration=" + std::string(config));
 
         switch (operation)
         {
@@ -121,20 +121,23 @@ namespace arcbuild
             break;
 
         case BuildOperation::Rebuild:
-            command += " /t:Rebuild";
+            spec.arguments.push_back("/t:Rebuild");
             break;
 
         case BuildOperation::Clean:
-            command += " /t:Clean";
+            spec.arguments.push_back("/t:Clean");
             break;
         }
 
-        command += " /m /nologo ) 2>&1";
+        spec.arguments.push_back("/m");
+        spec.arguments.push_back("/nologo");
 
-        return command;
+        ProcessPlan plan;
+        plan.steps.push_back(std::move(spec));
+        return plan;
     }
 
-    std::string ComposeMake(
+    ProcessPlan ComposeMake(
         const std::filesystem::path& make,
         const BackendContext& context,
         std::string_view config,
@@ -143,130 +146,187 @@ namespace arcbuild
         const std::string makeConfig =
             LowerAscii(config);
 
-        auto appendInvocation =
-            [&](std::string& command, bool clean)
+        auto invocation =
+            [&](bool clean)
             {
-                Quote(command, make);
-
-                command += " -C ";
-
-                Quote(command, context.path);
-
-                command += " config=";
-                command += makeConfig;
+                ProcessSpec spec;
+                spec.executable = make;
+                spec.arguments  =
+                {
+                    "-C",
+                    PathArgument(context.path),
+                    "config=" + makeConfig
+                };
 
                 if (clean)
-                    command += " clean";
+                    spec.arguments.push_back("clean");
+
+                return spec;
             };
 
-        std::string command = "( ";
+        ProcessPlan plan;
 
         switch (operation)
         {
         case BuildOperation::Build:
-            appendInvocation(command, false);
+            plan.steps.push_back(invocation(false));
             break;
 
         case BuildOperation::Clean:
-            appendInvocation(command, true);
+            plan.steps.push_back(invocation(true));
             break;
 
         case BuildOperation::Rebuild:
-            appendInvocation(command, true);
-            command += " && ";
-            appendInvocation(command, false);
+            plan.steps.push_back(invocation(true));
+            plan.steps.push_back(invocation(false));
             break;
         }
 
-        command += " ) 2>&1";
-
-        return command;
+        return plan;
     }
 
-    std::string ComposeNinja(
+    ProcessPlan ComposeNinja(
         const std::filesystem::path& ninja,
         const BackendContext& context,
+        std::string_view config,
         BuildOperation operation)
     {
-        auto appendInvocation =
-            [&](std::string& command, bool clean)
+        // The Ninja workspace target is <module-stem>_<Config> (beta8's
+        // naming for a workspace's per-configuration aggregate target --
+        // build/arcane.lua's `action:ninja` filter is the matching link-
+        // location half of this). BackendResolver stashes the module stem
+        // in BackendContext::scheme once it confirms <module-stem>.ninja
+        // exists alongside build.ninja (Backend.cpp).
+        const std::string stem =
+            context.scheme
+                ? *context.scheme
+                : std::string();
+
+        const std::string target =
+            stem + "_" + std::string(config);
+
+        auto invocation =
+            [&](bool clean)
             {
-                Quote(command, ninja);
-
-                command += " -C ";
-
-                Quote(command, context.path);
+                ProcessSpec spec;
+                spec.executable = ninja;
+                spec.arguments  =
+                {
+                    "-C",
+                    PathArgument(context.path)
+                };
 
                 if (clean)
-                    command += " -t clean";
+                {
+                    spec.arguments.push_back("-t");
+                    spec.arguments.push_back("clean");
+                }
+
+                spec.arguments.push_back(target);
+
+                return spec;
             };
 
-        std::string command = "( ";
+        ProcessPlan plan;
 
         switch (operation)
         {
         case BuildOperation::Build:
-            appendInvocation(command, false);
+            plan.steps.push_back(invocation(false));
             break;
 
         case BuildOperation::Clean:
-            appendInvocation(command, true);
+            plan.steps.push_back(invocation(true));
             break;
 
         case BuildOperation::Rebuild:
-            appendInvocation(command, true);
-            command += " && ";
-            appendInvocation(command, false);
+            plan.steps.push_back(invocation(true));
+            plan.steps.push_back(invocation(false));
             break;
         }
 
-        command += " ) 2>&1";
-
-        return command;
+        return plan;
     }
 
-    std::string ComposeXcodeBuild(
+    ProcessPlan ComposeXcodeBuild(
         const std::filesystem::path& xcodebuild,
         const BackendContext& context,
         std::string_view config,
         BuildOperation operation)
     {
-        std::string command = "( ";
+        // beta8's xcode4 generator creates a .xcworkspace + .xcodeproj but no
+        // shared scheme (Global Constraints, multibackend hardening plan) --
+        // BackendResolver stores the module stem in BackendContext::scheme
+        // and it is composed here as `-target`, never `-scheme`.
+        const std::string target =
+            context.scheme
+                ? *context.scheme
+                : std::string();
 
-        Quote(command, xcodebuild);
-
-        command += " -project ";
-
-        Quote(command, context.path);
-
-        if (context.scheme)
+        ProcessSpec spec;
+        spec.executable = xcodebuild;
+        spec.arguments  =
         {
-            command += " -scheme \"";
-            command += *context.scheme;
-            command += '"';
-        }
-
-        command += " -configuration \"";
-        command += config;
-        command += '"';
+            "-project",
+            PathArgument(context.path),
+            "-target",
+            target,
+            "-configuration",
+            std::string(config)
+        };
 
         switch (operation)
         {
         case BuildOperation::Build:
-            command += " build";
+            spec.arguments.push_back("build");
             break;
 
         case BuildOperation::Rebuild:
-            command += " clean build";
+            // ONE invocation, not two steps (unlike Make/Ninja above):
+            // xcodebuild takes "clean" and "build" as two positional
+            // actions in a single command line.
+            spec.arguments.push_back("clean");
+            spec.arguments.push_back("build");
             break;
 
         case BuildOperation::Clean:
-            command += " clean";
+            spec.arguments.push_back("clean");
             break;
         }
 
-        command += " ) 2>&1";
+        ProcessPlan plan;
+        plan.steps.push_back(std::move(spec));
+        return plan;
+    }
 
-        return command;
+    std::string RenderProcess(
+        const ProcessSpec& process)
+    {
+        std::string rendered;
+
+        auto appendToken =
+            [&](const std::string& token)
+            {
+                if (!rendered.empty())
+                    rendered += ' ';
+
+                if (NeedsDisplayQuoting(token))
+                {
+                    rendered += '"';
+                    rendered += token;
+                    rendered += '"';
+                }
+                else
+                {
+                    rendered += token;
+                }
+            };
+
+        appendToken(PathArgument(process.executable));
+
+        for (const std::string& argument : process.arguments)
+            appendToken(argument);
+
+        return rendered;
     }
 }

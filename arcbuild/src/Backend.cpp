@@ -164,10 +164,30 @@ namespace arcbuild
                     "' -- run generate first");
             }
 
+            // beta8 also emits <module-stem>.ninja beside the root
+            // build.ninja (the module's own compile/link rules); Compose
+            // needs the stem to derive the real workspace target
+            // (<module-stem>_<Config>, see ComposeNinja), so both files
+            // must exist before this context is usable. The stem rides in
+            // BackendContext::scheme for Compose to read back.
+            const auto moduleNinja =
+                project.root / (project.name + ".ninja");
+
+            if (!std::filesystem::is_regular_file(
+                moduleNinja,
+                ec) ||
+                ec)
+            {
+                return std::unexpected(
+                    "no generated '" +
+                    moduleNinja.generic_string() +
+                    "' -- run generate first");
+            }
+
             return BackendContext
             {
                 project.root,
-                std::nullopt
+                project.name
             };
         }
 
@@ -188,10 +208,14 @@ namespace arcbuild
                     "' -- run generate first");
             }
 
+            // beta8's xcode4 generator creates no shared scheme (Global
+            // Constraints, multibackend hardening plan) -- the module stem
+            // rides in BackendContext::scheme so Compose can drive
+            // `-target <stem>` instead of a scheme that does not exist.
             return BackendContext
             {
                 xcodeProject,
-                std::nullopt
+                project.name
             };
         }
 
