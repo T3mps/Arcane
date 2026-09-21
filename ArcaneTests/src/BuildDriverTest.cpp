@@ -1361,7 +1361,7 @@ namespace
     }
 }
 
-TEST_CASE("arcbuild::ProcessRunner: exact argv, merged stdout+stderr, cwd, and a child's exit code round-trip through a real fork/execvp launch",
+TEST_CASE("arcbuild::ProcessRunner: exact argv, merged stdout+stderr, cwd, and a child's exit code round-trip through a real fork/execv launch",
           "[build]")
 {
     REQUIRE(fs::exists(PosixShell()));
@@ -1401,7 +1401,7 @@ TEST_CASE("arcbuild::ProcessRunner: exact argv, merged stdout+stderr, cwd, and a
         if (m.rfind("[posix]:", 0) == 0)
             childLines.push_back(m.substr(std::string("[posix]:").size()));
 
-    // argv arrives EXACTLY as passed: execvp takes an array, so spaces,
+    // argv arrives EXACTLY as passed: execv takes an array, so spaces,
     // quotes and `$`/`;`/`|` are ordinary bytes with no second parse to
     // survive -- "$HOME" is still the four literal characters, and
     // "echo second-parse" never ran.
@@ -1464,7 +1464,7 @@ TEST_CASE("arcbuild::ProcessRunner: a missing executable is a launch refusal car
 
     const ProcessResult result = runner.Run(spec, "[posix]");
 
-    // execvp failed in the child, which reported {Exec, ENOENT} over the
+    // execv failed in the child, which reported {Exec, ENOENT} over the
     // error pipe and _exit(127)'d. That 127 must NOT be what the caller sees.
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().message.find("exec") != std::string::npos);
@@ -1474,6 +1474,33 @@ TEST_CASE("arcbuild::ProcessRunner: a missing executable is a launch refusal car
     ProcessPlan plan;
     plan.steps = { spec };
     CHECK(ExecutePlan(plan, runner, output, "[posix]") == kExitRefused);
+}
+
+TEST_CASE("arcbuild::ProcessRunner: a bare executable name is never resolved through PATH", "[build]")
+{
+    REQUIRE(fs::exists(PosixShell()));
+
+    // The POSIX counterpart of the Windows lpApplicationName decoy case.
+    // /bin is on PATH here and really does hold an executable named `sh`, so
+    // execvp WOULD have found and launched it from this bare name. execv does
+    // no PATH search at all -- the name resolves against the cwd, finds
+    // nothing, and the launch is refused. That is what keeps "executable
+    // names THE binary" true even if a future caller hands over a bare tool
+    // name by mistake.
+    EnvOverride path("PATH", "/bin:/usr/bin");
+
+    RecordingOutput output;
+    ProcessRunner   runner(output);
+
+    ProcessSpec spec;
+    spec.executable = fs::path("sh");
+    spec.arguments  = { "-c", "exit 0" };
+
+    const ProcessResult result = runner.Run(spec, "[posix]");
+
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message.find("exec") != std::string::npos);
+    CHECK(result.error().message.find(std::to_string(ENOENT)) != std::string::npos);
 }
 
 TEST_CASE("arcbuild::ProcessRunner: a missing working directory refuses the launch at the chdir stage", "[build]")

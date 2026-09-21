@@ -333,7 +333,7 @@ namespace arcbuild
             int descriptor_ = -1;
         };
 
-        // CHILD SIDE ONLY, between fork() and execvp(). Everything here is
+        // CHILD SIDE ONLY, between fork() and execv(). Everything here is
         // async-signal-safe: no allocation, no locale, no iostreams -- only
         // write()/_exit() over a record whose bytes are already laid out on
         // the stack. Never returns.
@@ -383,17 +383,29 @@ namespace arcbuild
         }
 
         // EINTR-safe waitpid for a child whose exit status is not wanted --
-        // used only to reap a child that already reported a setup failure,
-        // so it never becomes a zombie even though its 127 is discarded.
-        void ReapChild(
-            pid_t child) noexcept
+        // a child that already reported a setup failure, or one being cleaned
+        // up after the parent gave up on learning its status, so it does not
+        // become a zombie even though its code is discarded.
+        //
+        // `flags` is 0 (block until the child is gone -- correct when the
+        // child has demonstrably already exited) or WNOHANG (best effort,
+        // when blocking could hang because we do not know the child's state).
+        // Returns whether the child was actually reaped.
+        bool ReapChild(
+            pid_t child,
+            int   flags = 0) noexcept
         {
             int status = 0;
 
-            while (::waitpid(child, &status, 0) < 0)
+            for (;;)
             {
+                const pid_t waited = ::waitpid(child, &status, flags);
+
+                if (waited >= 0)
+                    return waited == child;
+
                 if (errno != EINTR)
-                    break;
+                    return false;
             }
         }
     }
@@ -695,7 +707,7 @@ namespace arcbuild
 
         return static_cast<int>(exitCode);
 #else
-        // ---- POSIX: pipe + fork + dup2 + (chdir) + execvp + waitpid -------
+        // ---- POSIX: pipe + fork + dup2 + (chdir) + execv + waitpid -------
         //
         // No shell anywhere: `arguments` becomes an argv array verbatim, so
         // spaces, quotes, `$`, `;` and `|` inside an argument are ordinary
@@ -751,11 +763,42 @@ namespace arcbuild
         FileDescriptor errorRead(errorPipe[0]);
         FileDescriptor errorWrite(errorPipe[1]);
 
+        // Move the error pipe's write end ABOVE the three standard
+        // descriptors if it landed on one of them. It can: this process may
+        // have been started (from a service/daemon context) with stdin,
+        // stdout or stderr closed, in which case pipe() is free to hand back
+        // fd 0/1/2. If that descriptor were fd 1 or 2, the child's dup2
+        // redirects below would overwrite it -- and a later exec failure's
+        // {stage, errno} record would then be written into the OUTPUT pipe
+        // instead: the parent would see a clean EOF on the error pipe, read
+        // it as "exec succeeded", stream eight raw record bytes as if they
+        // were child output, and hand back the child's fabricated 127 as a
+        // real exit code. Real spawn implementations (posix_spawn, CPython's
+        // subprocess) relocate their control pipe for exactly this reason.
+        //
+        // F_DUPFD_CLOEXEC gives the lowest free descriptor >= 3 with
+        // close-on-exec already set; the guard below then finds the flag
+        // present and leaves it alone.
+        if (errorWrite.get() < 3)
+        {
+            const int relocated = ::fcntl(errorWrite.get(), F_DUPFD_CLOEXEC, 3);
+
+            if (relocated < 0)
+            {
+                return std::unexpected(ProcessError{
+                    "fcntl(F_DUPFD_CLOEXEC) failed while moving the child's "
+                    "setup-error channel clear of stdin/stdout/stderr (" +
+                    DescribeErrorNumber(errno) + ")" });
+            }
+
+            errorWrite.reset(relocated);   // closes the low descriptor
+        }
+
         // FD_CLOEXEC on the error pipe's WRITE end, set in the PARENT before
         // fork() -- three reasons, all of them load-bearing:
         //
-        //  1. It is what makes EOF on the read end MEAN "execvp succeeded":
-        //     a successful execvp closes this descriptor for us, atomically,
+        //  1. It is what makes EOF on the read end MEAN "execv succeeded":
+        //     a successful execv closes this descriptor for us, atomically,
         //     as part of replacing the process image. The parent needs no
         //     handshake and no timeout.
         //  2. The flag is a property of the descriptor, so the forked child
@@ -789,10 +832,10 @@ namespace arcbuild
         if (child == 0)
         {
             // ================= CHILD ==================================
-            // Async-signal-safe only from here to execvp: close(), chdir(),
+            // Async-signal-safe only from here to execv: close(), chdir(),
             // dup2(), write(), _exit(). Nothing allocates, and the
             // FileDescriptor destructors never run (every path ends in
-            // execvp's image replacement or _exit), so these closes are
+            // execv's image replacement or _exit), so these closes are
             // explicit and cannot double-close.
             //
             // stdin is deliberately left as inherited: a POSIX build tool
@@ -825,14 +868,29 @@ namespace arcbuild
             if (outputWrite.get() != STDOUT_FILENO && outputWrite.get() != STDERR_FILENO)
                 ::close(outputWrite.get());
 
-            // execvp, with argv[0] an absolute path (ProcessSpec::executable
-            // always is -- Compose*/BackendResolver resolve the tool first),
-            // so its name contains a '/' and NO $PATH search happens: the
-            // same "this exact binary, never a PATH lookup" contract
-            // lpApplicationName gives the Windows branch.
-            ::execvp(argv[0], argv.data());
+            // execv, never execvp -- this is the POSIX spelling of the
+            // Windows branch's lpApplicationName contract: THIS exact file,
+            // never a lookup. execvp would break it two ways, neither of them
+            // visible at the call site:
+            //
+            //  * it searches $PATH for any name without a '/'. That
+            //    ProcessSpec::executable is always absolute is a convention
+            //    of its producers, not something the type enforces, so one
+            //    future bare name would silently turn into a PATH search.
+            //  * on ENOEXEC it re-execs /bin/sh with the target as an
+            //    argument (glibc's maybe_script_execute; macOS libc does the
+            //    same), EVEN for an absolute path. A file that exists and is
+            //    executable but is not a valid image -- wrong architecture,
+            //    truncated binary, a script with no shebang -- would then
+            //    launch a SHELL as an intermediary, successfully: the parent
+            //    sees EOF, never refuses, and a shell interprets a file
+            //    arcbuild meant to run directly.
+            //
+            // With execv both cases are honest Exec-stage records (ENOENT,
+            // ENOEXEC) on the error pipe, and the launch is refused.
+            ::execv(argv[0], argv.data());
 
-            // Reached ONLY if execvp failed -- on success it never returns.
+            // Reached ONLY if execv failed -- on success it never returns.
             ReportChildSetupFailure(errorWrite.get(), ChildSetupStage::Exec, errno);
         }
 
@@ -853,6 +911,8 @@ namespace arcbuild
         // blocks on a full output pipe afterwards.
         ChildSetupError record{};
         std::size_t     recordBytes = 0;
+        bool            recordUnreadable = false;
+        int             recordReadError  = 0;
 
         for (;;)
         {
@@ -867,15 +927,22 @@ namespace arcbuild
                 if (errno == EINTR)
                     continue;
 
-                // A read failure on this channel leaves us unable to tell
-                // "launched" from "failed to launch" by the record -- treat
-                // it as no record and fall through to waitpid, which still
-                // reports whatever really happened to the child.
+                // A read failure on this channel destroys the ONE signal that
+                // separates "the program ran" from "it never started" --
+                // recorded, and refused below. Falling through to waitpid
+                // instead would be actively unsafe: a child that failed
+                // chdir/dup2/execv has already _exit(127)'d, so waitpid would
+                // hand back that fabricated 127 as an ordinary exit code,
+                // indistinguishable from a tool that really ran and chose it.
+                // Captured NOW: the close() and waitpid() between here and the
+                // message below may overwrite errno.
+                recordUnreadable = true;
+                recordReadError  = errno;
                 break;
             }
 
             if (got == 0)
-                break;   // EOF: execvp succeeded (nothing was ever written)
+                break;   // EOF: execv succeeded (nothing was ever written)
 
             recordBytes += static_cast<std::size_t>(got);
 
@@ -884,6 +951,24 @@ namespace arcbuild
         }
 
         errorRead.reset();
+
+        if (recordUnreadable)
+        {
+            // Indeterminate: refuse. The child may be a running program or a
+            // corpse that never became one, and there is no longer any way to
+            // tell -- so reap it (blocking is safe only once it is known to
+            // have exited, which this is not, hence WNOHANG) and report a
+            // launch failure rather than risk presenting a setup failure's
+            // 127 as a result. A child that IS still running is left to
+            // finish on its own; both pipe ends close as this returns, so it
+            // sees EPIPE/SIGPIPE on its next write.
+            ReapChild(child, WNOHANG);
+
+            return std::unexpected(ProcessError{
+                "could not determine whether '" + spec.executable.string() +
+                "' launched: reading the child's setup-error channel failed (" +
+                DescribeErrorNumber(recordReadError) + ")" });
+        }
 
         if (recordBytes == sizeof(record))
         {
@@ -960,9 +1045,22 @@ namespace arcbuild
             if (errno == EINTR)
                 continue;
 
+            const int waitError = errno;
+
+            // One best-effort non-blocking reap before giving up. What this
+            // does and does NOT guarantee, stated plainly rather than assumed
+            // away: the realistic cause here is ECHILD in a host that set
+            // SIGCHLD to SIG_IGN, and under that disposition POSIX has the
+            // KERNEL reap children automatically -- nothing is leaked. For
+            // any other cause the child may remain a zombie until this
+            // process exits; ProcessRunner is a reusable type, not guaranteed
+            // to live inside a short-lived CLI, so that residual leak is
+            // accepted, not impossible.
+            ReapChild(child, WNOHANG);
+
             return std::unexpected(ProcessError{
                 "waitpid failed for '" + spec.executable.string() + "' (" +
-                DescribeErrorNumber(errno) + ")" });
+                DescribeErrorNumber(waitError) + ")" });
         }
 
         if (WIFEXITED(status))

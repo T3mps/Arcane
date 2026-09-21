@@ -4,7 +4,7 @@
 # 2026-09-20-arcbuild-multibackend-hardening-design.md s6.4).
 #
 # arcbuild's ProcessRunner has two branches: CreateProcessW under _WIN32, and
-# pipe/fork/dup2/chdir/execvp/waitpid outside it. A Windows desk can build and
+# pipe/fork/dup2/chdir/execv/waitpid outside it. A Windows desk can build and
 # run only the first, so this script is what a Linux/macOS host runs to
 # validate the second. Deliberately /bin/sh (not bash): it must run on a bare
 # CI container and on macOS's own shell without extra packages.

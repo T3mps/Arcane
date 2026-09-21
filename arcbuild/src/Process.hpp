@@ -40,7 +40,7 @@ namespace arcbuild
     // UTF-16 conversion failed, CreateProcessW itself failed (missing
     // executable, access denied, a bad working directory, ...), or a Win32
     // handle/attribute-list step failed; on POSIX: pipe/fork/waitpid failed,
-    // or the child reported a chdir/dup2/execvp failure over its error pipe
+    // or the child reported a chdir/dup2/execv failure over its error pipe
     // before ever becoming the requested program (see ChildSetupError below).
     // Distinct from a child that ran to completion and exited non-zero, which
     // is an ordinary ProcessResult VALUE, never an error -- see ExecutePlan's
@@ -56,9 +56,9 @@ namespace arcbuild
 
     // ---- POSIX child-side setup failures -----------------------------------
     //
-    // On POSIX a launch is fork() + execvp(), so the steps that can fail
+    // On POSIX a launch is fork() + execv(), so the steps that can fail
     // (chdir into the working directory, dup2 the pipe onto stdout/stderr,
-    // execvp itself) all run in the CHILD, after fork already succeeded --
+    // execv itself) all run in the CHILD, after fork already succeeded --
     // where there is no way to return a value. The child reports them over a
     // second, close-on-exec pipe as this fixed-size {stage, errno} record and
     // then _exit(127); the parent turns a received record into a
@@ -103,7 +103,7 @@ namespace arcbuild
     };
 
     // The real implementation, per platform: CreateProcessW on Windows,
-    // pipe/fork/dup2/execvp/waitpid on POSIX. Never a shell, never
+    // pipe/fork/dup2/execv/waitpid on POSIX. Never a shell, never
     // system()/popen(), and no libc process-spawn fallback of any kind on
     // either side -- see Process.cpp for the quoting + handle-inheritance
     // contract (Windows) and the error-pipe + descriptor contract (POSIX)
