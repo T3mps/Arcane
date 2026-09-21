@@ -143,6 +143,34 @@ arcane_game_module("MyGame")   -- SharedLib game module -> Binaries/MyGame.dll
 The host hot-reloads the module on rebuild (debounced mtime watcher, state
 preserved), with an ABI gate refusing cross-build mismatches.
 
+### Driving it with `arcbuild`
+
+Generating and building by hand (`premake5 <action>` then the matching build
+tool) is what `arcbuild.exe` automates -- it is the one entry point the
+editor's Build -> Rebuild Game Module, CI, and scripts all call instead of
+re-implementing that composition. Specs:
+`docs/specs/2026-09-13-arcbuild-driver-design.md` +
+`docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md`.
+
+```bat
+bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe generate --project MyGame
+bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build    --project MyGame --config Debug --sdk %ARCANE_SDK%
+bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
+```
+
+`--action` picks the Premake generator/backend pair, defaulting per host
+(`vs2026` on Windows, `gmake` on Linux, `xcode4` on macOS). MSBuild is the
+only backend guaranteed to "just work" from a plain `Visual Studio + vcpkg`
+setup. Ninja needs a Visual Studio developer environment on Windows (beta8's
+`ninja` action defaults to the MSVC toolset there) and then builds the module
+completely -- arcbuild stages the linked DLL into `Binaries/` itself, since
+beta8's ninja action cannot run a post-build step on Windows. Make needs a
+GCC/G++ toolchain (Premake beta8's `gmake` action defaults to GCC everywhere,
+including Windows -- never `cl.exe`); on Windows that compiles the module but
+cannot link it against the MSVC-built engine DLLs, so a Make build only
+becomes real with the engine's Linux port. Xcode resolves and composes on
+every platform but only **executes** on macOS. `probe` alone needs no SDK.
+
 ## License
 
 MIT -- see [LICENSE](LICENSE). Vendored third-party dependencies retain their

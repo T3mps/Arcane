@@ -171,5 +171,60 @@ External projects set `ARCANE_SDK` to this repo root and consume
 `$ARCANE_SDK/ArcaneClient/src` + `$ARCANE_SDK/ArcaneCore/src` + header-only
 ThirdParty; the import lib is
 `$ARCANE_SDK/bin/<cfg>-windows-x86_64-md/ArcaneClient/ArcaneClient.lib`. The
-editor's Build -> Rebuild Game Module resolves the bundled premake at
-`<sdkRoot>/ThirdParty/premake5/premake5.exe` (`ArcaneEditor/src/ModuleBuild.cpp`).
+editor's Build -> Rebuild Game Module spawns `arcbuild.exe` (below); it no
+longer resolves premake/msbuild itself (`ArcaneEditor/src/Project/
+ModuleBuild.cpp` only composes the `arcbuild` command line and streams its
+output).
+
+## arcbuild -- the game-project build driver
+
+`arcbuild.exe` (staged beside `ArcaneEditor.exe`; specs
+`docs/specs/2026-09-13-arcbuild-driver-design.md` +
+`docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md`, both
+**Implemented**) is the one entry point that drives Premake generation plus a
+backend-native build for an SDK-built game project (Aphelyon/Gacha's `Game/`,
+this repo's own `ReferenceProject/`, or the `ArcaneTests/data/arcbuild-
+fixture/` test fixture) -- the editor, CI, and any script call the same exe
+instead of re-implementing premake+msbuild composition three times over.
+
+```bat
+arcbuild generate --project <dir|.arcproj> [--action <premake-action>]
+arcbuild build    --project <dir|.arcproj> [--config Debug|Release|Dist] [--sdk <root>]
+arcbuild rebuild   --project <dir|.arcproj> ...
+arcbuild clean     --project <dir|.arcproj> ...
+arcbuild probe     --project <dir|.arcproj>    # slot verdict only -- no SDK needed
+```
+
+**Backends**, one per Premake action, each with a real resolve/compose/
+execute/exit-code contract (no shell -- direct `CreateProcessW` on Windows,
+`fork`/`execv` on POSIX):
+
+| Action | Backend | Needs (beyond `ninja`/`make`/`msbuild`/`xcodebuild` itself resolving) |
+|---|---|---|
+| `vs2026`/`vs2022` (Windows default) | MSBuild | Visual Studio |
+| `gmake`/`gmakelegacy` (Linux default) | Make | a GCC/G++ toolchain -- Premake beta8's `gmake` action defaults to GCC on every host, **including Windows** (never `cl.exe`) |
+| `ninja` | Ninja | on Windows, a VS developer environment (`cl.exe`/`link.exe`) -- beta8's `ninja` action defaults to MSVC on a native Windows target |
+| `xcode4` (macOS default) | xcodebuild | macOS only; `-target <module-stem>`, never `-scheme` (beta8 emits no shared scheme) |
+
+`probe` is the one command that needs neither an SDK nor a backend tool --
+it only inspects the manifest and the `Binaries/<gameModule>` slot. Live
+Make/Ninja acceptance (real generate/build/rebuild/clean, plus the four
+clean-precedence edge cases) is `scripts/verify-arcbuild-backends.ps1` (run
+it with `vcvars64` imported; 22 checks); the opt-in `[build-generator]`
+Catch2 case characterizes real Premake output for all three non-MSBuild
+actions.
+
+**What is live-proven (2026-09-21):** Ninja on Windows is a complete build --
+generate/build/rebuild/clean produce and remove `Binaries\Fixture.dll` (the
+slot is arcbuild's own staged copy of `Intermediate/<Config>/Ninja/Binaries/`,
+because beta8's ninja module cannot run a post-build command on Windows --
+see `arcbuild/src/Stage.hpp`). Make on Windows is the full driver mechanics
+plus a MinGW-w64 GCC compile of the module; the link then fails because a
+GCC object cannot resolve the MSVC-built `ArcaneCore`/`ArcaneClient` import
+libraries (C++ mangling) -- a Make-built module needs the GCC-built engine of
+the Linux port, not an arcbuild fix. Linux has never generated or built
+anything (`scripts/verify-arcbuild-posix.sh` stage 2 waits on that port;
+stage 1, the POSIX runner's compile contract, passes). Xcode's contract is
+unit-tested everywhere but **live `xcodebuild` execution needs macOS** --
+untested on this all-Windows desk, a standing live-validation limit, not a
+gap in the design.

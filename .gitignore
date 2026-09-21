@@ -51,6 +51,19 @@ data/shaders/generated/
 # generated IDE files + build output are derived.
 ReferenceProject/ReferenceProject.slnx
 ReferenceProject/*.vcxproj*
+# The non-MSBuild generator actions arcbuild drives (multibackend hardening):
+# `arcbuild generate --action gmake|ninja|xcode4 --project ReferenceProject`
+# drops these beside the .slnx above -- derived output, same as the .slnx/
+# .vcxproj rules, and the same shapes the arcbuild-fixture block below
+# ignores. Deliberately scoped to ReferenceProject/ (and the fixture): the
+# ENGINE tree must never have Make/Ninja output generated in place, so a
+# stray root-level Makefile/build.ninja stays visible to `git status`.
+ReferenceProject/Makefile
+ReferenceProject/*.make
+ReferenceProject/build.ninja
+ReferenceProject/*.ninja
+ReferenceProject/*.xcodeproj/
+ReferenceProject/*.xcworkspace/
 ReferenceProject/Binaries/
 ReferenceProject/Intermediate/
 # Task 12a: a bless run points --project at this SOURCE tree, so a harvest
@@ -62,6 +75,25 @@ ReferenceProject/Saved/
 ArcaneClient/ArcaneClient/
 ArcaneCore/ArcaneCore/
 ArcaneTests/ArcaneTests/
+arcbuild/arcbuild/
+
+# -- arcbuild-fixture generated backend artifacts (multibackend hardening) ----
+# ArcaneTests/data/arcbuild-fixture/ is a committed, input-only Premake
+# project (Fixture.arcproj, premake5.lua, Source/) -- real generation always
+# happens against a unique temp copy (the [build-generator] test, scripts/
+# verify-arcbuild-backends.ps1, verify-arcbuild-posix.sh), never here. These
+# rules only guard against an accidental in-place `premake5 <action>` run
+# leaving stray gmake/ninja/xcode4 output half-tracked; they never match the
+# three committed input files above.
+ArcaneTests/data/arcbuild-fixture/Makefile
+ArcaneTests/data/arcbuild-fixture/*.make
+ArcaneTests/data/arcbuild-fixture/build.ninja
+ArcaneTests/data/arcbuild-fixture/*.ninja
+ArcaneTests/data/arcbuild-fixture/*.xcodeproj/
+ArcaneTests/data/arcbuild-fixture/*.xcworkspace/
+ArcaneTests/data/arcbuild-fixture/Binaries/
+ArcaneTests/data/arcbuild-fixture/Intermediate/
+ArcaneTests/data/arcbuild-fixture/obj/
 
 # -- vcpkg in-tree clones ------------------------------------------------------
 # vcpkg lives outside the repo at $VCPKG_ROOT; the overlay triplet
