@@ -2,10 +2,38 @@
 
 **Date:** 2026-09-20
 
-**Status:** Proposed
+**Status:** Implemented (2026-09-21, Task 7 of the delivery sequence in
+§12 — correctness, robustness, and documentation/verification all landed;
+see this task's report,
+`.superpowers/sdd/2026-09-20-arcbuild-multibackend-hardening/task-7-report.md`,
+for the full acceptance evidence this line certifies).
 **Supersedes:** The Windows-only backend and deferred non-MSBuild execution
 statements in `2026-09-13-arcbuild-driver-design.md`. The existing CLI,
 single-slot CRT rule, exit codes, and clean guarantees remain binding.
+
+**Live-validation limits at close (all §11.2 gates otherwise green):**
+- **Xcode/macOS**: resolution, context, and argument composition are unit-
+  tested on every platform, but live `xcodebuild` execution requires macOS
+  and was not exercised — no macOS host was available for this plan. This is
+  the one gate §10/§11 always anticipated staying open on a Windows desk.
+- **Make and Ninja mechanics are fully live-verified** on Windows
+  (`scripts/verify-arcbuild-backends.ps1`): real generation, real child
+  processes, real exit-code propagation (including a genuinely distinct
+  child exit code, not a coincidental match with `kExitRefused`), and all
+  four clean-precedence edge cases (§9) against a real filesystem. A
+  **full compiled build** of the fixture module additionally requires a
+  working compiler for each backend's Premake-beta8-selected toolset (GCC
+  for `gmake`, MSVC for `ninja` on Windows — two independent tool
+  installs, see the Task 7 report) — on this desk, both toolchains compile
+  the fixture but fail to fully LINK it, for two separate, pre-existing,
+  engine/Premake-configuration reasons unrelated to arcbuild's own
+  correctness (an ArcaneCore header not yet portable to GCC, and the
+  `ninja` action's generated link line omitting a Windows system import
+  library `vs2026`'s MSBuild project system supplies implicitly). Both are
+  newly-discovered, out-of-scope findings recorded in the Task 7 report for
+  a follow-up — not a gap in arcbuild's own resolve/compose/execute/
+  propagate contract, which the exit-code-fidelity checks in the verify
+  script confirm directly.
 
 ## 1. Purpose
 

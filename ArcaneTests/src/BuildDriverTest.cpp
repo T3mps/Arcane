@@ -1759,3 +1759,204 @@ TEST_CASE("arcbuild generate writes the project's workspace file on this desk", 
     CHECK(sawPremake);
     CHECK_FALSE(Arcane::Toolchain::DiscoverSolution(fs::path(env)).empty());
 }
+
+// ---------------------------------------------------------------------------
+// Opt-in generator characterization (Task 7, multibackend hardening). Off by
+// default: it runs only under an explicit "[build-generator]" tag filter,
+// never under the ordinary "[build]" suite, because it spawns the REAL
+// bundled Premake three times to characterize actual gmake/ninja/xcode4
+// generator output -- heavier and slower than the rest of [build], which
+// only ever exercises composition/decision policy or the process-fixture
+// exe. Unlike [build-desk] it needs no environment variable: the SDK it
+// generates against is always THIS repo (SdkRootFromExeDir walks up from
+// ArcaneTests.exe's own directory, the same self-hosting trick the [build]
+// process-fixture cases already rely on for ExeDir()), so it is safe to run
+// on any desk or CI agent that built ArcaneTests.exe at all.
+//
+// Each case copies the committed, input-only ArcaneTests/data/arcbuild-
+// fixture/ into its OWN unique temp directory (never generates in place,
+// never touches the committed fixture) and runs the resolved bundled
+// premake5 through the real ProcessRunner -- no BuildExecutor/Pipeline
+// involved, since this test is about characterizing Premake's OWN output,
+// not arcbuild's orchestration of it (that is the rest of [build], plus the
+// live acceptance in scripts/verify-arcbuild-backends.ps1).
+// ---------------------------------------------------------------------------
+
+#include <chrono>
+#include <sstream>
+
+namespace
+{
+    // A directory that did not exist before this call and is guaranteed
+    // distinct from every other call in this process -- a monotonic step
+    // counter folded in alongside a steady_clock tick so two cases started
+    // in the same tick still land on different names. create_directory's
+    // own "did I just create this" return is the final word: a collision
+    // (however unlikely) is retried rather than silently reused.
+    std::filesystem::path MakeUniqueTempDir(std::string_view tag)
+    {
+        static int counter = 0;
+
+        const fs::path base =
+            fs::temp_directory_path() / "arcbuild_generator_test";
+
+        std::error_code ec;
+        fs::create_directories(base, ec);
+
+        for (int attempt = 0; attempt < 1000; ++attempt)
+        {
+            std::ostringstream name;
+            name << tag << "_"
+                 << std::chrono::steady_clock::now()
+                        .time_since_epoch()
+                        .count()
+                 << "_" << (++counter) << "_" << attempt;
+
+            fs::path candidate = base / name.str();
+
+            std::error_code createEc;
+            if (fs::create_directory(candidate, createEc) && !createEc)
+                return candidate;
+        }
+
+        FAIL("could not allocate a unique temp directory for '" << tag << "'");
+        return {};
+    }
+
+    // RAII around MakeUniqueTempDir: deletes ONLY the directory it created,
+    // and only after re-resolving both it and the system temp root through
+    // weakly_canonical and confirming the directory is still a strict
+    // descendant of that root -- the same "never remove anything outside a
+    // validated unique temp subtree" guard scripts/verify-arcbuild-
+    // backends.ps1 applies on the PowerShell side. A resolution failure (the
+    // directory already gone, a permission error) leaves cleanup to the OS's
+    // own temp-directory hygiene rather than guessing.
+    struct UniqueTempDir
+    {
+        fs::path path;
+
+        explicit UniqueTempDir(std::string_view tag)
+            : path(MakeUniqueTempDir(tag))
+        {
+        }
+
+        ~UniqueTempDir()
+        {
+            std::error_code ec;
+
+            const fs::path root =
+                fs::weakly_canonical(fs::temp_directory_path(), ec);
+            if (ec) return;
+
+            const fs::path resolved =
+                fs::weakly_canonical(path, ec);
+            if (ec) return;
+
+            const std::string rootStr     = root.generic_string();
+            const std::string resolvedStr = resolved.generic_string();
+
+            const bool isStrictDescendant =
+                resolvedStr.size() > rootStr.size() &&
+                resolvedStr.compare(0, rootStr.size(), rootStr) == 0 &&
+                resolvedStr[rootStr.size()] == '/';
+
+            if (isStrictDescendant)
+                fs::remove_all(resolved, ec);
+        }
+
+        UniqueTempDir(const UniqueTempDir&)            = delete;
+        UniqueTempDir& operator=(const UniqueTempDir&) = delete;
+    };
+}
+
+TEST_CASE("arcbuild's bundled Premake characterizes real gmake/ninja/xcode4 output from the fixture",
+          "[build-generator]")
+{
+    // Self-hosting SDK root: this repo IS an Arcane checkout, so the same
+    // <sdk>/bin/<cfg>-<system>-<arch>-md/<Project> inversion the editor uses
+    // to find "the SDK the running exe belongs to" gives the fixture's
+    // premake5.lua a real $ARCANE_SDK/build/arcane.lua to include, with no
+    // environment variable and no dependence on what ARCANE_SDK happens to
+    // be set to in this process.
+    const fs::path repoRoot =
+        Arcane::Editor::ModuleBuild::SdkRootFromExeDir(
+            Arcane::Editor::ModuleBuild::ExeDir());
+
+    const fs::path fixtureSource =
+        repoRoot / "ArcaneTests" / "data" / "arcbuild-fixture";
+    REQUIRE(fs::is_directory(fixtureSource));
+
+    const BackendResolver resolver;
+    const auto premake = resolver.ResolvePremake(repoRoot);
+    REQUIRE(premake.has_value());
+
+    RecordingOutput output;
+    ProcessRunner   runner(output);
+
+    struct GeneratorCase
+    {
+        const char*              label;
+        std::vector<std::string> arguments;
+        std::vector<fs::path>    expectedArtifacts;
+    };
+
+    // clang-format off
+    const std::vector<GeneratorCase> cases =
+    {
+        // gmake: BackendResolver::ResolveBackendContext(Make, ...) requires
+        // exactly these two files (Backend.cpp).
+        { "gmake", { "gmake" },
+          { "Makefile", "Fixture.make" } },
+
+        // ninja: BackendResolver::ResolveBackendContext(Ninja, ...) requires
+        // BOTH build.ninja and <name>.ninja (the module stem's own rules,
+        // read back as BackendContext::scheme -- Task 4).
+        { "ninja", { "ninja" },
+          { "build.ninja", "Fixture.ninja" } },
+
+        // xcode4: cross-generated from Windows via --os=macosx, exactly as
+        // Task 4's RED-reproduction script did. beta8 emits a workspace and
+        // project but -- confirmed by Task 4 -- NO shared scheme file, which
+        // is why ComposeXcodeBuild drives `-target`, never `-scheme`.
+        { "xcode4", { "--os=macosx", "xcode4" },
+          { "Fixture.xcworkspace/contents.xcworkspacedata",
+            "Fixture.xcodeproj/project.pbxproj" } },
+    };
+    // clang-format on
+
+    for (const GeneratorCase& generatorCase : cases)
+    {
+        INFO("generator action: " << generatorCase.label);
+
+        UniqueTempDir tempDir(
+            std::string("generator_") + generatorCase.label);
+
+        std::error_code copyEc;
+        fs::copy(
+            fixtureSource,
+            tempDir.path,
+            fs::copy_options::recursive,
+            copyEc);
+        REQUIRE_FALSE(copyEc);
+
+        ProcessSpec spec;
+        spec.executable       = *premake;
+        spec.arguments        = generatorCase.arguments;
+        spec.workingDirectory = tempDir.path;
+
+        const ProcessResult result =
+            runner.Run(spec, "[premake]");
+
+        REQUIRE(result.has_value());
+        CHECK(*result == 0);
+
+        for (const fs::path& artifact : generatorCase.expectedArtifacts)
+            CHECK(fs::exists(tempDir.path / artifact));
+
+        // The committed fixture is read-only input: generation only ever
+        // wrote into tempDir.path, never fixtureSource.
+        CHECK_FALSE(fs::exists(fixtureSource / "Makefile"));
+        CHECK_FALSE(fs::exists(fixtureSource / "build.ninja"));
+        CHECK_FALSE(fs::exists(fixtureSource / "Fixture.xcodeproj"));
+    }
+}
