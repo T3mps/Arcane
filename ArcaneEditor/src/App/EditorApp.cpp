@@ -30,6 +30,7 @@
 #include "Documents/MeshDocument.hpp"
 #include "Documents/SpriteDocument.hpp"
 
+#include <Arcane/Host/GpuSceneHost.hpp>      // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference/BlessReference/DiffArtifactPath
 #include <Arcane/Host/VerifyReport.hpp>      // --report (Task 9): VerifyReport
@@ -2310,6 +2311,19 @@ namespace Arcane::Editor
         if (Arcane::ImGuiNriNode* gameNode = m_viewportTargets.graph->ImGuiGame())
             gameNode->AdoptImGuiContext(m_gameImgui ? m_gameImgui->Context() : nullptr);
 
+        // THE VISIBILITY READBACK RING (F3 plan 2 T5), armed ONLY on a
+        // --report run -- the run whose report carries visibility.gpuVisible.
+        // Owed again on every rebuild of this context, like the adoption above:
+        // the ring belongs to the GpuScene this vehicle owns, and a switch
+        // builds a new one. An unarmed run declares no copy node and pays
+        // nothing (Host/GpuSceneHost.hpp).
+        if (!m_config.reportPath.empty()
+            && !Arcane::GpuSceneArmVisibilityReadback(m_viewportTargets.graph->Scene()))
+        {
+            ARC_WARN("--report: the GPU-scene visibility readback could not be armed -- "
+                      "the report's visibility.gpuVisible will be null");
+        }
+
         // The two injected seams the graph path needs to draw REAL content,
         // both copied from RuntimeApp::MainLoop's create block and both on the
         // VIEWPORT context only -- it is the one that renders the scene. The
@@ -2721,6 +2735,16 @@ namespace Arcane::Editor
                 m_viewportTargets.graph->OffscreenOutput());
         }
 
+        // THE GPU CULL'S OWN VISIBLE-ROW COUNT (F3 plan 2 T5), read while the
+        // viewport context is still alive -- the reset below takes the
+        // visibility readback ring with it, exactly as it takes the pick
+        // readback buffer in the runtime's twin of this function. Nullopt when
+        // the ring was never armed (no --report) or when no frame's readback
+        // had completed; the report then says `null` rather than substituting
+        // the CPU count.
+        const std::optional<std::uint32_t> gpuVisibleRows =
+            Arcane::GpuSceneVisibleRows(m_viewportTargets.graph ? m_viewportTargets.graph->Scene() : nullptr);
+
         // ===== THEN THE CONTEXTS, BORROWER FIRST =============================
         // Explicit resets rather than member destruction, for the reason
         // RuntimeApp::ShutdownGraphPath states: the latch has to be sampled
@@ -2973,8 +2997,15 @@ namespace Arcane::Editor
             // and draws emitted. Carried unconditionally like the census: a
             // 2D scene honestly reports zeros, and a 3D scene that culled
             // everything reports total > 0 with coarseVisible == 0.
+            // `gpuVisible` (schemaVersion 9, plan 2 T5) is the last COMPLETED
+            // GPU-cull readback -- nullopt on a run that never armed the ring
+            // (no --report), or one whose frames were all still in flight.
+            // NEVER the coarse count under the GPU's name: see
+            // VerifyReport::SetVisibility's own contract.
             report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
-                                 m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws);
+                                 m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
+                                 static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
+                                 gpuVisibleRows);
 
             // The WORLD SET (schemaVersion 6, Core-DLL split plan 1 Task 7). A
             // process is no longer a world: --play-as embedded-server runs the

@@ -345,10 +345,13 @@ $script:VerdictNames = @(
 $script:ReportSchemaMin = 3
 # 6 since the Core-DLL split's plan 1 Task 7 added the report's `worlds` array;
 # 7 since F4 plan 1 T12 added `viewMode`; 8 since F3 plan 1 T8 added the
-# `visibility` block (VerifyReport::kSchemaVersion).
+# `visibility` block; 9 since F3 plan 2 T5 gave that block `transparentRows`
+# and made `gpuVisible` the GPU cull's OWN asynchronously read-back count --
+# `null` until one completes -- instead of a copy of `coarseVisible`
+# (VerifyReport::kSchemaVersion).
 # -SelfTest is what makes this a failure rather than a hope if the two halves
 # ever drift again.
-$script:ReportSchemaMax = 8
+$script:ReportSchemaMax = 9
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.

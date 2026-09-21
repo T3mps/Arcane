@@ -266,13 +266,17 @@ namespace Arcane
     }
 
     void VerifyReport::SetVisibility(std::uint32_t total, std::uint32_t coarseVisible,
-                                     std::uint32_t batches, std::uint32_t draws)
+                                     std::uint32_t batches, std::uint32_t draws,
+                                     std::uint32_t transparentRows,
+                                     std::optional<std::uint32_t> gpuVisible)
     {
-        m_visibilitySet = true;
-        m_visTotal      = total;
-        m_visCoarse     = coarseVisible;
-        m_visBatches    = batches;
-        m_visDraws      = draws;
+        m_visibilitySet      = true;
+        m_visTotal           = total;
+        m_visCoarse          = coarseVisible;
+        m_visBatches         = batches;
+        m_visDraws           = draws;
+        m_visTransparentRows = transparentRows;
+        m_visGpu             = gpuVisible;
     }
 
     void VerifyReport::Evaluate(const std::vector<ProbeSpec>& specs)
@@ -585,6 +589,11 @@ namespace Arcane
         // SetVisibility) -- the GPU scene's per-frame counts, the fact a 3D
         // witness asserts on. Absent on any run that never set it; 7 remains
         // readable.
+        //
+        // Bumped 8 -> 9 by F3 plan 2 T5: `visibility` gained `transparentRows`
+        // and `gpuVisible` became the GPU CULL's own asynchronously read-back
+        // count -- `null` until one completes -- instead of a copy of
+        // coarseVisible. See VerifyReport.hpp's kSchemaVersion block.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -617,18 +626,25 @@ namespace Arcane
                              { "meshBound",        m_meshBound } };
         }
 
-        // The visibility counts (schemaVersion 8). ABSENT unless SetVisibility
-        // was called -- the same absence-must-be-absence contract as the
-        // census above. gpuVisible == coarseVisible until plan 2's GPU cull
-        // reads its count back; carried now so the key's consumers need no
-        // schema change then.
+        // The visibility counts (schemaVersion 8; transparentRows and the
+        // nullable gpuVisible are 9). ABSENT unless SetVisibility was called --
+        // the same absence-must-be-absence contract as the census above.
+        //
+        // gpuVisible IS `null` UNTIL A READBACK HAS COMPLETED, and that null is
+        // the whole point of the 9 bump: it used to be m_visCoarse, i.e. the
+        // CPU's own expectation wearing the GPU's name. A present-but-null
+        // field says "this run could not measure it" while keeping the key
+        // where a consumer already looks for it; a MISSING key would mean
+        // "this report does not carry visibility at all", which is what the
+        // absent block above says.
         if (m_visibilitySet)
         {
-            j["visibility"] = { { "total",         m_visTotal },
-                                 { "coarseVisible", m_visCoarse },
-                                 { "gpuVisible",    m_visCoarse },
-                                 { "batches",       m_visBatches },
-                                 { "draws",         m_visDraws } };
+            j["visibility"] = { { "total",           m_visTotal },
+                                 { "coarseVisible",   m_visCoarse },
+                                 { "gpuVisible",      m_visGpu ? nlohmann::json(*m_visGpu) : nlohmann::json() },
+                                 { "batches",         m_visBatches },
+                                 { "draws",           m_visDraws },
+                                 { "transparentRows", m_visTransparentRows } };
         }
 
         if (m_compareSet)

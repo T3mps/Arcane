@@ -30,6 +30,16 @@ namespace Arcane
         constexpr std::uint64_t kRowBytes = sizeof(GpuInstance);
         constexpr std::uint64_t kRingAlign = 16;
 
+        // The visibility readback packs the args region and the visible-index
+        // region into ONE buffer; the second region starts at this alignment so
+        // both copies land on an offset every backend accepts.
+        constexpr std::uint64_t kVisibilityRegionAlign = 256;
+
+        [[nodiscard]] constexpr std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment) noexcept
+        {
+            return ((value + alignment - 1) / alignment) * alignment;
+        }
+
         bool CreateBuffer(NriDevice& device, nri::MemoryLocation location, std::uint64_t bytes,
                           std::uint32_t stride, nri::BufferUsageBits usage, const char* name, nri::Buffer*& out)
         {
@@ -118,6 +128,19 @@ namespace Arcane
             if (m_args[s])        core.DestroyBuffer(m_args[s]);
         }
         if (m_debugReadback) core.DestroyBuffer(m_debugReadback);
+        // The visibility ring, if it was ever armed: mark it released BEFORE
+        // the buffers go, so any publish thunk the graveyard still holds (the
+        // ring's state outlives this object by design) does nothing rather
+        // than mapping a destroyed buffer.
+        if (m_visibility)
+        {
+            m_visibility->released = true;
+            for (VisibilityRing::Slot& s : m_visibility->slots)
+            {
+                if (s.buffer) core.DestroyBuffer(s.buffer);
+                s = {};
+            }
+        }
         for (auto& parked : m_parked)
             parked.second();
         m_parked.clear();
@@ -524,6 +547,27 @@ namespace Arcane
         });
         m_instances = nullptr; m_instancesView = nullptr; m_debugReadback = nullptr; m_debugReadbackBytes = 0;
         m_pendingGrowCopy = {};
+
+        // The visibility ring (the header's contract): RELEASED FIRST, then
+        // its buffers buried. A publish thunk still parked or still in the
+        // graveyard reads `released` and returns, which is the only thing that
+        // keeps it from mapping a buffer this burial destroys -- the thunks
+        // below are buried at the SAME fence value, and this one goes first.
+        if (m_visibility)
+        {
+            m_visibility->released = true;
+            nri::Buffer* visibility[kSwapchainFramesInFlight];
+            for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s)
+            {
+                visibility[s] = m_visibility->slots[s].buffer;
+                m_visibility->slots[s] = {};
+            }
+            graves.Bury(fence, [core, visibility]
+            {
+                for (nri::Buffer* b : visibility)
+                    if (b) core->DestroyBuffer(b);
+            });
+        }
         for (std::uint32_t s = 0; s < kSwapchainFramesInFlight; ++s) { m_args[s] = nullptr; m_argsStorageView[s] = nullptr; m_visible[s] = nullptr; m_visibleView[s] = nullptr; m_visibleStorageView[s] = nullptr; m_cullBatches[s] = nullptr; m_cullBatchesView[s] = nullptr; }
 
         // Anything still parked was retired by a frame that never submitted
@@ -599,5 +643,158 @@ namespace Arcane
         out.assign(mapped, mapped + bytes);
         core.UnmapBuffer(*m_debugReadback);
         return true;
+    }
+
+    // ============ OPT-IN: THE DELAYED VISIBILITY READBACK RING ============
+    // GpuScene.hpp's own block carries the contract; the comments here are the
+    // mechanics that implement it.
+
+    bool GpuScene::EnableVisibilityReadback()
+    {
+        if (m_visibility)
+            return true;
+        if (!m_device)
+            return false;
+        m_visibility = std::make_shared<VisibilityRing>();
+        m_visibility->core = &m_device->Core();
+        return true;
+    }
+
+    nri::Buffer* GpuScene::VisibilityReadbackBuffer(std::uint32_t slot) const noexcept
+    {
+        return (m_visibility && slot < kSwapchainFramesInFlight) ? m_visibility->slots[slot].buffer : nullptr;
+    }
+
+    std::uint64_t GpuScene::VisibilityReadbackBytes(std::uint32_t slot) const noexcept
+    {
+        return (m_visibility && slot < kSwapchainFramesInFlight) ? m_visibility->slots[slot].bytes : 0;
+    }
+
+    const GpuVisibilityReadback* GpuScene::LatestVisibility() const noexcept
+    {
+        if (!m_visibility || m_visibility->latest.publishCount == 0)
+            return nullptr;   // nothing has completed -- NEVER a CPU count standing in for one
+        return &m_visibility->latest;
+    }
+
+    // DECLARATION TIME (AddGpuSceneVisibilityReadbackNode), after Reserve has
+    // settled this slot's args / visible-index buffers -- the same rule the
+    // whole file follows: size and grow here, never inside a record callback.
+    bool GpuScene::EnsureVisibilityReadback(std::uint32_t slot, std::uint32_t argCount,
+                                            std::uint32_t visibleCount, std::uint64_t fence)
+    {
+        if (!m_visibility || slot >= kSwapchainFramesInFlight)
+            return false;
+        VisibilityRing::Slot& s = m_visibility->slots[slot];
+
+        // Clamped to what the slot's device buffers actually hold: the copy
+        // reads THEM, and a declaration asking for more than Reserve made is a
+        // frame this node must not record at all.
+        const std::uint64_t argBytes     = std::min(std::uint64_t(argCount) * sizeof(DrawIndexedArgs), ArgBytes(slot));
+        const std::uint64_t visibleBytes = std::min(std::uint64_t(visibleCount) * sizeof(std::uint32_t), VisibleBytes(slot));
+        if (argBytes == 0 || visibleBytes == 0)
+            return false;   // nothing to read back this frame (no emitted batch, or no rows)
+        const std::uint64_t argRegion = AlignUp(argBytes, kVisibilityRegionAlign);
+        const std::uint64_t need      = argRegion + visibleBytes;
+
+        if (!s.buffer || s.bytes < need)
+        {
+            if (s.buffer)
+            {
+                const nri::CoreInterface* core = &m_device->Core();
+                Park(fence, [core, b = s.buffer] { core->DestroyBuffer(b); });
+                s.buffer = nullptr;
+                s.bytes  = 0;
+            }
+            nri::Buffer* buffer = nullptr;
+            if (!CreateBuffer(*m_device, nri::MemoryLocation::HOST_READBACK, need, 0, nri::BufferUsageBits::NONE,
+                              "gpuscene visibility readback", buffer))
+                return false;   // logged; the slot stays unarmed for this frame
+            s.buffer = buffer;
+            s.bytes  = need;
+        }
+        s.argBytes     = argBytes;
+        s.argRegion    = argRegion;
+        s.visibleBytes = visibleBytes;
+        s.declaredSeq  = ++m_visibilitySeq;
+
+        // THE PUBLISH, PARKED (GpuScene.hpp's burial seam): stamped with the
+        // value THIS frame's submit will signal, buried by FlushGraves right
+        // after that submit, and run by a LATER frame's Reap -- so it reads the
+        // buffer only once the frame that filled it has retired. No wait, no
+        // poll, no per-frame flush. Everything it needs is CAPTURED rather than
+        // re-read from the ring: a growth between now and then replaces
+        // `s.buffer`, and this thunk still owes its answer from the buffer the
+        // copy it belongs to actually wrote (which stays alive until the same
+        // fence, parked just above).
+        Park(fence, [ring = m_visibility, slot, seq = s.declaredSeq, fence,
+                     buffer = s.buffer, argRegion, argCount = static_cast<std::uint32_t>(argBytes / sizeof(DrawIndexedArgs)),
+                     visibleCount = static_cast<std::uint32_t>(visibleBytes / sizeof(std::uint32_t))]
+        {
+            VisibilityRing& r = *ring;
+            if (r.released || !r.core || !buffer)
+                return;   // the scene was released; the buffer is gone or going
+            if (r.slots[slot].recordedSeq != seq)
+                return;   // that declaration never recorded its copy (a refused or skipped frame)
+            // THE ONE CASE THIS STAMP CANNOT SEE: an Execute that recorded the
+            // copy and then FAILED before submitting. The thunk then publishes
+            // whatever the buffer last held (that slot's previous frame),
+            // because nothing on the CPU can tell a recorded copy from an
+            // executed one. Accepted rather than plumbed around: a failed
+            // Execute is already a latched render error, which is a louder
+            // fact than a one-frame-stale observability count.
+            const std::uint64_t bytes = argRegion + std::uint64_t(visibleCount) * sizeof(std::uint32_t);
+            const auto* mapped = static_cast<const std::uint8_t*>(r.core->MapBuffer(*buffer, 0, bytes));
+            if (!mapped)
+            {
+                ARC_ERROR("[nri-graph] GpuScene: MapBuffer on the visibility readback buffer returned null");
+                return;
+            }
+            r.latest.args.resize(argCount);
+            if (argCount)
+                std::memcpy(r.latest.args.data(), mapped, std::size_t(argCount) * sizeof(DrawIndexedArgs));
+            r.latest.visibleIndices.resize(visibleCount);
+            if (visibleCount)
+                std::memcpy(r.latest.visibleIndices.data(), mapped + argRegion,
+                            std::size_t(visibleCount) * sizeof(std::uint32_t));
+            r.core->UnmapBuffer(*buffer);
+            r.latest.fence = fence;
+            ++r.latest.publishCount;
+        });
+        return true;
+    }
+
+    // RECORD TIME: two copies onto this frame's command list, args then visible
+    // indices, into the one buffer the declaration sized. Stamping
+    // `recordedSeq` is what tells the parked thunk this frame's copy is real.
+    void GpuScene::RecordVisibilityReadback(RenderGraphNodeContext& ctx, RgBuffer args, RgBuffer visibleIndices,
+                                            std::uint32_t slot)
+    {
+        if (!m_visibility || slot >= kSwapchainFramesInFlight)
+            return;
+        VisibilityRing::Slot& s = m_visibility->slots[slot];
+        nri::Buffer* sourceArgs = ctx.Resolve(args);
+        nri::Buffer* sourceVis  = ctx.Resolve(visibleIndices);
+        if (!s.buffer || !sourceArgs || !sourceVis || s.bytes < s.argRegion + s.visibleBytes)
+        {
+            ARC_ERROR("[nri-graph] GpuScene: the visibility readback node could not resolve its buffers");
+            return;
+        }
+        ctx.core.CmdCopyBuffer(ctx.cmd, *s.buffer, 0, *sourceArgs, 0, s.argBytes);
+        ctx.core.CmdCopyBuffer(ctx.cmd, *s.buffer, s.argRegion, *sourceVis, 0, s.visibleBytes);
+        s.recordedSeq = s.declaredSeq;
+    }
+
+    bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept
+    {
+        return device && device->EnableVisibilityReadback();
+    }
+
+    std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept
+    {
+        const GpuVisibilityReadback* latest = device ? device->LatestVisibility() : nullptr;
+        if (!latest)
+            return std::nullopt;   // unarmed, or nothing has completed yet
+        return latest->VisibleRows();
     }
 }

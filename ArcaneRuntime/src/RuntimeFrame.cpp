@@ -294,6 +294,28 @@ void BuildHud(FrameIo& io)
         ImGui::Text("Plugin gen: %u", io.plugin->Generation());
         const Arcane::Batch2DStats s = io.gpu->Batch().Stats();
         ImGui::Text("Quads: %u  Draws: %u", s.quads, s.drawCalls);
+
+        // THE 3D PASS'S VISIBILITY, beside the 2D batcher's counts (F3 plan 2
+        // T5): the CPU's own figures, then what the GPU CULL PASS itself
+        // emitted. Both describe the LAST frame, not this one -- the HUD is
+        // built before PrepareSceneForRender rebuilds `gpuSceneFrame` and the
+        // GPU's answer is asynchronous by construction -- which is the same
+        // one-frame lag the batcher's counts above already carry.
+        //
+        // The second line reads "unavailable" whenever no readback has
+        // completed: the ring is opt-in (--report arms it), and a HUD that
+        // printed the coarse count there would be showing the CPU's
+        // expectation under the GPU's name -- exactly the conflation this arc
+        // removed from the report.
+        const Arcane::GpuSceneFrame::Stats& vis = io.gpuSceneFrame.stats;
+        ImGui::Text("Rows: %u  Coarse: %u  Batches: %u  Draws: %u (+%u transparent)",
+                    vis.total, vis.coarseVisible, vis.batches, vis.draws,
+                    static_cast<std::uint32_t>(io.gpuSceneFrame.transparentDraws.size()));
+        if (const std::optional<std::uint32_t> gpuVisible =
+                Arcane::GpuSceneVisibleRows(io.graph ? io.graph->Scene() : nullptr))
+            ImGui::Text("GPU visible: %u", *gpuVisible);
+        else
+            ImGui::TextUnformatted("GPU visible: unavailable");
         ImGui::End();
     }
 

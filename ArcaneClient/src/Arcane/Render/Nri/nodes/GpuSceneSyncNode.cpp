@@ -94,4 +94,42 @@ namespace Arcane
                 scene->RecordDebugReadback(nodeContext, instances, *readback);
             });
     }
+
+    void AddGpuSceneVisibilityReadbackNode(RenderGraph& graph, NriGraphContext* context,
+                                           const GpuSceneNodeInputs& inputs, const GpuSceneFrame* frame)
+    {
+        GpuScene* scene = context ? context->Scene() : nullptr;
+        if (!scene || !scene->VisibilityReadbackEnabled() || !frame || frame->rowCount == 0 || frame->args.empty())
+            return;   // unarmed, or a frame with nothing the cull pass could have written
+        const std::uint32_t slot = context->FrameSlot();
+        // Sized -- and the publish parked -- at DECLARATION time, after
+        // AddGpuSceneSyncNode's Reserve settled this slot's buffers.
+        if (!scene->EnsureVisibilityReadback(slot, static_cast<std::uint32_t>(frame->args.size()),
+                                             frame->rowCount, context->CurrentFence()))
+            return;   // already logged, or this frame has nothing to copy
+
+        // Shared rather than captured by value for the same reason the debug
+        // readback node's is: the handle is minted inside this node's setup.
+        auto readback = std::make_shared<RgBuffer>();
+        graph.AddNode("gpuscene-visibility-readback", RenderGraph::NodeKind::Copy,
+            [scene, inputs, readback, slot](RenderGraphBuilder& builder)
+            {
+                *readback = builder.ImportBuffer("gpuscene.visibility-readback",
+                                                 scene->VisibilityReadbackBuffer(slot),
+                                                 scene->VisibilityReadbackBytes(slot));
+                builder.Read(inputs.args, RgUsage::CopySrc);
+                builder.Read(inputs.visibleIndices, RgUsage::CopySrc);
+                builder.Write(*readback, RgUsage::ReadbackHost);
+            },
+            [scene, inputs, slot, readiness = inputs.readiness](RenderGraphNodeContext& nodeContext)
+            {
+                // A REFUSED REGISTRY FRAME COPIES NOTHING: the slot buffers
+                // then hold the previous frame's data, and publishing that as
+                // this frame's answer would be a fabricated result. The parked
+                // thunk sees no matching record and keeps the last real one.
+                if (!readiness || !readiness->registryReady)
+                    return;
+                scene->RecordVisibilityReadback(nodeContext, inputs.args, inputs.visibleIndices, slot);
+            });
+    }
 }

@@ -39,6 +39,25 @@ namespace Arcane
     // synced" -> full rebuild. Re-declared identically in GpuScene.hpp.
     [[nodiscard]] ARCANE_API std::uint64_t GpuSceneSyncedGeneration(const GpuScene* device) noexcept;
 
+    // THE VISIBILITY OBSERVABILITY SEAM (F3 plan 2 T5), NRI-free for the same
+    // reason the generation above is: the hosts read it, and neither
+    // VerifyReport nor the runtime HUD may pull the device half in.
+    //
+    // Arm opts THIS device scene into the delayed readback ring -- a per-frame
+    // copy of the cull pass's args + visible indices, published once the owning
+    // frame's fence has retired (GpuScene.hpp's ring block states the whole
+    // contract). False for a null device. Both hosts arm it on a --report run,
+    // where the report is what carries the count; an unarmed run pays nothing.
+    //
+    // GpuSceneVisibleRows answers the most recently COMPLETED readback's
+    // GPU-visible row count -- every emitted batch's instanceNum, summed -- or
+    // nullopt when the ring is unarmed or no result has landed yet. NULLOPT IS
+    // THE HONEST ANSWER and must never be replaced by a CPU count: "the GPU
+    // emitted N" and "the CPU expected N" are different facts, and a report
+    // that conflates them tells a witness the cull ran when it may not have.
+    ARCANE_API bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept;
+    [[nodiscard]] ARCANE_API std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept;
+
     [[nodiscard]] inline bool SameView(const ViewTransform& a, const ViewTransform& b) noexcept
     {
         return a.view == b.view && a.projection == b.projection && a.viewport == b.viewport;

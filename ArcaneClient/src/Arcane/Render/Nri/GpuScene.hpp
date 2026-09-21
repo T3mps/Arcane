@@ -47,6 +47,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -133,6 +134,44 @@ namespace Arcane
         void RecordDebugReadback(RenderGraphNodeContext& ctx, RgBuffer instances, RgBuffer readback);
         bool ReadDebugInstances(std::vector<std::uint8_t>& out);
 
+        // ============ OPT-IN: THE DELAYED VISIBILITY READBACK RING =========
+        // What the GPU cull ACTUALLY wrote, off the device, WITHOUT A WAIT --
+        // the exact opposite of ReadDebugInstances above, which idles the
+        // device and is why it can never be on a production path.
+        //
+        // ARMED BY A CALL, never by default (EnableVisibilityReadback): an
+        // unarmed frame declares no copy node and pays nothing. A host arms it
+        // when it wants the stat (both hosts do on a --report run); the oracle
+        // test arms it to compare exact row sets against the CPU's
+        // GpuSceneFrame::oracleVisibleIndices.
+        //
+        // THE RING, per frame slot: EnsureVisibilityReadback sizes (and grows)
+        // that slot's HOST_READBACK buffer at DECLARATION time -- the same rule
+        // Reserve follows -- and PARKS a publish thunk stamped with the fence
+        // THIS frame's submit will signal. The graveyard runs that thunk from a
+        // LATER frame's Reap, i.e. only once the owning frame has retired: no
+        // DeviceWaitIdle, no fence Wait, no per-frame flush anywhere. The
+        // record callback copies this slot's args and visible indices into the
+        // buffer and stamps the declaration it copied for; a thunk whose
+        // declaration was never recorded (a refused or skipped frame) publishes
+        // nothing, so LatestVisibility() keeps the last result that was real.
+        //
+        // The ring's state is held through a shared_ptr so a thunk the
+        // graveyard still holds can outlive this GpuScene: Release() and the
+        // destructor mark it released and a late thunk then does nothing
+        // instead of mapping a destroyed buffer.
+        bool EnableVisibilityReadback();
+        [[nodiscard]] bool VisibilityReadbackEnabled() const noexcept { return m_visibility != nullptr; }
+        bool EnsureVisibilityReadback(std::uint32_t slot, std::uint32_t argCount, std::uint32_t visibleCount,
+                                      std::uint64_t fence);
+        [[nodiscard]] nri::Buffer*  VisibilityReadbackBuffer(std::uint32_t slot) const noexcept;
+        [[nodiscard]] std::uint64_t VisibilityReadbackBytes(std::uint32_t slot) const noexcept;
+        void RecordVisibilityReadback(RenderGraphNodeContext& ctx, RgBuffer args, RgBuffer visibleIndices,
+                                      std::uint32_t slot);
+        // The most recently COMPLETED result, or null while none has landed --
+        // NEVER a CPU count standing in for one.
+        [[nodiscard]] const GpuVisibilityReadback* LatestVisibility() const noexcept;
+
     private:
         GpuScene() = default;
         bool CreateInstances(std::uint32_t rowCapacity);            // buffer + view for rowCapacity + kScratchRows * frames
@@ -180,10 +219,37 @@ namespace Arcane
         nri::Buffer*  m_debugReadback        = nullptr;
         std::uint64_t m_debugReadbackBytes   = 0;
         bool          m_debugReadbackRecorded = false;
+
+        // The visibility ring's state (the API block above states the whole
+        // contract). Null until EnableVisibilityReadback arms it, which is
+        // also what VisibilityReadbackEnabled() answers.
+        struct VisibilityRing
+        {
+            struct Slot
+            {
+                nri::Buffer*  buffer       = nullptr;
+                std::uint64_t bytes        = 0;   // the buffer's whole size
+                std::uint64_t argBytes     = 0;   // this declaration's args region, at offset 0
+                std::uint64_t argRegion    = 0;   // ...aligned up: where the visible-index region starts
+                std::uint64_t visibleBytes = 0;
+                std::uint64_t declaredSeq  = 0;   // the declaration this slot was last sized for
+                std::uint64_t recordedSeq  = 0;   // ...and the one its exec fn actually copied
+            };
+            const nri::CoreInterface* core = nullptr;
+            Slot                      slots[kSwapchainFramesInFlight];
+            bool                      released = false;
+            GpuVisibilityReadback     latest;
+        };
+        std::shared_ptr<VisibilityRing> m_visibility;
+        std::uint64_t                   m_visibilitySeq = 0;
     };
 
-    // The NRI-free host seam (Task 8's Host/GpuSceneHost.hpp re-declares it
+    // The NRI-free host seams (Host/GpuSceneHost.hpp re-declares them
     // identically): the mirror generation the device last acknowledged, 0 for
-    // no device scene. Exported from ArcaneClient.dll.
+    // no device scene; the visibility ring's arming call; and the most
+    // recently completed GPU-visible row count, nullopt while none has landed.
+    // Exported from ArcaneClient.dll.
     ARCANE_API std::uint64_t GpuSceneSyncedGeneration(const GpuScene* device) noexcept;
+    ARCANE_API bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept;
+    [[nodiscard]] ARCANE_API std::optional<std::uint32_t> GpuSceneVisibleRows(const GpuScene* device) noexcept;
 }

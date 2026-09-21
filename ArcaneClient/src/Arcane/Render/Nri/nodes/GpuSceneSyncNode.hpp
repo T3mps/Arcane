@@ -51,4 +51,18 @@ namespace Arcane
     // by AddMeshNode after the mesh node, and only when the readback is armed.
     ARCANE_API void AddGpuSceneDebugReadbackNode(RenderGraph& graph, NriGraphContext* context,
                                                  const GpuSceneNodeInputs& inputs);
+
+    // OPT-IN (GpuScene::EnableVisibilityReadback, F3 plan 2 T5): a Copy node
+    // that reads THIS SLOT's indirect args and visible indices -- what the
+    // cull pass wrote -- into the slot's HOST_READBACK buffer. Declared by
+    // AddMeshNode after the mesh node, and only when a host or a test armed
+    // the ring: an unarmed frame declares nothing and pays nothing. Reading
+    // the args as CopySrc after the mesh pass consumed them as IndirectArgs is
+    // a transition the graph derives, like every other edge here.
+    //
+    // The RESULT is published later, by the graveyard, once this frame's fence
+    // has retired -- never by a wait (GpuScene.hpp's ring block).
+    ARCANE_API void AddGpuSceneVisibilityReadbackNode(RenderGraph& graph, NriGraphContext* context,
+                                                      const GpuSceneNodeInputs& inputs,
+                                                      const GpuSceneFrame* frame);
 }

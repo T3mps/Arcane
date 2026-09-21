@@ -192,7 +192,19 @@ namespace Arcane
         // row, the coarse-visible ones, batches, draws), the fact a 3D
         // witness asserts on. ABSENT on any run that never set it; 3..7
         // remain readable by the same rule.
-        static constexpr int kSchemaVersion                = 8;
+        //
+        // Bumped 8 -> 9 by F3 plan 2 T5, and the bump is the POINT rather than
+        // bookkeeping: `visibility` gained `transparentRows` (the direct
+        // records the indirect path never draws, so a consumer can check
+        // draws == batches + transparentRows itself) and `gpuVisible` STOPPED
+        // BEING A COPY OF coarseVisible. It is now the GPU cull's own count,
+        // read back asynchronously, and it is `null` whenever no readback has
+        // completed -- an 8-era consumer that read it as a number would
+        // otherwise silently read the CPU's expectation as the GPU's answer.
+        // A nullable field and a changed meaning are exactly what a version
+        // boundary exists for; 3..8 remain readable by the same rule for
+        // every OTHER field.
+        static constexpr int kSchemaVersion                = 9;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -450,19 +462,41 @@ namespace Arcane
         // upholds.
         void SetViewMode(std::string mode);
 
-        // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5): the
-        // last frame's GpuSceneFrame::Stats as the host saw them -- `total`
-        // live rows in the GPU-scene mirror (one per drawable mesh section),
-        // `coarseVisible` of them inside the mesh view's widened frustum,
-        // and the `batches` / `draws` the frame emitted. Emitted as a
-        // top-level `visibility` block ONLY when this was called (the same
-        // absence-must-be-absence contract every optional section above
-        // upholds); `gpuVisible` is carried alongside and EQUALS coarseVisible
-        // until plan 2's GPU cull reads its count back. VerifyReport does not
-        // compute these itself: it has no scene to look at, only whatever a
-        // host hands it -- AddCensus's own rule.
+        // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5; plan 2
+        // T5 for the last two arguments): the last frame's GpuSceneFrame as
+        // the host saw it -- `total` live rows in the GPU-scene mirror (one
+        // per drawable mesh section), `coarseVisible` of them inside the mesh
+        // view's widened frustum, and the `batches` / `draws` the frame
+        // emitted. Emitted as a top-level `visibility` block ONLY when this
+        // was called (the same absence-must-be-absence contract every optional
+        // section above upholds). VerifyReport does not compute any of these
+        // itself: it has no scene to look at, only whatever a host hands it --
+        // AddCensus's own rule.
+        //
+        //   transparentRows -- the frame's ordered DIRECT draw records
+        //                  (GpuSceneFrame::transparentDraws). The indirect
+        //                  path never draws these and the GPU cull never sees
+        //                  them, so `draws` is `batches + transparentRows` by
+        //                  construction -- carried as its own field so a
+        //                  witness can assert that identity instead of
+        //                  re-deriving it from a count it cannot see.
+        //   gpuVisible  -- what the GPU CULL PASS ITSELF emitted, summed over
+        //                  every indirect batch, from the most recently
+        //                  COMPLETED asynchronous readback
+        //                  (Host/GpuSceneHost.hpp's GpuSceneVisibleRows), or
+        //                  NULLOPT when the ring is unarmed or no result has
+        //                  landed yet -- which ToJson emits as `null`.
+        //                  DELIBERATELY NOT DEFAULTED, and deliberately not
+        //                  fillable from coarseVisible: through schemaVersion
+        //                  8 this field WAS a copy of the CPU count, which
+        //                  told every consumer the GPU had agreed when nothing
+        //                  had asked it. "The GPU emitted N" and "the CPU
+        //                  expected N" are different facts; a run that cannot
+        //                  state the first must say so.
         void SetVisibility(std::uint32_t total, std::uint32_t coarseVisible,
-                           std::uint32_t batches, std::uint32_t draws);
+                           std::uint32_t batches, std::uint32_t draws,
+                           std::uint32_t transparentRows,
+                           std::optional<std::uint32_t> gpuVisible);
 
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
@@ -552,9 +586,13 @@ namespace Arcane
         bool        m_viewModeSet = false;
         std::string m_viewMode;
 
-        // The visibility counts (schemaVersion 8) -- m_visibilitySet gates emission.
+        // The visibility counts (schemaVersion 8; transparentRows + the
+        // nullable gpuVisible are 9) -- m_visibilitySet gates emission, and
+        // m_visGpu's own emptiness is what makes gpuVisible `null`.
         bool          m_visibilitySet = false;
         std::uint32_t m_visTotal = 0, m_visCoarse = 0, m_visBatches = 0, m_visDraws = 0;
+        std::uint32_t m_visTransparentRows = 0;
+        std::optional<std::uint32_t> m_visGpu;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

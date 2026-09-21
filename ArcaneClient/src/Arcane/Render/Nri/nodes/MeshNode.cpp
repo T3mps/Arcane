@@ -1304,6 +1304,16 @@ namespace Arcane
                     node->Record(nodeContext, scene, context->FrameSlot(), context->Scene(), *readiness);
             });
 
+        // WHAT THE CULL PASS WROTE, read back WITHOUT A WAIT (F3 plan 2 T5),
+        // and declared only when a host or a test armed the ring
+        // (GpuScene::EnableVisibilityReadback): this slot's indirect args and
+        // visible indices into a HOST_READBACK buffer, published once this
+        // frame's fence has retired. Declared HERE, after the mesh pass, so the
+        // copy reads the buffers in the state the draw left them -- the graph
+        // derives the IndirectArgs/ShaderRead -> CopySrc transitions. A no-op on
+        // every unarmed frame.
+        AddGpuSceneVisibilityReadbackNode(graph, context, gpuScene, scene.scene);
+
         // TEST-ONLY, and declared only when a test armed it (GpuScene::
         // EnableDebugReadback): the instance buffer read back after this pass
         // consumed it. A no-op on every production frame.

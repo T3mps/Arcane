@@ -197,6 +197,33 @@ namespace Arcane
     };
     static_assert(sizeof(GpuCullBatch) == 16);
 
+    // ONE COMPLETED GPU-CULL READBACK (F3 plan 2 T5): what the compute pass
+    // actually wrote for ONE frame, copied off the device and published only
+    // after that frame's fence had already retired -- never behind a wait.
+    // The CPU's expectation for the same frame is
+    // GpuSceneFrame::oracleVisibleIndices, and the oracle test compares the
+    // two exactly. NRI-free on purpose: the hosts' observability (VerifyReport,
+    // the runtime HUD) reads it through the Host/GpuSceneHost.hpp seam without
+    // pulling the device half in.
+    struct GpuVisibilityReadback
+    {
+        std::uint64_t publishCount = 0;   // results published so far; 0 == none has ever landed
+        std::uint64_t fence        = 0;   // the frame fence whose retirement published this one
+        std::vector<DrawIndexedArgs> args;             // by argIndex, as the compute pass left them
+        std::vector<std::uint32_t>   visibleIndices;   // by row slot, the rows it emitted
+
+        // The frame's GPU-visible row count: every emitted batch's
+        // instanceNum, summed. Transparent rows are never counted -- they are
+        // direct draw records the compute pass never sees (spec s6).
+        [[nodiscard]] std::uint32_t VisibleRows() const noexcept
+        {
+            std::uint32_t n = 0;
+            for (const DrawIndexedArgs& a : args)
+                n += a.instanceNum;
+            return n;
+        }
+    };
+
     struct GpuBatchDraw
     {
         Guid          mesh{};

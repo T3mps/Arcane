@@ -7,6 +7,7 @@
 #include "RuntimeApp.hpp"
 #include "RuntimeFrame.hpp"   // MainLoop's frame body
 
+#include <Arcane/Host/GpuSceneHost.hpp>  // GpuSceneArmVisibilityReadback / GpuSceneVisibleRows (F3 plan 2 T5)
 #include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Host/VerifyReport.hpp>  // Arcane::VerifyReport/ProbeSpec/ParseProbe (Task 8: --report wiring, ShutdownGraphPath)
 #include <Arcane/Host/ReferenceImages.hpp>  // Arcane::ResolveReference/BlessReference/DiffArtifactPath (Task 8: --compare/--bless)
@@ -640,6 +641,16 @@ void RuntimeApp::MainLoop()
     // also gate convergence.
     const bool compareRequested = !m_config.compareReference.empty() && !m_config.bless;
 
+    // THE VISIBILITY READBACK RING (F3 plan 2 T5), armed ONLY on a --report
+    // run -- the run whose report is what carries `visibility.gpuVisible`.
+    // Opt-in by construction (Host/GpuSceneHost.hpp): an unarmed run declares
+    // no copy node and pays nothing, and a run that arms it and never gets a
+    // result reports `null` rather than the CPU's count. Same guard shape as
+    // the pick chain's above -- "not asking costs nothing".
+    if (!m_config.reportPath.empty() && !Arcane::GpuSceneArmVisibilityReadback(graph.Scene()))
+        ARC_WARN("--report: the GPU-scene visibility readback could not be armed -- "
+                  "the report's visibility.gpuVisible will be null");
+
     // Boot is over; anything the watchdog reports from here on belongs to the
     // frame loop, not to a stale boot stage.
     Arcane::Diagnostics::SetPhase("runtime frame loop");
@@ -989,6 +1000,13 @@ void RuntimeApp::ShutdownGraphPath()
         }
     }
 
+    // THE GPU CULL'S OWN VISIBLE-ROW COUNT, read here for the same reason the
+    // pick answer above is: the reset below takes the readback ring with it.
+    // Nullopt when the ring was never armed (no --report) or when no frame's
+    // readback had completed -- the report says so rather than substituting
+    // the CPU count (VerifyReport::SetVisibility's own contract).
+    const std::optional<std::uint32_t> gpuVisibleRows = Arcane::GpuSceneVisibleRows(graph->Scene());
+
     // This reset is what destroys every NRI object (graph, cache, ring,
     // swapchain, NRI device, native device), and teardown ordering is exactly
     // the class of mistake a validation layer exists to catch -- so the latch
@@ -1261,8 +1279,15 @@ void RuntimeApp::ShutdownGraphPath()
         // honestly reports zeros, and so does a scene with no active
         // perspective camera -- no mesh view means no frame was built at
         // all (PrepareSceneForRender's early return), not "everything culled".
+        //
+        // `gpuVisible` (plan 2 T5) is the LAST COMPLETED readback's count, or
+        // nullopt -- never the coarse count wearing the GPU's name: a run that
+        // never armed the ring, or one whose frames were all still in flight,
+        // has not measured it and says so.
         report.SetVisibility(m_gpuSceneFrame.stats.total, m_gpuSceneFrame.stats.coarseVisible,
-                             m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws);
+                             m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
+                             static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
+                             gpuVisibleRows);
 
         // The pick@x,y readback (Task 9), captured above while the vehicle
         // was still alive. Only set when a `pick@` probe was actually
