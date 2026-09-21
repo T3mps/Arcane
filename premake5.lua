@@ -424,6 +424,49 @@ project "arcbuild"
     filter {}
 
 -- ============================================================================
+-- arcbuild-process-fixture: a tiny, dependency-free console app Task 5's
+-- ProcessRunner spawns directly (Process.cpp's [build] integration tests,
+-- BuildDriverTest.cpp) to prove real CreateProcessW behavior end to end --
+-- exact argv reconstruction through the quoting layer, merged stdout+stderr,
+-- cwd, a handle-inheritance boundary probe, and child exit-code propagation.
+-- Deliberately its OWN project, never part of ArcaneTests' file glob (a
+-- second wmain/main in that binary would not link) -- plain Win32
+-- (windows.h) only, no ArcaneCore/engine dependency of any kind.
+-- ============================================================================
+project "arcbuild-process-fixture"
+    location "ArcaneTests/process-fixture"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/ProcessFixtureMain.cpp",
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus" }
+
+    filter "configurations:Debug"
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+-- ============================================================================
 -- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
 -- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
 -- SDL3 links INTO this DLL; consumers link only the import lib.
@@ -1129,8 +1172,8 @@ project "ArcaneTests"
         "%{wks.location}/arcbuild/src/Compose.cpp",
         -- Orchestration correctness-stage seams: source-compile the bootstrap,
         -- output, probe, pipeline, and filesystem cleaner into the tests so
-        -- [build] can drive them through narrow recording fakes. Process.cpp
-        -- and main.cpp remain excluded; ordinary [build] tests never spawn.
+        -- [build] can drive them through narrow recording fakes. main.cpp
+        -- (argv parsing + the real entry point) remains excluded.
         "%{wks.location}/arcbuild/src/Bootstrap.cpp",
         "%{wks.location}/arcbuild/src/Environment.cpp",
         "%{wks.location}/arcbuild/src/Output.cpp",
@@ -1143,6 +1186,17 @@ project "ArcaneTests"
         -- siblings above -- BuildDriverTest.cpp's backend-resolver [build]
         -- units drive it directly.
         "%{wks.location}/arcbuild/src/Backend.cpp",
+        -- Multibackend hardening Task 5: Process.cpp (the real Windows
+        -- ProcessRunner + ExecutePlan) DOES now source-compile into the test
+        -- exe, unlike its siblings above -- its own [build] cases are
+        -- deliberate, narrowly-scoped exceptions to "ordinary [build] tests
+        -- never spawn": the pure QuoteWindowsArgument/BuildWindowsCommandLine
+        -- algorithm tests spawn nothing, and the process-fixture integration
+        -- tests spawn the small, dependency-free arcbuild-process-fixture.exe
+        -- (this workspace's own build output, never an external tool) to
+        -- prove real CreateProcessW quoting/streaming/handle-inheritance
+        -- behavior end to end.
+        "%{wks.location}/arcbuild/src/Process.cpp",
         -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
         -- over the same Arcane::Cli arcbuild's Request.cpp above already
         -- source-compiles) and its `--report` census (ServerReport) source-
@@ -1332,8 +1386,13 @@ project "ArcaneTests"
     defines { "MOSAIC_ENABLE_ASSERTS" }
 
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
+    -- arcbuild-process-fixture (Task 5, multibackend hardening) must exist
+    -- before the [build] process-fixture integration tests can spawn it --
+    -- this is the ONLY thing that makes that happen for a
+    -- `/t:arcbuild,ArcaneTests` build (the fixture is not itself a named
+    -- target there).
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad",
-                "HotReloadPluginInitFail", "arccook" }
+                "HotReloadPluginInitFail", "arccook", "arcbuild-process-fixture" }
 
     -- The test exe loads ArcaneClient.dll from its own directory.
     postbuildcommands {

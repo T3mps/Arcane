@@ -21,19 +21,18 @@ namespace arcbuild
             return kExitRefused;
         }
 
-        const std::string command =
+        ProcessPlan plan;
+        plan.steps.push_back(
             ComposeGenerate(
                 context.project,
                 *premake,
-                context.request.action);
+                context.request.action));
 
-        output_.Info(
-            command);
-
-        return ExitFromChild(
-            processes_.RunStreaming(
-                command,
-                "[premake]"));
+        return ExecutePlan(
+            plan,
+            processes_,
+            output_,
+            "[premake]");
     }
 
     int BuildExecutor::Build(
@@ -65,7 +64,7 @@ namespace arcbuild
             return kExitRefused;
         }
 
-        const std::string command =
+        const ProcessPlan plan =
             ComposeBuild(
                 context.backend,
                 *builder,
@@ -73,7 +72,7 @@ namespace arcbuild
                 context.request.config,
                 operation);
 
-        if (command.empty())
+        if (plan.steps.empty())
         {
             output_.Error(
                 "build backend '" +
@@ -85,14 +84,12 @@ namespace arcbuild
             return kExitRefused;
         }
 
-        output_.Info(
-            command);
-
-        return ExitFromChild(
-            processes_.RunStreaming(
-                command,
-                BuildBackendPrefix(
-                    context.backend)));
+        return ExecutePlan(
+            plan,
+            processes_,
+            output_,
+            BuildBackendPrefix(
+                context.backend));
     }
 
     int BuildExecutor::CleanBackend(
@@ -137,7 +134,7 @@ namespace arcbuild
             return kExitOk;
         }
 
-        const std::string command =
+        const ProcessPlan plan =
             ComposeBuild(
                 context.backend,
                 *builder,
@@ -145,7 +142,7 @@ namespace arcbuild
                 context.request.config,
                 BuildOperation::Clean);
 
-        if (command.empty())
+        if (plan.steps.empty())
         {
             output_.Error(
                 "build backend '" +
@@ -157,13 +154,11 @@ namespace arcbuild
             return kExitRefused;
         }
 
-        output_.Info(
-            command);
-
-        return ExitFromChild(
-            processes_.RunStreaming(
-                command,
-                BuildBackendPrefix(
-                    context.backend)));
+        return ExecutePlan(
+            plan,
+            processes_,
+            output_,
+            BuildBackendPrefix(
+                context.backend));
     }
 }

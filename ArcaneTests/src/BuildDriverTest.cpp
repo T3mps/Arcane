@@ -8,6 +8,7 @@
 // opt-in [build-desk] cases at the bottom (Task 3) are the only tests that
 // reach it, SKIPping unless ARCANE_BUILD_DESK names a project directory.
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +22,23 @@
 #include <Bootstrap.hpp>
 #include <Output.hpp>
 #include <Pipeline.hpp>
+
+// Task 5 (multibackend hardening): ExeDir() locates the process-fixture exe
+// beside this test exe, the same "../<project>/<project>.exe" convention
+// DeskDriverExe() (bottom of this file) already uses for arcbuild.exe --
+// moved up here (rather than duplicated) since the [build] process-fixture
+// cases need it, not just the opt-in [build-desk] ones.
+#include <Project/ModuleBuild.hpp>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace
 {
@@ -55,6 +73,20 @@ namespace
     fs::path PremakePath()
     {
         return "D:/dev/starworks/Arcane/ThirdParty/premake5/premake5.exe";
+    }
+
+    // Task 5: the process-fixture exe premake5.lua builds as its own
+    // `arcbuild-process-fixture` project, located relative to THIS test
+    // exe's own directory -- the same "../<project>/<project>.exe"
+    // convention DeskDriverExe() (bottom of this file) uses for arcbuild.exe.
+    // Unlike arcbuild.exe (opt-in [build-desk] only), this exe is a normal
+    // build dependency of ArcaneTests (premake's dependson), so the ordinary
+    // [build] cases below can rely on it always being present.
+    fs::path ProcessFixtureExe()
+    {
+        return (Arcane::Editor::ModuleBuild::ExeDir() /
+                ".." / "arcbuild-process-fixture" / "arcbuild-process-fixture.exe")
+            .lexically_normal();
     }
 
     fs::path MsBuildPath()
@@ -588,7 +620,7 @@ TEST_CASE("arcbuild selects rebuild only for forced or rebuilding slot verdicts"
 
 // ---- exit codes -------------------------------------------------------------
 
-TEST_CASE("arcbuild exit codes: probe 0 on the plain rows, 3 on the rebuild rows; a dead pipe is a refusal", "[build]")
+TEST_CASE("arcbuild exit codes: probe 0 on the plain rows, 3 on the rebuild rows", "[build]")
 {
     CHECK(ProbeExitCode(SlotState::Absent)     == kExitOk);
     CHECK(ProbeExitCode(SlotState::Match)      == kExitOk);
@@ -597,11 +629,13 @@ TEST_CASE("arcbuild exit codes: probe 0 on the plain rows, 3 on the rebuild rows
     CHECK(kExitRefused == 2);
     CHECK(kExitProbeRebuild == 3);
     // A child's own status passes through untouched (premake and msbuild
-    // both exit 1 on failure; 9009 is cmd's "not found").
-    CHECK(ExitFromChild(0)    == 0);
-    CHECK(ExitFromChild(1)    == 1);
-    CHECK(ExitFromChild(9009) == 9009);
-    CHECK(ExitFromChild(std::nullopt) == kExitRefused);
+    // both exit 1 on failure; 9009 is cmd's "not found"), and a launch
+    // failure (missing executable, a bad UTF-16 conversion, ...) is a
+    // refusal -- ExecutePlan's own tests below cover both, now that
+    // ProcessResult (std::expected<int, ProcessError>) has replaced the old
+    // std::optional<int> this test used to check directly via a since-
+    // retired ExitFromChild(std::optional<int>) (Task 5, multibackend
+    // hardening).
 }
 
 TEST_CASE("filesystem clean failure outranks backend clean failure", "[build]")
@@ -930,6 +964,301 @@ TEST_CASE("arcbuild::CleanTargets is exactly Binaries/ and Intermediate/<config>
     }
 }
 
+// ---- process execution (Task 5, multibackend hardening) --------------------
+//
+// QuoteWindowsArgument/BuildWindowsCommandLine are pure string algorithms --
+// no spawn, tested directly first (TDD). ExecutePlan is tested against a
+// FakeProcessRunner (still no spawn) for its short-circuit/error-mapping
+// policy, and against the REAL ProcessRunner for a guaranteed launch
+// failure. The remaining cases spawn the small, dependency-free
+// arcbuild-process-fixture.exe (this workspace's own build output, never an
+// external tool -- premake's dependson guarantees it exists) to prove real
+// CreateProcessW quoting/streaming/cwd/handle-inheritance behavior end to
+// end -- see ProcessFixtureMain.cpp for its protocol.
+
+TEST_CASE("arcbuild::QuoteWindowsArgument follows the real MSVC CRT argv parsing rules", "[build]")
+{
+    // Bare, no special characters: left unquoted.
+    CHECK(QuoteWindowsArgument("plain") == "plain");
+
+    // "" would vanish from the child's argv entirely if left unquoted --
+    // always quoted, even though it contains nothing to escape.
+    CHECK(QuoteWindowsArgument("") == "\"\"");
+
+    // A space forces quoting; nothing inside is otherwise touched.
+    CHECK(QuoteWindowsArgument("hello world") == "\"hello world\"");
+
+    // An embedded quote is escaped as \" (0 preceding backslashes -> 1) --
+    // and that alone forces quoting, even with no whitespace at all.
+    CHECK(QuoteWindowsArgument(R"(a"b)") == R"("a\"b")");
+
+    // One trailing backslash immediately before the closing quote WE add:
+    // doubled to 2, so the CRT reads "2n backslashes then a quote" back as
+    // n (=1) literal backslashes with the quote ending the string -- never
+    // as an escaped quote. Quoting is forced here by the embedded space.
+    CHECK(QuoteWindowsArgument(R"(C:\Program Files\)") == R"("C:\Program Files\\")");
+
+    // Multiple (3) trailing backslashes: doubled to 6, same rule, n=3.
+    CHECK(QuoteWindowsArgument(R"(C:\Program Files\\\)") ==
+          R"("C:\Program Files\\\\\\")");
+
+    // A non-ASCII byte sequence (UTF-8), forced into quoting by a space,
+    // passes straight through untouched. Deliberately a std::string, never
+    // a std::filesystem::path: path::string() on Windows narrows through
+    // the ACTIVE CODE PAGE, not UTF-8 -- irrelevant to what this function
+    // does, but a real trap for a test that routed a non-ASCII VALUE
+    // through one on its way to becoming a std::string.
+    const std::string nonAsciiWithSpace = "caf\u00e9 bar";
+    CHECK(QuoteWindowsArgument(nonAsciiWithSpace) == "\"" + nonAsciiWithSpace + "\"");
+
+    // The same non-ASCII bytes with no space: no quoting triggered at all.
+    const std::string nonAsciiBare = "caf\u00e9";
+    CHECK(QuoteWindowsArgument(nonAsciiBare) == nonAsciiBare);
+}
+
+TEST_CASE("arcbuild::BuildWindowsCommandLine quotes the executable and every argument, space-joined", "[build]")
+{
+    ProcessSpec spec;
+    spec.executable = fs::path("C:/Program Files/premake5/premake5.exe");
+    spec.arguments  = { "vs2026", "an arg with spaces", "bare" };
+
+    const std::string commandLine = BuildWindowsCommandLine(spec);
+
+    // The executable comes first and is quoted (it contains a space) --
+    // exact separator rendering is not this test's concern.
+    CHECK(commandLine.front() == '"');
+    CHECK(commandLine.find("premake5.exe\"") != std::string::npos);
+    // Bare argv entries (no whitespace) are never quoted.
+    CHECK(commandLine.find(" vs2026 ") != std::string::npos);
+    REQUIRE(commandLine.size() >= 4);
+    CHECK(commandLine.substr(commandLine.size() - 4) == "bare");
+    // An argument with a space is quoted, exactly as QuoteWindowsArgument
+    // would quote it standalone.
+    CHECK(commandLine.find("\"an arg with spaces\"") != std::string::npos);
+}
+
+namespace
+{
+    // Records every spec it was asked to run and hands back scripted
+    // results in order -- never spawns anything.
+    struct FakeProcessRunner final : IProcessRunner
+    {
+        mutable std::vector<ProcessSpec> seen;
+        std::vector<ProcessResult>       results;
+        mutable std::size_t              next = 0;
+
+        ProcessResult Run(const ProcessSpec& spec, std::string_view) const override
+        {
+            seen.push_back(spec);
+            REQUIRE(next < results.size());
+            return results[next++];
+        }
+    };
+}
+
+TEST_CASE("arcbuild::ExecutePlan stops at the first non-zero result; a child exit code passes through unchanged",
+          "[build]")
+{
+    ProcessSpec stepA; stepA.executable = "tool-a.exe";
+    ProcessSpec stepB; stepB.executable = "tool-b.exe";
+
+    RecordingOutput output;
+    FakeProcessRunner fake;
+
+    ProcessPlan twoStep;
+    twoStep.steps = { stepA, stepB };
+
+    fake.results = { ProcessResult{9}, ProcessResult{0} };
+    CHECK(ExecutePlan(twoStep, fake, output, "[ninja]") == 9);
+    CHECK(fake.seen.size() == 1);   // stepB never ran
+
+    ProcessPlan oneStep;
+    oneStep.steps = { stepA };
+
+    fake.seen.clear();
+    fake.next = 0;
+    fake.results = { ProcessResult{2} };
+    CHECK(ExecutePlan(oneStep, fake, output, "[tool]") == 2);
+    CHECK(fake.seen.size() == 1);
+
+    // An empty plan is a no-op success.
+    fake.seen.clear();
+    fake.next = 0;
+    fake.results.clear();
+    CHECK(ExecutePlan(ProcessPlan{}, fake, output, "[empty]") == kExitOk);
+    CHECK(fake.seen.empty());
+}
+
+TEST_CASE("arcbuild::ExecutePlan maps a real launch failure to kExitRefused, never a synthetic child code",
+          "[build]")
+{
+    ProcessSpec missing;
+    missing.executable = fs::path("D:/definitely/not/a/real/tool-arcbuild-should-never-find.exe");
+
+    RecordingOutput output;
+    ProcessRunner runner(output);
+
+    const ProcessResult direct = runner.Run(missing, "[missing]");
+    REQUIRE_FALSE(direct.has_value());
+    CHECK_FALSE(direct.error().message.empty());
+
+    ProcessPlan plan;
+    plan.steps = { missing };
+    CHECK(ExecutePlan(plan, runner, output, "[missing]") == kExitRefused);
+
+    // Refused, visibly: the error reached Output, not just the return code.
+    bool sawError = false;
+    for (const std::string& m : output.messages)
+        if (m.rfind("error:", 0) == 0)
+            sawError = true;
+    CHECK(sawError);
+}
+
+TEST_CASE("arcbuild::ProcessRunner: exact argv, merged stdout+stderr, cwd, and a child's exit code round-trip through a real CreateProcessW launch",
+          "[build]")
+{
+    REQUIRE(fs::is_regular_file(ProcessFixtureExe()));
+
+    TempDir cwdDir("process_runner_cwd");
+
+    RecordingOutput output;
+    ProcessRunner runner(output);
+
+    ProcessSpec spec;
+    spec.executable       = ProcessFixtureExe();
+    spec.workingDirectory = cwdDir.path;
+    spec.arguments        =
+    {
+        "",                                 // empty argv entry
+        "has space",                        // whitespace forces quoting
+        R"(has"quote)",                     // embedded quote
+        R"(C:\Program Files\)",             // space + one trailing backslash
+        "caf\u00e9",                        // non-ASCII, bare (no quoting)
+        "--stderr", "err-line",
+        "--exit", "5",
+    };
+
+    const ProcessResult result = runner.Run(spec, "[fixture]");
+    REQUIRE(result.has_value());
+    CHECK(*result == 5);
+
+    std::vector<std::string> childLines;
+    for (const std::string& m : output.messages)
+        if (m.rfind("[fixture]:", 0) == 0)
+            childLines.push_back(m.substr(std::string("[fixture]:").size()));
+
+    // argv round-trips exactly, in order, through real Win32 quoting on the
+    // way out and the real CRT argv split on the fixture's own way in.
+    REQUIRE(childLines.size() >= 7);
+    CHECK(childLines[0] == "ARG:0:");
+    CHECK(childLines[1] == "ARG:1:has space");
+    CHECK(childLines[2] == R"(ARG:2:has"quote)");
+    CHECK(childLines[3] == R"(ARG:3:C:\Program Files\)");
+    CHECK(childLines[4] == std::string("ARG:4:") + "caf\u00e9");
+
+    bool sawCwd = false;
+    bool sawStderrLine = false;
+    for (const std::string& line : childLines)
+    {
+        if (line.rfind("CWD:", 0) == 0)
+        {
+            sawCwd = true;
+            CHECK(fs::equivalent(fs::path(line.substr(4)), cwdDir.path));
+        }
+        if (line == "err-line")
+            sawStderrLine = true;
+    }
+    CHECK(sawCwd);
+    CHECK(sawStderrLine);   // stderr is MERGED into the very same stream Child() sees
+}
+
+#ifdef _WIN32
+TEST_CASE("arcbuild::ProcessRunner: lpApplicationName pins the exact binary despite a same-named decoy earlier on PATH",
+          "[build]")
+{
+    REQUIRE(fs::is_regular_file(ProcessFixtureExe()));
+
+    const char* systemRoot = std::getenv("SystemRoot");
+    REQUIRE(systemRoot != nullptr);
+    const fs::path cmdExe = fs::path(systemRoot) / "System32" / "cmd.exe";
+    REQUIRE(fs::is_regular_file(cmdExe));
+
+    TempDir decoyDir("process_runner_path_decoy");
+    const fs::path decoyExe = decoyDir.path / ProcessFixtureExe().filename();
+
+    std::error_code copyEc;
+    fs::copy_file(cmdExe, decoyExe, fs::copy_options::overwrite_existing, copyEc);
+    REQUIRE_FALSE(copyEc);
+
+    const char* originalPath = std::getenv("PATH");
+    const std::string combinedPath =
+        decoyDir.path.string() + ";" + (originalPath ? originalPath : "");
+    EnvOverride path("PATH", combinedPath);
+
+    RecordingOutput output;
+    ProcessRunner runner(output);
+
+    ProcessSpec spec;
+    spec.executable = ProcessFixtureExe();   // the REAL fixture's absolute path
+    spec.arguments  = { "sentinel-arg", "--exit", "0" };
+
+    const ProcessResult result = runner.Run(spec, "[fixture]");
+    REQUIRE(result.has_value());
+    CHECK(*result == 0);
+
+    // Only the real fixture speaks this protocol -- cmd.exe, launched with
+    // the same argv, would not print an "ARG:0:sentinel-arg" line.
+    bool sawFixtureProtocol = false;
+    for (const std::string& m : output.messages)
+        if (m == "[fixture]:ARG:0:sentinel-arg")
+            sawFixtureProtocol = true;
+    CHECK(sawFixtureProtocol);
+}
+
+TEST_CASE("arcbuild::ProcessRunner: PROC_THREAD_ATTRIBUTE_HANDLE_LIST inherits only the pipe write handle, never broad inheritance",
+          "[build]")
+{
+    REQUIRE(fs::is_regular_file(ProcessFixtureExe()));
+
+    // An unrelated, deliberately inheritable handle this process owns but
+    // never puts in ANY handle list -- if ProcessRunner::Run relied on plain
+    // bInheritHandles=TRUE without PROC_THREAD_ATTRIBUTE_HANDLE_LIST, this
+    // would inherit into the child right alongside the pipe write handle.
+    SECURITY_ATTRIBUTES sentinelAttributes{};
+    sentinelAttributes.nLength       = sizeof(sentinelAttributes);
+    sentinelAttributes.bInheritHandle = TRUE;
+
+    HANDLE sentinel = ::CreateEventW(&sentinelAttributes, TRUE, FALSE, nullptr);
+    REQUIRE(sentinel != nullptr);
+
+    RecordingOutput output;
+    ProcessRunner runner(output);
+
+    ProcessSpec spec;
+    spec.executable = ProcessFixtureExe();
+    spec.arguments  =
+    {
+        // The sentinel's numeric value, as ORDINARY text -- never inherited,
+        // so it names nothing valid in the child's own handle table.
+        "--probe-handle", std::to_string(reinterpret_cast<std::uintptr_t>(sentinel)),
+        "--exit", "0",
+    };
+
+    const ProcessResult result = runner.Run(spec, "[fixture]");
+    ::CloseHandle(sentinel);
+
+    REQUIRE(result.has_value());
+    CHECK(*result == 0);   // the merged stdout/stderr pipe -- the ONE handle
+                            // that IS in the list -- kept working throughout
+
+    bool sawInvalid = false;
+    for (const std::string& m : output.messages)
+        if (m == "[fixture]:HANDLE:invalid")
+            sawInvalid = true;
+    CHECK(sawInvalid);
+}
+#endif
+
 // ---- backend resolver --------------------------------------------------------
 
 TEST_CASE("arcbuild::BackendResolver refuses BuildBackend::None for build resolution", "[build]")
@@ -1095,7 +1424,8 @@ TEST_CASE("arcbuild::BackendResolver stores the module stem in BackendContext::s
 // ---------------------------------------------------------------------------
 
 #include <cstdlib>
-#include <Project/ModuleBuild.hpp>        // RunCapture + ExeDir (editor helpers compiled into the tests)
+// ModuleBuild.hpp (RunCapture + ExeDir) is included near the top of this
+// file now -- the [build] process-fixture cases need ExeDir() too.
 #include <Arcane/Build/Toolchain.hpp>     // DiscoverSolution (the post-generate check)
 
 namespace

@@ -2,6 +2,7 @@
 
 #include "Output.hpp"
 
+#include <expected>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -16,8 +17,8 @@ namespace arcbuild
     // time; `workingDirectory`, when set, is the process's cwd. Compose*
     // (Compose.hpp) builds these. Nothing here is ever handed to a shell --
     // RenderProcess (Compose.hpp) produces a readable rendering for logging
-    // only, and the eventual process-launch call sites (multibackend
-    // hardening Task 5) consume the fields directly.
+    // only, and ProcessRunner::Run/ExecutePlan below are the eventual
+    // process-launch call sites (multibackend hardening Task 5).
     struct ProcessSpec
     {
         std::filesystem::path                executable;
@@ -34,7 +35,42 @@ namespace arcbuild
         std::vector<ProcessSpec> steps;
     };
 
-    class ProcessRunner
+    // A launch that never produced a child exit code at all -- UTF-16
+    // conversion failed, CreateProcessW itself failed (missing executable,
+    // access denied, a bad working directory, ...), or a Win32 handle/
+    // attribute-list step failed. Distinct from a child that ran to
+    // completion and exited non-zero, which is an ordinary ProcessResult
+    // VALUE, never an error -- see ExecutePlan's mapping of the two.
+    struct ProcessError
+    {
+        std::string message;
+    };
+
+    // A completed launch's exit code, or the launch failure that prevented
+    // one from ever existing.
+    using ProcessResult = std::expected<int, ProcessError>;
+
+    // The seam BuildExecutor and ExecutePlan depend on -- never the concrete
+    // ProcessRunner directly -- so a fake can record the specs it was asked
+    // to run and hand back scripted results without spawning anything real
+    // ([build] tests; the process-fixture integration tests below exercise
+    // the real ProcessRunner instead).
+    class IProcessRunner
+    {
+    public:
+        virtual ~IProcessRunner() = default;
+
+        [[nodiscard]]
+        virtual ProcessResult Run(
+            const ProcessSpec& spec,
+            std::string_view   prefix) const = 0;
+    };
+
+    // The real Windows implementation: CreateProcessW directly, with no
+    // shell and no libc process-spawn fallback of any kind -- see
+    // Process.cpp for the quoting and handle-inheritance contract this type
+    // owns.
+    class ProcessRunner final : public IProcessRunner
     {
     public:
         explicit ProcessRunner(
@@ -44,11 +80,31 @@ namespace arcbuild
         }
 
         [[nodiscard]]
-        std::optional<int> RunStreaming(
-            const std::string& commandLine,
-            std::string_view prefix) const;
+        ProcessResult Run(
+            const ProcessSpec& spec,
+            std::string_view   prefix) const override;
 
     private:
         IOutput& output_;
     };
+
+    // Windows command-line quoting -- the real MSVC CRT argv parsing rules
+    // (see Process.cpp for the exact algorithm and its citation). Pure
+    // string algorithms with no Win32 calls of their own: always compiled
+    // and directly unit-tested, even though only ProcessRunner::Run's
+    // CreateProcessW call ever actually consumes their output.
+    [[nodiscard]] std::string QuoteWindowsArgument(std::string_view argument);
+    [[nodiscard]] std::string BuildWindowsCommandLine(const ProcessSpec& spec);
+
+    // Runs an ORDERED ProcessPlan against `runner`, logging RenderProcess
+    // (Compose.hpp) to `output` before each launch. Stops at the first step
+    // whose result is a launch error (logged, then mapped to kExitRefused --
+    // Exit.hpp) or a non-zero child exit code (returned unchanged, never
+    // re-mapped). An empty plan, or a plan whose every step exits 0, is
+    // kExitOk.
+    [[nodiscard]] int ExecutePlan(
+        const ProcessPlan& plan,
+        IProcessRunner&    runner,
+        IOutput&           output,
+        std::string_view   prefix);
 }

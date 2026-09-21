@@ -32,7 +32,7 @@ namespace arcbuild
     public:
         BuildExecutor(
             BackendResolver& backends,
-            ProcessRunner& processes,
+            IProcessRunner& processes,
             IOutput& output)
             : backends_(backends),
             processes_(processes),
@@ -55,7 +55,7 @@ namespace arcbuild
 
     private:
         BackendResolver& backends_;
-        ProcessRunner&   processes_;
+        IProcessRunner&  processes_;
         IOutput&         output_;
     };
 }
