@@ -1,17 +1,23 @@
-// arcbuild's PURE core ([build]): command + flag parsing over Arcane::Cli,
+// arcbuild's core and orchestration ([build]): command + flag parsing over Arcane::Cli,
 // the --sdk / ARCANE_SDK precedence, the s4.3 decision table, exit-code
 // mapping, path conventions and every composed child command line. Nothing
-// here spawns a process or reads a PE file -- main.cpp does both, and the
+// here spawns a process or reads a PE file; temporary projects cover bootstrap
+// and missing-slot inspection. The
 // opt-in [build-desk] cases at the bottom (Task 3) are the only tests that
 // reach it, SKIPping unless ARCANE_BUILD_DESK names a project directory.
 
 #include <filesystem>
+#include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <Driver.hpp>
+#include <Bootstrap.hpp>
+#include <Output.hpp>
+#include <Pipeline.hpp>
 
 namespace
 {
@@ -51,6 +57,170 @@ namespace
     fs::path MsBuildPath()
     {
         return "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/MSBuild.exe";
+    }
+
+    struct TempArcProject
+    {
+        fs::path root;
+
+        explicit TempArcProject(std::string_view leaf)
+            : root(fs::temp_directory_path() / "arcbuild_orchestration_test" / leaf)
+        {
+            std::error_code ec;
+            fs::remove_all(root, ec);
+            fs::create_directories(root);
+
+            std::ofstream manifest(root / "Fixture.arcproj", std::ios::binary);
+            manifest << R"({
+  "formatVersion": 2,
+  "name": "Fixture",
+  "engine": { "abi": 37 },
+  "gameModule": "Fixture.dll"
+})";
+        }
+
+        ~TempArcProject()
+        {
+            std::error_code ec;
+            fs::remove_all(root, ec);
+        }
+    };
+
+    struct FakeEnvironment final : IEnvironment
+    {
+        std::optional<fs::path> sdk;
+        mutable int             setCalls = 0;
+        mutable fs::path        exported;
+        bool                    setResult = true;
+
+        std::optional<fs::path> ArcaneSdk() const override
+        {
+            return sdk;
+        }
+
+        bool SetArcaneSdk(const fs::path& root) const override
+        {
+            ++setCalls;
+            exported = root;
+            return setResult;
+        }
+    };
+
+    struct RecordingOutput final : IOutput
+    {
+        bool                     quiet = false;
+        mutable std::vector<std::string> messages;
+
+        void SetQuiet(bool value) noexcept override
+        {
+            quiet = value;
+        }
+
+        void Info(std::string_view message) const override
+        {
+            if (!quiet)
+                messages.emplace_back("info:" + std::string(message));
+        }
+
+        void Always(std::string_view message) const override
+        {
+            messages.emplace_back("always:" + std::string(message));
+        }
+
+        void Error(std::string_view message) const override
+        {
+            messages.emplace_back("error:" + std::string(message));
+        }
+
+        void Child(std::string_view prefix, std::string_view message) const override
+        {
+            messages.emplace_back(std::string(prefix) + ":" + std::string(message));
+        }
+    };
+
+    struct RecordingExecutor final : IBuildExecutor
+    {
+        std::vector<std::string>& events;
+        int generateExit = kExitOk;
+        int buildExit = kExitOk;
+        int cleanExit = kExitOk;
+
+        explicit RecordingExecutor(std::vector<std::string>& recorded)
+            : events(recorded)
+        {
+        }
+
+        int Generate(const DriverContext&) const override
+        {
+            events.emplace_back("generate");
+            return generateExit;
+        }
+
+        int Build(const DriverContext&, BuildOperation operation) const override
+        {
+            events.emplace_back(operation == BuildOperation::Rebuild
+                ? "rebuild"
+                : "build");
+            return buildExit;
+        }
+
+        int CleanBackend(const DriverContext&) const override
+        {
+            events.emplace_back("backend-clean");
+            return cleanExit;
+        }
+    };
+
+    struct RecordingSlots final : ISlotInspector
+    {
+        std::vector<std::string>& events;
+        SlotState state = SlotState::Match;
+
+        explicit RecordingSlots(std::vector<std::string>& recorded)
+            : events(recorded)
+        {
+        }
+
+        SlotProbe Inspect(const ProjectLayout&, std::string_view) const override
+        {
+            events.emplace_back("inspect");
+            SlotProbe probe;
+            probe.state = state;
+            return probe;
+        }
+
+        std::string Describe(const SlotProbe&, std::string_view, const Verdict&) const override
+        {
+            return "probe row";
+        }
+    };
+
+    struct RecordingCleaner final : IProjectCleaner
+    {
+        std::vector<std::string>& events;
+        int cleanExit = kExitOk;
+
+        explicit RecordingCleaner(std::vector<std::string>& recorded)
+            : events(recorded)
+        {
+        }
+
+        int Clean(const ProjectLayout&, std::string_view) const override
+        {
+            events.emplace_back("filesystem-clean");
+            return cleanExit;
+        }
+    };
+
+    DriverContext PipelineContext(Command command)
+    {
+        DriverContext context;
+        context.request.command = command;
+        context.request.action = "vs2026";
+        context.backend = BuildBackend::MsBuild;
+        context.sdkRoot = fs::path("D:/sdk");
+        context.project = AphelyonProject();
+        return context;
     }
 }
 
@@ -215,6 +385,59 @@ TEST_CASE("arcbuild::ResolveSdk: --sdk beats ARCANE_SDK beats refusal", "[build]
     CHECK_FALSE(ResolveSdk(std::nullopt, "").has_value());   // set-but-empty is unset
 }
 
+// ---- bootstrap --------------------------------------------------------------
+
+TEST_CASE("arcbuild probe bootstrap needs no SDK and does not export one", "[build]")
+{
+    TempArcProject project("probe_without_sdk");
+    FakeEnvironment environment;
+    Bootstrap bootstrap(environment);
+
+    Request request;
+    request.command = Command::Probe;
+    request.project = project.root;
+
+    const BootstrapResult result = bootstrap.Prepare(request);
+    REQUIRE(result.has_value());
+    CHECK_FALSE(result->sdkRoot.has_value());
+    CHECK(environment.setCalls == 0);
+}
+
+TEST_CASE("arcbuild non-probe bootstrap refuses a missing SDK", "[build]")
+{
+    TempArcProject project("build_without_sdk");
+    FakeEnvironment environment;
+    Bootstrap bootstrap(environment);
+
+    Request request;
+    request.command = Command::Build;
+    request.project = project.root;
+
+    const BootstrapResult result = bootstrap.Prepare(request);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().find("no SDK") != std::string::npos);
+    CHECK(environment.setCalls == 0);
+}
+
+TEST_CASE("arcbuild explicit SDK is absolutized and exported for non-probe commands", "[build]")
+{
+    TempArcProject project("explicit_sdk");
+    FakeEnvironment environment;
+    Bootstrap bootstrap(environment);
+
+    Request request;
+    request.command = Command::Generate;
+    request.project = project.root;
+    request.sdk = fs::path("relative-sdk-root");
+
+    const BootstrapResult result = bootstrap.Prepare(request);
+    REQUIRE(result.has_value());
+    REQUIRE(result->sdkRoot.has_value());
+    CHECK(result->sdkRoot->is_absolute());
+    CHECK(environment.setCalls == 1);
+    CHECK(environment.exported == *result->sdkRoot);
+}
+
 // ---- the s4.3 decision table ---------------------------------------------------
 
 TEST_CASE("arcbuild::ConfigWantsDebugCrt: Debug only; Dist maps to Release for the probe", "[build]")
@@ -274,6 +497,14 @@ TEST_CASE("arcbuild::Decide: plain for absent/match and rebuild for mismatch/unr
     }
 }
 
+TEST_CASE("arcbuild selects rebuild only for forced or rebuilding slot verdicts", "[build]")
+{
+    CHECK(OperationForBuild(false, Decide(SlotState::Absent)) == BuildOperation::Build);
+    CHECK(OperationForBuild(false, Decide(SlotState::Match)) == BuildOperation::Build);
+    CHECK(OperationForBuild(false, Decide(SlotState::Mismatch)) == BuildOperation::Rebuild);
+    CHECK(OperationForBuild(true, Decide(SlotState::Match)) == BuildOperation::Rebuild);
+}
+
 // ---- exit codes -------------------------------------------------------------
 
 TEST_CASE("arcbuild exit codes: probe 0 on the plain rows, 3 on the rebuild rows; a dead pipe is a refusal", "[build]")
@@ -290,6 +521,148 @@ TEST_CASE("arcbuild exit codes: probe 0 on the plain rows, 3 on the rebuild rows
     CHECK(ExitFromChild(1)    == 1);
     CHECK(ExitFromChild(9009) == 9009);
     CHECK(ExitFromChild(std::nullopt) == kExitRefused);
+}
+
+TEST_CASE("filesystem clean failure outranks backend clean failure", "[build]")
+{
+    CHECK(MergeCleanResults(0, 0) == 0);
+    CHECK(MergeCleanResults(7, 0) == 7);
+    CHECK(MergeCleanResults(0, kExitRefused) == kExitRefused);
+    CHECK(MergeCleanResults(7, kExitRefused) == kExitRefused);
+}
+
+// ---- orchestration ----------------------------------------------------------
+
+TEST_CASE("arcbuild build orchestration orders work and short-circuits generation failures", "[build]")
+{
+    std::vector<std::string> events;
+    RecordingExecutor executor{ events };
+    RecordingSlots slots{ events };
+    RecordingCleaner cleaner{ events };
+    RecordingOutput output;
+    BuildPipeline pipeline(executor, slots, cleaner, output);
+
+    SECTION("ordinary build generates, inspects, then builds")
+    {
+        CHECK(pipeline.Run(PipelineContext(Command::Build)) == kExitOk);
+        CHECK(events == std::vector<std::string>{ "generate", "inspect", "build" });
+    }
+
+    SECTION("failed generation stops before inspection and build")
+    {
+        executor.generateExit = 17;
+        CHECK(pipeline.Run(PipelineContext(Command::Build)) == 17);
+        CHECK(events == std::vector<std::string>{ "generate" });
+    }
+
+    SECTION("forced build rebuilds without inspecting the slot")
+    {
+        DriverContext context = PipelineContext(Command::Build);
+        context.request.forceRebuild = true;
+        CHECK(pipeline.Run(context) == kExitOk);
+        CHECK(events == std::vector<std::string>{ "generate", "rebuild" });
+    }
+}
+
+TEST_CASE("arcbuild probe only inspects and reports even when output is quiet", "[build]")
+{
+    std::vector<std::string> events;
+    RecordingExecutor executor{ events };
+    RecordingSlots slots{ events };
+    RecordingCleaner cleaner{ events };
+    RecordingOutput output;
+    output.SetQuiet(true);
+    BuildPipeline pipeline(executor, slots, cleaner, output);
+
+    DriverContext context = PipelineContext(Command::Probe);
+    context.sdkRoot.reset();
+    CHECK(pipeline.Run(context) == kExitOk);
+    CHECK(events == std::vector<std::string>{ "inspect" });
+    REQUIRE(output.messages.size() == 1);
+    CHECK(output.messages[0] == "always:probe row");
+}
+
+TEST_CASE("arcbuild probe status reports an absent SDK", "[build]")
+{
+    std::vector<std::string> events;
+    RecordingExecutor executor{ events };
+    RecordingSlots slots{ events };
+    RecordingCleaner cleaner{ events };
+    RecordingOutput output;
+    BuildPipeline pipeline(executor, slots, cleaner, output);
+    DriverContext context = PipelineContext(Command::Probe);
+    context.sdkRoot.reset();
+    slots.state = SlotState::Mismatch;
+
+    CHECK(pipeline.Run(context) == kExitProbeRebuild);
+    CHECK(events == std::vector<std::string>{ "inspect" });
+    REQUIRE(output.messages.size() == 2);
+    CHECK(output.messages[0].find("against SDK <none>") != std::string::npos);
+    CHECK(output.messages[1] == "always:probe row");
+}
+
+TEST_CASE("arcbuild slot inspection distinguishes a missing slot from an unreadable slot", "[build]")
+{
+    TempArcProject fixture("slot_inspection");
+    ProjectLayout project;
+    project.root = fixture.root;
+    project.gameModule = "Fixture.dll";
+    SlotInspector inspector;
+
+    SECTION("missing Binaries directory")
+    {
+        CHECK(inspector.Inspect(project, "Debug").state == SlotState::Absent);
+    }
+
+    SECTION("missing module file")
+    {
+        fs::create_directory(project.root / "Binaries");
+        CHECK(inspector.Inspect(project, "Debug").state == SlotState::Absent);
+    }
+
+    SECTION("directory in place of module")
+    {
+        fs::create_directories(project.root / "Binaries" / "Fixture.dll");
+        CHECK(inspector.Inspect(project, "Debug").state == SlotState::Unreadable);
+    }
+}
+
+TEST_CASE("arcbuild errors remain visible under quiet output", "[build]")
+{
+    std::vector<std::string> events;
+    RecordingExecutor executor{ events };
+    RecordingSlots slots{ events };
+    RecordingCleaner cleaner{ events };
+    RecordingOutput output;
+    output.SetQuiet(true);
+    BuildPipeline pipeline(executor, slots, cleaner, output);
+
+    DriverContext context = PipelineContext(Command::Build);
+    context.backend = BuildBackend::None;
+
+    CHECK(pipeline.Run(context) == kExitRefused);
+    CHECK(events.empty());
+    REQUIRE(output.messages.size() == 1);
+    CHECK(output.messages[0].rfind("error:", 0) == 0);
+}
+
+TEST_CASE("arcbuild clean runs filesystem cleanup after a backend failure", "[build]")
+{
+    std::vector<std::string> events;
+    RecordingExecutor executor{ events };
+    executor.cleanExit = 7;
+    RecordingSlots slots{ events };
+    RecordingCleaner cleaner{ events };
+    RecordingOutput output;
+    BuildPipeline pipeline(executor, slots, cleaner, output);
+
+    CHECK(pipeline.Run(PipelineContext(Command::Clean)) == 7);
+    CHECK(events == std::vector<std::string>{ "backend-clean", "filesystem-clean" });
+
+    events.clear();
+    cleaner.cleanExit = kExitRefused;
+    CHECK(pipeline.Run(PipelineContext(Command::Clean)) == kExitRefused);
+    CHECK(events == std::vector<std::string>{ "backend-clean", "filesystem-clean" });
 }
 
 // ---- paths ------------------------------------------------------------------

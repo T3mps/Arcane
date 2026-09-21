@@ -1127,6 +1127,16 @@ project "ArcaneTests"
         "%{wks.location}/arcbuild/src/Slot.cpp",
         "%{wks.location}/arcbuild/src/ProjectLayout.cpp",
         "%{wks.location}/arcbuild/src/Compose.cpp",
+        -- Orchestration correctness-stage seams: source-compile the bootstrap,
+        -- output, probe, pipeline, and filesystem cleaner into the tests so
+        -- [build] can drive them through narrow recording fakes. Process.cpp
+        -- and main.cpp remain excluded; ordinary [build] tests never spawn.
+        "%{wks.location}/arcbuild/src/Bootstrap.cpp",
+        "%{wks.location}/arcbuild/src/Environment.cpp",
+        "%{wks.location}/arcbuild/src/Output.cpp",
+        "%{wks.location}/arcbuild/src/Pipeline.cpp",
+        "%{wks.location}/arcbuild/src/Probe.cpp",
+        "%{wks.location}/arcbuild/src/ProjectCleaner.cpp",
         -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
         -- over the same Arcane::Cli arcbuild's Request.cpp above already
         -- source-compiles) and its `--report` census (ServerReport) source-
