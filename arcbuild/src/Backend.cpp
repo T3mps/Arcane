@@ -2,15 +2,22 @@
 
 #include <Arcane/Build/Toolchain.hpp>
 
+#include <string_view>
+
 namespace arcbuild
 {
     namespace
     {
-        std::optional<std::filesystem::path> NonEmpty(
-            std::filesystem::path path)
+        std::expected<std::filesystem::path, std::string> RequireTool(
+            std::filesystem::path path,
+            std::string_view description)
         {
             if (path.empty())
-                return std::nullopt;
+            {
+                return std::unexpected(
+                    "could not locate " +
+                    std::string(description));
+            }
 
             return path;
         }
@@ -33,39 +40,54 @@ namespace arcbuild
         }
     }
 
-    std::optional<std::filesystem::path>
+    std::expected<std::filesystem::path, std::string>
         BackendResolver::ResolvePremake(
             const std::filesystem::path& sdkRoot) const
     {
-        return NonEmpty(
+        return RequireTool(
             Arcane::Toolchain::ResolvePremake(
-                sdkRoot));
+                sdkRoot),
+            "Premake (checked '" +
+                (sdkRoot / "ThirdParty" / "premake5").generic_string() +
+                "' and PATH)");
     }
 
-    std::optional<std::filesystem::path>
+    std::expected<std::filesystem::path, std::string>
         BackendResolver::ResolveBuilder(
             BuildBackend backend) const
     {
         switch (backend)
         {
         case BuildBackend::MsBuild:
-            return NonEmpty(
-                Arcane::Toolchain::ResolveMsBuild());
+            return RequireTool(
+                Arcane::Toolchain::ResolveMsBuild(),
+                "MSBuild (checked vswhere and PATH)");
 
         case BuildBackend::Make:
+            return RequireTool(
+                Arcane::Toolchain::ResolveMake(),
+                "Make (checked PATH)");
+
         case BuildBackend::Ninja:
+            return RequireTool(
+                Arcane::Toolchain::ResolveNinja(),
+                "Ninja (checked PATH)");
+
         case BuildBackend::XcodeBuild:
-            // Concrete discovery for these backends lands in the next stage.
-            return std::nullopt;
+            return RequireTool(
+                Arcane::Toolchain::ResolveXcodeBuild(),
+                "xcodebuild (macOS only)");
 
         case BuildBackend::None:
-            return std::nullopt;
+            return std::unexpected(
+                "no build backend is available for this action");
         }
 
-        return std::nullopt;
+        return std::unexpected(
+            "unknown build backend");
     }
 
-    std::optional<BackendContext>
+    std::expected<BackendContext, std::string>
         BackendResolver::ResolveBackendContext(
             BuildBackend backend,
             const ProjectLayout& project) const
@@ -90,7 +112,10 @@ namespace arcbuild
                 ec) ||
                 ec)
             {
-                return std::nullopt;
+                return std::unexpected(
+                    "no generated solution file at '" +
+                    solution.generic_string() +
+                    "' -- run generate first");
             }
 
             return BackendContext
@@ -110,7 +135,10 @@ namespace arcbuild
                 ec) ||
                 ec)
             {
-                return std::nullopt;
+                return std::unexpected(
+                    "no generated Makefile at '" +
+                    makefile.generic_string() +
+                    "' -- run generate first");
             }
 
             return BackendContext
@@ -130,7 +158,10 @@ namespace arcbuild
                 ec) ||
                 ec)
             {
-                return std::nullopt;
+                return std::unexpected(
+                    "no generated build.ninja at '" +
+                    ninjaFile.generic_string() +
+                    "' -- run generate first");
             }
 
             return BackendContext
@@ -151,7 +182,10 @@ namespace arcbuild
                 ec) ||
                 ec)
             {
-                return std::nullopt;
+                return std::unexpected(
+                    "no generated Xcode project at '" +
+                    xcodeProject.generic_string() +
+                    "' -- run generate first");
             }
 
             return BackendContext
@@ -162,9 +196,11 @@ namespace arcbuild
         }
 
         case BuildBackend::None:
-            return std::nullopt;
+            return std::unexpected(
+                "no build backend is available for this action");
         }
 
-        return std::nullopt;
+        return std::unexpected(
+            "unknown build backend");
     }
 }

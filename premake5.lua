@@ -1137,6 +1137,12 @@ project "ArcaneTests"
         "%{wks.location}/arcbuild/src/Pipeline.cpp",
         "%{wks.location}/arcbuild/src/Probe.cpp",
         "%{wks.location}/arcbuild/src/ProjectCleaner.cpp",
+        -- Multibackend hardening Task 3: BackendResolver wraps Arcane::
+        -- Toolchain's real tool discovery in std::expected, no process spawn
+        -- of its own, so it source-compiles the same "pure logic" way as its
+        -- siblings above -- BuildDriverTest.cpp's backend-resolver [build]
+        -- units drive it directly.
+        "%{wks.location}/arcbuild/src/Backend.cpp",
         -- Core-DLL split Plan 1, Task 6: ArcaneServer's own CLI (ServerConfig,
         -- over the same Arcane::Cli arcbuild's Request.cpp above already
         -- source-compiles) and its `--report` census (ServerReport) source-

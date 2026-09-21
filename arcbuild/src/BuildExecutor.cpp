@@ -16,9 +16,7 @@ namespace arcbuild
         if (!premake)
         {
             output_.Error(
-                "could not locate Premake in SDK '" +
-                context.sdkRoot->generic_string() +
-                "'");
+                premake.error());
 
             return kExitRefused;
         }
@@ -49,11 +47,7 @@ namespace arcbuild
         if (!builder)
         {
             output_.Error(
-                "no builder available for backend '" +
-                std::string(
-                    BuildBackendName(
-                        context.backend)) +
-                "'");
+                builder.error());
 
             return kExitRefused;
         }
@@ -66,12 +60,7 @@ namespace arcbuild
         if (!backendContext)
         {
             output_.Error(
-                "could not locate generated build context "
-                "for backend '" +
-                std::string(
-                    BuildBackendName(
-                        context.backend)) +
-                "'");
+                backendContext.error());
 
             return kExitRefused;
         }
@@ -128,11 +117,8 @@ namespace arcbuild
         if (!builder)
         {
             output_.Info(
-                "no builder available for backend '" +
-                std::string(
-                    BuildBackendName(
-                        context.backend)) +
-                "' -- running filesystem clean only");
+                builder.error() +
+                " -- running filesystem clean only");
 
             return kExitOk;
         }
@@ -145,11 +131,8 @@ namespace arcbuild
         if (!backendContext)
         {
             output_.Info(
-                "no generated build context for backend '" +
-                std::string(
-                    BuildBackendName(
-                        context.backend)) +
-                "' -- running filesystem clean only");
+                backendContext.error() +
+                " -- running filesystem clean only");
 
             return kExitOk;
         }

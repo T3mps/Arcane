@@ -1,11 +1,14 @@
 // arcbuild's core and orchestration ([build]): command + flag parsing over Arcane::Cli,
 // the --sdk / ARCANE_SDK precedence, the s4.3 decision table, exit-code
-// mapping, path conventions and every composed child command line. Nothing
-// here spawns a process or reads a PE file; temporary projects cover bootstrap
-// and missing-slot inspection. The
+// mapping, path conventions, BackendResolver's expected-based tool/context
+// resolution, and every composed child command line. Nothing here spawns a
+// process or reads a PE file (BackendResolver tests that need a deterministic
+// "nothing on PATH" answer override PATH/PATHEXT for their own scope only);
+// temporary projects cover bootstrap and missing-slot inspection. The
 // opt-in [build-desk] cases at the bottom (Task 3) are the only tests that
 // reach it, SKIPping unless ARCANE_BUILD_DESK names a project directory.
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -84,6 +87,69 @@ namespace
             std::error_code ec;
             fs::remove_all(root, ec);
         }
+    };
+
+    // A plain, empty scratch directory -- BackendResolver's tool-lookup
+    // tests use this both as a bare "no bundled Premake here" SDK root and
+    // as a controlled, empty PATH entry.
+    struct TempDir
+    {
+        fs::path path;
+        explicit TempDir(std::string_view tag)
+            : path(fs::temp_directory_path() / "arcbuild_orchestration_test" /
+                   (std::string("dir_") + std::string(tag)))
+        {
+            std::error_code ec;
+            fs::remove_all(path, ec);
+            fs::create_directories(path);
+        }
+        ~TempDir()
+        {
+            std::error_code ec;
+            fs::remove_all(path, ec);
+        }
+    };
+
+    // RAII process-environment override. BackendResolver::ResolveBuilder and
+    // ::ResolvePremake ultimately call into Arcane::Toolchain's Resolve*
+    // functions, which read PATH/PATHEXT live via std::getenv -- so proving
+    // "nothing on PATH" (and therefore a descriptive std::unexpected rather
+    // than an optimistic bare name) needs a real, restored-on-scope-exit
+    // environment mutation, same technique as ToolchainTest.cpp.
+    class EnvOverride
+    {
+    public:
+        EnvOverride(const char* name, const std::string& value)
+            : name_(name)
+        {
+            if (const char* existing = std::getenv(name))
+                previous_ = existing;
+            Set(value);
+        }
+
+        ~EnvOverride()
+        {
+            Set(previous_.value_or(std::string()));
+        }
+
+        EnvOverride(const EnvOverride&) = delete;
+        EnvOverride& operator=(const EnvOverride&) = delete;
+
+    private:
+        void Set(const std::string& value)
+        {
+#ifdef _WIN32
+            _putenv_s(name_.c_str(), value.c_str());
+#else
+            if (value.empty())
+                unsetenv(name_.c_str());
+            else
+                setenv(name_.c_str(), value.c_str(), 1);
+#endif
+        }
+
+        std::string name_;
+        std::optional<std::string> previous_;
     };
 
     struct FakeEnvironment final : IEnvironment
@@ -729,6 +795,102 @@ TEST_CASE("arcbuild::CleanTargets is exactly Binaries/ and Intermediate/<config>
         CHECK(s.find("Saved") == std::string::npos);
         CHECK(s.find("Artifacts") == std::string::npos);
         CHECK(s.find(".slnx") == std::string::npos);
+    }
+}
+
+// ---- backend resolver --------------------------------------------------------
+
+TEST_CASE("arcbuild::BackendResolver refuses BuildBackend::None for build resolution", "[build]")
+{
+    const BackendResolver resolver;
+
+    const auto builder = resolver.ResolveBuilder(BuildBackend::None);
+    REQUIRE_FALSE(builder.has_value());
+    CHECK_FALSE(builder.error().empty());
+
+    const auto context = resolver.ResolveBackendContext(BuildBackend::None, AphelyonProject());
+    REQUIRE_FALSE(context.has_value());
+    CHECK_FALSE(context.error().empty());
+}
+
+TEST_CASE("arcbuild::BackendResolver turns an empty low-level tool lookup into a descriptive std::unexpected",
+          "[build]")
+{
+    // A controlled, empty PATH: none of Premake/Make/Ninja are really
+    // findable there, so each lookup below exercises the "concrete
+    // discovery came back empty" branch deterministically, regardless of
+    // what happens to be installed on this desk.
+    TempDir emptyPath("backend_resolver_missing_tools");
+    EnvOverride path("PATH", emptyPath.path.string());
+    EnvOverride pathExt("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+
+    const BackendResolver resolver;
+
+    SECTION("Premake: no bundled copy in the SDK root, nothing on PATH")
+    {
+        TempDir sdkRoot("backend_resolver_premake_sdk");
+        const auto result = resolver.ResolvePremake(sdkRoot.path);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().find("Premake") != std::string::npos);
+    }
+
+    SECTION("Make: nothing on PATH")
+    {
+        const auto result = resolver.ResolveBuilder(BuildBackend::Make);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().find("Make") != std::string::npos);
+    }
+
+    SECTION("Ninja: nothing on PATH")
+    {
+        const auto result = resolver.ResolveBuilder(BuildBackend::Ninja);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().find("Ninja") != std::string::npos);
+    }
+
+    SECTION("XcodeBuild: no macOS toolchain to find")
+    {
+        const auto result = resolver.ResolveBuilder(BuildBackend::XcodeBuild);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().find("xcodebuild") != std::string::npos);
+    }
+}
+
+TEST_CASE("arcbuild::BackendResolver reports a missing generated build context descriptively", "[build]")
+{
+    TempArcProject fixture("backend_resolver_context");
+    ProjectLayout project;
+    project.root = fixture.root;
+    project.name = "Fixture";
+
+    const BackendResolver resolver;
+
+    SECTION("MsBuild: no generated solution file")
+    {
+        const auto result = resolver.ResolveBackendContext(BuildBackend::MsBuild, project);
+        REQUIRE_FALSE(result.has_value());
+        CHECK_FALSE(result.error().empty());
+    }
+
+    SECTION("Make: no Makefile")
+    {
+        const auto result = resolver.ResolveBackendContext(BuildBackend::Make, project);
+        REQUIRE_FALSE(result.has_value());
+        CHECK_FALSE(result.error().empty());
+    }
+
+    SECTION("Ninja: no build.ninja")
+    {
+        const auto result = resolver.ResolveBackendContext(BuildBackend::Ninja, project);
+        REQUIRE_FALSE(result.has_value());
+        CHECK_FALSE(result.error().empty());
+    }
+
+    SECTION("XcodeBuild: no .xcodeproj directory")
+    {
+        const auto result = resolver.ResolveBackendContext(BuildBackend::XcodeBuild, project);
+        REQUIRE_FALSE(result.has_value());
+        CHECK_FALSE(result.error().empty());
     }
 }
 
