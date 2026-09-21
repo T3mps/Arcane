@@ -431,13 +431,38 @@ namespace arcbuild
 
         for (;;)
         {
-            DWORD bytesRead = 0;
+            DWORD      bytesRead = 0;
+            const BOOL readOk =
+                ::ReadFile(readHandle.get(), buffer, sizeof(buffer), &bytesRead, nullptr);
 
-            if (!::ReadFile(readHandle.get(), buffer, sizeof(buffer), &bytesRead, nullptr) ||
-                bytesRead == 0)
+            if (!readOk)
             {
+                // ERROR_BROKEN_PIPE is the NORMAL end of stream -- it fires
+                // exactly when the child (and everything it may have handed
+                // the write handle to) has closed it, i.e. every ordinary
+                // clean exit. Any other failure is a genuine mid-stream read
+                // error: rare, but silently truncating the child's log and
+                // still reporting its exit code as if the capture were
+                // complete would be worse than saying so -- surface it as a
+                // diagnostic (never a ProcessError: the child already
+                // launched and is running/finished, so this is not a
+                // launch/setup failure, and must not turn into kExitRefused).
+                const DWORD readError = ::GetLastError();
+
+                if (readError != ERROR_BROKEN_PIPE)
+                {
+                    output_.Error(
+                        "reading " + std::string(prefix) +
+                        "'s output failed mid-stream (error " +
+                        std::to_string(readError) +
+                        ") -- the captured log above may be incomplete");
+                }
+
                 break;
             }
+
+            if (bytesRead == 0)
+                break;
 
             carry.append(buffer, bytesRead);
 
