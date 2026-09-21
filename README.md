@@ -161,10 +161,14 @@ bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe probe    --project MyGame
 `--action` picks the Premake generator/backend pair, defaulting per host
 (`vs2026` on Windows, `gmake` on Linux, `xcode4` on macOS). MSBuild is the
 only backend guaranteed to "just work" from a plain `Visual Studio + vcpkg`
-setup; Make needs a GCC/G++ toolchain (Premake beta8's `gmake` action
-defaults to GCC everywhere, including Windows -- never `cl.exe`) and Ninja
-needs a Visual Studio developer environment on Windows (beta8's `ninja`
-action defaults to the MSVC toolset there). Xcode resolves and composes on
+setup. Ninja needs a Visual Studio developer environment on Windows (beta8's
+`ninja` action defaults to the MSVC toolset there) and then builds the module
+completely -- arcbuild stages the linked DLL into `Binaries/` itself, since
+beta8's ninja action cannot run a post-build step on Windows. Make needs a
+GCC/G++ toolchain (Premake beta8's `gmake` action defaults to GCC everywhere,
+including Windows -- never `cl.exe`); on Windows that compiles the module but
+cannot link it against the MSVC-built engine DLLs, so a Make build only
+becomes real with the engine's Linux port. Xcode resolves and composes on
 every platform but only **executes** on macOS. `probe` alone needs no SDK.
 
 ## License

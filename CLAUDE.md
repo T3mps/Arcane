@@ -209,8 +209,22 @@ execute/exit-code contract (no shell -- direct `CreateProcessW` on Windows,
 `probe` is the one command that needs neither an SDK nor a backend tool --
 it only inspects the manifest and the `Binaries/<gameModule>` slot. Live
 Make/Ninja acceptance (real generate/build/rebuild/clean, plus the four
-clean-precedence edge cases) is `scripts/verify-arcbuild-backends.ps1`; the
-opt-in `[build-generator]` Catch2 case characterizes real Premake output for
-all three non-MSBuild actions. Xcode's contract is unit-tested everywhere but
-**live `xcodebuild` execution needs macOS** -- untested on this all-Windows
-desk, a standing live-validation limit, not a gap in the design.
+clean-precedence edge cases) is `scripts/verify-arcbuild-backends.ps1` (run
+it with `vcvars64` imported; 22 checks); the opt-in `[build-generator]`
+Catch2 case characterizes real Premake output for all three non-MSBuild
+actions.
+
+**What is live-proven (2026-09-21):** Ninja on Windows is a complete build --
+generate/build/rebuild/clean produce and remove `Binaries\Fixture.dll` (the
+slot is arcbuild's own staged copy of `Intermediate/<Config>/Ninja/Binaries/`,
+because beta8's ninja module cannot run a post-build command on Windows --
+see `arcbuild/src/Stage.hpp`). Make on Windows is the full driver mechanics
+plus a MinGW-w64 GCC compile of the module; the link then fails because a
+GCC object cannot resolve the MSVC-built `ArcaneCore`/`ArcaneClient` import
+libraries (C++ mangling) -- a Make-built module needs the GCC-built engine of
+the Linux port, not an arcbuild fix. Linux has never generated or built
+anything (`scripts/verify-arcbuild-posix.sh` stage 2 waits on that port;
+stage 1, the POSIX runner's compile contract, passes). Xcode's contract is
+unit-tested everywhere but **live `xcodebuild` execution needs macOS** --
+untested on this all-Windows desk, a standing live-validation limit, not a
+gap in the design.

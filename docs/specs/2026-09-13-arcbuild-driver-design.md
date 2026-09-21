@@ -97,12 +97,20 @@ commands:
 **Supported backends** (multibackend hardening, 2026-09-20; full contracts in
 `docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md` §4.3/§8):
 
-| Premake action | Backend | Tool prerequisite | Live-tested on |
+| Premake action | Backend | Tool prerequisite | Live-validated (2026-09-21, `scripts/verify-arcbuild-backends.ps1` Debug + Release) |
 |---|---|---|---|
-| `vs2026`, `vs2022` | MSBuild | Visual Studio / `msbuild` on PATH (`vswhere`) | Windows |
-| `gmake`, `gmakelegacy` | Make | `mingw32-make`/`make` on PATH **and** a compiler the generated Makefile's toolset needs (beta8's `gmake` action defaults to GCC/G++ on every host, including Windows — a MinGW-w64 toolchain, never `cl.exe`) | Windows (mechanics), Linux (native) |
-| `ninja` | Ninja | `ninja` on PATH **and**, on Windows, a Visual Studio developer environment (`cl.exe`/`link.exe` — beta8's `ninja` action defaults to the MSVC toolset on a native Windows target) | Windows, Linux |
-| `xcode4` | xcodebuild | macOS only; `/usr/bin/xcodebuild` or `xcodebuild` on PATH | macOS only — **live `xcodebuild` execution is not reachable from Windows or Linux; this remains a documented live-validation limit**, same as any other host-gated toolchain |
+| `vs2026`, `vs2022` | MSBuild | Visual Studio / `msbuild` on PATH (`vswhere`) | Windows: full build/rebuild/clean/probe lifecycle against a disposable ReferenceProject copy |
+| `gmake`, `gmakelegacy` | Make | `mingw32-make`/`make` on PATH **and** a compiler the generated Makefile's toolset needs (beta8's `gmake` action defaults to GCC/G++ on every host, including Windows — a MinGW-w64 toolchain, never `cl.exe`) | Windows (MinGW-w64 GCC 16.1.0 / GNU Make 4.4.1): mechanics — generate, build, rebuild, clean, real child exit codes propagated unchanged, all four clean-precedence cases — **and the module now compiles** (GCC accepts the whole engine header closure the fixture pulls in); the **link fails**: the GCC object references Itanium-mangled `__imp_` symbols (`ImGui::SetAllocatorFunctions`, `Arcane::Runtime::Components`, `Arcane::Log::Engine`, …) that the MSVC-built `ArcaneCore`/`ArcaneClient` import libraries do not export. A MinGW-built module cannot link an MSVC-built engine; a Make-built `Fixture.dll` needs a GCC-built engine — i.e. the Linux port. Not an arcbuild or header defect. Linux: **not yet** — `verify-arcbuild-posix.sh` stage 2 has never run (no engine Linux port) |
+| `ninja` | Ninja | `ninja` on PATH **and**, on Windows, a Visual Studio developer environment (`cl.exe`/`link.exe` — beta8's `ninja` action defaults to the MSVC toolset on a native Windows target) | Windows: **full build** — generate, build, rebuild and clean each produce/remove `Binaries\Fixture.dll` (Debug and Release; the `probe`-able single slot is the arcbuild-staged copy, see the Ninja note below). Linux: **not yet** — same stage-2 gap as Make |
+| `xcode4` | xcodebuild | macOS only; `/usr/bin/xcodebuild` or `xcodebuild` on PATH | Nowhere live — resolution/context/argument composition are unit-tested on every platform against a real `--os=macosx xcode4` fixture, but **live `xcodebuild` execution needs macOS**, which no desk in this arc had; a documented live-validation limit |
+
+What "Linux: not yet" covers: the POSIX process runner's own contract is
+proven (its `fork`/`execv`/pipe branch compiles under GCC with
+`-Wall -Wextra -Werror` — `verify-arcbuild-posix.sh --syntax-only`, stage 1 —
+and its runtime behaviour was exercised through a throwaway harness on WSL2,
+Task 6), but no Linux host has ever generated a project, built a module, or
+run `ArcaneTests '[build]'`, because the engine itself has no Linux port yet.
+Stage 2 of that script is the gate that flips this row.
 
 **Verified Xcode target convention:** beta8's `xcode4` action emits a
 `.xcworkspace` + `.xcodeproj` but **no shared scheme** — confirmed by
@@ -115,6 +123,27 @@ same "characterize the real generator output first" provenance: Ninja's
 target is `<module-stem>_<Config>` (`Fixture.ninja`'s own per-configuration
 aggregate; beta8's naming, not an arcbuild convention), and Make's is `-C
 <root> config=<lowercased Config>` against the generated `Makefile`.
+
+**Ninja and the single slot (2026-09-21):** beta8's `ninja` action refuses
+three configurations that link to one output ("multiple rules generate
+`Binaries/X.dll`"), so `build/arcane.lua` links each configuration to its own
+`Intermediate/<Config>/Ninja/Binaries/<gameModule>` — inside the
+`Intermediate/<cfg>/` clean target of §4.4 — and **arcbuild copies the
+result into `Binaries/<gameModule>` itself** after a successful Ninja
+build/rebuild (`arcbuild/src/Stage.cpp`, `NinjaLinkOutput` in
+`ProjectLayout.cpp`; the `.pdb` beside it when the toolset made one). A
+Premake post-build step cannot do this on Windows: beta8's ninja module
+wraps post-build commands in `cmd /C "…"` and escapes every inner quote as
+`\"`, which cmd.exe reads as a bare backslash — a quoted relative path
+becomes a drive-root path (`\"Binaries\"` → `C:\Binaries`), and the module's
+own always-appended stamp touch fails the same way. Characterized live
+(the first run created `C:\Binaries` and failed; every later run had its
+`&&` chain swallowed into `IF NOT EXIST` and exited 0 having done nothing).
+Consequences: a raw `ninja <stem>_<Config>` links and stops; `arcbuild
+build`/`rebuild` is what fills the slot; a Ninja child that exits 0 without
+producing the link output is an arcbuild refusal (exit 2), never a
+fabricated success. MSBuild and Make link straight into the slot and need no
+staging.
 
 Any other valid Premake action is accepted by `generate` but has no backend:
 `build`/`rebuild` refuse it with exit 2; `clean` still performs the filesystem
@@ -271,15 +300,20 @@ The editor resolves `arcbuild.exe` beside its own exe (packaged layout) then
 
 **Built, 2026-09-20 (multibackend hardening):** `--action gmake`/`gmakelegacy`
 (Make), `ninja` (Ninja), and `xcode4` (Xcode, macOS-only resolution/execution)
-each have a real, live-verified build/rebuild/clean contract — see the
-Supported backends table in §3 and
+each have a real resolve/compose/execute/exit-code contract, unit-tested on
+every platform against real generated fixtures — see the Supported backends
+table in §3 and
 `docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md` §7/§8 for
-tool resolution and the exact composed command per backend/operation. §4.3's
+tool resolution and the exact composed command per backend/operation. How
+much of each is proven LIVE is exactly what the table's last column says and
+no more: Ninja on Windows is a complete, linked, slot-filling build; Make on
+Windows is the full driver mechanics plus a GCC compile that stops at the
+MSVC-vs-MinGW link boundary; Linux and macOS have not run a build yet. §4.3's
 probe stays the single-slot CRT-flavor check as written; it did not need to
 "generalise per platform" — `Module::ScanFileCrtFlavor` already reads the
-built module's own PE import table, which is backend-independent (a Make- or
-Ninja-built `Fixture.dll` carries the same CRT-flavor signal an MSBuild-built
-one does).
+built module's own PE import table, which is backend-independent (the
+Ninja-built, arcbuild-staged `Fixture.dll` carries the same CRT-flavor signal
+an MSBuild-built one does).
 
 **Not built (still a future seam):**
 - `--engine <root>` as a second target kind: the same commands over

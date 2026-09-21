@@ -11,29 +11,42 @@ for the full acceptance evidence this line certifies).
 statements in `2026-09-13-arcbuild-driver-design.md`. The existing CLI,
 single-slot CRT rule, exit codes, and clean guarantees remain binding.
 
-**Live-validation limits at close (all §11.2 gates otherwise green):**
-- **Xcode/macOS**: resolution, context, and argument composition are unit-
-  tested on every platform, but live `xcodebuild` execution requires macOS
-  and was not exercised — no macOS host was available for this plan. This is
-  the one gate §10/§11 always anticipated staying open on a Windows desk.
-- **Make and Ninja mechanics are fully live-verified** on Windows
-  (`scripts/verify-arcbuild-backends.ps1`): real generation, real child
-  processes, real exit-code propagation (including a genuinely distinct
-  child exit code, not a coincidental match with `kExitRefused`), and all
-  four clean-precedence edge cases (§9) against a real filesystem. A
-  **full compiled build** of the fixture module additionally requires a
-  working compiler for each backend's Premake-beta8-selected toolset (GCC
-  for `gmake`, MSVC for `ninja` on Windows — two independent tool
-  installs, see the Task 7 report) — on this desk, both toolchains compile
-  the fixture but fail to fully LINK it, for two separate, pre-existing,
-  engine/Premake-configuration reasons unrelated to arcbuild's own
-  correctness (an ArcaneCore header not yet portable to GCC, and the
-  `ninja` action's generated link line omitting a Windows system import
-  library `vs2026`'s MSBuild project system supplies implicitly). Both are
-  newly-discovered, out-of-scope findings recorded in the Task 7 report for
-  a follow-up — not a gap in arcbuild's own resolve/compose/execute/
-  propagate contract, which the exit-code-fidelity checks in the verify
-  script confirm directly.
+**Live-validation status at close (2026-09-21, after the whole-branch
+review's fix wave; all §11.2 gates green; `scripts/verify-arcbuild-backends.ps1`
+22/22 in Debug and Release):**
+- **Ninja on Windows is a complete live build**: generate, build, rebuild and
+  clean each produce/remove `Binaries\Fixture.dll` through real `ninja.exe`
+  + MSVC (`cl.exe`/`link.exe`). Two engine-side fixes made it real — the
+  `ninja` action's explicit link line now carries the Windows system import
+  libraries MSBuild had been supplying implicitly (`advapi32` et al.,
+  `build/arcane.lua`), and the single-slot copy moved from a Premake
+  post-build step (unexecutable under beta8's ninja module on Windows — its
+  `cmd /C` quote escaping turns relative paths into drive-root paths) into
+  arcbuild itself (§8.4).
+- **Make on Windows: full mechanics, compiles, does not link.** Real
+  generation, real child processes, real exit-code propagation (including a
+  genuinely distinct child exit code, not a coincidental match with
+  `kExitRefused`), all four clean-precedence edge cases (§9) against a real
+  filesystem — and, since `ArcaneCore/src/Arcane/Sim/RunLoop.hpp` stopped
+  using a nested-aggregate default argument GCC rejects and `arcane.lua`
+  stopped handing GCC the MSVC-only `/wd4251` `/utf-8` `/arch:AVX2` flags,
+  MinGW-w64 GCC 16.1.0 **compiles** the fixture against the whole engine
+  header closure. The **link** then fails on Itanium-mangled `__imp_`
+  references (`ImGui::SetAllocatorFunctions`, `Arcane::Runtime::Components`,
+  `Arcane::Log::Engine`, …) the MSVC-built `ArcaneCore`/`ArcaneClient` import
+  libraries cannot satisfy: a GCC-built module needs a GCC-built engine.
+  That is the Linux-port milestone, not this plan, and not an arcbuild
+  defect.
+- **Linux: not yet.** Stage 1 of `scripts/verify-arcbuild-posix.sh` (the
+  POSIX runner compiles under GCC, `-Wall -Wextra -Werror`) passes; stage 2
+  (generate + build + `ArcaneTests '[build]'` on a Linux host) has never run
+  because the engine has no Linux port. The runner's runtime behaviour was
+  exercised only through Task 6's throwaway WSL2 harness.
+- **Xcode/macOS: not live.** Resolution, context, and argument composition
+  are unit-tested on every platform against a real `--os=macosx xcode4`
+  fixture, but live `xcodebuild` execution requires macOS and no macOS host
+  was available — the one gate §10/§11 always anticipated staying open on a
+  Windows desk.
 
 ## 1. Purpose
 
@@ -132,9 +145,16 @@ enum class BuildOperation : std::uint8_t {
 
 struct BackendContext {
     std::filesystem::path path;
-    std::optional<std::string> scheme;
+    std::optional<std::string> target;   // Ninja: <target>_<Config>; Xcode: -target <target>; unset for MSBuild/Make
 };
 ```
+
+`target` (renamed from the original `scheme` in the review fix wave: it was
+carrying a Ninja module stem as well as an Xcode target name) is the module
+stem `BackendResolver` confirms on disk (`<stem>.ninja`, `<stem>.xcodeproj`).
+`ComposeNinja`/`ComposeXcodeBuild` return an EMPTY plan when it is absent,
+which `BuildExecutor` refuses as "cannot compose this operation" — never a
+malformed `_Debug` target or an empty `-target`.
 
 No `ActionInfo`, `GeneratorKind`, `BuildTarget`, `BuildContext`, or
 `BuildDecision` synonym remains. Slot policy continues to return `Verdict`,
@@ -295,16 +315,22 @@ diagnostic containing the platform error.
 
 ### 6.4 POSIX runner
 
-Linux and macOS use `pipe`, `fork`, `dup2`, optional `chdir`, `execvp`, and
+Linux and macOS use `pipe`, `fork`, `dup2`, optional `chdir`, `execv`, and
 `waitpid`. Arguments are passed as an `argv` array. The child writes stdout and
 stderr to the same pipe. Normal exit returns `WEXITSTATUS`; signal termination
-returns `128 + signal`.
+returns `128 + signal`. `execv`, never `execvp` (Task 6 review): the
+executable is always the exact absolute file `ProcessSpec` names — no `$PATH`
+search, and no `ENOEXEC` fallback that would exec `/bin/sh` as an
+intermediary.
 
 A second close-on-exec error pipe communicates child-side `chdir`, `dup2`, and
-`execvp` failures to the parent. Successful `execvp` closes this pipe through
-`FD_CLOEXEC`; a reported `errno` becomes `ProcessError`, not a synthetic child
-exit such as 126 or 127. Parent-side `pipe`, `fork`, read, and `waitpid`
-failures also become `ProcessError` with the relevant `errno` text.
+`execv` failures to the parent. Successful `execv` closes this pipe through
+`FD_CLOEXEC` (set atomically at creation with `pipe2(O_CLOEXEC)` on Linux,
+with `fcntl` right after `pipe()` elsewhere, and relocated off fd 0/1/2 with
+`F_DUPFD_CLOEXEC` if it landed there); a reported `errno` becomes
+`ProcessError`, not a synthetic child exit such as 126 or 127. Parent-side
+`pipe`, `fork`, read, and `waitpid` failures also become `ProcessError` with
+the relevant `errno` text.
 
 The driver itself must compile without Win32 headers on POSIX.
 
@@ -397,6 +423,25 @@ Every backend uses the same process shape:
 - Build, rebuild, and clean then use the verified Ninja-native invocations;
   rebuild is a two-step clean/build process plan, and build runs only after a
   successful clean.
+- **The single slot is arcbuild's to fill (review fix wave, 2026-09-21).**
+  beta8 refuses three configurations linking to one `Binaries/<gameModule>`
+  ("multiple rules generate"), so `build/arcane.lua`'s `action:ninja` filter
+  links each configuration to `Intermediate/<Config>/Ninja/Binaries/
+  <gameModule>` (inside the §9 filesystem clean target, so a soft-skipped or
+  failed backend clean cannot strand it), and `BuildExecutor::Build` copies
+  that file (plus its `.pdb` when present) over the slot after a successful
+  Build/Rebuild plan — `NinjaLinkOutput` (ProjectLayout) names the source,
+  `StageBuiltModule` (Stage.cpp) does the copy, and the `[build-generator]`
+  case pins the generated link edges against `NinjaLinkOutput` so the Lua and
+  the driver cannot drift. A Premake post-build copy was the original plan
+  and is not possible: beta8's ninja module wraps post-build commands in
+  `cmd /C "…"` and escapes inner quotes as `\"`, which cmd.exe does not
+  understand — quoted relative paths become drive-root paths (the first live
+  run created `C:\Binaries`), and its always-appended stamp touch fails the
+  same way, so no ninja post-build can exit 0 honestly on Windows. A Ninja
+  child that exits 0 without producing the link output is an arcbuild
+  refusal (exit 2). `Clean` never stages. MSBuild and Make link straight into
+  the slot and are untouched.
 
 ### 8.5 Xcode
 
