@@ -1,10 +1,19 @@
 #pragma once
 
-// MeshNode -- THE OPAQUE 3D PASS as a render graph node (NRI Phase 4, Task 7).
+// MeshNode -- THE 3D MESH PASS as a render graph node (NRI Phase 4, Task 7;
+// widened from opaque-only to opaque + masked + ordered transparent by F3
+// plan 2 Task 3).
 //
 // This is the node that puts a lit, textured, DEPTH-TESTED mesh through the
 // frame graph. It renders into the frame's canvas (the same RGBA16F transient
 // the 2D batch draws into) with a D32_SFLOAT depth target it creates itself.
+//
+// ONE PASS, THREE BLEND MODES, SIX PIPELINES: opaque and masked batches draw
+// INDIRECT off the counts mesh-cull filled in, then the transparent rows draw
+// DIRECT in the frame's sorted order. The blend x two-sided product is six
+// fixed pipelines in the cache, not a runtime shader define -- opaque, masked
+// and transparent are three separate offline artifacts out of mesh.hlsl, and
+// one/two-sided selects nri::CullMode::BACK/NONE on each.
 //
 // WHAT IT IS DELIBERATELY NOT:
 //   * NOT PBR. data/shaders/mesh.hlsl is one directional light, Lambert
@@ -479,23 +488,30 @@ namespace Arcane
         // into this node's own storage: valid until the next Prepare.
         [[nodiscard]] std::span<const GpuInstance> AdHocRows() const noexcept { return m_adHocRows; }
 
-        // Records one scene's opaque geometry into an ALREADY-OPEN raster pass
-        // whose colour attachment is the canvas and whose depth attachment is
-        // this node's depth target. In order: clear the DEPTH plane (the clear
+        // Records one scene's mesh geometry -- opaque, masked AND ordered
+        // transparent -- into an ALREADY-OPEN raster pass whose colour
+        // attachment is the canvas and whose depth attachment is this node's
+        // depth target. In order: clear the DEPTH plane (the clear
         // seam -- graph attachments are LOAD/STORE, see
         // NriGraphContext::DeclareGraphFrame); rewrite this slot's t0/t1
         // views if the GPU scene's buffers moved (the header block); bind the
-        // layout, the two sets and the pipeline; then (F3 plan 1 T7):
-        //   1. the registry-backed BATCHES, in the frame's order -- for each,
-        //      bind the mesh's already-resident vertex/index buffers, push
+        // layout and the two sets; then (F3 plan 1 T7, plan 2 T3):
+        //   1. the registry-backed BATCHES, in the frame's order (opaque
+        //      before masked, nearest first within each) -- for each, bind the
+        //      pipeline its (blend, twoSided) key selects, bind the mesh's
+        //      already-resident vertex/index buffers, push
         //      {batch.firstOutput, 0}, one CmdDrawIndexedIndirect reading
         //      argIndex's nri::DrawIndexedDesc from GpuScene::Args(slot);
-        //   2. the AD-HOC rows, in submission order -- push {scratchFirst +
+        //   2. the TRANSPARENT rows, DIRECT and one at a time, in the frame's
+        //      sorted order (render order ascending, biased projected depth
+        //      descending, then (entity, mesh, section)) -- push {row,
+        //      kMeshRootDirect}, one CmdDrawIndexed each;
+        //   3. the AD-HOC rows, in submission order -- push {scratchFirst +
         //      i, kMeshRootDirect}, one CmdDrawIndexed each.
         // A mesh that is not resident is SKIPPED, never a stale bind. A frame
-        // with no batches and no ad-hoc rows (R-D: staged rows only) records
-        // the depth clear and nothing else -- no draw, no error. Never
-        // uploads; never touches the frame ring for geometry.
+        // with no batches, no transparent rows and no ad-hoc rows (R-D: staged
+        // rows only) records the depth clear and nothing else -- no draw, no
+        // error. Never uploads; never touches the frame ring for geometry.
         //
         // IT DOES NOT CLEAR THE COLOUR PLANE. batch2d already cleared and drew
         // into the canvas; clearing it here would erase that.
@@ -518,9 +534,12 @@ namespace Arcane
         //
         // NO canvasFormat PARAMETER, unlike Batch2DNode::Record: that node
         // resolves a pipeline PER SPAN at record time and needs the format
-        // there, while this one has exactly one pipeline and Prepare already
-        // keyed it. A parameter this function did not read would just be
-        // something for a reader to reason about.
+        // there. This one resolves per (blend, twoSided) key instead -- six
+        // fixed pipelines since plan 2 T3, all SIX of them keyed by Prepare
+        // against the canvas format it was handed, so Record only ever LOOKS
+        // UP an already-built pipeline and never needs the format itself. A
+        // parameter this function did not read would just be something for a
+        // reader to reason about.
         void Record(RenderGraphNodeContext& context, const MeshSceneDesc& scene,
                     std::uint32_t frameSlot, GpuScene* gpuScene,
                     const GpuSceneFrameReadiness& readiness);

@@ -241,6 +241,15 @@ namespace Arcane
     // One visible transparent row, already fully resolved by the CPU frame
     // builder. MeshNode must draw this record directly; it never needs to
     // look up a mesh section or material state again.
+    //
+    // `projectedDepth` (a PER-OBJECT projected view-space Z plus the author's
+    // bias) is CONVENTIONAL ORDERED TRANSPARENCY -- the F3 BASELINE, and
+    // deliberately NOT Arcane's permanent answer (spec R9, the Deadlock-shaped
+    // hybrid contract). Sorting whole objects by one depth cannot resolve
+    // interpenetration or intra-object face overlap, and the engine's stated
+    // route out is MBOIT accumulation/combine plus a refraction pass, which
+    // stay NAMED LATER SEAMS in F3 rather than accidental scope. Nothing here
+    // may be described as "the transparency solution".
     struct TransparentDraw
     {
         std::uint32_t     row = 0;

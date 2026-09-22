@@ -263,8 +263,16 @@ std430, mirrored by a `static_assert(sizeof == 240)` and an HLSL struct in
 | `baseColor` | `float4` | 16 | Sync |
 | `materialSlot` | `uint` | 4 | Sync |
 | `batch` | `uint` | 4 | Sync (see 5.4: the batch KEY id, stable per (mesh, section, blend)) |
-| `flags` | `uint` | 4 | bit0 `teleported` (reserved, never set in F3); bits1–2 blend mode (0 opaque, 1 masked, 2 transparent); bit3 `twoSided` |
+| `flags` | `uint` | 4 | bit0 `teleported` (reserved, never set in F3); bits1–2 blend mode (0 opaque, 1 masked, 2 transparent); bit3 `twoSided`; bit4 `live` |
 | `pad` | `uint` | 4 | 0 |
+
+**`live` (bit 4) is load-bearing, not bookkeeping** (added by plan 2 Task 4's
+fix round): a freed row is not erased from the persistent buffer — erasing it
+would cost a scatter upload per free — it is STAGED AS A TOMBSTONE with this
+bit clear, and both the CPU coarse pass and `mesh_cull.hlsl` skip any row
+whose `live` bit is 0. Without it a dispatch sized to `rowCount` would
+frustum-test a dead row's stale bounds and emit a draw for geometry nothing
+owns.
 
 The rows live in **one persistent structured buffer** owned by `GpuScene`
 (`Render/Nri/GpuScene.{hpp,cpp}`, a member of `NriGraphContext` beside the
@@ -359,7 +367,7 @@ Per frame the CPU builds:
 - **The batch table** — for every key with ≥ 1 resident row: `capacity` (the
   count of resident rows with that key, known from the mirror without
   visibility), `firstOutput` = the exclusive prefix sum of capacities in key-id
-  order. Uploaded through the ring; `GpuBatch { uint firstOutput; uint capacity; uint emitted; uint argIndex; }` (`argIndex` = the batch's position in the emitted list, meaningful only when `emitted`).
+  order. Uploaded through the ring; `GpuCullBatch { uint firstOutput; uint capacity; uint argIndex; uint emitted; }` (`argIndex` = the batch's position in the emitted list, meaningful only when `emitted`). **That field order is the shipped one** — `Render/GpuSceneTypes.hpp`'s `static_assert(sizeof(GpuCullBatch) == 16)` and `data/shaders/gpu_scene.hlsli`'s mirror both spell it `firstOutput, capacity, argIndex, emitted`; this spec's draft wrote `GpuBatch` with `emitted` and `argIndex` the other way round, and the code is the authority.
 - **The emitted list** — keys with at least one row whose entity is in
   `SceneVisibility.views[0]` (the coarse pass prunes whole batches; a batch
   entirely off-screen never reaches the cull or the draw), **excluding
@@ -512,12 +520,24 @@ mesh draw:
 batch2d → GpuSceneSyncNode (the row copies; transfer only) → MeshCullNode → MeshNode (indirect + direct) → GridNode → post → tonemap → …
 ```
 
-Three node types (`GpuSceneSyncNode`, `MeshCullNode`, the rewritten
-`MeshNode`), bringing the `Nri/nodes/` tree to **nine pass types**; the
-domain-reorg trigger (10+, `project_arcane_render_pass_domain_reorg`) is
-re-counted and stated at the close, not pulled. `RenderGraph.hpp:33` is
-reworded: the graph still does not reorder; **culling is a node**, not a
-graph property.
+New node types (`GpuSceneSyncNode`, `MeshCullNode`, the rewritten `MeshNode`),
+and plan 2 added a second readback beside the sync node's debug one.
+`RenderGraph.hpp` is reworded: the graph still does not reorder; **culling is
+a node**, not a graph property.
+
+**Pass-type recount at the close (plan 2 Task 6).** Counting the types
+`Nri/nodes/` declares — nine classes (`Batch2DNode`, `PostChainNode`,
+`TonemapNode`, `GridNode`, `ImGuiNriNode`, `MeshCullNode`, `MeshNode`,
+`PickNode`, `OutlineNode`) plus the three free node-declaring functions in
+`GpuSceneSyncNode.hpp` (`AddGpuSceneSyncNode` → `gpuscene-sync`,
+`AddGpuSceneDebugReadbackNode` → `gpuscene-readback`,
+`AddGpuSceneVisibilityReadbackNode` → `gpuscene-visibility-readback`) — the
+tree now holds **twelve pass types**, not the nine this section predicted
+before plan 2 split the readbacks. The domain-reorg trigger (10+,
+`project_arcane_render_pass_domain_reorg`) is therefore **crossed**. It is
+STATED here and NOT pulled: plan 2 forbids reorganising `Nri/nodes/`, because
+a directory move in the same change as a new pass buries the pass's diff.
+The reorg stays the standing maintenance item it already was.
 
 **Declared pass slots — the G1/G2 seams, written here so F5 builds on them:**
 
@@ -533,9 +553,14 @@ transparent-ordered → transparent-mboit → mboit-combine → refraction →
 ordered-transparent slots only. The MBOIT accumulation/combination targets and
 the refraction source/destination contract are named seams, not F3 resources.
 
-**Debug switch:** a compile-time `kMeshCullEnabled` (default on) that makes
-the cull pass every emitted row (`instanceNum = capacity`, identity indices)
-— for bisecting a wrong-picture report. The cvar arc makes it runtime.
+**Debug switch:** a compile-time `kMeshCullEnabled` (default on,
+`MeshCullNode.hpp`) — for bisecting a wrong-picture report. The cvar arc
+makes it runtime. **It bypasses the frustum predicate INSIDE the compute
+shader** (`mesh_cull.hlsl`'s `g_Cull.cullEnabled` guard on `Contains`), so
+every live row of an emitted batch is counted; it does NOT restore
+CPU-authored counts. The invariant that the compute pass is the sole writer
+of `instanceNum` holds in both settings — the draft's `instanceNum =
+capacity` spelling would have broken it.
 
 ---
 
@@ -552,14 +577,31 @@ In order of authority:
    each batch partition's bounds and excluding stale tail data. The readback
    is delayed/asynchronous and never inserts a per-frame device flush. Runs on D3D12 and
    Vulkan. **The CPU pass is the oracle by construction.**
-2. **Witness.** `VerifyReport` gains `visibility { coarseVisible, total,
-   gpuVisible, batches, draws }`; the servitor lanes assert them for
-   ReferenceProject's 3D scene (exact for the first four, `draws ==
-   batches + transparentRows`).
-3. **Goldens.** `editor-ui-perspective` must not move (nothing in it is
-   off-screen). One new golden pair: a straddling mesh still draws in full
-   (conservative culling), and a transparent mesh in front of an opaque one
-   blends in the right order.
+2. **Witness.** `VerifyReport` gains `visibility { total, coarseVisible,
+   gpuVisible, batches, draws, transparentRows }` at **schemaVersion 9**, and
+   `gpuVisible` is **`null` until a readback retires** — it is the cull pass's
+   OWN asynchronously read-back count, never a copy of `coarseVisible`, so a
+   run that never armed the ring (or whose frames were all still in flight)
+   reports the absence rather than a plausible number. The witness lanes
+   assert the block for ReferenceProject's 3D scenes: `EditorWitnessTest.cpp`'s
+   E2 on the all-opaque boot scene (`total`/`coarseVisible`/`batches`/`draws`
+   exact, `transparentRows == 0`, `gpuVisible` a number equal to
+   `coarseVisible`), and `WitnessScenariosTest.cpp`'s W5 on the F3 fixture
+   scene (the same four exact, plus `transparentRows > 0`, `draws == batches +
+   transparentRows`, and `gpuVisible` a number STRICTLY below `coarseVisible`
+   — transparent keys never reach the cull).
+3. **Goldens.** `editor-ui` and `editor-ui-perspective` must not move as a
+   RENDER (nothing in them is off-screen); adding fixture assets does move
+   their asset-census text, which is a content fact and not a render one. One
+   new golden pair — `f3-cull-blend` on dx12 and vulkan, rendered by
+   ArcaneRuntime with `--scene` pointed at
+   `ReferenceProject/Content/scenes/f3_cull_blend.arcscene` — carrying all six
+   required visual cases: conservative culling of a straddling box, masked
+   over opaque with correct depth order, a masked surface clipped away
+   entirely by `alphaCutoff`, far-to-near transparent blending, stable
+   identity order at equal depth, `translucencyRenderOrder`/
+   `translucencyDepthSortBias` overriding depth order, and a one-sided
+   surface culled where its two-sided twin draws.
 4. **Unit (`~[gpu]`).** `Aabb` (union, transform conservativeness under
    random affine — rapidcheck); `Frustum` (ortho and perspective extraction
    against hand-built planes; the conservative property: a random box

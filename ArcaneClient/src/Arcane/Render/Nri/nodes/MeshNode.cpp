@@ -976,8 +976,8 @@ namespace Arcane
                 m_warnedBadCamera = true;
                 GraphError("MeshNode: the scene's view or projection matrix is not finite (a zero "
                            "fov, a non-positive aspect ratio or nearZ >= farZ all produce NaN "
-                           "silently) -- the opaque pass is dropped rather than recording a draw "
-                           "with an undefined clip position");
+                           "silently) -- the whole mesh pass (opaque, masked and transparent) is "
+                           "dropped rather than recording a draw with an undefined clip position");
             }
             return;
         }
@@ -1156,12 +1156,14 @@ namespace Arcane
         //    CmdDrawIndexedIndirect per batch, its nri::DrawIndexedDesc at
         //    argIndex in this slot's args buffer (GpuSceneSyncNode copied
         //    the frame's DrawIndexedArgs there -- GpuScene.cpp static_asserts
-        //    the two layouts agree). instanceNum is the CPU coarse count
-        //    (plan 2: the cull dispatch writes it), and the vertex shader
-        //    maps SV_InstanceID through the visible-index list from
-        //    batch.firstOutput. An indirect draw with instanceNum 0 is legal
-        //    and draws nothing; a batch is only EMITTED with >= 1 visible row
-        //    anyway.
+        //    the two layouts agree). instanceNum ARRIVES ZERO and is filled
+        //    IN by the mesh-cull compute dispatch, which is its sole
+        //    incrementer -- the CPU never authors a nonzero count, so a
+        //    stale one cannot survive a frame -- and the vertex shader maps
+        //    SV_InstanceID through the visible-index list from
+        //    batch.firstOutput. An indirect draw whose instanceNum the cull
+        //    left at 0 (every row of an emitted batch failed the GPU frustum
+        //    test) is legal and draws nothing.
         // ---------------------------------------------------------------
         if (draws.registry)
         {

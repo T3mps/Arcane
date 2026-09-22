@@ -45,9 +45,9 @@ TEST_CASE("E1: the editor stands up client + embedded server through --play-as a
 // one: the report's `viewMode` is what the host actually resolved the camera
 // to (a "perspective" the seed failed to apply would still exit 0 with a 2D
 // picture), and the compare PASSED against the blessed slot (which is what
-// makes the new golden load-bearing -- golden-gate.ps1 runs six lanes now,
-// and two of them (dx12 and vulkan) name it). Same [witness][gpu] posture as
-// E1: outside ~[gpu], run unfiltered.
+// makes the new golden load-bearing -- two of golden-gate.ps1's lanes (dx12
+// and vulkan) name it; that table is count-derived, so this comment names no
+// total). Same [witness][gpu] posture as E1: outside ~[gpu], run unfiltered.
 TEST_CASE("E2: the editor boots into perspective on --view-mode, reports viewMode, and matches the perspective golden", "[witness][gpu]")
 {
     WitnessScratch scratch(StagedEditorDir(), "e2-perspective");

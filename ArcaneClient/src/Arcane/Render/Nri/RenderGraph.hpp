@@ -123,12 +123,20 @@ namespace Arcane
         bool          depthStencil = false;   // chooses attachment vs shader usage bits (Task 4)
     };
 
-    // Per-declaration usage: what THIS Read/Write means, not a resource-wide.
-    // Culling is an ordinary Compute node declaring these usages, never an
-    // implicit graph property or an execution-time reordering rule.
+    // Per-declaration usage: what THIS Read/Write means, not a resource-wide
     // flag (the same resource can be ColorWrite in one node and ShaderRead
     // in the next). Task 4 maps each value to an (access, layout, stage)
     // triple for barrier derivation.
+    //
+    // F3: VISIBILITY CULLING IS AN ORDINARY COMPUTE NODE declaring these
+    // usages (MeshCullNode -- ShaderWriteCs on the visible-index and
+    // indirect-arg buffers, which MeshNode then reads as ShaderRead and
+    // IndirectArgs), never an implicit graph property and never an
+    // execution-time reordering rule. That is a DIFFERENT sense of the word
+    // from this file's header ("no culling", "does not reorder, cull, or
+    // parallelize nodes"), which is about culling NODES out of the graph --
+    // Filament's pass culling, which this graph still does not do. Both
+    // statements are true at once.
     enum class RgUsage : std::uint8_t
     {
         ColorWrite, DepthWrite, ShaderRead, ShaderWriteCs, // (UAV, compute)
