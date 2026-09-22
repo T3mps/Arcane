@@ -1,6 +1,7 @@
 #include <Arcane/Base/ForeignModules.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/ModuleTable.hpp>   // Scan() publishes the snapshot Diagnostics::ModuleTable::Find reads (crash window plan 1, Task 3)
 
 #include <algorithm>
 #include <cctype>
@@ -375,6 +376,16 @@ namespace Arcane::ForeignModules
             m.name = slash == std::string::npos ? m.path : m.path.substr(slash + 1);
             if (m.name.empty())
                 continue;
+
+            // Load address + image size for Diagnostics::ModuleTable (crash
+            // window plan 1, Task 3). Best-effort: a module this fails for
+            // just keeps base=size=0 and Find() never matches it.
+            MODULEINFO mi{};
+            if (GetModuleInformation(process, handles[i], &mi, sizeof(mi)))
+            {
+                m.base = reinterpret_cast<std::uint64_t>(mi.lpBaseOfDll);
+                m.size = mi.SizeOfImage;
+            }
             modules.push_back(std::move(m));
         }
 #endif
@@ -383,8 +394,15 @@ namespace Arcane::ForeignModules
 
     std::vector<Match> Scan()
     {
-        const std::vector<std::string> roots = OwnedRoots();
-        std::vector<Match> matches = MatchAll(EnumerateProcessModules(), roots, SystemRoot());
+        const std::vector<std::string> roots    = OwnedRoots();
+        const std::vector<LoadedModule> modules = EnumerateProcessModules();
+        std::vector<Match> matches = MatchAll(modules, roots, SystemRoot());
+
+        // Publish the module snapshot for Diagnostics::ModuleTable (crash
+        // window plan 1, Task 3) -- off the crash path, same as everything
+        // else Scan() does; the crash thread only ever calls Find().
+        Diagnostics::ModuleTable::Refresh(modules);
+
         {
             std::lock_guard lock(g_mutex);
             g_scanned  = true;

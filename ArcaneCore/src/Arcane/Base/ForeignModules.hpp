@@ -106,11 +106,17 @@ namespace Arcane::ForeignModules
     // module the enumerator could not path is not accused on no evidence.
     enum class Origin : std::uint8_t { Owned, System, Foreign, Unknown };
 
-    // A module as the loader reports it: base name + full path.
+    // A module as the loader reports it: base name + full path. `base`/`size`
+    // (the load address and image size, from GetModuleInformation) default to
+    // 0 so every existing aggregate initialisation of this struct -- which
+    // names only `name`/`path` -- keeps compiling; they are what feeds
+    // Diagnostics::ModuleTable::Refresh (crash window plan 1, Task 3).
     struct LoadedModule
     {
         std::string name;
         std::string path;
+        std::uint64_t base = 0;
+        std::uint64_t size = 0;
     };
 
     // Places `path` against the given roots. Case-insensitive, slash-
