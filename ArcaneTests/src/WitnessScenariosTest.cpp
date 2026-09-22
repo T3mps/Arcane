@@ -303,3 +303,92 @@ TEST_CASE("W4: a dynamic body authored in physics.arcscene falls under the runti
     REQUIRE(resting["entity"].is_string());
     CHECK(resting["entity"].get<std::string>() == "Crate");       // and landed here
 }
+
+TEST_CASE("W5: the F3 cull/blend fixture scene matches its golden and reports the "
+          "visibility split the mixed blend modes imply", "[witness][gpu]")
+{
+    // The RUNTIME half of spec s9.2's "the witness lanes assert the
+    // visibility block" (EditorWitnessTest.cpp's E2 is the editor half, on
+    // the all-opaque boot scene). This one runs the F3 plan 2 FIXTURE scene
+    // -- ReferenceProject/Content/scenes/f3_cull_blend.arcscene, the scene
+    // golden-gate.ps1's two `f3-cull-blend` lanes also render -- because the
+    // boot scene cannot express what plan 2 shipped: it has no transparent
+    // material, no masked one, and no two-sided one, so on it `batches ==
+    // draws` and `gpuVisible == coarseVisible` are both true by accident of
+    // content rather than by the mechanism being right.
+    //
+    // EVERY NUMBER BELOW IS DERIVED FROM THE FIXTURE'S OWN CONTENT, not
+    // recalled from a previous run:
+    //   total 15           -- fifteen MeshRenderer entities, each on a
+    //                         single-section primitive mesh (the cube, or the
+    //                         plane for the one/two-sided pair).
+    //   coarseVisible 15   -- the CPU coarse stage is geometric only. The
+    //                         alpha-clipped cube is still coarse-visible (its
+    //                         pixels die in the shader, not in the frustum
+    //                         test), and the edge-straddling cube is admitted
+    //                         by the conservative test that case exists to
+    //                         prove.
+    //   transparentRows 8  -- eight entities carry a `transparent` material
+    //                         (the far/near pair, the equal-depth pair, the
+    //                         render-order pair, the depth-bias pair); each is
+    //                         one DIRECT draw record, never a batch.
+    //   batches 4          -- the emitted (mesh, section, blend, twoSided)
+    //                         keys over the seven non-transparent rows:
+    //                         (cube, opaque, 1-sided), (cube, masked, 1-sided),
+    //                         (plane, opaque, 1-sided), (plane, opaque,
+    //                         2-sided). Transparent keys are excluded from the
+    //                         emitted list by construction (spec s5.4).
+    //   draws 12           -- 4 + 8, the identity the report states and this
+    //                         case re-derives rather than copies.
+    //   gpuVisible 7       -- the CULL PASS's own read-back total: the seven
+    //                         rows in emitted batches, all of them inside the
+    //                         frustum. STRICTLY LESS than coarseVisible here,
+    //                         which is the fact E2's scene cannot show.
+    WitnessScratch scratch(StagedRuntimeDir(), "w5-f3-cull-blend");
+    WitnessRun run = RunWitness(HostInv(scratch,
+        { "--scene", "7e5a0030-0030-4030-8030-000000000030",
+          "--settle", "30", "--compare", "f3-cull-blend" }));
+
+    INFO("host stdout: " << run.stdoutPath.string());
+    INFO("host stderr: " << run.stderrPath.string());
+    INFO("exit " << run.exitCode << ", wall " << run.wallMs << " ms, timedOut " << run.timedOut);
+
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("exitReason"));
+    CHECK(run.report["exitReason"].get<std::string>() == "frames-complete");
+
+    // THE PICTURE. Without this conjunct the counts below could all be right
+    // while the six visual cases rendered wrong -- the golden is what says
+    // the cull, the blend modes and the order produced the right pixels.
+    REQUIRE(run.report.contains("compare"));
+    const auto& compare = run.report["compare"];
+    CHECK(compare.at("reference") == "f3-cull-blend");
+    CHECK(compare.at("passed") == true);
+    CHECK(compare.at("diffCount") == 0);
+
+    REQUIRE(run.report.contains("visibility"));
+    const auto& vis = run.report["visibility"];
+    REQUIRE(vis.at("total").is_number_unsigned());
+    CHECK(vis.at("total") == 15);
+    CHECK(vis.at("coarseVisible") == 15);
+    CHECK(vis.at("batches") == 4);
+    CHECK(vis.at("transparentRows") == 8);
+    // The two RELATIONS, asserted as relations and not only as literals: a
+    // future edit to the fixture that adds a mesh has to update the literals
+    // above, but these two must hold whatever the scene contains.
+    CHECK(vis.at("transparentRows").get<std::uint32_t>() > 0u);
+    CHECK(vis.at("draws").get<std::uint32_t>()
+          == vis.at("batches").get<std::uint32_t>()
+           + vis.at("transparentRows").get<std::uint32_t>());
+    CHECK(vis.at("draws") == 12);
+    // A NUMBER, never null: the delayed readback ring must have retired one
+    // frame inside this run's budget. Null here means the budget is too short
+    // and the fix is a bigger --frames, never a relaxed assertion.
+    REQUIRE(vis.at("gpuVisible").is_number_unsigned());
+    CHECK(vis.at("gpuVisible") == 7);
+    // The half E2 cannot state: transparent rows never reach the cull, so the
+    // GPU's count is STRICTLY below the coarse one on a scene that has any.
+    CHECK(vis.at("gpuVisible").get<std::uint32_t>()
+          < vis.at("coarseVisible").get<std::uint32_t>());
+}

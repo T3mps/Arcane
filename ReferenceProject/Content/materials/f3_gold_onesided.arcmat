@@ -1,0 +1,20 @@
+{
+  "blend": "opaque",
+  "id": "7e5a002d-002d-402d-802d-00000000002d",
+  "kind": "mesh",
+  "name": "F3GoldOneSided",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        6.0,
+        4.8,
+        0.8,
+        1.0
+      ]
+    }
+  },
+  "snippet": "",
+  "twoSided": false,
+  "type": "material"
+}

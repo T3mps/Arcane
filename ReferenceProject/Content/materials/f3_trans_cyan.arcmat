@@ -1,0 +1,19 @@
+{
+  "blend": "transparent",
+  "id": "7e5a0025-0025-4025-8025-000000000025",
+  "kind": "mesh",
+  "name": "F3TransCyan",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.05,
+        0.85,
+        0.95,
+        0.5
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

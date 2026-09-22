@@ -1,0 +1,19 @@
+{
+  "blend": "transparent",
+  "id": "7e5a002a-002a-402a-802a-00000000002a",
+  "kind": "mesh",
+  "name": "F3TransPurple",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.55,
+        0.15,
+        0.95,
+        0.5
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

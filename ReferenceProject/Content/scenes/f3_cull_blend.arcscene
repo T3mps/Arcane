@@ -1,0 +1,730 @@
+{
+  "assets": [
+    "7e5a0011-0011-4011-8011-000000000011",
+    "7e5a0020-0020-4020-8020-000000000020",
+    "7e5a0021-0021-4021-8021-000000000021",
+    "7e5a0022-0022-4022-8022-000000000022",
+    "7e5a0023-0023-4023-8023-000000000023",
+    "7e5a0024-0024-4024-8024-000000000024",
+    "7e5a0025-0025-4025-8025-000000000025",
+    "7e5a0026-0026-4026-8026-000000000026",
+    "7e5a0027-0027-4027-8027-000000000027",
+    "7e5a0028-0028-4028-8028-000000000028",
+    "7e5a0029-0029-4029-8029-000000000029",
+    "7e5a002a-002a-402a-802a-00000000002a",
+    "7e5a002b-002b-402b-802b-00000000002b",
+    "7e5a002c-002c-402c-802c-00000000002c",
+    "7e5a002d-002d-402d-802d-00000000002d",
+    "7e5a002e-002e-402e-802e-00000000002e"
+  ],
+  "entities": [
+    {
+      "components": {
+        "Arcane::Camera": {
+          "active": true,
+          "farZ": 1000.0,
+          "fovYDegrees": 60.0,
+          "nearZ": 0.10000000149011612,
+          "orthographicSize": 2.0,
+          "projection": "Orthographic"
+        },
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775808
+          },
+          "name": "Scene"
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": -1
+    },
+    {
+      "components": {
+        "Arcane::Camera": {
+          "active": true,
+          "farZ": 500.0,
+          "fovYDegrees": 50.0,
+          "nearZ": 0.05000000074505806,
+          "orthographicSize": 5.0,
+          "projection": "Perspective"
+        },
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775809
+          },
+          "name": "PerspectiveCamera"
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.0,
+            0.0,
+            7.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775810
+          },
+          "name": "EdgeStraddleCube"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589738418978849,
+            "lo": 9232660711086227489
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            5.041,
+            1.901,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.24,
+            1.24,
+            1.24
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775811
+          },
+          "name": "OneSidedAway"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589789959372845,
+            "lo": 9236038410806755373
+          },
+          "mesh": {
+            "hi": 9104589734123946016,
+            "lo": 9232379236109516832
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -0.453,
+            2.221,
+            0.0
+          ],
+          "rotation": [
+            -0.7071067811865476,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ],
+          "scale": [
+            1.541,
+            1.0,
+            1.541
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775812
+          },
+          "name": "TwoSidedAway"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589794254405678,
+            "lo": 9236319885783466030
+          },
+          "mesh": {
+            "hi": 9104589734123946016,
+            "lo": 9232379236109516832
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            1.813,
+            2.221,
+            0.0
+          ],
+          "rotation": [
+            -0.7071067811865476,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ],
+          "scale": [
+            1.541,
+            1.0,
+            1.541
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775813
+          },
+          "name": "OpaqueBehind"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589742714011682,
+            "lo": 9232942186062938146
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -4.216,
+            0.392,
+            -1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.863,
+            1.863,
+            1.863
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775814
+          },
+          "name": "MaskedFront"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589747009044515,
+            "lo": 9233223661039648803
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -2.38,
+            -0.28,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.19,
+            1.19,
+            1.19
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775815
+          },
+          "name": "MaskedKept"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589747009044515,
+            "lo": 9233223661039648803
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -4.05,
+            -1.901,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.24,
+            1.24,
+            1.24
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775816
+          },
+          "name": "MaskedClipped"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589751304077348,
+            "lo": 9233505136016359460
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -2.562,
+            -1.901,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.24,
+            1.24,
+            1.24
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775817
+          },
+          "name": "TransFar"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589755599110181,
+            "lo": 9233786610993070117
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -0.195,
+            0.39,
+            -1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.95,
+            1.95,
+            1.95
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775818
+          },
+          "name": "TransNear"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589759894143014,
+            "lo": 9234068085969780774
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.638,
+            -0.319,
+            1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.149,
+            1.149,
+            1.149
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775819
+          },
+          "name": "TransEqualA"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589764189175847,
+            "lo": 9234349560946491431
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -0.164,
+            -2.054,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.315,
+            1.315,
+            1.315
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775820
+          },
+          "name": "TransEqualB"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589768484208680,
+            "lo": 9234631035923202088
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            0.616,
+            -2.218,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.315,
+            1.315,
+            1.315
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775821
+          },
+          "name": "OrderBehind"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589772779241513,
+            "lo": 9234912510899912745
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 1
+        },
+        "Arcane::Transform": {
+          "position": [
+            3.846,
+            0.69,
+            -1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.775,
+            1.775,
+            1.775
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775822
+          },
+          "name": "OrderFront"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589777074274346,
+            "lo": 9235193985876623402
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            3.126,
+            -0.064,
+            1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.149,
+            1.149,
+            1.149
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775823
+          },
+          "name": "BiasFar"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589781369307179,
+            "lo": 9235475460853334059
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            3.571,
+            -2.281,
+            -1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.686,
+            1.686,
+            1.686
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775824
+          },
+          "name": "BiasNear"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589785664340012,
+            "lo": 9235756935830044716
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 4.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            2.969,
+            -1.743,
+            1.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.033,
+            1.033,
+            1.033
+          ]
+        }
+      },
+      "parent": 0
+    }
+  ],
+  "id": "7e5a0030-0030-4030-8030-000000000030",
+  "version": 6
+}

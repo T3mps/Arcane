@@ -8,13 +8,15 @@
 # it is the gate that covers what an agent actually runs. Do not let a green
 # [gpu][golden] Catch2 run stand in for a green run of this script.
 #
-# Six combinations, no --bless:
+# Eight combinations, no --bless:
 #   ArcaneRuntime --backend dx12    --compare runtime-scene
 #   ArcaneRuntime --backend vulkan  --compare runtime-scene
 #   ArcaneEditor  --backend dx12    --compare editor-ui
 #   ArcaneEditor  --backend vulkan  --compare editor-ui
 #   ArcaneEditor  --backend dx12    --compare editor-ui-perspective  --view-mode perspective
 #   ArcaneEditor  --backend vulkan  --compare editor-ui-perspective  --view-mode perspective
+#   ArcaneRuntime --backend dx12    --compare f3-cull-blend  --scene <the F3 fixture>
+#   ArcaneRuntime --backend vulkan  --compare f3-cull-blend  --scene <the F3 fixture>
 #
 # THE VERDICT IS `exitReason` OUT OF THE REPORT JSON, NEVER THE RAW PROCESS
 # EXIT CODE ALONE (ArcaneEditor/src/main.cpp's own exit-code table names the
@@ -44,11 +46,12 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Release
 #   powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -SelfTest
-#       Prove the gate can FAIL: break the scene, assert all six lanes go red,
+#       Prove the gate can FAIL: break the BOOT scene, assert every lane that
+#       renders it goes red (and that the lanes on another scene do not),
 #       restore. The ONE mode that writes to the tree -- Content/ only, never
 #       Verify/, never a bless. The mutation-to-restore window is a single
 #       try/finally (opened where the staging loop below begins) that covers
-#       restaging, all six host launches, and any crash or Ctrl-C in
+#       restaging, all eight host launches, and any crash or Ctrl-C in
 #       between -- not just the tail after the lanes finish -- so the restore
 #       genuinely runs on every exit path out of that window, not only the
 #       happy one. Writes its verdict to golden-gate-selftest-summary.json
@@ -63,8 +66,8 @@
 #       automation-vocabulary.txt beside the exe, then diffs that against
 #       $script:VerdictNames / $script:ReportSchemaMin / $script:ReportSchemaMax
 #       below. A missing ArcaneTests.exe FAILS the self-test rather than
-#       warning past it -- by that point this mode has already launched six
-#       hosts out of the same bin/<Config>/ tree, so its absence means the
+#       warning past it -- by that point this mode has already launched every
+#       lane's host out of the same bin/<Config>/ tree, so its absence means the
 #       build is incomplete, not that the check does not apply.
 #
 #       PRECONDITIONS. (1) ReferenceProject/ must be clean: this mode
@@ -158,7 +161,7 @@
 # Exit 0 iff every HARD-GATING comparison resolves to a confirmed PASS. Exit 1
 # otherwise (a genuine mismatch, a missing/undecodable reference, or a run
 # whose outcome could not be determined at all). -SelfTest INVERTS this: it
-# exits 0 iff all six lanes launched and went FAIL as expected (see its own
+# exits 0 iff every lane launched and graded as its SelfTestExpect declares (see its own
 # exit block).
 #
 # Windows PowerShell 5.1 compatible.
@@ -166,8 +169,10 @@
 param(
     [string]$Configuration = 'Debug',
     # SELF-TEST: prove this gate is CAPABLE OF FAILING. A gate never observed
-    # failing is not a gate. Mutates ReferenceProject's scene, runs the six
-    # lanes, and asserts ALL SIX go FAIL -- then restores. This is the ONE
+    # failing is not a gate. Mutates ReferenceProject's BOOT scene, runs every
+    # lane, and asserts each grades as its SelfTestExpect declares (the
+    # boot-scene lanes FAIL, the other-scene lanes stay green) -- then
+    # restores. This is the ONE
     # mode in which this script writes to the tree; it touches Content/ only,
     # never Verify/, never blesses, and restores in a finally block so an
     # error or a Ctrl-C still leaves the tree clean.
@@ -300,7 +305,7 @@ function Exit-GateRefusal {
 #                          Errored branch's own comment.
 #     Passed            -- the ordinary green run
 #
-# ---- The six combinations. ----
+# ---- The eight combinations. ----
 # ExpectedLevel: which reference this lane is SUPPOSED to resolve against.
 # Nothing in the report can infer this -- a resolvedLevel of "shared" looks
 # identical whether that was the design or an oversight -- so it is declared
@@ -310,18 +315,50 @@ function Exit-GateRefusal {
 # launched (see the $exeArgs block below) -- how the perspective lanes below
 # ask for --view-mode perspective without every other lane having to declare
 # an empty axis it does not use.
+# SelfTestExpect: what -SelfTest's MeshCube mutation should do to this lane --
+# 'Failed' for every lane that renders the BOOT scene it mutates, 'Green' for a
+# lane whose --scene points somewhere else. See the grading block near the
+# bottom of this file: declaring it per lane is what turns "all lanes must go
+# red" (which a lane on another scene cannot honestly satisfy) into the
+# stronger statement that the mutation's BLAST RADIUS is exactly the boot
+# scene -- an f3-cull-blend lane going red under -SelfTest would mean a
+# main.arcscene edit had leaked into a different scene's render.
 $combos = @(
-    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'dx12';   ExpectedLevel = 'backend'; ExtraArgs = @() }
-    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'vulkan'; ExpectedLevel = 'backend'; ExtraArgs = @() }
-    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'dx12';   ExpectedLevel = 'shared';  ExtraArgs = @() }
-    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'vulkan'; ExpectedLevel = 'shared';  ExtraArgs = @() }
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'dx12';   ExpectedLevel = 'backend'; ExtraArgs = @(); SelfTestExpect = 'Failed' }
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'runtime-scene'; Backend = 'vulkan'; ExpectedLevel = 'backend'; ExtraArgs = @(); SelfTestExpect = 'Failed' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'dx12';   ExpectedLevel = 'shared';  ExtraArgs = @(); SelfTestExpect = 'Failed' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui';     Backend = 'vulkan'; ExpectedLevel = 'shared';  ExtraArgs = @(); SelfTestExpect = 'Failed' }
     # The perspective editor lane (F4 plan 1's witness E2, promoted to the gate
     # by plan 2). Keyed by BACKEND like every other lane and never by build
     # config -- UE keys screenshot references by Platform/RHI (Ruling P,
     # docs/plans/2026-09-17-f4-plan1-rulings-ue-check.md).
-    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective') }
-    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective') }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective'); SelfTestExpect = 'Failed' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective'); SelfTestExpect = 'Failed' }
+    # THE F3 CULL/BLEND LANES (F3 plan 2 T6, spec s9). The boot scene cannot
+    # express what plan 2 shipped -- it carries no masked, transparent or
+    # two-sided material at all -- so these two render a FIXTURE scene instead,
+    # ReferenceProject/Content/scenes/f3_cull_blend.arcscene, via the runtime
+    # host's --scene <asset guid> override (HostConfig::sceneOverride). One
+    # picture carries all six required visual cases; the counts the runtime HUD
+    # prints into it (Rows/Coarse/Batches/Draws/GPU visible) are the same
+    # numbers ArcaneTests' W5 witness asserts out of the report, so a drift
+    # shows up here as pixels and there as an assertion.
+    #
+    # ExpectedLevel 'backend', for the SAME reason runtime-scene declares it:
+    # the HUD prints the backend's name, so the dx12 and vulkan pictures differ
+    # -- by exactly the 120 pixels of that one word, measured at bless time --
+    # and each backend needs its own blessed reference. There is no
+    # dx12/f3-cull-blend.png (only vulkan/), so the dx12 lane resolves the
+    # shared file and reports PassedOnFallback, exactly as runtime-scene/dx12
+    # already does.
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'f3-cull-blend'; Backend = 'dx12';   ExpectedLevel = 'backend'; ExtraArgs = @('--scene', '7e5a0030-0030-4030-8030-000000000030'); SelfTestExpect = 'Green' }
+    @{ Host = 'ArcaneRuntime'; Exe = 'ArcaneRuntime.exe'; Reference = 'f3-cull-blend'; Backend = 'vulkan'; ExpectedLevel = 'backend'; ExtraArgs = @('--scene', '7e5a0030-0030-4030-8030-000000000030'); SelfTestExpect = 'Green' }
 )
+# Combo label -> SelfTestExpect, built from the table above so the two can
+# never drift: the label is exactly the "$Host/$Backend/$Reference" string the
+# lane loop below records into $results.
+$script:SelfTestExpect = @{}
+foreach ($c in $combos) { $script:SelfTestExpect["$($c.Host)/$($c.Backend)/$($c.Reference)"] = $c.SelfTestExpect }
 
 # THE VERDICT VOCABULARY. This literal set is the PowerShell half of a contract
 # whose other half is Arcane::Verdict (ArcaneClient/src/Arcane/Host/Verdict.hpp),
@@ -564,8 +601,8 @@ if ($SelfTest) {
 #      the fix for the review finding that the mode's OWN header claimed
 #      "always restored in a finally" while the actual try opened 292 lines
 #      after the mutation, leaving the two restaging failures below, the
-#      Remove-Item/Copy-Item restaging itself, and all six
-#      Start-Process -Wait host launches -- the mode's entire wall clock --
+#      Remove-Item/Copy-Item restaging itself, and every
+#      Start-Process -Wait host launch -- the mode's entire wall clock --
 #      completely unprotected. When -SelfTest is set, the mutation now
 #      happens as the FIRST statement inside this try, so a hung host, a
 #      locked staged file, an AV hold, or a Ctrl-C anywhere in this block
@@ -657,7 +694,7 @@ try {
         #      to say "hosts do not consume artifacts yet, so there is nothing here for a
         #      missing source to silently break" -- false since Task 8's sprite cutover
         #      made content ARTIFACT-ONLY. An empty staged Artifacts tree now means every
-        #      content texture on all six lanes hits ArtifactMissing: ArcaneRuntime exits
+        #      content texture on every lane hits ArtifactMissing: ArcaneRuntime exits
         #      nonzero at the first refused texture (Task 6/8's refuse-never-limp
         #      contract) and the editor lane's captures fail loudly too -- a HARD LANE
         #      FAILURE, by design, not a silent nothing. This block's own tolerance is
@@ -834,7 +871,7 @@ try {
 
         # Report/stderr land in the exe's own Saved/ (project-gitignored, so a
         # local run never leaves a tracked artifact behind) and are named per
-        # combo so six runs in the same exe dir never clobber each other --
+        # combo so eight runs in the same exe dir never clobber each other --
         # $hostName-$backend ALONE stopped being a unique combo key the moment
         # ArcaneEditor grew a second reference (editor-ui-perspective) on the
         # same backend, so $reference joins the filename too.
@@ -1287,8 +1324,8 @@ Write-GateSummaryFile -GatePassed $gatePassed -RefusalReason '' -Lanes @($result
 
 # ---- -SelfTest: every lane must have NOTICED. ----
 # R11: this block sits HERE -- after the summary is written above, before the
-# ordinary gatePassed check below -- and nowhere else. In -SelfTest mode all
-# six lanes FAIL by design, so an ordinary run would already have exited red;
+# ordinary gatePassed check below -- and nowhere else. In -SelfTest mode the
+# boot-scene lanes FAIL by design, so an ordinary run would already have exited red;
 # placing this block after those exit paths would make it dead code that never
 # asserts anything. Placing it inside Write-GateSummaryFile's own try is worse:
 # that catch exists specifically to stop summary I/O from deciding the verdict,
@@ -1298,7 +1335,7 @@ Write-GateSummaryFile -GatePassed $gatePassed -RefusalReason '' -Lanes @($result
 # #1) -- it now happens in the finally around the staging+host-launch block
 # above, which protects the WHOLE mutation-to-restore window instead of just
 # this tail. By the time this block runs, main.arcscene is ALREADY back to
-# its committed state; this block only grades what the six lanes reported.
+# its committed state; this block only grades what the lanes reported.
 if ($SelfTest) {
     # Review pass 2026-08-31, Important #2: the old umbrella 'FAIL' covered
     # things that did NOT mean "the gate noticed a broken render." The verdict
@@ -1340,7 +1377,7 @@ if ($SelfTest) {
     $vocabFile    = Join-Path $probeDir 'automation-vocabulary.txt'
     if (-not (Test-Path $verdictProbe)) {
         # A MISSING SUITE IS A FAILURE, NOT AN EXEMPTION. By this point
-        # -SelfTest has already launched six hosts out of this same
+        # -SelfTest has already launched every lane's host out of this same
         # bin/$configDirName/ tree, so ArcaneTests.exe missing from it means the
         # BUILD IS INCOMPLETE -- not that the check does not apply here. This
         # used to print a yellow warning and leave $vocabOk true, so
@@ -1444,14 +1481,30 @@ if ($SelfTest) {
         }
     }
 
-    # The ordinary -SelfTest mutation breaks the scene, so every lane that ran
-    # must report Failed -- the verdict meaning "the subject ran and did not meet
-    # its contract". NotRun, Skipped, Indeterminate and Errored all mean the lane
-    # never got to notice anything, and reporting a pass on any of them would be
-    # exactly the vacuous self-test this mode exists to rule out. That
-    # distinction used to need a bespoke $exeMissingCount; the vocabulary now
-    # carries it, so this asserts on Failed DIRECTLY rather than on "not green".
-    $notFailed = @($results | Where-Object { $_.Verdict -ne 'Failed' })
+    # The ordinary -SelfTest mutation breaks THE BOOT SCENE, so every lane that
+    # RENDERS the boot scene must report Failed -- the verdict meaning "the
+    # subject ran and did not meet its contract". NotRun, Skipped, Indeterminate
+    # and Errored all mean the lane never got to notice anything, and reporting
+    # a pass on any of them would be exactly the vacuous self-test this mode
+    # exists to rule out. That distinction used to need a bespoke
+    # $exeMissingCount; the vocabulary now carries it, so this asserts on Failed
+    # DIRECTLY rather than on "not green".
+    #
+    # NOT EVERY LANE RENDERS THAT SCENE any more (F3 plan 2 T6): the two
+    # f3-cull-blend lanes pass --scene and render the F3 fixture instead, which
+    # the mutation does not touch. Grading them "must go red" would be a
+    # demand the mutation cannot honestly produce, and the only ways to satisfy
+    # it would be to break them artificially or to exempt them silently. So the
+    # expectation is DECLARED PER LANE in $combos (SelfTestExpect) and asserted
+    # in both directions here -- which makes this check STRICTER than the old
+    # blanket rule rather than weaker: the boot-scene lanes must notice, and
+    # the fixture lanes must NOT, which is the statement that the mutation's
+    # blast radius is exactly one scene. A red f3-cull-blend lane under
+    # -SelfTest means a main.arcscene edit leaked into another scene's render.
+    $expectFailed = @($results | Where-Object { $script:SelfTestExpect[$_.Combo] -ne 'Green' })
+    $expectGreen  = @($results | Where-Object { $script:SelfTestExpect[$_.Combo] -eq 'Green' })
+    $notFailed = @($expectFailed | Where-Object { $_.Verdict -ne 'Failed' })
+    $notGreen  = @($expectGreen  | Where-Object { $_.Verdict -notin $script:GreenVerdicts })
     $unknown   = @($results | Where-Object { $_.Verdict -notin $script:VerdictNames })
 
     if ($unknown.Count -gt 0) {
@@ -1469,6 +1522,12 @@ if ($SelfTest) {
         $notFailed | ForEach-Object { Write-Host "  $($_.Combo) reported $($_.Verdict)" -ForegroundColor Red }
         Write-Host "A gate that cannot fail is not a gate. Fix the gate, not this check." -ForegroundColor Red
         $selfTestOk = $false
+    } elseif ($notGreen.Count -gt 0) {
+        Write-Host ""
+        Write-Host "SELF-TEST FAILED -- a lane that renders a DIFFERENT scene from the mutated one did not stay green." -ForegroundColor Red
+        $notGreen | ForEach-Object { Write-Host "  $($_.Combo) reported $($_.Verdict)" -ForegroundColor Red }
+        Write-Host "The MeshCube mutation is scoped to main.arcscene; a lane on another scene going red means it leaked." -ForegroundColor Red
+        $selfTestOk = $false
     } elseif (-not $vocabOk) {
         # The lanes graded correctly, but the wire contract is broken. Without
         # this arm the else below would report PASSED over the top of the
@@ -1478,7 +1537,7 @@ if ($SelfTest) {
         $selfTestOk = $false
     } else {
         Write-Host ""
-        Write-Host "SELF-TEST PASSED -- all $($results.Count) lane(s) launched and caught the broken scene." -ForegroundColor Green
+        Write-Host "SELF-TEST PASSED -- all $($results.Count) lane(s) launched; the $($expectFailed.Count) boot-scene lane(s) caught the broken scene and the $($expectGreen.Count) other-scene lane(s) stayed green." -ForegroundColor Green
         $selfTestOk = $true
     }
     # The self-test INVERTS the ordinary verdict: red lanes are the pass.

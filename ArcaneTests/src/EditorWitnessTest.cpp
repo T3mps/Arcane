@@ -69,4 +69,38 @@ TEST_CASE("E2: the editor boots into perspective on --view-mode, reports viewMod
     CHECK(run.report["compare"].at("reference") == "editor-ui-perspective");
     CHECK(run.report["compare"].at("passed") == true);
     CHECK(run.report["compare"].at("diffCount") == 0);
+
+    // THE VISIBILITY BLOCK (F3 spec s9.2, plan 2 T6). s9.2 asks the witness
+    // lanes to assert the block for ReferenceProject's 3D scene, and until
+    // this task nothing did: a host could have reported zeros, or a
+    // `gpuVisible` quietly copied from the coarse count, and every lane would
+    // still have been green. This is the EDITOR half -- the runtime half is
+    // WitnessScenariosTest.cpp's W5, against the F3 fixture scene.
+    //
+    // The numbers are the BOOT SCENE's, derived from its own content and not
+    // from a previous run's output: main.arcscene carries two MeshRenderers
+    // (MeshCube -> reference_cube.arcmesh, one section; GoldenProp ->
+    // golden_prop.arcmesh, three sections), so four (entity, section) rows,
+    // all four inside the perspective view, each with its own batch key
+    // (distinct mesh/section pairs, all opaque) and therefore its own indirect
+    // draw. No transparent material appears in that scene at all, which is
+    // exactly why the F3 fixture scene exists beside it.
+    REQUIRE(run.report.contains("visibility"));
+    const auto& vis = run.report["visibility"];
+    CHECK(vis.at("total") == 4);
+    CHECK(vis.at("coarseVisible") == 4);
+    CHECK(vis.at("batches") == 4);
+    CHECK(vis.at("draws") == 4);
+    CHECK(vis.at("transparentRows") == 0);
+    // gpuVisible is the CULL PASS's OWN count, read back asynchronously and
+    // `null` until one retires (schemaVersion 9). Asserting it is a NUMBER is
+    // the load-bearing half: a delayed ring that never publishes inside this
+    // run's --frames 60 / --settle 30 budget would leave null here, and the
+    // right answer to that is a bigger budget, never a fabricated number.
+    REQUIRE(vis.at("gpuVisible").is_number_unsigned());
+    // ...and it agrees with the coarse count ON THIS SCENE, where every row is
+    // opaque and inside the frustum. That identity is NOT general -- a scene
+    // with transparent rows has fewer gpuVisible than coarseVisible, since
+    // transparent keys are never emitted to the cull (W5 pins that side).
+    CHECK(vis.at("gpuVisible") == vis.at("coarseVisible"));
 }

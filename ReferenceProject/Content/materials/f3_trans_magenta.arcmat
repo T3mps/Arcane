@@ -1,0 +1,19 @@
+{
+  "blend": "transparent",
+  "id": "7e5a0026-0026-4026-8026-000000000026",
+  "kind": "mesh",
+  "name": "F3TransMagenta",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.95,
+        0.1,
+        0.6,
+        0.5
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

@@ -1,0 +1,19 @@
+{
+  "blend": "opaque",
+  "id": "7e5a0022-0022-4022-8022-000000000022",
+  "kind": "mesh",
+  "name": "F3OpaqueBlue",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.1,
+        0.25,
+        0.95,
+        1.0
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

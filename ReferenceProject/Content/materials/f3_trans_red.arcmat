@@ -1,0 +1,19 @@
+{
+  "blend": "transparent",
+  "id": "7e5a0027-0027-4027-8027-000000000027",
+  "kind": "mesh",
+  "name": "F3TransRed",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.95,
+        0.15,
+        0.1,
+        0.5
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

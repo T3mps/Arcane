@@ -1,0 +1,20 @@
+{
+  "alphaCutoff": 0.5,
+  "blend": "masked",
+  "id": "7e5a0023-0023-4023-8023-000000000023",
+  "kind": "mesh",
+  "name": "F3MaskedKept",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        0.95,
+        0.45,
+        0.05,
+        0.8
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}
