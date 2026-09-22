@@ -174,8 +174,11 @@ namespace
     constexpr std::size_t kSectionRsv = 32 * 1024;   // the walked thread's text
     constexpr std::size_t kHeaderRsv  = 8 * 1024;    // the .txt header
     constexpr std::size_t kEnvRsv     = 64 * 1024;   // one envelope's JSON
-    // 32 + 8 + 64 + 64 = 168 KiB of CrashArena::kCapacity (256 KiB), which
-    // leaves headroom for a later step rather than budgeting to the edge.
+    constexpr std::size_t kEnvLeanRsv = 8 * 1024;    // ...with the unbounded fields elided
+    // Worst case 8 + 32 + (64 + 8) + (64 + 8) = 184 KiB of
+    // CrashArena::kCapacity (256 KiB) -- both envelopes overrunning and
+    // both retrying lean -- which still leaves headroom rather than
+    // budgeting to the edge.
 
     // The one request in flight. Written by the SUBMITTING thread before it
     // signals, read by the crash thread after; the event pair is the
@@ -504,9 +507,31 @@ namespace
     char        g_rptInjectedNames[kInjectedMax][64]{};
     std::size_t g_rptInjectedCount = 0;
 
-    [[nodiscard]] std::string_view BuildEnvelopeJson(CrashArena& arena, const EnvFields& f) noexcept
+    // What BuildEnvelopeJson produced. `complete` is FALSE when the JSON did
+    // not fit its arena reserve -- Builder::Append copies min(remaining,
+    // size) and only flags the arena, so an overrun is SILENTLY TRUNCATED,
+    // syntactically invalid JSON. A caller that writes that over a good
+    // envelope destroys the only parseable report on disk, so the flag is
+    // load-bearing, not advisory. Detected as "not one spare byte left":
+    // cursor == end means Append ran out (and a failed carve gives
+    // begin == cursor == end, which reads the same way). A body that fills
+    // the reserve to the last byte exactly is treated as an overrun too --
+    // conservative in the safe direction.
+    struct EnvelopeJson
     {
-        CrashArena::Builder b = arena.OpenBuilder(kEnvRsv);
+        std::string_view text;
+        bool             complete;
+    };
+
+    // `elide` drops the two unbounded fields -- the stack text and
+    // everything the GPU provider supplies -- so a LEAN envelope stays valid
+    // JSON in a few hundred bytes. The stack is not lost: it is in the .txt
+    // sibling this envelope names.
+    [[nodiscard]] EnvelopeJson BuildEnvelopeJson(CrashArena& arena, const EnvFields& f,
+                                                 bool elide, std::size_t reserveBytes) noexcept
+    {
+        CrashArena::Builder b = arena.OpenBuilder(reserveBytes);
+        const Diag::Envelope* const gpu = elide ? nullptr : f.gpu;
 
         b.Append("{\n  \"formatVersion\": 1,\n  \"guid\": ");
         AppendJsonString(b, SV(f.guid));
@@ -515,13 +540,17 @@ namespace
         b.Append(",\n  \"appName\": ");          AppendJsonString(b, SV(f.appName));
         b.Append(",\n  \"phase\": ");            AppendJsonString(b, SV(f.phase));
         b.Append(",\n  \"buildInfo\": ");        AppendJsonString(b, SV(f.buildInfo));
-        b.Append(",\n  \"cpuThreadSummary\": "); AppendJsonString(b, f.cpuThreadSummary);
+        b.Append(",\n  \"cpuThreadSummary\": ");
+        AppendJsonString(b, elide
+            ? std::string_view("<elided: the crash arena could not hold this report's stack text; "
+                               "see the .txt sibling named in siblingTxt>")
+            : f.cpuThreadSummary);
 
         b.Append(",\n  \"queues\": [");
-        if (f.gpu)
+        if (gpu)
         {
             bool firstQueue = true;
-            for (const Diag::Envelope::Queue& q : f.gpu->queues)
+            for (const Diag::Envelope::Queue& q : gpu->queues)
             {
                 b.Append(firstQueue ? "\n    {\"name\": " : ",\n    {\"name\": ");
                 firstQueue = false;
@@ -542,6 +571,8 @@ namespace
         }
         b.Append("]");
 
+        // The fault block is three short strings -- kept even when eliding,
+        // because it is the classification a reader acts on.
         b.Append(",\n  \"fault\": {\"type\": ");
         AppendJsonString(b, f.gpu ? std::string_view(f.gpu->fault.type) : std::string_view{});
         b.Append(", \"address\": ");
@@ -555,10 +586,10 @@ namespace
         b.Append(",\n  \"siblingGpuDump\": "); AppendJsonString(b, SV(f.siblingGpuDump));
 
         b.Append(",\n  \"activeLayers\": [");
-        if (f.gpu)
+        if (gpu)
         {
             bool first = true;
-            for (const std::string& s : f.gpu->activeLayers)
+            for (const std::string& s : gpu->activeLayers)
             {
                 if (!first) b.Append(", ");
                 first = false;
@@ -571,7 +602,7 @@ namespace
         // .txt sibling's `injected` line is what tells "none" and "not
         // scanned" apart.
         b.Append(",\n  \"foreignModules\": [");
-        for (std::size_t i = 0; i < g_rptInjectedCount; ++i)
+        for (std::size_t i = 0; i < (elide ? 0u : g_rptInjectedCount); ++i)
         {
             if (i != 0) b.Append(", ");
             AppendJsonString(b, SV(g_rptInjectedNames[i]));
@@ -586,7 +617,31 @@ namespace
         b.Append(exitBuf);
 
         b.Append("\n}\n");
-        return b.View();
+        return { b.View(), b.cursor < b.end };
+    }
+
+    // How an envelope write ended. NotWritten is what protects a valid
+    // envelope already on disk: the caller must NOT replace it.
+    enum class EnvelopeWrite { Written, WrittenElided, NotWritten };
+
+    // Build-and-write, with ONE bounded retry. Spec S5.5: on exhaustion the
+    // crash thread writes what it has and SAYS SO -- what it must never do
+    // is write something that does not parse.
+    [[nodiscard]] EnvelopeWrite WriteEnvelope(CrashArena& arena, const EnvFields& f,
+                                              const char* path) noexcept
+    {
+        if (const EnvelopeJson full = BuildEnvelopeJson(arena, f, /*elide*/false, kEnvRsv);
+            full.complete)
+        {
+            return WriteTwoParts(path, full.text, {}) ? EnvelopeWrite::Written
+                                                      : EnvelopeWrite::NotWritten;
+        }
+
+        const EnvelopeJson lean = BuildEnvelopeJson(arena, f, /*elide*/true, kEnvLeanRsv);
+        if (!lean.complete)
+            return EnvelopeWrite::NotWritten;
+        return WriteTwoParts(path, lean.text, {}) ? EnvelopeWrite::WrittenElided
+                                                  : EnvelopeWrite::NotWritten;
     }
 
     // ---- the report's own text --------------------------------------------
@@ -617,7 +672,8 @@ namespace
     }
 
     void FillHeader(CrashArena::Builder& b, const Pending& p,
-                    const char* dmpPath, bool dumpOk, bool exhausted) noexcept
+                    const char* dmpPath, bool dumpOk, bool exhausted,
+                    bool envelopeElided) noexcept
     {
         char line[1024];
 
@@ -661,6 +717,9 @@ namespace
         }
         if (exhausted)
             b.Append("arena       : EXHAUSTED -- this report is truncated (spec S5.5)\n");
+        if (envelopeElided)
+            b.Append("envelope    : ELIDED -- the .arcdiag dropped the stack text and the GPU "
+                     "arrays to stay valid JSON; this file is the full stack\n");
 
         b.Append("\n");
     }
@@ -888,18 +947,24 @@ namespace
 
         // Step 3: the MINIMAL envelope, before anything that can wedge, so a
         // reporter can start on a report whose later steps never finished.
-        WriteTwoParts(diagPath, BuildEnvelopeJson(arena, fields), {});
+        const EnvelopeWrite minimalWrite = WriteEnvelope(arena, fields, diagPath);
 
         // Step 4: the minidump -- the artifact a debugger opens. Skipped for
         // a continuable (ensure) report, which must resume quickly.
         const bool dumpOk = !p.lightweight && WriteMiniDump(dmpPath, p.ep, p.walkThreadId);
 
-        // Step 5: the .txt.
-        FillHeader(header, p, dmpPath, dumpOk, arena.Exhausted());
+        // Step 5: the .txt. Exhaustion is sampled HERE, not at the end:
+        // the envelope retry below can exhaust the arena long after this
+        // file is complete, and a report that cried "truncated" over a whole
+        // text file would be lying about the one artifact a human reads.
+        const bool textTruncated = arena.Exhausted();
+        FillHeader(header, p, dmpPath, dumpOk, textTruncated,
+                   minimalWrite == EnvelopeWrite::WrittenElided);
         const bool txtOk = WriteTwoParts(txtPath, header.View(), section);
 
-        bool           spawnOk = true;
-        bool           haveGpu = false;
+        bool           spawnOk   = true;
+        bool           haveGpu   = false;
+        EnvelopeWrite  fullWrite = EnvelopeWrite::NotWritten;
         // Empty strings/vectors allocate nothing; it only reaches the heap
         // once the provider (below) fills it, which is the step the plan
         // tolerates allocations in.
@@ -964,12 +1029,25 @@ namespace
             fields.siblingDmp     = dumpOk ? dmpPath : "";
             fields.siblingGpuDump = haveGpu ? gpuEnv.siblingGpuDump.c_str() : "";
             fields.gpu            = haveGpu ? &gpuEnv : nullptr;
-            if (WriteTwoParts(tmpPath, BuildEnvelopeJson(arena, fields), {}))
+            fullWrite = WriteEnvelope(arena, fields, tmpPath);
+            if (fullWrite != EnvelopeWrite::NotWritten)
             {
+                // Only ever replace the minimal envelope with something that
+                // PARSES. A truncated full envelope moved over a good
+                // minimal one would leave the report unreadable -- the
+                // single worst outcome this whole path can produce.
                 wchar_t wFrom[kPathMax], wTo[kPathMax];
                 ToWide(tmpPath,  wFrom, static_cast<int>(kPathMax));
                 ToWide(diagPath, wTo,   static_cast<int>(kPathMax));
                 MoveFileExW(wFrom, wTo, MOVEFILE_REPLACE_EXISTING);
+            }
+            else
+            {
+                // Withheld. Clean up the unparseable temp so nothing
+                // downstream mistakes it for a report.
+                wchar_t wTmp[kPathMax];
+                ToWide(tmpPath, wTmp, static_cast<int>(kPathMax));
+                DeleteFileW(wTmp);
             }
 
             // Step 8: the log backlog beside the report, a BOUNDED flush (the
@@ -996,8 +1074,28 @@ namespace
             std::fprintf(stderr, "Arcane: crash reporter hand-off failed; the report is at %s.arcdiag\n", stem);
             ARC_WARN("Diagnostics: could not spawn the crash reporter; the report is at '{}.arcdiag'", stem);
         }
-        if (arena.Exhausted())
-            ARC_WARN("Diagnostics: the crash arena was exhausted; '{}.txt' is truncated", stem);
+        if (textTruncated)
+        {
+            ARC_WARN("Diagnostics: the crash arena was exhausted before the text report was "
+                     "built; '{}.txt' is truncated", stem);
+        }
+
+        // Spec S5.5: on exhaustion the crash thread writes what it has and
+        // SAYS SO. Both of these mean the .arcdiag on disk carries less than
+        // the report does -- and both mean the .txt sibling is the complete
+        // record.
+        if (minimalWrite == EnvelopeWrite::WrittenElided ||
+            (!p.lightweight && fullWrite == EnvelopeWrite::WrittenElided))
+        {
+            ARC_WARN("Diagnostics: '{}.arcdiag' was ELIDED (stack text and GPU arrays dropped) "
+                     "so it would still parse; '{}.txt' carries the full report", stem, stem);
+        }
+        if (!p.lightweight && fullWrite == EnvelopeWrite::NotWritten)
+        {
+            ARC_WARN("Diagnostics: the full envelope for '{}' was WITHHELD -- it would not fit "
+                     "the crash arena intact, and replacing a valid envelope with a truncated "
+                     "one is never an improvement; the earlier envelope stands", stem);
+        }
 
         // Report-written hook (GPU crash diagnostics arc, Task 9): fires
         // LAST, with the .arcdiag path, whether or not every write
@@ -1051,7 +1149,16 @@ namespace
             WaitForSingleObject(g_crashEvent, INFINITE);
             if (g_crashThreadStop.load(std::memory_order_acquire))
                 break;
-            RunReportGuarded(g_pending);
+
+            // COPY, never a reference to the global. A submitter whose wait
+            // expires (WAIT_TIMEOUT on a survivable report) releases
+            // g_submitMutex and returns while this report is still running,
+            // and the NEXT submitter then overwrites g_pending -- which would
+            // change the reason, the walked thread and the exit code
+            // mid-report. Pending is a ~1 KB trivially-copyable POD; this
+            // costs one memcpy on a 256 KB stack and no heap.
+            const Pending local = g_pending;
+            RunReportGuarded(local);
             SetEvent(g_handledEvent);
         }
         return 0;
@@ -1321,14 +1428,15 @@ namespace
     // sinks on one path).
     void AttachLogSink()
     {
-        // Log::AttachFileSink deliberately refuses before Log::Init() and
-        // never bootstraps the logger itself. Install is documented to be
-        // safe as the FIRST line of main (spec S5.1), and this function's
-        // caller logs a moment later anyway -- so take the same lazy Init
-        // every ARC_ macro takes, rather than losing the host's log file to
-        // call order.
-        (void)Log::Engine();
-
+        // R16 (binding): this must NOT bootstrap the engine logger. An
+        // earlier cut called Log::Engine() here so a host that installed
+        // before Log::Init() still got a log file -- but Log::Init is
+        // call_once and THE FIRST CALLER'S LEVEL WINS, so bootstrapping here
+        // would silently pin the whole process to the default level and a
+        // later Log::Init(debug) would be a no-op. Hosts call Log::Init()
+        // before Install (spec S5.1: "beside Log::Init"); when they have
+        // not, AttachFileSink refuses, ONE stderr line says so, and the
+        // process continues with no file sink and no backlog.
         std::filesystem::path file = g_cfg.logDir.empty()
                                    ? std::filesystem::path(g_reportDirSnap).parent_path() / "Logs"
                                    : std::filesystem::path(g_cfg.logDir);
@@ -1342,9 +1450,10 @@ namespace
         }
         else
         {
-            ARC_DEBUG("Diagnostics: no engine log file sink at '{}' (Log::Init has not run, "
-                      "or the file could not be opened); reports carry no log path",
-                      file.generic_string());
+            // stderr, NOT ARC_DEBUG: an ARC_ macro here would itself Init the
+            // logger, which is the very thing R16 forbids.
+            g_logPathSnap[0] = '\0';
+            std::fprintf(stderr, "Diagnostics: no engine logger yet; log file sink not attached\n");
         }
     }
 

@@ -29,6 +29,16 @@ namespace
     {
         explicit Armed(const std::filesystem::path& dir)
         {
+            // R16: Diagnostics::Install does NOT bootstrap the engine logger
+            // (Log::Init is call_once and the FIRST caller's level wins, so
+            // bootstrapping there would pin the whole process to the default
+            // level). Hosts call Log::Init() before Install -- so the tests
+            // do too, which is also what makes the backlog assertion below
+            // order-independent: no logger means no file sink, and no file
+            // sink means no backlog sink to record into. Init is a once-latch,
+            // so this is harmless when an earlier case already ran it.
+            Arcane::Log::Init();
+
             Arcane::Diagnostics::Config cfg;
             cfg.appName = "CrashPathTest";
             cfg.dumpDir = dir.string();
@@ -52,6 +62,45 @@ namespace
     {
         std::ifstream in(p, std::ios::binary);
         return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+    }
+
+    // RAII for the process-global GPU-section provider slot -- same reasoning
+    // as DiagnosticsTest's ArmedGpuProvider: the suite runs in random order,
+    // so a case that installs one must clear it even if an assertion unwinds
+    // first, or the NEXT report (or the watchdog, on its own thread) runs a
+    // provider pointing at this case's dead stack.
+    struct ArmedProvider
+    {
+        ArmedProvider(Arcane::Diagnostics::GpuSectionProvider fn, void* user)
+        {
+            Arcane::Diagnostics::SetGpuSectionProvider(fn, user);
+        }
+        ~ArmedProvider() { Arcane::Diagnostics::ClearGpuSectionProvider(); }
+
+        ArmedProvider(const ArmedProvider&)            = delete;
+        ArmedProvider& operator=(const ArmedProvider&) = delete;
+    };
+
+    // A provider that returns far more than the envelope's arena reserve can
+    // hold: ~400 queues of ~600 bytes each, plus 200 long activeLayers, is
+    // several hundred KiB against a 64 KiB reserve. Nothing here is a GPU
+    // call -- the point is purely the SIZE the provider hands back, which is
+    // the one input to this path a backend controls and Core cannot bound.
+    void FloodingGpuSectionProvider(Arcane::Diag::Envelope& envelope, std::string& humanText,
+                                    const std::filesystem::path&, void* user)
+    {
+        if (auto* calls = static_cast<int*>(user)) ++(*calls);
+
+        for (int i = 0; i < 400; ++i)
+        {
+            envelope.queues.push_back({ std::string(200, 'q'),
+                                        std::string(200, 'c'),
+                                        { std::string(200, 'f') } });
+        }
+        envelope.activeLayers.assign(200, std::string(200, 'L'));
+        envelope.fault = { "page-fault", "0xDEADBEEF0000", "FloodResource" };
+
+        humanText = "flooded";
     }
 }
 
@@ -106,4 +155,54 @@ TEST_CASE("crash path: a lightweight (ensure) report writes envelope and text on
     const auto env = Arcane::Diag::ReadFile(stem + ".arcdiag");
     REQUIRE(env.has_value());
     CHECK(env->kind == "ensure");
+}
+
+TEST_CASE("crash path: an envelope that cannot fit the arena is elided or withheld, never left "
+          "truncated on disk", "[diag]")
+{
+    // THE FAILURE THIS PINS. The envelope is hand-written into a fixed arena
+    // span, and CrashArena::Builder::Append copies min(remaining, size) and
+    // only flags the arena -- so an overrun is SILENTLY TRUNCATED,
+    // syntactically invalid JSON. The full envelope is then moved over the
+    // minimal one with MOVEFILE_REPLACE_EXISTING, which would destroy the
+    // only parseable report on disk. The GPU-section provider is the one
+    // input to that path Core cannot bound (a real backend returns however
+    // many queues, in-flight passes and layers the device has), so that is
+    // where the overrun is driven from here.
+    const auto dir = std::filesystem::temp_directory_path() / "arcane-crash-path-test-flood";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    Armed armed(dir);
+
+    int providerCalls = 0;
+    ArmedProvider provider(&FloodingGpuSectionProvider, &providerCalls);
+
+    Arcane::Diagnostics::SubmitReport({ "hang (envelope flood)", nullptr, false, 0 });
+    CHECK(providerCalls == 1);
+
+    const std::string stem = Arcane::Diagnostics::LastReportStem();
+    REQUIRE_FALSE(stem.empty());
+    REQUIRE(std::filesystem::exists(stem + ".arcdiag"));
+
+    // THE ASSERTION: whatever landed, it PARSES. Either the full envelope was
+    // withheld and the minimal one stands, or the rebuild with the unbounded
+    // fields elided replaced it -- both are valid JSON, and a truncated file
+    // is neither.
+    const auto env = Arcane::Diag::ReadFile(stem + ".arcdiag");
+    REQUIRE(env.has_value());
+
+    // ...and it is still the RIGHT report: kind and the sibling paths survive
+    // elision, because they are what a reader acts on.
+    CHECK(env->kind == "hang");
+    CHECK(env->guid.IsValid());
+    CHECK(env->siblingDmp.empty() == false);
+
+    // The stack is never lost by eliding -- it lives in the .txt sibling the
+    // envelope names, which is written before any of this.
+    const std::string txt = Slurp(stem + ".txt");
+    CHECK(txt.find(" + 0x") != std::string::npos);
+
+    // No unparseable temp is left lying around for a reporter to pick up.
+    CHECK_FALSE(std::filesystem::exists(stem + ".arcdiag.tmp"));
 }
