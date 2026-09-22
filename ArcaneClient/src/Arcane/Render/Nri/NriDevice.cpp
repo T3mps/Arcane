@@ -322,7 +322,10 @@ namespace Arcane
             return nullptr;
         }
 
-        return FinishWrap(device, GraphicsBackend::D3D12);
+        auto wrapped = FinishWrap(device, GraphicsBackend::D3D12);
+        if (wrapped)
+            wrapped->m_d3d12Creation = &creation;
+        return wrapped;
     }
 
     std::unique_ptr<NriDevice> NriDevice::Wrap(const NativeDeviceOwner& native)
@@ -478,7 +481,24 @@ namespace Arcane
         // ID3D12Device -- NRI set m_OwnsNativeObjects = false for the wrapper
         // path. The native device must therefore still be alive here, and its
         // owner destroys it after us.
+        //
+        // Bracketed by two DXGI debug-queue drains on D3D12, so a message the
+        // layers raise while NRI's own objects go out is attributed to THIS
+        // step and not to whatever ran before it (the DXGI queue only stores;
+        // see DeviceCreationD3D12.cpp).
+        if (m_backend == GraphicsBackend::D3D12)
+        {
+            if (m_d3d12Creation)
+                DrainD3D12DebugMessages(*m_d3d12Creation, "before nriDestroyDevice");
+            DrainDxgiDebugMessages("before nriDestroyDevice");
+        }
         nriDestroyDevice(m_device);
+        if (m_backend == GraphicsBackend::D3D12)
+        {
+            if (m_d3d12Creation)
+                DrainD3D12DebugMessages(*m_d3d12Creation, "after nriDestroyDevice");
+            DrainDxgiDebugMessages("after nriDestroyDevice");
+        }
         m_device        = nullptr;
         m_graphicsQueue = nullptr;
     }

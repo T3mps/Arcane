@@ -29,12 +29,27 @@ namespace Arcane
         Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
         Microsoft::WRL::ComPtr<ID3D12Device>  device;
 
+        // The reference ARMOR on `device`: this many extra AddRefs, taken at
+        // creation and audited then released as the very last thing
+        // DestroyD3D12NativeDevice does. It absorbs a module outside Arcane
+        // releasing our device more than it acquired (an injected overlay:
+        // see ArmorD3D12Device), so no teardown release can reach zero under
+        // NRI, D3D12MA or this owner; the audit names any deficit.
+        ULONG deviceArmorRefs = 0;
+
         // Contract item 12's registration, held so the owner can unregister:
         // the callback is a function in ArcaneClient.dll and must not outlive
         // it. Null (and cookie 0) unless the debug layer was requested AND
         // ID3D12InfoQueue1 resolved.
         Microsoft::WRL::ComPtr<ID3D12InfoQueue1> infoQueue;
         DWORD                                    infoQueueCookie = 0;
+
+        // The BASE info queue, kept alive for the device's whole life: on a
+        // layer without ID3D12InfoQueue1 (the Windows 10 in-box one) it is
+        // the only reader of the D3D12 layer's stored messages, and it is
+        // where the break-on-severity disarm was written. Null when the debug
+        // layer is not on this device.
+        Microsoft::WRL::ComPtr<ID3D12InfoQueue> infoQueueBase;
 
         // Contract item 10: the ONE D3D12_COMMAND_LIST_TYPE_DIRECT queue.
         // It is what the DXGI swapchain binds to, and it is what the wrapper
@@ -65,4 +80,16 @@ namespace Arcane
     // Owner teardown: unregister, then drop every COM reference in the order
     // the member layout above encodes.
     void DestroyD3D12NativeDevice(D3D12DeviceCreation& creation);
+
+    // The DXGI debug layer's messages, read out of its (store-only) info
+    // queue into the log and the RenderErrorCount latch. No-op when the debug
+    // layer was not requested or DXGIDebug.dll is absent. `moment` names the
+    // drain site in each message. Called by the owner's teardown above and
+    // by ~NriDevice around nriDestroyDevice; safe from any backend.
+    void DrainDxgiDebugMessages(const char* moment);
+
+    // The D3D12 debug layer's own stored messages (creation.infoQueueBase),
+    // read into the log and the latch the same way. No-op without the layer.
+    void DrainD3D12DebugMessages(const D3D12DeviceCreation& creation, const char* moment);
+
 }

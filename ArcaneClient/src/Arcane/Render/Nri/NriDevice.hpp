@@ -139,6 +139,9 @@ namespace Arcane
         // point of first use.
         [[nodiscard]] const NriDeviceCaps& Caps() const noexcept { return m_caps; }
 
+        // The D3D12 creation half this device wrapped; null on other backends.
+        [[nodiscard]] const D3D12DeviceCreation* D3D12Creation() const noexcept { return m_d3d12Creation; }
+
         // The GRAPHICS queue proven reachable at wrap time (contract item 7 /
         // §1.6.3: NRI clamps a declared queueNum against PHYSICAL family
         // capacity, and a failed throwaway-instance probe clamps it to ZERO,
@@ -187,5 +190,9 @@ namespace Arcane
         nri::Queue*        m_graphicsQueue = nullptr;
         GraphicsBackend    m_backend       = GraphicsBackend::D3D12;
         NriDeviceCaps      m_caps{};
+        // The creation half this device wrapped (WrapD3D12), which outlives
+        // it by contract; null on every other backend. ~NriDevice reads the
+        // D3D12 debug layer's stored messages through it.
+        const D3D12DeviceCreation* m_d3d12Creation = nullptr;
     };
 }

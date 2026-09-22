@@ -17,7 +17,9 @@
 #include <Arcane/Render/RenderErrorLatch.hpp>
 
 #include <d3d12.h>
+#include <d3d12sdklayers.h>   // DXGI_DEBUG_D3D12 -- the D3D12 layer's producer GUID in the DXGI info queue
 #include <dxgi1_6.h>
+#include <dxgidebug.h>        // IDXGIInfoQueue / DXGIGetDebugInterface1 -- the DXGI debug layer's own channel
 #include <wrl/client.h>
 
 #include <atomic>
@@ -62,6 +64,114 @@ namespace Arcane
         // second D3D12 device at all, so today this costs nothing.
         std::atomic<bool> g_d3d12DeviceCreated{ false };
         std::atomic<bool> g_d3d12DebugLayerEnabled{ false };
+
+        // The DXGI debug layer's info queue. PROCESS-GLOBAL like the layer
+        // itself (DXGIGetDebugInterface1 hands out one queue per process, not
+        // per factory or device), so it lives here beside the other
+        // process-global debug-layer state and not in D3D12DeviceCreation.
+        //
+        // Why it has to be armed at all: the D3D12 InfoQueue disarm further
+        // down covers the D3D12 layer's break-on-severity ONLY. The DXGI
+        // layer keeps its own queue with its own break flags, and those
+        // default to break-on-ERROR -- so any DXGI ERROR (and, on the Windows
+        // 10 in-box D3D12SDKLayers.dll, which reports THROUGH DXGIDebug.dll's
+        // DXGI_SDK_MESSAGE, some D3D12 ones) ends in DebugBreak(), which with
+        // no debugger attached is an unhandled STATUS_BREAKPOINT (0x80000003)
+        // and kills the process with the message text delivered to nobody.
+        // Observed at the desk 2026-09-22: the editor's ordinary Shutdown
+        // after a game-module rebuild died exactly that way inside
+        // ~DeviceD3D12, with a minidump that carried no message string.
+        //
+        // Same policy as the D3D12 half: the host does the reporting. Break
+        // off on all three severities, and the stored messages are DRAINED
+        // into the log and the RenderErrorCount latch by
+        // DrainDxgiDebugMessages below, so a DXGI ERROR fails the 0/0 gate
+        // exactly like a D3D12 or NRI one instead of aborting the process.
+        //
+        // Null when the debug layer was never requested or DXGIDebug.dll is
+        // not on the machine (it ships with the Graphics Tools optional
+        // feature, not with Windows proper) -- DrainDxgiDebugMessages is a
+        // no-op then.
+        ComPtr<IDXGIInfoQueue> g_dxgiInfoQueue;
+        std::atomic<bool>      g_dxgiInfoQueueProbed{ false };
+
+        // The device reference armor (defined with its rationale further
+        // down, beside the teardown that audits it).
+        void ArmorD3D12Device(D3D12DeviceCreation& out);
+        void ReleaseArmoredD3D12Device(D3D12DeviceCreation& creation);
+
+        const char* DxgiDebugProducerName(const GUID& producer)
+        {
+            if (producer == DXGI_DEBUG_DXGI)
+                return "dxgi";
+            if (producer == DXGI_DEBUG_D3D12)
+                return "d3d12";
+            if (producer == DXGI_DEBUG_APP)
+                return "app";
+            return "unknown-producer";
+        }
+
+        const char* D3D12DebugSeverityName(D3D12_MESSAGE_SEVERITY severity)
+        {
+            switch (severity)
+            {
+            case D3D12_MESSAGE_SEVERITY_CORRUPTION: return "CORRUPTION";
+            case D3D12_MESSAGE_SEVERITY_ERROR:      return "ERROR";
+            case D3D12_MESSAGE_SEVERITY_WARNING:    return "WARNING";
+            case D3D12_MESSAGE_SEVERITY_INFO:       return "INFO";
+            case D3D12_MESSAGE_SEVERITY_MESSAGE:    return "MESSAGE";
+            }
+            return "?";
+        }
+
+        const char* DxgiDebugSeverityName(DXGI_INFO_QUEUE_MESSAGE_SEVERITY severity)
+        {
+            switch (severity)
+            {
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION: return "CORRUPTION";
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR:      return "ERROR";
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING:    return "WARNING";
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_INFO:       return "INFO";
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_MESSAGE:    return "MESSAGE";
+            }
+            return "?";
+        }
+
+        // Once per process, and only when the D3D12 debug layer is going on:
+        // the DXGI debug layer is what DXGI_CREATE_FACTORY_DEBUG turns on, so
+        // the two are armed together. Failure is a diagnostics degradation,
+        // never a create failure.
+        //
+        // WHAT THIS DOES NOT COVER, stated because it was measured: the
+        // layers' CORRUPTION-class reports -- a call on an object the layer
+        // knows to be destroyed -- DebugBreak() out of DXGIDebug!
+        // DXGI_SDK_MESSAGE regardless of every break switch (all read back
+        // as off at the moment of such a break, desk 2026-09-22), and
+        // resuming past one lands on the corrupted object as an access
+        // violation. That break is protective and stays. What it guarded on
+        // this desk is RepairForeignDeviceOverRelease below.
+        void ArmDxgiDebugQueue()
+        {
+            if (g_dxgiInfoQueueProbed.exchange(true, std::memory_order_acq_rel))
+                return;
+
+            const HRESULT hr = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&g_dxgiInfoQueue));
+            if (FAILED(hr) || !g_dxgiInfoQueue)
+            {
+                g_dxgiInfoQueue.Reset();
+                ARC_WARN("DXGI debug info queue unavailable (DXGIGetDebugInterface1 hr=0x{:08X}; "
+                         "DXGIDebug.dll absent?); DXGI debug-layer messages will not reach the log",
+                         static_cast<uint32_t>(hr));
+                return;
+            }
+
+            // The DXGI twin of the ID3D12InfoQueue disarm below. DXGI_DEBUG_ALL
+            // is every producer the queue knows -- DXGI itself, the D3D12
+            // layer's messages that travel through it, and the app's.
+            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR, FALSE);
+            g_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_ALL, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING, FALSE);
+        }
 
         // F-3: the ONE device-removed observation point for this backend.
         // It is reached through RenderErrorLatch's hook slot, which
@@ -276,6 +386,12 @@ namespace Arcane
             }
         }
 
+        // BEFORE the factory: DXGI_CREATE_FACTORY_DEBUG is what switches the
+        // DXGI debug layer on, and its queue must already have break-off set
+        // when the first DXGI message can arrive.
+        if (debugLayerActive)
+            ArmDxgiDebugQueue();
+
         if (FAILED(CreateDXGIFactory2(factoryFlags, IID_PPV_ARGS(&out.factory))))
         {
             ARC_ERROR("CreateDXGIFactory2 failed");
@@ -337,6 +453,10 @@ namespace Arcane
         // window above is CLOSED for every later creation.
         g_d3d12DeviceCreated.store(true, std::memory_order_release);
 
+        // Before anything else can hold or touch the count -- see
+        // ArmorD3D12Device / ReleaseArmoredD3D12Device below.
+        ArmorD3D12Device(out);
+
         // The device-side half of the debug layer. BOTH QueryInterface results
         // are kept, because which one fails IS the diagnosis: the base
         // ID3D12InfoQueue is implemented by the debug layer's device wrapper,
@@ -386,6 +506,11 @@ namespace Arcane
                     ARC_WARN("ID3D12InfoQueue::PushStorageFilter failed; D3D12 INFO/MESSAGE "
                              "chatter will reach the debug-layer callback");
                 }
+                // Kept for the device's life: where ID3D12InfoQueue1 is
+                // missing (below), DrainD3D12DebugMessages reads the stored
+                // messages through this -- the only channel the in-box layer
+                // leaves open.
+                out.infoQueueBase = infoQueue;
             }
 
             // NRI capability contract item 12: turning break-off is all the
@@ -478,9 +603,234 @@ namespace Arcane
         UnregisterD3D12DebugCallback(creation);
         creation.graphicsQueue.Reset();
         creation.infoQueue.Reset();
-        creation.device.Reset();
+        creation.infoQueueBase.Reset();
+        ReleaseArmoredD3D12Device(creation);   // the owner's reference + the armor, audited
         creation.adapter.Reset();
         creation.factory.Reset();
+        // The device's final release is the last moment the layers can speak
+        // about it (live-object reports land here); read them out.
+        DrainDxgiDebugMessages("native device released");
+    }
+
+    // The DXGI debug queue's delivery half -- the counterpart of
+    // D3D12DebugLayerCallback for a layer that has NO callback interface on
+    // any Windows release: IDXGIInfoQueue only STORES, so the host has to
+    // come and read. Same sink and same severity split as the D3D12 callback
+    // (CORRUPTION/ERROR -> the latch through NoteError, tagged by the
+    // producer; WARNING -> ARC_WARN; INFO/MESSAGE dropped), so "an error
+    // happened" means one thing however it arrived.
+    //
+    // `moment` names the drain site in the log, because a stored message says
+    // nothing about WHEN it was raised -- only that it was raised before this
+    // read and after the previous one.
+    void DrainDxgiDebugMessages(const char* moment)
+    {
+        if (!g_dxgiInfoQueue)
+            return;
+
+        // The summary says what the queue held, and only when there is
+        // something to say: a quiet run stays quiet. The discarded count is
+        // cumulative for the process (the limit is 1024 per producer, and a
+        // 6 s windowed dx12 run fills the D3D12 producer's slot with WARNING
+        // #820/#821 alone).
+        const UINT64 count     = g_dxgiInfoQueue->GetNumStoredMessages(DXGI_DEBUG_ALL);
+        const UINT64 discarded = g_dxgiInfoQueue->GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL);
+        if (count == 0 && discarded == 0)
+            return;
+        ARC_INFO("[dxgi] info queue at '{}': {} stored message(s), {} discarded at the {}-per-producer limit",
+                 moment ? moment : "?", count, discarded, DXGI_INFO_QUEUE_DEFAULT_MESSAGE_COUNT_LIMIT);
+        if (count == 0)
+            return;
+
+        std::string storage;
+        for (UINT64 i = 0; i < count; ++i)
+        {
+            SIZE_T length = 0;
+            if (FAILED(g_dxgiInfoQueue->GetMessage(DXGI_DEBUG_ALL, i, nullptr, &length)) || length == 0)
+                continue;
+
+            storage.resize(length);
+            auto* message = reinterpret_cast<DXGI_INFO_QUEUE_MESSAGE*>(storage.data());
+            if (FAILED(g_dxgiInfoQueue->GetMessage(DXGI_DEBUG_ALL, i, message, &length)))
+                continue;
+
+            const char* producer = DxgiDebugProducerName(message->Producer);
+            const std::string text = std::string(message->pDescription ? message->pDescription : "",
+                                                 message->DescriptionByteLength) +
+                                     " [" + producer + " " + DxgiDebugSeverityName(message->Severity) +
+                                     " #" + std::to_string(message->ID) + ", drained at: " +
+                                     (moment ? moment : "?") + "]";
+
+            switch (message->Severity)
+            {
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION:
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR:
+                // Tagged by PRODUCER so a D3D12 message that travelled through
+                // DXGIDebug (the Windows 10 in-box layer's path) reads as
+                // "[d3d12]" -- the same tag D3D12DebugLayerCallback gives it
+                // where ID3D12InfoQueue1 exists -- and a DXGI one as "[dxgi]".
+                RenderErrorLatch::Instance().NoteError(producer, text.c_str());
+                break;
+            case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING:
+                ARC_WARN("[{}] {}", producer, text);
+                break;
+            default:
+                break;
+            }
+        }
+        g_dxgiInfoQueue->ClearStoredMessages(DXGI_DEBUG_ALL);
+    }
+
+    // THE DESK CRASH OF 2026-09-22, and what it actually was.
+    //
+    // Symptom: the editor (windowed, dx12, debug layer on) died at CLOSE with
+    // an unhandled STATUS_BREAKPOINT out of DXGIDebug!DXGI_SDK_MESSAGE, under
+    // whichever device-touching Release() ran first inside ~DeviceD3D12 --
+    // the zero buffer one run, a D3D12MA device interface the next, a command
+    // signature the one after. Never headless, never at 90 frames, always at
+    // 900, blamed on the game-module rebuild that happened to precede it.
+    //
+    // Cause, measured with a per-frame refcount trace and a vtable hook on
+    // the device's AddRef/Release: every 31 presented frames, GTIII-OSD64.dll
+    // -- the ASUS GPU Tweak III on-screen-display hook, injected into every
+    // windowed D3D12 process on that desk beside NahimicOSD.dll and
+    // nvspcap64.dll -- called Release() on OUR ID3D12Device three times
+    // against two acquisitions. Net one reference lost per period: the count
+    // read 33 at teardown headless (nriDestroyDevice then released 30 of
+    // them cleanly) but 30 after 90 windowed frames and 22 after 900. Below
+    // 30, nriDestroyDevice's own releases hit zero part-way, the device was
+    // destroyed under NRI, D3D12MA and this owner, and the debug layer's
+    // next look at it was the CORRUPTION break above (resumed once as an
+    // experiment: an access violation on the freed wrapper). The rebuild was
+    // a coincidence of session length.
+    //
+    // Why ARMOR rather than a measured repair: the leak is not Arcane's to
+    // fix and cannot be prevented from inside the process, and the legal
+    // count at any teardown point is NOT knowable -- on this layer every
+    // live child object holds a device reference, and NRI creates
+    // device-owned objects lazily (a command signature on the first indirect
+    // draw, a D3D12MA pool on the first allocation) that live until
+    // ~DeviceD3D12. A baseline taken after WrapD3D12 was tried and read
+    // below the teardown floor for exactly that reason. What IS known: the
+    // armor is ours, it is taken while nothing else can have touched the
+    // count, and it is released LAST -- so at that moment the live count
+    // must be armor + 1 (the owner's own reference), and any shortfall is
+    // exactly the number of foreign releases. Loud, once, naming the number:
+    // a desk with such an overlay sees the WARN on every close and knows
+    // what to uninstall or blacklist; a clean desk never sees a line.
+    //
+    // 65536 references cover ~2M presented frames at the measured rate
+    // (one per 31 frames), i.e. hours; ULONG has room for far more. The
+    // cost is one AddRef loop at creation and one Release loop at teardown,
+    // both through the debug layer's thin wrapper -- milliseconds, once.
+    namespace
+    {
+        constexpr ULONG kDeviceArmorRefs = 1u << 16;
+
+        void ArmorD3D12Device(D3D12DeviceCreation& out)
+        {
+            for (ULONG i = 0; i < kDeviceArmorRefs; ++i)
+                out.device->AddRef();
+            out.deviceArmorRefs = kDeviceArmorRefs;
+        }
+
+        // The audit + the last releases. The owner's ComPtr reference is
+        // detached into this so the count read here is exactly armor + 1
+        // when nobody outside this process has touched it.
+        void ReleaseArmoredD3D12Device(D3D12DeviceCreation& creation)
+        {
+            ID3D12Device* device = creation.device.Detach();
+            if (!device)
+                return;
+            const ULONG expected = creation.deviceArmorRefs + 1;
+            creation.deviceArmorRefs = 0;
+
+            device->AddRef();
+            const ULONG live = device->Release();
+            ULONG       toRelease = expected;
+            if (live < expected)
+            {
+                // A foreign deficit: release only what is really there, so the
+                // count reaches zero here and not one Release too late.
+                ARC_WARN("[d3d12] ID3D12Device refcount {} at final release is below the {} this process "
+                         "holds: a module outside Arcane (an injected overlay -- GPU Tweak III OSD, Nahimic, "
+                         "ShadowPlay-class) released our device {} time(s) too many; the reference armor "
+                         "absorbed it. Without the armor the close is an unhandled STATUS_BREAKPOINT in "
+                         "D3D12SDKLayers (the device destroyed under NRI/D3D12MA).",
+                         live, expected, expected - live);
+                toRelease = live;
+            }
+            else if (live > expected)
+            {
+                // Somebody still holds the device after every owner released
+                // theirs. Not ours to release: leave it exactly as a plain
+                // ComPtr teardown would have, and say so.
+                ARC_WARN("[d3d12] ID3D12Device refcount {} at final release exceeds the {} this process "
+                         "holds: {} reference(s) leaked by something that outlives the render device",
+                         live, expected, live - expected);
+            }
+            for (ULONG i = 0; i < toRelease; ++i)
+                device->Release();
+        }
+    }
+
+    // The D3D12 layer's stored messages, through the base ID3D12InfoQueue
+    // kept in the creation half. On the Windows 10 in-box layer this storage
+    // IS the D3D12 producer's slot of the DXGI queue above (clearing either
+    // empties both -- observed), so the two drains are one reader with two
+    // handles; where ID3D12InfoQueue1 exists the callback has already
+    // delivered everything and this finds the queue empty. Same sink, same
+    // severity split. ~NriDevice runs it before the DXGI drain so a D3D12
+    // message is read with D3D12's own ID and severity names.
+    void DrainD3D12DebugMessages(const D3D12DeviceCreation& creation, const char* moment)
+    {
+        ID3D12InfoQueue* queue = creation.infoQueueBase.Get();
+        if (!queue)
+            return;
+
+        const UINT64 count     = queue->GetNumStoredMessages();
+        const UINT64 discarded = queue->GetNumMessagesDiscardedByMessageCountLimit();
+        if (count == 0 && discarded == 0)
+            return;
+        ARC_INFO("[d3d12] info queue at '{}': {} stored message(s), {} discarded at the {} limit",
+                 moment ? moment : "?", count, discarded, queue->GetMessageCountLimit());
+        if (count == 0)
+            return;
+        if (count == 0)
+            return;
+
+        std::string storage;
+        for (UINT64 i = 0; i < count; ++i)
+        {
+            SIZE_T length = 0;
+            if (FAILED(queue->GetMessage(i, nullptr, &length)) || length == 0)
+                continue;
+            storage.resize(length);
+            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            if (FAILED(queue->GetMessage(i, message, &length)))
+                continue;
+
+            const std::string text = std::string(message->pDescription ? message->pDescription : "",
+                                                 message->DescriptionByteLength) +
+                                     " [d3d12 " + std::string(D3D12DebugSeverityName(message->Severity)) +
+                                     " #" + std::to_string(static_cast<int>(message->ID)) + ", drained at: " +
+                                     (moment ? moment : "?") + "]";
+            switch (message->Severity)
+            {
+            case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+            case D3D12_MESSAGE_SEVERITY_ERROR:
+                RenderErrorLatch::Instance().NoteError("d3d12", text.c_str());
+                break;
+            case D3D12_MESSAGE_SEVERITY_WARNING:
+                ARC_WARN("[d3d12] {}", text);
+                break;
+            default:
+                // INFO/MESSAGE are denied at the storage filter; nothing of
+                // theirs is ever here to drop.
+                break;
+            }
+        }
+        queue->ClearStoredMessages();
     }
 
     // The narrow export (DeviceRemovedObservers.hpp): the SAME observer
