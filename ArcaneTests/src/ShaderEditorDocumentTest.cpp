@@ -12,16 +12,20 @@
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/CommandStack.hpp>   // the mesh-metadata undo step rides the ONE undo history
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
+
+#include <Astra/Registry/Registry.hpp>   // CommandStack's resolver target (never called here)
 
 #include <imgui.h>   // the pane-layout ini round-trip drives ImGui's settings API
 
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -207,6 +211,130 @@ TEST_CASE("ShaderEditorDocument authors bounded mesh metadata only on mesh surfa
         REQUIRE(loaded.has_value());
         ShaderEditorDocument doc(DocServices{}, file, *loaded);
         CHECK_FALSE(doc.CaptureMeshMaterialMetadata().has_value());
+    }
+}
+
+// F3 plan 2 final review, I2: the mesh metadata rows (blend, alpha cutoff,
+// two-sided) were the ONE gesture in the material panel's "Rendering" block
+// that bypassed the document's undo plumbing -- Ctrl+Z after switching Blend
+// to Transparent reverted the colour drag before it and left the blend alone.
+// SetMeshMaterialMetadataWithUndo is the panel's write path now: one step per
+// edit, Undo restores the capture, Redo re-applies what LANDED (post-clamp).
+TEST_CASE("ShaderEditorDocument: a mesh metadata edit is one undo step -- undo restores blend/cutoff/twoSided, "
+          "redo re-applies the clamped state",
+          "[editor][material][mesh]")
+{
+    const fs::path dir = TempDir("mesh_metadata_undo");
+    const fs::path meshFile = dir / "mesh.arcmat";
+
+    Arcane::MaterialAssetData mesh;
+    mesh.id = Arcane::Guid::Generate();
+    mesh.name = "Mesh metadata undo";
+    mesh.kind = "mesh";
+    REQUIRE(Arcane::SaveMaterialAsset(meshFile, mesh));
+    const auto loaded = Arcane::LoadMaterialAsset(meshFile);
+    REQUIRE(loaded.has_value());
+
+    // A real CommandStack over an EMPTY registry (EditGestureTest's fixture):
+    // the metadata command never snapshots a component, so `resolve` is never
+    // called; and no Arcane::Runtime, which would steal the TypeContext.
+    Astra::Registry registry;
+    Arcane::CommandStack stack{[&registry]() -> Astra::Registry& { return registry; }};
+    DocServices services;
+    services.undo = &stack;
+    ShaderEditorDocument doc(services, meshFile, *loaded);
+
+    using State = ShaderEditorDocument::MeshMaterialMetadataState;
+    const auto captured = [&]() -> State
+    {
+        const std::optional<State> s = doc.CaptureMeshMaterialMetadata();
+        REQUIRE(s.has_value());
+        return *s;
+    };
+    const auto isUnset = [](const State& s)
+    {
+        return !s.blend.has_value() && !s.alphaCutoff.has_value() && !s.twoSided.has_value();
+    };
+    const auto isEdited = [](const State& s)
+    {
+        return s.blend == Arcane::MaterialBlendMode::Transparent && s.alphaCutoff == 1.0f && s.twoSided == true;
+    };
+    REQUIRE(isUnset(captured()));
+    CHECK_FALSE(stack.CanUndo());
+
+    // THE EDIT. The cutoff is out of range ON PURPOSE: Redo must re-apply the
+    // state that LANDED (clamped to 1.0), never the request.
+    State edit;
+    edit.blend       = Arcane::MaterialBlendMode::Transparent;
+    edit.alphaCutoff = 2.0f;
+    edit.twoSided    = true;
+    doc.SetMeshMaterialMetadataWithUndo(edit);
+    CHECK(isEdited(captured()));
+    CHECK(doc.Dirty());
+    REQUIRE(stack.CanUndo());
+    CHECK_FALSE(stack.CanRedo());
+    CHECK(std::string(stack.UndoLabel()) == "Edit Blend");
+
+    // ONE undo restores all three fields to the capture...
+    stack.Undo();
+    CHECK(isUnset(captured()));
+    CHECK(stack.CanRedo());
+    CHECK_FALSE(stack.CanUndo());
+
+    // ...and redo re-applies the landed state.
+    stack.Redo();
+    CHECK(isEdited(captured()));
+
+    // A second edit is its own step: one undo reverts only it, the first stays.
+    State second = captured();
+    second.blend = Arcane::MaterialBlendMode::Masked;
+    doc.SetMeshMaterialMetadataWithUndo(second);
+    CHECK(captured().blend == Arcane::MaterialBlendMode::Masked);
+    CHECK(std::string(stack.UndoLabel()) == "Edit Blend");
+    stack.Undo();
+    CHECK(isEdited(captured()));
+    CHECK(stack.CanUndo());   // the first edit is still a step of its own
+    CHECK(stack.CanRedo());
+
+    // A write that changes nothing pushes nothing -- redo stays intact, where a
+    // pushed step would have cleared it. A request the clamp collapses back
+    // onto the current value is "nothing" too.
+    doc.SetMeshMaterialMetadataWithUndo(captured());
+    CHECK(stack.CanRedo());
+    State clampedSame = captured();
+    clampedSame.alphaCutoff = 7.0f;   // clamps to 1.0, which is the current value
+    doc.SetMeshMaterialMetadataWithUndo(clampedSame);
+    CHECK(stack.CanRedo());
+    CHECK(captured().alphaCutoff == 1.0f);
+
+    // Each field's label names the field, for the Undo menu.
+    State cutoffOnly = captured();
+    cutoffOnly.alphaCutoff = 0.25f;
+    doc.SetMeshMaterialMetadataWithUndo(cutoffOnly);
+    CHECK(std::string(stack.UndoLabel()) == "Edit Alpha Cutoff");
+    State twoSidedOnly = captured();
+    twoSidedOnly.twoSided = false;
+    doc.SetMeshMaterialMetadataWithUndo(twoSidedOnly);
+    CHECK(std::string(stack.UndoLabel()) == "Edit Two Sided");
+
+    // Not a mesh surface: no metadata, and no step.
+    {
+        const fs::path spriteFile = dir / "sprite.arcmat";
+        Arcane::MaterialAssetData sprite;
+        sprite.id = Arcane::Guid::Generate();
+        sprite.name = "sprite";
+        sprite.kind = "sprite";
+        sprite.snippet = kSnippet;
+        REQUIRE(Arcane::SaveMaterialAsset(spriteFile, sprite));
+        const auto loadedSprite = Arcane::LoadMaterialAsset(spriteFile);
+        REQUIRE(loadedSprite.has_value());
+        Astra::Registry spriteRegistry;
+        Arcane::CommandStack spriteStack{[&spriteRegistry]() -> Astra::Registry& { return spriteRegistry; }};
+        DocServices spriteServices;
+        spriteServices.undo = &spriteStack;
+        ShaderEditorDocument spriteDoc(spriteServices, spriteFile, *loadedSprite);
+        spriteDoc.SetMeshMaterialMetadataWithUndo(edit);
+        CHECK_FALSE(spriteStack.CanUndo());
     }
 }
 

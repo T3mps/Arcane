@@ -293,10 +293,19 @@ namespace Arcane::Editor
             std::optional<Arcane::MaterialBlendMode> blend;
             std::optional<float> alphaCutoff;
             std::optional<bool> twoSided;
+            bool operator==(const MeshMaterialMetadataState&) const = default;
         };
         [[nodiscard]] std::optional<MeshMaterialMetadataState>
             CaptureMeshMaterialMetadata() const;
         void ApplyMeshMaterialMetadata(MeshMaterialMetadataState state);
+        // THE UNDOABLE WRITE (F3 plan 2 final review, I2), the same shape as
+        // SetParamWithUndo: capture, Apply, then ONE step whose Undo restores
+        // the capture and whose Redo re-applies what actually LANDED (the
+        // clamped cutoff, not the request). A write that changes nothing
+        // pushes nothing. The panel's single-shot rows (blend, the override
+        // boxes, two-sided) call this; the cutoff drag applies live inside the
+        // EditGesture bracket and pushes the same step once, at close.
+        void SetMeshMaterialMetadataWithUndo(MeshMaterialMetadataState state);
 
         // Assisted param rename (design 2026-07-24): the BASE document's
         // propagation rewrote this INSTANCE's file on disk -- keep this open
@@ -586,6 +595,11 @@ namespace Arcane::Editor
                               const Arcane::MatParamValue& current);
         void SetParamWithUndo(const Arcane::ParamDecl& decl,
                               const Arcane::MatParamValue& value);
+        // One mesh-metadata step for whatever differs between `before` and the
+        // document's CURRENT metadata (labelled by the field that changed);
+        // nothing when nothing does. SetMeshMaterialMetadataWithUndo and the
+        // cutoff drag's gesture close both end here.
+        void PushMeshMaterialMetadataUndo(const MeshMaterialMetadataState& before);
 
         DocServices                     m_services;
         std::filesystem::path           m_path;

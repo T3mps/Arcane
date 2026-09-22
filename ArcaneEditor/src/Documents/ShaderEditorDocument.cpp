@@ -176,6 +176,44 @@ namespace Arcane::Editor
             Arcane::MatParamValue m_after;
         };
 
+        // One mesh-metadata edit (blend / alpha cutoff / two-sided) as an undo
+        // step: ParamEditCommand's shape over MaterialAssetData's three fields
+        // rather than an instance param. The live edit already happened; Undo
+        // restores the BEFORE state, Redo re-applies the AFTER state as it
+        // LANDED (post-clamp). Doc-identity through the same weak anchor: the
+        // metadata lives on m_data, which no recompile swaps, but a closed
+        // document still has to leave the step inert.
+        class MeshMaterialMetadataCommand final : public Arcane::ICommand
+        {
+        public:
+            using State = ShaderEditorDocument::MeshMaterialMetadataState;
+
+            MeshMaterialMetadataCommand(std::weak_ptr<ShaderEditorDocument*> anchor, std::string label,
+                                        State before, State after)
+                : m_anchor(std::move(anchor)), m_label(std::move(label)),
+                  m_before(std::move(before)), m_after(std::move(after))
+            {
+            }
+
+            void Undo() override { Apply(m_before); }
+            void Redo() override { Apply(m_after); }
+            const char* Label() const override { return m_label.c_str(); }
+
+        private:
+            void Apply(const State& state)
+            {
+                auto doc = m_anchor.lock();
+                if (!doc || !*doc)
+                    return;   // document closed -- the step is inert
+                (*doc)->ApplyMeshMaterialMetadata(state);
+            }
+
+            std::weak_ptr<ShaderEditorDocument*> m_anchor;
+            std::string m_label;
+            State       m_before;
+            State       m_after;
+        };
+
         std::uint64_t StageKey(const Arcane::Guid& id, bool vertex,
                                std::size_t pass = 0)
         {
@@ -1739,6 +1777,30 @@ namespace Arcane::Editor
         m_data.alphaCutoff = state.alphaCutoff;
         m_data.twoSided = state.twoSided;
         m_dirty = true;
+    }
+
+    void ShaderEditorDocument::SetMeshMaterialMetadataWithUndo(MeshMaterialMetadataState state)
+    {
+        const std::optional<MeshMaterialMetadataState> before = CaptureMeshMaterialMetadata();
+        if (!before)
+            return;   // not a mesh surface: there is no metadata to edit
+        ApplyMeshMaterialMetadata(std::move(state));
+        PushMeshMaterialMetadataUndo(*before);
+    }
+
+    void ShaderEditorDocument::PushMeshMaterialMetadataUndo(const MeshMaterialMetadataState& before)
+    {
+        const std::optional<MeshMaterialMetadataState> after = CaptureMeshMaterialMetadata();
+        if (!after || *after == before)
+            return;   // nothing changed (or the clamp collapsed the request back) -- no step, redo intact
+        if (!m_services.undo)
+            return;
+        // Labelled by the field that changed, blend first when several did (a
+        // blend switch is the edit the others ride along with).
+        const char* label = before.blend != after->blend             ? "Edit Blend"
+                          : before.alphaCutoff != after->alphaCutoff ? "Edit Alpha Cutoff"
+                                                                     : "Edit Two Sided";
+        m_services.undo->Push(std::make_unique<MeshMaterialMetadataCommand>(m_anchor, label, before, *after));
     }
 
     void ShaderEditorDocument::ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
@@ -5632,6 +5694,10 @@ namespace Arcane::Editor
 
             ImGui::SeparatorText("Rendering");
 
+            // EVERY ROW HERE IS AN UNDO STEP (F3 plan 2 final review, I2), like
+            // the param rows below it: the single-shot widgets go through
+            // SetMeshMaterialMetadataWithUndo; the cutoff drag rides the
+            // document's EditGesture bracket so one drag is one step.
             bool blendOverride = metadata->blend.has_value();
             if (IsInstance())
             {
@@ -5640,7 +5706,7 @@ namespace Arcane::Editor
                     metadata->blend = blendOverride
                         ? std::optional<Arcane::MaterialBlendMode>(inheritedBlend)
                         : std::nullopt;
-                    ApplyMeshMaterialMetadata(*metadata);
+                    SetMeshMaterialMetadataWithUndo(*metadata);
                 }
                 ImGui::SameLine();
             }
@@ -5649,7 +5715,7 @@ namespace Arcane::Editor
             if (ImGui::Combo("Blend", &blend, "Opaque\0Masked\0Transparent\0"))
             {
                 metadata->blend = static_cast<Arcane::MaterialBlendMode>(blend);
-                ApplyMeshMaterialMetadata(*metadata);
+                SetMeshMaterialMetadataWithUndo(*metadata);
             }
             if (IsInstance() && !blendOverride) ImGui::EndDisabled();
 
@@ -5661,18 +5727,32 @@ namespace Arcane::Editor
                     metadata->alphaCutoff = cutoffOverride
                         ? std::optional<float>(inheritedCutoff)
                         : std::nullopt;
-                    ApplyMeshMaterialMetadata(*metadata);
+                    SetMeshMaterialMetadataWithUndo(*metadata);
                 }
                 ImGui::SameLine();
             }
             float cutoff = metadata->alphaCutoff.value_or(inheritedCutoff);
             if (IsInstance() && !cutoffOverride) ImGui::BeginDisabled();
-            if (ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f,
-                                 "%.3f", ImGuiSliderFlags_AlwaysClamp))
+            const bool cutoffEdited = ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f,
+                                                       "%.3f", ImGuiSliderFlags_AlwaysClamp);
+            // ONE DRAG = ONE STEP, the param rows' bracket: `*metadata` is the
+            // document's state at activation (this frame's earlier rows have
+            // already written through), parked as the step's before-state; the
+            // step itself is built at close, against whatever the drag left --
+            // and a pure click that moved nothing pushes nothing.
+            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+                [] { return std::string("Edit Alpha Cutoff"); },
+                [&]() -> std::function<void()>
+                {
+                    return std::function<void()>(
+                        [this, before = *metadata] { PushMeshMaterialMetadataUndo(before); });
+                });
+            if (cutoffEdited)
             {
                 metadata->alphaCutoff = cutoff;
-                ApplyMeshMaterialMetadata(*metadata);
+                ApplyMeshMaterialMetadata(*metadata);   // LIVE; the step lands when the drag closes
             }
+            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
             if (IsInstance() && !cutoffOverride) ImGui::EndDisabled();
 
             bool twoSidedOverride = metadata->twoSided.has_value();
@@ -5683,7 +5763,7 @@ namespace Arcane::Editor
                     metadata->twoSided = twoSidedOverride
                         ? std::optional<bool>(inheritedTwoSided)
                         : std::nullopt;
-                    ApplyMeshMaterialMetadata(*metadata);
+                    SetMeshMaterialMetadataWithUndo(*metadata);
                 }
                 ImGui::SameLine();
             }
@@ -5692,7 +5772,7 @@ namespace Arcane::Editor
             if (ImGui::Checkbox("Two sided", &twoSided))
             {
                 metadata->twoSided = twoSided;
-                ApplyMeshMaterialMetadata(*metadata);
+                SetMeshMaterialMetadataWithUndo(*metadata);
             }
             if (IsInstance() && !twoSidedOverride) ImGui::EndDisabled();
             ImGui::Separator();
