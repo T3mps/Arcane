@@ -3,7 +3,9 @@
 **Date:** 2026-09-22
 
 **Status:** Draft -- brainstormed and approved section by section on
-2026-09-22; awaiting the written-spec review before the implementation plan.
+2026-09-22; audited line by line against UE 5.8.2's Windows crash path the
+same day (§2.1 records every delta and what changed here because of it);
+awaiting the written-spec review before the implementation plan.
 
 **Sequencing (binding order, 2026-09-22 amendment):** this arc runs now,
 ahead of F5. arcbuild II follows F5. The general allocator, worker-thread
@@ -111,6 +113,33 @@ because we have no backend.
 - The crash arena is used on Windows (UE builds one and never swaps it there).
 - No comment box, no send, no screenshot: nothing to send to yet.
 
+### 2.1 Audit against UE's Windows crash path (2026-09-22)
+
+Every choice this spec had made from reasoning rather than source was checked
+against `Engine/Source/Runtime/Core/Private/Windows/WindowsPlatformCrashContext.cpp`,
+`Runtime/Launch/Private/Windows/LaunchWindows.cpp`,
+`Runtime/Core/Private/Windows/WindowsPlatformMisc.cpp`,
+`Runtime/Core/Private/Microsoft/MicrosoftPlatformStackWalk.cpp` and
+`Programs/CrashReportClient/Private/CrashReportClientApp.cpp`. Outcome:
+
+| Item | UE 5.8.2 does | This spec now |
+|---|---|---|
+| Handler set | Less: `_set_invalid_parameter_handler`, `_set_purecall_handler`, `signal(SIGABRT)`, Debug-only `_CrtSetReportMode`; no `set_terminate`, no `_set_abort_behavior`, no `SetThreadStackGuarantee` (`LaunchWindows.cpp:90-96`, `WindowsPlatformMisc.cpp:1042`, `WindowsPlatformCrashContext.cpp:1460`) | Keeps the superset (§5.1); `set_terminate` adds the exception's `what()` and names `bad_alloc` as `out-of-memory`, which UE classifies too |
+| `SetErrorMode` | Only under `-unattended` (`LaunchWindows.cpp:211-213`); interactive runs leave WER as the backstop | CHANGED: `SEM_NOGPFAULTERRORBOX` only when unattended, so WER LocalDumps stay the interactive backstop for what SEH never sees (§5.1) |
+| Debugger attached | Runs WITHOUT the SEH guard "to exactly trap the crash" (`LaunchWindows.cpp:262-267`) | Match: no reporter, the debugger takes it (§9) |
+| Crash-thread order | Heartbeat stopped first (`:1573`), log put into panic mode BEFORE signalling (`:1836`), context XML written BEFORE the minidump (`:1034` then `:419`), then the log copied into the folder, then the client launched | CHANGED to that order: watchdog stopped, log backlog frozen, minimal envelope first, minidump, text, GPU provider, full envelope rewritten atomically, log backlog dumped, spawn (§5.2) |
+| Crash inside the crash thread | Its own `__try/__except` terminates with a dedicated code (`:1342-1345`, `CrashReporterCrashed`) | CHANGED: exit code 13 for a crash inside the crash path (§4, §9) |
+| Portable stack | `RtlLookupFunctionEntry` + `RtlVirtualUnwind`, no DbgHelp at all, in its own SEH guard (`MicrosoftPlatformStackWalk.cpp:108-134`) | CHANGED: same, `StackWalk64` dropped (§5.2) |
+| Log at crash | Panic-mode redirector, log copied into the crash folder, `LogFilePath` in the context (`GenericPlatformCrashContext.cpp:1102,1658`) | CHANGED: file sink keeps a backlog ring; the crash path dumps it into the folder; flush is best-effort (§5.6) |
+| Relaunch | Records the command line and a separate sanitized restart line; client relaunches with `CreateProc` (`CrashReportClient.cpp:204`) | CHANGED: the host passes a sanitized relaunch line with dev crash flags stripped (§6) |
+| Build machines | Never spawns the client ("not okay to have lingering processes", `:1052-1056`); files still written; unattended client has no deadline | CHANGED: no reporter spawn on a build machine; the unattended reporter has a hard deadline (§6) |
+| Shutdown hang | No exit watchdog; the heartbeat simply never stops through shutdown and `RequestExit(true)` is `TerminateProcess` after one flush | CHANGED: the exit sentinel IS the watchdog kept alive through shutdown with an exit deadline, no new thread (§5.7) |
+| Console close / logoff | Ctrl-C two-step; close/shutdown/logoff hard-terminate with `0xC000013A` (`WindowsPlatformMisc.cpp:1160-1168`); `WM_ENDSESSION` saves nothing | Kept ours, more than UE: two-step Ctrl-C adopted; close and end-session write autosaves within the OS budget, then a clean exit (§5.7) |
+| Fail-fasts SEH never sees | The pre-launched MONITOR client watches the editor pid and, on an exit code it does not recognise, synthesizes an "AbnormalShutdown - ExitCode: STATUS_STACK_OVERFLOW" report with the log (`CrashReportClientApp.cpp:1126-1140`; limits documented at `WindowsPlatformCrashContext.cpp:1798-1801`) | ADDED §5.8 monitor mode: the reporter is pre-launched for windowed hosts and turns an unrecognised exit code into an `abnormal-exit` report. The "cannot be caught" row is closed the way UE closes it |
+| Ensures | A continuable report shape shares the crash pipeline, no dump, no all-thread capture, execution continues (`:1871-1887`) | ADDED: `ARC_ENSURE` failures write a lightweight `ensure` report once per site (§5.3) |
+| Stack overflow | No guard-page reset; the crash thread plus the monitor | Ours adds the stack guarantee and keeps both |
+| Exit codes | `3` on a crash via `RequestExit`, `777xxx` only for reporter diagnostics | Kept 10/11/12, added 13; the kind stays in the envelope |
+
 ## 3. Decisions taken in the brainstorm (2026-09-22)
 
 1. Coverage: crashes, hangs and GPU stalls. (A)
@@ -177,9 +206,10 @@ Everything else comes from the envelope. `Diag::Envelope` gains, additively
 **Exit codes** (a block clear of the hosts' existing 0-5, which the Hub and
 the witness harness decode): `10` crashed with a report written, `11` hang
 terminated by the reporter (the reporter's `TerminateProcess` argument), `12`
-exit sentinel fired. The kind is always in the envelope; the codes only tell
-a parent "a report exists". Fail-fasts we cannot catch (§5.3) keep their
-NTSTATUS codes.
+exit sentinel fired, `13` a crash inside the crash path itself (UE's
+`CrashReporterCrashed` shape). The kind is always in the envelope; the codes
+only tell a parent "a report exists". Fail-fasts SEH never sees keep their
+NTSTATUS codes, and the monitor (§5.8) turns those into a report.
 
 **Threads.** The crash thread (raw `CreateThread`, created in `Install`,
 waits on an event); the watchdog thread (existing); the reporter's UI thread
@@ -200,7 +230,11 @@ host), `commandLine` (for relaunch), `logDir` (empty = `<dump dir>/../Logs`,
 retargeted with `RetargetDumpDir`).
 
 Order inside `Install`, first to last, and the order is the point:
-1. `SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX)`.
+1. `SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX)`, plus
+   `SEM_NOGPFAULTERRORBOX` ONLY when `unattended` -- UE's rule
+   (`LaunchWindows.cpp:211`): an interactive run keeps WER reachable as the
+   backstop for the fail-fasts SEH never sees, and our own filter terminates
+   before WER's dialog could appear for everything else.
 2. `_set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT)`;
    `_CrtSetReportMode(_CRT_ASSERT | _CRT_ERROR | _CRT_WARN, _CRTDBG_MODE_FILE)`
    to stderr in Debug. No CRT dialog can appear after this line.
@@ -221,31 +255,42 @@ of `main` and the per-site `Shutdown()` calls before refusals go.
 
 ### 5.2 On a crash
 
-The filter (faulting thread): `g_inCrashHandler` guard as today; store the
-`EXCEPTION_POINTERS`, the thread id and the kind in the arena; signal the
-crash thread; `WaitForSingleObject` up to 60 s (UE's timeout); then
-`TerminateProcess(GetCurrentProcess(), 10)`. Never chains to the previous
-filter for our own kinds (that chain is what let WER's dialog appear).
+The filter (faulting thread): `g_inCrashHandler` guard as today (UE's
+`ReportCrashCallCount`); freeze the log backlog (§5.6, UE's `GLog->Panic()`
+before anything else); store the `EXCEPTION_POINTERS`, the thread id and the
+kind in the arena; signal the crash thread; `WaitForSingleObject` up to 60 s
+(UE's timeout); then `TerminateProcess(GetCurrentProcess(), 10)`. Never
+chains to the previous filter for our own kinds (that chain is what let
+WER's dialog appear).
 
-The crash thread, in order, each step independently survivable:
-1. Minidump (`MiniDumpWriteDump` with the faulting thread's exception
-   pointers, same type flags as today). FIRST, so it survives whatever fails
-   next.
-2. The portable stack of the faulting thread: `RtlCaptureStackBackTrace` /
-   `StackWalk64` addresses resolved to `module+offset` with the module base,
-   using the loaded-module list only -- no DbgHelp symbol loading, no
-   `SymInitialize`. Unloaded modules marked as such (the minidump carries
-   `MiniDumpWithUnloadedModules`).
-3. The `.txt` header as today (reason, app, pid, phase, `injected :` line
+The crash thread runs inside its own SEH guard whose handler terminates the
+process with 13 (UE: `CrashReporterCrashed`, `:1342`). Its steps, in UE's
+order (`HandleCrashInternal`, `:1570-1669`), each independently survivable:
+1. Stop the watchdog so no hang report interleaves with this one (UE stops
+   its heartbeat first, `:1573`).
+2. The portable stack of the faulting thread from the captured `CONTEXT`:
+   `RtlLookupFunctionEntry` + `RtlVirtualUnwind` per frame, addresses
+   resolved to `module+offset` against the loaded-module list -- no DbgHelp
+   at all (UE: `MicrosoftPlatformStackWalk.cpp:108-134`). Unloaded modules
+   marked (the minidump carries `MiniDumpWithUnloadedModules`).
+3. A MINIMAL envelope first: kind, reason, phase, portable stack, sibling
+   paths, from the arena, so the reporter can start even if everything
+   after this wedges (UE writes its context XML before the minidump,
+   `:1034`).
+4. Minidump (`MiniDumpWriteDump` with the faulting thread's exception
+   pointers, same type flags as today).
+5. The `.txt` header as today (reason, app, pid, phase, `injected :` line
    from `ForeignModules::LastScan`, exception) plus the portable stack. The
    all-thread symbolized walk is REMOVED from the in-process path; the
    reporter produces it from the minidump.
-4. The GPU section provider (DRED, device fault), unchanged, bounded by the
+6. The GPU section provider (DRED, device fault), unchanged, bounded by the
    filter's timeout.
-5. The envelope (`.arcdiag`) with the new fields.
-6. Log flush with a bounded attempt (§9), then the reporter spawn
-   (`CreateProcessW`, detached, no handle kept, static command line + the
-   envelope path), then return; the faulting thread wakes and terminates.
+7. The FULL envelope, rewritten atomically over the minimal one.
+8. The log backlog dumped into the crash folder as `<stem>.log.txt` (UE's
+   `DumpLog`, `GenericPlatformCrashContext.cpp:1658`), then a best-effort
+   file-sink flush, then the reporter spawn (`CreateProcessW`, detached, no
+   handle kept, static command line + the envelope path), then return; the
+   faulting thread wakes and terminates.
 
 `ARC_ERROR`'s echo of the whole report into the log stays but moves after the
 files are on disk.
@@ -262,16 +307,25 @@ written with the current context):
   file and line) through the crash thread and terminates the process with
   code 10; it never returns and `abort()` is never reached.
 - **terminate** (`std::set_terminate`): kind `terminate`; if
-  `std::current_exception()` is set, its `what()` goes into the reason.
+  `std::current_exception()` is set, its `what()` goes into the reason, and
+  a `std::bad_alloc` makes the kind `out-of-memory` (UE classifies OOM as
+  its own crash type, `:1582-1627`).
+- **ensure** (`ARC_ENSURE` / Mosaic `FailEnsure`, the recoverable path):
+  kind `ensure`, a LIGHTWEIGHT report -- envelope and portable stack only,
+  no minidump, no all-thread capture, no window, at most once per call site
+  per session -- and execution continues. UE's continuable-report shape
+  (`:1871-1887`, "don't capture all threads to report and resume quickly").
 - **SIGABRT** (`signal`): kind `terminate`, reason "abort() called" -- covers
   a third party's `abort()`.
 - **Invalid parameter / pure call**: kind `crash`, reason names the CRT
   check and the expression/function the CRT passes.
 
-What cannot be caught in process and is documented as the WER backstop:
-`__fastfail` raised by ntdll (heap corruption, `RtlReportCriticalFailure`)
-and `/GS` cookie failures. UE cannot either. The dev-setup note enables WER
-LocalDumps for the Arcane hosts.
+What cannot be caught in process: `__fastfail` raised by ntdll (heap
+corruption, `RtlReportCriticalFailure`), `/GS` cookie failures, and a stack
+overflow with no room left to run SEH. UE documents exactly these limits
+(`WindowsPlatformCrashContext.cpp:1798-1801`) and closes them OUT of process
+with its monitor client; §5.8 does the same. WER LocalDumps remain the
+last-resort backstop and stay reachable in interactive runs (§5.1 item 1).
 
 ### 5.4 Hangs and GPU stalls
 
@@ -293,27 +347,60 @@ for the reason text, paths, the portable stack and the envelope's JSON; reset
 per report; on exhaustion the thread writes what it has and says so in the
 header. It is NOT a general allocator and never becomes one (§13).
 
-### 5.6 Log file sink
+### 5.6 Log file sink and backlog
 
 `Log::Init` adds a file sink at `<logDir>/<App>.log` (rotated per run,
 keep 5) beside the stderr sink, retargeted when the dump dir retargets
-(`Saved/Logs/` under a project), `flush_on(warn)`. The envelope's `logPath`
-names it; the reporter shows its tail.
+(`Saved/Logs/` under a project), `flush_on(warn)`. The sink also keeps a
+BACKLOG: a fixed ring of the last 512 formatted lines written without taking
+the sink's mutex on the read side. The crash path freezes the ring on the
+faulting thread (UE's panic mode) and the crash thread dumps it into the
+crash folder, so the report folder is self-contained and no lock the dead
+thread held can block it. The envelope's `logPath` names the file; the
+reporter shows the folder's `.log.txt` first and the live file's tail when
+the folder copy is missing.
 
 ### 5.7 Exit sentinel and clean-exit handlers
 
-`Diagnostics::Shutdown` arms an exit sentinel: a detached raw thread that,
-if the process has not exited within `Config::exitSeconds` (default 30) of
-the host's exit request, writes a `hang` report ("hang at exit") through the
-crash thread, spawns the reporter, and terminates with 12. It is the only
-thing that can name the Vulkan teardown hang and the module-build join.
+The exit sentinel is the WATCHDOG KEPT ALIVE THROUGH SHUTDOWN, UE's shape
+(its heartbeat thread never stops during exit, `LaunchEngineLoop.cpp`), with
+one change of rule: from `Diagnostics::RequestCleanExit()` onward the beat is
+replaced by an exit deadline, `Config::exitSeconds` (default 30). If the
+process has not exited by then, the watchdog writes a `hang` report ("hang
+at exit") through the crash thread, spawns the reporter, and terminates with
+12. No new thread; `Shutdown()` no longer joins the watchdog early. It is the
+only thing that can name the Vulkan teardown hang and the module-build join.
 
-`SetConsoleCtrlHandler` (Ctrl+C, console close) and the hosts' window
-procedures on `WM_QUERYENDSESSION`/`WM_ENDSESSION` call
-`Diagnostics::RequestCleanExit()`, a hook the host installs: the editor
-writes autosaves for everything dirty (fast), then runs its ordinary exit.
-If the OS cuts it short the autosave marker stays enabled (§8.5), which is
-the right answer.
+`SetConsoleCtrlHandler` and the hosts' window procedures on
+`WM_QUERYENDSESSION`/`WM_ENDSESSION` route to `RequestCleanExit()`, a hook
+the host installs. Ctrl+C is two-step as in UE (`WindowsPlatformMisc.cpp:1113`):
+the first requests the clean exit, the second terminates. Console close,
+logoff and shutdown run the hook within the OS budget (five seconds for a
+console handler): the editor writes autosaves for everything dirty first,
+which is fast, then runs its ordinary exit. If the OS cuts it short the
+autosave marker stays enabled (§8.5), which is the right answer. UE saves
+nothing on either path; we do more here on purpose.
+
+### 5.8 Monitor mode (windowed hosts)
+
+Adopted from UE's monitor client (`WindowsPlatformCrashContext.cpp:512-640`,
+`CrashReportClientApp.cpp:1126-1160`): at `Install`, a windowed host that is
+not on a build machine launches `ArcaneCrashReporter.exe --monitor <pid>
+--product "<name>" --log <path> --report-dir <dir>` detached and hidden. The
+monitor waits on the host's process handle and inspects the exit code:
+- a known code (0-5, 10-13) or a fresh report in the report directory: the
+  monitor exits silently;
+- anything else (an NTSTATUS such as `STATUS_STACK_BUFFER_OVERRUN`,
+  `STATUS_HEAP_CORRUPTION`, `STATUS_FAIL_FAST_EXCEPTION`, a stack overflow
+  that had no room for SEH, or an external kill): it synthesizes a report of
+  kind `abnormal-exit` -- envelope with the exit code named, the host's log
+  file tail copied as the backlog -- and shows the window as for a crash.
+
+This closes the fail-fast row the in-process path cannot, exactly as UE
+closes it. The monitor never symbolizes (there is no minidump) and never
+spawns itself. Headless and build-machine runs launch no monitor. One monitor
+per host process; the reporter spawned by a crash and the monitor never both
+show a window, because the monitor sees the fresh report and exits.
 
 ## 6. The reporter
 
@@ -347,8 +434,21 @@ beside the report, unattended too. The editor's `CrashReportDocument`
 showing that sibling is owed (§13).
 
 **Unattended** (`--unattended`, every headless host): no window; symbolize,
-write the sibling, exit 0. Gate and CI logs gain readable stacks; the
-hand-off path stays exercised on every headless run.
+write the sibling, exit 0, under a hard deadline of 60 s after which it
+writes what it has and exits -- UE's unattended client has no deadline and
+UE therefore never launches it on build machines ("not okay to have
+lingering processes", `WindowsPlatformCrashContext.cpp:1052`). We keep the
+spawn on a desk's headless runs because it is bounded, and skip it entirely
+on a build machine: `Config::spawnReporter` is false when `ARCANE_BUILD_MACHINE`
+or `CI` is set in the environment (Jenkins sets it); the files are still
+written. Gate and CI logs on a desk gain readable stacks; the hand-off path
+stays exercised there.
+
+**Relaunch line.** The host passes `--relaunch` as a SANITIZED copy of its
+command line: dev crash flags (`--crash-gpu`, the death-fixture flags) and
+scripted-run flags stripped, so a relaunch never re-crashes on purpose or
+re-runs a scripted capture. UE keeps a separate `RestartCommandLine` for the
+same reason.
 
 **Failure modes.** Reporter missing or `CreateProcessW` fails: one line to
 log and stderr, same exit code, report on disk. Reporter crashes: its own
@@ -447,9 +547,11 @@ the log; the autosaves and the marker are already on disk.
 
 ## 9. Edge cases
 
-- **Crash inside the crash path.** The crash thread's own fault writes
-  nothing more; the faulting thread's 60 s wait expires and terminates with
-  10. The minidump was written first.
+- **Crash inside the crash path.** The crash thread's own SEH guard
+  terminates the process with 13 at once (UE's `CrashReporterCrashed`); if
+  the guard itself cannot run, the faulting thread's 60 s wait expires and
+  terminates with 10. The minimal envelope was written first, so the monitor
+  or the next start can still say what happened.
 - **Logger deadlock.** The faulting thread may have died holding spdlog's
   mutex; the flush uses a bounded try and moves on.
 - **Second faulting thread while a report is in flight.** It waits on the
@@ -510,8 +612,8 @@ Three plans, each independently mergeable, in this order:
    no-op), exit sentinel, clean-exit handlers, death fixture, `[diag]` tests.
    Removes the freeze on its own.
 2. **Reporter**: `NativeWindow` lift (splash re-presented), the
-   `ArcaneCrashReporter` program, symbolization, unattended mode, staging,
-   witness lanes, desk proof.
+   `ArcaneCrashReporter` program, symbolization, unattended mode with its
+   deadline, monitor mode (§5.8), staging, witness lanes, desk proof.
 3. **Autosave and recovery**: the `SaveTo` seam, scheduler, marker, prompt,
    settings, tests.
 
@@ -521,7 +623,9 @@ Three plans, each independently mergeable, in this order:
 - The general allocator: Core allocation entry, per-module new/delete
   replacement, ABI-gate check, Tracy memory hooks, mimalloc behind the entry
   once measured; Astra slab-provider hook (Astra repo first, then sync).
-- A WER runtime-exception module for fail-fasts we cannot catch.
+- A WER runtime-exception module: no longer needed once the monitor (§5.8)
+  covers the fail-fast row; kept here only as the fallback if the monitor
+  proves unreliable on a desk.
 - `CrashReportDocument` reading `.symbolized.txt` and `foreignModules`
   products.
 - The Hub decoding exit codes 10/11/12 into a "crashed, report at" row.
