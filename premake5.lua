@@ -476,6 +476,83 @@ project "arcbuild-process-fixture"
 end   -- arcbuild-process-fixture: Windows target only (Task 6)
 
 -- ============================================================================
+-- death-fixture: a tiny console app that installs Diagnostics and dies on
+-- request (crash window plan 1, task 6), so the crash path (task 5) is
+-- proven as a REAL process through HostWitness (CrashPathTest.cpp's
+-- "death fixture: ..." cases) -- exit code 10 + the .dmp/.txt/.arcdiag/
+-- .log.txt quadruple for `--die av`, exit 0 and nothing written for
+-- `--die none`. Unlike arcbuild-process-fixture above, this one is NOT
+-- dependency-free by design -- the whole point is exercising the real
+-- crash path (Arcane/Base/Diagnostics.hpp), not Win32 alone -- so it links
+-- ArcaneCore the way ArcaneTests does, narrowed to only what
+-- Base/Assert.hpp, Base/Diagnostics.hpp and Base/Log.hpp need: ArcaneCore's
+-- own include root plus the two vendored header-only deps those headers
+-- pull in transitively (spdlog via Log.hpp, Mosaic via Assert.hpp/Log.hpp).
+--
+-- Windows target only, same gate as arcbuild-process-fixture above (R7):
+-- Diagnostics is Windows-only today (Base/Diagnostics.hpp's own header
+-- comment says every entry point no-ops elsewhere), so a Linux generation
+-- would build a fixture that could never prove anything.
+-- ============================================================================
+if os.target() == "windows" then
+project "death-fixture"
+    location "ArcaneTests/death-fixture"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/DeathFixtureMain.cpp",
+    }
+
+    includedirs {
+        "%{IncludeDir.ArcaneCore}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.Mosaic}",
+    }
+
+    links { "ArcaneCore" }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+
+    filter "configurations:Debug"
+        defines { "ARCANE_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARCANE_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARCANE_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+    -- The fixture loads ArcaneCore.dll from its own directory, same as every
+    -- other consumer (mirrors ArcaneTests' matching postbuild line).
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
+    }
+end   -- death-fixture: Windows target only (task 6, mirrors arcbuild-process-fixture's gate)
+
+-- ============================================================================
 -- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
 -- (Base, Platform, Render for M1; Audio/Text/Assets/UI/Jobs/Plugin later).
 -- SDL3 links INTO this DLL; consumers link only the import lib.
@@ -1417,8 +1494,14 @@ project "ArcaneTests"
     -- may depend on it -- a gmake generation on Linux/macOS would otherwise
     -- name a target that was never emitted. The POSIX process cases in
     -- BuildDriverTest.cpp spawn /bin/sh instead and need no build dependency.
+    --
+    -- death-fixture (crash window plan 1, task 6): same reasoning -- it is
+    -- also Windows-only (its own gate above), and CrashPathTest.cpp's
+    -- "death fixture: ..." cases locate it the same "../<project>/
+    -- <project>.exe" way BuildDriverTest.cpp locates arcbuild-process-
+    -- fixture.exe, so it must exist before this project's tests can run.
     if os.target() == "windows" then
-        dependson { "arcbuild-process-fixture" }
+        dependson { "arcbuild-process-fixture", "death-fixture" }
     end
 
     -- The test exe loads ArcaneClient.dll from its own directory.

@@ -13,12 +13,15 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 
+#include "Helpers/HostWitness.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -205,4 +208,42 @@ TEST_CASE("crash path: an envelope that cannot fit the arena is elided or withhe
 
     // No unparseable temp is left lying around for a reporter to pick up.
     CHECK_FALSE(std::filesystem::exists(stem + ".arcdiag.tmp"));
+}
+
+namespace
+{
+    // Runs the fixture with `--die <mode>` into a fresh dir; returns the run and the newest .arcdiag stem.
+    struct FixtureRun { Arcane::Test::WitnessRun run; std::filesystem::path stem; };
+    FixtureRun RunFixture(const char* mode, std::vector<std::string> extra = {})
+    {
+        const auto exe = std::filesystem::absolute("../death-fixture/death-fixture.exe");
+        REQUIRE(std::filesystem::exists(exe));
+        const auto dir = std::filesystem::temp_directory_path() / (std::string("arcane-death-") + mode);
+        std::filesystem::remove_all(dir); std::filesystem::create_directories(dir);
+        std::vector<std::string> args = { "--dir", dir.string(), "--die", mode };
+        args.insert(args.end(), extra.begin(), extra.end());
+        Arcane::Test::WitnessInvocation inv; inv.exePath = exe; inv.args = args; inv.hardCapMs = 30000;
+        FixtureRun out{ Arcane::Test::RunWitness(inv), {} };
+        for (const auto& e : std::filesystem::directory_iterator(dir))
+            if (e.path().extension() == ".arcdiag") out.stem = e.path().parent_path() / e.path().stem();
+        return out;
+    }
+}
+
+TEST_CASE("death fixture: an access violation yields a crash report and exit code 10 within the cap, with no dialog", "[diag]")
+{
+    const FixtureRun r = RunFixture("av");
+    CHECK_FALSE(r.run.timedOut);
+    CHECK(r.run.exitCode == 10);
+    REQUIRE_FALSE(r.stem.empty());
+    CHECK(std::filesystem::exists(r.stem.string() + ".dmp"));
+    CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "crash");
+    CHECK(r.run.wallMs < 15000);
+}
+
+TEST_CASE("death fixture: a clean run exits 0 and writes nothing", "[diag]")
+{
+    const FixtureRun r = RunFixture("none");
+    CHECK(r.run.exitCode == 0);
+    CHECK(r.stem.empty());
 }
