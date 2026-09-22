@@ -140,21 +140,51 @@ namespace Arcane
         // device and is why it can never be on a production path.
         //
         // ARMED BY A CALL, never by default (EnableVisibilityReadback): an
-        // unarmed frame declares no copy node and pays nothing. A host arms it
-        // when it wants the stat (both hosts do on a --report run); the oracle
-        // test arms it to compare exact row sets against the CPU's
-        // GpuSceneFrame::oracleVisibleIndices.
+        // unarmed frame declares no copy node and pays nothing. The runtime
+        // host arms it on every run (its HUD shows the count); the editor only
+        // under --report; the oracle test arms it to compare exact row sets
+        // against the CPU's GpuSceneFrame::oracleVisibleIndices.
         //
         // THE RING, per frame slot: EnsureVisibilityReadback sizes (and grows)
         // that slot's HOST_READBACK buffer at DECLARATION time -- the same rule
-        // Reserve follows -- and PARKS a publish thunk stamped with the fence
-        // THIS frame's submit will signal. The graveyard runs that thunk from a
-        // LATER frame's Reap, i.e. only once the owning frame has retired: no
-        // DeviceWaitIdle, no fence Wait, no per-frame flush anywhere. The
-        // record callback copies this slot's args and visible indices into the
-        // buffer and stamps the declaration it copied for; a thunk whose
-        // declaration was never recorded (a refused or skipped frame) publishes
-        // nothing, so LatestVisibility() keeps the last result that was real.
+        // Reserve follows -- and the record callback copies this slot's args and
+        // visible indices into it, stamping the declaration it copied for. A
+        // declaration that was never recorded (a refused or skipped frame)
+        // publishes nothing, so LatestVisibility() keeps the last result that
+        // was real. NOTHING here waits, flushes or idles.
+        //
+        // TWO PUBLICATION PATHS, because one is not enough on the PRESENT path:
+        //
+        //   1. ON SLOT REUSE, synchronously, inside the record callback: before
+        //      re-recording a slot, whatever that slot recorded LAST and has
+        //      not published yet is read out and published. This needs no wait
+        //      of its own -- the executor's frameSlot contract already
+        //      guarantees the previous frame on this slot has retired (it is
+        //      about to reset that slot's command allocator), and this frame's
+        //      own copy has not been submitted yet, let alone run.
+        //
+        //   2. FROM THE GRAVEYARD: EnsureVisibilityReadback also PARKS a publish
+        //      thunk stamped with the fence THIS frame's submit will signal, so
+        //      a later frame's Reap runs it once the owning frame has retired.
+        //      This is what publishes the LAST frames of a run, whose slots are
+        //      never reused.
+        //
+        // WHY BOTH. RenderGraph::Execute reaps at its TOP, and on the present
+        // path the wait that makes a slot reusable lives INSIDE
+        // NriSwapChain::AcquireNextTexture, which Execute calls AFTER that reap.
+        // So when the GPU is the bottleneck, frame N's fence completes only at
+        // that acquire -- too late for this Execute's reap and, by the next one,
+        // frame N's slot has already been re-recorded, which invalidates the
+        // parked thunk's own seq check. Path 2 alone therefore FREEZES the
+        // windowed HUD on the last landed count under exactly the load a human
+        // reads it under. (The offscreen path waits before declaration instead,
+        // so its reap always wins the race and path 1 finds the result already
+        // published -- which is why no --report run, and no offscreen test,
+        // exhibits the freeze.)
+        //
+        // Both paths funnel through PublishVisibility, which ignores a seq that
+        // has already been published, so one frame is never counted twice and a
+        // published result never moves backwards.
         //
         // The ring's state is held through a shared_ptr so a thunk the
         // graveyard still holds can outlive this GpuScene: Release() and the
@@ -225,15 +255,31 @@ namespace Arcane
         // also what VisibilityReadbackEnabled() answers.
         struct VisibilityRing
         {
-            struct Slot
+            // A COPY THAT WAS RECORDED AND NOT YET PUBLISHED, with everything
+            // needed to read it. Snapshotted at record time on purpose: by the
+            // time it is published, the slot's own fields describe the NEXT
+            // declaration (which may have different counts, or a grown buffer).
+            struct Pending
             {
                 nri::Buffer*  buffer       = nullptr;
-                std::uint64_t bytes        = 0;   // the buffer's whole size
-                std::uint64_t argBytes     = 0;   // this declaration's args region, at offset 0
-                std::uint64_t argRegion    = 0;   // ...aligned up: where the visible-index region starts
-                std::uint64_t visibleBytes = 0;
-                std::uint64_t declaredSeq  = 0;   // the declaration this slot was last sized for
-                std::uint64_t recordedSeq  = 0;   // ...and the one its exec fn actually copied
+                std::uint64_t argRegion    = 0;
+                std::uint32_t argCount     = 0;
+                std::uint32_t visibleCount = 0;
+                std::uint64_t fence        = 0;
+                std::uint64_t seq          = 0;   // 0 == nothing pending
+            };
+            struct Slot
+            {
+                nri::Buffer*  buffer        = nullptr;
+                std::uint64_t bytes         = 0;   // the buffer's whole size
+                std::uint64_t argBytes      = 0;   // this declaration's args region, at offset 0
+                std::uint64_t argRegion     = 0;   // ...aligned up: where the visible-index region starts
+                std::uint64_t visibleBytes  = 0;
+                std::uint64_t declaredSeq   = 0;   // the declaration this slot was last sized for
+                std::uint64_t declaredFence = 0;   // ...and the fence value that declaration's frame signals
+                std::uint64_t recordedSeq   = 0;   // the declaration its exec fn actually copied
+                std::uint64_t publishedSeq  = 0;   // ...and the newest one whose result reached `latest`
+                Pending       pending;             // recorded, not published: the slot-reuse path's input
             };
             const nri::CoreInterface* core = nullptr;
             Slot                      slots[kSwapchainFramesInFlight];
@@ -242,6 +288,18 @@ namespace Arcane
         };
         std::shared_ptr<VisibilityRing> m_visibility;
         std::uint64_t                   m_visibilitySeq = 0;
+
+        // THE ONE PUBLISHER both paths funnel through (the ring block above).
+        // Reads `argCount` args from offset 0 and `visibleCount` indices from
+        // `argRegion` out of `buffer` into `ring.latest`, then stamps `seq` on
+        // the slot. A NO-OP when that slot has already published `seq` or
+        // anything newer, which is what makes the two paths safe to have at
+        // once: one frame is never counted twice, and a published result never
+        // moves backwards. Static because the parked thunk holds only the ring,
+        // never the GpuScene that made it.
+        static void PublishVisibility(VisibilityRing& ring, std::uint32_t slot, std::uint64_t seq,
+                                      std::uint64_t fence, nri::Buffer* buffer, std::uint64_t argRegion,
+                                      std::uint32_t argCount, std::uint32_t visibleCount);
     };
 
     // The NRI-free host seams (Host/GpuSceneHost.hpp re-declares them

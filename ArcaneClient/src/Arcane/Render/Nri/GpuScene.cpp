@@ -677,6 +677,42 @@ namespace Arcane
         return &m_visibility->latest;
     }
 
+    // THE ONE PUBLISHER (GpuScene.hpp's ring block): both the slot-reuse path
+    // and the graveyard path come through here, and the publishedSeq guard is
+    // what lets them coexist without double-counting a frame.
+    void GpuScene::PublishVisibility(VisibilityRing& ring, std::uint32_t slot, std::uint64_t seq,
+                                     std::uint64_t fence, nri::Buffer* buffer, std::uint64_t argRegion,
+                                     std::uint32_t argCount, std::uint32_t visibleCount)
+    {
+        if (ring.released || !ring.core || !buffer || seq == 0 || slot >= kSwapchainFramesInFlight)
+            return;
+        // ALREADY PUBLISHED -- by the other path, or by this one. `>=` rather
+        // than `!=`, so a stale entry can never move `latest` backwards either.
+        if (ring.slots[slot].publishedSeq >= seq)
+            return;
+        const std::uint64_t bytes = argRegion + std::uint64_t(visibleCount) * sizeof(std::uint32_t);
+        const auto* mapped = static_cast<const std::uint8_t*>(ring.core->MapBuffer(*buffer, 0, bytes));
+        if (!mapped)
+        {
+            ARC_ERROR("[nri-graph] GpuScene: MapBuffer on the visibility readback buffer returned null");
+            return;
+        }
+        // No allocation in steady state: EnsureVisibilityReadback reserves both
+        // vectors at declaration time, which is what keeps the slot-reuse path
+        // (a record callback) free of one.
+        ring.latest.args.resize(argCount);
+        if (argCount)
+            std::memcpy(ring.latest.args.data(), mapped, std::size_t(argCount) * sizeof(DrawIndexedArgs));
+        ring.latest.visibleIndices.resize(visibleCount);
+        if (visibleCount)
+            std::memcpy(ring.latest.visibleIndices.data(), mapped + argRegion,
+                        std::size_t(visibleCount) * sizeof(std::uint32_t));
+        ring.core->UnmapBuffer(*buffer);
+        ring.latest.fence = fence;
+        ++ring.latest.publishCount;
+        ring.slots[slot].publishedSeq = seq;
+    }
+
     // DECLARATION TIME (AddGpuSceneVisibilityReadbackNode), after Reserve has
     // settled this slot's args / visible-index buffers -- the same rule the
     // whole file follows: size and grow here, never inside a record callback.
@@ -713,53 +749,53 @@ namespace Arcane
             s.buffer = buffer;
             s.bytes  = need;
         }
-        s.argBytes     = argBytes;
-        s.argRegion    = argRegion;
-        s.visibleBytes = visibleBytes;
-        s.declaredSeq  = ++m_visibilitySeq;
+        s.argBytes      = argBytes;
+        s.argRegion     = argRegion;
+        s.visibleBytes  = visibleBytes;
+        s.declaredSeq   = ++m_visibilitySeq;
+        s.declaredFence = fence;
 
-        // THE PUBLISH, PARKED (GpuScene.hpp's burial seam): stamped with the
-        // value THIS frame's submit will signal, buried by FlushGraves right
-        // after that submit, and run by a LATER frame's Reap -- so it reads the
-        // buffer only once the frame that filled it has retired. No wait, no
-        // poll, no per-frame flush. Everything it needs is CAPTURED rather than
-        // re-read from the ring: a growth between now and then replaces
-        // `s.buffer`, and this thunk still owes its answer from the buffer the
-        // copy it belongs to actually wrote (which stays alive until the same
-        // fence, parked just above).
-        Park(fence, [ring = m_visibility, slot, seq = s.declaredSeq, fence,
-                     buffer = s.buffer, argRegion, argCount = static_cast<std::uint32_t>(argBytes / sizeof(DrawIndexedArgs)),
-                     visibleCount = static_cast<std::uint32_t>(visibleBytes / sizeof(std::uint32_t))]
+        // The publisher's only allocation, hoisted out of the record callback
+        // that the slot-reuse path publishes from (reserve never shrinks, so
+        // after the first frames the capacity covers every count seen).
+        const std::uint32_t declaredArgs    = static_cast<std::uint32_t>(argBytes / sizeof(DrawIndexedArgs));
+        const std::uint32_t declaredVisible = static_cast<std::uint32_t>(visibleBytes / sizeof(std::uint32_t));
+        m_visibility->latest.args.reserve(declaredArgs);
+        m_visibility->latest.visibleIndices.reserve(declaredVisible);
+
+        // PUBLICATION PATH 2, PARKED (GpuScene.hpp's ring block and the burial
+        // seam): stamped with the value THIS frame's submit will signal, buried
+        // by FlushGraves right after that submit, and run by a LATER frame's
+        // Reap -- so it reads the buffer only once the frame that filled it has
+        // retired. No wait, no poll, no per-frame flush. This is the path that
+        // publishes the frames whose slot is never reused (the tail of a run);
+        // under load on the present path, path 1 has usually got there first.
+        //
+        // Everything it needs is CAPTURED rather than re-read from the ring: a
+        // growth between now and then replaces `s.buffer`, and this thunk still
+        // owes its answer from the buffer the copy it belongs to actually wrote
+        // (which stays alive until the same fence, parked just above).
+        Park(fence, [ring = m_visibility, slot, seq = s.declaredSeq, fence, buffer = s.buffer,
+                     argRegion, argCount = declaredArgs, visibleCount = declaredVisible]
         {
             VisibilityRing& r = *ring;
-            if (r.released || !r.core || !buffer)
+            if (r.released)
                 return;   // the scene was released; the buffer is gone or going
+            // NOT this declaration's copy any more: either the frame never
+            // recorded one (a refused or skipped frame), or the slot has been
+            // re-recorded since -- and re-recording publishes what it replaces,
+            // so there is nothing left here to do. PublishVisibility's
+            // publishedSeq guard is the second half of that promise.
             if (r.slots[slot].recordedSeq != seq)
-                return;   // that declaration never recorded its copy (a refused or skipped frame)
+                return;
             // THE ONE CASE THIS STAMP CANNOT SEE: an Execute that recorded the
-            // copy and then FAILED before submitting. The thunk then publishes
+            // copy and then FAILED before submitting. The publish then reads
             // whatever the buffer last held (that slot's previous frame),
             // because nothing on the CPU can tell a recorded copy from an
             // executed one. Accepted rather than plumbed around: a failed
             // Execute is already a latched render error, which is a louder
             // fact than a one-frame-stale observability count.
-            const std::uint64_t bytes = argRegion + std::uint64_t(visibleCount) * sizeof(std::uint32_t);
-            const auto* mapped = static_cast<const std::uint8_t*>(r.core->MapBuffer(*buffer, 0, bytes));
-            if (!mapped)
-            {
-                ARC_ERROR("[nri-graph] GpuScene: MapBuffer on the visibility readback buffer returned null");
-                return;
-            }
-            r.latest.args.resize(argCount);
-            if (argCount)
-                std::memcpy(r.latest.args.data(), mapped, std::size_t(argCount) * sizeof(DrawIndexedArgs));
-            r.latest.visibleIndices.resize(visibleCount);
-            if (visibleCount)
-                std::memcpy(r.latest.visibleIndices.data(), mapped + argRegion,
-                            std::size_t(visibleCount) * sizeof(std::uint32_t));
-            r.core->UnmapBuffer(*buffer);
-            r.latest.fence = fence;
-            ++r.latest.publishCount;
+            PublishVisibility(r, slot, seq, fence, buffer, argRegion, argCount, visibleCount);
         });
         return true;
     }
@@ -773,6 +809,27 @@ namespace Arcane
         if (!m_visibility || slot >= kSwapchainFramesInFlight)
             return;
         VisibilityRing::Slot& s = m_visibility->slots[slot];
+
+        // PUBLICATION PATH 1 -- THE SLOT-REUSE PUBLISH, and the reason the ring
+        // does not depend on reap timing (GpuScene.hpp's ring block states the
+        // present-path race this closes). Whatever this slot recorded last and
+        // has not published yet is read out HERE, before the copy below
+        // overwrites the buffer and the stamp below invalidates its thunk.
+        //
+        // IT ADDS NO WAIT. Reaching this callback means the executor is
+        // recording into this frame slot, which it may only do once the frame
+        // that last used the slot has retired -- the offscreen path waits for
+        // that before declaration, the present path inside
+        // AcquireNextTexture -- so the pending copy is complete by
+        // construction. This frame's own copy is merely being RECORDED; it
+        // cannot have touched the buffer yet.
+        if (s.pending.seq != 0)
+        {
+            PublishVisibility(*m_visibility, slot, s.pending.seq, s.pending.fence, s.pending.buffer,
+                              s.pending.argRegion, s.pending.argCount, s.pending.visibleCount);
+            s.pending = {};
+        }
+
         nri::Buffer* sourceArgs = ctx.Resolve(args);
         nri::Buffer* sourceVis  = ctx.Resolve(visibleIndices);
         if (!s.buffer || !sourceArgs || !sourceVis || s.bytes < s.argRegion + s.visibleBytes)
@@ -783,6 +840,17 @@ namespace Arcane
         ctx.core.CmdCopyBuffer(ctx.cmd, *s.buffer, 0, *sourceArgs, 0, s.argBytes);
         ctx.core.CmdCopyBuffer(ctx.cmd, *s.buffer, s.argRegion, *sourceVis, 0, s.visibleBytes);
         s.recordedSeq = s.declaredSeq;
+        // SNAPSHOTTED, not re-read later: by the time this copy is published,
+        // `s` describes the NEXT declaration (possibly a different size, or a
+        // grown buffer). The buffer stays alive until this frame's fence at the
+        // earliest, and a growth parks its destroy behind that -- so the next
+        // record on this slot can always still read it.
+        s.pending = VisibilityRing::Pending{
+            s.buffer, s.argRegion,
+            static_cast<std::uint32_t>(s.argBytes / sizeof(DrawIndexedArgs)),
+            static_cast<std::uint32_t>(s.visibleBytes / sizeof(std::uint32_t)),
+            s.declaredFence, s.declaredSeq,
+        };
     }
 
     bool GpuSceneArmVisibilityReadback(GpuScene* device) noexcept

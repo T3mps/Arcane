@@ -446,23 +446,39 @@ namespace
         Arcane::NriGraphContext::FrameDesc fd;
         fd.mesh = &scene;
 
+        // Every frame that carries the fixture records ONE copy, so this count
+        // is the ceiling on how many results may ever be published -- the pin
+        // on the two publication paths not counting a frame twice.
+        std::uint32_t recordedFrames = 0;
+        const auto renderFixtureFrame = [&]
+        {
+            RenderOne(*v.ctx, fd);
+            ++recordedFrames;
+        };
+
         // ONE frame: the copy is recorded and its publish is parked against the
-        // fence this frame signals. Nothing has reaped it yet, so the answer is
-        // still UNAVAILABLE -- the state a host must report rather than a CPU
-        // count.
-        RenderOne(*v.ctx, fd);
+        // fence this frame signals. Nothing has reaped it and the slot has not
+        // been reused, so the answer is still UNAVAILABLE -- the state a host
+        // must report rather than a CPU count.
+        renderFixtureFrame();
         CHECK(device->LatestVisibility() == nullptr);
         CHECK_FALSE(Arcane::GpuSceneVisibleRows(device).has_value());
 
-        // Past the frames in flight, the offscreen pacing wait has already
-        // observed frame 1's fence, so its publish runs from the graveyard at
-        // the top of this Execute. No wait, no flush, no idle anywhere.
+        // Past the frames in flight, frame 1's fence has been observed -- by
+        // the offscreen pacing wait ahead of declaration, which makes this
+        // Execute's reap publish it, and failing that by the slot-reuse publish
+        // inside the record callback. No wait, no flush, no idle anywhere.
         for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 1u; ++i)
-            RenderOne(*v.ctx, fd);
+            renderFixtureFrame();
 
         const Arcane::GpuVisibilityReadback* landed = device->LatestVisibility();
         REQUIRE(landed != nullptr);
         CHECK(landed->publishCount > 0);
+        // NO DOUBLE PUBLICATION: the slot-reuse path and the graveyard path can
+        // both come due for the same frame, and `publishedSeq` is what makes the
+        // second one a no-op. More results than recorded copies would mean one
+        // frame was counted twice.
+        CHECK(landed->publishCount <= recordedFrames);
         CheckCullMatchesOracle(*landed, frame, world.mirror, "steady state");
         const std::optional<std::uint32_t> seam = Arcane::GpuSceneVisibleRows(device);
         REQUIRE(seam.has_value());
@@ -482,6 +498,7 @@ namespace
         // the positions the batch no longer uses, so this is the case that
         // catches a stale tail entry being counted or drawn.
         const std::uint64_t publishedBefore = landed->publishCount;
+        const std::uint64_t fenceBefore     = landed->fence;
         world.Move(insideB, glm::vec3(2000.0f, 0.0f, 0.0f));
         world.Schedulers();
         Arcane::VisibleSet shrunk;
@@ -500,11 +517,17 @@ namespace
 
         scene.scene = &frame2;
         for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 2u; ++i)
-            RenderOne(*v.ctx, fd);
+            renderFixtureFrame();
 
         const Arcane::GpuVisibilityReadback* shrunkResult = device->LatestVisibility();
         REQUIRE(shrunkResult != nullptr);
         REQUIRE(shrunkResult->publishCount > publishedBefore);
+        // PUBLICATION MOVES FORWARD, NEVER BACKWARDS: whichever path published
+        // this one, it came from a LATER frame than the previous result -- the
+        // `publishedSeq >= seq` guard is what rules out an older pending entry
+        // overwriting a newer answer.
+        CHECK(shrunkResult->fence > fenceBefore);
+        CHECK(shrunkResult->publishCount <= recordedFrames);
         CheckCullMatchesOracle(*shrunkResult, frame2, world.mirror, "after the visible set shrank");
 
         // A frame with no mesh scene, so the vehicle tears down with nothing
