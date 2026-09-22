@@ -6,8 +6,9 @@
 // loader lock (both need locks a crashing thread may already hold).
 //
 // Refresh() runs OFF the crash path: ForeignModules::Scan() calls it (at
-// device creation and when a verify report is written -- never per frame),
-// and Diagnostics::Install (Task 5) calls it once at startup. Find() is what
+// device creation, when a verify report is written, and on the user-
+// triggered path in EditorApp.cpp -- never per frame), and
+// Diagnostics::Install (Task 5) calls it once at startup. Find() is what
 // the crash path calls, from inside an exception filter.
 //
 // Double-buffered so a reader is never blocked by, and never observes a
@@ -16,6 +17,23 @@
 // index; Find loads that index with acquire and scans only the buffer it
 // names -- the acquire/release pair makes every write Refresh did before the
 // store visible to Find after its load, with no lock on the read side.
+//
+// A double buffer alone only protects a reader against ONE subsequent
+// flip. Find() hands back a raw ModuleEntry*, and its real caller
+// (PortableStack's capture-then-format sequence, Task 5's report) holds and
+// dereferences that pointer well after the Find() call returns -- across
+// the whole capture, not just for the duration of one call. If two OTHER
+// threads' Refresh() calls landed in that window (Scan() runs off the main
+// thread too, e.g. EditorApp.cpp's user-triggered rescan), the second flip
+// republishes the very buffer the reader's pointer still points into,
+// overwriting it out from under a live read: a genuine data race, not just
+// stale data. SetFrozen/Frozen close that window outright: a report FREEZES
+// the table for its whole lifetime (Task 5's SubmitReport calls
+// SetFrozen(true) beside Log::FreezeBacklog(), and unfreezes once the
+// report is written), and Refresh() is a no-op -- no write, no flip -- for
+// as long as the table is frozen. This is also the right STORY for a
+// report to tell: it describes the module set as it stood at the fault, and
+// a module loading or unloading mid-report is not part of that story.
 //
 // Fixed capacity (kMax) and no heap: ModuleEntry is a POD with a fixed
 // name[64] buffer, so the table behaves identically on the crash path as
@@ -45,7 +63,8 @@ namespace Arcane::Diagnostics
     };
 
     // Spec S5.2 step 1. See the file header for the double-buffering
-    // discipline that makes Find() lock-free and crash-filter-safe.
+    // discipline that makes Find() lock-free and crash-filter-safe, and for
+    // why a report additionally freezes the table.
     class ARCANE_CORE_API ModuleTable
     {
     public:
@@ -54,6 +73,7 @@ namespace Arcane::Diagnostics
         // Replaces the snapshot from a fresh module enumeration. Takes the
         // table's write lock -- callable from any ordinary thread, never
         // from the crash thread itself. `modules` beyond kMax are dropped.
+        // A no-op -- no write, no flip -- while Frozen() (see SetFrozen).
         static void Refresh(std::span<const ForeignModules::LoadedModule> modules) noexcept;
 
         // The entry whose [base, base + size) contains `address`, or
@@ -62,5 +82,17 @@ namespace Arcane::Diagnostics
 
         // The module count from the most recently published snapshot.
         static std::size_t Count() noexcept;
+
+        // Freezes (true) or unfreezes (false) the table against Refresh.
+        // Task 5's SubmitReport sets this beside Log::FreezeBacklog() for
+        // the lifetime of one report, so every Find() a report makes --
+        // and every pointer it holds onto afterwards, e.g. into
+        // FormatStackFrame -- resolves against the exact snapshot the fault
+        // was taken against, with no other thread's Refresh() able to
+        // rewrite it out from under a live read (see the file header).
+        static void SetFrozen(bool frozen) noexcept;
+
+        // Whether the table is currently frozen.
+        [[nodiscard]] static bool Frozen() noexcept;
     };
 }
