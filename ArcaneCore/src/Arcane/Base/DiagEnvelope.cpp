@@ -72,6 +72,7 @@ namespace Arcane::Diag
         doc["siblingGpuDump"] = envelope.siblingGpuDump;
 
         doc["activeLayers"] = envelope.activeLayers;
+        doc["foreignModules"] = envelope.foreignModules;
 
         // error_handler_t::replace: a snippet-adjacent field carrying
         // invalid UTF-8 must degrade to U+FFFD, never throw out of
@@ -136,6 +137,13 @@ namespace Arcane::Diag
             for (const nlohmann::json& s : doc["activeLayers"])
                 if (s.is_string())
                     e.activeLayers.push_back(s.get<std::string>());
+
+        // Optional and additive (see the header): absent on every envelope
+        // written before the injected-overlay detection, and that is fine.
+        if (doc.contains("foreignModules") && doc["foreignModules"].is_array())
+            for (const nlohmann::json& s : doc["foreignModules"])
+                if (s.is_string())
+                    e.foreignModules.push_back(s.get<std::string>());
 
         return e;
     }

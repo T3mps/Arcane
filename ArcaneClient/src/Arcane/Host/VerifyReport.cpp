@@ -265,6 +265,12 @@ namespace Arcane
         m_viewMode    = std::move(mode);
     }
 
+    void VerifyReport::SetForeignModules(std::vector<ForeignModules::Match> modules)
+    {
+        m_foreignModulesSet = true;
+        m_foreignModules    = std::move(modules);
+    }
+
     void VerifyReport::SetVisibility(std::uint32_t total, std::uint32_t coarseVisible,
                                      std::uint32_t batches, std::uint32_t draws,
                                      std::uint32_t transparentRows,
@@ -594,6 +600,12 @@ namespace Arcane
         // and `gpuVisible` became the GPU CULL's own asynchronously read-back
         // count -- `null` until one completes -- instead of a copy of
         // coarseVisible. See VerifyReport.hpp's kSchemaVersion block.
+        //
+        // Bumped 9 -> 10 by the injected-overlay detection: the report gained
+        // `foreignModules` (see SetForeignModules) -- the third-party modules
+        // the host found injected into its process, so a red lane on a desk
+        // with an overlay is attributable from the report alone. Absent on any
+        // run that never scanned; 9 remains readable.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -705,6 +717,26 @@ namespace Arcane
         // never reads as a mode.
         if (m_viewModeSet)
             j["viewMode"] = m_viewMode;
+
+        // The injected modules (schemaVersion 10). ABSENT unless
+        // SetForeignModules was called; an EMPTY array when the host scanned
+        // and found nothing -- "we looked" is itself the fact a consumer
+        // wants, since both hosts always look. module + path + product + tier
+        // only: the consequence and remedy are the WARN line's text, not
+        // facts an agent acts on. `product` is empty on a Tier 3 row (an
+        // outsider the table does not know) -- its path IS the attribution.
+        if (m_foreignModulesSet)
+        {
+            nlohmann::json modules = nlohmann::json::array();
+            for (const ForeignModules::Match& m : m_foreignModules)
+            {
+                modules.push_back({ { "module",  m.module },
+                                     { "path",    m.path },
+                                     { "product", m.product },
+                                     { "tier",    m.tier } });
+            }
+            j["foreignModules"] = std::move(modules);
+        }
 
         j["probes"] = m_probes;
 

@@ -78,6 +78,15 @@ namespace Arcane::Diag
         // Which diagnostic layers were actually armed for this capture (DRED
         // tier achieved, marker-buffer fallback used, ...) -- see F-2c/F-2d.
         std::vector<std::string> activeLayers;
+
+        // The injected third-party modules the process had found by its last
+        // scan (Base/ForeignModules.hpp -- overlays and present-path hooks,
+        // by base name), so a capture from a desk with GPU Tweak III's OSD in
+        // it says so on its face. Empty when none were found OR when no scan
+        // had run before the report; the .txt sibling's header line tells
+        // those two apart. Additive and optional: an older envelope without
+        // the key parses with an empty list, and formatVersion does not move.
+        std::vector<std::string> foreignModules;
     };
 
     // Envelope -> JSON text (2-space indent, UTF-8; invalid-UTF-8 field text

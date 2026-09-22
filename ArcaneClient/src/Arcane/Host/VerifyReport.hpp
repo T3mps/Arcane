@@ -35,6 +35,10 @@
 // VerifyReportTest.cpp still parses this report's JSON without linking a
 // renderer, which is the Servitor boundary this whole file exists to hold.
 #include <Arcane/Host/SettleBound.hpp>
+// ForeignModules::Match, what SetForeignModules takes (schemaVersion 10). A
+// Core header with no render dependency -- the standalone-parse property
+// above is untouched: the test still links nothing beyond Core and Client.
+#include <Arcane/Base/ForeignModules.hpp>
 
 #include <Json.hpp>
 
@@ -204,7 +208,16 @@ namespace Arcane
         // A nullable field and a changed meaning are exactly what a version
         // boundary exists for; 3..8 remain readable by the same rule for
         // every OTHER field.
-        static constexpr int kSchemaVersion                = 9;
+        //
+        // Bumped 9 -> 10 by the injected-overlay detection (the editor
+        // close-crash follow-up, 2026-09-22): the report gained
+        // `foreignModules` (see SetForeignModules) -- the third-party modules
+        // the host found injected into its process, each with product and
+        // tier, so a red lane on a desk with GPU Tweak III's OSD or RTSS in
+        // it is attributable from the report alone. ABSENT on any run that
+        // never scanned; an EMPTY array on one that scanned and found nothing.
+        // 3..9 remain readable by the same rule.
+        static constexpr int kSchemaVersion                = 10;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -498,6 +511,19 @@ namespace Arcane
                            std::uint32_t transparentRows,
                            std::optional<std::uint32_t> gpuVisible);
 
+        // The process's INJECTED third-party modules (schemaVersion 10): what
+        // Arcane::ForeignModules::Scan found -- overlays and present-path
+        // hooks matched by base name against Base/ForeignModules.hpp's table.
+        // Emitted as a top-level `foreignModules` array of
+        // `{ module, path, product, tier }` ONLY when this was called; both hosts
+        // call it unconditionally from their report path (a fresh Scan at
+        // that moment, so a module that injected after device creation is
+        // still on record), so a clean desk reports `[]` and a consumer can
+        // rely on the key. The consequence/remedy text stays in the log: an
+        // agent acts on module + tier, a human reads the WARN line. VerifyReport
+        // computes nothing here -- AddCensus's own rule.
+        void SetForeignModules(std::vector<ForeignModules::Match> modules);
+
         // Evaluates every spec against whatever SetCapture/AddCensus/SetPick were
         // given before this call, and appends one JSON entry per spec.
         // Callable more than once (specs accumulate) -- there is no reset,
@@ -593,6 +619,11 @@ namespace Arcane
         std::uint32_t m_visTotal = 0, m_visCoarse = 0, m_visBatches = 0, m_visDraws = 0;
         std::uint32_t m_visTransparentRows = 0;
         std::optional<std::uint32_t> m_visGpu;
+
+        // The injected modules (schemaVersion 10) -- m_foreignModulesSet gates
+        // emission, so "never scanned" and "scanned, clean" stay distinct.
+        bool                               m_foreignModulesSet = false;
+        std::vector<ForeignModules::Match> m_foreignModules;
 
         // Already-evaluated probe entries, in Evaluate() call order.
         nlohmann::json m_probes = nlohmann::json::array();

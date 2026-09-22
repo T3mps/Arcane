@@ -100,6 +100,32 @@ TEST_CASE("arcdiag envelope round-trips every field, including all three sibling
     CHECK(back->activeLayers[2] == "markers:buffer");
 }
 
+TEST_CASE("arcdiag envelope round-trips foreignModules, and an envelope without the key parses with none", "[diag]")
+{
+    // The injected-overlay detection's post-mortem half: a crash or hang
+    // report names the foreign modules the process had scanned, so a capture
+    // from a desk with GPU Tweak III's OSD injected says so on its face.
+    Arcane::Diag::Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "crash";
+    e.foreignModules = { "GTIII-OSD64.dll", "NahimicOSD.dll" };
+
+    const auto back = Arcane::Diag::Parse(Arcane::Diag::Serialize(e));
+    REQUIRE(back.has_value());
+    REQUIRE(back->foreignModules.size() == 2);
+    CHECK(back->foreignModules[0] == "GTIII-OSD64.dll");
+    CHECK(back->foreignModules[1] == "NahimicOSD.dll");
+
+    // A pre-detection envelope carries no such key and still parses, with an
+    // empty list: the field is additive and optional, so formatVersion does
+    // not move -- the same forward-compat rule as the unknown-key case below.
+    const std::string legacy =
+        "{\"formatVersion\":1,\"guid\":\"" + Arcane::Guid::Generate().ToString() + "\",\"kind\":\"hang\"}";
+    const auto old = Arcane::Diag::Parse(legacy);
+    REQUIRE(old.has_value());
+    CHECK(old->foreignModules.empty());
+}
+
 TEST_CASE("arcdiag parse ignores unknown extra keys (forward compat)", "[diag]")
 {
     const std::string json =

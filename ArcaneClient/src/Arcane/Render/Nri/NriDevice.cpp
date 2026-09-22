@@ -10,6 +10,7 @@
 
 #include "NriCommon.hpp"
 
+#include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Report -- the injected-overlay scan, once, after the native device exists
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/DeviceCreationD3D12.hpp>
 #include <Arcane/Render/DeviceCreationVulkan.hpp>
@@ -132,12 +133,26 @@ namespace Arcane
                 ARC_ERROR("Native Vulkan device creation failed: {}", e.what());
                 return nullptr;
             }
-            return owner;
+        }
+        else
+        {
+            owner->m_impl->d3d12 = std::make_unique<D3D12DeviceCreation>();
+            if (!CreateD3D12NativeDevice(desc, *owner->m_impl->d3d12))
+                return nullptr;
         }
 
-        owner->m_impl->d3d12 = std::make_unique<D3D12DeviceCreation>();
-        if (!CreateD3D12NativeDevice(desc, *owner->m_impl->d3d12))
-            return nullptr;
+        // THE INJECTED-OVERLAY SCAN, here and nowhere else: the native device
+        // now exists on either backend, which is the moment every hook an
+        // outside process wanted in us is in place (the desk's GTIII-OSD64.dll
+        // hooks D3D12/DXGI; the Vulkan-flavoured ones hook the loader). One
+        // enumeration, one line per known module per process -- Report keeps
+        // its own ledger, so the editor's second device (a project switch)
+        // and a test that creates twenty never repeat it. Never a modal: what
+        // this finds reaches the log, the verify report and the diagnostics
+        // envelope, and the windowed editor's Problems pane -- nothing else.
+        // The armor in DeviceCreationD3D12.cpp is what SURVIVES such a
+        // module; this is what NAMES it.
+        (void)ForeignModules::Report();
         return owner;
     }
 

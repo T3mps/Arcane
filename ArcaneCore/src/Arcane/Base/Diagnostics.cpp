@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope, WriteFile -- the .arcdiag sibling
 #include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8(), BuildInfo()
+#include <Arcane/Base/ForeignModules.hpp> // ForeignModules::LastScan -- the injected modules, for the report header + envelope
 #include <Arcane/Base/Log.hpp>
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -466,6 +468,34 @@ namespace
         }
         append(std::string("minidump    : ") + (dumpOk ? dmpPath.string() : "<failed to write>"));
 
+        // The injected third-party modules the process had found by its LAST
+        // scan (Base/ForeignModules.hpp) -- read from memory, never
+        // enumerated here: this runs inside an exception filter, where the
+        // loader lock is off limits. "not scanned" (no device was ever
+        // created) and "none" are different facts and are spelled apart, so
+        // a close crash on a desk with GPU Tweak III's OSD in it names the
+        // overlay on the report's first screen.
+        const std::optional<std::vector<ForeignModules::Match>> foreign = ForeignModules::LastScan();
+        {
+            std::string line;
+            if (!foreign)
+                line = "<not scanned>";
+            else if (foreign->empty())
+                line = "none";
+            else
+            {
+                for (const ForeignModules::Match& m : *foreign)
+                {
+                    if (!line.empty()) line += ", ";
+                    // A catalogued row names its product; an uncatalogued one
+                    // (tier 3) has only its path to be known by.
+                    line += m.module + " (tier " + std::to_string(m.tier) + ", " +
+                            (m.product.empty() ? m.path : m.product) + ")";
+                }
+            }
+            append("injected    : " + line);
+        }
+
         if (ep && ep->ExceptionRecord)
         {
             char b[128];
@@ -550,6 +580,12 @@ namespace
         // symbolized all-thread walk above, snapshotted BEFORE any GPU
         // section is appended below so this field stays CPU-only (F-6b).
         envelope.cpuThreadSummary = out;
+        // Same scan the header line above printed; base names only, the
+        // envelope's contract (DiagEnvelope.hpp). Empty for both "none" and
+        // "not scanned" -- the .txt sibling keeps the two apart.
+        if (foreign)
+            for (const ForeignModules::Match& m : *foreign)
+                envelope.foreignModules.push_back(m.module);
 
         GpuSectionProvider gpuProvider     = nullptr;
         void*              gpuProviderUser = nullptr;

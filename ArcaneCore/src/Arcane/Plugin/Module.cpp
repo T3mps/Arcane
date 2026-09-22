@@ -1,5 +1,7 @@
 #include <Arcane/Plugin/Module.hpp>
 
+#include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::NoteOwned -- what we load ourselves is ours
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -112,6 +114,13 @@ namespace Arcane
 #endif
         if (!handle)
             return std::nullopt;
+
+        // "We loaded this ourselves": its directory is one of this host's own
+        // trees from now on, so the injected-module scan (Base/ForeignModules)
+        // never lists a game module under <project>/Binaries or a plugin in
+        // its own folder as a foreign body. The ONE loader every engine-
+        // initiated load goes through, which is why the note lives here.
+        ForeignModules::NoteOwned(path.generic_string());
 
         return Module(std::move(path), handle);
     }

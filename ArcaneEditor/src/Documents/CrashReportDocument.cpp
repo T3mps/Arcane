@@ -166,6 +166,25 @@ namespace Arcane::Editor
             ImGui::Separator();
         }
 
+        // ---- foreignModules: the injected overlays the process carried ----
+        // Same joined-line shape as the layers: base names only (the
+        // envelope's contract), so a capture from a desk with GPU Tweak III's
+        // OSD in it says so on its first screen. Absent when none were
+        // recorded -- "none" and "not scanned" are told apart by the .txt
+        // sibling's header, not here.
+        if (!m_envelope.foreignModules.empty())
+        {
+            std::string line;
+            for (const std::string& module : m_envelope.foreignModules)
+            {
+                if (!line.empty())
+                    line += "   ";
+                line += module;
+            }
+            ImGui::TextWrapped("Injected modules: %s", line.c_str());
+            ImGui::Separator();
+        }
+
         // ---- per-queue timeline: lastCompleted then inFlight ----------------
         const std::vector<const Arcane::Diag::Envelope::Queue*> queues = VisibleQueues();
         if (ImGui::CollapsingHeader("GPU Queues", ImGuiTreeNodeFlags_DefaultOpen))

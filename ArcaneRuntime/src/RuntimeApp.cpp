@@ -16,6 +16,7 @@
 #include <Arcane/Base/Assert.hpp>        // ARC_ASSERT (ShutdownGraphPath's offscreen-guaranteed invariant, Fix 3)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat/SetPhase (pre-loop phase markers)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
+#include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Scan / Tier1Names -- the injected-overlay facts (report + the RenderErrorCount line)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Guid.hpp>          // Arcane::Guid::FromString (--scene override; not pulled in transitively by any of the below)
 #include <Arcane/Project/AssetId.hpp>    // Arcane::AssetId::FromGuid (--nri-graph asset resolver)
@@ -1039,8 +1040,21 @@ void RuntimeApp::ShutdownGraphPath()
     m_graphContext.reset();
     m_offscreen.reset();
 
+    // A present Tier 1 overlay is NAMED on the summary line: the drains tag
+    // every debug-layer message by producer, but "[d3d12]" cannot say whether
+    // the message was ours or the overlay's, and a desk reading this line
+    // after a red run must not start hunting an Arcane bug that is GPU Tweak
+    // III's. Fresh scan (microseconds), never per frame: a module that
+    // injected after device creation is still named here.
+    const std::vector<Arcane::ForeignModules::Match> foreignModules = Arcane::ForeignModules::Scan();
+    const std::string overlayNote = [&]() -> std::string {
+        const std::string tier1 = Arcane::ForeignModules::Tier1Names(foreignModules);
+        return tier1.empty() ? std::string{}
+                             : " (Tier 1 overlay injected: " + tier1 +
+                                   " -- its own D3D12/DXGI errors are counted here too)";
+    }();
     const std::uint64_t errorsNow = Arcane::RenderErrorCount();
-    ARC_INFO("[nri-graph] RenderErrorCount {} -> {}", m_graphErrorBaseline, errorsNow);
+    ARC_INFO("[nri-graph] RenderErrorCount {} -> {}{}", m_graphErrorBaseline, errorsNow, overlayNote);
     if (errorsNow > m_graphErrorBaseline)
     {
         ARC_ERROR("[nri-graph] FAILED: {} validation/render error(s) fired during the run "
@@ -1300,6 +1314,12 @@ void RuntimeApp::ShutdownGraphPath()
                              m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
                              static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
                              gpuVisibleRows);
+
+        // THE INJECTED MODULES (schemaVersion 10): the scan taken above for
+        // the RenderErrorCount line, carried unconditionally like the census
+        // -- a clean desk reports `[]`, and a red lane on a desk with an
+        // overlay is attributable from this file alone.
+        report.SetForeignModules(foreignModules);
 
         // The pick@x,y readback (Task 9), captured above while the vehicle
         // was still alive. Only set when a `pick@` probe was actually

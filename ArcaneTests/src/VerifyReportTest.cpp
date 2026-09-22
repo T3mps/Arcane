@@ -5,6 +5,8 @@
 // the JSON this produces without linking the engine.
 #include <Arcane/Host/VerifyReport.hpp>
 
+#include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Match -- what SetForeignModules takes (schemaVersion 10)
+
 #include <Json.hpp>
 
 #include <catch2/catch_approx.hpp>
@@ -70,7 +72,7 @@ TEST_CASE("verify: a brightness probe reads the capture and lands in the JSON", 
     // package, which parses this file without linking the engine -- so the
     // version is part of the contract, not decoration -- bumped to 2 by
     // Task 8's --compare/--bless block.
-    CHECK(doc["schemaVersion"] == 9);
+    CHECK(doc["schemaVersion"] == 10);
     CHECK(doc["backend"] == "D3D12");
     CHECK(doc["mode"] == "headless");
     CHECK(doc["framesRendered"] == 5);
@@ -731,7 +733,7 @@ TEST_CASE("verify: WriteTo round-trips through disk", "[verify]")
     in.close();
 
     const auto doc = nlohmann::json::parse(contents.str());
-    CHECK(doc["schemaVersion"] == 9);
+    CHECK(doc["schemaVersion"] == 10);
     CHECK(doc["framesRendered"] == 3);
 
     std::remove(path.c_str());
@@ -755,7 +757,7 @@ TEST_CASE("verify: the report schema is version 6 once settle facts exist", "[ve
     Arcane::VerifyReport r;
     r.SetRun("dx12", 60, "frames-complete");
     const auto doc = nlohmann::json::parse(r.ToJson());
-    CHECK(doc["schemaVersion"] == 9);
+    CHECK(doc["schemaVersion"] == 10);
 }
 
 TEST_CASE("verify: a run with no --compare emits NO compare block", "[verify]")
@@ -852,7 +854,7 @@ TEST_CASE("verify report: schemaVersion 9 carries settle facts and the headless 
                 /*captureFailed=*/false);
     const auto doc = nlohmann::json::parse(r.ToJson());
 
-    CHECK(doc["schemaVersion"] == 9);
+    CHECK(doc["schemaVersion"] == 10);
     // The MODE's machine-readable name, in the mode's own word. Changed on this
     // bump because a schemaVersion bump is exactly when a wire value may change.
     CHECK(doc["mode"] == "headless");
@@ -957,12 +959,12 @@ TEST_CASE("verify report: captureFailed alone is not a verdict", "[verify]")
     CHECK_FALSE(doc.contains("settleBailReason"));
 }
 
-TEST_CASE("verify report: schemaVersion is 9 and declares a supported range", "[host][verify]")
+TEST_CASE("verify report: schemaVersion is 10 and declares a supported range", "[host][verify]")
 {
     // A RANGE plus a predicate, not a bare number: a consumer across the
-    // Servitor boundary can then say "I understand 3..9" rather than "I
-    // understand 9", and an unreadable result can be marked deliberately.
-    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 9);
+    // Servitor boundary can then say "I understand 3..10" rather than "I
+    // understand 10", and an unreadable result can be marked deliberately.
+    STATIC_REQUIRE(Arcane::VerifyReport::kSchemaVersion == 10);
     STATIC_REQUIRE(Arcane::VerifyReport::kOldestSupportedSchemaVersion == 3);
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(3));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(4));
@@ -971,14 +973,15 @@ TEST_CASE("verify report: schemaVersion is 9 and declares a supported range", "[
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(7));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(8));
     CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(9));
+    CHECK(Arcane::VerifyReport::IsSupportedSchemaVersion(10));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(2));
-    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(10));
+    CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(11));
     CHECK_FALSE(Arcane::VerifyReport::IsSupportedSchemaVersion(0));
 
     Arcane::VerifyReport r;
     r.SetRun("D3D12", 60, "frames-complete");
     const auto j = nlohmann::json::parse(r.ToJson());
-    CHECK(j.at("schemaVersion").get<int>() == 9);
+    CHECK(j.at("schemaVersion").get<int>() == 10);
 }
 
 TEST_CASE("verify report: compare carries maxLocalDifference", "[host][verify]")
@@ -1014,7 +1017,7 @@ TEST_CASE("schema 5: compare block carries triedPaths in try order", "[host][ver
                  { "Verify/References/vulkan/runtime-scene.png",
                    "Verify/References/runtime-scene.png" });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 9);
+    REQUIRE(j["schemaVersion"].get<int>() == 10);
     REQUIRE(j["compare"]["triedPaths"].size() == 2);
     REQUIRE(j["compare"]["triedPaths"][0].get<std::string>()
             == "Verify/References/vulkan/runtime-scene.png");
@@ -1035,7 +1038,7 @@ TEST_CASE("schema 6: worlds carries one entry per live world, in host order", "[
     r.SetRun("vulkan", 60, "frames-complete");
     r.SetWorlds({ { "Client", false, 3, 2 }, { "DedicatedServer", true, 3, 3 } });
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 9);
+    REQUIRE(j["schemaVersion"].get<int>() == 10);
     REQUIRE(j.contains("worlds"));
     REQUIRE(j["worlds"].size() == 2);
     CHECK(j["worlds"][0].at("role") == "Client");
@@ -1063,7 +1066,7 @@ TEST_CASE("schema 7: viewMode carries the editor camera's resolved mode, absent 
     r.SetRun("D3D12", 60, "frames-complete");
     r.SetViewMode("perspective");
     const auto j = nlohmann::json::parse(r.ToJson());
-    REQUIRE(j["schemaVersion"].get<int>() == 9);
+    REQUIRE(j["schemaVersion"].get<int>() == 10);
     REQUIRE(j.contains("viewMode"));
     CHECK(j.at("viewMode") == "perspective");
 
@@ -1073,4 +1076,73 @@ TEST_CASE("schema 7: viewMode carries the editor camera's resolved mode, absent 
     Arcane::VerifyReport silent;
     silent.SetRun("Vulkan", 60, "frames-complete");
     CHECK_FALSE(nlohmann::json::parse(silent.ToJson()).contains("viewMode"));
+}
+
+// ---- Injected-overlay detection: schemaVersion 10 -- `foreignModules` ----
+
+TEST_CASE("schema 10: foreignModules carries the process's matched overlay modules with product and tier",
+          "[host][verify]")
+{
+    // The fact a red lane on a desk with an overlay is attributed by: which
+    // injected modules the host found, which product each is, and whether it
+    // is a Tier 1 (proven to corrupt the host) or a Tier 2 (present-path
+    // hook, attribution only) one. The host hands the matches over; the
+    // report computes nothing itself -- AddCensus's own rule.
+    Arcane::VerifyReport r;
+    r.SetRun("D3D12", 900, "frames-complete");
+    std::vector<Arcane::ForeignModules::Match> found(3);
+    found[0].module      = "GTIII-OSD64.dll";
+    found[0].path        = "C:\\Program Files\\ASUS\\GPU TweakIII\\GTIII-OSD64.dll";
+    found[0].product     = "ASUS GPU Tweak III on-screen display";
+    found[0].tier        = 1;
+    found[0].consequence = "releases the device too often";
+    found[0].remedy      = "blacklist the host in its OSD settings";
+    found[1].module      = "nvspcap64.dll";
+    found[1].path        = "C:\\Program Files\\NVIDIA Corporation\\NVIDIA app\\nvspcap64.dll";
+    found[1].product     = "NVIDIA ShadowPlay overlay";
+    found[1].tier        = 2;
+    // Uncatalogued: the path IS the attribution, there is no product to name.
+    found[2].module      = "SomeNewOverlay64.dll";
+    found[2].path        = "C:\\Program Files\\Vendor\\Overlay\\SomeNewOverlay64.dll";
+    found[2].tier        = Arcane::ForeignModules::kTierUncatalogued;
+    r.SetForeignModules(found);
+
+    const auto j = nlohmann::json::parse(r.ToJson());
+    REQUIRE(j["schemaVersion"].get<int>() == 10);
+    REQUIRE(j.contains("foreignModules"));
+    REQUIRE(j["foreignModules"].is_array());
+    REQUIRE(j["foreignModules"].size() == 3);
+    CHECK(j["foreignModules"][0].at("module")  == "GTIII-OSD64.dll");
+    CHECK(j["foreignModules"][0].at("path")    == "C:\\Program Files\\ASUS\\GPU TweakIII\\GTIII-OSD64.dll");
+    CHECK(j["foreignModules"][0].at("product") == "ASUS GPU Tweak III on-screen display");
+    CHECK(j["foreignModules"][0].at("tier")    == 1);
+    CHECK(j["foreignModules"][1].at("module")  == "nvspcap64.dll");
+    CHECK(j["foreignModules"][1].at("tier")    == 2);
+    CHECK(j["foreignModules"][2].at("module")  == "SomeNewOverlay64.dll");
+    CHECK(j["foreignModules"][2].at("path")    == "C:\\Program Files\\Vendor\\Overlay\\SomeNewOverlay64.dll");
+    CHECK(j["foreignModules"][2].at("product") == "");
+    CHECK(j["foreignModules"][2].at("tier")    == 3);
+    // The consequence and remedy are the WARN line's text, not report facts:
+    // an agent acts on module + tier, a human reads the log.
+    CHECK_FALSE(j["foreignModules"][0].contains("remedy"));
+    CHECK_FALSE(j["foreignModules"][0].contains("consequence"));
+}
+
+TEST_CASE("schema 10: a scanned-and-clean process emits an EMPTY foreignModules array; a never-scanned run emits none",
+          "[host][verify]")
+{
+    // "We looked and found nothing" is a fact; "we never looked" is the
+    // absence every optional section keeps. Both hosts scan, so a clean desk
+    // reports `[]` and an agent can rely on the key being there.
+    Arcane::VerifyReport clean;
+    clean.SetRun("Vulkan", 60, "frames-complete");
+    clean.SetForeignModules({});
+    const auto j = nlohmann::json::parse(clean.ToJson());
+    REQUIRE(j.contains("foreignModules"));
+    CHECK(j["foreignModules"].is_array());
+    CHECK(j["foreignModules"].empty());
+
+    Arcane::VerifyReport silent;
+    silent.SetRun("Vulkan", 60, "frames-complete");
+    CHECK_FALSE(nlohmann::json::parse(silent.ToJson()).contains("foreignModules"));
 }

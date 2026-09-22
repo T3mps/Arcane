@@ -38,6 +38,7 @@
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::ReadFile (crashReportFactory/Peek, beside materialFactory)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::RetargetDumpDir (RetargetDumpDir, beside RetargetLayoutIni)
 #include <Arcane/Base/Engine.hpp>   // Arcane::BuildInfo / Arcane::ToString (host banner)
+#include <Arcane/Base/ForeignModules.hpp>   // ForeignModules::Scan / LastScan / Tier1Names -- the injected-overlay facts (Problems notice, report, RenderErrorCount line)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Jobs/JobSystem.hpp>   // F2b Task 12: m_runtime->Jobs().Submit (CookQueue's SubmitFn)
@@ -2134,6 +2135,39 @@ namespace Arcane::Editor
             return false;
         }
 
+        // THE ONE-TIME PROBLEMS NOTICE for an injected Tier 1 overlay. The
+        // device creation just above ran ForeignModules::Report (the log's
+        // WARN line, once per process); this is the same fact where a desk
+        // operator is actually looking. Windowed only -- the headless path
+        // gets nothing beyond the log and the report field, so a CI lane
+        // never grows a row nobody can click -- and NEVER a modal: a Problems
+        // row is dismissable, a message box would stall every automated run.
+        // Tier 2 stays out of the pane: Steam's and ShadowPlay's hooks are on
+        // most desks and are attribution, not a problem to act on. Published
+        // under its own key, so a project switch that recreates the vehicles
+        // replaces the same rows rather than accumulating them.
+        if (!m_config.headless)
+        {
+            if (const std::optional<std::vector<Arcane::ForeignModules::Match>> scan = Arcane::ForeignModules::LastScan())
+            {
+                std::vector<Arcane::Diagnostic> rows;
+                for (const Arcane::ForeignModules::Match& m : *scan)
+                {
+                    if (m.tier != Arcane::ForeignModules::kTierDestabilising)
+                        continue;
+                    Arcane::Diagnostic d;
+                    d.severity = Arcane::DiagSeverity::Warning;
+                    d.scope    = Arcane::DiagScope::Project;
+                    d.code     = "process.foreignModule.destabilising";
+                    d.message  = m.product + " is injected into this editor (" + m.module + ")";
+                    d.detail   = "It " + m.consequence + ". Remedy: " + m.remedy + ".";
+                    rows.push_back(std::move(d));
+                }
+                if (!rows.empty())
+                    Arcane::Diagnostics::Publish("diagnostics:foreign-modules", rows);
+            }
+        }
+
         // ===== THE CHROME BACKEND'S ADOPTION, MADE EXPLICIT (Task 10) ========
         // It was already CORRECT before this line and it is still correct
         // without it: ImGuiNri::Init installs its backend identity on whatever
@@ -2782,8 +2816,20 @@ namespace Arcane::Editor
         // editor exit" is the observable proof that the invalidate above
         // actually ordered the view ahead of the texture. Without the pair
         // printed, a desk operator has a rule with nothing to read it against.
+        // A present Tier 1 overlay is NAMED on the summary line -- the same
+        // reasoning as RuntimeApp::ShutdownGraphPath's: the drains tag every
+        // debug-layer message by producer, but "[d3d12]" cannot say whether
+        // it was ours or the overlay's. Fresh scan (microseconds), reused by
+        // the report block below; never per frame.
+        const std::vector<Arcane::ForeignModules::Match> foreignModules = Arcane::ForeignModules::Scan();
+        const std::string overlayNote = [&]() -> std::string {
+            const std::string tier1 = Arcane::ForeignModules::Tier1Names(foreignModules);
+            return tier1.empty() ? std::string{}
+                                 : " (Tier 1 overlay injected: " + tier1 +
+                                       " -- its own D3D12/DXGI errors are counted here too)";
+        }();
         const std::uint64_t errorsNow = Arcane::RenderErrorCount();
-        ARC_INFO("[nri-graph] RenderErrorCount {} -> {}", m_graphErrorBaseline, errorsNow);
+        ARC_INFO("[nri-graph] RenderErrorCount {} -> {}{}", m_graphErrorBaseline, errorsNow, overlayNote);
         if (errorsNow > m_graphErrorBaseline)
         {
             ARC_ERROR("[nri-graph] FAILED: {} validation/render error(s) fired during the editor "
@@ -3011,6 +3057,11 @@ namespace Arcane::Editor
                                  m_gpuSceneFrame.stats.batches, m_gpuSceneFrame.stats.draws,
                                  static_cast<std::uint32_t>(m_gpuSceneFrame.transparentDraws.size()),
                                  gpuVisibleRows);
+
+            // THE INJECTED MODULES (schemaVersion 10): the scan taken above
+            // for the RenderErrorCount line, carried unconditionally like
+            // the census -- a clean desk reports `[]`.
+            report.SetForeignModules(foreignModules);
 
             // The WORLD SET (schemaVersion 6, Core-DLL split plan 1 Task 7). A
             // process is no longer a world: --play-as embedded-server runs the
