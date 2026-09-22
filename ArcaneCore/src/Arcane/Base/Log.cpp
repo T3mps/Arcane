@@ -106,18 +106,26 @@ namespace Arcane::Log
         // s_flushRequestCv, that runs the actual (potentially blocking)
         // logger flush off the caller's thread. See Log.hpp's
         // FlushFileSinkBounded comment for why this exists.
+        //
+        // s_flushMutex is a timed_mutex (not a plain mutex), and the two
+        // condvars are condition_variable_any (the general form that works
+        // with any Lockable, including unique_lock<timed_mutex>): review
+        // fix round 1 -- FlushFileSinkBounded's own lock acquisition must be
+        // bounded by timeoutMs too, not just its post-acquisition wait, so
+        // the crash thread can never block forever even if the faulting
+        // thread died holding s_flushMutex mid-request.
         std::thread s_flushThread;
         std::atomic<bool> s_helperRunning{false};
-        std::mutex s_flushMutex;
-        std::condition_variable s_flushRequestCv;
-        std::condition_variable s_flushDoneCv;
+        std::timed_mutex s_flushMutex;
+        std::condition_variable_any s_flushRequestCv;
+        std::condition_variable_any s_flushDoneCv;
         bool s_flushRequested = false;
         bool s_flushDone = true;
         bool s_helperShouldStop = false;
 
         void FlushHelperMain()
         {
-            std::unique_lock<std::mutex> lock(s_flushMutex);
+            std::unique_lock<std::timed_mutex> lock(s_flushMutex);
             for (;;)
             {
                 s_flushRequestCv.wait(lock, [] { return s_flushRequested || s_helperShouldStop; });
@@ -148,13 +156,29 @@ namespace Arcane::Log
             if (!s_helperRunning.exchange(false, std::memory_order_acq_rel))
                 return;
             {
-                std::lock_guard<std::mutex> lock(s_flushMutex);
+                std::lock_guard<std::timed_mutex> lock(s_flushMutex);
                 s_helperShouldStop = true;
             }
             s_flushRequestCv.notify_all();
             if (s_flushThread.joinable())
                 s_flushThread.join();
         }
+
+        // Review fix round 1 (finding 1): nothing in the process calls
+        // Log::Shutdown() today, so without this, a joinable s_flushThread
+        // would reach ~std::thread() at static destruction and std::terminate
+        // the process (exit code 3) the first time any file sink was ever
+        // attached. This guard's destructor runs StopFlushHelper() first --
+        // C++ guarantees statics in one translation unit destruct in the
+        // reverse of their construction order, and this is declared LAST
+        // among the flush-helper statics (and after s_engine), so every
+        // object StopFlushHelper() touches, including s_engine for the
+        // helper's final in-flight flush, is still alive when this runs.
+        struct FlushHelperShutdownGuard
+        {
+            ~FlushHelperShutdownGuard() { StopFlushHelper(); }
+        };
+        FlushHelperShutdownGuard s_flushHelperShutdownGuard;
     }
 
     void Init(spdlog::level::level_enum level)
@@ -335,12 +359,24 @@ namespace Arcane::Log
 
         try
         {
-            std::unique_lock<std::mutex> lock(s_flushMutex);
+            // Review fix round 1 (finding 3): a single deadline covers BOTH
+            // the lock acquisition and the completion wait, so the whole
+            // call is bounded by timeoutMs total -- not timeoutMs for each
+            // step. If the faulting thread died holding s_flushMutex
+            // mid-request, try_lock_until times out and returns false
+            // instead of blocking forever (the old std::mutex-based
+            // unique_lock construction could not do this: acquiring a plain
+            // std::mutex has no timeout).
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+
+            std::unique_lock<std::timed_mutex> lock(s_flushMutex, std::defer_lock);
+            if (!lock.try_lock_until(deadline))
+                return false;
+
             s_flushDone = false;
             s_flushRequested = true;
             s_flushRequestCv.notify_one();
-            return s_flushDoneCv.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-                                          [] { return s_flushDone; });
+            return s_flushDoneCv.wait_until(lock, deadline, [] { return s_flushDone; });
         }
         catch (...)
         {

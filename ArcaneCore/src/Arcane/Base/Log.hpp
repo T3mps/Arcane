@@ -89,16 +89,23 @@ namespace Arcane::Log
     // never happens on the crash path -- it happens during normal startup,
     // long before any crash) lazily starts one dedicated helper thread that
     // parks on a condition variable, waiting to be asked to flush. Calling
-    // FlushFileSinkBounded signals that helper and blocks on a SEPARATE
-    // completion condition variable for at most timeoutMs; it returns true
-    // only if the helper reports completion in time, and false on timeout
-    // (including when the helper is itself stuck on a mutex the dying
-    // faulting thread held -- in that case the helper thread leaks, but the
-    // process is already on its way down). Returns false immediately, with
-    // no wait, if no helper thread was ever started (AttachFileSink never
-    // succeeded) or no file sink is attached. The caller-side wait/signal
-    // uses only pre-constructed synchronization primitives and never
-    // allocates. Log::Shutdown() stops and joins the helper thread.
+    // FlushFileSinkBounded computes a single deadline (now + timeoutMs) that
+    // covers the WHOLE call: it takes the shared mutex with a bounded
+    // try_lock_until (never an unbounded lock -- review fix round 1, finding
+    // 3: even acquiring that mutex must not be able to block forever), then
+    // signals the helper and waits on a SEPARATE completion condition
+    // variable up to that same deadline. It returns true only if the helper
+    // reports completion in time, and false on any timeout -- including
+    // acquiring the mutex, or the helper itself being stuck on a mutex the
+    // dying faulting thread held (in that case the helper thread leaks, but
+    // the process is already on its way down). Returns false immediately,
+    // with no wait, if no helper thread was ever started (AttachFileSink
+    // never succeeded) or no file sink is attached. The caller-side
+    // wait/signal uses only pre-constructed synchronization primitives and
+    // never allocates. Log::Shutdown() stops and joins the helper thread;
+    // a static-destruction guard in Log.cpp also calls it at process exit
+    // so a joinable helper thread never reaches ~std::thread() (which would
+    // std::terminate the process) even when nothing ever calls Shutdown().
     ARCANE_CORE_API bool FlushFileSinkBounded(std::uint32_t timeoutMs) noexcept;
 }
 
