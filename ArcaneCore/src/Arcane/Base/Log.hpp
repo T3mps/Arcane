@@ -15,6 +15,11 @@
 
 #include <Mosaic/Log.hpp>
 
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <span>
+
 namespace Arcane::Log
 {
     ARCANE_CORE_API void Init(spdlog::level::level_enum level = spdlog::level::info);
@@ -32,6 +37,69 @@ namespace Arcane::Log
     // purpose: Mosaic's g_logSink is a per-module inline atomic, so each module
     // (Arcane.dll, ArcaneRuntime.exe, the plugin, tests) installs into its own copy.
     inline void InstallMosaicSink() noexcept { Mosaic::SetLogSink(MosaicSink(), nullptr); }
+
+    // ------------------------------------------------------------------
+    // File sink + backlog (spec S5.6, crash window plan 1 task 4).
+    //
+    // Attach a rotating file sink beside the stderr one. Whatever file
+    // currently sits at `file` is rotated out of the way first: delete
+    // <stem>.5.log, shift .4->.5 ... .1->.2, then <file> -> <stem>.1.log
+    // (keep = 5); a fresh, truncated file is then opened at `file`. Safe to
+    // call repeatedly with the same path (each call rotates again) or with a
+    // different one (the old sink is simply detached first). Returns false
+    // if Log::Init() has not run yet (no engine logger to attach to) or if
+    // the file could not be opened.
+    ARCANE_CORE_API bool AttachFileSink(const std::filesystem::path& file);
+    // The path passed to the most recent successful AttachFileSink, or an
+    // empty path when no file sink is attached.
+    ARCANE_CORE_API std::filesystem::path FileSinkPath();
+
+    // The backlog: the last kBacklogLines formatted lines the engine logger
+    // produced, ring-buffered. Backed by a fixed static array -- no
+    // allocation, ever, on any of the paths below.
+    inline constexpr std::size_t kBacklogLines = 512;
+    inline constexpr std::size_t kBacklogLineBytes = 512;
+
+    // FreezeBacklog: a single atomic store. Safe to call from the FAULTING
+    // thread (e.g. a SEH filter or signal handler) -- it takes no lock and
+    // touches no memory the logger itself owns beyond the flag. Once frozen,
+    // the backlog sink checks the flag before doing anything else and simply
+    // declines to record further lines, so the ring stays exactly as the
+    // faulting thread left it for the crash thread to read.
+    ARCANE_CORE_API void FreezeBacklog() noexcept;
+    // Test-only: undoes FreezeBacklog() so later, unrelated tests still get
+    // backlog coverage. FreezeBacklog is process-global (one static ring for
+    // the whole module), so a test that freezes it must unfreeze it again.
+    ARCANE_CORE_API void UnfreezeBacklogForTests() noexcept;
+    // min(total lines ever recorded, kBacklogLines). Lock-free, heap-free.
+    ARCANE_CORE_API std::size_t BacklogLineCount() noexcept;
+    // Copies line i (0 = oldest retained) into buf, NUL-free, and returns the
+    // number of bytes copied (at most min(strlen(line), buf.size())). Reads
+    // the ring directly with no lock of any kind -- a line concurrently being
+    // written by another thread may come back torn (part old, part new
+    // content); that is an accepted tradeoff for staying lock-free on the
+    // crash path. Never allocates.
+    ARCANE_CORE_API std::size_t BacklogLine(std::size_t i, std::span<char> buf) noexcept;
+
+    // FlushFileSinkBounded: there must be NO thread creation on the crash
+    // path, yet spdlog's file sink can only be flushed by a thread that is
+    // willing to take its internal mutex -- one the faulting thread might
+    // already hold mid-write. The fix is to never do that flush from the
+    // caller's own thread. The first successful AttachFileSink() call (which
+    // never happens on the crash path -- it happens during normal startup,
+    // long before any crash) lazily starts one dedicated helper thread that
+    // parks on a condition variable, waiting to be asked to flush. Calling
+    // FlushFileSinkBounded signals that helper and blocks on a SEPARATE
+    // completion condition variable for at most timeoutMs; it returns true
+    // only if the helper reports completion in time, and false on timeout
+    // (including when the helper is itself stuck on a mutex the dying
+    // faulting thread held -- in that case the helper thread leaks, but the
+    // process is already on its way down). Returns false immediately, with
+    // no wait, if no helper thread was ever started (AttachFileSink never
+    // succeeded) or no file sink is attached. The caller-side wait/signal
+    // uses only pre-constructed synchronization primitives and never
+    // allocates. Log::Shutdown() stops and joins the helper thread.
+    ARCANE_CORE_API bool FlushFileSinkBounded(std::uint32_t timeoutMs) noexcept;
 }
 
 #define ARC_TRACE(...)    ::Arcane::Log::Engine()->trace(__VA_ARGS__)
