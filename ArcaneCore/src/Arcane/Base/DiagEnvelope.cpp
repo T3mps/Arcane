@@ -74,6 +74,10 @@ namespace Arcane::Diag
         doc["activeLayers"] = envelope.activeLayers;
         doc["foreignModules"] = envelope.foreignModules;
 
+        doc["logPath"] = envelope.logPath;
+        doc["commandLine"] = envelope.commandLine;
+        doc["exitCode"] = envelope.exitCode;
+
         // error_handler_t::replace: a snippet-adjacent field carrying
         // invalid UTF-8 must degrade to U+FFFD, never throw out of
         // Serialize (same rule SaveMaterialAsset follows).
@@ -144,6 +148,11 @@ namespace Arcane::Diag
             for (const nlohmann::json& s : doc["foreignModules"])
                 if (s.is_string())
                     e.foreignModules.push_back(s.get<std::string>());
+
+        e.logPath = StrField(doc, "logPath");
+        e.commandLine = StrField(doc, "commandLine");
+        if (doc.contains("exitCode") && doc["exitCode"].is_number_integer())
+            e.exitCode = doc["exitCode"].get<int>();
 
         return e;
     }

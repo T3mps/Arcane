@@ -135,6 +135,11 @@ namespace Arcane::Diagnostics
     // capture path works BEFORE an intermittent bug depends on it.
     ARCANE_CORE_API std::string WriteReport(const char* reason);
 
+    // The .arcdiag `kind` for a report reason. Substring match, most specific
+    // first: "gpu" -> gpu-stall/gpu-crash, then assert / terminate / ensure /
+    // out-of-memory / abnormal-exit, then "hang", else "crash".
+    [[nodiscard]] ARCANE_CORE_API std::string DeriveReportKind(const char* reason);
+
     // Reports written this process. The observable the watchdog test asserts on.
     [[nodiscard]] ARCANE_CORE_API std::uint32_t ReportCount() noexcept;
 

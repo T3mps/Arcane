@@ -126,6 +126,28 @@ TEST_CASE("arcdiag envelope round-trips foreignModules, and an envelope without 
     CHECK(old->foreignModules.empty());
 }
 
+TEST_CASE("arcdiag envelope round-trips logPath, commandLine and exitCode; absent keys parse as empty/zero", "[diag]")
+{
+    Arcane::Diag::Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "crash";
+    e.logPath = "D:/p/Saved/Logs/ArcaneEditor.log";
+    e.commandLine = "ArcaneEditor.exe --project D:/p";
+    e.exitCode = 10;
+    const auto back = Arcane::Diag::Parse(Arcane::Diag::Serialize(e));
+    REQUIRE(back.has_value());
+    CHECK(back->logPath == e.logPath);
+    CHECK(back->commandLine == e.commandLine);
+    CHECK(back->exitCode == 10);
+
+    const std::string legacy = "{\"formatVersion\":1,\"guid\":\"" + Arcane::Guid::Generate().ToString() + "\"}";
+    const auto old = Arcane::Diag::Parse(legacy);
+    REQUIRE(old.has_value());
+    CHECK(old->logPath.empty());
+    CHECK(old->commandLine.empty());
+    CHECK(old->exitCode == 0);
+}
+
 TEST_CASE("arcdiag parse ignores unknown extra keys (forward compat)", "[diag]")
 {
     const std::string json =

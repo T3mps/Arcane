@@ -87,6 +87,13 @@ namespace Arcane::Diag
         // those two apart. Additive and optional: an older envelope without
         // the key parses with an empty list, and formatVersion does not move.
         std::vector<std::string> foreignModules;
+
+        // Crash-window arc (2026-09-22): the host's log file, its sanitized
+        // relaunch command line, and the exit code it will use -- all
+        // additive and optional, format version unchanged.
+        std::string logPath;
+        std::string commandLine;
+        int         exitCode = 0;   // 0 = not set
     };
 
     // Envelope -> JSON text (2-space indent, UTF-8; invalid-UTF-8 field text

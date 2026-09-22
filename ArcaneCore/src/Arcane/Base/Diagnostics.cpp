@@ -198,25 +198,14 @@ namespace
         return g_phase;
     }
 
-    // Kind derivation for the .arcdiag envelope: substring match on the
-    // REASON string, never the trigger site. Covers every phrasing
-    // WriteReportImpl sees today -- "crash (unhandled exception)" (the
-    // crash filter, below) and "hang (main thread has not ticked for ...)"
-    // (WatchdogMain, below) -- plus the GPU vocabulary named in
-    // docs/specs/2026-08-11-gpu-crash-diagnostics-design.md: the planned
-    // GPU-progress watchdog (Task 7, not yet wired) reports exactly
-    // "gpu-stall", and a device-removed capture (Task 5/6) is expected to
-    // name "gpu-crash". A reason naming "gpu" always resolves to one of the
-    // two gpu kinds rather than falling through to plain crash/hang, and it
-    // is checked before "hang" so "gpu-stall" cannot misclassify as "hang".
+    // Kind derivation for the .arcdiag envelope now lives in the exported
+    // DeriveReportKind (below, outside this anonymous namespace) so
+    // ArcaneTests can call it directly. This file-local name is kept only so
+    // existing call sites in this translation unit (WriteReportImpl et al.)
+    // compile unchanged.
     [[nodiscard]] std::string DeriveKind(const char* reason)
     {
-        const std::string_view r = reason ? reason : "";
-        if (r.find("gpu") != std::string_view::npos)
-            return r.find("stall") != std::string_view::npos ? "gpu-stall" : "gpu-crash";
-        if (r.find("hang") != std::string_view::npos)
-            return "hang";
-        return "crash";
+        return DeriveReportKind(reason);
     }
 
 #if defined(_WIN32)
@@ -861,6 +850,39 @@ namespace
         }
     }
 }   // namespace
+
+// Kind derivation for the .arcdiag envelope: substring match on the REASON
+// string, never the trigger site. Order matters -- most specific first:
+// "gpu" (then "stall" -> gpu-stall, else gpu-crash), assert, terminate,
+// ensure, out-of-memory, abnormal-exit, then "hang", else "crash". Covers
+// every phrasing WriteReportImpl sees today -- "crash (unhandled
+// exception)" (the crash filter, above) and "hang (main thread has not
+// ticked for ...)" (WatchdogMain, above) -- plus the GPU vocabulary named
+// in docs/specs/2026-08-11-gpu-crash-diagnostics-design.md ("gpu-stall"/
+// "gpu-crash") and the crash-window vocabulary the Task 7 fail-fast
+// handlers write (crash window plan 1): assert/terminate/ensure/
+// out-of-memory/abnormal-exit, each the exact word followed by a colon.
+// "gpu" is checked first so "gpu-stall" can never misclassify as "hang";
+// the five new kinds are checked ahead of "hang" too, for the same reason.
+std::string DeriveReportKind(const char* reason)
+{
+    const std::string_view r = reason ? reason : "";
+    if (r.find("gpu") != std::string_view::npos)
+        return r.find("stall") != std::string_view::npos ? "gpu-stall" : "gpu-crash";
+    if (r.find("assert") != std::string_view::npos)
+        return "assert";
+    if (r.find("terminate") != std::string_view::npos)
+        return "terminate";
+    if (r.find("ensure") != std::string_view::npos)
+        return "ensure";
+    if (r.find("out-of-memory") != std::string_view::npos)
+        return "out-of-memory";
+    if (r.find("abnormal-exit") != std::string_view::npos)
+        return "abnormal-exit";
+    if (r.find("hang") != std::string_view::npos)
+        return "hang";
+    return "crash";
+}
 
 void Install(const Config& cfg)
 {

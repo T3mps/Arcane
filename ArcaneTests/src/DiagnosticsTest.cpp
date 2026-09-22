@@ -882,3 +882,18 @@ TEST_CASE("Diagnostics GPU watchdog stays silent when the host stops rendering",
 
     CHECK(Arcane::Diagnostics::ReportCount() == base);
 }
+
+TEST_CASE("diagnostics: report kinds derive from the reason, new kinds ahead of crash", "[diag]")
+{
+    using Arcane::Diagnostics::DeriveReportKind;
+    CHECK(DeriveReportKind("crash (unhandled exception)") == "crash");
+    CHECK(DeriveReportKind("hang (main thread has not ticked for 12.0s)") == "hang");
+    CHECK(DeriveReportKind("gpu-stall: GPU progress counter 5 has not advanced") == "gpu-stall");
+    CHECK(DeriveReportKind("gpu-crash: device removed") == "gpu-crash");
+    CHECK(DeriveReportKind("assert: x != nullptr (MeshCache.cpp:12)") == "assert");
+    CHECK(DeriveReportKind("terminate: std::runtime_error: boom") == "terminate");
+    CHECK(DeriveReportKind("ensure: index < count") == "ensure");
+    CHECK(DeriveReportKind("out-of-memory: std::bad_alloc") == "out-of-memory");
+    CHECK(DeriveReportKind("abnormal-exit: 0xC0000409 STATUS_STACK_BUFFER_OVERRUN") == "abnormal-exit");
+    CHECK(DeriveReportKind("hang at exit (30s after the exit request)") == "hang");
+}
