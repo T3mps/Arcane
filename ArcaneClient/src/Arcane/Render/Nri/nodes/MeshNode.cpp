@@ -206,7 +206,7 @@ namespace Arcane
         if (!m_device->Caps().SupportsBindless())
         {
             ARC_ERROR("[nri-graph] MeshNode: refused -- this device reports bindless tier 0 "
-                      "(NriDeviceCaps::SupportsBindless() is false). The opaque mesh pass's "
+                      "(NriDeviceCaps::SupportsBindless() is false). The mesh pass's "
                       "material table is a descriptor-indexed bindless array; there is no "
                       "correct way to build it on hardware that cannot dynamically index a "
                       "descriptor array, so the node is refused here rather than rendering "
@@ -817,8 +817,11 @@ namespace Arcane
             // FORWARD-Z, [0,1]: near maps to 0 and far to 1
             // (SceneCamera.hpp's DEPTH CONVENTION -- reverse-Z is a
             // separately-decided-against choice), so LESS is "nearer wins" and
-            // the clear value is 1.0 (kDepthClear above). The pass is opaque,
-            // so it tests depth. The cache stamps the mode's keyed write bit.
+            // the clear value is 1.0 (kDepthClear above). All six variants
+            // TEST depth; whether one also WRITES it is the blend mode's
+            // (PipelineStateFor: opaque and masked write, transparent tests
+            // only), carried in `key.depthWrite` above and stamped by the
+            // cache -- so this callback sets only the shared compare op.
             desc.outputMerger.depth.compareOp = nri::CompareOp::LESS;
         });
     }
@@ -956,16 +959,32 @@ namespace Arcane
         if (!draws.registry && !draws.adHoc)
             return;
 
-        if (!m_pipeline[PipelineIndex(MaterialBlendMode::Opaque, false)])
+        // ALL SIX VARIANTS, not just the opaque one: Prepare resolves them
+        // together, so in practice they are all present or all missing -- but
+        // the gate says what is actually true either way. With every variant
+        // missing there is nothing to bind and the pass records only its clear;
+        // with some missing, bindPipeline below skips the draws in those
+        // variants (the cache already said why they failed) and the rest draw.
+        std::uint32_t missingPipelines = 0;
+        for (MaterialBlendMode blend : { MaterialBlendMode::Opaque, MaterialBlendMode::Masked,
+                                         MaterialBlendMode::Transparent })
+            for (const bool twoSided : { false, true })
+                if (!m_pipeline[PipelineIndex(blend, twoSided)])
+                    ++missingPipelines;
+        if (missingPipelines != 0)
         {
             if (!m_warnedNoPipeline)
             {
                 m_warnedNoPipeline = true;
-                ARC_WARN("[nri-graph] MeshNode: no pipeline for the canvas format -- the opaque "
-                         "pass draws nothing this run (Prepare was skipped, or the cache refused "
-                         "it and said why)");
+                ARC_WARN("[nri-graph] MeshNode: {} of the six mesh pipelines (opaque/masked/transparent x "
+                         "one-/two-sided) are missing for the canvas format -- {} (Prepare was skipped, "
+                         "or the cache refused them and said why)",
+                         missingPipelines,
+                         missingPipelines == 6 ? "the mesh pass draws nothing this run"
+                                               : "draws in the missing variants are skipped");
             }
-            return;
+            if (missingPipelines == 6)
+                return;
         }
 
         // THE CAMERA. Checked rather than trusted -- see IsFinite's comment.

@@ -259,7 +259,7 @@ std430, mirrored by a `static_assert(sizeof == 240)` and an HLSL struct in
 | `prevModel` | `float4x4` | 64 | Sync, from the mirror's CPU history (§5.3) |
 | `normal0..2` | `float4` × 3 (xyz = the normal matrix's columns; w unused) | 48 | Sync, `NormalMatrixFor(model)` — the guarded CPU function stays the one producer (UE stores `InvNonUniformScale` + `DeterminantSign` for the same reason: nobody inverts a 3×3 per vertex, `SceneData.ush:233-235`) |
 | `boundsMin` | `float4` (w unused) | 16 | Sync |
-| `boundsMax` | `float4` (w = `alphaCutoff` for masked rows) | 16 | Sync |
+| `boundsMax` | `float4` (w = the resolved `alphaCutoff`, stored for EVERY row so a blend-mode switch keeps it; only the masked pixel shader reads it) | 16 | Sync |
 | `baseColor` | `float4` | 16 | Sync |
 | `materialSlot` | `uint` | 4 | Sync |
 | `batch` | `uint` | 4 | Sync (see 5.4: the batch KEY id, stable per (mesh, section, blend)) |
@@ -361,7 +361,13 @@ reading the ring slice the host staged.
 ### 5.4 Batches — CPU per frame, from the mirror
 
 Key = `(mesh Guid, section index, blend mode, twoSided)`. The row's `batch` field holds
-a stable **key id** (a `FlatMap<key, id>` in `GpuScene`, ids reused on free).
+a stable **key id** (`GpuSceneMirror::batchIds`, an `unordered_map<key, id>` that
+`detail::BatchIdFor` in `Render/GpuSceneSync.hpp` appends to). **Ids are never freed
+or reused** (what shipped; the draft said "reused on free"): a key keeps its id for the
+mirror's lifetime, and `batchKeys` / `batchRowCount` grow monotonically -- bounded by
+six ids (three blend modes x one-/two-sided) per (mesh, section) pair ever loaded. A
+key whose rows have all left keeps its id with `batchRowCount` 0 and is simply never
+emitted.
 Per frame the CPU builds:
 
 - **The batch table** — for every key with ≥ 1 resident row: `capacity` (the

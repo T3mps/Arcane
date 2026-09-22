@@ -763,8 +763,9 @@ namespace Arcane
         bool m_warnedScratchOverflow = false;   // Prepare: ad-hoc instances past kScratchRows dropped
     };
 
-    // Declares the opaque mesh node into `graph` and hands back the
-    // D32_SFLOAT depth transient it created and attached.
+    // Declares the mesh node -- opaque, masked and ordered transparent, the
+    // head comment's ONE pass -- into `graph` and hands back the D32_SFLOAT
+    // depth transient it created and attached.
     //
     // THE DEPTH TARGET IS MINTED HERE, in this node's own Setup -- the same
     // create-then-write-then-attach shape AddBatch2DNode uses for the canvas,

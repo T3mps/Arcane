@@ -2115,8 +2115,10 @@ TEST_CASE("gpuscene: an Apply refusal resets the synced generation to 0 and the 
 //     through GpuSceneSyncNode's copies and ONE CmdDrawIndexedIndirect whose
 //     vertex shader reads row = g_VisibleIndices[firstOutput + SV_InstanceID].
 //     Two cubes share the batch: one at the origin, one at (1000, 0, 0) that the
-//     CPU coarse test rejects -- so the args carry instanceNum 1 and the centre
-//     pixel is the origin cube, red and lit.
+//     CPU coarse test rejects -- so the CPU's args carry instanceNum 0 (compute
+//     is the sole counter writer, asserted below), the cull pass emits exactly
+//     the origin cube's row, and the centre pixel is the origin cube, red and
+//     lit.
 //
 //     Then a VisibleSet that admits ONLY the far cube: the instance buffer still
 //     holds the origin cube's row (the stage is the same full rebuild), but the

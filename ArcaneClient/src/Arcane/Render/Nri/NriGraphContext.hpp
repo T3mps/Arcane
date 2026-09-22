@@ -402,10 +402,11 @@ namespace Arcane
             // renders a cleared canvas.
             Batcher2D* batch = nullptr;
 
-            // ---- the opaque 3D pass (Task 7) ----------------------------
+            // ---- the mesh pass (Task 7; opaque + masked + ordered ----------
+            //      transparent since F3 plan 2, MeshNode.hpp's head comment)
             // THIS FRAME'S MESH SCENE -- geometry, per-instance transforms,
             // the camera and the one directional light. Null (the default) is
-            // how a caller asks for the frame WITHOUT the opaque pass, exactly
+            // how a caller asks for the frame WITHOUT the mesh pass, exactly
             // as `post = nullptr` asks for it without the chain; an EMPTY
             // instance span means the same thing.
             //
@@ -415,7 +416,7 @@ namespace Arcane
             // ring at RECORD time, which is inside this call.
             //
             // TASK 7 ADDED THIS FIELD EARLY, because the [gpu][pixel] case that
-            // proves the opaque pass draws anything at all reaches the vehicle
+            // proves the mesh pass draws anything at all reaches the vehicle
             // only through RenderFrameOffscreen(FrameDesc). Task 9 is what
             // teaches the two HOSTS to fill it in from a real scene.
             const MeshSceneDesc* mesh = nullptr;
@@ -949,12 +950,12 @@ namespace Arcane
         [[nodiscard]] TonemapNode*   Tonemap()   noexcept { return m_tonemap.get(); }
         [[nodiscard]] PostChainNode* PostChain() noexcept { return m_post.get(); }
 
-        // The opaque 3D pass (Task 7). Built EAGERLY like the three above
-        // rather than behind a NodeSet flag: opaque geometry is part of what
-        // this renderer IS, not optional host chrome, and a frame that carries
-        // no mesh scene declares no node either way -- so the cost of having it
-        // is one small descriptor pool and a two-region constant arena, not a
-        // pass.
+        // The mesh pass (Task 7; F3 plan 2 widened it to opaque + masked +
+        // ordered transparent). Built EAGERLY like the three above rather than
+        // behind a NodeSet flag: mesh geometry is part of what this renderer
+        // IS, not optional host chrome, and a frame that carries no mesh scene
+        // declares no node either way -- so the cost of having it is one small
+        // descriptor pool and a two-region constant arena, not a pass.
         [[nodiscard]] MeshNode*      Mesh()      noexcept { return m_mesh.get(); }
         [[nodiscard]] MeshCullNode*  MeshCull()  noexcept { return m_meshCull.get(); }
 
@@ -1665,7 +1666,7 @@ namespace Arcane
         bool gameUi = false;
 
         // Task 4 (Phase 4): declare a D32_SFLOAT depth transient, canvas-sized,
-        // for the frame's opaque 3D pass. `RgUsage::DepthWrite` and
+        // for the frame's mesh pass. `RgUsage::DepthWrite` and
         // `RenderGraph::SetDepthAttachment` both already existed (Phase 2) with
         // no production consumer; this flag gives DeclareGraphFrame a reason to
         // create the resource. It does NOT wire up a consumer -- nothing in
@@ -1683,7 +1684,8 @@ namespace Arcane
         // carries two CreateTexture("depth") calls.
         bool depth = false;
 
-        // Task 7 (Phase 4): THE OPAQUE 3D PASS's scene, or null for none.
+        // Task 7 (Phase 4): THE MESH PASS's scene (opaque, masked and ordered
+        // transparent since F3 plan 2), or null for none.
         // Read for MeshSceneDesc::Empty() here (an empty scene -- no ad-hoc
         // instances and no registry scene with draws -- declares nothing,
         // exactly as a null one does) and for nothing else -- the geometry, the
