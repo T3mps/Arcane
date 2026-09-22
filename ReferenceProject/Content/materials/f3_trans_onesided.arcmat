@@ -1,0 +1,19 @@
+{
+  "blend": "transparent",
+  "id": "7e5a0033-0033-4033-8033-000000000033",
+  "kind": "mesh",
+  "name": "F3TransOneSided",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        6.0,
+        6.0,
+        6.0,
+        0.5
+      ]
+    }
+  },
+  "snippet": "",
+  "type": "material"
+}

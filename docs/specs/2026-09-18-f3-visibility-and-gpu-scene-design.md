@@ -596,12 +596,19 @@ In order of authority:
    new golden pair — `f3-cull-blend` on dx12 and vulkan, rendered by
    ArcaneRuntime with `--scene` pointed at
    `ReferenceProject/Content/scenes/f3_cull_blend.arcscene` — carrying all six
-   required visual cases: conservative culling of a straddling box, masked
-   over opaque with correct depth order, a masked surface clipped away
-   entirely by `alphaCutoff`, far-to-near transparent blending, stable
-   identity order at equal depth, `translucencyRenderOrder`/
-   `translucencyDepthSortBias` overriding depth order, and a one-sided
-   surface culled where its two-sided twin draws.
+   required visual cases: conservative culling of a straddling box; masked
+   over opaque with the depth WRITE proven, not only the depth test (a
+   transparent cube sits behind the masked cube and is drawn after it, so it
+   shows through the masked surface's kept region unless masked wrote depth);
+   a masked surface clipped away entirely by `alphaCutoff`; far-to-near
+   transparent blending; stable identity order at equal depth;
+   `translucencyRenderOrder`/`translucencyDepthSortBias` overriding depth
+   order; and one-sided and two-sided variants proving culling is independent
+   of transparency — an opaque, a masked and a transparent pair of away-facing
+   plane twins that differ only in `twoSided`, each one-sided twin culled where
+   its two-sided twin draws, so every one of the six pipeline states
+   (opaque/masked/transparent × one-sided/two-sided) renders in the picture
+   and the golden is the instrument for all six.
 4. **Unit (`~[gpu]`).** `Aabb` (union, transform conservativeness under
    random affine — rapidcheck); `Frustum` (ortho and perspective extraction
    against hand-built planes; the conservative property: a random box

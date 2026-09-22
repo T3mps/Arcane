@@ -15,7 +15,11 @@
     "7e5a002b-002b-402b-802b-00000000002b",
     "7e5a002c-002c-402c-802c-00000000002c",
     "7e5a002d-002d-402d-802d-00000000002d",
-    "7e5a002e-002e-402e-802e-00000000002e"
+    "7e5a002e-002e-402e-802e-00000000002e",
+    "7e5a0031-0031-4031-8031-000000000031",
+    "7e5a0032-0032-4032-8032-000000000032",
+    "7e5a0033-0033-4033-8033-000000000033",
+    "7e5a0034-0034-4034-8034-000000000034"
   ],
   "entities": [
     {
@@ -719,6 +723,216 @@
             1.033,
             1.033,
             1.033
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775825
+          },
+          "name": "TransBehindMasked"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589764189175847,
+            "lo": 9234349560946491431
+          },
+          "mesh": {
+            "hi": 9104589669698453521,
+            "lo": 9228157111458856977
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -3.72,
+            -0.3,
+            -0.1
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775826
+          },
+          "name": "MaskedOneSidedAway"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589807139504177,
+            "lo": 9237164310713598001
+          },
+          "mesh": {
+            "hi": 9104589734123946016,
+            "lo": 9232379236109516832
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -1.45,
+            0.52,
+            0.0
+          ],
+          "rotation": [
+            -0.7071067811865476,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ],
+          "scale": [
+            0.63,
+            1.0,
+            0.63
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775827
+          },
+          "name": "MaskedTwoSidedAway"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589811434537010,
+            "lo": 9237445785690308658
+          },
+          "mesh": {
+            "hi": 9104589734123946016,
+            "lo": 9232379236109516832
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -1.45,
+            -0.51,
+            0.0
+          ],
+          "rotation": [
+            -0.7071067811865476,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ],
+          "scale": [
+            0.63,
+            1.0,
+            0.63
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775828
+          },
+          "name": "TransOneSidedAway"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589815729569843,
+            "lo": 9237727260667019315
+          },
+          "mesh": {
+            "hi": 9104589734123946016,
+            "lo": 9232379236109516832
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -1.45,
+            -1.53,
+            0.0
+          ],
+          "rotation": [
+            -0.7071067811865476,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ],
+          "scale": [
+            0.63,
+            1.0,
+            0.63
+          ]
+        }
+      },
+      "parent": 0
+    },
+    {
+      "components": {
+        "Arcane::Identity": {
+          "id": {
+            "hi": 9104590696194523136,
+            "lo": 9223372036854775829
+          },
+          "name": "TransTwoSidedAway"
+        },
+        "Arcane::MeshRenderer": {
+          "materialOverride": {
+            "hi": 9104589820024602676,
+            "lo": 9238008735643729972
+          },
+          "mesh": {
+            "hi": 9104589734123946016,
+            "lo": 9232379236109516832
+          },
+          "translucencyDepthSortBias": 0.0,
+          "translucencyRenderOrder": 0
+        },
+        "Arcane::Transform": {
+          "position": [
+            -1.45,
+            -2.56,
+            0.0
+          ],
+          "rotation": [
+            -0.7071067811865476,
+            0.0,
+            0.0,
+            0.7071067811865476
+          ],
+          "scale": [
+            0.63,
+            1.0,
+            0.63
           ]
         }
       },

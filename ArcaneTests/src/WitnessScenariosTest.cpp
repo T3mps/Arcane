@@ -319,31 +319,48 @@ TEST_CASE("W5: the F3 cull/blend fixture scene matches its golden and reports th
     //
     // EVERY NUMBER BELOW IS DERIVED FROM THE FIXTURE'S OWN CONTENT, not
     // recalled from a previous run:
-    //   total 15           -- fifteen MeshRenderer entities, each on a
-    //                         single-section primitive mesh (the cube, or the
-    //                         plane for the one/two-sided pair).
-    //   coarseVisible 15   -- the CPU coarse stage is geometric only. The
+    //   total 20           -- twenty MeshRenderer entities, each on a
+    //                         single-section primitive mesh: fourteen cubes
+    //                         (the thirteen original ones plus
+    //                         TransBehindMasked, the transparent cube behind
+    //                         the masked/opaque pair that proves the masked
+    //                         pipeline WRITES depth) and six planes (the
+    //                         one-sided/two-sided away-facing twins, one pair
+    //                         per blend mode: opaque, masked, transparent).
+    //   coarseVisible 20   -- the CPU coarse stage is geometric only. The
     //                         alpha-clipped cube is still coarse-visible (its
     //                         pixels die in the shader, not in the frustum
-    //                         test), and the edge-straddling cube is admitted
-    //                         by the conservative test that case exists to
-    //                         prove.
-    //   transparentRows 8  -- eight entities carry a `transparent` material
+    //                         test), the edge-straddling cube is admitted by
+    //                         the conservative test that case exists to
+    //                         prove, and the three one-sided away-facing
+    //                         planes are coarse-visible too: back-face culling
+    //                         happens in the raster, never in the frustum
+    //                         test, so their absence from the picture is not
+    //                         an absence from this count.
+    //   transparentRows 11 -- eleven entities carry a `transparent` material
     //                         (the far/near pair, the equal-depth pair, the
-    //                         render-order pair, the depth-bias pair); each is
-    //                         one DIRECT draw record, never a batch.
-    //   batches 4          -- the emitted (mesh, section, blend, twoSided)
-    //                         keys over the seven non-transparent rows:
+    //                         render-order pair, the depth-bias pair,
+    //                         TransBehindMasked, and the transparent
+    //                         one-sided/two-sided plane twins); each is one
+    //                         DIRECT draw record, never a batch.
+    //   batches 6          -- the emitted (mesh, section, blend, twoSided)
+    //                         keys over the nine non-transparent rows:
     //                         (cube, opaque, 1-sided), (cube, masked, 1-sided),
     //                         (plane, opaque, 1-sided), (plane, opaque,
-    //                         2-sided). Transparent keys are excluded from the
-    //                         emitted list by construction (spec s5.4).
-    //   draws 12           -- 4 + 8, the identity the report states and this
+    //                         2-sided), (plane, masked, 1-sided), (plane,
+    //                         masked, 2-sided). Transparent keys are excluded
+    //                         from the emitted list by construction (spec
+    //                         s5.4), so the transparent twins add rows but no
+    //                         batch.
+    //   draws 17           -- 6 + 11, the identity the report states and this
     //                         case re-derives rather than copies.
-    //   gpuVisible 7       -- the CULL PASS's own read-back total: the seven
+    //   gpuVisible 9       -- the CULL PASS's own read-back total: the nine
     //                         rows in emitted batches, all of them inside the
-    //                         frustum. STRICTLY LESS than coarseVisible here,
-    //                         which is the fact E2's scene cannot show.
+    //                         frustum (the one-sided away-facing opaque and
+    //                         masked planes included -- the GPU cull is
+    //                         frustum-only and knows nothing of facing).
+    //                         STRICTLY LESS than coarseVisible here, which is
+    //                         the fact E2's scene cannot show.
     WitnessScratch scratch(StagedRuntimeDir(), "w5-f3-cull-blend");
     WitnessRun run = RunWitness(HostInv(scratch,
         { "--scene", "7e5a0030-0030-4030-8030-000000000030",
@@ -370,10 +387,10 @@ TEST_CASE("W5: the F3 cull/blend fixture scene matches its golden and reports th
     REQUIRE(run.report.contains("visibility"));
     const auto& vis = run.report["visibility"];
     REQUIRE(vis.at("total").is_number_unsigned());
-    CHECK(vis.at("total") == 15);
-    CHECK(vis.at("coarseVisible") == 15);
-    CHECK(vis.at("batches") == 4);
-    CHECK(vis.at("transparentRows") == 8);
+    CHECK(vis.at("total") == 20);
+    CHECK(vis.at("coarseVisible") == 20);
+    CHECK(vis.at("batches") == 6);
+    CHECK(vis.at("transparentRows") == 11);
     // The two RELATIONS, asserted as relations and not only as literals: a
     // future edit to the fixture that adds a mesh has to update the literals
     // above, but these two must hold whatever the scene contains.
@@ -381,12 +398,12 @@ TEST_CASE("W5: the F3 cull/blend fixture scene matches its golden and reports th
     CHECK(vis.at("draws").get<std::uint32_t>()
           == vis.at("batches").get<std::uint32_t>()
            + vis.at("transparentRows").get<std::uint32_t>());
-    CHECK(vis.at("draws") == 12);
+    CHECK(vis.at("draws") == 17);
     // A NUMBER, never null: the delayed readback ring must have retired one
     // frame inside this run's budget. Null here means the budget is too short
     // and the fix is a bigger --frames, never a relaxed assertion.
     REQUIRE(vis.at("gpuVisible").is_number_unsigned());
-    CHECK(vis.at("gpuVisible") == 7);
+    CHECK(vis.at("gpuVisible") == 9);
     // The half E2 cannot state: transparent rows never reach the cull, so the
     // GPU's count is STRICTLY below the coarse one on a scene that has any.
     CHECK(vis.at("gpuVisible").get<std::uint32_t>()

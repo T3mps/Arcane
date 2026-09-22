@@ -1,0 +1,21 @@
+{
+  "alphaCutoff": 0.5,
+  "blend": "masked",
+  "id": "7e5a0032-0032-4032-8032-000000000032",
+  "kind": "mesh",
+  "name": "F3MaskedTwoSided",
+  "params": {
+    "baseColor": {
+      "type": "color",
+      "value": [
+        6.0,
+        2.4,
+        1.8,
+        0.8
+      ]
+    }
+  },
+  "snippet": "",
+  "twoSided": true,
+  "type": "material"
+}
