@@ -15,12 +15,33 @@
 // forever. Neither does a debugger help much when the defect is intermittent:
 // it requires a human attached at the exact moment. The watchdog does not.
 //
-// A report is:
-//   - a MINIDUMP (.dmp), written FIRST because MiniDumpWriteDump is the
-//     battle-tested path and must land even if the text walk below wedges;
-//   - a SYMBOLIZED TEXT stack (.txt) of EVERY thread, also echoed into the
-//     engine log. "Every thread" is deliberate: a main thread blocked on a
-//     worker names the wrong culprit, and the answer is the other stack.
+// A report is written on a DEDICATED CRASH THREAD (crash window plan 1, task
+// 5; spec S5.2), never on the thread that faulted -- that thread only freezes
+// the log backlog, hands over the fault context, waits, and exits. The steps
+// run in UE's order, each independently survivable:
+//
+//   1. the watchdog is paused so no hang report interleaves;
+//   2. the portable stack of the WALKED thread (RtlVirtualUnwind against
+//      ModuleTable -- no DbgHelp, no loader lock, so no symbol load can wedge
+//      a process that is already misbehaving);
+//   3. a MINIMAL .arcdiag envelope, so a reporter can start even if
+//      everything after this step wedges;
+//   4. the MINIDUMP (.dmp) -- the artifact a debugger opens;
+//   5. the TEXT report (.txt): header + `module + 0xoffset` frames. It is no
+//      longer symbolized and no longer covers every thread: both were the
+//      in-process freeze this arc exists to remove, and the reporter
+//      reconstructs them out of process from the minidump;
+//   6. the GPU-section provider (DRED, device fault), unchanged;
+//   7. the FULL envelope, rewritten atomically over the minimal one;
+//   8. the log backlog as `<stem>.log.txt`, a bounded file-sink flush, and
+//      the reporter hand-off.
+//
+// NOTHING on that path may touch the heap (the heap may be what just faulted):
+// the arena (Base/CrashArena.hpp) is the only allocator, the envelope JSON is
+// hand-written through it, and every string the report needs is snapshotted
+// into fixed storage OFF the crash path (at Install/RetargetDumpDir). The two
+// documented exceptions both run only after files are already on disk: the
+// GPU-section provider, and the ARC_ERROR echo + report-written hook.
 //
 // Reading it needs no debugger, which is the whole point -- the text file is
 // the artifact you paste into a bug report.
@@ -30,6 +51,7 @@
 
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Base/DiagEnvelope.hpp>
+#include <Arcane/Base/ForeignModules.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <cstdint>
@@ -84,16 +106,125 @@ namespace Arcane::Diagnostics
         // of the two a reader should believe.
         std::uint32_t gpuStallSeconds = 8;
 
+        // Gates SetUnhandledExceptionFilter ONLY (and, from task 7, the
+        // fail-fast family). The crash thread and its events are created by
+        // Install either way: they are the report ENGINE, not a handler, and
+        // WriteReport/the watchdog need them with no handler installed at all.
         bool installCrashHandler = true;
         bool startHangWatchdog   = true;
+
+        // ---- crash window plan 1 (spec S5.1) ------------------------------
+
+        // Window title the reporter shows. Empty => appName.
+        std::string productName;
+
+        // The reporter executable. Empty => "<exe dir>/ArcaneCrashReporter.exe".
+        // Missing is the expected case until the reporter itself ships: the
+        // spawn fails, says so once, and the report on disk is unaffected.
+        std::string reporterPath;
+
+        // Headless host: the reporter must put no window anywhere (spec S9,
+        // "Headless / unattended").
+        bool unattended = false;
+
+        // Whether to hand off to the reporter at all. Install FORCES this
+        // false when ARCANE_BUILD_MACHINE or CI is set in the environment --
+        // a build agent must never leave an interactive process behind.
+        bool spawnReporter = true;
+
+        // The sanitized relaunch command line, carried in the envelope so the
+        // reporter can offer "restart". Never derived here: only the host
+        // knows which of its own arguments are safe to repeat.
+        std::string commandLine;
+
+        // Where the engine log file sink writes. Empty => "<report dir>/../Logs",
+        // which FOLLOWS RetargetDumpDir; an explicit path never moves.
+        std::string logDir;
+
+        // Exit sentinel window (task 8): how long a requested exit may take
+        // before it is reported as a hang-at-exit.
+        std::uint32_t exitSeconds = 30;
+
+        // How long the SUBMITTING thread waits for the crash thread to finish
+        // a report before giving up and terminating anyway (UE's 60 s).
+        std::uint32_t crashHandlingTimeoutSeconds = 60;
     };
+
+    // Process exit codes this module produces. Stable and small: the monitor,
+    // CI and the reporter all read them.
+    namespace ExitCode
+    {
+        inline constexpr int kCrashed         = 10;   // a report was written, the host died
+        inline constexpr int kHangTerminated  = 11;   // the reporter terminated a hung host
+        inline constexpr int kExitSentinel    = 12;   // the exit sentinel fired (task 8)
+        inline constexpr int kCrashInCrashPath = 13;  // the crash thread itself faulted
+    }
+
+    // One report request. `reason`'s PREFIX decides the kind (DeriveReportKind
+    // below), so its wording is a contract, not prose.
+    struct ReportRequest
+    {
+        // Copied into fixed storage by SubmitReport on the CALLING thread, so
+        // a reason formatted into the crash arena survives the arena reset the
+        // crash thread does at the top of every report.
+        const char* reason = nullptr;
+
+        // EXCEPTION_POINTERS* for a real fault, or null. Null means the walked
+        // thread's context is fetched by suspending it (see LastReportStem's
+        // note below on WHICH thread that is).
+        void* exceptionPointers = nullptr;
+
+        // A continuable report (ARC_ENSURE): envelope + portable stack only,
+        // no minidump, no backlog freeze, and it RETURNS so the caller goes on.
+        bool lightweight = false;
+
+        // Non-zero terminates the process with this code once the report is on
+        // disk; SubmitReport then never returns. Zero is a SURVIVABLE report
+        // (a hang, a gpu-stall, a manual WriteReport): the host keeps running,
+        // and the backlog/module table are thawed again on the way out.
+        int exitCode = ExitCode::kCrashed;
+    };
+
+    // The one entry every death path uses. Hands the request to the crash
+    // thread, waits up to Config::crashHandlingTimeoutSeconds, and then
+    // terminates with `exitCode` when that is non-zero.
+    //
+    // The WALKED thread (whose stack the report carries) is: the context in
+    // `exceptionPointers` when there is one; otherwise the registered MAIN
+    // thread when the caller is the watchdog (a hang is about the main thread,
+    // not about the watchdog that noticed it); otherwise the calling thread,
+    // suspended by the crash thread while it parks in the wait below.
+    //
+    // Safe with Diagnostics not installed: nothing is written, and the call
+    // still terminates when `exitCode` is non-zero rather than deadlocking.
+    ARCANE_CORE_API void SubmitReport(const ReportRequest& request) noexcept;
+
+    // The last report's sibling stem -- the base path with NO extension, which
+    // "<stem>.txt", "<stem>.dmp", "<stem>.arcdiag" and "<stem>.log.txt" all
+    // hang off. Empty until a report has been written. A test seam and a host
+    // convenience; never called from the crash path itself (it allocates).
+    [[nodiscard]] ARCANE_CORE_API std::string LastReportStem();
+
+    // Copies ForeignModules' latest scan into fixed storage the crash thread
+    // can read with no lock, no heap and no loader lock (controller note R14).
+    // ForeignModules::Scan() calls this beside its ModuleTable::Refresh, and
+    // Install() seeds it from LastScan(); the crash path reads ONLY the
+    // snapshot, never LastScan() (which returns a heap copy under a mutex).
+    ARCANE_CORE_API void SnapshotInjectedModules(std::span<const ForeignModules::Match> matches) noexcept;
 
     // Registers the CALLING thread as the main thread and arms both triggers.
     // Call once, early in main(), beside Log::Init(). Idempotent.
     ARCANE_CORE_API void Install(const Config& cfg);
 
-    // Disarms both triggers and joins the watchdog. Idempotent; safe to skip
-    // (the process exiting is also fine). Does NOT reset Config::dumpDir --
+    // Disarms both triggers, joins the watchdog, restores the previous
+    // unhandled-exception filter, and stops and joins the crash thread
+    // (closing its events) -- an Install/Shutdown cycle leaves no joinable
+    // thread and no live handle behind. Also thaws the module table and the
+    // log backlog, so a survivable report that was interrupted cannot leave
+    // either frozen for the rest of the process.
+    //
+    // Idempotent; safe to skip (the process exiting is also fine). Does NOT
+    // reset Config::dumpDir --
     // a dumpDir retargeted live (RetargetDumpDir, below) is host state, not
     // arming state, and must survive a Shutdown/Install cycle the same way
     // appName does.
@@ -112,9 +243,15 @@ namespace Arcane::Diagnostics
     // convergence (a failed project switch, or no --project at all) passes.
     //
     // Thread-safe against a concurrent watchdog/crash report: takes the same
-    // lock WriteReportImpl holds for its own g_cfg.dumpDir read (via
-    // ReportDir()), so a live retarget can never race a report already
-    // mid-write.
+    // lock the crash thread holds for its ENTIRE report body, so a live
+    // retarget can never race a report already mid-write. The report
+    // directory is re-derived and re-snapshotted here (the crash path reads
+    // only the snapshot -- it may not touch std::filesystem).
+    //
+    // The engine log follows too, but only when Config::logDir is EMPTY (the
+    // derived case): the file sink is re-attached at "<dir>/../Logs/<appName>.log"
+    // so a project's log lands beside that project's reports. An explicitly
+    // configured logDir is never retargeted.
     ARCANE_CORE_API void RetargetDumpDir(const std::filesystem::path& dir);
 
     // "The main thread is alive." One relaxed atomic store -- cheap enough for
@@ -129,10 +266,13 @@ namespace Arcane::Diagnostics
     // call it per phase, never per frame.
     ARCANE_CORE_API void SetPhase(std::string phase);
 
-    // Writes a report immediately, whatever the process state. Returns the .txt
-    // path, or an empty string if nothing could be written. Public because a
-    // manual trigger is useful, and because it is how the self-test proves the
-    // capture path works BEFORE an intermittent bug depends on it.
+    // Writes a SURVIVABLE report immediately, whatever the process state, and
+    // returns the .txt path (empty if nothing could be written). Exactly
+    // SubmitReport({reason, nullptr, false, /*exitCode*/0}) plus the path --
+    // the process keeps running, which is what the hang watchdog and the GPU
+    // observer need (spec S5.4). Public because a manual trigger is useful,
+    // and because it is how the self-test proves the capture path works BEFORE
+    // an intermittent bug depends on it.
     ARCANE_CORE_API std::string WriteReport(const char* reason);
 
     // The .arcdiag `kind` for a report reason. Substring match, most specific

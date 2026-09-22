@@ -316,9 +316,14 @@ namespace Arcane::Log
         g_frozen.store(true, std::memory_order_release);
     }
 
-    void UnfreezeBacklogForTests() noexcept
+    void ThawBacklog() noexcept
     {
         g_frozen.store(false, std::memory_order_release);
+    }
+
+    void UnfreezeBacklogForTests() noexcept
+    {
+        ThawBacklog();
     }
 
     std::size_t BacklogLineCount() noexcept

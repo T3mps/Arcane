@@ -126,7 +126,7 @@ namespace
     }
 }
 
-TEST_CASE("Diagnostics writes a symbolized all-thread report on demand", "[diag]")
+TEST_CASE("Diagnostics writes a module+offset report for the walked thread on demand", "[diag]")
 {
     const std::filesystem::path dir = FreshReportDir("ondemand");
 
@@ -154,17 +154,21 @@ TEST_CASE("Diagnostics writes a symbolized all-thread report on demand", "[diag]
     // "stuck in <stage>" -- the whole reason SetPhase exists.
     CHECK(body.find("unit-test-phase") != std::string::npos);
 
-    // The walk actually produced thread sections, and tagged the registered
+    // The walk actually produced a thread section, and tagged the registered
     // main thread. Without this the report could be a well-formed header over
-    // no stacks at all, which is the failure mode that costs a repro.
+    // no stack at all, which is the failure mode that costs a repro. ONE
+    // section now, not every thread: the in-process all-thread symbolized walk
+    // was the freeze this arc removes, and the reporter reconstructs the other
+    // threads from the minidump (spec S5.2 step 5).
     CHECK(body.find("--- thread") != std::string::npos);
     CHECK(body.find("(MAIN)") != std::string::npos);
 
-    // At least one resolved frame. "module!..." is emitted whenever the module
-    // base resolved, so this holds even where PDBs are absent and symbol names
-    // degrade -- it proves StackWalk64 walked, rather than asserting on symbol
-    // quality that legitimately varies by configuration.
-    CHECK(body.find('!') != std::string::npos);
+    // At least one resolved frame, in the PORTABLE form the crash path now
+    // emits: "<module> + 0x<offset> (base 0x...)" from RtlVirtualUnwind +
+    // ModuleTable, never DbgHelp's "module!function" (crash window plan 1,
+    // task 5 -- symbolization moved out of process, into the reporter, and
+    // the .txt here no longer depends on PDBs being present at all).
+    CHECK(body.find(" + 0x") != std::string::npos);
     CHECK(body.find("<no frames recovered>") == std::string::npos);
 
     // The minidump is the artifact a debugger opens; the .txt is the one a

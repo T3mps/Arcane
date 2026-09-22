@@ -1,6 +1,7 @@
 #include <Arcane/Base/ForeignModules.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/Diagnostics.hpp>   // Scan() also publishes the injected-module snapshot the crash thread reads (Task 5, R14)
 #include <Arcane/Base/ModuleTable.hpp>   // Scan() publishes the snapshot Diagnostics::ModuleTable::Find reads (crash window plan 1, Task 3)
 
 #include <algorithm>
@@ -402,6 +403,13 @@ namespace Arcane::ForeignModules
         // window plan 1, Task 3) -- off the crash path, same as everything
         // else Scan() does; the crash thread only ever calls Find().
         Diagnostics::ModuleTable::Refresh(modules);
+
+        // ...and the same for the INJECTED set (crash window plan 1, Task 5,
+        // R14): the report's `injected` line and the envelope's
+        // foreignModules come from a fixed-size snapshot taken here, never
+        // from LastScan() -- that returns a heap copy under g_mutex, and the
+        // crash thread may touch neither.
+        Diagnostics::SnapshotInjectedModules(matches);
 
         {
             std::lock_guard lock(g_mutex);

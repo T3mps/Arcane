@@ -1,14 +1,21 @@
 #include <Arcane/Base/Diagnostics.hpp>
 
-#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope, WriteFile -- the .arcdiag sibling
+#include <Arcane/Base/CrashArena.hpp>     // the ONLY allocator the crash thread may use (spec S5.5)
+#include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope -- the GPU provider's own field carrier
 #include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8(), BuildInfo()
-#include <Arcane/Base/ForeignModules.hpp> // ForeignModules::LastScan -- the injected modules, for the report header + envelope
+#include <Arcane/Base/ForeignModules.hpp> // ForeignModules::LastScan -- snapshotted OFF the crash path (R14)
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Base/ModuleTable.hpp>    // address -> module+offset, lock-free (Task 3)
+#include <Arcane/Base/PortableStack.hpp>  // RtlVirtualUnwind walk -- no DbgHelp anywhere below
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iterator>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -18,8 +25,12 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+// dbghelp is still needed for MiniDumpWriteDump -- and ONLY for that. Every
+// Sym* call is gone from this file: DbgHelp takes the process symbol-handler
+// lock and may load symbols from disk, which a thread that just faulted can
+// already be holding locks against (spec S5.2 step 2). The reporter
+// symbolizes the minidump out of process instead.
 #include <dbghelp.h>
-#include <tlhelp32.h>
 #pragma comment(lib, "dbghelp.lib")
 #endif
 
@@ -93,10 +104,19 @@ namespace
 
     // Serializes report writing. Two triggers can race (the watchdog fires while
     // the main thread faults); interleaved reports are worse than a late one.
-    std::mutex g_reportMutex;
+    //
+    // RECURSIVE on purpose: a fault inside the GPU-section provider re-enters
+    // SubmitReport ON THE CRASH THREAD, which then runs the nested report
+    // directly (spec S9, "crash inside the crash path") while the outer
+    // report still holds this lock. A plain std::mutex would self-deadlock
+    // there and the 60 s wait would be the only thing left to save the
+    // process. FenceReports() is unaffected: it is called from OTHER threads
+    // (a device destructor), where a recursive mutex blocks exactly like a
+    // plain one.
+    std::recursive_mutex g_reportMutex;
 
     // GPU-section provider slot (Task 5/6 install their backend here). A
-    // separate mutex from g_reportMutex: WriteReportImpl only holds this one
+    // separate mutex from g_reportMutex: the report only holds this one
     // long enough to copy the two pointers out, then calls the provider
     // unlocked -- an unknown callback must never run while holding a lock
     // another thread might need in order to install/clear it.
@@ -113,13 +133,20 @@ namespace
     ReportWrittenHook g_reportWrittenHook = nullptr;
     void*             g_reportWrittenUser = nullptr;
 
-    // DbgHelp is explicitly NOT thread-safe -- every Sym* call in the process
-    // must be serialized, including ones the walk makes indirectly.
-    std::mutex        g_symMutex;
-    std::atomic<bool> g_symReady{false};
-
     std::thread       g_watchdog;
     std::atomic<bool> g_watchdogStop{false};
+
+    // The crash thread raises this for the lifetime of a report so no hang
+    // rule can interleave a second report with the one being written (spec
+    // S5.2 step 1, UE stops its heartbeat first). Task 8 is what makes the
+    // watchdog loop READ it; a survivable report lowers it again on the way
+    // out so a later stall is still reported.
+    std::atomic<bool> g_watchdogPaused{false};
+
+    // The watchdog's own thread id, published when WatchdogMain starts. Read
+    // by SubmitReport to decide WHICH thread the report walks: a hang is
+    // about the main thread, not about the watchdog that noticed it (R6).
+    std::atomic<std::uint32_t> g_watchdogThreadId{0};
 
     // "The render layer has already CONFIRMED the GPU device is gone."
     // Set once by Render's NoteGpuDeviceLost (GpuInstrumentation.cpp); the
@@ -133,8 +160,92 @@ namespace
     DWORD  g_mainThreadId = 0;
     LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter = nullptr;
 
-    // A fault INSIDE the handler must not re-enter it forever.
+    // A FATAL report has claimed the process. Latched, never cleared: every
+    // later fatal submitter waits on the crash thread's event and terminates
+    // instead of queuing a second report nobody will read (spec S9, "second
+    // faulting thread while a report is in flight").
     std::atomic<bool> g_inCrashHandler{false};
+
+    // ---- crash thread -----------------------------------------------------
+
+    constexpr std::size_t kPathMax    = 1024;   // UTF-8 bytes, generous vs MAX_PATH
+    constexpr std::size_t kReasonMax  = 1024;
+    constexpr std::size_t kMaxFrames  = 96;
+    constexpr std::size_t kSectionRsv = 32 * 1024;   // the walked thread's text
+    constexpr std::size_t kHeaderRsv  = 8 * 1024;    // the .txt header
+    constexpr std::size_t kEnvRsv     = 64 * 1024;   // one envelope's JSON
+    // 32 + 8 + 64 + 64 = 168 KiB of CrashArena::kCapacity (256 KiB), which
+    // leaves headroom for a later step rather than budgeting to the edge.
+
+    // The one request in flight. Written by the SUBMITTING thread before it
+    // signals, read by the crash thread after; the event pair is the
+    // happens-before edge, and g_submitMutex is what keeps it single.
+    struct Pending
+    {
+        char   reason[kReasonMax];
+        EXCEPTION_POINTERS* ep;
+        DWORD  walkThreadId;
+        bool   lightweight;
+        int    exitCode;
+    };
+    Pending g_pending{};
+
+    HANDLE            g_crashEvent   = nullptr;   // submitter -> crash thread
+    HANDLE            g_handledEvent = nullptr;   // crash thread -> submitter
+    HANDLE            g_crashThread  = nullptr;
+    std::atomic<std::uint32_t> g_crashThreadId{0};
+    std::atomic<bool> g_crashThreadStop{false};
+
+    // Serializes SUBMISSION (not the report body -- that is g_reportMutex).
+    // timed_ so a submitter that arrives while another report is in flight
+    // waits BOUNDEDLY and then does the right thing for its kind, instead of
+    // parking forever behind a crash thread that may itself be wedged.
+    std::timed_mutex g_submitMutex;
+
+    // Written by the crash thread once every file exists; read by
+    // LastReportStem (off the crash path). The release/acquire pair is the
+    // whole synchronisation -- the bytes never change after the store.
+    char              g_lastStem[kPathMax]{};
+    std::atomic<bool> g_lastStemValid{false};
+
+    // ---- snapshots taken OFF the crash path -------------------------------
+    // Everything the report needs as text, copied into fixed storage at
+    // Install()/SetPhase()/RetargetDumpDir()/Scan(). The crash thread reads
+    // only these: std::string, std::filesystem::path and Log::FileSinkPath()
+    // all allocate, and the heap may be exactly what faulted.
+
+    char g_reportDirSnap[kPathMax]{};
+    char g_appNameSnap[128]{};
+    char g_productSnap[128]{};
+    char g_logPathSnap[kPathMax]{};
+    char g_commandLineSnap[4096]{};
+    char g_phaseSnap[256]{};
+
+    // The injected third-party modules (R14): one rendered line for the .txt
+    // and the base names for the envelope array. Guarded by its own mutex,
+    // which the crash thread only ever TRY-locks.
+    constexpr std::size_t kInjectedMax = 32;
+    std::mutex  g_injectedMutex;
+    bool        g_injectedScanned = false;
+    char        g_injectedLine[2048]{};
+    char        g_injectedNames[kInjectedMax][64]{};
+    std::size_t g_injectedCount = 0;
+
+    // The reporter hand-off, prepared at Install: CreateProcessW needs a
+    // WRITABLE command line, so the prefix lives here and the per-report
+    // suffix is appended into g_spawnCmd on the crash thread.
+    wchar_t g_reporterExe[kPathMax]{};
+    wchar_t g_productWide[128]{};
+    wchar_t g_spawnCmd[8192]{};
+
+    // Seed for the per-report envelope guid. Guid::Generate() draws from the
+    // Core CSPRNG (a lock, and possibly the heap), so it runs ONCE here and
+    // the crash thread mixes it with the clock + the report counter instead.
+    Guid g_guidSeed{};
+
+    // Crash-thread scratch that must not live on a 256 KiB stack.
+    StackFrame g_frames[kMaxFrames]{};
+    wchar_t    g_wideScratch[kPathMax]{};
 #endif
 
     [[nodiscard]] std::filesystem::path ReportDir()
@@ -160,17 +271,17 @@ namespace
         return dir;
     }
 
-    [[nodiscard]] std::string TimeStampForFilename()
+    // Both stamp helpers write into a caller-supplied buffer: neither may
+    // allocate, because both are called from the crash thread.
+    void TimeStampForFilename(char* out, std::size_t cap) noexcept
     {
 #if defined(_WIN32)
         SYSTEMTIME st{};
         GetLocalTime(&st);
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%04u%02u%02u-%02u%02u%02u",
+        std::snprintf(out, cap, "%04u%02u%02u-%02u%02u%02u",
                       st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-        return buf;
 #else
-        return "unknown-time";
+        std::snprintf(out, cap, "unknown-time");
 #endif
     }
 
@@ -178,223 +289,422 @@ namespace
     // from TimeStampForFilename's local-time, filename-safe stamp above. A
     // report a teammate opens in another timezone needs an unambiguous
     // instant, not the reporter's local clock.
-    [[nodiscard]] std::string TimestampUtcIso8601()
+    void TimestampUtcIso8601(char* out, std::size_t cap) noexcept
     {
 #if defined(_WIN32)
         SYSTEMTIME st{};
         GetSystemTime(&st);
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+        std::snprintf(out, cap, "%04u-%02u-%02uT%02u:%02u:%02uZ",
                       st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-        return buf;
 #else
-        return "unknown-time";
+        std::snprintf(out, cap, "unknown-time");
 #endif
     }
 
-    [[nodiscard]] std::string CurrentPhase()
+    // Kind derivation, HEAP-FREE: the exported DeriveReportKind returns a
+    // std::string for callers' convenience, but the crash thread needs the
+    // same decision without an allocation, so the rule itself lives here and
+    // hands back a static literal. One rule, two skins -- never two rules.
+    [[nodiscard]] const char* DeriveKindCStr(const char* reason) noexcept
     {
-        std::lock_guard lock(g_phaseMutex);
-        return g_phase;
-    }
-
-    // Kind derivation for the .arcdiag envelope now lives in the exported
-    // DeriveReportKind (below, outside this anonymous namespace) so
-    // ArcaneTests can call it directly. This file-local name is kept only so
-    // existing call sites in this translation unit (WriteReportImpl et al.)
-    // compile unchanged.
-    [[nodiscard]] std::string DeriveKind(const char* reason)
-    {
-        return DeriveReportKind(reason);
+        const std::string_view r = reason ? reason : "";
+        if (r.find("gpu") != std::string_view::npos)
+            return r.find("stall") != std::string_view::npos ? "gpu-stall" : "gpu-crash";
+        if (r.find("assert") != std::string_view::npos)        return "assert";
+        if (r.find("terminate") != std::string_view::npos)     return "terminate";
+        if (r.find("ensure") != std::string_view::npos)        return "ensure";
+        if (r.find("out-of-memory") != std::string_view::npos) return "out-of-memory";
+        if (r.find("abnormal-exit") != std::string_view::npos) return "abnormal-exit";
+        if (r.find("hang") != std::string_view::npos)          return "hang";
+        return "crash";
     }
 
 #if defined(_WIN32)
-    // ---- symbols ----------------------------------------------------------
+    // ---- fixed-storage snapshot helpers (all OFF the crash path) ----------
 
-    void EnsureSymbols()
+    void CopyInto(char* dst, std::size_t cap, const char* src) noexcept
     {
-        if (g_symReady.load(std::memory_order_acquire)) return;
-        SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_FAIL_CRITICAL_ERRORS);
-        // TRUE == also enumerate already-loaded modules, so Arcane.dll and the
-        // hosted plugin resolve without us tracking load events ourselves.
-        if (SymInitialize(GetCurrentProcess(), nullptr, TRUE))
-            g_symReady.store(true, std::memory_order_release);
+        if (cap == 0) return;
+        if (!src) { dst[0] = '\0'; return; }
+        std::size_t n = 0;
+        while (n + 1 < cap && src[n] != '\0') { dst[n] = src[n]; ++n; }
+        dst[n] = '\0';
     }
 
-    [[nodiscard]] std::string DescribeThread(DWORD tid)
+    // UTF-8 -> UTF-16 into a caller buffer. No heap, no throw; an empty
+    // result on failure so a bad path simply fails the file open below.
+    const wchar_t* ToWide(const char* utf8, wchar_t* buf, int cap) noexcept
     {
-        // GetThreadDescription is Win10 1607+. Looked up dynamically rather than
-        // linked so this file does not carry an SDK floor of its own.
-        using GetThreadDescriptionFn = HRESULT(WINAPI*)(HANDLE, PWSTR*);
-        static GetThreadDescriptionFn fn = []() -> GetThreadDescriptionFn {
-            if (HMODULE k32 = GetModuleHandleW(L"kernel32.dll"))
-                return reinterpret_cast<GetThreadDescriptionFn>(
-                    reinterpret_cast<void*>(GetProcAddress(k32, "GetThreadDescription")));
-            return nullptr;
-        }();
-        if (!fn) return {};
+        buf[0] = L'\0';
+        if (utf8 && *utf8)
+            MultiByteToWideChar(CP_UTF8, 0, utf8, -1, buf, cap);
+        return buf;
+    }
+    // ---- heap-free file IO ------------------------------------------------
+    // CreateFileW over a UTF-8 path converted in place: fopen's narrow path
+    // is ANSI on Windows, and std::ofstream/std::filesystem::path both
+    // allocate. Everything below runs on the crash thread.
 
-        HANDLE th = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, tid);
-        if (!th) return {};
+    HANDLE OpenForWrite(const char* utf8Path, bool append) noexcept
+    {
+        wchar_t wide[kPathMax];
+        ToWide(utf8Path, wide, static_cast<int>(kPathMax));
+        if (!wide[0]) return INVALID_HANDLE_VALUE;
+        return CreateFileW(wide,
+                           append ? FILE_APPEND_DATA : GENERIC_WRITE,
+                           FILE_SHARE_READ, nullptr,
+                           append ? OPEN_ALWAYS : CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    }
 
-        std::string out;
-        PWSTR desc = nullptr;
-        if (SUCCEEDED(fn(th, &desc)) && desc)
+    bool WriteAll(HANDLE h, std::string_view s) noexcept
+    {
+        if (h == INVALID_HANDLE_VALUE) return false;
+        const char* p = s.data();
+        std::size_t left = s.size();
+        while (left > 0)
         {
-            if (const int n = WideCharToMultiByte(CP_UTF8, 0, desc, -1, nullptr, 0, nullptr, nullptr); n > 1)
-            {
-                out.resize(static_cast<std::size_t>(n) - 1);
-                WideCharToMultiByte(CP_UTF8, 0, desc, -1, out.data(), n, nullptr, nullptr);
-            }
-            LocalFree(desc);
+            const DWORD chunk = left > 0x04000000u ? 0x04000000u : static_cast<DWORD>(left);
+            DWORD wrote = 0;
+            if (!::WriteFile(h, p, chunk, &wrote, nullptr) || wrote == 0) return false;
+            p    += wrote;
+            left -= wrote;
         }
-        CloseHandle(th);
-        return out;
+        return true;
     }
 
-    // One symbolized frame line. Caller holds g_symMutex.
-    [[nodiscard]] std::string DescribeFrame(unsigned index, DWORD64 pc)
+    bool WriteTwoParts(const char* utf8Path, std::string_view a, std::string_view b) noexcept
+    {
+        const HANDLE h = OpenForWrite(utf8Path, /*append*/false);
+        if (h == INVALID_HANDLE_VALUE) return false;
+        const bool ok = WriteAll(h, a) && (b.empty() || WriteAll(h, b));
+        CloseHandle(h);
+        return ok;
+    }
+
+    // ---- hand-written envelope JSON ---------------------------------------
+    // nlohmann allocates on every node, so the envelope the crash thread
+    // writes is built by hand through the arena. Diag::Parse (lenient, and
+    // the reporter's only reader) accepts exactly these keys -- keep this
+    // in step with DiagEnvelope.cpp's Serialize.
+
+    [[nodiscard]] std::string_view SV(const char* s) noexcept
+    {
+        return s ? std::string_view(s) : std::string_view{};
+    }
+
+    // Length of the valid UTF-8 sequence at `p`, or 0 when the bytes are not
+    // valid UTF-8. Needed because nlohmann's parser REJECTS a string with an
+    // invalid sequence in it -- one bad byte anywhere would make the whole
+    // envelope unreadable, so those bytes are replaced instead.
+    [[nodiscard]] std::size_t Utf8SeqLen(const unsigned char* p, std::size_t avail) noexcept
+    {
+        const unsigned char c = p[0];
+        if (c < 0x80) return 1;
+
+        std::size_t need = 0;
+        if      ((c & 0xE0) == 0xC0) need = 2;
+        else if ((c & 0xF0) == 0xE0) need = 3;
+        else if ((c & 0xF8) == 0xF0) need = 4;
+        else return 0;
+
+        if (need > avail) return 0;
+        for (std::size_t i = 1; i < need; ++i)
+            if ((p[i] & 0xC0) != 0x80) return 0;
+        if (need == 2 && c < 0xC2) return 0;   // overlong
+        if (need == 4 && c > 0xF4) return 0;   // beyond U+10FFFF
+        return need;
+    }
+
+    void AppendJsonString(CrashArena::Builder& b, std::string_view s) noexcept
+    {
+        b.Append("\"");
+
+        const auto* p = reinterpret_cast<const unsigned char*>(s.data());
+        const std::size_t n = s.size();
+        std::size_t i = 0;
+        std::size_t runStart = 0;
+        const auto flush = [&](std::size_t end) noexcept {
+            if (end > runStart) b.Append(std::string_view(s.data() + runStart, end - runStart));
+        };
+
+        while (i < n)
+        {
+            const unsigned char c = p[i];
+            if (c == '"' || c == '\\')
+            {
+                flush(i);
+                const char esc[2] = { '\\', static_cast<char>(c) };
+                b.Append(std::string_view(esc, 2));
+                runStart = ++i;
+                continue;
+            }
+            if (c < 0x20)
+            {
+                flush(i);
+                switch (c)
+                {
+                    case '\n': b.Append("\\n"); break;
+                    case '\r': b.Append("\\r"); break;
+                    case '\t': b.Append("\\t"); break;
+                    case '\b': b.Append("\\b"); break;
+                    case '\f': b.Append("\\f"); break;
+                    default:
+                    {
+                        char u[8];
+                        std::snprintf(u, sizeof(u), "\\u%04x", static_cast<unsigned>(c));
+                        b.Append(u);
+                        break;
+                    }
+                }
+                runStart = ++i;
+                continue;
+            }
+            if (c < 0x80) { ++i; continue; }
+
+            const std::size_t seq = Utf8SeqLen(p + i, n - i);
+            if (seq == 0)
+            {
+                flush(i);
+                b.Append("?");
+                runStart = ++i;
+                continue;
+            }
+            i += seq;
+        }
+        flush(n);
+
+        b.Append("\"");
+    }
+
+    // Everything one envelope carries, as pointers into fixed storage / the
+    // arena. `gpu` is the provider's own Envelope (heap-backed, read-only
+    // here) or null for the minimal envelope written before it runs.
+    struct EnvFields
+    {
+        const char*      guid           = nullptr;
+        const char*      kind           = nullptr;
+        const char*      timestampUtc   = nullptr;
+        const char*      appName        = nullptr;
+        const char*      phase          = nullptr;
+        const char*      buildInfo      = nullptr;
+        std::string_view cpuThreadSummary;
+        const char*      siblingTxt     = nullptr;
+        const char*      siblingDmp     = nullptr;
+        const char*      siblingGpuDump = nullptr;
+        const char*      logPath        = nullptr;
+        const char*      commandLine    = nullptr;
+        int              exitCode       = 0;
+        const Diag::Envelope* gpu       = nullptr;
+    };
+
+    // The injected-module snapshot, copied once per report so every step of
+    // it reads the same list even if a Scan() lands mid-report (R14).
+    char        g_rptInjectedLine[sizeof(g_injectedLine)]{};
+    char        g_rptInjectedNames[kInjectedMax][64]{};
+    std::size_t g_rptInjectedCount = 0;
+
+    [[nodiscard]] std::string_view BuildEnvelopeJson(CrashArena& arena, const EnvFields& f) noexcept
+    {
+        CrashArena::Builder b = arena.OpenBuilder(kEnvRsv);
+
+        b.Append("{\n  \"formatVersion\": 1,\n  \"guid\": ");
+        AppendJsonString(b, SV(f.guid));
+        b.Append(",\n  \"kind\": ");             AppendJsonString(b, SV(f.kind));
+        b.Append(",\n  \"timestampUtc\": ");     AppendJsonString(b, SV(f.timestampUtc));
+        b.Append(",\n  \"appName\": ");          AppendJsonString(b, SV(f.appName));
+        b.Append(",\n  \"phase\": ");            AppendJsonString(b, SV(f.phase));
+        b.Append(",\n  \"buildInfo\": ");        AppendJsonString(b, SV(f.buildInfo));
+        b.Append(",\n  \"cpuThreadSummary\": "); AppendJsonString(b, f.cpuThreadSummary);
+
+        b.Append(",\n  \"queues\": [");
+        if (f.gpu)
+        {
+            bool firstQueue = true;
+            for (const Diag::Envelope::Queue& q : f.gpu->queues)
+            {
+                b.Append(firstQueue ? "\n    {\"name\": " : ",\n    {\"name\": ");
+                firstQueue = false;
+                AppendJsonString(b, q.name);
+                b.Append(", \"lastCompleted\": ");
+                AppendJsonString(b, q.lastCompleted);
+                b.Append(", \"inFlight\": [");
+                bool firstFlight = true;
+                for (const std::string& s : q.inFlight)
+                {
+                    if (!firstFlight) b.Append(", ");
+                    firstFlight = false;
+                    AppendJsonString(b, s);
+                }
+                b.Append("]}");
+            }
+            if (!firstQueue) b.Append("\n  ");
+        }
+        b.Append("]");
+
+        b.Append(",\n  \"fault\": {\"type\": ");
+        AppendJsonString(b, f.gpu ? std::string_view(f.gpu->fault.type) : std::string_view{});
+        b.Append(", \"address\": ");
+        AppendJsonString(b, f.gpu ? std::string_view(f.gpu->fault.address) : std::string_view{});
+        b.Append(", \"resource\": ");
+        AppendJsonString(b, f.gpu ? std::string_view(f.gpu->fault.resource) : std::string_view{});
+        b.Append("}");
+
+        b.Append(",\n  \"siblingTxt\": ");     AppendJsonString(b, SV(f.siblingTxt));
+        b.Append(",\n  \"siblingDmp\": ");     AppendJsonString(b, SV(f.siblingDmp));
+        b.Append(",\n  \"siblingGpuDump\": "); AppendJsonString(b, SV(f.siblingGpuDump));
+
+        b.Append(",\n  \"activeLayers\": [");
+        if (f.gpu)
+        {
+            bool first = true;
+            for (const std::string& s : f.gpu->activeLayers)
+            {
+                if (!first) b.Append(", ");
+                first = false;
+                AppendJsonString(b, s);
+            }
+        }
+        b.Append("]");
+
+        // Base names only -- the envelope's contract (DiagEnvelope.hpp). The
+        // .txt sibling's `injected` line is what tells "none" and "not
+        // scanned" apart.
+        b.Append(",\n  \"foreignModules\": [");
+        for (std::size_t i = 0; i < g_rptInjectedCount; ++i)
+        {
+            if (i != 0) b.Append(", ");
+            AppendJsonString(b, SV(g_rptInjectedNames[i]));
+        }
+        b.Append("]");
+
+        b.Append(",\n  \"logPath\": ");     AppendJsonString(b, SV(f.logPath));
+        b.Append(",\n  \"commandLine\": "); AppendJsonString(b, SV(f.commandLine));
+
+        char exitBuf[32];
+        std::snprintf(exitBuf, sizeof(exitBuf), ",\n  \"exitCode\": %d", f.exitCode);
+        b.Append(exitBuf);
+
+        b.Append("\n}\n");
+        return b.View();
+    }
+
+    // ---- the report's own text --------------------------------------------
+
+    // ONE thread section, not every thread: the in-process all-thread walk
+    // was the freeze this arc removes (spec S5.2 step 5). The reporter
+    // reconstructs the other threads from the minidump, which carries every
+    // stack anyway.
+    [[nodiscard]] std::string_view BuildThreadSection(CrashArena::Builder& b, DWORD tid,
+                                                      std::size_t frameCount) noexcept
+    {
+        char line[512];
+        std::snprintf(line, sizeof(line), "--- thread %lu%s ---",
+                      tid, tid == g_mainThreadId ? " (MAIN)" : "");
+        b.Append(line);
+        b.Append("\n");
+
+        if (frameCount == 0)
+            b.Append("  <no frames recovered>\n");
+
+        for (std::size_t i = 0; i < frameCount; ++i)
+        {
+            b.Append(FormatStackFrame(i, g_frames[i], std::span<char>(line, sizeof(line))));
+            b.Append("\n");
+        }
+        b.Append("\n");
+        return b.View();
+    }
+
+    void FillHeader(CrashArena::Builder& b, const Pending& p,
+                    const char* dmpPath, bool dumpOk, bool exhausted) noexcept
     {
         char line[1024];
 
-        alignas(SYMBOL_INFO) char symBuf[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(char)]{};
-        auto* sym = reinterpret_cast<SYMBOL_INFO*>(symBuf);
-        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
-        sym->MaxNameLen   = MAX_SYM_NAME;
+        b.Append("=== Arcane diagnostic report ===\n");
+        b.Append("reason      : "); b.Append(p.reason[0] ? p.reason : "unspecified"); b.Append("\n");
+        b.Append("app         : "); b.Append(g_appNameSnap); b.Append("\n");
 
-        // Module name first: it is the one field that survives a total symbol
-        // miss, and "which DLL" is often already the answer.
-        std::string moduleName;
-        if (const DWORD64 base = SymGetModuleBase64(GetCurrentProcess(), pc); base != 0)
+        std::snprintf(line, sizeof(line), "pid         : %lu\n", GetCurrentProcessId());
+        b.Append(line);
+        std::snprintf(line, sizeof(line), "main thread : %lu\n", g_mainThreadId);
+        b.Append(line);
+
+        if (g_phaseSnap[0] != '\0')
         {
-            IMAGEHLP_MODULE64 mod{};
-            mod.SizeOfStruct = sizeof(mod);
-            if (SymGetModuleInfo64(GetCurrentProcess(), base, &mod))
-                moduleName = mod.ModuleName;
+            b.Append("phase       : "); b.Append(g_phaseSnap); b.Append("\n");
+        }
+        if (g_beatSeen.load(std::memory_order_acquire))
+        {
+            std::snprintf(line, sizeof(line), "since beat  : %.2f s\n",
+                          SecondsSince(g_lastBeat.load(std::memory_order_acquire)));
+            b.Append(line);
         }
 
-        DWORD64 symDisp = 0;
-        if (SymFromAddr(GetCurrentProcess(), pc, &symDisp, sym))
+        b.Append("minidump    : ");
+        b.Append(dumpOk ? dmpPath
+                        : (p.lightweight ? "<not written (lightweight report)>" : "<failed to write>"));
+        b.Append("\n");
+
+        // The injected third-party modules the process had found by its LAST
+        // scan, read from the fixed snapshot -- never enumerated here, where
+        // the loader lock is off limits (R14). "not scanned" (no device was
+        // ever created) and "none" are different facts and are spelled apart.
+        b.Append("injected    : "); b.Append(g_rptInjectedLine); b.Append("\n");
+
+        if (p.ep && p.ep->ExceptionRecord)
         {
-            IMAGEHLP_LINE64 ln{};
-            ln.SizeOfStruct = sizeof(ln);
-            DWORD lineDisp = 0;
-            if (SymGetLineFromAddr64(GetCurrentProcess(), pc, &lineDisp, &ln))
-            {
-                std::snprintf(line, sizeof(line), "  %02u  %s!%s + 0x%llx   [%s:%lu]",
-                              index, moduleName.empty() ? "?" : moduleName.c_str(),
-                              sym->Name, static_cast<unsigned long long>(symDisp),
-                              ln.FileName ? ln.FileName : "?", ln.LineNumber);
-            }
-            else
-            {
-                std::snprintf(line, sizeof(line), "  %02u  %s!%s + 0x%llx",
-                              index, moduleName.empty() ? "?" : moduleName.c_str(),
-                              sym->Name, static_cast<unsigned long long>(symDisp));
-            }
+            std::snprintf(line, sizeof(line), "exception   : code 0x%08lx at 0x%llx\n",
+                          p.ep->ExceptionRecord->ExceptionCode,
+                          reinterpret_cast<unsigned long long>(p.ep->ExceptionRecord->ExceptionAddress));
+            b.Append(line);
         }
-        else
-        {
-            std::snprintf(line, sizeof(line), "  %02u  %s!0x%llx   <no symbol>",
-                          index, moduleName.empty() ? "?" : moduleName.c_str(),
-                          static_cast<unsigned long long>(pc));
-        }
-        return line;
+        if (exhausted)
+            b.Append("arena       : EXHAUSTED -- this report is truncated (spec S5.5)\n");
+
+        b.Append("\n");
     }
 
-    // Walks one thread. `ctxIn` is the fault context when we have one (a crash);
-    // otherwise null and we fetch it ourselves.
-    //
-    // The current thread is NEVER suspended -- suspending yourself never
-    // resumes. For any other thread we suspend, copy, walk, and resume
-    // immediately, one thread at a time: holding several suspended raises the
-    // odds of wedging on a lock DbgHelp itself needs.
-    [[nodiscard]] std::vector<std::string> WalkThread(DWORD tid, const CONTEXT* ctxIn)
+    // ---- the individual steps ---------------------------------------------
+
+    // R6: with a fault context, walk that. Otherwise the walked thread is
+    // parked (in SubmitReport's wait, or -- for a hang -- in whatever wedged
+    // it), so suspend it, copy its context, and resume it immediately: one
+    // thread held at a time, and never this one.
+    [[nodiscard]] std::size_t CaptureWalkedStack(const Pending& p) noexcept
     {
-        std::vector<std::string> frames;
+        const std::span<StackFrame> out(g_frames, kMaxFrames);
 
-#if defined(_M_X64)
-        const bool isSelf = (tid == GetCurrentThreadId());
+        if (p.ep && p.ep->ContextRecord)
+            return CaptureStackFromContext(p.ep->ContextRecord, out);
 
-        CONTEXT ctx{};
-        HANDLE  th = nullptr;
+        if (p.walkThreadId == GetCurrentThreadId())
+            return CaptureCurrentStack(out);
 
-        if (isSelf)
+        const HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION | THREAD_SUSPEND_RESUME,
+                                     FALSE, p.walkThreadId);
+        if (!th) return 0;
+
+        std::size_t n = 0;
+        if (SuspendThread(th) != static_cast<DWORD>(-1))
         {
-            if (ctxIn) ctx = *ctxIn;
-            else       RtlCaptureContext(&ctx);
-            th = GetCurrentThread();
-        }
-        else
-        {
-            th = OpenThread(THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION | THREAD_SUSPEND_RESUME, FALSE, tid);
-            if (!th)
-            {
-                frames.emplace_back("  <could not open thread>");
-                return frames;
-            }
-            if (SuspendThread(th) == static_cast<DWORD>(-1))
-            {
-                CloseHandle(th);
-                frames.emplace_back("  <could not suspend thread>");
-                return frames;
-            }
+            CONTEXT ctx{};
             ctx.ContextFlags = CONTEXT_FULL;
-            if (!GetThreadContext(th, &ctx))
-            {
-                ResumeThread(th);
-                CloseHandle(th);
-                frames.emplace_back("  <could not read thread context>");
-                return frames;
-            }
-        }
-
-        STACKFRAME64 frame{};
-        frame.AddrPC.Offset    = ctx.Rip;
-        frame.AddrPC.Mode      = AddrModeFlat;
-        frame.AddrFrame.Offset = ctx.Rbp;
-        frame.AddrFrame.Mode   = AddrModeFlat;
-        frame.AddrStack.Offset = ctx.Rsp;
-        frame.AddrStack.Mode   = AddrModeFlat;
-
-        {
-            std::lock_guard lock(g_symMutex);
-            EnsureSymbols();
-
-            constexpr unsigned kMaxFrames = 96;
-            for (unsigned i = 0; i < kMaxFrames; ++i)
-            {
-                if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, GetCurrentProcess(), th, &frame, &ctx,
-                                 nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr))
-                    break;
-                if (frame.AddrPC.Offset == 0) break;
-                frames.emplace_back(DescribeFrame(i, frame.AddrPC.Offset));
-            }
-        }
-
-        if (!isSelf)
-        {
+            if (GetThreadContext(th, &ctx))
+                n = CaptureStackFromContext(&ctx, out);
             ResumeThread(th);
-            CloseHandle(th);
         }
-#else
-        (void)tid; (void)ctxIn;
-        frames.emplace_back("  <stack walking implemented for x64 only>");
-#endif
-
-        if (frames.empty())
-            frames.emplace_back("  <no frames recovered>");
-        return frames;
+        CloseHandle(th);
+        return n;
     }
 
-    bool WriteMiniDump(const std::filesystem::path& path, EXCEPTION_POINTERS* ep)
+    bool WriteMiniDump(const char* utf8Path, EXCEPTION_POINTERS* ep, DWORD threadId) noexcept
     {
-        HANDLE file = CreateFileW(path.wstring().c_str(), GENERIC_WRITE, 0, nullptr,
-                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        const HANDLE file = OpenForWrite(utf8Path, /*append*/false);
         if (file == INVALID_HANDLE_VALUE) return false;
 
         MINIDUMP_EXCEPTION_INFORMATION mei{};
-        mei.ThreadId          = GetCurrentThreadId();
+        mei.ThreadId          = threadId;
         mei.ExceptionPointers = ep;
         mei.ClientPointers    = FALSE;
 
@@ -411,234 +721,289 @@ namespace
         CloseHandle(file);
         return ok != FALSE;
     }
-#endif  // _WIN32
 
-    // The one report path both triggers share.
-    std::string WriteReportImpl(const char* reason, void* exceptionPointers)
+    // A fresh, non-nil, v4-shaped guid without touching Guid::Generate()
+    // (which takes the Core CSPRNG's lock). The seed is drawn once at
+    // Install; the clock and the report counter make each report distinct.
+    void MakeReportGuid(char* out, std::size_t cap) noexcept
     {
-#if defined(_WIN32)
-        std::lock_guard reportLock(g_reportMutex);
+        LARGE_INTEGER qpc{};
+        QueryPerformanceCounter(&qpc);
 
-        auto* ep = static_cast<EXCEPTION_POINTERS*>(exceptionPointers);
+        std::uint64_t hi = g_guidSeed.hi ^ (static_cast<std::uint64_t>(qpc.QuadPart) * 0x9E3779B97F4A7C15ull);
+        std::uint64_t lo = g_guidSeed.lo
+                         ^ ((static_cast<std::uint64_t>(GetCurrentProcessId()) << 32)
+                            + (static_cast<std::uint64_t>(g_reportCount.load(std::memory_order_relaxed)) + 1)
+                              * 0xBF58476D1CE4E5B9ull);
 
-        const std::filesystem::path dir   = ReportDir();
-        const std::string           stamp = TimeStampForFilename();
-        const std::string           base  = g_cfg.appName + "-" + stamp + "-pid" +
-                                            std::to_string(GetCurrentProcessId());
+        // RFC-4122 v4 layout, so the string form reads as a real v4 UUID to
+        // anything that inspects it -- and can never come out nil, which
+        // Diag::Parse refuses.
+        hi = (hi & 0xFFFFFFFFFFFF0FFFull) | 0x0000000000004000ull;
+        lo = (lo & 0x3FFFFFFFFFFFFFFFull) | 0x8000000000000000ull;
 
-        const std::filesystem::path dmpPath  = dir / (base + ".dmp");
-        const std::filesystem::path txtPath  = dir / (base + ".txt");
-        const std::filesystem::path diagPath = dir / (base + ".arcdiag");
-        // Same stem, no extension -- what a GPU-section provider writes its
-        // own <reportStem>.gpudump against (F-6b).
-        const std::filesystem::path reportStem = dir / base;
+        std::snprintf(out, cap, "%08x-%04x-%04x-%04x-%012llx",
+                      static_cast<unsigned>(hi >> 32),
+                      static_cast<unsigned>((hi >> 16) & 0xFFFFull),
+                      static_cast<unsigned>(hi & 0xFFFFull),
+                      static_cast<unsigned>(lo >> 48),
+                      static_cast<unsigned long long>(lo & 0xFFFFFFFFFFFFull));
+    }
 
-        // Minidump FIRST, on purpose. The text walk below suspends threads and
-        // calls DbgHelp in a process that is already misbehaving; if it wedges,
-        // the .dmp is still on disk and still answers the question.
-        const bool dumpOk = WriteMiniDump(dmpPath, ep);
+    void DumpBacklog(const char* utf8Path) noexcept
+    {
+        const HANDLE h = OpenForWrite(utf8Path, /*append*/false);
+        if (h == INVALID_HANDLE_VALUE) return;
 
-        std::string out;
-        out.reserve(16 * 1024);
-        auto append = [&out](const std::string& s) { out += s; out += '\n'; };
-
-        append("=== Arcane diagnostic report ===");
-        append("reason      : " + std::string(reason ? reason : "unspecified"));
-        append("app         : " + g_cfg.appName);
-        append("pid         : " + std::to_string(GetCurrentProcessId()));
-        append("main thread : " + std::to_string(g_mainThreadId));
-        if (const std::string phase = CurrentPhase(); !phase.empty())
-            append("phase       : " + phase);
-        if (g_beatSeen.load(std::memory_order_acquire))
+        char line[Log::kBacklogLineBytes];
+        const std::size_t count = Log::BacklogLineCount();
+        for (std::size_t i = 0; i < count; ++i)
         {
-            char b[64];
-            std::snprintf(b, sizeof(b), "%.2f s", SecondsSince(g_lastBeat.load(std::memory_order_acquire)));
-            append("since beat  : " + std::string(b));
+            std::size_t len = Log::BacklogLine(i, std::span<char>(line, sizeof(line)));
+            // spdlog's formatted record already ends in the pattern's eol;
+            // trim it so the dump is one line per record, not one blank
+            // line between each.
+            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) --len;
+            WriteAll(h, std::string_view(line, len));
+            WriteAll(h, "\n");
         }
-        append(std::string("minidump    : ") + (dumpOk ? dmpPath.string() : "<failed to write>"));
+        CloseHandle(h);
+    }
 
-        // The injected third-party modules the process had found by its LAST
-        // scan (Base/ForeignModules.hpp) -- read from memory, never
-        // enumerated here: this runs inside an exception filter, where the
-        // loader lock is off limits. "not scanned" (no device was ever
-        // created) and "none" are different facts and are spelled apart, so
-        // a close crash on a desk with GPU Tweak III's OSD in it names the
-        // overlay on the report's first screen.
-        const std::optional<std::vector<ForeignModules::Match>> foreign = ForeignModules::LastScan();
+    // The hand-off. Missing exe is the EXPECTED case in this plan (the
+    // reporter does not exist yet), so a failure is one line, after the
+    // files are already on disk, and never anything louder.
+    [[nodiscard]] bool SpawnReporter(const char* stemUtf8, const char* kind) noexcept
+    {
+        if (!g_cfg.spawnReporter) return true;   // disabled: not a failure
+        if (!g_reporterExe[0])    return false;
+
+        wchar_t wideStem[kPathMax];
+        wchar_t wideKind[64];
+        ToWide(stemUtf8, wideStem, static_cast<int>(kPathMax));
+        ToWide(kind, wideKind, 64);
+
+        _snwprintf_s(g_spawnCmd, sizeof(g_spawnCmd) / sizeof(g_spawnCmd[0]), _TRUNCATE,
+                     L"\"%s\" \"%s.arcdiag\" --pid %lu --kind %s --product \"%s\"%s",
+                     g_reporterExe, wideStem,
+                     static_cast<unsigned long>(GetCurrentProcessId()),
+                     wideKind, g_productWide,
+                     g_cfg.unattended ? L" --unattended" : L"");
+
+        STARTUPINFOW        si{};
+        PROCESS_INFORMATION pi{};
+        si.cb = sizeof(si);
+        if (!CreateProcessW(nullptr, g_spawnCmd, nullptr, nullptr, FALSE,
+                            CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi))
+            return false;
+
+        // No handle kept: the reporter outlives us on purpose.
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return true;
+    }
+
+    // ---- the report, in UE's order (spec S5.2) -----------------------------
+
+    void RunReportOnCrashThread(const Pending& p) noexcept
+    {
+        // Held for the WHOLE body, exactly as WriteReportImpl used to be, so
+        // FenceReports() stays a sound teardown fence and RetargetDumpDir
+        // cannot move the directory out from under a report mid-write.
+        std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
+
+        // Step 1: no hang report may interleave with this one.
+        g_watchdogPaused.store(true, std::memory_order_release);
+
+        CrashArena& arena = CrashArena::Instance();
+        arena.Reset();
+        g_lastStemValid.store(false, std::memory_order_release);
+
+        // One consistent injected-module list for the whole report. TRY-lock
+        // only: a report must never block on a scan that is running, and a
+        // missing decoration is not worth a wedged crash path.
         {
-            std::string line;
-            if (!foreign)
-                line = "<not scanned>";
-            else if (foreign->empty())
-                line = "none";
+            std::unique_lock<std::mutex> lock(g_injectedMutex, std::try_to_lock);
+            if (!lock.owns_lock())
+            {
+                CopyInto(g_rptInjectedLine, sizeof(g_rptInjectedLine), "<snapshot unavailable>");
+                g_rptInjectedCount = 0;
+            }
             else
             {
-                for (const ForeignModules::Match& m : *foreign)
+                CopyInto(g_rptInjectedLine, sizeof(g_rptInjectedLine),
+                         g_injectedScanned ? g_injectedLine : "<not scanned>");
+                g_rptInjectedCount = g_injectedCount;
+                for (std::size_t i = 0; i < g_rptInjectedCount; ++i)
+                    CopyInto(g_rptInjectedNames[i], 64, g_injectedNames[i]);
+            }
+        }
+
+        // Paths. The report directory was snapshotted off-path; the stem is
+        // "<dir>\<app>-<stamp>-pid<n>", the same spelling operator/ produced
+        // before, so every existing consumer of the sibling stem is unmoved.
+        char stamp[32];
+        TimeStampForFilename(stamp, sizeof(stamp));
+
+        char stem[kPathMax], txtPath[kPathMax], dmpPath[kPathMax];
+        char diagPath[kPathMax], tmpPath[kPathMax], logTxtPath[kPathMax];
+        std::snprintf(stem, sizeof(stem), "%s\\%s-%s-pid%lu",
+                      g_reportDirSnap, g_appNameSnap, stamp,
+                      static_cast<unsigned long>(GetCurrentProcessId()));
+        std::snprintf(txtPath,    sizeof(txtPath),    "%s.txt",         stem);
+        std::snprintf(dmpPath,    sizeof(dmpPath),    "%s.dmp",         stem);
+        std::snprintf(diagPath,   sizeof(diagPath),   "%s.arcdiag",     stem);
+        std::snprintf(tmpPath,    sizeof(tmpPath),    "%s.arcdiag.tmp", stem);
+        std::snprintf(logTxtPath, sizeof(logTxtPath), "%s.log.txt",     stem);
+
+        // Step 2: the portable stack of the walked thread. The header's span
+        // is carved FIRST so an arena that runs out while formatting the
+        // stack still has room for the header that says so.
+        const std::size_t frameCount = CaptureWalkedStack(p);
+        CrashArena::Builder header  = arena.OpenBuilder(kHeaderRsv);
+        CrashArena::Builder sectionB = arena.OpenBuilder(kSectionRsv);
+        const std::string_view section = BuildThreadSection(sectionB, p.walkThreadId, frameCount);
+
+        char guid[48];
+        char tsUtc[48];
+        MakeReportGuid(guid, sizeof(guid));
+        TimestampUtcIso8601(tsUtc, sizeof(tsUtc));
+        const char* const kind = DeriveKindCStr(p.reason);
+
+        EnvFields fields;
+        fields.guid             = guid;
+        fields.kind             = kind;
+        fields.timestampUtc     = tsUtc;
+        fields.appName          = g_appNameSnap;
+        fields.phase            = g_phaseSnap;
+        fields.buildInfo        = BuildInfo();          // a static literal; no allocation
+        fields.cpuThreadSummary = section;
+        fields.siblingTxt       = txtPath;
+        fields.siblingDmp       = p.lightweight ? "" : dmpPath;
+        fields.siblingGpuDump   = "";
+        fields.logPath          = g_logPathSnap;
+        fields.commandLine      = g_commandLineSnap;
+        fields.exitCode         = p.exitCode;
+        fields.gpu              = nullptr;
+
+        // Step 3: the MINIMAL envelope, before anything that can wedge, so a
+        // reporter can start on a report whose later steps never finished.
+        WriteTwoParts(diagPath, BuildEnvelopeJson(arena, fields), {});
+
+        // Step 4: the minidump -- the artifact a debugger opens. Skipped for
+        // a continuable (ensure) report, which must resume quickly.
+        const bool dumpOk = !p.lightweight && WriteMiniDump(dmpPath, p.ep, p.walkThreadId);
+
+        // Step 5: the .txt.
+        FillHeader(header, p, dmpPath, dumpOk, arena.Exhausted());
+        const bool txtOk = WriteTwoParts(txtPath, header.View(), section);
+
+        bool           spawnOk = true;
+        bool           haveGpu = false;
+        // Empty strings/vectors allocate nothing; it only reaches the heap
+        // once the provider (below) fills it, which is the step the plan
+        // tolerates allocations in.
+        Diag::Envelope gpuEnv;
+
+        if (!p.lightweight)
+        {
+            // Step 6: the GPU-section provider. THE one step allowed to
+            // allocate (a real backend retrieves DRED, names resources, may
+            // write its own .gpudump) -- which is exactly why it runs here,
+            // after the envelope and the minidump are already on disk.
+            GpuSectionProvider gpuProvider     = nullptr;
+            void*              gpuProviderUser = nullptr;
+            {
+                std::lock_guard gpuLock(g_gpuProviderMutex);
+                gpuProvider     = g_gpuProvider;
+                gpuProviderUser = g_gpuProviderUser;
+            }
+            if (gpuProvider)
+            {
+                // The provider's CONTRACT (Diagnostics.hpp, GpuSectionProvider)
+                // is that the envelope handed to it ALREADY carries
+                // guid/kind/timestamp/appName/phase/buildInfo/cpuThreadSummary
+                // -- NriDiagnostics' backend classifies device-removed vs
+                // device-alive from `kind` alone, because it is the only
+                // evidence it has (Render/Nri/NriDiagnostics.cpp). Filled
+                // here, inside the one step the plan already tolerates
+                // allocations in, after the minimal envelope and the minidump
+                // are both durable.
+                if (const auto parsed = Guid::FromString(guid)) gpuEnv.guid = *parsed;
+                gpuEnv.kind             = kind;
+                gpuEnv.timestampUtc     = tsUtc;
+                gpuEnv.appName          = g_appNameSnap;
+                gpuEnv.phase            = g_phaseSnap;
+                gpuEnv.buildInfo        = fields.buildInfo;
+                gpuEnv.cpuThreadSummary = section;
+
+                std::string                 gpuText;
+                const std::filesystem::path stemPath(stem);
+                gpuProvider(gpuEnv, gpuText, stemPath, gpuProviderUser);
+                haveGpu = true;
+
+                // Append-only: the CPU portion is already durable from the
+                // write above, so a provider that blocks or faults never
+                // re-risks the report that already succeeded.
+                if (txtOk)
                 {
-                    if (!line.empty()) line += ", ";
-                    // A catalogued row names its product; an uncatalogued one
-                    // (tier 3) has only its path to be known by.
-                    line += m.module + " (tier " + std::to_string(m.tier) + ", " +
-                            (m.product.empty() ? m.path : m.product) + ")";
+                    const HANDLE h = OpenForWrite(txtPath, /*append*/true);
+                    if (h != INVALID_HANDLE_VALUE)
+                    {
+                        WriteAll(h, "=== GPU ===\n");
+                        if (!gpuText.empty()) { WriteAll(h, gpuText); WriteAll(h, "\n"); }
+                        CloseHandle(h);
+                    }
                 }
             }
-            append("injected    : " + line);
-        }
 
-        if (ep && ep->ExceptionRecord)
-        {
-            char b[128];
-            std::snprintf(b, sizeof(b), "code 0x%08lx at 0x%llx",
-                          ep->ExceptionRecord->ExceptionCode,
-                          reinterpret_cast<unsigned long long>(ep->ExceptionRecord->ExceptionAddress));
-            append("exception   : " + std::string(b));
-        }
-        append("");
-
-        // EVERY thread. A main thread parked on a worker's result names the
-        // wrong culprit; the worker's stack is the answer, and we cannot tell
-        // which is which before looking.
-        const DWORD selfTid = GetCurrentThreadId();
-        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if (snap != INVALID_HANDLE_VALUE)
-        {
-            THREADENTRY32 te{};
-            te.dwSize = sizeof(te);
-            const DWORD pid = GetCurrentProcessId();
-            for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te))
+            // Step 7: the FULL envelope, rewritten ATOMICALLY over the
+            // minimal one. Sibling paths now reflect what actually landed --
+            // never claim a path the editor's open button would fail on.
+            fields.siblingTxt     = txtOk  ? txtPath : "";
+            fields.siblingDmp     = dumpOk ? dmpPath : "";
+            fields.siblingGpuDump = haveGpu ? gpuEnv.siblingGpuDump.c_str() : "";
+            fields.gpu            = haveGpu ? &gpuEnv : nullptr;
+            if (WriteTwoParts(tmpPath, BuildEnvelopeJson(arena, fields), {}))
             {
-                if (te.th32OwnerProcessID != pid) continue;
-
-                std::string title = "--- thread " + std::to_string(te.th32ThreadID);
-                if (te.th32ThreadID == g_mainThreadId) title += " (MAIN)";
-                if (te.th32ThreadID == selfTid)        title += " (reporter)";
-                if (const std::string name = DescribeThread(te.th32ThreadID); !name.empty())
-                    title += " \"" + name + "\"";
-                title += " ---";
-                append(title);
-
-                // The fault context belongs to the thread that FAULTED, which is
-                // the thread reporting. Handing it to any other thread's walk
-                // would print one stack twice and lose a real one.
-                const CONTEXT* ctx = nullptr;
-                if (te.th32ThreadID == selfTid && ep) ctx = ep->ContextRecord;
-
-                for (const std::string& f : WalkThread(te.th32ThreadID, ctx))
-                    append(f);
-                append("");
+                wchar_t wFrom[kPathMax], wTo[kPathMax];
+                ToWide(tmpPath,  wFrom, static_cast<int>(kPathMax));
+                ToWide(diagPath, wTo,   static_cast<int>(kPathMax));
+                MoveFileExW(wFrom, wTo, MOVEFILE_REPLACE_EXISTING);
             }
-            CloseHandle(snap);
+
+            // Step 8: the log backlog beside the report, a BOUNDED flush (the
+            // faulting thread may have died holding spdlog's mutex), and the
+            // hand-off.
+            DumpBacklog(logTxtPath);
+            Log::FlushFileSinkBounded(2000);
+            spawnOk = SpawnReporter(stem, kind);
         }
-        else
-        {
-            append("<could not enumerate threads>");
-        }
-
-        // The .txt goes down BEFORE the GPU provider runs, not after: the
-        // provider is now the single riskiest step in this function (a real
-        // backend touches a just-removed/hung device -- GetDeviceRemovedReason,
-        // DRED retrieval, a raw .gpudump write), and the whole point of the
-        // "minidump first" comment above is that a report already on disk
-        // survives whatever happens next. If this write fails, txtOk stays
-        // false and siblingTxt records that honestly below instead of
-        // claiming a file that doesn't exist.
-        const bool txtOk = [&]() {
-            if (FILE* f = nullptr; fopen_s(&f, txtPath.string().c_str(), "wb") == 0 && f)
-            {
-                std::fwrite(out.data(), 1, out.size(), f);
-                std::fclose(f);
-                return true;
-            }
-            return false;
-        }();
-
-        // .arcdiag envelope (GPU crash diagnostics arc, Task 4): ALWAYS
-        // emitted, with or without a GPU backend installed -- a plain CPU
-        // crash/hang report must be fully renderable by the future
-        // CrashReportDocument on its own, not an empty shell waiting on
-        // Task 5/6. guid is minted fresh here (never by Diag::WriteFile /
-        // Diag::Parse) because Parse rejects a nil guid.
-        Diag::Envelope envelope;
-        envelope.guid      = Guid::Generate();
-        envelope.kind      = DeriveKind(reason);
-        envelope.timestampUtc = TimestampUtcIso8601();
-        envelope.appName   = g_cfg.appName;
-        envelope.phase     = CurrentPhase();
-        envelope.buildInfo = BuildInfo();
-        // Same content the .txt sibling's CPU portion carries -- the
-        // symbolized all-thread walk above, snapshotted BEFORE any GPU
-        // section is appended below so this field stays CPU-only (F-6b).
-        envelope.cpuThreadSummary = out;
-        // Same scan the header line above printed; base names only, the
-        // envelope's contract (DiagEnvelope.hpp). Empty for both "none" and
-        // "not scanned" -- the .txt sibling keeps the two apart.
-        if (foreign)
-            for (const ForeignModules::Match& m : *foreign)
-                envelope.foreignModules.push_back(m.module);
-
-        GpuSectionProvider gpuProvider     = nullptr;
-        void*              gpuProviderUser = nullptr;
-        {
-            std::lock_guard gpuLock(g_gpuProviderMutex);
-            gpuProvider     = g_gpuProvider;
-            gpuProviderUser = g_gpuProviderUser;
-        }
-        if (gpuProvider)
-        {
-            const std::size_t cpuLen = out.size();
-            std::string gpuText;
-            gpuProvider(envelope, gpuText, reportStem, gpuProviderUser);
-            append("=== GPU ===");
-            if (!gpuText.empty())
-                append(gpuText);
-
-            // Append-only: the CPU portion is already durable on disk from
-            // the write above. Only the newly appended GPU slice goes out
-            // here, so a provider that blocks or faults never re-risks the
-            // CPU report that already succeeded.
-            if (txtOk)
-            {
-                if (FILE* f = nullptr; fopen_s(&f, txtPath.string().c_str(), "ab") == 0 && f)
-                {
-                    std::fwrite(out.data() + cpuLen, 1, out.size() - cpuLen, f);
-                    std::fclose(f);
-                }
-            }
-        }
-
-        // Sibling paths reflect what actually landed on disk, per
-        // DiagEnvelope.hpp's contract ("Empty when a given sibling wasn't
-        // produced") -- never claim a path Task 10's shell-open button would
-        // fail to open. siblingGpuDump stays whatever the provider set
-        // directly on `envelope` (empty if it wrote nothing).
-        envelope.siblingTxt = txtOk  ? txtPath.string() : std::string{};
-        envelope.siblingDmp = dumpOk ? dmpPath.string() : std::string{};
-        Diag::WriteFile(envelope, diagPath);
 
         g_reportCount.fetch_add(1, std::memory_order_acq_rel);
+        CopyInto(g_lastStem, sizeof(g_lastStem), stem);
+        g_lastStemValid.store(true, std::memory_order_release);
 
-        // Echo into the engine log too: the log is what the user already has
-        // open, and a report nobody notices is a report that did not happen.
-        ARC_ERROR("Diagnostics: {} -- report written\n{}", reason ? reason : "report", out);
+        // ---------------------------------------------------------------
+        // Every file is on disk from here on, so the heap is fair game
+        // again -- which is the whole reason the log echo and the hook moved
+        // down here from where WriteReportImpl used to run them.
+        // ---------------------------------------------------------------
+        ARC_ERROR("Diagnostics: {} -- report written\n{}{}",
+                  p.reason[0] ? p.reason : "report", header.View(), section);
+        if (!spawnOk)
+        {
+            std::fprintf(stderr, "Arcane: crash reporter hand-off failed; the report is at %s.arcdiag\n", stem);
+            ARC_WARN("Diagnostics: could not spawn the crash reporter; the report is at '{}.arcdiag'", stem);
+        }
+        if (arena.Exhausted())
+            ARC_WARN("Diagnostics: the crash arena was exhausted; '{}.txt' is truncated", stem);
 
-        // Report-written hook (Task 9): fires LAST, after every sibling has
-        // finished writing and the count/log echo above are done, with the
-        // exact .arcdiag path regardless of whether Diag::WriteFile actually
-        // succeeded (it is best-effort, same as the rest of this function --
-        // a hook that then fails to read the file back simply skips it, the
-        // same way AssetRegistry::AddFile skips an unreadable file today).
-        // Copy the slot out under its own g_reportWrittenMutex, then call --
-        // same discipline as the GPU-section provider above.
-        //
-        // CORRECTED: "unlocked" above means unlocked with respect to
-        // g_reportWrittenMutex/g_gpuProviderMutex only. Both the hook and the
-        // GPU-section provider actually run while g_reportMutex -- taken at
-        // the top of this function and held for its entire body -- is STILL
-        // LOCKED. That is not an oversight; it is exactly what makes
-        // Diagnostics::FenceReports() sound as a teardown fence: a caller
-        // that acquires g_reportMutex there cannot proceed until a report
-        // already inside this function, hook/provider call included, has
-        // completely finished.
+        // Report-written hook (GPU crash diagnostics arc, Task 9): fires
+        // LAST, with the .arcdiag path, whether or not every write
+        // succeeded -- best-effort, same as the rest of this function. It
+        // runs while g_reportMutex is still held, which is what makes
+        // FenceReports() sound.
         ReportWrittenHook reportHook     = nullptr;
         void*             reportHookUser = nullptr;
         {
@@ -647,14 +1012,75 @@ namespace
             reportHookUser = g_reportWrittenUser;
         }
         if (reportHook)
-            reportHook(diagPath, reportHookUser);
+            reportHook(std::filesystem::path(diagPath), reportHookUser);
 
-        return txtPath.string();
-#else
-        (void)reason; (void)exceptionPointers;
-        return {};
-#endif
+        // A SURVIVABLE report hands the process back: the module table and
+        // the log backlog must start moving again, or every later line in
+        // the session is lost. A fatal one deliberately leaves both frozen --
+        // that process is already on its way down (R11).
+        if (p.exitCode == 0 || p.lightweight)
+        {
+            ModuleTable::SetFrozen(false);
+            if (!p.lightweight) Log::ThawBacklog();
+            g_watchdogPaused.store(false, std::memory_order_release);
+        }
     }
+
+    // The crash thread's own SEH guard (spec S9): a fault inside the report
+    // path terminates AT ONCE with 13 rather than letting the submitting
+    // thread's 60 s wait be the only thing left. No C++ object with a
+    // destructor may live in a function carrying __try/__except (MSVC C2712),
+    // which is why this is a wrapper and not part of the body above.
+    void RunReportGuarded(const Pending& p) noexcept
+    {
+        __try
+        {
+            RunReportOnCrashThread(p);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            TerminateProcess(GetCurrentProcess(), ExitCode::kCrashInCrashPath);
+        }
+    }
+
+    DWORD WINAPI CrashThreadProc(LPVOID)
+    {
+        SetThreadDescription(GetCurrentThread(), L"Arcane-CrashReporter");
+        for (;;)
+        {
+            WaitForSingleObject(g_crashEvent, INFINITE);
+            if (g_crashThreadStop.load(std::memory_order_acquire))
+                break;
+            RunReportGuarded(g_pending);
+            SetEvent(g_handledEvent);
+        }
+        return 0;
+    }
+
+    void FillPending(const ReportRequest& r, DWORD walkTid) noexcept
+    {
+        // R3: the reason is COPIED here, on the submitting thread, because
+        // the crash thread resets the arena at the top of every report and a
+        // reason formatted INTO that arena (task 7's handlers) would die with
+        // the reset.
+        CopyInto(g_pending.reason, sizeof(g_pending.reason), r.reason ? r.reason : "unspecified");
+        g_pending.ep           = static_cast<EXCEPTION_POINTERS*>(r.exceptionPointers);
+        g_pending.walkThreadId = walkTid;
+        g_pending.lightweight  = r.lightweight;
+        g_pending.exitCode     = r.exitCode;
+    }
+
+    // R6, in one place: a hang is about the MAIN thread, not about the
+    // watchdog that noticed it.
+    [[nodiscard]] DWORD WalkTargetFor(const ReportRequest& r) noexcept
+    {
+        const DWORD self = GetCurrentThreadId();
+        if (r.exceptionPointers) return self;
+        if (g_mainThreadId != 0 && g_watchdogThreadId.load(std::memory_order_acquire) == self)
+            return g_mainThreadId;
+        return self;
+    }
+#endif  // _WIN32
 
 #if defined(_WIN32)
     // The D3D12 debug layer's fail-fast.
@@ -670,9 +1096,10 @@ namespace
 
     LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* ep)
     {
-        if (g_inCrashHandler.exchange(true, std::memory_order_acq_rel))
-            return EXCEPTION_EXECUTE_HANDLER;   // faulted inside ourselves; do not loop
-
+        // No re-entry guard here any more: SubmitReport owns it (a second
+        // faulting thread waits for the report in flight, then terminates),
+        // and the filter's only job is to name the kind.
+        //
         // A 0x87D fail-fast AFTER the render layer has already confirmed the
         // device is gone is not a new incident -- it is the debug layer's
         // account of the loss we are already reporting, raised from whatever
@@ -693,8 +1120,12 @@ namespace
             // "gpu" in the reason is load-bearing: DeriveKind classifies on it
             // and it is what gets the `.gpudump` sibling written. Same wording
             // rule as ObserveDeviceRemoved (Render/DeviceCreationD3D12.cpp).
-            WriteReportImpl("gpu-crash: device removed "
-                            "(D3D12 debug-layer fail-fast 0x87d after the loss)", ep);
+            // Exit code 1 is what the hosts already exit with on a device
+            // loss; SubmitReport terminates with it once the report is on
+            // disk, so the TerminateProcess below is only a belt-and-braces
+            // backstop for a report path that could not run at all.
+            SubmitReport({ "gpu-crash: device removed "
+                           "(D3D12 debug-layer fail-fast 0x87d after the loss)", ep, false, 1 });
 
             // Exit the way the hosts exit on a device loss, and exit NOW.
             // Falling through would hand the fail-fast to WER, which takes
@@ -707,9 +1138,13 @@ namespace
             TerminateProcess(GetCurrentProcess(), 1);
         }
 
-        WriteReportImpl("crash (unhandled exception)", ep);
-
-        if (g_prevFilter) return g_prevFilter(ep);
+        // Never chains to g_prevFilter for our OWN kinds: that chain is what
+        // let WER's dialog appear on top of a report we had already written
+        // (spec S5.2). SubmitReport terminates with kCrashed, so the return
+        // below is unreachable in practice -- it exists because the compiler
+        // needs one, and because a Diagnostics that was never installed must
+        // still leave the process to whatever handled faults before us.
+        SubmitReport({ "crash (unhandled exception)", ep, false, ExitCode::kCrashed });
         return EXCEPTION_EXECUTE_HANDLER;
     }
 #endif
@@ -723,6 +1158,9 @@ namespace
     {
 #if defined(_WIN32)
         SetThreadDescription(GetCurrentThread(), L"Arcane-HangWatchdog");
+        // R6: published so SubmitReport knows a report raised from HERE is
+        // about the registered main thread, not about this one.
+        g_watchdogThreadId.store(GetCurrentThreadId(), std::memory_order_release);
 #endif
         const auto threshold = static_cast<double>(g_cfg.hangSeconds);
 
@@ -753,7 +1191,7 @@ namespace
             char msg[160];
             std::snprintf(msg, sizeof(msg), "hang (main thread has not ticked for %.1fs)",
                           SecondsSince(beat));
-            WriteReportImpl(msg, nullptr);
+            SubmitReport({ msg, nullptr, /*lightweight*/false, /*exitCode*/0 });
 
             reported     = true;
             reportedBeat = beat;
@@ -824,7 +1262,7 @@ namespace
                               static_cast<unsigned long long>(fence),
                               gpuRule.StalledSeconds(now));
             }
-            WriteReportImpl(msg, nullptr);
+            SubmitReport({ msg, nullptr, /*lightweight*/false, /*exitCode*/0 });
         };
 
         while (!g_watchdogStop.load(std::memory_order_acquire))
@@ -849,13 +1287,95 @@ namespace
             checkMainThreadBeat();
         }
     }
+
+#if defined(_WIN32)
+    // ---- off-path preparation ---------------------------------------------
+    // Everything below runs on an ORDINARY thread (Install/RetargetDumpDir),
+    // where std::filesystem, the heap and the loader lock are all fair game.
+    // Their whole job is to leave fixed-storage snapshots behind so the crash
+    // thread never has to.
+
+    [[nodiscard]] bool EnvIsSet(const wchar_t* name) noexcept
+    {
+        wchar_t probe[8];
+        SetLastError(ERROR_SUCCESS);
+        const DWORD n = GetEnvironmentVariableW(name, probe, static_cast<DWORD>(std::size(probe)));
+        // n == 0 AND "not found" is the only "unset" answer: a value longer
+        // than the probe returns the required size, which is > 0.
+        return n > 0 || GetLastError() != ERROR_ENVVAR_NOT_FOUND;
+    }
+
+    void SnapshotReportDir()
+    {
+        std::string dir = ReportDir().string();
+        // operator/ never doubles a separator, and neither may the snprintf
+        // that replaces it on the crash path.
+        while (dir.size() > 3 && (dir.back() == '\\' || dir.back() == '/'))
+            dir.pop_back();
+        CopyInto(g_reportDirSnap, sizeof(g_reportDirSnap), dir.c_str());
+    }
+
+    // R5. The derived log directory FOLLOWS the report directory; an explicit
+    // Config::logDir never moves. Called once at Install and once per
+    // retarget (R13: AttachFileSink rotates and replaces, never stacks two
+    // sinks on one path).
+    void AttachLogSink()
+    {
+        // Log::AttachFileSink deliberately refuses before Log::Init() and
+        // never bootstraps the logger itself. Install is documented to be
+        // safe as the FIRST line of main (spec S5.1), and this function's
+        // caller logs a moment later anyway -- so take the same lazy Init
+        // every ARC_ macro takes, rather than losing the host's log file to
+        // call order.
+        (void)Log::Engine();
+
+        std::filesystem::path file = g_cfg.logDir.empty()
+                                   ? std::filesystem::path(g_reportDirSnap).parent_path() / "Logs"
+                                   : std::filesystem::path(g_cfg.logDir);
+        file /= (g_cfg.appName.empty() ? std::string("Arcane") : g_cfg.appName) + ".log";
+
+        if (Log::AttachFileSink(file))
+        {
+            // Log::FileSinkPath() allocates and is unsynchronised, so the
+            // envelope's logPath comes from this snapshot, never from it.
+            CopyInto(g_logPathSnap, sizeof(g_logPathSnap), file.string().c_str());
+        }
+        else
+        {
+            ARC_DEBUG("Diagnostics: no engine log file sink at '{}' (Log::Init has not run, "
+                      "or the file could not be opened); reports carry no log path",
+                      file.generic_string());
+        }
+    }
+
+    void ResolveReporterPath()
+    {
+        std::filesystem::path exe;
+        if (!g_cfg.reporterPath.empty())
+        {
+            exe = std::filesystem::path(g_cfg.reporterPath);
+        }
+        else
+        {
+            const std::string self = ExecutablePathUtf8();
+            exe = (self.empty() ? std::filesystem::path(".")
+                                : std::filesystem::path(self).parent_path())
+                / "ArcaneCrashReporter.exe";
+        }
+
+        const std::wstring w = exe.wstring();
+        const std::size_t n = w.size() < kPathMax - 1 ? w.size() : kPathMax - 1;
+        std::wmemcpy(g_reporterExe, w.c_str(), n);
+        g_reporterExe[n] = L'\0';
+    }
+#endif
 }   // namespace
 
 // Kind derivation for the .arcdiag envelope: substring match on the REASON
 // string, never the trigger site. Order matters -- most specific first:
 // "gpu" (then "stall" -> gpu-stall, else gpu-crash), assert, terminate,
 // ensure, out-of-memory, abnormal-exit, then "hang", else "crash". Covers
-// every phrasing WriteReportImpl sees today -- "crash (unhandled
+// every phrasing the report path sees today -- "crash (unhandled
 // exception)" (the crash filter, above) and "hang (main thread has not
 // ticked for ...)" (WatchdogMain, above) -- plus the GPU vocabulary named
 // in docs/specs/2026-08-11-gpu-crash-diagnostics-design.md ("gpu-stall"/
@@ -866,22 +1386,9 @@ namespace
 // the five new kinds are checked ahead of "hang" too, for the same reason.
 std::string DeriveReportKind(const char* reason)
 {
-    const std::string_view r = reason ? reason : "";
-    if (r.find("gpu") != std::string_view::npos)
-        return r.find("stall") != std::string_view::npos ? "gpu-stall" : "gpu-crash";
-    if (r.find("assert") != std::string_view::npos)
-        return "assert";
-    if (r.find("terminate") != std::string_view::npos)
-        return "terminate";
-    if (r.find("ensure") != std::string_view::npos)
-        return "ensure";
-    if (r.find("out-of-memory") != std::string_view::npos)
-        return "out-of-memory";
-    if (r.find("abnormal-exit") != std::string_view::npos)
-        return "abnormal-exit";
-    if (r.find("hang") != std::string_view::npos)
-        return "hang";
-    return "crash";
+    // ONE rule, in DeriveKindCStr above: this is only its std::string skin,
+    // for callers that are not on the crash path.
+    return DeriveKindCStr(reason);
 }
 
 void Install(const Config& cfg)
@@ -904,6 +1411,58 @@ void Install(const Config& cfg)
 #if defined(_WIN32)
     g_mainThreadId = GetCurrentThreadId();
 
+    // A build agent must never be left with an interactive process on it.
+    // Checked here rather than at spawn time so the decision is visible in
+    // the "Diagnostics armed" line below.
+    if (EnvIsSet(L"ARCANE_BUILD_MACHINE") || EnvIsSet(L"CI"))
+        g_cfg.spawnReporter = false;
+
+    // ---- fixed-storage snapshots (spec S5.5 -- the crash path reads only
+    // these, because std::string/std::filesystem::path both allocate) ----
+    CopyInto(g_appNameSnap, sizeof(g_appNameSnap), g_cfg.appName.c_str());
+    CopyInto(g_productSnap, sizeof(g_productSnap),
+             g_cfg.productName.empty() ? g_cfg.appName.c_str() : g_cfg.productName.c_str());
+    CopyInto(g_commandLineSnap, sizeof(g_commandLineSnap), g_cfg.commandLine.c_str());
+    {
+        std::lock_guard phaseLock(g_phaseMutex);
+        CopyInto(g_phaseSnap, sizeof(g_phaseSnap), g_phase.c_str());
+    }
+    SnapshotReportDir();
+    ToWide(g_productSnap, g_productWide, static_cast<int>(std::size(g_productWide)));
+    ResolveReporterPath();
+
+    // The engine log file sink, before anything that might want to warn.
+    AttachLogSink();
+
+    // The module table the portable stack resolves against. Unfrozen first:
+    // a report interrupted in a previous arming could otherwise have left it
+    // frozen, and Refresh is a no-op while it is (R11).
+    ModuleTable::SetFrozen(false);
+    ModuleTable::Refresh(ForeignModules::EnumerateProcessModules());
+    if (const auto scan = ForeignModules::LastScan())
+        SnapshotInjectedModules(*scan);
+
+    // One CSPRNG draw, here, so the crash thread never takes its lock (R14's
+    // sibling problem: every convenience API on this path allocates or locks).
+    g_guidSeed = Guid::Generate();
+
+    // The crash thread and its events come up REGARDLESS of
+    // installCrashHandler/startHangWatchdog (R2): they are the report
+    // ENGINE, and WriteReport works with no handler installed at all.
+    g_crashThreadStop.store(false, std::memory_order_release);
+    g_lastStemValid.store(false, std::memory_order_release);
+    g_crashEvent   = CreateEventW(nullptr, /*manualReset*/FALSE, FALSE, nullptr);
+    // MANUAL-reset: the submitting thread resets it before signalling, so a
+    // stale signal from a previous report can never satisfy the next wait.
+    g_handledEvent = CreateEventW(nullptr, /*manualReset*/TRUE,  FALSE, nullptr);
+    if (g_crashEvent && g_handledEvent)
+    {
+        DWORD crashTid = 0;
+        g_crashThread = CreateThread(nullptr, 256 * 1024, &CrashThreadProc, nullptr, 0, &crashTid);
+        if (g_crashThread)
+            g_crashThreadId.store(crashTid, std::memory_order_release);
+    }
+
     if (cfg.installCrashHandler)
         g_prevFilter = SetUnhandledExceptionFilter(&OnUnhandledException);
 #endif
@@ -911,14 +1470,17 @@ void Install(const Config& cfg)
     if (cfg.startHangWatchdog)
     {
         g_watchdogStop.store(false, std::memory_order_release);
+        g_watchdogPaused.store(false, std::memory_order_release);
         g_watchdog = std::thread(&WatchdogMain);
     }
 
-    ARC_INFO("Diagnostics armed (crash handler {}, hang watchdog {} @ {}s, gpu-stall @ {}s) -> {}",
+    ARC_INFO("Diagnostics armed (crash handler {}, hang watchdog {} @ {}s, gpu-stall @ {}s, "
+             "reporter {}) -> {}",
              cfg.installCrashHandler ? "on" : "off",
              cfg.startHangWatchdog ? "on" : "off",
              cfg.hangSeconds,
              cfg.gpuStallSeconds,
+             g_cfg.spawnReporter ? "on" : "off",
              ReportDir().string());
 }
 
@@ -930,17 +1492,41 @@ void Shutdown() noexcept
     if (g_watchdog.joinable()) g_watchdog.join();
 
 #if defined(_WIN32)
+    // R2: Shutdown RESTORES whatever filter was there before us. (What the
+    // spec deletes is the CHAIN -- OnUnhandledException never calls the
+    // previous filter for our own kinds -- not this restore.)
     if (g_prevFilter)
     {
         SetUnhandledExceptionFilter(g_prevFilter);
         g_prevFilter = nullptr;
     }
-    if (g_symReady.exchange(false, std::memory_order_acq_rel))
+
+    // The crash thread, and its handles. An Install/Shutdown cycle must
+    // leave nothing joinable and no handle open: the event wakes the loop,
+    // the stop flag makes it exit instead of reporting, and only then do the
+    // handles close.
+    if (g_crashThread)
     {
-        std::lock_guard lock(g_symMutex);
-        SymCleanup(GetCurrentProcess());
+        g_crashThreadStop.store(true, std::memory_order_release);
+        SetEvent(g_crashEvent);
+        WaitForSingleObject(g_crashThread, INFINITE);
+        CloseHandle(g_crashThread);
+        g_crashThread = nullptr;
     }
+    g_crashThreadId.store(0, std::memory_order_release);
+    if (g_crashEvent)   { CloseHandle(g_crashEvent);   g_crashEvent   = nullptr; }
+    if (g_handledEvent) { CloseHandle(g_handledEvent); g_handledEvent = nullptr; }
+
+    g_watchdogThreadId.store(0, std::memory_order_release);
 #endif
+
+    // Neither the module table nor the log backlog may outlive this arming
+    // frozen: a survivable report thaws them itself, but a report that timed
+    // out (or never reached its crash thread at all) would otherwise silence
+    // the logger for the rest of the process (R11).
+    ModuleTable::SetFrozen(false);
+    Log::ThawBacklog();
+    g_watchdogPaused.store(false, std::memory_order_release);
 
     // Beat state is per-arming: a later Install() must not inherit a stale
     // "already beating" flag from this one. Both triggers, for both reasons --
@@ -951,13 +1537,21 @@ void Shutdown() noexcept
 
 void RetargetDumpDir(const std::filesystem::path& dir)
 {
-    // Same lock WriteReportImpl holds for its ENTIRE body, including its
-    // ReportDir() read of g_cfg.dumpDir (Diagnostics.cpp: WriteReportImpl,
-    // `std::lock_guard reportLock(g_reportMutex)` then `ReportDir()`) -- a
-    // live retarget from a host's main thread must never race a report the
-    // watchdog thread or the crash filter is mid-way through writing.
-    std::lock_guard reportLock(g_reportMutex);
+    // Same lock RunReportOnCrashThread holds for its ENTIRE body -- a live
+    // retarget from a host's main thread must never race a report the crash
+    // thread is mid-way through writing.
+    std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
     g_cfg.dumpDir = dir.string();
+#if defined(_WIN32)
+    // The crash path may not touch std::filesystem, so the new directory is
+    // re-derived (and created) HERE and only the snapshot travels.
+    SnapshotReportDir();
+    // R5: a DERIVED log directory follows the reports, so a project's log
+    // lands beside that project's crash reports. An explicit Config::logDir
+    // is host state and never moves.
+    if (g_cfg.logDir.empty())
+        AttachLogSink();
+#endif
 }
 
 void Heartbeat() noexcept
@@ -1033,11 +1627,171 @@ void SetPhase(std::string phase)
 {
     std::lock_guard lock(g_phaseMutex);
     g_phase = std::move(phase);
+#if defined(_WIN32)
+    // The crash path reads the snapshot, never g_phase: copying the
+    // std::string out would allocate and would take this same lock, and a
+    // report must do neither.
+    CopyInto(g_phaseSnap, sizeof(g_phaseSnap), g_phase.c_str());
+#endif
 }
 
 std::string WriteReport(const char* reason)
 {
-    return WriteReportImpl(reason, nullptr);
+    // A SURVIVABLE report: exitCode 0 means "write it and hand the process
+    // back", which is exactly what the hang watchdog and the GPU observer
+    // need (spec S5.4).
+    SubmitReport({ reason, nullptr, /*lightweight*/false, /*exitCode*/0 });
+    const std::string stem = LastReportStem();
+    return stem.empty() ? std::string{} : stem + ".txt";
+}
+
+std::string LastReportStem()
+{
+#if defined(_WIN32)
+    if (!g_lastStemValid.load(std::memory_order_acquire)) return {};
+    return std::string(g_lastStem);
+#else
+    return {};
+#endif
+}
+
+void SnapshotInjectedModules(std::span<const ForeignModules::Match> matches) noexcept
+{
+#if defined(_WIN32)
+    std::lock_guard lock(g_injectedMutex);
+    g_injectedScanned = true;
+    g_injectedCount   = 0;
+
+    if (matches.empty())
+    {
+        CopyInto(g_injectedLine, sizeof(g_injectedLine), "none");
+        return;
+    }
+
+    std::size_t used = 0;
+    g_injectedLine[0] = '\0';
+    for (const ForeignModules::Match& m : matches)
+    {
+        if (used + 1 < sizeof(g_injectedLine))
+        {
+            // A catalogued row names its product; an uncatalogued one (tier
+            // 3) has only its path to be known by.
+            const int n = std::snprintf(g_injectedLine + used, sizeof(g_injectedLine) - used,
+                                        "%s%s (tier %d, %s)",
+                                        used == 0 ? "" : ", ",
+                                        m.module.c_str(), m.tier,
+                                        m.product.empty() ? m.path.c_str() : m.product.c_str());
+            if (n > 0)
+            {
+                used += static_cast<std::size_t>(n);
+                if (used >= sizeof(g_injectedLine)) used = sizeof(g_injectedLine) - 1;
+            }
+        }
+        if (g_injectedCount < kInjectedMax)
+            CopyInto(g_injectedNames[g_injectedCount++], 64, m.module.c_str());
+    }
+#else
+    (void)matches;
+#endif
+}
+
+void SubmitReport(const ReportRequest& request) noexcept
+{
+#if defined(_WIN32)
+    const DWORD self = GetCurrentThreadId();
+
+    // Already ON the crash thread: the GPU-section provider or the
+    // report-written hook faulted inside a report (spec S9). Signalling
+    // ourselves would wait forever, so the nested report runs directly --
+    // g_reportMutex is recursive precisely for this.
+    if (self != 0 && g_crashThreadId.load(std::memory_order_acquire) == self)
+    {
+        Pending nested{};
+        CopyInto(nested.reason, sizeof(nested.reason),
+                 request.reason ? request.reason : "unspecified");
+        nested.ep           = static_cast<EXCEPTION_POINTERS*>(request.exceptionPointers);
+        nested.walkThreadId = self;
+        nested.lightweight  = request.lightweight;
+        nested.exitCode     = request.exitCode;
+        RunReportOnCrashThread(nested);
+        if (request.exitCode != 0)
+            TerminateProcess(GetCurrentProcess(), request.exitCode);
+        return;
+    }
+
+    const bool  fatal     = (request.exitCode != 0);
+    const DWORD timeoutMs = g_cfg.crashHandlingTimeoutSeconds != 0
+                          ? g_cfg.crashHandlingTimeoutSeconds * 1000u
+                          : 60u * 1000u;
+
+    if (fatal)
+    {
+        // A second faulting thread while a report is in flight (spec S9):
+        // it does not queue a report nobody will read -- it waits for the
+        // one being written (holding g_submitMutex IS that report) and then
+        // dies with its own code, exactly like the first.
+        if (g_inCrashHandler.exchange(true, std::memory_order_acq_rel))
+        {
+            if (g_submitMutex.try_lock_for(std::chrono::milliseconds(timeoutMs)))
+                g_submitMutex.unlock();
+            TerminateProcess(GetCurrentProcess(), request.exitCode);
+            return;   // unreachable
+        }
+    }
+    else if (g_inCrashHandler.load(std::memory_order_acquire))
+    {
+        // A fatal report already owns the process; a survivable one written
+        // on top of it would only race the teardown.
+        return;
+    }
+
+    if (!g_submitMutex.try_lock_for(std::chrono::milliseconds(timeoutMs)))
+    {
+        // The report in flight never finished. Nothing left to do but die
+        // with the code we were asked for.
+        if (fatal)
+            TerminateProcess(GetCurrentProcess(), request.exitCode);
+        return;
+    }
+
+    {
+        std::lock_guard<std::timed_mutex> submitted(g_submitMutex, std::adopt_lock);
+
+        // R11, on THIS thread, before anything else -- UE's GLog->Panic()
+        // rule. A lightweight (ensure) report does NOT freeze the backlog:
+        // the process continues and its log must keep flowing.
+        ModuleTable::SetFrozen(true);
+        if (!request.lightweight)
+            Log::FreezeBacklog();
+
+        FillPending(request, WalkTargetFor(request));
+
+        if (g_crashThread && g_crashEvent && g_handledEvent)
+        {
+            ResetEvent(g_handledEvent);
+            SetEvent(g_crashEvent);
+            WaitForSingleObject(g_handledEvent, timeoutMs);
+        }
+        else
+        {
+            // Diagnostics was never installed (or the crash thread could not
+            // be created). Nothing can be written -- but this must not
+            // deadlock, and it must not leave the table frozen either.
+            ModuleTable::SetFrozen(false);
+            if (!request.lightweight)
+                Log::ThawBacklog();
+        }
+    }
+
+    if (request.exitCode != 0)
+        TerminateProcess(GetCurrentProcess(), request.exitCode);
+#else
+    // No report path off Windows yet; the CONTRACT still holds -- a fatal
+    // submission ends the process rather than returning into a caller that
+    // believes it died.
+    if (request.exitCode != 0)
+        std::_Exit(request.exitCode);
+#endif
 }
 
 std::uint32_t ReportCount() noexcept
@@ -1071,14 +1825,17 @@ void ClearGpuSectionProvider() noexcept
 
 void FenceReports() noexcept
 {
-    // Empty critical section, deliberately. WriteReportImpl takes
+    // Empty critical section, deliberately. RunReportOnCrashThread takes
     // g_reportMutex at the very top of its body and holds it until it
-    // returns -- report write, GPU-section provider call, and
-    // report-written hook call all happen inside that one lock (see the
-    // comment at the report-written hook call site below). Acquiring and
-    // immediately releasing the same mutex here therefore cannot return
+    // returns -- every file write, the GPU-section provider call, and the
+    // report-written hook call all happen inside that one lock. Acquiring
+    // and immediately releasing the same mutex here therefore cannot return
     // until any report already in flight has fully finished.
-    std::lock_guard<std::mutex> lock(g_reportMutex);
+    //
+    // Unchanged by the report moving to its own thread: the fence's callers
+    // (a device destructor) are OTHER threads, where a recursive mutex
+    // blocks exactly like a plain one.
+    std::lock_guard<std::recursive_mutex> lock(g_reportMutex);
 }
 
 void SetReportWrittenHook(ReportWrittenHook hook, void* user) noexcept

@@ -67,9 +67,17 @@ namespace Arcane::Log
     // declines to record further lines, so the ring stays exactly as the
     // faulting thread left it for the crash thread to read.
     ARCANE_CORE_API void FreezeBacklog() noexcept;
-    // Test-only: undoes FreezeBacklog() so later, unrelated tests still get
-    // backlog coverage. FreezeBacklog is process-global (one static ring for
-    // the whole module), so a test that freezes it must unfreeze it again.
+    // Undoes FreezeBacklog(). A single atomic store, same discipline as the
+    // freeze. Production caller: Diagnostics' crash thread at the end of a
+    // SURVIVABLE report (a hang keeps the host alive -- spec S5.4 -- so the
+    // ring must start recording again, or every later line in the session is
+    // lost). A FATAL report deliberately never calls it: that process is
+    // already on its way down and the ring must stay exactly as the fault
+    // left it.
+    ARCANE_CORE_API void ThawBacklog() noexcept;
+    // Test-only alias for ThawBacklog, kept for the tests that already name
+    // it. FreezeBacklog is process-global (one static ring for the whole
+    // module), so a test that freezes it must unfreeze it again.
     ARCANE_CORE_API void UnfreezeBacklogForTests() noexcept;
     // min(total lines ever recorded, kBacklogLines). Lock-free, heap-free.
     ARCANE_CORE_API std::size_t BacklogLineCount() noexcept;
