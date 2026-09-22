@@ -48,3 +48,23 @@ TEST_CASE("crash arena: the static instance holds 256 KiB and a builder that ove
     CHECK(arena.Exhausted());
     arena.Reset();
 }
+
+TEST_CASE("crash arena: OpenBuilder on a too-small remainder returns an already-exhausted, safe no-op builder", "[diag]")
+{
+    // Fill to within N-1 bytes of capacity (N = 16): 64 - 15 = 49 bytes used,
+    // byte-granular (align 1, matching OpenBuilder's own carve) so the
+    // remainder is exact.
+    Arcane::Diagnostics::CrashArena arena(64);
+    REQUIRE(arena.Alloc(49, 1) != nullptr);
+    CHECK(arena.Used() == 49);
+    CHECK_FALSE(arena.Exhausted());
+
+    auto builder = arena.OpenBuilder(16);   // 16 > the 15 bytes left: the carve fails
+    CHECK(builder.View().empty());
+    CHECK(arena.Exhausted());               // set by the failed carve, before any Append
+
+    // A subsequent Append must be a safe no-op -- no write past the buffer,
+    // no crash, and the view stays empty.
+    builder.Append("more than zero bytes");
+    CHECK(builder.View().empty());
+}
