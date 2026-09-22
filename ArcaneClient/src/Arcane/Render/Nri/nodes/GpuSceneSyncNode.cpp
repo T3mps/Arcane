@@ -99,14 +99,24 @@ namespace Arcane
                                            const GpuSceneNodeInputs& inputs, const GpuSceneFrame* frame)
     {
         GpuScene* scene = context ? context->Scene() : nullptr;
-        if (!scene || !scene->VisibilityReadbackEnabled() || !frame || frame->rowCount == 0 || frame->args.empty())
-            return;   // unarmed, or a frame with nothing the cull pass could have written
+        if (!scene || !scene->VisibilityReadbackEnabled() || !frame)
+            return;   // unarmed, or no registry scene this frame (an ad-hoc-only pass has no frame to answer for)
         const std::uint32_t slot = context->FrameSlot();
+        // NO EMITTED BATCH: the cull pass has nothing it could have counted, so
+        // this frame's GPU answer is zero before any dispatch. Published NOW as
+        // this frame's own result (GpuScene.hpp's ring block) -- leaving the
+        // previous frame's count standing would attribute it to this frame,
+        // which is what the runtime HUD and a --report's `gpuVisible` read.
+        if (frame->rowCount == 0 || frame->args.empty())
+        {
+            scene->PublishEmptyVisibility(context->CurrentFence());
+            return;
+        }
         // Sized -- and the publish parked -- at DECLARATION time, after
         // AddGpuSceneSyncNode's Reserve settled this slot's buffers.
         if (!scene->EnsureVisibilityReadback(slot, static_cast<std::uint32_t>(frame->args.size()),
                                              frame->rowCount, context->CurrentFence()))
-            return;   // already logged, or this frame has nothing to copy
+            return;   // refused, and it said why; this frame publishes nothing (the last real result stands)
 
         // Shared rather than captured by value for the same reason the debug
         // readback node's is: the handle is minted inside this node's setup.

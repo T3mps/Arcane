@@ -677,24 +677,40 @@ namespace Arcane
         return &m_visibility->latest;
     }
 
-    // THE ONE PUBLISHER (GpuScene.hpp's ring block): both the slot-reuse path
-    // and the graveyard path come through here, and the publishedSeq guard is
-    // what lets them coexist without double-counting a frame.
-    void GpuScene::PublishVisibility(VisibilityRing& ring, std::uint32_t slot, std::uint64_t seq,
-                                     std::uint64_t fence, nri::Buffer* buffer, std::uint64_t argRegion,
+    // THE ONE GUARD (GpuScene.hpp's ring block, "one order"). Seqs come from
+    // the one counter in declaration order, so "newer than the mark" IS "a
+    // later frame than anything published": the check that keeps `latest`
+    // monotonic across slots and paths by construction.
+    bool GpuScene::ClaimVisibilitySeq(VisibilityRing& ring, std::uint64_t seq) noexcept
+    {
+        if (seq == 0 || seq <= ring.publishedMaxSeq)
+            return false;   // nothing, already claimed, or OLDER than a claimed one
+        ring.publishedMaxSeq = seq;
+        return true;
+    }
+
+    // THE PUBLISHER OF RECORDED COPIES (GpuScene.hpp's ring block): the
+    // slot-reuse path and the graveyard path both come through here, and the
+    // claim is what lets them coexist without double-counting a frame.
+    void GpuScene::PublishVisibility(VisibilityRing& ring, std::uint64_t seq, std::uint64_t fence,
+                                     nri::Buffer* buffer, std::uint64_t argRegion,
                                      std::uint32_t argCount, std::uint32_t visibleCount)
     {
-        if (ring.released || !ring.core || !buffer || seq == 0 || slot >= kSwapchainFramesInFlight)
+        if (ring.released || !ring.core || !buffer)
             return;
-        // ALREADY PUBLISHED -- by the other path, or by this one. `>=` rather
-        // than `!=`, so a stale entry can never move `latest` backwards either.
-        if (ring.slots[slot].publishedSeq >= seq)
+        // CLAIMED BEFORE THE READ. Either path may have got here first, and an
+        // older frame may arrive after a newer one has published; both are
+        // refused here. And a claim that then fails to map below is still a
+        // consumed frame: the seq is spent, so no later path retries the map
+        // against a buffer a growth may since have parked for destruction.
+        if (!ClaimVisibilitySeq(ring, seq))
             return;
         const std::uint64_t bytes = argRegion + std::uint64_t(visibleCount) * sizeof(std::uint32_t);
         const auto* mapped = static_cast<const std::uint8_t*>(ring.core->MapBuffer(*buffer, 0, bytes));
         if (!mapped)
         {
-            ARC_ERROR("[nri-graph] GpuScene: MapBuffer on the visibility readback buffer returned null");
+            ARC_ERROR("[nri-graph] GpuScene: MapBuffer on the visibility readback buffer returned null -- "
+                      "this frame's visibility result is dropped (the last published one stands)");
             return;
         }
         // No allocation in steady state: EnsureVisibilityReadback reserves both
@@ -710,7 +726,25 @@ namespace Arcane
         ring.core->UnmapBuffer(*buffer);
         ring.latest.fence = fence;
         ++ring.latest.publishCount;
-        ring.slots[slot].publishedSeq = seq;
+    }
+
+    // THE BATCH-LESS FRAME'S PUBLICATION (GpuScene.hpp's ring block): the
+    // frame's seq is minted here, at declaration, exactly where a recorded
+    // frame's would be, and claimed through the same guard -- so it orders
+    // after every earlier frame and before every later one, and an earlier
+    // frame's copy landing after this cannot overwrite it. Nothing is mapped:
+    // clear() keeps the vectors' capacity, so this allocates nothing either.
+    void GpuScene::PublishEmptyVisibility(std::uint64_t fence)
+    {
+        if (!m_visibility || m_visibility->released)
+            return;
+        VisibilityRing& ring = *m_visibility;
+        if (!ClaimVisibilitySeq(ring, ++m_visibilitySeq))
+            return;   // unreachable while the counter is the only seq source; kept so the guard stays the one rule
+        ring.latest.args.clear();
+        ring.latest.visibleIndices.clear();
+        ring.latest.fence = fence;
+        ++ring.latest.publishCount;
     }
 
     // DECLARATION TIME (AddGpuSceneVisibilityReadbackNode), after Reserve has
@@ -720,16 +754,41 @@ namespace Arcane
                                             std::uint32_t visibleCount, std::uint64_t fence)
     {
         if (!m_visibility || slot >= kSwapchainFramesInFlight)
+        {
+            ARC_ERROR("[nri-graph] GpuScene: EnsureVisibilityReadback on an unarmed ring or frame slot {} -- refused", slot);
             return false;
+        }
         VisibilityRing::Slot& s = m_visibility->slots[slot];
 
-        // Clamped to what the slot's device buffers actually hold: the copy
-        // reads THEM, and a declaration asking for more than Reserve made is a
-        // frame this node must not record at all.
-        const std::uint64_t argBytes     = std::min(std::uint64_t(argCount) * sizeof(DrawIndexedArgs), ArgBytes(slot));
-        const std::uint64_t visibleBytes = std::min(std::uint64_t(visibleCount) * sizeof(std::uint32_t), VisibleBytes(slot));
+        // The copy reads the slot's DEVICE buffers, which Reserve sized for
+        // this very frame -- so a declaration asking for more than they hold,
+        // or for nothing at all, is a caller's contract broken, not a frame to
+        // clamp quietly: a truncated copy would publish a count missing whole
+        // batches under this frame's name. Refused, loudly, and the frame then
+        // publishes nothing (the last real result stands). The batch-less
+        // frame never reaches here: AddGpuSceneVisibilityReadbackNode routes
+        // it to PublishEmptyVisibility instead.
+        const std::uint64_t argBytes     = std::uint64_t(argCount) * sizeof(DrawIndexedArgs);
+        const std::uint64_t visibleBytes = std::uint64_t(visibleCount) * sizeof(std::uint32_t);
         if (argBytes == 0 || visibleBytes == 0)
-            return false;   // nothing to read back this frame (no emitted batch, or no rows)
+        {
+            ARC_ERROR("[nri-graph] GpuScene: a visibility readback declared for {} args and {} rows -- nothing to copy; "
+                      "a batch-less frame publishes an empty result instead (AddGpuSceneVisibilityReadbackNode)",
+                      argCount, visibleCount);
+            return false;
+        }
+        if (argBytes > ArgBytes(slot) || visibleBytes > VisibleBytes(slot))
+        {
+            if (!m_warnedVisibilityClamp)
+            {
+                m_warnedVisibilityClamp = true;
+                ARC_WARN("[nri-graph] GpuScene: the visibility readback asked for {} arg bytes and {} visible-index bytes "
+                         "but frame slot {} holds {} and {} -- Reserve did not size this frame's buffers; the readback "
+                         "is refused rather than truncated (reported once)",
+                         argBytes, visibleBytes, slot, ArgBytes(slot), VisibleBytes(slot));
+            }
+            return false;
+        }
         const std::uint64_t argRegion = AlignUp(argBytes, kVisibilityRegionAlign);
         const std::uint64_t need      = argRegion + visibleBytes;
 
@@ -782,10 +841,10 @@ namespace Arcane
             if (r.released)
                 return;   // the scene was released; the buffer is gone or going
             // NOT this declaration's copy any more: either the frame never
-            // recorded one (a refused or skipped frame), or the slot has been
-            // re-recorded since -- and re-recording publishes what it replaces,
-            // so there is nothing left here to do. PublishVisibility's
-            // publishedSeq guard is the second half of that promise.
+            // recorded one (a refused frame), or the slot has been re-recorded
+            // since -- and re-recording publishes what it replaces, so there is
+            // nothing left here to do. The seq claim inside PublishVisibility
+            // is the second half of that promise.
             if (r.slots[slot].recordedSeq != seq)
                 return;
             // THE ONE CASE THIS STAMP CANNOT SEE: an Execute that recorded the
@@ -795,7 +854,7 @@ namespace Arcane
             // executed one. Accepted rather than plumbed around: a failed
             // Execute is already a latched render error, which is a louder
             // fact than a one-frame-stale observability count.
-            PublishVisibility(r, slot, seq, fence, buffer, argRegion, argCount, visibleCount);
+            PublishVisibility(r, seq, fence, buffer, argRegion, argCount, visibleCount);
         });
         return true;
     }
@@ -825,7 +884,7 @@ namespace Arcane
         // cannot have touched the buffer yet.
         if (s.pending.seq != 0)
         {
-            PublishVisibility(*m_visibility, slot, s.pending.seq, s.pending.fence, s.pending.buffer,
+            PublishVisibility(*m_visibility, s.pending.seq, s.pending.fence, s.pending.buffer,
                               s.pending.argRegion, s.pending.argCount, s.pending.visibleCount);
             s.pending = {};
         }

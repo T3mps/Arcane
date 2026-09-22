@@ -21,7 +21,12 @@
 //   * no id appears twice,
 //   * and, across a second phase where the visible set SHRINKS, no leftover
 //     from the first phase survives inside the new range -- the stale-tail
-//     case, which is the one a single-frame test cannot see at all.
+//     case, which is the one a single-frame test cannot see at all,
+//   * and, across a third phase where NO batch is emitted at all (only
+//     transparent rows stay coarse-visible), an EMPTY result lands for that
+//     frame -- non-null, zero rows, zero through the hosts' seam -- rather than
+//     the previous frame's count standing in for it; a fourth phase then lands
+//     a real, nonzero count again once a batch returns.
 //
 // Transparent rows are asserted ABSENT: their batch keys are never emitted
 // (BuildGpuSceneFrame) and MeshNode draws them as direct records, so a
@@ -360,34 +365,45 @@ namespace
         const Arcane::Guid transparent = world.AddMaterial(Arcane::Guid{ 10, 2 }, Arcane::MaterialBlendMode::Transparent, false);
         const Arcane::Guid twoSided    = world.AddMaterial(Arcane::Guid{ 10, 3 }, Arcane::MaterialBlendMode::Opaque, true);
 
+        // Every entity whose rows can reach an INDIRECT batch (everything but
+        // the transparent pair), kept so phase 3 below can move them all out
+        // of the frustum at once.
+        std::vector<Astra::Entity> indirectEntities;
+        const auto spawnIndirect = [&](glm::vec3 position, Arcane::Guid mesh, Arcane::Guid material = {})
+        {
+            const Astra::Entity e = world.Spawn(position, mesh, material);
+            indirectEntities.push_back(e);
+            return e;
+        };
+
         // Inside, sharing both of meshA's batches (2 rows each).
-        world.Spawn(glm::vec3(-0.6f, 0.2f, 0.0f), meshA);
-        const Astra::Entity insideB = world.Spawn(glm::vec3(0.6f, -0.2f, 0.0f), meshA);
+        const Astra::Entity insideA = spawnIndirect(glm::vec3(-0.6f, 0.2f, 0.0f), meshA);
+        const Astra::Entity insideB = spawnIndirect(glm::vec3(0.6f, -0.2f, 0.0f), meshA);
         // Outside each of the six planes. The frustum at the origin plane is
         // ~7.7 x 4.6 m (60 degrees, 4 m away), near 0.1 and far 100 from the
         // eye at +4 -- so these are outside by orders of magnitude, never by a
         // rounding error the CPU and the GPU could resolve differently.
-        world.Spawn(glm::vec3( 1000.0f,     0.0f,     0.0f), meshA);   // right
-        world.Spawn(glm::vec3(-1000.0f,     0.0f,     0.0f), meshA);   // left
-        world.Spawn(glm::vec3(     0.0f,  1000.0f,    0.0f), meshA);   // top
-        world.Spawn(glm::vec3(     0.0f, -1000.0f,    0.0f), meshA);   // bottom
-        world.Spawn(glm::vec3(     0.0f,     0.0f,  1000.0f), meshA);  // behind the eye (near)
-        world.Spawn(glm::vec3(     0.0f,     0.0f, -1000.0f), meshA);  // past the far plane
+        spawnIndirect(glm::vec3( 1000.0f,     0.0f,     0.0f), meshA);   // right
+        spawnIndirect(glm::vec3(-1000.0f,     0.0f,     0.0f), meshA);   // left
+        spawnIndirect(glm::vec3(     0.0f,  1000.0f,    0.0f), meshA);   // top
+        spawnIndirect(glm::vec3(     0.0f, -1000.0f,    0.0f), meshA);   // bottom
+        spawnIndirect(glm::vec3(     0.0f,     0.0f,  1000.0f), meshA);  // behind the eye (near)
+        spawnIndirect(glm::vec3(     0.0f,     0.0f, -1000.0f), meshA);  // past the far plane
         // Straddling: each box crosses one plane with roughly half of its
         // 2 m extent on either side, so both predicates accept it and neither
         // sits on a tangency.
-        world.Spawn(glm::vec3( 3.8f,  0.0f,   0.0f), meshA);   // across the right plane
-        world.Spawn(glm::vec3(-3.8f,  0.0f,   0.0f), meshA);   // across the left plane
-        world.Spawn(glm::vec3( 0.0f,  2.2f,   0.0f), meshA);   // across the top plane
-        world.Spawn(glm::vec3( 0.0f, -2.2f,   0.0f), meshA);   // across the bottom plane
-        world.Spawn(glm::vec3( 0.0f,  0.0f,   3.9f), meshA);   // across the near plane
-        world.Spawn(glm::vec3( 0.0f,  0.0f, -95.5f), meshA);   // across the far plane
+        spawnIndirect(glm::vec3( 3.8f,  0.0f,   0.0f), meshA);   // across the right plane
+        spawnIndirect(glm::vec3(-3.8f,  0.0f,   0.0f), meshA);   // across the left plane
+        spawnIndirect(glm::vec3( 0.0f,  2.2f,   0.0f), meshA);   // across the top plane
+        spawnIndirect(glm::vec3( 0.0f, -2.2f,   0.0f), meshA);   // across the bottom plane
+        spawnIndirect(glm::vec3( 0.0f,  0.0f,   3.9f), meshA);   // across the near plane
+        spawnIndirect(glm::vec3( 0.0f,  0.0f, -95.5f), meshA);   // across the far plane
         // The material variants, two entities each: masked and two-sided are
         // their own opaque-pass batches; transparent is never emitted at all.
-        world.Spawn(glm::vec3(-0.3f, 0.9f, 0.5f), meshB, masked);
-        world.Spawn(glm::vec3( 0.3f, 0.9f, 0.5f), meshB, masked);
-        world.Spawn(glm::vec3(-0.3f, -0.9f, 0.5f), meshB, twoSided);
-        world.Spawn(glm::vec3( 0.3f, -0.9f, 0.5f), meshB, twoSided);
+        spawnIndirect(glm::vec3(-0.3f, 0.9f, 0.5f), meshB, masked);
+        spawnIndirect(glm::vec3( 0.3f, 0.9f, 0.5f), meshB, masked);
+        spawnIndirect(glm::vec3(-0.3f, -0.9f, 0.5f), meshB, twoSided);
+        spawnIndirect(glm::vec3( 0.3f, -0.9f, 0.5f), meshB, twoSided);
         world.Spawn(glm::vec3(-0.9f, 0.0f, 1.2f), meshB, transparent);
         world.Spawn(glm::vec3( 0.9f, 0.0f, 1.2f), meshB, transparent);
         world.Schedulers();
@@ -529,6 +545,81 @@ namespace
         CHECK(shrunkResult->fence > fenceBefore);
         CHECK(shrunkResult->publishCount <= recordedFrames);
         CheckCullMatchesOracle(*shrunkResult, frame2, world.mirror, "after the visible set shrank");
+
+        // ---- PHASE 3: NO EMITTED BATCH AT ALL --------------------------
+        // Every entity that can reach an indirect batch leaves the frustum;
+        // only the two transparent rows stay coarse-visible. Such a frame
+        // emits no batch, so the compute pass has NOTHING it could have
+        // incremented: the GPU's answer is determined -- zero -- before any
+        // dispatch. The ring must publish that EMPTY result for THIS frame
+        // rather than leave the shrunk frame's count standing. This is the
+        // frame the runtime HUD shows while a camera orbits away from every
+        // mesh, and the frame a --report's `gpuVisible` is read from when it
+        // is the run's last; a count left over from an earlier frame is a
+        // measurement attributed to the wrong frame. (A REFUSED frame is
+        // different and keeps the last real result: it has no GPU answer.)
+        const std::uint64_t publishedBeforeEmpty = shrunkResult->publishCount;
+        const std::uint64_t fenceBeforeEmpty     = shrunkResult->fence;
+        for (const Astra::Entity e : indirectEntities)
+            world.Move(e, glm::vec3(5000.0f, 0.0f, 0.0f));
+        world.Schedulers();
+        Arcane::VisibleSet onlyTransparent;
+        Arcane::BuildVisibleSet(world.reg, view, onlyTransparent);
+        Arcane::GpuSceneFrame frame3;
+        Arcane::GpuSceneSync(world.reg, world.mirror, Arcane::GpuSceneSyncedGeneration(device), frame3.stage);
+        Arcane::BuildGpuSceneFrame(world.mirror, &onlyTransparent,
+                                   world.reg.GetResource<Arcane::MeshTable>(), view, frame3);
+        REQUIRE(frame3.rowCount > 0);                    // every row is still resident -- nothing was freed
+        REQUIRE(frame3.batches.empty());                 // ...and no indirect batch is emitted
+        REQUIRE(frame3.args.empty());
+        REQUIRE(frame3.transparentDraws.size() == 2);    // the direct records still draw
+        CHECK(frame3.stats.coarseVisible == 2);
+        CHECK(frame3.stats.draws == 2);                  // the identity, on a batch-less frame: 0 + 2
+
+        scene.scene = &frame3;
+        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 2u; ++i)
+            renderFixtureFrame();
+
+        const Arcane::GpuVisibilityReadback* emptyResult = device->LatestVisibility();
+        REQUIRE(emptyResult != nullptr);                          // an answer LANDED -- this is not "nothing completed"
+        CHECK(emptyResult->publishCount > publishedBeforeEmpty);  // ...a NEW one, for these frames
+        CHECK(emptyResult->fence > fenceBeforeEmpty);             // sequenced after the shrunk result, never before it
+        CHECK(emptyResult->publishCount <= recordedFrames);       // still at most one publication per frame
+        CHECK(emptyResult->args.empty());
+        CHECK(emptyResult->visibleIndices.empty());
+        CHECK(emptyResult->VisibleRows() == 0u);
+        // THE HOSTS' SEAM: zero -- not null, and not the shrunk frame's count.
+        CHECK(Arcane::GpuSceneVisibleRows(device) == std::optional<std::uint32_t>{ 0u });
+
+        // ---- PHASE 4: A BATCH COMES BACK -------------------------------
+        // The empty result must not be sticky either. One shared-batch entity
+        // returns, and a real, nonzero count lands again -- one that matches
+        // the oracle for its own frame.
+        const std::uint64_t publishedBeforeReturn = emptyResult->publishCount;
+        const std::uint64_t fenceBeforeReturn     = emptyResult->fence;
+        world.Move(insideA, glm::vec3(-0.6f, 0.2f, 0.0f));
+        world.Schedulers();
+        Arcane::VisibleSet returned;
+        Arcane::BuildVisibleSet(world.reg, view, returned);
+        Arcane::GpuSceneFrame frame4;
+        Arcane::GpuSceneSync(world.reg, world.mirror, Arcane::GpuSceneSyncedGeneration(device), frame4.stage);
+        Arcane::BuildGpuSceneFrame(world.mirror, &returned,
+                                   world.reg.GetResource<Arcane::MeshTable>(), view, frame4);
+        REQUIRE(frame4.batches.size() == 2);             // meshA's two sections, one row each
+        REQUIRE(frame4.transparentDraws.size() == 2);
+
+        scene.scene = &frame4;
+        for (std::uint32_t i = 0; i < Arcane::kSwapchainFramesInFlight + 2u; ++i)
+            renderFixtureFrame();
+
+        const Arcane::GpuVisibilityReadback* returnedResult = device->LatestVisibility();
+        REQUIRE(returnedResult != nullptr);
+        REQUIRE(returnedResult->publishCount > publishedBeforeReturn);
+        CHECK(returnedResult->fence > fenceBeforeReturn);
+        CHECK(returnedResult->publishCount <= recordedFrames);
+        CHECK(returnedResult->VisibleRows() == 2u);
+        CheckCullMatchesOracle(*returnedResult, frame4, world.mirror, "after a batch returned");
+        CHECK(Arcane::GpuSceneVisibleRows(device) == std::optional<std::uint32_t>{ returnedResult->VisibleRows() });
 
         // A frame with no mesh scene, so the vehicle tears down with nothing
         // pending but what every frame leaves.

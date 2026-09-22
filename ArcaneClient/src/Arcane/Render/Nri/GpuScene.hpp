@@ -149,11 +149,26 @@ namespace Arcane
         // that slot's HOST_READBACK buffer at DECLARATION time -- the same rule
         // Reserve follows -- and the record callback copies this slot's args and
         // visible indices into it, stamping the declaration it copied for. A
-        // declaration that was never recorded (a refused or skipped frame)
-        // publishes nothing, so LatestVisibility() keeps the last result that
-        // was real. NOTHING here waits, flushes or idles.
+        // declaration that was never recorded (a REFUSED frame: Reserve or
+        // Apply said no) publishes nothing, so LatestVisibility() keeps the
+        // last result that was real -- a refused frame has no GPU answer.
+        // NOTHING here waits, flushes or idles.
         //
-        // TWO PUBLICATION PATHS, because one is not enough on the PRESENT path:
+        // A FRAME WITH NO EMITTED BATCH IS NOT A REFUSED FRAME. When the frame
+        // emits no indirect batch (every opaque/masked row culled coarsely, a
+        // scene of only transparent rows, or no rows at all), the cull pass has
+        // nothing it could have incremented, so the GPU's answer for that frame
+        // is determined -- zero -- before any dispatch. PublishEmptyVisibility
+        // publishes exactly that, AT DECLARATION, as a result of its own (a
+        // seq from the same counter, this frame's fence, empty args and
+        // indices), so the HUD and a --report read zero for such a frame and
+        // never an older frame's count. It maps no buffer and adds no wait.
+        // This is still never a CPU count standing in for a GPU one: the CPU
+        // is not asserting what the GPU saw, only that no batch was submitted
+        // for it to count.
+        //
+        // TWO PUBLICATION PATHS for a RECORDED copy, because one is not enough
+        // on the PRESENT path:
         //
         //   1. ON SLOT REUSE, synchronously, inside the record callback: before
         //      re-recording a slot, whatever that slot recorded LAST and has
@@ -182,9 +197,16 @@ namespace Arcane
         // published -- which is why no --report run, and no offscreen test,
         // exhibits the freeze.)
         //
-        // Both paths funnel through PublishVisibility, which ignores a seq that
-        // has already been published, so one frame is never counted twice and a
-        // published result never moves backwards.
+        // ONE ORDER FOR EVERY PUBLICATION. Every declaration -- a recorded copy
+        // or an empty frame -- takes its seq from the one counter
+        // (m_visibilitySeq), in frame order. Every publication, whichever path
+        // delivers it, must CLAIM its seq against the ring-global high-water
+        // mark `publishedMaxSeq`: a seq at or below the mark is refused. So a
+        // frame is never counted twice, and `latest` never moves backwards --
+        // BY CONSTRUCTION, not by an argument about reap order: an older
+        // frame's late publish (its thunk running after a newer frame's
+        // slot-reuse publish, or after a newer empty frame published at
+        // declaration) finds the mark already past it and does nothing.
         //
         // The ring's state is held through a shared_ptr so a thunk the
         // graveyard still holds can outlive this GpuScene: Release() and the
@@ -194,6 +216,11 @@ namespace Arcane
         [[nodiscard]] bool VisibilityReadbackEnabled() const noexcept { return m_visibility != nullptr; }
         bool EnsureVisibilityReadback(std::uint32_t slot, std::uint32_t argCount, std::uint32_t visibleCount,
                                       std::uint64_t fence);
+        // The batch-less frame's publication (the ring block above): an empty
+        // result for THIS frame, sequenced like any other, published now.
+        // `fence` is the value this frame's submit will signal, recorded on
+        // the result as every publication's is. No buffer is mapped.
+        void PublishEmptyVisibility(std::uint64_t fence);
         [[nodiscard]] nri::Buffer*  VisibilityReadbackBuffer(std::uint32_t slot) const noexcept;
         [[nodiscard]] std::uint64_t VisibilityReadbackBytes(std::uint32_t slot) const noexcept;
         void RecordVisibilityReadback(RenderGraphNodeContext& ctx, RgBuffer args, RgBuffer visibleIndices,
@@ -249,6 +276,7 @@ namespace Arcane
         nri::Buffer*  m_debugReadback        = nullptr;
         std::uint64_t m_debugReadbackBytes   = 0;
         bool          m_debugReadbackRecorded = false;
+        bool          m_warnedVisibilityClamp = false;   // EnsureVisibilityReadback: a declaration larger than the slot's buffers, once
 
         // The visibility ring's state (the API block above states the whole
         // contract). Null until EnableVisibilityReadback arms it, which is
@@ -278,27 +306,35 @@ namespace Arcane
                 std::uint64_t declaredSeq   = 0;   // the declaration this slot was last sized for
                 std::uint64_t declaredFence = 0;   // ...and the fence value that declaration's frame signals
                 std::uint64_t recordedSeq   = 0;   // the declaration its exec fn actually copied
-                std::uint64_t publishedSeq  = 0;   // ...and the newest one whose result reached `latest`
                 Pending       pending;             // recorded, not published: the slot-reuse path's input
             };
             const nri::CoreInterface* core = nullptr;
             Slot                      slots[kSwapchainFramesInFlight];
             bool                      released = false;
+            // THE RING-GLOBAL HIGH-WATER MARK (the ring block's "one order"):
+            // the newest seq any publication has claimed, across every slot
+            // and every path. Claimed by ClaimVisibilitySeq and nowhere else.
+            std::uint64_t             publishedMaxSeq = 0;
             GpuVisibilityReadback     latest;
         };
         std::shared_ptr<VisibilityRing> m_visibility;
-        std::uint64_t                   m_visibilitySeq = 0;
+        std::uint64_t                   m_visibilitySeq = 0;   // the ONE seq counter: ++ at every declaration, in frame order
 
-        // THE ONE PUBLISHER both paths funnel through (the ring block above).
-        // Reads `argCount` args from offset 0 and `visibleCount` indices from
-        // `argRegion` out of `buffer` into `ring.latest`, then stamps `seq` on
-        // the slot. A NO-OP when that slot has already published `seq` or
-        // anything newer, which is what makes the two paths safe to have at
-        // once: one frame is never counted twice, and a published result never
-        // moves backwards. Static because the parked thunk holds only the ring,
-        // never the GpuScene that made it.
-        static void PublishVisibility(VisibilityRing& ring, std::uint32_t slot, std::uint64_t seq,
-                                      std::uint64_t fence, nri::Buffer* buffer, std::uint64_t argRegion,
+        // THE ONE GUARD every publication passes (the ring block above): true,
+        // and the mark advanced, when `seq` is newer than everything claimed
+        // so far; false -- publish nothing -- when it is 0, already claimed,
+        // or older than a claimed one. Claiming happens BEFORE the result is
+        // read, so a frame whose read then fails is still consumed (never
+        // retried against a buffer a growth may since have retired).
+        static bool ClaimVisibilitySeq(VisibilityRing& ring, std::uint64_t seq) noexcept;
+
+        // THE PUBLISHER OF RECORDED COPIES, which both the slot-reuse path and
+        // the graveyard path call. Claims `seq` (above), then reads `argCount`
+        // args from offset 0 and `visibleCount` indices from `argRegion` out of
+        // `buffer` into `ring.latest`. Static because the parked thunk holds
+        // only the ring, never the GpuScene that made it.
+        static void PublishVisibility(VisibilityRing& ring, std::uint64_t seq, std::uint64_t fence,
+                                      nri::Buffer* buffer, std::uint64_t argRegion,
                                       std::uint32_t argCount, std::uint32_t visibleCount);
     };
 
