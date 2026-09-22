@@ -520,6 +520,13 @@ project "death-fixture"
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        -- Same hazard, same fix as ArcaneTests' own MOSAIC_ENABLE_ASSERTS
+        -- define above (premake5.lua:1481 and its comment): MOSAIC_ASSERT
+        -- (ARC_ASSERT's `assert` die mode) compiles to a no-op under NDEBUG
+        -- unless forced on, and this project's Release/Dist filters below
+        -- define NDEBUG -- without this, `--die assert` would silently do
+        -- nothing in a Release/Dist fixture build.
+        "MOSAIC_ENABLE_ASSERTS",
     }
 
     filter "system:windows"

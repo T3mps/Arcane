@@ -13,11 +13,11 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <vector>
 
 namespace
 {
@@ -57,7 +57,31 @@ int main(int argc, char** argv)
     else if (die == "invalid-parameter") { char buf[4]; strcpy_s(buf, 4, "toolong"); }
     else if (die == "purecall")     { Derived d; (void)d; }   // the dtor's virtual call is pure
     else if (die == "stack-overflow") { return Recurse(0); }
-    else if (die == "oom")          { std::vector<char*> keep; for (;;) keep.push_back(new char[1u << 30]); }
+    else if (die == "oom")
+    {
+        // Controller ruling R19: ONE impossible allocation, not a loop. A
+        // bounded loop commits real memory per iteration (Windows reserves
+        // commit charge at allocation time, not on first touch), climbing
+        // toward the machine's RAM+pagefile limit before failing -- slow,
+        // unpredictable, and hostile to the desk/CI machine under a 30s test
+        // cap. This size can never be satisfied, so operator new fails
+        // immediately with std::bad_alloc (or std::bad_array_new_length,
+        // which derives from it) -- deterministic and instant.
+        //
+        // The size is computed into a local first rather than written
+        // directly as `new char[std::numeric_limits<std::size_t>::max() / 2]`
+        // -- tested empirically on this toolchain (MSVC /MDd): with the size
+        // as a manifest compile-time constant, the compiler silently elides
+        // the whole allocation (the C++14 new-expression elision rule) since
+        // `p` is never dereferenced -- no throw, no crash, exit 0 after a
+        // ~1.4s stall. Routing the same value through a runtime local
+        // defeats that elision and reliably throws in ~100-200ms; volatile
+        // plus the use below additionally stop the read of `p` itself from
+        // being optimized away.
+        std::size_t n = std::numeric_limits<std::size_t>::max() / 2;
+        volatile char* p = new char[n];
+        g_sink += p ? 1 : 0;
+    }
     if (hangSeconds > 0)
     {
         // Stop beating: the watchdog must report a hang and the process must stay alive.
