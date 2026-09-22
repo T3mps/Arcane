@@ -4,8 +4,9 @@
 // 10, spec s5.2).
 //
 // An ANALYTIC grid (data/shaders/grid.hlsl) on one large ground quad,
-// drawn AFTER the opaque mesh pass, DEPTH-TESTED against that pass's depth
-// transient (LESS_OR_EQUAL) WITHOUT WRITING IT, and alpha-blended (straight
+// drawn AFTER the mesh pass, DEPTH-TESTED against that pass's depth
+// transient (LESS_OR_EQUAL; opaque and masked rows wrote it, transparent
+// ones did not) WITHOUT WRITING IT, and alpha-blended (straight
 // alpha) into the linear RGBA16F canvas. Minor lines every 1 m and major
 // lines every 10 m from screen-space derivatives (fwidth), so a line is ~1
 // px wide at every distance; the two in-plane ORIGIN AXES over the lines in

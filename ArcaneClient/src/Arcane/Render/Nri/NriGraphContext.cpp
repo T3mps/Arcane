@@ -442,7 +442,8 @@ namespace Arcane
         m_meshCull = MeshCullNode::Create(*this);
         if (!m_meshCull)
             return false;
-        // The opaque 3D pass (Task 7), eagerly like the rest -- see Mesh().
+        // The mesh pass (Task 7; opaque + masked + ordered transparent since F3
+        // plan 2), eagerly like the rest -- see Mesh().
         m_mesh = MeshNode::Create(*this);
         if (!m_mesh)
             return false;   // already logged
@@ -1252,8 +1253,9 @@ namespace Arcane
         handles.canvas = AddBatch2DNode(graph, context, shape.canvasWidth, shape.canvasHeight);
 
         // ---------------------------------------------------------------
-        // THE OPAQUE 3D PASS (Task 4 declared its depth target; Task 7 is the
-        // pass itself). MeshNode CREATES the depth transient, Writes the canvas
+        // THE MESH PASS (Task 4 declared its depth target; Task 7 is the pass
+        // itself; F3 plan 2 widened it to opaque + masked + ordered
+        // transparent). MeshNode CREATES the depth transient, Writes the canvas
         // as ColorWrite and the depth as DepthWrite, and attaches both -- all
         // in its own Setup, which is the same create-then-write-then-attach
         // shape AddBatch2DNode uses for the canvas one line above.
@@ -1610,7 +1612,7 @@ namespace Arcane
         shape.captureBuffer = m_capture;
         shape.captureBytes  = m_captureSlicePitch;
         shape.post          = frame.post;
-        // The opaque 3D pass (Task 7). Belt-and-braces the same way
+        // The mesh pass (Task 7). Belt-and-braces the same way
         // `pickOutline` and the two HUDs are: a scene for THIS frame and a node
         // that was actually built, so a driver handing a mesh scene to a
         // vehicle whose MeshNode failed to build declares nothing rather than
