@@ -367,7 +367,7 @@ Per frame the CPU builds:
 - **The batch table** — for every key with ≥ 1 resident row: `capacity` (the
   count of resident rows with that key, known from the mirror without
   visibility), `firstOutput` = the exclusive prefix sum of capacities in key-id
-  order. Uploaded through the ring; `GpuCullBatch { uint firstOutput; uint capacity; uint argIndex; uint emitted; }` (`argIndex` = the batch's position in the emitted list, meaningful only when `emitted`). **That field order is the shipped one** — `Render/GpuSceneTypes.hpp`'s `static_assert(sizeof(GpuCullBatch) == 16)` and `data/shaders/gpu_scene.hlsli`'s mirror both spell it `firstOutput, capacity, argIndex, emitted`; this spec's draft wrote `GpuBatch` with `emitted` and `argIndex` the other way round, and the code is the authority.
+  order. Uploaded through the ring; `GpuCullBatch { uint firstOutput; uint capacity; uint argIndex; uint emitted; }` (`argIndex` = the batch's position in the emitted list, meaningful only when `emitted`). **That field order is the shipped one** — `Render/GpuSceneTypes.hpp`'s `static_assert(sizeof(GpuCullBatch) == 16)` and `data/shaders/mesh_cull.hlsl`'s mirror (the struct lives in the cull shader, not in the shared `gpu_scene.hlsli`, which carries only `GpuInstance` and its flag constants) both spell it `firstOutput, capacity, argIndex, emitted`; this spec's draft wrote `GpuBatch` with `emitted` and `argIndex` the other way round, and the code is the authority.
 - **The emitted list** — keys with at least one row whose entity is in
   `SceneVisibility.views[0]` (the coarse pass prunes whole batches; a batch
   entirely off-screen never reaches the cull or the draw), **excluding

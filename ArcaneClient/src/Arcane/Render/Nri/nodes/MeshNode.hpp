@@ -502,12 +502,15 @@ namespace Arcane
         //      already-resident vertex/index buffers, push
         //      {batch.firstOutput, 0}, one CmdDrawIndexedIndirect reading
         //      argIndex's nri::DrawIndexedDesc from GpuScene::Args(slot);
-        //   2. the TRANSPARENT rows, DIRECT and one at a time, in the frame's
+        //   2. the AD-HOC rows, DIRECT, in submission order, on the opaque
+        //      one-sided pipeline -- push {scratchFirst + i, kMeshRootDirect},
+        //      one CmdDrawIndexed each;
+        //   3. the TRANSPARENT rows, DIRECT and one at a time, in the frame's
         //      sorted order (render order ascending, biased projected depth
         //      descending, then (entity, mesh, section)) -- push {row,
-        //      kMeshRootDirect}, one CmdDrawIndexed each;
-        //   3. the AD-HOC rows, in submission order -- push {scratchFirst +
-        //      i, kMeshRootDirect}, one CmdDrawIndexed each.
+        //      kMeshRootDirect}, one CmdDrawIndexed each. They go LAST so
+        //      every depth-writing surface, ad-hoc included, is in the depth
+        //      plane before the first blend reads it.
         // A mesh that is not resident is SKIPPED, never a stale bind. A frame
         // with no batches, no transparent rows and no ad-hoc rows (R-D: staged
         // rows only) records the depth clear and nothing else -- no draw, no
