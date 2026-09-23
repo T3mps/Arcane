@@ -313,15 +313,38 @@ int main(int argc, char** argv)
     const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
     if (!parsed.config) return parsed.exitCode;
 
+    // Probe: identity to stdout, nothing else. Deliberately BEFORE any engine
+    // boot -- the Arcane Hub calls this to read the plugin ABI it must stamp
+    // into a new .arcproj, and it must not pay for a window, a device, or a
+    // registry to answer.
+    //
+    // AND BEFORE Diagnostics::Install BELOW (R25), which is the ONE exception
+    // to "Install is the first thing this process does": this path is a pure
+    // query that prints one line and exits, so arming for it would start the
+    // crash thread and the watchdog, open and rotate a log file, and leave an
+    // empty diagnostics/ directory beside the exe -- per Hub probe, for a
+    // process that cannot live long enough to crash or hang. Nothing between
+    // here and Install depends on Install.
+    if (parsed.config->printEngineInfo)
+    {
+        // ExecutablePathUtf8, NOT argv[0]: argv[0] is whatever the launcher typed
+        // (a bare relative name under the documented cd-then-run workflow) and is
+        // ANSI-codepage bytes under MSVC, which a strict-UTF-8 dump() rejects.
+        std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
+        return 0;
+    }
+
     // POST-MORTEM CAPTURE, THE FIRST THING THIS PROCESS DOES once its argv
-    // makes sense (crash window plan 1, task 9; spec S5.1's closing paragraph).
+    // makes sense and it is going to actually RUN (crash window plan 1, task
+    // 9; spec S5.1's closing paragraph).
     // A crash writes a minidump plus a portable all-thread stack; a WEDGED main
     // thread writes the same report while the process is still alive. The
     // second half is the point: Windows Error Reporting only ever fires on
     // process death, so a hang ("Not Responding") otherwise produces nothing,
     // anywhere, ever.
     //
-    // FIRST, and no longer after the refusals below, because everything that
+    // FIRST (bar the probe above), and no longer after the refusals below,
+    // because everything that
     // made the old position load-bearing is gone: the watchdog is a raw thread
     // stopped from an atexit hook Install registers, so an early `return` can
     // no longer leave a joinable std::thread to static destruction (which was
@@ -344,7 +367,18 @@ int main(int argc, char** argv)
         // The RELAUNCH line the reporter's "restart" offers -- this run's argv
         // minus the capture harness, so a crashed verify run comes back as the
         // session it was rendering. See SanitizeRelaunchLine (HostConfig.hpp).
-        const std::vector<std::string> args(argv, argv + argc);
+        //
+        // ELEMENT 0 IS ExecutablePathUtf8(), NOT argv[0], for exactly the
+        // reason the probe above states: argv[0] is whatever the launcher
+        // typed -- a bare relative name under the documented cd-then-run
+        // workflow, in ANSI-codepage bytes under MSVC -- so a reporter
+        // relaunching it from its own working directory, or writing it into a
+        // UTF-8 envelope, would get a path that does not resolve. The
+        // sanitizer stays pure: the substitution is the host's job, and only
+        // the host knows its own exe.
+        std::vector<std::string> args(argv, argv + argc);
+        if (args.empty()) args.emplace_back();
+        args[0] = Arcane::ExecutablePathUtf8();
         diag.commandLine = Arcane::SanitizeRelaunchLine(args);
         Arcane::Diagnostics::Install(diag);
     }
@@ -356,19 +390,6 @@ int main(int argc, char** argv)
     // every host installs one, or a first Ctrl-C is declined and Windows
     // terminates as before).
     Arcane::Editor::EditorApp::InstallCleanExitHook();
-
-    // Probe: identity to stdout, nothing else. Deliberately BEFORE any engine
-    // boot -- the Arcane Hub calls this to read the plugin ABI it must stamp
-    // into a new .arcproj, and it must not pay for a window, a device, or a
-    // registry to answer.
-    if (parsed.config->printEngineInfo)
-    {
-        // ExecutablePathUtf8, NOT argv[0]: argv[0] is whatever the launcher typed
-        // (a bare relative name under the documented cd-then-run workflow) and is
-        // ANSI-codepage bytes under MSVC, which a strict-UTF-8 dump() rejects.
-        std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
-        return 0;
-    }
 
     // THE HostConfig FLAGS THIS HOST DOES NOT IMPLEMENT, refused here rather
     // than silently ignored. HostConfig is SHARED with ArcaneRuntime, so
@@ -477,8 +498,8 @@ int main(int argc, char** argv)
 
     // (Diagnostics::Install USED TO BE HERE, deliberately after every refusal
     // above -- see the reciprocal note in the refusal block for why that
-    // stopped being necessary. It now runs as the first statement after the
-    // parse, at the top of main(), which is the only placement that also
+    // stopped being necessary. It now runs at the top of main(), right after
+    // the --print-engine-info probe, which is the only placement that also
     // covers the boot.)
 
 #ifdef _WIN32

@@ -89,12 +89,19 @@ namespace Arcane
         // filter. A captureless lambda is exactly the ProfilerCallbackFunc
         // function pointer the struct wants.
         //
-        // numTaskThreadsToCreate keeps its own default (hardware threads minus
-        // the calling thread) when `threads` is 0, which is what
-        // Initialize() with no argument did.
+        // `threads` IS A TOTAL, not a worker count -- JobSystem.hpp's own
+        // contract, and enki's: Initialize(numThreadsTotal_) sets
+        // numTaskThreadsToCreate = numThreadsTotal_ - 1
+        // (TaskScheduler.cpp:1131), because the CALLING thread participates in
+        // every ParallelFor (WaitforTask runs tasks on it). Hence `threads - 1`
+        // here: passing `threads` straight through made JobSystem(1) -- the
+        // serial, no-worker scheduler the thread-count-invariance test uses --
+        // quietly spawn a real worker. numTaskThreadsToCreate keeps enki's own
+        // default (hardware threads minus the calling thread) when `threads` is
+        // 0, which is what Initialize() with no argument did.
         enki::TaskSchedulerConfig config;
         if (threads != 0)
-            config.numTaskThreadsToCreate = threads;
+            config.numTaskThreadsToCreate = threads - 1;
         config.profilerCallbacks.threadStart =
             [](uint32_t) { Arcane::Diagnostics::GuaranteeStackForThisThread(); };
         m_impl->ts.Initialize(config);

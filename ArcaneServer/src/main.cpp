@@ -38,11 +38,20 @@ namespace
     // host's own too (ServerConfig, not HostConfig): --frames N and --report
     // <json> are the scripted-run half, and everything else -- --project,
     // --plugin, --fixed-dt -- describes the SESSION and is kept.
-    std::string SanitizedRelaunchLine(int argc, char** argv)
+    //
+    // `exePath` REPLACES argv[0], for the same reason the --print-engine-info
+    // probe below prints ExecutablePathUtf8() rather than argv[0]: argv[0] is
+    // whatever the launcher typed -- a bare relative name under the documented
+    // cd-then-run workflow, in ANSI-codepage bytes under MSVC -- which neither
+    // relaunches from the reporter's own working directory nor survives a
+    // strict-UTF-8 envelope.
+    std::string SanitizedRelaunchLine(const std::string& exePath, int argc, char** argv)
     {
         static constexpr std::string_view kStripWithValue[] = { "frames", "report" };
-        std::string out;
-        for (int i = 0; i < argc; ++i)
+        std::string out = (exePath.find(' ') != std::string::npos || exePath.empty())
+                        ? "\"" + exePath + "\""
+                        : exePath;
+        for (int i = 1; i < argc; ++i)   // 1: argv[0] is `exePath` above
         {
             std::string_view arg(argv[i]);
             if (arg.starts_with("--"))
@@ -80,26 +89,6 @@ int main(int argc, char** argv)
         Arcane::Server::ServerConfig::Parse(argc, argv);
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
 
-    // POST-MORTEM CAPTURE, FIRST (crash window plan 1, task 9; spec S5.1's
-    // closing paragraph) -- same arming, same reasoning and the same position
-    // as the other two hosts, which is the whole point: a crash or a hang on
-    // this host must leave the same evidence behind.
-    {
-        Arcane::Diagnostics::Config diag;
-        diag.appName     = "ArcaneServer";
-        diag.productName = "Arcane Server";
-        // ALWAYS unattended, unlike the other two: a dedicated server has no
-        // desktop session to put a reporter window on, whatever its flags say.
-        diag.unattended  = true;
-        diag.commandLine = SanitizedRelaunchLine(argc, argv);
-        Arcane::Diagnostics::Install(diag);
-    }
-    // Every host installs one (R24): with the slot empty a first Ctrl-C is
-    // declined and Windows terminates outright. This is the host where it
-    // matters most -- a dedicated server's ordinary stop IS a Ctrl-C or a
-    // service shutdown, and its tick loop is otherwise open-ended.
-    Arcane::Server::ServerApp::InstallCleanExitHook();
-
     // Same probe every host offers: identity to stdout, no window, no device,
     // no project, no ProcessContext. `EngineInfoJson` (ArcaneClient/src/Arcane/
     // Host/ProjectBoot.hpp) stays Client-side deliberately -- this Core-only
@@ -107,6 +96,12 @@ int main(int argc, char** argv)
     // SAME three keys itself, straight from the Core-side identity probes
     // (Arcane::PluginABIVersion/BuildInfo/ExecutablePathUtf8) EngineInfoJson
     // is built from.
+    //
+    // AND BEFORE Diagnostics::Install BELOW (R25), the ONE path that exits
+    // before arming -- see ArcaneEditor/src/main.cpp's copy of this note: a
+    // pure query that prints one line and exits must not start the crash
+    // thread and the watchdog, rotate a log file and leave an empty
+    // diagnostics/ directory beside the exe.
     if (parsed.config->printEngineInfo)
     {
         nlohmann::json j;
@@ -117,10 +112,25 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // (Diagnostics::Install USED TO BE HERE, after the --print-engine-info
-    // probe. It now runs as the first statement after the parse -- see the
-    // block above, and ArcaneEditor/src/main.cpp for the full account of why
-    // the old placement stopped being load-bearing.)
+    // POST-MORTEM CAPTURE, FIRST (bar the probe above) -- crash window plan 1,
+    // task 9; spec S5.1's closing paragraph. Same arming, same reasoning and
+    // the same position as the other two hosts, which is the whole point: a
+    // crash or a hang on this host must leave the same evidence behind.
+    {
+        Arcane::Diagnostics::Config diag;
+        diag.appName     = "ArcaneServer";
+        diag.productName = "Arcane Server";
+        // ALWAYS unattended, unlike the other two: a dedicated server has no
+        // desktop session to put a reporter window on, whatever its flags say.
+        diag.unattended  = true;
+        diag.commandLine = SanitizedRelaunchLine(Arcane::ExecutablePathUtf8(), argc, argv);
+        Arcane::Diagnostics::Install(diag);
+    }
+    // Every host installs one (R24): with the slot empty a first Ctrl-C is
+    // declined and Windows terminates outright. This is the host where it
+    // matters most -- a dedicated server's ordinary stop IS a Ctrl-C or a
+    // service shutdown, and its tick loop is otherwise open-ended.
+    Arcane::Server::ServerApp::InstallCleanExitHook();
 
     int rc = 0;
     {

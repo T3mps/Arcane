@@ -53,33 +53,17 @@ int main(int argc, char** argv)
     const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
 
-    // POST-MORTEM CAPTURE, FIRST (crash window plan 1, task 9; spec S5.1's
-    // closing paragraph). Same arming, same reasoning and now the same
-    // POSITION as ArcaneEditor -- see that file's block for the full account
-    // of why the "after every refusal" placement is gone: the watchdog is a
-    // raw thread stopped from an atexit hook Install registers, so an early
-    // `return` is clean and the boot itself is finally covered. AFTER the
-    // Log::Init/Mosaic trio above, which is still load-bearing (R16).
-    {
-        Arcane::Diagnostics::Config diag;
-        diag.appName     = "ArcaneRuntime";
-        diag.productName = ProductNameFor(parsed.config->projectPath);
-        diag.unattended  = parsed.config->headless;   // nobody to answer a reporter window
-        const std::vector<std::string> args(argv, argv + argc);
-        diag.commandLine = Arcane::SanitizeRelaunchLine(args);
-        Arcane::Diagnostics::Install(diag);
-    }
-    // Every host installs one (R24): with the slot empty a first Ctrl-C is
-    // declined and Windows terminates the process outright, so the two-step
-    // clean exit only exists for hosts that opt in. This one stops the frame
-    // loop the same way the window's close box does.
-    RuntimeApp::InstallCleanExitHook();
-
     // Same probe as the editor: identity to stdout, no window, no device. The
     // flag lives in the SHARED HostConfig, so a flag that parsed on both hosts
     // but only worked on one would be a trap. A bare run (no --project, no
     // --plugin) refuses at plugin_load with usage guidance -- the runtime's one
     // job is running a game (the old Sandbox.dll default was retired 2026-08-11).
+    //
+    // AND BEFORE Diagnostics::Install BELOW (R25), the ONE path that exits
+    // before arming -- see ArcaneEditor/src/main.cpp's copy of this note: a
+    // pure query that prints one line and exits must not start the crash
+    // thread and the watchdog, rotate a log file and leave an empty
+    // diagnostics/ directory beside the exe.
     if (parsed.config->printEngineInfo)
     {
         // ExecutablePathUtf8, NOT argv[0]: argv[0] is whatever the launcher typed
@@ -88,6 +72,35 @@ int main(int argc, char** argv)
         std::printf("%s\n", Arcane::HostBoot::EngineInfoJson(Arcane::ExecutablePathUtf8()).c_str());
         return 0;
     }
+
+    // POST-MORTEM CAPTURE, FIRST (bar the probe above) -- crash window plan 1,
+    // task 9; spec S5.1's closing paragraph. Same arming, same reasoning and
+    // now the same POSITION as ArcaneEditor -- see that file's block for the
+    // full account of why the "after every refusal" placement is gone: the
+    // watchdog is a raw thread stopped from an atexit hook Install registers,
+    // so an early `return` is clean and the boot itself is finally covered.
+    // AFTER the Log::Init/Mosaic trio above, which is still load-bearing (R16).
+    {
+        Arcane::Diagnostics::Config diag;
+        diag.appName     = "ArcaneRuntime";
+        diag.productName = ProductNameFor(parsed.config->projectPath);
+        diag.unattended  = parsed.config->headless;   // nobody to answer a reporter window
+        // Element 0 is ExecutablePathUtf8(), NOT argv[0] -- the same reason the
+        // probe above gives for not printing argv[0]: a bare relative name in
+        // ANSI-codepage bytes is not something a reporter can relaunch or put
+        // in a UTF-8 envelope. The sanitizer stays pure; only the host knows
+        // its own exe.
+        std::vector<std::string> args(argv, argv + argc);
+        if (args.empty()) args.emplace_back();
+        args[0] = Arcane::ExecutablePathUtf8();
+        diag.commandLine = Arcane::SanitizeRelaunchLine(args);
+        Arcane::Diagnostics::Install(diag);
+    }
+    // Every host installs one (R24): with the slot empty a first Ctrl-C is
+    // declined and Windows terminates the process outright, so the two-step
+    // clean exit only exists for hosts that opt in. This one stops the frame
+    // loop the same way the window's close box does.
+    RuntimeApp::InstallCleanExitHook();
 
     // --dump-layout: THIS HOST'S FIRST REFUSAL (Task 10, plan-b comparator).
     // HostConfig is shared with ArcaneEditor, which implements the flag
@@ -154,8 +167,8 @@ int main(int argc, char** argv)
     }
 
     // (Diagnostics::Install USED TO BE HERE, after the refusals above. It now
-    // runs as the first statement after the parse -- see the block at the top
-    // of main() and the reciprocal note in the --dump-layout refusal.)
+    // runs right after the --print-engine-info probe -- see the block at the
+    // top of main() and the reciprocal note in the --dump-layout refusal.)
 
     // Before ANY engine boot: something on screen within ~100ms. The probe
     // return above stays free of any window on purpose. Never fails boot --

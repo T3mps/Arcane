@@ -75,6 +75,23 @@ TEST_CASE("JobSystem exposes an ITaskExecutor over the enki pool", "[jobs]")
     REQUIRE(exec->WorkerCount() >= 1);
 }
 
+// JobSystem's ctor parameter is a TOTAL thread count, not a spawned-worker
+// count: the calling thread participates in every ParallelFor, so JobSystem(1)
+// is the SERIAL scheduler (no worker spawned at all) the thread-count-
+// invariance case below relies on. That test is invariant by construction and
+// stays green either way, so nothing else in this file would notice the pool
+// silently growing by one -- which is exactly what happened when the ctor moved
+// to enki's TaskSchedulerConfig overload (whose numTaskThreadsToCreate is the
+// worker count, one less than the total Initialize(n) takes). This asserts the
+// arithmetic directly.
+TEST_CASE("JobSystem's thread count is a TOTAL: JobSystem(1) spawns no worker", "[jobs]")
+{
+    CHECK(JobSystem(1).WorkerCount() == 1u);   // the calling thread alone
+    CHECK(JobSystem(2).WorkerCount() == 2u);   // the calling thread + one worker
+    CHECK(JobSystem(4).WorkerCount() == 4u);
+    CHECK(JobSystem().WorkerCount() >= 1u);    // hardware default, whatever this box has
+}
+
 TEST_CASE("enki executor: disjoint full cover, worker index in range", "[jobs]")
 {
     JobSystem jobs;
