@@ -293,6 +293,20 @@ namespace
     wchar_t g_productWide[128]{};
     wchar_t g_spawnCmd[8192]{};
 
+    // The hang protocol (plan 2, D11/D12/D7). The event is created at Install
+    // so the reporter can OpenEventW it by name; the reporter handle is kept
+    // for SURVIVABLE spawns only; the creation time rides on every spawn so
+    // the reporter never terminates a pid that was recycled (spec s9).
+    //
+    // Threads: g_reporterProcess is touched only by the crash thread
+    // (SpawnReporter) and by Shutdown AFTER that thread is joined;
+    // g_recoveredEvent is reset by the crash thread and set by the watchdog,
+    // both of which Shutdown stops before it closes the handle.
+    wchar_t            g_recoveredName[64]{};
+    HANDLE             g_recoveredEvent  = nullptr;
+    HANDLE             g_reporterProcess = nullptr;
+    unsigned long long g_hostCreated     = 0;
+
     // Seed for the per-report envelope guid. Guid::Generate() draws from the
     // Core CSPRNG (a lock, and possibly the heap), so it runs ONCE here and
     // the crash thread mixes it with the clock + the report counter instead.
@@ -984,10 +998,34 @@ namespace
     // The hand-off. Missing exe is the EXPECTED case in this plan (the
     // reporter does not exist yet), so a failure is one line, after the
     // files are already on disk, and never anything louder.
-    [[nodiscard]] bool SpawnReporter(const char* stemUtf8, const char* kind) noexcept
+    //
+    // Plan 2, task 8 (spec s5.4): `survivable` (the report's exitCode is 0 --
+    // a hang, a gpu-stall, an ensure) switches on the hang protocol's host
+    // half: the recovered event is reset for the reporter about to wait on it
+    // (D11), its name rides on the line, and the reporter's process handle is
+    // KEPT so that while it lives no second reporter is spawned for this host
+    // (D12). Every spawn carries --host-created (D7). Runs on the crash
+    // thread: fixed storage and Win32 calls only, no heap.
+    [[nodiscard]] bool SpawnReporter(const char* stemUtf8, const char* kind, bool survivable) noexcept
     {
-        if (!g_cfg.spawnReporter) return true;   // disabled: not a failure
+        // Reset BEFORE the spawn gate, so a host with the spawn disabled (the
+        // [diag] recovered-event case, a build machine) still runs the
+        // protocol's observable half -- and so the event a live reporter from
+        // an EARLIER stall is waiting on is re-armed by this report too.
+        if (survivable && g_recoveredEvent) ResetEvent(g_recoveredEvent);
+        if (!g_cfg.spawnReporter) return true;   // disabled (or a build machine, Install's gate): not a failure
         if (!g_reporterExe[0])    return false;
+
+        if (survivable && g_reporterProcess)
+        {
+            // One window per host (spec s5.4, D12): a reporter spawned for an
+            // earlier survivable report is still up for this pid. The report
+            // was still written; it just gets no second window. A dead one's
+            // handle is released and the spawn proceeds.
+            if (WaitForSingleObject(g_reporterProcess, 0) == WAIT_TIMEOUT) return true;
+            CloseHandle(g_reporterProcess);
+            g_reporterProcess = nullptr;
+        }
 
         wchar_t wideStem[kPathMax];
         wchar_t wideKind[64];
@@ -995,11 +1033,13 @@ namespace
         ToWide(kind, wideKind, 64);
 
         _snwprintf_s(g_spawnCmd, sizeof(g_spawnCmd) / sizeof(g_spawnCmd[0]), _TRUNCATE,
-                     L"\"%s\" \"%s.arcdiag\" --pid %lu --kind %s --product \"%s\"%s",
+                     L"\"%s\" \"%s.arcdiag\" --pid %lu --kind %s --product \"%s\" --host-created %llu%s%s%s",
                      g_reporterExe, wideStem,
                      static_cast<unsigned long>(GetCurrentProcessId()),
-                     wideKind, g_productWide,
-                     g_cfg.unattended ? L" --unattended" : L"");
+                     wideKind, g_productWide, g_hostCreated,
+                     g_cfg.unattended ? L" --unattended" : L"",
+                     (survivable && g_recoveredEvent) ? L" --recovered-event " : L"",
+                     (survivable && g_recoveredEvent) ? g_recoveredName : L"");
 
         STARTUPINFOW        si{};
         PROCESS_INFORMATION pi{};
@@ -1007,10 +1047,20 @@ namespace
         if (!CreateProcessW(nullptr, g_spawnCmd, nullptr, nullptr, FALSE,
                             CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi))
             return false;
-
-        // No handle kept: the reporter outlives us on purpose.
         CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
+
+        // D14 (UE: WindowsPlatformCrashContext.cpp:913-915): Windows lets a
+        // background process take the foreground only when the foreground one
+        // grants it. Without this the reporter's window can open BEHIND the
+        // host's own. A user32 call, no heap; UE makes it from its crash
+        // thread too.
+        AllowSetForegroundWindow(pi.dwProcessId);
+
+        // Survivable: kept -- "while it lives no second reporter" (D12).
+        // Fatal: closed -- the host is about to die and the reporter outlives
+        // it on purpose.
+        if (survivable) g_reporterProcess = pi.hProcess;
+        else            CloseHandle(pi.hProcess);
         return true;
     }
 
@@ -1230,7 +1280,7 @@ namespace
             // hand-off.
             DumpBacklog(logTxtPath);
             Log::FlushFileSinkBounded(2000);
-            spawnOk = SpawnReporter(stem, kind);
+            spawnOk = SpawnReporter(stem, kind, /*survivable*/p.exitCode == 0);
         }
 
         g_reportCount.fetch_add(1, std::memory_order_acq_rel);
@@ -1742,6 +1792,19 @@ namespace
     }
 #endif
 
+    // D11 (plan 2, task 8): the stall a survivable report was written for is
+    // over. Wakes the attended reporter's waiter, which closes its window --
+    // the report stays on disk. Watchdog thread only; Shutdown stops that
+    // thread before it closes the handle. The stop-flag test covers the one
+    // thread Shutdown does NOT join -- a watchdog orphaned mid-report
+    // (StopWatchdog's 5 s bound) must not touch a handle Shutdown is closing.
+    void SignalRecovered() noexcept
+    {
+#if defined(_WIN32)
+        if (g_recoveredEvent && !g_watchdogStop.load(std::memory_order_acquire)) SetEvent(g_recoveredEvent);
+#endif
+    }
+
     // ONE thread, TWO rules (Task 7). The GPU-progress rule is a sibling loop
     // body here rather than a second thread: it needs the same 250ms cadence,
     // the same debugger suppression, and the same report serialization as the
@@ -1781,7 +1844,10 @@ namespace
             const std::int64_t beat = g_lastBeat.load(std::memory_order_acquire);
 
             if (reported && beat != reportedBeat)
+            {
                 reported = false;   // main thread moved again: re-arm
+                SignalRecovered();  // D11: a reporter waiting on this stall closes itself
+            }
 
             if (reported) return;
             if (SecondsSince(beat) < threshold) return;
@@ -1833,7 +1899,15 @@ namespace
 
             const std::uint64_t fence = g_gpuFence.load(std::memory_order_acquire);
             const double        now   = NowSeconds();
-            if (!gpuRule.Poll(fence, now)) return;
+            const bool          wasReported = gpuRule.WasReported();
+            if (!gpuRule.Poll(fence, now))
+            {
+                // D11: progress resumed after a gpu-stall report. (A Reset()
+                // above -- the render path stopped publishing -- is NOT
+                // recovery and deliberately signals nothing.)
+                if (wasReported && !gpuRule.WasReported()) SignalRecovered();
+                return;
+            }
 
             const double beatAge = g_beatSeen.load(std::memory_order_acquire)
                                  ? SecondsSince(g_lastBeat.load(std::memory_order_acquire))
@@ -2294,6 +2368,23 @@ void Install(const Config& cfg)
     ToWide(g_productSnap, g_productWide, static_cast<int>(std::size(g_productWide)));
     ResolveReporterPath();
 
+    // The hang protocol's host half (plan 2, D11/D7), prepared here so the
+    // crash thread only ever resets an existing event and prints a number.
+    // Manual-reset: the reporter's waiter must see a SetEvent that landed
+    // before it started waiting. Created unconditionally -- the [diag] case
+    // observes it with the spawn disabled. A failed create leaves the handle
+    // null and the protocol simply absent (no --recovered-event on the line).
+    _snwprintf_s(g_recoveredName, std::size(g_recoveredName), _TRUNCATE,
+                 L"Local\\Arcane-Recovered-%lu", static_cast<unsigned long>(GetCurrentProcessId()));
+    g_recoveredEvent = CreateEventW(nullptr, /*manualReset*/TRUE, FALSE, g_recoveredName);
+    {
+        // D7 / spec s9: the reporter compares this against GetProcessTimes on
+        // the handle it opened, so a recycled pid can never be terminated.
+        FILETIME created{}, exited{}, kernel{}, user{};
+        if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+            g_hostCreated = (static_cast<unsigned long long>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+    }
+
     // The engine log file sink, before anything that might want to warn.
     AttachLogSink();
 
@@ -2415,6 +2506,14 @@ void Shutdown() noexcept
     g_crashThreadId.store(0, std::memory_order_release);
     if (g_crashEvent)   { CloseHandle(g_crashEvent);   g_crashEvent   = nullptr; }
     if (g_handledEvent) { CloseHandle(g_handledEvent); g_handledEvent = nullptr; }
+
+    // The hang protocol's handles (plan 2, task 8) -- the HANDLES only. A
+    // reporter mid-symbolization keeps running by design; it holds its own
+    // handle to the event, so the named object outlives this close for as
+    // long as it needs it. Safe here: the crash thread (SpawnReporter) was
+    // joined just above and the watchdog (SignalRecovered) at the top.
+    if (g_reporterProcess) { CloseHandle(g_reporterProcess); g_reporterProcess = nullptr; }
+    if (g_recoveredEvent)  { CloseHandle(g_recoveredEvent);  g_recoveredEvent  = nullptr; }
 #endif
 
     // Neither the module table nor the log backlog may outlive this arming

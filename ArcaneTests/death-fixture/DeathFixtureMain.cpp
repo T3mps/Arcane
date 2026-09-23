@@ -34,6 +34,7 @@ int main(int argc, char** argv)
 {
     std::string dir, die; int hangSeconds = 0; bool hangAtExit = false; unsigned exitSeconds = 3, hangThreshold = 2;
     bool reporter = false, attended = false;
+    int stalls = 1, ensureAt = 0;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -45,6 +46,15 @@ int main(int argc, char** argv)
         else if (a == "--hang-seconds") { std::string v; next(v); hangThreshold = static_cast<unsigned>(std::atoi(v.c_str())); }
         else if (a == "--reporter") reporter = true;     // spawn the STAGED reporter beside this exe (tests, desk)
         else if (a == "--attended") attended = true;     // desk only: let the reporter show its window
+        // Task 8 desk levers for the hang protocol. `--stalls N` repeats the
+        // --hang sleep N times with ONE beat between (the beat is the
+        // recovery the reporter's window closes on, D11, and what re-arms the
+        // host's once-per-stall rule for the next one). `--ensure-at S` fires
+        // an ensure from a helper thread S seconds in -- a SURVIVABLE report
+        // raised while a hang reporter is still up, which is D12's case: the
+        // report is written, no second reporter is spawned.
+        else if (a == "--stalls") { std::string v; next(v); stalls = std::atoi(v.c_str()); }
+        else if (a == "--ensure-at") { std::string v; next(v); ensureAt = std::atoi(v.c_str()); }
     }
     Arcane::Log::Init(spdlog::level::info);
     Arcane::Log::InstallMosaicSink();
@@ -100,16 +110,24 @@ int main(int argc, char** argv)
     }
     if (hangSeconds > 0)
     {
+        std::thread ensurer;
+        if (ensureAt > 0)
+            ensurer = std::thread([ensureAt] { std::this_thread::sleep_for(std::chrono::seconds(ensureAt));
+                                               (void)ARC_ENSURE(false, "fixture ensure during a hang"); });
         // One beat ARMS the hang trigger -- until a first Heartbeat() the
         // watchdog is deliberately silent, so a host that never beats (a
         // headless tool, every other mode in this fixture) gets silence
         // rather than a spurious report hangSeconds after boot.
-        Arcane::Diagnostics::Heartbeat();
         // Then stop beating: the watchdog must report a hang and the process
         // must stay alive. Returning from main() WITHOUT Shutdown() is part
         // of the case -- the atexit hook is what stops the raw watchdog
         // thread now, and exit code 0 is the proof it did.
-        std::this_thread::sleep_for(std::chrono::seconds(hangSeconds));
+        for (int s = 0; s < (stalls > 0 ? stalls : 1); ++s)
+        {
+            Arcane::Diagnostics::Heartbeat();   // stall 2+: THIS beat is the recovery (D11)
+            std::this_thread::sleep_for(std::chrono::seconds(hangSeconds));
+        }
+        if (ensurer.joinable()) ensurer.join();
         return 0;
     }
     if (hangAtExit)

@@ -479,6 +479,25 @@ TEST_CASE("death fixture: a hang writes a hang report and the process stays aliv
     CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "hang");
 }
 
+// The hang hand-off as a whole process (spec S5.4, task 8): the watchdog
+// spawns the reporter with the recovered event; unattended, it symbolizes the
+// hang's minidump and exits while the host is STILL ALIVE (an unattended hang
+// report waits on nothing -- nobody is there to choose), and the host then
+// exits 0 on its own. The sibling is polled after the run: the fixture's 8 s
+// sleep is normally long enough, but a slow symbol load is no reason to flake.
+TEST_CASE("death fixture --reporter: a hang report gains its .symbolized.txt while the host lives", "[diag]")
+{
+    SkipIfBuildMachine();
+    REQUIRE(std::filesystem::exists(std::filesystem::absolute("../death-fixture/ArcaneCrashReporter.exe")));
+    const FixtureRun r = RunFixture("none", { "--hang", "8", "--hang-seconds", "1", "--reporter" });
+    CHECK_FALSE(r.run.timedOut);
+    CHECK(r.run.exitCode == 0);
+    REQUIRE_FALSE(r.stem.empty());
+    CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "hang");
+    REQUIRE(WaitForFile(r.stem.string() + ".symbolized.txt", std::chrono::seconds(20)));
+    CHECK(Slurp(r.stem.string() + ".symbolized.txt").find("thread") != std::string::npos);
+}
+
 // Spec S5.7, the other half: from RequestCleanExit() onward the watchdog's beat
 // rule is replaced by an exit deadline, and a host that never gets out is NAMED
 // ("hang at exit") rather than left wedged on somebody's desk. The fixture asks

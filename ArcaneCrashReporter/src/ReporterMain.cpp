@@ -13,6 +13,7 @@
 // (spec §12 item 2), which is how Diagnostics::ResolveReporterPath finds it at
 // "<exe dir>/ArcaneCrashReporter.exe".
 #include "FileText.hpp"
+#include "HangSession.hpp"
 #include "LogTail.hpp"
 #include "ReportView.hpp"
 #include "ReporterArgs.hpp"
@@ -29,8 +30,11 @@
 
 #include <shellapi.h>   // CommandLineToArgvW
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -100,12 +104,151 @@ namespace
         return sibling;
     }
 
+    // The hang protocol's reporter half (plan 2, task 8; spec s5.4, D6/D7,
+    // s9 "Reporter pid reuse"). Exists ONLY for an attended run whose view is
+    // a hang: an unattended hang report waits on nothing (symbolize, write,
+    // exit 0 -- nobody is there to choose, and the host's once-per-stall rule
+    // stands), and a crash view has no live host to watch.
+    //
+    // `host` is opened ONCE, at start, and the identity check runs against
+    // THAT handle: a process handle names one process object for its whole
+    // life, so once the creation time matched, a later TerminateProcess on it
+    // can never reach a stranger that inherited the pid. The check is repeated
+    // before TerminateProcess anyway -- it is one syscall, and it is the line
+    // D7 names.
+    struct HangWatch
+    {
+        HANDLE           host      = nullptr;   // SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION
+        HANDLE           recovered = nullptr;   // the host's Local\Arcane-Recovered-<pid>, or null (no --recovered-event)
+        HANDLE           closing   = nullptr;   // R36: manual-reset, set by THIS process when its window is done
+        std::uint64_t    hostCreated = 0;       // --host-created; 0 = an older host that did not send it
+        std::thread      waiter;
+        std::atomic<int> outcomeExit{ -1 };     // -1 = no hang outcome chose an exit code; else a Reporter::ExitCode
+
+        HangWatch() = default;
+        HangWatch(const HangWatch&)            = delete;
+        HangWatch& operator=(const HangWatch&) = delete;
+        ~HangWatch()
+        {
+            Stop();
+            if (host)      CloseHandle(host);
+            if (recovered) CloseHandle(recovered);
+            if (closing)   CloseHandle(closing);
+        }
+
+        // D7: the handle we opened is the host we were told about. A host
+        // that sent no creation time (0) is taken by pid, as before D7.
+        [[nodiscard]] bool IsTheHost() const
+        {
+            if (!host) return false;
+            if (hostCreated == 0) return true;
+            FILETIME c{}, e{}, k{}, u{};
+            return GetProcessTimes(host, &c, &e, &k, &u) &&
+                   ((static_cast<std::uint64_t>(c.dwHighDateTime) << 32) | c.dwLowDateTime) == hostCreated;
+        }
+
+        // The waiter: ONE wait, ONE posted event, then done. Everything it
+        // learns goes to the window thread as a PostUser -- never a direct
+        // call into ReporterWindow -- so every hang decision is made on that
+        // one thread, and a message that lands after the window died is
+        // simply dropped (PostUser to a null/dead HWND).
+        //
+        // R36: `closing` is always in the array, which is what lets Stop()
+        // end the wait without TerminateThread. The array is built COMPACTLY
+        // -- with no recovered event, `closing` is index 1, not 2 -- so the
+        // index each handle landed at is recorded and the result is mapped
+        // back through those, never through fixed positions. Index order is
+        // also priority order (WaitForMultipleObjects reports the LOWEST
+        // signalled index): a host that exited outranks a beat that resumed.
+        void Start(NativeWindow& window)
+        {
+            waiter = std::thread([this, &window]
+            {
+                HANDLE      handles[3]{};
+                DWORD       n         = 0;
+                const DWORD hostAt    = n; handles[n++] = host;
+                DWORD       recoverAt = MAXDWORD;
+                if (recovered) { recoverAt = n; handles[n++] = recovered; }
+                handles[n++] = closing;
+
+                const DWORD r = WaitForMultipleObjects(n, handles, FALSE, INFINITE);
+                if (r == WAIT_OBJECT_0 + hostAt)
+                {
+                    DWORD code = 0;
+                    GetExitCodeProcess(host, &code);
+                    window.PostUser(ReporterWindow::kUserHostExited, code);
+                }
+                else if (recoverAt != MAXDWORD && r == WAIT_OBJECT_0 + recoverAt)
+                {
+                    window.PostUser(ReporterWindow::kUserHostRecovered);
+                }
+                // `closing` (this process is done) or WAIT_FAILED: post nothing.
+            });
+        }
+
+        // R36: set right after the attended wait returns, before the join --
+        // the host may well still be alive (Keep Waiting, Close), and the
+        // waiter would otherwise block this join forever. Idempotent.
+        void Stop()
+        {
+            if (closing) SetEvent(closing);
+            if (waiter.joinable()) waiter.join();
+        }
+    };
+
+    // "0xC0000005" for an NTSTATUS-shaped code, plain decimal for a small one
+    // (an ordinary exit code reads better as "1" than "0x00000001").
+    std::string HostCodeText(std::uint32_t code)
+    {
+        char buf[32];
+        if (code > 0xFFFFu) std::snprintf(buf, sizeof(buf), "0x%08X", code);
+        else                std::snprintf(buf, sizeof(buf), "%u", code);
+        return buf;
+    }
+
+    // Applies one hang decision (HangSession.hpp's pure table) to the live
+    // window and host. Window thread only -- it is reached from OnButton,
+    // i.e. from ReporterWindow's onCommand, for both the two hang buttons and
+    // the three posted host events.
+    void ApplyHang(HangEvent event, std::uint32_t hostExitCode, ReporterWindow& ui, HWND hwnd, HangWatch& hang)
+    {
+        const HangOutcome o = DecideHang(event, hostExitCode);
+        if (o.terminateHost)
+        {
+            // D7 / spec s9: never terminate a process that is not the host we
+            // were told about. A mismatch here is the IdentityMismatch row:
+            // close, exit 4 (Reporter::ExitCode::kHostMismatch).
+            if (!hang.IsTheHost())
+            {
+                ARC_ERROR("reporter: the process behind the pid is not the host that reported the hang; terminate refused");
+                ApplyHang(HangEvent::IdentityMismatch, 0, ui, hwnd, hang);
+                return;
+            }
+            if (!TerminateProcess(hang.host, static_cast<UINT>(Arcane::Diagnostics::ExitCode::kHangTerminated)))
+            {
+                // The host may have exited on its own a moment ago -- the
+                // waiter's HostExited will say so. Either way the window
+                // stays as it is rather than claiming a termination.
+                ARC_ERROR("reporter: TerminateProcess on the host failed ({})", GetLastError());
+                return;
+            }
+        }
+        if (o.becomeCrashView)
+            ui.BecomeCrashView(o.terminateHost ? std::string(" -- terminated and collected")
+                                               : " -- the host exited (" + HostCodeText(hostExitCode) + ")");
+        if (o.closeWindow)
+        {
+            hang.outcomeExit.store(o.exitCode);
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        }
+    }
+
     // Runs on the window thread (it IS `onCommand`, ReporterWindow's ctor
     // contract). The folder and the relaunch line are read from the window's
     // CURRENT view -- SetView may have replaced the initial one by the time a
     // button fires -- through ReporterWindow's mutex-guarded accessors
     // (R40), never captured once at window creation.
-    void OnButton(int id, ReporterWindow& ui, NativeWindow& window)
+    void OnButton(int id, ReporterWindow& ui, NativeWindow& window, HangWatch* hang)
     {
         HWND hwnd = static_cast<HWND>(window.Hwnd());
         switch (id)
@@ -153,7 +296,17 @@ namespace
             // a presenter callback that runs before the window is ready".
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
             break;
-        default: break;   // task 8: kBtnKeepWaiting / kBtnTerminate / kHostExited / kHostRecovered
+        // Task 8: the two hang buttons and the three host events. `hang` is
+        // null outside an attended hang view -- the buttons are hidden there
+        // and nothing posts host events -- so a stray id is ignored.
+        case ReporterWindow::kBtnKeepWaiting: if (hang) ApplyHang(HangEvent::KeepWaitingChosen, 0, ui, hwnd, *hang); break;
+        case ReporterWindow::kBtnTerminate:   if (hang) ApplyHang(HangEvent::TerminateChosen,   0, ui, hwnd, *hang); break;
+        case ReporterWindow::kHostRecovered:  if (hang) ApplyHang(HangEvent::HostRecovered,     0, ui, hwnd, *hang); break;
+        case ReporterWindow::kHostMismatch:   if (hang) ApplyHang(HangEvent::IdentityMismatch,  0, ui, hwnd, *hang); break;
+        case ReporterWindow::kHostExited:
+            if (hang) ApplyHang(HangEvent::HostExited, ui.LastHostExitCode(), ui, hwnd, *hang);
+            break;
+        default: break;
         }
     }
 
@@ -198,6 +351,12 @@ namespace
         // still be running the `[&]` lambda below, which dereferences `*ui`.
         // Declaring them the other way round would destroy `ui` while the
         // window thread could still be alive to call into it.
+        //
+        // Task 8: `hang` is declared before both, because the `[&]` lambda
+        // reaches it too -- but it is STOPPED explicitly right after
+        // window.Wait() below (R36), not left to its destructor, since its
+        // waiter posts into `window` and `window` is destroyed first.
+        std::unique_ptr<HangWatch>      hang;
         std::unique_ptr<ReporterWindow> ui;
         NativeWindow                    window;
         std::string                     logTail;
@@ -205,8 +364,55 @@ namespace
         {
             logTail = ReadLogTail(stem, std::filesystem::path(ToWide(envelope->logPath)), 200);
             const ReportView initial = BuildReportView(*envelope, a, nullptr, logTail);
-            ui = std::make_unique<ReporterWindow>(initial, [&](int id) { OnButton(id, *ui, window); });
+            ui = std::make_unique<ReporterWindow>(initial, [&](int id) { OnButton(id, *ui, window, hang.get()); });
+
+            // The hang protocol (spec s5.4): the handles are opened BEFORE the
+            // window exists, so a click can never find `hang` half-built; the
+            // closing event exists before any waiter does (R36).
+            if (initial.isHang)
+            {
+                hang = std::make_unique<HangWatch>();
+                hang->host        = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, a.pid);
+                hang->recovered   = a.recoveredEvent.empty() ? nullptr : OpenEventW(SYNCHRONIZE, FALSE, ToWide(a.recoveredEvent).c_str());
+                hang->closing     = CreateEventW(nullptr, /*manualReset*/TRUE, FALSE, nullptr);
+                hang->hostCreated = a.hostCreated;
+            }
+
             ui->Show(window, a.product);
+
+            // Only once the window is genuinely up: before that there is no
+            // one to post to, and a window that never opened is the
+            // unattended case (R89's third bullet), which waits on nothing.
+            if (hang && window.WasEverOpen())
+            {
+                if (!hang->host)
+                {
+                    // Gone already (or not ours to open). Nothing to wait on
+                    // and nothing Terminate could reach: this is a crash view.
+                    ARC_WARN("reporter: cannot open host pid {} ({}); showing the report as a crash view", a.pid, GetLastError());
+                    ui->BecomeCrashView(" -- the host could not be reached");
+                }
+                else if (!hang->IsTheHost())
+                {
+                    // D7: the pid was recycled -- the host that hung is gone
+                    // and this is a stranger. The IdentityMismatch row, on the
+                    // window thread like every other hang decision.
+                    ARC_ERROR("reporter: pid {} is not the host that reported the hang (creation time differs)", a.pid);
+                    window.PostUser(ReporterWindow::kUserHostMismatch);
+                }
+                else if (hang->closing)
+                {
+                    hang->Start(window);
+                }
+                else
+                {
+                    // R36: without a closing event a waiter could only be
+                    // ended by TerminateThread, which is never used. The
+                    // buttons still work; recovery and a host exit are just
+                    // not noticed.
+                    ARC_WARN("reporter: cannot create the closing event ({}); not watching the host", GetLastError());
+                }
+            }
         }
 
         // Symbolize on a WORKER under the unattended deadline (spec §6). The
@@ -372,6 +578,23 @@ namespace
         // Shutdown() below must not run while that window is still up.
         if (ui) window.Wait();
 
+        // R36: the waiter is released and joined HERE -- after the window is
+        // gone, before anything it captured (`window` above all) goes out of
+        // scope.
+        if (hang) hang->Stop();
+
+        // Task 8: the exit code. Precedence, in order:
+        //   4 (kHostMismatch) -- a genuine identity mismatch is the one hang
+        //     outcome that names a failure, and the more specific one: it says
+        //     this reporter REFUSED an action, which a parent checking the
+        //     code needs to know even if the sibling write also failed;
+        //   6 (kWriteFailed)  -- otherwise a failed sibling write still
+        //     surfaces (R64), whatever the hang outcome was: every other
+        //     outcome carries 0, and 0 must not paper over a missing artifact;
+        //   0 (kOk).
+        // Returning here (never exiting) is also what routes the mismatch
+        // through ArmedDiagnostics' scope guard (R67).
+        if (hang && hang->outcomeExit.load() == ExitCode::kHostMismatch) return ExitCode::kHostMismatch;
         return writeOk ? ExitCode::kOk : ExitCode::kWriteFailed;
     }
 }

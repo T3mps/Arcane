@@ -1539,6 +1539,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/HangSession.cpp",
     }
 
     includedirs {

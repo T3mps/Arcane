@@ -2,6 +2,8 @@
 #include "Win32Text.hpp"
 #include <windowsx.h>
 
+#include <algorithm>
+
 namespace Arcane::Reporter
 {
     namespace
@@ -46,7 +48,12 @@ namespace Arcane::Reporter
         NativeWindowDesc d;
         d.className = L"ArcaneCrashReporter";
         d.title     = ToWide(m_view.title.empty() ? productForTitle : m_view.title);
-        d.width = 900; d.height = 640;
+        // R92 (task 8): 1000, not 900. The hang view shows all six buttons,
+        // and at 96 DPI they need 2*12 + 6*150 + 5*8 = 964 px of client
+        // area; a 900 px window has about 884, which clipped "Terminate and
+        // Collect" off the right edge. Layout also shrinks the row to fit
+        // (below), so this is the width at which nothing HAS to shrink.
+        d.width = 1000; d.height = 640;
         d.popup = false; d.topmost = false; d.appWindow = true;
         d.foreground = true;   // UE's CRC forces itself to front (CrashReportClientApp.cpp:425-427)
         d.backgroundRgb = 0xF0F0F0;   // the system button face: plain Win32 controls draw on it
@@ -57,8 +64,21 @@ namespace Arcane::Reporter
 
     void ReporterWindow::SetView(ReportView v)
     {
-        { std::lock_guard<std::mutex> lk(m_mutex); m_view = std::move(v); m_symbolizing = false; }
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            if (m_crashView) ApplyCrashViewLocked(v);   // R35: the latch survives a later view
+            m_view = std::move(v);
+            m_symbolizing = false;
+        }
         if (m_window) m_window->PostUser(kUserViewChanged);
+    }
+
+    void ReporterWindow::ApplyCrashViewLocked(ReportView& v) const
+    {
+        v.isHang = false;
+        v.canRelaunch = !v.relaunchLine.empty();
+        v.headline += m_crashSuffix;
+        v.title += m_crashSuffix;
     }
 
     void ReporterWindow::BecomeCrashView(const std::string& headlineSuffix)
@@ -71,10 +91,10 @@ namespace Arcane::Reporter
         std::string title;
         {
             std::lock_guard<std::mutex> lk(m_mutex);
-            m_view.isHang = false;
-            m_view.canRelaunch = !m_view.relaunchLine.empty();
-            m_view.headline += headlineSuffix;
-            m_view.title += headlineSuffix;
+            if (m_crashView) return;   // R35: the first call wins
+            m_crashView   = true;
+            m_crashSuffix = headlineSuffix;
+            ApplyCrashViewLocked(m_view);
             title = m_view.title;
         }
         if (m_window) { m_window->SetTitle(ToWide(title)); m_window->PostUser(kUserViewChanged); }
@@ -228,9 +248,16 @@ namespace Arcane::Reporter
 
     void ReporterWindow::Layout(int w, int h)
     {
+        // Minimized: WM_SIZE (and GetClientRect, from ApplyView) report 0x0.
+        // R92's shrink-to-fit would lay every button out at zero width, and a
+        // zero-width button cannot be clicked even programmatically --
+        // BM_CLICK's synthesized point falls outside it; the task 8 desk proof
+        // hit exactly that. Keep the last real layout; the restore brings a
+        // real size and lays out again.
+        if (w <= 0 || h <= 0) return;
         const int dpi = static_cast<int>(GetDpiForWindow(static_cast<HWND>(m_hwnd)));
         auto px = [&](int v) { return MulDiv(v, dpi, 96); };
-        const int m = px(12), line = px(20), btnW = px(150), btnH = px(28);
+        const int m = px(12), line = px(20), btnH = px(28), gap = px(8);
         int y = m;
         MoveWindow(static_cast<HWND>(m_header), m, y, w - 2 * m, line, TRUE); y += line + px(2);
         MoveWindow(static_cast<HWND>(m_when),   m, y, w - 2 * m, line, TRUE); y += line + px(2);
@@ -239,13 +266,30 @@ namespace Arcane::Reporter
         if (IsWindowVisible(static_cast<HWND>(m_combo))) y += px(26) + px(4);
         const int detailsBottom = h - m - btnH - px(8);
         MoveWindow(static_cast<HWND>(m_details), m, y, w - 2 * m, detailsBottom - y, TRUE);
+        // R92 (task 8): the button row never runs past the client edge. The
+        // preferred width is 150 px; when the visible buttons do not fit, it
+        // shrinks to share what there is, down to a 72 px floor (about the
+        // shortest label, "Close", with padding). Below the floor -- a window
+        // the user dragged narrower than any sensible row -- the edge still
+        // wins: the last buttons are clipped to end AT the edge rather than
+        // drawn past it. The style bit, not IsWindowVisible, decides which
+        // buttons count: IsWindowVisible is false for every child while the
+        // parent itself is not yet shown (the first Layout runs from OnCreate).
+        auto shown = [](void* c) { return (GetWindowLongW(static_cast<HWND>(c), GWL_STYLE) & WS_VISIBLE) != 0; };
+        int visible = 0;
+        for (void* b : m_buttons) if (shown(b)) ++visible;
+        const int room = w - 2 * m - (visible > 1 ? (visible - 1) * gap : 0);
+        int btnW = px(150);
+        if (visible > 0 && visible * btnW > room) btnW = (std::max)(room / visible, px(72));
+        const int right = w - m;
         int x = m;
         for (int i = 0; i < 6; ++i)
         {
             HWND b = static_cast<HWND>(m_buttons[i]);
-            if (!IsWindowVisible(b)) continue;
-            MoveWindow(b, x, h - m - btnH, btnW, btnH, TRUE);
-            x += btnW + px(8);
+            if (!shown(b)) continue;
+            const int bw = (std::max)(0, (std::min)(btnW, right - x));
+            MoveWindow(b, x, h - m - btnH, bw, btnH, TRUE);
+            x += btnW + gap;
         }
     }
 
@@ -272,10 +316,25 @@ namespace Arcane::Reporter
         if (id >= kBtnOpenFolder && id <= kBtnTerminate && m_onCommand) m_onCommand(id);
     }
 
-    bool ReporterWindow::OnUser(unsigned msg, std::uintptr_t, std::intptr_t)
+    // Task 8: the host events arrive here as posted messages -- from the
+    // reporter's waiter thread (exited / recovered) or its main thread (the
+    // start-up identity check) -- and go out through the same m_onCommand the
+    // buttons use, so ReporterMain decides every hang outcome in one place,
+    // on this thread. A message posted after the window died is simply never
+    // delivered (NativeWindow::PostUser posts to a null or dead HWND), which
+    // is what makes a late host event harmless.
+    bool ReporterWindow::OnUser(unsigned msg, std::uintptr_t w, std::intptr_t)
     {
         if (msg == kUserViewChanged) { ApplyView(); return true; }   // full refresh, incl. ComboBox_ResetContent (R84)
-        return false;   // kUserHostRecovered / kUserHostExited: task 8
+        if (msg == kUserHostExited)
+        {
+            m_hostExitCode.store(static_cast<std::uint32_t>(w));
+            if (m_onCommand) m_onCommand(kHostExited);
+            return true;
+        }
+        if (msg == kUserHostRecovered) { if (m_onCommand) m_onCommand(kHostRecovered); return true; }
+        if (msg == kUserHostMismatch)  { if (m_onCommand) m_onCommand(kHostMismatch);  return true; }
+        return false;
     }
 
     void ReporterWindow::OnDestroy()

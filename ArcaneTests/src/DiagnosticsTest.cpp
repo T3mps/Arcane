@@ -337,6 +337,57 @@ TEST_CASE("Diagnostics watchdog re-arms and does not spam a single stall", "[dia
     CHECK(Arcane::Diagnostics::ReportCount() > afterFirstStall);
 }
 
+#if defined(_WIN32)
+// Spec s5.4 / D11: the host creates Local\Arcane-Recovered-<pid> at Install,
+// RESETS it before a survivable report's hand-off (spawnReporter is off here,
+// so the reset is the only observable) and SETS it when the beat resumes.
+//
+// R45: the event is SET by the test BEFORE the hang is provoked. A freshly
+// created event starts non-signalled, so without this the WAIT_TIMEOUT below
+// would pass whether or not the host ever called ResetEvent -- it would be
+// witnessing CreateEventW's initial state, not the protocol. Opening with
+// EVENT_MODIFY_STATE is what lets this side SetEvent it.
+TEST_CASE("diagnostics: the recovered event is reset by a hang report and set when the main thread beats again", "[diag]")
+{
+    if (IsDebuggerPresent())
+    {
+        SUCCEED("watchdog is suppressed under a debugger by design");
+        return;
+    }
+
+    const std::filesystem::path dir = FreshReportDir("recovered-event");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "RecoveredEventTest";
+    cfg.dumpDir             = dir.string();
+    cfg.unattended          = true;
+    cfg.spawnReporter       = false;
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = true;
+    cfg.hangSeconds         = 1;
+    ArmedDiagnostics armed(cfg);
+
+    const std::wstring name = L"Local\\Arcane-Recovered-" + std::to_wstring(GetCurrentProcessId());
+    HANDLE ev = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name.c_str());
+    REQUIRE(ev != nullptr);
+    struct CloseEv { HANDLE h; ~CloseEv() { CloseHandle(h); } } closeEv{ ev };
+
+    REQUIRE(SetEvent(ev));                                // R45: signalled, so only the host's reset can clear it
+    REQUIRE(WaitForSingleObject(ev, 0) == WAIT_OBJECT_0);
+
+    const std::uint32_t before = Arcane::Diagnostics::ReportCount();
+    Arcane::Diagnostics::Heartbeat();   // arms the trigger; then silence
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (Arcane::Diagnostics::ReportCount() == before && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    REQUIRE(Arcane::Diagnostics::ReportCount() == before + 1);
+    CHECK(WaitForSingleObject(ev, 0) == WAIT_TIMEOUT);   // reset for the reporter that would be waiting
+
+    Arcane::Diagnostics::Heartbeat();                    // the main thread moves again
+    CHECK(WaitForSingleObject(ev, 2000) == WAIT_OBJECT_0);
+}
+#endif
+
 TEST_CASE("Diagnostics emits an .arcdiag with a GPU section when a provider is installed", "[diag]")
 {
     const std::filesystem::path dir = FreshReportDir("arcdiag-with-provider");

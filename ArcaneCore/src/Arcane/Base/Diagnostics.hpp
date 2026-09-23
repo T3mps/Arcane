@@ -483,6 +483,13 @@ namespace Arcane::Diagnostics
         // a gap during which nothing was expected to move.
         void Reset() noexcept;
 
+        // Whether the CURRENT stall already produced its report. The watchdog
+        // reads it on both sides of a Poll(): true before and false after means
+        // the counter moved again after a gpu-stall report, which is when the
+        // hang protocol signals the recovered event (plan 2, D11). Inline, so
+        // it adds no export.
+        [[nodiscard]] bool WasReported() const noexcept { return m_reported; }
+
     private:
         double        m_stallSeconds;
         std::uint64_t m_value    = 0;
