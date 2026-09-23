@@ -51,7 +51,13 @@ int main(int argc, char** argv)
 
     if (die == "av")                { int* p = nullptr; *p = 1; }
     else if (die == "assert")       { ARC_ASSERT(false, "fixture assert"); }
-    else if (die == "ensure")       { (void)ARC_ENSURE(false, "fixture ensure"); return 0; }
+    // NOT `return 0` here: an ensure is the one mode that SURVIVES, so it must
+    // leave by the ordinary exit below -- which calls Diagnostics::Shutdown().
+    // Returning straight out of main skipped it and left the watchdog's
+    // std::thread joinable at static destruction, whose destructor calls
+    // std::terminate: the "survivable" mode died (and, before this task's
+    // handlers existed, wedged unkillably on the CRT's abort box).
+    else if (die == "ensure")       { (void)ARC_ENSURE(false, "fixture ensure"); }
     else if (die == "terminate")    { throw std::runtime_error("fixture terminate"); }
     else if (die == "abort")        { std::abort(); }
     else if (die == "invalid-parameter") { char buf[4]; strcpy_s(buf, 4, "toolong"); }

@@ -247,3 +247,41 @@ TEST_CASE("death fixture: a clean run exits 0 and writes nothing", "[diag]")
     CHECK(r.run.exitCode == 0);
     CHECK(r.stem.empty());
 }
+
+// THE FAILURE THIS PINS (task 7). Every death that is NOT an SEH fault is
+// invisible today: a failing ARC_ASSERT goes to Mosaic's abort(), an uncaught
+// exception to std::terminate, a CRT contract violation to __fastfail -- none
+// of them reach the crash thread, so none of them leave a report, and under a
+// Debug CRT some of them stop on a modal box no unattended run can dismiss.
+// The wall-time bound is part of the assertion, not decoration: a dialog is
+// observable here ONLY as a run that burns the 30s cap.
+TEST_CASE("death fixture: assert, terminate, abort, invalid parameter, pure call, stack overflow "
+          "and OOM all yield a report with the right kind and exit 10, bounded", "[diag]")
+{
+    struct Row { const char* mode; const char* kind; };
+    const Row rows[] = { {"assert","assert"}, {"terminate","terminate"}, {"abort","terminate"},
+                         {"invalid-parameter","crash"}, {"purecall","crash"},
+                         {"stack-overflow","crash"}, {"oom","out-of-memory"} };
+    for (const Row& row : rows)
+    {
+        INFO("mode " << row.mode);
+        const FixtureRun r = RunFixture(row.mode);
+        CHECK_FALSE(r.run.timedOut);
+        CHECK(r.run.exitCode == 10);
+        REQUIRE_FALSE(r.stem.empty());
+        CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == row.kind);
+        CHECK(r.run.wallMs < 20000);
+    }
+}
+
+// The one member of the family that must NOT kill the process: an ensure is a
+// report you walk away from (spec S5.3, UE's continuable report). Envelope
+// only -- no minidump -- and the fixture goes on to return 0.
+TEST_CASE("death fixture: an ensure writes a lightweight report and the process continues to exit 0", "[diag]")
+{
+    const FixtureRun r = RunFixture("ensure");
+    CHECK(r.run.exitCode == 0);
+    REQUIRE_FALSE(r.stem.empty());
+    CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "ensure");
+    CHECK_FALSE(std::filesystem::exists(r.stem.string() + ".dmp"));
+}

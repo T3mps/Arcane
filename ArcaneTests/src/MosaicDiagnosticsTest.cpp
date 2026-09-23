@@ -49,7 +49,14 @@ TEST_CASE("Mosaic assert failures route through the Arcane handler (ENSURE, non-
     std::string captured;
     auto cb = AttachCapture(captured);
     Arcane::Assert::InstallMosaicHandler();     // install into THIS module
-    const bool ok = MOSAIC_ENSURE(false, "diag-ensure-msg");   // non-fatal, returns false
+    // ARC_ENSURE, not a bare MOSAIC_ENSURE (task 7): Mosaic hands the handler
+    // one AssertContext with no fatal/recoverable flag in it, so the Arcane
+    // handler tells the two apart by the depth ARC_ENSURE raises. A raw
+    // MOSAIC_ENSURE through the Arcane handler is therefore read as a fatal
+    // assert and takes the process down with a crash report -- which is
+    // exactly what this case did to the whole [diag] suite until it was
+    // written the way the engine actually spells an ensure.
+    const bool ok = ARC_ENSURE(false, "diag-ensure-msg");   // non-fatal, returns false
     DetachCapture(cb);
 
     CHECK_FALSE(ok);

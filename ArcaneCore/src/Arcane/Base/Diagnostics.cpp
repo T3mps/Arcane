@@ -11,11 +11,15 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <csignal>       // signal(SIGABRT) -- a third party's abort()
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
-#include <cstdlib>
+#include <cstdlib>       // _set_abort_behavior, _set_invalid_parameter_handler, _set_purecall_handler
 #include <cstring>
+#include <exception>     // set_terminate, current_exception, rethrow_exception
 #include <iterator>
+#include <new>           // std::bad_alloc -- the terminate handler's OOM arm
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -32,6 +36,7 @@
 // symbolizes the minidump out of process instead.
 #include <dbghelp.h>
 #pragma comment(lib, "dbghelp.lib")
+#include <crtdbg.h>   // _CrtSetReportMode/_CrtSetReportFile -- the Debug CRT's box, redirected to stderr
 #endif
 
 namespace Arcane::Diagnostics
@@ -1201,6 +1206,20 @@ namespace
     // only decide how to die -- never whether to.
     constexpr DWORD kD3D12DebugLayerFailFast = 0x0000087dul;
 
+    // MSVC's C++ exception code ('msc' | 0xE0000000). A `throw` that nothing
+    // catches is raised as THIS, and -- measured on this toolchain, not
+    // assumed -- it arrives HERE, at the top-level filter, rather than at
+    // std::terminate: with a filter installed, the CRT's own unhandled-C++
+    // filter never gets to call terminate(). So the classification has to
+    // live on both paths (see ActiveExceptionReason below), or every uncaught
+    // exception -- an OOM included -- would be filed as a plain `crash`.
+    constexpr DWORD kMsvcCppException = 0xE06D7363ul;
+
+    // Both defined with the fail-fast family below; ActiveExceptionReason is
+    // shared with OnTerminate.
+    const char* ActiveExceptionReason(const char* fallback) noexcept;
+    const char* CppExceptionReason(const EXCEPTION_RECORD* record) noexcept;
+
     LONG WINAPI OnUnhandledException(EXCEPTION_POINTERS* ep)
     {
         // No re-entry guard here any more: SubmitReport owns it (a second
@@ -1245,6 +1264,26 @@ namespace
             TerminateProcess(GetCurrentProcess(), 1);
         }
 
+        // An uncaught C++ exception is a TERMINATE, not a fault: same kind,
+        // same reason and the same OOM classification it would have got from
+        // std::terminate (spec S5.3), because which of the two paths the
+        // toolchain happens to route it down is not something a crash report
+        // should be able to disagree about. `ep` still travels, so the
+        // minidump is taken at the throw site.
+        if (ep && ep->ExceptionRecord &&
+            ep->ExceptionRecord->ExceptionCode == kMsvcCppException)
+        {
+            // The throw record first (it carries the type even here, where
+            // std::current_exception() is empty because nothing has caught
+            // anything), then the terminate-path classifier, then a plain
+            // statement of what happened.
+            const char* reason = CppExceptionReason(ep->ExceptionRecord);
+            if (!reason)
+                reason = ActiveExceptionReason("terminate: unhandled C++ exception");
+            SubmitReport({ reason, ep, false, ExitCode::kCrashed });
+            return EXCEPTION_EXECUTE_HANDLER;
+        }
+
         // Never chains to g_prevFilter for our OWN kinds: that chain is what
         // let WER's dialog appear on top of a report we had already written
         // (spec S5.2). SubmitReport terminates with kCrashed, so the return
@@ -1253,6 +1292,257 @@ namespace
         // still leave the process to whatever handled faults before us.
         SubmitReport({ "crash (unhandled exception)", ep, false, ExitCode::kCrashed });
         return EXCEPTION_EXECUTE_HANDLER;
+    }
+#endif
+
+#if defined(_WIN32)
+    // ---- the fail-fast family (spec S5.1 items 1-4, S5.3) -----------------
+    //
+    // SEH is not the only way a process dies. A failing assert aborts, an
+    // uncaught exception terminates, a CRT contract violation fail-fasts, a
+    // pure virtual call traps -- and none of those reaches the unhandled
+    // exception filter above. Each handler below is the SAME entry into the
+    // crash thread, differing only in the reason it hands over (DeriveKindCStr
+    // reads the kind straight out of that reason, which is why the prefixes
+    // are load-bearing).
+    //
+    // All of them run ON the faulting thread, after the fault: noexcept,
+    // heap-free, and never returning -- SubmitReport terminates the process
+    // once the report is on disk. Reasons are formatted into the crash arena
+    // (R3), and SubmitReport copies them into the pending record before the
+    // crash thread resets that arena, so no reason ever dangles.
+
+    // The one piece of this family that may touch C++ machinery: classifying
+    // the in-flight exception is the whole point (a std::bad_alloc is an OOM,
+    // not a generic terminate -- UE gives OOM its own crash type), and the
+    // only way to see its type is to rethrow it into a catch. Every arm ends
+    // in a literal or an arena slot, and catch(...) means nothing escapes.
+    // `fallback` is what the caller means by "no exception was active", which
+    // differs between the two callers.
+    const char* ActiveExceptionReason(const char* fallback) noexcept
+    {
+        const char* reason = fallback;
+        if (const std::exception_ptr ex = std::current_exception())
+        {
+            try { std::rethrow_exception(ex); }
+            catch (const std::bad_alloc& e) { reason = CrashArena::Instance().Format("out-of-memory: %s", e.what()); }
+            catch (const std::exception& e) { reason = CrashArena::Instance().Format("terminate: %s", e.what()); }
+            catch (...)                     { reason = "terminate: non-std exception"; }
+        }
+        return reason;
+    }
+
+    void OnTerminate() noexcept
+    {
+        SubmitReport({ ActiveExceptionReason("terminate: (no active exception)"),
+                       nullptr, false, ExitCode::kCrashed });
+    }
+
+    // ---- the throw record, decoded ----------------------------------------
+    //
+    // An exception that nothing catches arrives at the unhandled-exception
+    // filter with the C++ machinery still in front of it: nothing has been
+    // caught, so std::current_exception() is empty (measured, not assumed) and
+    // the rethrow classification above has nothing to work with. The raised
+    // record DOES carry the type, in the form the compiler emits for every
+    // `throw`: parameters {magic, object, ThrowInfo, image base}, and the
+    // ThrowInfo names every type the throw is catchable as. That list is how
+    // `catch (const std::bad_alloc&)` would have matched -- so reading it is
+    // the same question a catch asks, asked without unwinding anything.
+    //
+    // Layouts are the compiler's (vcruntime's ehdata.h), restated here because
+    // that header is not public. Every offset is an RVA against the image base
+    // on x64.
+    struct ThrowPmd            { int mdisp; int pdisp; int vdisp; };
+    struct ThrowCatchableType  { unsigned int properties; int pType; ThrowPmd thisDisplacement;
+                                 int sizeOrOffset; int copyFunction; };
+    struct ThrowCatchableArray { int count; int types[1]; };
+    struct ThrowInfoLayout     { unsigned int attributes; int pmfnUnwind; int pForwardCompat;
+                                 int pCatchableTypeArray; };
+    struct ThrowTypeDescriptor { const void* vftable; void* spare; char name[1]; };
+
+    template <typename T>
+    const T* FromRva(const char* base, int rva) noexcept
+    {
+        return rva != 0 ? reinterpret_cast<const T*>(base + rva) : nullptr;
+    }
+
+    bool NameContains(const char* name, const char* needle) noexcept
+    {
+        return name && needle && std::strstr(name, needle) != nullptr;
+    }
+
+    const char* CppExceptionReason(const EXCEPTION_RECORD* record) noexcept
+    {
+        if (!record || record->NumberParameters < 4) return nullptr;
+
+        const char* const objectPtr = reinterpret_cast<const char*>(record->ExceptionInformation[1]);
+        const auto* const info      = reinterpret_cast<const ThrowInfoLayout*>(record->ExceptionInformation[2]);
+        const char* const imageBase = reinterpret_cast<const char*>(record->ExceptionInformation[3]);
+        // A bare `throw;` with nothing in flight carries no ThrowInfo.
+        if (!info || !objectPtr) return nullptr;
+
+        const char* typeName   = nullptr;
+        const char* whatText   = nullptr;
+        bool        isBadAlloc = false;
+
+        // Structure-walking memory handed to us by a process that is already
+        // dying: SEH, so a torn record degrades to "unclassified" instead of
+        // faulting the crash path. No C++ object with a destructor may be in
+        // scope here -- hence the raw pointers above.
+        __try
+        {
+            const auto* const types = FromRva<ThrowCatchableArray>(imageBase, info->pCatchableTypeArray);
+            const int count = types ? types->count : 0;
+            int stdExceptionDisp = -1;
+
+            for (int i = 0; i < count && i < 16; ++i)
+            {
+                const auto* const ct = FromRva<ThrowCatchableType>(imageBase, types->types[i]);
+                if (!ct) continue;
+                const auto* const td = FromRva<ThrowTypeDescriptor>(imageBase, ct->pType);
+                if (!td) continue;
+
+                const char* const name = td->name;   // mangled: ".?AVbad_alloc@std@@"
+                if (!typeName) typeName = name;      // [0] is the most-derived type
+                if (NameContains(name, "bad_alloc") || NameContains(name, "bad_array_new_length"))
+                    isBadAlloc = true;
+                // The std::exception subobject, if this throw has one: pdisp
+                // < 0 means a plain (non-virtual-base) offset, which is all
+                // we are willing to follow.
+                if (std::strcmp(name, ".?AVexception@std@@") == 0 && ct->thisDisplacement.pdisp < 0)
+                    stdExceptionDisp = ct->thisDisplacement.mdisp;
+            }
+
+            // what() through the SAME offset a catch would have applied. The
+            // object is alive: the exception is still in flight.
+            if (stdExceptionDisp >= 0)
+                whatText = reinterpret_cast<const std::exception*>(objectPtr + stdExceptionDisp)->what();
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return nullptr;
+        }
+
+        if (isBadAlloc)
+            return CrashArena::Instance().Format("out-of-memory: %s",
+                                                 whatText ? whatText : "std::bad_alloc");
+        if (whatText)
+            return CrashArena::Instance().Format("terminate: %s", whatText);
+        if (typeName)
+            return CrashArena::Instance().Format("terminate: unhandled C++ exception %s", typeName);
+        return nullptr;
+    }
+
+    // A third party's abort() -- or our own, if anything still reaches one.
+    // _set_abort_behavior below has already stripped the banner and the WER
+    // hand-off, so this is now the whole of what abort() does.
+    void OnAbortSignal(int) noexcept
+    {
+        SubmitReport({ "terminate: abort() called", nullptr, false, ExitCode::kCrashed });
+    }
+
+    void OnInvalidParameter(const wchar_t* expr, const wchar_t* fn, const wchar_t* file,
+                            unsigned int line, std::uintptr_t) noexcept
+    {
+        // The CRT passes nulls in Release (those strings are Debug-only), so
+        // format what exists rather than what the signature promises.
+        (void)expr;
+        const char* reason = CrashArena::Instance().Format(
+            "crash: CRT invalid parameter in %ls (%ls:%u)",
+            fn ? fn : L"?", file ? file : L"?", line);
+        SubmitReport({ reason, nullptr, false, ExitCode::kCrashed });
+    }
+
+    void OnPureCall() noexcept
+    {
+        SubmitReport({ "crash: pure virtual function call", nullptr, false, ExitCode::kCrashed });
+    }
+
+    // What Install() replaced, so Shutdown() can put every slot back (R2). An
+    // Install/Shutdown cycle must leave the process exactly as it found it --
+    // the test suite arms and disarms Diagnostics dozens of times and has to
+    // keep its OWN fault handling in between.
+    using SigHandler = void (*)(int);
+
+    constexpr unsigned int kAbortBehaviorMask = _WRITE_ABORT_MSG | _CALL_REPORTFAULT;
+
+    bool                       g_failFastInstalled = false;
+    UINT                       g_prevErrorMode     = 0;
+    unsigned int               g_prevAbortBehavior = 0;
+    std::terminate_handler     g_prevTerminate     = nullptr;
+    SigHandler                 g_prevSigAbrt       = nullptr;
+    _invalid_parameter_handler g_prevInvalidParam  = nullptr;
+    _purecall_handler          g_prevPureCall      = nullptr;
+
+    void InstallFailFastHandlers(const Config& cfg) noexcept
+    {
+        if (g_failFastInstalled) return;
+
+        // 1. No OS error box. SEM_NOGPFAULTERRORBOX ONLY when unattended --
+        //    UE's rule (LaunchWindows.cpp:211): an interactive run keeps WER
+        //    reachable as the backstop for the fail-fasts SEH never sees
+        //    (ntdll's __fastfail, /GS cookie failures), while our own filter
+        //    terminates before WER's dialog could appear for everything else.
+        UINT mode = SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
+        if (cfg.unattended) mode |= SEM_NOGPFAULTERRORBOX;
+        g_prevErrorMode = SetErrorMode(mode);
+
+        // 2. abort() writes no banner and hands nothing to WER; the Debug CRT
+        //    reports to stderr instead of a modal box. AFTER THIS LINE NO CRT
+        //    DIALOG CAN APPEAR -- which is what makes an unattended run (CI,
+        //    the death fixture, a cooked build on a build agent) die in
+        //    milliseconds instead of wedging on a box nobody can click.
+        g_prevAbortBehavior = _set_abort_behavior(0, kAbortBehaviorMask);
+#if defined(_DEBUG)
+        _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+        _CrtSetReportMode(_CRT_ERROR,  _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(_CRT_ERROR,  _CRTDBG_FILE_STDERR);
+        _CrtSetReportMode(_CRT_WARN,   _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(_CRT_WARN,   _CRTDBG_FILE_STDERR);
+#endif
+
+        // 3. The family proper.
+        g_prevTerminate    = std::set_terminate(&OnTerminate);
+        g_prevSigAbrt      = std::signal(SIGABRT, &OnAbortSignal);
+        g_prevInvalidParam = _set_invalid_parameter_handler(&OnInvalidParameter);
+        g_prevPureCall     = _set_purecall_handler(&OnPureCall);
+
+        // 4. Room for the exception filter to run on a stack that has just
+        //    overflowed. EXCEPTION_STACK_OVERFLOW needs no handler of its own
+        //    -- the filter only signals the crash thread and waits, and the
+        //    crash thread has its own 256 KiB stack -- but it does need these
+        //    64 KiB below the guard page to get that far.
+        ULONG guarantee = 64 * 1024;
+        SetThreadStackGuarantee(&guarantee);
+
+        g_failFastInstalled = true;
+    }
+
+    void RestoreFailFastHandlers() noexcept
+    {
+        if (!g_failFastInstalled) return;
+        g_failFastInstalled = false;
+
+        SetErrorMode(g_prevErrorMode);
+        _set_abort_behavior(g_prevAbortBehavior, kAbortBehaviorMask);
+        std::set_terminate(g_prevTerminate);
+        // signal() reports FAILURE as SIG_ERR, which is not a handler to put
+        // back; anything else (SIG_DFL included) is.
+        if (g_prevSigAbrt != SIG_ERR) std::signal(SIGABRT, g_prevSigAbrt);
+        _set_invalid_parameter_handler(g_prevInvalidParam);
+        _set_purecall_handler(g_prevPureCall);
+
+        g_prevErrorMode     = 0;
+        g_prevAbortBehavior = 0;
+        g_prevTerminate    = nullptr;
+        g_prevSigAbrt      = nullptr;
+        g_prevInvalidParam = nullptr;
+        g_prevPureCall     = nullptr;
+        // The _CrtSetReportMode redirection and the stack guarantee stay: both
+        // are harmless on their own, and neither has a "previous value" worth
+        // restoring -- a modal CRT box is never what a caller wanted back.
     }
 #endif
 
@@ -1518,6 +1808,16 @@ void Install(const Config& cfg)
     g_gpuBeatSeen.store(false, std::memory_order_release);
 
 #if defined(_WIN32)
+    // FIRST, and gated (R2). Spec S5.1 items 1-4: no OS or CRT dialog can
+    // appear after this call, and every non-SEH death has a handler -- which
+    // is worth having in place before the lines below (the log sink, the
+    // module table, a CSPRNG draw) get a chance to die. Gated on
+    // installCrashHandler because this IS the crash-handler family: a host
+    // that asked us not to take the fault path (every [diag] case does) keeps
+    // its own terminate/abort/CRT handling too.
+    if (cfg.installCrashHandler)
+        InstallFailFastHandlers(g_cfg);
+
     g_mainThreadId = GetCurrentThreadId();
 
     // A build agent must never be left with an interactive process on it.
@@ -1609,6 +1909,11 @@ void Shutdown() noexcept
         SetUnhandledExceptionFilter(g_prevFilter);
         g_prevFilter = nullptr;
     }
+
+    // ...and everything ELSE Install replaced: the terminate handler, SIGABRT,
+    // the invalid-parameter and purecall handlers, the error mode. Symmetric
+    // with InstallFailFastHandlers, and a no-op when it never ran (R2).
+    RestoreFailFastHandlers();
 
     // The crash thread, and its handles. An Install/Shutdown cycle must
     // leave nothing joinable and no handle open: the event wakes the loop,
