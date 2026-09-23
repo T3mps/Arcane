@@ -66,7 +66,20 @@ namespace
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return std::filesystem::exists(p);
     }
-    bool OnBuildMachine() { return std::getenv("CI") || std::getenv("ARCANE_BUILD_MACHINE"); }
+    // R107 (controller ruling, fix round 1): mirrors
+    // CrashPathTest.cpp:225-229's SkipIfBuildMachine EXACTLY --
+    // global-constraints.md bullet 4 is binding for every test that needs a
+    // SPAWNED reporter, witness siblings included: skip only when CI or
+    // ARCANE_BUILD_MACHINE is set AND ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE
+    // is NOT, so Jenkins can opt these lanes in later without the override
+    // going silently unhonoured. Kept file-local, this suite's convention
+    // (CrashPathTest.cpp does not export its own copy either).
+    void SkipIfBuildMachine()
+    {
+        if ((std::getenv("CI") || std::getenv("ARCANE_BUILD_MACHINE")) && !std::getenv("ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE"))
+            SKIP("CI/ARCANE_BUILD_MACHINE set -- the reporter is never spawned on a build machine (spec §6; "
+                 "ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE overrides)");
+    }
 }
 
 // H1: the main thread stops beating for kHangMainSeconds (15 s) at frame 30 --
@@ -91,8 +104,7 @@ TEST_CASE("H1: a scripted main-thread hang yields a hang report, the reporter si
     CHECK(env->kind == "hang");
     CHECK(env->exitCode == 0);
     CHECK(std::filesystem::exists(stem.string() + ".dmp"));
-    if (OnBuildMachine())
-        SKIP("CI/ARCANE_BUILD_MACHINE set -- the reporter is never spawned on a build machine (spec s6)");
+    SkipIfBuildMachine();
     REQUIRE(WaitForFile(stem.string() + ".symbolized.txt", std::chrono::seconds(20)));
 }
 
