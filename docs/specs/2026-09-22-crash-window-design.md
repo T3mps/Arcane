@@ -59,6 +59,9 @@ ABI 39 -> 40: `Diag::Envelope` gained `std::string reason`,
 - Suite: `~[gpu]` 2026 cases / 2022 passed / 4 skipped; `[reporter]` 22;
   `[diag]` 92; `death fixture*` 13; `[platform]` 6; `[boot]` 33; `[host]`
   98; `[witness][gpu]` 8 cases, 7 passed, 1 skipped (G1, desk-gated);
+  G1 run by hand with the user's consent: RED (exit 42 after 6 s, TDR
+  fired, no `.arcdiag` -- the device-removed hook is not armed on the
+  headless offscreen graph device; §10, §13);
   `[witness][server]` 3/3; golden gate 8/8. All exit 0.
 
 **Plan 1 measurements (2026-09-22, Debug, this desk):**
@@ -610,7 +613,7 @@ not decide "abnormal" from the exit code either.
 - **D15 session record.** `Install` writes `<Install-time report
   dir>/<app>-pid<pid>.session` (JSON, absolute paths, temp file + rename:
   `pid`, `app`, `product`, `logPath`, `reportDir`, `commandLine`,
-  `hostCreated`, `recoveredEvent`), and ONLY when a monitor is actually
+  `hostCreated`, `launchedUtc`, `recoveredEvent`), and ONLY when a monitor is actually
   launched. The record's PATH is fixed for the host's life -- the monitor
   was told that path -- and `RetargetDumpDir` rewrites its CONTENTS in
   place (R101; deleting and rewriting at a new path would have made every
@@ -951,8 +954,24 @@ the log; the autosaves and the marker are already on disk.
   DESK-GATED: it skips unless `ARCANE_DIAG_DESK` is set, because it drives
   the real driver into a device reset; it is run by hand at a moment the
   user picks (`ARCANE_DIAG_DESK=1 ./ArcaneTests.exe "G1*"` from the
-  ArcaneTests exe dir). G1's outcome: pending the user's run (recorded
-  below when it happens).
+  ArcaneTests exe dir).
+  **G1 outcome (2026-09-23 12:25, run with the user's consent): RED.** The
+  command exited 42 after 6 s. The TDR fired: Vulkan returned
+  `DEVICE_LOST` at `QueueWaitIdle` (`NriDiagnostics.cpp:791`) and at
+  `QueueSubmit` (`RenderGraphExec.cpp:1441`), and the host stopped with
+  exitReason `render-failed` -- but NO `.arcdiag` was written, in either
+  `<scratch>/diagnostics` or `ReferenceProject/Saved/Diagnostics` (kept
+  artifact: `%TEMP%/arcane-witness/g1-crash-gpu-55928`). Cause (R109):
+  `ARC_NRI_CHECK`'s `DEVICE_LOST` branch (`NriCommon.cpp:156-159`) calls
+  `RenderErrorLatch::NoteDeviceLost`, which fires `m_deviceRemovedHook`
+  only when one is installed (`RenderErrorLatch.hpp:126-131`), and
+  `NriDiagnostics`' `Arm` installs it only `if (hook)`
+  (`NriDiagnostics.cpp:268-269`); on the headless Vulkan OFFSCREEN graph
+  device no hook was armed, so no gpu-crash report was written. This is
+  PRE-EXISTING -- plan 2 changed nothing under
+  `ArcaneClient/src/Arcane/Render` -- and owed (§13). The reporter side
+  of a `gpu-crash` report is proven separately by the plan-2 desk run
+  (R95): such a report gets its own reporter window.
 - **Desk**: the overlay close-crash reproduction shows GPU Tweak III by name
   in the window; a deliberate assert in the Aphelyon module shows expression
   and location; the exit sentinel against the Vulkan teardown hang if it
@@ -1032,6 +1051,9 @@ Owed from plan 2's build (2026-09-23):
   in the window before a project opens reports there, not under the
   project (D8) -- intended, but nothing points the project's
   `Saved/Diagnostics` at it afterwards.
+- Arm the device-removed hook on the headless/offscreen graph device (G1
+  RED, R109); re-run G1 (a machine-wide TDR, only with the user's
+  consent); consider a D3D12 G1 variant.
 - **Editor-styled reporter window.** The user asked for the reporter window
   to look like the editor's custom ImGui. Research: UE's crash reporter is
   a MONOLITHIC exe carrying Slate plus a standalone D3D11 renderer, which
