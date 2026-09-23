@@ -21,6 +21,16 @@ namespace Arcane
         std::uint32_t backgroundRgb = 0x0D0D0F;   // 0xRRGGBB class brush -- honoured only by the
                                                    // window that first registers `className`; give
                                                    // windows of different colours different class names
+        // Crash window plan 2, task 7 (R83): when true, the message loop runs
+        // every message through IsDialogMessageW first, which is what makes
+        // Tab/Shift+Tab walk WS_TABSTOP children, Enter click the
+        // BS_DEFPUSHBUTTON child, and Esc post a synthesized IDCANCEL
+        // WM_COMMAND -- none of that exists on the plain TranslateMessage/
+        // DispatchMessageW loop below, and a presenter cannot inject it from
+        // outside (it owns no access to the message loop). Default false so
+        // the boot splash -- which has no child controls to navigate between
+        // -- is untouched.
+        bool dialogNavigation = false;
     };
 
     // Called on the WINDOW THREAD only. Every default is a no-op so a presenter

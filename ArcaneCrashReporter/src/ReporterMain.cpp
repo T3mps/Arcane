@@ -13,7 +13,10 @@
 // (spec §12 item 2), which is how Diagnostics::ResolveReporterPath finds it at
 // "<exe dir>/ArcaneCrashReporter.exe".
 #include "FileText.hpp"
+#include "LogTail.hpp"
+#include "ReportView.hpp"
 #include "ReporterArgs.hpp"
+#include "ReporterWindow.hpp"
 #include "SymbolizedText.hpp"
 #include "Symbolizer.hpp"
 #include "Win32Text.hpp"
@@ -29,6 +32,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -38,6 +42,7 @@
 namespace
 {
     using namespace Arcane::Reporter;
+    using Arcane::NativeWindow;   // Arcane::Reporter is a child namespace of Arcane, not a re-export of it
 
     std::vector<std::string> ArgvUtf8()
     {
@@ -95,6 +100,36 @@ namespace
         return sibling;
     }
 
+    // Runs on the window thread (it IS `onCommand`, ReporterWindow's ctor
+    // contract). The folder and the relaunch line are read from the window's
+    // CURRENT view -- SetView may have replaced the initial one by the time a
+    // button fires -- through ReporterWindow's mutex-guarded accessors
+    // (R40), never captured once at window creation.
+    void OnButton(int id, ReporterWindow& ui, NativeWindow& window)
+    {
+        HWND hwnd = static_cast<HWND>(window.Hwnd());
+        switch (id)
+        {
+        case ReporterWindow::kBtnOpenFolder: OpenFolder(ToWide(ui.ReportFolder())); break;
+        case ReporterWindow::kBtnCopy:       CopyToClipboard(hwnd, ui.CurrentDetails()); break;
+        case ReporterWindow::kBtnRelaunch:
+            SpawnDetached(ui.RelaunchLine());
+            [[fallthrough]];
+        case ReporterWindow::kBtnClose:
+            // ON the window thread: PostMessageW, never window.Close() here --
+            // NativeWindow::Close() called from its own thread only posts
+            // WM_CLOSE and returns without joining (R51), so posting directly
+            // is the documented idiom with one less indirection, and calling
+            // it from OnCreate specifically would block forever (Close()
+            // waits on `ready`, which OnCreate itself has to return from
+            // first) -- not the case here, but the rule is "never from inside
+            // a presenter callback that runs before the window is ready".
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            break;
+        default: break;   // task 8: kBtnKeepWaiting / kBtnTerminate / kHostExited / kHostRecovered
+        }
+    }
+
     int RunReport(const Args& a)
     {
         const std::filesystem::path envelopePath = std::filesystem::path(ToWide(a.envelopePath));
@@ -121,6 +156,31 @@ namespace
         const ArmedDiagnostics armed(diag);
 
         const std::filesystem::path sibling = SymbolizedSiblingPath(stem);
+
+        // TASK 7: the window goes up now, BEFORE symbolization starts, so an
+        // attended run has it on screen within about a second saying
+        // "Symbolizing..." rather than waiting on dbgeng. `logTail` is read
+        // once here and reused for the final view below (R86: no host change
+        // needed to bound this -- the reporter's own --deadline default is
+        // spec §6's 60s) rather than a second file read the unattended path
+        // would never need.
+        //
+        // R34: `ui` is declared BEFORE `window`, so `window` -- declared
+        // second -- is destroyed FIRST at scope exit. NativeWindow's dtor
+        // joins the window thread; only once that join returns can nothing
+        // still be running the `[&]` lambda below, which dereferences `*ui`.
+        // Declaring them the other way round would destroy `ui` while the
+        // window thread could still be alive to call into it.
+        std::unique_ptr<ReporterWindow> ui;
+        NativeWindow                    window;
+        std::string                     logTail;
+        if (!a.unattended)
+        {
+            logTail = ReadLogTail(stem, std::filesystem::path(ToWide(envelope->logPath)), 200);
+            const ReportView initial = BuildReportView(*envelope, a, nullptr, logTail);
+            ui = std::make_unique<ReporterWindow>(initial, [&](int id) { OnButton(id, *ui, window); });
+            ui->Show(window, a.product);
+        }
 
         // Symbolize on a WORKER under the unattended deadline (spec §6). The
         // engine can block for an unbounded time inside symbol loading -- a
@@ -163,13 +223,15 @@ namespace
                 return cv.wait_for(lk, std::chrono::seconds(a.deadlineSeconds), [&] { return done; });
             }();
 
-            if (!symbolizedInTime)
+            if (!symbolizedInTime && a.unattended)
             {
-                // R39: UNGUARDED on purpose. Task 7 adds the window and wraps
-                // this branch in an `unattended` check -- an ATTENDED run must
-                // let the worker keep going while the user looks at the
-                // report. At this point in the plan no window exists, so
-                // unconditional is correct, and task 7 owns the guard.
+                // R39: guarded on `a.unattended` -- an ATTENDED run lets the
+                // worker keep going while the user looks at the window (which
+                // already shows "Symbolizing..."); only a headless run is
+                // bound by the deadline at all. When attended and the
+                // deadline has passed, control falls straight through to the
+                // unconditional `worker.join()` below and simply waits
+                // longer, same as if no deadline had been set.
                 //
                 // TerminateProcess, not a return: the worker captured `result`,
                 // `m`, `cv` and `done` BY REFERENCE off this frame. Returning
@@ -221,7 +283,15 @@ namespace
             return ExitCode::kWriteFailed;
         }
 
-        // TASK 7: the window, unless unattended.
+        // The window (when attended) gets the finished view -- the same
+        // `logTail` read before symbolization started, not a second read.
+        if (ui) ui->SetView(BuildReportView(*envelope, a, &result, logTail));
+
+        // Block here, not on ~NativeWindow: an attended run is done only once
+        // the user closes the window (a button, Esc, or the system menu);
+        // Shutdown() below must not run while that window is still up.
+        if (ui) window.Wait();
+
         return ExitCode::kOk;
     }
 }

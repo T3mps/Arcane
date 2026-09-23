@@ -150,8 +150,16 @@ namespace Arcane
                 MSG msg;
                 while (GetMessageW(&msg, nullptr, 0, 0) > 0)
                 {
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
+                    // R83: opt-in (see NativeWindowDesc::dialogNavigation) --
+                    // IsDialogMessageW consumes Tab/Enter/Esc and any other
+                    // keystroke it maps to child navigation, so a window with
+                    // no child controls (the splash) must not route through
+                    // it.
+                    if (!d.dialogNavigation || !IsDialogMessageW(h, &msg))
+                    {
+                        TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
                 }
                 impl->open.store(false);
             }
