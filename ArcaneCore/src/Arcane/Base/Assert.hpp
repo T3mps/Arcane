@@ -10,6 +10,9 @@
 
 #include <Mosaic/Assert.hpp>
 
+#include <atomic>            // ARC_ENSURE's per-call-site one-shot latch
+#include <source_location>   // ...captured at the call site, not inside the lambda
+
 namespace Arcane::Assert
 {
     ARCANE_CORE_API Mosaic::AssertHandler MosaicHandler() noexcept;
@@ -35,9 +38,9 @@ namespace Arcane::Assert
     // see each other's depth.
     ARCANE_CORE_API int& EnsureDepth() noexcept;
 
-    // Raises EnsureDepth() for the duration of one ARC_ENSURE. Nested (a
-    // depth, not a flag) because an ensure's condition may itself call
-    // something that ensures.
+    // Raises EnsureDepth() around ONE ensure's FAILURE REPORT -- not around
+    // its condition (see ARC_ENSURE below, and R22). Nested (a depth, not a
+    // flag) because a report's own path may reach another guard.
     struct EnsureScope
     {
         EnsureScope() noexcept  { ++EnsureDepth(); }
@@ -52,13 +55,36 @@ namespace Arcane::Assert
 #define ARC_ASSERT(cond, msg)  MOSAIC_ASSERT(cond, msg)
 #define ARC_VERIFY(cond, msg)  MOSAIC_VERIFY(cond, msg)
 
-// ARC_ENSURE is MOSAIC_ENSURE inside an EnsureScope -- otherwise identical:
-// `cond` is evaluated exactly once (MOSAIC_ENSURE takes it as an ARGUMENT),
-// the result is forwarded, and the per-call-site one-shot latch is unchanged.
-// noexcept because the handler it may reach runs on a thread that is about to
-// write a crash report; a guard is no place to start unwinding.
-#define ARC_ENSURE(cond, msg)                                                  \
-    ([&]() noexcept -> bool {                                                  \
-        ::Arcane::Assert::EnsureScope arcEnsureScope_;                         \
-        return MOSAIC_ENSURE(cond, msg);                                       \
-    }())
+// ARC_ENSURE restates MOSAIC_ENSURE's shape (Mosaic/Assert.hpp:233-242) rather
+// than wrapping it, for ONE reason: WHERE the EnsureScope may be raised.
+//
+// THE HAZARD THIS SHAPE AVOIDS. `ARC_ENSURE(SomeCall(), "...")` where SomeCall
+// asserts internally is an ordinary shape. Wrapping the whole macro in a scope
+// evaluates `cond` with the depth already raised, so that nested fatal
+// ARC_ASSERT reaches the handler looking like an ensure: it would take the
+// survivable arm, write a report of kind `ensure`, return Continue -- and
+// Mosaic's FailFatal would return false WITHOUT aborting, leaving the process
+// running past a violated fatal contract. A fatal assert inside an ensure's
+// condition must stay fatal, so the condition is evaluated OUTSIDE the scope
+// (as a call argument, at the call site) and the scope exists only around the
+// failure report, where nothing of the caller's is still running.
+//
+// Everything else is Mosaic's own semantics, unchanged: `cond` is evaluated
+// exactly once as an argument (so an exception from it propagates normally --
+// it is never inside the noexcept lambda), `#cond` is stringized at the call
+// site, the source_location is captured at the call site, and the failure is
+// reported at most once per call site (each expansion is a distinct lambda
+// type, hence its own static; the atomic exchange makes concurrent failures at
+// one site report exactly once). A PASSING ensure now costs nothing at all --
+// no scope, and so no cross-DLL EnsureDepth() call.
+#define ARC_ENSURE(cond, msg)                                                          \
+    ([](bool arcOk, const char* arcMsg, const std::source_location& arcLoc) noexcept -> bool { \
+        if (arcOk) [[likely]] return true;                                             \
+        static std::atomic<bool> arcFired{false};                                      \
+        if (!arcFired.exchange(true, std::memory_order_relaxed))                       \
+        {                                                                              \
+            ::Arcane::Assert::EnsureScope arcScope;                                    \
+            (void)::Mosaic::detail::FailEnsure(#cond, arcMsg, arcLoc);                 \
+        }                                                                              \
+        return false;                                                                  \
+    }(static_cast<bool>(cond), (msg), std::source_location::current()))
