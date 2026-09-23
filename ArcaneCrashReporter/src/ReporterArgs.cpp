@@ -104,30 +104,33 @@ namespace Arcane::Reporter
             // here is refused loudly rather than accepted and ignored.
             else return { std::nullopt, "unknown argument: " + s };
         }
+        // R65: the per-mode validation. `pid != 0` is required in BOTH modes,
+        // and that is deliberately uniform -- 0 names the System Idle Process,
+        // so it can never be the host a report came from or the host a monitor
+        // watches. Usage() declared --pid mandatory and nothing enforced it,
+        // so a Report line missing it parsed clean with a silent pid == 0: the
+        // field tasks 8 and 9 use to FIND AND TERMINATE the host. A loud parse
+        // failure here beats a mysterious OpenProcess failure two tasks later,
+        // and a trust boundary should fail closed.
+        //
+        // A Monitor pid cannot be ABSENT (the flag that supplies it selects the
+        // mode), but an explicit "--monitor 0" is a different thing, and
+        // refusing it at the boundary is cheaper than making task 9 reason
+        // about a value the parser already knows is impossible.
+        //
+        // A later task may relax either rule if it finds a legitimate no-pid
+        // path, with a documented reason.
         if (haveMonitor)
         {
             a.mode = Args::Mode::Monitor;
             if (a.sessionPath.empty()) return { std::nullopt, "--monitor needs --session" };
             if (!a.envelopePath.empty()) return { std::nullopt, "--monitor takes no envelope path" };
-            // NOTE: a Monitor-mode pid cannot be ABSENT -- the flag that
-            // supplies it is the flag that selects the mode -- so the R65
-            // rule below does not apply here. An explicit "--monitor 0" is
-            // still accepted; task 9 owns that hole and the pid's use.
+            if (a.pid == 0) return { std::nullopt, "--monitor 0 is not a host pid" };
         }
-        else if (a.envelopePath.empty())
+        else
         {
-            return { std::nullopt, "missing <report.arcdiag> (or --monitor <pid>)" };
-        }
-        // R65: Usage() declares --pid mandatory in Report mode and nothing
-        // enforced it, so a line missing it yielded a silent pid == 0 -- the
-        // field tasks 8 and 9 use to FIND AND TERMINATE the host. A loud parse
-        // failure here beats a mysterious OpenProcess failure two tasks later,
-        // and a trust boundary should fail closed. (0 is never a real pid: it
-        // names the System Idle Process.) A later task may relax this if it
-        // finds a legitimate no-pid path, with a documented reason.
-        else if (a.pid == 0)
-        {
-            return { std::nullopt, "missing --pid <n> (the host this report came from)" };
+            if (a.envelopePath.empty()) return { std::nullopt, "missing <report.arcdiag> (or --monitor <pid>)" };
+            if (a.pid == 0) return { std::nullopt, "missing --pid <n> (the host this report came from)" };
         }
         return { a, "" };
     }

@@ -88,22 +88,35 @@ TEST_CASE("reporter args: test seams and refusals", "[reporter]")
 
 // R65. Usage() declares --pid mandatory in Report mode and nothing enforced
 // it, so a line missing it parsed clean with a silent pid == 0 -- the field
-// tasks 8 and 9 use to find and TERMINATE the host. It fails closed now.
-TEST_CASE("reporter args: Report mode refuses a line with no usable --pid", "[reporter]")
+// tasks 8 and 9 use to find and TERMINATE the host. It fails closed now, and
+// the rule is UNIFORM across both modes: 0 names the System Idle Process, so
+// it can never be a host, and refusing it at the boundary is cheaper than
+// making task 9 reason about a value the parser already knows is impossible.
+TEST_CASE("reporter args: neither mode accepts a pid of zero", "[reporter]")
 {
+    // Report mode, pid absent entirely -- the silent-zero shape.
     const ParseResult none = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--kind", "crash" });
     CHECK_FALSE(none.args.has_value());
     CHECK(none.error.find("--pid") != std::string::npos);
 
-    // An EXPLICIT zero is refused by the same rule: 0 names the System Idle
-    // Process, so it can never be the host a report came from.
+    // Report mode, pid present and explicitly zero.
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "0" }).args.has_value());
 
-    // Monitor mode is untouched: its pid arrives on the flag that SELECTS the
-    // mode, so it cannot be absent, and nothing below task 9 reads it.
+    // Monitor mode: a pid cannot be ABSENT here (the flag that supplies it is
+    // the flag that selects the mode), but an explicit zero is refused by the
+    // same rule rather than reaching task 9's OpenProcess.
+    const ParseResult monZero = ParseArgs(std::vector<std::string>{
+        "--monitor", "0", "--session", "s.session" });
+    CHECK_FALSE(monZero.args.has_value());
+    CHECK(monZero.error.find("--monitor") != std::string::npos);
+
+    // A real pid still parses in BOTH modes -- the rule refuses zero, not pids.
     const ParseResult mon = ParseArgs(std::vector<std::string>{ "--monitor", "99", "--session", "s.session" });
     REQUIRE(mon.args.has_value());
     CHECK(mon.args->pid == 99u);
+    const ParseResult rep = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "99" });
+    REQUIRE(rep.args.has_value());
+    CHECK(rep.args->pid == 99u);
 }
 
 // R66. A value-taking option must not swallow the NEXT FLAG as its value.

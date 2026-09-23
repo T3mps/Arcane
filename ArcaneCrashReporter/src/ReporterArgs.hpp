@@ -26,13 +26,23 @@ namespace Arcane::Reporter
         inline constexpr int kNoEnvelope   = 3;
         inline constexpr int kHostMismatch = 4;   // --host-created did not match: terminate refused
         inline constexpr int kDeadline     = 5;   // unattended deadline expired; partial sibling written
-        // R64: the envelope was READ but its sibling could not be WRITTEN, so
-        // the run produced nothing. Added rather than folded into one of the
-        // four above, each of which would name a different and untrue cause;
-        // spec §6's failure-mode list has no code for this one. The
-        // alternative -- exiting 0 having written nothing -- is the exact lie
-        // R64 exists to remove. If the controller would rather this reuse an
-        // existing code, it is a one-line change here and at its one call site.
+        // R64, APPROVED as a plan amendment (controller, fix round 1) -- so
+        // this is a CONTRACT ADDITION, not merely a header constant. The plan's
+        // global constraints and spec §4's exit-code block both enumerate the
+        // reporter's codes as 0/2/3/4/5. TASK 11's spec close-out adds 6 to
+        // both of those and to spec §6's failure-mode list; the line to write
+        // there is:
+        //
+        //     6 -- everything parsed and loaded, but the one artifact of this
+        //          hand-off could not be written.
+        //
+        // Why a new code rather than one of the four above: the envelope was
+        // READ successfully, so kNoEnvelope would name an untrue cause; no
+        // deadline expired, so kDeadline would name one too; and exiting 0 is
+        // precisely the lie R64 exists to remove. This is the exact failure a
+        // human stares at when the symbolized file is missing and nothing else
+        // looks wrong, which is what makes it worth naming. 6 collides with
+        // nothing: the reporter owns 0-5, the hosts own 10-13 (spec §4).
         inline constexpr int kWriteFailed  = 6;   // the .symbolized.txt sibling could not be written
     }
 
