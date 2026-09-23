@@ -301,6 +301,25 @@ namespace
     // Crash-thread scratch that must not live on a 256 KiB stack.
     StackFrame g_frames[kMaxFrames]{};
     wchar_t    g_wideScratch[kPathMax]{};
+
+    // Crash-thread scratch (crash window plan 2, task 5): the walked thread's
+    // captured context, kept so the minidump of a HANG or MANUAL report still
+    // carries an EXCEPTION stream.
+    //
+    // Without one, MiniDumpWriteDump is handed a null MINIDUMP_EXCEPTION_
+    // INFORMATION, the dump has no stored event, and dbgeng's
+    // GetStoredEventInformation fails -- so the reporter has no way to know
+    // which thread to walk and lands on thread 0. UE never hits that because
+    // it builds a synthetic EXCEPTION_POINTERS around a SUSPENDED thread's
+    // context, with ExceptionCode = STILL_ACTIVE (WindowsPlatformCrashContext
+    // .cpp:1925-1966): "not a fault, a snapshot".
+    //
+    // Fixed storage and file scope for the same reason as g_frames: this is
+    // written on the crash thread, under g_reportMutex, and must not sit on
+    // its 256 KiB stack.
+    CONTEXT          g_walkedContext{};
+    EXCEPTION_RECORD g_walkedRecord{};
+    bool             g_walkedContextValid = false;
 #endif
 
     [[nodiscard]] std::filesystem::path ReportDir()
@@ -833,6 +852,11 @@ namespace
     {
         const std::span<StackFrame> out(g_frames, kMaxFrames);
 
+        // Plan 2 task 5: stale from a previous report is worse than absent --
+        // a synthetic exception record built on another report's context would
+        // point the reporter's walk at a thread this one never touched.
+        g_walkedContextValid = false;
+
         if (p.ep && p.ep->ContextRecord)
             return CaptureStackFromContext(p.ep->ContextRecord, out);
 
@@ -847,9 +871,17 @@ namespace
         if (SuspendThread(th) != static_cast<DWORD>(-1))
         {
             CONTEXT ctx{};
-            ctx.ContextFlags = CONTEXT_FULL;
+            // CONTEXT_ALL, not CONTEXT_FULL (UE :1935): the context is now
+            // ALSO what rides into the minidump as the synthetic exception's
+            // ContextRecord, and a dump whose context is missing the segment
+            // and debug registers is one dbgeng can refuse to walk from.
+            ctx.ContextFlags = CONTEXT_ALL;
             if (GetThreadContext(th, &ctx))
+            {
                 n = CaptureStackFromContext(&ctx, out);
+                g_walkedContext      = ctx;
+                g_walkedContextValid = true;
+            }
             ResumeThread(th);
         }
         CloseHandle(th);
@@ -1072,7 +1104,29 @@ namespace
 
         // Step 4: the minidump -- the artifact a debugger opens. Skipped for
         // a continuable (ensure) report, which must resume quickly.
-        const bool dumpOk = !p.lightweight && WriteMiniDump(dmpPath, p.ep, p.walkThreadId);
+        //
+        // Plan 2 task 5: a hang or manual report has no fault, so without help
+        // its dump carries NO exception stream, dbgeng finds no stored event,
+        // and the reporter cannot tell which thread wedged -- it lands on
+        // thread 0. The walked thread's captured context rides in a synthetic
+        // record (ExceptionCode = STILL_ACTIVE, UE
+        // WindowsPlatformCrashContext.cpp:1925-1966) so EVERY Arcane dump
+        // opens with a stored event the reporter walks from, uniformly.
+        //
+        // FillHeader still prints `exception :` only for a REAL fault: it
+        // reads p.ep, which is untouched here.
+        EXCEPTION_POINTERS  synthetic{};
+        EXCEPTION_POINTERS* dumpEp = p.ep;
+        if (!dumpEp && g_walkedContextValid)
+        {
+            g_walkedRecord                  = {};
+            g_walkedRecord.ExceptionCode    = STILL_ACTIVE;
+            g_walkedRecord.ExceptionAddress = reinterpret_cast<void*>(g_walkedContext.Rip);
+            synthetic.ExceptionRecord       = &g_walkedRecord;
+            synthetic.ContextRecord         = &g_walkedContext;
+            dumpEp                          = &synthetic;
+        }
+        const bool dumpOk = !p.lightweight && WriteMiniDump(dmpPath, dumpEp, p.walkThreadId);
 
         // Step 5: the .txt. Exhaustion is sampled HERE, not at the end:
         // the envelope retry below can exhaust the arena long after this

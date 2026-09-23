@@ -17,7 +17,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -289,6 +291,87 @@ namespace
         FixtureRun out{ Arcane::Test::RunWitness(inv), {}, dir };
         out.stem = WaitForStem(dir, std::chrono::milliseconds(0));
         return out;
+    }
+
+    // The pid the report came from, read off its own stem
+    // ("<app>-<stamp>-pid<n>", Diagnostics.cpp's spelling).
+    //
+    // The brief for task 5 passed `--pid 0` here; R65 (task 4 fix round 1)
+    // made that a parse refusal in both modes afterwards, and rightly -- 0
+    // names the System Idle Process. The stem's pid is the honest value: the
+    // fixture that wrote the report has already exited, which IS the crash
+    // case this reporter run models, and no LIVE process can be named by
+    // accident from a file the fixture itself wrote.
+    std::uint32_t PidFromStem(const std::filesystem::path& stem)
+    {
+        const std::string name = stem.filename().string();
+        const std::size_t at   = name.rfind("-pid");
+        if (at == std::string::npos) return 0;
+        std::uint32_t    pid = 0;
+        const char* const b   = name.data() + at + 4;
+        const auto        r   = std::from_chars(b, name.data() + name.size(), pid);
+        return r.ec == std::errc{} ? pid : 0;
+    }
+
+    // Runs the staged reporter DIRECTLY on a report the fixture already wrote
+    // -- no host spawn, so this is the symbolizer under test and nothing else.
+    Arcane::Test::WitnessRun RunReporter(const std::filesystem::path& stem, std::vector<std::string> extra)
+    {
+        const auto exe = std::filesystem::absolute("../ArcaneCrashReporter/ArcaneCrashReporter.exe");
+        REQUIRE(std::filesystem::exists(exe));
+        const std::uint32_t pid = PidFromStem(stem);
+        REQUIRE(pid != 0u);
+        std::vector<std::string> args = { stem.string() + ".arcdiag", "--pid", std::to_string(pid),
+                                          "--kind", "crash", "--product", "DeathFixture",
+                                          "--unattended", "--deadline", "40" };
+        args.insert(args.end(), extra.begin(), extra.end());
+        Arcane::Test::WitnessInvocation inv; inv.exePath = exe; inv.args = args; inv.hardCapMs = 60000;
+        return Arcane::Test::RunWitness(inv);
+    }
+}
+
+// Spec §6 "Symbolization": once with PDBs present (names resolve) and once
+// with them hidden (module+offset). --symbol-path REPLACES the search and sets
+// SYMOPT_IGNORE_CVREC (D5), which is the only way to hide a PDB on the desk
+// that built it -- the linker embedded an absolute path to it in the image.
+//
+// This is the case that proves the engine is REAL: a pure formatter cannot
+// tell you whether dbgeng resolved a name, only how a resolved one prints.
+TEST_CASE("reporter: symbolizes the death fixture's minidump -- names with PDBs, module+offset with them hidden", "[diag]")
+{
+    const FixtureRun crash = RunFixture("av");
+    REQUIRE(crash.run.exitCode == 10);
+    REQUIRE_FALSE(crash.stem.empty());
+    const std::string sibling = crash.stem.string() + ".symbolized.txt";
+
+    const std::string fixtureDir = std::filesystem::absolute("../death-fixture").string();
+    const std::string coreDir    = std::filesystem::absolute("../ArcaneCore").string();
+    {
+        const auto run = RunReporter(crash.stem, { "--symbol-path", fixtureDir + ";" + coreDir });
+        INFO("reporter stderr: " << run.stderrPath.string());
+        CHECK_FALSE(run.timedOut);
+        CHECK(run.exitCode == 0);
+        REQUIRE(std::filesystem::exists(sibling));
+        const std::string text = Slurp(sibling);
+        INFO("symbolized:\n" << text);
+        CHECK(text.find("engine      : dbgeng") != std::string::npos);
+        CHECK(text.find("(faulting)") != std::string::npos);
+        CHECK(text.find("!main") != std::string::npos);            // death-fixture.pdb resolved
+        CHECK(text.find("DeathFixtureMain.cpp") != std::string::npos);
+    }
+    std::filesystem::remove(sibling);
+    {
+        const auto hidden = std::filesystem::temp_directory_path() / "arcane-no-symbols";
+        std::filesystem::remove_all(hidden);
+        std::filesystem::create_directories(hidden);
+        const auto run = RunReporter(crash.stem, { "--symbol-path", hidden.string() });
+        CHECK(run.exitCode == 0);
+        REQUIRE(std::filesystem::exists(sibling));
+        const std::string text = Slurp(sibling);
+        INFO("symbolized (hidden):\n" << text);
+        CHECK(text.find("engine      : dbgeng") != std::string::npos);
+        CHECK(text.find("!main") == std::string::npos);
+        CHECK(text.find("death-fixture.exe+0x") != std::string::npos);   // the symbol-less form names the IMAGE
     }
 }
 

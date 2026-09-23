@@ -70,7 +70,10 @@ namespace Arcane::Reporter
         std::string   logPath;               // --log <path>               (monitor, optional override of the record)
         std::string   reportDir;             // --report-dir <dir>         (monitor, optional override of the record)
         std::string   symbolPath;            // --symbol-path "<a;b>"      (D5 test seam)
-        std::uint32_t deadlineSeconds = 60;  // --deadline <s>             (unattended; tests lower it)
+        // --deadline <s> (unattended; tests lower it). R60: 60 is spec §6's
+        // DEFAULT, not the only legal value; the FLOOR is 1 and 0 is refused
+        // at parse time -- see ReporterArgs.cpp for the reasoning.
+        std::uint32_t deadlineSeconds = 60;
         bool          respawned = false;     // --respawned                (monitor: the second instance, D16)
     };
 

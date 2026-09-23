@@ -195,3 +195,47 @@ TEST_CASE("reporter args: --host-handle carries the host's inherited process han
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--host-handle", "0x1f4" }).args.has_value());
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--host-handle", "0x1f4" }).error.empty());
 }
+
+// R60 (controller ruling, task 5). The deadline had no floor: `--deadline 0`
+// parsed and was accepted, and zero seconds is not a deadline -- it is a
+// guarantee that the symbolizing worker is killed before it can resolve a
+// single frame, so every unattended run carrying it would produce a partial
+// report and exit 5 while looking like it had tried.
+//
+// The three candidate meanings were "no deadline", "expire immediately" and
+// "refused". It is REFUSED, on the same fail-closed rule R65 applied to the
+// pid: a value that can never express a legitimate intent is named at the
+// boundary rather than absorbed into behaviour a later reader has to
+// reverse-engineer. "No deadline" is the worst of the three -- it would make
+// the one flag whose entire job is to BOUND an unattended child silently
+// unbound, which is precisely the headless hazard spec §6 wrote it for -- and
+// "expire immediately" is not even a reliable test lever, because
+// wait_for(0s, pred) evaluates the predicate once and a worker that had
+// already finished would return success.
+//
+// The floor is therefore 1 second: the smallest value the flag can express
+// that still gives the worker a real window, and the lever the deadline
+// branch is exercised with.
+TEST_CASE("reporter args: a deadline of zero is refused -- the floor is one second", "[reporter]")
+{
+    const ParseResult zero = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "7", "--deadline", "0" });
+    CHECK_FALSE(zero.args.has_value());
+    CHECK(zero.error.find("--deadline") != std::string::npos);
+
+    // Monitor mode carries the same flag to the report it synthesizes (task
+    // 9), so the rule is uniform across both modes -- as the pid rule is.
+    const ParseResult monZero = ParseArgs(std::vector<std::string>{
+        "--monitor", "7", "--session", "s.session", "--deadline", "0" });
+    CHECK_FALSE(monZero.args.has_value());
+
+    // One second is the floor, not a refusal: it is the lever the deadline
+    // branch itself is driven with.
+    const ParseResult one = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "7", "--deadline", "1" });
+    REQUIRE(one.args.has_value());
+    CHECK(one.args->deadlineSeconds == 1u);
+
+    // The default is untouched: 60 s is spec §6's number, not the only legal one.
+    const ParseResult plain = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "7" });
+    REQUIRE(plain.args.has_value());
+    CHECK(plain.args->deadlineSeconds == 60u);
+}

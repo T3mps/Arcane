@@ -1530,7 +1530,14 @@ project "ArcaneTests"
         -- Tasks 5, 6, 8 and 9 each append one line to this list
         -- (SymbolizedText.cpp, ReportView.cpp, HangSession.cpp,
         -- MonitorRule.cpp).
+        --
+        -- NOTE (task 5): this list is NOT gated on the target OS, so every
+        -- file named here must compile without windows.h. SymbolizedText.cpp
+        -- is the MODEL and its TEXT only; Symbolizer.cpp -- the dbgeng half --
+        -- stays out, and the reporter PROJECT above is what carries the
+        -- Windows gate.
         "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
     }
 
     includedirs {

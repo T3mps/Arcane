@@ -12,7 +12,10 @@
 // in the same way. It is staged beside every host by that host's own postbuild
 // (spec §12 item 2), which is how Diagnostics::ResolveReporterPath finds it at
 // "<exe dir>/ArcaneCrashReporter.exe".
+#include "FileText.hpp"
 #include "ReporterArgs.hpp"
+#include "SymbolizedText.hpp"
+#include "Symbolizer.hpp"
 #include "Win32Text.hpp"
 
 #include <Arcane/Base/Assert.hpp>
@@ -23,10 +26,13 @@
 
 #include <shellapi.h>   // CommandLineToArgvW
 
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
-#include <fstream>
+#include <mutex>
 #include <string>
-#include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -83,18 +89,6 @@ namespace
         return sibling;
     }
 
-    // Task 4's sibling: the portable stack the host already wrote, re-headed.
-    // Task 5 keeps this as the fallback when the debug engine is unavailable.
-    bool WriteFallbackSymbolized(const std::filesystem::path& stem, const Arcane::Diag::Envelope& e, std::string_view why)
-    {
-        std::ofstream out(SymbolizedSiblingPath(stem), std::ios::binary);
-        if (!out) return false;
-        out << "symbolized by ArcaneCrashReporter " << Arcane::BuildInfo() << "\n"
-            << "engine      : unavailable (" << why << ") -- module+offset from the portable stack\n\n"
-            << e.cpuThreadSummary << "\n";
-        return static_cast<bool>(out);
-    }
-
     int RunReport(const Args& a)
     {
         const std::filesystem::path envelopePath = std::filesystem::path(ToWide(a.envelopePath));
@@ -120,15 +114,89 @@ namespace
         diag.startHangWatchdog = false;
         const ArmedDiagnostics armed(diag);
 
-        // TASK 5: the dbgeng worker + deadline replace this call.
-        //
-        // R64: the return value is ACTED ON, never discarded. Writing this
-        // sibling is the reporter's whole job in task 4; a silent kOk after a
-        // failed write is a lie a parent (and the [diag] hand-off case) would
-        // believe.
-        if (!WriteFallbackSymbolized(stem, *envelope, "not built yet (plan 2 task 4)"))
+        const std::filesystem::path sibling = SymbolizedSiblingPath(stem);
+
+        // Symbolize on a WORKER under the unattended deadline (spec §6). The
+        // engine can block for an unbounded time inside symbol loading -- a
+        // symbol server, a dead UNC path, a huge PDB -- and a headless gate
+        // must never inherit an open-ended child. This deadline is the ONLY
+        // bound on SymbolizeDump; the 30 s WaitForEvent inside it covers the
+        // open, not the walk.
+        Symbolized result;
+        if (envelope->siblingDmp.empty())
         {
-            ARC_ERROR("reporter: cannot write '{}'", ToUtf8(SymbolizedSiblingPath(stem).wstring()));
+            // A lightweight (ensure) report writes no dump on purpose, so
+            // there is nothing to open and no reason to pay for a thread: the
+            // portable stack IS the answer, and the header says why.
+            result.engineError = "no minidump (lightweight report)";
+        }
+        else
+        {
+            SymbolizeOptions opt;
+            opt.symbolPath = a.symbolPath;
+            // D5: an explicit --symbol-path REPLACES the search, which only
+            // means anything if the PDB path the linker embedded in the image
+            // is also ignored. Coupled deliberately -- the two are one seam.
+            opt.ignoreCvRecord = !a.symbolPath.empty();
+
+            std::mutex              m;
+            std::condition_variable cv;
+            bool                    done = false;
+            std::thread             worker([&]
+            {
+                Symbolized r = SymbolizeDump(std::filesystem::path(ToWide(envelope->siblingDmp)), opt);
+                std::lock_guard<std::mutex> lk(m);
+                result = std::move(r);
+                done   = true;
+                cv.notify_all();
+            });
+
+            const bool symbolizedInTime = [&]
+            {
+                std::unique_lock<std::mutex> lk(m);
+                return cv.wait_for(lk, std::chrono::seconds(a.deadlineSeconds), [&] { return done; });
+            }();
+
+            if (!symbolizedInTime)
+            {
+                // R39: UNGUARDED on purpose. Task 7 adds the window and wraps
+                // this branch in an `unattended` check -- an ATTENDED run must
+                // let the worker keep going while the user looks at the
+                // report. At this point in the plan no window exists, so
+                // unconditional is correct, and task 7 owns the guard.
+                //
+                // TerminateProcess, not a return: the worker captured `result`,
+                // `m`, `cv` and `done` BY REFERENCE off this frame. Returning
+                // would unwind them under a thread still writing to them, and
+                // ~std::thread on a joinable thread calls std::terminate
+                // anyway. Ending the process here is the only exit that is
+                // sound with a wedged worker -- and it is exactly what the
+                // deadline promised.
+                // The one place this task DISCARDS a write result, deliberately
+                // (cf. R64 below): the process is about to end with kDeadline,
+                // which already names a failure, and kWriteFailed cannot also
+                // be returned. The expired deadline is the more informative
+                // cause of the two, so it is the one the exit code carries.
+                Symbolized partial;
+                partial.engineError = "deadline of " + std::to_string(a.deadlineSeconds) + " s expired";
+                (void)WriteText(sibling, FormatSymbolized(partial, Arcane::BuildInfo(), envelope->cpuThreadSummary));
+                ARC_WARN("reporter: symbolization did not finish within {} s; wrote the portable stack", a.deadlineSeconds);
+                Arcane::Log::FlushFileSinkBounded(1000);
+                TerminateProcess(GetCurrentProcess(), static_cast<UINT>(ExitCode::kDeadline));
+            }
+            worker.join();
+        }
+
+        // The engine's own verdict leads; the envelope's walked thread is the
+        // fallback for a dump with no stored event (see PutFaultingFirst).
+        PutFaultingFirst(result, ParseWalkedThreadId(envelope->cpuThreadSummary));
+
+        // R64: the return value is ACTED ON, never discarded. This sibling is
+        // the whole artifact of the hand-off; a silent kOk after a failed
+        // write is a lie a parent (and the [diag] hand-off case) would believe.
+        if (!WriteText(sibling, FormatSymbolized(result, Arcane::BuildInfo(), envelope->cpuThreadSummary)))
+        {
+            ARC_ERROR("reporter: cannot write '{}'", ToUtf8(sibling.wstring()));
             return ExitCode::kWriteFailed;
         }
 

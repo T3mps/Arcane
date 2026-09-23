@@ -98,7 +98,32 @@ namespace Arcane::Reporter
             else if (s == "--log")             a.logPath = v;
             else if (s == "--report-dir")      a.reportDir = v;
             else if (s == "--symbol-path")     a.symbolPath = v;
-            else if (s == "--deadline")        { if (!ParseNumber(v, a.deadlineSeconds)) return { std::nullopt, "--deadline is not a number: " + v }; }
+            // R60 (controller ruling, task 5): the deadline has a FLOOR of one
+            // second, and zero is REFUSED rather than given a meaning.
+            //
+            // Zero could have meant "no deadline" or "expire immediately".
+            // "No deadline" is the worst reading available: the one flag whose
+            // entire purpose is to BOUND an unattended child would silently
+            // unbound it, which is precisely the headless hazard spec §6 wrote
+            // it for. "Expire immediately" is honest but useless -- it
+            // guarantees the symbolizing worker is killed before it resolves a
+            // single frame, so every run carrying it produces a partial report
+            // and exit 5 while looking like it tried; and it is not even a
+            // reliable lever for the deadline branch, since wait_for(0s, pred)
+            // evaluates the predicate once and a finished worker would return
+            // success. So it is refused, on the same fail-closed rule R65
+            // applied to the pid: a value that cannot express a legitimate
+            // intent is named at the boundary, never absorbed.
+            //
+            // One second is the floor: the smallest value the flag can express
+            // that still gives the worker a real window, and the lever the
+            // deadline branch is driven with. Spec §6's 60 s remains the
+            // DEFAULT, not the only legal value.
+            else if (s == "--deadline")
+            {
+                if (!ParseNumber(v, a.deadlineSeconds)) return { std::nullopt, "--deadline is not a number: " + v };
+                if (a.deadlineSeconds == 0) return { std::nullopt, "--deadline 0 is not a deadline (the floor is 1 second)" };
+            }
             // Unreachable by construction -- TakesValue above is the gate.
             // Kept so an option added to that list without a dispatch arm
             // here is refused loudly rather than accepted and ignored.
