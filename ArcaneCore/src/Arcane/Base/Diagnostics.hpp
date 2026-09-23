@@ -368,10 +368,28 @@ namespace Arcane::Diagnostics
     // an intermittent bug depends on it.
     ARCANE_CORE_API std::string WriteReport(const char* reason);
 
-    // The .arcdiag `kind` for a report reason. Substring match, most specific
-    // first: "gpu" -> gpu-stall/gpu-crash, then assert / terminate / ensure /
-    // out-of-memory / abnormal-exit, then "hang", else "crash".
+    // The .arcdiag `kind` for a report reason. The reason's PREFIX -- what
+    // stands before the first ':' or space -- is matched against the kind
+    // table first (gpu-stall, gpu-crash, assert, ensure, terminate,
+    // out-of-memory, abnormal-exit, hang, crash), because every reason this
+    // engine produces is written "<kind>: <detail>" and the detail embeds
+    // caller expressions and file paths that must not be allowed to vote
+    // ("ensure: gpu != nullptr" is an ensure, not a gpu-crash). Only a reason
+    // with no recognised prefix falls back to the older substring rule, for
+    // the free-form legacy wordings ("hang (main thread ...)").
     [[nodiscard]] ARCANE_CORE_API std::string DeriveReportKind(const char* reason);
+
+    // printf-formats a fail-fast reason into a per-thread 1 KiB buffer (the
+    // same size as the pending report's reason field) and returns it. This
+    // exists so that NOTHING formats a reason into the CrashArena: the arena
+    // is bump-allocated with a plain m_used += and is reset by the crash
+    // thread at the top of every report, so a fail-fast handler on some other
+    // thread formatting into it could corrupt a report already in flight
+    // (final review, finding I2). The arena is crash-thread-only. The
+    // returned pointer stays valid until the SAME thread formats another
+    // reason -- which is exactly long enough, because SubmitReport copies the
+    // reason into fixed storage on the calling thread (R3).
+    [[nodiscard]] ARCANE_CORE_API const char* FormatReason(const char* fmt, ...) noexcept;
 
     // Reports written this process. The observable the watchdog test asserts on.
     [[nodiscard]] ARCANE_CORE_API std::uint32_t ReportCount() noexcept;

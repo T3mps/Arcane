@@ -900,4 +900,11 @@ TEST_CASE("diagnostics: report kinds derive from the reason, new kinds ahead of 
     CHECK(DeriveReportKind("out-of-memory: std::bad_alloc") == "out-of-memory");
     CHECK(DeriveReportKind("abnormal-exit: 0xC0000409 STATUS_STACK_BUFFER_OVERRUN") == "abnormal-exit");
     CHECK(DeriveReportKind("hang at exit (30s after the exit request)") == "hang");
+
+    // Final review (I3): the DETAIL must not vote. A guard's stringized
+    // condition carries whatever the caller wrote -- "gpu", "assert" --
+    // and the reason's prefix is the only thing that says what happened.
+    CHECK(DeriveReportKind("ensure: gpu != nullptr (X.cpp:1)") == "ensure");
+    CHECK(DeriveReportKind("ensure: !asserted (X.cpp:1)") == "ensure");
+    CHECK(DeriveReportKind("assert: gpuQueue == nullptr -- msg (X.cpp:1)") == "assert");
 }

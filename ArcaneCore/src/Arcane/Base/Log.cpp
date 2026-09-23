@@ -2,6 +2,7 @@
 
 #include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/dist_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <Arcane/Base/Assert.hpp>
@@ -98,6 +99,26 @@ namespace Arcane::Log
         };
 
         // ---- Rotating file sink + bounded flush helper (task 4) ----------
+        //
+        // THE ATTACH POINT (final review, finding I1). The engine logger's own
+        // sink vector is written EXACTLY ONCE, inside Init()'s call_once, and
+        // never again: every later attach/detach happens inside s_distSink,
+        // whose add_sink/remove_sink take the dist sink's own mutex. That
+        // matters because AttachFileSink is NOT startup-only -- Diagnostics'
+        // RetargetDumpDir re-attaches the log sink when the editor switches
+        // projects, on the main thread, while worker threads are logging. A
+        // push_back/erase on spdlog::logger::sinks_ under a concurrent
+        // logger::log() (which iterates that vector unsynchronised) is a
+        // use-after-free waiting to happen; a dist sink is the vendored,
+        // internally-locked way to have a mutable sink set.
+        //
+        // The logger therefore holds [stderr, dist]; the file sink and the
+        // backlog sink live INSIDE dist. Flushing the logger flushes dist,
+        // which flushes its children, so flush_on(warn) and the bounded
+        // flush helper below keep working exactly as before. Sub-sinks added
+        // after Init keep their own (default-pattern) formatters -- the same
+        // formatting the raw push_back gave them.
+        std::shared_ptr<spdlog::sinks::dist_sink_mt> s_distSink;
         std::shared_ptr<spdlog::sinks::basic_file_sink_mt> s_fileSink;
         std::shared_ptr<BacklogSink> s_backlogSink;
         std::filesystem::path s_fileSinkPath;
@@ -142,7 +163,9 @@ namespace Arcane::Log
         }
 
         // Off the crash path: only ever called from AttachFileSink, which is
-        // startup/attach-time code.
+        // ordinary attach-time code (startup, or a live project retarget) --
+        // never the crash thread. The exchange makes the start idempotent,
+        // so a re-attach never spawns a second helper.
         void EnsureFlushHelperStarted()
         {
             if (s_helperRunning.exchange(true, std::memory_order_acq_rel))
@@ -196,6 +219,13 @@ namespace Arcane::Log
             s_engine = existing ? existing : spdlog::stderr_color_mt("Arcane");
             s_engine->set_level(level);
             s_engine->set_pattern("%^[%H:%M:%S.%e] [%n] [%l]%$ %v");
+            // The one and only mutation of the logger's own sink vector, made
+            // here under call_once -- before any other thread can reach the
+            // logger, since Engine() is the only way to get it and every
+            // caller funnels through this call_once. Everything attachable
+            // later goes inside this dist sink instead (see its declaration).
+            s_distSink = std::make_shared<spdlog::sinks::dist_sink_mt>();
+            s_engine->sinks().push_back(s_distSink);
             // THIS module's (ArcaneCore.dll's) Mosaic copy -- Astra/Manifold2D code
             // running inside Core routes here; Client and the hosts keep installing
             // into their own copies via InstallMosaicSink()/InstallMosaicHandler().
@@ -212,6 +242,12 @@ namespace Arcane::Log
     void Shutdown()
     {
         StopFlushHelper();
+        if (s_distSink)
+        {
+            if (s_fileSink)    s_distSink->remove_sink(s_fileSink);
+            if (s_backlogSink) s_distSink->remove_sink(s_backlogSink);
+        }
+        s_distSink.reset();
         s_fileSink.reset();
         s_backlogSink.reset();
         s_fileSinkPath.clear();
@@ -232,21 +268,20 @@ namespace Arcane::Log
 
     bool AttachFileSink(const std::filesystem::path& file)
     {
-        // Deliberately checks s_engine directly rather than calling Engine()
-        // (which would lazily Init()): attaching a file sink before the
-        // engine logger exists is refused, not auto-bootstrapped.
-        if (!s_engine)
+        // Deliberately checks s_engine/s_distSink directly rather than calling
+        // Engine() (which would lazily Init()): attaching a file sink before
+        // the engine logger exists is refused, not auto-bootstrapped.
+        if (!s_engine || !s_distSink)
             return false;
 
         // Detach and DESTROY any previously-attached file sink first: this
         // closes its file handle. Windows refuses to rename an open file, so
-        // the rename chain below must run after the handle is gone.
+        // the rename chain below must run after the handle is gone. The
+        // detach goes through the dist sink's own lock, so a worker thread
+        // logging through the logger at this instant is safe (finding I1).
         if (s_fileSink)
         {
-            auto& sinkVec = s_engine->sinks();
-            sinkVec.erase(std::remove(sinkVec.begin(), sinkVec.end(),
-                                       std::static_pointer_cast<spdlog::sinks::sink>(s_fileSink)),
-                          sinkVec.end());
+            s_distSink->remove_sink(s_fileSink);
             s_fileSink.reset();
         }
 
@@ -284,14 +319,14 @@ namespace Arcane::Log
                 std::filesystem::create_directories(dir, ec);
 
             auto newSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(file.string(), /*truncate*/ true);
-            s_engine->sinks().push_back(newSink);
+            s_distSink->add_sink(newSink);
             s_fileSink = newSink;
             s_fileSinkPath = file;
 
             if (!s_backlogSink)
             {
                 s_backlogSink = std::make_shared<BacklogSink>();
-                s_engine->sinks().push_back(s_backlogSink);
+                s_distSink->add_sink(s_backlogSink);
             }
 
             s_engine->flush_on(spdlog::level::warn);

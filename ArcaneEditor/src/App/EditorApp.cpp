@@ -70,6 +70,7 @@
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
+#include <atomic>   // g_cleanExitRequested -- the clean-exit hook's latch
 #include <chrono>
 #include <cstdint>
 #include <cstdio>

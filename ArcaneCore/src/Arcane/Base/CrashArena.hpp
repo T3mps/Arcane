@@ -1,10 +1,21 @@
 #pragma once
 
 // Crash window plan 1 (Task 2): a fixed-size bump arena that is the ONLY
-// allocator the crash path (Task 5's report steps) and the fail-fast
-// handlers (Task 7) may use once a fault has already happened -- the
-// process's heap may itself be the thing that just faulted, so nothing
-// downstream of a crash may call new/malloc, and nothing here may throw.
+// allocator the crash path (Task 5's report steps) may use once a fault has
+// already happened -- the process's heap may itself be the thing that just
+// faulted, so nothing downstream of a crash may call new/malloc, and nothing
+// here may throw.
+//
+// CRASH-THREAD-ONLY (final review, finding I2). Alloc() is a plain
+// `m_used += ...` with no synchronisation at all, and the crash thread
+// Reset()s the arena at the top of every report and then carves the whole
+// report out of it. So only ONE thread -- the crash thread, inside
+// RunReportOnCrashThread -- may touch Instance(). In particular the
+// fail-fast handlers (Task 7: the assert handler, the terminate/OOM
+// classifiers, the CRT invalid-parameter handler) run on arbitrary threads
+// BEFORE the report's submit mutex is taken; they format their reason with
+// Diagnostics::FormatReason, into a per-thread buffer, and never come near
+// this arena. Nothing outside the crash path may reach for it.
 //
 // Instance() is one static 256 KiB block, reset at the top of each report
 // (Reset()) and bump-allocated for the report's lifetime: the module table,

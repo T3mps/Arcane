@@ -1,7 +1,6 @@
 #include <Arcane/Base/Assert.hpp>
 
-#include <Arcane/Base/CrashArena.hpp>    // the reason slot -- the crash path's only allocator
-#include <Arcane/Base/Diagnostics.hpp>   // SubmitReport: a failing guard IS a report
+#include <Arcane/Base/Diagnostics.hpp>   // SubmitReport + FormatReason: a failing guard IS a report
 #include <Arcane/Base/Log.hpp>           // Arcane::Log::Engine()
 
 #include <spdlog/spdlog.h>
@@ -46,7 +45,10 @@ namespace
 #endif
 
         // Everything below runs on a thread that is already in trouble: no
-        // heap, no std::string -- the arena, and nothing else (R3).
+        // heap, no std::string -- a per-thread reason buffer, and nothing
+        // else (R3; final review finding I2 moved this OFF the crash arena,
+        // which the crash thread resets under every report and which a guard
+        // failing on an unrelated thread must therefore never bump).
         const char* const expr = c.expression ? c.expression : "<expr>";
         const char* const msg  = c.message    ? c.message    : "";
         const char* const file = c.location.file_name();
@@ -54,13 +56,13 @@ namespace
 
         if (Arcane::Assert::EnsureDepth() > 0)
         {
-            const char* const reason = Arcane::Diagnostics::CrashArena::Instance().Format(
+            const char* const reason = Arcane::Diagnostics::FormatReason(
                 "ensure: %s -- %s (%s:%u)", expr, msg, file, line);
             Arcane::Diagnostics::SubmitReport({ reason, nullptr, /*lightweight*/true, 0 });
             return Mosaic::AssertAction::Continue;
         }
 
-        const char* const reason = Arcane::Diagnostics::CrashArena::Instance().Format(
+        const char* const reason = Arcane::Diagnostics::FormatReason(
             "assert: %s -- %s (%s:%u)", expr, msg, file, line);
         Arcane::Diagnostics::SubmitReport({ reason, nullptr, /*lightweight*/false,
                                             Arcane::Diagnostics::ExitCode::kCrashed });

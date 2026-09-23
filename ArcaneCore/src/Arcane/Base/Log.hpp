@@ -49,6 +49,16 @@ namespace Arcane::Log
     // different one (the old sink is simply detached first). Returns false
     // if Log::Init() has not run yet (no engine logger to attach to) or if
     // the file could not be opened.
+    //
+    // NOT startup-only, and deliberately so: Diagnostics::RetargetDumpDir
+    // re-attaches this sink on a LIVE process when the editor switches
+    // projects. The attach/detach therefore happens inside an
+    // internally-locked spdlog dist sink (Log.cpp), never on the logger's own
+    // sink vector, so worker threads may keep logging straight through a
+    // re-attach. Concurrent AttachFileSink calls with each OTHER are still
+    // the caller's problem to serialise (Diagnostics does it under its report
+    // mutex); this must be called off the crash path either way -- it opens
+    // files and starts the flush helper thread.
     ARCANE_CORE_API bool AttachFileSink(const std::filesystem::path& file);
     // The path passed to the most recent successful AttachFileSink, or an
     // empty path when no file sink is attached.

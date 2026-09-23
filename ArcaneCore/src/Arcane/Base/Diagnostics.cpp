@@ -356,13 +356,39 @@ namespace
 #endif
     }
 
+    // The kind vocabulary, most specific first. Static literals: what
+    // DeriveKindCStr hands back has to outlive the report.
+    constexpr const char* kReportKinds[] = {
+        "gpu-stall", "gpu-crash", "assert", "ensure", "terminate",
+        "out-of-memory", "abnormal-exit", "hang", "crash",
+    };
+
     // Kind derivation, HEAP-FREE: the exported DeriveReportKind returns a
     // std::string for callers' convenience, but the crash thread needs the
     // same decision without an allocation, so the rule itself lives here and
     // hands back a static literal. One rule, two skins -- never two rules.
+    //
+    // PREFIX FIRST (final review, finding I3). Every reason this engine
+    // writes is "<kind>: <detail>", and the detail is attacker-ish text we do
+    // not control: a stringized ARC_ENSURE condition, a what() string, a
+    // source path. Classifying by substring let that detail vote, so
+    // "ensure: gpu != nullptr (X.cpp:1)" filed as a gpu-crash and
+    // "ensure: !asserted (X.cpp:1)" as an assert. So: take what stands before
+    // the first ':' or space, and if it IS one of the kinds, that is the
+    // kind, full stop. Only when the prefix is not a kind do we fall back to
+    // the old substring rule, which is what still classifies the free-form
+    // legacy wordings ("crash (unhandled exception)", "hang (main thread has
+    // not ticked for 12.0s)", "hang at exit (...)").
     [[nodiscard]] const char* DeriveKindCStr(const char* reason) noexcept
     {
         const std::string_view r = reason ? reason : "";
+
+        const std::size_t cut = r.find_first_of(": ");
+        const std::string_view prefix = (cut == std::string_view::npos) ? r : r.substr(0, cut);
+        for (const char* kind : kReportKinds)
+            if (prefix == kind)
+                return kind;
+
         if (r.find("gpu") != std::string_view::npos)
             return r.find("stall") != std::string_view::npos ? "gpu-stall" : "gpu-crash";
         if (r.find("assert") != std::string_view::npos)        return "assert";
@@ -1355,9 +1381,12 @@ namespace
     //
     // All of them run ON the faulting thread, after the fault: noexcept,
     // heap-free, and never returning -- SubmitReport terminates the process
-    // once the report is on disk. Reasons are formatted into the crash arena
-    // (R3), and SubmitReport copies them into the pending record before the
-    // crash thread resets that arena, so no reason ever dangles.
+    // once the report is on disk. Reasons are formatted with FormatReason,
+    // into a PER-THREAD buffer, and SubmitReport copies them into the pending
+    // record on this same thread (R3), so no reason ever dangles. They are
+    // deliberately NOT formatted into the crash arena: these handlers fire on
+    // arbitrary threads and the arena belongs to the crash thread alone
+    // (finding I2).
 
     // The one piece of this family that may touch C++ machinery: classifying
     // the in-flight exception is the whole point (a std::bad_alloc is an OOM,
@@ -1372,8 +1401,8 @@ namespace
         if (const std::exception_ptr ex = std::current_exception())
         {
             try { std::rethrow_exception(ex); }
-            catch (const std::bad_alloc& e) { reason = CrashArena::Instance().Format("out-of-memory: %s", e.what()); }
-            catch (const std::exception& e) { reason = CrashArena::Instance().Format("terminate: %s", e.what()); }
+            catch (const std::bad_alloc& e) { reason = FormatReason("out-of-memory: %s", e.what()); }
+            catch (const std::exception& e) { reason = FormatReason("terminate: %s", e.what()); }
             catch (...)                     { reason = "terminate: non-std exception"; }
         }
         return reason;
@@ -1472,12 +1501,11 @@ namespace
         }
 
         if (isBadAlloc)
-            return CrashArena::Instance().Format("out-of-memory: %s",
-                                                 whatText ? whatText : "std::bad_alloc");
+            return FormatReason("out-of-memory: %s", whatText ? whatText : "std::bad_alloc");
         if (whatText)
-            return CrashArena::Instance().Format("terminate: %s", whatText);
+            return FormatReason("terminate: %s", whatText);
         if (typeName)
-            return CrashArena::Instance().Format("terminate: unhandled C++ exception %s", typeName);
+            return FormatReason("terminate: unhandled C++ exception %s", typeName);
         return nullptr;
     }
 
@@ -1495,7 +1523,7 @@ namespace
         // The CRT passes nulls in Release (those strings are Debug-only), so
         // format what exists rather than what the signature promises.
         (void)expr;
-        const char* reason = CrashArena::Instance().Format(
+        const char* reason = FormatReason(
             "crash: CRT invalid parameter in %ls (%ls:%u)",
             fn ? fn : L"?", file ? file : L"?", line);
         SubmitReport({ reason, nullptr, false, ExitCode::kCrashed });
@@ -1993,24 +2021,38 @@ namespace
 #endif
 }   // namespace
 
-// Kind derivation for the .arcdiag envelope: substring match on the REASON
-// string, never the trigger site. Order matters -- most specific first:
-// "gpu" (then "stall" -> gpu-stall, else gpu-crash), assert, terminate,
-// ensure, out-of-memory, abnormal-exit, then "hang", else "crash". Covers
-// every phrasing the report path sees today -- "crash (unhandled
-// exception)" (the crash filter, above) and "hang (main thread has not
-// ticked for ...)" (WatchdogMain, above) -- plus the GPU vocabulary named
-// in docs/specs/2026-08-11-gpu-crash-diagnostics-design.md ("gpu-stall"/
-// "gpu-crash") and the crash-window vocabulary the Task 7 fail-fast
-// handlers write (crash window plan 1): assert/terminate/ensure/
+// Kind derivation for the .arcdiag envelope: read off the REASON string,
+// never the trigger site. The reason's PREFIX (up to the first ':' or space)
+// decides when it names a kind, and only an unrecognised prefix falls back to
+// the older substring order -- see DeriveKindCStr above for why the detail
+// text must not get a vote. Covers every phrasing the report path writes
+// today: the free-form "crash (unhandled exception)" (the crash filter) and
+// "hang (main thread has not ticked for ...)" (WatchdogMain), the GPU
+// vocabulary from docs/specs/2026-08-11-gpu-crash-diagnostics-design.md
+// ("gpu-stall:"/"gpu-crash:") and the crash-window vocabulary the Task 7
+// fail-fast handlers write (crash window plan 1): assert/terminate/ensure/
 // out-of-memory/abnormal-exit, each the exact word followed by a colon.
-// "gpu" is checked first so "gpu-stall" can never misclassify as "hang";
-// the five new kinds are checked ahead of "hang" too, for the same reason.
 std::string DeriveReportKind(const char* reason)
 {
     // ONE rule, in DeriveKindCStr above: this is only its std::string skin,
     // for callers that are not on the crash path.
     return DeriveKindCStr(reason);
+}
+
+// See the header: a per-thread reason buffer, so no fail-fast handler has to
+// touch the crash arena before SubmitReport has copied the reason (I2).
+// kReasonMax is deliberately the SAME size as Pending::reason -- a reason
+// that fits here fits the report.
+const char* FormatReason(const char* fmt, ...) noexcept
+{
+    static thread_local char t_reason[kReasonMax];
+
+    va_list args;
+    va_start(args, fmt);
+    std::vsnprintf(t_reason, sizeof(t_reason), fmt, args);
+    va_end(args);
+    t_reason[sizeof(t_reason) - 1] = '\0';   // NUL even on a truncated write
+    return t_reason;
 }
 
 void Install(const Config& cfg)

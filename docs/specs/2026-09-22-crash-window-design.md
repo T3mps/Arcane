@@ -334,9 +334,14 @@ files are on disk.
 
 ### 5.3 The fail-fast family
 
-Each handler builds a synthetic reason in the arena and enters the same
-crash-thread path with `EXCEPTION_POINTERS` = null (the minidump is still
-written with the current context):
+Each handler builds a synthetic reason and enters the same crash-thread path
+with `EXCEPTION_POINTERS` = null (the minidump is still written with the
+current context). **As built (final review, I2):** that reason is formatted
+by `Diagnostics::FormatReason` into a per-thread 1 KiB buffer, NOT into the
+arena -- these handlers fire on arbitrary threads before the submit mutex is
+taken, and the arena (§5.5) belongs to the crash thread alone. `SubmitReport`
+still copies the reason into fixed storage on the calling thread (R3), so the
+buffer only has to outlive that call:
 - **Assert** (`Arcane::Assert::MosaicHandler`, `Base/Assert.cpp`): with a
   debugger attached the handler logs and returns `AssertAction::Break` as
   today, so Mosaic's `FailFatal` breaks into the debugger. Without one it
@@ -397,12 +402,20 @@ A fixed static block (256 KiB, hard cap) bump-allocated by the crash thread
 for the reason text, paths, the portable stack and the envelope's JSON; reset
 per report; on exhaustion the thread writes what it has and says so in the
 header. It is NOT a general allocator and never becomes one (§13).
+**As built (final review, I2):** `Alloc` is an unsynchronised `m_used +=`, so
+the arena is crash-thread-ONLY -- nothing on another thread may bump it,
+which is why the fail-fast reasons moved off it (§5.3).
 
 ### 5.6 Log file sink and backlog
 
 `Log::Init` adds a file sink at `<logDir>/<App>.log` (rotated per run,
 keep 5) beside the stderr sink, retargeted when the dump dir retargets
-(`Saved/Logs/` under a project), `flush_on(warn)`. The sink also keeps a
+(`Saved/Logs/` under a project), `flush_on(warn)`. **As built (final review,
+I1):** `Log::Init` attaches one `spdlog::sinks::dist_sink_mt` to the engine
+logger and the file and backlog sinks live INSIDE it, because the retarget
+happens on a live process while worker threads log -- mutating
+`spdlog::logger::sinks_` under a concurrent `log()` is a data race, and the
+dist sink's `add_sink`/`remove_sink` are internally locked. The sink also keeps a
 BACKLOG: a fixed ring of the last 512 formatted lines written without taking
 the sink's mutex on the read side. The crash path freezes the ring on the
 faulting thread (UE's panic mode) and the crash thread dumps it into the

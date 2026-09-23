@@ -39,6 +39,7 @@
 
 #include <imgui.h>
 
+#include <atomic>   // g_cleanExitRequested -- the clean-exit hook's latch
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
