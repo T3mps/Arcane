@@ -7,6 +7,27 @@
 same day (§2.1 records every delta and what changed here because of it);
 awaiting the written-spec review before the implementation plan.
 
+**Plan 1 status:** Plan 1 (core crash path) implemented 2026-09-22 on branch
+feat/crash-window-plan-1, commit c15d71d6 (+ this close-out); plans 2
+(reporter + NativeWindow + monitor mode) and 3 (autosave) pending.
+
+**Plan 1 measurements (2026-09-22, Debug, this desk):**
+- Death fixture (`bin/Debug-windows-x86_64-md/death-fixture`), wall time to
+  exit measured by hand, kind from the envelope: `av` exit 10, report
+  written; `assert` exit 10, ~148 ms, kind `assert`; `terminate` exit 10,
+  135 ms, kind `terminate`; `abort` exit 10, 141 ms, kind `terminate`;
+  `invalid-parameter` exit 10, 137 ms, kind `crash`; `purecall` exit 10,
+  152 ms, kind `crash`; `stack-overflow` exit 10, 207 ms, kind `crash`;
+  `oom` exit 10, 156-168 ms, kind `out-of-memory` -- 135-207 ms is the
+  spread across these seven rows; `ensure` exit 0, ~311 ms, kind `ensure`,
+  no `.dmp`; `--hang-at-exit --exit-seconds 2` exit 12 at 2223 ms;
+  `--hang 5 --hang-seconds 1` exit 0 at 5058 ms.
+- Desk: `ArcaneEditor.exe --project ReferenceProject --backend dx12
+  --frames 900` exit 0; log retargeted to `<exe dir>/ReferenceProject/
+  Saved/Logs/ArcaneEditor.log`.
+- Suite: `~[gpu]` 1987 cases / 1983 passed / 4 skipped; golden gate 8/8;
+  `[witness][gpu]` 6/6; `[witness][server]` 3/3.
+
 **Sequencing (binding order, 2026-09-22 amendment):** this arc runs now,
 ahead of F5. arcbuild II follows F5. The general allocator, worker-thread
 heartbeats and the slow-task scope are owed to the introspection arc (§13).
@@ -203,6 +224,13 @@ Everything else comes from the envelope. `Diag::Envelope` gains, additively
 `commandLine`, `exitCode`, and the kind vocabulary grows by `assert` and
 `terminate` (`DeriveKind` matches those substrings ahead of "crash").
 
+(plan 1 as built) Spawning the absent reporter is one stderr line plus one
+`ARC_WARN` after the files exist -- plan 1 has no reporter to spawn yet, so
+the hand-off contract's command line is built but unused; the minimal
+envelope carries the portable stack in `cpuThreadSummary`, not a separate
+field (R4); a full envelope that cannot fit the arena is elided (an 8 KiB
+lean form) or withheld entirely, never truncated on disk.
+
 **Exit codes** (a block clear of the hosts' existing 0-5, which the Hub and
 the witness harness decode): `10` crashed with a report written, `11` hang
 terminated by the reporter (the reporter's `TerminateProcess` argument), `12`
@@ -252,6 +280,15 @@ The current rule that `Install` must come AFTER every flag refusal
 The watchdog thread becomes a raw thread with a stop flag joined from an
 `atexit` hook registered by `Install`, so `Install` is safe as the first line
 of `main` and the per-site `Shutdown()` calls before refusals go.
+
+(plan 1 as built) `Install` runs first after argument parsing EXCEPT for
+`--print-engine-info`, the Hub's probe, which runs before it so the probe
+stays free of diagnostics artifacts (R25). `Shutdown()` still disarms the
+watchdog with a bounded wait -- the sentinel window is
+`RequestCleanExit()` -> `Shutdown()` (R1). The `atexit` hook registered
+from ArcaneCore.dll runs at `DLL_PROCESS_DETACH` after other threads are
+gone, so what actually makes Install-then-return safe is the raw thread
+handle, not the hook itself (owed: fix the comment that implies otherwise).
 
 ### 5.2 On a crash
 
@@ -309,12 +346,26 @@ written with the current context):
 - **terminate** (`std::set_terminate`): kind `terminate`; if
   `std::current_exception()` is set, its `what()` goes into the reason, and
   a `std::bad_alloc` makes the kind `out-of-memory` (UE classifies OOM as
-  its own crash type, `:1582-1627`).
+  its own crash type, `:1582-1627`). (plan 1 as built) With our
+  unhandled-exception filter installed, an uncaught C++ exception reaches
+  the FILTER before `std::terminate`, and `std::current_exception()` is
+  empty there -- measured, not assumed -- so the filter decodes the MSVC
+  throw record (`ThrowInfo` -> catchable types) for kind `terminate` /
+  `out-of-memory` and `what()` instead; `std::set_terminate` remains
+  installed for the paths that DO reach it (noexcept violation, terminate
+  during unwinding, an explicit call) (ruling R20).
 - **ensure** (`ARC_ENSURE` / Mosaic `FailEnsure`, the recoverable path):
   kind `ensure`, a LIGHTWEIGHT report -- envelope and portable stack only,
   no minidump, no all-thread capture, no window, at most once per call site
   per session -- and execution continues. UE's continuable-report shape
   (`:1871-1887`, "don't capture all threads to report and resume quickly").
+  (plan 1 as built) `ARC_ENSURE` evaluates its condition at the call site
+  and raises the ensure scope only around the failure report, so a fatal
+  assert reached while evaluating the condition stays fatal (R22); the
+  discriminator is one exported thread-local accessor in Core, because a
+  header-inline `thread_local` gives each module its own copy across DLLs
+  (R21); a bare `MOSAIC_ENSURE` reaching the Arcane handler is fatal, not
+  recoverable (owed: give Mosaic's `AssertContext` a recoverable flag).
 - **SIGABRT** (`signal`): kind `terminate`, reason "abort() called" -- covers
   a third party's `abort()`.
 - **Invalid parameter / pure call**: kind `crash`, reason names the CRT
@@ -360,6 +411,13 @@ thread held can block it. The envelope's `logPath` names the file; the
 reporter shows the folder's `.log.txt` first and the live file's tail when
 the folder copy is missing.
 
+(plan 1 as built) The file sink attaches in `Diagnostics::Install`, not
+`Log::Init` -- the sink needs the resolved `logDir`, which `Install`
+computes -- and re-attaches on `RetargetDumpDir` when `logDir` was derived
+from the dump dir (R5). `AttachFileSink` called again on an already-attached
+path rotates the existing file and replaces the sink rather than erroring or
+duplicating it (R13).
+
 ### 5.7 Exit sentinel and clean-exit handlers
 
 The exit sentinel is the WATCHDOG KEPT ALIVE THROUGH SHUTDOWN, UE's shape
@@ -380,6 +438,15 @@ console handler): the editor writes autosaves for everything dirty first,
 which is fast, then runs its ordinary exit. If the OS cuts it short the
 autosave marker stays enabled (§8.5), which is the right answer. UE saves
 nothing on either path; we do more here on purpose.
+
+(plan 1 as built) `exitSeconds == 0` disables the sentinel outright, for a
+host that wants no exit deadline. The console handler is gated by
+`installCrashHandler`, the same gate as the fail-fast family, since it is a
+process-wide handler (R24); a Ctrl-C that arrives with no clean-exit hook
+installed is DECLINED -- the handler returns `FALSE` before touching the
+press counter or arming the sentinel, so Windows' default termination runs
+-- rather than being silently swallowed by an empty hook slot. Every host
+installs a hook, so this only matters for a bare `Config`.
 
 ### 5.8 Monitor mode (windowed hosts)
 
@@ -631,3 +698,26 @@ Three plans, each independently mergeable, in this order:
 - The Hub decoding exit codes 10/11/12 into a "crashed, report at" row.
 - Document autosave beyond the built-in types is covered by the seam; a
   document that cannot serialize to a path must say so in its own spec.
+
+Owed from plan 1's build (2026-09-22):
+- Mosaic `AssertContext` needs a recoverable flag, plus a grep gate banning
+  raw `MOSAIC_ENSURE*` outside `Assert.hpp` (a bare `MOSAIC_ENSURE` through
+  the Arcane handler is fatal today, §5.3).
+- `DeriveKind` classifies by substring match; the assert/ensure reasons now
+  carry a file path, so a guard in a path containing "gpu" or "assert" can
+  be misclassified. Wants a prefix-match rule instead.
+- `StopWatchdog`'s bounded 5 s wait can return while the watchdog is still
+  parked mid-report; wants an orphaned-thread guard.
+- `Diagnostics.cpp` has grown past one task's worth of concern (envelope
+  writer, IO helpers, snapshot block) and wants extraction into its own
+  files.
+- The death fixture has no Release-config rows (`MOSAIC_ENABLE_ASSERTS` is
+  defined there for Debug/Release/Dist alike, but only Debug is exercised
+  by the gate).
+- A second `g_handledEvent` correlation id, for the case where a hang report
+  and a crash report could otherwise be confused as the same event.
+- The `.txt` header has no `envelope : ELIDED` line for the case where a
+  full envelope could not fit the arena and was withheld.
+- The job-worker stack guarantee (`GuaranteeStackForThisThread`, R23) is
+  wired into `JobSystem` and `ServiceThread` but has no test proving a
+  worker thread actually survives a near-overflow.
