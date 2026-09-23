@@ -124,6 +124,17 @@ namespace Arcane::Reporter
             return p;
         }
 
+        // Reap the record (UE :1408) -- and, R104(c), the "<record>.tmp" a
+        // host leaves behind when it dies between writing the temp copy and
+        // renaming it over the record (Diagnostics.cpp, WriteSessionRecord).
+        // Both are no-ops when the host already cleaned up.
+        void ReapRecord(const std::filesystem::path& record)
+        {
+            std::error_code ec;
+            std::filesystem::remove(record, ec);
+            std::filesystem::remove(WithSuffix(record, L".tmp"), ec);
+        }
+
         // R98 / R33: the host's handle. The host passes an inheritable
         // duplicate of its own handle (--host-handle) through a one-entry
         // handle list; it is taken only if it really names the pid we were
@@ -211,7 +222,7 @@ namespace Arcane::Reporter
         std::error_code ec;
         if (ClassifyHostExit(session.has_value(), crashPathSpoke) == MonitorVerdict::Silent)
         {
-            std::filesystem::remove(recordPath, ec);   // reap (UE :1408); a no-op when the host already did
+            ReapRecord(recordPath);   // a no-op when the host already did
             return Arcane::Reporter::ExitCode::kOk;
         }
 
@@ -288,7 +299,7 @@ namespace Arcane::Reporter
                        "a __fastfail, a /GS cookie failure, heap corruption, a stack overflow with no room\n"
                        "for SEH, or an external kill (spec s5.8). The log tail is in the .log.txt beside this.\n") && ok;
         ok = Diag::WriteFile(e, envPath) && ok;
-        std::filesystem::remove(recordPath, ec);   // reap the record now that its story is told (UE :1408)
+        ReapRecord(recordPath);   // now that its story is told
         if (ok) ARC_WARN("monitor: {} exited abnormally ({}); report at {}", app, e.reason, ToUtf8(envPath.wstring()));
         else    ARC_ERROR("monitor: {} exited abnormally ({}); the report at {} could not be written in full",
                           app, e.reason, ToUtf8(stem.wstring()));

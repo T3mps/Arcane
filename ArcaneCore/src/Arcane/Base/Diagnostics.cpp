@@ -2339,9 +2339,14 @@ namespace
     // resurrect the record: the deleter clears g_sessionRecordLive BEFORE its
     // DeleteFileW, and the writer re-checks the flag AFTER its rename -- so
     // whichever order the two land in, the file is gone at the end.
-    void WriteSessionRecord()
+    //
+    // R103 (task 9 fix round 1): returns false when the record could NOT be
+    // (re)written -- the old file, if any, is then untouched -- and true when
+    // it was written or there was nothing to write (no monitor watching, or
+    // the record already deleted by a clean-exit path).
+    [[nodiscard]] bool WriteSessionRecord()
     {
-        if (!g_sessionPathWide[0] || !g_sessionRecordLive.load(std::memory_order_acquire)) return;
+        if (!g_sessionPathWide[0] || !g_sessionRecordLive.load(std::memory_order_acquire)) return true;
 
         // ABSOLUTE paths in the record: a host opened with a relative
         // `--project` retargets to a relative report dir, and the monitor --
@@ -2383,15 +2388,16 @@ namespace
 
         const std::wstring tmp = std::wstring(g_sessionPathWide) + L".tmp";
         const HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h == INVALID_HANDLE_VALUE) return;
+        if (h == INVALID_HANDLE_VALUE) return false;
         const bool ok = WriteAll(h, text);
         CloseHandle(h);
         if (!ok || !MoveFileExW(tmp.c_str(), g_sessionPathWide, MOVEFILE_REPLACE_EXISTING))
         {
             DeleteFileW(tmp.c_str());
-            return;
+            return false;
         }
         if (!g_sessionRecordLive.load(std::memory_order_acquire)) DeleteFileW(g_sessionPathWide);
+        return true;
     }
 
     // R98 / R33 (spec S5.8 "waits on the host's process HANDLE"): the monitor
@@ -2409,6 +2415,20 @@ namespace
     {
         if (!g_reporterExe[0] || !g_sessionPathWide[0]) return;
 
+        // R104(b): everything that can THROW (the attribute-list storage, the
+        // command line) is built BEFORE the handle exists, so an allocation
+        // failure cannot leak it; after DuplicateHandle nothing below throws
+        // until CloseHandle(self).
+        SIZE_T attrSize = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+        std::vector<unsigned char> attrStorage(attrSize);
+        auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrStorage.data());
+        std::wstring cmd = L"\"" + std::wstring(g_reporterExe) + L"\" --monitor " + std::to_wstring(GetCurrentProcessId())
+                         + L" --host-handle ";
+        const std::wstring cmdTail = L" --session \"" + std::wstring(g_sessionPathWide) + L"\""
+                                   + (g_cfg.unattended ? L" --unattended" : L"");
+        cmd.reserve(cmd.size() + 24 + cmdTail.size());
+
         HANDLE self = nullptr;
         if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &self,
                              SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, /*inherit*/TRUE, 0))
@@ -2420,16 +2440,14 @@ namespace
         }
 
         // A path and three numbers: nothing here needs escaping (a Windows
-        // path cannot contain a double quote).
-        std::wstring cmd = L"\"" + std::wstring(g_reporterExe) + L"\" --monitor " + std::to_wstring(GetCurrentProcessId())
-                         + L" --host-handle " + std::to_wstring(static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(self)))
-                         + L" --session \"" + std::wstring(g_sessionPathWide) + L"\"";
-        if (g_cfg.unattended) cmd += L" --unattended";
+        // path cannot contain a double quote). The handle's digits go into
+        // the capacity reserved above, and swprintf writes them without
+        // allocating (at most 20 digits for a u64).
+        wchar_t digits[24];
+        _snwprintf_s(digits, std::size(digits), _TRUNCATE, L"%llu",
+                     static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(self)));
+        cmd.append(digits).append(cmdTail);
 
-        SIZE_T attrSize = 0;
-        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
-        std::vector<unsigned char> attrStorage(attrSize);
-        auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrStorage.data());
         bool                launched = false;
         DWORD               error    = 0;
         PROCESS_INFORMATION pi{};
@@ -2488,8 +2506,7 @@ namespace
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(g_sessionPathWide).parent_path(), ec);
         g_sessionRecordLive.store(true, std::memory_order_release);
-        WriteSessionRecord();
-        if (GetFileAttributesW(g_sessionPathWide) == INVALID_FILE_ATTRIBUTES)
+        if (!WriteSessionRecord() || GetFileAttributesW(g_sessionPathWide) == INVALID_FILE_ATTRIBUTES)
         {
             g_sessionRecordLive.store(false, std::memory_order_release);
             ARC_WARN("Diagnostics: could not write the session record; the crash monitor is not launched");
@@ -2809,6 +2826,8 @@ void RetargetDumpDir(const std::filesystem::path& dir)
     std::lock_guard<std::recursive_mutex> reportLock(g_reportMutex);
     g_cfg.dumpDir = dir.string();
 #if defined(_WIN32)
+    // What the session record names until the rewrite below lands (R103).
+    const std::string previousReportDir = g_reportDirSnap;
     // The crash path may not touch std::filesystem, so the new directory is
     // re-derived (and created) HERE and only the snapshot travels.
     SnapshotReportDir();
@@ -2820,7 +2839,25 @@ void RetargetDumpDir(const std::filesystem::path& dir)
     // Plan 2, task 9 (D8/D15): the session record now names the new report
     // dir and log -- rewritten IN PLACE (the monitor was told its path at
     // launch); a no-op when no monitor is watching or the record is gone.
-    WriteSessionRecord();
+    //
+    // R103 (task 9 fix round 1): a failed rewrite (an AV scanner or indexer
+    // holding the file across the rename, a full disk) is RETRIED once and
+    // then reported, never swallowed. On a second failure the OLD record is
+    // KEPT on purpose: it still says "no clean exit yet", so the monitor
+    // still reports a fail-fast or a kill. Deleting it instead would make the
+    // monitor read every later death as a clean exit -- total silence, the
+    // worse failure. What the stale record costs is named in the warning: it
+    // points the monitor at the OLD report dir, so it cannot see the crash
+    // path's own report in the new one and may synthesize a second window.
+    if (!WriteSessionRecord())
+    {
+        ARC_WARN("Diagnostics: could not rewrite the session record for the new report dir; retrying once");
+        Sleep(50);
+        if (!WriteSessionRecord())
+            ARC_WARN("Diagnostics: the session record still names '{}' (not '{}'); a crash from here on may show "
+                     "two windows (the crash reporter's and the monitor's abnormal-exit report)",
+                     previousReportDir, g_reportDirSnap);
+    }
 #endif
 }
 

@@ -663,6 +663,13 @@ TEST_CASE("death fixture --monitor: a clean exit deletes the session record and 
     SkipIfBuildMachine();
     const FixtureRun r = RunFixture("none", { "--monitor" });
     CHECK(r.run.exitCode == 0);
+    // R104(a): a monitor was REALLY watching -- without this, the silence
+    // below would pass just as well if none had ever been launched (the host
+    // deletes its own record either way). The fixture's log is derived:
+    // <dumpDir>/../Logs/DeathFixture.log, truncated per run by the sink.
+    const std::string log = Slurp(std::filesystem::temp_directory_path() / "Logs" / "DeathFixture.log");
+    CHECK(log.find("Diagnostics: crash monitor launched (pid ") != std::string::npos);
+    CHECK(log.find("monitor on)") != std::string::npos);
     CHECK(WaitForNoSessionRecord(r.dir, std::chrono::seconds(5)));
     std::this_thread::sleep_for(std::chrono::seconds(2));
     CHECK(CountEnvelopes(r.dir) == 0);

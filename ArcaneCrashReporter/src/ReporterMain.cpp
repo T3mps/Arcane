@@ -187,6 +187,23 @@ namespace Arcane::Reporter
             if (closing) SetEvent(closing);
             if (waiter.joinable()) waiter.join();
         }
+
+        // R102 (task 9 fix round 1): the window is GONE -- stop the waiter
+        // and let go of the host's D11 event at once. Monitor mode reads "an
+        // attended hang reporter still holds that event, unsignalled" as "a
+        // hang window owns this host's death" (Monitor.cpp,
+        // HangWindowOwnsExit). A window closed while it still said
+        // "Symbolizing..." used to leave this process waiting out the rest
+        // of the deadline on the dbgeng worker (up to 60 s) with the event
+        // held -- and a host killed in that gap got NO report and NO window.
+        // Holding the event must mean "the window is up", nothing more.
+        // Idempotent; the waiter is joined before the handle is closed, so
+        // nothing can be waiting on it.
+        void ReleaseWindowClaim()
+        {
+            Stop();
+            if (recovered) { CloseHandle(recovered); recovered = nullptr; }
+        }
     };
 }
 
@@ -551,6 +568,11 @@ namespace
                     if (symbolizedInTime) break;
                     if (window.IsOpen()) continue;
 
+                    // R102: the FIRST point this thread sees the window
+                    // closed -- release the hang claim before waiting out
+                    // the rest of the deadline on the worker.
+                    if (hang) hang->ReleaseWindowClaim();
+
                     // The window just closed and the worker is still
                     // running: from here this is the unattended case,
                     // except bounded by whatever remains of the deadline
@@ -606,7 +628,11 @@ namespace
         // R36: the waiter is released and joined HERE -- after the window is
         // gone, before anything it captured (`window` above all) goes out of
         // scope.
-        if (hang) hang->Stop();
+        //
+        // R102: and the D11 event goes with it (ReleaseWindowClaim), so a
+        // monitor judging a later host death never mistakes this closed
+        // window for one still on screen.
+        if (hang) hang->ReleaseWindowClaim();
 
         // Task 8: the exit code. Precedence, in order:
         //   4 (kHostMismatch) -- a genuine identity mismatch is the one hang
