@@ -170,6 +170,12 @@ namespace
     CleanExitHook g_cleanExitHook = nullptr;
     void*         g_cleanExitUser = nullptr;
 
+    // "...and a host actually installed one." Mirrors the slot above so the
+    // console handler can ask that question WITHOUT taking g_cleanExitMutex:
+    // it runs on an OS-created thread, on a deadline, while the main thread
+    // may be anywhere -- including inside SetCleanExitHook.
+    std::atomic<bool> g_haveCleanExitHook{false};
+
     // The crash thread raises this for the lifetime of a report so no hang
     // rule can interleave a second report with the one being written (spec
     // S5.2 step 1, UE stops its heartbeat first). Task 8 is what makes the
@@ -1860,6 +1866,16 @@ namespace
         {
         case CTRL_C_EVENT:
         case CTRL_BREAK_EVENT:
+            // NO HOOK, NO TWO-STEP. Without a host hook there is nothing for
+            // the first press to start, so claiming the event would SWALLOW
+            // it: the user would press Ctrl-C, watch nothing happen, and have
+            // to press again to get a kill. Returning FALSE hands the press
+            // back to Windows' default handler, which terminates exactly as
+            // it did before this module existed -- the right answer for a
+            // console tool that never opted in.
+            if (!g_haveCleanExitHook.load(std::memory_order_acquire))
+                return FALSE;
+
             // The same gesture, counted together: the FIRST asks the host to
             // quit the way it knows how, and the SECOND is the user saying
             // that did not work. Not a graceful exit and not pretending to
@@ -2099,14 +2115,26 @@ void Install(const Config& cfg)
     if (cfg.installCrashHandler)
         g_prevFilter = SetUnhandledExceptionFilter(&OnUnhandledException);
 
-    // UE's rule (WindowsPlatformMisc.cpp): only a process that OWNS a console
-    // takes the console handler. A windowed host inherits nothing to be
-    // Ctrl-C'd, and a GUI process that registers here would sit in the handler
-    // for events it can never receive -- its session-end path is
-    // WM_QUERYENDSESSION/WM_ENDSESSION, which routes to the same
+    // Two gates, both load-bearing (R24).
+    //
+    // UE's rule (WindowsPlatformMisc.cpp) is the second one: only a process
+    // that OWNS a console takes the console handler. A windowed host inherits
+    // nothing to be Ctrl-C'd, and a GUI process that registered here would sit
+    // in the handler for events it can never receive -- its session-end path
+    // is WM_QUERYENDSESSION/WM_ENDSESSION, which routes to the same
     // RequestCleanExit from the host's own window procedure (task 9).
-    if (GetConsoleWindow() != nullptr && SetConsoleCtrlHandler(&OnConsoleCtrl, TRUE))
+    //
+    // installCrashHandler is the first, and it is the SAME gate the fail-fast
+    // family takes (R2): this IS a process-wide handler, and a host that asked
+    // us not to take its death paths keeps its own Ctrl-C too. Without it the
+    // test runner -- every [diag] case -- would install one for the whole
+    // process. SimulateConsoleCtrl is unaffected either way: it calls the rule
+    // directly, which is the point of the seam.
+    if (cfg.installCrashHandler && GetConsoleWindow() != nullptr
+        && SetConsoleCtrlHandler(&OnConsoleCtrl, TRUE))
+    {
         g_consoleHandlerInstalled = true;
+    }
 #endif
 
     if (cfg.startHangWatchdog)
@@ -2526,6 +2554,10 @@ void SetCleanExitHook(CleanExitHook hook, void* user) noexcept
     std::lock_guard lock(g_cleanExitMutex);
     g_cleanExitHook = hook;
     g_cleanExitUser = user;
+    // The console handler's lock-free mirror of "is there one?" -- see
+    // g_haveCleanExitHook. Published last, so a handler that sees `true`
+    // cannot then read a half-written pair.
+    g_haveCleanExitHook.store(hook != nullptr, std::memory_order_release);
 }
 
 void RequestCleanExit() noexcept

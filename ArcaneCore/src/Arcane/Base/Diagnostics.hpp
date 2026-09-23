@@ -217,7 +217,10 @@ namespace Arcane::Diagnostics
     //
     // Also installs the console control handler (Ctrl-C / console close /
     // logoff / shutdown -> RequestCleanExit, below) when the process owns a
-    // console window, and registers ONE process-lifetime atexit hook that
+    // console window AND Config::installCrashHandler is set (R24) -- it is a
+    // process-wide handler, so it takes the same gate the rest of the
+    // crash-handler family does -- and registers ONE process-lifetime atexit
+    // hook that
     // stops the watchdog thread. The atexit hook is what makes an
     // Install-then-return-from-main() safe: the watchdog is a RAW thread so
     // that it can outlive a host that never reaches Shutdown() (spec S5.7),
@@ -301,6 +304,13 @@ namespace Arcane::Diagnostics
 
     // Install (or, with nullptr, clear) the process-wide clean-exit hook.
     // Last writer wins; one call per host lifetime is the expected shape.
+    //
+    // Installing one is ALSO what opts a console host into the two-step
+    // Ctrl-C. With the slot empty there is nothing for a first press to
+    // start, so claiming it would only swallow it: the handler declines the
+    // event instead and Windows terminates the process exactly as it always
+    // did. Console close/logoff/shutdown are not affected -- those end the
+    // process whatever we return.
     ARCANE_CORE_API void SetCleanExitHook(CleanExitHook hook, void* user) noexcept;
 
     // "The host has been asked to quit." Arms the exit deadline and calls the
@@ -317,8 +327,10 @@ namespace Arcane::Diagnostics
     // returns whether it handled it -- exactly what Windows would call, with
     // the ONE difference that the second Ctrl-C's TerminateProcess is real
     // here too, so a test simulates the first press only. Works with no
-    // console attached and with the watchdog not running: the console rule
-    // depends on neither.
+    // console attached, with the handler not installed (R24 gates that on
+    // Config::installCrashHandler) and with the watchdog not running: the
+    // console rule depends on none of the three. False for a Ctrl-C with no
+    // clean-exit hook installed -- see SetCleanExitHook.
     [[nodiscard]] ARCANE_CORE_API bool SimulateConsoleCtrl(unsigned long ctrlType) noexcept;
 
     // "The main thread is alive." One relaxed atomic store -- cheap enough for

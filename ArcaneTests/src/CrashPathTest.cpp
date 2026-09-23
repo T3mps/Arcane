@@ -328,10 +328,25 @@ TEST_CASE("diagnostics: the console handler is two-step for Ctrl-C and requests 
     std::filesystem::create_directories(dir);
     Armed armed(dir);
     static int hookCalls = 0; hookCalls = 0;
+
+    // WITH NO HOOK INSTALLED the press is DECLINED, not swallowed. A console
+    // tool that never opted in has nothing for a first Ctrl-C to start, so
+    // claiming the event would cost the user a press and then kill the process
+    // with 0xC000013A instead of the exit they asked for. Returning false
+    // hands it to Windows' default handler, which terminates exactly as it did
+    // before this module existed.
+    Arcane::Diagnostics::SetCleanExitHook(nullptr, nullptr);
+    CHECK_FALSE(Arcane::Diagnostics::SimulateConsoleCtrl(0 /*CTRL_C_EVENT*/));
+    CHECK(hookCalls == 0);
+
     Arcane::Diagnostics::SetCleanExitHook([](void*) { ++hookCalls; }, nullptr);
     CHECK(Arcane::Diagnostics::SimulateConsoleCtrl(0 /*CTRL_C_EVENT*/));
     CHECK(hookCalls == 1);
     // A second Ctrl-C would terminate: not simulated. Close requests the same clean exit once.
     CHECK(Arcane::Diagnostics::SimulateConsoleCtrl(2 /*CTRL_CLOSE_EVENT*/));
     CHECK(hookCalls == 1);   // idempotent
+
+    // The slot is PROCESS-wide and outlives this case's Armed: leave it empty
+    // rather than pointing every later RequestCleanExit at this case's counter.
+    Arcane::Diagnostics::SetCleanExitHook(nullptr, nullptr);
 }
