@@ -23,7 +23,6 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
-#include <thread>
 
 #pragma comment(lib, "gdiplus.lib")
 // shell32.lib (CLSID_TaskbarList) and ole32.lib (Co* functions) are already
@@ -110,9 +109,27 @@ namespace Arcane
     struct BootSplashWindow::Impl final : INativeWindowPresenter
     {
         NativeWindow      window;
+        // R54: the HWND OnCreate is handed, cached for the window thread's
+        // own use. Valid for the whole window-thread lifetime (no presenter
+        // callback ever runs after OnDestroy), so OnPaint/OnUser below read
+        // THIS, never window.Hwnd() -- that atomic is exchanged to nullptr by
+        // NativeWindow::Close() BEFORE WM_CLOSE is even posted, so a WM_PAINT
+        // already in flight when Close() runs would otherwise observe a null
+        // handle mid-dispatch. SetStatusText/SetProgress (below) run on OTHER
+        // threads and deliberately keep reading window.Hwnd() -- there, null
+        // IS the correct "no window yet, or already closed" guard, and a
+        // cached member would just be a stale-read race of its own.
+        HWND              hwnd = nullptr;
         std::string       imagePath;
         std::mutex        textMutex;     // statusText: written by any thread, read by OnPaint
         std::string       statusText;
+
+        // Gate for BootSplashPresenter::Present's forwarding of status text +
+        // taskbar progress -- see SetShowProgress/ShowProgress's own comments
+        // in the header. Defaults true (this class's behaviour before the
+        // flag existed); RuntimeApp explicitly flips it false before
+        // BootSequence::Run begins, per the spec default for a non-editor
+        // host.
         std::atomic<bool> showProgress{true};
         int               lastPercent = -1;   // SetProgress dedupe (boot/main thread only)
 
@@ -120,23 +137,33 @@ namespace Arcane
         // the same rule the old splash thread's own body followed (create
         // near the top, tear down in reverse order once the message loop
         // exits); OnCreate/OnDestroy are NativeWindow's equivalent hooks, both
-        // called on the window thread only.
+        // called on the window thread only. GDI+ itself is the one exception
+        // to "acquired in OnCreate" -- see OnUser's kUserLoadImage handling
+        // below for where GdiplusStartup actually runs, and why.
         std::unique_ptr<Gdiplus::Bitmap>      bitmap;
         ULONG_PTR                             gdiplusToken   = 0;
         bool                                  gdiplusOk      = false;
         Microsoft::WRL::ComPtr<ITaskbarList3> taskbar;
         bool                                  comInitialized = false;
 
-        void OnCreate(void*) override
+        void OnCreate(void* hwndParam) override
         {
-            Gdiplus::GdiplusStartupInput in;
-            gdiplusOk      = Gdiplus::GdiplusStartup(&gdiplusToken, &in, nullptr) == Gdiplus::Ok;
-            comInitialized = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+            hwnd            = static_cast<HWND>(hwndParam);
+            comInitialized  = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
             // The image decodes AFTER the window is up and painted once:
             // NativeWindow shows the window right after OnCreate returns and
             // UpdateWindow paints synchronously, so this posted message is
             // dequeued only after that first paint -- the "~100 ms to
-            // something on screen" promise is about the WINDOW, not the image.
+            // something on screen" promise is about the WINDOW, not the
+            // image. GdiplusStartup moves with it (see kUserLoadImage below)
+            // rather than running here: it spins up its own background
+            // thread, so starting it in OnCreate would put it back on the
+            // critical path to first pixel AND delay NativeWindow's
+            // ready.store(true) (which Close() waits on) -- exactly what the
+            // deleted thread body avoided by running it after
+            // ShowWindow/UpdateWindow too. CoInitializeEx stays here: it is
+            // cheap, and must run on this thread before the later
+            // CoCreateInstance in kUserSetProgress below.
             window.PostUser(kUserLoadImage);
         }
 
@@ -146,6 +173,16 @@ namespace Arcane
         {
             if (msg == kUserLoadImage)
             {
+                // R55: GdiplusStartup lives HERE, not in OnCreate (see that
+                // method's comment) -- the post-first-paint slot. Attempted
+                // unconditionally, same as the deleted code, so gdiplusOk is
+                // meaningful regardless of whether there is an image to
+                // decode. If the window closes before this message is ever
+                // dequeued, gdiplusOk simply stays false (its default) and
+                // OnDestroy's `if (gdiplusOk)` guard skips GdiplusShutdown --
+                // balanced either way, never a leak or a double-shutdown.
+                Gdiplus::GdiplusStartupInput in;
+                gdiplusOk = Gdiplus::GdiplusStartup(&gdiplusToken, &in, nullptr) == Gdiplus::Ok;
                 if (gdiplusOk && !imagePath.empty())
                 {
                     const std::wstring wpath = ResolveImagePathWide(imagePath);
@@ -176,13 +213,13 @@ namespace Arcane
                 }
                 if (taskbar)
                 {
-                    const HWND h = static_cast<HWND>(window.Hwnd());
                     const int percent = static_cast<int>(w);
                     // Mirrors WindowsPlatformSplash.cpp:769-781 exactly: 100%
                     // clears the overlay instead of leaving a full bar stuck
-                    // on the taskbar icon after the splash is gone.
-                    if (percent >= 100) taskbar->SetProgressState(h, TBPF_NOPROGRESS);
-                    else                taskbar->SetProgressValue(h, static_cast<ULONGLONG>(percent), 100ULL);
+                    // on the taskbar icon after the splash is gone. Uses the
+                    // cached `hwnd` (R54), not window.Hwnd().
+                    if (percent >= 100) taskbar->SetProgressState(hwnd, TBPF_NOPROGRESS);
+                    else                taskbar->SetProgressValue(hwnd, static_cast<ULONGLONG>(percent), 100ULL);
                 }
                 return true;
             }
@@ -205,6 +242,11 @@ namespace Arcane
         // NativeWindow only on the window thread, passing *this, and Impl
         // outlives the window (NativeWindow::Close() -- and the dtor's Close()
         // before it -- joins the window thread before Impl can be destroyed).
+        // `h` is impl's cached hwnd (R54), never window.Hwnd(): Close()
+        // exchanges that atomic to nullptr BEFORE posting WM_CLOSE, so a
+        // WM_PAINT already in flight at that moment would otherwise be handed
+        // a null HWND mid-dispatch -- the cached handle is valid for the
+        // whole window-thread lifetime instead.
         // `paintRect` is BeginPaint's own PAINTSTRUCT::rcPaint -- the region
         // actually invalidated -- so a SetStatusText-only repaint (which
         // invalidates just the text row; see SetStatusText's own comment) can
@@ -297,7 +339,7 @@ namespace Arcane
     void BootSplashWindow::Impl::OnPaint(void* hdc, int left, int top, int right, int bottom)
     {
         const RECT paint{ left, top, right, bottom };
-        PaintSplash(static_cast<HWND>(window.Hwnd()), *this, static_cast<HDC>(hdc), paint);
+        PaintSplash(hwnd, *this, static_cast<HDC>(hdc), paint);   // cached hwnd (R54), not window.Hwnd()
     }
 
     BootSplashWindow::BootSplashWindow(const char* imagePath) noexcept
@@ -332,7 +374,19 @@ namespace Arcane
             d.height        = 270;
             d.popup         = true;
             d.topmost       = true;
-            d.appWindow     = true;                  // taskbar button, so ITaskbarList3 has somewhere to draw (WindowsPlatformSplash.cpp:451-452)
+            // WS_EX_APPWINDOW, not WS_EX_TOOLWINDOW (2026-07-30 review round
+            // 2, finding 1): a tool window never gets a taskbar button, so
+            // SetProgress's ITaskbarList3 calls had nowhere to render -- the
+            // overlay was silently a no-op for the ENTIRE splash lifetime,
+            // since the real window is also hidden until reveal and so has
+            // no taskbar button of its own either. UE forces exactly this for
+            // the editor (WindowsPlatformSplash.cpp:451-452: "Force the
+            // editor splash screen to show up in the taskbar and alt-tab
+            // lists" -> `GIsEditor ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW`) --
+            // that style is WHY its SetProgress (:769-781) works at all.
+            // Consequence, taken deliberately: the splash has a taskbar
+            // button and appears in Alt-Tab, matching UE's editor behaviour.
+            d.appWindow     = true;
             d.backgroundRgb = 0x0D0D0F;              // RGB(13, 13, 15), the brush PaintSplash reads back via GCLP_HBRBACKGROUND
             m_impl->window.Open(d, m_impl.get());
         }
