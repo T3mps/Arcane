@@ -34,7 +34,7 @@ int main(int argc, char** argv)
 {
     std::string dir, die; int hangSeconds = 0; bool hangAtExit = false; unsigned exitSeconds = 3, hangThreshold = 2;
     bool reporter = false, attended = false;
-    int stalls = 1, ensureAt = 0;
+    int stalls = 1, reportAt = 0; std::string reportKind;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -49,12 +49,15 @@ int main(int argc, char** argv)
         // Task 8 desk levers for the hang protocol. `--stalls N` repeats the
         // --hang sleep N times with ONE beat between (the beat is the
         // recovery the reporter's window closes on, D11, and what re-arms the
-        // host's once-per-stall rule for the next one). `--ensure-at S` fires
-        // an ensure from a helper thread S seconds in -- a SURVIVABLE report
-        // raised while a hang reporter is still up, which is D12's case: the
-        // report is written, no second reporter is spawned.
+        // host's once-per-stall rule for the next one). `--report-at S KIND`
+        // has a helper thread call WriteReport("KIND: fixture") S seconds in,
+        // while a hang reporter is still up. R96 (fix round 1): NOT an ensure
+        // -- an ensure is lightweight and never reaches the hand-off at all,
+        // so it proved nothing. KIND `hang` is D12's case (written, no second
+        // reporter); KIND `gpu-crash` is R95's (its own reporter, beside the
+        // hang window, because the hang protocol is keyed on the kind).
         else if (a == "--stalls") { std::string v; next(v); stalls = std::atoi(v.c_str()); }
-        else if (a == "--ensure-at") { std::string v; next(v); ensureAt = std::atoi(v.c_str()); }
+        else if (a == "--report-at") { std::string v; next(v); reportAt = std::atoi(v.c_str()); next(reportKind); }
     }
     Arcane::Log::Init(spdlog::level::info);
     Arcane::Log::InstallMosaicSink();
@@ -110,10 +113,11 @@ int main(int argc, char** argv)
     }
     if (hangSeconds > 0)
     {
-        std::thread ensurer;
-        if (ensureAt > 0)
-            ensurer = std::thread([ensureAt] { std::this_thread::sleep_for(std::chrono::seconds(ensureAt));
-                                               (void)ARC_ENSURE(false, "fixture ensure during a hang"); });
+        std::thread reporterThread;
+        if (reportAt > 0 && !reportKind.empty())
+            reporterThread = std::thread([reportAt, reportKind] {
+                std::this_thread::sleep_for(std::chrono::seconds(reportAt));
+                (void)Arcane::Diagnostics::WriteReport((reportKind + ": fixture").c_str()); });
         // One beat ARMS the hang trigger -- until a first Heartbeat() the
         // watchdog is deliberately silent, so a host that never beats (a
         // headless tool, every other mode in this fixture) gets silence
@@ -127,7 +131,7 @@ int main(int argc, char** argv)
             Arcane::Diagnostics::Heartbeat();   // stall 2+: THIS beat is the recovery (D11)
             std::this_thread::sleep_for(std::chrono::seconds(hangSeconds));
         }
-        if (ensurer.joinable()) ensurer.join();
+        if (reporterThread.joinable()) reporterThread.join();
         return 0;
     }
     if (hangAtExit)

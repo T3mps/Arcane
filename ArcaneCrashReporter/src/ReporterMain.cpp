@@ -182,7 +182,15 @@ namespace
                 {
                     window.PostUser(ReporterWindow::kUserHostRecovered);
                 }
-                // `closing` (this process is done) or WAIT_FAILED: post nothing.
+                else if (r == WAIT_FAILED)
+                {
+                    // R97: post nothing -- but say so. Without this line the
+                    // window would quietly stop reacting to a recovery or a
+                    // host exit, with no trace of why.
+                    ARC_WARN("reporter: waiting on the host failed ({}); recovery and host exit will not be noticed",
+                             GetLastError());
+                }
+                // `closing` (this process is done): post nothing.
             });
         }
 
@@ -360,6 +368,19 @@ namespace
         std::unique_ptr<ReporterWindow> ui;
         NativeWindow                    window;
         std::string                     logTail;
+
+        // R97: the waiter posts into `window`, so it must be stopped and
+        // joined before `window` is destroyed on EVERY path out of this
+        // scope. The normal path does that explicitly after window.Wait();
+        // this guard, declared AFTER `window` (so destroyed BEFORE it), covers
+        // an exception unwinding RunReport in between. Armed right after
+        // HangWatch::Start; Stop() is idempotent, so the normal path's
+        // explicit call and this one never conflict.
+        struct StopWaiterOnUnwind
+        {
+            HangWatch* watch = nullptr;
+            ~StopWaiterOnUnwind() { if (watch) watch->Stop(); }
+        } stopWaiterOnUnwind;
         if (!a.unattended)
         {
             logTail = ReadLogTail(stem, std::filesystem::path(ToWide(envelope->logPath)), 200);
@@ -403,6 +424,7 @@ namespace
                 else if (hang->closing)
                 {
                     hang->Start(window);
+                    stopWaiterOnUnwind.watch = hang.get();
                 }
                 else
                 {
@@ -594,7 +616,8 @@ namespace
         //   0 (kOk).
         // Returning here (never exiting) is also what routes the mismatch
         // through ArmedDiagnostics' scope guard (R67).
-        if (hang && hang->outcomeExit.load() == ExitCode::kHostMismatch) return ExitCode::kHostMismatch;
+        if (hang && hang->outcomeExit.load() == Arcane::Reporter::ExitCode::kHostMismatch)
+            return Arcane::Reporter::ExitCode::kHostMismatch;
         return writeOk ? ExitCode::kOk : ExitCode::kWriteFailed;
     }
 }

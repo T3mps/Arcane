@@ -295,7 +295,7 @@ namespace
 
     // The hang protocol (plan 2, D11/D12/D7). The event is created at Install
     // so the reporter can OpenEventW it by name; the reporter handle is kept
-    // for SURVIVABLE spawns only; the creation time rides on every spawn so
+    // for hang/gpu-stall spawns only (R95); the creation time rides on every spawn so
     // the reporter never terminates a pid that was recycled (spec s9).
     //
     // Threads: g_reporterProcess is touched only by the crash thread
@@ -999,27 +999,45 @@ namespace
     // reporter does not exist yet), so a failure is one line, after the
     // files are already on disk, and never anything louder.
     //
-    // Plan 2, task 8 (spec s5.4): `survivable` (the report's exitCode is 0 --
-    // a hang, a gpu-stall, an ensure) switches on the hang protocol's host
-    // half: the recovered event is reset for the reporter about to wait on it
-    // (D11), its name rides on the line, and the reporter's process handle is
-    // KEPT so that while it lives no second reporter is spawned for this host
-    // (D12). Every spawn carries --host-created (D7). Runs on the crash
-    // thread: fixed storage and Win32 calls only, no heap.
-    [[nodiscard]] bool SpawnReporter(const char* stemUtf8, const char* kind, bool survivable) noexcept
+    // Plan 2, task 8 (spec s5.4): `hangProtocol` switches on the hang
+    // protocol's host half: the recovered event is reset for the reporter
+    // about to wait on it (D11), its name rides on the line, and the
+    // reporter's process handle is KEPT so that while it lives no second
+    // hang reporter is spawned for this host (D12). Every spawn carries
+    // --host-created (D7). Runs on the crash thread: fixed storage and Win32
+    // calls only, no heap.
+    //
+    // R95 (fix round 1): the caller keys it on the KIND -- hang or gpu-stall,
+    // with exit code 0 (IsHangProtocolReport below) -- never on the exit code
+    // alone. Spec s5.4 scopes the protocol to the `--kind hang|gpu-stall`
+    // spawn. A device-removed WriteReport("gpu-crash: ...") is exit-0 too, and
+    // keyed on the exit code it was swallowed by a gpu-stall window's D12 gate
+    // (the canonical TDR sequence) or, spawned first, blocked a later hang's.
+    // Every other report gets a plain detached reporter whose handle is
+    // closed: it is never gated by a hang window, and never gates one.
+    // R95: the reports the hang protocol belongs to -- the host survives them
+    // (exit code 0) AND they are about a stall (spec s5.4's hang|gpu-stall).
+    // `kind` is DeriveKindCStr's static string, so strcmp is heap-free.
+    [[nodiscard]] bool IsHangProtocolReport(const char* kind, int exitCode) noexcept
+    {
+        return exitCode == 0 && kind &&
+               (std::strcmp(kind, "hang") == 0 || std::strcmp(kind, "gpu-stall") == 0);
+    }
+
+    [[nodiscard]] bool SpawnReporter(const char* stemUtf8, const char* kind, bool hangProtocol) noexcept
     {
         // Reset BEFORE the spawn gate, so a host with the spawn disabled (the
         // [diag] recovered-event case, a build machine) still runs the
         // protocol's observable half -- and so the event a live reporter from
         // an EARLIER stall is waiting on is re-armed by this report too.
-        if (survivable && g_recoveredEvent) ResetEvent(g_recoveredEvent);
+        if (hangProtocol && g_recoveredEvent) ResetEvent(g_recoveredEvent);
         if (!g_cfg.spawnReporter) return true;   // disabled (or a build machine, Install's gate): not a failure
         if (!g_reporterExe[0])    return false;
 
-        if (survivable && g_reporterProcess)
+        if (hangProtocol && g_reporterProcess)
         {
             // One window per host (spec s5.4, D12): a reporter spawned for an
-            // earlier survivable report is still up for this pid. The report
+            // earlier hang/gpu-stall report is still up for this pid. The report
             // was still written; it just gets no second window. A dead one's
             // handle is released and the spawn proceeds.
             if (WaitForSingleObject(g_reporterProcess, 0) == WAIT_TIMEOUT) return true;
@@ -1038,8 +1056,8 @@ namespace
                      static_cast<unsigned long>(GetCurrentProcessId()),
                      wideKind, g_productWide, g_hostCreated,
                      g_cfg.unattended ? L" --unattended" : L"",
-                     (survivable && g_recoveredEvent) ? L" --recovered-event " : L"",
-                     (survivable && g_recoveredEvent) ? g_recoveredName : L"");
+                     (hangProtocol && g_recoveredEvent) ? L" --recovered-event " : L"",
+                     (hangProtocol && g_recoveredEvent) ? g_recoveredName : L"");
 
         STARTUPINFOW        si{};
         PROCESS_INFORMATION pi{};
@@ -1056,10 +1074,11 @@ namespace
         // thread too.
         AllowSetForegroundWindow(pi.dwProcessId);
 
-        // Survivable: kept -- "while it lives no second reporter" (D12).
-        // Fatal: closed -- the host is about to die and the reporter outlives
-        // it on purpose.
-        if (survivable) g_reporterProcess = pi.hProcess;
+        // Hang protocol: kept -- "while it lives no second reporter" (D12).
+        // Everything else: closed -- a fatal host is about to die and the
+        // reporter outlives it on purpose; a survivable non-hang report's
+        // reporter is independent of any hang window (R95).
+        if (hangProtocol) g_reporterProcess = pi.hProcess;
         else            CloseHandle(pi.hProcess);
         return true;
     }
@@ -1280,7 +1299,7 @@ namespace
             // hand-off.
             DumpBacklog(logTxtPath);
             Log::FlushFileSinkBounded(2000);
-            spawnOk = SpawnReporter(stem, kind, /*survivable*/p.exitCode == 0);
+            spawnOk = SpawnReporter(stem, kind, IsHangProtocolReport(kind, p.exitCode));
         }
 
         g_reportCount.fetch_add(1, std::memory_order_acq_rel);
@@ -1792,7 +1811,7 @@ namespace
     }
 #endif
 
-    // D11 (plan 2, task 8): the stall a survivable report was written for is
+    // D11 (plan 2, task 8): the stall a hang/gpu-stall report was written for is
     // over. Wakes the attended reporter's waiter, which closes its window --
     // the report stays on disk. Watchdog thread only; Shutdown stops that
     // thread before it closes the handle. The stop-flag test covers the one

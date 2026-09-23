@@ -386,6 +386,44 @@ TEST_CASE("diagnostics: the recovered event is reset by a hang report and set wh
     Arcane::Diagnostics::Heartbeat();                    // the main thread moves again
     CHECK(WaitForSingleObject(ev, 2000) == WAIT_OBJECT_0);
 }
+
+// R95 (task 8 fix round 1): spec s5.4 scopes the hang protocol to the
+// `--kind hang|gpu-stall` spawn. Exit code 0 is NOT the key: a device-removed
+// WriteReport("gpu-crash: ...") and a manual report are exit-0 too, and a
+// protocol keyed on the exit code let them reset the event (and share the D12
+// gate, and swallow each other's windows). Same R45 shape as above: the event
+// is SET first, so "still signalled" after a gpu-crash report proves no reset
+// ran, and "reset" after a hang report proves the protocol still runs for the
+// kinds it belongs to.
+TEST_CASE("diagnostics: only a hang or gpu-stall report resets the recovered event; a gpu-crash report leaves it alone", "[diag]")
+{
+    const std::filesystem::path dir = FreshReportDir("recovered-event-kind");
+
+    Arcane::Diagnostics::Config cfg;
+    cfg.appName             = "RecoveredEventKindTest";
+    cfg.dumpDir             = dir.string();
+    cfg.unattended          = true;
+    cfg.spawnReporter       = false;
+    cfg.installCrashHandler = false;
+    cfg.startHangWatchdog   = false;
+    ArmedDiagnostics armed(cfg);
+
+    const std::wstring name = L"Local\\Arcane-Recovered-" + std::to_wstring(GetCurrentProcessId());
+    HANDLE ev = OpenEventW(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name.c_str());
+    REQUIRE(ev != nullptr);
+    struct CloseEv { HANDLE h; ~CloseEv() { CloseHandle(h); } } closeEv{ ev };
+
+    REQUIRE(SetEvent(ev));
+    REQUIRE_FALSE(Arcane::Diagnostics::WriteReport("gpu-crash: test").empty());
+    CHECK(WaitForSingleObject(ev, 0) == WAIT_OBJECT_0);   // not a hang: the event is untouched
+
+    REQUIRE_FALSE(Arcane::Diagnostics::WriteReport("hang: test").empty());
+    CHECK(WaitForSingleObject(ev, 0) == WAIT_TIMEOUT);    // a hang report still resets it
+
+    REQUIRE(SetEvent(ev));
+    REQUIRE_FALSE(Arcane::Diagnostics::WriteReport("gpu-stall: test").empty());
+    CHECK(WaitForSingleObject(ev, 0) == WAIT_TIMEOUT);    // and so does a gpu-stall report
+}
 #endif
 
 TEST_CASE("Diagnostics emits an .arcdiag with a GPU section when a provider is installed", "[diag]")
