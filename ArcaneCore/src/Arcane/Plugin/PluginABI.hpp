@@ -923,7 +923,18 @@ namespace Arcane
     //     MeshRenderer gains translucencyRenderOrder/translucencyDepthSortBias.
     //     A v37 module reads either header-defined layout at stale offsets;
     //     reject the pairing. ReferenceProject.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 38;
+    // v39 (2026-09-22, crash window plan 1): ArcaneCore.dll gains the whole
+    //     crash-window export surface, and Diagnostics::Config gains five
+    //     fields (productName/unattended/commandLine/logDir/exitSeconds) that
+    //     change the size and layout of a struct a module's own headers can
+    //     construct. New exports across tasks 1-9: the crash thread and
+    //     SubmitReport/ReportRequest, the fail-fast family (assert, ensure,
+    //     terminate, abort, invalid parameter, pure call, stack overflow), the
+    //     exit sentinel's RequestCleanExit/SetCleanExitHook/SimulateConsoleCtrl,
+    //     the log file sink, and GuaranteeStackForThisThread. A v38 module was
+    //     compiled against a Core with neither; reject the pairing.
+    //     ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 39;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

@@ -40,6 +40,20 @@ public:
     explicit RuntimeApp(Arcane::HostConfig cfg, Arcane::BootSplashWindow* splash = nullptr);
     int Run();   // BootSequence -> MainLoop() -> Shutdown(); process exit code
 
+    // ---- The clean-exit hook (crash window plan 1, task 9; spec S5.7) ------
+    // "Begin your ordinary exit now" for the paths the OS gives seconds rather
+    // than a frame: Ctrl-C, the console close box, logoff, WM_ENDSESSION.
+    // STATIC and installed from main() BEFORE this object exists -- the window
+    // it has to cover starts at Diagnostics::Install, which is now the first
+    // thing main does, and the hook runs on whatever thread noticed (the OS's
+    // console-handler thread), so it may touch nothing thread-affine. It sets
+    // one atomic MainLoop reads at the top of the frame, which is the same
+    // stop the window's close box already performs.
+    static void InstallCleanExitHook() noexcept;
+
+    // Whether that hook has fired. Read once per frame by MainLoop.
+    [[nodiscard]] static bool CleanExitRequested() noexcept;
+
     // Pushes the scene's ACTIVE Camera entity into the plugin's stored camera,
     // with the once-only diagnostics for "no usable camera" / "several".
     // ONE copy of this reasoning, shared: it is the view the plugin's render

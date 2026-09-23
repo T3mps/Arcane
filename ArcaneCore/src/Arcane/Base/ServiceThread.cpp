@@ -1,5 +1,6 @@
 #include <Arcane/Base/ServiceThread.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>   // GuaranteeStackForThisThread -- spec S5.1 item 4 (crash window plan 1, R23)
 #include <Arcane/Base/Log.hpp>
 
 #include <utility>
@@ -13,6 +14,12 @@ namespace Arcane
     {
         m_thread = std::thread([this, body = std::move(main)]
         {
+            // FIRST statement of the thread body, before `body` can grow a
+            // single stack frame: a service thread that overflows its stack
+            // must still be able to run the exception filter, and the filter
+            // needs 64 KiB below the guard page to get that far. See
+            // Diagnostics::GuaranteeStackForThisThread.
+            Arcane::Diagnostics::GuaranteeStackForThisThread();
             if (body) body();
         });
     }

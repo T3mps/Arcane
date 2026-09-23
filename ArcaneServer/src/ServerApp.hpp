@@ -36,6 +36,19 @@ namespace Arcane::Server
         // finish, non-zero on any refusal).
         int Run();
 
+        // ---- The clean-exit hook (crash window plan 1, task 9; spec S5.7) --
+        // A dedicated server's ORDINARY stop is a Ctrl-C or a service
+        // shutdown: without --frames its tick loop is open-ended, so this hook
+        // is the only thing that can end it cleanly rather than by
+        // termination. STATIC and installed from main() before this object
+        // exists -- the window starts at Diagnostics::Install, and the hook
+        // runs on the OS's console-handler thread, so it may touch nothing
+        // thread-affine. It sets one atomic the tick loop reads.
+        static void InstallCleanExitHook() noexcept;
+
+        // Whether that hook has fired. Read once per tick.
+        [[nodiscard]] static bool CleanExitRequested() noexcept;
+
     private:
         // Finish: stamp the census's exitReason, write it to m_cfg.reportPath
         // (if any), and return `exitCode` -- the ONE tail every Run() return

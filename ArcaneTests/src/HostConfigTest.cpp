@@ -972,3 +972,60 @@ TEST_CASE("host config: --play-as round-trips a known topology, refuses an unkno
     REQUIRE(absent.config.has_value());
     CHECK(absent.config->playAs.empty());
 }
+
+// ---- crash window plan 1, Task 9: the sanitized relaunch line --------------
+//
+// SanitizeRelaunchLine is what a host puts in Diagnostics::Config::commandLine,
+// so the crash reporter's "restart" button re-runs the SESSION and not the
+// capture harness that produced the crash. Two properties, and the second is
+// the one a naive "drop --frames" implementation gets wrong: the line it
+// returns must still PARSE, so a stripped flag takes its dependants with it
+// (HostConfig::Parse refuses --probe without --frames, and the whole
+// offscreen-only family without --headless).
+
+TEST_CASE("SanitizeRelaunchLine strips the harness flags and keeps the session", "[host]")
+{
+    const std::vector<std::string> argv = {
+        "ArcaneEditor.exe", "--project", "ReferenceProject", "--backend", "dx12",
+        "--frames", "900", "--headless", "--settle", "4", "--report", "out.json",
+        "--compare", "golden", "--screenshot", "shot.png", "--crash-gpu", "3",
+    };
+    const std::string line = Arcane::SanitizeRelaunchLine(argv);
+
+    CHECK(line.find("--project ReferenceProject") != std::string::npos);
+    CHECK(line.find("--backend dx12") != std::string::npos);
+    CHECK(line.find("ArcaneEditor.exe") == 0u);
+
+    for (const char* gone : { "--frames", "900", "--headless", "--settle", "--report",
+                              "out.json", "--compare", "golden", "--screenshot",
+                              "shot.png", "--crash-gpu" })
+        CHECK(line.find(gone) == std::string::npos);
+}
+
+TEST_CASE("SanitizeRelaunchLine handles --flag=value, dependants and spaces", "[host]")
+{
+    // --flag=value is the OTHER form Cli accepts (Cli.cpp:146) -- stripping
+    // only the space-separated spelling would leave the flag in the line.
+    const std::vector<std::string> inlineForm = {
+        "ArcaneRuntime.exe", "--frames=120", "--project=P", "--report=r.json",
+    };
+    const std::string a = Arcane::SanitizeRelaunchLine(inlineForm);
+    CHECK(a.find("--project=P") != std::string::npos);
+    CHECK(a.find("--frames") == std::string::npos);
+    CHECK(a.find("--report") == std::string::npos);
+
+    // The dependants go with their parents: --bless without --compare and
+    // --settle-timeout without --settle are both parse-time refusals, so a
+    // line that kept them would not relaunch anything.
+    const std::vector<std::string> dependants = {
+        "ArcaneRuntime.exe", "--headless", "--frames", "8", "--settle", "4",
+        "--settle-timeout", "9000", "--compare", "g", "--bless", "--probe", "census",
+        "--fixed-dt", "0.016", "--project", "P",
+    };
+    const std::string b = Arcane::SanitizeRelaunchLine(dependants);
+    CHECK(b == "ArcaneRuntime.exe --project P");
+
+    // A path with spaces has to come back quoted or the relaunch splits it.
+    const std::vector<std::string> spaced = { "ArcaneEditor.exe", "--project", "C:/My Games/P" };
+    CHECK(Arcane::SanitizeRelaunchLine(spaced) == "ArcaneEditor.exe --project \"C:/My Games/P\"");
+}

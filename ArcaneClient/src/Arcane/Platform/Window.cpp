@@ -1,5 +1,6 @@
 #include <Arcane/Platform/Window.hpp>
 
+#include <Arcane/Base/Diagnostics.hpp>   // RequestCleanExit -- the session-end route (crash window plan 1, task 9)
 #include <Arcane/Base/Log.hpp>
 
 #include <SDL3/SDL.h>
@@ -7,8 +8,23 @@
 
 #include <stb_image.h>   // decode the icon file; implementation lives in Assets/StbImpl.cpp (same DLL)
 
+#include <atomic>
 #include <memory>
 #include <string>
+
+#if defined(_WIN32)
+// The session-end hook below reads msg->message, and SDL3/SDL_system.h only
+// FORWARD-declares MSG (`typedef struct tagMSG MSG;`) -- so the real header
+// has to come first.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <SDL3/SDL_system.h>   // SDL_SetWindowsMessageHook (SDL 3.2.0+)
+#endif
 
 namespace Arcane
 {
@@ -25,6 +41,45 @@ namespace Arcane
             const char* picked = (filelist && filelist[0]) ? filelist[0] : nullptr;
             if (ctx->cb) ctx->cb(picked, ctx->user);
         }
+
+#if defined(_WIN32)
+        // THE END-SESSION ROUTE (crash window plan 1, task 9; spec S5.7).
+        // Logging off or shutting down Windows does NOT send WM_CLOSE, so the
+        // ordinary quit path this host already has is never entered: the
+        // process is simply killed once the session-end budget runs out, which
+        // is how an editor with unsaved work loses it silently.
+        //
+        // SDL_SetWindowsMessageHook runs before TranslateMessage for EVERY
+        // message on this thread, and its return value means "let the message
+        // continue to be processed" -- it is NOT the window procedure's return
+        // value, so returning true here still lets DefWindowProc answer
+        // WM_QUERYENDSESSION with TRUE (we consent to the shutdown; refusing
+        // it is a different feature and not one we want).
+        //
+        // WM_ENDSESSION with wParam == TRUE is the commitment: the session IS
+        // ending. RequestCleanExit arms the exit deadline and runs the host's
+        // hook, which begins the ordinary exit (and, from plan 3, autosaves
+        // first). wParam == FALSE means an earlier query was vetoed and
+        // nothing is ending -- ignoring that case is the whole reason the
+        // wParam check exists.
+        bool SDLCALL SessionEndHook(void* /*userdata*/, MSG* msg)
+        {
+            if (msg)
+            {
+                if (msg->message == WM_ENDSESSION && msg->wParam == TRUE)
+                    Arcane::Diagnostics::RequestCleanExit();
+            }
+            return true;   // never swallow a message
+        }
+
+        // ONCE PER PROCESS, not per window: SDL's hook slot is process-wide
+        // (last writer wins), and a host that opens a second window -- or
+        // recreates its window on a project switch -- must not end up
+        // re-registering the same callback and paying for the SDL_GetError
+        // round trip again. Both windowed hosts share this Window type, which
+        // is why the registration lives here rather than in either host.
+        std::atomic<bool> g_sessionEndHookInstalled{ false };
+#endif
     }
 
     bool Window::Create(const WindowDesc& desc)
@@ -54,6 +109,14 @@ namespace Arcane
             SDL_QuitSubSystem(SDL_INIT_VIDEO);
             return false;
         }
+
+#if defined(_WIN32)
+        // Right after the window exists, and exactly once per process -- see
+        // SessionEndHook above for what it is for and why the registration is
+        // shared rather than per host.
+        if (!g_sessionEndHookInstalled.exchange(true, std::memory_order_acq_rel))
+            SDL_SetWindowsMessageHook(&SessionEndHook, nullptr);
+#endif
 
         ARC_INFO("Window created: '{}' {}x{}", desc.title, desc.width, desc.height);
         return true;

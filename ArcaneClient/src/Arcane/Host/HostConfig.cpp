@@ -3,9 +3,82 @@
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::ParseProbe -- reused for the --probe parse-time refusal below
 #include <Arcane/Host/ReferenceImages.hpp>   // Arcane::ReferenceNameIsSafe -- reused for --compare's parse-time refusal (Task 8, Finding 2)
 #include <cmath>    // std::isfinite -- --max-diff-pixel-ratio's range refusal below
+#include <algorithm>   // std::find -- SanitizeRelaunchLine's strip-set lookups
 #include <cstdio>
+#include <string_view>
 namespace Arcane
 {
+    namespace
+    {
+        // THE STRIP SET (SanitizeRelaunchLine, see HostConfig.hpp for the two
+        // rules). Split by whether the flag consumes the NEXT argv entry: a
+        // value-taking flag drops its value too, or the value would survive as
+        // a stray positional the relaunch then chokes on.
+        //
+        // The second half of each list is the dependants rule: --settle-timeout,
+        // --bless and --max-diff-* have no meaning without a parent that is
+        // already going, and --probe/--fixed-dt/--fixed-time cannot parse
+        // without --headless.
+        constexpr std::string_view kStripWithValue[] = {
+            "crash-gpu", "frames", "report", "compare", "settle", "screenshot",
+            "settle-timeout", "probe", "max-diff-pixels", "max-diff-pixel-ratio",
+            "fixed-dt", "fixed-time", "pick-probe",
+        };
+        constexpr std::string_view kStripBareFlags[] = { "headless", "bless" };
+
+        [[nodiscard]] bool InSet(std::span<const std::string_view> set, std::string_view name)
+        {
+            return std::find(set.begin(), set.end(), name) != set.end();
+        }
+
+        // A relaunch line is re-split on whitespace by whoever runs it, so an
+        // argument that contains a space has to come back as one token. Empty
+        // is quoted for the same reason -- it would otherwise vanish.
+        [[nodiscard]] std::string QuoteIfNeeded(const std::string& arg)
+        {
+            if (!arg.empty() && arg.find(' ') == std::string::npos)
+                return arg;
+            return "\"" + arg + "\"";
+        }
+    }
+
+    std::string SanitizeRelaunchLine(std::span<const std::string> argv)
+    {
+        std::string out;
+        for (std::size_t i = 0; i < argv.size(); ++i)
+        {
+            const std::string& arg = argv[i];
+            if (arg.rfind("--", 0) == 0)
+            {
+                // BOTH spellings Cli accepts (Cli.cpp:146): "--name value" and
+                // "--name=value". Matching only the first would leave the
+                // inline form in the line, which is the whole point of the
+                // sanitize.
+                std::string_view body(arg);
+                body.remove_prefix(2);
+                const std::size_t eq = body.find('=');
+                const bool inlineValue = eq != std::string_view::npos;
+                const std::string_view name = inlineValue ? body.substr(0, eq) : body;
+
+                if (InSet(kStripBareFlags, name))
+                    continue;
+                if (InSet(kStripWithValue, name))
+                {
+                    // Its value is the next entry, UNLESS it was inline or the
+                    // next entry is itself an option. A negative number
+                    // (`--fixed-time -1`) starts with one dash, not two, so it
+                    // is correctly consumed as the value it is.
+                    if (!inlineValue && i + 1 < argv.size() && argv[i + 1].rfind("--", 0) != 0)
+                        ++i;
+                    continue;
+                }
+            }
+            if (!out.empty()) out.push_back(' ');
+            out += QuoteIfNeeded(arg);
+        }
+        return out;
+    }
+
     HostConfig::ParseOutcome HostConfig::Parse(int argc, char** argv)
     {
         Cli cli{ "Arcane Runtime", "standalone runtime host" };

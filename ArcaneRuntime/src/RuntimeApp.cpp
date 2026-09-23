@@ -365,6 +365,26 @@ bool RuntimeApp::StageFinalize(Arcane::HostBoot::BootContext&)
     return true;
 }
 
+// ---- The clean-exit hook (crash window plan 1, task 9) --------------------
+// One process-lifetime atomic, not a member: main() installs the hook before
+// this object exists (see RuntimeApp.hpp), and the hook runs on whatever
+// thread noticed the session ending.
+namespace
+{
+    std::atomic<bool> g_cleanExitRequested{ false };
+}
+
+void RuntimeApp::InstallCleanExitHook() noexcept
+{
+    Arcane::Diagnostics::SetCleanExitHook(
+        [](void*) { g_cleanExitRequested.store(true, std::memory_order_release); }, nullptr);
+}
+
+bool RuntimeApp::CleanExitRequested() noexcept
+{
+    return g_cleanExitRequested.load(std::memory_order_acquire);
+}
+
 void RuntimeApp::MainLoop()
 {
     // WALL-CLOCK BASELINES, consulted only in HOST-WINDOW mode: RuntimeFrame
@@ -734,6 +754,18 @@ void RuntimeApp::MainLoop()
 
     while (running)
     {
+        // The OS asked for this session to end -- Ctrl-C, the console close
+        // box, logoff or shutdown, all routed through
+        // Diagnostics::RequestCleanExit into the hook main() installed (crash
+        // window plan 1, task 9; spec S5.7). First in the frame, and an
+        // unconditional break: a session-end handler has about five seconds,
+        // so the ordinary exit has to start on the very next frame boundary.
+        if (CleanExitRequested())
+        {
+            ARC_INFO("ArcaneRuntime: exiting on a clean-exit request (Ctrl-C, console close, or session end)");
+            break;
+        }
+
         // Heartbeat, device-lost check, this frame's window-event pump and
         // resize handling -- true means the window's close was requested or
         // the device was lost; io.skipFrame (minimized window) asks for the
@@ -1569,6 +1601,15 @@ int RuntimeApp::Run()
         return boot.quitRequested ? 0 : 1;
 
     MainLoop();
+    // THE QUIT SITE (crash window plan 1, task 9; spec S5.7): the loop is over
+    // and everything below is teardown, which is the one failure the watchdog
+    // cannot otherwise see -- the loop beat right up to its last frame and
+    // there is nothing left to observe. RequestCleanExit swaps the beat rule
+    // for a single deadline (Config::exitSeconds, 30 s) covering Shutdown()
+    // and the destructors after it, so a render-stack teardown that never
+    // returns is reported as "hang at exit" and terminated with 12.
+    // Idempotent -- a Ctrl-C that already armed it does not restamp the clock.
+    Arcane::Diagnostics::RequestCleanExit();
     Shutdown();
     // F2b Task 6, spec s5 -- "refuse, never limp": a content texture whose cooked
     // artifact is missing or invalid (ArtifactMissing since Task 8's sprite

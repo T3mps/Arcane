@@ -1,6 +1,7 @@
 #include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Jobs/ArcaneWorkScheduler.hpp>   // presents the enki ITaskExecutor as a Mosaic::IWorkScheduler
+#include <Arcane/Base/Diagnostics.hpp>   // GuaranteeStackForThisThread -- every worker's first statement (crash window plan 1, R23)
 
 #include <TaskScheduler.h>
 
@@ -79,10 +80,24 @@ namespace Arcane
 
     JobSystem::JobSystem(uint32_t threads) : m_impl(std::make_unique<Impl>())
     {
-        if (threads == 0)
-            m_impl->ts.Initialize();
-        else
-            m_impl->ts.Initialize(threads);
+        // Initialize through the CONFIG overload, not the count one, for a
+        // single reason: profilerCallbacks.threadStart is enki's worker-entry
+        // hook (TaskScheduler.cpp:258, the first statement of
+        // TaskingThreadFunction after the thread registers itself), and that
+        // is where spec S5.1 item 4's stack guarantee has to go -- a worker
+        // that overflows its stack must still be able to run the exception
+        // filter. A captureless lambda is exactly the ProfilerCallbackFunc
+        // function pointer the struct wants.
+        //
+        // numTaskThreadsToCreate keeps its own default (hardware threads minus
+        // the calling thread) when `threads` is 0, which is what
+        // Initialize() with no argument did.
+        enki::TaskSchedulerConfig config;
+        if (threads != 0)
+            config.numTaskThreadsToCreate = threads;
+        config.profilerCallbacks.threadStart =
+            [](uint32_t) { Arcane::Diagnostics::GuaranteeStackForThisThread(); };
+        m_impl->ts.Initialize(config);
         m_impl->taskExec = std::make_unique<EnkiTaskExecutor>(m_impl->ts);
         // WorkScheduler() presents the SAME enki pool as a Mosaic::IWorkScheduler by
         // wrapping the worker-index-aware ITaskExecutor -- one adapter, no duplicate,

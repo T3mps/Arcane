@@ -4,6 +4,7 @@
 // (Core). PRESENTATION-FREE + C++23-clean.
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 #include <Arcane/Base/Api.hpp>
@@ -326,4 +327,28 @@ namespace Arcane
     };
 
     struct HostConfig::ParseOutcome { std::optional<HostConfig> config; int exitCode = 0; };
+
+    // The RELAUNCH line a host hands to Diagnostics::Config::commandLine (crash
+    // window plan 1, spec S5.1): this process's own argv with the capture
+    // harness taken out, so the crash reporter's "restart" re-runs the SESSION
+    // rather than the scripted run that produced the report. A crashed
+    // `--headless --frames 900 --compare golden` must come back as the plain
+    // project it was rendering, not as another 900-frame comparison.
+    //
+    // Two rules, and the second is the one a naive "drop --frames" gets wrong:
+    //   1. every run-shaping / capture flag is stripped, in BOTH spellings Cli
+    //      accepts (`--frames 900` and `--frames=900`);
+    //   2. a stripped flag takes its DEPENDANTS with it, because
+    //      HostConfig::Parse refuses each of them on its own -- --probe/
+    //      --report/--settle/--settle-timeout/--compare/--fixed-dt/--fixed-time
+    //      all require --headless, --probe/--screenshot require --frames, and
+    //      --bless/--max-diff-* require --compare. A line that kept an orphan
+    //      would exit 2 instead of relaunching anything, which is a worse
+    //      answer than offering no button at all.
+    //
+    // Everything else is kept verbatim (--project, --plugin, --scene,
+    // --backend, the editor-only seeds), and an argument containing a space is
+    // quoted. Pure: no host state, no parse, no side effects -- which is what
+    // makes it unit-testable (ArcaneTests/src/HostConfigTest.cpp, "[host]").
+    [[nodiscard]] ARCANE_API std::string SanitizeRelaunchLine(std::span<const std::string> argv);
 }

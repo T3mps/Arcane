@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <shobjidl.h>
@@ -105,9 +107,11 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 // minting editor-only numbers RuntimeApp does not share, outweighs avoiding a
 // reuse of 3 the double-open guard already claimed. A HUMAN running one
 // deliberate command line knows which precondition applied and is never
-// actually confused -- the pre-boot double-open guard fires before
-// Diagnostics::Install, with no project ever opened and no report ever
-// requested, while the post-boot settle-not-converged/compare-failed code
+// actually confused -- the pre-boot double-open guard fires before any engine
+// boot at all, with no project ever opened and no report ever written (it is
+// no longer ahead of Diagnostics::Install, which task 9 moved to the top of
+// main, but Install only ARMS the report path -- a plain refusal still writes
+// nothing), while the post-boot settle-not-converged/compare-failed code
 // requires a full boot and a --headless --settle run.
 //
 // A SCRIPTED CALLER LOOPING COMMAND-LINE COMBINATIONS CANNOT ASSUME THAT,
@@ -309,6 +313,50 @@ int main(int argc, char** argv)
     const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
     if (!parsed.config) return parsed.exitCode;
 
+    // POST-MORTEM CAPTURE, THE FIRST THING THIS PROCESS DOES once its argv
+    // makes sense (crash window plan 1, task 9; spec S5.1's closing paragraph).
+    // A crash writes a minidump plus a portable all-thread stack; a WEDGED main
+    // thread writes the same report while the process is still alive. The
+    // second half is the point: Windows Error Reporting only ever fires on
+    // process death, so a hang ("Not Responding") otherwise produces nothing,
+    // anywhere, ever.
+    //
+    // FIRST, and no longer after the refusals below, because everything that
+    // made the old position load-bearing is gone: the watchdog is a raw thread
+    // stopped from an atexit hook Install registers, so an early `return` can
+    // no longer leave a joinable std::thread to static destruction (which was
+    // std::terminate -> abort() -> a BLOCKING Debug-CRT dialog). Every refusal
+    // below is an ordinary `return` again. It is also the only placement that
+    // covers the boot itself -- the window where a project scan or a shader
+    // compile actually wedges.
+    //
+    // AFTER Log::Init/InstallMosaicSink/InstallMosaicHandler above, and that
+    // order IS still load-bearing (R16): Install attaches the log file sink
+    // and the crash path freezes the log backlog, neither of which exists
+    // before Log::Init runs.
+    {
+        Arcane::Diagnostics::Config diag;
+        diag.appName     = "ArcaneEditor";
+        diag.productName = "Arcane Editor";   // the reporter's window title
+        // A --headless run has nobody to answer a reporter window: the report
+        // is written, the reporter stays silent.
+        diag.unattended  = parsed.config->headless;
+        // The RELAUNCH line the reporter's "restart" offers -- this run's argv
+        // minus the capture harness, so a crashed verify run comes back as the
+        // session it was rendering. See SanitizeRelaunchLine (HostConfig.hpp).
+        const std::vector<std::string> args(argv, argv + argc);
+        diag.commandLine = Arcane::SanitizeRelaunchLine(args);
+        Arcane::Diagnostics::Install(diag);
+    }
+    // The two-step Ctrl-C, the console close, and logoff/shutdown all route
+    // into RequestCleanExit, which calls THIS hook (spec S5.7). Installed here
+    // rather than from EditorApp so the window between Install and the app's
+    // first frame -- the whole boot -- is covered too; the hook is a static
+    // that sets a flag the frame loop reads, so it needs no live app (R24:
+    // every host installs one, or a first Ctrl-C is declined and Windows
+    // terminates as before).
+    Arcane::Editor::EditorApp::InstallCleanExitHook();
+
     // Probe: identity to stdout, nothing else. Deliberately BEFORE any engine
     // boot -- the Arcane Hub calls this to read the plugin ABI it must stamp
     // into a new .arcproj, and it must not pay for a window, a device, or a
@@ -344,22 +392,17 @@ int main(int argc, char** argv)
     // exactly what made it easy to delete two-thirds of it without noticing
     // the third had to stay.
     //
-    // AHEAD OF Diagnostics::Install BELOW, and that placement is load-bearing
-    // rather than tidy: an early `return` taken AFTER Install leaves the hang
-    // watchdog's std::thread joinable at static destruction, which is
-    // std::terminate -> abort(). The two refusals further down USED to pay
-    // for exactly this (a bare `--frames 10` with no project was documented
-    // as exit 2 and, this task discovered by actually running it, does not
-    // even reliably reach exit code 3 -- under a Debug CRT abort() pops a
-    // BLOCKING "Microsoft Visual C++ Runtime Library" dialog and the process
-    // never exits on its own; see those two sites for the measurement). That
-    // turned out to be worse than a documentation mismatch, so THIS task
-    // fixed both of them too, by calling Diagnostics::Shutdown() before their
-    // `return`s rather than moving them -- zero behaviour cost, and it does
-    // not touch ArcaneHub's exit-code contract for either one. The refusal
-    // below (--probe) still goes ahead of Install instead, matching this
-    // block's existing shape rather than adding a third flavour of fix to
-    // one function.
+    // THE ORDERING AGAINST Diagnostics::Install IS NO LONGER LOAD-BEARING
+    // (crash window plan 1, task 9). This block, and every refusal below it,
+    // used to have to run BEFORE Install: an early `return` taken after it
+    // left the hang watchdog's std::thread joinable at static destruction,
+    // which is std::terminate -> abort() -- and under a Debug CRT that is a
+    // BLOCKING "Microsoft Visual C++ Runtime Library" dialog, i.e. a hang
+    // rather than the documented exit code (measured, not theorised). The
+    // watchdog is now a RAW thread stopped from an atexit hook Install
+    // registers, so a plain `return` from anywhere is clean and Install has
+    // moved to the top of main() where it covers the boot as well. Refusals
+    // here are free to move, and none of them needs a Shutdown() of its own.
     if (!parsed.config->probes.empty())
     {
         std::fprintf(stderr,
@@ -432,25 +475,11 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    // Post-mortem capture, armed for every REAL run. A crash writes a minidump
-    // plus a symbolized all-thread stack; a WEDGED main thread writes the same
-    // report while the process is still alive. The second half is the point:
-    // Windows Error Reporting only ever fires on process death, so a hang
-    // ("Not Responding") otherwise produces nothing, anywhere, ever.
-    // Deliberately AFTER the probe -- that path pays for nothing it can skip,
-    // and a watchdog thread is not free.
-    //
-    // ORDERING IS LOAD-BEARING, reciprocal note to the block above: every flag
-    // refusal above this point `return`s before the watchdog thread exists, so
-    // each one is a clean exit at its documented code. Moving this Install()
-    // call any earlier turns every one of those returns into std::terminate ->
-    // abort() -> exit code 3 instead -- measured, not theorised (see above).
-    // Do not move this line up without re-auditing every refusal above it.
-    {
-        Arcane::Diagnostics::Config diag;
-        diag.appName = "ArcaneEditor";
-        Arcane::Diagnostics::Install(diag);
-    }
+    // (Diagnostics::Install USED TO BE HERE, deliberately after every refusal
+    // above -- see the reciprocal note in the refusal block for why that
+    // stopped being necessary. It now runs as the first statement after the
+    // parse, at the top of main(), which is the only placement that also
+    // covers the boot.)
 
 #ifdef _WIN32
     // One taskbar family. Windows groups taskbar buttons by AppUserModelID,
@@ -480,17 +509,15 @@ int main(int argc, char** argv)
     // Both flags remain bypasses ON PURPOSE: CI and the scripted
     // `--project <p> --frames N` harness depend on --project, and --plugin is the
     // engine-dev path (hosting a plugin without a project).
-    // Task 12 fix, MEASURED rather than left as the theorised "actually exits
-    // 3" the comment above once claimed: under a Debug CRT this `return 2`,
-    // taken after Diagnostics::Install armed the watchdog thread, does not
-    // even reach exit code 3 cleanly -- std::terminate's default handler pops
-    // a BLOCKING "Microsoft Visual C++ Runtime Library" MessageBox
-    // (confirmed via Process.MainWindowTitle on a run of exactly this
-    // command) and the process never exits on its own. That is a hang, not a
-    // wrong code, and a scripted/CI caller has no recourse but an external
-    // timeout-kill. Shutdown() joins the watchdog cleanly first, so this
-    // `return 2` is now an ordinary clean exit at the code it names --
-    // zero behaviour cost otherwise, and it needed no ordering change.
+    // A PLAIN `return 2` AGAIN (crash window plan 1, task 9). Task 12 measured
+    // that this return, taken after Install had armed a joinable watchdog
+    // std::thread, did not even reach an exit code -- std::terminate's default
+    // handler popped a BLOCKING "Microsoft Visual C++ Runtime Library"
+    // MessageBox and the process never exited on its own -- and paid for it
+    // with a Diagnostics::Shutdown() right here. The watchdog is now a raw
+    // thread stopped from Install's atexit hook, so that call has gone: the
+    // return is clean on its own, and the report machinery stays armed right
+    // up to process exit, which is where it belongs.
     const bool noProject = parsed.config->projectPath.empty() && parsed.config->pluginPath.empty();
     if (noProject && parsed.config->maxFrames != 0)
     {
@@ -498,7 +525,6 @@ int main(int argc, char** argv)
             "Arcane Editor: no project selected, and --frames makes this a scripted run.\n"
             "  Pass --project <folder-or-.arcproj> to open one,\n"
             "  or --plugin <dll> to host a plugin without a project.\n");
-        Arcane::Diagnostics::Shutdown();
         return 2;
     }
 
@@ -512,13 +538,10 @@ int main(int argc, char** argv)
     // pid+creation-time, and exit code 3 is distinct from 2 (the no-project
     // refusal above) so the Hub's boot watchdog can name the reason.
     //
-    // Same Shutdown()-before-return fix as the no-project block above, and
-    // the same `return`-after-`Install()` shape just MEASURED there -- but
-    // NOT independently measured for this specific branch: reproducing it
-    // needs a second, already-live rival editor process holding the lock,
-    // and standing one up risks exactly the windowed boot this task's
-    // verification avoids. Applying the identical fix on the strength of the
-    // identical mechanism, not a second measurement of this exact path.
+    // Its `return 3` is a plain return too, for the same reason the
+    // no-project block above states in full: the Shutdown()-before-return
+    // Task 12 added here is gone with the joinable-watchdog hazard that
+    // motivated it.
     if (!parsed.config->projectPath.empty())
     {
         std::filesystem::path lockRoot(parsed.config->projectPath);
@@ -530,7 +553,6 @@ int main(int argc, char** argv)
                 "Arcane Editor: '%s' is already open in another editor (pid %u) -- focusing it.\n",
                 parsed.config->projectPath.c_str(), *rival);
             Arcane::EditorLock::FocusWindowOfProcess(*rival);
-            Arcane::Diagnostics::Shutdown();
             return 3;
         }
     }
@@ -558,9 +580,12 @@ int main(int argc, char** argv)
     // Scoped so ~EditorApp -- the load-bearing teardown sequence -- runs while
     // the watchdog is STILL armed. Teardown does not beat, so a deadlock in it
     // reports as a hang, which is exactly right: tearing down threaded state is
-    // itself a suspect. Shutdown() then joins the watchdog before main returns;
-    // leaving a joinable std::thread to static destruction would call
-    // std::terminate and turn a clean exit into a crash.
+    // itself a suspect. Since task 9 EditorApp::Run also calls
+    // Diagnostics::RequestCleanExit() at its quit site, so the watchdog spends
+    // this whole scope as the EXIT SENTINEL (spec S5.7): a teardown that never
+    // returns is reported as "hang at exit" and terminated with 12 instead of
+    // sitting there forever. Shutdown() below is the END of that window, and
+    // stays the last statement of main for exactly that reason.
     // Declaring app in a nested scope keeps its destruction BEFORE splash's,
     // the same relative order as when both were siblings here.
     int rc = 0;

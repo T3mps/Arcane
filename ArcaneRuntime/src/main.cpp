@@ -12,7 +12,10 @@
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 
 #include <cstdio>
+#include <filesystem>
 #include <optional>
+#include <string>
+#include <vector>
 
 // Agility SDK handshake: the D3D12 loader reads these EXPORTED symbols from
 // the EXE to redirect device creation into the vendored D3D12Core.dll under
@@ -21,6 +24,27 @@
 extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = 619;
 extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D12\\";
 
+namespace
+{
+    // The reporter's window title (Diagnostics::Config::productName, spec
+    // S5.1: "the runtime the project's name"). Derived from --project, which
+    // is all this host knows before the project is even opened -- a
+    // ".../MyGame/MyGame.arcproj" and a ".../MyGame" folder both read
+    // "MyGame". Falls back to the app name for a project-less run (which
+    // ArcaneRuntime refuses at plugin_load anyway, but productName is set
+    // before that refusal and must not be empty).
+    std::string ProductNameFor(const std::string& projectPath)
+    {
+        if (projectPath.empty()) return "Arcane Runtime";
+        std::filesystem::path p = std::filesystem::path(projectPath).lexically_normal();
+        // A trailing separator makes filename() empty -- step up once so a
+        // "D:/games/MyGame/" reads the same as "D:/games/MyGame".
+        if (p.filename().empty()) p = p.parent_path();
+        const std::string stem = p.stem().string();
+        return stem.empty() ? "Arcane Runtime" : stem;
+    }
+}
+
 int main(int argc, char** argv)
 {
     Arcane::Log::Init();
@@ -28,6 +52,28 @@ int main(int argc, char** argv)
     Arcane::Assert::InstallMosaicHandler();
     const Arcane::HostConfig::ParseOutcome parsed = Arcane::HostConfig::Parse(argc, argv);
     if (!parsed.config) return parsed.exitCode;   // --help => 0, bad args => 2
+
+    // POST-MORTEM CAPTURE, FIRST (crash window plan 1, task 9; spec S5.1's
+    // closing paragraph). Same arming, same reasoning and now the same
+    // POSITION as ArcaneEditor -- see that file's block for the full account
+    // of why the "after every refusal" placement is gone: the watchdog is a
+    // raw thread stopped from an atexit hook Install registers, so an early
+    // `return` is clean and the boot itself is finally covered. AFTER the
+    // Log::Init/Mosaic trio above, which is still load-bearing (R16).
+    {
+        Arcane::Diagnostics::Config diag;
+        diag.appName     = "ArcaneRuntime";
+        diag.productName = ProductNameFor(parsed.config->projectPath);
+        diag.unattended  = parsed.config->headless;   // nobody to answer a reporter window
+        const std::vector<std::string> args(argv, argv + argc);
+        diag.commandLine = Arcane::SanitizeRelaunchLine(args);
+        Arcane::Diagnostics::Install(diag);
+    }
+    // Every host installs one (R24): with the slot empty a first Ctrl-C is
+    // declined and Windows terminates the process outright, so the two-step
+    // clean exit only exists for hosts that opt in. This one stops the frame
+    // loop the same way the window's close box does.
+    RuntimeApp::InstallCleanExitHook();
 
     // Same probe as the editor: identity to stdout, no window, no device. The
     // flag lives in the SHARED HostConfig, so a flag that parsed on both hosts
@@ -52,12 +98,14 @@ int main(int argc, char** argv)
     // ArcaneEditor/src/main.cpp's own refusal table for the established
     // idiom this one-line table borrows).
     //
-    // AHEAD OF Diagnostics::Install BELOW, and that placement is load-bearing,
-    // not tidy -- same reasoning ArcaneEditor/src/main.cpp's refusal-table
-    // comment states in full: an early `return` taken AFTER Install leaves
-    // the hang watchdog's std::thread joinable at static destruction, which
-    // is std::terminate -> abort() (a BLOCKING dialog under a Debug CRT, not
-    // a clean exit). Ahead of Install, a plain `return 2;` is already clean.
+    // ITS POSITION RELATIVE TO Diagnostics::Install NO LONGER MATTERS (crash
+    // window plan 1, task 9) -- same reasoning ArcaneEditor/src/main.cpp's
+    // refusal-table comment states in full. It USED to have to run first: an
+    // early `return` taken after Install left the hang watchdog's std::thread
+    // joinable at static destruction, which is std::terminate -> abort() (a
+    // BLOCKING dialog under a Debug CRT, not a clean exit). The watchdog is
+    // now a raw thread stopped from Install's atexit hook, so a plain
+    // `return 2;` is clean wherever it sits.
     if (!parsed.config->dumpLayoutPath.empty())
     {
         std::fprintf(stderr, "error: --dump-layout is an EDITOR-only flag (there is no ImGui "
@@ -70,9 +118,8 @@ int main(int argc, char** argv)
     // Edit mode at boot in a chosen topology; this host has no Edit mode to
     // leave and no PlaySession to enter -- it is always simply running the game
     // -- so parsing it and shrugging would exit 0 having silently ignored a
-    // topology the caller explicitly asked for. Same position too: AHEAD of
-    // Diagnostics::Install, so this `return 2;` is already clean (see the
-    // --dump-layout block above for the full watchdog-join reasoning).
+    // topology the caller explicitly asked for. Its `return 2;` is clean on
+    // its own (see the --dump-layout block above).
     if (!parsed.config->playAs.empty())
     {
         std::fprintf(stderr, "error: --play-as is an EDITOR-only flag (this host has no Edit "
@@ -106,14 +153,9 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    // Same arming as the editor, same reasoning, same position relative to the
-    // probe -- see ArcaneEditor/src/main.cpp. The two hosts must not diverge on
-    // whether a crash or a hang leaves evidence behind.
-    {
-        Arcane::Diagnostics::Config diag;
-        diag.appName = "ArcaneRuntime";
-        Arcane::Diagnostics::Install(diag);
-    }
+    // (Diagnostics::Install USED TO BE HERE, after the refusals above. It now
+    // runs as the first statement after the parse -- see the block at the top
+    // of main() and the reciprocal note in the --dump-layout refusal.)
 
     // Before ANY engine boot: something on screen within ~100ms. The probe
     // return above stays free of any window on purpose. Never fails boot --

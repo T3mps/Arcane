@@ -10,6 +10,7 @@
 
 #include <Astra/Core/TypeContext.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -27,6 +28,26 @@
 
 namespace Arcane::Server
 {
+    // ---- The clean-exit hook (crash window plan 1, task 9) ----------------
+    // One process-lifetime atomic, not a member: main() installs the hook
+    // before this object exists (see ServerApp.hpp), and the hook runs on the
+    // OS's console-handler thread.
+    namespace
+    {
+        std::atomic<bool> g_cleanExitRequested{ false };
+    }
+
+    void ServerApp::InstallCleanExitHook() noexcept
+    {
+        Arcane::Diagnostics::SetCleanExitHook(
+            [](void*) { g_cleanExitRequested.store(true, std::memory_order_release); }, nullptr);
+    }
+
+    bool ServerApp::CleanExitRequested() noexcept
+    {
+        return g_cleanExitRequested.load(std::memory_order_acquire);
+    }
+
     int ServerApp::Finish(ServerReport& rep, std::string exitReason, int exitCode)
     {
         rep.exitReason = std::move(exitReason);
@@ -117,8 +138,27 @@ namespace Arcane::Server
         // Fixed-step tick, forever or --frames N. Wall-clock paced by sleeping the
         // remainder of each step (spec s6: tick rate is a RUNTIME value); the loop
         // is unpaused (fresh).
+        // Whether the loop ended because the OS asked for this session to end
+        // rather than because the frame budget ran out -- the census must not
+        // report "frames-complete" for a run that was stopped a tenth of the
+        // way through.
+        bool stoppedByCleanExit = false;
         for (std::uint64_t f = 0; m_cfg.frames == 0 || f < m_cfg.frames; ++f)
         {
+            // Ctrl-C, the console close box, logoff or service shutdown,
+            // routed through Diagnostics::RequestCleanExit into the hook
+            // main() installed (crash window plan 1, task 9; spec S5.7).
+            // Checked at the TOP of the tick so the exit begins on the very
+            // next tick boundary -- a console handler has about five seconds,
+            // and everything below (the census write, ~PluginHost's module
+            // unload, ~Runtime) has to fit inside it.
+            if (CleanExitRequested())
+            {
+                ARC_INFO("ArcaneServer: stopping on a clean-exit request after {} tick(s)", rep.framesTicked);
+                stoppedByCleanExit = true;
+                break;
+            }
+
             const auto start = std::chrono::steady_clock::now();
             m_runtime->EnsurePhysics();
             m_runtime->Loop().Advance(m_cfg.fixedDtSeconds,
@@ -130,6 +170,17 @@ namespace Arcane::Server
             std::this_thread::sleep_until(start + std::chrono::duration<double>(m_cfg.fixedDtSeconds));
         }
 
+        // THE QUIT SITE (crash window plan 1, task 9; spec S5.7): the loop is
+        // over and everything below -- the census, then this object's members
+        // unwinding (the module unload, ~Runtime, ~ProcessContext) -- is
+        // teardown, the one failure the watchdog cannot otherwise see, because
+        // the tick loop that was beating is gone. RequestCleanExit swaps the
+        // beat rule for a single deadline (Config::exitSeconds, 30 s), so a
+        // module unload that never returns is reported as "hang at exit" and
+        // terminated with 12. Idempotent -- a Ctrl-C that already armed it
+        // does not restamp the clock.
+        Arcane::Diagnostics::RequestCleanExit();
+
         rep.fixedUpdate = m_runtime->Schedulers().fixedUpdate.Size();
         rep.update      = m_runtime->Schedulers().update.Size();
         rep.render      = m_runtime->Schedulers().render.Size();
@@ -138,6 +189,9 @@ namespace Arcane::Server
         rep.hasRenderSubmission = false;   // by construction: no ClientRuntime exists in this process
         rep.clientAttached      = m_runtime->Client() != nullptr;
 
-        return Finish(rep, "frames-complete", 0);
+        // "clean-exit" is a SUCCESSFUL stop (exit code 0) that simply is not
+        // "frames-complete": the run was asked to end and did, which a census
+        // reader must be able to tell from a budget that ran out.
+        return Finish(rep, stoppedByCleanExit ? "clean-exit" : "frames-complete", 0);
     }
 }

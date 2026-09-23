@@ -3399,6 +3399,28 @@ namespace Arcane::Editor
         }
     }
 
+    // ---- The clean-exit hook (crash window plan 1, task 9) -----------------
+    // One process-lifetime atomic, not a member: main() installs the hook
+    // BEFORE this object exists (see EditorApp.hpp for why the window has to
+    // start that early), and the hook runs on whatever thread noticed the
+    // session ending -- the OS's console-handler thread for Ctrl-C and the
+    // close box -- which may not touch editor state.
+    namespace
+    {
+        std::atomic<bool> g_cleanExitRequested{ false };
+    }
+
+    void EditorApp::InstallCleanExitHook() noexcept
+    {
+        Arcane::Diagnostics::SetCleanExitHook(
+            [](void*) { g_cleanExitRequested.store(true, std::memory_order_release); }, nullptr);
+    }
+
+    bool EditorApp::CleanExitRequested() noexcept
+    {
+        return g_cleanExitRequested.load(std::memory_order_acquire);
+    }
+
     int EditorApp::Run()
     {
         int exitCode = 1;
@@ -3412,6 +3434,19 @@ namespace Arcane::Editor
             case InitResult::Failed: exitCode = 1;      break;
             }
         }
+
+        // THE QUIT SITE (crash window plan 1, task 9; spec S5.7). Everything
+        // below this line is teardown, and teardown is the one failure the
+        // watchdog cannot otherwise see: the frame loop beat right up to its
+        // last frame, and there is no loop left to observe afterwards.
+        // RequestCleanExit swaps the watchdog's beat rule for a single
+        // deadline (Config::exitSeconds, 30 s) that covers Shutdown() +
+        // Destroy() + ~EditorApp, so a Vulkan teardown that never returns or a
+        // module-build join that never completes is reported as "hang at exit"
+        // and terminated with 12 rather than sitting there forever. Idempotent:
+        // a Ctrl-C or WM_ENDSESSION that already armed it does not restamp the
+        // clock (Diagnostics.cpp's own note on why that matters).
+        Arcane::Diagnostics::RequestCleanExit();
 
         Shutdown();
         Destroy();

@@ -449,6 +449,20 @@ namespace Arcane::Editor
         if (m_requestExit)
             return FramePump::Exit;
 
+        // The OS asked for this session to end -- Ctrl-C, the console close
+        // box, logoff or shutdown, all routed through
+        // Diagnostics::RequestCleanExit into the hook main() installed (crash
+        // window plan 1, task 9; spec S5.7). Deliberately the same immediate
+        // exit m_requestExit takes and NOT the confirm modal below: the OS
+        // gives a session-end handler about five seconds, and nobody can
+        // answer a dialog inside it. (Autosave-before-exit is plan 3's job;
+        // this only starts the ordinary exit as early as possible.)
+        if (CleanExitRequested())
+        {
+            ARC_INFO("Editor: exiting on a clean-exit request (Ctrl-C, console close, or session end)");
+            return FramePump::Exit;
+        }
+
         auto events = m_gpu->Win().PumpEvents();
         if (events.quitRequested)
         {

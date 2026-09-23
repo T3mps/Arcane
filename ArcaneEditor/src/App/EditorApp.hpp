@@ -109,6 +109,26 @@ namespace Arcane::Editor
         // project-less state, and this is its cold-start path into the picker.
         void RaiseOpenProjectOnStart() noexcept { m_raiseOpenProjectOnStart = true; }
 
+        // ---- The clean-exit hook (crash window plan 1, task 9; spec S5.7) ---
+        // "Begin your ordinary exit now", for the paths the OS gives seconds
+        // rather than a frame: Ctrl-C, the console close box, logoff and
+        // WM_ENDSESSION all route into Diagnostics::RequestCleanExit, which
+        // calls the one hook the host installed.
+        //
+        // STATIC, and installed from main() BEFORE this object exists, for two
+        // reasons: the window it has to cover starts at Install (the whole
+        // boot is in it -- a project scan is exactly where a session-end can
+        // land), and the hook runs on WHATEVER thread noticed (the OS's
+        // console-handler thread), which may touch nothing thread-affine. So
+        // it sets one atomic that PumpFrameEvents reads at the top of the
+        // frame, which is the same "request the ordinary exit" the window's
+        // close box performs. Autosave-first behaviour arrives in plan 3.
+        static void InstallCleanExitHook() noexcept;
+
+        // Whether that hook has fired. Read by PumpFrameEvents; a plain
+        // relaxed load per frame.
+        [[nodiscard]] static bool CleanExitRequested() noexcept;
+
     private:
         // ---- Boot (EditorApp.cpp) -------------------------------------------
         // Run() builds Arcane::HostBoot::EditorStages(ctx) -- the SAME shared

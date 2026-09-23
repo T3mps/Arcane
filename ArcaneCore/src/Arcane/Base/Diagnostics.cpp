@@ -2506,6 +2506,20 @@ bool GpuDeviceLostNoted() noexcept
     return g_gpuDeviceLost.load(std::memory_order_acquire);
 }
 
+void GuaranteeStackForThisThread() noexcept
+{
+#if defined(_WIN32)
+    // The SAME 64 KiB InstallFailFastHandlers reserves for the main thread --
+    // see step 4 there for why the number is what it is. Deliberately NOT
+    // gated on Diagnostics being installed: a worker pool can outlive an
+    // Install/Shutdown cycle (the test binary does ~20 of them), the call is
+    // idempotent, and a guarantee that is already in place costs nothing to
+    // re-request.
+    ULONG guarantee = 64 * 1024;
+    SetThreadStackGuarantee(&guarantee);
+#endif
+}
+
 void SetGpuSectionProvider(GpuSectionProvider provider, void* user) noexcept
 {
     std::lock_guard lock(g_gpuProviderMutex);

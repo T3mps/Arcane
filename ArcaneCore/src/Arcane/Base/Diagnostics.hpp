@@ -227,6 +227,20 @@ namespace Arcane::Diagnostics
     // and something has to stop it when main() simply returns.
     ARCANE_CORE_API void Install(const Config& cfg);
 
+    // The one-line helper spec S5.1 item 4 asks every WORKER thread to call as
+    // its first statement (crash window plan 1, R23). Install already does this
+    // for the thread that called it -- the main thread -- and the reason is the
+    // same on a worker: a stack overflow leaves only the guard page between the
+    // faulting thread and the filter that has to run on it, and the filter (it
+    // only signals the crash thread and waits) needs 64 KiB below that page to
+    // get that far. Without it, an overflow on a job worker is a silent death
+    // with no report at all.
+    //
+    // Call sites: the enkiTS worker entry (Jobs/JobSystem.cpp, through the
+    // scheduler's threadStart callback) and ServiceThread's thread body
+    // (Base/ServiceThread.cpp). Idempotent, cheap, and a no-op off Windows.
+    ARCANE_CORE_API void GuaranteeStackForThisThread() noexcept;
+
     // Disarms both triggers, stops the watchdog (a bounded wait on its raw
     // thread handle, which is then closed), restores the previous
     // unhandled-exception filter and the console handler, and stops and joins
