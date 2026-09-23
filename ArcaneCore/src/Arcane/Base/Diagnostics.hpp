@@ -200,6 +200,17 @@ namespace Arcane::Diagnostics
         // disk; SubmitReport then never returns. Zero is a SURVIVABLE report
         // (a hang, a gpu-stall, a manual WriteReport): the host keeps running,
         // and the backlog/module table are thawed again on the way out.
+        //
+        // "Survivable" (exitCode == 0) is NOT the same thing as the HANG
+        // PROTOCOL (kind "hang" or "gpu-stall" AND exitCode == 0 --
+        // IsHangProtocolReport, R95/R110): a report can be survivable with
+        // any kind (an `ensure` is survivable and never hang protocol), and a
+        // `hang`-kind report can be non-survivable -- the exit sentinel files
+        // "hang at exit" with ExitCode::kExitSentinel (12), a kind of "hang"
+        // that terminates the process, so it is neither survivable nor hang
+        // protocol. Both the host (IsHangProtocolReport) and the reporter's
+        // view (ReportView::isHang) key on the same exitCode == 0 check for
+        // exactly this reason.
         int exitCode = ExitCode::kCrashed;
     };
 

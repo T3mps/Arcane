@@ -105,7 +105,7 @@ namespace Arcane::Reporter
         v.logTail   = std::string(logTail);
         v.reportFolder = std::filesystem::path(a.envelopePath).parent_path().generic_string();
         v.relaunchLine = a.relaunch.empty() ? e.commandLine : a.relaunch;
-        v.isHang    = (e.kind == "hang" || e.kind == "gpu-stall");
+        v.isHang    = (e.kind == "hang" || e.kind == "gpu-stall") && e.exitCode == 0;
         v.isAbnormalExit = (e.kind == "abnormal-exit");
         v.canRelaunch = !v.relaunchLine.empty() && !v.isHang;
 

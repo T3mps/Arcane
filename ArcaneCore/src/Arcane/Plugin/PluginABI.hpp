@@ -939,11 +939,14 @@ namespace Arcane
     //     reason` (D2) -- the type crosses ArcaneCore.dll, so its size and
     //     member offsets moved. Diagnostics::Config gains `launchMonitor`
     //     (D4, monitor mode), changing the layout of a struct a module can
-    //     construct. ArcaneCore.dll gains the NativeWindow surface
-    //     (NativeWindow, INativeWindowPresenter, NativeWindowDesc incl.
-    //     `dialogNavigation`). ProgressStallRule::WasReported() is inline and
-    //     adds no export. A v39 module was compiled against the old layouts;
-    //     reject the pairing. ReferenceProject.arcproj restamped.
+    //     construct. HostConfig gains `hangMainFrame` (D10, the dev-only hang
+    //     trigger) -- another `ARCANE_API` struct layout move, same house
+    //     convention as the v18/v19 entries. ArcaneCore.dll gains the
+    //     NativeWindow surface (NativeWindow, INativeWindowPresenter,
+    //     NativeWindowDesc incl. `dialogNavigation`).
+    //     ProgressStallRule::WasReported() is inline and adds no export. A
+    //     v39 module was compiled against the old layouts; reject the
+    //     pairing. ReferenceProject.arcproj restamped.
     inline constexpr uint32_t kGamePluginABIVersion = 40;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

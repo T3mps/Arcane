@@ -94,6 +94,24 @@ TEST_CASE("report view: symbolized threads replace the portable one, faulting fi
     CHECK(h.headline == "Arcane Editor stopped responding");
 }
 
+TEST_CASE("report view: R110 -- the exit sentinel's 'hang at exit' (kind hang, exitCode 12) is a CRASH view, not a hang window", "[reporter]")
+{
+    // Diagnostics.cpp's exit sentinel files kind "hang" with ExitCode::kExitSentinel
+    // (12): the host is already terminating itself, not stalled and waiting to be
+    // watched. The reporter-side mirror of R95 (IsHangProtocolReport, host side)
+    // keys isHang on exitCode == 0 too, so this must present as an ordinary crash
+    // view -- Relaunch enabled when a relaunch line exists, no HangWatch opened.
+    Arcane::Diag::Envelope e = Crash();
+    e.kind = "hang";
+    e.reason = "hang at exit (Vulkan teardown did not complete)";
+    e.exitCode = 12;
+    const ReportView v = BuildReportView(e, Attended(), nullptr, "");
+    CHECK_FALSE(v.isHang);
+    CHECK(v.canRelaunch == !v.relaunchLine.empty());
+    CHECK(v.canRelaunch);   // Crash() sets a non-empty commandLine, so this IS a crash view with Relaunch live
+    CHECK(v.headline == "Arcane Editor stopped responding");
+}
+
 TEST_CASE("report view: the GPU section and the abnormal-exit shape", "[reporter]")
 {
     Arcane::Diag::Envelope g = Crash();

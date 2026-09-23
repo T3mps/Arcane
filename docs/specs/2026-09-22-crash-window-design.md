@@ -731,8 +731,26 @@ debugger has the crash), as UE.
   (R43, D1): the line comes from the envelope's `commandLine` (report mode)
   or the session record (monitor mode, §5.8). The relaunched process
   inherits the REPORTER's working directory, not the dead host's. A failed
-  relaunch stays on screen and says why. Relaunch is hidden for a hang until
-  the host is terminated.
+  relaunch stays on screen and says why. Relaunch is DISABLED, not hidden,
+  for a hang until the host is terminated: the button stays visible whenever
+  a relaunch line exists (`ShowWindow`, keyed on `relaunchLine`) and only
+  `EnableWindow`-greys out while `canRelaunch` is false
+  (`ReporterWindow.cpp:196-197`).
+- **R61's elevated-host caveat** (final review security note; not a merge
+  blocker, recorded here for the next hardening pass). `envelopePath` is
+  unvalidated because it is not a privilege boundary: the reporter runs as
+  the same user as the host that spawned it. That holds for plan 2 as
+  built, WITH one named exception. If a host runs ELEVATED and its
+  project's `Saved/Diagnostics` sits in a directory a less-privileged local
+  user can write, that user can race-replace the freshly written envelope
+  before the elevated reporter reads it, planting the Relaunch line, which
+  then runs ELEVATED on the user's click; the same user could also plant
+  `.arcdiag` files to suppress the monitor (suppression is the only effect
+  there). The session record itself is safe -- it lives in the Install-time
+  `<exe dir>/diagnostics`, whose relaunch line inherits the install dir's
+  ACL, not the project's. A cheap future hardening: the reporter refuses to
+  relaunch when its own token is elevated, or shows the line and asks for
+  confirmation first.
 - **`--symbol-path "<a;b>"`** (D5, test seam) REPLACES the default search
   and sets BOTH `SYMOPT_IGNORE_CVREC` and `SYMOPT_NO_IMAGE_SEARCH`.
   Measured: `IGNORE_CVREC` alone did NOT hide the PDBs on the desk that
@@ -812,8 +830,10 @@ calls on the caller's thread, not posted messages. The splash is untouched by
 
 The reporter window, as shipped: title "<product> -- <plain-words kind>";
 header, time + build, reason; a thread selector; a read-only monospace
-details pane (the whole `.symbolized.txt` view, then the log tail, then the
-report folder); buttons Open Report Folder, Copy Details, Close (the
+details pane (`DetailsText`: headline, reason, injected modules, the
+SELECTED thread's frames -- not the whole `.symbolized.txt` sibling, which
+the pane never reads -- then the GPU section, the log tail, then the report
+folder); buttons Open Report Folder, Copy Details, Close (the
 `BS_DEFPUSHBUTTON`), Relaunch, Keep Waiting, Terminate and Collect, shown per
 mode. Esc (`IDCANCEL`) and Enter with no focused button (`IDOK`) both map to
 Close, never to Relaunch. Default size 1000x640 at 96 DPI, the width at
@@ -1053,7 +1073,24 @@ Owed from plan 2's build (2026-09-23):
   `Saved/Diagnostics` at it afterwards.
 - Arm the device-removed hook on the headless/offscreen graph device (G1
   RED, R109); re-run G1 (a machine-wide TDR, only with the user's
-  consent); consider a D3D12 G1 variant.
+  consent); consider a D3D12 G1 variant. The fix should arm the offscreen
+  device only when no crash chain is already installed (ask the slot), not
+  unconditionally -- `NriGraphContext.cpp:300-310` deliberately skips `Arm`
+  for the BORROWED offscreen device today, assuming its creator armed it;
+  the windowed path arms unconditionally at `NriGraphContext.cpp:228`, and
+  an unconditional arm on the offscreen path would lose the R-disarm
+  protection that the skipped-Arm comment describes.
+- **The monitor window's foreground follow-up** (final review, deferred
+  minor 39/(a)): the report is on disk and the taskbar button flashes
+  today, because Windows flashes it when `SetForegroundWindow` is refused,
+  but nothing raises the window itself. Owed: a `NativeWindowDesc` "raise"
+  option doing UE's topmost toggle (`HWND_TOPMOST` then `HWND_NOTOPMOST`)
+  plus `FlashWindowEx`, so the window is at least visible above others.
+- **A `NativeWindow` minimum window size** (final review, deferred minor
+  32/(c)): `Layout`'s 150 px preferred button width shrinks to fit but is
+  floored at 72 px (§7, R92) -- dragged small enough, buttons can still
+  fall below that floor. Owed: a `NativeWindowDesc` minimum size honoured
+  via `WM_GETMINMAXINFO`, with the next `NativeWindow` touch.
 - **Editor-styled reporter window.** The user asked for the reporter window
   to look like the editor's custom ImGui. Research: UE's crash reporter is
   a MONOLITHIC exe carrying Slate plus a standalone D3D11 renderer, which

@@ -93,9 +93,13 @@ namespace Arcane::Reporter
     // duplicated process handle (R33) and a relaunched copy of the same host
     // inheriting it would confuse a later `--host-created` identity check
     // with a handle it never opened itself. CREATE_NO_WINDOW | DETACHED_PROCESS
-    // mirrors Diagnostics.cpp's own SpawnReporter (only meaningful for a
-    // console-subsystem target; ignored for a windowed one, which every host
-    // here is).
+    // mirrors Diagnostics.cpp's own SpawnReporter. Both ArcaneEditor and
+    // ArcaneRuntime are `kind "ConsoleApp"` (premake5.lua), so this is NOT a
+    // no-op: a relaunched host runs with no console of its own, its stderr
+    // goes nowhere, and it installs no console handler. That is acceptable
+    // here -- the editor's own children (e.g. arcbuild) already run under
+    // CREATE_NO_WINDOW, and a relaunch is a GUI host the user is about to
+    // look at, not a console tool whose output matters.
     //
     // Fix round 1 (R90): `outChildPid`, when given, is filled with the
     // child's pid on success so the caller can AllowSetForegroundWindow it

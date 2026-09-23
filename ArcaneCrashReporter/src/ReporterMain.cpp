@@ -421,6 +421,15 @@ namespace
 
             ui->Show(window, a.product);
 
+            // M4 (final review, same class as R102): a window that never
+            // opened holds no waiter and shows nothing, so the D11 claim it
+            // was opened for is already meaningless -- release it right away
+            // instead of carrying it through the whole symbolization wait
+            // (up to the deadline). Without this, a monitor judging a host
+            // death in that window reads "a hang window owns this exit" for
+            // a window nobody ever saw.
+            if (hang && !window.WasEverOpen()) hang->ReleaseWindowClaim();
+
             // Only once the window is genuinely up: before that there is no
             // one to post to, and a window that never opened is the
             // unattended case (R89's third bullet), which waits on nothing.
