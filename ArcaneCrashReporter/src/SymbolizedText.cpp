@@ -28,7 +28,13 @@ namespace Arcane::Reporter
             out += "engine      : dbgeng\nsymbol path : " + s.symbolPath + "\n\n";
             for (const SymThread& t : s.threads)
             {
-                out += "--- thread " + std::to_string(t.systemId) + (t.faulting ? " (faulting)\n" : "\n");
+                // R77: an id of 0 is "the engine would not name it", not a
+                // thread. Printing "thread 0" would read as a real id and send
+                // a reader looking for a thread that does not exist.
+                out += "--- thread ";
+                out += t.systemId != 0 ? std::to_string(t.systemId) : std::string("<unknown>");
+                out += t.faulting ? " (faulting)\n" : "\n";
+
                 char idx[8];
                 for (std::size_t i = 0; i < t.frames.size(); ++i)
                 {
@@ -37,9 +43,16 @@ namespace Arcane::Reporter
                     out += FormatFrame(t.frames[i]);
                     out += "\n";
                 }
+                // A blank block is indistinguishable from a formatting bug.
                 if (t.frames.empty()) out += "  <no frames recovered>\n";
+                // R78: a capped walk and a complete one are otherwise the same
+                // text, and "is this the whole stack?" is the question.
+                if (t.framesTruncated)
+                    out += "   ... (truncated at the reporter's " + std::to_string(t.frames.size()) + "-frame cap)\n";
                 out += "\n";
             }
+            if (s.threadsTruncated)
+                out += "--- (truncated at the reporter's " + std::to_string(s.threads.size()) + "-thread cap)\n\n";
         }
         else
         {

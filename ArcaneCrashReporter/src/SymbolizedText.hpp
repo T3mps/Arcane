@@ -29,9 +29,16 @@ namespace Arcane::Reporter
 
     struct SymThread
     {
+        // 0 == the engine would not name this thread (R77). It prints as
+        // "<unknown>", NEVER as "thread 0": a correct stack under a plausible
+        // wrong id is worse than an obviously missing one.
         std::uint32_t         systemId = 0;
         bool                  faulting = false;
         std::vector<SymFrame> frames;
+        // R78: the walk stopped at the reporter's per-thread cap, not at the
+        // bottom of the stack. Appended LAST so the existing brace-init of
+        // this aggregate -- { id, faulting, frames } -- keeps working.
+        bool                  framesTruncated = false;
     };
 
     struct Symbolized
@@ -40,6 +47,7 @@ namespace Arcane::Reporter
         std::string            engineError;               // why not, when not
         std::string            symbolPath;                // what the engine was actually given
         std::vector<SymThread> threads;                   // the faulting thread first
+        bool                   threadsTruncated = false;  // R78: the dump held more threads than the cap
     };
 
     // "module!function+0x1a [file:line]"  |  "module!function+0x1a"  |  "module+0x1234"

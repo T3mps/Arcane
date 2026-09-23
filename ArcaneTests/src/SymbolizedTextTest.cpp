@@ -68,3 +68,42 @@ TEST_CASE("symbolized text: the walked thread id is read from the envelope's sta
     CHECK(s.threads.front().systemId == 4242u);
     CHECK(s.threads.front().faulting);
 }
+
+// R78 + R81 + R77's label. Three things this artifact must never say silently:
+//
+//  - a walk that hit the reporter's cap reads IDENTICALLY to one that ended at
+//    the bottom of the stack, and "is this the whole stack?" is the question a
+//    human opening a truncated one is actually asking;
+//  - a thread that walked to nothing prints as a blank block, which is
+//    indistinguishable from a formatting bug. That line was output the brief
+//    did not specify and nothing pinned, so a later edit could drop it unseen;
+//  - a thread whose system id the engine REFUSED to give up (R77: the
+//    SetCurrentThreadId/GetCurrentThreadSystemId pair can fail) must not print
+//    as "thread 0", which reads like a real -- and wrong -- id. A correct stack
+//    under a wrong thread id is worse than an obviously missing one.
+TEST_CASE("symbolized text: a capped walk says so, an empty thread is not a blank block, "
+          "and an unnamed thread is not thread 0", "[reporter]")
+{
+    Symbolized s;
+    s.engineAvailable  = true;
+    s.symbolPath       = "D:\\bin";
+    s.threadsTruncated = true;
+    s.threads.push_back({ 7, true, { { 0x1, "m", "f", 0x2, "", 0 } }, /*framesTruncated*/ true });
+    s.threads.push_back({ 8, false, {} });   // walked to nothing
+    s.threads.push_back({ 0, false, {} });   // the engine would not name it
+
+    const std::string text = FormatSymbolized(s, "b", "");
+    CHECK(text.find("(truncated at the reporter's 1-frame cap)") != std::string::npos);
+    CHECK(text.find("(truncated at the reporter's 3-thread cap)") != std::string::npos);
+    CHECK(text.find("<no frames recovered>") != std::string::npos);
+    CHECK(text.find("--- thread <unknown>") != std::string::npos);
+    CHECK(text.find("--- thread 0") == std::string::npos);
+
+    // An UNcapped walk says nothing at all -- a marker that is always there is
+    // not a marker.
+    Symbolized plain;
+    plain.engineAvailable = true;
+    plain.threads.push_back({ 9, true, { { 0x1, "m", "f", 0x2, "", 0 } } });
+    const std::string quiet = FormatSymbolized(plain, "b", "");
+    CHECK(quiet.find("truncated") == std::string::npos);
+}

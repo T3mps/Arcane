@@ -24,6 +24,15 @@ namespace Arcane::Reporter
             return b;
         }
 
+        // R76: dbgeng's string getters return S_FALSE for "your buffer was too
+        // small -- here is a TRUNCATED answer and the size I needed". SUCCEEDED
+        // admits that, and a truncated answer is not a smaller truth: a clipped
+        // "module!function" can lose the '!' and be read as a bare module, and
+        // a clipped module PATH is pushed onto the SYMBOL PATH below, where it
+        // is simply a wrong directory. Exact success only; anything else means
+        // "no answer", and module+offset is the honest fallback.
+        [[nodiscard]] bool Exact(HRESULT hr) { return hr == S_OK; }
+
         // EndSession on EVERY exit from the point the dump opened, including
         // the failure paths. The ComPtrs below would release the client on
         // their own, but "release the last reference and hope" is not the same
@@ -59,7 +68,10 @@ namespace Arcane::Reporter
                 if (FAILED(symbols->GetModuleByIndex(i, &base))) continue;
                 wchar_t image[1024];
                 ULONG   size = 0;
-                if (FAILED(symbols->GetModuleNameStringWide(DEBUG_MODNAME_IMAGE, i, base, image, 1024, &size)) || size <= 1) continue;
+                // R76: EXACT success only. A truncated image path here becomes
+                // a wrong DIRECTORY on the symbol path -- the one place a
+                // "nearly right" answer is worse than none.
+                if (!Exact(symbols->GetModuleNameStringWide(DEBUG_MODNAME_IMAGE, i, base, image, 1024, &size)) || size <= 1) continue;
                 std::wstring dir(image);
                 const std::size_t slash = dir.find_last_of(L"/\\");
                 if (slash == std::wstring::npos) continue;
@@ -75,8 +87,35 @@ namespace Arcane::Reporter
             std::wstring self = ToWide(Arcane::ExecutablePathUtf8());
             const std::size_t slash = self.find_last_of(L"/\\");
             if (slash != std::wstring::npos) { self.resize(slash); path += self; path += L";"; }
-            wchar_t env[4096];
-            if (GetEnvironmentVariableW(L"_NT_SYMBOL_PATH", env, 4096) > 0) path += env;
+            // R75. GetEnvironmentVariableW does NOT write the buffer when the
+            // value does not fit: it returns the REQUIRED size (including the
+            // null) and leaves the buffer untouched. The old `> 0` test passed
+            // in exactly that case and then appended an UNINITIALISED
+            // wchar_t[4096] until it happened to meet a null word -- undefined
+            // behaviour, and a garbage symbol path in practice.
+            //
+            // This is the DEFAULT path, the one every real hand-off takes, in
+            // the process whose whole job is to work when things have already
+            // gone wrong. A desk with a short or unset _NT_SYMBOL_PATH can
+            // never reproduce it, which is what made it a failure-path defect
+            // rather than a happy-path one.
+            //
+            // Sized with a null buffer first, so a long value is USED rather
+            // than dropped: the developer who set a 5 KB symbol path meant it.
+            const DWORD needed = GetEnvironmentVariableW(L"_NT_SYMBOL_PATH", nullptr, 0);
+            if (needed > 1)
+            {
+                std::wstring env(needed, L'\0');
+                const DWORD  wrote = GetEnvironmentVariableW(L"_NT_SYMBOL_PATH", env.data(), needed);
+                // `wrote` EXCLUDES the null on success and must be < needed;
+                // anything else means the value changed under us between the
+                // two calls, and a half-read path is not worth using.
+                if (wrote > 0 && wrote < needed)
+                {
+                    env.resize(wrote);
+                    path += env;
+                }
+            }
             return path;
         }
 
@@ -90,7 +129,7 @@ namespace Arcane::Reporter
             wchar_t name[1024];
             ULONG   size = 0;
             ULONG64 disp = 0;
-            if (SUCCEEDED(symbols->GetNameByOffsetWide(address, name, 1024, &size, &disp)) && size > 1)
+            if (Exact(symbols->GetNameByOffsetWide(address, name, 1024, &size, &disp)) && size > 1)
             {
                 const std::string full = ToUtf8(name);
                 const std::size_t bang = full.find('!');
@@ -108,7 +147,7 @@ namespace Arcane::Reporter
                     ULONG   line     = 0;
                     ULONG   fileSize = 0;
                     ULONG64 lineDisp = 0;
-                    if (SUCCEEDED(symbols->GetLineByOffsetWide(address, &line, file, 1024, &fileSize, &lineDisp)) && fileSize > 1)
+                    if (Exact(symbols->GetLineByOffsetWide(address, &line, file, 1024, &fileSize, &lineDisp)) && fileSize > 1)
                     {
                         f.file = ToUtf8(file);
                         f.line = line;
@@ -123,7 +162,7 @@ namespace Arcane::Reporter
             {
                 wchar_t image[1024];
                 ULONG   imageSize = 0;
-                if (SUCCEEDED(symbols->GetModuleNameStringWide(DEBUG_MODNAME_IMAGE, index, base, image, 1024, &imageSize)) && imageSize > 1)
+                if (Exact(symbols->GetModuleNameStringWide(DEBUG_MODNAME_IMAGE, index, base, image, 1024, &imageSize)) && imageSize > 1)
                 {
                     const std::string full  = ToUtf8(image);
                     const std::size_t slash = full.find_last_of("/\\");
@@ -202,50 +241,108 @@ namespace Arcane::Reporter
         // UE does for a suspended thread (:1925-1966).
         std::vector<std::uint8_t> ctx(4096);
         ULONG eventType = 0, eventPid = 0, eventTid = 0, ctxUsed = 0;
-        const bool haveEvent = SUCCEEDED(control->GetStoredEventInformation(&eventType, &eventPid, &eventTid,
-                                                                            ctx.data(), static_cast<ULONG>(ctx.size()), &ctxUsed,
-                                                                            nullptr, 0, nullptr))
-                            && ctxUsed > 0;
+        bool  haveEvent = SUCCEEDED(control->GetStoredEventInformation(&eventType, &eventPid, &eventTid,
+                                                                       ctx.data(), static_cast<ULONG>(ctx.size()), &ctxUsed,
+                                                                       nullptr, 0, nullptr))
+                       && ctxUsed > 0;
+        // R76, same class as the truncated strings above: SUCCEEDED admits
+        // S_FALSE, and this call's S_FALSE means "your buffer was too small --
+        // ctxUsed is what I NEEDED". Handing that number straight back as a
+        // LENGTH would have GetContextStackTrace read past the end of `ctx`.
+        // An x64 CONTEXT is ~1.2 KB against this 4 KB buffer, so it is the
+        // extended-state machine of some future desk that would hit it --
+        // silently, in the one process that must not be the thing that breaks.
+        //
+        // Grown and retried once rather than merely clamped: giving up here
+        // costs the FAULTING-THREAD WALK, which is the whole feature, and the
+        // required size is right there. A second overflow is refused outright
+        // and the envelope's walked thread becomes the fallback
+        // (PutFaultingFirst), which is exactly what that fallback is for.
+        if (haveEvent && ctxUsed > ctx.size())
+        {
+            ctx.assign(ctxUsed, 0);
+            ULONG again = 0;
+            haveEvent = SUCCEEDED(control->GetStoredEventInformation(&eventType, &eventPid, &eventTid,
+                                                                     ctx.data(), static_cast<ULONG>(ctx.size()), &again,
+                                                                     nullptr, 0, nullptr))
+                     && again > 0 && again <= ctx.size();
+            ctxUsed = again;
+        }
         if (haveEvent)
         {
             SymThread t;
-            ULONG     sysId = 0;
-            sys->SetCurrentThreadId(eventTid);
-            sys->GetCurrentThreadSystemId(&sysId);
-            t.systemId = sysId;
             t.faulting = true;
+
+            // R77: these two decide the LABEL on the faulting thread, and a
+            // correct stack under a wrong id is worse than one that admits it
+            // does not know. Unchecked, a failed SetCurrentThreadId leaves the
+            // engine on whatever thread it was already on and
+            // GetCurrentThreadSystemId then cheerfully reports THAT one. Both
+            // are checked; on failure the id stays 0, which the text prints as
+            // "<unknown>" rather than as "thread 0". The FRAMES are unaffected
+            // either way -- GetContextStackTrace walks from the stored context
+            // that is passed to it explicitly, not from the current thread.
+            ULONG sysId = 0;
+            if (SUCCEEDED(sys->SetCurrentThreadId(eventTid)) && SUCCEEDED(sys->GetCurrentThreadSystemId(&sysId)))
+                t.systemId = sysId;
 
             std::vector<DEBUG_STACK_FRAME> frames(opt.maxFramesPerThread);
             ULONG                          filled = 0;
             if (SUCCEEDED(control->GetContextStackTrace(ctx.data(), ctxUsed, frames.data(), static_cast<ULONG>(frames.size()),
                                                         nullptr, 0, 0, &filled)))
+            {
                 for (ULONG k = 0; k < filled; ++k)
                     t.frames.push_back(Resolve(symbols.Get(), frames[k].InstructionOffset));
+                // R78: dbgeng stops at the buffer, so a full buffer means "the
+                // stack may go deeper" -- conservatively true even for a stack
+                // that happens to be exactly this deep, which is the right way
+                // round for a truncation marker.
+                t.framesTruncated = filled == frames.size();
+            }
             out.threads.push_back(std::move(t));
         }
 
         // Every OTHER thread from its own saved context (what windbg's ~*k
         // does). This is beyond what UE's client walks -- its other threads
         // come from the in-process portable capture -- so it is best-effort: a
-        // thread that fails to walk is listed with no frames rather than
+        // thread that fails to WALK is listed with no frames rather than
         // failing the report.
+        //
+        // R77 made the code match that sentence, in the one direction that is
+        // honest. There were two `continue`s dropping a thread silently, and
+        // they are NOT the same failure:
+        //
+        //  - GetThreadIdsByIndex failing means we have no IDENTITY for the
+        //    thread. There is nothing to list -- "--- thread <unknown>" with no
+        //    frames would be a row of pure noise -- so it still skips.
+        //  - SetCurrentThreadId failing means we HAVE the system id and merely
+        //    cannot walk it. That is exactly the case the comment promised, so
+        //    it now lists the thread with no frames. A thread that exists and
+        //    could not be walked is a fact about the dump; deleting it from the
+        //    report hides that a thread was there at all.
         ULONG count = 0;
         sys->GetNumberThreads(&count);
+        out.threadsTruncated = count > opt.maxThreads;   // R78
         for (ULONG i = 0; i < count && i < opt.maxThreads; ++i)
         {
             ULONG engineId = 0, systemId = 0;
             if (FAILED(sys->GetThreadIdsByIndex(i, 1, &engineId, &systemId))) continue;
             if (haveEvent && engineId == eventTid) continue;
-            if (FAILED(sys->SetCurrentThreadId(engineId))) continue;
 
             SymThread t;
             t.systemId = systemId;
 
-            std::vector<DEBUG_STACK_FRAME> frames(opt.maxFramesPerThread);
-            ULONG                          filled = 0;
-            if (SUCCEEDED(control->GetStackTrace(0, 0, 0, frames.data(), static_cast<ULONG>(frames.size()), &filled)))
-                for (ULONG k = 0; k < filled; ++k)
-                    t.frames.push_back(Resolve(symbols.Get(), frames[k].InstructionOffset));
+            if (SUCCEEDED(sys->SetCurrentThreadId(engineId)))
+            {
+                std::vector<DEBUG_STACK_FRAME> frames(opt.maxFramesPerThread);
+                ULONG                          filled = 0;
+                if (SUCCEEDED(control->GetStackTrace(0, 0, 0, frames.data(), static_cast<ULONG>(frames.size()), &filled)))
+                {
+                    for (ULONG k = 0; k < filled; ++k)
+                        t.frames.push_back(Resolve(symbols.Get(), frames[k].InstructionOffset));
+                    t.framesTruncated = filled == frames.size();   // R78
+                }
+            }
             out.threads.push_back(std::move(t));
         }
 

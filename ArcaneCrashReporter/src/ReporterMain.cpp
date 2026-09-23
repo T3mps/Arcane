@@ -54,15 +54,21 @@ namespace
         return envelopePath.parent_path() / envelopePath.stem();   // "<dir>/<name>" from "<dir>/<name>.arcdiag"
     }
 
-    // R67: Install/Shutdown bound by SCOPE, not by control flow. Today the
-    // only early return in RunReport sits before Install, so the raw pair
-    // balanced -- but task 5's kDeadline and task 8's kHostMismatch both
-    // return from INSIDE that window, and Diagnostics.hpp:109-112 is explicit
-    // that Install creates the crash thread and its events even with
-    // installCrashHandler and startHangWatchdog both off. The death fixture's
-    // own comment records what skipping Shutdown cost last time: a joinable
-    // thread at static destruction, whose destructor calls std::terminate.
-    // The trap is removed here, before two later tasks can step into it.
+    // R67: Install/Shutdown bound by SCOPE, not by control flow.
+    // Diagnostics.hpp:109-112 is explicit that Install creates the crash thread
+    // and its events even with installCrashHandler and startHangWatchdog both
+    // off, and the death fixture's own comment records what skipping Shutdown
+    // cost last time: a joinable thread at static destruction, whose destructor
+    // calls std::terminate.
+    //
+    // R80 corrects what this comment used to claim. Task 5's kDeadline does NOT
+    // return from inside the guarded window -- it ends the process with
+    // TerminateProcess, so this guard never runs on that path. That is the
+    // CORRECT behaviour, not an oversight: TerminateProcess runs no destructors
+    // by design, and calling Shutdown() under an already-expired deadline could
+    // itself block on the very worker the deadline just gave up on. The guard
+    // stays because task 8's kHostMismatch IS a real return from this scope,
+    // and because the ordinary success path still needs it.
     struct ArmedDiagnostics
     {
         explicit ArmedDiagnostics(const Arcane::Diagnostics::Config& cfg) { Arcane::Diagnostics::Install(cfg); }
@@ -182,7 +188,22 @@ namespace
                 (void)WriteText(sibling, FormatSymbolized(partial, Arcane::BuildInfo(), envelope->cpuThreadSummary));
                 ARC_WARN("reporter: symbolization did not finish within {} s; wrote the portable stack", a.deadlineSeconds);
                 Arcane::Log::FlushFileSinkBounded(1000);
-                TerminateProcess(GetCurrentProcess(), static_cast<UINT>(ExitCode::kDeadline));
+
+                // R79: unreachable BY CONSTRUCTION, not by argument. The
+                // argument -- TerminateProcess on the current process cannot
+                // fail, because the pseudo-handle always carries
+                // PROCESS_TERMINATE -- is true, but if it ever DID return,
+                // control fell straight into worker.join() and blocked forever
+                // on the wedged worker: precisely the outcome this deadline
+                // exists to prevent, arrived at through the code that
+                // implements it.
+                //
+                // A loop with no exit removes the fall-through from the
+                // grammar. Retrying is also the only sensible response to a
+                // failure that cannot happen: the alternatives all end in
+                // waiting on the worker, and there is nothing else this
+                // process should be doing.
+                for (;;) TerminateProcess(GetCurrentProcess(), static_cast<UINT>(ExitCode::kDeadline));
             }
             worker.join();
         }
