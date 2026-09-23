@@ -1896,10 +1896,20 @@ namespace
     HANDLE g_watchdogOrphan = nullptr;
 #endif
 
+    // THE FLAGS ARE CLEARED BY WHOEVER ACTUALLY STARTS A THREAD, never at the
+    // top of this function -- and the orphan check runs before them. Plan 2's
+    // brief put the two stores first and this block after the early-out; that
+    // order RESURRECTS the very thread it then refuses to replace, because the
+    // orphan's loop condition is `!g_watchdogStop` (WatchdogMain, below) and
+    // `g_watchdogPaused` is what a report parked it on. The orphan would then
+    // never exit -- so every later StartWatchdog refuses at the line below and
+    // hang detection is off for the rest of the process (the suite alone runs
+    // ~15 Install/Shutdown cycles) -- and a hang it did report would walk its
+    // OWN stack, since StopWatchdog already zeroed g_watchdogThreadId and
+    // WatchdogMain publishes that id once, at entry (R6). Do not "restore" the
+    // brief's order.
     void StartWatchdog() noexcept
     {
-        g_watchdogStop.store(false, std::memory_order_release);
-        g_watchdogPaused.store(false, std::memory_order_release);
 #if defined(_WIN32)
         if (g_watchdogThread) return;   // already running (Install is idempotent)
         if (g_watchdogOrphan)
@@ -1913,11 +1923,17 @@ namespace
             CloseHandle(g_watchdogOrphan);
             g_watchdogOrphan = nullptr;
         }
+        g_watchdogStop.store(false, std::memory_order_release);
+        g_watchdogPaused.store(false, std::memory_order_release);
         g_watchdogThread = CreateThread(nullptr, 128 * 1024, &WatchdogThreadProc,
                                         nullptr, 0, nullptr);
 #else
         if (!g_watchdog.joinable())
+        {
+            g_watchdogStop.store(false, std::memory_order_release);
+            g_watchdogPaused.store(false, std::memory_order_release);
             g_watchdog = std::thread(&WatchdogMain);
+        }
 #endif
     }
 
@@ -2568,6 +2584,16 @@ void SubmitReport(const ReportRequest& request) noexcept
             deadline - std::chrono::steady_clock::now()).count();
         return left > 0 ? static_cast<DWORD>(left) : 0u;
     };
+    // R49: ...but a FATAL report never gets a budget of ZERO. A submitter that
+    // wins the lock near the deadline would otherwise signal the crash thread,
+    // not wait at all, and TerminateProcess it mid-write. Seam 2 exists to stop
+    // the 60 + 60 = 120 s worst case, not to hand the report nothing: the floor
+    // makes the ceiling 65 s, which keeps the seam's value and still guarantees
+    // the crash thread a real chance to finish. Defence in depth -- plan 1's R4
+    // writes the MINIMAL envelope (portable stack included) before anything
+    // that can wedge, so a kill mid-report already degrades the report rather
+    // than leaving an unparsable one.
+    constexpr DWORD kMinFatalWaitMs = 5000;
 
     if (fatal)
     {
@@ -2613,9 +2639,13 @@ void SubmitReport(const ReportRequest& request) noexcept
 
         if (g_crashThread && g_crashEvent && g_handledEvent)
         {
+            DWORD waitMs = remainingMs();
+            if (fatal && waitMs < kMinFatalWaitMs)
+                waitMs = kMinFatalWaitMs;
+
             ResetEvent(g_handledEvent);
             SetEvent(g_crashEvent);
-            WaitForSingleObject(g_handledEvent, remainingMs());
+            WaitForSingleObject(g_handledEvent, waitMs);
         }
         else
         {

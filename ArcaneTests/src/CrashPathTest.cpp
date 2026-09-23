@@ -240,12 +240,21 @@ TEST_CASE("death fixture: an access violation yields a crash report and exit cod
     REQUIRE_FALSE(r.stem.empty());
     CHECK(std::filesystem::exists(r.stem.string() + ".dmp"));
     // Plan 2 (D9): a FATAL report's echo reaches the log file WITHOUT spdlog.
-    // The fixture's logDir is derived: <dumpDir>/../Logs/<appName>.log. This
-    // line is green before the change too (spdlog used to carry it); it pins
-    // that the direct append lands in the same file.
+    // The fixture's logDir is derived: <dumpDir>/../Logs/<appName>.log.
     const auto log = std::filesystem::temp_directory_path() / "Logs" / "DeathFixture.log";
     REQUIRE(std::filesystem::exists(log));
-    CHECK(Slurp(log).find("-- report written") != std::string::npos);
+    const std::string logText = Slurp(log);
+    // The direct append lands in the same file spdlog is writing. This much
+    // was green before D9 too -- ARC_ERROR used to carry the line...
+    CHECK(logText.find("-- report written") != std::string::npos);
+    // ...so the assertion that actually PINS D9 is that the echo is
+    // UNPREFIXED. spdlog stamps every line it emits with
+    // "[<ts>] [Arcane] [<level>] "; FatalEcho's WriteFile does not. An echo
+    // that regressed to ARC_ERROR fails both of these -- the line would no
+    // longer start at a newline, and an [error]-prefixed copy would appear.
+    CHECK(logText.find("\nDiagnostics: crash (unhandled exception) -- report written")
+          != std::string::npos);
+    CHECK(logText.find("[error] Diagnostics: crash") == std::string::npos);
     CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "crash");
     CHECK(r.run.wallMs < 15000);
 }
