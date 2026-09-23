@@ -747,6 +747,7 @@ void RuntimeApp::MainLoop()
         .compareEvaluated      = m_compareEvaluated,
 #if !defined(ARCANE_DIST)
         .gpuFaultFired   = m_gpuFaultFired,
+        .hangMainFired   = m_hangMainFired,
 #endif
         .simPrev         = simPrev,
         .lastFrameTime   = lastFrameTime,

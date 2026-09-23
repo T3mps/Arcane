@@ -287,6 +287,10 @@ private:
     // NriDiagnostics::FireFault, which owns its objects for the length of one
     // dispatch, so nothing is held between frames.
     bool                                      m_gpuFaultFired = false;
+
+    // --hang-main N (crash window plan 2, D10). Same shape as
+    // m_gpuFaultFired directly above.
+    bool                                      m_hangMainFired = false;
 #endif
 
     // Scene asset resolution (sprite-resolution lift, 2026-07-29): the sprite,

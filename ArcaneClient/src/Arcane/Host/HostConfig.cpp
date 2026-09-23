@@ -20,7 +20,7 @@ namespace Arcane
         // already going, and --probe/--fixed-dt/--fixed-time cannot parse
         // without --headless.
         constexpr std::string_view kStripWithValue[] = {
-            "crash-gpu", "frames", "report", "compare", "settle", "screenshot",
+            "crash-gpu", "hang-main", "frames", "report", "compare", "settle", "screenshot",
             "settle-timeout", "probe", "max-diff-pixels", "max-diff-pixel-ratio",
             "fixed-dt", "fixed-time", "pick-probe",
         };
@@ -164,6 +164,8 @@ namespace Arcane
 #if !defined(ARCANE_DIST)
         cli.Option("crash-gpu", "0", "DEV: deliberately fault the GPU on frame N (0 = off) -- "
                                      "the crash-diagnostics desk trigger").Type(CliType::Uint);
+        cli.Option("hang-main", "0", "DEV: on frame N block the main thread for 15 s without "
+                                     "beating (0 = off) -- the hang-report desk trigger").Type(CliType::Uint);
         // Registered beside the other Dist-guarded dev flags. The render path
         // is unconditional, so this flag has no prerequisite to name.
         cli.Option("pick-probe", "",  "DEV: add the pick + JFA outline nodes, scripted "
@@ -238,6 +240,7 @@ namespace Arcane
         // graph path it used to opt into is now the only one.
 #if !defined(ARCANE_DIST)
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
+        cfg.hangMainFrame = r.GetAs<std::uint64_t>("hang-main");
 #endif
 
         // --screenshot only ever fires on the last frame (both hosts gate it on

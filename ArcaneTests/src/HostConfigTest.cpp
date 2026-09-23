@@ -135,6 +135,20 @@ TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary
     REQUIRE(faultRun.config.has_value());
     CHECK(faultRun.config->crashGpuFrame == 30u);
 }
+
+// --hang-main N (crash window plan 2, D10): the witness hang lane's trigger.
+// Parsed the same way --crash-gpu is, and honoured by both hosts.
+TEST_CASE("host config: --hang-main round-trips and kHangMainSeconds is 15", "[host]") {
+    const auto hangRun = Run({"--project", "P", "--headless",
+                              "--hang-main", "30", "--frames", "90"});
+    REQUIRE(hangRun.config.has_value());
+    CHECK(hangRun.config->hangMainFrame == 30u);
+    CHECK(Arcane::kHangMainSeconds == 15u);
+
+    const auto off = Run({});
+    REQUIRE(off.config.has_value());
+    CHECK(off.config->hangMainFrame == 0u);
+}
 // The pick/outline probe. Guarded like --nri-graph
 // (both are DEV scaffolding registered inside HostConfig.cpp's
 // `#if !defined(ARCANE_DIST)` block), and, like it, the parse round-trip is the
@@ -989,6 +1003,7 @@ TEST_CASE("SanitizeRelaunchLine strips the harness flags and keeps the session",
         "ArcaneEditor.exe", "--project", "ReferenceProject", "--backend", "dx12",
         "--frames", "900", "--headless", "--settle", "4", "--report", "out.json",
         "--compare", "golden", "--screenshot", "shot.png", "--crash-gpu", "3",
+        "--hang-main", "30",
     };
     const std::string line = Arcane::SanitizeRelaunchLine(argv);
 
@@ -998,7 +1013,7 @@ TEST_CASE("SanitizeRelaunchLine strips the harness flags and keeps the session",
 
     for (const char* gone : { "--frames", "900", "--headless", "--settle", "--report",
                               "out.json", "--compare", "golden", "--screenshot",
-                              "shot.png", "--crash-gpu" })
+                              "shot.png", "--crash-gpu", "--hang-main" })
         CHECK(line.find(gone) == std::string::npos);
 }
 

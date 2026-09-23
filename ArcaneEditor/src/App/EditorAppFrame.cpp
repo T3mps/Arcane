@@ -394,6 +394,18 @@ namespace Arcane::Editor
                 m_gpuFaultFired = true;   // set FIRST: a failed build must not retry every frame
                 FireDeliberateGpuFault();
             }
+
+            // --hang-main N (crash window plan 2, D10): stop beating on
+            // purpose. The sleep sits here, after the beat published just
+            // above, so the watchdog sees a beat that then goes stale for
+            // kHangMainSeconds.
+            if (m_config.hangMainFrame != 0 && !m_hangMainFired &&
+                m_frameCount >= m_config.hangMainFrame)
+            {
+                m_hangMainFired = true;   // set FIRST: exactly once
+                ARC_WARN("--hang-main: blocking the main thread for {} s without a heartbeat", Arcane::kHangMainSeconds);
+                std::this_thread::sleep_for(std::chrono::seconds(Arcane::kHangMainSeconds));
+            }
 #endif
 
             FrameState fs;

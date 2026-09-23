@@ -2068,6 +2068,11 @@ namespace Arcane::Editor
         // latched by this -- a user who clicks twice meant it twice; the latch
         // exists only so a per-frame schedule fires once.
         bool                                      m_gpuFaultFired = false;
+
+        // --hang-main N (crash window plan 2, D10): the witness hang lane's
+        // trigger, honoured by both hosts. Same fired-once shape as
+        // m_gpuFaultFired directly above.
+        bool                                      m_hangMainFired = false;
 #endif
 
         // Editor state naming entities of the OUTGOING scene, torn down before any

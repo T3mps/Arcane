@@ -258,6 +258,11 @@ namespace Arcane::RuntimeFrame
         // state needed: RenderGraph fires through the stateless
         // NriDiagnostics::FireFault, which holds nothing between frames.
         bool&                                      gpuFaultFired;
+
+        // --hang-main N (crash window plan 2, D10). Same shape as
+        // gpuFaultFired directly above -- a fired-once latch, nothing else
+        // to carry between frames.
+        bool&                                      hangMainFired;
 #endif
 
         // ---- MainLoop-scope locals, hoisted one level up (before the while

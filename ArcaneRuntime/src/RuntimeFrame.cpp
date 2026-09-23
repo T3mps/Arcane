@@ -423,6 +423,16 @@ Arcane::NriGraphContext::FrameOutcome RenderGraph(FrameIo& io)
         if (!queue || !Arcane::NriDiagnostics::FireFault(io.graph->Device(), *queue))
             ARC_ERROR("--crash-gpu: fault injector unavailable -- nothing dispatched");
     }
+
+    // --hang-main N (crash window plan 2, D10): stop beating on purpose. The
+    // sleep sits here, after the beat PumpAndResize published for this frame,
+    // so the watchdog sees a beat that then goes stale for kHangMainSeconds.
+    if (io.config.hangMainFrame != 0 && !io.hangMainFired && io.frameCount >= io.config.hangMainFrame)
+    {
+        io.hangMainFired = true;   // set FIRST: exactly once
+        ARC_WARN("--hang-main: blocking the main thread for {} s without a heartbeat", Arcane::kHangMainSeconds);
+        std::this_thread::sleep_for(std::chrono::seconds(Arcane::kHangMainSeconds));
+    }
 #endif
 
     // ============================================================

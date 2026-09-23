@@ -289,6 +289,14 @@ namespace Arcane
         // frame is declared -- neither of which is observable in the report.
         std::uint64_t   crashGpuFrame = 0;
 
+        // DEV ONLY (crash window plan 2, D10): on frame N the MAIN thread
+        // sleeps kHangMainSeconds without beating, then carries on -- the
+        // scripted trigger for the hang report + reporter hand-off (spec
+        // s5.4), the way --crash-gpu is the trigger for gpu-crash. Fires once.
+        // 15 s clears Diagnostics::Config::hangSeconds' 12 s default by 3 s;
+        // honoured by BOTH hosts (a flag one host silently ignores is a trap).
+        std::uint64_t   hangMainFrame = 0;
+
         // DEV ONLY: `--pick-probe x,y` -- the SCRIPTED desk check for the
         // graph's pick + JFA outline nodes.
         //
@@ -327,6 +335,13 @@ namespace Arcane
     };
 
     struct HostConfig::ParseOutcome { std::optional<HostConfig> config; int exitCode = 0; };
+
+#if !defined(ARCANE_DIST)
+    // DEV ONLY (crash window plan 2, D10): the duration --hang-main blocks the
+    // main thread for. 15 s clears Diagnostics::Config::hangSeconds' 12 s
+    // default by 3 s, so the watchdog's hang report is reliably provoked.
+    inline constexpr std::uint32_t kHangMainSeconds = 15;
+#endif
 
     // The RELAUNCH line a host hands to Diagnostics::Config::commandLine (crash
     // window plan 1, spec S5.1): this process's own argv with the capture
