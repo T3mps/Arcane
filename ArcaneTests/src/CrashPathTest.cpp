@@ -229,15 +229,33 @@ namespace
 
     // The newest .arcdiag stem in `dir`, polling up to `timeout` -- a
     // detached reporter or monitor writes AFTER the fixture has exited.
+    //
+    // R69: "newest" means BY last_write_time, not "whichever entry
+    // directory_iterator happened to yield last" -- directory order is not
+    // timestamp order. This is not hypothetical: the reporter installs its
+    // OWN Diagnostics into the host's report directory (D13), so two app
+    // names can legitimately coexist there, and tasks 8/9 add a monitor that
+    // writes a third.
     std::filesystem::path WaitForStem(const std::filesystem::path& dir, std::chrono::milliseconds timeout)
     {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
         for (;;)
         {
-            std::filesystem::path found;
-            std::error_code ec;
+            std::filesystem::path           found;
+            std::filesystem::file_time_type newest{};
+            std::error_code                 ec;
             for (const auto& e : std::filesystem::directory_iterator(dir, ec))
-                if (e.path().extension() == ".arcdiag") found = e.path().parent_path() / e.path().stem();
+            {
+                if (e.path().extension() != ".arcdiag") continue;
+                std::error_code tec;
+                const auto written = std::filesystem::last_write_time(e.path(), tec);
+                if (tec) continue;
+                if (found.empty() || written > newest)
+                {
+                    newest = written;
+                    found  = e.path().parent_path() / e.path().stem();
+                }
+            }
             if (!found.empty() || std::chrono::steady_clock::now() >= deadline) return found;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }

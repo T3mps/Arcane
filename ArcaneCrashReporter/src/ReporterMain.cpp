@@ -48,11 +48,46 @@ namespace
         return envelopePath.parent_path() / envelopePath.stem();   // "<dir>/<name>" from "<dir>/<name>.arcdiag"
     }
 
+    // R67: Install/Shutdown bound by SCOPE, not by control flow. Today the
+    // only early return in RunReport sits before Install, so the raw pair
+    // balanced -- but task 5's kDeadline and task 8's kHostMismatch both
+    // return from INSIDE that window, and Diagnostics.hpp:109-112 is explicit
+    // that Install creates the crash thread and its events even with
+    // installCrashHandler and startHangWatchdog both off. The death fixture's
+    // own comment records what skipping Shutdown cost last time: a joinable
+    // thread at static destruction, whose destructor calls std::terminate.
+    // The trap is removed here, before two later tasks can step into it.
+    struct ArmedDiagnostics
+    {
+        explicit ArmedDiagnostics(const Arcane::Diagnostics::Config& cfg) { Arcane::Diagnostics::Install(cfg); }
+        ~ArmedDiagnostics() { Arcane::Diagnostics::Shutdown(); }
+
+        ArmedDiagnostics(const ArmedDiagnostics&)            = delete;
+        ArmedDiagnostics& operator=(const ArmedDiagnostics&) = delete;
+    };
+
+    // The path of the sibling this reporter writes beside <stem>.
+    //
+    // R64: built by APPENDING TO A PATH, never by `stem.string() + "..."`.
+    // MSVC's path::string() narrows through CP_ACP and substitutes '?' for
+    // anything unmappable, so on a machine whose profile path carries
+    // non-ACP characters that concatenation produces a name NTFS rejects --
+    // and the reporter would then "succeed" having written the only artifact
+    // of the whole hand-off nowhere. operator+= appends without a separator
+    // and keeps the native wide form, which the ofstream path overload then
+    // opens as-is.
+    std::filesystem::path SymbolizedSiblingPath(const std::filesystem::path& stem)
+    {
+        std::filesystem::path sibling = stem;
+        sibling += ".symbolized.txt";
+        return sibling;
+    }
+
     // Task 4's sibling: the portable stack the host already wrote, re-headed.
     // Task 5 keeps this as the fallback when the debug engine is unavailable.
     bool WriteFallbackSymbolized(const std::filesystem::path& stem, const Arcane::Diag::Envelope& e, std::string_view why)
     {
-        std::ofstream out(stem.string() + ".symbolized.txt", std::ios::binary);
+        std::ofstream out(SymbolizedSiblingPath(stem), std::ios::binary);
         if (!out) return false;
         out << "symbolized by ArcaneCrashReporter " << Arcane::BuildInfo() << "\n"
             << "engine      : unavailable (" << why << ") -- module+offset from the portable stack\n\n"
@@ -69,20 +104,35 @@ namespace
 
         // Diagnostics for the reporter ITSELF (spec §6 failure modes): same
         // folder, never spawns a reporter (D13).
+        //
+        // R70: THIS EXE is what Diagnostics::ResolveReporterPath defaults
+        // `reporterPath` to ("<exe dir>/ArcaneCrashReporter.exe"), so the
+        // `spawnReporter = false` below is the ONLY thing standing between a
+        // reporter that crashes and a reporter that spawns itself, forever.
+        // It must never be set true here, and it must survive tasks 7 and 9 --
+        // both of which edit this function.
         Arcane::Diagnostics::Config diag;
         diag.appName           = "ArcaneCrashReporter";
         diag.productName       = "Arcane Crash Reporter";
         diag.dumpDir           = stem.parent_path().string();
         diag.unattended        = a.unattended;
-        diag.spawnReporter     = false;
+        diag.spawnReporter     = false;   // R70: never true -- see above
         diag.startHangWatchdog = false;
-        Arcane::Diagnostics::Install(diag);
+        const ArmedDiagnostics armed(diag);
 
         // TASK 5: the dbgeng worker + deadline replace this call.
-        WriteFallbackSymbolized(stem, *envelope, "not built yet (plan 2 task 4)");
+        //
+        // R64: the return value is ACTED ON, never discarded. Writing this
+        // sibling is the reporter's whole job in task 4; a silent kOk after a
+        // failed write is a lie a parent (and the [diag] hand-off case) would
+        // believe.
+        if (!WriteFallbackSymbolized(stem, *envelope, "not built yet (plan 2 task 4)"))
+        {
+            ARC_ERROR("reporter: cannot write '{}'", ToUtf8(SymbolizedSiblingPath(stem).wstring()));
+            return ExitCode::kWriteFailed;
+        }
 
         // TASK 7: the window, unless unattended.
-        Arcane::Diagnostics::Shutdown();
         return ExitCode::kOk;
     }
 }

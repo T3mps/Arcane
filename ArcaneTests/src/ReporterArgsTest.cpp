@@ -66,8 +66,10 @@ TEST_CASE("reporter args: the hang line carries the recovered event; the monitor
 
 TEST_CASE("reporter args: test seams and refusals", "[reporter]")
 {
+    // R65: a REAL pid here -- Report mode now refuses pid 0, and this case is
+    // about the seams, not the pid rule (which has its own case below).
     const ParseResult seams = ParseArgs(std::vector<std::string>{
-        "r.arcdiag", "--pid", "0", "--symbol-path", "D:/a;D:/b", "--deadline", "10" });
+        "r.arcdiag", "--pid", "4242", "--symbol-path", "D:/a;D:/b", "--deadline", "10" });
     REQUIRE(seams.args.has_value());
     CHECK(seams.args->symbolPath == "D:/a;D:/b");
     CHECK(seams.args->deadlineSeconds == 10u);
@@ -75,11 +77,83 @@ TEST_CASE("reporter args: test seams and refusals", "[reporter]")
     CHECK_FALSE(ParseArgs(std::vector<std::string>{}).args.has_value());                              // no envelope, no --monitor
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid" }).args.has_value());        // missing value
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "x" }).args.has_value());   // not a number
-    CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--bogus" }).args.has_value());      // unknown flag
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "--monitor", "5" }).args.has_value());            // monitor without --session
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "a.arcdiag", "b.arcdiag" }).args.has_value());    // two positionals
     CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "x" }).error.empty());
     CHECK(Usage().find("--monitor") != std::string::npos);
+    // The unknown-flag refusal moved to its own case (R68): asserting only
+    // "did not parse" here let it pass through the MISSING-VALUE branch
+    // instead, so the branch this line was believed to cover was never run.
+}
+
+// R65. Usage() declares --pid mandatory in Report mode and nothing enforced
+// it, so a line missing it parsed clean with a silent pid == 0 -- the field
+// tasks 8 and 9 use to find and TERMINATE the host. It fails closed now.
+TEST_CASE("reporter args: Report mode refuses a line with no usable --pid", "[reporter]")
+{
+    const ParseResult none = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--kind", "crash" });
+    CHECK_FALSE(none.args.has_value());
+    CHECK(none.error.find("--pid") != std::string::npos);
+
+    // An EXPLICIT zero is refused by the same rule: 0 names the System Idle
+    // Process, so it can never be the host a report came from.
+    CHECK_FALSE(ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "0" }).args.has_value());
+
+    // Monitor mode is untouched: its pid arrives on the flag that SELECTS the
+    // mode, so it cannot be absent, and nothing below task 9 reads it.
+    const ParseResult mon = ParseArgs(std::vector<std::string>{ "--monitor", "99", "--session", "s.session" });
+    REQUIRE(mon.args.has_value());
+    CHECK(mon.args->pid == 99u);
+}
+
+// R66. A value-taking option must not swallow the NEXT FLAG as its value.
+// "--relaunch --unattended" used to produce a garbage relaunch line that task
+// 7's restart button would hand to CreateProcess AND silently drop the host's
+// unattended intent -- putting a window on a machine that asked for none.
+TEST_CASE("reporter args: a flag is never absorbed as another option's value", "[reporter]")
+{
+    const ParseResult dropped = ParseArgs(std::vector<std::string>{
+        "r.arcdiag", "--pid", "7", "--relaunch", "--unattended" });
+    CHECK_FALSE(dropped.args.has_value());
+    CHECK(dropped.error.find("--relaunch") != std::string::npos);
+    CHECK(dropped.error.find("needs a value") != std::string::npos);
+
+    // Same rule for a numeric option, and mid-line rather than last.
+    CHECK_FALSE(ParseArgs(std::vector<std::string>{
+        "r.arcdiag", "--pid", "--unattended", "--kind", "crash" }).args.has_value());
+
+    // ...and the legitimate shape still parses: a relaunch line starts with
+    // the executable, never with "--", so nothing real is refused here.
+    const ParseResult ok = ParseArgs(std::vector<std::string>{
+        "r.arcdiag", "--pid", "7", "--relaunch", "P.exe --project X", "--unattended" });
+    REQUIRE(ok.args.has_value());
+    CHECK(ok.args->relaunch == "P.exe --project X");
+    CHECK(ok.args->unattended);
+}
+
+// R68. An unknown flag is named as UNKNOWN wherever it sits. Before this the
+// value was demanded first, so "--bogus" in final position came back as
+// "--bogus needs a value" -- the wrong defect named, and the unknown-argument
+// branch was unreachable from the end of a line even though a case commented
+// "// unknown flag" was believed to cover it.
+TEST_CASE("reporter args: an unknown flag is refused as unknown in any position", "[reporter]")
+{
+    // Final position -- the shape that used to report the wrong error.
+    const ParseResult last = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "7", "--bogus" });
+    CHECK_FALSE(last.args.has_value());
+    CHECK(last.error.find("unknown argument: --bogus") != std::string::npos);
+
+    // Mid-line, with something that LOOKS like its value after it.
+    const ParseResult mid = ParseArgs(std::vector<std::string>{
+        "r.arcdiag", "--bogus", "value", "--pid", "7" });
+    CHECK_FALSE(mid.args.has_value());
+    CHECK(mid.error.find("unknown argument: --bogus") != std::string::npos);
+
+    // A KNOWN option genuinely missing its value still says exactly that, so
+    // the two refusals stay distinguishable to a reader of the log.
+    const ParseResult missing = ParseArgs(std::vector<std::string>{ "r.arcdiag", "--pid", "7", "--kind" });
+    CHECK_FALSE(missing.args.has_value());
+    CHECK(missing.error.find("--kind needs a value") != std::string::npos);
 }
 
 // R33 (plan 2 pre-flight). The monitor task 9 builds respawns ITSELF (D16), so

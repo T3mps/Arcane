@@ -26,6 +26,14 @@ namespace Arcane::Reporter
         inline constexpr int kNoEnvelope   = 3;
         inline constexpr int kHostMismatch = 4;   // --host-created did not match: terminate refused
         inline constexpr int kDeadline     = 5;   // unattended deadline expired; partial sibling written
+        // R64: the envelope was READ but its sibling could not be WRITTEN, so
+        // the run produced nothing. Added rather than folded into one of the
+        // four above, each of which would name a different and untrue cause;
+        // spec §6's failure-mode list has no code for this one. The
+        // alternative -- exiting 0 having written nothing -- is the exact lie
+        // R64 exists to remove. If the controller would rather this reuse an
+        // existing code, it is a one-line change here and at its one call site.
+        inline constexpr int kWriteFailed  = 6;   // the .symbolized.txt sibling could not be written
     }
 
     struct Args
