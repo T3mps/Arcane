@@ -554,12 +554,82 @@ project "death-fixture"
         symbols "off"
     filter {}
 
+    -- Crash window plan 2 (spec §12 item 2): the fixture's `--reporter` mode
+    -- hands off to the STAGED reporter beside it, exactly as a host does, so
+    -- the hand-off is proven end to end as two real processes.
+    dependson { "ArcaneCrashReporter" }
+
     -- The fixture loads ArcaneCore.dll from its own directory, same as every
     -- other consumer (mirrors ArcaneTests' matching postbuild line).
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
+        -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"',
     }
 end   -- death-fixture: Windows target only (task 6, mirrors arcbuild-process-fixture's gate)
+
+-- ============================================================================
+-- ArcaneCrashReporter (crash window plan 2; spec §6): the out-of-process crash
+-- reporter every host hands off to. WindowedApp (no console; wWinMain), links
+-- ArcaneCore ONLY -- never ArcaneClient, no GPU, no ImGui -- plus dbgeng/
+-- dbghelp for out-of-process symbolization. STAGED beside every host by that
+-- host's own postbuild, exactly like ArcaneCore.dll (spec §12 item 2), which
+-- is why each host `dependson` it. Its pure files (ReporterArgs, ReportView,
+-- SymbolizedText, HangSession, MonitorRule) are ALSO source-compiled into
+-- ArcaneTests ([reporter]); the dbgeng/Win32 files are not.
+--
+-- Windows target only, same gate (and same reason) as death-fixture above:
+-- Diagnostics -- the thing that hands off to this exe -- is Windows-only
+-- today, and dbgeng/dbghelp have no counterpart elsewhere.
+-- ============================================================================
+if os.target() == "windows" then
+project "ArcaneCrashReporter"
+    location "ArcaneCrashReporter"
+    kind "WindowedApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    includedirs {
+        "%{prj.location}/src",
+        "%{IncludeDir.ArcaneCore}",
+        "%{IncludeDir.spdlog}",     -- Log.hpp
+        "%{IncludeDir.Mosaic}",     -- Assert.hpp
+        "%{IncludeDir.nlohmann}",   -- Monitor.cpp reads the host's session record (task 9)
+    }
+
+    links { "ArcaneCore", "dbgeng", "dbghelp", "user32", "gdi32", "shell32", "ole32" }
+
+    defines {
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "NOMINMAX",
+        "WIN32_LEAN_AND_MEAN",
+    }
+
+    -- The reporter loads ArcaneCore.dll from its own directory, same as every
+    -- other consumer (arcbuild's matching postbuild line is the template).
+    postbuildcommands {
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/Zc:__cplusplus" }
+        fatalwarnings { "4715" }   -- falling off a value-returning function is UB, not a warning
+    filter "configurations:Debug"    defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release"  defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"     defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter {}
+end   -- ArcaneCrashReporter: Windows target only
 
 -- ============================================================================
 -- Arcane: the engine DLL. One DLL, modular inside by folder/namespace
@@ -722,9 +792,26 @@ project "ArcaneServer"
     -- ArcaneCore ONLY -- see this project's header comment. NOT ArcaneClient:
     -- that link line is the whole point of this task.
     links { "ArcaneCore" }
+    -- R30 (crash window plan 2, task 4): a REAL build-order defect, fixed here
+    -- because this task edits the postbuild block below anyway. This exe links
+    -- ArcaneCore ONLY, so nothing ordered its ArcaneClient.dll copy (see that
+    -- line's own comment) after ArcaneClient's LINK -- on a fresh parallel
+    -- build the copy ran before the DLL existed, failed, and was hidden behind
+    -- the later successful copies in the same multi-line command. The staged
+    -- server slot then had no ArcaneClient.dll, which makes ArcaneServer unable
+    -- to MAP any SDK-built game module at all (diagnosed on a clean worktree:
+    -- the [witness][server] lane failed until the DLL was staged by hand).
+    -- A link edge would be the wrong fix -- P10 is that this exe links Core
+    -- only -- so the ordering is stated directly.
+    dependson { "ArcaneClient" }
+    if os.target() == "windows" then
+        dependson { "ArcaneCrashReporter" }   -- staged by the postbuild below; emitted for a Windows target only
+    end
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING" }
     postbuildcommands {
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
+        -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"',
         -- P10: the game module (ReferenceGame.dll et al) links BOTH ArcaneCore's
         -- and ArcaneClient's import libs -- it is built as an engine-as-SDK
         -- consumer against the FULL surface, the same DLL a windowed host loads
@@ -809,6 +896,9 @@ project "ArcaneRuntime"
     links { "ArcaneCore", "ArcaneClient" }
     -- arccook (F2b Task 5) must exist before this project's postbuild runs it.
     dependson { "arccook" }
+    if os.target() == "windows" then
+        dependson { "ArcaneCrashReporter" }   -- staged by the postbuild below; emitted for a Windows target only
+    end
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- cook-then-copy per
@@ -821,6 +911,8 @@ project "ArcaneRuntime"
         '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
+        -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -949,6 +1041,9 @@ project "ArcaneEditor"
     -- ArcaneServer: the play-mode picker's separate-server row resolves and spawns
     -- ../ArcaneServer/ArcaneServer.exe, so it has to be built beside this exe.
     dependson { "arccook", "ArcaneServer" }
+    if os.target() == "windows" then
+        dependson { "ArcaneCrashReporter" }   -- staged by the postbuild below; emitted for a Windows target only
+    end
     defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)" }
     postbuildcommands {
         -- F2b Task 5: cook FIRST, then stage the cooked artifacts -- same cook-then-copy
@@ -958,6 +1053,8 @@ project "ArcaneEditor"
         '{COPYDIR} "%{wks.location}/ReferenceProject/Intermediate/Artifacts" "%{cfg.buildtarget.directory}/ReferenceProject/Intermediate/Artifacts"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCore/ArcaneCore.dll" "%{cfg.buildtarget.directory}/ArcaneCore.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneClient/ArcaneClient.dll" "%{cfg.buildtarget.directory}/ArcaneClient.dll"',
+        -- Crash window plan 2 (spec §12 item 2): the reporter this host hands off to lives beside it.
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ArcaneCrashReporter/ArcaneCrashReporter.exe" "%{cfg.buildtarget.directory}/ArcaneCrashReporter.exe"',
         '{COPYDIR} "%{wks.location}/data/shaders/generated" "%{cfg.buildtarget.directory}/data/shaders"',
         -- Material TEMPLATE SOURCES (not compiled artifacts): the material
         -- pipeline stitches + runtime-compiles these via ShaderSourceProvider.
@@ -1424,6 +1521,16 @@ project "ArcaneTests"
         -- (CreateAssetDialog.hpp's pill text, AssetPanelModel.hpp's three
         -- field-name heuristics).
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorView.cpp",
+        -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
+        -- source-compile into the test exe so the [reporter] units drive them
+        -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
+        -- above. ReporterMain.cpp (wWinMain), Symbolizer.cpp (dbgeng),
+        -- ReporterWindow.cpp (the window) and Monitor.cpp are NOT compiled
+        -- here: a second entry point would not link, and the rest is Win32.
+        -- Tasks 5, 6, 8 and 9 each append one line to this list
+        -- (SymbolizedText.cpp, ReportView.cpp, HangSession.cpp,
+        -- MonitorRule.cpp).
+        "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
     }
 
     includedirs {
@@ -1454,6 +1561,7 @@ project "ArcaneTests"
         "%{IncludeDir.meshoptimizer}",  -- F2c Task 1: VendorSmokeTest.cpp drives meshopt_generateVertexRemap/optimizeVertexCache directly
         "%{wks.location}/arcbuild/src",   -- Driver.hpp for the [build] units (arcbuild Task 2)
         "%{wks.location}/ArcaneServer/src",   -- ServerConfig.hpp/ServerReport.hpp for the [server] units (Core-DLL split Task 6)
+        "%{wks.location}/ArcaneCrashReporter/src",   -- ReporterArgs.hpp for the [reporter] units (crash window plan 2, Task 4)
     }
 
     -- msdfgen, freetype, and NRI are static libs compiled separately; the smoke
@@ -1509,8 +1617,14 @@ project "ArcaneTests"
     -- "death fixture: ..." cases locate it the same "../<project>/
     -- <project>.exe" way BuildDriverTest.cpp locates arcbuild-process-
     -- fixture.exe, so it must exist before this project's tests can run.
+    --
+    -- ArcaneCrashReporter (crash window plan 2, task 4): same reasoning again --
+    -- Windows-only by its own gate. CrashPathTest.cpp's `--reporter` case
+    -- requires the exe STAGED beside the death fixture (death-fixture's own
+    -- dependson + postbuild do that), and the later `reporter:` cases run
+    -- "../ArcaneCrashReporter/ArcaneCrashReporter.exe" directly (Task 5).
     if os.target() == "windows" then
-        dependson { "arcbuild-process-fixture", "death-fixture" }
+        dependson { "arcbuild-process-fixture", "death-fixture", "ArcaneCrashReporter" }
     end
 
     -- The test exe loads ArcaneClient.dll from its own directory.

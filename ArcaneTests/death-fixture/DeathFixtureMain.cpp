@@ -1,6 +1,9 @@
 // ArcaneTests/death-fixture/DeathFixtureMain.cpp -- dies on request so the
 // crash path is tested as a real process (spec S10). No engine beyond Core.
 //
+// `--reporter` turns the hand-off on (the reporter is staged beside this exe
+// by premake); `--attended` is the desk switch that lets it show a window.
+//
 // R18 (controller notes): Mosaic is header-only with per-module statics, so
 // this exe has its OWN assert handler / log sink slots -- installing them
 // right after Log::Init mirrors the hosts (ArcaneRuntime/src/main.cpp:26-28)
@@ -30,6 +33,7 @@ namespace
 int main(int argc, char** argv)
 {
     std::string dir, die; int hangSeconds = 0; bool hangAtExit = false; unsigned exitSeconds = 3, hangThreshold = 2;
+    bool reporter = false, attended = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -39,12 +43,14 @@ int main(int argc, char** argv)
         else if (a == "--hang-at-exit") hangAtExit = true;
         else if (a == "--exit-seconds") { std::string v; next(v); exitSeconds = static_cast<unsigned>(std::atoi(v.c_str())); }
         else if (a == "--hang-seconds") { std::string v; next(v); hangThreshold = static_cast<unsigned>(std::atoi(v.c_str())); }
+        else if (a == "--reporter") reporter = true;     // spawn the STAGED reporter beside this exe (tests, desk)
+        else if (a == "--attended") attended = true;     // desk only: let the reporter show its window
     }
     Arcane::Log::Init(spdlog::level::info);
     Arcane::Log::InstallMosaicSink();
     Arcane::Assert::InstallMosaicHandler();
     Arcane::Diagnostics::Config cfg;
-    cfg.appName = "DeathFixture"; cfg.dumpDir = dir; cfg.unattended = true; cfg.spawnReporter = false;
+    cfg.appName = "DeathFixture"; cfg.dumpDir = dir; cfg.unattended = !attended; cfg.spawnReporter = reporter;
     cfg.hangSeconds = hangThreshold; cfg.exitSeconds = exitSeconds;
     Arcane::Diagnostics::Install(cfg);
     ARC_INFO("death fixture: mode {}", die);

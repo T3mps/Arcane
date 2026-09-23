@@ -17,10 +17,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -214,22 +217,79 @@ TEST_CASE("crash path: an envelope that cannot fit the arena is elided or withhe
 
 namespace
 {
-    // Runs the fixture with `--die <mode>` into a fresh dir; returns the run and the newest .arcdiag stem.
-    struct FixtureRun { Arcane::Test::WitnessRun run; std::filesystem::path stem; };
+    // Spec §6: no reporter spawn on a build machine (Install forces
+    // spawnReporter=false there), so every case that needs a SPAWNED reporter
+    // skips -- the desk gate is where these run.
+    void SkipIfBuildMachine()
+    {
+        if ((std::getenv("CI") || std::getenv("ARCANE_BUILD_MACHINE")) && !std::getenv("ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE"))
+            SKIP("CI/ARCANE_BUILD_MACHINE set -- the reporter is never spawned on a build machine (spec §6; "
+                 "ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE overrides)");
+    }
+
+    // The newest .arcdiag stem in `dir`, polling up to `timeout` -- a
+    // detached reporter or monitor writes AFTER the fixture has exited.
+    std::filesystem::path WaitForStem(const std::filesystem::path& dir, std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        for (;;)
+        {
+            std::filesystem::path found;
+            std::error_code ec;
+            for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+                if (e.path().extension() == ".arcdiag") found = e.path().parent_path() / e.path().stem();
+            if (!found.empty() || std::chrono::steady_clock::now() >= deadline) return found;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    bool WaitForFile(const std::filesystem::path& p, std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!std::filesystem::exists(p) && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        return std::filesystem::exists(p);
+    }
+
+    // Runs the fixture with `--die <mode>` into a fresh dir; returns the run,
+    // the newest .arcdiag stem and the directory itself. The `tag` derivation
+    // gives each FLAG VARIANT its own directory ("arcane-death-av-reporter"),
+    // so a `--reporter` run can never read a plain run's stem -- before this,
+    // the three `--die none` cases all shared "arcane-death-none".
+    struct FixtureRun { Arcane::Test::WitnessRun run; std::filesystem::path stem; std::filesystem::path dir; };
     FixtureRun RunFixture(const char* mode, std::vector<std::string> extra = {})
     {
         const auto exe = std::filesystem::absolute("../death-fixture/death-fixture.exe");
         REQUIRE(std::filesystem::exists(exe));
-        const auto dir = std::filesystem::temp_directory_path() / (std::string("arcane-death-") + mode);
+        std::string tag = mode;
+        for (const auto& e : extra) if (e.rfind("--", 0) == 0) tag += "-" + e.substr(2);
+        const auto dir = std::filesystem::temp_directory_path() / ("arcane-death-" + tag);
         std::filesystem::remove_all(dir); std::filesystem::create_directories(dir);
         std::vector<std::string> args = { "--dir", dir.string(), "--die", mode };
         args.insert(args.end(), extra.begin(), extra.end());
         Arcane::Test::WitnessInvocation inv; inv.exePath = exe; inv.args = args; inv.hardCapMs = 30000;
-        FixtureRun out{ Arcane::Test::RunWitness(inv), {} };
-        for (const auto& e : std::filesystem::directory_iterator(dir))
-            if (e.path().extension() == ".arcdiag") out.stem = e.path().parent_path() / e.path().stem();
+        FixtureRun out{ Arcane::Test::RunWitness(inv), {}, dir };
+        out.stem = WaitForStem(dir, std::chrono::milliseconds(0));
         return out;
     }
+}
+
+// The hand-off, end to end (spec §6): the fixture crashes, the crash thread
+// spawns the STAGED reporter beside the fixture, the reporter reads the
+// envelope and writes <stem>.symbolized.txt after the host is already dead.
+TEST_CASE("death fixture --reporter: a crash report gains a .symbolized.txt from the detached reporter", "[diag]")
+{
+    SkipIfBuildMachine();
+    REQUIRE(std::filesystem::exists(std::filesystem::absolute("../death-fixture/ArcaneCrashReporter.exe")));
+    const FixtureRun r = RunFixture("av", { "--reporter" });
+    CHECK_FALSE(r.run.timedOut);
+    CHECK(r.run.exitCode == 10);
+    REQUIRE_FALSE(r.stem.empty());
+    const auto sibling = r.stem.string() + ".symbolized.txt";
+    REQUIRE(WaitForFile(sibling, std::chrono::seconds(20)));
+    const std::string text = Slurp(sibling);
+    CHECK(text.find("symbolized by ArcaneCrashReporter") != std::string::npos);
+    CHECK(text.find("thread") != std::string::npos);
 }
 
 TEST_CASE("death fixture: an access violation yields a crash report and exit code 10 within the cap, with no dialog", "[diag]")

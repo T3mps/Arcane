@@ -2214,10 +2214,16 @@ void Install(const Config& cfg)
 
     g_mainThreadId = GetCurrentThreadId();
 
-    // A build agent must never be left with an interactive process on it.
+    // A build agent must never be left with an interactive process on it --
+    // unless it says so: the unattended reporter is bounded by its deadline,
+    // and a CI lane that wants the hand-off proven opts in explicitly. The
+    // override is UE's -AllowCrashReportClientOnBuildMachine
+    // (WindowsPlatformCrashContext.cpp:1053) as an environment variable, and
+    // the [diag] cases that need a SPAWNED reporter honour the same three
+    // names (CrashPathTest.cpp's SkipIfBuildMachine).
     // Checked here rather than at spawn time so the decision is visible in
     // the "Diagnostics armed" line below.
-    if (EnvIsSet(L"ARCANE_BUILD_MACHINE") || EnvIsSet(L"CI"))
+    if ((EnvIsSet(L"ARCANE_BUILD_MACHINE") || EnvIsSet(L"CI")) && !EnvIsSet(L"ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE"))
         g_cfg.spawnReporter = false;
 
     // ---- fixed-storage snapshots (spec S5.5 -- the crash path reads only
