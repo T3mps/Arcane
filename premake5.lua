@@ -176,7 +176,9 @@ project "ArcaneCore"
         -- dbghelp: MiniDumpWriteDump + StackWalk64/Sym* behind
         -- Arcane/Base/Diagnostics.cpp (crash + hang post-mortem capture),
         -- which moved into this DLL with the rest of Base/.
-        links { "dbghelp" }
+        -- user32/gdi32: Platform/NativeWindow.cpp (crash window plan 2) --
+        -- explicit rather than inherited from the VS default list.
+        links { "dbghelp", "user32", "gdi32" }
 
     filter "configurations:Debug"
         defines { "ARCANE_DEBUG" }
