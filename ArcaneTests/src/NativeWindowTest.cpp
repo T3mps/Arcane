@@ -33,6 +33,30 @@ namespace
         void OnDestroy() override { ++destroys; }
     };
 
+    // R51: a presenter that closes its own window from inside a callback --
+    // the exact shape a maintainer reaches for (OnCommand(IDCANCEL) { ... }).
+    // Close() must neither hang (it can't join the thread it's running on)
+    // nor terminate (MSVC's std::thread::join() throws on a self-join,
+    // which would escape Close()'s `noexcept` as std::terminate).
+    struct SelfClosingPresenter final : Arcane::INativeWindowPresenter
+    {
+        Arcane::NativeWindow*       window = nullptr;
+        std::atomic<bool>           closeReturned{false};
+        std::atomic<unsigned>       closeCallThread{0};
+        std::atomic<int>            destroys{0};
+        bool OnUser(unsigned msg, std::uintptr_t, std::intptr_t) override
+        {
+            if (msg == 1 && window)
+            {
+                closeCallThread.store(GetCurrentThreadId());
+                window->Close();   // called FROM the window thread
+                closeReturned.store(true);   // reached only if Close() didn't hang or terminate
+            }
+            return true;
+        }
+        void OnDestroy() override { ++destroys; }
+    };
+
     bool PollUntil(const std::function<bool()>& pred, std::chrono::milliseconds timeout = std::chrono::seconds(5))
     {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -135,5 +159,29 @@ TEST_CASE("NativeWindow: Close() before creation completes and Close() on a neve
         w.Wait();
         CHECK_FALSE(w.WasEverOpen());
     }
+}
+
+TEST_CASE("NativeWindow: Close() called from the window thread itself neither hangs nor terminates (R51)", "[platform]")
+{
+    SelfClosingPresenter p;
+    Arcane::NativeWindow w;
+    p.window = &w;
+
+    Arcane::NativeWindowDesc d;
+    d.className = L"ArcaneNativeWindowTest";
+    w.Open(d, &p);
+    REQUIRE(w.WaitUntilReady(5000));
+    REQUIRE(w.OnWindowThread() == false);   // this (test) thread is not the window thread
+
+    w.PostUser(1);   // -> SelfClosingPresenter::OnUser calls w.Close() on the window thread
+    CHECK(PollUntil([&] { return p.closeReturned.load(); }));   // Close() returned -- no terminate, no hang
+    CHECK(p.closeCallThread.load() != GetCurrentThreadId());    // it really ran on the window thread, not this one
+
+    w.Wait();   // the thread still winds down on its own via WM_DESTROY -> PostQuitMessage
+    CHECK_FALSE(w.IsOpen());
+    CHECK(p.destroys.load() == 1);
+
+    w.Close();   // from the test thread, after the fact: idempotent, joins cleanly (already joined by Wait())
+    CHECK(p.destroys.load() == 1);
 }
 #endif

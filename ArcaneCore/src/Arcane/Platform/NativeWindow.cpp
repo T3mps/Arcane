@@ -9,6 +9,7 @@
 #endif
 #include <windows.h>
 #include <atomic>
+#include <cwchar>   // std::wmemcpy (SetTitle) -- <string> drags it in transitively on MSVC, but don't rely on that
 #include <thread>
 #endif
 
@@ -191,8 +192,17 @@ namespace Arcane
     {
         if (!m_impl) return;
         m_impl->ready.wait(false);   // creation attempted -- see BootSplashWindow's Impl::ready archaeology
+        const bool selfClose = OnWindowThread();
         if (HWND h = m_impl->hwnd.exchange(nullptr))
             PostMessageW(h, WM_CLOSE, 0, 0);
+        // R51: called FROM the window thread (e.g. a presenter's OnCommand),
+        // std::thread::join() on the calling thread's own id throws
+        // system_error(resource_deadlock_would_occur), which would escape
+        // this noexcept function as std::terminate. The WM_CLOSE just posted
+        // still closes the window; the thread unwinds the GetMessageW loop
+        // on its own via WM_DESTROY -> PostQuitMessage, same as the user's
+        // Alt+F4 path -- there is simply no join to do from in here.
+        if (selfClose) return;
         if (m_impl->thread.joinable()) m_impl->thread.join();
         m_impl->open.store(false);
     }
@@ -210,7 +220,12 @@ namespace Arcane
     unsigned NativeWindow::Dpi() const noexcept
     {
         const HWND h = static_cast<HWND>(Hwnd());
-        return h ? GetDpiForWindow(h) : 96u;
+        // R53(a): the window can die (another thread's Close(), or the user
+        // closing it) between the Hwnd() load above and this call landing;
+        // GetDpiForWindow on a handle that just became invalid returns 0,
+        // not the promised 96.
+        const unsigned dpi = h ? GetDpiForWindow(h) : 0;
+        return dpi ? dpi : 96u;
     }
     void NativeWindow::Invalidate() noexcept
     {

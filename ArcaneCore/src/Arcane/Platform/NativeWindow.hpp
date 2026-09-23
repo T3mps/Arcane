@@ -18,7 +18,9 @@ namespace Arcane
         bool          foreground = false;    // SetForegroundWindow after ShowWindow -- the reporter's window may otherwise
                                              // open BEHIND the dead host's (UE's HACK_ForceToFront, WindowsWindow.cpp:654-657;
                                              // the spawning host must AllowSetForegroundWindow us first, see SpawnReporter)
-        std::uint32_t backgroundRgb = 0x0D0D0F;   // 0xRRGGBB class brush
+        std::uint32_t backgroundRgb = 0x0D0D0F;   // 0xRRGGBB class brush -- honoured only by the
+                                                   // window that first registers `className`; give
+                                                   // windows of different colours different class names
     };
 
     // Called on the WINDOW THREAD only. Every default is a no-op so a presenter
@@ -53,16 +55,20 @@ namespace Arcane
 
         // Starts the window thread and returns at once. `presenter` must
         // outlive the window (Close() first, then destroy the presenter).
-        // A second Open on an open window is ignored.
+        // Open is honoured once per object: a second Open, whether the
+        // window is still open or already closed, is ignored.
         void Open(const NativeWindowDesc& desc, INativeWindowPresenter* presenter) noexcept;
 
         // Blocks until creation has been ATTEMPTED (succeeded or failed) or
         // the timeout passes; returns IsOpen().
         [[nodiscard]] bool WaitUntilReady(std::uint32_t timeoutMs) noexcept;
 
-        // Posts WM_CLOSE if the window exists, then joins the thread. Never
-        // call it FROM the window thread (it joins itself): a presenter that
-        // wants to close posts WM_CLOSE to Hwnd() instead.
+        // Posts WM_CLOSE if the window exists, then joins the thread and
+        // blocks until it exits. From the window thread itself (e.g. a
+        // presenter's OnCommand) it closes the window but does not wait --
+        // joining the calling thread's own id would otherwise terminate the
+        // process -- so a presenter may safely call Close() on itself;
+        // posting WM_CLOSE to Hwnd() directly remains the idiomatic route.
         void Close() noexcept;
         // Joins without closing: returns when the window is gone (the user
         // closed it, or Close() ran elsewhere).
