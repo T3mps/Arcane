@@ -285,3 +285,53 @@ TEST_CASE("death fixture: an ensure writes a lightweight report and the process 
     CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "ensure");
     CHECK_FALSE(std::filesystem::exists(r.stem.string() + ".dmp"));
 }
+
+// Spec S5.4, as a whole process: a hang report is SURVIVABLE. The watchdog
+// writes it and hands the host straight back -- the fixture then finishes its
+// sleep and leaves by its own `return 0`, WITHOUT calling Shutdown(), which is
+// also what proves the raw watchdog thread + atexit hook (task 8) let a main()
+// return cleanly where a joinable std::thread used to call std::terminate.
+TEST_CASE("death fixture: a hang writes a hang report and the process stays alive until it exits on its own with 0", "[diag]")
+{
+    const FixtureRun r = RunFixture("none", { "--hang", "5", "--hang-seconds", "1" });
+    CHECK_FALSE(r.run.timedOut);
+    CHECK(r.run.exitCode == 0);
+    REQUIRE_FALSE(r.stem.empty());
+    CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "hang");
+}
+
+// Spec S5.7, the other half: from RequestCleanExit() onward the watchdog's beat
+// rule is replaced by an exit deadline, and a host that never gets out is NAMED
+// ("hang at exit") rather than left wedged on somebody's desk. The fixture asks
+// for a clean exit and then never exits, so only the sentinel can end it.
+TEST_CASE("death fixture: a hang at exit is named by the sentinel and ends with exit code 12", "[diag]")
+{
+    const FixtureRun r = RunFixture("none", { "--hang-at-exit", "--exit-seconds", "2" });
+    CHECK_FALSE(r.run.timedOut);
+    CHECK(r.run.exitCode == 12);
+    REQUIRE_FALSE(r.stem.empty());
+    const auto env = Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag");
+    REQUIRE(env.has_value());
+    CHECK(env->kind == "hang");
+    CHECK(env->exitCode == 12);
+}
+
+// The console family (spec S5.7): Ctrl-C is two-step as in UE -- the first
+// press requests the host's clean exit, the second terminates -- and a console
+// close requests the SAME clean exit rather than a second one. Driven through
+// the SimulateConsoleCtrl seam so the rule is testable without a console, a
+// signal, or a process to kill; note that `Armed` runs with
+// startHangWatchdog = false, so none of this may depend on the watchdog.
+TEST_CASE("diagnostics: the console handler is two-step for Ctrl-C and requests a clean exit on close", "[diag]")
+{
+    const auto dir = std::filesystem::temp_directory_path() / "arcane-console-ctrl-test";
+    std::filesystem::create_directories(dir);
+    Armed armed(dir);
+    static int hookCalls = 0; hookCalls = 0;
+    Arcane::Diagnostics::SetCleanExitHook([](void*) { ++hookCalls; }, nullptr);
+    CHECK(Arcane::Diagnostics::SimulateConsoleCtrl(0 /*CTRL_C_EVENT*/));
+    CHECK(hookCalls == 1);
+    // A second Ctrl-C would terminate: not simulated. Close requests the same clean exit once.
+    CHECK(Arcane::Diagnostics::SimulateConsoleCtrl(2 /*CTRL_CLOSE_EVENT*/));
+    CHECK(hookCalls == 1);   // idempotent
+}

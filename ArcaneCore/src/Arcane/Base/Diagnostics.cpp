@@ -138,8 +138,37 @@ namespace
     ReportWrittenHook g_reportWrittenHook = nullptr;
     void*             g_reportWrittenUser = nullptr;
 
-    std::thread       g_watchdog;
     std::atomic<bool> g_watchdogStop{false};
+
+    // ---- exit sentinel + clean-exit hook (task 8, spec S5.7) --------------
+
+    // "The host has been asked to quit." From here until Shutdown() the
+    // watchdog's beat rules are replaced by the deadline below.
+    std::atomic<bool>         g_exitRequested{false};
+    std::atomic<std::int64_t> g_exitRequestedAt{0};
+
+    // "The host finished its exit." Set by Shutdown() and by the atexit hook;
+    // the only reader is the console CLOSE arm, which waits on it inside the
+    // OS's budget before letting Windows terminate us.
+    //
+    // An atomic polled in short steps rather than a Win32 event, deliberately:
+    // the waiter is the OS's console-handler thread and the setter is the main
+    // thread mid-teardown, so an event handle would have to be created once
+    // and never closed (a wait on a handle another thread just closed is
+    // undefined). One bool and a 25 ms poll have neither problem and are
+    // indistinguishable at this timescale.
+    std::atomic<bool> g_exitedCleanly{false};
+
+    // Ctrl-C is two-step (UE's rule): the first press requests the clean exit,
+    // the second gives up on it and terminates. Reset per arming.
+    std::atomic<int> g_ctrlCPresses{0};
+
+    // The host's clean-exit callback. Same slot shape (and same reasoning) as
+    // the report-written hook above: raw pointer pair, its own mutex, held
+    // only long enough to copy the pair out.
+    std::mutex    g_cleanExitMutex;
+    CleanExitHook g_cleanExitHook = nullptr;
+    void*         g_cleanExitUser = nullptr;
 
     // The crash thread raises this for the lifetime of a report so no hang
     // rule can interleave a second report with the one being written (spec
@@ -152,6 +181,18 @@ namespace
     // by SubmitReport to decide WHICH thread the report walks: a hang is
     // about the main thread, not about the watchdog that noticed it (R6).
     std::atomic<std::uint32_t> g_watchdogThreadId{0};
+
+    // The watchdog runs on a RAW thread (task 8), not a std::thread. The
+    // reason is the exit sentinel: the thread has to be stoppable from an
+    // atexit hook, and a std::thread that is still joinable when its
+    // destructor runs calls std::terminate -- which is exactly what a main()
+    // that returned without Shutdown() used to do (see the death fixture's
+    // `ensure` comment). A HANDLE has no destructor and no such opinion.
+#if defined(_WIN32)
+    HANDLE g_watchdogThread = nullptr;
+#else
+    std::thread g_watchdog;
+#endif
 
     // "The render layer has already CONFIRMED the GPU device is gone."
     // Set once by Render's NoteGpuDeviceLost (GpuInstrumentation.cpp); the
@@ -1561,6 +1602,11 @@ namespace
 #endif
         const auto threshold = static_cast<double>(g_cfg.hangSeconds);
 
+        // The exit sentinel's deadline (spec S5.7). Zero DISABLES it -- a host
+        // that says "no deadline" gets none, rather than a deadline of nothing
+        // that fires on the first poll after the request.
+        const auto exitThreshold = static_cast<double>(g_cfg.exitSeconds);
+
         // Which beat value we already reported on, so one stall yields one
         // report -- and a NEW stall later still yields another.
         std::int64_t reportedBeat = 0;
@@ -1662,6 +1708,37 @@ namespace
             SubmitReport({ msg, nullptr, /*lightweight*/false, /*exitCode*/0 });
         };
 
+        // The exit sentinel (spec S5.7). Not a rule about a beat: once the
+        // host has ASKED to quit, "still beating" is no longer evidence of
+        // anything -- a teardown legitimately stops pumping frames -- so the
+        // only question left is whether it got out, and the only answer is a
+        // clock. This is the one report in the module that fires on a host
+        // doing nothing wrong right up to the moment it was told to stop.
+        const auto checkExitDeadline = [&]()
+        {
+            if (exitThreshold <= 0.0) return;
+
+            // Belt and braces against the one input that could make this rule
+            // fire on nothing: an unset stamp would read as "since the clock's
+            // epoch". RequestCleanExit publishes it before the flag, so this
+            // is unreachable -- and worth one compare anyway, because the
+            // consequence is TerminateProcess.
+            const std::int64_t requestedAt = g_exitRequestedAt.load(std::memory_order_acquire);
+            if (requestedAt == 0) return;
+
+            const double elapsed = SecondsSince(requestedAt);
+            if (elapsed <= exitThreshold) return;
+
+            char msg[160];
+            std::snprintf(msg, sizeof(msg),
+                          "hang at exit (%.1fs after the exit request)", elapsed);
+            // FATAL, unlike every other rule on this thread: a host that
+            // cannot finish exiting cannot be handed back to either. This call
+            // does not return -- SubmitReport terminates once the report is on
+            // disk (and terminates anyway if it could not be written).
+            SubmitReport({ msg, nullptr, /*lightweight*/false, ExitCode::kExitSentinel });
+        };
+
         while (!g_watchdogStop.load(std::memory_order_acquire))
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1670,9 +1747,26 @@ namespace
             // A breakpoint stops the main thread by design -- and with it every
             // submission, so the GPU counter freezes too. Firing then would
             // train the user to ignore the one signal that matters. Hoisted
-            // above both rules for that second reason.
+            // above both rules for that second reason. It covers the exit
+            // deadline too: stepping through a teardown is not a hang at exit.
             if (IsDebuggerPresent()) continue;
 #endif
+
+            // A report is being written RIGHT NOW (the crash thread raises
+            // this for the whole body, spec S5.2 step 1). Nothing below may
+            // interleave a second one -- including the sentinel, whose report
+            // would otherwise terminate the process out from under a hang
+            // report that is still on its way to disk.
+            if (g_watchdogPaused.load(std::memory_order_acquire)) continue;
+
+            // The exit request REPLACES the beat rules rather than joining
+            // them: after it, a frozen main thread is the expected shape of a
+            // teardown and reporting it as a hang would be noise.
+            if (g_exitRequested.load(std::memory_order_acquire))
+            {
+                checkExitDeadline();
+                continue;
+            }
 
             // The two rules are disjoint by construction -- both signals are
             // published from the main thread, so "still publishing GPU
@@ -1684,6 +1778,119 @@ namespace
             checkMainThreadBeat();
         }
     }
+
+#if defined(_WIN32)
+    DWORD WINAPI WatchdogThreadProc(LPVOID)
+    {
+        WatchdogMain();
+        return 0;
+    }
+#endif
+
+    void StartWatchdog() noexcept
+    {
+        g_watchdogStop.store(false, std::memory_order_release);
+        g_watchdogPaused.store(false, std::memory_order_release);
+#if defined(_WIN32)
+        if (g_watchdogThread) return;   // already running (Install is idempotent)
+        g_watchdogThread = CreateThread(nullptr, 128 * 1024, &WatchdogThreadProc,
+                                        nullptr, 0, nullptr);
+#else
+        if (!g_watchdog.joinable())
+            g_watchdog = std::thread(&WatchdogMain);
+#endif
+    }
+
+    // Stops the watchdog and closes its handle. Idempotent and a NO-OP once
+    // the thread is gone, which is what lets both Shutdown() and the atexit
+    // hook call it unconditionally.
+    void StopWatchdog() noexcept
+    {
+        g_watchdogStop.store(true, std::memory_order_release);
+#if defined(_WIN32)
+        if (g_watchdogThread)
+        {
+            // BOUNDED, unlike the old join. The loop observes the stop flag
+            // within its 250 ms poll -- the same latency the join had -- but a
+            // watchdog that is mid-report may be parked on the crash thread
+            // for as long as crashHandlingTimeoutSeconds, and a teardown that
+            // blocks on that is a second hang nobody asked for. Five seconds
+            // covers a report that is actually writing; past it we let the
+            // thread finish on its own rather than wedge the exit.
+            WaitForSingleObject(g_watchdogThread, 5000);
+            CloseHandle(g_watchdogThread);
+            g_watchdogThread = nullptr;
+        }
+#else
+        if (g_watchdog.joinable()) g_watchdog.join();
+#endif
+        g_watchdogThreadId.store(0, std::memory_order_release);
+    }
+
+    // Registered ONCE per process by Install (std::atexit). Two jobs, both of
+    // them about a main() that RETURNS without calling Shutdown():
+    //
+    //   - it stops the watchdog, so the raw thread that exists to outlive a
+    //     host's teardown does not outlive the host itself and cannot fire a
+    //     sentinel into a process that is already on its way out;
+    //   - it publishes "exited cleanly", which is what a console CLOSE
+    //     handler is waiting on before it lets Windows terminate us.
+    //
+    // A no-op when Shutdown() already ran, and safe to run when Install never
+    // did (nothing below touches state that must exist).
+    void AtExitStopWatchdog() noexcept
+    {
+        StopWatchdog();
+        g_exitedCleanly.store(true, std::memory_order_release);
+    }
+
+    std::atomic<bool> g_atExitRegistered{false};
+
+#if defined(_WIN32)
+    // Whether Install actually registered the console handler, so Shutdown
+    // removes exactly what was added (a console-less host adds nothing).
+    bool g_consoleHandlerInstalled = false;
+
+    // The rule behind BOTH the real console handler and SimulateConsoleCtrl.
+    // UE's shape (WindowsPlatformMisc.cpp): Ctrl-C is two-step, everything
+    // else is a session ending on the OS's clock, not ours.
+    BOOL WINAPI OnConsoleCtrl(DWORD ctrlType)
+    {
+        switch (ctrlType)
+        {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+            // The same gesture, counted together: the FIRST asks the host to
+            // quit the way it knows how, and the SECOND is the user saying
+            // that did not work. Not a graceful exit and not pretending to
+            // be one -- 0xC000013A is STATUS_CONTROL_C_EXIT, exactly what
+            // Windows' own default handler reports.
+            if (g_ctrlCPresses.fetch_add(1, std::memory_order_acq_rel) == 0)
+            {
+                RequestCleanExit();
+                return TRUE;
+            }
+            TerminateProcess(GetCurrentProcess(), 0xC000013A);
+            return TRUE;   // unreachable
+
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            // No second chance on these: Windows terminates the process as
+            // soon as this returns (and unconditionally after ~5 s). So we
+            // start the host's exit and then SPEND that budget rather than
+            // returning into a kill -- 4 s, one under the documented cap, in
+            // 25 ms steps so a host that finishes early is not held up.
+            RequestCleanExit();
+            for (int i = 0; i < 160 && !g_exitedCleanly.load(std::memory_order_acquire); ++i)
+                Sleep(25);
+            return TRUE;
+
+        default:
+            return FALSE;
+        }
+    }
+#endif
 
 #if defined(_WIN32)
     // ---- off-path preparation ---------------------------------------------
@@ -1807,6 +2014,23 @@ void Install(const Config& cfg)
     g_beatSeen.store(false, std::memory_order_release);
     g_gpuBeatSeen.store(false, std::memory_order_release);
 
+    // ...and so is the exit-sentinel state, for the same reason plus a
+    // sharper one: a clean-exit request inherited from a PREVIOUS arming
+    // would arm this one's sentinel against a deadline that has already
+    // passed, and the first poll of the new watchdog would terminate a
+    // process that has only just started. Shutdown() clears these too.
+    g_exitRequested.store(false, std::memory_order_release);
+    g_exitRequestedAt.store(0, std::memory_order_release);
+    g_exitedCleanly.store(false, std::memory_order_release);
+    g_ctrlCPresses.store(0, std::memory_order_release);
+
+    // ONE per process, whatever a host does with Install/Shutdown afterwards
+    // (atexit has no deregister, so registering per arming would stack N
+    // copies). See AtExitStopWatchdog: this is what makes returning from
+    // main() without Shutdown() safe.
+    if (!g_atExitRegistered.exchange(true, std::memory_order_acq_rel))
+        std::atexit(&AtExitStopWatchdog);
+
 #if defined(_WIN32)
     // FIRST, and gated (R2). Spec S5.1 items 1-4: no OS or CRT dialog can
     // appear after this call, and every non-SEH death has a handler -- which
@@ -1874,14 +2098,19 @@ void Install(const Config& cfg)
 
     if (cfg.installCrashHandler)
         g_prevFilter = SetUnhandledExceptionFilter(&OnUnhandledException);
+
+    // UE's rule (WindowsPlatformMisc.cpp): only a process that OWNS a console
+    // takes the console handler. A windowed host inherits nothing to be
+    // Ctrl-C'd, and a GUI process that registers here would sit in the handler
+    // for events it can never receive -- its session-end path is
+    // WM_QUERYENDSESSION/WM_ENDSESSION, which routes to the same
+    // RequestCleanExit from the host's own window procedure (task 9).
+    if (GetConsoleWindow() != nullptr && SetConsoleCtrlHandler(&OnConsoleCtrl, TRUE))
+        g_consoleHandlerInstalled = true;
 #endif
 
     if (cfg.startHangWatchdog)
-    {
-        g_watchdogStop.store(false, std::memory_order_release);
-        g_watchdogPaused.store(false, std::memory_order_release);
-        g_watchdog = std::thread(&WatchdogMain);
-    }
+        StartWatchdog();
 
     ARC_INFO("Diagnostics armed (crash handler {}, hang watchdog {} @ {}s, gpu-stall @ {}s, "
              "reporter {}) -> {}",
@@ -1897,10 +2126,24 @@ void Shutdown() noexcept
 {
     if (!g_installed.exchange(false, std::memory_order_acq_rel)) return;
 
-    g_watchdogStop.store(true, std::memory_order_release);
-    if (g_watchdog.joinable()) g_watchdog.join();
+    // R1: Shutdown DISARMS the watchdog -- it does not hand it on. The exit
+    // sentinel's window is RequestCleanExit() -> Shutdown(), and every host
+    // calls Shutdown() as its last line, so the teardown the sentinel exists
+    // to name (a host that never gets there) is covered exactly as spec S5.7
+    // intends. What the window may NOT be is "forever": a process that
+    // disarms and keeps running -- the test binary does this ~20 times, and a
+    // tool that installs diagnostics for one job does it once -- would
+    // otherwise be terminated with 12 by a thread nobody can see,
+    // exitSeconds after any quit request.
+    StopWatchdog();
 
 #if defined(_WIN32)
+    if (g_consoleHandlerInstalled)
+    {
+        SetConsoleCtrlHandler(&OnConsoleCtrl, FALSE);
+        g_consoleHandlerInstalled = false;
+    }
+
     // R2: Shutdown RESTORES whatever filter was there before us. (What the
     // spec deletes is the CHAIN -- OnUnhandledException never calls the
     // previous filter for our own kinds -- not this restore.)
@@ -1930,8 +2173,6 @@ void Shutdown() noexcept
     g_crashThreadId.store(0, std::memory_order_release);
     if (g_crashEvent)   { CloseHandle(g_crashEvent);   g_crashEvent   = nullptr; }
     if (g_handledEvent) { CloseHandle(g_handledEvent); g_handledEvent = nullptr; }
-
-    g_watchdogThreadId.store(0, std::memory_order_release);
 #endif
 
     // Neither the module table nor the log backlog may outlive this arming
@@ -1947,6 +2188,20 @@ void Shutdown() noexcept
     // the GPU one would otherwise re-arm against a dead device's last counter.
     g_beatSeen.store(false, std::memory_order_release);
     g_gpuBeatSeen.store(false, std::memory_order_release);
+
+    // The sentinel's window closes HERE (R1), so its state goes with it: the
+    // request, its deadline and the Ctrl-C step counter are all per-arming,
+    // and a process that Installs again starts from "nobody has asked to
+    // quit" rather than inheriting a request the previous arming served.
+    g_exitRequested.store(false, std::memory_order_release);
+    g_exitRequestedAt.store(0, std::memory_order_release);
+    g_ctrlCPresses.store(0, std::memory_order_release);
+
+    // Reaching this line IS the clean exit a console CLOSE handler is waiting
+    // on -- the host ran its own teardown and got here -- so release it now
+    // instead of burning the rest of the OS's budget. (The atexit hook sets
+    // the same flag for a main() that never called Shutdown at all.)
+    g_exitedCleanly.store(true, std::memory_order_release);
 }
 
 void RetargetDumpDir(const std::filesystem::path& dir)
@@ -2264,6 +2519,61 @@ void ClearReportWrittenHook() noexcept
     std::lock_guard lock(g_reportWrittenMutex);
     g_reportWrittenHook = nullptr;
     g_reportWrittenUser = nullptr;
+}
+
+void SetCleanExitHook(CleanExitHook hook, void* user) noexcept
+{
+    std::lock_guard lock(g_cleanExitMutex);
+    g_cleanExitHook = hook;
+    g_cleanExitUser = user;
+}
+
+void RequestCleanExit() noexcept
+{
+    // Already armed: do NOT restamp the deadline. A host that requests the
+    // same exit twice (Ctrl-C, then the window's close box) must not push the
+    // sentinel's clock out each time -- that is how a deadline quietly
+    // becomes no deadline at all.
+    if (g_exitRequested.load(std::memory_order_acquire)) return;
+
+    // The timestamp is published BEFORE the flag that arms it -- Heartbeat()'s
+    // ordering discipline, and for the same failure: the watchdog polls these
+    // two independently, and "requested" with a still-unset stamp reads as a
+    // deadline that expired at the clock's epoch, which would terminate the
+    // process with 12 on the very next poll.
+    g_exitRequestedAt.store(NowTicks(), std::memory_order_release);
+
+    // ...and the deadline is armed before the HOOK runs, which is the other
+    // half of the same idea: a hook that wedges -- the editor's autosave
+    // against a dead network drive, say -- is exactly the failure the
+    // sentinel exists to name, and arming afterwards could never name it.
+    //
+    // Two genuinely concurrent first callers both stamp (nanoseconds apart,
+    // which no deadline can tell apart) and exactly one wins the exchange and
+    // calls the hook; every later caller took the fast path above.
+    if (g_exitRequested.exchange(true, std::memory_order_acq_rel)) return;
+
+    CleanExitHook hook = nullptr;
+    void*         user = nullptr;
+    {
+        // Copy the pair out and call UNLOCKED: an unknown callback must never
+        // run while holding a lock another thread needs to install one (same
+        // rule as the GPU provider and report-written slots).
+        std::lock_guard lock(g_cleanExitMutex);
+        hook = g_cleanExitHook;
+        user = g_cleanExitUser;
+    }
+    if (hook) hook(user);
+}
+
+bool SimulateConsoleCtrl(unsigned long ctrlType) noexcept
+{
+#if defined(_WIN32)
+    return OnConsoleCtrl(static_cast<DWORD>(ctrlType)) != FALSE;
+#else
+    (void)ctrlType;
+    return false;
+#endif
 }
 }   // namespace Arcane::Diagnostics
 

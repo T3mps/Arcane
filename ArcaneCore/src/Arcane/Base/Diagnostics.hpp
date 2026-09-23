@@ -214,14 +214,29 @@ namespace Arcane::Diagnostics
 
     // Registers the CALLING thread as the main thread and arms both triggers.
     // Call once, early in main(), beside Log::Init(). Idempotent.
+    //
+    // Also installs the console control handler (Ctrl-C / console close /
+    // logoff / shutdown -> RequestCleanExit, below) when the process owns a
+    // console window, and registers ONE process-lifetime atexit hook that
+    // stops the watchdog thread. The atexit hook is what makes an
+    // Install-then-return-from-main() safe: the watchdog is a RAW thread so
+    // that it can outlive a host that never reaches Shutdown() (spec S5.7),
+    // and something has to stop it when main() simply returns.
     ARCANE_CORE_API void Install(const Config& cfg);
 
-    // Disarms both triggers, joins the watchdog, restores the previous
-    // unhandled-exception filter, and stops and joins the crash thread
-    // (closing its events) -- an Install/Shutdown cycle leaves no joinable
-    // thread and no live handle behind. Also thaws the module table and the
-    // log backlog, so a survivable report that was interrupted cannot leave
-    // either frozen for the rest of the process.
+    // Disarms both triggers, stops the watchdog (a bounded wait on its raw
+    // thread handle, which is then closed), restores the previous
+    // unhandled-exception filter and the console handler, and stops and joins
+    // the crash thread (closing its events) -- an Install/Shutdown cycle
+    // leaves no running thread and no live handle behind. Also thaws the
+    // module table and the log backlog, so a survivable report that was
+    // interrupted cannot leave either frozen for the rest of the process.
+    //
+    // It is also the END of the exit-sentinel window (below): the clean-exit
+    // request, its deadline and the Ctrl-C step counter are all reset here, so
+    // a process that disarms and keeps running -- the test binary does this
+    // ~20 times -- is genuinely disarmed and can never be terminated by a
+    // sentinel armed in a previous arming.
     //
     // Idempotent; safe to skip (the process exiting is also fine). Does NOT
     // reset Config::dumpDir --
@@ -253,6 +268,58 @@ namespace Arcane::Diagnostics
     // so a project's log lands beside that project's reports. An explicitly
     // configured logDir is never retargeted.
     ARCANE_CORE_API void RetargetDumpDir(const std::filesystem::path& dir);
+
+    // -------------------------------------------------------------------
+    // Exit sentinel and clean-exit handlers (crash window plan 1, task 8;
+    // spec S5.7)
+    // -------------------------------------------------------------------
+    // The exit sentinel is NOT a new thread: it is the watchdog with its rule
+    // swapped. From RequestCleanExit() until Shutdown(), the main-thread beat
+    // and GPU-progress rules are replaced by a single deadline
+    // (Config::exitSeconds). A host that asked to quit and then never got out
+    // -- a Vulkan teardown that never returns, a module-build join that never
+    // completes -- is the one failure nothing else in this module can name: it
+    // keeps beating right up to the last frame and then disappears into a
+    // teardown with no frame loop left to observe. The sentinel writes a
+    // `hang` report ("hang at exit") through the crash thread and terminates
+    // with ExitCode::kExitSentinel (12).
+    //
+    // What the hook is for: the OS gives a console handler about five seconds
+    // and a session-end message not much more, so the host's own quit path has
+    // to be STARTED from whatever noticed (Ctrl-C, console close, logoff,
+    // WM_ENDSESSION) rather than waited for. The host installs one function
+    // that begins its ordinary exit -- the editor autosaves everything dirty
+    // first, which is fast -- and every one of those paths routes here.
+
+    // The host's "begin your ordinary exit now" callback. A raw pointer pair
+    // (same shape as SetReportWrittenHook): the DLL boundary stays free of
+    // std::function's allocator coupling, and nothing on this path allocates.
+    // Runs on WHATEVER thread requested the exit -- the OS's console-handler
+    // thread for Ctrl-C and close, the host's own thread for a window
+    // message -- so a hook that touches thread-affine state must marshal.
+    using CleanExitHook = void (*)(void* user);
+
+    // Install (or, with nullptr, clear) the process-wide clean-exit hook.
+    // Last writer wins; one call per host lifetime is the expected shape.
+    ARCANE_CORE_API void SetCleanExitHook(CleanExitHook hook, void* user) noexcept;
+
+    // "The host has been asked to quit." Arms the exit deadline and calls the
+    // hook EXACTLY ONCE, however many paths request the same exit (a Ctrl-C
+    // and a close and the host's own File->Exit). The deadline is armed BEFORE
+    // the hook runs, on purpose: a hook that itself wedges is precisely what
+    // the sentinel exists to name.
+    //
+    // Safe to call with Diagnostics not installed, and safe from any thread.
+    ARCANE_CORE_API void RequestCleanExit() noexcept;
+
+    // Test seam: runs the console control handler's rule for `ctrlType`
+    // (CTRL_C_EVENT = 0, CTRL_BREAK_EVENT = 1, CTRL_CLOSE_EVENT = 2, ...) and
+    // returns whether it handled it -- exactly what Windows would call, with
+    // the ONE difference that the second Ctrl-C's TerminateProcess is real
+    // here too, so a test simulates the first press only. Works with no
+    // console attached and with the watchdog not running: the console rule
+    // depends on neither.
+    [[nodiscard]] ARCANE_CORE_API bool SimulateConsoleCtrl(unsigned long ctrlType) noexcept;
 
     // "The main thread is alive." One relaxed atomic store -- cheap enough for
     // every frame, which is where it belongs. A hang is DEFINED as this not

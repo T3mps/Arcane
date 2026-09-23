@@ -55,8 +55,12 @@ int main(int argc, char** argv)
     // leave by the ordinary exit below -- which calls Diagnostics::Shutdown().
     // Returning straight out of main skipped it and left the watchdog's
     // std::thread joinable at static destruction, whose destructor calls
-    // std::terminate: the "survivable" mode died (and, before this task's
-    // handlers existed, wedged unkillably on the CRT's abort box).
+    // std::terminate: the "survivable" mode died (and, before task 7's
+    // handlers existed, wedged unkillably on the CRT's abort box). Task 8
+    // removed the trap itself -- the watchdog is a raw thread an atexit hook
+    // stops, which is what lets the `--hang` mode below return from main --
+    // but going out through Shutdown() is still the shape a host has, so this
+    // mode keeps exercising it.
     else if (die == "ensure")       { (void)ARC_ENSURE(false, "fixture ensure"); }
     else if (die == "terminate")    { throw std::runtime_error("fixture terminate"); }
     else if (die == "abort")        { std::abort(); }
@@ -90,17 +94,27 @@ int main(int argc, char** argv)
     }
     if (hangSeconds > 0)
     {
-        // Stop beating: the watchdog must report a hang and the process must stay alive.
+        // One beat ARMS the hang trigger -- until a first Heartbeat() the
+        // watchdog is deliberately silent, so a host that never beats (a
+        // headless tool, every other mode in this fixture) gets silence
+        // rather than a spurious report hangSeconds after boot.
+        Arcane::Diagnostics::Heartbeat();
+        // Then stop beating: the watchdog must report a hang and the process
+        // must stay alive. Returning from main() WITHOUT Shutdown() is part
+        // of the case -- the atexit hook is what stops the raw watchdog
+        // thread now, and exit code 0 is the proof it did.
         std::this_thread::sleep_for(std::chrono::seconds(hangSeconds));
         return 0;
     }
-    // task 8: RequestCleanExit does not exist yet (controller notes R8).
-    // if (hangAtExit)
-    // {
-    //     Arcane::Diagnostics::RequestCleanExit();
-    //     for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));   // never exits on its own
-    // }
-    (void)hangAtExit;
+    if (hangAtExit)
+    {
+        // The exit sentinel's case (spec S5.7): the host asks to quit and then
+        // never gets out. Nothing here ever calls Shutdown(), so the watchdog
+        // is still armed and its deadline is the ONLY thing that can end this
+        // process -- exit code 12, with a "hang at exit" report on disk.
+        Arcane::Diagnostics::RequestCleanExit();
+        for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));   // never exits on its own
+    }
     Arcane::Diagnostics::Shutdown();
     return 0;
 }
