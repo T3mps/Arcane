@@ -11,6 +11,10 @@ awaiting the written-spec review before the implementation plan.
 feat/crash-window-plan-1, commit c15d71d6 (+ this close-out); plans 2
 (reporter + NativeWindow + monitor mode) and 3 (autosave) pending.
 
+**Plan 2 status:** in progress on `feat/crash-window-plan-2` (reporter +
+NativeWindow + monitor mode); the envelope gains `reason` (D2); the fatal
+echo bypasses spdlog (D9); one submit deadline; orphaned-watchdog guard.
+
 **Plan 1 measurements (2026-09-22, Debug, this desk):**
 - Death fixture (`bin/Debug-windows-x86_64-md/death-fixture`), wall time to
   exit measured by hand, kind from the envelope: `av` exit 10, report
@@ -408,7 +412,8 @@ which is why the fail-fast reasons moved off it (§5.3).
 
 ### 5.6 Log file sink and backlog
 
-`Log::Init` adds a file sink at `<logDir>/<App>.log` (rotated per run,
+`Diagnostics::Install` attaches a file sink (through the dist sink `Log::Init`
+installs) at `<logDir>/<App>.log` (rotated per run,
 keep 5) beside the stderr sink, retargeted when the dump dir retargets
 (`Saved/Logs/` under a project), `flush_on(warn)`. **As built (final review,
 I1):** `Log::Init` attaches one `spdlog::sinks::dist_sink_mt` to the engine

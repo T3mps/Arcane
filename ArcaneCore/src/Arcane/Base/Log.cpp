@@ -101,9 +101,11 @@ namespace Arcane::Log
         // ---- Rotating file sink + bounded flush helper (task 4) ----------
         //
         // THE ATTACH POINT (final review, finding I1). The engine logger's own
-        // sink vector is written EXACTLY ONCE, inside Init()'s call_once, and
-        // never again: every later attach/detach happens inside s_distSink,
-        // whose add_sink/remove_sink take the dist sink's own mutex. That
+        // sink vector is written EXACTLY ONCE BY THIS FILE, inside Init()'s
+        // call_once, and never again: every later attach/detach here happens
+        // inside s_distSink, whose add_sink/remove_sink take the dist sink's
+        // own mutex. (EditorApp's Console sink still mutates the vector
+        // directly -- owed: move it inside the dist sink.) That
         // matters because AttachFileSink is NOT startup-only -- Diagnostics'
         // RetargetDumpDir re-attaches the log sink when the editor switches
         // projects, on the main thread, while worker threads are logging. A

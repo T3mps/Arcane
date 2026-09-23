@@ -130,6 +130,8 @@ TEST_CASE("crash path: a manual report runs on the crash thread, writes envelope
     const auto env = Arcane::Diag::ReadFile(stem + ".arcdiag");
     REQUIRE(env.has_value());
     CHECK(env->kind == "hang");
+    // Plan 2 (D2): the reason rides in the envelope so the reporter reads one file.
+    CHECK(env->reason == "hang (test)");
     CHECK(env->siblingDmp.empty() == false);
 
     const std::string txt = Slurp(stem + ".txt");
@@ -237,6 +239,13 @@ TEST_CASE("death fixture: an access violation yields a crash report and exit cod
     CHECK(r.run.exitCode == 10);
     REQUIRE_FALSE(r.stem.empty());
     CHECK(std::filesystem::exists(r.stem.string() + ".dmp"));
+    // Plan 2 (D9): a FATAL report's echo reaches the log file WITHOUT spdlog.
+    // The fixture's logDir is derived: <dumpDir>/../Logs/<appName>.log. This
+    // line is green before the change too (spdlog used to carry it); it pins
+    // that the direct append lands in the same file.
+    const auto log = std::filesystem::temp_directory_path() / "Logs" / "DeathFixture.log";
+    REQUIRE(std::filesystem::exists(log));
+    CHECK(Slurp(log).find("-- report written") != std::string::npos);
     CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "crash");
     CHECK(r.run.wallMs < 15000);
 }

@@ -148,6 +148,22 @@ TEST_CASE("arcdiag envelope round-trips logPath, commandLine and exitCode; absen
     CHECK(old->exitCode == 0);
 }
 
+TEST_CASE("arcdiag envelope round-trips reason; an absent key parses as empty", "[diag]")
+{
+    Arcane::Diag::Envelope e;
+    e.guid = Arcane::Guid::Generate();
+    e.kind = "assert";
+    e.reason = "assert: x != nullptr -- boom (MeshCache.cpp:12)";
+    const auto back = Arcane::Diag::Parse(Arcane::Diag::Serialize(e));
+    REQUIRE(back.has_value());
+    CHECK(back->reason == e.reason);
+
+    const std::string legacy = "{\"formatVersion\":1,\"guid\":\"" + Arcane::Guid::Generate().ToString() + "\"}";
+    const auto old = Arcane::Diag::Parse(legacy);
+    REQUIRE(old.has_value());
+    CHECK(old->reason.empty());
+}
+
 TEST_CASE("arcdiag parse ignores unknown extra keys (forward compat)", "[diag]")
 {
     const std::string json =

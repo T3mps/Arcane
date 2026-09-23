@@ -438,6 +438,25 @@ namespace
                            FILE_ATTRIBUTE_NORMAL, nullptr);
     }
 
+    // Append to a file ANOTHER writer already holds open for writing -- the
+    // log file, which spdlog's live basic_file_sink_mt owns. OpenForWrite's
+    // FILE_SHARE_READ is not enough for that: a second open of a file held
+    // for WRITE must itself allow sharing for write, or CreateFileW fails
+    // with ERROR_SHARING_VIOLATION. FILE_APPEND_DATA keeps every write
+    // atomic at the current end of file, so interleaving with spdlog's own
+    // writes cannot overwrite them (plan 2, D9).
+    HANDLE OpenForAppendShared(const char* utf8Path) noexcept
+    {
+        wchar_t wide[kPathMax];
+        ToWide(utf8Path, wide, static_cast<int>(kPathMax));
+        if (!wide[0]) return INVALID_HANDLE_VALUE;
+        return CreateFileW(wide,
+                           FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    }
+
     bool WriteAll(HANDLE h, std::string_view s) noexcept
     {
         if (h == INVALID_HANDLE_VALUE) return false;
@@ -565,6 +584,7 @@ namespace
     {
         const char*      guid           = nullptr;
         const char*      kind           = nullptr;
+        const char*      reason         = nullptr;
         const char*      timestampUtc   = nullptr;
         const char*      appName        = nullptr;
         const char*      phase          = nullptr;
@@ -614,6 +634,7 @@ namespace
         b.Append("{\n  \"formatVersion\": 1,\n  \"guid\": ");
         AppendJsonString(b, SV(f.guid));
         b.Append(",\n  \"kind\": ");             AppendJsonString(b, SV(f.kind));
+        b.Append(",\n  \"reason\": ");           AppendJsonString(b, SV(f.reason));
         b.Append(",\n  \"timestampUtc\": ");     AppendJsonString(b, SV(f.timestampUtc));
         b.Append(",\n  \"appName\": ");          AppendJsonString(b, SV(f.appName));
         b.Append(",\n  \"phase\": ");            AppendJsonString(b, SV(f.phase));
@@ -907,6 +928,27 @@ namespace
         CloseHandle(h);
     }
 
+    // Plan 2 (D9): a FATAL report's echo may not go through spdlog. The
+    // faulting thread may have died holding a sink mutex, and the crash thread
+    // would then wedge on ARC_ERROR until the submitter's deadline expired --
+    // after every file was already on disk. Straight to the log file (append,
+    // through OpenForAppendShared: spdlog holds that file open for WRITE, so a
+    // second handle must share write access) and to the stderr HANDLE (not the
+    // CRT stream, whose lock is the same hazard).
+    void FatalEcho(std::initializer_list<std::string_view> parts) noexcept
+    {
+        HANDLE log = INVALID_HANDLE_VALUE;
+        if (g_logPathSnap[0]) log = OpenForAppendShared(g_logPathSnap);
+        const HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+        for (std::string_view part : parts)
+        {
+            if (log != INVALID_HANDLE_VALUE) WriteAll(log, part);
+            if (err && err != INVALID_HANDLE_VALUE) WriteAll(err, part);
+        }
+        if (log != INVALID_HANDLE_VALUE) { WriteAll(log, "\n"); CloseHandle(log); }
+        if (err && err != INVALID_HANDLE_VALUE) WriteAll(err, "\n");
+    }
+
     // The hand-off. Missing exe is the EXPECTED case in this plan (the
     // reporter does not exist yet), so a failure is one line, after the
     // files are already on disk, and never anything louder.
@@ -1010,6 +1052,7 @@ namespace
         EnvFields fields;
         fields.guid             = guid;
         fields.kind             = kind;
+        fields.reason           = p.reason[0] ? p.reason : "unspecified";
         fields.timestampUtc     = tsUtc;
         fields.appName          = g_appNameSnap;
         fields.phase            = g_phaseSnap;
@@ -1145,34 +1188,58 @@ namespace
         // again -- which is the whole reason the log echo and the hook moved
         // down here from where WriteReportImpl used to run them.
         // ---------------------------------------------------------------
-        ARC_ERROR("Diagnostics: {} -- report written\n{}{}",
-                  p.reason[0] ? p.reason : "report", header.View(), section);
-        if (!spawnOk)
+        // ...with ONE exception (plan 2, D9): a FATAL report's echo still may
+        // not touch spdlog. The heap is safe by now, but the sink mutex is
+        // not -- the thread that died may have been holding it -- so a report
+        // the process will not survive echoes through FatalEcho instead. A
+        // SURVIVABLE one keeps the macros: its log is still flowing.
+        const char* const reasonText = p.reason[0] ? p.reason : "report";
+        if (p.exitCode != 0)
         {
-            std::fprintf(stderr, "Arcane: crash reporter hand-off failed; the report is at %s.arcdiag\n", stem);
-            ARC_WARN("Diagnostics: could not spawn the crash reporter; the report is at '{}.arcdiag'", stem);
+            FatalEcho({ "Diagnostics: ", reasonText, " -- report written\n", header.View(), section });
+            if (!spawnOk)
+                FatalEcho({ "Arcane: crash reporter hand-off failed; the report is at ", stem, ".arcdiag" });
+            if (textTruncated)
+                FatalEcho({ "Diagnostics: the crash arena was exhausted before the text report was built; '",
+                            stem, ".txt' is truncated" });
+            // Spec S5.5: on exhaustion the crash thread writes what it has and
+            // SAYS SO. Both of these mean the .arcdiag on disk carries less
+            // than the report does -- and both mean the .txt sibling is the
+            // complete record.
+            if (minimalWrite == EnvelopeWrite::WrittenElided ||
+                (!p.lightweight && fullWrite == EnvelopeWrite::WrittenElided))
+                FatalEcho({ "Diagnostics: '", stem, ".arcdiag' was ELIDED so it would still parse; '",
+                            stem, ".txt' carries the full report" });
+            if (!p.lightweight && fullWrite == EnvelopeWrite::NotWritten)
+                FatalEcho({ "Diagnostics: the full envelope for '", stem, "' was WITHHELD; the earlier envelope stands" });
         }
-        if (textTruncated)
+        else
         {
-            ARC_WARN("Diagnostics: the crash arena was exhausted before the text report was "
-                     "built; '{}.txt' is truncated", stem);
-        }
+            ARC_ERROR("Diagnostics: {} -- report written\n{}{}",
+                      reasonText, header.View(), section);
+            if (!spawnOk)
+            {
+                std::fprintf(stderr, "Arcane: crash reporter hand-off failed; the report is at %s.arcdiag\n", stem);
+                ARC_WARN("Diagnostics: could not spawn the crash reporter; the report is at '{}.arcdiag'", stem);
+            }
+            if (textTruncated)
+            {
+                ARC_WARN("Diagnostics: the crash arena was exhausted before the text report was "
+                         "built; '{}.txt' is truncated", stem);
+            }
 
-        // Spec S5.5: on exhaustion the crash thread writes what it has and
-        // SAYS SO. Both of these mean the .arcdiag on disk carries less than
-        // the report does -- and both mean the .txt sibling is the complete
-        // record.
-        if (minimalWrite == EnvelopeWrite::WrittenElided ||
-            (!p.lightweight && fullWrite == EnvelopeWrite::WrittenElided))
-        {
-            ARC_WARN("Diagnostics: '{}.arcdiag' was ELIDED (stack text and GPU arrays dropped) "
-                     "so it would still parse; '{}.txt' carries the full report", stem, stem);
-        }
-        if (!p.lightweight && fullWrite == EnvelopeWrite::NotWritten)
-        {
-            ARC_WARN("Diagnostics: the full envelope for '{}' was WITHHELD -- it would not fit "
-                     "the crash arena intact, and replacing a valid envelope with a truncated "
-                     "one is never an improvement; the earlier envelope stands", stem);
+            if (minimalWrite == EnvelopeWrite::WrittenElided ||
+                (!p.lightweight && fullWrite == EnvelopeWrite::WrittenElided))
+            {
+                ARC_WARN("Diagnostics: '{}.arcdiag' was ELIDED (stack text and GPU arrays dropped) "
+                         "so it would still parse; '{}.txt' carries the full report", stem, stem);
+            }
+            if (!p.lightweight && fullWrite == EnvelopeWrite::NotWritten)
+            {
+                ARC_WARN("Diagnostics: the full envelope for '{}' was WITHHELD -- it would not fit "
+                         "the crash arena intact, and replacing a valid envelope with a truncated "
+                         "one is never an improvement; the earlier envelope stands", stem);
+            }
         }
 
         // Report-written hook (GPU crash diagnostics arc, Task 9): fires
@@ -1821,12 +1888,31 @@ namespace
     }
 #endif
 
+#if defined(_WIN32)
+    // A watchdog that outlived StopWatchdog's bounded wait (parked mid-report
+    // on the crash thread). Kept so StartWatchdog cannot start a SECOND thread
+    // beside it -- two watchdogs on one g_watchdogThreadId was plan 1's
+    // deferred minor -- and closed once it has actually exited.
+    HANDLE g_watchdogOrphan = nullptr;
+#endif
+
     void StartWatchdog() noexcept
     {
         g_watchdogStop.store(false, std::memory_order_release);
         g_watchdogPaused.store(false, std::memory_order_release);
 #if defined(_WIN32)
         if (g_watchdogThread) return;   // already running (Install is idempotent)
+        if (g_watchdogOrphan)
+        {
+            if (WaitForSingleObject(g_watchdogOrphan, 0) != WAIT_OBJECT_0)
+            {
+                std::fprintf(stderr, "Diagnostics: a previous hang watchdog is still parked; "
+                                     "not starting another\n");
+                return;
+            }
+            CloseHandle(g_watchdogOrphan);
+            g_watchdogOrphan = nullptr;
+        }
         g_watchdogThread = CreateThread(nullptr, 128 * 1024, &WatchdogThreadProc,
                                         nullptr, 0, nullptr);
 #else
@@ -1849,10 +1935,20 @@ namespace
             // watchdog that is mid-report may be parked on the crash thread
             // for as long as crashHandlingTimeoutSeconds, and a teardown that
             // blocks on that is a second hang nobody asked for. Five seconds
-            // covers a report that is actually writing; past it we let the
-            // thread finish on its own rather than wedge the exit.
-            WaitForSingleObject(g_watchdogThread, 5000);
-            CloseHandle(g_watchdogThread);
+            // covers a report that is actually writing. Past it the thread is
+            // ORPHANED, not abandoned: the handle moves to g_watchdogOrphan and
+            // StartWatchdog refuses to run a second watchdog until it is gone.
+            if (WaitForSingleObject(g_watchdogThread, 5000) == WAIT_OBJECT_0)
+            {
+                CloseHandle(g_watchdogThread);
+            }
+            else
+            {
+                if (g_watchdogOrphan) CloseHandle(g_watchdogOrphan);
+                g_watchdogOrphan = g_watchdogThread;
+                std::fprintf(stderr, "Diagnostics: the hang watchdog is still parked mid-report; "
+                                     "it will finish on its own\n");
+            }
             g_watchdogThread = nullptr;
         }
 #else
@@ -2458,10 +2554,20 @@ void SubmitReport(const ReportRequest& request) noexcept
         return;
     }
 
-    const bool  fatal     = (request.exitCode != 0);
-    const DWORD timeoutMs = g_cfg.crashHandlingTimeoutSeconds != 0
-                          ? g_cfg.crashHandlingTimeoutSeconds * 1000u
-                          : 60u * 1000u;
+    const bool fatal = (request.exitCode != 0);
+    const std::uint32_t timeoutMs = g_cfg.crashHandlingTimeoutSeconds != 0
+                                  ? g_cfg.crashHandlingTimeoutSeconds * 1000u
+                                  : 60u * 1000u;
+    // ONE deadline for the lock AND the wait (plan 2, seam 2): plan 1 spent
+    // the timeout twice in the worst case -- 60 s behind another submitter's
+    // lock, then 60 s more on the crash thread -- and the spec's number is 60.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    const auto remainingMs = [&]() noexcept -> DWORD
+    {
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        return left > 0 ? static_cast<DWORD>(left) : 0u;
+    };
 
     if (fatal)
     {
@@ -2471,7 +2577,7 @@ void SubmitReport(const ReportRequest& request) noexcept
         // dies with its own code, exactly like the first.
         if (g_inCrashHandler.exchange(true, std::memory_order_acq_rel))
         {
-            if (g_submitMutex.try_lock_for(std::chrono::milliseconds(timeoutMs)))
+            if (g_submitMutex.try_lock_until(deadline))
                 g_submitMutex.unlock();
             TerminateProcess(GetCurrentProcess(), request.exitCode);
             return;   // unreachable
@@ -2484,7 +2590,7 @@ void SubmitReport(const ReportRequest& request) noexcept
         return;
     }
 
-    if (!g_submitMutex.try_lock_for(std::chrono::milliseconds(timeoutMs)))
+    if (!g_submitMutex.try_lock_until(deadline))
     {
         // The report in flight never finished. Nothing left to do but die
         // with the code we were asked for.
@@ -2509,7 +2615,7 @@ void SubmitReport(const ReportRequest& request) noexcept
         {
             ResetEvent(g_handledEvent);
             SetEvent(g_crashEvent);
-            WaitForSingleObject(g_handledEvent, timeoutMs);
+            WaitForSingleObject(g_handledEvent, remainingMs());
         }
         else
         {

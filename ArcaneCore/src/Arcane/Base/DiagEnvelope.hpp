@@ -94,6 +94,12 @@ namespace Arcane::Diag
         std::string logPath;
         std::string commandLine;
         int         exitCode = 0;   // 0 = not set
+
+        // Plan 2 (D2): the report's reason text -- "crash (unhandled exception)",
+        // "assert: <expr> -- <msg> (<file>:<line>)", "hang (main thread has not
+        // ticked for 12.3s)" -- the same string the .txt header's `reason :`
+        // line carries. Additive and optional, format version unchanged.
+        std::string reason;
     };
 
     // Envelope -> JSON text (2-space indent, UTF-8; invalid-UTF-8 field text

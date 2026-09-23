@@ -77,6 +77,7 @@ namespace Arcane::Diag
         doc["logPath"] = envelope.logPath;
         doc["commandLine"] = envelope.commandLine;
         doc["exitCode"] = envelope.exitCode;
+        doc["reason"] = envelope.reason;
 
         // error_handler_t::replace: a snippet-adjacent field carrying
         // invalid UTF-8 must degrade to U+FFFD, never throw out of
@@ -153,6 +154,7 @@ namespace Arcane::Diag
         e.commandLine = StrField(doc, "commandLine");
         if (doc.contains("exitCode") && doc["exitCode"].is_number_integer())
             e.exitCode = doc["exitCode"].get<int>();
+        e.reason = StrField(doc, "reason");
 
         return e;
     }
