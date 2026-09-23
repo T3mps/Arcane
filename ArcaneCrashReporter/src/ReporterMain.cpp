@@ -110,11 +110,38 @@ namespace
         HWND hwnd = static_cast<HWND>(window.Hwnd());
         switch (id)
         {
-        case ReporterWindow::kBtnOpenFolder: OpenFolder(ToWide(ui.ReportFolder())); break;
-        case ReporterWindow::kBtnCopy:       CopyToClipboard(hwnd, ui.CurrentDetails()); break;
+        case ReporterWindow::kBtnOpenFolder:
+        {
+            // Fix round 1 (R91 minor 3): log a failed open (<= 32 is a real
+            // SE_ERR_*/ERROR_* code from ShellExecuteW) instead of ignoring it.
+            const INT_PTR rc = OpenFolder(ToWide(ui.ReportFolder()));
+            if (rc <= 32) ARC_WARN("reporter: could not open the report folder (ShellExecute rc {})", static_cast<long long>(rc));
+            break;
+        }
+        case ReporterWindow::kBtnCopy:
+            // Fix round 1 (R91 minor 3): log a failed copy instead of ignoring it.
+            if (!CopyToClipboard(hwnd, ui.CurrentDetails())) ARC_WARN("reporter: could not copy details to the clipboard");
+            break;
         case ReporterWindow::kBtnRelaunch:
-            SpawnDetached(ui.RelaunchLine());
-            [[fallthrough]];
+        {
+            // Fix round 1 (R90): a failed relaunch must not be swallowed and
+            // must not close the window -- the user still has Open Folder
+            // and Copy Details to fall back on. On success,
+            // AllowSetForegroundWindow lets the relaunched host come to the
+            // front (D14 applies to it too, same as the reporter itself).
+            const std::string line = ui.RelaunchLine();
+            DWORD             childPid = 0;
+            if (SpawnDetached(line, &childPid))
+            {
+                AllowSetForegroundWindow(childPid);
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+            else
+            {
+                ARC_ERROR("reporter: relaunch failed ({}): {}", GetLastError(), line);
+            }
+            break;
+        }
         case ReporterWindow::kBtnClose:
             // ON the window thread: PostMessageW, never window.Close() here --
             // NativeWindow::Close() called from its own thread only posts
@@ -217,34 +244,39 @@ namespace
                 cv.notify_all();
             });
 
-            const bool symbolizedInTime = [&]
-            {
-                std::unique_lock<std::mutex> lk(m);
-                return cv.wait_for(lk, std::chrono::seconds(a.deadlineSeconds), [&] { return done; });
-            }();
+            // Fix round 1 (R89, Important 1): R39 exempted an attended run
+            // from the deadline entirely, then fell into an unconditional
+            // worker.join() -- if the worker wedges and the user closes the
+            // window, the process was left running forever with no UI (and,
+            // under D12, blocking every later report from this host: the
+            // host will not spawn a second reporter while this one's handle
+            // still reports WAIT_TIMEOUT).
+            //
+            // The deadline is measured from HERE (worker start), not from
+            // whenever the window happens to close -- an attended run that
+            // spent 55 of its 60 seconds with the window open does not get a
+            // fresh 60 when the window closes.
+            const auto symbolizeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(a.deadlineSeconds);
 
-            if (!symbolizedInTime && a.unattended)
+            // TerminateProcess(kDeadline) after writing whatever the worker
+            // has NOT produced -- the ONE place both the plain-unattended
+            // path and the "attended, window closed, worker still wedged"
+            // path end, so neither can drift out of step with the other
+            // (R89 asks for exactly this factoring).
+            //
+            // TerminateProcess, not a return: the worker captured `result`,
+            // `m`, `cv` and `done` BY REFERENCE off this frame. Returning
+            // would unwind them under a thread still writing to them, and
+            // ~std::thread on a joinable thread calls std::terminate anyway.
+            // Ending the process here is the only exit that is sound with a
+            // wedged worker -- and it is exactly what the deadline promised.
+            // The one place this task DISCARDS a write result, deliberately
+            // (cf. R64 below): the process is about to end with kDeadline,
+            // which already names a failure, and kWriteFailed cannot also be
+            // returned. The expired deadline is the more informative cause
+            // of the two, so it is the one the exit code carries.
+            auto expireDeadline = [&]
             {
-                // R39: guarded on `a.unattended` -- an ATTENDED run lets the
-                // worker keep going while the user looks at the window (which
-                // already shows "Symbolizing..."); only a headless run is
-                // bound by the deadline at all. When attended and the
-                // deadline has passed, control falls straight through to the
-                // unconditional `worker.join()` below and simply waits
-                // longer, same as if no deadline had been set.
-                //
-                // TerminateProcess, not a return: the worker captured `result`,
-                // `m`, `cv` and `done` BY REFERENCE off this frame. Returning
-                // would unwind them under a thread still writing to them, and
-                // ~std::thread on a joinable thread calls std::terminate
-                // anyway. Ending the process here is the only exit that is
-                // sound with a wedged worker -- and it is exactly what the
-                // deadline promised.
-                // The one place this task DISCARDS a write result, deliberately
-                // (cf. R64 below): the process is about to end with kDeadline,
-                // which already names a failure, and kWriteFailed cannot also
-                // be returned. The expired deadline is the more informative
-                // cause of the two, so it is the one the exit code carries.
                 Symbolized partial;
                 partial.engineError = "deadline of " + std::to_string(a.deadlineSeconds) + " s expired";
                 (void)WriteText(sibling, FormatSymbolized(partial, Arcane::BuildInfo(), envelope->cpuThreadSummary));
@@ -266,7 +298,51 @@ namespace
                 // waiting on the worker, and there is nothing else this
                 // process should be doing.
                 for (;;) TerminateProcess(GetCurrentProcess(), static_cast<UINT>(ExitCode::kDeadline));
+            };
+
+            bool symbolizedInTime = false;
+            if (ui && window.WasEverOpen())
+            {
+                // Attended, and the window genuinely opened (R89's third
+                // bullet: a window that never opened behaves exactly like
+                // unattended, handled by the `else` below). Poll in short
+                // slices ONLY so this loop can notice the window closing --
+                // not to impose a bound: while the window stays open the
+                // wait is UNBOUNDED, deadline or not, because the user is
+                // looking at "Symbolizing..." and may be waiting on a slow
+                // symbol server for perfectly good reasons.
+                for (;;)
+                {
+                    {
+                        std::unique_lock<std::mutex> lk(m);
+                        symbolizedInTime = cv.wait_for(lk, std::chrono::milliseconds(250), [&] { return done; });
+                    }
+                    if (symbolizedInTime) break;
+                    if (window.IsOpen()) continue;
+
+                    // The window just closed and the worker is still
+                    // running: from here this is the unattended case,
+                    // except bounded by whatever remains of the deadline
+                    // computed above (measured from worker start), not a
+                    // fresh window's worth of time.
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now < symbolizeDeadline)
+                    {
+                        std::unique_lock<std::mutex> lk(m);
+                        symbolizedInTime = cv.wait_for(lk, symbolizeDeadline - now, [&] { return done; });
+                    }
+                    break;
+                }
             }
+            else
+            {
+                // Unattended, OR the window never actually opened
+                // (WasEverOpen() == false: R89's third bullet).
+                std::unique_lock<std::mutex> lk(m);
+                symbolizedInTime = cv.wait_for(lk, std::chrono::seconds(a.deadlineSeconds), [&] { return done; });
+            }
+
+            if (!symbolizedInTime) expireDeadline();   // never returns
             worker.join();
         }
 
@@ -277,14 +353,18 @@ namespace
         // R64: the return value is ACTED ON, never discarded. This sibling is
         // the whole artifact of the hand-off; a silent kOk after a failed
         // write is a lie a parent (and the [diag] hand-off case) would believe.
-        if (!WriteText(sibling, FormatSymbolized(result, Arcane::BuildInfo(), envelope->cpuThreadSummary)))
-        {
-            ARC_ERROR("reporter: cannot write '{}'", ToUtf8(sibling.wstring()));
-            return ExitCode::kWriteFailed;
-        }
+        const bool writeOk = WriteText(sibling, FormatSymbolized(result, Arcane::BuildInfo(), envelope->cpuThreadSummary));
+        if (!writeOk) ARC_ERROR("reporter: cannot write '{}'", ToUtf8(sibling.wstring()));
 
-        // The window (when attended) gets the finished view -- the same
-        // `logTail` read before symbolization started, not a second read.
+        // Fix round 1 (R91 minor 1): the window (when attended) gets the
+        // finished view and stays open regardless of whether the sibling
+        // write succeeded -- the symbolized result is already in memory, and
+        // a write failure is no reason to vanish the window out from under a
+        // user still reading "Symbolizing..." (the ORIGINAL code returned
+        // kWriteFailed straight from inside the `if`, before SetView/Wait
+        // ever ran, so ~NativeWindow closed a window that still said
+        // "Symbolizing..."). Same `logTail` read before symbolization
+        // started, not a second read.
         if (ui) ui->SetView(BuildReportView(*envelope, a, &result, logTail));
 
         // Block here, not on ~NativeWindow: an attended run is done only once
@@ -292,7 +372,7 @@ namespace
         // Shutdown() below must not run while that window is still up.
         if (ui) window.Wait();
 
-        return ExitCode::kOk;
+        return writeOk ? ExitCode::kOk : ExitCode::kWriteFailed;
     }
 }
 

@@ -135,6 +135,12 @@ namespace Arcane::Reporter
             m_buttons[i] = Child(h, L"BUTTON", labels[i], style, kBtnOpenFolder + i, ui);
         }
         ApplyView();
+        // Fix round 1 (R91 minor 6): explicit initial focus. Without it Tab
+        // starts from nothing, and while Enter still reaches Close correctly
+        // (IsDialogMessageW's BS_DEFPUSHBUTTON path, not DM_GETDEFID -- this
+        // is not a real dialog template), a visible focus rect on the
+        // default button is the keyboard-navigation cue a user expects.
+        SetFocus(static_cast<HWND>(m_buttons[kBtnClose - kBtnOpenFolder]));
     }
 
     void ReporterWindow::ApplyView()

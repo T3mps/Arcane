@@ -46,33 +46,43 @@ namespace Arcane::Reporter
     }
 
     // Open Explorer on `folder` (Open Report Folder). Best-effort: an empty
-    // or missing folder just fails silently, same as every other button
-    // action in this reporter -- there is no console to report to (D3,
-    // WindowedApp) and a MessageBox from a process reporting someone ELSE's
-    // crash is not this button's job.
-    inline void OpenFolder(const std::wstring& folder)
+    // folder returns 0 (never calls ShellExecuteW -- there is nothing to
+    // pass it); otherwise returns ShellExecuteW's raw result so the caller
+    // can log a failure (R91 minor 3, fix round 1): > 32 means success, <= 32
+    // is a real SE_ERR_*/ERROR_* code. There is no console to report to here
+    // (D3, WindowedApp) and a MessageBox from a process reporting someone
+    // ELSE's crash is not this button's job -- OnButton logs instead.
+    inline INT_PTR OpenFolder(const std::wstring& folder)
     {
-        if (folder.empty()) return;
-        ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        if (folder.empty()) return 0;
+        return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
     }
 
     // Copy Details: the whole clipboard dance, UTF-16 (CF_UNICODETEXT) since
-    // that is what every paste target on Windows wants. `mem` is only ever
-    // freed on a failure path BEFORE SetClipboardData -- once that call
-    // succeeds the system owns the handle, and freeing it here would be a
-    // double free the next paste crashes on.
+    // that is what every paste target on Windows wants.
+    //
+    // Fix round 1 (R91 minor 3): the payload is built (GlobalAlloc + fill)
+    // BEFORE the clipboard is touched at all -- OpenClipboard/EmptyClipboard
+    // moved after it. The original order called EmptyClipboard() first, so a
+    // subsequent GlobalAlloc failure left the user's clipboard wiped with
+    // nothing copied in its place; building the payload first means a
+    // failure here never touches the clipboard the user already had.
+    //
+    // `mem` is only ever freed on a failure path BEFORE SetClipboardData --
+    // once that call succeeds the system owns the handle, and freeing it
+    // here would be a double free the next paste crashes on.
     inline bool CopyToClipboard(HWND owner, std::string_view text)
     {
-        if (!OpenClipboard(owner)) return false;
-        EmptyClipboard();
         const std::wstring wide  = ToWide(text);
         const SIZE_T       bytes = (wide.size() + 1) * sizeof(wchar_t);
         HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-        if (!mem) { CloseClipboard(); return false; }
+        if (!mem) return false;
         void* dst = GlobalLock(mem);
-        if (!dst) { GlobalFree(mem); CloseClipboard(); return false; }
+        if (!dst) { GlobalFree(mem); return false; }
         std::memcpy(dst, wide.c_str(), bytes);
         GlobalUnlock(mem);
+        if (!OpenClipboard(owner)) { GlobalFree(mem); return false; }
+        EmptyClipboard();
         if (!SetClipboardData(CF_UNICODETEXT, mem)) { GlobalFree(mem); CloseClipboard(); return false; }
         CloseClipboard();
         return true;
@@ -86,15 +96,23 @@ namespace Arcane::Reporter
     // mirrors Diagnostics.cpp's own SpawnReporter (only meaningful for a
     // console-subsystem target; ignored for a windowed one, which every host
     // here is).
-    inline bool SpawnDetached(std::string_view commandLine)
+    //
+    // Fix round 1 (R90): `outChildPid`, when given, is filled with the
+    // child's pid on success so the caller can AllowSetForegroundWindow it
+    // (D14 applies to a relaunched host too). On the empty-line refusal,
+    // SetLastError is set explicitly so a caller that logs GetLastError()
+    // right after a `false` return gets a real code instead of whatever
+    // Win32 call happened to run last on this thread.
+    inline bool SpawnDetached(std::string_view commandLine, DWORD* outChildPid = nullptr)
     {
-        if (commandLine.empty()) return false;
+        if (commandLine.empty()) { SetLastError(ERROR_INVALID_PARAMETER); return false; }
         std::wstring wide = ToWide(commandLine);   // CreateProcessW may write into this buffer; must be mutable
         STARTUPINFOW        si{}; si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
         const BOOL ok = CreateProcessW(nullptr, wide.data(), nullptr, nullptr, /*bInheritHandles=*/FALSE,
                                        CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi);
-        if (!ok) return false;
+        if (!ok) return false;   // GetLastError() is still CreateProcessW's -- nothing Win32 runs between here and the caller's check
+        if (outChildPid) *outChildPid = pi.dwProcessId;
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);   // fire-and-forget: this exe outlives nothing it relaunches
         return true;
