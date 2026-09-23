@@ -132,6 +132,24 @@ namespace Arcane::Diagnostics
         // a build agent must never leave an interactive process behind.
         bool spawnReporter = true;
 
+        // Pre-launch the reporter in MONITOR mode (spec S5.8): it waits on this
+        // process and turns a death the crash path never saw (a __fastfail,
+        // /GS, heap corruption, a stack overflow with no room for SEH, an
+        // external kill) into an abnormal-exit report. Windowed hosts set it
+        // to !headless; headless and server hosts leave it off. Ignored when
+        // spawnReporter is false (build machine) or a debugger is attached.
+        //
+        // What the monitor reads is the SESSION RECORD (plan 2, D15; UE's
+        // UECrashContext-<pid>.xml): "<Install-time report dir>/<app>-pid<n>.session",
+        // written by Install only when the monitor is actually launched,
+        // rewritten IN PLACE by RetargetDumpDir (its contents name the new
+        // report dir; its path never moves -- the monitor was told that path),
+        // and deleted by Shutdown(), the atexit hook, and the console
+        // handler's user-requested terminations. A record left behind when
+        // the process is gone is what "abnormal" means; the exit code only
+        // names the reason.
+        bool launchMonitor = false;
+
         // The sanitized relaunch command line, carried in the envelope so the
         // reporter can offer "restart". Never derived here: only the host
         // knows which of its own arguments are safe to repeat.

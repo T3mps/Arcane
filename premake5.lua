@@ -1540,6 +1540,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/HangSession.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/MonitorRule.cpp",
     }
 
     includedirs {

@@ -13,6 +13,19 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
+#if defined(_WIN32)
+// R37: FAST_FAIL_FATAL_APP_EXIT comes from winnt.h -- named, never hardcoded.
+// Guarded like every other Win32 include in the tree; __fastfail itself is an
+// MSVC intrinsic (<intrin.h>).
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <intrin.h>
+#endif
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -33,7 +46,7 @@ namespace
 int main(int argc, char** argv)
 {
     std::string dir, die; int hangSeconds = 0; bool hangAtExit = false; unsigned exitSeconds = 3, hangThreshold = 2;
-    bool reporter = false, attended = false;
+    bool reporter = false, attended = false, monitor = false;
     int stalls = 1, reportAt = 0; std::string reportKind;
     for (int i = 1; i < argc; ++i)
     {
@@ -46,6 +59,9 @@ int main(int argc, char** argv)
         else if (a == "--hang-seconds") { std::string v; next(v); hangThreshold = static_cast<unsigned>(std::atoi(v.c_str())); }
         else if (a == "--reporter") reporter = true;     // spawn the STAGED reporter beside this exe (tests, desk)
         else if (a == "--attended") attended = true;     // desk only: let the reporter show its window
+        // Task 9 (spec s5.8): pre-launch the STAGED reporter in monitor mode.
+        // It IS the reporter exe, so `--monitor` implies the spawn is allowed.
+        else if (a == "--monitor") monitor = true;
         // Task 8 desk levers for the hang protocol. `--stalls N` repeats the
         // --hang sleep N times with ONE beat between (the beat is the
         // recovery the reporter's window closes on, D11, and what re-arms the
@@ -65,8 +81,12 @@ int main(int argc, char** argv)
     Arcane::Diagnostics::Config cfg;
     cfg.appName = "DeathFixture"; cfg.dumpDir = dir; cfg.unattended = !attended; cfg.spawnReporter = reporter;
     cfg.hangSeconds = hangThreshold; cfg.exitSeconds = exitSeconds;
+    if (monitor) { cfg.launchMonitor = true; cfg.spawnReporter = true; }
     Arcane::Diagnostics::Install(cfg);
-    ARC_INFO("death fixture: mode {}", die);
+    // R32: WARN, not INFO -- WARN is the file sink's flush_on level, so this
+    // line is ON DISK before a `--die fastfail` takes the process with no
+    // unwinding at all. The monitor's log-tail assertion reads it back.
+    ARC_WARN("death fixture: mode {}", die);
 
     if (die == "av")                { int* p = nullptr; *p = 1; }
     else if (die == "assert")       { ARC_ASSERT(false, "fixture assert"); }
@@ -86,6 +106,14 @@ int main(int argc, char** argv)
     else if (die == "invalid-parameter") { char buf[4]; strcpy_s(buf, 4, "toolong"); }
     else if (die == "purecall")     { Derived d; (void)d; }   // the dtor's virtual call is pure
     else if (die == "stack-overflow") { return Recurse(0); }
+#if defined(_WIN32)
+    // Task 9, the monitor's row (spec s5.8): __fastfail raises a
+    // NON-CONTINUABLE exception that no handler in this process ever sees --
+    // not the unhandled-exception filter, not the CRT -- and the process dies
+    // with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN). The host writes nothing;
+    // only the pre-launched monitor can report it.
+    else if (die == "fastfail")     { __fastfail(FAST_FAIL_FATAL_APP_EXIT); }
+#endif
     else if (die == "oom")
     {
         // Controller ruling R19: ONE impossible allocation, not a loop. A

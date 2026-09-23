@@ -117,4 +117,46 @@ namespace Arcane::Reporter
         CloseHandle(pi.hProcess);   // fire-and-forget: this exe outlives nothing it relaunches
         return true;
     }
+
+    // Task 9 (R98, D16): the monitor's respawn -- a detached child that
+    // inherits EXACTLY ONE handle, `inherit` (the host's process handle), at
+    // the same value, and nothing else. PROC_THREAD_ATTRIBUTE_HANDLE_LIST is
+    // what makes bInheritHandles = TRUE safe: without the list every
+    // inheritable handle in this process would follow. Same shape as the
+    // host's own LaunchMonitor (Diagnostics.cpp), which cannot be shared --
+    // it lives in ArcaneCore and this is the reporter exe -- and
+    // STARTF_USESTDHANDLES with null handles for the same reason: the child's
+    // std slots stay empty rather than carrying this process's handle VALUES.
+    //
+    // `inherit` is marked inheritable first: a handle this process opened
+    // itself (the OpenProcess fallback) is not, and one it inherited already
+    // is -- SetHandleInformation makes both cases the same.
+    inline bool SpawnDetachedInheriting(std::wstring commandLine, HANDLE inherit, DWORD* outChildPid = nullptr)
+    {
+        if (!inherit || !SetHandleInformation(inherit, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) return false;
+        SIZE_T size = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+        std::string storage(size, '\0');
+        auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+        if (!InitializeProcThreadAttributeList(attrs, 1, 0, &size)) return false;
+        BOOL ok = UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherit, sizeof(inherit), nullptr, nullptr);
+        PROCESS_INFORMATION pi{};
+        if (ok)
+        {
+            STARTUPINFOEXW si{};
+            si.StartupInfo.cb      = sizeof(si);
+            si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;   // all three null
+            si.lpAttributeList     = attrs;
+            ok = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, /*bInheritHandles=*/TRUE,
+                                EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | DETACHED_PROCESS,
+                                nullptr, nullptr, &si.StartupInfo, &pi);
+        }
+        const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+        DeleteProcThreadAttributeList(attrs);
+        if (!ok) { SetLastError(error); return false; }
+        if (outChildPid) *outChildPid = pi.dwProcessId;
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return true;
+    }
 }

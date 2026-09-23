@@ -514,6 +514,160 @@ TEST_CASE("death fixture: a hang at exit is named by the sentinel and ends with 
     CHECK(env->exitCode == 12);
 }
 
+namespace
+{
+    // True once no "*.session" file remains in `dir` (the host deleted it on a
+    // clean exit, or the monitor reaped it after deciding).
+    bool WaitForNoSessionRecord(const std::filesystem::path& dir, std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        for (;;)
+        {
+            bool any = false;
+            std::error_code ec;
+            for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+                if (e.path().extension() == ".session") any = true;
+            if (!any) return true;
+            if (std::chrono::steady_clock::now() >= deadline) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    // The stem of the first envelope of `kind` in `dir`, polled until one
+    // appears or `timeout` passes -- the monitor writes AFTER the host is
+    // gone, and a directory may legitimately hold the host's own survivable
+    // report beside it.
+    std::filesystem::path WaitForKind(const std::filesystem::path& dir, const std::string& kind, std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        for (;;)
+        {
+            std::error_code ec;
+            for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+            {
+                if (e.path().extension() != ".arcdiag") continue;
+                const auto env = Arcane::Diag::ReadFile(e.path());
+                if (env && env->kind == kind) return e.path().parent_path() / e.path().stem();
+            }
+            if (std::chrono::steady_clock::now() >= deadline) return {};
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    std::size_t CountEnvelopes(const std::filesystem::path& dir)
+    {
+        std::size_t n = 0;
+        std::error_code ec;
+        for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+            if (e.path().extension() == ".arcdiag") ++n;
+        return n;
+    }
+}
+
+// Spec s5.8, the row the in-process path cannot close: __fastfail never
+// reaches the filter, so the host writes NOTHING and dies 0xC0000409. The
+// pre-launched monitor sees the session record still present (D15), finds no
+// report of the host's own, and synthesizes an abnormal-exit report with the
+// log tail -- exactly UE's monitor shape.
+TEST_CASE("death fixture --monitor: a fail-fast the host never sees becomes an abnormal-exit report from the monitor", "[diag]")
+{
+    SkipIfBuildMachine();
+    const FixtureRun r = RunFixture("fastfail", { "--monitor" });
+    CHECK_FALSE(r.run.timedOut);
+    CHECK(static_cast<std::uint32_t>(r.run.exitCode) == 0xC0000409u);
+    const auto stem = WaitForKind(r.dir, "abnormal-exit", std::chrono::seconds(10));
+    REQUIRE_FALSE(stem.empty());
+    CHECK(CountEnvelopes(r.dir) == 1);   // the host wrote nothing at exit time: the monitor's is the only one
+    const auto env = Arcane::Diag::ReadFile(stem.string() + ".arcdiag");
+    REQUIRE(env.has_value());
+    CHECK(env->appName == "DeathFixture");
+    CHECK(static_cast<std::uint32_t>(env->exitCode) == 0xC0000409u);
+    CHECK(env->reason == "abnormal-exit: 0xC0000409 STATUS_STACK_BUFFER_OVERRUN");
+    CHECK(std::filesystem::exists(stem.string() + ".txt"));
+    // R32: the fixture logs its mode at WARN -- the file sink's flush_on
+    // level -- so the line is on disk before __fastfail takes the process.
+    CHECK(Slurp(stem.string() + ".log.txt").find("death fixture: mode fastfail") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(stem.string() + ".dmp"));   // no minidump: the monitor never saw the fault
+    CHECK(WaitForNoSessionRecord(r.dir, std::chrono::seconds(5)));   // the monitor reaps the record (UE :1408)
+}
+
+// The other half of s5.8: a host that died THROUGH the crash path (exit 10,
+// report on disk) leaves the monitor silent -- one window per incident. The
+// session record is still present (a crash never reaches Shutdown), so this is
+// the "fresh report" clause of the rule doing its job.
+TEST_CASE("death fixture --monitor: a crash the host reported itself leaves the monitor silent", "[diag]")
+{
+    SkipIfBuildMachine();
+    const FixtureRun r = RunFixture("av", { "--monitor" });
+    CHECK(r.run.exitCode == 10);
+    REQUIRE_FALSE(r.stem.empty());
+    CHECK(WaitForNoSessionRecord(r.dir, std::chrono::seconds(5)));   // the monitor ran, decided, and reaped
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    CHECK(CountEnvelopes(r.dir) == 1);
+    CHECK(Arcane::Diag::ReadFile(r.stem.string() + ".arcdiag")->kind == "crash");
+}
+
+// D15's reason for existing: an external kill. The harness kills the sleeping
+// fixture at its cap (TerminateProcess with 1, a code inside the hosts'
+// "known" range) -- no report, no Shutdown, record left behind -> the monitor
+// names it. The exit code alone could never have said this was abnormal.
+TEST_CASE("death fixture --monitor: an external kill leaves the session record behind and the monitor reports it", "[diag]")
+{
+    SkipIfBuildMachine();
+    const auto exe = std::filesystem::absolute("../death-fixture/death-fixture.exe");
+    const auto dir = std::filesystem::temp_directory_path() / "arcane-death-killed-monitor";
+    std::filesystem::remove_all(dir); std::filesystem::create_directories(dir);
+    Arcane::Test::WitnessInvocation inv;
+    inv.exePath = exe;
+    inv.args = { "--dir", dir.string(), "--die", "none", "--monitor", "--hang", "60", "--hang-seconds", "100" };
+    inv.hardCapMs = 3000;   // killed mid-sleep; hang-seconds 100 keeps the watchdog quiet
+    const auto run = Arcane::Test::RunWitness(inv);
+    REQUIRE(run.timedOut);
+    const auto stem = WaitForKind(dir, "abnormal-exit", std::chrono::seconds(10));
+    REQUIRE_FALSE(stem.empty());
+    const auto env = Arcane::Diag::ReadFile(stem.string() + ".arcdiag");
+    REQUIRE(env.has_value());
+    CHECK(env->exitCode == 1);
+    CHECK(env->reason == "abnormal-exit: 0x00000001");
+    CHECK(WaitForNoSessionRecord(dir, std::chrono::seconds(5)));
+}
+
+// The hang-then-kill decision (task 9): a SURVIVABLE report the host wrote
+// earlier -- here a hang, reported unattended, so no hang window is up --
+// says nothing about a death that came later. The monitor still names the
+// kill; only a FATAL report of the host's own, or a live hang window that
+// never saw its host recover, speaks for the exit. Under the brief's "any
+// .arcdiag newer than the record" rule this case was silent.
+TEST_CASE("death fixture --monitor: a hang report written earlier does not silence the monitor when the host is later killed", "[diag]")
+{
+    SkipIfBuildMachine();
+    const auto exe = std::filesystem::absolute("../death-fixture/death-fixture.exe");
+    const auto dir = std::filesystem::temp_directory_path() / "arcane-death-hang-then-killed-monitor";
+    std::filesystem::remove_all(dir); std::filesystem::create_directories(dir);
+    Arcane::Test::WitnessInvocation inv;
+    inv.exePath = exe;
+    inv.args = { "--dir", dir.string(), "--die", "none", "--monitor", "--hang", "60", "--hang-seconds", "1" };
+    inv.hardCapMs = 5000;   // the hang report lands at ~1-2 s; the kill at 5 s
+    const auto run = Arcane::Test::RunWitness(inv);
+    REQUIRE(run.timedOut);
+    REQUIRE_FALSE(WaitForKind(dir, "hang", std::chrono::seconds(1)).empty());
+    const auto stem = WaitForKind(dir, "abnormal-exit", std::chrono::seconds(10));
+    REQUIRE_FALSE(stem.empty());
+    CHECK(Arcane::Diag::ReadFile(stem.string() + ".arcdiag")->exitCode == 1);
+    CHECK(WaitForNoSessionRecord(dir, std::chrono::seconds(5)));
+}
+
+// A clean run deletes its record in Shutdown, so the monitor has nothing to say.
+TEST_CASE("death fixture --monitor: a clean exit deletes the session record and the monitor stays silent", "[diag]")
+{
+    SkipIfBuildMachine();
+    const FixtureRun r = RunFixture("none", { "--monitor" });
+    CHECK(r.run.exitCode == 0);
+    CHECK(WaitForNoSessionRecord(r.dir, std::chrono::seconds(5)));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    CHECK(CountEnvelopes(r.dir) == 0);
+}
+
 // The console family (spec S5.7): Ctrl-C is two-step as in UE -- the first
 // press requests the host's clean exit, the second terminates -- and a console
 // close requests the SAME clean exit rather than a second one. Driven through

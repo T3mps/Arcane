@@ -2,8 +2,9 @@
 //
 // Report mode: read the envelope the host wrote, symbolize its minidump out of
 // process, write <stem>.symbolized.txt, then show the window (or exit,
-// unattended). Monitor mode (task 9): wait on a host pid and turn an
-// unrecognised exit code into an abnormal-exit report.
+// unattended). Monitor mode (task 9, Monitor.cpp): wait on the host's process
+// handle and turn a death the crash path never saw into an abnormal-exit
+// report.
 //
 // This process is deliberately MINIMAL: it links ArcaneCore.dll and the Win32
 // debug libraries and NOTHING else -- never ArcaneClient, no GPU, no ImGui --
@@ -15,8 +16,10 @@
 #include "FileText.hpp"
 #include "HangSession.hpp"
 #include "LogTail.hpp"
+#include "Monitor.hpp"
 #include "ReportView.hpp"
 #include "ReporterArgs.hpp"
+#include "ReporterShared.hpp"
 #include "ReporterWindow.hpp"
 #include "SymbolizedText.hpp"
 #include "Symbolizer.hpp"
@@ -63,29 +66,8 @@ namespace
         return envelopePath.parent_path() / envelopePath.stem();   // "<dir>/<name>" from "<dir>/<name>.arcdiag"
     }
 
-    // R67: Install/Shutdown bound by SCOPE, not by control flow.
-    // Diagnostics.hpp:109-112 is explicit that Install creates the crash thread
-    // and its events even with installCrashHandler and startHangWatchdog both
-    // off, and the death fixture's own comment records what skipping Shutdown
-    // cost last time: a joinable thread at static destruction, whose destructor
-    // calls std::terminate.
-    //
-    // R80 corrects what this comment used to claim. Task 5's kDeadline does NOT
-    // return from inside the guarded window -- it ends the process with
-    // TerminateProcess, so this guard never runs on that path. That is the
-    // CORRECT behaviour, not an oversight: TerminateProcess runs no destructors
-    // by design, and calling Shutdown() under an already-expired deadline could
-    // itself block on the very worker the deadline just gave up on. The guard
-    // stays because task 8's kHostMismatch IS a real return from this scope,
-    // and because the ordinary success path still needs it.
-    struct ArmedDiagnostics
-    {
-        explicit ArmedDiagnostics(const Arcane::Diagnostics::Config& cfg) { Arcane::Diagnostics::Install(cfg); }
-        ~ArmedDiagnostics() { Arcane::Diagnostics::Shutdown(); }
-
-        ArmedDiagnostics(const ArmedDiagnostics&)            = delete;
-        ArmedDiagnostics& operator=(const ArmedDiagnostics&) = delete;
-    };
+    // ArmedDiagnostics (R67/R80) lives in ReporterShared.hpp: monitor mode
+    // installs this process's own Diagnostics the same way (task 9).
 
     // The path of the sibling this reporter writes beside <stem>.
     //
@@ -103,7 +85,10 @@ namespace
         sibling += ".symbolized.txt";
         return sibling;
     }
+}
 
+namespace Arcane::Reporter
+{
     // The hang protocol's reporter half (plan 2, task 8; spec s5.4, D6/D7,
     // s9 "Reporter pid reuse"). Exists ONLY for an attended run whose view is
     // a hang: an unattended hang report waits on nothing (symbolize, write,
@@ -203,6 +188,12 @@ namespace
             if (waiter.joinable()) waiter.join();
         }
     };
+}
+
+namespace
+{
+    using namespace Arcane::Reporter;
+    using Arcane::NativeWindow;
 
     // "0xC0000005" for an NTSTATUS-shaped code, plain decimal for a small one
     // (an ordinary exit code reads better as "1" than "0x00000001").
@@ -250,12 +241,18 @@ namespace
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
         }
     }
+}
 
+namespace Arcane::Reporter
+{
     // Runs on the window thread (it IS `onCommand`, ReporterWindow's ctor
     // contract). The folder and the relaunch line are read from the window's
     // CURRENT view -- SetView may have replaced the initial one by the time a
     // button fires -- through ReporterWindow's mutex-guarded accessors
     // (R40), never captured once at window creation.
+    //
+    // R99 (task 9): external linkage, declared in ReporterShared.hpp, so the
+    // monitor's window runs the same handler with `hang = nullptr`.
     void OnButton(int id, ReporterWindow& ui, NativeWindow& window, HangWatch* hang)
     {
         HWND hwnd = static_cast<HWND>(window.Hwnd());
@@ -317,6 +314,12 @@ namespace
         default: break;
         }
     }
+}
+
+namespace
+{
+    using namespace Arcane::Reporter;
+    using Arcane::NativeWindow;
 
     int RunReport(const Args& a)
     {
@@ -636,7 +639,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         ARC_ERROR("reporter: {}\n{}", parsed.error, Usage());
         return ExitCode::kBadArgs;
     }
+    // A monitor line that parsed is a monitor that runs: RunMonitor returns
+    // Reporter::ExitCode::kOk whether or not it had anything to say.
     if (parsed.args->mode == Args::Mode::Monitor)
-        return ExitCode::kBadArgs;   // TASK 9: RunMonitor(*parsed.args)
+        return RunMonitor(*parsed.args);
     return RunReport(*parsed.args);
 }

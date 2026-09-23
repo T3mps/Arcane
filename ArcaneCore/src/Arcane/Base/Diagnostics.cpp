@@ -8,6 +8,8 @@
 #include <Arcane/Base/ModuleTable.hpp>    // address -> module+offset, lock-free (Task 3)
 #include <Arcane/Base/PortableStack.hpp>  // RtlVirtualUnwind walk -- no DbgHelp anywhere below
 
+#include <Json.hpp>                        // the session record (plan 2, task 9) -- written OFF the crash path only
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -306,6 +308,32 @@ namespace
     HANDLE             g_recoveredEvent  = nullptr;
     HANDLE             g_reporterProcess = nullptr;
     unsigned long long g_hostCreated     = 0;
+
+    // Monitor mode (plan 2, task 9; spec S5.8, D15). The session record's path
+    // is fixed ONCE per process -- at the first Install that launches a
+    // monitor -- because the monitor was handed that path on its command
+    // line: RetargetDumpDir rewrites the record's CONTENTS in place (so they
+    // name the project's report dir, D8) but never moves the file, or a
+    // monitor still watching the old path would read "deleted" -- a clean
+    // exit -- for every death after a project opened.
+    //
+    // `g_sessionRecordLive` is the ONE gate on deletion: exchange(false) then
+    // DeleteFileW, so the paths that delete it (Shutdown, the atexit hook,
+    // the console handler's thread) each do so at most once, on a static wide
+    // path, with no heap and no lock -- the atexit hook runs during
+    // DLL_PROCESS_DETACH, where a lock another (already-terminated) thread
+    // held would never be released.
+    wchar_t           g_sessionPathWide[kPathMax]{};
+    std::atomic<bool> g_sessionRecordLive{false};
+    bool              g_monitorLaunched = false;   // one monitor per PROCESS, whatever Install/Shutdown cycles follow
+
+    // Deletes the session record -- "this process recorded its clean exit".
+    // Heap-free and lock-free (see above); safe when none was ever written.
+    void DeleteSessionRecord() noexcept
+    {
+        if (g_sessionRecordLive.exchange(false, std::memory_order_acq_rel))
+            DeleteFileW(g_sessionPathWide);
+    }
 
     // Seed for the per-report envelope guid. Guid::Generate() draws from the
     // Core CSPRNG (a lock, and possibly the heap), so it runs ONCE here and
@@ -2131,9 +2159,16 @@ namespace
     //
     // A no-op when Shutdown() already ran, and safe to run when Install never
     // did (nothing below touches state that must exist).
+    //
+    // Plan 2, task 9: a main() that returns IS a clean exit, so this is also
+    // one of the two places the session record is deleted (D15). Heap-free
+    // (DeleteSessionRecord's contract), since this runs at DLL detach.
     void AtExitStopWatchdog() noexcept
     {
         StopWatchdog();
+#if defined(_WIN32)
+        DeleteSessionRecord();
+#endif
         g_exitedCleanly.store(true, std::memory_order_release);
     }
 
@@ -2173,6 +2208,11 @@ namespace
                 RequestCleanExit();
                 return TRUE;
             }
+            // Task 9: the user ASKED, twice -- a requested termination, not a
+            // death the monitor should report. Deleting the record is how the
+            // host says so (D15); without it the monitor would file an
+            // abnormal-exit report for STATUS_CONTROL_C_EXIT.
+            DeleteSessionRecord();
             TerminateProcess(GetCurrentProcess(), 0xC000013A);
             return TRUE;   // unreachable
 
@@ -2187,6 +2227,11 @@ namespace
             RequestCleanExit();
             for (int i = 0; i < 160 && !g_exitedCleanly.load(std::memory_order_acquire); ++i)
                 Sleep(25);
+            // Task 9: the user (or the session) closed us -- whether or not the
+            // host's own exit finished inside the budget, Windows ends the
+            // process when this returns, and that is not an abnormal exit for
+            // the monitor to report. A no-op when Shutdown already deleted it.
+            DeleteSessionRecord();
             return TRUE;
 
         default:
@@ -2276,6 +2321,181 @@ namespace
         const std::size_t n = w.size() < kPathMax - 1 ? w.size() : kPathMax - 1;
         std::wmemcpy(g_reporterExe, w.c_str(), n);
         g_reporterExe[n] = L'\0';
+    }
+
+    // ---- monitor mode (plan 2, task 9; spec S5.8, D15/D16) ----------------
+    // Everything below runs at Install / RetargetDumpDir time, on an ordinary
+    // thread: the heap, nlohmann and std::filesystem are all fine here. Only
+    // the DELETION (DeleteSessionRecord, above) runs on the exit paths.
+
+    // The session record (D15; UE's UECrashContext-<pid>.xml,
+    // GenericPlatformCrashContext.cpp:877-880, 949-984). Its PRESENCE after
+    // the process is gone is what the monitor reads as "died without a clean
+    // shutdown"; its contents are what the synthesized report needs. Written
+    // to a temp sibling and renamed over the old one, so a host that dies
+    // mid-rewrite leaves either the old record or the new one, never half.
+    //
+    // A rewrite racing a deletion on the console-handler thread cannot
+    // resurrect the record: the deleter clears g_sessionRecordLive BEFORE its
+    // DeleteFileW, and the writer re-checks the flag AFTER its rename -- so
+    // whichever order the two land in, the file is gone at the end.
+    void WriteSessionRecord()
+    {
+        if (!g_sessionPathWide[0] || !g_sessionRecordLive.load(std::memory_order_acquire)) return;
+
+        // ABSOLUTE paths in the record: a host opened with a relative
+        // `--project` retargets to a relative report dir, and the monitor --
+        // another process, reading this after the host is gone -- must not
+        // have to resolve it against a working directory it merely happened
+        // to inherit.
+        auto absoluteUtf8 = [](const char* utf8) -> std::string
+        {
+            if (!utf8 || !*utf8) return {};
+            wchar_t wide[kPathMax];
+            ToWide(utf8, wide, static_cast<int>(kPathMax));
+            std::error_code ec;
+            const std::filesystem::path abs = std::filesystem::absolute(std::filesystem::path(wide), ec);
+            const std::wstring w = (ec ? std::filesystem::path(wide) : abs).lexically_normal().wstring();
+            const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+            std::string out(n > 0 ? static_cast<std::size_t>(n) : 0, '\0');
+            if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
+            return out;
+        };
+
+        nlohmann::json doc;
+        doc["pid"]            = static_cast<std::uint32_t>(GetCurrentProcessId());
+        doc["app"]            = g_appNameSnap;
+        doc["product"]        = g_productSnap;
+        doc["logPath"]        = absoluteUtf8(g_logPathSnap);
+        doc["reportDir"]      = absoluteUtf8(g_reportDirSnap);
+        doc["commandLine"]    = g_commandLineSnap;
+        doc["hostCreated"]    = g_hostCreated;
+        // The D11 event's NAME, so the monitor can ask "is a hang window up
+        // for this host that never saw it recover?" without re-deriving the
+        // host's spelling of it.
+        char recovered[64]{};
+        WideCharToMultiByte(CP_UTF8, 0, g_recoveredName, -1, recovered, static_cast<int>(sizeof(recovered)), nullptr, nullptr);
+        doc["recoveredEvent"] = g_recoveredEvent ? recovered : "";
+        char stamp[48];
+        TimestampUtcIso8601(stamp, sizeof(stamp));
+        doc["launchedUtc"]    = stamp;
+        const std::string text = doc.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
+
+        const std::wstring tmp = std::wstring(g_sessionPathWide) + L".tmp";
+        const HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return;
+        const bool ok = WriteAll(h, text);
+        CloseHandle(h);
+        if (!ok || !MoveFileExW(tmp.c_str(), g_sessionPathWide, MOVEFILE_REPLACE_EXISTING))
+        {
+            DeleteFileW(tmp.c_str());
+            return;
+        }
+        if (!g_sessionRecordLive.load(std::memory_order_acquire)) DeleteFileW(g_sessionPathWide);
+    }
+
+    // R98 / R33 (spec S5.8 "waits on the host's process HANDLE"): the monitor
+    // is handed an inheritable duplicate of THIS process's handle, and it
+    // inherits that handle and nothing else. A pid the monitor opened for
+    // itself could name a stranger once this process is gone and the pid is
+    // recycled -- a handle cannot. PROC_THREAD_ATTRIBUTE_HANDLE_LIST, not a
+    // blanket bInheritHandles: a test harness hands a host its stdout/stderr
+    // as inheritable handles, and a monitor that inherited those would hold
+    // the harness's capture files (or pipes) open for as long as it lives.
+    // STARTF_USESTDHANDLES with null handles keeps the child's std slots
+    // empty rather than filled with this process's handle VALUES, which name
+    // nothing (or something else) over there.
+    void LaunchMonitor()
+    {
+        if (!g_reporterExe[0] || !g_sessionPathWide[0]) return;
+
+        HANDLE self = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &self,
+                             SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, /*inherit*/TRUE, 0))
+        {
+            ARC_WARN("Diagnostics: could not duplicate the host handle for the crash monitor ({}); abnormal exits will go unreported",
+                     GetLastError());
+            DeleteSessionRecord();   // nobody will ever reap it
+            return;
+        }
+
+        // A path and three numbers: nothing here needs escaping (a Windows
+        // path cannot contain a double quote).
+        std::wstring cmd = L"\"" + std::wstring(g_reporterExe) + L"\" --monitor " + std::to_wstring(GetCurrentProcessId())
+                         + L" --host-handle " + std::to_wstring(static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(self)))
+                         + L" --session \"" + std::wstring(g_sessionPathWide) + L"\"";
+        if (g_cfg.unattended) cmd += L" --unattended";
+
+        SIZE_T attrSize = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+        std::vector<unsigned char> attrStorage(attrSize);
+        auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrStorage.data());
+        bool                launched = false;
+        DWORD               error    = 0;
+        PROCESS_INFORMATION pi{};
+        if (InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize))
+        {
+            if (UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &self, sizeof(self), nullptr, nullptr))
+            {
+                STARTUPINFOEXW si{};
+                si.StartupInfo.cb      = sizeof(si);
+                si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;   // all three null: see above
+                si.lpAttributeList     = attrs;
+                launched = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, /*bInheritHandles*/TRUE,
+                                          EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | DETACHED_PROCESS,
+                                          nullptr, nullptr, &si.StartupInfo, &pi) != FALSE;
+            }
+            if (!launched) error = GetLastError();
+            DeleteProcThreadAttributeList(attrs);
+        }
+        else
+        {
+            error = GetLastError();
+        }
+        CloseHandle(self);   // the monitor holds its own copy now (or never will)
+
+        if (!launched)
+        {
+            ARC_WARN("Diagnostics: could not launch the crash monitor ({}); abnormal exits will go unreported", error);
+            DeleteSessionRecord();
+            return;
+        }
+        // D14: the first instance may need the foreground to pass on to its
+        // respawn (D16), which is the one that shows a window.
+        AllowSetForegroundWindow(pi.dwProcessId);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);   // D16: the host keeps no handle to either instance
+        g_monitorLaunched = true;
+        ARC_INFO("Diagnostics: crash monitor launched (pid {})", pi.dwProcessId);
+    }
+
+    // Install's half: fix the record's path (once per process), write it, and
+    // launch the monitor (once per process). The record must exist BEFORE the
+    // monitor starts -- a monitor that found nothing would read it as a clean
+    // exit. Written ONLY when a monitor will read it: a record nobody watches
+    // is never reaped and would pile up beside the reports.
+    void ArmMonitor()
+    {
+        if (!g_cfg.launchMonitor || !g_cfg.spawnReporter || IsDebuggerPresent() || !g_reporterExe[0]) return;
+        if (!g_sessionPathWide[0])
+        {
+            char pathUtf8[kPathMax];
+            std::snprintf(pathUtf8, sizeof(pathUtf8), "%s\\%s-pid%lu.session",
+                          g_reportDirSnap, g_appNameSnap, static_cast<unsigned long>(GetCurrentProcessId()));
+            ToWide(pathUtf8, g_sessionPathWide, static_cast<int>(kPathMax));
+            if (!g_sessionPathWide[0]) return;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(g_sessionPathWide).parent_path(), ec);
+        g_sessionRecordLive.store(true, std::memory_order_release);
+        WriteSessionRecord();
+        if (GetFileAttributesW(g_sessionPathWide) == INVALID_FILE_ATTRIBUTES)
+        {
+            g_sessionRecordLive.store(false, std::memory_order_release);
+            ARC_WARN("Diagnostics: could not write the session record; the crash monitor is not launched");
+            return;
+        }
+        if (!g_monitorLaunched) LaunchMonitor();
     }
 #endif
 }   // namespace
@@ -2464,13 +2684,24 @@ void Install(const Config& cfg)
     if (cfg.startHangWatchdog)
         StartWatchdog();
 
+#if defined(_WIN32)
+    // Monitor mode (plan 2, task 9; spec S5.8): LAST, once the snapshots the
+    // session record carries (app, product, log path, report dir, relaunch
+    // line, creation time, the D11 event name) all exist.
+    ArmMonitor();
+    const bool monitorOn = g_sessionRecordLive.load(std::memory_order_acquire) && g_monitorLaunched;
+#else
+    const bool monitorOn = false;
+#endif
+
     ARC_INFO("Diagnostics armed (crash handler {}, hang watchdog {} @ {}s, gpu-stall @ {}s, "
-             "reporter {}) -> {}",
+             "reporter {}, monitor {}) -> {}",
              cfg.installCrashHandler ? "on" : "off",
              cfg.startHangWatchdog ? "on" : "off",
              cfg.hangSeconds,
              cfg.gpuStallSeconds,
              g_cfg.spawnReporter ? "on" : "off",
+             monitorOn ? "on" : "off",
              ReportDir().string());
 }
 
@@ -2488,6 +2719,12 @@ void Shutdown() noexcept
     // otherwise be terminated with 12 by a thread nobody can see,
     // exitSeconds after any quit request.
     StopWatchdog();
+
+#if defined(_WIN32)
+    // Plan 2, task 9 (D15): reaching Shutdown IS the clean exit -- deleting
+    // the session record is how this process tells its monitor so.
+    DeleteSessionRecord();
+#endif
 
 #if defined(_WIN32)
     if (g_consoleHandlerInstalled)
@@ -2580,6 +2817,10 @@ void RetargetDumpDir(const std::filesystem::path& dir)
     // is host state and never moves.
     if (g_cfg.logDir.empty())
         AttachLogSink();
+    // Plan 2, task 9 (D8/D15): the session record now names the new report
+    // dir and log -- rewritten IN PLACE (the monitor was told its path at
+    // launch); a no-op when no monitor is watching or the record is gone.
+    WriteSessionRecord();
 #endif
 }
 

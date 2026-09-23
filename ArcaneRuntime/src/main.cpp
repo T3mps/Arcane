@@ -85,6 +85,9 @@ int main(int argc, char** argv)
         diag.appName     = "ArcaneRuntime";
         diag.productName = ProductNameFor(parsed.config->projectPath);
         diag.unattended  = parsed.config->headless;   // nobody to answer a reporter window
+        // Spec S5.8 (plan 2, task 9): windowed runs pre-launch the crash monitor;
+        // headless runs, build machines and debugged runs launch none.
+        diag.launchMonitor = !parsed.config->headless;
         // Element 0 is ExecutablePathUtf8(), NOT argv[0] -- the same reason the
         // probe above gives for not printing argv[0]: a bare relative name in
         // ANSI-codepage bytes is not something a reporter can relaunch or put

@@ -364,6 +364,13 @@ int main(int argc, char** argv)
         // A --headless run has nobody to answer a reporter window: the report
         // is written, the reporter stays silent.
         diag.unattended  = parsed.config->headless;
+        // Spec S5.8 (plan 2, task 9): a windowed run pre-launches the crash
+        // MONITOR, so a death the crash path never sees (__fastfail, /GS, heap
+        // corruption, an external kill) still becomes a report. A --headless
+        // run has nobody to show it to and launches none. Install also skips
+        // it on a build machine (spawnReporter forced false) and under a
+        // debugger.
+        diag.launchMonitor = !parsed.config->headless;
         // The RELAUNCH line the reporter's "restart" offers -- this run's argv
         // minus the capture harness, so a crashed verify run comes back as the
         // session it was rendering. See SanitizeRelaunchLine (HostConfig.hpp).
