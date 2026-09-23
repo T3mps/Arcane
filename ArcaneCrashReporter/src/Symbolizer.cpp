@@ -102,6 +102,16 @@ namespace Arcane::Reporter
             //
             // Sized with a null buffer first, so a long value is USED rather
             // than dropped: the developer who set a 5 KB symbol path meant it.
+            //
+            // R113: NOT in Dist. UE's reason (WindowsPlatformStackWalkExt.cpp
+            // :22-28): "we don't want shipping crash reporter to try to
+            // access build servers" -- _NT_SYMBOL_PATH is exactly that, an
+            // env var a build machine or a developer's desk sets to point at
+            // one. The explicit --symbol-path seam (opt.symbolPath, checked
+            // by the caller above) and the module-directory search
+            // (ModuleDirectories, just above) are unaffected in every
+            // configuration -- only the ambient env var is shut off here.
+#if !defined(ARCANE_DIST)
             const DWORD needed = GetEnvironmentVariableW(L"_NT_SYMBOL_PATH", nullptr, 0);
             if (needed > 1)
             {
@@ -116,6 +126,7 @@ namespace Arcane::Reporter
                     path += env;
                 }
             }
+#endif
             return path;
         }
 
@@ -286,7 +297,15 @@ namespace Arcane::Reporter
             if (SUCCEEDED(sys->SetCurrentThreadId(eventTid)) && SUCCEEDED(sys->GetCurrentThreadSystemId(&sysId)))
                 t.systemId = sysId;
 
-            std::vector<DEBUG_STACK_FRAME> frames(opt.maxFramesPerThread);
+            // R112: this walk -- the faulting thread only -- gets the deep
+            // 8192-frame cap; other threads below still use
+            // maxFramesPerThread. FrameContexts is nullptr/0 (we do not ask
+            // dbgeng for per-frame contexts), so this vector is the only
+            // buffer that scales with the cap, and it is a std::vector, not a
+            // fixed-size array -- 8192 * sizeof(DEBUG_STACK_FRAME) is a heap
+            // allocation, not a stack overrun. (UE's MaxFramesSize concern is
+            // for its fixed local array; not applicable to this shape.)
+            std::vector<DEBUG_STACK_FRAME> frames(opt.maxFramesFaultingThread);
             ULONG                          filled = 0;
             if (SUCCEEDED(control->GetContextStackTrace(ctx.data(), ctxUsed, frames.data(), static_cast<ULONG>(frames.size()),
                                                         nullptr, 0, 0, &filled)))

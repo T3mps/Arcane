@@ -14,6 +14,11 @@
 // minidump the death fixture wrote.
 
 #include "SymbolizedText.hpp"
+// Symbolizer.hpp is the pure seam ITSELF free of windows.h/dbgeng (only
+// Symbolizer.cpp touches those, and that TU is not compiled into this exe --
+// see its own header comment). SymbolizeOptions' defaults are therefore
+// testable directly, same as SymbolizedText.hpp above.
+#include "Symbolizer.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -106,4 +111,17 @@ TEST_CASE("symbolized text: a capped walk says so, an empty thread is not a blan
     plain.threads.push_back({ 9, true, { { 0x1, "m", "f", 0x2, "", 0 } } });
     const std::string quiet = FormatSymbolized(plain, "b", "");
     CHECK(quiet.find("truncated") == std::string::npos);
+}
+
+// R112 (post-review UE audit): the FAULTING thread's cap is deep, matching
+// UE's MaxFrames = 8192 (WindowsPlatformStackWalkExt.cpp:481); every OTHER
+// thread keeps the small cap Symbolizer.cpp has always used. A pure default
+// check -- Symbolizer.cpp's dbgeng walk itself is CrashPathTest's job (a real
+// minidump), not this TU's.
+TEST_CASE("symbolize options: the faulting thread's cap is deep (8192), other threads stay small (64)", "[reporter]")
+{
+    SymbolizeOptions opt;
+    CHECK(opt.maxFramesFaultingThread == 8192u);
+    CHECK(opt.maxFramesPerThread == 64u);
+    CHECK(opt.maxThreads == 64u);
 }

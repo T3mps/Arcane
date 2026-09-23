@@ -37,6 +37,12 @@ namespace Arcane::Reporter
         bool          ignoreCvRecord     = false;
         // R78: the walk stops at these, and the report SAYS SO when it does.
         std::uint32_t maxFramesPerThread = 64;
+        // R112: the FAULTING thread only, matching UE's MaxFrames = 8192
+        // (WindowsPlatformStackWalkExt.cpp:481) -- a stack overflow is exactly
+        // the report that needs the deep frames. Every OTHER thread keeps the
+        // small maxFramesPerThread cap above, same as UE walking only the
+        // responsible thread for a stall/ensure.
+        std::uint32_t maxFramesFaultingThread = 8192;
         std::uint32_t maxThreads         = 64;
         std::uint32_t waitForEventMs     = 30000;
     };
