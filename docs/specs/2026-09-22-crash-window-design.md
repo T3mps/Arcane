@@ -11,9 +11,55 @@ awaiting the written-spec review before the implementation plan.
 feat/crash-window-plan-1, commit c15d71d6 (+ this close-out); plans 2
 (reporter + NativeWindow + monitor mode) and 3 (autosave) pending.
 
-**Plan 2 status:** in progress on `feat/crash-window-plan-2` (reporter +
-NativeWindow + monitor mode); the envelope gains `reason` (D2); the fatal
-echo bypasses spdlog (D9); one submit deadline; orphaned-watchdog guard.
+**Plan 2 status:** Plan 2 (reporter + NativeWindow + monitor mode)
+implemented 2026-09-23 on `feat/crash-window-plan-2`, commit: this commit
+(the ABI 40 close-out); plan 3 (autosave) pending. The envelope gains
+`reason` (D2); the fatal echo bypasses spdlog (D9); one submit deadline;
+orphaned-watchdog guard. Decisions D1-D16 are the plan's
+(`docs/superpowers/plans/2026-09-23-crash-window-plan-2-reporter.md`);
+the "(plan 2 as built)" notes below record where the build refined them.
+ABI 39 -> 40: `Diag::Envelope` gained `std::string reason`,
+`Diagnostics::Config` gained `launchMonitor`, and ArcaneCore.dll gained the
+`NativeWindow` surface (incl. `NativeWindowDesc::dialogNavigation`).
+
+**Plan 2 measurements (2026-09-23, Debug, this desk, head of
+`feat/crash-window-plan-2`):**
+- Desk 1, the monitor's real case: `ArcaneEditor.exe --project
+  ReferenceProject --backend vulkan` windowed died 10.4 s after launch with
+  `0xC0000409` (GPU Tweak III's `GTIII-OSD64-VK.dll`) and no report of its
+  own; the monitor's window "Arcane Editor -- exited abnormally", reason
+  `abnormal-exit: 0xC0000409 STATUS_STACK_BUFFER_OVERRUN`, was up 993 ms
+  after the host died; its log tail names `GTIII-OSD64-VK.dll` (and
+  `GTIII-OSD64.dll`, `-GL.dll`, the Nahimic modules) from the host's
+  `[foreign-module]` lines. The report (`.arcdiag`, `.txt`, `.log.txt`, no
+  `.dmp`) landed in `<exe dir>/ReferenceProject/Saved/Diagnostics` -- the
+  project had opened, so `RetargetDumpDir` had rewritten the record (D8).
+  Relaunch spawned `ArcaneEditor.exe --project ReferenceProject --backend
+  vulkan` (the same line) as the monitor's child, which died the same way
+  and got its own monitor window.
+- Desk 2, assert: `death-fixture --die assert --reporter --attended` exit
+  10 at 205 ms; window up at 898 ms, already symbolized, reason `assert:
+  false -- fixture assert (...DeathFixtureMain.cpp:92)`,
+  `death_fixture!main+0x61c [...DeathFixtureMain.cpp:92]` in the faulting
+  thread.
+- Desk 3, hang: `death-fixture --hang 60 --hang-seconds 2 --reporter
+  --attended`: window at 3.2 s; Terminate and Collect -> fixture exit 11
+  3 ms after the click, window retitled "-- terminated and collected",
+  reporter exit 0; Keep Waiting (second run) -> reporter exit 0 at once,
+  fixture ran on and exited 0 at 60.1 s.
+- Desk 4, windowed dx12 editor, WM_CLOSE: exit 0; no
+  `ArcaneCrashReporter.exe` on the desk 5 s later (monitor silent, record
+  deleted). The windowed runtime likewise.
+- Desk 5, headless editor `--backend dx12 --frames 900`: exit 0 in 6.1 s;
+  "Diagnostics armed (... reporter on, monitor off)".
+- H1 witness lane: 18.5 s (including the 15 s scripted hang).
+- Symbolization of the fixture's assert dump by the unattended reporter:
+  195-215 ms with PDBs (names + lines), 95-97 ms with PDBs hidden
+  (`--symbol-path` at an empty directory: module+offset).
+- Suite: `~[gpu]` 2026 cases / 2022 passed / 4 skipped; `[reporter]` 22;
+  `[diag]` 92; `death fixture*` 13; `[platform]` 6; `[boot]` 33; `[host]`
+  98; `[witness][gpu]` 8 cases, 7 passed, 1 skipped (G1, desk-gated);
+  `[witness][server]` 3/3; golden gate 8/8. All exit 0.
 
 **Plan 1 measurements (2026-09-22, Debug, this desk):**
 - Death fixture (`bin/Debug-windows-x86_64-md/death-fixture`), wall time to
@@ -235,6 +281,24 @@ envelope carries the portable stack in `cpuThreadSummary`, not a separate
 field (R4); a full envelope that cannot fit the arena is elided (an 8 KiB
 lean form) or withheld entirely, never truncated on disk.
 
+(plan 2 as built) The envelope gains `reason` (D2): the same string the
+`.txt` header's `reason :` line carries ("assert: <expr> -- <msg>
+(<file>:<line>)", "hang (main thread has not ticked for 12.3s)", the
+exception code and address), additive and optional, format version
+unchanged, so the reporter reads one file. Every spawn carries `--host-created
+<u64>` (the host's creation `FILETIME`, D7); the reporter compares it against
+`GetProcessTimes` on the handle it opened at start before any
+`TerminateProcess`, so pid reuse cannot make it kill a stranger. The shipped
+report line is `ArcaneCrashReporter.exe "<stem>.arcdiag" --pid <n> --kind
+<kind> --product "<name>" --host-created <u64> [--unattended]
+[--recovered-event <name>]` (`--recovered-event` only for kind
+`hang|gpu-stall`, §5.4). `--relaunch` is an override that no host or monitor
+launch emits (R43): the relaunch line comes from the envelope's
+`commandLine` in report mode, or from the session record in monitor mode
+(§5.8), so nothing is ever escaped for `CommandLineToArgvW`. The monitor line
+is §5.8's. Test and operator seams the hosts never pass: `--symbol-path`,
+`--deadline` (§6).
+
 **Exit codes** (a block clear of the hosts' existing 0-5, which the Hub and
 the witness harness decode): `10` crashed with a report written, `11` hang
 terminated by the reporter (the reporter's `TerminateProcess` argument), `12`
@@ -242,6 +306,17 @@ exit sentinel fired, `13` a crash inside the crash path itself (UE's
 `CrashReporterCrashed` shape). The kind is always in the envelope; the codes
 only tell a parent "a report exists". Fail-fasts SEH never sees keep their
 NTSTATUS codes, and the monitor (§5.8) turns those into a report.
+
+(plan 2 as built) The REPORTER's own exit codes, a separate block from the
+hosts' (`ArcaneCrashReporter/src/ReporterArgs.hpp`, `ExitCode`): `0` done
+(including Keep Waiting, D6); `2` bad arguments (every malformed line is
+refused and named, never absorbed into a default); `3` envelope unreadable;
+`4` host identity mismatch, terminate refused (D7); `5` unattended deadline
+expired with a partial `.symbolized.txt` written; `6` everything parsed and
+loaded, but the one artifact of this hand-off (the `.symbolized.txt`
+sibling) could not be written (R71 -- the envelope was read, so `3` would
+name an untrue cause, no deadline expired, so `5` would too, and `0` would
+be a lie).
 
 **Threads.** The crash thread (raw `CreateThread`, created in `Install`,
 waits on an event); the watchdog thread (existing); the reporter's UI thread
@@ -400,6 +475,41 @@ closes itself. If the user chooses Terminate and Collect, the reporter
 `TerminateProcess(host, 11)`es and becomes the crash view of the report it
 already holds.
 
+(plan 2 as built) The hang protocol -- `ResetEvent`, the kept reporter
+handle, the D12 one-live-reporter gate and `--recovered-event` -- is keyed
+on the report's KIND, `hang` or `gpu-stall` (with exit code 0), never on the
+exit code alone (R95): a device-removed `gpu-crash` report is exit-0 too,
+and keyed on the code it would be swallowed by a `gpu-stall` window's gate
+(the canonical TDR sequence). Every other report, including exit-0
+`gpu-crash` and manual ones, gets a plain detached reporter whose handle is
+closed; it is never gated by a hang window and never gates one.
+- **D11 recovered event.** `Local\Arcane-Recovered-<pid>`, manual-reset,
+  created by `Install`; `ResetEvent` before every hang-protocol spawn (even
+  with the spawn disabled, so the observable half runs on a build machine
+  too); `SetEvent` from the watchdog when the main-thread beat resumes after
+  a `hang` report or GPU progress resumes after a `gpu-stall` report
+  (`ProgressStallRule::WasReported()` read on both sides of a `Poll()`);
+  never signalled by an orphaned watchdog; closed at `Shutdown`.
+- **D12 one live reporter.** The host keeps the process handle of the
+  reporter spawned for a hang-protocol report; while
+  `WaitForSingleObject(h, 0) == WAIT_TIMEOUT` no second reporter is spawned
+  (the report itself is still written). The reporter releases the recovered
+  event THE MOMENT its window is gone (R102), not when symbolization ends,
+  so a Close or Keep Waiting while the details still say "Symbolizing..."
+  cannot leave the event unsignalled -- the monitor's hang-window exception
+  (§5.8) would otherwise swallow a kill in that gap.
+- **D6 Keep Waiting.** The reporter exits 0; the report stays on disk; the
+  host's once-per-stall rule re-arms on progress, so a later stall gets a
+  new reporter. Nothing hides and lingers.
+- The reporter's decision table (`HangSession`, pure): recovered -> close,
+  0; Keep Waiting -> close, 0; identity mismatch -> close, 4 (D7);
+  Terminate and Collect -> `TerminateProcess(host, 11)` then crash view;
+  host exited 10/12/13 -> close, 0 (another reporter owns that fatal view);
+  host exited 11 -> crash view; any other exit, INCLUDING 0 -> crash view
+  "-- the host exited (<code>)" (R94: a host that exits under its hang
+  window without ever beating again never recovered, and saying so beats
+  vanishing). `BecomeCrashView` latches: the first call wins (R35).
+
 ### 5.5 The arena
 
 A fixed static block (256 KiB, hard cap) bump-allocated by the crash thread
@@ -487,6 +597,71 @@ spawns itself. Headless and build-machine runs launch no monitor. One monitor
 per host process; the reporter spawned by a crash and the monitor never both
 show a window, because the monitor sees the fresh report and exits.
 
+(plan 2 as built; D4, D8, D15, D16) The rule above that decides from the exit
+code was replaced before it shipped, after the UE audit: UE's monitor does
+not decide "abnormal" from the exit code either.
+- **D4 gate.** `Config::launchMonitor` (default `false`); the editor and the
+  runtime set it to `!headless`, the server never, the death fixture on
+  `--monitor`. `Install` launches the monitor iff `launchMonitor &&
+  spawnReporter && !IsDebuggerPresent()`, passing `--unattended` when
+  `Config::unattended` (an unattended monitor synthesizes the report and
+  shows nothing, which is what makes it testable). The "Diagnostics armed"
+  log line says `monitor on|off`.
+- **D15 session record.** `Install` writes `<Install-time report
+  dir>/<app>-pid<pid>.session` (JSON, absolute paths, temp file + rename:
+  `pid`, `app`, `product`, `logPath`, `reportDir`, `commandLine`,
+  `hostCreated`, `recoveredEvent`), and ONLY when a monitor is actually
+  launched. The record's PATH is fixed for the host's life -- the monitor
+  was told that path -- and `RetargetDumpDir` rewrites its CONTENTS in
+  place (R101; deleting and rewriting at a new path would have made every
+  death after a project opens read as a clean exit). A failed rewrite logs
+  `ARC_WARN`, retries once and, still failing, KEEPS the old record and
+  says a crash after this point may show two windows (R103) -- deleting it
+  would be false silence, the worse error. `Shutdown()`, the atexit hook
+  and the console handler's user-requested terminations (close, second
+  Ctrl+C) delete it.
+- **The verdict ignores the exit code.** Record gone -> clean exit, silent.
+  Record present and the crash path spoke -> silent (that reporter owns the
+  window). Record present and it did not -> an `abnormal-exit` report whose
+  reason names the code (`abnormal-exit: 0xC0000409
+  STATUS_STACK_BUFFER_OVERRUN`, the exit code table is decoration, as in
+  UE), with the host's log tail copied as the backlog. So a 13 with no
+  report on disk IS reported, and `taskkill /F` (exit 1) is too. "The crash
+  path spoke" means a FATAL host report (the host's stem, `exitCode != 0`)
+  written during this host's lifetime (`GetProcessTimes` creation time) in
+  the directory the record names.
+- **The hang-window exception.** The monitor also stays silent when an
+  attended hang window already owns the death: a hang reporter is still
+  alive and its host never recovered (the event the record's
+  `recoveredEvent` names is still open -- only a live hang reporter holds it
+  once the host is gone -- and unsignalled), AND §5.4's table keeps that
+  window up as the crash view for this exit code (every code but 10/12/13;
+  11 from Terminate and Collect included). That window is what the user
+  sees; a second one would be noise.
+- **D8 report directory.** The monitor writes into the report directory the
+  record names: `<exe dir>/diagnostics` before a project opens, the
+  project's `Saved/Diagnostics` after `RetargetDumpDir`.
+- **The monitor line** is `ArcaneCrashReporter.exe --monitor <pid>
+  --host-handle <u64> --session "<record>" [--unattended]`; there is no
+  `--product`/`--log`/`--report-dir` on it (the record carries them; the
+  parser keeps `--log`/`--report-dir` only as overrides). `--host-handle`
+  (R33) is an INHERITABLE `SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION`
+  duplicate of the host's own handle, inherited through
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` alone; a blanket `bInheritHandles`
+  would leak every inheritable handle the host holds -- under `RunWitness`,
+  which captures stdio to FILES, that would hold the capture files open.
+  `OpenProcess` by pid remains the fallback when the flag is absent.
+- **D16 respawn.** The first monitor instance relaunches itself with
+  `--respawned` (passing the same handle the same way) and exits, so its
+  parent is a process that no longer exists and "End process tree" on the
+  host cannot take the monitor with it. The host keeps no handle to either.
+- "Never both show a window" holds only while the record rewrite succeeds
+  (R103 above).
+- A fail-fast loses whatever the log sink had buffered below `warn` (the
+  file sink flushes on warn, §5.6), so the monitor's log tail ends at the
+  last warn-or-worse line (R32; the death fixture logs its mode line at
+  `ARC_WARN` for that reason).
+
 ## 6. The reporter
 
 **Program.** `ArcaneCrashReporter` (`ArcaneCrashReporter/src/`): argument
@@ -542,6 +717,59 @@ log and stderr, same exit code, report on disk. Reporter crashes: its own
 portable stack. Debugger attached to the host: no reporter spawned (the
 debugger has the crash), as UE.
 
+(plan 2 as built)
+- **Exit codes.** `0` done, `2` bad arguments, `3` envelope unreadable, `4`
+  host identity mismatch (terminate refused), `5` unattended deadline
+  expired with a partial sibling written, `6` the `.symbolized.txt` sibling
+  could not be written although everything parsed and loaded (R71; §4).
+  Failure modes gain that row: a sibling write that fails is named by exit
+  6 and on the window, never reported as success.
+- **Relaunch.** `--relaunch` is an override no host or monitor launch emits
+  (R43, D1): the line comes from the envelope's `commandLine` (report mode)
+  or the session record (monitor mode, §5.8). The relaunched process
+  inherits the REPORTER's working directory, not the dead host's. A failed
+  relaunch stays on screen and says why. Relaunch is hidden for a hang until
+  the host is terminated.
+- **`--symbol-path "<a;b>"`** (D5, test seam) REPLACES the default search
+  and sets BOTH `SYMOPT_IGNORE_CVREC` and `SYMOPT_NO_IMAGE_SEARCH`.
+  Measured: `IGNORE_CVREC` alone did NOT hide the PDBs on the desk that
+  built them -- dbghelp fell back to the image's recorded directory, where
+  the PDB sits beside the exe -- so the PDBs-hidden case resolved names and
+  the seam was decorative until `NO_IMAGE_SEARCH` joined it in the same
+  branch.
+- **`--deadline <s>`** (unattended; tests lower it; default 60, §6 above).
+  `--deadline 0` is REFUSED at parse time with exit 2; the floor is 1 s
+  (R60: "no deadline" would silently unbind the one flag whose purpose is
+  to bound an unattended child, and "expire at once" is not even a reliable
+  test lever). There is deliberately NO ceiling (R73): a long deadline is a
+  legitimate operational choice. No host emits `--deadline`; the reporter's
+  own 60 s default bounds a host that omits it. Attended runs are unbounded
+  while the window is open, and bounded from symbolization start once it
+  closes (R89, §7).
+- **Symbolization of a nested report.** A report raised on the crash thread
+  itself (a fault inside the crash path) still yields a minidump with no
+  exception stream -- the synthetic exception stream covers the suspend
+  path only (hang, watchdog and fail-fast reports) -- and the reporter's
+  faulting-thread choice falls back to the portable stack's walked thread
+  id (`ParseWalkedThreadId`/`PutFaultingFirst`) (R41).
+- **The fatal echo (D9).** For a report with `exitCode != 0` the post-file
+  echo (`Diagnostics: <reason> -- report written`, header, stack, hand-off
+  and elision warnings) is appended to `<App>.log` by `WriteFile` and
+  written to the stderr handle, never through spdlog, whose sink mutex the
+  dead thread may hold; those lines therefore carry NO spdlog prefix.
+  Survivable reports keep `ARC_ERROR`/`ARC_WARN`. A fail-fast loses
+  whatever the sink had buffered below `warn` (R32, §5.8).
+- **Self-protection (D13).** The reporter installs `Diagnostics` with
+  `spawnReporter = false`, no hang watchdog, and `dumpDir` = the report's
+  own directory, which is the mechanism behind "it never spawns itself".
+- **Foreground (D14).** The host calls `AllowSetForegroundWindow` on the
+  reporter's pid after every spawn and the window calls
+  `SetForegroundWindow` once shown.
+- Build machines: the spawn-needing tests skip under `CI` /
+  `ARCANE_BUILD_MACHINE` unless `ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE`
+  is set (UE's `-AllowCrashReportClientOnBuildMachine` as an environment
+  variable), which `Install`'s gate honours too.
+
 ## 7. `Arcane::NativeWindow`
 
 Lifted from `ArcaneClient/src/Arcane/Host/BootSplashWindow.cpp`, which has
@@ -560,6 +788,42 @@ w, l)`, `OnDestroy`. `BootSplashWindow` becomes a presenter in
 progress; its public API and its device-free tests are unchanged. The reporter
 is a presenter in its own exe using standard child controls. This is not a
 UI toolkit and not a second window path for the hosts.
+
+(plan 2 as built) The presenter interface as shipped
+(`ArcaneCore/src/Arcane/Platform/NativeWindow.hpp`, exported): `OnCreate(void*
+hwnd)` (before the first paint), `OnPaint(void* hdc, left, top, right,
+bottom)`, `OnCommand(int id)`, `OnSize(w, h)`, `OnUser(unsigned msg,
+uintptr_t, intptr_t) -> bool` (`PostUser`'s `msg` < 256), `OnDestroy()` --
+Win32 types erased to `void*` so the header stays windows.h-free, every
+default a no-op. `NativeWindow`: `Open` (once per object), `WaitUntilReady`,
+`Close` (safe from the window thread itself: it closes without joining),
+`Wait` (join without closing), `IsOpen`/`WasEverOpen` (atomics),
+`Hwnd`, `Dpi`, `OnWindowThread`, `Invalidate`, `PostUser`, `SetTitle`.
+`NativeWindowDesc` carries class name, title, size, `popup`, `topmost`,
+`appWindow`, `backgroundRgb` (honoured only by the window that first
+registers the class) and `dialogNavigation` (R83, default `false`): when
+set the loop runs `IsDialogMessageW` before translate/dispatch, so Tab moves
+between controls. `Dpi()` and `Invalidate()` are direct non-blocking USER32
+calls on the caller's thread, not posted messages. The splash is untouched by
+`dialogNavigation`.
+
+The reporter window, as shipped: title "<product> -- <plain-words kind>";
+header, time + build, reason; a thread selector; a read-only monospace
+details pane (the whole `.symbolized.txt` view, then the log tail, then the
+report folder); buttons Open Report Folder, Copy Details, Close (the
+`BS_DEFPUSHBUTTON`), Relaunch, Keep Waiting, Terminate and Collect, shown per
+mode. Esc (`IDCANCEL`) and Enter with no focused button (`IDOK`) both map to
+Close, never to Relaunch. Default size 1000x640 at 96 DPI, the width at
+which all six hang-row buttons fit; `Layout` never lets a button run past
+the client edge -- the 150 px preferred width shrinks to fit, floored at
+72 px (R92). Fonts are rebuilt on `OnSize` when `GetDpiForWindow` changed
+(R85). `BecomeCrashView` latches, first call wins (R35). An attended run
+waits in 250 ms slices on "worker done OR window closed": unbounded while
+the window is open, and once it is closed with the worker still running,
+the unattended deadline applies measured from when symbolization STARTED,
+writing the partial sibling and taking exit 5 if it has already expired
+(R89). A hang reporter releases the recovered event the moment its window
+is gone (R102, §5.4).
 
 ## 8. Autosave and recovery
 
@@ -677,6 +941,18 @@ the log; the autosaves and the marker are already on disk.
   reporter sibling; a hang lane proves the report and sibling under the
   harness cap; a headless editor writes no marker.
 - **Gate**: 8/8 unchanged; headless never arms autosave, so no chrome change.
+- (plan 2 as built) **H1** (`CrashWitnessTest.cpp`, `[witness][gpu]`): the
+  headless runtime with `--hang-main 30` (D10: the main thread sleeps
+  `kHangMainSeconds = 15` without beating on frame 30, then carries on)
+  yields a `hang` report, the staged reporter's `.symbolized.txt` sibling
+  and a clean exit; it is IN the gate and runs on every desk gate (it skips
+  on a build machine unless `ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE`).
+  **G1** (the deliberate GPU fault / TDR through the reporter) is
+  DESK-GATED: it skips unless `ARCANE_DIAG_DESK` is set, because it drives
+  the real driver into a device reset; it is run by hand at a moment the
+  user picks (`ARCANE_DIAG_DESK=1 ./ArcaneTests.exe "G1*"` from the
+  ArcaneTests exe dir). G1's outcome: pending the user's run (recorded
+  below when it happens).
 - **Desk**: the overlay close-crash reproduction shows GPU Tweak III by name
   in the window; a deliberate assert in the Aphelyon module shows expression
   and location; the exit sentinel against the Vulkan teardown hang if it
@@ -739,3 +1015,29 @@ Owed from plan 1's build (2026-09-22):
 - The job-worker stack guarantee (`GuaranteeStackForThisThread`, R23) is
   wired into `JobSystem` and `ServiceThread` but has no test proving a
   worker thread actually survives a near-overflow.
+
+Owed from plan 2's build (2026-09-23):
+- The editor's `CrashReportDocument` showing the reporter's
+  `.symbolized.txt` sibling (and `foreignModules` products) -- still owed
+  from the list above; plan 2 wrote the sibling but no editor view reads it.
+- The Hub decoding the host exit codes 10-13 into a "crashed, report at"
+  row (10/11/12 above, plus 13).
+- The editor's Console sink still mutates the engine logger's sink vector
+  directly; it belongs inside the dist sink (§5.6's rule), like the file
+  and backlog sinks.
+- Release-config rows for the death fixture (above), now also for the
+  reporter and monitor lanes.
+- The monitor's pre-retarget directory: a record written by `Install`
+  names `<exe dir>/diagnostics` until `RetargetDumpDir` runs, so a death
+  in the window before a project opens reports there, not under the
+  project (D8) -- intended, but nothing points the project's
+  `Saved/Diagnostics` at it afterwards.
+- **Editor-styled reporter window.** The user asked for the reporter window
+  to look like the editor's custom ImGui. Research: UE's crash reporter is
+  a MONOLITHIC exe carrying Slate plus a standalone D3D11 renderer, which
+  retries renderer init 10 x 2 s and falls back to unattended; Firefox's
+  uses native Win32/Cocoa/GTK; Crashpad and Sentry have no UI. The
+  candidate design is ImGui rasterized on the CPU and blitted with GDI --
+  no graphics device, so immune to the overlay injection that is often
+  WHY the host died -- with today's Win32 window as the fallback floor.
+  The advantage of the Win32 window to keep: native accessibility (UIA).

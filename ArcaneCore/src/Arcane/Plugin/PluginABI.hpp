@@ -934,7 +934,17 @@ namespace Arcane
     //     the log file sink, and GuaranteeStackForThisThread. A v38 module was
     //     compiled against a Core with neither; reject the pairing.
     //     ReferenceProject.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 39;
+    // v40 (2026-09-23, crash window plan 2): layout and export changes a
+    //     module's own headers can see. Diag::Envelope gains `std::string
+    //     reason` (D2) -- the type crosses ArcaneCore.dll, so its size and
+    //     member offsets moved. Diagnostics::Config gains `launchMonitor`
+    //     (D4, monitor mode), changing the layout of a struct a module can
+    //     construct. ArcaneCore.dll gains the NativeWindow surface
+    //     (NativeWindow, INativeWindowPresenter, NativeWindowDesc incl.
+    //     `dialogNavigation`). ProgressStallRule::WasReported() is inline and
+    //     adds no export. A v39 module was compiled against the old layouts;
+    //     reject the pairing. ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 40;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
