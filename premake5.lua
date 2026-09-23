@@ -1538,6 +1538,7 @@ project "ArcaneTests"
         -- Windows gate.
         "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
     }
 
     includedirs {
