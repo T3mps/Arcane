@@ -98,6 +98,10 @@ namespace Arcane
         // VerifyReport, not here: the kinds are that component's vocabulary.
         std::vector<std::string> probes;
 
+        // Repeatable `--set name=value`. Applied at SetBy::CommandLine after
+        // the config layers. Not a cvar itself.
+        std::vector<std::string> cvarSets;
+
         // --settle N. --headless only, refused elsewhere -- same idiom as
         // fixedDtSeconds above -- and requires --screenshot or --report too
         // (RuntimeFrame.cpp's CaptureTail has nowhere to land the comparison

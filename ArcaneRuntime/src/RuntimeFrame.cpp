@@ -8,6 +8,8 @@
 #include <Arcane/Audio/AudioDevice.hpp>   // complete type for AudioSystem().Update (AdvanceSim's voice reap)
 #include <Arcane/Base/Assert.hpp>         // ARC_ASSERT (FrameExtent's io.graph invariant)
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
+#include <Arcane/Config/ConsoleModel.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
@@ -21,12 +23,18 @@
 #include <Arcane/Scene/SceneCamera.hpp>              // ActivePerspectiveSceneCamera (the SAME guarded path MeshSceneDesc's comment requires)
 
 #include <imgui.h>
+#include <cstdio>
 
 #include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <thread>
+
+namespace
+{
+    bool g_runtimeConsoleOpen = false;
+}
 
 namespace
 {
@@ -180,6 +188,7 @@ bool PumpAndResize(FrameIo& io)
 
 void AdvanceSim(FrameIo& io)
 {
+    Arcane::CVarRegistry::Get().Publish();
     io.perf.FrameStart();
 
     // --settle N (Task 10): once the ordinary --frames budget is spent,
@@ -238,9 +247,14 @@ void AdvanceSim(FrameIo& io)
                                       io.gpu->Imgui().WantCaptureMouse());
         io.runtime->SetInputSnapshot(snap);   // plugins read it via ClientRuntime::Input()
         io.gpu->Input().Update(frameDt, snap);
-        if (io.gpu->Input().Pressed("quit"))                { io.quit = true; return; }
-        if (io.gpu->Input().Pressed("reload_plugin"))       io.plugin->ForceReload();
-        if (io.gpu->Input().Pressed("reload_plugin_fresh")) io.plugin->ReloadFresh();
+        if (!io.config.headless && io.gpu->Input().Pressed("console_toggle"))
+            g_runtimeConsoleOpen = !g_runtimeConsoleOpen;
+        if (!g_runtimeConsoleOpen)
+        {
+            if (io.gpu->Input().Pressed("quit"))                { io.quit = true; return; }
+            if (io.gpu->Input().Pressed("reload_plugin"))       io.plugin->ForceReload();
+            if (io.gpu->Input().Pressed("reload_plugin_fresh")) io.plugin->ReloadFresh();
+        }
     }
 
     // Sim advance: clamp dt, drive RunLoop with plugin callbacks interleaved.
@@ -327,6 +341,36 @@ void BuildHud(FrameIo& io)
     // ABI v2: the game module + any secondary plugins draw their own ImGui between
     // BeginFrame and Render. Each entry point is null-checked inside DrawUIAll.
     io.plugin->DrawUIAll();
+
+    // The engine console sits above anything the game module drew. Headless
+    // has no window to put it on; --set still reaches the same registry.
+    if (!io.config.headless)
+    {
+        static Arcane::ConsoleModel console;
+        if (g_runtimeConsoleOpen)
+        {
+            ImGui::SetNextWindowSize(ImVec2(640.0f, 280.0f), ImGuiCond_FirstUseEver);
+            bool open = g_runtimeConsoleOpen;
+            if (ImGui::Begin("Console##runtime", &open))
+            {
+                for (const Arcane::ConsoleLine& line : console.Lines())
+                    ImGui::TextUnformatted(line.text.c_str());
+                char buffer[512];
+                std::snprintf(buffer, sizeof(buffer), "%s", console.Input().c_str());
+                if (ImGui::InputText("##cvar", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue))
+                {
+                    console.SetInput(buffer);
+                    console.Submit(Arcane::CVarRegistry::Get(), Arcane::Permission::Player);
+                }
+                else
+                {
+                    console.SetInput(buffer);
+                }
+            }
+            ImGui::End();
+            g_runtimeConsoleOpen = open;
+        }
+    }
 }
 
 void PrepareFrame(FrameIo& io)

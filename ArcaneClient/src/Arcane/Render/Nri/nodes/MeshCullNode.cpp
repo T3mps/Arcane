@@ -4,6 +4,8 @@
 
 #undef ERROR
 
+#include <Arcane/Config/CVarDecl.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Render/Nri/GpuScene.hpp>
 #include <Arcane/Render/Nri/Graveyard.hpp>
@@ -16,13 +18,22 @@
 
 namespace Arcane
 {
+    ARC_CVAR("render.meshCull", Bool, CVarValue::Bool(kMeshCullEnabled), CVarFlags::Dev,
+             "Frustum-cull mesh instances on the GPU.");
+
+    bool MeshCullFrustumEnabled()
+    {
+        const auto value = CVarRegistry::Get().Get(CVarRegistry::Get().Find("render.meshCull"));
+        return !value || value->AsBool();
+    }
+
     namespace
     {
         struct CullConstants
         {
             std::uint32_t rowCount = 0;
             std::uint32_t batchCount = 0;
-            std::uint32_t enabled = kMeshCullEnabled ? 1u : 0u;
+            std::uint32_t enabled = MeshCullFrustumEnabled() ? 1u : 0u;
             std::uint32_t pad = 0;
             glm::vec4 planes[6]{};
         };

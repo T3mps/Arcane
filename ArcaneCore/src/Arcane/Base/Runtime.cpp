@@ -1,6 +1,8 @@
 #include <Arcane/Base/Runtime.hpp>
 
 #include <Arcane/Assets/Assets.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
@@ -220,6 +222,8 @@ namespace Arcane
             // OpenProject re-layers the project + user files on top.
             engineConfigDir = ExeDir() / "data" / "EngineConfig";
             config.LoadEngineDefaults(engineConfigDir);
+            ApplyCVarDirectory(CVarRegistry::Get(), engineConfigDir, SetBy::EngineConfig, "engine-config");
+            CVarRegistry::Get().Publish();
             // The audio device that used to be initialized here is ClientRuntime's
             // (its RuntimePresentation member, initialized from its own ctor with
             // the enableAudioDevice flag that moved there with it).
@@ -518,6 +522,13 @@ namespace Arcane
             m_impl->config.LayerDir(pluginRoot / "Config");
         m_impl->config.LayerProject(m_impl->project->Root() / "Config",
                                     m_impl->project->Root() / "Saved" / "Config");
+        CVarRegistry& cvars = CVarRegistry::Get();
+        ApplyCVarDirectory(cvars, m_impl->engineConfigDir, SetBy::EngineConfig, "engine-config");
+        for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
+            ApplyCVarDirectory(cvars, pluginRoot / "Config", SetBy::Plugin, pluginRoot.filename().string());
+        ApplyCVarDirectory(cvars, m_impl->project->Root() / "Config", SetBy::Project, "project");
+        ApplyCVarDirectory(cvars, m_impl->project->Root() / "Saved" / "Config", SetBy::User, "user");
+        cvars.Publish();
         return true;
     }
 

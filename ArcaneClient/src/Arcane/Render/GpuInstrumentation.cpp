@@ -1,3 +1,5 @@
+#include <Arcane/Config/CVarDecl.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>
 
 #include <Arcane/Base/Diagnostics.hpp>
@@ -24,7 +26,8 @@ namespace Arcane
         // ordering, kept as-is: a
         // toggle observed one frame late was never meaningful and this must
         // not fence the render path if a future reader arrives.
-        std::atomic<bool> g_drawMarkers{ false };
+        ARC_CVAR("diagnostics.drawMarkers", Bool, CVarValue::Bool(false), CVarFlags::Dev,
+                 "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.");
 
         // The device-lost latch (see the header). Written by the device layer
         // after the gpu-crash report lands; read once per host frame.
@@ -94,12 +97,16 @@ namespace Arcane
 
     void SetGpuDrawMarkersEnabled(bool enabled) noexcept
     {
-        g_drawMarkers.store(enabled, std::memory_order_relaxed);
+        const CVarHandle handle = CVarRegistry::Get().Find("diagnostics.drawMarkers");
+        if (handle.IsStale()) return;
+        CVarRegistry::Get().Set(handle, CVarValue::Bool(enabled), SetBy::Code, "instrumentation");
+        CVarRegistry::Get().Publish();
     }
 
     bool GpuDrawMarkersEnabled() noexcept
     {
-        return g_drawMarkers.load(std::memory_order_relaxed);
+        const auto value = CVarRegistry::Get().Get(CVarRegistry::Get().Find("diagnostics.drawMarkers"));
+        return value && value->type == CVarType::Bool && value->AsBool();
     }
 
     // ---------------------------------------------------------------------

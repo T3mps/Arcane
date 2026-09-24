@@ -1,7 +1,7 @@
 # CVar system — design
 
-**Status:** design approved 2026-09-02. **No implementation.** Build begins after Arc A closes
-and F2b lands (user's explicit sequencing call — see §10).
+**Status:** implemented 2026-09-24 (`docs/plans/2026-09-24-cvar-system-plan.md`). §10's sequencing
+sentence is historical and was not rewritten.
 
 **Goal:** one typed, discoverable, runtime-mutable registry of scalar knobs and commands,
 serving three audiences from one substrate — engine/editor development, players via an in-game
@@ -375,7 +375,9 @@ layers cover it; Arc A's repro-command line covers reproduce-this-run.
 ## 8. Console access, per host
 
 **One console model, two presentations.** The model — history buffer, input line, registry access,
-autocomplete — is engine-owned and lives in ArcaneClient. Only presentation differs.
+autocomplete — is engine-owned. It lives in `ArcaneCore` (`ConsoleModel`), not ArcaneClient:
+the core split landed after this spec, and the model is presentation-free so the tests can
+link it. Only presentation differs.
 `works-in-editor-broken-in-runtime` is a standing bug class here, and it bites hardest when two
 hosts grow their own copy of a mechanism. Share the model and behaviour cannot diverge.
 

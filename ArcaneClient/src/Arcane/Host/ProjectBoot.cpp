@@ -229,7 +229,8 @@ namespace Arcane::HostBoot
             // project's Config/diagnostics.json takes effect exactly the way its
             // input map does), and a whole BootStage for one bool would be
             // ceremony. See HostBoot::ApplyDiagnosticsConfig.
-            ApplyDiagnosticsConfig(ctx.runtime->Configuration());
+            ApplyDiagnosticsConfig(ctx.runtime->Configuration(), ctx.cvarPermission,
+                                   ctx.hostConfig ? ctx.hostConfig->cvarSets : std::vector<std::string>{});
             return true;
         }));
         // sprite_tables is Fatal, not Optional (2026-07-30 review, Fix 5):

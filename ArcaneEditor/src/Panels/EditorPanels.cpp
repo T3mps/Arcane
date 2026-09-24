@@ -2,6 +2,9 @@
 #include "Panels/AssetPanelModel.hpp"   // AssetKindOf (F2b Task 13: the texture-asset panel's kind gate)
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
+#include <cstdio>
+#include <Arcane/Config/ConsoleModel.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
 #include "Panels/DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
 #include "Widgets/EditorFonts.hpp"
@@ -899,7 +902,7 @@ namespace Arcane::Editor
         // crashes (imgui_widgets.cpp:7453 -> 8249). Frame ONE of any launch
         // where another tab covers the Console hits this. So: no body in a
         // skipped child, period.
-        if (!ImGui::BeginChild("##consolerows"))
+        if (!ImGui::BeginChild("##consolerows", ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing())))
         {
             ImGui::EndChild();   // always called -- BeginChild's contract, unlike Begin's
             ImGui::End();
@@ -1082,6 +1085,19 @@ namespace Arcane::Editor
         if (ui.autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
+        static Arcane::ConsoleModel cvars;
+        char buffer[512];
+        std::snprintf(buffer, sizeof(buffer), "%s", cvars.Input().c_str());
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##cvarline", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue))
+        {
+            cvars.SetInput(buffer);
+            cvars.Submit(Arcane::CVarRegistry::Get(), Arcane::Permission::Editor);
+        }
+        else
+        {
+            cvars.SetInput(buffer);
+        }
         ImGui::End();
     }
 

@@ -99,6 +99,7 @@ namespace Arcane
                                      "Time is independent of the frame count (--headless only; "
                                      "omit to let the clock accumulate)").Type(CliType::Double);
         cli.Option("probe", "",          "repeatable: brightness@x,y | luma@x,y | rgba@x,y | pick@x,y | census").Many();
+        cli.Option("set", "",            "repeatable: set a cvar, name=value, before the first frame").Many();
         cli.Option("report", "",         "write the observation report to this JSON path");
         cli.Option("dump-layout", "", "write the live ImGui layout to this .ini at shutdown "
                                       "(editor only; the authoring half of the committed "
@@ -192,6 +193,7 @@ namespace Arcane
         if (r.Supplied("fixed-time"))
             cfg.fixedTimeSeconds = r.GetAs<double>("fixed-time");
         cfg.probes         = r.GetMany("probe");
+        cfg.cvarSets       = r.GetMany("set");
         cfg.reportPath     = r.Get("report");
         cfg.dumpLayoutPath = r.Get("dump-layout");
         cfg.playAs         = r.Get("play-as");

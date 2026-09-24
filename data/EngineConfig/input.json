@@ -4,6 +4,11 @@
       "name": "demo",
       "actions": [
         {
+          "name": "console_toggle",
+          "type": "Button",
+          "bindings": [ { "path": "<Keyboard>/grave" } ]
+        },
+        {
           "name": "quit",
           "type": "Button",
           "bindings": [ { "path": "<Keyboard>/escape" } ]

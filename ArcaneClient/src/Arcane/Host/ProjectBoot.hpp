@@ -22,7 +22,9 @@
                                              // reach them without linking ArcaneClient.dll. Re-exported into
                                              // Arcane::HostBoot below so every existing caller compiles
                                              // unchanged.
-#include <Arcane/Render/GpuInstrumentation.hpp>   // SetGpuDrawMarkersEnabled (ApplyDiagnosticsConfig)
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Render/GpuInstrumentation.hpp>   // draw-marker flag, now a cvar read
 
 #include <Json.hpp>
 
@@ -118,14 +120,13 @@ namespace Arcane::HostBoot
     // PIX/RenderDoc open. PASS-level scopes are unconditional and are NOT
     // configurable: they are what a crash report is built from, so a config file
     // must never be able to turn the diagnostics off.
-    inline void ApplyDiagnosticsConfig(const Arcane::Config& config)
+    inline void ApplyDiagnosticsConfig(const Arcane::Config&, Permission permission,
+                                       const std::vector<std::string>& sets)
     {
-        // is_object() before value(): a category whose file was authored as an
-        // array or a scalar would make value() THROW, and a malformed config
-        // file must not take a host down over a debugging toggle.
-        const nlohmann::json& diagnostics = config.Category("diagnostics");
-        SetGpuDrawMarkersEnabled(diagnostics.is_object() &&
-                                 diagnostics.value("drawMarkers", false));
+        // Config layers were applied when the project opened (Runtime::OpenProject).
+        // This stage only adds the command line, which outranks those layers.
+        ApplyCVarCommandLine(CVarRegistry::Get(), sets, permission);
+        CVarRegistry::Get().Publish();
     }
 
     // GameModule, PluginModules, BootSceneFile (x2), BootSceneResult,
@@ -188,6 +189,11 @@ namespace Arcane::HostBoot
         // default here is the ordinary every-mount open, so a context built
         // without one (the parity tests) behaves exactly as before.
         ProjectOpenOptions openOptions{};
+
+        // `--set` permission. The editor sets Editor; the runtime sets Player.
+        // Null hostConfig means there is no command line (parity tests).
+        const HostConfig* hostConfig = nullptr;
+        Permission cvarPermission = Permission::Player;
     };
 
     // THE CANONICAL BOOT SEQUENCE. Both hosts take this LIST whole: the ids,

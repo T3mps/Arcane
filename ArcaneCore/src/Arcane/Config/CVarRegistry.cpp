@@ -412,7 +412,7 @@ namespace Arcane
         return out;
     }
 
-    ExecResult CVarRegistry::Execute(std::string_view line, Permission permission)
+    ExecResult CVarRegistry::Execute(std::string_view line, Permission permission, SetBy by)
     {
         while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
         if (line.empty()) return { false, "empty" };
@@ -501,7 +501,7 @@ namespace Arcane
         default:
             return { false, "type has no accessor" };
         }
-        const SetResult result = Set(handle, std::move(parsed), SetBy::Console, {}, permission);
+        const SetResult result = Set(handle, std::move(parsed), by, {}, permission);
         if (result == SetResult::Denied) return { false, "denied" };
         if (result == SetResult::RefusedWeaker) return { false, "refused: a stronger source holds " + name };
         if (result != SetResult::Applied) return { false, "rejected" };

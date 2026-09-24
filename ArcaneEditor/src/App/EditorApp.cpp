@@ -1937,6 +1937,8 @@ namespace Arcane::Editor
         // that demoted editor-ui to advisory. Same shared rule the runtime
         // host uses (HostBoot::OpenOptionsFor), never a second copy.
         m_bootCtx.openOptions = Arcane::HostBoot::OpenOptionsFor(m_config);
+        m_bootCtx.hostConfig = &m_config;
+        m_bootCtx.cvarPermission = Arcane::Permission::Editor;
 
         // Spec sec 6: the editor ALWAYS shows boot progress, regardless of any
         // opened project's manifest (project_open's shared CoreStages body
@@ -2064,12 +2066,15 @@ namespace Arcane::Editor
         // a teardown-only validation error must still fail the run.
         m_graphErrorBaseline = Arcane::RenderErrorCount();
 
-        // The chrome context ARMS the crash chain (NriGraphContext::Create ->
-        // NriDiagnostics::Arm), exactly as the runtime's single context does.
-        // The offscreen one below deliberately does NOT -- Arm/Disarm name one
-        // process-wide slot with no owner identity, so a second armer would be
-        // harmless but a second DISARMER would unplug this one's chain. That
-        // gating lives inside CreateOffscreen; nothing here may disturb it.
+        // WHOEVER CREATES THE DEVICE ARMS THE CRASH CHAIN, exactly as in the
+        // runtime: windowed, the chrome context (NriGraphContext::Create ->
+        // NriDiagnostics::Arm); under --headless, the chrome OffscreenVehicle
+        // (OffscreenVehicle::Create, G1/R109). Every offscreen context that
+        // BORROWS the device -- the viewport, each document preview -- never
+        // arms: Arm/Disarm name one process-wide slot with no owner identity,
+        // so a second armer would be harmless but a second DISARMER would
+        // unplug the owner's chain. That gating lives inside CreateOffscreen;
+        // nothing here may disturb it.
         if (m_config.headless)
         {
             // THE EXTENT, from the same place the windowed path's comes from:
@@ -2123,8 +2128,8 @@ namespace Arcane::Editor
             // the editor's GPU-stall watchdog is OFF, a wedged GPU produces
             // no diagnostics capture, and closing that gap needs a different
             // rule ("the frame-driving context publishes") that does not
-            // exist yet. The CRASH chain is unaffected -- CreateOffscreen's
-            // own gating decides that, and nothing here disturbs it.
+            // exist yet. The CRASH chain is unaffected -- the vehicle armed
+            // it on the device it created, and nothing here disturbs it.
         }
         else
         {

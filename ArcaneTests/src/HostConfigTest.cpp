@@ -33,6 +33,14 @@ namespace {
         return Arcane::HostConfig::Parse(static_cast<int>(argv.size()), argv.data());
     }
 }
+TEST_CASE("HostConfig: --set repeats", "[host]") {
+    const auto o = Run({ "--set", "game.speed=4", "--set", "cheats=1" });
+    REQUIRE(o.config.has_value());
+    REQUIRE(o.config->cvarSets.size() == 2);
+    REQUIRE(o.config->cvarSets[0] == "game.speed=4");
+    REQUIRE(o.config->cvarSets[1] == "cheats=1");
+}
+
 TEST_CASE("HostConfig: defaults", "[host]") {
     const auto o = Run({});
     REQUIRE(o.config.has_value());

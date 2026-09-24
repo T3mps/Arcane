@@ -1,6 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
+#include <Arcane/Config/ConsoleModel.hpp>
+#include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
+#include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 
 using namespace Arcane;
@@ -141,6 +146,86 @@ TEST_CASE("default-deny and cheat revert", "[cvar]") {
     reg.Publish();
     REQUIRE(reg.Get(cheat)->AsBool() == false);
     REQUIRE(reg.Explain("game.noclip")->setBy == SetBy::Project);
+}
+
+TEST_CASE("config apply warns on a cvar category and ignores a document", "[cvar]") {
+    CVarRegistry reg;
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "", "engine" }).IsStale());
+    nlohmann::json diagnostics = { {"drawMarkers", true}, {"notACvar", 1} };
+    const CVarApplyReport cvars = ApplyCVarCategory(reg, "diagnostics", diagnostics, SetBy::Project, false, "project");
+    REQUIRE(cvars.unknownKeys.size() == 1);
+    REQUIRE(cvars.unknownKeys[0] == "diagnostics.notACvar");
+    reg.Publish();
+    REQUIRE(reg.Get(reg.Find("diagnostics.drawMarkers"))->AsBool() == true);
+
+    nlohmann::json input = { {"actionMaps", nlohmann::json::array()} };
+    const CVarApplyReport document = ApplyCVarCategory(reg, "input", input, SetBy::Project, true, "project");
+    REQUIRE(document.unknownKeys.empty());
+
+    const auto user = std::filesystem::temp_directory_path() / "arcane-cvar-archive-test";
+    std::filesystem::remove_all(user);
+    WriteCVarArchive(reg, user);
+    REQUIRE_FALSE(std::filesystem::exists(user / "diagnostics.json"));
+
+    REQUIRE(reg.Set(reg.Find("diagnostics.drawMarkers"), CVarValue::Bool(false), SetBy::Console) == SetResult::Applied);
+    reg.Publish();
+    WriteCVarArchive(reg, user);
+    REQUIRE(std::filesystem::exists(user / "diagnostics.json"));
+    std::filesystem::remove_all(user);
+}
+
+TEST_CASE("command line set beats user and loses to code", "[cvar]") {
+    CVarRegistry reg;
+    const CVarHandle h = reg.Register(CVarDesc{
+        "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, CVarFlags::UserSettable, "", "engine" });
+    REQUIRE(reg.Set(h, CVarValue::Int32(2), SetBy::User) == SetResult::Applied);
+    ApplyCVarCommandLine(reg, { "game.speed=4" }, Permission::Player);
+    REQUIRE(reg.Set(h, CVarValue::Int32(9), SetBy::Code) == SetResult::Applied);
+    ApplyCVarCommandLine(reg, { "game.speed=5" }, Permission::Player);
+    reg.Publish();
+    REQUIRE(reg.Get(h)->AsInt32() == 9);
+    REQUIRE(reg.Explain("game.speed")->setBy == SetBy::Code);
+}
+
+TEST_CASE("a command and a cvar cannot share a name", "[cvar]") {
+    CVarRegistry reg;
+    REQUIRE(reg.RegisterCommand("game.speed", CVarFlags::None, "", "mod", [](std::string_view, std::string&, void*) {}, nullptr));
+    REQUIRE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    REQUIRE(reg.LastError().find("command") != std::string::npos);
+}
+
+TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
+    CVarRegistry reg;
+    REQUIRE_FALSE(reg.Register(CVarDesc{
+        "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, {}, "markers", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{
+        "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    ConsoleModel model;
+    model.SetInput("diag");
+    const auto matches = model.Complete(reg);
+    REQUIRE(matches.size() == 1);
+    REQUIRE(matches[0] == "diagnostics.drawMarkers");
+    model.SetInput("cvar_explain diagnostics.drawMarkers");
+    model.Submit(reg, Permission::Editor);
+    REQUIRE(model.Lines().size() == 2);
+    REQUIRE(model.Lines().back().text.find("Default") != std::string::npos);
+    model.SetInput("game.speed 3");
+    model.Submit(reg, Permission::Player);
+    REQUIRE_FALSE(model.Lines().back().ok);
+    REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 1);
+}
+
+TEST_CASE("render.meshCull defaults on and publishes off", "[cvar]") {
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle handle = reg.Find("render.meshCull");
+    if (handle.IsStale()) return;   // Dist compiles the Dev cvar out; missing means on
+    REQUIRE(MeshCullFrustumEnabled());
+    REQUIRE(reg.Set(handle, CVarValue::Bool(false), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    REQUIRE_FALSE(MeshCullFrustumEnabled());
+    REQUIRE(reg.Set(handle, CVarValue::Bool(true), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    REQUIRE(MeshCullFrustumEnabled());
 }
 
 TEST_CASE("Dev cvars are absent when the registry is built without them", "[cvar]") {

@@ -119,7 +119,8 @@ namespace Arcane
 
         [[nodiscard]] std::optional<CVarExplain> Explain(std::string_view name) const;
         [[nodiscard]] std::vector<CVarListEntry> List() const;   // skips Hidden; skips Dev if compiled out
-        [[nodiscard]] ExecResult Execute(std::string_view line, Permission permission);
+        [[nodiscard]] ExecResult Execute(std::string_view line, Permission permission,
+                                        SetBy by = SetBy::Console);
 
         // The published bool of the cvar named "cheats". False when absent.
         [[nodiscard]] bool CheatsEnabled() const;

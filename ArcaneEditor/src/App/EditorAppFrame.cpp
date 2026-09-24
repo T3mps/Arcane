@@ -23,6 +23,7 @@
 #include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 9): PixelData/ImageCompareOptions/CompareImages; also pulls in ImageIo.hpp's LoadPngRgba
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
@@ -219,6 +220,7 @@ namespace Arcane::Editor
         // Boot is over; anything the watchdog reports from here on belongs to
         // the frame loop, not to a stale boot stage.
         Arcane::Diagnostics::SetPhase("editor frame loop");
+        Arcane::CVarRegistry::Get().Publish();
 
         // ===== F2b Task 12: the cook gate =====================================
         // verify/capture/bless REFUSES-OR-WAITS while CookSession-reported

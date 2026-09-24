@@ -93,6 +93,7 @@ namespace Arcane
                 { "rgui",      "Right GUI"   },
                 { "return",    "Return"      },
                 { "escape",    "Escape"      },
+                { "grave",     "Grave"       },
                 { "space",     "Space"       },
                 { "tab",       "Tab"         },
                 { "backspace", "Backspace"   },
