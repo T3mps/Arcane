@@ -62,7 +62,13 @@ behaves**; Source 2 is the model for **what a cvar is**.
 
 Source 2's typed model, narrowed by YAGNI. Implemented in v1:
 
-`Bool`, `Int32`, `Int64`, `Float32`, `Float64`, `String`
+`Bool`, `Int32`, `UInt32`, `Int64`, `UInt64`, `Float32`, `Float64`, `String`
+
+`UInt32` and `UInt64` are in Source 2's value union and were originally left out. They are in
+v1 anyway (2026-09-24): the registry is the type contract games declare against, and a game
+counting handles, bit masks, or hashes should not have to borrow a signed integer. Unreal's
+console variables do not have an unsigned type (`IConsoleManager.h` only constructs bool,
+int32, float, and `FString`); that gap is theirs, not a reason to copy it.
 
 Reserved in the enum, accessors deferred until a real caller exists: `Color`, `Vec2`, `Vec3`,
 `Vec4`. The enum is a persistence and tooling contract, so leaving numbering holes is worse than
@@ -70,7 +76,7 @@ declaring the values; implementing accessors before a caller is speculative.
 
 **Dropped deliberately:**
 
-- `Int16` / `UInt16` — no plausible caller.
+- `Int16` / `UInt16` — no plausible caller. Sixteen-bit quantities promote at the API.
 - **`Qangle`** — Source's Euler-angle type. The 3D pivot committed to one `Transform` with
   quaternion rotation. A Euler cvar type would be a standing invitation to precisely the class of
   bug that decision exists to prevent.
@@ -480,6 +486,7 @@ question does not reopen this design.
 | 3 | Source 2's type model, Source 1's flag model | They are the same flags; only Source 1's are readable |
 | 4 | Drop `Qangle`; reserve vectors/colour unimplemented | Pivot committed to quaternion rotation; enum is a contract, accessors are not |
 | 5 | `Deterministic` flag added | Makes "a declared knob is not an applied knob" structurally checkable |
+| 18 | `UInt32` and `UInt64` are implemented in v1, not reserved | Source 2 stores them; games will declare them. Unreal's console variables have no unsigned type, which is a gap, not a model |
 | 6 | Registry-owned storage, handle access | Dangling pointers into unloaded modules are a known in-tree bug class |
 | 7 | Callbacks by ID, not function pointer | A stale ID is checkable; a stale pointer is a crash |
 | 8 | Duplicate names are a hard error | Silent aliasing yields two knobs that look like one |
