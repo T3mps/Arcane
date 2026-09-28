@@ -20,10 +20,11 @@
 // module needs. THE ENGINE OWNS ITS STANDARD SYSTEMS (Runtime::
 // InstallEngineSystems: PhysicsSystem -> TransformPropagationSystem in
 // fixedUpdate, RenderSubmissionSystem in render) -- a module registers ONLY its
-// own systems, in OnInit through RegisterSystem<T>(mask, phase) (ABI 30), and
-// places them with Astra::Before<...> / Astra::After<...> against the engine's
-// types (Astra keys systems by a hash of the type NAME, so that works across the
-// DLL boundary). RegisterSystem declares a FACTORY, not an instance: each of the
+// own systems. Default-constructible systems use ARCANE_SYSTEM in one .cpp;
+// systems needing runtime constructor values use RegisterSystem<T>(mask, phase)
+// in OnInit. Both paths place them with Astra::Before<...> / Astra::After<...>
+// against the engine's types (Astra keys systems by a hash of the type NAME, so
+// that works across the DLL boundary). Registration declares a FACTORY, not an instance: each of the
 // N Runtimes the host attached instantiates the subset its NetMode matches
 // (Arcane/Plugin/SystemFactory.hpp), which is what lets one module image serve a
 // server world and a client world in one process.
@@ -39,8 +40,9 @@
 #include <Arcane/Base/ProcessContext.hpp>   // Process()/RegisterSystem reach SystemFactories()
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Plugin/GameComponents.hpp>
+#include <Arcane/Plugin/GameSystems.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
-#include <Arcane/Plugin/SystemFactory.hpp>   // RoleMask / SystemPhase / SystemFactoryEntry
+#include <Arcane/Plugin/SystemFactory.hpp>   // RoleMask / SystemPhase
 #include <Arcane/Scene/SceneResources.hpp>   // SceneRoot: SceneRootEntity() + the Save/LoadState root id
 
 #include <Astra/Component/ComponentModule.hpp>
@@ -54,7 +56,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
-#include <tuple>       // std::ignore (RegisterSystem's AddSystem result)
 #include <type_traits>
 #include <vector>
 
@@ -74,7 +75,8 @@ namespace Arcane
         // ---- hooks (every one defaulted; override what the module needs) ----
 
         // After the prologue (TypeContext, Mosaic, ImGui, this module's
-        // ComponentModule drained). Register the module's OWN systems here.
+        // component and automatic-system registrars drained). Register only
+        // systems needing runtime constructor values here.
         // false aborts the load (the host reports "initial load failed").
         virtual bool OnInit(EngineContext& ctx) { (void)ctx; return true; }
         // Before the ComponentModule handle closes and before the image unmaps;
@@ -119,9 +121,10 @@ namespace Arcane
             return sr ? sr->entity : Astra::Entity::Invalid();
         }
 
-        // Register one of this module's systems ONCE per DLL load (spec s4: "systems
-        // stay explicit, their order is a design act" -- an explicit line in OnInit,
-        // with an explicit mask; Astra's Before/After traits still place it). Every
+        // Register one of this module's systems ONCE per DLL load when it needs
+        // runtime constructor values. Default-constructible systems should use
+        // ARCANE_SYSTEM in their .cpp. Static registration order is unspecified;
+        // Astra's Before/After traits are the sole semantic ordering contract. Every
         // Runtime whose NetMode matches `mask` instantiates it: the primary right
         // after OnInit, any other attached Runtime at attach, and all of them again
         // after a hot reload. The std::function lives in THIS module and PluginHost
@@ -135,9 +138,8 @@ namespace Arcane
         template <class System, class... Args>
         void RegisterSystem(RoleMask mask, SystemPhase phase, Args... args)
         {
-            Process().SystemFactories().Add(SystemFactoryEntry{
-                std::string(Astra::TypeID<System>::Name()), mask, phase,
-                [args...](Astra::SystemScheduler& s) { std::ignore = s.AddSystem<System>(args...); }, nullptr });
+            Game::Detail::AddSystemFactory<System>(
+                Process().SystemFactories(), mask, phase, args...);
         }
 
         // Bound by ARCANE_GAME_MODULE's Init before OnInit runs. Not for modules.
@@ -208,10 +210,13 @@ namespace Arcane
                 const std::size_t count = Game::RegisterComponents(*components);
                 ARC_INFO("{}: registered {} module component type(s)", name, count);
 
-                // 3. The module itself. Systems are the module's to register in
-                // OnInit -- the engine's standard ones are already installed.
+                // 3. The module itself. Drain automatic system factories after
+                // binding so they share this image's open owner bracket. OnInit
+                // follows for systems whose construction needs runtime values.
                 instance = new Type();
                 instance->BindForMacro_(c, components);
+                const std::size_t systemCount = Game::RegisterSystems(c->process->SystemFactories());
+                ARC_INFO("{}: registered {} automatic module system(s)", name, systemCount);
                 if (!instance->OnInit(*c))
                 {
                     delete instance;   instance   = nullptr;

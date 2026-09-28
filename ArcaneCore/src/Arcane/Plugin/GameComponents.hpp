@@ -19,12 +19,11 @@
 // without a header tool. (UE's IMPLEMENT_PRIMARY_GAME_MODULE is the eventual
 // home for the Init boilerplate too; see the editor<->IDE surface notes.)
 //
-// Why components and not systems: a component's registration ORDER carries
-// no meaning (ComponentIDs are a per-process counter, nothing persists them),
-// so a static-initialisation-ordered list is exactly good enough. A system's
-// order in its scheduler IS a design act (propagation before submission), and
-// static-init order across TUs is unspecified -- so systems stay explicit in
-// Init, with Astra::Before/After for the dependencies that matter.
+// Component registration order carries no meaning (ComponentIDs are a per-
+// process counter, nothing persists them), so static-initialisation order is
+// sufficient here. Systems have a parallel registrar in GameSystems.hpp, but
+// their semantic order must be expressed through Astra::Before/After traits;
+// neither registrar list promises cross-TU order.
 //
 // The ComponentModule contract (ComponentModule.hpp: "NEVER a plugin-side
 // static/global object" whose destructor does live cleanup) is respected by

@@ -9,6 +9,20 @@
 
 namespace Arcane
 {
+    namespace
+    {
+        const char* PhaseName(SystemPhase phase) noexcept
+        {
+            switch (phase)
+            {
+                case SystemPhase::FixedUpdate: return "FixedUpdate";
+                case SystemPhase::Update:      return "Update";
+                case SystemPhase::Render:      return "Render";
+            }
+            return "Unknown";
+        }
+    }
+
     const char* ToString(NetMode m) noexcept
     {
         switch (m)
@@ -44,6 +58,25 @@ namespace Arcane
                       "(register systems from OnInit, spec 2026-09-15 s4)", e.name);
             return;
         }
+
+        // Role is deliberately absent from this identity. Separate Server and
+        // Client declarations for one type/phase would both run in Standalone
+        // and ListenServer worlds, creating the same scheduler system twice.
+        const auto duplicate = std::ranges::find_if(
+            m_entries,
+            [this, &e](const SystemFactoryEntry& existing)
+            {
+                return existing.owner == m_openOwner &&
+                       existing.name == e.name &&
+                       existing.phase == e.phase;
+            });
+        if (duplicate != m_entries.end())
+        {
+            ARC_ERROR("SystemFactories: dropped duplicate registration of '{}' in phase {} for one module image",
+                      e.name, PhaseName(e.phase));
+            return;
+        }
+
         e.owner = m_openOwner;
         m_entries.push_back(std::move(e));
     }

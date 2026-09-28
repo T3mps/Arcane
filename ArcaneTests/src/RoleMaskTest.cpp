@@ -4,21 +4,77 @@
 // IsRunningDedicatedServer vs NetMode).
 #include <catch2/catch_test_macros.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/GameSystems.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
+#include <Arcane/Sim/SystemSchedulers.hpp>
 #include "Helpers/TestTypeContext.hpp"
 #include "../plugins/HotReloadShared.hpp"
 #include <Astra/Component/ComponentRegistry.hpp>   // GetComponentDescriptor (the shared-registry proof)
 #include <Astra/Core/TypeID.hpp>
 #include <filesystem>
+#include <type_traits>
 using namespace Arcane::HotReloadTest;
 
 namespace
 {
+    struct AutoUpdateProbe
+    {
+        void operator()(Astra::Registry&) {}
+    };
+
     void Step(Arcane::Runtime& rt, Arcane::PluginHost& host, int k)
     { for (int i = 0; i < k; ++i) rt.Loop().Advance(1.0 / 60.0, [&](double dt){ host.FixedUpdateAll(dt); }, [&](double,double){}); }
     RoleCounters Read(Arcane::Runtime& rt)
     { RoleCounters out; rt.Registry().CreateView<RoleCounters>().ForEach([&](Astra::Entity, RoleCounters& c){ out = c; }); return out; }
+}
+
+ARCANE_SYSTEM(AutoUpdateProbe,
+              Arcane::RoleMask::Client,
+              Arcane::SystemPhase::Update)
+
+TEST_CASE("automatic system registrars add a role-masked factory to the selected phase",
+          "[runtime][netmode][systems]")
+{
+    STATIC_REQUIRE(std::is_trivially_destructible_v<Arcane::Game::SystemRegistrar>);
+
+    Arcane::SystemFactoryTable table;
+    const int owner = 1;
+    table.BeginOwner(&owner);
+    CHECK(Arcane::Game::RegisterSystems(table) == 1);
+    table.EndOwner();
+
+    Arcane::SystemSchedulers client(nullptr);
+    CHECK(table.InstantiateInto(client, Arcane::NetMode::Client) == 1);
+    CHECK(client.update.HasSystem<AutoUpdateProbe>());
+    CHECK_FALSE(client.fixedUpdate.HasSystem<AutoUpdateProbe>());
+    CHECK_FALSE(client.render.HasSystem<AutoUpdateProbe>());
+
+    Arcane::SystemSchedulers server(nullptr);
+    CHECK(table.InstantiateInto(server, Arcane::NetMode::DedicatedServer) == 0);
+    CHECK_FALSE(server.update.HasSystem<AutoUpdateProbe>());
+}
+
+TEST_CASE("one module cannot register the same system twice in one phase",
+          "[runtime][netmode][systems]")
+{
+    Arcane::SystemFactoryTable table;
+    const int owner = 2;
+    const auto entry = [](Arcane::RoleMask mask, Arcane::SystemPhase phase)
+    {
+        return Arcane::SystemFactoryEntry{
+            "DuplicateProbe", mask, phase,
+            [](Astra::SystemScheduler&) {}, nullptr };
+    };
+
+    table.BeginOwner(&owner);
+    table.Add(entry(Arcane::RoleMask::Server, Arcane::SystemPhase::FixedUpdate));
+    table.Add(entry(Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate));
+    CHECK(table.Size() == 1);
+
+    table.Add(entry(Arcane::RoleMask::Client, Arcane::SystemPhase::Update));
+    CHECK(table.Size() == 2);
+    table.EndOwner();
 }
 
 TEST_CASE("HasAuthority: every mode but Client", "[runtime][netmode]")
