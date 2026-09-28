@@ -809,6 +809,14 @@ namespace Arcane::Editor
             pluginSnap.wheelY = 0.0f;
         }
         m_runtime->SetInputSnapshot(pluginSnap);
+        Arcane::InputSnapshot gameplaySnap = pluginSnap;
+        gameplaySnap.wantCaptureKeyboard = !InPlayMode() || !inViewport ||
+            snap.wantCaptureKeyboard || m_gameImgui->WantCaptureKeyboard();
+        gameplaySnap.wantCaptureMouse = !InPlayMode() || !inViewport ||
+            pluginSnap.wantCaptureMouse || fs.gameUiClaims;
+        if (!InPlayMode() || !inViewport)
+            gameplaySnap.gamepadConnected = false;
+        m_runtime->UpdateGameInput(frameDt, gameplaySnap);
         m_gpu->Input().Update(frameDt, snap);
 
         HandleUndoRedoAndSceneShortcuts(snap, fs);
@@ -1344,7 +1352,7 @@ namespace Arcane::Editor
         }
         m_runtime->EnsurePhysics();   // engine-owned physics (spec s4.3); Edit mode's pass is EditModeSchedule's (Task 7)
         m_runtime->Loop().Advance(simDt,
-            [&](double dt)          { if (m_plugin) m_plugin->FixedUpdateAll(dt); },
+            [&](double dt)          { m_runtime->BeginGameInputFixedStep(); if (m_plugin) m_plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ if (m_plugin) m_plugin->UpdateAll(dt, a); });
         // The embedded server world (EmbeddedServer topology) advances on the same
         // real dt, right after -- its OWN loop and its OWN Server-masked systems.

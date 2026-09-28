@@ -563,6 +563,22 @@ namespace Arcane
         return true;
     }
 
+    bool Project::SetInputActionsAsset(const Guid& id)
+    {
+        const std::filesystem::path file = m_manifestFile;
+        if (file.empty())
+        {
+            ARC_ERROR("SetInputActionsAsset: this project has no manifest file on disk");
+            return false;
+        }
+        const std::string value = id.IsValid() ? id.ToString() : std::string{};
+        if (!RewriteManifest(file, "SetInputActionsAsset",
+                             [&](nlohmann::ordered_json& doc) { doc["inputActions"] = value; }))
+            return false;
+        m_manifest.inputActions = value;
+        return true;
+    }
+
     bool Project::RestampEngineAbi(int abi)
     {
         const std::filesystem::path file = m_manifestFile;

@@ -388,7 +388,7 @@ namespace Arcane
             id = ResolveSourceId(mountPath);   // derived, never written -- see IsSourceFile
         }
         else if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite" ||
-            ext == ".arcmesh")
+            ext == ".arcmesh" || ext == ".arcinput")
             id = ResolveNativeId(file, &idWriteFailed);
         else if (ext == ".arcdiag")
             id = ResolveDiagId(file);   // F-7 CRITICAL: never ResolveNativeId -- see above

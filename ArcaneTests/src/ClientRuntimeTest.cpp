@@ -9,6 +9,7 @@
 #include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Input/LocalInputUser.hpp>
+#include <Arcane/Host/ProjectBoot.hpp>
 #include <Arcane/Plugin/ClientHooks.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>   // EngineContext (the hooks' fill target)
 #include <Arcane/Render/RenderSystems.hpp>
@@ -16,6 +17,9 @@
 #include <Arcane/Scene/TransformSystems.hpp>
 
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
+
+#include <filesystem>
+#include <fstream>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -112,4 +116,48 @@ TEST_CASE("ClientRuntime switches gameplay input between project identities", "[
     REQUIRE(runtime.ConfigureGameInput(RuntimeInputAsset(), b));
     CHECK(runtime.GameInput().ProjectId() == b);
     CHECK(runtime.GameInput().Bindings(*jump)[0].effectivePath == "<Keyboard>/space");
+}
+
+TEST_CASE("project gameplay input boot reports unconfigured missing valid and invalid assets", "[client][input]")
+{
+    namespace fs = std::filesystem;
+    const auto root = fs::temp_directory_path() /
+        ("arcane_gameplay_boot_" + Arcane::Guid::Generate().ToString());
+    fs::create_directories(root / "Content" / "input");
+    auto writeManifest = [&](const std::string& selection)
+    {
+        nlohmann::json manifest = {
+            { "formatVersion", 2 }, { "name", "P" },
+            { "engine", { { "abi", Arcane::kGamePluginABIVersion } } },
+            { "inputActions", selection }
+        };
+        std::ofstream(root / "P.arcproj") << manifest.dump(2);
+    };
+    Arcane::ClientRuntime runtime(Arcane::Test::Process());
+    writeManifest("");
+    auto project = Arcane::Project::Open(root);
+    REQUIRE(project);
+    CHECK(Arcane::HostBoot::LoadGameplayInput(runtime, *project).status ==
+          Arcane::HostBoot::GameplayInputLoadResult::Status::Unconfigured);
+    writeManifest("99999999-9999-4999-8999-999999999999");
+    project = Arcane::Project::Open(root);
+    REQUIRE(project);
+    CHECK(Arcane::HostBoot::LoadGameplayInput(runtime, *project).status ==
+          Arcane::HostBoot::GameplayInputLoadResult::Status::Invalid);
+    const auto asset = RuntimeInputAsset();
+    std::ofstream(root / "Content" / "input" / "Player.arcinput") << asset.ToJson().dump(2);
+    writeManifest(asset.id.ToString());
+    project = Arcane::Project::Open(root);
+    REQUIRE(project);
+    CHECK(Arcane::HostBoot::LoadGameplayInput(runtime, *project).status ==
+          Arcane::HostBoot::GameplayInputLoadResult::Status::Loaded);
+    CHECK(runtime.GameInput().FindAction("Player", "Jump").has_value());
+    std::ofstream(root / "Content" / "input" / "Player.arcinput") <<
+        nlohmann::json{ { "id", asset.id.ToString() }, { "version", 99 } }.dump();
+    project = Arcane::Project::Open(root);
+    REQUIRE(project);
+    CHECK(Arcane::HostBoot::LoadGameplayInput(runtime, *project).status ==
+          Arcane::HostBoot::GameplayInputLoadResult::Status::Invalid);
+    std::error_code error;
+    fs::remove_all(root, error);
 }

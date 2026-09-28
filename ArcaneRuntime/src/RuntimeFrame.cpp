@@ -246,6 +246,7 @@ void AdvanceSim(FrameIo& io)
             io.gpu->InDevices().Sample(io.gpu->Imgui().WantCaptureKeyboard(),
                                       io.gpu->Imgui().WantCaptureMouse());
         io.runtime->SetInputSnapshot(snap);   // plugins read it via ClientRuntime::Input()
+        io.runtime->UpdateGameInput(frameDt, snap);
         io.gpu->Input().Update(frameDt, snap);
         if (!io.config.headless && io.gpu->Input().Pressed("console_toggle"))
             g_runtimeConsoleOpen = !g_runtimeConsoleOpen;
@@ -288,7 +289,7 @@ void AdvanceSim(FrameIo& io)
         const auto t0 = io.perf.On() ? io.perf.Now() : Arcane::FramePerf::Clock::time_point{};
         io.runtime->EnsurePhysics();   // engine-owned physics (spec s4.3): mint/refresh the world before the step
         io.runtime->Loop().Advance(simDt,
-            [&](double dt)          { io.plugin->FixedUpdateAll(dt); },
+            [&](double dt)          { io.runtime->BeginGameInputFixedStep(); io.plugin->FixedUpdateAll(dt); },
             [&](double dt, double a){ io.plugin->UpdateAll(dt, a); });
         // Reclaim finished fire-and-forget SFX voices each frame (and, on the
         // device-less null backend, advance audio time so one-shots actually end).

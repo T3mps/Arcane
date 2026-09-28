@@ -75,6 +75,7 @@ namespace Arcane
         std::string            gameModule;         // may be empty (content-only)
         std::vector<PluginRef> plugins;
         std::string            bootScene;           // asset Guid text (see Project::SetBootScene); empty = none
+        std::string            inputActions;        // project gameplay input asset Guid; empty = unconfigured
 
         // The project's durable identity, as canonical Guid text; empty when the
         // manifest predates the field (Project::Open self-heals by stamping one).

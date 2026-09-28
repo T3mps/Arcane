@@ -341,3 +341,46 @@ TEST_CASE("ProjectManifest rejects a sourceDir outside Source/ or escaping it", 
         "formatVersion": 1, "name": "X", "engine": { "abi": 4 }, "sourceDir": 7
     })")).has_value());
 }
+
+TEST_CASE("ProjectManifest accepts optional gameplay input asset selection", "[project][input]")
+{
+    const auto selected = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion":2,"name":"P","engine":{"abi":1},
+        "inputActions":"11111111-1111-4111-8111-111111111111"
+    })"));
+    REQUIRE(selected);
+    CHECK(selected->inputActions == "11111111-1111-4111-8111-111111111111");
+    const auto empty = Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion":2,"name":"P","engine":{"abi":1},"inputActions":""
+    })"));
+    REQUIRE(empty);
+    CHECK(empty->inputActions.empty());
+    CHECK_FALSE(Arcane::ProjectManifest::FromJson(nlohmann::json::parse(R"({
+        "formatVersion":2,"name":"P","engine":{"abi":1},"inputActions":42
+    })")));
+}
+
+TEST_CASE("SetInputActionsAsset persists selection and clear across reopen", "[project][input]")
+{
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() /
+        ("arcane_input_selection_" + Arcane::Guid::Generate().ToString());
+    fs::create_directories(dir / "Content");
+    std::ofstream(dir / "P.arcproj") <<
+        R"({"formatVersion":2,"name":"P","engine":{"abi":)"
+        << static_cast<int>(Arcane::kGamePluginABIVersion) << "}}";
+    auto project = Arcane::Project::Open(dir);
+    REQUIRE(project);
+    const auto id = Arcane::Guid::Generate();
+    REQUIRE(project->SetInputActionsAsset(id));
+    CHECK(project->Manifest().inputActions == id.ToString());
+    auto reopened = Arcane::Project::Open(dir);
+    REQUIRE(reopened);
+    CHECK(reopened->Manifest().inputActions == id.ToString());
+    REQUIRE(reopened->SetInputActionsAsset(Arcane::Guid::Nil()));
+    reopened = Arcane::Project::Open(dir);
+    REQUIRE(reopened);
+    CHECK(reopened->Manifest().inputActions.empty());
+    std::error_code error;
+    fs::remove_all(dir, error);
+}

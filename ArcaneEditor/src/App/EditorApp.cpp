@@ -1081,6 +1081,19 @@ namespace Arcane::Editor
 
     bool EditorApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
     {
+        if (const Arcane::Project* project = m_runtime->CurrentProject())
+        {
+            const auto input = Arcane::HostBoot::LoadGameplayInput(*m_runtime, *project);
+            if (input.status == Arcane::HostBoot::GameplayInputLoadResult::Status::Invalid)
+            {
+                ARC_ERROR("Arcane Editor: gameplay input failed to load: {}", input.diagnostic);
+                m_modalErrors.Push("Gameplay Input Invalid", input.diagnostic);
+            }
+        }
+        else
+        {
+            m_runtime->GameInput().Clear();
+        }
         // The editor loads a game module only when one is specified -- a project's
         // gameModule, or an explicit --plugin. Bare `ArcaneEditor` (no --project, no
         // --plugin) starts with NO game loaded (an empty editor) rather than the physics

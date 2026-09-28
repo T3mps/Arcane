@@ -43,6 +43,7 @@ namespace Arcane
         m.description = doc.value("description", std::string{});
         m.gameModule  = doc.value("gameModule", std::string{});
         m.bootScene   = doc.value("bootScene", std::string{});
+        m.inputActions = doc.value("inputActions", std::string{});
         m.guid        = doc.value("guid", std::string{});
 
         // sourceDir: optional, default "Source". Strict and loud (plan ruling

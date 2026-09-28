@@ -180,6 +180,19 @@ bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
 
 bool RuntimeApp::StagePluginLoad(Arcane::HostBoot::BootContext&)
 {
+    if (const Arcane::Project* project = m_runtime->CurrentProject())
+    {
+        const auto input = Arcane::HostBoot::LoadGameplayInput(*m_runtime, *project);
+        if (input.status == Arcane::HostBoot::GameplayInputLoadResult::Status::Invalid)
+        {
+            ARC_ERROR("ArcaneRuntime: gameplay input failed to load: {}", input.diagnostic);
+            return false;
+        }
+    }
+    else
+    {
+        m_runtime->GameInput().Clear();
+    }
     // The runtime hosts whatever the project's manifest names (--plugin overrides,
     // for bare-DLL workflows). NOTHING to host is a refusal, not an empty window:
     // the editor is a workshop and meaningfully opens project-less, but this

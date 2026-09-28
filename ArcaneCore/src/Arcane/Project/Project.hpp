@@ -102,6 +102,7 @@ namespace Arcane
         // replace (see Project.cpp for the per-platform mechanism) so an
         // interrupted write cannot leave a project with a truncated manifest.
         bool SetBootScene(const Guid& id);
+        bool SetInputActionsAsset(const Guid& id);
 
         // Re-stamp the manifest's engine.abi (same atomic rewrite as
         // SetBootScene) and mirror it in memory. The EDITOR calls this to

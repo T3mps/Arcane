@@ -1,15 +1,50 @@
 #include <Arcane/Host/ProjectBoot.hpp>
+#include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Input/InputActionAsset.hpp>
 
 #include <Arcane/Base/Diagnostics.hpp>   // Arcane::Diagnostic (silent-peek outDiag below)
 #include <Arcane/Host/BootSplashWindow.hpp>
 #include <Arcane/Host/GpuContext.hpp>
 
 #include <algorithm>
+#include <fstream>
 #include <iterator>
 #include <type_traits>
 
 namespace Arcane::HostBoot
 {
+    GameplayInputLoadResult LoadGameplayInput(ClientRuntime& runtime, const Project& project)
+    {
+        runtime.GameInput().Clear();
+        const std::string& selected = project.Manifest().inputActions;
+        if (selected.empty()) return {};
+        auto invalid = [](std::string message)
+        {
+            ARC_WARN("project input: {}", message);
+            return GameplayInputLoadResult{ GameplayInputLoadResult::Status::Invalid,
+                                            std::move(message) };
+        };
+        const auto id = Guid::FromString(selected);
+        if (!id || id->IsNil()) return invalid("inputActions is not a valid asset GUID");
+        const auto file = project.ResolveAsset(AssetId::FromGuid(*id));
+        if (!file) return invalid("selected gameplay input asset " + selected + " was not found");
+        if (file->extension() != ".arcinput")
+            return invalid("selected gameplay input asset is not an .arcinput file");
+        std::ifstream stream(*file, std::ios::binary);
+        if (!stream) return invalid("selected gameplay input asset could not be read");
+        const auto doc = nlohmann::json::parse(stream, nullptr, false);
+        std::string error;
+        const auto asset = InputActionAsset::FromJson(doc, &error);
+        if (!asset) return invalid("selected gameplay input asset is invalid: " + error);
+        if (asset->id != *id) return invalid("selected gameplay input asset ID does not match the manifest");
+        const auto projectId = Guid::FromString(project.Manifest().guid);
+        if (!projectId || projectId->IsNil())
+            return invalid("project GUID is missing or invalid");
+        if (!runtime.ConfigureGameInput(*asset, *projectId))
+            return invalid("selected gameplay input asset could not be compiled");
+        return { GameplayInputLoadResult::Status::Loaded, {} };
+    }
+
     // Binding proof (2026-07-30 review): BootContext::gpu must be a real
     // Arcane::GpuContext*, not a phantom Arcane::HostBoot::GpuContext* that an
     // elaborated-type-specifier ("class GpuContext*") would silently conjure

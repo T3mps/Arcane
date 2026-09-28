@@ -52,12 +52,23 @@ namespace Arcane
     // and so is unaffected in practice, but is declared here too for the same
     // reason and for symmetry with GpuContext/BootSplashWindow.
     class Runtime;
+    class ClientRuntime;
     class GpuContext;
     class BootSplashWindow;   // Task 7 defines this, in namespace Arcane
 }
 
 namespace Arcane::HostBoot
 {
+    struct GameplayInputLoadResult
+    {
+        enum class Status { Unconfigured, Loaded, Invalid };
+        Status status = Status::Unconfigured;
+        std::string diagnostic;
+    };
+
+    [[nodiscard]] ARCANE_API GameplayInputLoadResult LoadGameplayInput(
+        ClientRuntime& runtime, const Project& project);
+
     // VerifySharedTypeContext moved to Arcane::ProjectHost (ArcaneCore.dll,
     // Core-DLL split Task 6) -- re-exported here so every existing
     // `HostBoot::VerifySharedTypeContext(...)` caller compiles unchanged. See

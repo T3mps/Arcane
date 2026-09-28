@@ -155,7 +155,7 @@ namespace Arcane
                          AssetRegistry::ScanProgressFn onProgress = {},
                          ProjectOpenOptions opts = {}) { return m_core.OpenProject(pathOrFile, std::move(onProgress), std::move(opts)); }
         const Project* CurrentProject() const noexcept { return m_core.CurrentProject(); }
-        void CloseProject() { m_core.CloseProject(); }
+        void CloseProject() { m_pres.gameInput.Clear(); m_core.CloseProject(); }
         std::optional<Guid> RegisterCreatedAsset(const std::filesystem::path& file) { return m_core.RegisterCreatedAsset(file); }
         bool SetProjectBootScene(const Guid& id) { return m_core.SetProjectBootScene(id); }
         bool RestampProjectEngineAbi(int abi) { return m_core.RestampProjectEngineAbi(abi); }
