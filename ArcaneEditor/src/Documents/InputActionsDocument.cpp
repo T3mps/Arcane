@@ -79,12 +79,26 @@ namespace Arcane::Editor
             ImGui::TextDisabled("%s", Dirty() ? "Unsaved changes" : "Saved");
             for (const auto& diagnostic : model_.Diagnostics())
                 ImGui::TextWrapped("%s", diagnostic.c_str());
-            if (ImGui::InputTextMultiline("##input_actions_json", text_.data(), text_.size(),
-                ImGui::GetContentRegionAvail()))
+            if (ImGui::BeginTabBar("##input_document_tabs"))
             {
-                auto next = nlohmann::json::parse(text_.data(), nullptr, false);
-                if (next.is_discarded()) next = std::string(text_.data());
-                (void)model_.ApplyEdit("Edit input actions", model_.Draft(), std::move(next));
+                if (ImGui::BeginTabItem("Actions"))
+                {
+                    widgets_.Draw(model_, previewSnapshot_);
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("JSON"))
+                {
+                    if (!ImGui::IsAnyItemActive()) RefreshText();
+                    if (ImGui::InputTextMultiline("##input_actions_json", text_.data(), text_.size(),
+                        ImGui::GetContentRegionAvail()))
+                    {
+                        auto next = nlohmann::json::parse(text_.data(), nullptr, false);
+                        if (next.is_discarded()) next = std::string(text_.data());
+                        (void)model_.ApplyEdit("Edit input actions", model_.Draft(), std::move(next));
+                    }
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
             }
         }
         else

@@ -134,3 +134,65 @@ TEST_CASE("input editor: opening the same asset focuses its document", "[editor]
     std::error_code error;
     fs::remove(path, error);
 }
+
+TEST_CASE("input editor: map lifecycle maintains default and undo", "[editor][input]")
+{
+    Arcane::Editor::InputActionsEditorModel model(Arcane::InputActionAsset::CreateDefault().ToJson());
+    REQUIRE(model.AddMap("Player"));
+    const auto player = model.SelectedMap();
+    CHECK(model.Draft()["defaultMap"] == player.ToString());
+    REQUIRE(model.AddMap("Menus"));
+    const auto menus = model.SelectedMap();
+    REQUIRE(model.SetDefaultMap(menus));
+    REQUIRE(model.MoveRow(menus, -1));
+    CHECK(model.Draft()["actionMaps"][0]["id"] == menus.ToString());
+    REQUIRE(model.RemoveMap(menus));
+    CHECK(model.Draft()["defaultMap"] == player.ToString());
+    REQUIRE(model.RemoveMap(player));
+    CHECK_FALSE(model.Draft().contains("defaultMap"));
+    REQUIRE(model.LastValidPreview());
+}
+
+TEST_CASE("input editor: action binding composite and scheme edits", "[editor][input]")
+{
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson());
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    REQUIRE(model.AddScheme("Gamepad", "Gamepad"));
+    REQUIRE(model.SetField(action, "type", "Axis1D"));
+    REQUIRE(model.AddComposite(map, action, "1DAxis"));
+    const auto binding = model.SelectedBinding();
+    REQUIRE(model.LastValidPreview());
+    CHECK(model.Draft()["actionMaps"][0]["actions"][0]["bindings"].size() == 2);
+    REQUIRE(model.SetField(binding, "groups", nlohmann::json::array({"Gamepad"})));
+    REQUIRE(model.MoveRow(binding, -1));
+    REQUIRE(model.RemoveBinding(map, action, binding));
+    REQUIRE(model.LastValidPreview());
+    CHECK(model.Draft()["actionMaps"][0]["actions"][0]["bindings"].size() == 1);
+}
+
+TEST_CASE("input editor: same path warnings remain nonblocking", "[editor][input]")
+{
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson());
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    REQUIRE(model.AddBinding(map, action, "<Keyboard>/space"));
+    CHECK_FALSE(model.Warnings().empty());
+    REQUIRE(model.LastValidPreview());
+}
+
+TEST_CASE("input editor: composite parts can be added removed and reordered", "[editor][input]")
+{
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson());
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    REQUIRE(model.AddComposite(map, action, "1DAxis"));
+    const auto binding = model.SelectedBinding();
+    REQUIRE(model.AddPart(binding, "positive", "<Keyboard>/d"));
+    const auto part = model.SelectedPart();
+    REQUIRE(model.MoveRow(part, -1));
+    REQUIRE(model.DuplicateRow(binding));
+    REQUIRE(model.RemovePart(binding, part));
+    CHECK(model.LastValidPreview().has_value());
+    CHECK(model.Draft()["actionMaps"][0]["actions"][0]["bindings"].size() == 3);
+}

@@ -33,6 +33,7 @@
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame, once per viewport frame
 #include <Arcane/Host/ReferenceImages.hpp>   // --compare/--bless (Task 9): ResolveReference (MainLoop's pre-loop fail-fast)
 #include <Arcane/Input/InputSnapshot.hpp>
+#include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GpuInstrumentation.hpp>   // Arcane::GpuDeviceLostObserved -- the device-loss latch
 #include <Arcane/Render/PhysicsDebugDraw.hpp>   // Physics overlay (spec 2026-09-11-physics-2d-wiring s6.3)
@@ -722,6 +723,11 @@ namespace Arcane::Editor
             ls.lastFrameTime = now;
         }
         const Arcane::InputSnapshot snap = m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(), m_gpu->Imgui().WantCaptureMouse());
+        m_documents.ForEach([&](EditorDocument& document)
+        {
+            if (auto* input = dynamic_cast<InputActionsDocument*>(&document))
+                input->SetPreviewSnapshot(snap);
+        });
 
         // The plugin only sees scene-relevant input when the Viewport panel
         // is active (hovered/focused), with the cursor remapped into
