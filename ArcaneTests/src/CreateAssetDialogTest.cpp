@@ -11,6 +11,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Panels/CreateAssetDialog.hpp"
+#include "Project/ClassTemplates.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -36,6 +37,22 @@ namespace
     {
         std::ofstream(dir / fileName, std::ios::binary) << "{}";
     }
+}
+
+TEST_CASE("Create C++ System options start at Fixed Update and Both",
+          "[editor][create]")
+{
+    const CreateDialogState state;
+    const CreateAssetResult result;
+    CHECK(state.systemPhaseIndex == 0);
+    CHECK(state.systemRoleIndex == 0);
+    CHECK(result.systemPhaseIndex == 0);
+    CHECK(result.systemRoleIndex == 0);
+
+    const auto options = ClassTemplates::SystemOptionsForChoiceIndices(
+        state.systemPhaseIndex, state.systemRoleIndex);
+    CHECK(options.phase == Arcane::SystemPhase::FixedUpdate);
+    CHECK(options.role == Arcane::RoleMask::Both);
 }
 
 TEST_CASE("ValidateCreateName accepts an ordinary unused name", "[editor][create]")

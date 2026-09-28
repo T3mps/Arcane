@@ -2975,7 +2975,8 @@ namespace Arcane::Editor
                 // mint derives the .cpp beside it, registers both under
                 // source:// and regenerates the solution. `created` is the
                 // file to open in Visual Studio (the .cpp when there is one).
-                created = MintCppClass(target, r.name, r.classTemplate);
+                created = MintCppClass(target, r.name, r.classTemplate,
+                                       r.systemPhaseIndex, r.systemRoleIndex);
                 break;
         }
 

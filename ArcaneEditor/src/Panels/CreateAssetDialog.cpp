@@ -246,14 +246,43 @@ namespace Arcane::Editor
             }
         }
 
-        // CppClass: the Template combo -- Component / System / Plain class
-        // (Project/ClassTemplates.hpp). Same shape as the Material Kind combo.
+        using ChoiceLabel = const char* (*)(int) noexcept;
+
+        void DrawIndexedCombo(const char* caption,
+                              const char* id,
+                              int& index,
+                              int count,
+                              ChoiceLabel label)
+        {
+            // Store the clamped value back. A stale index must not merely LOOK
+            // valid while the result still carries an out-of-range selection.
+            index = std::clamp(index, 0, count - 1);
+            ImGui::TextDisabled("%s", caption);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::BeginCombo(id, label(index)))
+            {
+                for (int i = 0; i < count; ++i)
+                {
+                    const bool selected = (i == index);
+                    if (ImGui::Selectable(label(i), selected))
+                        index = i;
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        }
+
+        // CppClass: the Template combo -- Component / System / Plain class.
+        // System alone grows the phase/role controls because those values are
+        // meaningless for component and ordinary-class templates.
         void DrawClassTemplateField(CreateDialogState& st)
         {
             ImGui::TextDisabled("Template");
             ImGui::SetNextItemWidth(-FLT_MIN);
             const int count = static_cast<int>(ClassTemplates::Kind::Count);
             const int index = std::clamp(st.classTemplate, 0, count - 1);
+            st.classTemplate = index;
             const auto label = [](int i) { return ClassTemplates::KindLabel(static_cast<ClassTemplates::Kind>(i)); };
             if (ImGui::BeginCombo("##createclasstemplate", label(index)))
             {
@@ -275,7 +304,15 @@ namespace Arcane::Editor
                     ImGui::TextDisabled("Reflected data on an entity. Live after Rebuild Game Module.");
                     break;
                 case ClassTemplates::Kind::System:
-                    ImGui::TextDisabled("A scheduler functor. Add its AddSystem line to Init (see the file).");
+                    DrawIndexedCombo("Execution Phase", "##createsystemphase",
+                                     st.systemPhaseIndex,
+                                     ClassTemplates::kSystemPhaseChoiceCount,
+                                     &ClassTemplates::SystemPhaseChoiceLabel);
+                    DrawIndexedCombo("Network Role", "##createsystemrole",
+                                     st.systemRoleIndex,
+                                     ClassTemplates::kSystemRoleChoiceCount,
+                                     &ClassTemplates::SystemRoleChoiceLabel);
+                    ImGui::TextDisabled("The generated .cpp registers on Rebuild Game Module; ordering is declared in traits.");
                     break;
                 default:
                     ImGui::TextDisabled("A .hpp/.cpp pair in the project namespace.");
@@ -634,6 +671,8 @@ namespace Arcane::Editor
                                              static_cast<int>(folders.size()) - 1))].relative;
                 r.surface   = static_cast<int>(MaterialSurfaceForComboIndex(st.surface));
                 r.classTemplate = st.classTemplate;
+                r.systemPhaseIndex = st.systemPhaseIndex;
+                r.systemRoleIndex = st.systemRoleIndex;
                 r.meshSource = st.request.prefillMeshSource;
                 r.parent    = st.parent;
                 r.texture   = st.texture;

@@ -2959,7 +2959,10 @@ namespace Arcane::Editor
     // ---- Assets -> Create -> C++ Class (see EditorApp.hpp) -------------------
 
     Arcane::Guid EditorApp::MintCppClass(const std::filesystem::path& headerTarget,
-                                         const std::string& className, int templateKind)
+                                         const std::string& className,
+                                         int templateKind,
+                                         int systemPhaseIndex,
+                                         int systemRoleIndex)
     {
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj)
@@ -2967,8 +2970,14 @@ namespace Arcane::Editor
 
         const auto kind = static_cast<ClassTemplates::Kind>(
             std::clamp(templateKind, 0, static_cast<int>(ClassTemplates::Kind::Count) - 1));
+        // Convert UI indices once at the pure template boundary. That boundary
+        // also normalizes stale values, so generated C++ always contains valid
+        // enum spellings even if a dialog result outlives a UI roster change.
+        const ClassTemplates::SystemOptions systemOptions =
+            ClassTemplates::SystemOptionsForChoiceIndices(
+                systemPhaseIndex, systemRoleIndex);
         const ClassTemplates::Rendered files =
-            ClassTemplates::Render(kind, className, proj->Manifest().name);
+            ClassTemplates::Render(kind, className, proj->Manifest().name, systemOptions);
 
         const std::filesystem::path dir        = headerTarget.parent_path();
         const std::filesystem::path headerPath = dir / files.headerName;

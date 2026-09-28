@@ -1997,7 +1997,10 @@ namespace Arcane::Editor
         // Console. Opening it in Visual Studio is the dispatcher's post-mint
         // step, same "the caller decides" split as MintMeshAsset.
         Arcane::Guid MintCppClass(const std::filesystem::path& headerTarget,
-                                  const std::string& className, int templateKind);
+                                  const std::string& className,
+                                  int templateKind,
+                                  int systemPhaseIndex,
+                                  int systemRoleIndex);
 
         // ---- Report-written notify (GPU crash diagnostics arc, Task 9) -----
         // Diagnostics::ReportWrittenHook (Diagnostics.hpp) fires on WHATEVER

@@ -393,6 +393,11 @@ namespace Arcane::Editor
         bool setAsBoot = false;
         bool pickerOpen = false;
         int  classTemplate = 0;     // CppClass: a ClassTemplates::Kind value (Template combo)
+        // CppClass/System only. Keep UI indices here, not engine enums: stale
+        // persisted or test-injected values are clamped at the dialog boundary,
+        // then converted once by ClassTemplates when the files are minted.
+        int  systemPhaseIndex = 0;  // Fixed Update / Update / Render
+        int  systemRoleIndex = 0;   // Both / Server / Client
         // Set once DrawCreateAssetDialog has seeded folderIndex for THIS
         // request; BeginCreateAsset resets it to false along with everything
         // else. Deliberately separate from ImGui's own IsPopupOpen(title):
@@ -416,6 +421,8 @@ namespace Arcane::Editor
         std::string name; std::string folder;    // relative to CreateKindRoot(kind)
         int surface = 0;                          // Material: MaterialSurface value
         int classTemplate = 0;                    // CppClass: ClassTemplates::Kind value
+        int systemPhaseIndex = 0;                 // CppClass/System: choice index
+        int systemRoleIndex = 0;                  // CppClass/System: choice index
         int meshSource = -1;                      // Mesh: the request's MeshSource preset (-1 = MeshAssetData's Cube default)
         Arcane::Guid parent, texture; bool setAsBoot = false;
         // Task 13: Sprite's mint-or-reuse notice carries an "Open existing"
