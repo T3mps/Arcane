@@ -1,7 +1,7 @@
 # Automatic Game-System Registration Design
 
 **Date:** 2026-09-27
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved 2026-09-27
 
 ## Purpose
 
@@ -106,11 +106,12 @@ logic are required.
 ### Duplicate registrations
 
 `SystemFactoryTable::Add` rejects registrations of the same system type more
-than once in the same phase under the same module owner. It asserts in debug
-builds and logs then drops the later entry in non-asserting builds. The same
+than once in the same phase under the same module owner. It logs an error that
+names the type and phase, then drops the later entry in every build. The same
 system type may be registered in different phases. Separate `Server` and
 `Client` registrations are still duplicates: both match `Standalone` and
-`ListenServer` runtimes, which play both roles.
+`ListenServer` runtimes, which play both roles. This is deliberately recoverable:
+a duplicate wiring mistake must not terminate the editor during module load.
 
 This catches accidental combinations of `ARCANE_SYSTEM` and a leftover manual
 `RegisterSystem` line before a runtime receives duplicate work.
@@ -202,7 +203,7 @@ and must not be rewritten.
 - Registering outside an open image-owner bracket retains the existing assert,
   error log, and dropped-entry behavior.
 - Duplicate registration in one owner and phase follows the new
-  assert/log/drop behavior described above.
+  error-log/drop behavior described above.
 - An empty automatic registrar list is normal and produces no warning.
 - Module initialization logs the number of automatically registered systems,
   parallel to the component-registration count.
