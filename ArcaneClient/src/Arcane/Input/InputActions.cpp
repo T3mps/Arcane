@@ -680,6 +680,9 @@ namespace Arcane
                 m_maps.clear();
                 m_contextStack.clear();
                 m_frame = 0;
+                m_pendingTransitions.clear();
+                m_fixedTransitions.clear();
+                m_overflowReported = false;
                 m_nativeAsset.reset();
                 m_mapById.clear();
                 m_actionById.clear();
@@ -1035,6 +1038,13 @@ namespace Arcane
                     for (auto& [aName, a] : m.actions)
                     {
                         EvalAction(a, dt, snap);
+                        if (a.id.IsValid())
+                        {
+                            if (a.started) QueueTransition(a.id, InputActionPhase::Started);
+                            if (a.performed) QueueTransition(a.id, InputActionPhase::Performed);
+                            if (a.prevDown && !a.curDown)
+                                QueueTransition(a.id, InputActionPhase::Canceled);
+                        }
 
                         // Track device contribution for active-device hysteresis
                         if (a.kbmContrib) kbmActive = true;
@@ -1047,6 +1057,32 @@ namespace Arcane
                     m_activeDevice = InputDevice::Kbm;
                 else if (padMaxMag > kBtnThreshold)
                     m_activeDevice = InputDevice::Gamepad;
+            }
+
+            void BeginFixedStep() override
+            {
+                m_fixedTransitions = std::move(m_pendingTransitions);
+                m_pendingTransitions.clear();
+                m_overflowReported = false;
+            }
+
+            bool PressedThisFixedStep(const Guid& action) const override
+            {
+                return std::any_of(m_fixedTransitions.begin(), m_fixedTransitions.end(),
+                    [&](const InputActionTransition& t)
+                    { return t.action == action && t.phase == InputActionPhase::Started; });
+            }
+
+            bool ReleasedThisFixedStep(const Guid& action) const override
+            {
+                return std::any_of(m_fixedTransitions.begin(), m_fixedTransitions.end(),
+                    [&](const InputActionTransition& t)
+                    { return t.action == action && t.phase == InputActionPhase::Canceled; });
+            }
+
+            std::span<const InputActionTransition> TransitionsThisFixedStep() const override
+            {
+                return m_fixedTransitions;
             }
 
             void PushContext(std::string_view map) override
@@ -1168,6 +1204,24 @@ namespace Arcane
             std::unordered_map<Guid, Map*> m_mapById;
             std::unordered_map<Guid, ActionRef> m_actionById;
             std::unordered_map<Guid, BindingRef> m_bindingById;
+            std::vector<InputActionTransition> m_pendingTransitions;
+            std::vector<InputActionTransition> m_fixedTransitions;
+            bool m_overflowReported = false;
+
+            void QueueTransition(const Guid& action, InputActionPhase phase)
+            {
+                constexpr size_t kMaxTransitions = 256;
+                if (m_pendingTransitions.size() == kMaxTransitions)
+                {
+                    m_pendingTransitions.erase(m_pendingTransitions.begin());
+                    if (!m_overflowReported)
+                    {
+                        ARC_WARN("input: fixed-step transition queue overflow; oldest transition discarded");
+                        m_overflowReported = true;
+                    }
+                }
+                m_pendingTransitions.push_back({ action, phase, m_frame });
+            }
 
             void IndexBinding(CompiledBinding& binding, Action& action,
                               const std::string& mapName, const std::string& actionName)

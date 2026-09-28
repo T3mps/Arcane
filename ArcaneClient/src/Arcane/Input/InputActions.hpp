@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,13 @@ namespace Arcane
         float scalar = 0.0f;
         glm::vec2 vector = { 0.0f, 0.0f };
         InputActionPhase phase = InputActionPhase::Waiting;
+    };
+
+    struct InputActionTransition
+    {
+        Guid action;
+        InputActionPhase phase = InputActionPhase::Waiting;
+        uint64_t sampleIndex = 0;
     };
 
     struct InputMapInfo
@@ -113,6 +121,10 @@ namespace Arcane
         // Evaluates every map's actions from the snapshot. Once per frame,
         // before queries. dt feeds hold/tap interaction timing.
         virtual void Update(double dt, const InputSnapshot& snap) = 0;
+        virtual void BeginFixedStep() = 0;
+        [[nodiscard]] virtual bool PressedThisFixedStep(const Guid& action) const = 0;
+        [[nodiscard]] virtual bool ReleasedThisFixedStep(const Guid& action) const = 0;
+        [[nodiscard]] virtual std::span<const InputActionTransition> TransitionsThisFixedStep() const = 0;
 
         // Context stack: queries resolve top-down; a 'blocking' map stops
         // fall-through. Unknown map names warn + no-op.
