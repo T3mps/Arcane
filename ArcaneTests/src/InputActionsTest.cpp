@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Input/InputActions.hpp>
+#include <Arcane/Input/InputActionAsset.hpp>
 
 #include <Json.hpp>
 
@@ -518,4 +519,208 @@ TEST_CASE("input: round-trip load of the Playground demo asset", "[input]")
     input->Update(1.0 / 60.0, snap);
     CHECK(input->Strength("move") == Approx(1.0f).margin(1e-4));
     CHECK_FALSE(input->Down("quit"));
+}
+
+namespace
+{
+    nlohmann::json NativeActionDoc()
+    {
+        return nlohmann::json::parse(R"JSON({
+            "version": 1,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "defaultMap": "22222222-2222-4222-8222-222222222222",
+            "controlSchemes": [
+                { "id": "44444444-4444-4444-8444-444444444444",
+                  "name": "KeyboardMouse", "bindingGroup": "KeyboardMouse" },
+                { "id": "55555555-5555-4555-8555-555555555555",
+                  "name": "Gamepad", "bindingGroup": "Gamepad" }
+            ],
+            "actionMaps": [
+                { "id": "22222222-2222-4222-8222-222222222222",
+                  "name": "Player", "actions": [
+                    { "id": "66666666-6666-4666-8666-666666666666",
+                      "name": "Move", "type": "Axis1D", "bindings": [
+                        { "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                          "composite": "1DAxis", "groups": ["KeyboardMouse"],
+                          "parts": [
+                            { "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+                              "name": "positive", "path": "<Keyboard>/scancode/d" },
+                            { "id": "99999999-9999-4999-8999-999999999999",
+                              "name": "negative", "path": "<Keyboard>/scancode/a" }
+                          ] },
+                        { "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                          "path": "<Gamepad>/leftStick/x", "groups": ["Gamepad"] }
+                      ] },
+                    { "id": "77777777-7777-4777-8777-777777777777",
+                      "name": "Confirm", "type": "Button", "bindings": [
+                        { "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                          "path": "<Keyboard>/space", "groups": ["KeyboardMouse"] }
+                      ] },
+                    { "id": "88888888-8888-4888-8888-888888888888",
+                      "name": "Jump", "type": "Button", "bindings": [
+                        { "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                          "path": "<Keyboard>/space" }
+                      ] }
+                  ] },
+                { "id": "33333333-3333-4333-8333-333333333333",
+                  "name": "Menu", "blocking": true, "actions": [
+                    { "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                      "name": "Confirm", "type": "Button", "bindings": [
+                        { "id": "abababab-abab-4aba-8aba-abababababab",
+                          "path": "<Keyboard>/space" }
+                      ] }
+                  ] }
+            ]
+        })JSON");
+    }
+}
+
+TEST_CASE("input: native asset queries by stable action ID", "[input][native]")
+{
+    auto asset = Arcane::InputActionAsset::FromJson(NativeActionDoc());
+    REQUIRE(asset);
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadAsset(*asset));
+    input->SetBaseContext("Player");
+
+    const auto move = input->FindAction("Player", "Move");
+    REQUIRE(move);
+    CHECK(move->ToString() == "66666666-6666-4666-8666-666666666666");
+    CHECK(input->FindAction("Move") == move);
+
+    InputSnapshot snap;
+    snap.SetScancode(kScancodeD);
+    input->Update(1.0 / 60.0, snap);
+    const auto value = input->Value(*move);
+    CHECK(value.type == Arcane::InputActionType::Axis1D);
+    CHECK(value.down);
+    CHECK(value.scalar == Approx(1.0f));
+    REQUIRE(input->ScalarValue(*move));
+    CHECK(*input->ScalarValue(*move) == Approx(1.0f));
+
+    const auto maps = input->Maps();
+    REQUIRE(maps.size() == 2);
+    CHECK(maps[0].name == "Player");
+    CHECK(maps[1].name == "Menu");
+    const auto actions = input->Actions(maps[0].id);
+    REQUIRE(actions.size() == 3);
+    CHECK(actions[0].id == *move);
+    const auto bindings = input->Bindings(*move);
+    REQUIRE(bindings.size() == 2);
+    CHECK(bindings[0].composite == "1DAxis");
+    CHECK(bindings[1].authoredPath == "<Gamepad>/leftStick/x");
+}
+
+TEST_CASE("input: ambiguous unqualified action names do not resolve", "[input][native]")
+{
+    auto asset = Arcane::InputActionAsset::FromJson(NativeActionDoc());
+    REQUIRE(asset);
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadAsset(*asset));
+    CHECK_FALSE(input->FindAction("Confirm"));
+    const auto player = input->FindAction("Player", "Confirm");
+    const auto menu = input->FindAction("Menu", "Confirm");
+    REQUIRE(player);
+    REQUIRE(menu);
+    CHECK(*player != *menu);
+    CHECK_FALSE(input->FindAction("Missing", "Confirm"));
+}
+
+TEST_CASE("input: typed queries reject action type mismatches", "[input][native]")
+{
+    auto asset = Arcane::InputActionAsset::FromJson(NativeActionDoc());
+    REQUIRE(asset);
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadAsset(*asset));
+    const auto move = input->FindAction("Player", "Move");
+    const auto jump = input->FindAction("Player", "Jump");
+    REQUIRE(move);
+    REQUIRE(jump);
+    CHECK_FALSE(input->ButtonDown(*move));
+    CHECK_FALSE(input->VectorValue(*move));
+    CHECK_FALSE(input->ScalarValue(*jump));
+
+    input->SetBaseContext("Menu");
+    InputSnapshot snap;
+    snap.SetScancode(kScancodeD);
+    input->Update(1.0 / 60.0, snap);
+    CHECK_FALSE(input->Value(*move).down);
+    CHECK(input->Value(*move).scalar == 0.0f);
+    CHECK_FALSE(input->Value(Arcane::Guid::Nil()).down);
+}
+
+TEST_CASE("input: scheme groups filter bindings", "[input][native]")
+{
+    auto asset = Arcane::InputActionAsset::FromJson(NativeActionDoc());
+    REQUIRE(asset);
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadAsset(*asset));
+    input->SetBaseContext("Player");
+    const auto move = input->FindAction("Player", "Move");
+    const auto jump = input->FindAction("Player", "Jump");
+    REQUIRE(move);
+    REQUIRE(jump);
+
+    InputSnapshot pad;
+    pad.gamepadConnected = true;
+    pad.gamepadAxes[0] = 0.8f;
+    input->Update(1.0 / 60.0, pad);
+    CHECK(input->Value(*move).scalar == Approx(0.8f));
+
+    REQUIRE(input->SetControlScheme("KeyboardMouse"));
+    input->Update(1.0 / 60.0, pad);
+    CHECK(input->Value(*move).scalar == 0.0f);
+    InputSnapshot key;
+    key.SetScancode(kScancodeD);
+    input->Update(1.0 / 60.0, key);
+    CHECK(input->Value(*move).scalar == Approx(1.0f));
+
+    REQUIRE(input->SetControlScheme("Gamepad"));
+    input->Update(1.0 / 60.0, key);
+    CHECK(input->Value(*move).scalar == 0.0f);
+    input->Update(1.0 / 60.0, pad);
+    CHECK(input->Value(*move).scalar == Approx(0.8f));
+    InputSnapshot space;
+    space.AddKeycode(kKeycodeSpace);
+    input->Update(1.0 / 60.0, space);
+    CHECK(input->Value(*jump).down); // ungrouped bindings stay eligible
+    CHECK_FALSE(input->SetControlScheme("Missing"));
+}
+
+TEST_CASE("input: binding path override affects evaluation without mutating asset data", "[input][native]")
+{
+    auto asset = Arcane::InputActionAsset::FromJson(NativeActionDoc());
+    REQUIRE(asset);
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadAsset(*asset));
+    input->SetBaseContext("Player");
+    const auto jump = input->FindAction("Player", "Jump");
+    const auto move = input->FindAction("Player", "Move");
+    REQUIRE(jump);
+    REQUIRE(move);
+    const auto jumpBinding = Arcane::Guid::FromString("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    const auto positivePart = Arcane::Guid::FromString("ffffffff-ffff-4fff-8fff-ffffffffffff");
+    REQUIRE(jumpBinding);
+    REQUIRE(positivePart);
+    REQUIRE(input->SetBindingPath(*jumpBinding, "<Keyboard>/scancode/w"));
+    REQUIRE(input->SetBindingPath(*positivePart, "<Keyboard>/scancode/s"));
+
+    InputSnapshot space;
+    space.AddKeycode(kKeycodeSpace);
+    input->Update(1.0 / 60.0, space);
+    CHECK_FALSE(input->Value(*jump).down);
+    InputSnapshot rebound;
+    rebound.SetScancode(kScancodeW);
+    rebound.SetScancode(kScancodeS2);
+    input->Update(1.0 / 60.0, rebound);
+    CHECK(input->Value(*jump).down);
+    CHECK(input->Value(*move).scalar == Approx(1.0f));
+
+    const auto jumpBindings = input->Bindings(*jump);
+    REQUIRE(jumpBindings.size() == 1);
+    CHECK(jumpBindings[0].authoredPath == "<Keyboard>/space");
+    CHECK(jumpBindings[0].effectivePath == "<Keyboard>/scancode/w");
+    CHECK_FALSE(input->BindingDisplayString(*jumpBinding).empty());
+    CHECK(asset->ToJson()["actionMaps"][0]["actions"][2]["bindings"][0]["path"] == "<Keyboard>/space");
+    CHECK_FALSE(input->SetBindingPath(Arcane::Guid::Nil(), "<Keyboard>/space"));
 }

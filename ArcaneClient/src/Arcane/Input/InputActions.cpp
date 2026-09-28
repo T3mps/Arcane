@@ -11,6 +11,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -18,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -426,8 +428,10 @@ namespace Arcane
         // CompiledBinding
         struct CompiledBinding
         {
+            Guid id;
             std::vector<ControlId> chord;   // size 1 = simple path; size>1 = chord
             std::string path;               // original string (deferred features)
+            std::vector<std::string> groups;
             std::vector<ProcessorOp> processors;
             bool isComposite = false;
             std::string compositeType;      // "2DVector" or "1DAxis"
@@ -483,9 +487,11 @@ namespace Arcane
         // Action
         struct Action
         {
+            Guid id;
             std::string name;
             std::string type;           // "Button" | "Value"
             std::string controlType;    // "Vector2" or empty
+            InputActionType nativeType = InputActionType::Button;
 
             std::vector<CompiledBinding> bindings;
             Interaction interaction;
@@ -516,6 +522,7 @@ namespace Arcane
         // Map
         struct Map
         {
+            Guid id;
             std::string name;
             bool blocking = false;
             std::unordered_map<std::string, Action> actions;
@@ -545,6 +552,16 @@ namespace Arcane
                                        const std::string& actionName)
         {
             CompiledBinding cb;
+            if (bj.contains("id") && bj["id"].is_string())
+            {
+                if (const auto parsed = Guid::FromString(bj["id"].get<std::string>()))
+                    cb.id = *parsed;
+            }
+            if (bj.contains("groups") && bj["groups"].is_array())
+            {
+                for (const auto& group : bj["groups"])
+                    if (group.is_string()) cb.groups.push_back(group.get<std::string>());
+            }
 
             // Check for composite
             if (bj.contains("composite") && bj["composite"].is_string())
@@ -607,9 +624,50 @@ namespace Arcane
             return cb;
         }
 
+        nlohmann::json NativeAsLegacy(const InputActionAsset& asset)
+        {
+            nlohmann::json document = asset.ToJson();
+            for (auto& map : document["actionMaps"])
+            {
+                for (auto& action : map["actions"])
+                {
+                    const std::string type = action["type"].get<std::string>();
+                    if (type == "Axis1D")
+                        action["type"] = "Value";
+                    else if (type == "Axis2D")
+                    {
+                        action["type"] = "Value";
+                        action["controlType"] = "Vector2";
+                    }
+                    for (auto& binding : action["bindings"])
+                    {
+                        if (!binding.contains("composite")) continue;
+                        nlohmann::json buckets = nlohmann::json::object();
+                        for (const auto& part : binding["parts"])
+                        {
+                            const std::string role = part["name"].get<std::string>();
+                            if (!buckets.contains(role)) buckets[role] = nlohmann::json::array();
+                            buckets[role].push_back(part);
+                        }
+                        binding["parts"] = std::move(buckets);
+                    }
+                }
+            }
+            return document;
+        }
+
         // InputActionsImpl
         class InputActionsImpl final : public InputActions
         {
+            struct ActionRef { Map* map = nullptr; Action* action = nullptr; };
+            struct BindingRef
+            {
+                CompiledBinding* binding = nullptr;
+                Action* action = nullptr;
+                std::string mapName;
+                std::string actionName;
+            };
+
         public:
             bool LoadJson(const nlohmann::json& doc) override
             {
@@ -622,6 +680,11 @@ namespace Arcane
                 m_maps.clear();
                 m_contextStack.clear();
                 m_frame = 0;
+                m_nativeAsset.reset();
+                m_mapById.clear();
+                m_actionById.clear();
+                m_bindingById.clear();
+                m_activeSchemeGroup.clear();
 
                 for (const auto& mj : doc["actionMaps"])
                 {
@@ -675,6 +738,264 @@ namespace Arcane
                 }
 
                 return true;
+            }
+
+            bool LoadAsset(const InputActionAsset& asset) override
+            {
+                std::string error;
+                auto validated = InputActionAsset::FromJson(asset.ToJson(), &error);
+                if (!validated)
+                {
+                    ARC_WARN("input: LoadAsset failed: {}", error);
+                    return false;
+                }
+
+                // The legacy evaluator keys maps/actions by name. Check those
+                // keys before replacing the last usable compiled definition.
+                std::unordered_set<std::string> mapNames;
+                for (const auto& map : validated->actionMaps)
+                {
+                    if (!mapNames.insert(map.name).second)
+                    {
+                        ARC_WARN("input: LoadAsset failed: duplicate map name '{}'", map.name);
+                        return false;
+                    }
+                    std::unordered_set<std::string> actionNames;
+                    for (const auto& action : map.actions)
+                    {
+                        if (!actionNames.insert(action.name).second)
+                        {
+                            ARC_WARN("input: LoadAsset failed: duplicate action name '{}' in '{}'",
+                                     action.name, map.name);
+                            return false;
+                        }
+                    }
+                }
+
+                if (!LoadJson(NativeAsLegacy(*validated)))
+                    return false;
+                m_nativeAsset = std::move(*validated);
+                for (const auto& mapDef : m_nativeAsset->actionMaps)
+                {
+                    Map& map = m_maps.at(mapDef.name);
+                    map.id = mapDef.id;
+                    m_mapById[map.id] = &map;
+                    for (const auto& actionDef : mapDef.actions)
+                    {
+                        Action& action = map.actions.at(actionDef.name);
+                        action.id = actionDef.id;
+                        action.nativeType = actionDef.type;
+                        m_actionById[action.id] = { &map, &action };
+                        for (auto& binding : action.bindings)
+                            IndexBinding(binding, action, mapDef.name, actionDef.name);
+                    }
+                }
+                return true;
+            }
+
+            bool SetControlScheme(std::string_view schemeName) override
+            {
+                if (schemeName.empty())
+                {
+                    m_activeSchemeGroup.clear();
+                    return true;
+                }
+                if (!m_nativeAsset) return false;
+                for (const auto& scheme : m_nativeAsset->controlSchemes)
+                {
+                    if (scheme.name == schemeName)
+                    {
+                        m_activeSchemeGroup = scheme.bindingGroup;
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            std::optional<Guid> FindAction(std::string_view mapName,
+                                            std::string_view actionName) const override
+            {
+                if (!m_nativeAsset) return std::nullopt;
+                for (const auto& map : m_nativeAsset->actionMaps)
+                {
+                    if (map.name != mapName) continue;
+                    for (const auto& action : map.actions)
+                        if (action.name == actionName) return action.id;
+                }
+                return std::nullopt;
+            }
+
+            std::optional<Guid> FindAction(std::string_view actionName) const override
+            {
+                if (!m_nativeAsset) return std::nullopt;
+                std::optional<Guid> found;
+                for (const auto& map : m_nativeAsset->actionMaps)
+                {
+                    for (const auto& action : map.actions)
+                    {
+                        if (action.name != actionName) continue;
+                        if (found) return std::nullopt;
+                        found = action.id;
+                    }
+                }
+                return found;
+            }
+
+            InputActionValue Value(const Guid& actionId) const override
+            {
+                InputActionValue value;
+                const auto it = m_actionById.find(actionId);
+                if (it == m_actionById.end()) return value;
+                const Action& action = *it->second.action;
+                value.type = action.nativeType;
+                if (!MapVisible(it->second.map)) return value;
+                value.down = action.curDown;
+                value.scalar = action.strength;
+                value.vector = action.vec;
+                if (action.canceled) value.phase = InputActionPhase::Canceled;
+                else if (action.performed) value.phase = InputActionPhase::Performed;
+                else if (action.started) value.phase = InputActionPhase::Started;
+                return value;
+            }
+
+            std::optional<bool> ButtonDown(const Guid& actionId) const override
+            {
+                const auto it = m_actionById.find(actionId);
+                if (it == m_actionById.end() || it->second.action->nativeType != InputActionType::Button)
+                    return std::nullopt;
+                return Value(actionId).down;
+            }
+
+            std::optional<float> ScalarValue(const Guid& actionId) const override
+            {
+                const auto it = m_actionById.find(actionId);
+                if (it == m_actionById.end() || it->second.action->nativeType != InputActionType::Axis1D)
+                    return std::nullopt;
+                return Value(actionId).scalar;
+            }
+
+            std::optional<glm::vec2> VectorValue(const Guid& actionId) const override
+            {
+                const auto it = m_actionById.find(actionId);
+                if (it == m_actionById.end() || it->second.action->nativeType != InputActionType::Axis2D)
+                    return std::nullopt;
+                return Value(actionId).vector;
+            }
+
+            std::optional<InputActionPhase> Phase(const Guid& actionId) const override
+            {
+                if (!m_actionById.contains(actionId)) return std::nullopt;
+                return Value(actionId).phase;
+            }
+
+            bool SetBindingPath(const Guid& bindingId, std::string_view path) override
+            {
+                const auto it = m_bindingById.find(bindingId);
+                if (it == m_bindingById.end() || it->second.binding->isComposite)
+                    return false;
+                BindingRef& ref = it->second;
+                std::vector<ControlId> compiled = CompilePath(std::string(path), ref.mapName, ref.actionName);
+                if (compiled.empty() || std::any_of(compiled.begin(), compiled.end(),
+                    [](const ControlId& control) { return control.source == ControlSource::None; }))
+                    return false;
+                ref.binding->path = std::string(path);
+                ref.binding->chord = std::move(compiled);
+                Action& action = *ref.action;
+                action.prevDown = false;
+                action.curDown = false;
+                action.strength = 0.0f;
+                action.vec = glm::vec2(0.0f);
+                action.started = action.performed = action.canceled = false;
+                action._perfFired = action._tapValid = false;
+                action.heldTime = 0.0;
+                action.bufConsumed = true;
+                return true;
+            }
+
+            std::vector<InputMapInfo> Maps() const override
+            {
+                std::vector<InputMapInfo> result;
+                if (!m_nativeAsset) return result;
+                result.reserve(m_nativeAsset->actionMaps.size());
+                for (const auto& map : m_nativeAsset->actionMaps)
+                    result.push_back({ map.id, map.name, map.blocking, map.priority });
+                return result;
+            }
+
+            std::vector<InputActionInfo> Actions(const Guid& mapId) const override
+            {
+                std::vector<InputActionInfo> result;
+                if (!m_nativeAsset) return result;
+                for (const auto& map : m_nativeAsset->actionMaps)
+                {
+                    if (map.id != mapId) continue;
+                    result.reserve(map.actions.size());
+                    for (const auto& action : map.actions)
+                        result.push_back({ action.id, map.id, action.name, action.type });
+                    break;
+                }
+                return result;
+            }
+
+            std::vector<InputBindingInfo> Bindings(const Guid& actionId) const override
+            {
+                std::vector<InputBindingInfo> result;
+                if (!m_nativeAsset) return result;
+                for (const auto& map : m_nativeAsset->actionMaps)
+                {
+                    for (const auto& action : map.actions)
+                    {
+                        if (action.id != actionId) continue;
+                        result.reserve(action.bindings.size());
+                        for (const auto& binding : action.bindings)
+                        {
+                            InputBindingInfo info;
+                            info.id = binding.id;
+                            info.actionId = action.id;
+                            info.authoredPath = binding.path;
+                            info.effectivePath = EffectivePath(binding.id, binding.path);
+                            info.composite = binding.composite;
+                            info.groups = binding.groups;
+                            for (const auto& part : binding.parts)
+                                info.parts.push_back({ part.id, part.name, part.path,
+                                    EffectivePath(part.id, part.path), part.groups });
+                            result.push_back(std::move(info));
+                        }
+                        return result;
+                    }
+                }
+                return result;
+            }
+
+            std::string BindingDisplayString(const Guid& bindingId) const override
+            {
+                const auto it = m_bindingById.find(bindingId);
+                if (it == m_bindingById.end()) return {};
+                const CompiledBinding& binding = *it->second.binding;
+                if (binding.isComposite)
+                    return binding.compositeType == "1DAxis" ? "1D Axis" : "2D Vector";
+                const std::string& path = binding.path;
+                const std::size_t close = path.find(">/");
+                if (path.empty() || path.front() != '<' || close == std::string::npos)
+                    return path;
+                std::string device = path.substr(1, close - 1);
+                std::string control = path.substr(close + 2);
+                constexpr std::string_view scanPrefix = "scancode/";
+                if (control.starts_with(scanPrefix)) control.erase(0, scanPrefix.size());
+                std::string readable;
+                for (char c : control)
+                {
+                    if (c == '/') readable += ' ';
+                    else if (std::isupper(static_cast<unsigned char>(c)) && !readable.empty() &&
+                             std::islower(static_cast<unsigned char>(readable.back())))
+                    {
+                        readable += ' ';
+                        readable += c;
+                    }
+                    else readable += c;
+                }
+                if (!readable.empty()) readable.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(readable.front())));
+                return device + " " + readable;
             }
 
             bool LoadFile(const std::filesystem::path& path) override
@@ -842,6 +1163,45 @@ namespace Arcane
             std::vector<std::string> m_contextStack;
             uint64_t m_frame = 0;
             InputDevice m_activeDevice = InputDevice::Kbm;
+            std::optional<InputActionAsset> m_nativeAsset;
+            std::string m_activeSchemeGroup;
+            std::unordered_map<Guid, Map*> m_mapById;
+            std::unordered_map<Guid, ActionRef> m_actionById;
+            std::unordered_map<Guid, BindingRef> m_bindingById;
+
+            void IndexBinding(CompiledBinding& binding, Action& action,
+                              const std::string& mapName, const std::string& actionName)
+            {
+                if (binding.id.IsValid())
+                    m_bindingById[binding.id] = { &binding, &action, mapName, actionName };
+                for (auto& [role, parts] : binding.parts)
+                    for (auto& part : parts)
+                        IndexBinding(part, action, mapName, actionName);
+            }
+
+            bool MapVisible(const Map* target) const
+            {
+                for (int i = static_cast<int>(m_contextStack.size()) - 1; i >= 0; --i)
+                {
+                    const auto it = m_maps.find(m_contextStack[i]);
+                    if (it == m_maps.end()) continue;
+                    if (&it->second == target) return true;
+                    if (it->second.blocking) return false;
+                }
+                return false;
+            }
+
+            std::string EffectivePath(const Guid& id, const std::string& authored) const
+            {
+                const auto it = m_bindingById.find(id);
+                return it == m_bindingById.end() ? authored : it->second.binding->path;
+            }
+
+            static bool SchemeAllows(const CompiledBinding& binding, std::string_view activeGroup)
+            {
+                if (activeGroup.empty() || binding.groups.empty()) return true;
+                return std::find(binding.groups.begin(), binding.groups.end(), activeGroup) != binding.groups.end();
+            }
 
             // Resolve action name through context stack top-down.
             // A blocking map stops fall-through (oracle resolve()).
@@ -888,6 +1248,7 @@ namespace Arcane
 
                 for (const auto& b : a.bindings)
                 {
+                    if (!SchemeAllows(b, m_activeSchemeGroup)) continue;
                     if (b.isComposite)
                     {
                         // Composite resolution (oracle: resolveComposite / partStrength).
@@ -907,8 +1268,8 @@ namespace Arcane
                         if (b.compositeType == "1DAxis")
                         {
                             // oracle: pos - neg, then scalar processors
-                            float pos = PartStrength(getPart("positive"), snap);
-                            float neg = PartStrength(getPart("negative"), snap);
+                            float pos = PartStrength(getPart("positive"), snap, m_activeSchemeGroup);
+                            float neg = PartStrength(getPart("negative"), snap, m_activeSchemeGroup);
                             float val = ApplyScalarProcessors(b.processors, pos - neg);
                             float mag = std::abs(val);
                             if (mag > bestScalarMag)
@@ -924,10 +1285,10 @@ namespace Arcane
                         else  // 2DVector (default)
                         {
                             // oracle: vec = {right-left, down-up}, then vector processors
-                            float up    = PartStrength(getPart("up"),    snap);
-                            float down  = PartStrength(getPart("down"),  snap);
-                            float left  = PartStrength(getPart("left"),  snap);
-                            float right = PartStrength(getPart("right"), snap);
+                            float up    = PartStrength(getPart("up"),    snap, m_activeSchemeGroup);
+                            float down  = PartStrength(getPart("down"),  snap, m_activeSchemeGroup);
+                            float left  = PartStrength(getPart("left"),  snap, m_activeSchemeGroup);
+                            float right = PartStrength(getPart("right"), snap, m_activeSchemeGroup);
                             glm::vec2 rawVec(right - left, down - up);
                             glm::vec2 vec = ApplyVectorProcessors(b.processors, rawVec);
                             float len = glm::length(vec);
@@ -1154,11 +1515,12 @@ namespace Arcane
             // binding array (oracle: partStrength in Input.lua).
             // Each binding in the array is a simple/chord path (no nested composites).
             static float PartStrength(const std::vector<CompiledBinding>& partBindings,
-                                      const InputSnapshot& snap)
+                                      const InputSnapshot& snap, std::string_view activeGroup)
             {
                 float best = 0.0f;
                 for (const auto& pb : partBindings)
                 {
+                    if (!SchemeAllows(pb, activeGroup)) continue;
                     float raw = ResolveChord(pb.chord, snap);
                     float val = ApplyScalarProcessors(pb.processors, raw);
                     float mag = std::abs(val);
