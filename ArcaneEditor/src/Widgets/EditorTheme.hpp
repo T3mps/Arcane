@@ -37,8 +37,10 @@
 //
 // Header-only and free of every editor type on purpose: ApplyEditorTheme takes
 // the ImGuiStyle to fill, so any Arcane ImGui consumer (a game's debug HUD, a
-// future tool host) can adopt the same look with one call. The editor is the
-// only caller today -- ArcaneRuntime/Sandbox HUDs are untouched.
+// future tool host) can adopt the same look with one call. Callers today:
+// the editor, and ArcaneCrashReporter (ReporterWindow.cpp), which reaches
+// this header through a bare `ArcaneEditor/src` include path -- a shared
+// header-only home for it is owed (crash-window spec s13).
 
 #include <imgui.h>
 

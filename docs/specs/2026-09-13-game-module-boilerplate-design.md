@@ -238,6 +238,13 @@ list is explicit in one place (`InstallEngineSystems`), a game's placement
 is an explicit declaration on the type, and nothing self-registers a
 system through static initialisation.
 
+> **Superseded 2026-09-27** by
+> `docs/superpowers/specs/2026-09-27-automatic-game-system-registration-design.md`:
+> a game system now registers its factory through `ARCANE_SYSTEM(Type, Role,
+> Phase)` at module static-initialisation time (module-local list, drained
+> inside PluginHost's owner bracket). The declaration on the type -- phase,
+> role, Astra `Before`/`After` -- is still where its order is decided.
+
 ## 5. Consumers — the three module sources, all adopted
 
 1. **`ArcaneTests/plugins/HotReloadPlugin.cpp`** (one source → V1/V2/Bad

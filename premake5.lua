@@ -621,7 +621,9 @@ project "ArcaneCrashReporter"
         "%{wks.location}/ArcaneEditor/src",   -- Widgets/EditorTheme.hpp, header-only
     }
 
-    links { "ArcaneCore", "dbgeng", "dbghelp", "user32", "gdi32", "shell32", "ole32", "dwmapi", "d3d11", "dxgi" }
+    -- No dwmapi: nothing in the reporter calls Dwm*; imgui_impl_win32.cpp
+    -- pragma-links it for its own use.
+    links { "ArcaneCore", "dbgeng", "dbghelp", "user32", "gdi32", "shell32", "ole32", "d3d11", "dxgi" }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",

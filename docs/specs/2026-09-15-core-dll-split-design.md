@@ -217,6 +217,12 @@ a factory is registered by an explicit line in the module's `OnInit`, with an
 explicit mask, and Astra's `Before`/`After` traits still place it. Nothing
 self-registers a system through static initialisation.
 
+> **Superseded 2026-09-27** by
+> `docs/superpowers/specs/2026-09-27-automatic-game-system-registration-design.md`:
+> `ARCANE_SYSTEM(Type, Role, Phase)` now registers the factory from a
+> module-local static-init list, drained inside the same owner bracket; the
+> manual `RegisterSystem` line still works on top of it.
+
 **`ListenServer` is the one-world dual-role mode.** One `Runtime`, authoritative,
 with the host's local client presentation reading that same authoritative world
 directly — no second world, no loopback duplication of state. That is id Tech 4

@@ -2,6 +2,11 @@
 
 **Date:** 2026-09-27
 **Status:** Approved 2026-09-27
+**Supersedes:** the "nothing self-registers a system through static
+initialisation" rulings in `docs/specs/2026-09-13-game-module-boilerplate-design.md`
+(4.3) and `docs/specs/2026-09-15-core-dll-split-design.md` (the system-factory
+table paragraph). What those rulings protected -- order as a design act -- is
+kept: phase, role and Astra placement stay an explicit declaration on the type.
 
 ## Purpose
 
