@@ -3,12 +3,13 @@
   "name": "ReferenceProject",
   "description": "The in-repo sample: an SDK-built game module (Source/Game/ -> Binaries/ReferenceGame.dll, the Unreal-style Source/<Module>/ layout) plus a simple data scene.",
   "engine": {
-    "abi": 42
+    "abi": 43
   },
   "gameModule": "ReferenceGame.dll",
   "sourceDir": "Source/Game",
   "plugins": [],
   "packages": [],
   "bootScene": "10d8ff06-45c2-47f2-90cb-ab7ac29cb51d",
+  "inputActions": "97260310-8b35-4b29-b12f-1fd6f8e99071",
   "guid": "cfafaf09-86bb-4b4b-a99f-9ecb0771bc15"
 }

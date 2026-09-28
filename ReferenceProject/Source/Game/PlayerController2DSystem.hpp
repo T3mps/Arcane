@@ -9,13 +9,12 @@
 // knowing this type. Registrar discovery order is intentionally irrelevant:
 // the Before<> trait below is the semantic ordering contract. Fixed update
 // applies movement to the live body before PhysicsSystem steps and propagates
-// its new pose. This sample reads a local keyboard, so it runs on the client
+// its new pose. This sample reads locally resolved gameplay actions, so it runs on the client
 // role; an authoritative network game would route commands to a server system.
 
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsCommands.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
-#include <Arcane/Input/InputSnapshot.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 #include <Astra/System/System.hpp>
@@ -26,36 +25,6 @@
 
 namespace ReferenceProject
 {
-    struct PlatformerControls
-    {
-        float horizontal = 0.0f;
-        bool jumpPressed = false;
-        bool jumpDown = false;
-    };
-
-    // Snapshot scancodes are SDL's physical key positions: A=4, D=7,
-    // W=26, Space=44. Keep these bindings local to the sample game.
-    struct PlatformerInputState
-    {
-        bool jumpHeld = false;
-
-        PlatformerControls Sample(const Arcane::InputSnapshot& snapshot)
-        {
-            const bool live = !snapshot.wantCaptureKeyboard;
-            const bool left = live && snapshot.ScancodeDown(4);
-            const bool right = live && snapshot.ScancodeDown(7);
-            const bool jump = live && (snapshot.ScancodeDown(26) || snapshot.ScancodeDown(44));
-            const PlatformerControls controls
-            {
-                static_cast<float>(static_cast<int>(right) - static_cast<int>(left)),
-                jump && !jumpHeld,
-                jump
-            };
-            jumpHeld = jump;
-            return controls;
-        }
-    };
-
     struct PlayerController2DSystem :
         Astra::SystemTraits<Astra::Writes<PlayerController2D>,
                             Astra::Writes<Arcane::RigidBody2D>,

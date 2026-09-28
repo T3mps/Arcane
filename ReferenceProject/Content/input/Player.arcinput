@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "id": "97260310-8b35-4b29-b12f-1fd6f8e99071",
+  "defaultMap": "97fe5369-9b8b-459b-af75-b27eab7e9a73",
+  "controlSchemes": [
+    {
+      "id": "255687d8-f5b6-4dd0-b949-7335cedbe834",
+      "name": "KeyboardMouse",
+      "bindingGroup": "KeyboardMouse"
+    },
+    {
+      "id": "8c988f65-b8c6-4127-9648-1399c0c66c7c",
+      "name": "Gamepad",
+      "bindingGroup": "Gamepad"
+    }
+  ],
+  "actionMaps": [
+    {
+      "id": "97fe5369-9b8b-459b-af75-b27eab7e9a73",
+      "name": "Player",
+      "actions": [
+        {
+          "id": "11dd15e5-9525-4936-89c6-4049196c9c6d",
+          "name": "Move",
+          "type": "Axis1D",
+          "bindings": [
+            {
+              "id": "896b6e16-2d11-4b20-9566-b4262bfbed3a",
+              "composite": "1DAxis",
+              "groups": ["KeyboardMouse"],
+              "parts": [
+                {
+                  "id": "5ee3aeaf-81b8-4cbd-b493-fffd90da98aa",
+                  "name": "negative",
+                  "path": "<Keyboard>/scancode/a"
+                },
+                {
+                  "id": "70bd3a94-313c-4b86-8bf7-4001905bfa04",
+                  "name": "positive",
+                  "path": "<Keyboard>/scancode/d"
+                }
+              ]
+            },
+            {
+              "id": "4f3e0887-b98d-41a7-b06f-530379f33060",
+              "path": "<Gamepad>/leftStick/x",
+              "groups": ["Gamepad"]
+            }
+          ]
+        },
+        {
+          "id": "b8277f11-faf8-43f6-b6c7-d8b8f31aee70",
+          "name": "Jump",
+          "type": "Button",
+          "bindings": [
+            {
+              "id": "8f29844c-7115-4571-aebd-479cbe2861e4",
+              "path": "<Keyboard>/scancode/w",
+              "groups": ["KeyboardMouse"]
+            },
+            {
+              "id": "a82e97c8-d04b-4981-997c-91eed6f5f26f",
+              "path": "<Keyboard>/space",
+              "groups": ["KeyboardMouse"]
+            },
+            {
+              "id": "0d829a3b-af25-49d6-9429-6580f70632f6",
+              "path": "<Gamepad>/buttonSouth",
+              "groups": ["Gamepad"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

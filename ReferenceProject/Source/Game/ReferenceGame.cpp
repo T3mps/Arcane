@@ -1,43 +1,43 @@
 #include <Arcane/Plugin/GameModule.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
-#include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Base/Log.hpp>
 
 #include "PlayerController2DSystem.hpp"
-
-#include <algorithm>
 
 namespace ReferenceGame
 {
     struct Module final : Arcane::GameModule
     {
-        ReferenceProject::PlatformerInputState input;
-        float pendingJumpSeconds = 0.0f;
+        Arcane::Guid moveId;
+        Arcane::Guid jumpId;
 
-        void OnUpdate(double dt, double) override
+        bool OnInit(Arcane::EngineContext&) override
         {
-            // A render frame may contain no fixed tick. Latch a press until
-            // simulation consumes it, but expire it while paused so a tap in
-            // Edit mode cannot turn into a surprise jump on entering Play.
-            pendingJumpSeconds = std::max(0.0f, pendingJumpSeconds - static_cast<float>(dt));
-            if (Client())
+            if (!Client()) return true; // server has no local input device
+            const auto move = Client()->GameInput().FindAction("Player", "Move");
+            const auto jump = Client()->GameInput().FindAction("Player", "Jump");
+            if (!move || !jump)
             {
-                if (input.Sample(Client()->Input()).jumpPressed)
-                    pendingJumpSeconds = 0.10f;
+                ARC_ERROR("ReferenceGame: Player.Move and Player.Jump are required in the selected gameplay input asset");
+                return false;
             }
+            moveId = *move;
+            jumpId = *jump;
+            return true;
         }
 
         void OnFixedUpdate(double dt) override
         {
-            const Arcane::InputSnapshot empty;
-            const auto controls = input.Sample(Client() ? Client()->Input() : empty);
-            const bool jumpPressed = controls.jumpPressed || pendingJumpSeconds > 0.0f;
-            pendingJumpSeconds = 0.0f;
+            const auto* client = Client();
+            const float horizontal = client ? client->GameInput().Value(moveId).scalar : 0.0f;
+            const bool jumpPressed = client && client->GameInput().PressedThisFixedStep(jumpId);
+            const bool jumpDown = client && client->GameInput().Down(jumpId);
             Registry().CreateView<ReferenceProject::PlayerController2D>().ForEach(
                 [&](Astra::Entity, ReferenceProject::PlayerController2D& controller)
                 {
-                    controller.value = controls.horizontal;
+                    controller.value = horizontal;
                     controller.jumpRequested = jumpPressed;
-                    controller.jumpHeld = controls.jumpDown;
+                    controller.jumpHeld = jumpDown;
                     controller.fixedDt = static_cast<float>(dt);
                 });
         }
