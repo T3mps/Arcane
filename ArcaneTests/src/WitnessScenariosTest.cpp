@@ -409,3 +409,48 @@ TEST_CASE("W5: the F3 cull/blend fixture scene matches its golden and reports th
     CHECK(vis.at("gpuVisible").get<std::uint32_t>()
           < vis.at("coarseVisible").get<std::uint32_t>());
 }
+
+#include <fstream>
+
+TEST_CASE("W6: a headless runtime neither reads nor writes the slot's imgui.ini",
+          "[witness][gpu]")
+{
+    // THE LEVER: the imgui.ini a windowed session leaves beside the exe. On
+    // 2026-09-28 the golden gate's two runtime lanes were red by ~2600 px and
+    // never settled ("timeout-bound") while the same compare passed from a
+    // fresh scratch copy -- the slot held an ini with the HUD at Pos=59,60,
+    // one pixel off the default, and the headless host read it. The editor
+    // pins io.IniFilename = nullptr under --headless (EditorApp.cpp, "THE
+    // FLAG BEATS THE INI"); the runtime must do the same, or every golden
+    // depends on whatever ini the slot happens to hold.
+    WitnessScratch scratch(StagedRuntimeDir(), "w6-imgui-ini-ignored");
+    const std::filesystem::path ini = scratch.Dir() / "imgui.ini";
+    const std::string poisoned = R"ini([Window][ArcaneRuntime]
+Pos=59,60
+Size=416,116
+Collapsed=0
+)ini";
+    {
+        std::ofstream out(ini, std::ios::binary);
+        REQUIRE(out.good());
+        out << poisoned;
+    }
+
+    WitnessRun run = RunWitness(HostInv(scratch, { "--settle", "30", "--compare", "runtime-scene" }));
+    INFO("host stdout: " << run.stdoutPath.string());
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+
+    // Neither read (the HUD sits where the golden has it, and the frame
+    // settles) ...
+    REQUIRE(run.report.contains("compare"));
+    CHECK(run.report["compare"].at("passed") == true);
+    CHECK(run.report["compare"].at("diffCount") == 0);
+    CHECK(run.report.at("settleBailReason") == "converged");
+
+    // ... nor written: the file is byte-for-byte what this case seeded.
+    std::ifstream in(ini, std::ios::binary);
+    const std::string after((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(after == poisoned);
+}

@@ -173,6 +173,18 @@ bool RuntimeApp::StageRenderBridge(Arcane::HostBoot::BootContext&)
                             ud);
     }
 
+    // THE FLAG BEATS THE INI, as in the editor (EditorApp.cpp's headless
+    // pin): under --headless the HUD context neither reads nor writes
+    // imgui.ini. A windowed session leaves one beside the exe with the HUD
+    // wherever it was last dragged (Pos=59,60 on 2026-09-28 -- one pixel off
+    // the default), and a headless compare that reads it moves the HUD, never
+    // settles, and fails by the HUD's every pixel while the same compare from
+    // a fresh scratch copy passes. Witness: W6. Pinned after the layer created
+    // the context and before the first NewFrame, which is when ImGui would
+    // load the file.
+    if (m_config.headless)
+        ImGui::GetIO().IniFilename = nullptr;   // never read, never written
+
     // THE WINDOW REVEAL IS NOT HERE. It runs dead last rather than right
     // after gpu_core -- see StageFinalize's comment for the reveal ordering.
     return true;
