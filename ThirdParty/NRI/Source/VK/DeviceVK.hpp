@@ -1000,6 +1000,7 @@ Result DeviceVK::Create(const DeviceCreationDesc& desc, const DeviceCreationVKDe
         m_Desc.descriptorSet.textureMaxNum = limits.maxDescriptorSetSampledImages;
         m_Desc.descriptorSet.storageTextureMaxNum = limits.maxDescriptorSetStorageImages;
 
+        // ARCANE LOCAL FIX (2026-09-28, update-after-bind limits gated on the feature bits) -- README.md "Local modifications".
         // A non-zero limit alone does not make UPDATE_AFTER_BIND legal. The
         // matching granular Vulkan 1.2 feature must also be enabled. Expose
         // zero through DeviceDesc when that feature is absent so callers can
@@ -1017,6 +1018,7 @@ Result DeviceVK::Create(const DeviceCreationDesc& desc, const DeviceCreationVKDe
         m_Desc.shaderStage.descriptorStorageTextureMaxNum = limits.maxPerStageDescriptorStorageImages;
         m_Desc.shaderStage.resourceMaxNum = limits.maxPerStageResources;
 
+        // ARCANE LOCAL FIX (2026-09-28, per-stage update-after-bind limits gated the same way) -- README.md "Local modifications".
         m_Desc.shaderStage.updateAfterSet.descriptorSamplerMaxNum = features12.descriptorBindingSampledImageUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindSamplers : 0;
         m_Desc.shaderStage.updateAfterSet.descriptorConstantBufferMaxNum = features12.descriptorBindingUniformBufferUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindUniformBuffers : 0;
         m_Desc.shaderStage.updateAfterSet.descriptorStorageBufferMaxNum = features12.descriptorBindingStorageBufferUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindStorageBuffers : 0;
@@ -1170,6 +1172,7 @@ Result DeviceVK::Create(const DeviceCreationDesc& desc, const DeviceCreationVKDe
         if (m_Desc.tiers.shadingRate && FragmentShadingRateFeatures.primitiveFragmentShadingRate && FragmentShadingRateFeatures.attachmentFragmentShadingRate)
             m_Desc.tiers.shadingRate = 2;
 
+        // ARCANE LOCAL FIX (2026-09-28, bindless tier requires the granular indexing features) -- README.md "Local modifications".
         // NRI tier 1 promises an unbound descriptor array with dynamic
         // indexing. Vulkan's umbrella descriptorIndexing bit does not imply
         // the granular sampled-image indexing / partially-bound features.

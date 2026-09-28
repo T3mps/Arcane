@@ -60,6 +60,7 @@ struct PipelineLayoutVK final : public DebugNameBase {
     void SetDebugName(const char* name) NRI_DEBUG_NAME_OVERRIDE;
 
 private:
+    // ARCANE LOCAL FIX (2026-09-28, CreateSetLayout returns Result) -- README.md "Local modifications".
     Result CreateSetLayout(VkDescriptorSetLayout* setLayout, const DescriptorSetDesc& descriptorSetDesc, const RootSamplerDesc* rootSamplers, uint32_t rootSamplerNum, bool ignoreGlobalSPIRVOffsets, bool isPush);
 
 private:

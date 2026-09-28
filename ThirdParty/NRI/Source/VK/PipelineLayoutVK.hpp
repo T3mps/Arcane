@@ -176,6 +176,8 @@ Result PipelineLayoutVK::Create(const PipelineLayoutDesc& pipelineLayoutDesc) {
     return Result::SUCCESS;
 }
 
+// ARCANE LOCAL FIX (2026-09-28, CreateSetLayout returns Result and its three call sites in Create()
+// propagate it; NRI_RETURN_VOID_ON_BAD_VKRESULT -> NRI_RETURN_ON_BAD_VKRESULT) -- README.md "Local modifications".
 Result PipelineLayoutVK::CreateSetLayout(VkDescriptorSetLayout* setLayout, const DescriptorSetDesc& descriptorSetDesc, const RootSamplerDesc* rootSamplers, uint32_t rootSamplerNum, bool ignoreGlobalSPIRVOffsets, bool isPush) {
     const DeviceDesc& deviceDesc = m_Device.GetDesc();
 
