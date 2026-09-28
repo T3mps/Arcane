@@ -74,20 +74,26 @@ namespace Arcane
         }
         nri::RootConstantDesc root = {};
         root.registerIndex = 0; root.size = sizeof(CullConstants); root.shaderStages = nri::StageBits::COMPUTE_SHADER;
+        // NO update-after-set on range, set or pool: UpdateSet rewrites only
+        // the current frame slot's set, after the graph retired that slot's
+        // previous use -- the same retirement argument MeshNode's per-frame
+        // sets make -- and the flag fails layout/pool creation on a Vulkan
+        // device without the storage-buffer UAB feature (DeviceVK reports
+        // those limits as 0 now). Hygiene pass 2026-09-28.
         nri::DescriptorRangeDesc ranges[4] = {};
-        for (nri::DescriptorRangeDesc& range : ranges) range.descriptorNum = 1, range.shaderStages = nri::StageBits::COMPUTE_SHADER, range.flags = nri::DescriptorRangeBits::ALLOW_UPDATE_AFTER_SET;
+        for (nri::DescriptorRangeDesc& range : ranges) range.descriptorNum = 1, range.shaderStages = nri::StageBits::COMPUTE_SHADER;
         ranges[0].baseRegisterIndex = 0; ranges[0].descriptorType = nri::DescriptorType::STRUCTURED_BUFFER; // t0 instances
         ranges[1].baseRegisterIndex = 1; ranges[1].descriptorType = nri::DescriptorType::STRUCTURED_BUFFER; // t1 batches
         ranges[2].baseRegisterIndex = 0; ranges[2].descriptorType = nri::DescriptorType::STORAGE_STRUCTURED_BUFFER; // u0 visible
         ranges[3].baseRegisterIndex = 1; ranges[3].descriptorType = nri::DescriptorType::STORAGE_STRUCTURED_BUFFER; // u1 args
         nri::DescriptorSetDesc set = {};
-        set.registerSpace = 1; set.ranges = ranges; set.rangeNum = 4; set.flags = nri::DescriptorSetBits::ALLOW_UPDATE_AFTER_SET;
+        set.registerSpace = 1; set.ranges = ranges; set.rangeNum = 4;
         nri::PipelineLayoutDesc layout = {};
         layout.rootRegisterSpace = 0; layout.rootConstants = &root; layout.rootConstantNum = 1; layout.descriptorSets = &set; layout.descriptorSetNum = 1; layout.shaderStages = nri::StageBits::COMPUTE_SHADER;
         m_layoutId = m_pipelines->RegisterLayout(layout);
         if (m_layoutId == NriPipelineCache::kInvalidLayout) return false;
         nri::DescriptorPoolDesc pool = {};
-        pool.descriptorSetMaxNum = kSwapchainFramesInFlight; pool.structuredBufferMaxNum = 2 * kSwapchainFramesInFlight; pool.storageStructuredBufferMaxNum = 2 * kSwapchainFramesInFlight; pool.flags = nri::DescriptorPoolBits::ALLOW_UPDATE_AFTER_SET;
+        pool.descriptorSetMaxNum = kSwapchainFramesInFlight; pool.structuredBufferMaxNum = 2 * kSwapchainFramesInFlight; pool.storageStructuredBufferMaxNum = 2 * kSwapchainFramesInFlight;
         if (!ARC_NRI_CHECK(m_device->Core().CreateDescriptorPool(m_device->Device(), pool, m_pool)) || !m_pool) return false;
         if (!ARC_NRI_CHECK(m_device->Core().AllocateDescriptorSets(*m_pool, *m_pipelines->Layout(m_layoutId), 0, m_sets, kSwapchainFramesInFlight, 0))) return false;
         m_pipeline = m_pipelines->GetCompute({ 0xF3000004ull, m_layoutId }, [this](nri::ComputePipelineDesc& desc)
