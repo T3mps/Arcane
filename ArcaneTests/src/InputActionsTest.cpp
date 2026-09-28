@@ -73,6 +73,27 @@ TEST_CASE("input: keycode, scancode and mouse buttons with edges", "[input]")
     CHECK_FALSE(input->Pressed("jump"));
 }
 
+TEST_CASE("input: <Keyboard>/grave resolves to the backquote keycode", "[input]")
+{
+    // The console toggle ships on <Keyboard>/grave (data/EngineConfig/input.json).
+    // SDL names that key by its glyph, so the LOVE->SDL table must hand
+    // SDL_GetKeyFromName the backquote string, not "Grave" (hygiene pass
+    // 2026-09-28: the binding was silently dropped at boot).
+    constexpr uint32_t kKeycodeGrave = 96;   // SDLK_GRAVE = '`'
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(nlohmann::json::parse(R"({
+      "actionMaps": [ { "name": "engine", "actions": [
+        { "name": "console_toggle", "type": "Button",
+          "bindings": [ { "path": "<Keyboard>/grave" } ] } ] } ]
+    })")));
+    input->SetBaseContext("engine");
+    InputSnapshot snap;
+    snap.AddKeycode(kKeycodeGrave);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("console_toggle"));
+    CHECK(input->Pressed("console_toggle"));
+}
+
 TEST_CASE("input: unknown action and unknown path token", "[input]")
 {
     auto input = InputActions::Create();

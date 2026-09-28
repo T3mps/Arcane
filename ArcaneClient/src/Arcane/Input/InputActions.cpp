@@ -95,7 +95,7 @@ namespace Arcane
                 { "rgui",      "Right GUI"   },
                 { "return",    "Return"      },
                 { "escape",    "Escape"      },
-                { "grave",     "Grave"       },
+                { "grave",     "`"           },   // SDL names this key by its glyph, not "Grave"
                 { "space",     "Space"       },
                 { "tab",       "Tab"         },
                 { "backspace", "Backspace"   },
@@ -1063,10 +1063,16 @@ namespace Arcane
 
                 for (auto& [mapName, m] : m_maps)
                 {
+                    // Edges are queued for the fixed step under the SAME
+                    // visibility rule the frame queries apply (Pressed/Started/
+                    // ... return neutral for a map that is not on the context
+                    // stack, or sits below a blocking one): the fixed-step
+                    // consumer must not see a Jump the frame consumer would not.
+                    const bool visible = MapVisible(&m);
                     for (auto& [aName, a] : m.actions)
                     {
                         EvalAction(a, dt, snap);
-                        if (a.id.IsValid())
+                        if (a.id.IsValid() && visible)
                         {
                             if (a.started) QueueTransition(a.id, InputActionPhase::Started);
                             if (a.performed) QueueTransition(a.id, InputActionPhase::Performed);

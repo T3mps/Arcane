@@ -42,8 +42,12 @@ namespace Arcane
 
         if (!eligibleDevice_ || *eligibleDevice_ == InputDevice::Kbm)
         {
+            // A key or button the UI has claimed this frame (an ImGui text
+            // field, a hovered widget) is not a capture -- the same rule the
+            // evaluator applies to wantCaptureKeyboard/Mouse.
             for (uint32_t scancode = 1; scancode < 512; ++scancode)
             {
+                if (snapshot.wantCaptureKeyboard) break;
                 if (!snapshot.ScancodeDown(scancode) || previous_.ScancodeDown(scancode)) continue;
                 const char* name = SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode));
                 if (!name || !*name) continue;
@@ -57,7 +61,8 @@ namespace Arcane
                 "leftButton", "rightButton", "middleButton", "button/4", "button/5" };
             for (uint8_t bit = 0; bit < 5; ++bit)
             {
-                if ((snapshot.mouseButtons & (1u << bit)) && !(previous_.mouseButtons & (1u << bit)))
+                if (!snapshot.wantCaptureMouse
+                    && (snapshot.mouseButtons & (1u << bit)) && !(previous_.mouseButtons & (1u << bit)))
                 {
                     complete(std::string("<Mouse>/") + mouseNames[bit]);
                     return;

@@ -36,13 +36,18 @@ namespace Arcane::Editor
             return nullptr;
         }
 
+        // Every entry MUST be a path the evaluator compiles (InputActions.cpp:
+        // LoveToSdlName / GamepadButtonToken / the Mouse branch). A spelling
+        // the evaluator does not know yields a constant-zero binding that
+        // the model's Warnings() does not flag (hygiene pass 2026-09-28: five
+        // entries here were exactly that).
         constexpr std::array<const char*, 17> kPaths = {
             "<Keyboard>/a", "<Keyboard>/d", "<Keyboard>/w", "<Keyboard>/s",
-            "<Keyboard>/space", "<Keyboard>/leftArrow", "<Keyboard>/rightArrow",
-            "<Mouse>/leftButton", "<Mouse>/rightButton", "<Mouse>/delta/x",
+            "<Keyboard>/space", "<Keyboard>/left", "<Keyboard>/right",
+            "<Mouse>/leftButton", "<Mouse>/rightButton", "<Mouse>/middleButton",
             "<Gamepad>/leftStick/x", "<Gamepad>/leftStick/y",
             "<Gamepad>/buttonSouth", "<Gamepad>/buttonEast",
-            "<Gamepad>/dpad/left", "<Gamepad>/dpad/right", "<Gamepad>/rightTrigger"
+            "<Gamepad>/dpadLeft", "<Gamepad>/dpadRight", "<Gamepad>/rightTrigger"
         };
     }
 

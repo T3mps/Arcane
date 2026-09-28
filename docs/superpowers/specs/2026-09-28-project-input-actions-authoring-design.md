@@ -269,4 +269,40 @@ does not need new game-specific automated tests.
 - [Unity Project-Wide Actions](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.17/manual/ProjectWideActions.html)
 - [Unity Input Bindings and Overrides](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.17/manual/ActionBindings.html)
 - [Unity PlayerInput](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.17/manual/PlayerInput.html)
-- User-provided UI reference: `C:\Users\Ethan Temprovich\Desktop\Player+Action+Map.webp`.
+- User-provided UI reference: `Player+Action+Map.webp` (supplied out of band; not in the repo).
+
+## Hygiene pass 2026-09-28: owed against this spec
+
+Recorded by the post-implementation review (report in the session scratchpad);
+the code these describe is on `main` as of `f1d807ef`.
+
+- Save does not republish the compiled definition to a running preview, and
+  there is no hot reload of the designated asset (`ConfigureGameInput` runs on
+  Project Settings selection and at plugin load only).
+- Runtime rebinding returns no conflict information (`InputRebindResult` is
+  state/id/path only).
+- The editor conflict scan misses ungrouped-vs-grouped overlap and only checks
+  `find('>')` for path validity; no "unreachable bindings"; no acknowledge.
+- The loader rejects the unversioned legacy `actionMaps` shape (`LoadJson` keeps
+  it for host config); amend this spec or add the translation.
+- Untyped `Value/Down/Pressed(Guid)` are silent on an invalid ID; only the typed
+  optionals warn.
+- No device labels or display strings in editor rows (`BindingDisplayString`
+  is never called by the editor).
+- `LocalInputUser` returns STL by value across the module boundary (safe on the
+  shared /MD CRT; document the carve-out) and the `TransitionsThisFixedStep`
+  span's lifetime (invalidated by BeginFixedStep/Configure/Clear/LoadProfile)
+  is not stated on the header.
+- `EditorAppFrame` duplicates `HostBoot::LoadGameplayInput` and drops its
+  diagnostics.
+- Binding-level `interactions` and action-level `processors` parse and edit but
+  the evaluator never reads them; profile Load/Import/Reset re-`LoadAsset`,
+  wiping the pushed map stack and latched edges; `Canceled` is queued on every
+  falling edge (a completed Hold's release arrives as Canceled).
+- Hygiene: three key-name vocabularies (evaluator, rebind capture, picker); the
+  atomic-write helper exists three times; the six new headers use trailing-
+  underscore members where ArcaneClient uses `m_`; `ValidOverride` compiles a
+  fresh evaluator per override; `nlohmann` now rides every game module's
+  include path through `LocalInputUser.hpp`; `SDL_GetPrefPath` has no test seam.
+- Fixed by the pass: fixed-step queue honours the context stack; rebind capture
+  honours `wantCapture*`; picker paths compile; C4834/C4996; ABI 44.

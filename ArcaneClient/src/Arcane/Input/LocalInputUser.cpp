@@ -21,11 +21,11 @@ namespace Arcane
         actions_ = std::move(next);
         asset_ = asset;
         projectId_ = projectId;
-        if (asset.defaultMap) SetBaseMap(*asset.defaultMap);
+        if (asset.defaultMap) (void)SetBaseMap(*asset.defaultMap);
         char* pref = SDL_GetPrefPath("Arcane", "Arcane");
         if (pref)
         {
-            profileRoot_ = std::filesystem::u8path(pref) / "InputProfiles" / projectId.ToString();
+            profileRoot_ = std::filesystem::path(reinterpret_cast<const char8_t*>(pref)) / "InputProfiles" / projectId.ToString();
             SDL_free(pref);
         }
         else
@@ -173,7 +173,7 @@ namespace Arcane
         if (result.status == ProfileLoadStatus::Invalid) return result;
         if (!actions_->LoadAsset(*asset_))
             return { ProfileLoadStatus::Invalid, { "gameplay asset failed to recompile" } };
-        if (asset_->defaultMap) SetBaseMap(*asset_->defaultMap);
+        if (asset_->defaultMap) (void)SetBaseMap(*asset_->defaultMap);
         profile_ = std::move(next);
         profileName_ = safe;
         ApplyProfile();
@@ -194,7 +194,7 @@ namespace Arcane
         {
             if (!actions_->LoadAsset(*asset_))
                 return { ProfileLoadStatus::Invalid, { "gameplay asset failed to recompile" } };
-            if (asset_->defaultMap) SetBaseMap(*asset_->defaultMap);
+            if (asset_->defaultMap) (void)SetBaseMap(*asset_->defaultMap);
             profile_ = std::move(next);
             ApplyProfile();
         }
@@ -243,7 +243,7 @@ namespace Arcane
     {
         if (!asset_) return;
         if (actions_->LoadAsset(*asset_) && asset_->defaultMap)
-            SetBaseMap(*asset_->defaultMap);
+            (void)SetBaseMap(*asset_->defaultMap);
         profile_.Reset();
     }
     void LocalInputUser::ApplyProfile()

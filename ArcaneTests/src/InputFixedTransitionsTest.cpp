@@ -15,6 +15,10 @@ namespace
             "defaultMap": "22222222-2222-4222-8222-222222222222",
             "controlSchemes": [],
             "actionMaps": [{
+                "id": "55555555-5555-4555-8555-555555555555",
+                "name": "Menu",
+                "actions": []
+            }, {
                 "id": "22222222-2222-4222-8222-222222222222",
                 "name": "Player",
                 "actions": [{
@@ -92,4 +96,34 @@ TEST_CASE("input fixed: edge is delivered only to the first fixed step", "[input
     CHECK_FALSE(input->ReleasedThisFixedStep(JumpId()));
     CHECK(input->TransitionsThisFixedStep().empty());
     CHECK(input->Value(JumpId()).down);
+}
+
+TEST_CASE("input fixed: an edge on a map that is not on the context stack is not queued", "[input][fixed]")
+{
+    // The frame queries (Pressed/Started/...) already answer neutral for a
+    // map that is not visible; the fixed-step queue must apply the same rule
+    // at queue time, or a Jump authored in Player fires in fixed update while
+    // only Menu is active (hygiene pass 2026-09-28).
+    auto input = Arcane::InputActions::Create();
+    REQUIRE(input->LoadAsset(FixedAsset()));
+    input->SetBaseContext("Menu");
+    Arcane::InputSnapshot pressed;
+    pressed.AddKeycode(kSpace);
+    input->Update(1.0 / 60.0, pressed);
+    input->BeginFixedStep();
+    CHECK_FALSE(input->PressedThisFixedStep(JumpId()));
+    CHECK(input->TransitionsThisFixedStep().empty());
+
+    // Releasing while still hidden queues nothing either.
+    input->Update(1.0 / 60.0, Arcane::InputSnapshot{});
+    input->BeginFixedStep();
+    CHECK_FALSE(input->ReleasedThisFixedStep(JumpId()));
+    CHECK(input->TransitionsThisFixedStep().empty());
+
+    // The same press with Player active is queued -- the rule is visibility,
+    // not the asset.
+    input->SetBaseContext("Player");
+    input->Update(1.0 / 60.0, pressed);
+    input->BeginFixedStep();
+    CHECK(input->PressedThisFixedStep(JumpId()));
 }
