@@ -14,16 +14,16 @@
 //                 and a .cpp carrying the ONE ARCANE_COMPONENT(ns::T) line
 //                 (Arcane/Plugin/GameComponents.hpp), so the type is live
 //                 after one Rebuild Game Module with no edit to Init.
-//   System     -- a header-only Astra::SystemTraits functor placed Before the
-//                 engine's TransformPropagationSystem by default, with the
-//                 paste-ready AddSystem line for the module's OnInit in its
-//                 comment: systems stay EXPLICIT because their scheduler order
-//                 is a design act (the engine owns the standard ones).
+//   System     -- an Astra::SystemTraits functor plus a .cpp containing its
+//                 ARCANE_SYSTEM declaration. The selected phase and role are
+//                 explicit; semantic order stays in Before/After traits.
 //   PlainClass -- a class in the project namespace with its own .cpp.
 //
 // Templates are embedded here rather than shipped as data files (UE's
 // Engine/Content/Editor/Templates/*.template): three short texts, testable
 // as strings, and nothing yet asks to edit them outside the engine.
+
+#include <Arcane/Plugin/SystemFactory.hpp>
 
 #include <optional>
 #include <string>
@@ -33,7 +33,20 @@ namespace Arcane::Editor::ClassTemplates
 {
     enum class Kind : int { Component = 0, System, PlainClass, Count };
 
+    inline constexpr int kSystemPhaseChoiceCount = 3;
+    inline constexpr int kSystemRoleChoiceCount  = 3;
+
+    struct SystemOptions
+    {
+        Arcane::SystemPhase phase = Arcane::SystemPhase::FixedUpdate;
+        Arcane::RoleMask    role  = Arcane::RoleMask::Both;
+    };
+
     [[nodiscard]] const char* KindLabel(Kind kind);   // "Component" / "System" / "Plain class"
+    [[nodiscard]] const char* SystemPhaseChoiceLabel(int index) noexcept;
+    [[nodiscard]] const char* SystemRoleChoiceLabel(int index) noexcept;
+    [[nodiscard]] SystemOptions SystemOptionsForChoiceIndices(
+        int phaseIndex, int roleIndex) noexcept;
 
     // nullopt when `name` is a usable C++ identifier for a type; otherwise the
     // reason, in the words the dialog shows. Refuses: empty, a leading digit,
@@ -56,5 +69,8 @@ namespace Arcane::Editor::ClassTemplates
 
     // Render `kind` for `className` (already validated) in `projectName`'s
     // namespace. Every text ends in a newline and carries no template token.
-    [[nodiscard]] Rendered Render(Kind kind, std::string_view className, std::string_view projectName);
+    [[nodiscard]] Rendered Render(Kind kind,
+                                  std::string_view className,
+                                  std::string_view projectName,
+                                  SystemOptions options = {});
 }

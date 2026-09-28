@@ -63,12 +63,64 @@ namespace Arcane::Editor::ClassTemplates
             }
         }
 
-        std::string Fill(std::string_view tmpl, std::string_view cls, std::string_view ns)
+        std::string Fill(std::string_view tmpl,
+                         std::string_view cls,
+                         std::string_view ns,
+                         std::string_view role = {},
+                         std::string_view phase = {})
         {
             std::string out(tmpl);
             ReplaceAll(out, "{{CLASS}}", cls);
             ReplaceAll(out, "{{NS}}", ns);
+            ReplaceAll(out, "{{ROLE}}", role);
+            ReplaceAll(out, "{{PHASE}}", phase);
             return out;
+        }
+
+        Arcane::SystemPhase NormalizePhase(Arcane::SystemPhase phase) noexcept
+        {
+            switch (phase)
+            {
+                case Arcane::SystemPhase::FixedUpdate:
+                case Arcane::SystemPhase::Update:
+                case Arcane::SystemPhase::Render:
+                    return phase;
+            }
+            return Arcane::SystemPhase::FixedUpdate;
+        }
+
+        Arcane::RoleMask NormalizeRole(Arcane::RoleMask role) noexcept
+        {
+            switch (role)
+            {
+                case Arcane::RoleMask::Both:
+                case Arcane::RoleMask::Server:
+                case Arcane::RoleMask::Client:
+                    return role;
+            }
+            return Arcane::RoleMask::Both;
+        }
+
+        const char* PhaseSpelling(Arcane::SystemPhase phase) noexcept
+        {
+            switch (NormalizePhase(phase))
+            {
+                case Arcane::SystemPhase::FixedUpdate: return "Arcane::SystemPhase::FixedUpdate";
+                case Arcane::SystemPhase::Update:      return "Arcane::SystemPhase::Update";
+                case Arcane::SystemPhase::Render:      return "Arcane::SystemPhase::Render";
+            }
+            return "Arcane::SystemPhase::FixedUpdate";
+        }
+
+        const char* RoleSpelling(Arcane::RoleMask role) noexcept
+        {
+            switch (NormalizeRole(role))
+            {
+                case Arcane::RoleMask::Both:   return "Arcane::RoleMask::Both";
+                case Arcane::RoleMask::Server: return "Arcane::RoleMask::Server";
+                case Arcane::RoleMask::Client: return "Arcane::RoleMask::Client";
+            }
+            return "Arcane::RoleMask::Both";
         }
 
         // ---- the templates ---------------------------------------------------
@@ -107,28 +159,17 @@ namespace {{NS}}
 ARCANE_COMPONENT({{NS}}::{{CLASS}})
 )";
 
-        constexpr std::string_view kSystemHeader = R"(#pragma once
+        constexpr std::string_view kFixedUpdateSystemHeader = R"(#pragma once
 
 // {{CLASS}}: a system -- a functor the scheduler runs over the registry each
 // step. Declare what it reads and writes in the SystemTraits so the scheduler
 // can order and parallelise it.
 //
-// PLACEMENT. The engine owns its standard systems (Runtime::InstallEngineSystems:
-// PhysicsSystem -> TransformPropagationSystem in fixedUpdate, RenderSubmission
-// System in render). Say where THIS one runs relative to them in the traits:
-// Astra::Before<Arcane::TransformPropagationSystem> (the default below: move
-// things, THEN the engine propagates) or Astra::After<...> (read the propagated
-// WorldTransform). Astra orders by the type NAME, so naming an engine system
-// from a game module is fine; an anchor the host never installed adds no edge.
-//
-// Systems are registered EXPLICITLY, because their order is a design act.
-// Add this line to your module's OnInit (Arcane/Plugin/GameModule.hpp):
-//
-//     RegisterSystem<{{NS}}::{{CLASS}}>(Arcane::RoleMask::Both, Arcane::SystemPhase::FixedUpdate);
-//
-// (FixedUpdate for simulation, Render for submission-time work. The mask says
-// which worlds get it: RoleMask::Server for authoritative-only simulation,
-// RoleMask::Client for presentation-only, RoleMask::Both for either.)
+// Fixed-update systems run before transform propagation by default so gameplay
+// can move local transforms first. Registrar discovery order is irrelevant:
+// scheduler order is expressed only through Before<> and After<> traits.
+// The ARCANE_SYSTEM declaration that selects phase and network role is in
+// {{CLASS}}.cpp.
 
 #include <Arcane/Scene/TransformSystems.hpp>   // the placement anchor
 
@@ -149,6 +190,46 @@ namespace {{NS}}
 }
 )";
 
+        constexpr std::string_view kUnanchoredSystemHeader = R"(#pragma once
+
+// {{CLASS}}: a system -- a functor the scheduler runs over the registry each
+// step. Declare what it reads and writes in the SystemTraits so the scheduler
+// can order and parallelise it.
+//
+// Fixed-step transform propagation is not installed in the Update or Render
+// scheduler, so this template invents no irrelevant edge. Registrar discovery
+// order is irrelevant: add a meaningful Before<> or After<> trait whenever
+// scheduler order matters. The ARCANE_SYSTEM declaration that selects phase
+// and network role is in {{CLASS}}.cpp.
+
+#include <Astra/Registry/Registry.hpp>
+#include <Astra/System/System.hpp>
+
+namespace {{NS}}
+{
+    struct {{CLASS}}
+        : Astra::SystemTraits<Astra::Reads<>, Astra::Writes<>>
+    {
+        void operator()(Astra::Registry& reg)
+        {
+            (void)reg;
+        }
+    };
+}
+)";
+
+        constexpr std::string_view kSystemSource = R"(#include "{{CLASS}}.hpp"
+
+#include <Arcane/Plugin/GameSystems.hpp>
+
+// ARCANE_GAME_MODULE discovers this declaration while its DLL-owner bracket
+// is open. Phase and role are explicit; scheduler order belongs in traits.
+ARCANE_SYSTEM(
+    {{NS}}::{{CLASS}},
+    {{ROLE}},
+    {{PHASE}})
+)";
+
         constexpr std::string_view kPlainHeader = R"(#pragma once
 
 namespace {{NS}}
@@ -167,6 +248,46 @@ namespace {{NS}}
 {
 }
 )";
+    }
+
+    const char* SystemPhaseChoiceLabel(int index) noexcept
+    {
+        switch (index)
+        {
+            case 0: return "Fixed Update";
+            case 1: return "Update";
+            case 2: return "Render";
+            default: return "Fixed Update";
+        }
+    }
+
+    const char* SystemRoleChoiceLabel(int index) noexcept
+    {
+        switch (index)
+        {
+            case 0: return "Both";
+            case 1: return "Server";
+            case 2: return "Client";
+            default: return "Both";
+        }
+    }
+
+    SystemOptions SystemOptionsForChoiceIndices(int phaseIndex, int roleIndex) noexcept
+    {
+        SystemOptions options;
+        switch (phaseIndex)
+        {
+            case 1: options.phase = Arcane::SystemPhase::Update; break;
+            case 2: options.phase = Arcane::SystemPhase::Render; break;
+            default: options.phase = Arcane::SystemPhase::FixedUpdate; break;
+        }
+        switch (roleIndex)
+        {
+            case 1: options.role = Arcane::RoleMask::Server; break;
+            case 2: options.role = Arcane::RoleMask::Client; break;
+            default: options.role = Arcane::RoleMask::Both; break;
+        }
+        return options;
     }
 
     std::optional<std::string> ValidateClassName(std::string_view name)
@@ -196,7 +317,10 @@ namespace {{NS}}
         return ns;
     }
 
-    Rendered Render(Kind kind, std::string_view className, std::string_view projectName)
+    Rendered Render(Kind kind,
+                    std::string_view className,
+                    std::string_view projectName,
+                    SystemOptions options)
     {
         const std::string ns = NamespaceForProject(projectName);
         const std::string cls(className);
@@ -210,8 +334,18 @@ namespace {{NS}}
                 r.source     = Fill(kComponentSource, cls, ns);
                 break;
             case Kind::System:
-                r.header = Fill(kSystemHeader, cls, ns);
+            {
+                const Arcane::SystemPhase phase = NormalizePhase(options.phase);
+                const Arcane::RoleMask role = NormalizeRole(options.role);
+                const std::string_view headerTemplate =
+                    phase == Arcane::SystemPhase::FixedUpdate
+                        ? kFixedUpdateSystemHeader
+                        : kUnanchoredSystemHeader;
+                r.header     = Fill(headerTemplate, cls, ns);
+                r.sourceName = cls + ".cpp";
+                r.source     = Fill(kSystemSource, cls, ns, RoleSpelling(role), PhaseSpelling(phase));
                 break;
+            }
             case Kind::PlainClass:
             case Kind::Count:
                 r.header     = Fill(kPlainHeader, cls, ns);

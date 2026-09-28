@@ -68,14 +68,13 @@ TEST_CASE("ClassTemplates::Render Component: a reflected struct in the header, t
     CHECK(r.source.back() == '\n');
 }
 
-TEST_CASE("ClassTemplates::Render System: a header-only SystemTraits functor with the paste-ready RegisterSystem line", "[editor]")
+TEST_CASE("ClassTemplates::Render System: a registered header/source pair with safe defaults", "[editor]")
 {
     const ClassTemplates::Rendered r =
         ClassTemplates::Render(ClassTemplates::Kind::System, "Movement", "Aphelyon");
 
     CHECK(r.headerName == "Movement.hpp");
-    CHECK(r.sourceName.empty());   // engine systems are header-only functors; so is this
-    CHECK(r.source.empty());
+    CHECK(r.sourceName == "Movement.cpp");
 
     CHECK(Has(r.header, "#pragma once"));
     CHECK(Has(r.header, "#include <Astra/Registry/Registry.hpp>"));
@@ -84,24 +83,91 @@ TEST_CASE("ClassTemplates::Render System: a header-only SystemTraits functor wit
     CHECK(Has(r.header, "struct Movement"));
     CHECK(Has(r.header, "Astra::SystemTraits<"));
     CHECK(Has(r.header, "void operator()(Astra::Registry& reg)"));
-    // Systems stay EXPLICIT (their order is a design act): the note carries the
-    // exact OnInit line, and the default traits PLACE the system before the
-    // engine's TransformPropagationSystem (the gameplay-moves-things case; the
-    // note names After<> for the read-world-transforms case). The engine owns
-    // the standard systems, so nothing here mentions GamePlugin_Init.
     CHECK(Has(r.header, "#include <Arcane/Scene/TransformSystems.hpp>"));
     CHECK(Has(r.header, "Astra::Before<Arcane::TransformPropagationSystem>"));
-    CHECK(Has(r.header, "Astra::After<"));
-    CHECK(Has(r.header, "OnInit"));
-    // ABI 30 (Core-DLL split, spec 2026-09-15 s4): the paste-ready line is the
-    // SDK's RegisterSystem -- a role-masked FACTORY, not a direct AddSystem into
-    // one Runtime's scheduler -- so a wizard-made system serves every world the
-    // host attached.
-    CHECK(Has(r.header, "RegisterSystem<Aphelyon::Movement>(Arcane::RoleMask::Both, Arcane::SystemPhase::FixedUpdate)"));
-    CHECK_FALSE(Has(r.header, "AddSystem<"));
-    CHECK_FALSE(Has(r.header, "GamePlugin_Init"));
+
+    CHECK(Has(r.source, "#include \"Movement.hpp\""));
+    CHECK(Has(r.source, "#include <Arcane/Plugin/GameSystems.hpp>"));
+    CHECK(Has(r.source, "ARCANE_SYSTEM("));
+    CHECK(Has(r.source, "Aphelyon::Movement"));
+    CHECK(Has(r.source, "Arcane::RoleMask::Both"));
+    CHECK(Has(r.source, "Arcane::SystemPhase::FixedUpdate"));
+    CHECK(Has(r.source, "ARCANE_GAME_MODULE discovers"));
+    CHECK(Has(r.source, "scheduler order belongs in traits"));
     CHECK_FALSE(Has(r.header, "{{"));
+    CHECK_FALSE(Has(r.source, "{{"));
     CHECK(r.header.back() == '\n');
+    CHECK(r.source.back() == '\n');
+}
+
+TEST_CASE("ClassTemplates::Render System maps every phase and role choice", "[editor]")
+{
+    struct PhaseCase
+    {
+        int index;
+        const char* spelling;
+        bool transformAnchor;
+    };
+
+    for (const PhaseCase c : {
+             PhaseCase{0, "Arcane::SystemPhase::FixedUpdate", true},
+             PhaseCase{1, "Arcane::SystemPhase::Update", false},
+             PhaseCase{2, "Arcane::SystemPhase::Render", false},
+         })
+    {
+        const auto options = ClassTemplates::SystemOptionsForChoiceIndices(c.index, 0);
+        const auto rendered = ClassTemplates::Render(
+            ClassTemplates::Kind::System, "Movement", "Aphelyon", options);
+        CHECK(Has(rendered.source, c.spelling));
+        CHECK(Has(rendered.header, "Astra::Before<Arcane::TransformPropagationSystem>")
+              == c.transformAnchor);
+        CHECK(Has(rendered.header, "#include <Arcane/Scene/TransformSystems.hpp>")
+              == c.transformAnchor);
+        CHECK(Has(rendered.header, "scheduler order"));
+        CHECK(rendered.header.back() == '\n');
+        CHECK(rendered.source.back() == '\n');
+        CHECK_FALSE(Has(rendered.header, "{{"));
+        CHECK_FALSE(Has(rendered.source, "{{"));
+    }
+
+    struct RoleCase { int index; const char* spelling; };
+    for (const RoleCase c : {
+             RoleCase{0, "Arcane::RoleMask::Both"},
+             RoleCase{1, "Arcane::RoleMask::Server"},
+             RoleCase{2, "Arcane::RoleMask::Client"},
+         })
+    {
+        const auto options = ClassTemplates::SystemOptionsForChoiceIndices(0, c.index);
+        const auto rendered = ClassTemplates::Render(
+            ClassTemplates::Kind::System, "Movement", "Aphelyon", options);
+        CHECK(Has(rendered.source, c.spelling));
+    }
+}
+
+TEST_CASE("ClassTemplates::Render System normalizes stale choices and invalid typed options", "[editor]")
+{
+    STATIC_REQUIRE(ClassTemplates::kSystemPhaseChoiceCount == 3);
+    STATIC_REQUIRE(ClassTemplates::kSystemRoleChoiceCount == 3);
+    CHECK(std::string_view(ClassTemplates::SystemPhaseChoiceLabel(0)) == "Fixed Update");
+    CHECK(std::string_view(ClassTemplates::SystemPhaseChoiceLabel(1)) == "Update");
+    CHECK(std::string_view(ClassTemplates::SystemPhaseChoiceLabel(2)) == "Render");
+    CHECK(std::string_view(ClassTemplates::SystemPhaseChoiceLabel(99)) == "Fixed Update");
+    CHECK(std::string_view(ClassTemplates::SystemRoleChoiceLabel(0)) == "Both");
+    CHECK(std::string_view(ClassTemplates::SystemRoleChoiceLabel(1)) == "Server");
+    CHECK(std::string_view(ClassTemplates::SystemRoleChoiceLabel(2)) == "Client");
+    CHECK(std::string_view(ClassTemplates::SystemRoleChoiceLabel(-1)) == "Both");
+
+    const auto choices = ClassTemplates::SystemOptionsForChoiceIndices(-1, 99);
+    CHECK(choices.phase == Arcane::SystemPhase::FixedUpdate);
+    CHECK(choices.role == Arcane::RoleMask::Both);
+
+    ClassTemplates::SystemOptions invalid;
+    invalid.phase = static_cast<Arcane::SystemPhase>(255);
+    invalid.role  = static_cast<Arcane::RoleMask>(0);
+    const auto normalized = ClassTemplates::Render(
+        ClassTemplates::Kind::System, "Movement", "Aphelyon", invalid);
+    CHECK(Has(normalized.source, "Arcane::SystemPhase::FixedUpdate"));
+    CHECK(Has(normalized.source, "Arcane::RoleMask::Both"));
 }
 
 TEST_CASE("ClassTemplates::Render PlainClass: a class in the project namespace with its own .cpp", "[editor]")
