@@ -22,7 +22,9 @@
 #include <Arcane/Assets/Assets.hpp>      // Arcane::WritePngRgba (RenderSceneToViewport's capture block)
 #include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 9): PixelData/ImageCompareOptions/CompareImages; also pulls in ImageIo.hpp's LoadPngRgba
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
+#include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
+#include <fstream>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
@@ -2986,6 +2988,22 @@ namespace Arcane::Editor
                 created = MintCppClass(target, r.name, r.classTemplate,
                                        r.systemPhaseIndex, r.systemRoleIndex);
                 break;
+            case Arcane::Editor::CreateAssetKind::InputActions:
+            {
+                if (std::filesystem::exists(target)) break;
+                const Arcane::InputActionAsset asset = Arcane::InputActionAsset::CreateDefault();
+                std::ofstream output(target, std::ios::binary);
+                if (!output) break;
+                output << asset.ToJson().dump(2) << '\n';
+                output.close();
+                if (!output) break;
+                if (const auto registered = m_runtime->RegisterCreatedAsset(target))
+                {
+                    created = *registered;
+                    m_assetModel.MarkAllDirty();
+                }
+                break;
+            }
         }
 
         if (!created.IsValid())

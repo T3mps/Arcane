@@ -78,6 +78,7 @@ namespace Arcane::Editor
         }
         entry(ICON_LC_STICKER      " Sprite...", CreateAssetKind::Sprite);
         entry(ICON_LC_CLAPPERBOARD " Scene...",  CreateAssetKind::Scene);
+        entry(ICON_LC_GAMEPAD_2    " Input Actions...", CreateAssetKind::InputActions);
         ImGui::Separator();
         // The editor<->IDE surface, step 3: code, not content -- lands under
         // Source/ (CreateKindRoot), same icon the Source rows carry.

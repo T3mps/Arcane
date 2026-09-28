@@ -278,6 +278,7 @@ namespace Arcane::Editor
                     }
                     entry("Sprite...", Arcane::Editor::CreateAssetKind::Sprite);
                     entry("Scene...",  Arcane::Editor::CreateAssetKind::Scene);
+                    entry("Input Actions...", Arcane::Editor::CreateAssetKind::InputActions);
                     ImGui::Separator();
                     // The editor<->IDE surface, step 3: code under Source/.
                     entry("C++ Class...", Arcane::Editor::CreateAssetKind::CppClass);

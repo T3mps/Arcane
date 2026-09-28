@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/DiagEnvelope.hpp>
+#include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -551,4 +552,27 @@ TEST_CASE("AssetRegistry::All() is ordered deterministically, not by hash", "[pr
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
     std::filesystem::remove_all(tieRoot, ec);
+}
+
+TEST_CASE("AssetRegistry keeps embedded input action GUID across a rename", "[project][input]")
+{
+    namespace fs = std::filesystem;
+    const auto dir = TempDir("input_actions_native");
+    fs::create_directories(dir);
+    const auto asset = Arcane::InputActionAsset::CreateDefault();
+    const auto original = dir / "Player.arcinput";
+    std::ofstream(original) << asset.ToJson().dump(2);
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 1);
+    CHECK(registry.Resolve(asset.id) == "game://Player.arcinput");
+    const auto renamed = dir / "Controls.arcinput";
+    fs::rename(original, renamed);
+    REQUIRE(registry.ScanContent(dir, "game") == 1);
+    CHECK(registry.Resolve(asset.id) == "game://Controls.arcinput");
+    std::ifstream stream(renamed);
+    const auto doc = nlohmann::json::parse(stream);
+    CHECK(doc["id"] == asset.id.ToString());
+    stream.close();
+    std::error_code error;
+    fs::remove_all(dir, error);
 }

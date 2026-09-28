@@ -24,6 +24,13 @@
 using namespace Arcane::Editor;
 namespace fs = std::filesystem;
 
+TEST_CASE("asset model: native input actions have their own browser kind", "[editor][input]")
+{
+    CHECK(AssetKindOf("game://input/Player.arcinput") == AssetKind::InputActions);
+    CHECK(std::string(KindLabel(AssetKind::InputActions)) == "Input Actions");
+    CHECK(AssetKindOf("game://input/other.json") == AssetKind::Data);
+}
+
 namespace
 {
     fs::path WriteFile(const fs::path& dir, const char* name, const std::string& text)

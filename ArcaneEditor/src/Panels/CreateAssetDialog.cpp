@@ -650,6 +650,9 @@ namespace Arcane::Editor
                 case CreateAssetKind::CppClass:
                     DrawClassTemplateField(st);
                     break;
+                case CreateAssetKind::InputActions:
+                    ImGui::TextDisabled("Create an empty gameplay input action asset.");
+                    break;
             }
 
             // Footer: Cancel then Create, right-aligned (the mock's order).

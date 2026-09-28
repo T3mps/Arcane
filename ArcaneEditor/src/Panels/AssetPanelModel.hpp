@@ -71,9 +71,10 @@ namespace Arcane::Editor
         // the open-in-IDE step's job, not this one's). Same ahead-of-the-
         // catch-all placement every kind since Diagnostic has used.
         Source,
+        InputActions,
         Other,
     };
-    inline constexpr int kAssetKindCount = 12;
+    inline constexpr int kAssetKindCount = 13;
 
     // The ImGui drag-drop payload type for browser rows (the params panel's
     // texture slots accept it). Payload bytes = AssetDragPayload (POD).
@@ -105,6 +106,8 @@ namespace Arcane::Editor
             return AssetKind::Diagnostic;
         if (ext == ".arcmesh")
             return AssetKind::Mesh;
+        if (ext == ".arcinput")
+            return AssetKind::InputActions;
         // F2c s4.1: the imported originals -- AssetRegistry's IsImportedBinary
         // recognizes the identical pair as sidecar-bearing binaries.
         if (ext == ".gltf" || ext == ".glb")
@@ -301,6 +304,7 @@ namespace Arcane::Editor
             // ICON_LC_FILE_CODE exists in IconsLucide.h (grepped: IconsLucide.h:708)
             // -- a file with code brackets, distinct from Other's plain ICON_LC_FILE.
             case AssetKind::Source:   return ICON_LC_FILE_CODE;
+            case AssetKind::InputActions: return ICON_LC_GAMEPAD_2;
             case AssetKind::Other:    return ICON_LC_FILE;
         }
         return ICON_LC_FILE;
@@ -321,6 +325,7 @@ namespace Arcane::Editor
             case AssetKind::Mesh:     return "Mesh";
             case AssetKind::Model:    return "Model";
             case AssetKind::Source:   return "Source";
+            case AssetKind::InputActions: return "Input Actions";
             case AssetKind::Other:    return "Other";
         }
         return "Other";
@@ -339,6 +344,7 @@ namespace Arcane::Editor
             case AssetKind::Mesh:     return 0x5b9bb0u;
             case AssetKind::Sprite:   return 0x9b5bb0u;
             case AssetKind::Scene:    return 0xb09b5bu;
+            case AssetKind::InputActions: return 0x8b7ab5u;
             // F2c Plan 2 Task 8: extends §11.3. Adjacent to Mesh's #5b9bb0 in
             // the same muted family (a Model and its Mesh are kin). Distinct
             // from Sprite's #9b5bb0.

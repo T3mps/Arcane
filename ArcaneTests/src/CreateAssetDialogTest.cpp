@@ -184,7 +184,7 @@ TEST_CASE("Create-kind vocabulary and the AssetKind bridge", "[editor][create]")
 // Material.
 TEST_CASE("Create-kind vocabulary: C++ Class lands under Source/ and bridges from AssetKind::Source", "[editor][create]")
 {
-    CHECK(kCreateAssetKindCount == 6);
+    CHECK(kCreateAssetKindCount == 7);
     CHECK(CreateKindForAssetKind(AssetKind::Source) == CreateAssetKind::CppClass);
 
     CHECK(std::string(CreateKindTitle(CreateAssetKind::CppClass))         == "Create C++ Class");
@@ -264,4 +264,23 @@ TEST_CASE("Create > Mesh > <primitive>: the request carries a MeshSource preset;
     CHECK(PrimitiveMeshRelativePath(Arcane::MeshSource::UvSphere) == "meshes/Sphere.arcmesh");
     CHECK(PrimitiveMeshRelativePath(Arcane::MeshSource::Cube)     == "meshes/Cube.arcmesh");
     CHECK(PrimitiveMeshRelativePath(Arcane::MeshSource::Imported).empty());
+}
+
+TEST_CASE("Input Actions creation uses a native asset path and rejects name collisions", "[editor][create][input]")
+{
+    namespace fs = std::filesystem;
+    CHECK(kCreateAssetKindCount == 7);
+    CHECK(CreateKindForAssetKind(AssetKind::InputActions) == CreateAssetKind::InputActions);
+    CHECK(std::string(CreateKindTitle(CreateAssetKind::InputActions)) == "Create Input Actions");
+    CHECK(std::string(CreateKindExtension(CreateAssetKind::InputActions)) == ".arcinput");
+    CHECK(std::string(CreateKindDefaultFolder(CreateAssetKind::InputActions)) == "input/");
+    CHECK(std::string(CreateKindRoot(CreateAssetKind::InputActions)) == "Content");
+    const auto dir = fs::temp_directory_path() /
+        ("arcane_create_input_" + Arcane::Guid::Generate().ToString());
+    fs::create_directories(dir);
+    CHECK(ValidateCreateName("Player", dir, ".arcinput").ok);
+    std::ofstream(dir / "Player.arcinput") << "{}";
+    CHECK_FALSE(ValidateCreateName("Player", dir, ".arcinput").ok);
+    std::error_code error;
+    fs::remove_all(dir, error);
 }

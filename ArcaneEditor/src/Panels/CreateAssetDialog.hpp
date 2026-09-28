@@ -57,9 +57,9 @@ namespace Arcane::Editor
     // of files (Project/ClassTemplates.hpp renders them); the header is the
     // primary (uniqueness validates against ".hpp"), the .cpp is derived.
     enum class CreateAssetKind : std::uint8_t
-    { Material, MaterialInstance, Mesh, Sprite, Scene, CppClass };
+    { Material, MaterialInstance, Mesh, Sprite, Scene, CppClass, InputActions };
 
-    inline constexpr int kCreateAssetKindCount = 6;
+    inline constexpr int kCreateAssetKindCount = 7;
 
     // A request to create something. Raised by producers, consumed by
     // EditorApp::BeginCreateAsset. `prefillParent` pre-fills the kind's one
@@ -92,6 +92,7 @@ namespace Arcane::Editor
             case CreateAssetKind::Sprite:           return "Create Sprite";
             case CreateAssetKind::Scene:            return "Create Scene";
             case CreateAssetKind::CppClass:         return "Create C++ Class";
+            case CreateAssetKind::InputActions:     return "Create Input Actions";
         }
         return "Create Asset";
     }
@@ -120,6 +121,7 @@ namespace Arcane::Editor
             case CreateAssetKind::Sprite:           return ".arcsprite";
             case CreateAssetKind::Scene:            return ".arcscene";
             case CreateAssetKind::CppClass:         return ".hpp";   // the primary of the pair
+            case CreateAssetKind::InputActions:     return ".arcinput";
         }
         return "";
     }
@@ -137,6 +139,7 @@ namespace Arcane::Editor
             case CreateAssetKind::Sprite:           return "sprites/";
             case CreateAssetKind::Scene:            return "scenes/";
             case CreateAssetKind::CppClass:         return "";   // Source/ itself
+            case CreateAssetKind::InputActions:     return "input/";
         }
         return "";
     }
@@ -171,6 +174,7 @@ namespace Arcane::Editor
         if (extension == ".arcsprite") return "sprite";
         if (extension == ".arcscene")  return "scene";
         if (extension == ".hpp")       return "class";
+        if (extension == ".arcinput")  return "input actions asset";
         return "file";
     }
 
@@ -293,6 +297,7 @@ namespace Arcane::Editor
             case AssetKind::Sprite:   return CreateAssetKind::Sprite;
             case AssetKind::Scene:    return CreateAssetKind::Scene;
             case AssetKind::Source:   return CreateAssetKind::CppClass;
+            case AssetKind::InputActions: return CreateAssetKind::InputActions;
             default:                  return std::nullopt;
         }
     }
