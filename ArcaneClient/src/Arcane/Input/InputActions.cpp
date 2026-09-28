@@ -891,6 +891,34 @@ namespace Arcane
                 return Value(actionId).phase;
             }
 
+            bool Pressed(const Guid& id) const override
+            {
+                const auto it = m_actionById.find(id);
+                return it != m_actionById.end() && MapVisible(it->second.map) &&
+                    it->second.action->curDown && !it->second.action->prevDown;
+            }
+            bool Released(const Guid& id) const override
+            {
+                const auto it = m_actionById.find(id);
+                return it != m_actionById.end() && MapVisible(it->second.map) &&
+                    !it->second.action->curDown && it->second.action->prevDown;
+            }
+            bool Started(const Guid& id) const override
+            {
+                const auto it = m_actionById.find(id);
+                return it != m_actionById.end() && MapVisible(it->second.map) && it->second.action->started;
+            }
+            bool Performed(const Guid& id) const override
+            {
+                const auto it = m_actionById.find(id);
+                return it != m_actionById.end() && MapVisible(it->second.map) && it->second.action->performed;
+            }
+            bool Canceled(const Guid& id) const override
+            {
+                const auto it = m_actionById.find(id);
+                return it != m_actionById.end() && MapVisible(it->second.map) && it->second.action->canceled;
+            }
+
             bool SetBindingPath(const Guid& bindingId, std::string_view path) override
             {
                 const auto it = m_bindingById.find(bindingId);

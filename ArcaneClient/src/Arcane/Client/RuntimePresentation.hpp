@@ -11,6 +11,7 @@
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <Arcane/Input/LocalInputUser.hpp>
 #include <Arcane/Scene/ViewTransform.hpp>
 
 #include <glm/glm.hpp>
@@ -22,6 +23,7 @@ namespace Arcane
     struct RuntimePresentation
     {
         InputSnapshot          input{};        // latest host-supplied snapshot; plugins read via Input()
+        LocalInputUser         gameInput;       // one project gameplay session per client instance
         Audio::AudioDeviceDesc audioDesc{};
         Audio::AudioDevice     audio;
         // THE ONE camera (F4 plan 1): identity matrices + viewport 0 until a

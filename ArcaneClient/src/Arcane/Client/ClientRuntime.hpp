@@ -76,6 +76,11 @@ namespace Arcane
         // via SetInputSnapshot; plugins read it via Input() in their update hooks.
         void                 SetInputSnapshot(const InputSnapshot& snap) noexcept;
         const InputSnapshot& Input() const noexcept;
+        [[nodiscard]] LocalInputUser& GameInput() noexcept { return m_pres.gameInput; }
+        [[nodiscard]] const LocalInputUser& GameInput() const noexcept { return m_pres.gameInput; }
+        [[nodiscard]] bool ConfigureGameInput(const InputActionAsset& asset, const Guid& projectId);
+        void UpdateGameInput(double dt, const InputSnapshot& snapshot);
+        void BeginGameInputFixedStep();
 
         // --- ImGui handoff (ABI v2) ---
         // The host installs its ImGui context + allocators here (once, after creating

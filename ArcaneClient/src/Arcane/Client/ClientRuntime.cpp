@@ -71,6 +71,12 @@ namespace Arcane
 
     void ClientRuntime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_pres.input = snap; }
     const InputSnapshot& ClientRuntime::Input() const noexcept { return m_pres.input; }
+    bool ClientRuntime::ConfigureGameInput(const InputActionAsset& asset, const Guid& projectId)
+    { return m_pres.gameInput.Configure(asset, projectId); }
+    void ClientRuntime::UpdateGameInput(double dt, const InputSnapshot& snapshot)
+    { m_pres.gameInput.Update(dt, snapshot); }
+    void ClientRuntime::BeginGameInputFixedStep()
+    { m_pres.gameInput.BeginFixedStep(); }
 
     void ClientRuntime::SetImGui(void* context, void* alloc, void* freeFn, void* userData) noexcept
     {

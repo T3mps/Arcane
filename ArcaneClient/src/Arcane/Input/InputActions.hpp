@@ -108,6 +108,11 @@ namespace Arcane
         [[nodiscard]] virtual std::optional<float> ScalarValue(const Guid& action) const = 0;
         [[nodiscard]] virtual std::optional<glm::vec2> VectorValue(const Guid& action) const = 0;
         [[nodiscard]] virtual std::optional<InputActionPhase> Phase(const Guid& action) const = 0;
+        [[nodiscard]] virtual bool Pressed(const Guid& action) const = 0;
+        [[nodiscard]] virtual bool Released(const Guid& action) const = 0;
+        [[nodiscard]] virtual bool Started(const Guid& action) const = 0;
+        [[nodiscard]] virtual bool Performed(const Guid& action) const = 0;
+        [[nodiscard]] virtual bool Canceled(const Guid& action) const = 0;
         virtual bool SetBindingPath(const Guid& binding, std::string_view path) = 0;
         [[nodiscard]] virtual std::vector<InputMapInfo> Maps() const = 0;
         [[nodiscard]] virtual std::vector<InputActionInfo> Actions(const Guid& map) const = 0;
