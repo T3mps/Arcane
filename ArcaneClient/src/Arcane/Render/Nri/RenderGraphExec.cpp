@@ -41,6 +41,7 @@
 #undef ERROR
 
 #include <atomic>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -229,7 +230,9 @@ namespace Arcane
         {
             return a.type == b.type && a.usage == b.usage && a.format == b.format
                 && a.width == b.width && a.height == b.height && a.depth == b.depth
-                && a.mipNum == b.mipNum && a.layerNum == b.layerNum && a.sampleNum == b.sampleNum;
+                && a.mipNum == b.mipNum && a.layerNum == b.layerNum && a.sampleNum == b.sampleNum
+                && std::memcmp(&a.optimizedClearValue, &b.optimizedClearValue,
+                               sizeof(nri::ClearValue)) == 0;
         }
 
         bool SameBufferDesc(const nri::BufferDesc& a, const nri::BufferDesc& b) noexcept
@@ -633,6 +636,13 @@ namespace Arcane
 
             if (!transient.isTexture)
                 continue;
+
+            // A no-clear tenant is compatible with either optimized value.
+            // Compile() prevents two tenants with DIFFERENT declared clears
+            // from sharing, so the last declared clear here is unambiguous.
+            const TextureResource& resource = m_textures[transient.resourceIndex];
+            if (resource.desc.hasOptimizedClearValue)
+                slot.texture.optimizedClearValue = resource.desc.optimizedClearValue;
 
             for (const Access& access : m_accesses)
             {

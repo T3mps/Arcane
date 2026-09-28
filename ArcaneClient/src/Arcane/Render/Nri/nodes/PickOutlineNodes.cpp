@@ -1291,6 +1291,7 @@ namespace Arcane
                 // sub-pixel coverage its centroid needs. See PickNode::kSuperSample.
                 desc.width  = width  * PickNode::kSuperSample;
                 desc.height = height * PickNode::kSuperSample;
+                desc.hasOptimizedClearValue = true; // PickNode clears ids to uint zero.
                 *ids = builder.CreateTexture("pickids", desc);
                 builder.Write(*ids, RgUsage::ColorWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(ids.get(), 1));
@@ -1305,6 +1306,8 @@ namespace Arcane
                 depthDesc.width        = width  * PickNode::kSuperSample;
                 depthDesc.height       = height * PickNode::kSuperSample;
                 depthDesc.depthStencil = true;
+                depthDesc.optimizedClearValue.depthStencil.depth = 1.0f;
+                depthDesc.hasOptimizedClearValue = true;
                 *depth = builder.CreateTexture("pickdepth", depthDesc);
                 builder.Write(*depth, RgUsage::DepthWrite);
                 graph.SetDepthAttachment(*depth);

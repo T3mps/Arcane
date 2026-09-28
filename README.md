@@ -51,7 +51,8 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
 
 ## Automation
 
-Two layers, both owned by the engine and both in `scripts/`.
+Two layers, both owned by the engine and both in `scripts/`, plus the agent-facing layer on top of
+them (see [Agent skills and the knowledge graph](#agent-skills-and-the-knowledge-graph)).
 
 **`ArcaneTests`** is the unit/integration suite. Run it **from its own directory** -- it resolves
 data relative to the working directory and runs in random order:
@@ -66,9 +67,10 @@ exclude `[golden]` or `[mesh]`, which carry no `[gpu]` tag, are CPU-side, and ar
 baseline.
 
 **`scripts/golden-gate.ps1`** is the golden-image gate, and it is what covers what the suite
-cannot: that the engine still *renders* the same picture. It runs four lanes -- ArcaneRuntime and
-ArcaneEditor, each on D3D12 and Vulkan -- launching the real hosts headless against
-`ReferenceProject` and comparing each capture against a blessed reference.
+cannot: that the engine still *renders* the same picture. It runs eight lanes -- four references
+(`runtime-scene`, `f3-cull-blend`, `editor-ui`, `editor-ui-perspective`), each on D3D12 and Vulkan --
+launching the real hosts headless against `ReferenceProject` and comparing each capture against a
+blessed reference.
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Debug
@@ -79,7 +81,7 @@ It runs in CI from the `Jenkinsfile` on a GPU agent (job setup: `ci/README.md`);
 only.
 
 `golden-gate.ps1 -SelfTest` proves the gate is capable of failing: it deliberately breaks
-`ReferenceProject`'s scene, asserts all four lanes go red, and restores in a `try/finally` that
+`ReferenceProject`'s boot scene, asserts every lane that renders it goes red, and restores in a `try/finally` that
 covers the whole mutation-to-restore window, not just its tail. The Jenkins pipeline runs it on
 `main`/`milestone/*` only, immediately after the ordinary "Golden gate" stage on the same agent --
 the property it proves belongs to the gate itself, which changes rarely, so it does not need to run
@@ -99,24 +101,37 @@ reads a previous run's green as this run's answer.
 ### Blessing a reference
 
 When a rendering change is intentional, re-bless. `--bless` accepts the converged capture as the
-reference `--compare` names, writing to the level it resolved from:
+reference `--compare` names, writing to the level it resolved from
+(`Verify\References\<backend>\<name>.png` if that override exists, else the shared
+`Verify\References\<name>.png`).
+
+**`--project` resolves against the working directory**, so where a bless lands depends on where you
+run it. From the repo root it writes the SOURCE `ReferenceProject\`; from the host's exe directory
+(which is how the gate runs) it writes the STAGED copy under `bin\<config>\<Host>\ReferenceProject\`.
+The source tree is the one that matters: the next ReferenceProject build restages the whole project
+beside the hosts and overwrites a staged-only bless. So either bless from the repo root:
 
 ```bat
 bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceProject ^
   --headless --backend dx12 --frames 60 --settle 30 --report r.json --compare runtime-scene --bless
 ```
 
-Two things that are easy to get wrong:
+or, if you blessed from the exe directory, immediately copy the blessed PNG back into the source
+`ReferenceProject\Verify\References\`. Either way `git status` must show the reference modified.
+`scripts\desk-verify-golden-gate.ps1` handles the restaging for its own round-trip.
+
+Also easy to get wrong:
 
 - **`--report` (or `--screenshot`) is required.** `--settle` is refused without one, because it
   compares captured frames and otherwise has nowhere to land the result.
-- **A bless must be restaged before the gate can see it.** `golden-gate.ps1` deliberately does not
-  restage `Verify/` -- it must not trample a bless -- so copy `ReferenceProject\Verify\*` into
-  `bin\<config>\{ArcaneRuntime,ArcaneEditor}\ReferenceProject\Verify\` after blessing.
-  `scripts\desk-verify-golden-gate.ps1` does this for you.
+- **Per-reference levels.** `runtime-scene` and `f3-cull-blend` are backend-split (a Vulkan
+  override; D3D12 uses the shared file and reports `PassedOnFallback`), so bless each backend.
+  `editor-ui` and `editor-ui-perspective` are shared, so bless them once. `f3-cull-blend` renders a
+  fixture scene (`--scene 7e5a0030-0030-4030-8030-000000000030`) and `editor-ui-perspective` adds
+  `--view-mode perspective`.
 
-`runtime-scene` is backend-split (Vulkan has its own override); `editor-ui` is a shared reference,
-so bless it once.
+The full procedure, including the mesh-thumbnail goldens and what to do when a diff will not go
+away, is the `arcane-verify` agent skill below.
 
 ### `scripts/desk-verify-golden-gate.ps1`
 
@@ -125,6 +140,31 @@ The desk half. CI now proves the gate **can fail** too (`golden-gate.ps1 -SelfTe
 ANY branch. What only this script still covers: that blessing is **cheap** (Phase B times a full
 break -> fail -> bless -> pass round-trip). Needs a display and a real GPU. Every mutation is
 inside `try/finally` and restored with `git checkout --`, so Ctrl-C is safe.
+
+### Agent skills and the knowledge graph
+
+AI agents (Claude Code) drive the same CLIs as everyone else: `arcbuild`, `arccook`, the hosts'
+`--frames`/`--settle`/`--compare`/`--probe` flags, `golden-gate.ps1` and the JSON reports. Two
+additions make that reliable:
+
+- **Project skills in `.claude/skills/`**, checked in and loaded on demand: `arcane-build`,
+  `arcane-tests`, `arcane-verify` and `arcane-graph`. Each carries the repo-specific traps for its
+  area (the single-slot game DLL, source-vs-staged `--project` resolution, seeds and CI lanes, where
+  a bless writes). They are plain Markdown and double as human runbooks.
+- **A knowledge graph of the engine** in `graphify-out/` (gitignored), built with
+  [graphify](https://github.com/Graphify-Labs/graphify) over every first-party module, the Starworks
+  libraries under `ThirdParty/` (Astra, Manifold2D, Mosaic) and all of `docs/`. Scope is set by the
+  root `.graphifyignore`. Build it with `/graphify .` in Claude Code, refresh with
+  `/graphify . --update`, and list everything connected to a symbol, code and governing docs alike,
+  with:
+
+  ```bat
+  python .claude\skills\arcane-graph\neighbors.py ViewTransform
+  ```
+
+Agent tooling is deliberately CLI-first rather than MCP. Asking a *running* host a new question is
+the remaining gap; it is planned as a CLI client to an in-host listener, alongside the cvar/console
+work.
 
 ## Using the engine as an SDK
 

@@ -608,11 +608,18 @@ TEST_CASE("rendergraph compile: ColorWrite maps to COLOR_ATTACHMENT access/layou
                nri::AccessBits::COLOR_ATTACHMENT, nri::Layout::COLOR_ATTACHMENT, nri::StageBits::COLOR_ATTACHMENT);
 }
 
-TEST_CASE("rendergraph compile: DepthWrite maps to DEPTH_STENCIL_ATTACHMENT access/layout/stage", "[nri]")
+TEST_CASE("rendergraph compile: DepthWrite carries the read and write access Vulkan requires", "[nri]")
 {
-    CheckState(DerivedTextureState(Arcane::RgUsage::CopyDst, Arcane::RgUsage::DepthWrite),
-               nri::AccessBits::DEPTH_STENCIL_ATTACHMENT, nri::Layout::DEPTH_STENCIL_ATTACHMENT,
-               nri::StageBits::DEPTH_STENCIL_ATTACHMENT);
+    const nri::AccessLayoutStage state =
+        DerivedTextureState(Arcane::RgUsage::CopyDst, Arcane::RgUsage::DepthWrite);
+    CheckState(state, nri::AccessBits::DEPTH_STENCIL_ATTACHMENT,
+               nri::Layout::DEPTH_STENCIL_ATTACHMENT, nri::StageBits::DEPTH_STENCIL_ATTACHMENT);
+
+    // Vulkan synchronization validation requires READ for the depth test and
+    // WRITE for depth updates. NRI's legacy D3D12 translator gives WRITE
+    // precedence so this portable state does not become DEPTH_READ | WRITE.
+    CHECK((state.access & nri::AccessBits::DEPTH_STENCIL_ATTACHMENT_WRITE) != 0u);
+    CHECK((state.access & nri::AccessBits::DEPTH_STENCIL_ATTACHMENT_READ) != 0u);
 }
 
 TEST_CASE("rendergraph compile: ShaderRead maps to SHADER_RESOURCE across every shader stage this phase uses", "[nri]")
@@ -1120,6 +1127,77 @@ TEST_CASE("rendergraph compile: (e) two identical transients with disjoint lifet
     CHECK(compiled.transientLifetimes[1].last == 2);
     CHECK(compiled.transientPoolSlot[0] == compiled.transientPoolSlot[1]);
     CHECK(compiled.poolSlotCount == 1);
+}
+
+TEST_CASE("rendergraph compile: optimized clear value is part of a transient texture's pool shape", "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture early, late;
+
+    graph.AddNode("declare", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            Arcane::RgTextureDesc dark = MakeColorDesc();
+            Arcane::RgTextureDesc lit  = MakeColorDesc();
+            dark.hasOptimizedClearValue = true;
+            lit.optimizedClearValue.color.f = { 0.02f, 0.02f, 0.04f, 1.0f };
+            lit.hasOptimizedClearValue = true;
+            early = builder.CreateTexture("early", dark);
+            late  = builder.CreateTexture("late", lit);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    graph.AddNode("uses-early", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { builder.Write(early, Arcane::RgUsage::ShaderWriteCs); },
+        [](Arcane::RenderGraphNodeContext&) {});
+    graph.AddNode("uses-late", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { builder.Write(late, Arcane::RgUsage::ShaderWriteCs); },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.transientPoolSlot.size() == 2);
+    CHECK(compiled.transientPoolSlot[0] != compiled.transientPoolSlot[1]);
+    CHECK(compiled.poolSlotCount == 2);
+}
+
+TEST_CASE("rendergraph compile: an undeclared clear cannot bridge incompatible optimized clear values", "[nri]")
+{
+    Arcane::RenderGraph graph;
+    Arcane::RgTexture neutral, dark, lit;
+
+    graph.AddNode("declare", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder)
+        {
+            Arcane::RgTextureDesc noClear = MakeColorDesc();
+            Arcane::RgTextureDesc darkClear = MakeColorDesc();
+            Arcane::RgTextureDesc litClear = MakeColorDesc();
+            darkClear.hasOptimizedClearValue = true;
+            litClear.optimizedClearValue.color.f = { 0.02f, 0.02f, 0.04f, 1.0f };
+            litClear.hasOptimizedClearValue = true;
+
+            // Keep the no-clear texture first: it is the pool slot's
+            // representative and must not make two declared clear values
+            // appear mutually compatible through it.
+            neutral = builder.CreateTexture("neutral", noClear);
+            dark = builder.CreateTexture("dark", darkClear);
+            lit = builder.CreateTexture("lit", litClear);
+        },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    graph.AddNode("uses-neutral", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { builder.Write(neutral, Arcane::RgUsage::ShaderWriteCs); },
+        [](Arcane::RenderGraphNodeContext&) {});
+    graph.AddNode("uses-dark", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { builder.Write(dark, Arcane::RgUsage::ShaderWriteCs); },
+        [](Arcane::RenderGraphNodeContext&) {});
+    graph.AddNode("uses-lit", Arcane::RenderGraph::NodeKind::Compute,
+        [&](Arcane::RenderGraphBuilder& builder) { builder.Write(lit, Arcane::RgUsage::ShaderWriteCs); },
+        [](Arcane::RenderGraphNodeContext&) {});
+
+    const Arcane::RgCompiled compiled = CompileOk(graph);
+    REQUIRE(compiled.transientPoolSlot.size() == 3);
+    CHECK(compiled.transientPoolSlot[1] != compiled.transientPoolSlot[2]);
+    CHECK(compiled.poolSlotCount == 2);
 }
 
 TEST_CASE("rendergraph compile: (e) a pool-slot handover seeds the next tenant's before from the previous tenant's final access/stages", "[nri]")
@@ -7095,7 +7173,7 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     // MeshNode::kBindlessCapacity and mesh.hlsl's register map rather than
     // copied from the implementation, so a set that gains a dimension
     // without the pool gaining one fails here.
-    const nri::DescriptorPoolDesc pool = Arcane::MeshNode::PoolSizes();
+    const nri::DescriptorPoolDesc pool = Arcane::MeshNode::PoolSizes(false);
 
     // Task 8/10: ONE set per frame slot (b1 is the only per-frame thing left
     // in a set -- t0/s0 moved out, see below) PLUS ONE bindless set, shared
@@ -7125,6 +7203,14 @@ TEST_CASE("nri graph frame: the mesh node's descriptor pool covers every set it 
     CHECK(pool.storageBufferMaxNum == 0);
     CHECK(pool.storageStructuredBufferMaxNum == 0);
     CHECK(pool.storageTextureMaxNum   == 0);
+
+    // Update-after-set is an optional permission, not a requirement for the
+    // pool shape. Intel Vulkan devices can expose descriptor indexing without
+    // the sampled-image update-after-bind feature.
+    CHECK(static_cast<std::uint8_t>(pool.flags) == 0u);
+    const nri::DescriptorPoolDesc liveUpdatePool = Arcane::MeshNode::PoolSizes(true);
+    CHECK(static_cast<std::uint8_t>(liveUpdatePool.flags)
+          == static_cast<std::uint8_t>(nri::DescriptorPoolBits::ALLOW_UPDATE_AFTER_SET));
 }
 
 TEST_CASE("nri pick readback: every frame slot owns a distinct, alignment-legal region", "[nri]")

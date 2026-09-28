@@ -671,10 +671,14 @@ not decide "abnormal" from the exit code either.
 parser, envelope-to-view model (pure), symbolizer, presenter over
 `NativeWindow`. Links `ArcaneCore.dll` (envelope parser, `ForeignModules`
 table for naming overlays, log), `dbgeng.lib`, `dbghelp.lib`. No
-`ArcaneClient`, no GPU, no ImGui.
+`ArcaneClient` and no reliance on the GPU that just died. Dear ImGui is
+compiled into this exe (not the copy inside `ArcaneClient`) and drawn
+through a Direct3D 11 WARP device; the plain Win32 controls are the
+fallback when that device cannot be created.
 
-**Window** (plain Win32 controls, on screen within a second saying
-"Symbolizing", filled from a worker thread):
+**Window** (the editor's ImGui theme, WARP-rendered, on screen within a
+second saying "Symbolizing", filled from a worker thread; plain Win32
+controls if WARP cannot be created):
 - Header: product, plain-words kind (crashed / stopped responding / the GPU
   stopped responding / the GPU device was lost / an assertion failed /
   terminated), time, phase, build.
@@ -1080,6 +1084,16 @@ Owed from plan 2's build (2026-09-23):
   the windowed path arms unconditionally at `NriGraphContext.cpp:228`, and
   an unconditional arm on the offscreen path would lose the R-disarm
   protection that the skipped-Arm comment describes.
+  **Fixed 2026-09-23 (code; G1 re-run pending the user's consent):** the
+  arm moved to the device's OWNER. `OffscreenVehicle::Create` -- the
+  device creator under `--headless` in both hosts -- calls
+  `NriDiagnostics::Arm` right after the wrap (as `NriGraphContext::Create`
+  does windowed) and keeps its return value; `~OffscreenVehicle` disarms
+  only when it armed. `CreateOffscreen` still never arms, so borrowers keep
+  the R-disarm protection, and `Arm`'s own refusal on an occupied slot is
+  the "ask the slot" check. It covers D3D12 headless as well. Proof:
+  `OffscreenVehicleTest.cpp`'s "offscreen vehicle arms the crash chain..."
+  and "...leaves an already-armed crash chain alone" cases.
 - **The monitor window's foreground follow-up** (final review, deferred
   minor 39/(a)): the report is on disk and the taskbar button flashes
   today, because Windows flashes it when `SetForegroundWindow` is refused,
@@ -1091,12 +1105,12 @@ Owed from plan 2's build (2026-09-23):
   floored at 72 px (§7, R92) -- dragged small enough, buttons can still
   fall below that floor. Owed: a `NativeWindowDesc` minimum size honoured
   via `WM_GETMINMAXINFO`, with the next `NativeWindow` touch.
-- **Editor-styled reporter window.** The user asked for the reporter window
-  to look like the editor's custom ImGui. Research: UE's crash reporter is
-  a MONOLITHIC exe carrying Slate plus a standalone D3D11 renderer, which
-  retries renderer init 10 x 2 s and falls back to unattended; Firefox's
-  uses native Win32/Cocoa/GTK; Crashpad and Sentry have no UI. The
-  candidate design is ImGui rasterized on the CPU and blitted with GDI --
-  no graphics device, so immune to the overlay injection that is often
-  WHY the host died -- with today's Win32 window as the fallback floor.
-  The advantage of the Win32 window to keep: native accessibility (UIA).
+- **Editor-styled reporter window.** Done (2026-09-24). The attended window
+  calls `ApplyEditorTheme` (Inter for the chrome, Consolas for the report
+  text) and draws Dear ImGui through a Direct3D 11 WARP device -- the
+  software rasterizer, not the GPU that just died. A hand-rolled CPU blit
+  was tried first and rejected: every hover repainted the whole window, and
+  gaining focus flashed the light class brush. If the WARP device cannot be
+  created, the plain Win32 controls remain, and they keep native UI
+  Automation. Esc still closes; Enter closes unless a button or the text
+  well already took it, and it never relaunches.

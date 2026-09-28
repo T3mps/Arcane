@@ -303,6 +303,11 @@ namespace
 #endif
         static std::unique_ptr<Arcane::NativeDeviceOwner> native;
         static std::unique_ptr<Arcane::NriDevice> nri;
+        // The previous case's pair goes first, WRAP BEFORE OWNER: reassigning
+        // `native` alone destroyed the old owner while the old `nri` still
+        // wrapped it, and the second MakeParityContext in a process SIGSEGV'd.
+        nri.reset();
+        native.reset();
         native = Arcane::NativeDeviceOwner::Create(desc);
         REQUIRE(native != nullptr);
         nri = Arcane::NriDevice::Wrap(*native);

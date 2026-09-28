@@ -16,14 +16,20 @@
 // desk with an overlay attributable from the verify report alone. Table
 // provenance: docs/research/2026-09-22-injected-overlay-modules.md.
 //
-// THE LIST DECORATES, IT DOES NOT GATE. Origin is decided from the module's
-// path: under one of this host's own trees (the exe directory, plus every
-// directory Module::Load has loaded from -- the game module, plugins) it is
-// ours; under the Windows directory it is the OS's; anywhere else it got in
-// from outside and is REPORTED whether or not the table knows it. The table
-// only upgrades a known module from "injected, uncatalogued" to "GPU Tweak
-// III, do this", and it outranks the path: a catalogued Tier 1 module is
-// Tier 1 wherever its installer put it.
+// THE LIST DECORATES, AND IT GATES EXACTLY ONE CALL. Origin is decided from
+// the module's path: under one of this host's own trees (the exe directory,
+// plus every directory Module::Load has loaded from -- the game module,
+// plugins) it is ours; under the Windows directory it is the OS's; anywhere
+// else it got in from outside and is REPORTED whether or not the table knows
+// it. The table only upgrades a known module from "injected, uncatalogued"
+// to "GPU Tweak III, do this", and it outranks the path: a catalogued Tier 1
+// module is Tier 1 wherever its installer put it. It does not refuse a
+// backend by itself. The exception is WindowedVulkanBlocker: GTIII-OSD64-VK.dll
+// fast-fails the windowed Vulkan loader (0xC0000409 inside vulkan-1.dll) once
+// a swapchain is created, and that is not a refcount DeviceCreationD3D12's
+// armor can absorb. GpuContext rewrites a windowed Vulkan request to D3D12
+// when that module is loaded. Headless Vulkan never builds that swapchain
+// and is not rewritten.
 //
 // It lives in Base, not Render, because the fact is a PROCESS fact -- the
 // crash/hang report (Diagnostics.cpp) and the .arcdiag envelope need it, and
@@ -94,6 +100,13 @@ namespace Arcane::ForeignModules
     // matches, "MyNahimicOSD.dll" and "NahimicOSD.dll.bak" do not. nullopt
     // for anything the table does not know. Pure; `path` is left empty.
     [[nodiscard]] ARCANE_CORE_API std::optional<Match> Classify(std::string_view moduleBaseName);
+
+    // The one gate. Returns the match for GTIII-OSD64-VK.dll when that base
+    // name is in the list (case-insensitive, exact), else nullopt. The D3D12
+    // and GL siblings are not blockers: their damage is the device
+    // over-release the reference armor absorbs. Pure; does not enumerate.
+    [[nodiscard]] ARCANE_CORE_API std::optional<Match>
+        WindowedVulkanBlocker(std::span<const std::string> moduleBaseNames);
 
     // Every TABLE hit in `moduleBaseNames`, in the input's order, each module
     // reported ONCE however many times the list names it. Pure, name-only:

@@ -1601,6 +1601,9 @@ namespace Arcane
                 desc.format = kCanvasFormat;
                 desc.width  = width;
                 desc.height = height;
+                desc.optimizedClearValue.color.f = {
+                    kCanvasClear[0], kCanvasClear[1], kCanvasClear[2], kCanvasClear[3] };
+                desc.hasOptimizedClearValue = true;
                 canvas = builder.CreateTexture("canvas", desc);
                 builder.Write(canvas, RgUsage::ColorWrite);
                 graph.SetColorAttachments(std::span<const RgTexture>(&canvas, 1));

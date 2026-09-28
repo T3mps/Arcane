@@ -126,6 +126,7 @@
             1.0
           ]
         },
+        "Arcane::WorldBounds": null,
         "Arcane::WorldTransform": null
       },
       "parent": 0
@@ -210,6 +211,7 @@
             1.0
           ]
         },
+        "Arcane::WorldBounds": null,
         "Arcane::WorldTransform": null
       },
       "parent": 0
@@ -294,6 +296,7 @@
             1.0
           ]
         },
+        "Arcane::WorldBounds": null,
         "Arcane::WorldTransform": null
       },
       "parent": 0
@@ -305,7 +308,7 @@
             {
               "categoryBits": 1,
               "density": 1.0,
-              "friction": 0.6000000238418579,
+              "friction": 0.0,
               "halfH": 0.30000001192092896,
               "halfLen": 0.3333333432674408,
               "halfW": 0.5,
@@ -332,7 +335,7 @@
         "Arcane::PhysicsBodyRef": null,
         "Arcane::RigidBody2D": {
           "bullet": false,
-          "fixedRotation": false,
+          "fixedRotation": true,
           "linearDamping": 0.0,
           "mass": 1.399999976158142,
           "type": "Dynamic",
@@ -368,9 +371,9 @@
           ],
           "rotation": [
             0.0,
-            -0.0,
-            0.7101853489875793,
-            0.7040147185325623
+            0.0,
+            0.7071068286895752,
+            0.7071068286895752
           ],
           "scale": [
             1.5,
@@ -378,7 +381,20 @@
             1.0
           ]
         },
-        "Arcane::WorldTransform": null
+        "Arcane::WorldBounds": null,
+        "Arcane::WorldTransform": null,
+        "ReferenceProject::PlayerController2D": {
+          "airAcceleration": 25.0,
+          "coyoteTime": 0.10000000149011612,
+          "groundAcceleration": 45.0,
+          "groundBraking": 55.0,
+          "jumpBufferTime": 0.10000000149011612,
+          "jumpCutMultiplier": 0.44999998807907104,
+          "jumpSpeed": 6.0,
+          "moveSpeed": 4.0,
+          "turnAcceleration": 60.0,
+          "value": 0.0
+        }
       },
       "parent": 0
     }

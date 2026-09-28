@@ -107,7 +107,9 @@ vcpkg_installed/
 data/images/icons/
 
 # -- Agent/tool caches ---------------------------------------------------------
-.claude/
+# .claude/ is local agent state EXCEPT the project skills, which are checked in.
+.claude/*
+!.claude/skills/
 .superpowers/
 graphify-out/
 ide-md/

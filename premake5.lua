@@ -571,8 +571,11 @@ end   -- death-fixture: Windows target only (task 6, mirrors arcbuild-process-fi
 -- ============================================================================
 -- ArcaneCrashReporter (crash window plan 2; spec §6): the out-of-process crash
 -- reporter every host hands off to. WindowedApp (no console; wWinMain), links
--- ArcaneCore ONLY -- never ArcaneClient, no GPU, no ImGui -- plus dbgeng/
--- dbghelp for out-of-process symbolization. STAGED beside every host by that
+-- ArcaneCore ONLY -- never ArcaneClient, no GPU -- plus dbgeng/dbghelp for
+-- out-of-process symbolization. Dear ImGui is compiled INTO this exe (the
+-- core plus the Win32 and D3D11 backends). The D3D11 device is WARP, the
+-- software rasterizer, never the GPU that just died. The plain Win32
+-- controls are the fallback when WARP cannot be created. STAGED beside every host by that
 -- host's own postbuild, exactly like ArcaneCore.dll (spec §12 item 2), which
 -- is why each host `dependson` it. Its pure files (ReporterArgs, ReportView,
 -- SymbolizedText, HangSession, MonitorRule) are ALSO source-compiled into
@@ -596,6 +599,15 @@ project "ArcaneCrashReporter"
     files {
         "%{prj.location}/src/**.hpp",
         "%{prj.location}/src/**.cpp",
+        -- Private copy. NOT the workspace imgui static lib: that one exports
+        -- into ArcaneClient.dll and compiles the SDL3 backend. This exe must
+        -- not link ArcaneClient. The D3D11 backend drives a WARP device.
+        "%{wks.location}/ThirdParty/imgui/imgui.cpp",
+        "%{wks.location}/ThirdParty/imgui/imgui_draw.cpp",
+        "%{wks.location}/ThirdParty/imgui/imgui_tables.cpp",
+        "%{wks.location}/ThirdParty/imgui/imgui_widgets.cpp",
+        "%{wks.location}/ThirdParty/imgui/backends/imgui_impl_win32.cpp",
+        "%{wks.location}/ThirdParty/imgui/backends/imgui_impl_dx11.cpp",
     }
 
     includedirs {
@@ -604,15 +616,19 @@ project "ArcaneCrashReporter"
         "%{IncludeDir.spdlog}",     -- Log.hpp
         "%{IncludeDir.Mosaic}",     -- Assert.hpp
         "%{IncludeDir.nlohmann}",   -- Monitor.cpp reads the host's session record (task 9)
+        "%{wks.location}/ThirdParty/imgui",
+        "%{wks.location}/ThirdParty/imgui/backends",
+        "%{wks.location}/ArcaneEditor/src",   -- Widgets/EditorTheme.hpp, header-only
     }
 
-    links { "ArcaneCore", "dbgeng", "dbghelp", "user32", "gdi32", "shell32", "ole32" }
+    links { "ArcaneCore", "dbgeng", "dbghelp", "user32", "gdi32", "shell32", "ole32", "dwmapi", "d3d11", "dxgi" }
 
     defines {
         "_CRT_SECURE_NO_WARNINGS",
         "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
         "NOMINMAX",
         "WIN32_LEAN_AND_MEAN",
+        "IMGUI_IMPL_WIN32_DISABLE_GAMEPAD",   -- a crash reporter does not load XInput
     }
 
     -- The reporter loads ArcaneCore.dll from its own directory, same as every

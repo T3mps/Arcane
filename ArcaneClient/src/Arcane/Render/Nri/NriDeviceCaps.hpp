@@ -22,7 +22,21 @@ namespace Arcane
         std::uint8_t rayTracingTier = 0;   // tiers.rayTracing
         bool         meshShader     = false;                // features.meshShader
         std::uint32_t maxDescriptorSetTextures = 0;          // descriptorSet.textureMaxNum
+        std::uint32_t maxPerStageTextures = 0;                // shaderStage.descriptorTextureMaxNum
+        std::uint32_t maxDescriptorSetUpdateAfterSetTextures = 0; // descriptorSet.updateAfterSet.textureMaxNum
+        std::uint32_t maxPerStageUpdateAfterSetTextures = 0; // shaderStage.updateAfterSet.descriptorTextureMaxNum
 
         [[nodiscard]] bool SupportsBindless() const noexcept { return bindlessTier > 0; }
+        [[nodiscard]] bool SupportsBindlessTextures(std::uint32_t required) const noexcept
+        {
+            return SupportsBindless()
+                && maxDescriptorSetTextures >= required
+                && maxPerStageTextures >= required;
+        }
+        [[nodiscard]] bool SupportsTextureUpdateAfterSet(std::uint32_t required) const noexcept
+        {
+            return maxDescriptorSetUpdateAfterSetTextures >= required
+                && maxPerStageUpdateAfterSetTextures >= required;
+        }
     };
 }

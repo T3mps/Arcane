@@ -7,10 +7,13 @@
 // report.
 //
 // This process is deliberately MINIMAL: it links ArcaneCore.dll and the Win32
-// debug libraries and NOTHING else -- never ArcaneClient, no GPU, no ImGui --
+// debug libraries, and it never links ArcaneClient or opens a GPU device,
 // because it has to be able to run when the host it reports on is already
 // dead, and anything it shares with that host is something that can be broken
-// in the same way. It is staged beside every host by that host's own postbuild
+// in the same way. Its window is the editor's ImGui theme, drawn through a
+// private Dear ImGui on a Direct3D 11 WARP device (not the GPU, and not the
+// ImGui inside ArcaneClient).
+// It is staged beside every host by that host's own postbuild
 // (spec §12 item 2), which is how Diagnostics::ResolveReporterPath finds it at
 // "<exe dir>/ArcaneCrashReporter.exe".
 #include "FileText.hpp"

@@ -100,6 +100,26 @@ TEST_CASE("foreign modules: Tier 2 present-path hooks classify as tier 2 with a 
     CHECK(reshade->tier == 2);
 }
 
+TEST_CASE("foreign modules: only GTIII-OSD64-VK.dll blocks windowed Vulkan", "[foreign-modules]")
+{
+    // The D3D12 and GL siblings are the over-release the reference armor
+    // absorbs. Nahimic is a present hook, not the loader fast-fail.
+    const std::vector<std::string> tolerated = {
+        "GTIII-OSD64.dll", "GTIII-OSD64-GL.dll", "NahimicOSD.dll", "AudioDevProps2.dll",
+        "vulkan-1.dll", "GTIII-OSD64-VK.dll.bak",
+    };
+    const std::vector<std::string> none;
+    const std::vector<std::string> hooked = { "ntdll.dll", "gtiii-osd64-vk.dll" };
+    CHECK_FALSE(Arcane::ForeignModules::WindowedVulkanBlocker(none).has_value());
+    CHECK_FALSE(Arcane::ForeignModules::WindowedVulkanBlocker(tolerated).has_value());
+
+    const auto blocked = Arcane::ForeignModules::WindowedVulkanBlocker(hooked);
+    REQUIRE(blocked.has_value());
+    CHECK(blocked->module == "gtiii-osd64-vk.dll");
+    CHECK(blocked->tier == 1);
+    CHECK(blocked->remedy.find("Blacklist") != std::string::npos);
+}
+
 TEST_CASE("foreign modules: a normal module list yields no match -- exact base names, never substrings",
           "[foreign-modules]")
 {

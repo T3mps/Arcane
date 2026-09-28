@@ -46,7 +46,13 @@ namespace Arcane
         // The window is created HIDDEN; the caller reveals it (Window::Show)
         // once the render vehicle that owns this window's only swapchain
         // exists.
-        static std::unique_ptr<GpuContext> Create(const HostConfig& cfg);
+        //
+        // May rewrite cfg.backend from Vulkan to D3D12 before the window
+        // exists. Windowed Vulkan plus GTIII-OSD64-VK.dll fast-fails inside
+        // vulkan-1.dll at swapchain creation; D3D12 is the path whose device
+        // reference armor survives that injector family. Headless is left on
+        // Vulkan: it never builds the swapchain the hook kills.
+        static std::unique_ptr<GpuContext> Create(HostConfig& cfg);
 
         Window&        Win()       { return m_window; }
         Batcher2D&     Batch()     { return *m_batcher; }

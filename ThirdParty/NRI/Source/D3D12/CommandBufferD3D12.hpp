@@ -194,11 +194,15 @@ static inline D3D12_RESOURCE_STATES GetResourceStates(AccessBits accessBits, D3D
     if (accessBits & AccessBits::SHADING_RATE_ATTACHMENT)
         resourceStates |= D3D12_RESOURCE_STATE_SHADING_RATE_SOURCE;
 
-    if (accessBits & AccessBits::DEPTH_STENCIL_ATTACHMENT_READ)
-        resourceStates |= D3D12_RESOURCE_STATE_DEPTH_READ;
-
+    // DEPTH_WRITE is exclusive in the legacy D3D12 state model, but NRI's
+    // DEPTH_STENCIL_ATTACHMENT access intentionally contains both READ and
+    // WRITE because a writable depth attachment also performs depth tests.
+    // Give WRITE precedence instead of emitting the invalid
+    // DEPTH_READ | DEPTH_WRITE combination.
     if (accessBits & AccessBits::DEPTH_STENCIL_ATTACHMENT_WRITE)
         resourceStates |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    else if (accessBits & AccessBits::DEPTH_STENCIL_ATTACHMENT_READ)
+        resourceStates |= D3D12_RESOURCE_STATE_DEPTH_READ;
 
     if (accessBits & AccessBits::SHADER_RESOURCE) {
         resourceStates |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;

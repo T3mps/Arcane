@@ -208,6 +208,17 @@ namespace Arcane::ForeignModules
         return std::span<const Entry>(kTable, std::size(kTable));
     }
 
+    std::optional<Match> WindowedVulkanBlocker(std::span<const std::string> moduleBaseNames)
+    {
+        for (const std::string& name : moduleBaseNames)
+        {
+            if (!EqualsInsensitive(name, "GTIII-OSD64-VK.dll"))
+                continue;
+            return Classify(name);
+        }
+        return std::nullopt;
+    }
+
     std::optional<Match> Classify(std::string_view moduleBaseName)
     {
         for (const Entry& row : kTable)

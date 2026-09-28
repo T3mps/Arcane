@@ -1,8 +1,18 @@
 #include "ReporterWindow.hpp"
+#include "WarpImGui.hpp"
 #include "Win32Text.hpp"
+
+#include "Widgets/EditorTheme.hpp"
+
+#include <imgui.h>
+#include <imgui_impl_win32.h>
+
 #include <windowsx.h>
 
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 #include <algorithm>
+#include <filesystem>
 
 namespace Arcane::Reporter
 {
@@ -37,6 +47,61 @@ namespace Arcane::Reporter
             for (wchar_t c : w) { if (c == L'\n') out += L'\r'; out += c; }
             return out;
         }
+
+        constexpr wchar_t kStyledProp[] = L"Arcane.ReporterWindow";
+
+        bool IsStyledInput(UINT msg)
+        {
+            switch (msg)
+            {
+            case WM_MOUSEMOVE: case WM_MOUSELEAVE:
+            case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+            case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+            case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+            case WM_XBUTTONDOWN: case WM_XBUTTONUP:
+            case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL:
+            case WM_KEYDOWN: case WM_KEYUP: case WM_SYSKEYDOWN: case WM_SYSKEYUP: case WM_CHAR:
+            case WM_SETFOCUS: case WM_KILLFOCUS:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // Real Win32 proc. Forwards into the friend so the class stays free of
+        // windows.h in its header. x64 has one calling convention, so the
+        // pointer-sized arguments match ReporterStyledProc's.
+        LRESULT CALLBACK StyledWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+        {
+            return static_cast<LRESULT>(ReporterStyledProc(hwnd, msg,
+                                                           static_cast<std::uintptr_t>(wParam),
+                                                           static_cast<std::intptr_t>(lParam)));
+        }
+    }
+
+    std::intptr_t __stdcall ReporterStyledProc(void* hwnd, unsigned msg, std::uintptr_t wParam, std::intptr_t lParam)
+    {
+        HWND h = static_cast<HWND>(hwnd);
+        auto* self = static_cast<ReporterWindow*>(GetPropW(h, kStyledProp));
+        if (!self || !self->m_prevProc)
+            return static_cast<std::intptr_t>(DefWindowProcW(h, msg, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam)));
+        auto prev = reinterpret_cast<WNDPROC>(self->m_prevProc);
+        if (!self->m_styled)
+            return static_cast<std::intptr_t>(CallWindowProcW(prev, h, msg, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam)));
+
+        // Gaining focus invalidates the window and DefWindowProc erases it
+        // with the class brush, which is the light grey the Win32 fallback
+        // needs. Swallowing the erase leaves the swap chain's last frame up.
+        if (msg == WM_ERASEBKGND)
+            return 1;
+
+        const LRESULT eaten = ImGui_ImplWin32_WndProcHandler(h, msg, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam));
+        // WM_SIZE is not in this list: NativeWindow turns it into OnSize,
+        // and OnSize is what rebuilds the bitmap. Framing here too would
+        // draw once against the old surface and once against the new.
+        if (IsStyledInput(msg)) self->Frame();
+        if (eaten) return static_cast<std::intptr_t>(eaten);
+        return static_cast<std::intptr_t>(CallWindowProcW(prev, h, msg, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam)));
     }
 
     ReporterWindow::ReporterWindow(ReportView initial, std::function<void(int)> onCommand)
@@ -102,6 +167,18 @@ namespace Arcane::Reporter
 
     std::string ReporterWindow::CurrentDetails()
     {
+        // The styled path has no Win32 combo. m_threadIndex is written only
+        // on this thread (BuildUi), which is also the thread OnButton calls
+        // this from, so reading it next to the lock is the same rule as the
+        // ComboBox_GetCurSel below: never hold m_mutex across a callback
+        // that might want it.
+        if (m_styled)
+        {
+            const int sel = m_threadIndex;
+            std::lock_guard<std::mutex> lk(m_mutex);
+            const std::size_t index = sel < 0 ? 0 : static_cast<std::size_t>(sel);
+            return DetailsText(m_view, index < m_view.threads.size() ? index : 0);
+        }
         // R84: the combo's current selection is read with a SendMessage
         // (ComboBox_GetCurSel) BEFORE m_mutex is taken, never across it --
         // holding the lock into a SendMessage that lands back on this same
@@ -129,6 +206,7 @@ namespace Arcane::Reporter
     void ReporterWindow::OnCreate(void* hwnd)
     {
         m_hwnd = hwnd;
+        if (TryStyled(hwnd)) return;
         HWND h = static_cast<HWND>(hwnd);
         m_fontDpi = GetDpiForWindow(h);
         m_uiFont   = MessageFont(m_fontDpi);
@@ -165,6 +243,12 @@ namespace Arcane::Reporter
 
     void ReporterWindow::ApplyView()
     {
+        if (m_styled)
+        {
+            m_detailsDirty = true;
+            Frame();
+            return;
+        }
         // R84: copy m_view under the lock, then touch every control OUTSIDE
         // it. Child controls (the combo above all) send SYNCHRONOUS
         // WM_COMMANDs back to this window as a side effect of
@@ -293,10 +377,30 @@ namespace Arcane::Reporter
         }
     }
 
+    void ReporterWindow::OnPaint(void*, int, int, int, int)
+    {
+        // The styled path presents from the swap chain in Frame(). BeginPaint
+        // (NativeWindow) is what validates the region; painting here would
+        // only race that present.
+    }
+
     void ReporterWindow::OnSize(int w, int h)
     {
         if (!m_hwnd) return;
         const unsigned dpi = GetDpiForWindow(static_cast<HWND>(m_hwnd));
+        if (m_styled)
+        {
+            // Same signal the Win32 path uses (R85): WM_DPICHANGED only
+            // resizes, and the WM_SIZE after it is the DPI signal we get.
+            if (dpi && dpi != m_fontDpi)
+            {
+                m_fontDpi = dpi;
+                ApplyScaledTheme(static_cast<float>(dpi) / 96.0f);
+            }
+            if (w > 0 && h > 0 && !WarpResize(m_warp, w, h)) return;
+            Frame();
+            return;
+        }
         if (dpi != m_fontDpi) RebuildFonts(dpi);   // R85
         Layout(w, h);
     }
@@ -339,10 +443,263 @@ namespace Arcane::Reporter
 
     void ReporterWindow::OnDestroy()
     {
+        HWND h = static_cast<HWND>(m_hwnd);
+        if (h && m_prevProc)
+        {
+            SetWindowLongPtrW(h, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(m_prevProc));
+            m_prevProc = nullptr;
+            RemovePropW(h, kStyledProp);
+        }
+        if (m_styled || m_imgui) ShutdownStyled();
         if (m_uiFont)   DeleteObject(static_cast<HFONT>(m_uiFont));
         if (m_monoFont) DeleteObject(static_cast<HFONT>(m_monoFont));
         m_uiFont = m_monoFont = nullptr;
         m_fontDpi = 0;
         m_hwnd = nullptr;
+    }
+
+    bool ReporterWindow::TryStyled(void* hwnd)
+    {
+        HWND h = static_cast<HWND>(hwnd);
+        IMGUI_CHECKVERSION();
+        m_imgui = ImGui::CreateContext();
+        if (!m_imgui) return false;
+        ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui));
+
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;    // do not drop an imgui.ini beside the host
+        io.LogFilename = nullptr;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+        m_fontDpi = GetDpiForWindow(h);
+        if (!m_fontDpi) m_fontDpi = 96;
+        ApplyScaledTheme(static_cast<float>(m_fontDpi) / 96.0f);
+        LoadFaces();
+
+        if (!ImGui_ImplWin32_Init(h)) { ShutdownStyled(); return false; }
+
+        SetPropW(h, kStyledProp, this);
+        m_prevProc = reinterpret_cast<void*>(SetWindowLongPtrW(h, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&StyledWndProc)));
+        if (!m_prevProc)
+        {
+            RemovePropW(h, kStyledProp);
+            ShutdownStyled();
+            return false;
+        }
+
+        m_warp = WarpCreate(h);
+        if (!m_warp)
+        {
+            SetWindowLongPtrW(h, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(m_prevProc));
+            m_prevProc = nullptr;
+            RemovePropW(h, kStyledProp);
+            ShutdownStyled();
+            return false;
+        }
+
+        // Dialog navigation would swallow Tab/Enter/Esc before our proc saw
+        // them, and this path has no WS_TABSTOP children for it to walk.
+        // The fallback leaves the flag Show() set (true).
+        m_styled = true;
+        if (m_window) m_window->SetDialogNavigation(false);
+        m_detailsDirty = true;
+        Frame();
+        return true;
+    }
+
+    void ReporterWindow::ShutdownStyled()
+    {
+        m_styled = false;
+        if (m_imgui)
+        {
+            ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui));
+            // DX11 shutdown uses the context, so it has to run before DestroyContext.
+            if (m_warp) { WarpDestroy(m_warp); m_warp = nullptr; }
+            if (ImGui::GetIO().BackendPlatformUserData)
+                ImGui_ImplWin32_Shutdown();
+            ImGui::DestroyContext(static_cast<ImGuiContext*>(m_imgui));
+            m_imgui = nullptr;
+        }
+        else if (m_warp)
+        {
+            WarpDestroy(m_warp);
+            m_warp = nullptr;
+        }
+        m_uiFace = m_monoFace = nullptr;
+    }
+
+    void ReporterWindow::ApplyScaledTheme(float dpiScale)
+    {
+        if (dpiScale < 1.0f) dpiScale = 1.0f;
+        ImGuiStyle fresh;
+        Arcane::Editor::ApplyEditorTheme(fresh);
+        if (dpiScale != 1.0f) fresh.ScaleAllSizes(dpiScale);
+        fresh.FontSizeBase = 16.0f;     // the editor's UI size (InstallEditorFonts)
+        fresh.FontScaleDpi = dpiScale;  // sizes above were scaled; text follows
+        ImGui::GetStyle() = fresh;
+    }
+
+    void ReporterWindow::LoadFaces()
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        wchar_t exe[MAX_PATH]{};
+        std::filesystem::path dir;
+        if (GetModuleFileNameW(nullptr, exe, MAX_PATH) != 0)
+            dir = std::filesystem::path(exe).parent_path();
+        const std::filesystem::path inter = dir / "data" / "font" / "inter" / "static" / "Inter_18pt-Regular.ttf";
+        wchar_t windir[MAX_PATH]{};
+        std::filesystem::path consolas;
+        if (GetWindowsDirectoryW(windir, MAX_PATH) != 0)
+            consolas = std::filesystem::path(windir) / "Fonts" / "consola.ttf";
+
+        // Inter first, so it becomes Fonts[0] -- the same default the editor
+        // installs. A missing file (this exe launched from its own bin dir,
+        // not staged beside a host) falls back to the embedded font; the
+        // theme colors still hold.
+        ImFont* ui = io.Fonts->AddFontFromFileTTF(inter.string().c_str(), 16.0f);
+        if (!ui) ui = io.Fonts->AddFontDefault();
+        m_uiFace = ui;
+        ImFont* mono = consolas.empty() ? nullptr : io.Fonts->AddFontFromFileTTF(consolas.string().c_str(), 15.0f);
+        m_monoFace = mono ? mono : ui;
+    }
+
+    void ReporterWindow::RebuildDetails(const ReportView& v, bool symbolizing)
+    {
+        if (m_threadIndex < 0 || m_threadIndex >= static_cast<int>(v.threads.size()))
+            m_threadIndex = 0;
+        const std::size_t sel = m_threadIndex < 0 ? 0 : static_cast<std::size_t>(m_threadIndex);
+        std::string body = DetailsText(v, sel);
+        if (symbolizing) body.insert(0, "Symbolizing...\n\n");
+        m_detailsBuf = std::move(body);
+        m_detailsDirty = false;
+    }
+
+    int ReporterWindow::BuildUi(const ReportView& v, bool symbolizing)
+    {
+        if (m_detailsDirty) RebuildDetails(v, symbolizing);
+
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+        const ImGuiWindowFlags flags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse;
+        int cmd = 0;
+        if (ImGui::Begin("##report", nullptr, flags))
+        {
+            ImGui::PushFont(static_cast<ImFont*>(m_uiFace), 18.0f);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(v.headline.empty() ? "Arcane" : v.headline.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopFont();
+            if (!v.whenLine.empty()) ImGui::TextDisabled("%s", v.whenLine.c_str());
+            if (!v.reasonText.empty())
+            {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(v.reasonText.c_str());
+                ImGui::PopTextWrapPos();
+            }
+
+            if (v.threads.size() > 1)
+            {
+                const float width = 320.0f * ImGui::GetStyle().FontScaleDpi;
+                ImGui::SetNextItemWidth(width);
+                const char* preview = (m_threadIndex >= 0 && m_threadIndex < static_cast<int>(v.threads.size()))
+                    ? v.threads[static_cast<std::size_t>(m_threadIndex)].label.c_str() : "";
+                if (ImGui::BeginCombo("##thread", preview))
+                {
+                    for (int i = 0; i < static_cast<int>(v.threads.size()); ++i)
+                    {
+                        ImGui::PushID(i);
+                        const bool selected = i == m_threadIndex;
+                        if (ImGui::Selectable(v.threads[static_cast<std::size_t>(i)].label.c_str(), selected))
+                        {
+                            m_threadIndex = i;
+                            m_detailsDirty = true;
+                        }
+                        if (selected) ImGui::SetItemDefaultFocus();
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            if (m_detailsDirty) RebuildDetails(v, symbolizing);
+
+            const float footer = ImGui::GetFrameHeightWithSpacing();
+            ImGui::PushFont(static_cast<ImFont*>(m_monoFace), 15.0f);
+            // Read-only, so the buffer is not written. size()+1 counts the
+            // trailing NUL std::string already stores (C++11).
+            char empty = '\0';
+            char* text = m_detailsBuf.empty() ? &empty : m_detailsBuf.data();
+            const std::size_t textSize = m_detailsBuf.empty() ? 1 : m_detailsBuf.size() + 1;
+            ImGui::InputTextMultiline("##details", text, textSize, ImVec2(-1.0f, -footer),
+                                      ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_WordWrap);
+            ImGui::PopFont();
+
+            bool placed = false;
+            auto button = [&](const char* label, int id, bool show, bool enabled)
+            {
+                if (!show) return;
+                if (placed) ImGui::SameLine();
+                placed = true;
+                if (!enabled) ImGui::BeginDisabled();
+                if (id == kBtnClose && m_focusClose) ImGui::SetKeyboardFocusHere();
+                if (ImGui::Button(label) && cmd == 0) cmd = id;
+                if (!enabled) ImGui::EndDisabled();
+            };
+            // Same order and the same show/enable rules as the Win32 row.
+            button("Open Report Folder", kBtnOpenFolder, true, true);
+            button("Copy Details", kBtnCopy, true, true);
+            button("Close", kBtnClose, true, true);
+            button("Relaunch", kBtnRelaunch, !v.relaunchLine.empty(), v.canRelaunch);
+            button("Keep Waiting", kBtnKeepWaiting, v.isHang, true);
+            button("Terminate and Collect", kBtnTerminate, v.isHang, true);
+            m_focusClose = false;
+
+            const bool popup = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+            if (cmd == 0 && !popup && ImGui::IsKeyPressed(ImGuiKey_Escape))
+                cmd = kBtnClose;
+            // Enter closes, like the Win32 default button, unless a button
+            // already took it or the text well is active. Never Relaunch:
+            // that is the one action Enter must not fire by accident (R83).
+            const bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter);
+            if (cmd == 0 && !popup && enter && !ImGui::IsAnyItemActive())
+                cmd = kBtnClose;
+        }
+        ImGui::End();
+        return cmd;
+    }
+
+    void ReporterWindow::Frame()
+    {
+        if (!m_styled || m_inFrame || !m_imgui || !m_hwnd) return;
+        HWND h = static_cast<HWND>(m_hwnd);
+        RECT rc{};
+        GetClientRect(h, &rc);
+        if (rc.right <= 0 || rc.bottom <= 0) return;
+        if (!WarpResize(m_warp, rc.right, rc.bottom)) return;
+
+        m_inFrame = true;
+        ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui));
+        WarpNewFrame(m_warp);
+        ImGui_ImplWin32_NewFrame();
+
+        ReportView v;
+        bool symbolizing = false;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            v = m_view;
+            symbolizing = m_symbolizing;
+        }
+        if (m_detailsDirty) RebuildDetails(v, symbolizing);
+
+        ImGui::NewFrame();
+        const int cmd = BuildUi(v, symbolizing);
+        ImGui::Render();
+        WarpDraw(m_warp, ImGui::GetDrawData());
+        m_inFrame = false;
+        if (cmd && m_onCommand) m_onCommand(cmd);
     }
 }

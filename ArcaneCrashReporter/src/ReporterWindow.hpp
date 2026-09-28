@@ -1,5 +1,8 @@
 // The crash window's presenter (crash window plan 2, task 7; spec §6
-// "Window"). Plain Win32 controls on Arcane::NativeWindow -- no toolkit.
+// "Window"). The attended window draws the editor's ImGui theme through a
+// Direct3D 11 WARP device (software rasterizer, not the GPU that just
+// died). Plain Win32 controls are the fallback when that device cannot be
+// created, and they are what keeps native UI Automation.
 //
 // This is NOT one of the pure files: unlike ReporterArgs/ReportView/
 // SymbolizedText, ReporterWindow.hpp/.cpp are never source-compiled into
@@ -19,6 +22,13 @@
 
 namespace Arcane::Reporter
 {
+    struct WarpImGui;
+
+    // Win32 window proc for the styled path. A free function so it can have
+    // the real callback signature without pulling windows.h into this header;
+    // the cpp adapts it. x64, where the Win32 proc convention matches.
+    std::intptr_t __stdcall ReporterStyledProc(void* hwnd, unsigned msg, std::uintptr_t wParam, std::intptr_t lParam);
+
     class ReporterWindow final : public INativeWindowPresenter
     {
     public:
@@ -72,7 +82,10 @@ namespace Arcane::Reporter
         [[nodiscard]] std::string RelaunchLine();      // m_view.relaunchLine
 
     private:
+        friend std::intptr_t __stdcall ReporterStyledProc(void*, unsigned, std::uintptr_t, std::intptr_t);
+
         void OnCreate(void* hwnd) override;
+        void OnPaint(void* hdc, int left, int top, int right, int bottom) override;
         void OnSize(int w, int h) override;
         void OnCommand(int id) override;
         bool OnUser(unsigned msg, std::uintptr_t w, std::intptr_t l) override;
@@ -82,6 +95,18 @@ namespace Arcane::Reporter
         void RebuildFonts(unsigned dpi);   // window thread: R85 -- DPI changed since the fonts were built
         void Layout(int w, int h);
         void ApplyCrashViewLocked(ReportView& v) const;   // m_mutex held: the R35 latch's transformation
+
+        // Styled path. All of these run on the window thread. TryStyled
+        // leaves the Win32 controls uncreated when it returns true; the
+        // caller falls back to them when it returns false, having already
+        // torn the half-built context down.
+        bool TryStyled(void* hwnd);
+        void ShutdownStyled();
+        void Frame();
+        void RebuildDetails(const ReportView& v, bool symbolizing);
+        void ApplyScaledTheme(float dpiScale);
+        void LoadFaces();
+        int  BuildUi(const ReportView& v, bool symbolizing);   // 0, or a Command id fired after Render
 
         NativeWindow*           m_window = nullptr;
         std::mutex              m_mutex;
@@ -95,5 +120,19 @@ namespace Arcane::Reporter
         bool        m_crashView = false;   // R35: BecomeCrashView has run (guarded by m_mutex)
         std::string m_crashSuffix;         // ...with this suffix (guarded by m_mutex)
         std::atomic<std::uint32_t> m_hostExitCode{0};   // R40: set by OnUser(kUserHostExited)
+
+        // Styled path. m_threadIndex is the combo selection (the Win32 combo
+        // does not exist on this path).
+        bool        m_styled = false;
+        bool        m_inFrame = false;
+        bool        m_detailsDirty = true;
+        bool        m_focusClose = true;
+        int         m_threadIndex = 0;
+        void*       m_imgui = nullptr;     // ImGuiContext*
+        void*       m_uiFace = nullptr;    // ImFont*
+        void*       m_monoFace = nullptr;  // ImFont*
+        void*       m_prevProc = nullptr;  // WNDPROC installed over, restored on destroy
+        WarpImGui*  m_warp = nullptr;
+        std::string m_detailsBuf;
     };
 }

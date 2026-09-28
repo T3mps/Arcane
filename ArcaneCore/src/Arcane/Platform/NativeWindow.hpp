@@ -90,6 +90,12 @@ namespace Arcane
         [[nodiscard]] unsigned Dpi() const noexcept;        // GetDpiForWindow; 96 with no window
         [[nodiscard]] bool  OnWindowThread() const noexcept;
 
+        // Window thread only. The message loop reads this each message, and
+        // OnCreate runs before that loop, so a presenter that has decided it
+        // owns the keyboard itself (the styled reporter) can turn the dialog
+        // walker off without a race. The Win32-control fallback leaves it on.
+        void SetDialogNavigation(bool on) noexcept;
+
         void Invalidate() noexcept;
         void Invalidate(int left, int top, int right, int bottom) noexcept;   // client rect, bErase = FALSE
         void PostUser(unsigned msg, std::uintptr_t w = 0, std::intptr_t l = 0) noexcept;   // -> OnUser(msg, w, l), msg < 256

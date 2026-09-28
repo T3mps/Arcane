@@ -6,6 +6,7 @@
 #include <Arcane/Host/OffscreenVehicle.hpp>
 
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Render/Nri/NriDiagnostics.hpp>
 
 namespace Arcane
 {
@@ -54,6 +55,22 @@ namespace Arcane
         v->m_nri = NriDevice::Wrap(*v->m_native);
         if (!v->m_nri) { ARC_ERROR("[offscreen] NriDevice::Wrap failed"); return nullptr; }
 
+        // THE CRASH CHAIN, armed by the device's OWNER -- this vehicle, under
+        // --headless in both hosts -- exactly as the windowed
+        // NriGraphContext::Create arms the device IT creates, and at the same
+        // point: right after the wrap, before anything below can fail on a
+        // device with no device-removed observation point. CreateOffscreen
+        // still never arms (it BORROWS its device); before this line nothing
+        // armed a headless process at all, so a device loss latched through
+        // RenderErrorLatch::NoteDeviceLost with no hook, the host stopped with
+        // render-failed, and no gpu-crash report was written (G1, R109).
+        //
+        // Arm() refuses when a chain is already installed, and the RETURN
+        // VALUE gates the Disarm in the destructor, so a vehicle built beside
+        // an incumbent owner (an [gpu] test, a future second device) neither
+        // displaces nor unplugs it.
+        v->m_armedDiagnostics = NriDiagnostics::Arm(*v->m_nri);
+
         // vsync is meaningless with nothing to present to; CreateOffscreen ignores
         // it and the other surface-owned knobs.
         v->m_ctx = NriGraphContext::CreateOffscreen(cfg, *v->m_nri, width, height, nodes);
@@ -64,5 +81,12 @@ namespace Arcane
         return v;
     }
 
-    OffscreenVehicle::~OffscreenVehicle() = default;
+    OffscreenVehicle::~OffscreenVehicle()
+    {
+        // FIRST, before any member goes: the armed slots name a backend built
+        // over m_nri, and a slot outliving what it names dangles -- the same
+        // reason ~NriGraphContext disarms at the top of its body.
+        if (m_armedDiagnostics)
+            NriDiagnostics::Disarm();
+    }
 }

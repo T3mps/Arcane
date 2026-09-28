@@ -421,6 +421,11 @@ namespace Arcane
             wrapped->m_caps.rayTracingTier           = deviceDesc.tiers.rayTracing;
             wrapped->m_caps.meshShader               = deviceDesc.features.meshShader;
             wrapped->m_caps.maxDescriptorSetTextures = deviceDesc.descriptorSet.textureMaxNum;
+            wrapped->m_caps.maxPerStageTextures = deviceDesc.shaderStage.descriptorTextureMaxNum;
+            wrapped->m_caps.maxDescriptorSetUpdateAfterSetTextures =
+                deviceDesc.descriptorSet.updateAfterSet.textureMaxNum;
+            wrapped->m_caps.maxPerStageUpdateAfterSetTextures =
+                deviceDesc.shaderStage.updateAfterSet.descriptorTextureMaxNum;
         }
 
         // Contract item 14, post-wrap assert 3: say what we ended up with.
@@ -428,10 +433,15 @@ namespace Arcane
         // Task 1: one more line, alongside the identity log, stating what
         // this device CAN DO -- the snapshot just taken above, not a second
         // query.
-        ARC_INFO("[nri] caps: bindlessTier={} rayTracingTier={} meshShader={} maxDescriptorSetTextures={}",
+        ARC_INFO("[nri] caps: bindlessTier={} rayTracingTier={} meshShader={} "
+                 "maxDescriptorSetTextures={} maxPerStageTextures={} "
+                 "maxDescriptorSetUpdateAfterSetTextures={} maxPerStageUpdateAfterSetTextures={}",
                  static_cast<unsigned>(wrapped->m_caps.bindlessTier),
                  static_cast<unsigned>(wrapped->m_caps.rayTracingTier),
-                 wrapped->m_caps.meshShader, wrapped->m_caps.maxDescriptorSetTextures);
+                 wrapped->m_caps.meshShader, wrapped->m_caps.maxDescriptorSetTextures,
+                 wrapped->m_caps.maxPerStageTextures,
+                 wrapped->m_caps.maxDescriptorSetUpdateAfterSetTextures,
+                 wrapped->m_caps.maxPerStageUpdateAfterSetTextures);
         return wrapped;
     }
 

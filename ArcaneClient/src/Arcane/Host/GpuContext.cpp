@@ -3,7 +3,11 @@
 
 #include <Arcane/Host/GpuContext.hpp>
 
+#include <Arcane/Base/ForeignModules.hpp>
 #include <Arcane/Base/Log.hpp>
+
+#include <string>
+#include <vector>
 
 namespace Arcane
 {
@@ -25,12 +29,36 @@ namespace Arcane
         }
     }
 
-    std::unique_ptr<GpuContext> GpuContext::Create(const HostConfig& cfg)
+    std::unique_ptr<GpuContext> GpuContext::Create(HostConfig& cfg)
     {
         // Private ctor -> can't use make_unique; the partial unwinds via RAII on any
         // early return (members destruct in reverse declaration order, the shutdown
         // order).
         auto ctx = std::unique_ptr<GpuContext>(new GpuContext());
+
+        // BEFORE the window, so SDL_WINDOW_VULKAN is never set on a session
+        // that must not call the hooked loader. The scan is the same
+        // enumeration Report() runs after the device exists; doing it here
+        // is what makes the refusal earlier than the fast-fail. Headless
+        // stays on the requested backend: its device is offscreen and the
+        // measured crash is the windowed swapchain.
+        if (!cfg.headless && cfg.backend == GraphicsBackend::Vulkan)
+        {
+            const std::vector<ForeignModules::LoadedModule> loaded = ForeignModules::EnumerateProcessModules();
+            std::vector<std::string> names;
+            names.reserve(loaded.size());
+            for (const ForeignModules::LoadedModule& module : loaded)
+                names.push_back(module.name);
+            if (const std::optional<ForeignModules::Match> blocker = ForeignModules::WindowedVulkanBlocker(names))
+            {
+                ARC_WARN("[foreign-module] {} is injected. A windowed Vulkan swapchain fast-fails "
+                         "inside vulkan-1.dll (0xC0000409 STATUS_STACK_BUFFER_OVERRUN) under that "
+                         "hook, which is not a refcount the D3D12 reference armor can absorb. This "
+                         "session continues on D3D12. {}",
+                         blocker->module, blocker->remedy);
+                cfg.backend = GraphicsBackend::D3D12;
+            }
+        }
 
         // THE window of the process, created first for the reason stated in
         // the header: it destructs LAST, and the NRI swapchain the caller

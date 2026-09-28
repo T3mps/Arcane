@@ -194,24 +194,39 @@ namespace Arcane
         m_pipelines = &context.Pipelines();
 
         // THE GATE (Task 8/10 Step 1), FIRST -- before shader loads, before
-        // any NRI object exists. NriDeviceCaps::SupportsBindless()'s FIRST
-        // production call site: this node's whole material model is a
-        // descriptor-indexed table, which means nothing on hardware that
-        // cannot dynamically index a descriptor array (bindless tier 0).
+        // any NRI object exists. This node's whole material model is a fixed-
+        // capacity descriptor-indexed table, so both the bindless tier and
+        // the sampled-image descriptor limit must cover it.
         // The house refuse-loudly posture: producing wrong pixels (or
         // silently degrading to some other path) on tier-0 hardware is
         // worse than refusing to build the node at all, so this returns
         // false -- Create() turns that into a logged, latched null -- rather
         // than limping on with an unbuilt or half-built table.
-        if (!m_device->Caps().SupportsBindless())
+        if (!m_device->Caps().SupportsBindlessTextures(kBindlessCapacity))
         {
-            ARC_ERROR("[nri-graph] MeshNode: refused -- this device reports bindless tier 0 "
-                      "(NriDeviceCaps::SupportsBindless() is false). The mesh pass's "
+            ARC_ERROR("[nri-graph] MeshNode: refused -- this device cannot provide the "
+                      "required {} bindless sampled-image descriptors "
+                      "(tier={}, setLimit={}, stageLimit={}). "
+                      "The mesh pass's "
                       "material table is a descriptor-indexed bindless array; there is no "
                       "correct way to build it on hardware that cannot dynamically index a "
                       "descriptor array, so the node is refused here rather than rendering "
-                      "wrong pixels or silently degrading.");
+                      "wrong pixels or silently degrading.", kBindlessCapacity,
+                      static_cast<unsigned>(m_device->Caps().bindlessTier),
+                      m_device->Caps().maxDescriptorSetTextures,
+                      m_device->Caps().maxPerStageTextures);
             return false;
+        }
+
+        m_bindlessUpdateAfterSet =
+            m_device->Caps().SupportsTextureUpdateAfterSet(kBindlessCapacity);
+        if (!m_bindlessUpdateAfterSet)
+        {
+            ARC_WARN("[nri-graph] MeshNode: sampled-image update-after-set is unavailable "
+                     "for the {}-descriptor material table; new material residency will "
+                     "wait for device idle (setLimit={}, stageLimit={})", kBindlessCapacity,
+                     m_device->Caps().maxDescriptorSetUpdateAfterSetTextures,
+                     m_device->Caps().maxPerStageUpdateAfterSetTextures);
         }
 
         m_vs = context.ShaderBytecode(kMeshVs);
@@ -277,7 +292,7 @@ namespace Arcane
         return true;
     }
 
-    nri::DescriptorPoolDesc MeshNode::PoolSizes() noexcept
+    nri::DescriptorPoolDesc MeshNode::PoolSizes(bool bindlessUpdateAfterSet) noexcept
     {
         // TWO dimensions now (Task 8/10): kSwapchainFramesInFlight per-frame
         // sets, each carrying exactly ONE CONSTANT_BUFFER descriptor (b1);
@@ -292,13 +307,12 @@ namespace Arcane
         poolDesc.constantBufferMaxNum     = kFrameSets;          // b1, one per frame slot
         poolDesc.structuredBufferMaxNum   = 2 * kFrameSets;      // t0 instances + t1 visible indices, per frame slot (F3 plan 1 T7)
         poolDesc.textureMaxNum            = kBindlessCapacity;   // the bindless array's own budget
-        // ALLOW_UPDATE_AFTER_SET (Task 11): a POOL-level permission bit only --
-        // it lets a set ALLOCATED from this pool opt into update-after-bind
-        // (the bindless set since Task 11; the per-frame sets too since F3
-        // plan 1 T7, for the t0/t1 rewrite Record does when the GPU scene's
-        // buffers move). See AddMaterial's own synchronization comment and
-        // the header's WHAT THIS NODE OWNS block.
-        poolDesc.flags                    = nri::DescriptorPoolBits::ALLOW_UPDATE_AFTER_SET;
+        // The pool-level update-after-set permission is conditional. Only the
+        // bindless texture set needs it, and Vulkan may expose descriptor
+        // indexing without the granular sampled-image update-after-bind bit.
+        poolDesc.flags = bindlessUpdateAfterSet
+                       ? nri::DescriptorPoolBits::ALLOW_UPDATE_AFTER_SET
+                       : nri::DescriptorPoolBits::NONE;
         return poolDesc;
     }
 
@@ -385,12 +399,8 @@ namespace Arcane
         // GpuScene::InstancesView), and t1, THIS slot's visible-index buffer
         // (stride 4 -- GpuScene::VisibleIndicesView(slot)), both vertex-
         // only. Range indices 0/1/2 are what Record's UpdateDescriptorRanges
-        // names. ALL THREE carry ALLOW_UPDATE_AFTER_SET (with the set-level
-        // flag below): ranges 1-2 are rewritten by Record for a slot whose
-        // buffers moved, and range 0 asks for it too so the set's ranges are
-        // uniform (NRI maps the range flag to VK's per-binding UPDATE_AFTER_
-        // BIND bit and D3D12's DATA_VOLATILE/DESCRIPTORS_VOLATILE -- either
-        // is legal on a range that is never rewritten).
+        // names. They do not need update-after-set: Record rewrites only the
+        // current frame slot after BeginFrame retired that slot's prior use.
         nri::DescriptorRangeDesc frameRanges[3] = {};
         frameRanges[0].baseRegisterIndex = 1;                 // b1
         frameRanges[0].descriptorNum     = 1;
@@ -404,14 +414,10 @@ namespace Arcane
         frameRanges[2].descriptorNum     = 1;
         frameRanges[2].descriptorType    = nri::DescriptorType::STRUCTURED_BUFFER;
         frameRanges[2].shaderStages      = nri::StageBits::VERTEX_SHADER;
-        for (nri::DescriptorRangeDesc& r : frameRanges)
-            r.flags = nri::DescriptorRangeBits::ALLOW_UPDATE_AFTER_SET;
-
         nri::DescriptorSetDesc frameSetDesc = {};
         frameSetDesc.registerSpace = 1;
         frameSetDesc.ranges        = frameRanges;
         frameSetDesc.rangeNum      = 3;
-        frameSetDesc.flags         = nri::DescriptorSetBits::ALLOW_UPDATE_AFTER_SET;
 
         // set (array index 1, space2): the bindless material array at t0 --
         // a FIXED size (kBindlessCapacity, matched by mesh.hlsl's own
@@ -424,45 +430,27 @@ namespace Arcane
         // unwritten, which is legal by construction -- mesh.hlsl only ever
         // indexes a slot AddMaterial actually wrote -- rather than a
         // validation violation.
-        // ALLOW_UPDATE_AFTER_SET (Task 11, on top of Task 10's ARRAY |
-        // PARTIALLY_BOUND): lets AddMaterial's UpdateDescriptorRanges write a
-        // NEW slot into this range AFTER the set has already been bound by an
-        // earlier, possibly still-in-flight frame's command buffer -- exactly
-        // what a live feed resolving textures mid-run needs (a mesh whose
-        // albedo finishes cooking, or is referenced for the first time, on
-        // frame N must not have to wait for every frame before N to retire
-        // first). Both backends implement it fully (VK:
-        // VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, gated on the device's
-        // VK_EXT_descriptor_indexing feature bundle, which this device
-        // already has -- SupportsBindless() above is gated on the SAME
-        // Vulkan 1.2 `descriptorIndexing` feature, and NRI's device creation
-        // enables every sub-feature the physical device reports, granular
-        // update-after-bind bits included; D3D12: PipelineLayoutD3D12.hpp
-        // marks the range DATA_VOLATILE/DESCRIPTORS_VOLATILE, which is
-        // exactly this backend's "safe to rewrite a live table" idiom). See
-        // AddMaterial's own doc comment for what this makes safe and what it
-        // still does not (a slot, once written, is never rewritten or freed
-        // -- BindlessTable's own SLOT POLICY -- so nothing here has to reason
-        // about a draw that is CURRENTLY reading the slot being touched, only
-        // about writing slots nothing has read yet).
+        // ALLOW_UPDATE_AFTER_SET is added only when the granular sampled-image
+        // limit covers this entire range. Otherwise AddMaterial waits for
+        // device idle before appending a descriptor.
         nri::DescriptorRangeDesc bindlessRange = {};
         bindlessRange.baseRegisterIndex = 0;                  // t0
         bindlessRange.descriptorNum     = kBindlessCapacity;
         bindlessRange.descriptorType    = nri::DescriptorType::TEXTURE;
         bindlessRange.shaderStages      = nri::StageBits::FRAGMENT_SHADER;
         bindlessRange.flags             = nri::DescriptorRangeBits::ARRAY
-                                         | nri::DescriptorRangeBits::PARTIALLY_BOUND
-                                         | nri::DescriptorRangeBits::ALLOW_UPDATE_AFTER_SET;
+                                         | nri::DescriptorRangeBits::PARTIALLY_BOUND;
+        if (m_bindlessUpdateAfterSet)
+            bindlessRange.flags |= nri::DescriptorRangeBits::ALLOW_UPDATE_AFTER_SET;
 
         nri::DescriptorSetDesc bindlessSetDesc = {};
         bindlessSetDesc.registerSpace = 2;
         bindlessSetDesc.ranges        = &bindlessRange;
         bindlessSetDesc.rangeNum      = 1;
-        // The SET-level counterpart the range's flag requires (NRIDescs.h:
-        // "ALLOW_UPDATE_AFTER_SET ... allows DescriptorRangeBits::
-        // ALLOW_UPDATE_AFTER_SET") -- the per-frame frameSetDesc above
-        // carries it too since F3 plan 1 T7 (its t0/t1 ranges).
-        bindlessSetDesc.flags         = nri::DescriptorSetBits::ALLOW_UPDATE_AFTER_SET;
+        // The SET-level counterpart is present exactly when the range opted in.
+        bindlessSetDesc.flags = m_bindlessUpdateAfterSet
+                              ? nri::DescriptorSetBits::ALLOW_UPDATE_AFTER_SET
+                              : nri::DescriptorSetBits::NONE;
 
         nri::DescriptorSetDesc setDescs[2] = { frameSetDesc, bindlessSetDesc };
 
@@ -494,7 +482,7 @@ namespace Arcane
         // AddMaterial's own synchronization comment). Nothing is ever FREED,
         // which is what keeps ResetDescriptorPool and its fence discipline
         // out of this file, exactly as in Batch2DNode.
-        const nri::DescriptorPoolDesc poolDesc = PoolSizes();
+        const nri::DescriptorPoolDesc poolDesc = PoolSizes(m_bindlessUpdateAfterSet);
         if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
         {
             ARC_ERROR("[nri-graph] MeshNode: descriptor pool creation failed");
@@ -587,7 +575,7 @@ namespace Arcane
             {
                 ARC_ERROR("[nri-graph] MeshNode: descriptor-set allocation failed for frame slot "
                           "{} -- the pool holds {} sets (PoolSizes)", slot,
-                          PoolSizes().descriptorSetMaxNum);
+                          PoolSizes(m_bindlessUpdateAfterSet).descriptorSetMaxNum);
                 return false;
             }
 
@@ -617,7 +605,7 @@ namespace Arcane
         {
             ARC_ERROR("[nri-graph] MeshNode: the bindless material descriptor set could not be "
                       "allocated -- the pool holds {} sets (PoolSizes)",
-                      PoolSizes().descriptorSetMaxNum);
+                      PoolSizes(m_bindlessUpdateAfterSet).descriptorSetMaxNum);
             return false;
         }
         return true;
@@ -627,8 +615,17 @@ namespace Arcane
     {
         // See this method's own doc comment in MeshNode.hpp for the full
         // ownership and synchronization contract.
-        if (!m_bindless || !m_bindlessSet)
+        if (!m_bindless || !m_bindlessSet || !srv)
             return BindlessTable::kInvalidSlot;
+
+        const nri::CoreInterface& core = m_device->Core();
+        if (!m_bindlessUpdateAfterSet
+            && !ARC_NRI_CHECK(core.DeviceWaitIdle(&m_device->Device())))
+        {
+            ARC_ERROR("[nri-graph] MeshNode: could not retire in-flight work before "
+                      "updating a bindless material descriptor");
+            return BindlessTable::kInvalidSlot;
+        }
 
         const std::uint32_t slot = m_bindless->Add(srv);
         if (slot == BindlessTable::kInvalidSlot)
@@ -636,7 +633,6 @@ namespace Arcane
                                                    // already warned (once) or refused silently, per
                                                    // its own Add() contract
 
-        const nri::CoreInterface& core = m_device->Core();
         // `view`'s ADDRESS must outlive UpdateDescriptorRanges -- same rule
         // CreateSets' `cb` local follows, and for the same reason.
         const nri::Descriptor* view = srv;
@@ -1069,8 +1065,8 @@ namespace Arcane
         // pointer moved; GpuScene keeps no generation for those). Both
         // halves of the compare are load-bearing. Safe: this slot's previous
         // frame retired at BeginFrame, so nothing in flight reads the set;
-        // the ranges carry ALLOW_UPDATE_AFTER_SET regardless. The first
-        // Record for a slot always writes (the members start at 0 / null).
+        // no update-after-set feature is needed. The first Record for a slot
+        // always writes (the members start at 0 / null).
         // ---------------------------------------------------------------
         if (m_setInstanceGen[frameSlot] != gpuScene->InstanceBufferGeneration()
             || m_setVisibleView[frameSlot] != gpuScene->VisibleIndicesView(frameSlot))
@@ -1299,6 +1295,8 @@ namespace Arcane
                 desc.width        = width;
                 desc.height       = height;
                 desc.depthStencil = true;
+                desc.optimizedClearValue.depthStencil.depth = kDepthClear;
+                desc.hasOptimizedClearValue = true;
                 depth = builder.CreateTexture("depth", desc);
 
                 // BOTH targets, both written, both attached. The colour one

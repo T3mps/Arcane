@@ -21,6 +21,5 @@ namespace arccook
     // Writes `artifact`'s full mip chain (mip 0 first, exactly as already stored in its
     // own payload/MipDesc table) to `path` as a standard DDS file. Returns false on any
     // IO failure; `path` is not guaranteed to exist on false.
-    [[nodiscard]] bool WriteDds(const std::filesystem::path& path,
-                                 const Arcane::AssetPipeline::LoadedArtifact& artifact);
+    [[nodiscard]] bool WriteDds(const std::filesystem::path& path, const Arcane::AssetPipeline::LoadedArtifact& artifact);
 }

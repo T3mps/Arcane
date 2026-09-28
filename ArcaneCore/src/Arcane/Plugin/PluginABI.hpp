@@ -947,7 +947,18 @@ namespace Arcane
     //     ProgressStallRule::WasReported() is inline and adds no export. A
     //     v39 module was compiled against the old layouts; reject the
     //     pairing. ReferenceProject.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 40;
+    // v41 (2026-09-28, game-module physics command): ArcaneCore.dll exports
+    // SetBodyHorizontalVelocity for a game module's fixed-step controller.
+    // A module using that command cannot load beside a v40 Core that lacks the
+    // symbol; keep the module/version gate in step with the SDK import surface.
+    // ReferenceProject.arcproj restamped.
+    // v42 (2026-09-28, platformer input): ArcaneCore.dll exports TryJumpBody
+    // and the game module's reflected PlayerController2D layout gains jump
+    // speed and a transient jump pulse. Reject stale host/module pairings.
+    // v43 (2026-09-28, reference platformer controller): ArcaneCore exports
+    // GetBodyMotion2D/SetBodyVelocity2D and the reflected sample component
+    // gains movement tuning and transient jump state. Refuse stale SDK pairs.
+    inline constexpr uint32_t kGamePluginABIVersion = 43;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

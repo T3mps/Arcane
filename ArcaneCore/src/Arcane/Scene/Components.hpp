@@ -288,7 +288,12 @@ namespace Arcane
         // Non-trivially-copyable: the binary path (Play snapshots, scene
         // SaveBinary) serializes through this member instead of the POD
         // memcpy overload (Astra's HasSerializeMethod seam).
-        template<typename Archive> void Serialize(Archive& ar) { ar(id); ar(name); }
+        template<typename Archive>
+        void Serialize(Archive& ar)
+        {
+            ar(id);
+            ar(name);
+        }
     };
 
     // Marker ("tag component"): render submission skips entities carrying it

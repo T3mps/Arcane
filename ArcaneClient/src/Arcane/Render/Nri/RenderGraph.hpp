@@ -121,6 +121,12 @@ namespace Arcane
                                                // nri::TextureDesc::mipNum and into the pool-slot
                                                // compatibility key (RenderGraphExec.cpp/RenderGraph.cpp).
         bool          depthStencil = false;   // chooses attachment vs shader usage bits (Task 4)
+        // D3D12 bakes this value into render-target/depth resources. A node
+        // that clears must declare the exact value here or the debug layer
+        // reports a slow clear-value mismatch. Transients that are never
+        // cleared leave hasOptimizedClearValue false and may alias either.
+        nri::ClearValue optimizedClearValue{};
+        bool            hasOptimizedClearValue = false;
     };
 
     // Per-declaration usage: what THIS Read/Write means, not a resource-wide

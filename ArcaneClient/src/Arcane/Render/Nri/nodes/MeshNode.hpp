@@ -47,9 +47,9 @@
 //
 // WHAT THIS NODE OWNS (all persistent, all created once at Create()):
 //   * the BINDLESS MATERIAL TABLE (Task 8/10) -- a BindlessTable of
-//     kBindlessCapacity SRV slots, gated on NriDeviceCaps::SupportsBindless()
-//     at Create() (tier 0 refuses the node outright rather than render wrong
-//     pixels) -- and the ONE
+//     kBindlessCapacity SRV slots, gated on both bindless tier and the
+//     sampled-image descriptor limit at Create() (insufficient hardware
+//     refuses the node outright rather than render wrong pixels) -- and the ONE
 //     descriptor set its array lives in. This REPLACED the node's own 1x1
 //     white texel + t0 binding outright: `kInvalidSlot` (MeshInstance::
 //     materialSlot's default) now selects a FLAT path in mesh.hlsl that
@@ -75,7 +75,8 @@
 //     slot's PREVIOUS frame retired at BeginFrame (the swapchain's fence
 //     wait), so nothing in flight reads that slot's set. Batch2DNode's sets
 //     are never rewritten at all; this one is rewritten only for the
-//     CURRENT slot, only when a buffer moved, under ALLOW_UPDATE_AFTER_SET.
+//     CURRENT slot, only when a buffer moved, and therefore needs no
+//     update-after-set permission.
 //     The bindless set is DIFFERENT again: allocated ONCE (not per frame
 //     slot, since its contents do not vary by frame) and written
 //     INCREMENTALLY by AddMaterial as slots are Added -- see that method's
@@ -132,6 +133,7 @@
 #include <Arcane/Mesh/MeshBuilder.hpp>      // MeshData / MeshVertex -- the CPU geometry
 #include <Arcane/Render/GpuSceneTypes.hpp>     // GpuSceneFrame -- MeshSceneDesc::scene (F3 plan 1 T6)
 #include <Arcane/Render/Nri/BindlessTable.hpp> // MeshInstance::materialSlot's kInvalidSlot default
+#include <Arcane/Render/Nri/NriDeviceCaps.hpp>
 #include <Arcane/Render/Nri/NriMeshBufferCache.hpp>
 #include <Arcane/Render/Nri/NriPipelineCache.hpp>
 #include <Arcane/Render/Nri/RenderGraph.hpp>
@@ -384,11 +386,11 @@ namespace Arcane
         // the pipeline layout. Null (already logged + latched) on any
         // failure -- a vehicle that cannot build this node must not render a
         // frame that silently draws nothing. Refuses FIRST, before any of
-        // that, on a device whose NriDeviceCaps::SupportsBindless() is false
-        // (bindless tier 0) -- the house refuse-loudly posture: this node's
-        // material table cannot mean anything on hardware that cannot index
-        // it, so it does not get built at all rather than rendering wrong
-        // pixels or silently falling back.
+        // that, on a device whose bindless tier or sampled-image descriptor
+        // limit cannot cover kBindlessCapacity -- the house refuse-loudly
+        // posture: this node's material table cannot mean anything on such
+        // hardware, so it does not get built rather than rendering wrong
+        // pixels or silently changing the material model.
         static std::unique_ptr<MeshNode> Create(NriGraphContext& context);
 
         // Maps blend and sidedness independently to one of the six fixed mesh
@@ -426,23 +428,15 @@ namespace Arcane
         // generated texture) still owns it and must outlive both the view
         // and this node's use of the returned slot.
         //
-        // SYNCHRONIZATION (Task 11 revisited this): CreateBindings' bindless
-        // range/set/pool now carry ALLOW_UPDATE_AFTER_SET (on top of Task
-        // 10's ARRAY | PARTIALLY_BOUND), so this write is safe to issue at
-        // ANY time relative to earlier frames' command buffers -- including
-        // ones still in flight on the GPU -- as long as the SLOT being
-        // written has never been read by any of them, which BindlessTable's
-        // own Add-only policy guarantees by construction (a fresh Add always
-        // claims the next UNUSED dense slot; nothing here ever rewrites a
-        // slot a prior instance's materialSlot could already be indexing).
-        // That is exactly the property a live feed needs: SceneRenderResolver
-        // ->MeshMaterialCache->NriGraphContext::ResolveMeshAlbedoSlot calls
-        // this once per newly-seen albedo Guid, on whatever frame first
-        // references it, with no fence wait and no requirement that earlier
-        // frames have retired first. Before Task 11 this call was only safe
-        // "before this set has ever been bound to a command buffer" -- see
-        // git history for that account if the update-after-bind wiring is
-        // ever questioned.
+        // SYNCHRONIZATION: when the device supports sampled-image update-
+        // after-bind for the entire fixed table, CreateBindings opts the
+        // bindless range/set/pool into it and this appends a fresh slot while
+        // older frames may still be in flight. When Vulkan exposes descriptor
+        // indexing without that granular feature, this method waits for
+        // device idle before appending. The fallback is paid only when a new
+        // material becomes resident, never per frame. BindlessTable's add-
+        // only policy means neither path rewrites a descriptor an older draw
+        // could already reference.
         [[nodiscard]] std::uint32_t AddMaterial(nri::Descriptor* srv);
 
         // Resolves the PIPELINE for the colour format the frame being declared
@@ -609,14 +603,15 @@ namespace Arcane
         // (kBindlessCapacity TEXTURE descriptors, MeshNode.cpp). The root
         // sampler consumes NO pool budget at all -- RootSamplerDesc is "not
         // allocated from a descriptor pool" (NRIDescs.h:1077).
-        [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes() noexcept;
+        [[nodiscard]] static nri::DescriptorPoolDesc PoolSizes(bool bindlessUpdateAfterSet) noexcept;
 
     private:
         MeshNode() = default;
 
         bool Init(NriGraphContext& context);
-        // Creates the BindlessTable (gated on Caps().SupportsBindless() by
-        // Init(), before this runs). Called before CreateBindings(), which
+        // Creates the BindlessTable (gated on the bindless tier and both
+        // sampled-image limits by Init(), before this runs). Called before
+        // CreateBindings(), which
         // sizes the bindless descriptor range off kBindlessCapacity alone
         // (a compile-time constant) rather than this table, so ordering
         // between the two is not otherwise load-bearing.
@@ -630,9 +625,9 @@ namespace Arcane
         // descriptor set (its range left UNWRITTEN here -- AddMaterial
         // writes it incrementally, and CreateBindings' PARTIALLY_BOUND flag
         // is what makes allocating it with an empty range legal). No
-        // ResetDescriptorPool anywhere: nothing is ever freed, only
-        // rewritten under ALLOW_UPDATE_AFTER_SET at points the fence
-        // discipline already covers.
+        // ResetDescriptorPool anywhere: nothing is ever freed. Frame-set
+        // rewrites happen after that slot retires; bindless appends use
+        // update-after-set when supported and otherwise wait for device idle.
         bool CreateSets();
 
         // One fixed material state for this frame's attachment formats, from
@@ -683,6 +678,9 @@ namespace Arcane
         // leave either half-built (Init()'s `&&` chain).
         std::unique_ptr<BindlessTable> m_bindless;
         nri::DescriptorSet*            m_bindlessSet = nullptr;
+        // Descriptor indexing does not imply Vulkan's granular sampled-image
+        // update-after-bind feature. False selects AddMaterial's idle fallback.
+        bool                           m_bindlessUpdateAfterSet = false;
 
         nri::DescriptorPool* m_pool = nullptr;
         std::uint32_t        m_layoutId = NriPipelineCache::kInvalidLayout;

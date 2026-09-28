@@ -1000,11 +1000,15 @@ Result DeviceVK::Create(const DeviceCreationDesc& desc, const DeviceCreationVKDe
         m_Desc.descriptorSet.textureMaxNum = limits.maxDescriptorSetSampledImages;
         m_Desc.descriptorSet.storageTextureMaxNum = limits.maxDescriptorSetStorageImages;
 
-        m_Desc.descriptorSet.updateAfterSet.samplerMaxNum = props12.maxDescriptorSetUpdateAfterBindSamplers;
-        m_Desc.descriptorSet.updateAfterSet.constantBufferMaxNum = props12.maxDescriptorSetUpdateAfterBindUniformBuffers;
-        m_Desc.descriptorSet.updateAfterSet.storageBufferMaxNum = props12.maxDescriptorSetUpdateAfterBindStorageBuffers;
-        m_Desc.descriptorSet.updateAfterSet.textureMaxNum = props12.maxDescriptorSetUpdateAfterBindSampledImages;
-        m_Desc.descriptorSet.updateAfterSet.storageTextureMaxNum = props12.maxDescriptorSetUpdateAfterBindStorageImages;
+        // A non-zero limit alone does not make UPDATE_AFTER_BIND legal. The
+        // matching granular Vulkan 1.2 feature must also be enabled. Expose
+        // zero through DeviceDesc when that feature is absent so callers can
+        // use these limits as reliable capability gates.
+        m_Desc.descriptorSet.updateAfterSet.samplerMaxNum = features12.descriptorBindingSampledImageUpdateAfterBind ? props12.maxDescriptorSetUpdateAfterBindSamplers : 0;
+        m_Desc.descriptorSet.updateAfterSet.constantBufferMaxNum = features12.descriptorBindingUniformBufferUpdateAfterBind ? props12.maxDescriptorSetUpdateAfterBindUniformBuffers : 0;
+        m_Desc.descriptorSet.updateAfterSet.storageBufferMaxNum = features12.descriptorBindingStorageBufferUpdateAfterBind ? props12.maxDescriptorSetUpdateAfterBindStorageBuffers : 0;
+        m_Desc.descriptorSet.updateAfterSet.textureMaxNum = features12.descriptorBindingSampledImageUpdateAfterBind ? props12.maxDescriptorSetUpdateAfterBindSampledImages : 0;
+        m_Desc.descriptorSet.updateAfterSet.storageTextureMaxNum = features12.descriptorBindingStorageImageUpdateAfterBind ? props12.maxDescriptorSetUpdateAfterBindStorageImages : 0;
 
         m_Desc.shaderStage.descriptorSamplerMaxNum = limits.maxPerStageDescriptorSamplers;
         m_Desc.shaderStage.descriptorConstantBufferMaxNum = limits.maxPerStageDescriptorUniformBuffers;
@@ -1013,11 +1017,11 @@ Result DeviceVK::Create(const DeviceCreationDesc& desc, const DeviceCreationVKDe
         m_Desc.shaderStage.descriptorStorageTextureMaxNum = limits.maxPerStageDescriptorStorageImages;
         m_Desc.shaderStage.resourceMaxNum = limits.maxPerStageResources;
 
-        m_Desc.shaderStage.updateAfterSet.descriptorSamplerMaxNum = props12.maxPerStageDescriptorUpdateAfterBindSamplers;
-        m_Desc.shaderStage.updateAfterSet.descriptorConstantBufferMaxNum = props12.maxPerStageDescriptorUpdateAfterBindUniformBuffers;
-        m_Desc.shaderStage.updateAfterSet.descriptorStorageBufferMaxNum = props12.maxPerStageDescriptorUpdateAfterBindStorageBuffers;
-        m_Desc.shaderStage.updateAfterSet.descriptorTextureMaxNum = props12.maxPerStageDescriptorUpdateAfterBindSampledImages;
-        m_Desc.shaderStage.updateAfterSet.descriptorStorageTextureMaxNum = props12.maxPerStageDescriptorUpdateAfterBindStorageImages;
+        m_Desc.shaderStage.updateAfterSet.descriptorSamplerMaxNum = features12.descriptorBindingSampledImageUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindSamplers : 0;
+        m_Desc.shaderStage.updateAfterSet.descriptorConstantBufferMaxNum = features12.descriptorBindingUniformBufferUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindUniformBuffers : 0;
+        m_Desc.shaderStage.updateAfterSet.descriptorStorageBufferMaxNum = features12.descriptorBindingStorageBufferUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindStorageBuffers : 0;
+        m_Desc.shaderStage.updateAfterSet.descriptorTextureMaxNum = features12.descriptorBindingSampledImageUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindSampledImages : 0;
+        m_Desc.shaderStage.updateAfterSet.descriptorStorageTextureMaxNum = features12.descriptorBindingStorageImageUpdateAfterBind ? props12.maxPerStageDescriptorUpdateAfterBindStorageImages : 0;
         m_Desc.shaderStage.updateAfterSet.resourceMaxNum = props12.maxPerStageUpdateAfterBindResources;
 
         m_Desc.shaderStage.vertex.attributeMaxNum = limits.maxVertexInputAttributes;
@@ -1166,8 +1170,12 @@ Result DeviceVK::Create(const DeviceCreationDesc& desc, const DeviceCreationVKDe
         if (m_Desc.tiers.shadingRate && FragmentShadingRateFeatures.primitiveFragmentShadingRate && FragmentShadingRateFeatures.attachmentFragmentShadingRate)
             m_Desc.tiers.shadingRate = 2;
 
-        // TODO: seems to be the best match
-        m_Desc.tiers.bindless = features12.descriptorIndexing ? 1 : 0;
+        // NRI tier 1 promises an unbound descriptor array with dynamic
+        // indexing. Vulkan's umbrella descriptorIndexing bit does not imply
+        // the granular sampled-image indexing / partially-bound features.
+        m_Desc.tiers.bindless = features12.descriptorIndexing
+            && features12.shaderSampledImageArrayNonUniformIndexing
+            && features12.descriptorBindingPartiallyBound ? 1 : 0;
         m_Desc.tiers.resourceBinding = 2;
         m_Desc.tiers.memory = 1;
 

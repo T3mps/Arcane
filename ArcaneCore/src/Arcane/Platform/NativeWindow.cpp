@@ -248,6 +248,11 @@ namespace Arcane
         if (msg >= 0x100) return;
         if (HWND h = static_cast<HWND>(Hwnd())) PostMessageW(h, kMsgUserBase + msg, static_cast<WPARAM>(w), static_cast<LPARAM>(l));
     }
+    void NativeWindow::SetDialogNavigation(bool on) noexcept
+    {
+        if (m_impl) m_impl->desc.dialogNavigation = on;
+    }
+
     void NativeWindow::SetTitle(std::wstring title) noexcept
     {
         HWND h = static_cast<HWND>(Hwnd());
@@ -273,6 +278,7 @@ namespace Arcane
     void* NativeWindow::Hwnd() const noexcept { return nullptr; }
     unsigned NativeWindow::Dpi() const noexcept { return 96u; }
     bool NativeWindow::OnWindowThread() const noexcept { return false; }
+    void NativeWindow::SetDialogNavigation(bool) noexcept {}
     void NativeWindow::Invalidate() noexcept {}
     void NativeWindow::Invalidate(int, int, int, int) noexcept {}
     void NativeWindow::PostUser(unsigned, std::uintptr_t, std::intptr_t) noexcept {}

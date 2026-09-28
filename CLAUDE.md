@@ -67,6 +67,10 @@ bin\Debug-windows-x86_64-md\ArcaneRuntime\ArcaneRuntime.exe --project ReferenceP
   ASCII comments.
 - **Units are MKS** (meters/kg/seconds). Never author pixel-scale content;
   the reference camera maps world->screen at `pixelsPerMeter = 100`.
+- **Cvars** live in `ArcaneCore` next to `Config`: typed values (including
+  `UInt32`/`UInt64`), names not GUIDs, `SetBy` history, a frame publish barrier,
+  default-deny. The editor Console tab and the runtime overlay are the two
+  presentations; ImGui is only the drawing. `--set name=value` is the command-line door.
 - **Shaders are data:** HLSL sources in `data/shaders/`, compiled by
   `data/shaders/compile-shaders.bat` (DXC; DXIL+SPIR-V; SPIR-V register
   shifts match `nvrhi::VulkanBindingOffsets`: t=0 s=128 b=256 u=384) via the
@@ -164,6 +168,32 @@ Actions (`.github/workflows/ci.yml`) is the hosted `~[gpu]` lane only.
 - Crashes AND hangs auto-capture symbolized all-thread stacks + a minidump to
   `<exe dir>/diagnostics/` -- read the .txt before theorizing.
 
+## Agent skills and the knowledge graph
+
+Project skills live in `.claude/skills/` (checked in; the rest of `.claude/`
+stays ignored). Claude Code loads them on demand by their descriptions; they
+carry the repo-specific traps the sections above only summarize:
+
+| Skill | Use it for |
+|---|---|
+| `arcane-build` | regenerate/build order, the single-slot game DLL, `--project` source-vs-staged resolution, arcbuild |
+| `arcane-tests` | running and reproducing ArcaneTests, seeds, which CI lane ran what, the coverage baselines |
+| `arcane-verify` | the golden gate, judging lanes, the slot/bless table, copying blesses back to source |
+| `arcane-graph` | impact analysis and "what connects to X" via the knowledge graph |
+
+**Use the knowledge graph before assuming how files, symbols or docs
+connect.** `graphify-out/` (gitignored; build it per machine with
+`/graphify .`, refresh with `/graphify . --update`) graphs every first-party
+module plus Astra/Manifold2D/Mosaic together with the specs, plans, research
+and audits. Scope is fixed by the root `.graphifyignore`. For impact analysis
+run `python .claude/skills/arcane-graph/neighbors.py <Symbol>` AND grep, then
+union them -- each finds things the other misses. Confirm in source before
+asserting.
+
+**Agent tooling goes the CLI route (shell tools + these skills), not MCP.**
+The live-query gap (asking a RUNNING host a new question) is to be closed by
+a CLI client to an in-host listener, designed with the cvar/console build.
+
 ## Engine-as-SDK
 
 External projects set `ARCANE_SDK` to this repo root and consume
@@ -178,7 +208,9 @@ output).
 
 ## arcbuild -- the game-project build driver
 
-`arcbuild.exe` (staged beside `ArcaneEditor.exe`; specs
+`arcbuild.exe` (built to `bin/<cfg>-windows-x86_64-md/arcbuild/`, not on
+PATH; a packaged layout ships it beside `ArcaneEditor.exe`, and the editor
+looks in both places; specs
 `docs/specs/2026-09-13-arcbuild-driver-design.md` +
 `docs/specs/2026-09-20-arcbuild-multibackend-hardening-design.md`, both
 **Implemented**) is the one entry point that drives Premake generation plus a

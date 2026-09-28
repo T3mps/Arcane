@@ -2,6 +2,7 @@
 
 #include <Arcane/Base/Assert.hpp>
 
+#include <cstring>
 #include <string>
 #include <utility>
 
@@ -25,9 +26,9 @@ namespace
     //                   -- ROP blending reads as well
     //                   as writes)
     //  DepthWrite     DEPTH_STENCIL_ATTACHMENT          DEPTH_STENCIL_ATTACHMENT    DEPTH_STENCIL_ATTACHMENT (bit 8)
-    //                   (bits 7|8, same umbrella
-    //                   reasoning: depth test reads,
-    //                   depth write writes)
+    //                   (bits 7|8: depth test reads and
+    //                   depth write writes; NRI's legacy
+    //                   D3D12 translator collapses this to DEPTH_WRITE)
     //  ShaderRead     SHADER_RESOURCE   (bit 15)        SHADER_RESOURCE             VERTEX|FRAGMENT|COMPUTE_SHADER
     //                                                                                 (bits 1|7|11) -- see below
     //  ShaderWriteCs  SHADER_RESOURCE_STORAGE (bit 16)  SHADER_RESOURCE_STORAGE     COMPUTE_SHADER     (bit 11)
@@ -476,7 +477,13 @@ namespace Arcane
             return lhs.size == rhs.size && lhs.usage == rhs.usage;
         };
 
-        struct PoolSlot { std::size_t representative; std::vector<RgCompiled::Lifetime> occupied; };
+        struct PoolSlot
+        {
+            std::size_t representative;
+            std::vector<RgCompiled::Lifetime> occupied;
+            bool hasOptimizedClearValue = false;
+            nri::ClearValue optimizedClearValue{};
+        };
         std::vector<PoolSlot> pool;
         compiled.transientPoolSlot.assign(compiled.transients.size(), kRgNoPoolSlot);
 
@@ -492,6 +499,18 @@ namespace Arcane
                 if (!descsMatch(compiled.transients[pool[p].representative], compiled.transients[t]))
                     continue;
 
+                const RgTransient& candidate = compiled.transients[t];
+                if (candidate.isTexture)
+                {
+                    const RgTextureDesc& desc = m_textures[candidate.resourceIndex].desc;
+                    if (desc.hasOptimizedClearValue && pool[p].hasOptimizedClearValue
+                        && std::memcmp(&desc.optimizedClearValue, &pool[p].optimizedClearValue,
+                                       sizeof(nri::ClearValue)) != 0)
+                    {
+                        continue;
+                    }
+                }
+
                 bool overlaps = false;
                 for (const RgCompiled::Lifetime& occupied : pool[p].occupied)
                 {
@@ -505,6 +524,15 @@ namespace Arcane
                     continue;
 
                 pool[p].occupied.push_back(lifetime);
+                if (candidate.isTexture)
+                {
+                    const RgTextureDesc& desc = m_textures[candidate.resourceIndex].desc;
+                    if (desc.hasOptimizedClearValue && !pool[p].hasOptimizedClearValue)
+                    {
+                        pool[p].hasOptimizedClearValue = true;
+                        pool[p].optimizedClearValue = desc.optimizedClearValue;
+                    }
+                }
                 compiled.transientPoolSlot[t] = static_cast<std::uint32_t>(p);
                 assigned = true;
             }
@@ -512,7 +540,18 @@ namespace Arcane
             if (!assigned)
             {
                 compiled.transientPoolSlot[t] = static_cast<std::uint32_t>(pool.size());
-                pool.push_back(PoolSlot{ t, { lifetime } });
+                PoolSlot slot{ t, { lifetime } };
+                const RgTransient& candidate = compiled.transients[t];
+                if (candidate.isTexture)
+                {
+                    const RgTextureDesc& desc = m_textures[candidate.resourceIndex].desc;
+                    if (desc.hasOptimizedClearValue)
+                    {
+                        slot.hasOptimizedClearValue = true;
+                        slot.optimizedClearValue = desc.optimizedClearValue;
+                    }
+                }
+                pool.push_back(slot);
             }
         }
         compiled.poolSlotCount = static_cast<std::uint32_t>(pool.size());
