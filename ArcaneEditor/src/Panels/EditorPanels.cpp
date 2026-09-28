@@ -226,7 +226,8 @@ namespace Arcane::Editor
                 // windows exist -- this absorbs the old top-level Preferences
                 // leaf.
                 ImGui::MenuItem("Preferences...");
-                ImGui::MenuItem("Project Settings...");
+                if (ImGui::MenuItem("Project Settings..."))
+                    requests.showProjectSettings = true;
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Assets"))
@@ -2827,6 +2828,61 @@ namespace Arcane::Editor
         // the button above (or a previous frame's click) opened it.
         DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
 
+        ImGui::End();
+    }
+    void DrawProjectSettings(const Arcane::Project* project, bool* open,
+                             ProjectSettingsRequests& requests)
+    {
+        if (!ImGui::Begin("Project Settings", open)) { ImGui::End(); return; }
+        if (!project)
+        {
+            ImGui::TextDisabled("Open a project to configure gameplay input.");
+            ImGui::End();
+            return;
+        }
+
+        ImGui::TextUnformatted("Gameplay Input Actions");
+        ImGui::Separator();
+        const auto selected = Guid::FromString(project->Manifest().inputActions).value_or(Guid{});
+        const auto registered = project->Registry().All();
+        std::vector<std::pair<Guid, std::string>> choices;
+        for (const auto& [id, mountPath] : registered)
+        {
+            if (mountPath.size() >= 9 &&
+                mountPath.substr(mountPath.size() - 9) == ".arcinput")
+                choices.emplace_back(id, mountPath);
+        }
+        const bool missing = selected.IsValid() &&
+            std::none_of(choices.begin(), choices.end(),
+                [&](const auto& entry) { return entry.first == selected; });
+        if (missing)
+            ImGui::TextWrapped("Selected asset %s is missing from the project registry. Choose another asset or clear the selection.",
+                               selected.ToString().c_str());
+        else if (!selected.IsValid())
+            ImGui::TextDisabled("No gameplay input asset selected.");
+
+        if (ImGui::BeginCombo("Input Asset", missing ? "Missing asset" :
+            selected.IsValid() ? "Selected asset" : "None"))
+        {
+            if (ImGui::Selectable("None", !selected.IsValid())) requests.clear = true;
+            for (const auto& [id, path] : choices)
+            {
+                if (ImGui::Selectable(path.c_str(), selected == id))
+                { requests.selection = id; requests.select = true; }
+            }
+            ImGui::EndCombo();
+        }
+        if (choices.empty())
+            ImGui::TextDisabled("No .arcinput assets are registered in this project.");
+        if (selected.IsValid() && !missing)
+        {
+            for (const auto& [id, path] : choices)
+                if (id == selected) ImGui::TextWrapped("%s", path.c_str());
+            if (ImGui::Button("Open Asset")) requests.open = true;
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Selection")) requests.clear = true;
+        }
+        if (ImGui::Button("Create Input Actions Asset")) requests.create = true;
         ImGui::End();
     }
 }

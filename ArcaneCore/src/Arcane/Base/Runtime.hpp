@@ -218,6 +218,7 @@ namespace Arcane
         // a mutable CurrentProject accessor: this is the one mutation the editor
         // needs, and it keeps Project's mutability from leaking to every caller.
         bool SetProjectBootScene(const Guid& id);
+        bool SetProjectInputActionsAsset(const Guid& id);
 
         // Re-stamp the open project's manifest engine.abi (Project::
         // RestampEngineAbi). Same narrow-seam shape as SetProjectBootScene

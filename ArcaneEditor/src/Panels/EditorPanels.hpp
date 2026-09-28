@@ -39,6 +39,7 @@ namespace Arcane::Editor
     struct MenuRequests
     {
         bool openProject = false;    // File -> Open Project      (file dialog)
+        bool showProjectSettings = false;
         // A picked recent-project path. Empty = nothing picked this frame.
         // A path rather than a bool because a submenu carries the choice.
         std::string openRecentPath;
@@ -100,6 +101,18 @@ namespace Arcane::Editor
         bool crashGpu = false;
 #endif
     };
+
+    struct ProjectSettingsRequests
+    {
+        Guid selection;
+        bool select = false;
+        bool clear = false;
+        bool open = false;
+        bool create = false;
+    };
+
+    void DrawProjectSettings(const Arcane::Project* project, bool* open,
+                             ProjectSettingsRequests& requests);
 
     // Open the full-viewport dockspace host window + the editor menu bar and LEAVE IT
     // OPEN (call once per frame right after ImGui BeginFrame). Draw the fixed toolbar

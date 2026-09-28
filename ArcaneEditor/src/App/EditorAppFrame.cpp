@@ -2378,6 +2378,53 @@ namespace Arcane::Editor
         // before the panel's own EndOnDeactivate has had its say.
         Arcane::Editor::DrawMaterialPanel(ResolveActiveMaterialDoc());
 
+        if (m_projectSettingsOpen)
+        {
+            Arcane::Editor::ProjectSettingsRequests settings;
+            Arcane::Editor::DrawProjectSettings(m_runtime->CurrentProject(),
+                                                &m_projectSettingsOpen, settings);
+            if (settings.create)
+            {
+                Arcane::Editor::CreateAssetRequest request;
+                request.kind = Arcane::Editor::CreateAssetKind::InputActions;
+                BeginCreateAsset(request);
+            }
+            if (settings.open)
+            {
+                if (const auto* project = m_runtime->CurrentProject())
+                {
+                    const auto id = Arcane::Guid::FromString(project->Manifest().inputActions);
+                    if (id && id->IsValid())
+                        if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(*id)))
+                            m_documents.OpenPath(*path);
+                }
+            }
+            if (settings.clear || settings.select)
+            {
+                const auto id = settings.clear ? Arcane::Guid::Nil() : settings.selection;
+                if (m_runtime->SetProjectInputActionsAsset(id))
+                {
+                    m_runtime->GameInput().Clear();
+                    if (id.IsValid())
+                    {
+                        if (const auto* project = m_runtime->CurrentProject())
+                        {
+                            if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(id)))
+                            {
+                                std::ifstream file(*path, std::ios::binary);
+                                const std::string raw(std::istreambuf_iterator<char>{file}, {});
+                                const auto json = nlohmann::json::parse(raw, nullptr, false);
+                                const auto asset = Arcane::InputActionAsset::FromJson(json);
+                                const auto projectId = Arcane::Guid::FromString(project->Manifest().guid);
+                                if (asset && projectId)
+                                    (void)m_runtime->ConfigureGameInput(*asset, *projectId);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // New documents tab into the Viewport's node (captured last frame).
         m_documents.DrawAll(m_viewportDockId);
     }
@@ -2385,6 +2432,7 @@ namespace Arcane::Editor
     void EditorApp::ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
                                         const FrameState& fs, LoopState& ls)
     {
+        if (menuReq.showProjectSettings) m_projectSettingsOpen = true;
         // Bare interactive launch: raise the picker as if the user had clicked
         // File -> Open Project, once. Routed through menuReq (rather than
         // calling the dialog directly) so there is exactly ONE launch site and

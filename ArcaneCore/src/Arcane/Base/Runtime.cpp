@@ -575,6 +575,16 @@ namespace Arcane
         return m_impl->project->SetBootScene(id);
     }
 
+    bool Runtime::SetProjectInputActionsAsset(const Guid& id)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::SetProjectInputActionsAsset: no project open");
+            return false;
+        }
+        return m_impl->project->SetInputActionsAsset(id);
+    }
+
     bool Runtime::RestampProjectEngineAbi(int abi)
     {
         if (!m_impl->project)

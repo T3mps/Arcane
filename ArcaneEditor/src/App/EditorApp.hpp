@@ -1361,6 +1361,7 @@ namespace Arcane::Editor
         // fine only because the dtor never drains -- it just un-publishes.
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
+        bool m_projectSettingsOpen = false;
         // Asset-manager redesign, Plan 1 Task 9 -> panel-split Task 7: the
         // asset panels' session UI state, one struct per WINDOW now that the
         // three lenses are three panels (spec s6). The Asset Status window

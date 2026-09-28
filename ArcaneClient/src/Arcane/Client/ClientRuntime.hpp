@@ -158,6 +158,7 @@ namespace Arcane
         void CloseProject() { m_pres.gameInput.Clear(); m_core.CloseProject(); }
         std::optional<Guid> RegisterCreatedAsset(const std::filesystem::path& file) { return m_core.RegisterCreatedAsset(file); }
         bool SetProjectBootScene(const Guid& id) { return m_core.SetProjectBootScene(id); }
+        bool SetProjectInputActionsAsset(const Guid& id) { return m_core.SetProjectInputActionsAsset(id); }
         bool RestampProjectEngineAbi(int abi) { return m_core.RestampProjectEngineAbi(abi); }
 
         Astra::Result<std::vector<std::byte>, Astra::SerializationError> SnapshotRegistry() const { return m_core.SnapshotRegistry(); }
