@@ -2,8 +2,9 @@
 //   HotReloadPluginV1       -> HOTRELOAD_STEP=1,  ABI = kGamePluginABIVersion
 //   HotReloadPluginV2       -> HOTRELOAD_STEP=10, ABI = kGamePluginABIVersion
 //   HotReloadPluginBad      -> ABI = kGamePluginABIVersion + 999 (forces rollback)
-//   HotReloadPluginInitFail -> HOTRELOAD_INIT_FAIL: OnInit registers its system
-//        factories and THEN returns false. The ABI is fine and the image loads
+//   HotReloadPluginInitFail -> HOTRELOAD_INIT_FAIL: automatic registration and
+//        OnInit's manual registration both add factories before OnInit returns
+//        false. The ABI is fine and the image loads
 //        cleanly, so this is the one failure shape that gets as far as running a
 //        module's registrations before the host has to unwind them -- the fixture
 //        for PluginHost's secondary-init-failure teardown (final-review fix wave,
@@ -33,6 +34,13 @@
 // macro's Init performs -- the same path a wizard-made component takes.
 ARCANE_COMPONENT(Arcane::HotReloadTest::Pulse)
 ARCANE_COMPONENT(Arcane::HotReloadTest::RoleCounters)
+
+// Deliberately pair the automatic path with ClientOnlyTick's manual OnInit
+// path below. The same DLL therefore proves that both produce owned factories
+// with identical role, reload, and teardown behavior.
+ARCANE_SYSTEM(Arcane::HotReloadTest::ServerOnlyTick,
+              Arcane::RoleMask::Server,
+              Arcane::SystemPhase::FixedUpdate)
 
 namespace Arcane::HotReloadTest
 {
@@ -64,12 +72,13 @@ namespace Arcane::HotReloadTest
 #endif
             }
             CacheHandle();
-            // The s4 contract: factories registered ONCE per DLL load, with an explicit
-            // mask; each Runtime instantiates what its NetMode matches.
-            RegisterSystem<ServerOnlyTick>(Arcane::RoleMask::Server, Arcane::SystemPhase::FixedUpdate);
+            // The s4 contract: factories register ONCE per DLL load, with an
+            // explicit mask; each Runtime instantiates what its NetMode matches.
+            // ServerOnlyTick arrived through ARCANE_SYSTEM before OnInit;
+            // ClientOnlyTick stays manual as the constructor-aware control path.
             RegisterSystem<ClientOnlyTick>(Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate);
 #ifdef HOTRELOAD_INIT_FAIL
-            // AFTER the registrations, deliberately: this build exists to leave
+            // AFTER both registrations, deliberately: this build exists to leave
             // entries in the process-lifetime SystemFactoryTable that point into an
             // image the host is about to unmap. See the header comment.
             ARC_INFO("HotReloadPlugin: OnInit refusing on purpose (HOTRELOAD_INIT_FAIL)");
