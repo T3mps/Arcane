@@ -7,6 +7,13 @@
 folder (`Arcane/Input/`) rather than living inside Platform; Platform keeps
 window/events/app lifecycle.
 
+**2026-09-28 follow-up:** The project gameplay input plan in
+`docs/superpowers/plans/2026-09-28-project-input-actions-authoring.md`
+implements the rebinding and persistence work deferred below. Projects now
+select a versioned `.arcinput` asset, local users persist binding profiles,
+and the editor authors maps and bindings. The evaluator semantics in this
+document still apply to host `input_actions.json` and compiled project assets.
+
 ## Goal
 
 A Unity-style input action system inside Arcane.dll: action maps -> actions

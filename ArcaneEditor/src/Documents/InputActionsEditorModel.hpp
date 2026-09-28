@@ -61,6 +61,7 @@ namespace Arcane::Editor
         [[nodiscard]] bool SetField(const Guid& id, std::string key, nlohmann::json value);
         [[nodiscard]] bool SetDefaultMap(const Guid& map);
         [[nodiscard]] bool AddScheme(std::string name, std::string group);
+        [[nodiscard]] bool EditScheme(const Guid& scheme, std::string name, std::string group);
         [[nodiscard]] bool RemoveScheme(const Guid& scheme);
         [[nodiscard]] std::vector<std::string> Warnings() const;
 

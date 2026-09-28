@@ -196,3 +196,21 @@ TEST_CASE("input editor: composite parts can be added removed and reordered", "[
     CHECK(model.LastValidPreview().has_value());
     CHECK(model.Draft()["actionMaps"][0]["actions"][0]["bindings"].size() == 3);
 }
+
+TEST_CASE("input editor: renaming a scheme preserves binding membership", "[editor][input]")
+{
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson());
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    REQUIRE(model.AddScheme("Keyboard", "Keyboard"));
+    const auto scheme = *Arcane::Guid::FromString(
+        model.Draft()["controlSchemes"][0]["id"].get<std::string>());
+    REQUIRE(model.AddBinding(map, action, "<Keyboard>/a"));
+    const auto binding = model.SelectedBinding();
+    REQUIRE(model.SetField(binding, "groups", nlohmann::json::array({"Keyboard"})));
+    REQUIRE(model.EditScheme(scheme, "Keyboard and Mouse", "KeyboardMouse"));
+    CHECK(model.Draft()["controlSchemes"][0]["name"] == "Keyboard and Mouse");
+    CHECK(model.Draft()["actionMaps"][0]["actions"][0]["bindings"][1]["groups"][0] ==
+          "KeyboardMouse");
+    CHECK(model.LastValidPreview().has_value());
+}

@@ -110,10 +110,19 @@ namespace Arcane::Editor
             {
                 const auto id = Id(scheme);
                 ImGui::PushID(id.ToString().c_str());
-                ImGui::Text("%s (%s)", String(scheme, "name").c_str(),
-                            String(scheme, "bindingGroup").c_str());
+                const auto name = String(scheme, "name");
+                const auto group = String(scheme, "bindingGroup");
+                ImGui::Text("%s (%s)", name.c_str(), group.c_str());
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x")) edit = [&model, id] { (void)model.RemoveScheme(id); };
+                if (ImGui::TreeNode("Edit Scheme"))
+                {
+                    TextField("Name##scheme", name, [&model, &edit, id, group](std::string value)
+                    { edit = [&model, id, value, group] { (void)model.EditScheme(id, value, group); }; });
+                    TextField("Group##scheme", group, [&model, &edit, id, name](std::string value)
+                    { edit = [&model, id, name, value] { (void)model.EditScheme(id, name, value); }; });
+                    ImGui::TreePop();
+                }
                 ImGui::PopID();
             }
         }
@@ -193,7 +202,8 @@ namespace Arcane::Editor
                 ImGui::TextUnformatted("PROPERTIES");
                 if (selected->contains("name"))
                     TextField("Name", String(*selected, "name"),
-                        [&model, targetId](std::string text) { (void)model.SetField(targetId, "name", std::move(text)); });
+                        [&model, &edit, targetId](std::string text)
+                        { edit = [&model, targetId, text] { (void)model.SetField(targetId, "name", text); }; });
                 if (targetId == mapId)
                 {
                     bool blocking = selected->value("blocking", false);
@@ -217,8 +227,8 @@ namespace Arcane::Editor
                 if (selected->contains("path"))
                 {
                     const auto path = String(*selected, "path");
-                    TextField("Control Path", path, [&model, targetId](std::string text)
-                        { (void)model.SetField(targetId, "path", std::move(text)); });
+                    TextField("Control Path", path, [&model, &edit, targetId](std::string text)
+                        { edit = [&model, targetId, text] { (void)model.SetField(targetId, "path", text); }; });
                     if (ImGui::BeginCombo("Pick Control", path.c_str()))
                     {
                         for (const char* choice : kPaths)
@@ -247,7 +257,7 @@ namespace Arcane::Editor
                         for (const auto& entry : (*selected)[field])
                             if (entry.is_string())
                             { if (!current.empty()) current += ", "; current += entry.get<std::string>(); }
-                    TextField(field, current, [&model, targetId, field](std::string value)
+                    TextField(field, current, [&model, &edit, targetId, field](std::string value)
                     {
                         nlohmann::json entries = nlohmann::json::array();
                         size_t offset = 0;
@@ -264,7 +274,8 @@ namespace Arcane::Editor
                             if (end == std::string::npos) break;
                             offset = end + 1;
                         }
-                        (void)model.SetField(targetId, field, std::move(entries));
+                        edit = [&model, targetId, field, entries]
+                            { (void)model.SetField(targetId, field, entries); };
                     });
                 }
                 if (selected->contains("groups") || selected->contains("path") || selected->contains("composite"))

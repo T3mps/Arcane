@@ -416,6 +416,35 @@ namespace Arcane::Editor
         return ApplyEdit("Add control scheme", draft_, next);
     }
 
+    bool InputActionsEditorModel::EditScheme(const Guid& scheme, std::string name,
+                                             std::string group)
+    {
+        if (name.empty() || group.empty() || !draft_.is_object() ||
+            !draft_.contains("controlSchemes") || !draft_["controlSchemes"].is_array()) return false;
+        auto next = draft_;
+        auto* row = FindId(next["controlSchemes"], scheme);
+        if (!row) return false;
+        const auto oldGroup = row->value("bindingGroup", std::string{});
+        (*row)["name"] = std::move(name);
+        (*row)["bindingGroup"] = group;
+        if (oldGroup != group && next.contains("actionMaps"))
+        {
+            auto replace = [&](auto&& self, nlohmann::json& node) -> void
+            {
+                if (node.is_object())
+                {
+                    if (node.contains("groups") && node["groups"].is_array())
+                        for (auto& entry : node["groups"])
+                            if (entry == oldGroup) entry = group;
+                    for (auto& [key, child] : node.items()) self(self, child);
+                }
+                else if (node.is_array()) for (auto& child : node) self(self, child);
+            };
+            replace(replace, next["actionMaps"]);
+        }
+        return ApplyEdit("Edit control scheme", draft_, next);
+    }
+
     bool InputActionsEditorModel::RemoveScheme(const Guid& scheme)
     {
         if (!draft_.is_object() || !draft_.contains("controlSchemes") || !draft_["controlSchemes"].is_array()) return false;

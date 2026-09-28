@@ -175,8 +175,8 @@ function arcane_game_module(name)
 
         -- Public engine header surface (in-place) + the header-only ThirdParty deps a
         -- game module pulls in transitively (glm/Astra scene types, imgui handoff,
-        -- spdlog via Log.hpp, the Mosaic threading seam, and Manifold2D through
-        -- the public PhysicsComponents.hpp surface).
+        -- spdlog via Log.hpp, the Mosaic threading seam, Manifold2D through
+        -- PhysicsComponents.hpp, and Json.hpp through InputActionAsset.hpp).
         includedirs {
             "%{wks.location}/" .. sourceDir,
             ARCANE_SDK .. "/ArcaneClient/src",
@@ -194,6 +194,7 @@ function arcane_game_module(name)
             ARCANE_TP .. "/imgui",
             ARCANE_TP .. "/spdlog/include",
             ARCANE_TP .. "/Mosaic/include",
+            ARCANE_TP .. "/nlohmann",
         }
 
         -- Link the engine import libs by name out of the per-config SDK bin dirs.
