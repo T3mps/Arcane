@@ -46,6 +46,7 @@
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
+#include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>   // Arcane::GraphicsBackend / ToString (HUD)
@@ -822,6 +823,11 @@ namespace Arcane::Editor
                 return data ? data->id : Arcane::Guid::Nil();
             };
         m_documents.RegisterFactory(".arcmesh", meshFactory, meshPeek);
+        m_documents.RegisterFactory(".arcinput",
+            [this](const std::filesystem::path& path) -> std::unique_ptr<Arcane::Editor::EditorDocument>
+            { return Arcane::Editor::InputActionsDocument::Open(path, m_undo ? &*m_undo : nullptr); },
+            [](const std::filesystem::path& path) -> Arcane::Guid
+            { return Arcane::Editor::InputActionsDocument::PeekGuid(path); });
 
         // Scene asset resolution (sprite-resolution lift): ONE engine-side
         // service resolves everything a scene references into what the

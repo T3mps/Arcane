@@ -3028,6 +3028,7 @@ namespace Arcane::Editor
         {
             case Arcane::Editor::CreateAssetKind::Mesh:
             case Arcane::Editor::CreateAssetKind::Sprite:
+            case Arcane::Editor::CreateAssetKind::InputActions:
                 OpenAssetDocument(created);
                 break;
             case Arcane::Editor::CreateAssetKind::Scene:

@@ -1201,6 +1201,8 @@ project "ArcaneTests"
         -- Draw (the ImGui half) is never called; device-less services skip the
         -- preview resources in the ctor.
         "%{wks.location}/ArcaneEditor/src/Documents/ShaderEditorDocument.cpp",
+        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsEditorModel.cpp",
+        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsDocument.cpp",
         -- Outliner slice 4: ComponentCatalog (registry enumeration + the one
         -- system-managed hide-list + selection-aware missing counts) source-
         -- compiles into the test exe so the [editor] units drive it directly --
