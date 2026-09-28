@@ -26,13 +26,4 @@ namespace Arcane
 
     // Set both axes on an existing body, or its authored mint velocity.
     ARCANE_CORE_API void SetBodyVelocity2D(Astra::Registry& registry, Astra::Entity entity, float velocityX, float velocityY);
-
-    // Set authored X velocity for a body that has not been minted yet, or set
-    // the live body's X velocity while preserving its current vertical speed.
-    // Call from fixed update before PhysicsSystem. Missing bodies are harmless.
-    ARCANE_CORE_API void SetBodyHorizontalVelocity(Astra::Registry& registry, Astra::Entity entity, float velocityX);
-
-    // Launch a supported dynamic body upward, preserving X speed. Returns
-    // false for air, walls, ceilings, missing/stale bodies or invalid speed.
-    ARCANE_CORE_API bool TryJumpBody(Astra::Registry& registry, Astra::Entity entity, float jumpSpeed);
 }

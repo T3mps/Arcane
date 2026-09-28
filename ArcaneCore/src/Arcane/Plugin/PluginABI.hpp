@@ -947,18 +947,29 @@ namespace Arcane
     //     ProgressStallRule::WasReported() is inline and adds no export. A
     //     v39 module was compiled against the old layouts; reject the
     //     pairing. ReferenceProject.arcproj restamped.
-    // v41 (2026-09-28, game-module physics command): ArcaneCore.dll exports
-    // SetBodyHorizontalVelocity for a game module's fixed-step controller.
-    // A module using that command cannot load beside a v40 Core that lacks the
-    // symbol; keep the module/version gate in step with the SDK import surface.
-    // ReferenceProject.arcproj restamped.
-    // v42 (2026-09-28, platformer input): ArcaneCore.dll exports TryJumpBody
-    // and the game module's reflected PlayerController2D layout gains jump
-    // speed and a transient jump pulse. Reject stale host/module pairings.
-    // v43 (2026-09-28, reference platformer controller): ArcaneCore exports
-    // GetBodyMotion2D/SetBodyVelocity2D and the reflected sample component
-    // gains movement tuning and transient jump state. Refuse stale SDK pairs.
-    inline constexpr uint32_t kGamePluginABIVersion = 43;
+    // v41-v43 (2026-09-28, reference platformer): three stamps that landed in
+    //     one unpushed checkpoint. ArcaneCore.dll exports GetBodyMotion2D and
+    //     SetBodyVelocity2D (Scene/PhysicsCommands.hpp, the game-module-safe
+    //     seam over the PhysicsWorld linked inside Core) and the reflected
+    //     sample component PlayerController2D gains movement tuning and
+    //     transient jump state. The two exports v41/v42 had named
+    //     (SetBodyHorizontalVelocity, TryJumpBody) never gained a caller and
+    //     were removed at v44, before the push.
+    // v44 (2026-09-28, project input actions; the hygiene pass): the
+    //     module-visible input surface moved. `class ARCANE_API InputActions`
+    //     gained 21 pure virtuals MID-VTABLE (LoadAsset, SetControlScheme, the
+    //     ID-keyed FindAction/Value/Phase/Pressed/... family, SetBindingPath,
+    //     the Maps/Actions/Bindings enumeration, BeginFixedStep and the
+    //     *ThisFixedStep queries); RuntimePresentation, a by-value member of
+    //     `ARCANE_API ClientRuntime`, gained `LocalInputUser gameInput`, moving
+    //     every later member; ArcaneClient.dll exports LocalInputUser,
+    //     InputActionAsset, InputBindingProfile, InputRebindOperation,
+    //     ClientRuntime::GameInput and HostBoot::LoadGameplayInput;
+    //     ArcaneCore.dll exports Runtime::SetProjectInputActionsAsset, and the
+    //     .arcproj manifest gained `inputActions`. A v43 module was compiled
+    //     against the old vtable and layout; reject the pairing.
+    //     ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 44;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
