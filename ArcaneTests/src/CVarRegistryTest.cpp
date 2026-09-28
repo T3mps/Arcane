@@ -213,6 +213,16 @@ TEST_CASE("console model submits, completes, and refuses a player", "[cvar]") {
     model.Submit(reg, Permission::Player);
     REQUIRE_FALSE(model.Lines().back().ok);
     REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 1);
+
+    // An accepted set is PENDING after Submit: the console is a writer like
+    // any other, and only the frame driver's Publish makes it visible
+    // (spec 6.4 -- read-your-own-writes is deliberately not provided).
+    model.SetInput("game.speed 3");
+    model.Submit(reg, Permission::Editor);
+    REQUIRE(model.Lines().back().ok);
+    REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 1);
+    reg.Publish();
+    REQUIRE(reg.Get(reg.Find("game.speed"))->AsInt32() == 3);
 }
 
 TEST_CASE("render.meshCull defaults on and publishes off", "[cvar]") {

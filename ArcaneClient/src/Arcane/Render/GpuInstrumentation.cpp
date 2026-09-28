@@ -20,12 +20,10 @@ namespace Arcane
         // impossible for a pointer-width atomic.
         std::atomic<IGpuCrashBackend*> g_activeBackend{ nullptr };
 
-        // Set from ProjectBoot.hpp's config load every boot. There is no
-        // draw-granular marker scope to read it, so this is currently
-        // write-only -- see GpuInstrumentation.hpp's banner. Relaxed
-        // ordering, kept as-is: a
-        // toggle observed one frame late was never meaningful and this must
-        // not fence the render path if a future reader arrives.
+        // A Dev cvar: EngineConfig/diagnostics.json, --set and the console
+        // write it, the frame driver's Publish makes it visible, and
+        // GpuDrawMarkersEnabled reads the published value. There is no
+        // draw-granular marker scope to read it yet -- see the header's banner.
         ARC_CVAR("diagnostics.drawMarkers", Bool, CVarValue::Bool(false), CVarFlags::Dev,
                  "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.");
 
@@ -93,14 +91,6 @@ namespace Arcane
     void ResetGpuDeviceLost() noexcept
     {
         g_deviceLost.store(false, std::memory_order_release);
-    }
-
-    void SetGpuDrawMarkersEnabled(bool enabled) noexcept
-    {
-        const CVarHandle handle = CVarRegistry::Get().Find("diagnostics.drawMarkers");
-        if (handle.IsStale()) return;
-        CVarRegistry::Get().Set(handle, CVarValue::Bool(enabled), SetBy::Code, "instrumentation");
-        CVarRegistry::Get().Publish();
     }
 
     bool GpuDrawMarkersEnabled() noexcept

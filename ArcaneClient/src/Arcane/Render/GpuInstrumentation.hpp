@@ -79,11 +79,11 @@ namespace Arcane
     //
     // ASYMMETRIC, DELIBERATELY. The SETTER is genuinely live:
     // ProjectBoot.hpp's ApplyDiagnosticsConfig calls it every boot from the
-    // `diagnostics.drawMarkers` config key, so the flag is read from JSON and
-    // stored. The GETTER has ZERO callers -- there is no draw-granular marker
-    // scope to read it. Kept rather than pruned: dropping it means editing
-    // that config-loading path too.
-    ARCANE_API void SetGpuDrawMarkersEnabled(bool enabled) noexcept;
+    // `diagnostics.drawMarkers` Dev cvar (GpuInstrumentation.cpp): the config
+    // layers, --set and the console write it. The GETTER has ZERO callers --
+    // there is no draw-granular marker scope to read it yet; it is the seam
+    // that scope will use. (The old SetGpuDrawMarkersEnabled setter, also
+    // caller-less, published mid-frame and is gone.)
     [[nodiscard]] ARCANE_API bool GpuDrawMarkersEnabled() noexcept;
 
     // -----------------------------------------------------------------

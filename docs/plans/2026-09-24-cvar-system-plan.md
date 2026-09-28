@@ -231,3 +231,33 @@
 ## What this plan deliberately does not decide again
 
 Source 2's typed union and callback id, Unreal's `SetBy` ladder and history pop, our registry-owned storage, our publish barrier, and default-deny are the spec. Task code that "simplifies" any of those — a stringly value, a raw pointer in the handle, a render-thread shadow, a default-allow console — is a bug, not an implementation detail.
+
+## Hygiene pass 2026-09-28: what the review found owed
+
+Fixed by the pass: `<Keyboard>/grave` resolves (the console toggle was dead);
+the editor publishes once per frame (it published once at loop entry); the
+console and `SetGpuDrawMarkersEnabled` no longer publish mid-frame (the setter,
+caller-less, is gone); the editor Console tab draws the model's replies.
+
+Still owed, in the order they bite:
+- Module lifetime (spec 4.4, decision 7): `ARC_CVAR`/`ARC_COMMAND` hard-code
+  module "engine"; nothing calls `UnregisterModule` on plugin unload; callbacks
+  and commands are raw function pointers, so a rebuilt game module's statics
+  are refused as duplicates and stale pointers stay live.
+- Game-module cvars never receive config layers: layers apply in `project_open`,
+  `--set` in `input_config`, the module's statics run in `plugin_load`, and the
+  boot DAG orders none of them; re-apply on module reload too.
+- History is append-only (equal-rung repeats push; `OpenProject` re-pushes every
+  layer; `CloseProject` never pops), against the one-record-per-source model.
+- `Register` does not check `defaultValue.type == type`; cheat revert bypasses
+  callbacks; callback dispatch iterates a reference a callback can invalidate;
+  config parse failures and unknown keys are silent (the spec promises a
+  warning); command success is sniffed from the reply text.
+- The spec's "workers read the immutable snapshot" contract has no
+  implementation (no double buffer, no atomic index): either state main-thread-
+  only or build it.
+- Drift: storage is one `Slot` with a `variant`, not type-segregated arrays;
+  reads go by name because the `ARC_CVAR` handle is unnameable; the config seam
+  re-parses JSON instead of reading `Config::Category`; console focus and
+  autocomplete are absent; `PublishImmediate()` does not exist; the plan's
+  eight-type round-trip and `GpuDrawMarkersEnabled` tests are missing.

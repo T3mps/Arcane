@@ -223,7 +223,6 @@ namespace Arcane::Editor
         // Boot is over; anything the watchdog reports from here on belongs to
         // the frame loop, not to a stale boot stage.
         Arcane::Diagnostics::SetPhase("editor frame loop");
-        Arcane::CVarRegistry::Get().Publish();
 
         // ===== F2b Task 12: the cook gate =====================================
         // verify/capture/bless REFUSES-OR-WAITS while CookSession-reported
@@ -414,6 +413,11 @@ namespace Arcane::Editor
 #endif
 
             FrameState fs;
+            // THE CVAR PUBLISH BARRIER, once per frame: every Set a console
+            // line, a callback or a plugin made since the last one becomes
+            // visible here, to all of this frame's readers at once. The
+            // runtime does the same at the top of AdvanceSim.
+            Arcane::CVarRegistry::Get().Publish();
             FrameInput(ls, fs);
             AdvanceSim(ls);
             ApplyPendingViewportResize();

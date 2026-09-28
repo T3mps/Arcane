@@ -904,7 +904,13 @@ namespace Arcane::Editor
         // crashes (imgui_widgets.cpp:7453 -> 8249). Frame ONE of any launch
         // where another tab covers the Console hits this. So: no body in a
         // skipped child, period.
-        if (!ImGui::BeginChild("##consolerows", ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing())))
+        // The cvar console's own history sits between the log rows and the
+        // input line: reserve the input line plus up to six reply lines.
+        // (Hygiene pass 2026-09-28: the replies were never drawn here.)
+        static Arcane::ConsoleModel cvars;
+        const std::size_t cvarLines = cvars.Lines().size() < 6 ? cvars.Lines().size() : std::size_t{ 6 };
+        const float reserved = ImGui::GetFrameHeightWithSpacing() * (1.0f + static_cast<float>(cvarLines));
+        if (!ImGui::BeginChild("##consolerows", ImVec2(0.0f, -reserved)))
         {
             ImGui::EndChild();   // always called -- BeginChild's contract, unlike Begin's
             ImGui::End();
@@ -1087,7 +1093,15 @@ namespace Arcane::Editor
         if (ui.autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
-        static Arcane::ConsoleModel cvars;
+        if (cvarLines > 0)
+        {
+            const auto& lines = cvars.Lines();
+            for (std::size_t i = lines.size() - cvarLines; i < lines.size(); ++i)
+            {
+                if (lines[i].ok) ImGui::TextUnformatted(lines[i].text.c_str());
+                else             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
+            }
+        }
         char buffer[512];
         std::snprintf(buffer, sizeof(buffer), "%s", cvars.Input().c_str());
         ImGui::SetNextItemWidth(-1.0f);
