@@ -1289,6 +1289,8 @@ namespace Arcane::Editor
                 OpenAssetRow(*e, project, docs, actions);
             if (ImGui::Button(ICON_LC_FOLDER_OPEN " Show in Explorer", btnSize))
                 actions.showInExplorer = e->guid;
+            if (ImGui::Button(ICON_LC_FILE_TEXT " Open as text", btnSize))
+                actions.openAsText = e->guid;
             if (ImGui::Button(ICON_LC_COPY " Copy Path", btnSize))
                 actions.copyPath = e->guid;
 

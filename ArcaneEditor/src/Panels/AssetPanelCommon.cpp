@@ -333,6 +333,8 @@ namespace Arcane::Editor
         ImGui::Separator();
         if (ImGui::MenuItem("Show in Explorer"))
             actions.showInExplorer = e.guid;
+        if (ImGui::MenuItem("Open as text"))
+            actions.openAsText = e.guid;
         if (ImGui::MenuItem("Copy Path"))
             actions.copyPath = e.guid;
         if (ImGui::MenuItem("Copy Guid"))

@@ -53,7 +53,8 @@ namespace Arcane::Editor
     struct AssetPanelActions   // superset of the old (retired) AssetBrowserActions
     {
         Arcane::Guid createInstanceOf, createSpriteFrom, setBootScene,
-                     showInExplorer, copyPath, copyGuid;
+                     showInExplorer, copyPath, copyGuid,
+                     openAsText;   // Open as text: hand the asset file to the OS default editor (input editor spec s6)
         std::filesystem::path openScene;
         // Source/ in the Asset Browser, step 2: a Source row's Open (double-
         // click, the preview pane's Open button, the context menu's Open --

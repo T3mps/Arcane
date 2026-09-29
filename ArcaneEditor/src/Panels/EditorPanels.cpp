@@ -292,6 +292,8 @@ namespace Arcane::Editor
                     requests.showInExplorer = true;
                 if (ImGui::MenuItem("Copy Path", nullptr, false, hasAssetSelection))
                     requests.copyAssetPath = true;
+                if (ImGui::MenuItem("Open as text", nullptr, false, hasAssetSelection))
+                    requests.openAssetAsText = true;
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("View"))

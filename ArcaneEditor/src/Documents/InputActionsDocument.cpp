@@ -1,13 +1,15 @@
 #include "Documents/InputActionsDocument.hpp"
 
+#include "Widgets/EditorTheme.hpp"
+#include "Widgets/IconsLucide.h"
+
 #include <Arcane/Base/Log.hpp>
 
 #include <imgui.h>
 
-#include <algorithm>
-#include <cstring>
 #include <fstream>
 #include <iterator>
+#include <optional>
 
 namespace Arcane::Editor
 {
@@ -38,7 +40,6 @@ namespace Arcane::Editor
           guid_(DraftGuid(draft, path_)), model_(std::move(draft), commands)
     {
         windowLabel_ = title_ + " (Input Actions)###inputdoc_" + guid_.ToString();
-        RefreshText();
         SelectFirstMapAndAction();
     }
 
@@ -85,52 +86,85 @@ namespace Arcane::Editor
     Guid InputActionsDocument::PeekGuid(const std::filesystem::path& path)
     { return DraftGuid(ReadDraft(path), path); }
 
-    void InputActionsDocument::RefreshText()
+    InputSnapshot InputActionsDocument::SnapshotForCapture(const InputSnapshot& raw, bool anyItemActive)
     {
-        const auto text = model_.Draft().is_string()
-            ? model_.Draft().get<std::string>() : model_.Draft().dump(2);
-        const auto count = std::min(text.size(), text_.size() - 1);
-        std::memcpy(text_.data(), text.data(), count);
-        text_[count] = '\0';
+        InputSnapshot s = raw;
+        s.wantCaptureMouse = false;
+        s.wantCaptureKeyboard = anyItemActive;
+        return s;
+    }
+
+    void InputActionsDocument::BeginRebind(const Guid& target)
+    {
+        if (!target.IsValid()) return;
+        captureTarget_ = target;
+        capture_.Begin(target, std::nullopt, 10.0f, previewSnapshot_);   // any device; the initiating control is not a capture (existing rule)
+    }
+
+    void InputActionsDocument::TickCapture(bool bodyDrawn)
+    {
+        if (!captureTarget_.IsValid()) return;
+        captureSwallowFrame_ = ImGui::GetFrameCount();   // every frame the capture is live, INCLUDING the completing/cancelling one
+        // A capture is bound to the focused, visible document (UE's
+        // SInputKeySelector ends selection on focus loss): a hidden tab, a
+        // collapsed window or a click into the Viewport/Inspector cancels it, so
+        // a key typed elsewhere can never land in a binding and the timeout
+        // cannot freeze while the tab is hidden.
+        if (!bodyDrawn || !focused_) capture_.Cancel();
+        else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) capture_.Cancel();
+        else capture_.Observe(SnapshotForCapture(previewSnapshot_, ImGui::IsAnyItemActive()),
+                              ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : 1.0f / 60.0f);
+        const auto& result = capture_.Result();
+        if (result.state == InputRebindState::Completed)
+        {
+            (void)model_.SetField(captureTarget_, "path", result.replacementPath);   // ONE undoable edit
+            captureTarget_ = {};
+        }
+        else if (result.state == InputRebindState::Canceled || result.state == InputRebindState::TimedOut)
+            captureTarget_ = {};
     }
 
     void InputActionsDocument::Draw(bool& requestClose)
     {
         bool open = true;
-        if (ImGui::Begin(windowLabel_.c_str(), &open))
+        // Tab dot = polled model state each frame (MeshDocument/SpriteDocument/
+        // ShaderEditorDocument pattern): undo back to the saved revision clears
+        // it with no bookkeeping.
+        const ImGuiWindowFlags flags = Dirty() ? ImGuiWindowFlags_UnsavedDocument : 0;
+        const bool bodyDrawn = ImGui::Begin(windowLabel_.c_str(), &open, flags);
+        focused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);   // valid on both branches
+        TickCapture(bodyDrawn);                                                      // BEFORE the shortcut: the swallow stamp is written here
+        if (bodyDrawn)
         {
-            focused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            if (ImGui::Button("Save") || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
+            if (!InputSwallowed() && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S))
                 if (!Save()) ARC_WARN("InputActionsDocument: save refused for '{}'", path_.generic_string());
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", Dirty() ? "Unsaved changes" : "Saved");
-            for (const auto& diagnostic : model_.Diagnostics())
-                ImGui::TextWrapped("%s", diagnostic.c_str());
-            if (ImGui::BeginTabBar("##input_document_tabs"))
+            preview_.Sync(model_);
+            if (state_.previewArmed)
             {
-                if (ImGui::BeginTabItem("Actions"))
-                {
-                    widgets_.Draw(model_, previewSnapshot_);
-                    ImGui::EndTabItem();
-                }
-                if (ImGui::BeginTabItem("JSON"))
-                {
-                    if (!ImGui::IsAnyItemActive()) RefreshText();
-                    if (ImGui::InputTextMultiline("##input_actions_json", text_.data(), text_.size(),
-                        ImGui::GetContentRegionAvail()))
-                    {
-                        auto next = nlohmann::json::parse(text_.data(), nullptr, false);
-                        if (next.is_discarded()) next = std::string(text_.data());
-                        (void)model_.ApplyEdit("Edit input actions", model_.Draft(), std::move(next));
-                    }
-                    ImGui::EndTabItem();
-                }
-                ImGui::EndTabBar();
+                InputSnapshot raw = previewSnapshot_;
+                raw.wantCaptureKeyboard = false;
+                raw.wantCaptureMouse = false;
+                preview_.Update(raw);
             }
-        }
-        else
-        {
-            focused_ = false;
+            if (!model_.Diagnostics().empty())
+            {
+                // The draft is not a valid asset: say so above the columns (the
+                // columns draw what they can; a missing actionMaps draws nothing).
+                ImGui::PushStyleColor(ImGuiCol_Text, Arcane::Editor::Theme::kAmber);
+                ImGui::TextUnformatted(ICON_LC_TRIANGLE_ALERT);
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s -- fix it in a text editor (Assets > Open as text), then reopen.",
+                                   model_.Diagnostics().front().c_str());
+                ImGui::Separator();
+            }
+            InputActionsDocumentWidgets::Services services;
+            services.beginRebind     = [this](const Guid& id) { BeginRebind(id); };
+            services.isRebinding     = [this](const Guid& id) { return captureTarget_ == id; };
+            services.rebindRemaining = [this] { return capture_.Remaining(); };
+            services.glow            = [this](const Guid& id) { return state_.previewArmed ? preview_.BindingValue(id) : 0.0f; };
+            services.inputSwallowed  = [this] { return InputSwallowed(); };
+            widgets_.Draw(model_, state_, services);
         }
         ImGui::End();
         requestClose = !open;

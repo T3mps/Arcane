@@ -413,3 +413,11 @@ TEST_CASE("input editor: Conflicts and Warnings -- same scheme, ungrouped-vs-gro
     CHECK(std::count_if(warnings.begin(), warnings.end(), [](const std::string& w) { return w.starts_with("Unknown control path"); }) == 1);
     CHECK(std::count_if(warnings.begin(), warnings.end(), [](const std::string& w) { return w.starts_with("Conflicting"); }) == 4);   // one per PAIR: Jump/Crouch, Fire/Crouch, Aim/Block mouse, Aim/Block chord
 }
+
+TEST_CASE("input document: the capture snapshot ignores ImGui's mouse claim and keeps the keyboard's ActiveId claim", "[editor][input]")
+{
+    Arcane::InputSnapshot raw; raw.mouseButtons = 0x2; raw.wantCaptureMouse = true; raw.wantCaptureKeyboard = false;
+    const auto s = Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, false);
+    CHECK_FALSE(s.wantCaptureMouse); CHECK_FALSE(s.wantCaptureKeyboard); CHECK(s.mouseButtons == 0x2);
+    CHECK(Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, true).wantCaptureKeyboard);
+}

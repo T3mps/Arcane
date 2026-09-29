@@ -178,7 +178,10 @@ namespace Arcane::Editor
 
     // 12px bordered label (spec §11.2). variant: 0 = neutral (#333333 border,
     // TextDisabled-ish #9a9a9a text), 1 = amber (border #7a5a20, text
-    // Theme::kAmber). kPillLineHeight line height; chain several with SameLine.
+    // Theme::kAmber), 2 = blue-grey scheme tint (border #3a4a5c, text
+    // #9fb3c8), 3 = violet-grey scheme tint (border #4a3a5c, text #b8a3c8)
+    // (input editor spec s2.3). kPillLineHeight line height; chain several
+    // with SameLine.
     void AssetPill(const char* text, int variant = 0);
 
     // Right-most segmented switch (spec §11.1/§11.2, e.g. the Browse/Graph/

@@ -94,6 +94,7 @@ namespace Arcane::Editor
         bool exitEditor = false;     // File -> Exit
         bool showInExplorer = false;   // Assets -> Show in Explorer (on the browser's tracked row)
         bool copyAssetPath = false;    // Assets -> Copy Path        (on the browser's tracked row)
+        bool openAssetAsText = false;  // Assets -> Open as text     (on the browser's tracked row)
         bool togglePhysicsOverlay = false;   // View -> Physics Overlay
 #if !defined(ARCANE_DIST)
         // Build -> Diagnostics -> Crash GPU (diagnostics test). Dev-only, and

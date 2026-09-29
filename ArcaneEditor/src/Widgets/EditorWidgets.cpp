@@ -303,6 +303,13 @@ namespace Arcane::Editor
         // acting-on frame; if a third ever needs it, promote it to
         // EditorTheme.hpp instead of a third hardcode.
         constexpr ImU32 kPillAmberBorder = IM_COL32(0x7a, 0x5a, 0x20, 255);
+        // The input editor's per-scheme binding pills (input editor spec s2.3):
+        // variant 2 = blue-grey (the KeyboardMouse scheme), 3 = violet-grey
+        // (every other scheme). Spec-pinned hexes with no chrome-ramp token.
+        constexpr ImU32 kPillSchemeBlueBorder   = IM_COL32(0x3a, 0x4a, 0x5c, 255);
+        constexpr ImU32 kPillSchemeBlueText     = IM_COL32(0x9f, 0xb3, 0xc8, 255);
+        constexpr ImU32 kPillSchemeVioletBorder = IM_COL32(0x4a, 0x3a, 0x5c, 255);
+        constexpr ImU32 kPillSchemeVioletText   = IM_COL32(0xb8, 0xa3, 0xc8, 255);
 
         // ---------------------------------------------------------------------
         // Status lens vocabulary (Plan 2, asset-manager-redesign-design.md
@@ -648,10 +655,15 @@ namespace Arcane::Editor
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         const ImVec2 size(textSize.x + paddingX * 2.0f, kPillLineHeight);
 
-        const ImU32 borderColor = (variant == 1) ? kPillAmberBorder
-                                                  : ImGui::GetColorU32(Theme::kSeparator);
-        const ImU32 textColor   = (variant == 1) ? ImGui::GetColorU32(Theme::kAmber)
-                                                  : ImGui::GetColorU32(Theme::kGrab);
+        ImU32 borderColor = ImGui::GetColorU32(Theme::kSeparator);
+        ImU32 textColor   = ImGui::GetColorU32(Theme::kGrab);
+        switch (variant)
+        {
+        case 1: borderColor = kPillAmberBorder;        textColor = ImGui::GetColorU32(Theme::kAmber); break;
+        case 2: borderColor = kPillSchemeBlueBorder;   textColor = kPillSchemeBlueText;               break;
+        case 3: borderColor = kPillSchemeVioletBorder; textColor = kPillSchemeVioletText;             break;
+        default: break;
+        }
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), borderColor);

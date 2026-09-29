@@ -167,12 +167,12 @@ namespace Arcane::Editor
             return nullptr;
         }
 
-        // Assets -> Show in Explorer / Copy Path, on a resolved asset Guid.
+        // Assets -> Show in Explorer / Copy Path / Open as text, on a resolved asset Guid.
         // Extracted so the menu-bar route (the panel's tracked row) and the
         // Asset Browser's own row context menu (AssetBrowserPanel.cpp) resolve the
         // SAME way -- one implementation, two entry points.
         void AssetPathAction(const Arcane::Project* proj, const Arcane::Guid& guid,
-                             bool showInExplorer, bool copyPath)
+                             bool showInExplorer, bool copyPath, bool openAsText = false)
         {
             const auto assetPath = proj
                 ? proj->ResolveAsset(Arcane::AssetId::FromGuid(guid))
@@ -191,6 +191,13 @@ namespace Arcane::Editor
             }
             if (copyPath)
                 ImGui::SetClipboardText(assetPath->string().c_str());
+            if (openAsText)
+            {
+                // The OS default handler for the file (a .arcinput is JSON: the
+                // user's text editor). No SDL_OpenURL: a file path, not a URL.
+                ShellExecuteW(nullptr, L"open", assetPath->wstring().c_str(),
+                              nullptr, nullptr, SW_SHOWNORMAL);
+            }
         }
     }
 
@@ -2594,14 +2601,14 @@ namespace Arcane::Editor
             ls.sceneAction = { Arcane::Editor::SceneIntent::Exit, {} };
         }
 
-        // Assets -> Show in Explorer / Copy Path, on the panel's tracked
+        // Assets -> Show in Explorer / Copy Path / Open as text, on the panel's tracked
         // selection (Task 10: repointed from the frozen m_assetBrowser.selected
         // to m_assetModel.selected -- see Task 9's carry-over note).
-        if ((menuReq.showInExplorer || menuReq.copyAssetPath) &&
+        if ((menuReq.showInExplorer || menuReq.copyAssetPath || menuReq.openAssetAsText) &&
             m_assetModel.selected.IsValid())
         {
             AssetPathAction(m_runtime->CurrentProject(), m_assetModel.selected,
-                            menuReq.showInExplorer, menuReq.copyAssetPath);
+                            menuReq.showInExplorer, menuReq.copyAssetPath, menuReq.openAssetAsText);
         }
 
         // Assets -> Create -> <kind>...  TASK 12: the two ShowSaveFileDialog
@@ -2770,6 +2777,8 @@ namespace Arcane::Editor
             AssetPathAction(m_runtime->CurrentProject(), panelActions.showInExplorer, true, false);
         if (panelActions.copyPath.IsValid())
             AssetPathAction(m_runtime->CurrentProject(), panelActions.copyPath, false, true);
+        if (panelActions.openAsText.IsValid())
+            AssetPathAction(m_runtime->CurrentProject(), panelActions.openAsText, false, false, true);
         // Spec s6's new context-menu entry: Copy Guid, straight to the
         // clipboard (no file resolution needed -- unlike copyPath/
         // showInExplorer, a guid needs no project lookup to be copyable).

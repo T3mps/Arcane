@@ -1,387 +1,585 @@
 #include "Documents/InputActionsDocumentWidgets.hpp"
 
+#include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
+#include "Widgets/IconsLucide.h"
 
 #include <imgui.h>
 
-#include <array>
+#include <algorithm>
+#include <cfloat>
+#include <cstdio>
 
 namespace Arcane::Editor
 {
     namespace
     {
-        Guid Id(const nlohmann::json& row)
+        constexpr float kMapsColumnWidth = 180.0f;
+        constexpr float kIndent = 16.0f;
+        constexpr const char* kDragPayload = "ARC_INPUT_ROW";
+
+        Guid IdOf(const nlohmann::json& row)
         {
             if (!row.is_object() || !row.contains("id") || !row["id"].is_string()) return {};
             return Guid::FromString(row["id"].get<std::string>()).value_or(Guid{});
         }
-
-        std::string String(const nlohmann::json& row, const char* key)
+        std::string Str(const nlohmann::json& row, const char* key)
+        { return row.is_object() && row.contains(key) && row[key].is_string() ? row[key].get<std::string>() : std::string{}; }
+        const nlohmann::json* FindMap(const nlohmann::json& draft, const Guid& id)
         {
-            if (!row.is_object() || !row.contains(key) || !row[key].is_string()) return {};
-            return row[key].get<std::string>();
-        }
-
-        const nlohmann::json* Find(const nlohmann::json& row, const Guid& id)
-        {
-            if (row.is_object())
-            {
-                if (Id(row) == id) return &row;
-                for (const auto& [key, child] : row.items())
-                    if (const auto* match = Find(child, id)) return match;
-            }
-            else if (row.is_array())
-                for (const auto& child : row)
-                    if (const auto* match = Find(child, id)) return match;
+            if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return nullptr;
+            for (const auto& m : draft["actionMaps"]) if (IdOf(m) == id) return &m;
             return nullptr;
         }
+        bool IsMapId(const nlohmann::json& draft, const Guid& id) { return FindMap(draft, id) != nullptr; }
+        bool IsActionId(const nlohmann::json& draft, const Guid& id)
+        {
+            if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return false;
+            for (const auto& m : draft["actionMaps"])
+                if (m.is_object() && m.contains("actions") && m["actions"].is_array())
+                    for (const auto& a : m["actions"]) if (IdOf(a) == id) return true;
+            return false;
+        }
+        // Leading/trailing spaces and tabs stripped: the model's name rules
+        // compare trimmed (Task 6 ValidateName), so the rename commits trimmed.
+        std::string Trim(std::string s)
+        {
+            const auto notBlank = [](unsigned char c) { return c != ' ' && c != '\t'; };
+            s.erase(s.begin(), std::find_if(s.begin(), s.end(), notBlank));
+            s.erase(std::find_if(s.rbegin(), s.rend(), notBlank).base(), s.end());
+            return s;
+        }
+        std::string NameOf(const InputActionsEditorModel& model, const Guid& id)
+        {
+            const auto* n = model.FindNode(id);
+            return n ? Str(*n, "name") : std::string{};
+        }
+        const char* DeviceIcon(const std::string& device)
+        {
+            if (device == "Keyboard") return ICON_LC_KEYBOARD;
+            if (device == "Mouse")    return ICON_LC_MOUSE;
+            if (device == "Gamepad")  return ICON_LC_GAMEPAD_2;
+            return ICON_LC_CIRCLE_DOT;
+        }
+        int SchemeVariant(const std::string& badge) { return badge == "KeyboardMouse" ? 2 : 3; }
+        // The expander chevron's cell at the head of an action row (the button
+        // plus its spacing). Action rows start their thumb cell after it; every
+        // child row indents from it, so a binding sits directly under its
+        // action's name.
+        float ChevronCell()
+        {
+            return ImGui::CalcTextSize(ICON_LC_CHEVRON_DOWN).x + ImGui::GetStyle().FramePadding.x * 2.0f
+                 + ImGui::GetStyle().ItemSpacing.x;
+        }
 
-        // Every entry MUST be a path the evaluator compiles (InputActions.cpp:
-        // LoveToSdlName / GamepadButtonToken / the Mouse branch). A spelling
-        // the evaluator does not know yields a constant-zero binding that
-        // the model's Warnings() does not flag (hygiene pass 2026-09-28: five
-        // entries here were exactly that).
-        constexpr std::array<const char*, 17> kPaths = {
-            "<Keyboard>/a", "<Keyboard>/d", "<Keyboard>/w", "<Keyboard>/s",
-            "<Keyboard>/space", "<Keyboard>/left", "<Keyboard>/right",
-            "<Mouse>/leftButton", "<Mouse>/rightButton", "<Mouse>/middleButton",
-            "<Gamepad>/leftStick/x", "<Gamepad>/leftStick/y",
-            "<Gamepad>/buttonSouth", "<Gamepad>/buttonEast",
-            "<Gamepad>/dpadLeft", "<Gamepad>/dpadRight", "<Gamepad>/rightTrigger"
-        };
+        void MoveRowMenu(InputActionsEditorModel& model, const Guid& id, std::function<void()>& edit)
+        {
+            if (ImGui::MenuItem("Move up"))   edit = [&model, id] { (void)model.MoveRow(id, -1); };
+            if (ImGui::MenuItem("Move down")) edit = [&model, id] { (void)model.MoveRow(id, 1); };
+        }
+        // A new map/action opens in a rename box on its (unique, Task 6) name --
+        // UE's new-item kick-off. Shared by the toolbar, the maps `+` and the
+        // actions-column `+ Action`.
+        void OpenRenameOn(InputActionsEditorModel& model, InputActionsDocumentState& state, const Guid& id)
+        {
+            state.renameTarget = id;
+            state.renameBuf = NameOf(model, id);
+            state.renameFocusPending = state.scrollToSelection = true;
+        }
     }
 
-    bool InputActionsDocumentWidgets::TextField(
-        const char* label, const std::string& value,
-        const std::function<void(std::string)>& commit)
+    void InputActionsDocumentWidgets::SelectRow(InputActionsEditorModel& model, const InputRow& row)
     {
-        const auto widgetId = ImGui::GetID(label);
-        auto [it, inserted] = fieldDrafts_.try_emplace(widgetId, value);
-        if (!ImGui::IsAnyItemActive() && !inserted && it->second != value)
-            it->second = value;
-        InputTextString(label, &it->second);
-        if (ImGui::IsItemDeactivatedAfterEdit())
+        switch (row.kind)
         {
-            const auto edited = it->second;
-            fieldDrafts_.erase(it);
-            if (edited != value) { commit(edited); return true; }
+        case InputRowKind::Action:          model.SelectAction(row.id); model.SelectBinding({}); break;
+        case InputRowKind::Binding:
+        case InputRowKind::CompositeHeader: model.SelectAction(row.actionId); model.SelectBinding(row.id); break;
+        case InputRowKind::Part:            model.SelectAction(row.actionId); model.SelectBinding(row.bindingId); model.SelectPart(row.id); break;
+        case InputRowKind::AddBinding:      break;
         }
-        return false;
     }
 
-    void InputActionsDocumentWidgets::Draw(InputActionsEditorModel& model,
-                                            const InputSnapshot& snapshot)
+    bool InputActionsDocumentWidgets::RowSelected(const InputActionsEditorModel& model, const InputRow& row)
     {
-        if (captureTarget_.IsValid())
+        switch (row.kind)
         {
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) capture_.Cancel();
-            else capture_.Observe(snapshot, 1.0f / 60.0f);
-            const auto& result = capture_.Result();
-            if (result.state == InputRebindState::Completed)
-            {
-                (void)model.SetField(captureTarget_, "path", result.replacementPath);
-                captureTarget_ = {};
-            }
-            else if (result.state == InputRebindState::Canceled ||
-                     result.state == InputRebindState::TimedOut)
-                captureTarget_ = {};
+        case InputRowKind::Action:          return model.SelectedAction() == row.id && !model.SelectedBinding().IsValid();
+        case InputRowKind::Binding:
+        case InputRowKind::CompositeHeader: return model.SelectedBinding() == row.id && !model.SelectedPart().IsValid();
+        case InputRowKind::Part:            return model.SelectedPart() == row.id;
+        default:                            return false;
         }
-        if (!model.Draft().is_object() || !model.Draft().contains("actionMaps") ||
-            !model.Draft()["actionMaps"].is_array())
-        {
-            ImGui::TextWrapped("Repair the JSON draft to resume visual editing.");
-            return;
-        }
-        std::function<void()> edit;
-        ImGui::BeginChild("##input_maps", ImVec2(205, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
-        ImGui::TextUnformatted("ACTION MAPS");
-        if (ImGui::Button("+ Map")) edit = [&model] { (void)model.AddMap(); };
-        for (const auto& map : model.Draft()["actionMaps"])
-        {
-            if (!map.is_object()) continue;
-            const auto id = Id(map);
-            ImGui::PushID(id.ToString().c_str());
-            const bool selected = model.SelectedMap() == id;
-            if (ImGui::Selectable(String(map, "name").c_str(), selected)) model.SelectMap(id);
-            if (model.Draft().value("defaultMap", std::string{}) == id.ToString())
-            { ImGui::SameLine(); ImGui::TextDisabled("*"); }
-            ImGui::PopID();
-        }
+    }
+
+    void InputActionsDocumentWidgets::Draw(InputActionsEditorModel& model, InputActionsDocumentState& state,
+                                            const Services& services)
+    {
+        const bool swallowed = services.inputSwallowed && services.inputSwallowed();
+        Edit edit;
+        // While a capture is armed the capture row is the only live control
+        // (UE SKeySelector: the listening widget holds focus + capture): the
+        // toolbar is disabled and neither column takes mouse input, so the
+        // completing click retargets nothing and no other row's menu opens.
+        // Scrolling pauses for the capture's duration (<= 10 s; Escape ends it).
+        ImGui::BeginDisabled(swallowed);
+        DrawToolbar(model, state, edit);
+        ImGui::EndDisabled();
         ImGui::Separator();
-        ImGui::TextUnformatted("CONTROL SCHEMES");
-        if (model.Draft().contains("controlSchemes") && model.Draft()["controlSchemes"].is_array())
-        {
-            for (const auto& scheme : model.Draft()["controlSchemes"])
-            {
-                const auto id = Id(scheme);
-                ImGui::PushID(id.ToString().c_str());
-                const auto name = String(scheme, "name");
-                const auto group = String(scheme, "bindingGroup");
-                ImGui::Text("%s (%s)", name.c_str(), group.c_str());
-                ImGui::SameLine();
-                if (ImGui::SmallButton("x")) edit = [&model, id] { (void)model.RemoveScheme(id); };
-                if (ImGui::TreeNode("Edit Scheme"))
-                {
-                    TextField("Name##scheme", name, [&model, &edit, id, group](std::string value)
-                    { edit = [&model, id, value, group] { (void)model.EditScheme(id, value, group); }; });
-                    TextField("Group##scheme", group, [&model, &edit, id, name](std::string value)
-                    { edit = [&model, id, name, value] { (void)model.EditScheme(id, name, value); }; });
-                    ImGui::TreePop();
-                }
-                ImGui::PopID();
-            }
-        }
-        ImGui::SetNextItemWidth(90); ImGui::InputText("Name##scheme", schemeName_, sizeof(schemeName_));
-        ImGui::SetNextItemWidth(90); ImGui::InputText("Group##scheme", schemeGroup_, sizeof(schemeGroup_));
-        if (ImGui::Button("+ Scheme"))
-        {
-            const std::string name = schemeName_, group = schemeGroup_;
-            edit = [&model, name, group] { (void)model.AddScheme(name, group); };
-        }
+        const ImGuiWindowFlags colFlags = swallowed ? ImGuiWindowFlags_NoInputs : 0;
+        ImGui::BeginChild("##input_maps", ImVec2(kMapsColumnWidth, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX, colFlags);
+        DrawMaps(model, state, services, edit);
         ImGui::EndChild();
         ImGui::SameLine();
-        ImGui::BeginChild("##input_hierarchy", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        const auto mapId = model.SelectedMap();
-        const auto* map = Find(model.Draft()["actionMaps"], mapId);
-        if (!map || !map->contains("actions") || !(*map)["actions"].is_array())
-            ImGui::TextDisabled("Select an action map.");
-        else
+        ImGui::BeginChild("##input_actions", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders, colFlags);
+        DrawActions(model, state, services, edit);
+        ImGui::EndChild();
+        if (state.schemePopupPending) { ImGui::OpenPopup("Control schemes##input"); state.schemePopupPending = false; }
+        DrawSchemePopup(model, state, edit);
+        if (edit) edit();   // AFTER the draw: the draft must not mutate under the row loop
+    }
+
+    void InputActionsDocumentWidgets::DrawToolbar(InputActionsEditorModel& model, InputActionsDocumentState& state, Edit& edit)
+    {
+        const Guid map = model.SelectedMap(), action = model.SelectedAction();
+        if (ImGui::Button(ICON_LC_PLUS " Add " ICON_LC_CHEVRON_DOWN)) ImGui::OpenPopup("##input_add");
+        if (ImGui::BeginPopup("##input_add"))
         {
-            ImGui::Text("%s", String(*map, "name").c_str());
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Default")) edit = [&model, mapId] { (void)model.SetDefaultMap(mapId); };
-            ImGui::SameLine();
-            if (ImGui::SmallButton("+ Action")) edit = [&model, mapId] { (void)model.AddAction(mapId); };
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Delete Map")) edit = [&model, mapId] { (void)model.RemoveMap(mapId); };
-            for (const auto& action : (*map)["actions"])
+            // The model selects the new row and gives it a unique sibling name
+            // ("Action Map 2", "Action 3" -- Task 6); the new row opens in rename.
+            if (ImGui::MenuItem("Action map")) edit = [&model, &state] { if (model.AddMap()) OpenRenameOn(model, state, model.SelectedMap()); };
+            if (ImGui::MenuItem("Action", nullptr, false, map.IsValid())) edit = [&model, &state, map] { if (model.AddAction(map)) OpenRenameOn(model, state, model.SelectedAction()); };
+            if (ImGui::MenuItem("Binding", nullptr, false, action.IsValid())) edit = [&model, &state, map, action] { if (model.AddBinding(map, action)) state.scrollToSelection = true; };
+            if (ImGui::BeginMenu("Composite", action.IsValid()))
             {
-                const auto actionId = Id(action);
-                ImGui::PushID(actionId.ToString().c_str());
-                const bool open = ImGui::TreeNodeEx("##action", ImGuiTreeNodeFlags_OpenOnArrow,
-                    "%s (%s)", String(action, "name").c_str(), String(action, "type").c_str());
-                if (ImGui::IsItemClicked()) { model.SelectAction(actionId); model.SelectBinding({}); }
-                ImGui::SameLine(); if (ImGui::SmallButton("+")) edit = [&model, mapId, actionId] { (void)model.AddBinding(mapId, actionId); };
-                ImGui::SameLine(); if (ImGui::SmallButton("1D")) edit = [&model, mapId, actionId] { (void)model.AddComposite(mapId, actionId, "1DAxis"); };
-                ImGui::SameLine(); if (ImGui::SmallButton("2D")) edit = [&model, mapId, actionId] { (void)model.AddComposite(mapId, actionId, "2DVector"); };
-                if (open)
+                if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "1DAxis")) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "2DVector")) state.scrollToSelection = true; };
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("Control scheme")) state.schemePopupPending = true;
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(200.0f);
+        ImGui::InputTextWithHint("##input_search", ICON_LC_SEARCH " Search", state.search, sizeof(state.search));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(160.0f);
+        const std::string preview = state.schemeFilter.empty() ? "All schemes" : state.schemeFilter;
+        if (ImGui::BeginCombo("##input_scheme", preview.c_str()))
+        {
+            if (ImGui::Selectable("All schemes", state.schemeFilter.empty())) state.schemeFilter.clear();
+            if (model.Draft().is_object() && model.Draft().contains("controlSchemes") && model.Draft()["controlSchemes"].is_array())
+                for (const auto& s : model.Draft()["controlSchemes"])
                 {
-                    if (action.contains("bindings") && action["bindings"].is_array())
-                        for (const auto& binding : action["bindings"])
-                        {
-                            const auto bindingId = Id(binding);
-                            ImGui::PushID(bindingId.ToString().c_str());
-                            const bool composite = binding.contains("composite");
-                            const auto label = composite ? String(binding, "composite") : String(binding, "path");
-                            const bool bindingOpen = ImGui::TreeNodeEx("##binding",
-                                ImGuiTreeNodeFlags_OpenOnArrow | (composite ? 0 : ImGuiTreeNodeFlags_Leaf),
-                                "%s", label.c_str());
-                            if (ImGui::IsItemClicked())
-                            { model.SelectAction(actionId); model.SelectBinding(bindingId); }
-                            if (bindingOpen)
-                            {
-                                if (composite && binding.contains("parts") && binding["parts"].is_array())
-                                    for (const auto& part : binding["parts"])
-                                    {
-                                        const auto partId = Id(part);
-                                        ImGui::PushID(partId.ToString().c_str());
-                                        if (ImGui::Selectable((String(part, "name") + ": " + String(part, "path")).c_str(),
-                                                              model.SelectedPart() == partId))
-                                        { model.SelectAction(actionId); model.SelectBinding(bindingId); model.SelectPart(partId); }
-                                        ImGui::PopID();
-                                    }
-                                ImGui::TreePop();
-                            }
-                            ImGui::PopID();
-                        }
-                    ImGui::TreePop();
+                    const std::string group = Str(s, "bindingGroup");
+                    if (ImGui::Selectable(Str(s, "name").c_str(), state.schemeFilter == group)) state.schemeFilter = group;
+                }
+            ImGui::Separator();
+            if (ImGui::Selectable("Edit schemes...")) state.schemePopupPending = true;
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (state.previewArmed) ImGui::PushStyleColor(ImGuiCol_Button, Theme::WithAlpha(Theme::kAmber, 0.35f));
+        if (ImGui::Button(ICON_LC_PLAY " Preview")) state.previewArmed = !state.previewArmed;
+        if (state.previewArmed) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+            ImGui::SetTooltip("Live preview: bindings glow as they fire; the Inspector's Live preview block reads live values");
+    }
+
+    void InputActionsDocumentWidgets::DrawMaps(InputActionsEditorModel& model, InputActionsDocumentState& state,
+                                                const Services& services, Edit& edit)
+    {
+        ImGui::TextDisabled("ACTION MAPS");
+        // Right-edge idiom (GetWindowContentRegionMax is obsolete in 1.92).
+        ImGui::SameLine(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight());
+        if (ImGui::SmallButton(ICON_LC_PLUS "##addmap")) edit = [&model, &state] { if (model.AddMap()) OpenRenameOn(model, state, model.SelectedMap()); };
+        const auto& draft = model.Draft();
+        if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return;
+        // A rename target that no row can draw (undo removed it) would wedge the
+        // key handlers shut: sweep it -- the Outliner's sweep, EditorPanels.cpp:1644-1658.
+        if (state.renameTarget.IsValid() && !IsMapId(draft, state.renameTarget) && !IsActionId(draft, state.renameTarget)) state.renameTarget = {};
+        for (const auto& m : draft["actionMaps"])
+        {
+            const Guid id = IdOf(m);
+            if (!id.IsValid()) continue;
+            ImGui::PushID(id.ToString().c_str());
+            const std::string name = Str(m, "name");
+            if (state.renameTarget == id)
+            {
+                // Same rules as the action rename in DrawRow: live validation with
+                // its reason, Enter on invalid text re-arms the box, focus loss on
+                // invalid text cancels, Escape reverts (ImGui restores the buffer
+                // before deactivating, so the Escape check is the cancel path).
+                if (state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+                if (state.renameFocusPending) { ImGui::SetKeyboardFocusHere(); state.renameFocusPending = false; }
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                const bool entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+                const auto reason = InputActionsEditorModel::ValidateName(draft, id, state.renameBuf);
+                if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
+                if (ImGui::IsItemDeactivated())
+                {
+                    const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
+                    if (cancelled || !reason)
+                    {
+                        const std::string trimmed = Trim(state.renameBuf);
+                        if (!cancelled && trimmed != name) edit = [&model, id, trimmed] { (void)model.SetField(id, "name", trimmed); };
+                        state.renameTarget = {};
+                    }
+                    else if (entered) state.renameFocusPending = true;   // keep renameTarget + renameBuf
+                    else state.renameTarget = {};
                 }
                 ImGui::PopID();
+                continue;
             }
-            ImGui::Separator();
-            const auto targetId = model.SelectedPart().IsValid() ? model.SelectedPart()
-                : model.SelectedBinding().IsValid() ? model.SelectedBinding()
-                : model.SelectedAction().IsValid() ? model.SelectedAction() : mapId;
-            if (const auto* selected = Find(model.Draft(), targetId))
+            const auto row = RowWithThumb("##map", 0, ICON_LC_LAYERS, name.c_str(), model.SelectedMap() == id, 0.0f);
+            const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // restored after the trailing pills (same rule as DrawRow)
+            if (row.clicked) model.SelectMap(id);
+            if (model.SelectedMap() == id && state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+            if (ImGui::BeginPopupContextItem("##mapmenu"))
             {
-                ImGui::TextUnformatted("PROPERTIES");
-                if (selected->contains("name"))
-                    TextField("Name", String(*selected, "name"),
-                        [&model, &edit, targetId](std::string text)
-                        { edit = [&model, targetId, text] { (void)model.SetField(targetId, "name", text); }; });
-                if (targetId == mapId)
-                {
-                    bool blocking = selected->value("blocking", false);
-                    if (ImGui::Checkbox("Blocking", &blocking))
-                        edit = [&model, targetId, blocking] { (void)model.SetField(targetId, "blocking", blocking); };
-                    int priority = selected->value("priority", 0);
-                    if (ImGui::InputInt("Priority", &priority) && ImGui::IsItemDeactivatedAfterEdit())
-                        edit = [&model, targetId, priority] { (void)model.SetField(targetId, "priority", priority); };
-                }
-                if (selected->contains("type"))
-                {
-                    const auto type = String(*selected, "type");
-                    if (ImGui::BeginCombo("Action Type", type.c_str()))
-                    {
-                        for (const char* choice : {"Button", "Axis1D", "Axis2D"})
-                            if (ImGui::Selectable(choice, type == choice))
-                                edit = [&model, targetId, choice] { (void)model.SetField(targetId, "type", choice); };
-                        ImGui::EndCombo();
-                    }
-                }
-                if (selected->contains("path"))
-                {
-                    const auto path = String(*selected, "path");
-                    TextField("Control Path", path, [&model, &edit, targetId](std::string text)
-                        { edit = [&model, targetId, text] { (void)model.SetField(targetId, "path", text); }; });
-                    if (ImGui::BeginCombo("Pick Control", path.c_str()))
-                    {
-                        for (const char* choice : kPaths)
-                            if (ImGui::Selectable(choice, path == choice))
-                                edit = [&model, targetId, choice] { (void)model.SetField(targetId, "path", choice); };
-                        ImGui::EndCombo();
-                    }
-                    ImGui::Combo("Capture Device", &captureDevice_, "Keyboard / Mouse\0Gamepad\0\0");
-                    if (captureTarget_ == targetId)
-                    {
-                        ImGui::TextDisabled("Press a control (Esc cancels; 10 second timeout)");
-                        if (ImGui::Button("Cancel Capture")) capture_.Cancel();
-                    }
-                    else if (ImGui::Button("Capture Control"))
-                    {
-                        captureTarget_ = targetId;
-                        capture_.Begin(targetId,
-                            captureDevice_ == 0 ? InputDevice::Kbm : InputDevice::Gamepad,
-                            10.0f, snapshot);
-                    }
-                }
-                for (const char* field : {"processors", "interactions"})
-                {
-                    std::string current;
-                    if (selected->contains(field) && (*selected)[field].is_array())
-                        for (const auto& entry : (*selected)[field])
-                            if (entry.is_string())
-                            { if (!current.empty()) current += ", "; current += entry.get<std::string>(); }
-                    TextField(field, current, [&model, &edit, targetId, field](std::string value)
-                    {
-                        nlohmann::json entries = nlohmann::json::array();
-                        size_t offset = 0;
-                        while (offset < value.size())
-                        {
-                            const auto end = value.find(',', offset);
-                            auto token = value.substr(offset, end == std::string::npos ? end : end - offset);
-                            const auto first = token.find_first_not_of(" \t");
-                            if (first != std::string::npos)
-                            {
-                                token = token.substr(first, token.find_last_not_of(" \t") - first + 1);
-                                if (!token.empty()) entries.push_back(token);
-                            }
-                            if (end == std::string::npos) break;
-                            offset = end + 1;
-                        }
-                        edit = [&model, targetId, field, entries]
-                            { (void)model.SetField(targetId, field, entries); };
-                    });
-                }
-                if (selected->contains("groups") || selected->contains("path") || selected->contains("composite"))
-                {
-                    auto groups = selected->value("groups", nlohmann::json::array());
-                    if (!groups.is_array()) groups = nlohmann::json::array();
-                    for (const auto& scheme : model.Draft().value("controlSchemes", nlohmann::json::array()))
-                    {
-                        const auto group = String(scheme, "bindingGroup");
-                        bool enabled = false;
-                        for (const auto& existing : groups) if (existing == group) enabled = true;
-                        if (ImGui::Checkbox(group.c_str(), &enabled))
-                        {
-                            nlohmann::json nextGroups = groups;
-                            if (enabled) nextGroups.push_back(group);
-                            else for (size_t i = nextGroups.size(); i > 0; --i)
-                                if (nextGroups[i - 1] == group) nextGroups.erase(nextGroups.begin() + i - 1);
-                            edit = [&model, targetId, nextGroups] { (void)model.SetField(targetId, "groups", nextGroups); };
-                        }
-                    }
-                }
-                if (selected->contains("bindings"))
-                {
-                    if (ImGui::Button("Duplicate Action")) edit = [&model, mapId, targetId] { (void)model.DuplicateAction(mapId, targetId); };
-                    ImGui::SameLine();
-                    if (ImGui::Button("Delete Action")) edit = [&model, mapId, targetId] { (void)model.RemoveAction(mapId, targetId); };
-                }
-                else if (model.SelectedPart().IsValid())
-                {
-                    const auto bindingId = model.SelectedBinding();
-                    if (ImGui::Button("Delete Part"))
-                        edit = [&model, bindingId, targetId] { (void)model.RemovePart(bindingId, targetId); };
-                }
-                else if (selected->contains("path") || selected->contains("composite"))
-                {
-                    if (ImGui::Button("Delete Binding") && model.SelectedBinding().IsValid() && !model.SelectedPart().IsValid())
-                    {
-                        const auto actionId = model.SelectedAction(), bindingId = model.SelectedBinding();
-                        edit = [&model, mapId, actionId, bindingId] { (void)model.RemoveBinding(mapId, actionId, bindingId); };
-                    }
-                }
-                if (selected->contains("composite"))
-                {
-                    const auto composite = String(*selected, "composite");
-                    if (ImGui::BeginCombo("Add Part", "Choose role"))
-                    {
-                        const auto roles = composite == "1DAxis"
-                            ? std::vector<const char*>{"negative", "positive"}
-                            : std::vector<const char*>{"up", "down", "left", "right"};
-                        for (const auto* role : roles)
-                            if (ImGui::Selectable(role))
-                                edit = [&model, targetId, role] { (void)model.AddPart(targetId, role); };
-                        ImGui::EndCombo();
-                    }
-                }
-                if (ImGui::Button("Duplicate Row"))
-                    edit = [&model, targetId] { (void)model.DuplicateRow(targetId); };
-                ImGui::SameLine();
-                if (ImGui::Button("Move Up")) edit = [&model, targetId] { (void)model.MoveRow(targetId, -1); };
-                ImGui::SameLine();
-                if (ImGui::Button("Move Down")) edit = [&model, targetId] { (void)model.MoveRow(targetId, 1); };
+                if (ImGui::MenuItem("Rename", "F2")) { state.renameTarget = id; state.renameBuf = name; state.renameFocusPending = state.scrollToSelection = true; }
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id] { if (model.DuplicateRow(id)) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("Set as default", nullptr, draft.value("defaultMap", std::string{}) == id.ToString()))
+                    edit = [&model, id] { (void)model.SetDefaultMap(id); };
+                ImGui::Separator();
+                MoveRowMenu(model, id, edit);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, id] { (void)model.RemoveMap(id); };
+                ImGui::EndPopup();
             }
+            ImGui::SetCursorScreenPos(row.trailingPos);
+            if (m.value("blocking", false)) { AssetPill("blocks", 1); ImGui::SameLine(); }
+            const std::size_t count = m.contains("actions") && m["actions"].is_array() ? m["actions"].size() : 0;
+            AssetPill(std::to_string(count).c_str(), 0);
+            ImGui::SetCursorScreenPos(rowBottom);
+            ImGui::PopID();
+        }
+        // Empty space in the maps column deselects: the ASSET is the container
+        // (spec A s3.1). Not while an inline rename is live -- that click commits
+        // the rename.
+        if (!state.renameTarget.IsValid() && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered())
+            model.SelectMap({});
+        HandleMapKeys(model, state, services, edit);   // still inside ##input_maps
+    }
+
+    void InputActionsDocumentWidgets::DrawActions(InputActionsEditorModel& model, InputActionsDocumentState& state,
+                                                   const Services& services, Edit& edit)
+    {
+        const Guid map = model.SelectedMap();
+        const nlohmann::json* m = FindMap(model.Draft(), map);
+        if (!m) { ImGui::TextDisabled("Select an action map."); return; }
+        ImGui::TextUnformatted(Str(*m, "name").c_str());
+        ImGui::SameLine(); ImGui::TextDisabled("· actions");
+        ImGui::SameLine(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ICON_LC_PLUS " Action").x - ImGui::GetStyle().FramePadding.x * 2.0f);
+        if (ImGui::SmallButton(ICON_LC_PLUS " Action")) edit = [&model, &state, map] { if (model.AddAction(map)) OpenRenameOn(model, state, model.SelectedAction()); };
+        ImGui::Separator();
+        InputRowFilter filter;
+        filter.search = state.search;
+        filter.schemeGroup = state.schemeFilter;
+        const std::vector<InputRow> rows = BuildInputRows(model.Draft(), map, filter, model.Conflicts(), state.collapsedActions);
+        // A rename target can stop being drawable without its InputText ever
+        // deactivating (undo/redo or an Inspector page removed the action; the
+        // search/scheme filter or a collapse dropped it from `rows`): sweep it.
+        if (state.renameTarget.IsValid())
+        {
+            bool drawn = false;
+            for (const InputRow& r : rows) if (r.kind == InputRowKind::Action && r.id == state.renameTarget) { drawn = true; break; }
+            if (!drawn && !IsMapId(model.Draft(), state.renameTarget)) state.renameTarget = {};
+        }
+        state.dragVerdictPrev = state.dragVerdict;
+        state.dragVerdict = InputActionsDocumentState::DragVerdict::Illegal;   // hovering no row reads "Cannot move" (the drag op starts invalid)
+        for (const InputRow& row : rows) DrawRow(row, model, state, services, edit, rows);
+        // Empty space under the rows: the MAP is the container (spec A s3.1);
+        // SelectMap(same) clears action/binding/part.
+        if (!state.renameTarget.IsValid() && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered())
+            model.SelectMap(map);
+        HandleKeys(model, state, services, edit, rows);
+    }
+
+    void InputActionsDocumentWidgets::DrawRow(const InputRow& row, InputActionsEditorModel& model,
+                                               InputActionsDocumentState& state, const Services& services,
+                                               Edit& edit, const std::vector<InputRow>& rows)
+    {
+        (void)rows;   // Task 9's keyboard nav reads the sibling rows
+        ImGui::PushID(row.id.ToString().c_str());
+        ImGui::PushID(static_cast<int>(row.kind));
+        const float indent = (row.depth > 0 ? ChevronCell() : 0.0f) + kIndent * static_cast<float>(row.depth);
+        const bool swallowed = services.inputSwallowed && services.inputSwallowed();
+        const Guid map = model.SelectedMap();
+        if (row.kind == InputRowKind::AddBinding)
+        {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
+            ImGui::PushStyleColor(ImGuiCol_Button, Theme::kNone);
+            ImGui::PushStyleColor(ImGuiCol_Text, Theme::kTextDim);
+            if (ImGui::SmallButton(ICON_LC_PLUS " Binding") && !swallowed)
+                edit = [&model, &state, map, action = row.actionId] { if (model.AddBinding(map, action)) state.scrollToSelection = true; };
+            ImGui::PopStyleColor(2);
+            ImGui::PopID(); ImGui::PopID();
+            return;
+        }
+
+        // Inline rename (actions only). Validation runs every frame (blank,
+        // duplicate sibling) and shows its reason; Enter with invalid text re-arms
+        // the box next frame (ImGui deactivates on Enter; UE stays in edit),
+        // focus loss with invalid text cancels. Escape reverts the buffer to its
+        // seed BEFORE deactivating, so the Escape check is the cancel path.
+        if (row.kind == InputRowKind::Action && state.renameTarget == row.id)
+        {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent + ImGui::GetFrameHeight());
+            if (state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+            if (state.renameFocusPending) { ImGui::SetKeyboardFocusHere(); state.renameFocusPending = false; }
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const bool entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            const auto reason = InputActionsEditorModel::ValidateName(model.Draft(), row.id, state.renameBuf);
+            if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
+            if (ImGui::IsItemDeactivated())
+            {
+                const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
+                if (cancelled || !reason)
+                {
+                    const std::string trimmed = Trim(state.renameBuf);
+                    if (!cancelled && trimmed != row.name) edit = [&model, id = row.id, trimmed] { (void)model.SetField(id, "name", trimmed); };
+                    state.renameTarget = {};
+                }
+                else if (entered) state.renameFocusPending = true;   // keep renameTarget + renameBuf
+                else state.renameTarget = {};
+            }
+            ImGui::PopID(); ImGui::PopID();
+            return;
+        }
+
+        // Expander chevron cell before an action row: the row's thumb cell is
+        // shifted right by it here, and the chevron itself is submitted AFTER
+        // the row's Selectable (below, once the row's drag/menu/tooltip have
+        // read it as the last item) -- RowWithThumb's documented foreground-item
+        // pattern. Submitted before the row, the selected row's highlight
+        // painted over it and it sat top-aligned in the 24 px row.
+        const bool searching = state.search[0] != '\0';
+        const char* chevron = nullptr;
+        if (row.kind == InputRowKind::Action)
+        {
+            const bool collapsed = !searching && state.collapsedActions.count(row.id.ToString()) != 0;
+            chevron = collapsed ? ICON_LC_CHEVRON_RIGHT "##x" : ICON_LC_CHEVRON_DOWN "##x";
+        }
+        const ImVec2 rowTop = ImGui::GetCursorScreenPos();
+
+        const bool selected = RowSelected(model, row);
+        const bool rebinding = (row.kind == InputRowKind::Binding || row.kind == InputRowKind::Part) && services.isRebinding && services.isRebinding(row.id);
+        std::string label = row.name;
+        if (rebinding)
+        {
+            char buf[64];
+            std::snprintf(buf, sizeof buf, "Press a control... Esc cancels · %.0f s", services.rebindRemaining ? services.rebindRemaining() : 0.0f);
+            label = buf;
+        }
+        const char* icon = row.kind == InputRowKind::Action ? "" : row.kind == InputRowKind::CompositeHeader ? ICON_LC_LAYERS_2 : DeviceIcon(row.device);
+        if (rebinding) ImGui::PushStyleColor(ImGuiCol_Text, Theme::kAmber);
+        const AssetRowResult r = RowWithThumb("##row", 0, icon, label.c_str(), selected,
+                                              row.kind == InputRowKind::Action ? ChevronCell() : indent);
+        if (rebinding) ImGui::PopStyleColor();
+        const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // RowWithThumb parked the cursor at the next row's start; restored at the end
+        if (r.clicked && !swallowed) SelectRow(model, row);
+        if (selected && state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+
+        // Live glow: an amber bar at the row's left edge + a faint wash.
+        if (const float v = services.glow ? services.glow(row.id) : 0.0f; v > 0.0f && row.kind != InputRowKind::Action)
+        {
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(lo, hi, ImGui::ColorConvertFloat4ToU32(Theme::WithAlpha(Theme::kAmber, 0.12f + 0.2f * std::min(v, 1.0f))));
+            dl->AddRectFilled(lo, ImVec2(lo.x + 2.0f, hi.y), ImGui::ColorConvertFloat4ToU32(Theme::kAmber));
+        }
+
+        // Drag-drop reorder within the parent (spec s6: plus Move up/down below).
+        // Legality is decided while HOVERING, not on release: the target writes a
+        // verdict, the source's preview reads it next frame (the drag decorator),
+        // and only a legal target draws a drop highlight. Inert while a capture is
+        // armed. The AddBinding ghost never reaches here (it returned above).
+        if (!swallowed && ImGui::BeginDragDropSource())
+        {
+            const std::string id = row.id.ToString();
+            ImGui::SetDragDropPayload(kDragPayload, id.c_str(), id.size() + 1);
+            const bool legal = state.dragVerdictPrev == InputActionsDocumentState::DragVerdict::Legal;
+            ImGui::PushStyleColor(ImGuiCol_Text, legal ? Theme::kText : Theme::kTextDim);
+            ImGui::Text(legal ? "%s  Move '%s' here" : "%s  Cannot move '%s' here", legal ? ICON_LC_CHECK : ICON_LC_BAN, row.name.c_str());
+            ImGui::PopStyleColor();
+            ImGui::EndDragDropSource();
+        }
+        if (!swallowed && ImGui::BeginDragDropTarget())
+        {
+            // AcceptPeekOnly = AcceptBeforeDelivery | AcceptNoDrawDefaultRect: the
+            // payload is visible every hovered frame and ImGui draws nothing itself.
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kDragPayload, ImGuiDragDropFlags_AcceptPeekOnly))
+            {
+                const Guid src = Guid::FromString(static_cast<const char*>(p->Data)).value_or(Guid{});
+                const auto from = SiblingIndex(model.Draft(), src), to = SiblingIndex(model.Draft(), row.id);
+                // Same parent array only (a Part cannot land among an action's
+                // bindings, a Binding not among a composite's parts, nothing on
+                // itself), and the index must change -- a no-op is not a target.
+                const bool legal = from && to && from->parent == to->parent && src != row.id && from->index != to->index;
+                state.dragVerdict = legal ? InputActionsDocumentState::DragVerdict::Legal : InputActionsDocumentState::DragVerdict::Illegal;
+                if (legal)
+                {
+                    ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                                        ImGui::ColorConvertFloat4ToU32(Theme::kSelection), 0.0f, 0, 2.0f);
+                    if (p->IsDelivery())
+                        edit = [&model, src, index = to->index] { (void)model.MoveRowTo(src, index); };
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        // Context menu (inert while a capture is armed).
+        if (!swallowed && ImGui::BeginPopupContextItem("##rowmenu"))
+        {
+            if (row.kind == InputRowKind::Action)
+            {
+                if (ImGui::MenuItem("Rename", "F2")) { state.renameTarget = row.id; state.renameBuf = row.name; state.renameFocusPending = state.scrollToSelection = true; }
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("Add binding")) edit = [&model, &state, map, id = row.id] { if (model.AddBinding(map, id)) state.scrollToSelection = true; };
+                if (ImGui::BeginMenu("Add composite"))
+                {
+                    if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "1DAxis")) state.scrollToSelection = true; };
+                    if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "2DVector")) state.scrollToSelection = true; };
+                    ImGui::EndMenu();
+                }
+                ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
+                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, map, id = row.id] { (void)model.RemoveAction(map, id); };
+            }
+            else if (row.kind == InputRowKind::CompositeHeader)
+            {
+                if (ImGui::BeginMenu("Add part"))
+                {
+                    const bool axis = row.name == "1D Axis";
+                    for (const char* role : axis ? std::vector<const char*>{ "negative", "positive" } : std::vector<const char*>{ "up", "down", "left", "right" })
+                        if (ImGui::MenuItem(role)) edit = [&model, &state, id = row.id, role] { if (model.AddPart(id, role)) state.scrollToSelection = true; };
+                    ImGui::EndMenu();
+                }
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollToSelection = true; };
+                ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
+                if (ImGui::MenuItem("Delete", "Del")) edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
+            }
+            else   // Binding / Part
+            {
+                if (ImGui::MenuItem("Rebind...", "Enter") && services.beginRebind) services.beginRebind(row.id);
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollToSelection = true; };
+                ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
+                if (ImGui::MenuItem("Delete", "Del"))
+                {
+                    if (row.kind == InputRowKind::Part) edit = [&model, composite = row.bindingId, id = row.id] { (void)model.RemovePart(composite, id); };
+                    else edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
+                }
+            }
+            ImGui::EndPopup();
+        }
+        if (!row.path.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) ImGui::SetTooltip("%s", row.path.c_str());
+
+        // The expander chevron, over the row (a SmallButton is FontSize tall:
+        // centred in the 24 px row). A non-empty search forces every action
+        // open (rows are built that way) and the click is a no-op then, so the
+        // user's own collapse state survives the search.
+        if (chevron)
+        {
+            ImGui::SetCursorScreenPos(ImVec2(rowTop.x, rowTop.y + (24.0f - ImGui::GetFontSize()) * 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_Button, Theme::kNone);
+            if (ImGui::SmallButton(chevron) && !searching && !swallowed)
+            {
+                if (state.collapsedActions.count(row.id.ToString()) != 0) state.collapsedActions.erase(row.id.ToString());
+                else state.collapsedActions.insert(row.id.ToString());
+            }
+            ImGui::PopStyleColor();
+        }
+
+        // Trailing: conflict dot, badges, detail, the Rebind hit region.
+        ImGui::SetCursorScreenPos(r.trailingPos);
+        if (row.conflict)
+        {
+            ImGui::TextColored(Theme::kAmber, ICON_LC_CIRCLE_DOT);
+            if (ImGui::IsItemHovered())
+            {
+                std::string who;
+                for (const auto& c : model.Conflicts()) if (c.binding == row.id) { if (!who.empty()) who += ", "; who += c.otherActionName; }
+                ImGui::SetTooltip("Also bound by %s", who.c_str());
+            }
+            ImGui::SameLine();
+        }
+        if (row.kind == InputRowKind::Action)
+        {
+            if (!row.badge.empty()) AssetPill(row.badge.c_str(), 0);
+            if (!row.detail.empty()) { if (!row.badge.empty()) ImGui::SameLine(); ImGui::TextDisabled("%s", row.detail.c_str()); }
+        }
+        else
+        {
+            if (!row.detail.empty()) { ImGui::TextDisabled("%s", row.detail.c_str()); ImGui::SameLine(); }
+            for (const auto& g : row.groups) { AssetPill(g.c_str(), SchemeVariant(g)); ImGui::SameLine(); }   // one tinted pill PER scheme
+            if (row.kind != InputRowKind::CompositeHeader && !rebinding && !swallowed)
+            {
+                // The Rebind button: its hit region is SUBMITTED every frame and
+                // only its PAINT is gated on hover/selection. Gating the submission
+                // on r.hovered oscillates on an AllowOverlap row (the Asset Browser
+                // rail's documented bug, AssetBrowserPanel.cpp:304-341): the rule
+                // for any trailing widget on a RowWithThumb row.
+                const ImVec2 sz(ImGui::CalcTextSize("Rebind").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFrameHeight());
+                const bool rbClicked = ImGui::InvisibleButton("##rebind", sz);
+                const bool rbHovered = ImGui::IsItemHovered();
+                if (r.hovered || selected || rbHovered)
+                {
+                    const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    dl->AddRectFilled(lo, hi, ImGui::GetColorU32(rbHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button), ImGui::GetStyle().FrameRounding);
+                    dl->AddText(ImVec2(lo.x + ImGui::GetStyle().FramePadding.x, lo.y + ImGui::GetStyle().FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), "Rebind");
+                }
+                if (rbClicked && services.beginRebind) services.beginRebind(row.id);
+            }
+        }
+        ImGui::SetCursorScreenPos(rowBottom);   // every row pitches exactly one RowWithThumb height whatever the trailing item's height was
+        ImGui::PopID(); ImGui::PopID();
+    }
+
+    void InputActionsDocumentWidgets::DrawSchemePopup(InputActionsEditorModel& model, InputActionsDocumentState& state, Edit& edit)
+    {
+        if (!ImGui::BeginPopupModal("Control schemes##input", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+        if (ImGui::BeginTable("##schemes", 3, ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Name"); ImGui::TableSetupColumn("Group"); ImGui::TableSetupColumn("##x", ImGuiTableColumnFlags_WidthFixed, 24.0f);
+            ImGui::TableHeadersRow();
+            if (model.Draft().is_object() && model.Draft().contains("controlSchemes") && model.Draft()["controlSchemes"].is_array())
+                for (const auto& s : model.Draft()["controlSchemes"])
+                {
+                    const Guid id = IdOf(s);
+                    ImGui::PushID(id.ToString().c_str());
+                    ImGui::TableNextRow();
+                    std::string name = Str(s, "name"), group = Str(s, "bindingGroup");
+                    ImGui::TableSetColumnIndex(0); ImGui::SetNextItemWidth(-FLT_MIN);
+                    InputTextString("##name", &name);
+                    if (ImGui::IsItemDeactivatedAfterEdit() && !name.empty()) edit = [&model, id, name, group] { (void)model.EditScheme(id, name, group); };
+                    ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-FLT_MIN);
+                    InputTextString("##group", &group);
+                    if (ImGui::IsItemDeactivatedAfterEdit() && !group.empty()) edit = [&model, id, name, group] { (void)model.EditScheme(id, name, group); };
+                    ImGui::TableSetColumnIndex(2);
+                    if (ImGui::SmallButton(ICON_LC_TRASH_2)) edit = [&model, id] { (void)model.RemoveScheme(id); };
+                    ImGui::PopID();
+                }
+            ImGui::EndTable();
         }
         ImGui::Separator();
-        for (const auto& warning : model.Warnings())
-            ImGui::TextWrapped("Warning: %s", warning.c_str());
-        if (model.LastValidPreview())
-        {
-            if (!preview_ || previewSource_ != model.LastValidPreview()->ToJson())
-            {
-                preview_ = InputActions::Create();
-                if (!preview_->LoadAsset(*model.LastValidPreview())) preview_.reset();
-                previewSource_ = model.LastValidPreview()->ToJson();
-            }
-            if (preview_)
-            {
-                auto raw = snapshot;
-                raw.wantCaptureKeyboard = false;
-                raw.wantCaptureMouse = false;
-                preview_->Update(1.0 / 60.0, raw);
-                const auto action = model.SelectedAction();
-                if (action.IsValid())
-                {
-                    const auto value = preview_->Value(action);
-                    const char* phase = "Waiting";
-                    switch (value.phase)
-                    {
-                    case InputActionPhase::Started: phase = "Started"; break;
-                    case InputActionPhase::Performed: phase = "Performed"; break;
-                    case InputActionPhase::Canceled: phase = "Canceled"; break;
-                    default: break;
-                    }
-                    ImGui::Separator();
-                    ImGui::Text("LIVE: %s  scalar %.2f  vector (%.2f, %.2f)",
-                                phase, value.scalar, value.vector.x, value.vector.y);
-                    ImGui::TextDisabled("Device: %s", preview_->ActiveDevice() == InputDevice::Gamepad
-                                        ? "Gamepad" : "Keyboard / Mouse");
-                }
-            }
-        }
-        ImGui::EndChild();
-        if (edit) edit();
+        ImGui::SetNextItemWidth(120.0f); ImGui::InputText("Name", state.newSchemeName, sizeof state.newSchemeName);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120.0f); ImGui::InputText("Group", state.newSchemeGroup, sizeof state.newSchemeGroup);
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_LC_PLUS " Scheme"))
+            edit = [&model, name = std::string(state.newSchemeName), group = std::string(state.newSchemeGroup)] { (void)model.AddScheme(name, group); };
+        if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
+
+    // Task 9 fills both key handlers (keyboard nav, F2, Delete, Enter); Task 8
+    // leaves them empty so the column children already route to them.
+    void InputActionsDocumentWidgets::HandleKeys(InputActionsEditorModel& model, InputActionsDocumentState& state,
+                                                  const Services& services, Edit& edit, const std::vector<InputRow>& rows)
+    { (void)model; (void)state; (void)services; (void)edit; (void)rows; }
+
+    void InputActionsDocumentWidgets::HandleMapKeys(InputActionsEditorModel& model, InputActionsDocumentState& state,
+                                                     const Services& services, Edit& edit)
+    { (void)model; (void)state; (void)services; (void)edit; }
 }
