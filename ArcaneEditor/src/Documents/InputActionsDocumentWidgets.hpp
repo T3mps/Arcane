@@ -86,9 +86,12 @@ namespace Arcane::Editor
         void DrawRow(const InputRow& row, InputActionsEditorModel& model, InputActionsDocumentState& state,
                      const Services& services, Edit& edit, const std::vector<InputRow>& rows);
         void DrawSchemePopup(InputActionsEditorModel& model, InputActionsDocumentState& state, Edit& edit);
-        // Task 9 fills both; Task 8 gives them empty bodies. Each runs inside its
-        // own column child, so IsWindowFocused(ChildWindows) routes the keys to
-        // whichever column has focus.
+        // Keyboard navigation (spec B s2.3). Each runs inside its own column
+        // child, so IsWindowFocused(ChildWindows) routes the keys to whichever
+        // column has focus. Actions: Up/Down step (auto-repeat), Left/Right tree
+        // convention, Enter rebinds, F2 renames an action, Delete removes the
+        // row. Maps: Up/Down, F2, Delete. Commands never auto-repeat; every key
+        // is inert while a capture/drag/text box/inline rename owns input.
         void HandleKeys(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services,
                         Edit& edit, const std::vector<InputRow>& rows);
         void HandleMapKeys(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services, Edit& edit);

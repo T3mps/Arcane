@@ -121,6 +121,20 @@ namespace Arcane::Editor
                 else state.renameTarget = {};
             }
         }
+
+        // The guard both column key handlers share; call it INSIDE the column's
+        // child (the focus test reads the current window). A rebind capture owns
+        // the keyboard: the key that completed (or is feeding) it is consumed
+        // there (UE SInputKeySelector's OnPreviewKeyDown rule). No commands
+        // mid-drag (UE FUICommandList). Then the Outliner's guard: this column
+        // focused, no text box typing, no inline rename live.
+        bool ColumnKeysLive(const InputActionsDocumentWidgets::Services& services, const InputActionsDocumentState& state)
+        {
+            if (services.inputSwallowed && services.inputSwallowed()) return false;
+            if (ImGui::GetDragDropPayload() != nullptr) return false;   // the public form; IsDragDropActive is imgui_internal
+            if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || ImGui::GetIO().WantTextInput) return false;
+            return !state.renameTarget.IsValid();   // safe: DrawActions/DrawMaps sweep a target whose row is not drawn this frame
+        }
     }
 
     void InputActionsDocumentWidgets::SelectRow(InputActionsEditorModel& model, const InputRow& row)
@@ -314,7 +328,7 @@ namespace Arcane::Editor
                                                InputActionsDocumentState& state, const Services& services,
                                                Edit& edit, const std::vector<InputRow>& rows)
     {
-        (void)rows;   // Task 9's keyboard nav reads the sibling rows
+        (void)rows;   // the keyboard nav (HandleKeys) reads the sibling rows; the row draw does not
         ImGui::PushID(row.id.ToString().c_str());
         ImGui::PushID(static_cast<int>(row.kind));
         const float indent = (row.depth > 0 ? ChevronCell() : 0.0f) + kIndent * static_cast<float>(row.depth);
@@ -566,13 +580,106 @@ namespace Arcane::Editor
         ImGui::EndPopup();
     }
 
-    // Task 9 fills both key handlers (keyboard nav, F2, Delete, Enter); Task 8
-    // leaves them empty so the column children already route to them.
+    // Keyboard navigation (spec B s2.3), one handler per column. Each runs
+    // inside its own column child, so IsWindowFocused(ChildWindows) routes the
+    // keys to whichever column has focus. Every mutation is deferred through
+    // `edit` (undoable, after the draw); selection and collapse state change in
+    // place, as a click does.
     void InputActionsDocumentWidgets::HandleKeys(InputActionsEditorModel& model, InputActionsDocumentState& state,
                                                   const Services& services, Edit& edit, const std::vector<InputRow>& rows)
-    { (void)model; (void)state; (void)services; (void)edit; (void)rows; }
+    {
+        if (!ColumnKeysLive(services, state)) return;
+        const Guid current = model.SelectedPart().IsValid() ? model.SelectedPart()
+                           : model.SelectedBinding().IsValid() ? model.SelectedBinding()
+                           : model.SelectedAction();
+        const InputRow* row = nullptr;
+        for (const auto& r : rows) if (r.kind != InputRowKind::AddBinding && r.id == current) { row = &r; break; }
+
+        auto step = [&](int dir)
+        {
+            if (const auto next = StepSelection(rows, current, dir))
+                for (const auto& r : rows) if (r.id == *next && r.kind != InputRowKind::AddBinding) { SelectRow(model, r); state.scrollToSelection = true; break; }
+        };
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step(+1);   // navigation repeats (UE SListView)
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))   step(-1);
+        if (!row) return;
+        const std::string actionKey = row->actionId.ToString();
+        const bool searching = state.search[0] != '\0';   // a search forces every action open: Left/Right never edit collapsedActions then
+        const bool collapsed = !searching && state.collapsedActions.count(actionKey) != 0;
+        auto rowById = [&](InputRowKind kind, const Guid& id) -> const InputRow*
+        {
+            for (const auto& r : rows) if (r.kind == kind && r.id == id) return &r;
+            return nullptr;
+        };
+        // Tree convention: Left collapses an expanded action, otherwise selects
+        // the parent row (no collapse); Right expands a collapsed action,
+        // otherwise descends to the first child. Commands (Left/Right/Enter/F2/
+        // Delete) never auto-repeat: repeat = false, as the Outliner passes.
+        // Alt-modified presses are left alone (window/menu chords).
+        if (!ImGui::GetIO().KeyAlt)
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false))
+            {
+                if (row->kind == InputRowKind::Action)
+                {
+                    if (!collapsed && !searching) state.collapsedActions.insert(actionKey);   // already collapsed: no-op
+                }
+                else if (row->kind == InputRowKind::Part)
+                {
+                    if (const auto* parent = rowById(InputRowKind::CompositeHeader, row->bindingId)) { SelectRow(model, *parent); state.scrollToSelection = true; }
+                }
+                else if (const auto* parent = rowById(InputRowKind::Action, row->actionId)) { SelectRow(model, *parent); state.scrollToSelection = true; }
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false))
+            {
+                if (row->kind == InputRowKind::Action && collapsed) state.collapsedActions.erase(actionKey);
+                else if (row->kind == InputRowKind::Action || row->kind == InputRowKind::CompositeHeader)
+                {
+                    const std::size_t at = static_cast<std::size_t>(row - rows.data());
+                    if (at + 1 < rows.size() && rows[at + 1].depth > row->depth && rows[at + 1].kind != InputRowKind::AddBinding)
+                    { SelectRow(model, rows[at + 1]); state.scrollToSelection = true; }
+                }
+            }
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) && (row->kind == InputRowKind::Binding || row->kind == InputRowKind::Part) && services.beginRebind)
+            services.beginRebind(row->id);
+        if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && row->kind == InputRowKind::Action)
+            OpenRenameOn(model, state, row->id);   // the same entry as the context menu's Rename
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+        {
+            const Guid map = model.SelectedMap();
+            switch (row->kind)
+            {
+            case InputRowKind::Action:          edit = [&model, map, id = row->id] { (void)model.RemoveAction(map, id); }; break;
+            case InputRowKind::Binding:
+            case InputRowKind::CompositeHeader: edit = [&model, map, action = row->actionId, id = row->id] { (void)model.RemoveBinding(map, action, id); }; break;
+            case InputRowKind::Part:            edit = [&model, composite = row->bindingId, id = row->id] { (void)model.RemovePart(composite, id); }; break;
+            default: break;
+            }
+        }
+    }
 
     void InputActionsDocumentWidgets::HandleMapKeys(InputActionsEditorModel& model, InputActionsDocumentState& state,
                                                      const Services& services, Edit& edit)
-    { (void)model; (void)state; (void)services; (void)edit; }
+    {
+        if (!ColumnKeysLive(services, state)) return;
+        const auto& draft = model.Draft();
+        if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return;
+        std::vector<Guid> ids;
+        for (const auto& m : draft["actionMaps"]) if (const Guid id = IdOf(m); id.IsValid()) ids.push_back(id);
+        if (ids.empty()) return;
+        const Guid current = model.SelectedMap();
+        const auto index = std::find(ids.begin(), ids.end(), current);
+        auto step = [&](int dir)
+        {
+            const std::ptrdiff_t i = index == ids.end() ? (dir > 0 ? 0 : static_cast<std::ptrdiff_t>(ids.size()) - 1)
+                                                        : std::clamp<std::ptrdiff_t>((index - ids.begin()) + dir, 0, static_cast<std::ptrdiff_t>(ids.size()) - 1);
+            model.SelectMap(ids[static_cast<std::size_t>(i)]); state.scrollToSelection = true;
+        };
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step(+1);
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))   step(-1);
+        if (index == ids.end()) return;
+        if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) OpenRenameOn(model, state, current);
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) edit = [&model, id = current] { (void)model.RemoveMap(id); };
+    }
 }

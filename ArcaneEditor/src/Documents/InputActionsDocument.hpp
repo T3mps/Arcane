@@ -43,6 +43,13 @@ namespace Arcane::Editor
         [[nodiscard]] static InputSnapshot SnapshotForCapture(const InputSnapshot& raw, bool anyItemActive);
         [[nodiscard]] const InputActionsDocumentState& State() const noexcept { return state_; }
         [[nodiscard]] const InputActionsPreview& Preview() const noexcept { return preview_; }
+        // True while a capture is live and on the frame it completed/cancelled:
+        // keys and clicks belong to the capture (UE consumes the heard key at
+        // the selector; ImGui has no event consumption, so the frame stamp does).
+        // Public for the app's raw-scancode shortcuts (Ctrl+Z/Y/N/O/S/X/C/V/D,
+        // EditorApp::HandleUndoRedoAndSceneShortcuts), which run before the
+        // document draws and must stand down while a capture is armed.
+        [[nodiscard]] bool InputSwallowed() const noexcept { return captureTarget_.IsValid() || captureSwallowFrame_ == ImGui::GetFrameCount(); }
 
     private:
         InputActionsDocument(std::filesystem::path path, nlohmann::json draft,
@@ -50,10 +57,6 @@ namespace Arcane::Editor
         void SelectFirstMapAndAction();
         void TickCapture(bool bodyDrawn);
         void BeginRebind(const Guid& target);
-        // True while a capture is live and on the frame it completed/cancelled:
-        // keys and clicks belong to the capture (UE consumes the heard key at
-        // the selector; ImGui has no event consumption, so the frame stamp does).
-        [[nodiscard]] bool InputSwallowed() const noexcept { return captureTarget_.IsValid() || captureSwallowFrame_ == ImGui::GetFrameCount(); }
 
         std::filesystem::path path_;
         std::string title_;
