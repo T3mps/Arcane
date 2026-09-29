@@ -85,7 +85,9 @@ namespace Arcane
     // A control path's readable name with its device split out, for a UI that
     // draws the device as an icon: "<Gamepad>/buttonSouth" -> {"Gamepad",
     // "South Button"}, "<Keyboard>/scancode/a" -> {"Keyboard", "A"}. A path
-    // the compiler cannot parse comes back as {"", path}. Captured scancode
+    // the compiler cannot parse comes back as {"", path}. A chord whose parts
+    // span devices has an empty device; each part names its own device in
+    // `control` ("Keyboard Left Ctrl + Mouse Left Button"). Captured scancode
     // paths display with SDL's canonical name, resolved by the compiler's own
     // lookup ("<Keyboard>/scancode/left shift" -> "Left Shift").
     struct InputControlDisplay

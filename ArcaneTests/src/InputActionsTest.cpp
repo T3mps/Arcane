@@ -785,6 +785,39 @@ TEST_CASE("input: IsKnownControlPath refuses what the compiler would zero-compil
     CHECK_FALSE(InputActions::IsKnownControlPath("<Keyboard>/a+<Wheel>/up"));
 }
 
+TEST_CASE("input: DisplayForPath names each part's own device in a mixed-device chord", "[input]")
+{
+    using Arcane::InputActions;
+    struct Row { const char* path; const char* device; const char* control; };
+    const Row rows[] = {
+        { "<Mouse>/leftButton", "Mouse", "Left Button" },
+        { "<Keyboard>/lshift+<Keyboard>/a", "Keyboard", "Left Shift + A" },
+        { "<Keyboard>/lctrl+<Mouse>/leftButton", "", "Keyboard Left Ctrl + Mouse Left Button" },
+        { "<Keyboard>/scancode/lshift+<Mouse>/leftButton", "", "Keyboard Left Shift + Mouse Left Button" },
+        { "<Wheel>/up", "Wheel", "Up" },
+        { "<Wheel>/up+<Keyboard>/a", "", "Wheel Up + Keyboard A" },
+        { "garbage+<Keyboard>/a", "", "garbage+<Keyboard>/a" },   // an unparseable part: the raw text back whole
+    };
+    for (const auto& r : rows)
+    {
+        INFO(r.path);
+        const auto d = InputActions::DisplayForPath(r.path);
+        CHECK(d.device == r.device);
+        CHECK(d.control == r.control);
+    }
+}
+
+TEST_CASE("input: BindingDisplayString of a mixed-device chord names both devices", "[input][native]")
+{
+    auto asset = Arcane::InputActionAsset::FromJson(NativeActionDoc());
+    REQUIRE(asset);
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadAsset(*asset));
+    const auto jumpBinding = *Arcane::Guid::FromString("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    REQUIRE(input->SetBindingPath(jumpBinding, "<Keyboard>/lctrl+<Mouse>/leftButton"));
+    CHECK(input->BindingDisplayString(jumpBinding) == "Keyboard Left Ctrl + Mouse Left Button");
+}
+
 TEST_CASE("input: DisplayForPath splits the device from a readable control name", "[input]")
 {
     using Arcane::InputActions;

@@ -131,6 +131,18 @@ TEST_CASE("input rows: a binding in several schemes carries every group", "[edit
     CHECK(rows[1].groups[1] == "Gamepad");
 }
 
+TEST_CASE("input rows: a mixed-device chord row has no single device", "[editor][input]")
+{
+    const auto draft = nlohmann::json::parse(R"JSON({"version":1,"id":"11111111-1111-4111-8111-111111111111","controlSchemes":[],
+      "actionMaps":[{"id":"22222222-2222-4222-8222-222222222222","name":"P","actions":[
+        {"id":"33333333-3333-4333-8333-333333333333","name":"Fire","type":"Button","bindings":[
+          {"id":"44444444-4444-4444-8444-444444444444","path":"<Keyboard>/lshift+<Mouse>/leftButton"}]}]}]})JSON");
+    const auto rows = BuildInputRows(draft, kMap, {}, {}, {});
+    REQUIRE(rows.size() == 3);
+    CHECK(rows[1].device.empty());
+    CHECK(rows[1].name == "Keyboard Left Shift + Mouse Left Button");
+}
+
 TEST_CASE("input rows: ConflictTooltip names each other action once with its schemes", "[editor][input]")
 {
     using C = InputActionsEditorModel::BindingConflict;

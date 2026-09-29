@@ -192,7 +192,7 @@ namespace Arcane
         constexpr int kMouseButtonCount = 5;
 
         // Path compiler
-        // The quiet core: compiles a single simple path (no '+') to a
+        // The quiet core: compiles a single simple path (no '+<' separator) to a
         // ControlId, nullopt for anything the compiler does not know, with NO
         // warning -- IsKnownControlPath and the editor's picker ask this
         // question thousands of times a session. An empty path is a silent
@@ -1727,16 +1727,24 @@ namespace Arcane
     InputControlDisplay InputActions::DisplayForPath(std::string_view pathView)
     {
         const std::string path(pathView);
-        InputControlDisplay out;
+        std::vector<std::pair<std::string, std::string>> parts;   // (device, readable)
         for (const std::string& part : SplitChordParts(path))
         {
             const std::size_t close = part.find(">/");
             if (part.empty() || part.front() != '<' || close == std::string::npos)
                 return { {}, path };   // unparseable: hand the raw text back whole
-            const std::string device = part.substr(1, close - 1);
-            if (out.device.empty()) out.device = device;
+            std::string device = part.substr(1, close - 1);
+            std::string name = ReadableControl(device, part.substr(close + 2));
+            parts.emplace_back(std::move(device), std::move(name));
+        }
+        const bool oneDevice = std::all_of(parts.begin(), parts.end(),
+            [&](const auto& p) { return p.first == parts.front().first; });
+        InputControlDisplay out;
+        if (oneDevice) out.device = parts.front().first;
+        for (const auto& [device, name] : parts)
+        {
             if (!out.control.empty()) out.control += " + ";
-            out.control += ReadableControl(device, part.substr(close + 2));
+            out.control += oneDevice ? name : device + " " + name;
         }
         return out;
     }
