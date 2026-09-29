@@ -25,6 +25,11 @@ namespace Arcane::Editor
         }
         std::string Str(const nlohmann::json& row, const char* key)
         { return row.is_object() && row.contains(key) && row[key].is_string() ? row[key].get<std::string>() : std::string{}; }
+        // A hand-edited draft may carry any JSON type under any key (the repair
+        // banner sends users to the text): the draw reads with type checks and
+        // degrades, never through nlohmann's throwing value()/get<>.
+        bool Bool(const nlohmann::json& row, const char* key)
+        { return row.is_object() && row.contains(key) && row[key].is_boolean() && row[key].get<bool>(); }
         const nlohmann::json* FindMap(const nlohmann::json& draft, const Guid& id)
         {
             if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return nullptr;
@@ -78,13 +83,43 @@ namespace Arcane::Editor
             if (ImGui::MenuItem("Move down")) edit = [&model, id] { (void)model.MoveRow(id, 1); };
         }
         // A new map/action opens in a rename box on its (unique, Task 6) name --
-        // UE's new-item kick-off. Shared by the toolbar, the maps `+` and the
-        // actions-column `+ Action`.
+        // UE's new-item kick-off. Shared by the toolbar, the maps `+`, the
+        // actions-column `+ Action` and both columns' Rename menu items.
         void OpenRenameOn(InputActionsEditorModel& model, InputActionsDocumentState& state, const Guid& id)
         {
             state.renameTarget = id;
             state.renameBuf = NameOf(model, id);
             state.renameFocusPending = state.scrollToSelection = true;
+        }
+
+        // The inline rename box, ONE for the maps and actions columns (the caller
+        // positions the cursor). Validation runs every frame (blank, duplicate
+        // sibling) and shows its reason; Enter with invalid text re-arms the box
+        // next frame (ImGui deactivates on Enter; UE stays in edit), focus loss
+        // with invalid text cancels. Escape reverts the buffer to its seed BEFORE
+        // deactivating, so the Escape check is the cancel path. The commit is
+        // trimmed (the model's name rules compare trimmed).
+        void DrawRenameBox(InputActionsEditorModel& model, InputActionsDocumentState& state, const Guid& id,
+                           const std::string& currentName, std::function<void()>& edit)
+        {
+            if (state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+            if (state.renameFocusPending) { ImGui::SetKeyboardFocusHere(); state.renameFocusPending = false; }
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const bool entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            const auto reason = InputActionsEditorModel::ValidateName(model.Draft(), id, state.renameBuf);
+            if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
+            if (ImGui::IsItemDeactivated())
+            {
+                const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
+                if (cancelled || !reason)
+                {
+                    const std::string trimmed = Trim(state.renameBuf);
+                    if (!cancelled && trimmed != currentName) edit = [&model, id, trimmed] { (void)model.SetField(id, "name", trimmed); };
+                    state.renameTarget = {};
+                }
+                else if (entered) state.renameFocusPending = true;   // keep renameTarget + renameBuf
+                else state.renameTarget = {};
+            }
         }
     }
 
@@ -206,28 +241,7 @@ namespace Arcane::Editor
             const std::string name = Str(m, "name");
             if (state.renameTarget == id)
             {
-                // Same rules as the action rename in DrawRow: live validation with
-                // its reason, Enter on invalid text re-arms the box, focus loss on
-                // invalid text cancels, Escape reverts (ImGui restores the buffer
-                // before deactivating, so the Escape check is the cancel path).
-                if (state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
-                if (state.renameFocusPending) { ImGui::SetKeyboardFocusHere(); state.renameFocusPending = false; }
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                const bool entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-                const auto reason = InputActionsEditorModel::ValidateName(draft, id, state.renameBuf);
-                if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
-                if (ImGui::IsItemDeactivated())
-                {
-                    const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
-                    if (cancelled || !reason)
-                    {
-                        const std::string trimmed = Trim(state.renameBuf);
-                        if (!cancelled && trimmed != name) edit = [&model, id, trimmed] { (void)model.SetField(id, "name", trimmed); };
-                        state.renameTarget = {};
-                    }
-                    else if (entered) state.renameFocusPending = true;   // keep renameTarget + renameBuf
-                    else state.renameTarget = {};
-                }
+                DrawRenameBox(model, state, id, name, edit);   // the same box as an action's (DrawRow)
                 ImGui::PopID();
                 continue;
             }
@@ -237,9 +251,9 @@ namespace Arcane::Editor
             if (model.SelectedMap() == id && state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
             if (ImGui::BeginPopupContextItem("##mapmenu"))
             {
-                if (ImGui::MenuItem("Rename", "F2")) { state.renameTarget = id; state.renameBuf = name; state.renameFocusPending = state.scrollToSelection = true; }
+                if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id] { if (model.DuplicateRow(id)) state.scrollToSelection = true; };
-                if (ImGui::MenuItem("Set as default", nullptr, draft.value("defaultMap", std::string{}) == id.ToString()))
+                if (ImGui::MenuItem("Set as default", nullptr, Str(draft, "defaultMap") == id.ToString()))
                     edit = [&model, id] { (void)model.SetDefaultMap(id); };
                 ImGui::Separator();
                 MoveRowMenu(model, id, edit);
@@ -248,7 +262,7 @@ namespace Arcane::Editor
                 ImGui::EndPopup();
             }
             ImGui::SetCursorScreenPos(row.trailingPos);
-            if (m.value("blocking", false)) { AssetPill("blocks", 1); ImGui::SameLine(); }
+            if (Bool(m, "blocking")) { AssetPill("blocks", 1); ImGui::SameLine(); }
             const std::size_t count = m.contains("actions") && m["actions"].is_array() ? m["actions"].size() : 0;
             AssetPill(std::to_string(count).c_str(), 0);
             ImGui::SetCursorScreenPos(rowBottom);
@@ -318,32 +332,11 @@ namespace Arcane::Editor
             return;
         }
 
-        // Inline rename (actions only). Validation runs every frame (blank,
-        // duplicate sibling) and shows its reason; Enter with invalid text re-arms
-        // the box next frame (ImGui deactivates on Enter; UE stays in edit),
-        // focus loss with invalid text cancels. Escape reverts the buffer to its
-        // seed BEFORE deactivating, so the Escape check is the cancel path.
+        // Inline rename (actions only; the maps column draws the same box).
         if (row.kind == InputRowKind::Action && state.renameTarget == row.id)
         {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent + ImGui::GetFrameHeight());
-            if (state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
-            if (state.renameFocusPending) { ImGui::SetKeyboardFocusHere(); state.renameFocusPending = false; }
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            const bool entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-            const auto reason = InputActionsEditorModel::ValidateName(model.Draft(), row.id, state.renameBuf);
-            if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
-            if (ImGui::IsItemDeactivated())
-            {
-                const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
-                if (cancelled || !reason)
-                {
-                    const std::string trimmed = Trim(state.renameBuf);
-                    if (!cancelled && trimmed != row.name) edit = [&model, id = row.id, trimmed] { (void)model.SetField(id, "name", trimmed); };
-                    state.renameTarget = {};
-                }
-                else if (entered) state.renameFocusPending = true;   // keep renameTarget + renameBuf
-                else state.renameTarget = {};
-            }
+            DrawRenameBox(model, state, row.id, row.name, edit);
             ImGui::PopID(); ImGui::PopID();
             return;
         }
@@ -434,7 +427,7 @@ namespace Arcane::Editor
         {
             if (row.kind == InputRowKind::Action)
             {
-                if (ImGui::MenuItem("Rename", "F2")) { state.renameTarget = row.id; state.renameBuf = row.name; state.renameFocusPending = state.scrollToSelection = true; }
+                if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, row.id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollToSelection = true; };
                 if (ImGui::MenuItem("Add binding")) edit = [&model, &state, map, id = row.id] { if (model.AddBinding(map, id)) state.scrollToSelection = true; };
                 if (ImGui::BeginMenu("Add composite"))

@@ -110,7 +110,21 @@ namespace Arcane::Editor
         // collapsed window or a click into the Viewport/Inspector cancels it, so
         // a key typed elsewhere can never land in a binding and the timeout
         // cannot freeze while the tab is hidden.
-        if (!bodyDrawn || !focused_) capture_.Cancel();
+        //
+        // Focus alone cannot see the click that moves it: ImGui applies
+        // click-to-focus on a window background in EndFrame, AFTER this frame's
+        // document draw, and the capture snapshot was sampled at frame start --
+        // so on the click frame focused_ is still true and Observe would bind
+        // the very button that clicked away (<Mouse>/leftButton). A click of
+        // ANY button this frame outside the document window cancels instead.
+        // The column children are NoInputs while a capture is live, so the
+        // hover falls through to the document root: a click INSIDE the
+        // document still binds (right-click over a column reads Right Button).
+        bool clickedAway = false;
+        if (bodyDrawn && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+            for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+                if (ImGui::IsMouseClicked(button)) { clickedAway = true; break; }
+        if (!bodyDrawn || !focused_ || clickedAway) capture_.Cancel();
         else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) capture_.Cancel();
         else capture_.Observe(SnapshotForCapture(previewSnapshot_, ImGui::IsAnyItemActive()),
                               ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : 1.0f / 60.0f);

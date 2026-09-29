@@ -195,8 +195,22 @@ namespace Arcane::Editor
             {
                 // The OS default handler for the file (a .arcinput is JSON: the
                 // user's text editor). No SDL_OpenURL: a file path, not a URL.
-                ShellExecuteW(nullptr, L"open", assetPath->wstring().c_str(),
-                              nullptr, nullptr, SW_SHOWNORMAL);
+                // ShellExecuteW returns a value <= 32 on failure; an extension
+                // with no association (.arcinput/.json on a stock machine) has
+                // no `open` handler, so fall back to `openas` (the Windows Open
+                // With picker) and say so if even that fails -- with the JSON
+                // tab retired this is the repair banner's only route.
+                const std::wstring file = assetPath->wstring();
+                const auto opened = reinterpret_cast<INT_PTR>(
+                    ShellExecuteW(nullptr, L"open", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                if (opened <= 32)
+                {
+                    const auto picked = reinterpret_cast<INT_PTR>(
+                        ShellExecuteW(nullptr, L"openas", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                    if (picked <= 32)
+                        ARC_WARN("Assets: Open as text failed for '{}' (no handler; ShellExecute {} / openas {})",
+                                 assetPath->generic_string(), static_cast<long long>(opened), static_cast<long long>(picked));
+                }
             }
         }
     }
