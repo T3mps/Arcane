@@ -1,8 +1,12 @@
 // InspectorHost (inspector-ownership spec s5): the PURE routing -- which
 // source's page an Inspector instance shows -- driven with fake sources, no
-// ImGui. Every rule in spec s3.1/s3.3/s6 has a case here.
+// ImGui. Every rule in spec s3.1/s3.3/s6 has a case here. The one ImGui case
+// (last) is the instance list's ini section, on a bare context, no device.
 #include <catch2/catch_test_macros.hpp>
 #include <Panels/InspectorHost.hpp>
+#include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
+#include <imgui.h>
+#include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
 #include <string>
 #include <vector>
 
@@ -313,4 +317,40 @@ TEST_CASE("InspectorHost: RepinKey moves only the pinned instance's key", "[edit
     w.host.SetPinned(0, false);
     w.host.RepinKey(0, "x");                           // unpinned: ignored
     CHECK(w.host.Find(0)->pinnedKey.empty());
+}
+
+// The [EditorInspector][Instances] ini section (arc-1 debt F): the handler
+// moved beside InspectorWindows so it can be driven on a bare ImGui context
+// (the ShaderEditorDocumentTest "material panel layout round-trips through
+// imgui.ini" pattern). The clear half is what a WINDOWED project switch does
+// (EditorApp::RetargetLayoutIni: ClearIniSettings, then the incoming file):
+// a file without the section must leave exactly {0}, never the outgoing
+// project's extra instances.
+TEST_CASE("InspectorHost: the [EditorInspector][Instances] section round-trips, and a clear + reload without it resets to {0}", "[editor][inspector]")
+{
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    // Restores the previous context even when a REQUIRE below throws.
+    struct ContextGuard
+    {
+        ImGuiContext* ctx; ImGuiContext* prev;
+        ~ContextGuard() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+    } guard{ ctx, prev };
+    ImGui::SetCurrentContext(ctx);
+    ImGui::GetIO().IniFilename = nullptr;   // never let a test touch a real ini
+    FakeSource scene{ "Scene" };            // InspectorHost has no default ctor: it needs its fallback source
+    InspectorHost host{ scene };
+    RegisterInspectorInstancesSettings(host);
+    RegisterInspectorInstancesSettings(host);                           // idempotent
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=2,3\n");
+    REQUIRE(host.Instances().size() == 3);
+    const std::string saved = ImGui::SaveIniSettingsToMemory();
+    CHECK(saved.find("[EditorInspector][Instances]\nIds=2,3") != std::string::npos);
+    CHECK(saved.find("[EditorInspector]") == saved.rfind("[EditorInspector]"));   // one section
+    ImGui::ClearIniSettings();                                          // the switch's reset
+    ImGui::LoadIniSettingsFromMemory("[EditorPanels][Visibility]\nConsole=1\n");
+    CHECK(host.Instances().size() == 1);
+    CHECK(host.Instances()[0].id == 0);
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=0,3,3,42,-1\n");
+    CHECK(host.Instances().size() == 2);                                // {0,3}
 }

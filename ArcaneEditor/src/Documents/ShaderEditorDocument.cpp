@@ -1893,6 +1893,11 @@ namespace Arcane::Editor
         handler.ReadOpenFn = LayoutSettingsReadOpen;
         handler.ReadLineFn = LayoutSettingsReadLine;
         handler.WriteAllFn = LayoutSettingsWriteAll;
+        // ImGui::ClearIniSettings (a windowed project switch, EditorApp::
+        // RetargetLayoutIni, before it reads the incoming file): back to the
+        // default, so a file without the section never inherits the outgoing
+        // project's split.
+        handler.ClearAllFn = [](ImGuiContext*, ImGuiSettingsHandler*) { ShaderEditorDocument::Layout() = LayoutPrefs{}; };
         ImGui::AddSettingsHandler(&handler);
     }
 

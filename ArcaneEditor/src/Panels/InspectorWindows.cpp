@@ -4,13 +4,16 @@
 #include "Widgets/IconsLucide.h"
 
 #include <imgui.h>
-#include <imgui_internal.h>   // FindWindowByName (the primary's dock node for a new instance)
+#include <imgui_internal.h>   // FindWindowByName (the primary's dock node for a new instance); ImGuiSettingsHandler
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Arcane::Editor
 {
@@ -207,5 +210,71 @@ namespace Arcane::Editor
             if (inst.id != 0 && !open) result.closed.push_back(inst.id);
         }
         return result;
+    }
+
+    // ---- [EditorInspector][Instances]: the Inspector instance ID LIST -------
+    // Extra ids only (instance 0 is implicit); an empty `Ids=` line restores
+    // {0}. Ids are dock slots (ImGui keys `###inspector_<id>` settings on the
+    // id), so a closed slot stays closed across a restart and Window > New
+    // Inspector reopens the lowest free one. Pins are deliberately NOT
+    // persisted: a pin names a selection, and a selection does not survive a
+    // restart (the reason history is never persisted either, spec s6.3).
+    // Moved here from EditorApp (arc-1 debt F) so the test exe can drive it.
+    namespace
+    {
+        constexpr const char* kInstancesIniType = "EditorInspector";
+        constexpr const char* kInstancesIniName = "Instances";
+
+        void* InstancesSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler, const char* name)
+        {
+            return std::strcmp(name, kInstancesIniName) == 0 ? handler->UserData : nullptr;
+        }
+        void InstancesSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line)
+        {
+            auto* host = static_cast<InspectorHost*>(entry);
+            if (std::strncmp(line, "Ids=", 4) != 0) return;
+            std::vector<int> ids;
+            for (const char* p = line + 4; *p;)
+            {
+                char* end = nullptr;
+                const long v = std::strtol(p, &end, 10);
+                if (end == p) break;
+                ids.push_back(static_cast<int>(v));
+                p = (*end == ',') ? end + 1 : end;
+            }
+            host->SetInstanceIds(ids);   // 0, duplicates and out-of-range ids are dropped inside
+        }
+        void InstancesSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf)
+        {
+            const auto* host = static_cast<const InspectorHost*>(handler->UserData);
+            buf->appendf("[%s][%s]\nIds=", handler->TypeName, kInstancesIniName);
+            bool first = true;
+            for (const auto& inst : host->Instances())
+                if (inst.id != 0) { buf->appendf(first ? "%d" : ",%d", inst.id); first = false; }
+            buf->append("\n\n");
+        }
+    }
+
+    void RegisterInspectorInstancesSettings(InspectorHost& host)
+    {
+        if (ImGui::GetCurrentContext() == nullptr ||
+            ImGui::FindSettingsHandler(kInstancesIniType) != nullptr)
+            return;   // same idempotence guard as EditorApp's other ini handlers
+
+        ImGuiSettingsHandler handler;
+        handler.TypeName   = kInstancesIniType;
+        handler.TypeHash   = ImHashStr(kInstancesIniType);
+        handler.UserData   = &host;
+        handler.ReadOpenFn = &InstancesSettingsReadOpen;
+        handler.ReadLineFn = &InstancesSettingsReadLine;
+        handler.WriteAllFn = &InstancesSettingsWriteAll;
+        // ImGui::ClearIniSettings (a windowed project switch, EditorApp::
+        // RetargetLayoutIni) resets the list to exactly {0}, so an incoming
+        // file without this section never inherits the outgoing project's
+        // extra instances. ONLY here: the list is layout, not project state,
+        // so InspectorHost::ReleaseAll deliberately keeps it.
+        handler.ClearAllFn = [](ImGuiContext*, ImGuiSettingsHandler* h)
+        { static_cast<InspectorHost*>(h->UserData)->SetInstanceIds({}); };
+        ImGui::AddSettingsHandler(&handler);
     }
 }

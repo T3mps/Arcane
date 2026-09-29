@@ -21,6 +21,7 @@
 #include <Astra/Registry/Registry.hpp>   // CommandStack's resolver target (never called here)
 
 #include <imgui.h>   // the pane-layout ini round-trip drives ImGui's settings API
+#include <imgui_internal.h>   // ClearIniSettings (a windowed project switch's reset)
 
 #include <chrono>
 #include <cmath>
@@ -835,6 +836,40 @@ TEST_CASE("material panel layout round-trips through imgui.ini", "[editor][mater
     const std::size_t first = once.find("[ArcaneEditorLayout][MaterialPanel]");
     REQUIRE(first != std::string::npos);
     CHECK(once.find("[ArcaneEditorLayout][MaterialPanel]", first + 1) == std::string::npos);
+
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(nullptr);
+    ShaderEditorDocument::Layout() = Layout{};   // leave the default for other tests
+}
+
+// A WINDOWED project switch (EditorApp::RetargetLayoutIni, arc-1 debt F)
+// clears ImGui's settings and then reads the incoming project's file. Every
+// handler's ClearAllFn must put its preference back to the default, so an
+// incoming file WITHOUT this section shows the default split -- never the
+// outgoing project's.
+TEST_CASE("material panel layout resets to the default on ClearIniSettings", "[editor][material]")
+{
+    using Layout = ShaderEditorDocument::LayoutPrefs;
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGui::GetIO().IniFilename = nullptr;   // never let a test touch a real ini
+
+    ShaderEditorDocument::Layout() = Layout{};
+    ShaderEditorDocument::RegisterLayoutSettings();
+
+    auto approx = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
+
+    // The round-trip case's non-default section: the outgoing project's split.
+    ImGui::LoadIniSettingsFromMemory(
+        "[ArcaneEditorLayout][MaterialPanel]\nPreviewSplit=0.6900\n");
+    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.69f));
+
+    ImGui::ClearIniSettings();   // the switch's reset
+    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, Layout{}.previewSplit));
+
+    // ... and an incoming file without the section leaves it there.
+    ImGui::LoadIniSettingsFromMemory("[EditorPanels][Visibility]\nConsole=1\n");
+    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, Layout{}.previewSplit));
 
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(nullptr);

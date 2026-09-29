@@ -75,7 +75,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>   // std::strtol (InspectorSettingsReadLine)
+#include <cstdlib>   // _wgetenv (RetargetLayoutIni)
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -184,6 +184,16 @@ namespace Arcane::Editor
         buf->append("\n");
     }
 
+    // ImGui::ClearIniSettings -- a WINDOWED project switch (RetargetLayoutIni)
+    // before it reads the incoming file: back to the value a fresh EditorApp
+    // holds, so a file without this section never inherits the outgoing
+    // project's mode.
+    void EditorApp::PlayModeSettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
+    {
+        auto* self = static_cast<EditorApp*>(handler->UserData);
+        self->m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
+    }
+
     void EditorApp::RegisterPlayModeSettings()
     {
         // No context (headless) or already registered: nothing to do -- same
@@ -199,6 +209,7 @@ namespace Arcane::Editor
         handler.ReadOpenFn = &EditorApp::PlayModeSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::PlayModeSettingsReadLine;
         handler.WriteAllFn = &EditorApp::PlayModeSettingsWriteAll;
+        handler.ClearAllFn = &EditorApp::PlayModeSettingsClearAll;
         ImGui::AddSettingsHandler(&handler);
     }
 
@@ -223,7 +234,8 @@ namespace Arcane::Editor
         // (F4 plan 1 final review, F3 -- see m_cameraRestoredFromIni). The
         // request always precedes this read: OnProjectOpened records it, and
         // the ini is read afterwards (RetargetLayoutIni under --headless, the
-        // first NewFrame on a windowed run). The committed verify-layout.ini
+        // first NewFrame on a windowed run, RetargetLayoutIni's reload on a
+        // windowed project switch). The committed verify-layout.ini
         // carries no [EditorViewport] block, so gate/witness runs still frame.
         const bool accepted =
             Arcane::Editor::ViewportSettings::ReadIniLine(line, self->m_camera, self->m_viewSettings);
@@ -254,6 +266,23 @@ namespace Arcane::Editor
         Arcane::Editor::ViewportSettings::WriteIni(*buf, self->m_camera, self->m_viewSettings);
     }
 
+    // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
+    // the camera and the viewport preferences go back to a fresh EditorApp's,
+    // and the camera counts as NOT restored. The SceneOpen framing request is
+    // deliberately left alone: the reload's ReadLine cancels it when the
+    // incoming file carries a camera, exactly as at boot. The --view-mode seed
+    // is re-applied (THE FLAG BEATS THE INI, see ReadLine): without it an
+    // incoming file with no [EditorViewport] block would drop the flag's mode
+    // while a file WITH one keeps it.
+    void EditorApp::ViewportSettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
+    {
+        auto* self = static_cast<EditorApp*>(handler->UserData);
+        self->m_camera                = decltype(self->m_camera){};
+        self->m_viewSettings          = decltype(self->m_viewSettings){};
+        self->m_cameraRestoredFromIni = false;
+        Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
+    }
+
     void EditorApp::RegisterViewportSettings()
     {
         if (ImGui::GetCurrentContext() == nullptr ||
@@ -267,6 +296,7 @@ namespace Arcane::Editor
         handler.ReadOpenFn = &EditorApp::ViewportSettingsReadOpen;
         handler.ReadLineFn = &EditorApp::ViewportSettingsReadLine;
         handler.WriteAllFn = &EditorApp::ViewportSettingsWriteAll;
+        handler.ClearAllFn = &EditorApp::ViewportSettingsClearAll;
         ImGui::AddSettingsHandler(&handler);
     }
 
@@ -305,6 +335,14 @@ namespace Arcane::Editor
         buf->append("\n");
     }
 
+    // ImGui::ClearIniSettings (a windowed project switch, RetargetLayoutIni):
+    // every panel back to a fresh EditorApp's visibility.
+    void EditorApp::PanelVisibilitySettingsClearAll(ImGuiContext*, ImGuiSettingsHandler* handler)
+    {
+        auto* self = static_cast<EditorApp*>(handler->UserData);
+        self->m_panelVis = decltype(self->m_panelVis){};
+    }
+
     void EditorApp::RegisterPanelVisibilitySettings()
     {
         if (ImGui::GetCurrentContext() == nullptr ||
@@ -318,59 +356,14 @@ namespace Arcane::Editor
         handler.ReadOpenFn = &EditorApp::PanelVisibilitySettingsReadOpen;
         handler.ReadLineFn = &EditorApp::PanelVisibilitySettingsReadLine;
         handler.WriteAllFn = &EditorApp::PanelVisibilitySettingsWriteAll;
+        handler.ClearAllFn = &EditorApp::PanelVisibilitySettingsClearAll;
         ImGui::AddSettingsHandler(&handler);
     }
 
-    // ---- [EditorInspector][Instances]: the Inspector instance ID LIST -------
-    // Extra ids only (instance 0 is implicit); an empty `Ids=` line restores
-    // {0}. Ids are dock slots (ImGui keys `###inspector_<id>` settings on the
-    // id), so a closed slot stays closed across a restart and Window > New
-    // Inspector reopens the lowest free one. Pins are deliberately NOT
-    // persisted: a pin names a selection, and a selection does not survive a
-    // restart (the reason history is never persisted either, spec s6.3).
-    void* EditorApp::InspectorSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler, const char* name)
-    {
-        return std::strcmp(name, "Instances") == 0 ? handler->UserData : nullptr;
-    }
-    void EditorApp::InspectorSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line)
-    {
-        auto* app = static_cast<EditorApp*>(entry);
-        if (std::strncmp(line, "Ids=", 4) != 0) return;
-        std::vector<int> ids;
-        for (const char* p = line + 4; *p;)
-        {
-            char* end = nullptr;
-            const long v = std::strtol(p, &end, 10);
-            if (end == p) break;
-            ids.push_back(static_cast<int>(v));
-            p = (*end == ',') ? end + 1 : end;
-        }
-        app->m_inspectorHost.SetInstanceIds(ids);   // 0, duplicates and out-of-range ids are dropped inside
-    }
-    void EditorApp::InspectorSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf)
-    {
-        auto* app = static_cast<EditorApp*>(handler->UserData);
-        buf->appendf("[%s][Instances]\nIds=", handler->TypeName);
-        bool first = true;
-        for (const auto& inst : app->m_inspectorHost.Instances())
-            if (inst.id != 0) { buf->appendf(first ? "%d" : ",%d", inst.id); first = false; }
-        buf->append("\n\n");
-    }
-    void EditorApp::RegisterInspectorSettingsHandler()
-    {
-        if (ImGui::GetCurrentContext() == nullptr ||
-            ImGui::FindSettingsHandler("EditorInspector") != nullptr)
-            return;   // same idempotence guard as RegisterPanelVisibilitySettings
-
-        ImGuiSettingsHandler handler;
-        handler.TypeName = "EditorInspector";
-        handler.TypeHash = ImHashStr("EditorInspector");
-        handler.UserData = this;
-        handler.ReadOpenFn = &EditorApp::InspectorSettingsReadOpen;
-        handler.ReadLineFn = &EditorApp::InspectorSettingsReadLine;
-        handler.WriteAllFn = &EditorApp::InspectorSettingsWriteAll;
-        ImGui::AddSettingsHandler(&handler);
-    }
+    // [EditorInspector][Instances] (the Inspector instance ID list) lives
+    // beside the Inspector windows: RegisterInspectorInstancesSettings,
+    // Panels/InspectorWindows.cpp (arc-1 debt F moved it there so the test
+    // exe can drive it on a bare context).
 
     // ---- Boot stages (Task 8: EditorApp::Init folded into CoreStages) -------
     // Each method below is one block lifted verbatim (or near-verbatim; noted
@@ -571,7 +564,7 @@ namespace Arcane::Editor
         ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
         RegisterPanelVisibilitySettings();
-        RegisterInspectorSettingsHandler();
+        Arcane::Editor::RegisterInspectorInstancesSettings(m_inspectorHost);
         RegisterViewportSettings();
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
@@ -1666,6 +1659,12 @@ namespace Arcane::Editor
             return;
         }
 
+        // Every ImGui call below (GetIO, the flush, the clear + reload) must
+        // land on the EDITOR context: the offscreen layer can leave the game
+        // context current (Shutdown's save pins it for the same reason).
+        if (m_editorImguiContext)
+            ImGui::SetCurrentContext(m_editorImguiContext);
+
         // %LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini ("default"
         // for a project-less session) -- the editor's slot under the same
         // family root the Hub already uses (%LOCALAPPDATA%\Arcane\hub,
@@ -1710,10 +1709,27 @@ namespace Arcane::Editor
             if (std::filesystem::exists("imgui.ini", ec))
                 std::filesystem::copy_file("imgui.ini", target, ec);
 
+        const bool switching = !m_layoutIniPath.empty();   // boot: ImGui's first NewFrame autoloads; a switch must reload by hand
         // io.IniFilename is a BORROWED pointer (ImGui never copies it) -- the
         // member string is its stable storage for the context's lifetime.
         m_layoutIniPath = target.string();
         io.IniFilename  = m_layoutIniPath.c_str();
+        if (switching)
+        {
+            // ImGui reads the ini only while !SettingsLoaded (its first
+            // NewFrame), so without this the OUTGOING layout -- docking,
+            // windows, panel visibility, camera, play mode, Inspector
+            // instances -- stays live and then overwrites the incoming file.
+            // Safe point: every switch runs at the top of the main loop,
+            // before the editor's ImGui frame. ClearIniSettings runs every
+            // handler's ClearAllFn (defaults), then the incoming file is read;
+            // with no dock nodes in it, EndDockSpace builds the default
+            // layout, as on a first run.
+            ImGui::ClearIniSettings();
+            if (std::filesystem::exists(target, ec))
+                ImGui::LoadIniSettingsFromDisk(m_layoutIniPath.c_str());
+            ARC_INFO("layout: switched to {}", m_layoutIniPath);
+        }
     }
 
     void EditorApp::RetargetDumpDir()

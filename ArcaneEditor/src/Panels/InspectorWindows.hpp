@@ -41,4 +41,14 @@ namespace Arcane::Editor
     // draw (they carry their own X).
     InspectorWindowsResult DrawInspectorWindows(InspectorHost& host, InspectorWindowsState& state,
                                                 bool* primaryOpen);
+
+    // The Inspector instance ID LIST's imgui.ini section,
+    // "[EditorInspector][Instances]": one `Ids=<extra ids>` line (instance 0
+    // is implicit; an empty line restores {0}). Registered on the CURRENT
+    // ImGui context with UserData = &host, so `host` must outlive the
+    // context's settings use. Idempotent; a no-op with no current context.
+    // Its ClearAllFn (ImGui::ClearIniSettings -- a windowed project switch)
+    // resets the list to exactly {0}. Pins are NOT persisted: a pin names a
+    // selection, and a selection does not survive a restart.
+    void RegisterInspectorInstancesSettings(InspectorHost& host);
 }

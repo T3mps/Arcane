@@ -1232,9 +1232,16 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorMeta.cpp",
         -- Inspector ownership T2: InspectorHost (pure routing, no ImGui) source-
         -- compiles into the test exe so EditorInspectorHostTest drives it with
-        -- fake sources. SceneInspectorSource.cpp / InspectorWindows.cpp stay OUT
-        -- (they need EditorPanels.cpp).
+        -- fake sources. SceneInspectorSource.cpp stays OUT (it needs
+        -- EditorPanels.cpp).
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorHost.cpp",
+        -- Arc-1 debt F: InspectorWindows (the Inspector windows + the
+        -- [EditorInspector][Instances] ini handler) source-compiles into the
+        -- test exe so EditorInspectorHostTest drives the handler on a bare
+        -- ImGui context. It needs only InspectorHost + PropertyGrid (both
+        -- compiled here) and the header-only EditorTheme; DrawInspectorWindows
+        -- is never called headlessly.
+        "%{wks.location}/ArcaneEditor/src/Panels/InspectorWindows.cpp",
         -- F2b Task 13: TextureMetaPanel (the Inspector's texture-asset
         -- settings block's PURE half -- reading/merge-writing the ".meta"
         -- sidecar's "texture" block) source-compiles into the test exe so

@@ -942,6 +942,10 @@ namespace Arcane::Editor
                                               void* entry, const char* line);
         static void  PlayModeSettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                               ImGuiTextBuffer* buf);
+        // Each handler's ClearAllFn (ImGui::ClearIniSettings -- a windowed
+        // project switch, RetargetLayoutIni) resets its members to a fresh
+        // EditorApp's values before the incoming file is read.
+        static void  PlayModeSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
         void RegisterPlayModeSettings();   // called from Init, beside RegisterLayoutSettings
 
         // ImGuiSettingsHandler callbacks for m_camera + m_viewSettings
@@ -958,6 +962,7 @@ namespace Arcane::Editor
                                               void* entry, const char* line);
         static void  ViewportSettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                               ImGuiTextBuffer* buf);
+        static void  ViewportSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
         void RegisterViewportSettings();
 
         // ImGuiSettingsHandler callbacks for m_panelVis ("[EditorPanels]
@@ -970,15 +975,11 @@ namespace Arcane::Editor
                                                      void* entry, const char* line);
         static void  PanelVisibilitySettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                                      ImGuiTextBuffer* buf);
+        static void  PanelVisibilitySettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
 
-        // ImGuiSettingsHandler callbacks for the Inspector instance list
-        // ("[EditorInspector][Instances]", one `Ids=<extra ids>` line; empty =
-        // {0}), mirroring the PanelVisibility handler above. Registered at the
-        // same Init site. Pins are NOT persisted: a pin names a selection.
-        void RegisterInspectorSettingsHandler();
-        static void* InspectorSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name);
-        static void  InspectorSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line);
-        static void  InspectorSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer* buf);
+        // The Inspector instance list's handler ("[EditorInspector][Instances]")
+        // lives beside the Inspector windows: RegisterInspectorInstancesSettings
+        // (Panels/InspectorWindows.hpp), registered at the same Init site.
         // The document an Inspector source IS, for the Ctrl+S routes: null for
         // the scene source and for null (EditorDocument derives from
         // InspectorSource, Task 2).
@@ -1203,8 +1204,10 @@ namespace Arcane::Editor
         // review, F3: a restored camera cancels the boot-time SceneOpen
         // framing (EditModeSchedule::CancelFrame) so centre/halfHeight/
         // pivot/distance survive a restart as spec s4 says; a later File >
-        // Open still frames (the ini is read once, at the first NewFrame --
-        // or in RetargetLayoutIni under --headless -- never on a scene open).
+        // Open still frames (the ini is read at the first NewFrame -- or in
+        // RetargetLayoutIni under --headless -- and again by RetargetLayoutIni
+        // on a windowed PROJECT switch, whose clear resets this to false;
+        // never on a scene open).
         bool m_cameraRestoredFromIni = false;
         // The ONE live mouse-drag camera gesture (F4 plan 1 T7): 2D RMB pan, or
         // in Perspective RMB look / Alt+LMB orbit / MMB pan. Rules: a gesture
