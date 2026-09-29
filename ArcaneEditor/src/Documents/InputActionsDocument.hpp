@@ -45,6 +45,8 @@ namespace Arcane::Editor
         ~InputActionsDocument() override { Arcane::Diagnostics::Clear(diagKey_); }
         bool WindowFocused() const override { return focused_; }
         void Draw(bool& requestClose) override;
+        void Tick(double) override { PublishWarnings(); }   // every frame, visible or not: a hidden tab's page edit or undo still reaches Problems
+        [[nodiscard]] const std::string& DiagnosticKey() const noexcept { return diagKey_; }
         InputActionsEditorModel& Model() noexcept { return model_; }
         const InputActionsEditorModel& Model() const noexcept { return model_; }
         void SetPreviewSnapshot(const InputSnapshot& snapshot) { previewSnapshot_ = snapshot; }
@@ -112,6 +114,7 @@ namespace Arcane::Editor
         void PublishWarnings();   // Task 11
         std::function<void(const Guid&, const InputActionAsset&)> onSaved_;         // Task 11
         std::string diagKey_;                                                     // Task 11: "input:" + guid
+        std::uint64_t publishedRevision_ = 0;
         std::vector<std::string> publishedWarnings_;                              // Task 11
     };
 }

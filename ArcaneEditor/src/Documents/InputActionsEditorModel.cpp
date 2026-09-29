@@ -216,6 +216,7 @@ namespace Arcane::Editor
 
     void InputActionsEditorModel::Validate()
     {
+        ++draftRevision_;
         std::string error;
         auto parsed = InputActionAsset::FromJson(draft_, &error);
         diagnostics_.clear();
@@ -757,6 +758,7 @@ namespace Arcane::Editor
         return out;
     }
 
+    // A pure function of the draft (draft_/preview_, set only by Validate) plus SDL's key-name/layout state; the document memoises it on DraftRevision(), so a keyboard-layout change shows on the next edit.
     std::vector<std::string> InputActionsEditorModel::Warnings() const
     {
         std::vector<std::string> warnings;

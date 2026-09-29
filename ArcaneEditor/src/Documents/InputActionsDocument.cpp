@@ -206,7 +206,6 @@ namespace Arcane::Editor
             services.glow            = [this](const Guid& id) { return state_.previewArmed ? preview_.BindingValue(id) : 0.0f; };
             services.inputSwallowed  = [this] { return InputSwallowed(); };
             widgets_.Draw(model_, state_, services);
-            PublishWarnings();
         }
         ImGui::End();
         requestClose = !open;
@@ -214,6 +213,8 @@ namespace Arcane::Editor
 
     void InputActionsDocument::PublishWarnings()
     {
+        if (model_.DraftRevision() == publishedRevision_) return;   // Warnings() runs once per draft revision, not per frame
+        publishedRevision_ = model_.DraftRevision();
         std::vector<std::string> warnings = model_.Warnings();
         if (warnings == publishedWarnings_) return;
         publishedWarnings_ = std::move(warnings);

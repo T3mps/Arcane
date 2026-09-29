@@ -4,6 +4,7 @@
 #include "Documents/InputActionsDocument.hpp"
 #include "Documents/InputSelectionKey.hpp"
 #include "Documents/DocumentHost.hpp"
+#include "Panels/DiagnosticStore.hpp"
 
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Base/Runtime.hpp>
@@ -653,4 +654,84 @@ TEST_CASE("input editor: RestoreSelectionOrAncestor treats a malformed key as no
     CHECK(model.SelectedAction().ToString() == A);                                                     // falls back to its action
     CHECK_FALSE(model.SelectedBinding().IsValid());
     CHECK(model.SelectionEpoch() == epoch);                                                            // silent throughout
+}
+
+namespace
+{
+    // DocumentJson plus one conflict (Crouch's ungrouped space) and one unknown path (Fire's 'spaec').
+    nlohmann::json WarningsJson()
+    {
+        auto json = DocumentJson();
+        auto& actions = json["actionMaps"][0]["actions"];
+        actions.push_back(nlohmann::json::parse(R"JSON({"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Crouch","type":"Button",
+            "bindings":[{"id":"dddddddd-dddd-4ddd-8ddd-dddddddddddd","path":"<Keyboard>/space"}]})JSON"));
+        actions.push_back(nlohmann::json::parse(R"JSON({"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee","name":"Fire","type":"Button",
+            "bindings":[{"id":"12121212-1212-4121-8121-121212121212","path":"<Keyboard>/spaec"}]})JSON"));
+        return json;
+    }
+}
+
+TEST_CASE("input editor: DraftRevision bumps on every draft change and never on selection or save", "[editor][input]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), &commands);
+    const auto r0 = model.DraftRevision();
+    model.SelectMap(*Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222"));
+    model.SelectAction(*Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333"));
+    CHECK(model.DraftRevision() == r0);
+    REQUIRE(model.SetField(*Arcane::Guid::FromString("44444444-4444-4444-8444-444444444444"), "path", "<Keyboard>/k"));
+    const auto r1 = model.DraftRevision();
+    CHECK(r1 > r0);
+    const auto file = std::filesystem::temp_directory_path() / ("rev-" + Arcane::Guid::Generate().ToString() + ".arcinput");
+    REQUIRE(model.Save(file));
+    CHECK(model.DraftRevision() == r1);
+    REQUIRE(model.Undo());
+    CHECK(model.DraftRevision() > r1);
+    const auto r2 = model.DraftRevision();
+    REQUIRE(model.Redo());
+    CHECK(model.DraftRevision() > r2);
+    std::filesystem::remove(file);
+}
+
+TEST_CASE("input document: Tick publishes its Warnings as asset rows with no draw, keeps them over a save, retracts a fixed one, clears on close", "[editor][input][diagnostics]")
+{
+    namespace fs = std::filesystem;
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+    const auto path = fs::temp_directory_path() / ("problems-" + Arcane::Guid::Generate().ToString() + ".arcinput");
+    { std::ofstream out(path); out << WarningsJson().dump(2); }
+    {
+        auto doc = Arcane::Editor::InputActionsDocument::Open(path);
+        REQUIRE(doc);
+        CHECK(doc->DiagnosticKey() == "input:11111111-1111-4111-8111-111111111111");
+        const auto w = doc->Model().Warnings();
+        REQUIRE(w.size() >= 2);
+        doc->Tick(0.0);                                                   // no ImGui frame, no Draw
+        auto rows = store.Snapshot();
+        REQUIRE(rows.size() == w.size());
+        for (std::size_t i = 0; i < rows.size(); ++i)
+        {
+            CHECK(rows[i].message == w[i]);
+            CHECK(rows[i].severity == Arcane::DiagSeverity::Warning);
+            CHECK(rows[i].scope == Arcane::DiagScope::Assets);
+            CHECK(rows[i].locator.kind == Arcane::DiagLocator::Kind::Asset);
+            CHECK(rows[i].locator.asset == doc->AssetGuid());
+            CHECK(rows[i].detail == path.stem().string() + ".arcinput");
+        }
+        CHECK(std::any_of(rows.begin(), rows.end(), [](const auto& d) { return d.code == "input.path.unknown"; }));
+        CHECK(std::any_of(rows.begin(), rows.end(), [](const auto& d) { return d.code == "input.binding.conflict"; }));
+        const auto n0 = rows.size();
+        REQUIRE(doc->Save());                                             // a save changes no draft: rows persist
+        doc->Tick(0.0);
+        CHECK(store.Snapshot().size() == n0);
+        REQUIRE(doc->Model().SetField(*Arcane::Guid::FromString("12121212-1212-4121-8121-121212121212"), "path", "<Keyboard>/k"));
+        doc->Tick(0.0);                                                   // as a hidden tab's page edit would be picked up
+        rows = store.Snapshot();
+        CHECK(rows.size() == n0 - 1);
+        CHECK_FALSE(std::any_of(rows.begin(), rows.end(), [](const auto& d) { return d.code == "input.path.unknown"; }));
+    }
+    CHECK(store.Snapshot().empty());                                      // closing clears
+    store.UninstallEngineSink();
+    fs::remove(path);
 }

@@ -94,6 +94,7 @@ namespace Arcane::Editor
         [[nodiscard]] std::vector<BindingConflict> Conflicts() const;
         // Invalid names + unknown paths (the evaluator's own check) + one line per conflicting PAIR.
         [[nodiscard]] std::vector<std::string> Warnings() const;
+        [[nodiscard]] std::uint64_t DraftRevision() const noexcept { return draftRevision_; }   // bumped by every draft write (Validate is the one funnel)
         // Name rules mirror the runtime's LoadAsset keys (InputActions.cpp:757-775):
         // map names unique across the document, action names unique within
         // their map; trimmed, case-sensitive. nullopt = acceptable (the
@@ -109,6 +110,7 @@ namespace Arcane::Editor
         void Validate();
         bool OwnerOfBinding(const Guid& binding, Guid& map, Guid& action) const;
         void SetSelectionSilently(const std::array<Guid, 4>& ids);
+        std::uint64_t draftRevision_ = 0;
         nlohmann::json draft_;
         nlohmann::json saved_;
         std::optional<InputActionAsset> preview_;
