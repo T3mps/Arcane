@@ -134,7 +134,7 @@ namespace Arcane::Editor
 
     void InputActionsInspectorPage::Draw(PropertyGrid& grid)
     {
-        edit_ = nullptr;
+        edit_.clear();
         drawing_ = true;   // Defer() queues until the end of this call
         const auto& draft = model_.Draft();
         const auto* map = Find(draft, sel_.map);
@@ -147,7 +147,14 @@ namespace Arcane::Editor
         else if (map) DrawMap(grid, *map);
         else DrawAsset(grid);
         drawing_ = false;
-        if (edit_) edit_();   // AFTER the draw: the draft must not mutate under the rows above
+        // AFTER the draw (the draft must not mutate under the rows above), IN
+        // ORDER: two rows can commit in one Draw (a text/number row commits on
+        // deactivate, the frame AFTER the click that moved focus; a checkbox or
+        // combo on release -- a tap lands both in one frame). Each SetField
+        // copies the draft afresh, so running them one after another is safe.
+        std::vector<std::function<void()>> queue;
+        queue.swap(edit_);
+        for (auto& fn : queue) fn();
     }
 
     void InputActionsInspectorPage::DrawAsset(PropertyGrid& grid)
@@ -167,7 +174,7 @@ namespace Arcane::Editor
                 const std::string def = Str(draft, "defaultMap");
                 for (std::size_t i = 0; i < ids.size(); ++i) if (ids[i].ToString() == def) current = static_cast<int>(i);
                 if (const int picked = grid.ComboRow("Default map", items.data(), static_cast<int>(items.size()), current); picked >= 0)
-                    edit_ = [m = &model_, id = ids[static_cast<std::size_t>(picked)]] { (void)m->SetDefaultMap(id); };
+                    edit_.push_back([m = &model_, id = ids[static_cast<std::size_t>(picked)]] { (void)m->SetDefaultMap(id); });
                 std::size_t actions = 0, bindings = 0;
                 if (draft.is_object() && draft.contains("actionMaps") && draft["actionMaps"].is_array())
                     for (const auto& m : draft["actionMaps"]) if (m.contains("actions") && m["actions"].is_array())
@@ -216,9 +223,9 @@ namespace Arcane::Editor
                 grid.TextRow("Name", Str(map, "name"), [this, id, w = std::weak_ptr<bool>(alive_)](std::string v)
                              { if (w.expired()) return; Defer([m = &model_, id, v] { (void)m->SetField(id, "name", v); }); });
                 bool blocking = Bool(map, "blocking", false);
-                if (grid.CheckboxRow("Blocking", blocking)) edit_ = [m = &model_, id, blocking] { (void)m->SetField(id, "blocking", blocking); };
+                if (grid.CheckboxRow("Blocking", blocking)) edit_.push_back([m = &model_, id, blocking] { (void)m->SetField(id, "blocking", blocking); });
                 int priority = Int(map, "priority", 0);
-                if (grid.IntRow("Priority", priority)) edit_ = [m = &model_, id, priority] { (void)m->SetField(id, "priority", priority); };
+                if (grid.IntRow("Priority", priority)) edit_.push_back([m = &model_, id, priority] { (void)m->SetField(id, "priority", priority); });
             }
         }
         if (grid.Section("Contents"))
@@ -250,7 +257,7 @@ namespace Arcane::Editor
                 const std::string type = Str(action, "type");
                 int current = 0; for (int i = 0; i < 3; ++i) if (type == kTypes[i]) current = i;
                 if (const int picked = grid.ComboRow("Type", kTypes, 3, current); picked >= 0)
-                    edit_ = [m = &model_, id, picked] { (void)m->SetField(id, "type", kTypes[picked]); };
+                    edit_.push_back([m = &model_, id, picked] { (void)m->SetField(id, "type", kTypes[picked]); });
                 // Interaction: the first token decides the combo; Hold/Tap carry a
                 // duration. An undecorated token takes the ENGINE's default
                 // (kDefaultHoldSeconds / kDefaultTapSeconds, InputActions.hpp):
@@ -268,11 +275,11 @@ namespace Arcane::Editor
                     if (k == 3) { std::snprintf(buf, sizeof buf, "tap(duration=%.2f)", s); return nlohmann::json::array({ buf }); }
                     return nlohmann::json::array(); };
                 if (const int picked = grid.ComboRow("Interaction", kInteractions, 4, kind); picked >= 0)
-                    edit_ = [m = &model_, id, v = compose(picked, picked == 2 ? kDefaultHoldSeconds : kDefaultTapSeconds)]
-                            { (void)m->SetField(id, "interactions", v); };
+                    edit_.push_back([m = &model_, id, v = compose(picked, picked == 2 ? kDefaultHoldSeconds : kDefaultTapSeconds)]
+                            { (void)m->SetField(id, "interactions", v); });
                 if (kind == 2 || kind == 3)
                     if (grid.FloatRow("Seconds", seconds, 0.01f))
-                        edit_ = [m = &model_, id, v = compose(kind, seconds)] { (void)m->SetField(id, "interactions", v); };
+                        edit_.push_back([m = &model_, id, v = compose(kind, seconds)] { (void)m->SetField(id, "interactions", v); });
                 grid.TextRow("Processors", Joined(action.value("processors", nlohmann::json::array())),
                              [this, id, w = std::weak_ptr<bool>(alive_)](std::string v)
                              { if (w.expired()) return; Defer([m = &model_, id, arr = Split(v)] { (void)m->SetField(id, "processors", arr); }); });
@@ -344,7 +351,7 @@ namespace Arcane::Editor
                             nlohmann::json next = nlohmann::json::array();
                             for (const auto& g : groups) if (g != group) next.push_back(g);
                             if (on) next.push_back(group);
-                            edit_ = [m = &model_, id, next] { (void)m->SetField(id, "groups", next); };
+                            edit_.push_back([m = &model_, id, next] { (void)m->SetField(id, "groups", next); });
                         }
                         ImGui::PopID();
                     }
@@ -371,8 +378,8 @@ namespace Arcane::Editor
                     if (inv) next.push_back("invert");
                     if (sc) { char buf[40]; std::snprintf(buf, sizeof buf, "scale(factor=%.3f)", factor); next.push_back(buf); }
                     return next; };
-                if (grid.CheckboxRow("Invert", invert)) edit_ = [m = &model_, id, v = rebuild(invert, hasScale, scale)] { (void)m->SetField(id, "processors", v); };
-                if (grid.FloatRow("Scale", scale, 0.01f)) edit_ = [m = &model_, id, v = rebuild(invert, true, scale)] { (void)m->SetField(id, "processors", v); };
+                if (grid.CheckboxRow("Invert", invert)) edit_.push_back([m = &model_, id, v = rebuild(invert, hasScale, scale)] { (void)m->SetField(id, "processors", v); });
+                if (grid.FloatRow("Scale", scale, 0.01f)) edit_.push_back([m = &model_, id, v = rebuild(invert, true, scale)] { (void)m->SetField(id, "processors", v); });
                 grid.ReadOnlyRow("Raw", Joined(procs));
             }
         }
@@ -429,7 +436,7 @@ namespace Arcane::Editor
         const InputControlChoice* firstVisible = nullptr;
         auto commit = [&](const InputControlChoice& c)
         {
-            edit_ = [m = &model_, target, path = c.path] { (void)m->SetField(target, "path", path); };
+            edit_.push_back([m = &model_, target, path = c.path] { (void)m->SetField(target, "path", path); });
             ImGui::CloseCurrentPopup();
         };
         ImGui::BeginChild("##picklist", ImVec2(300.0f, 260.0f));

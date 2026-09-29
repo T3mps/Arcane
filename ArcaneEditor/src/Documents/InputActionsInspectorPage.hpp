@@ -53,18 +53,21 @@ namespace Arcane::Editor
         void DrawLivePreview(PropertyGrid& grid, const Guid& action);
         void DrawPicker(const Guid& target);
         // Edits never mutate the draft under the row loop: inside Draw they are
-        // queued (edit_) and run after the last Draft() reference; OUTSIDE Draw
-        // -- a TextRow draft deactivated while this page was not drawn, flushed
-        // by PropertyGrid::CommitOrphans before any Inspector window Begins --
-        // the edit applies at once, so a following Ctrl+S saves it.
-        void Defer(std::function<void()> fn) { if (drawing_) edit_ = std::move(fn); else fn(); }
+        // QUEUED (edit_, every commit appended, never overwritten -- two rows can
+        // commit in the same Draw, e.g. a text row's deactivate-commit plus a
+        // checkbox tapped on the next frame) and run IN ORDER after the last
+        // Draft() reference; OUTSIDE Draw -- a TextRow draft deactivated while
+        // this page was not drawn, flushed by PropertyGrid::CommitOrphans before
+        // any Inspector window Begins -- the edit applies at once, so a
+        // following Ctrl+S saves it.
+        void Defer(std::function<void()> fn) { if (drawing_) edit_.push_back(std::move(fn)); else fn(); }
 
         InputActionsEditorModel& model_;
         std::string assetName_, assetPath_;
         Services services_;
         InputSelection sel_;
         char pickerSearch_[64] = {};
-        std::function<void()> edit_;
+        std::vector<std::function<void()>> edit_;   // this Draw's queued edits, run in order at its end
         bool drawing_ = false;
         // Liveness token for the commits TextRow stores in its draft: a draft
         // outlives the page (the document closed while a box was active), so a
