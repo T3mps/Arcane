@@ -196,6 +196,10 @@ namespace Arcane::Editor
         }
         else if (result.state == InputRebindState::Canceled || result.state == InputRebindState::TimedOut)
             captureTarget_ = {};
+        // The capture ended on a frame the body is not drawn: DrawActions (which
+        // owns the one-shot's clear) does not run, so drop the page Rebind's
+        // scroll-to-row here, or it would scroll a row later with no capture live.
+        if (!bodyDrawn && !captureTarget_.IsValid()) state_.scrollRowToId = {};
     }
 
     void InputActionsDocument::Draw(bool& requestClose)

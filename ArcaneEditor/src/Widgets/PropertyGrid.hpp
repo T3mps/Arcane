@@ -109,6 +109,9 @@ namespace Arcane::Editor
         // reason: shown as a tooltip while typing; Enter on a refused value
         // keeps the text and re-arms the box; focus loss with a refused value
         // reverts without committing. Mirrors the Input Actions rename box.
+        // CommitOrphans flushes an orphaned ACTIVE draft through `commit`
+        // WITHOUT `validate`: a commit that does not re-validate can land a
+        // refused value that way.
         bool CheckboxRow(const char* label, bool& value);
         bool IntRow(const char* label, int& value);                          // true once per gesture, on deactivate-after-edit AND value != seed; value follows the gesture every frame
         bool FloatRow(const char* label, float& value, float speed = 0.01f); // same rule; Escape mid-drag = cancel, no commit
@@ -119,7 +122,9 @@ namespace Arcane::Editor
         void MeterRow(const char* label, float fraction01, const char* overlay);
         // Flush drafts whose box was deactivated while its row was not drawn
         // (window hidden/closed, section collapsed, selection moved): commit
-        // the text if it changed, then drop the draft. Call ONCE per frame per
+        // the text if it changed, then drop the draft. The row's `validate` is
+        // NOT consulted (it is never stored): the commit must re-validate if a
+        // refused value must never land. Call ONCE per frame per
         // state BEFORE any window that draws this state Begins.
         void CommitOrphans();
 

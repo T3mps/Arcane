@@ -59,7 +59,9 @@ namespace Arcane::Editor
         // A hold (Enter on a refused value) keeps the typed text while focus is
         // re-armed; it expires if the row vanished or focus never came back, so
         // a refused name never leaves stale text on screen.
-        if (draft.hold && (draft.lastFrame + 1 < now || now > draft.holdFrame + 3)) draft.hold = false;   // row vanished, or focus never came back
+        // The queued re-arm expires with it: a stale focusPending would grab focus
+        // (select-all) unprompted the next time the row draws.
+        if (draft.hold && (draft.lastFrame + 1 < now || now > draft.holdFrame + 3)) { draft.hold = false; draft.focusPending = false; }   // row vanished, or focus never came back
         // Re-seed from live data whenever THIS widget was not active on its
         // last draw, OR was not drawn last frame at all (page/source switched
         // while the box was active: CommitOrphans owns that edit, never this
@@ -89,6 +91,17 @@ namespace Arcane::Editor
         draft.active = ImGui::IsItemActive();
         if (draft.active) draft.hold = false;   // focus came back: the hold has done its job
         bool committed = false;
+        // Enter on a refused value keeps the text and re-arms the box on EVERY
+        // deactivation, edited this activation or not (a second Enter after a
+        // re-arm has no new edit): the rename box's IsItemDeactivated rule (D4).
+        // A draft created this frame is CommitOrphans' flushed one (see below).
+        if (reason && !inserted && ImGui::IsItemDeactivated()
+            && (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+        {
+            draft.hold = true; draft.holdFrame = now; draft.focusPending = true;   // keep text + re-arm
+            ImGui::PopID();
+            return false;
+        }
         if (ImGui::IsItemDeactivatedAfterEdit())
         {
             if (inserted)
@@ -100,8 +113,6 @@ namespace Arcane::Editor
             }
             else
             {
-                const bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
-                if (reason && enter) { draft.hold = true; draft.holdFrame = now; draft.focusPending = true; ImGui::PopID(); return false; }   // keep text + re-arm (the rename box's rule)
                 if (reason) { m_state.textDrafts.erase(it); ImGui::PopID(); return false; }                                            // focus loss / Escape: revert, no commit
                 std::string edited = draft.text;
                 auto fn = std::move(draft.commit);

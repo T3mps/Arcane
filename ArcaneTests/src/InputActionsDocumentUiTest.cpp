@@ -13,6 +13,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 
 namespace
@@ -62,7 +63,11 @@ namespace
             doc = Arcane::Editor::InputActionsDocument::Open(path);
             grid.probe = &probe;
         }
-        ~DocUi() { ImGui::DestroyContext(ctx); ctx = nullptr; ImGui::SetCurrentContext(prev); doc.reset(); fs::remove(path); }
+        bool collapseDoc = false;   // true = the document window draws collapsed: its body is not drawn (Begin returns false)
+        // ~Ui owns the context teardown: the document's destructor touches no
+        // ImGui (Diagnostics::Clear only). The remove must not throw from a
+        // destructor (a briefly locked temp file would std::terminate the run).
+        ~DocUi() { doc.reset(); std::error_code ec; fs::remove(path, ec); }
         void Frame()
         {
             ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
@@ -71,6 +76,7 @@ namespace
             Arcane::Editor::PropertyGrid(grid).CommitOrphans();
             ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_Always);
+            if (collapseDoc) ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always);
             bool close = false;
             doc->Draw(close);
             ImGui::SetNextWindowPos(ImVec2(820, 0), ImGuiCond_Always);
@@ -106,6 +112,23 @@ TEST_CASE("input document: the Inspector page's Rebind... takes focus, so the ca
     CHECK_FALSE(ui.doc->State().scrollRowToId.IsValid());
     ui.Key(ImGuiKey_Escape);
     CHECK_FALSE(ui.doc->InputSwallowed());
+}
+
+TEST_CASE("input document: a page Rebind cancelled on a frame the document body is not drawn drops its scroll-to-row one-shot (final review)", "[editor][input][inspector]")
+{
+    DocUi ui;
+    REQUIRE(ui.doc);
+    REQUIRE(ui.doc->SelectByPath("Player/Jump/0"));
+    ui.Frame(); ui.Frame();
+    ui.Move(ui.At("#Rebind..."));
+    ui.Button(0, true);
+    ui.Button(0, false);                         // the page arms the capture and sets the one-shot
+    REQUIRE(ui.doc->State().scrollRowToId == G("44444444-4444-4444-8444-444444444444"));
+    ui.collapseDoc = true;                       // next frame the body is not drawn: TickCapture(false) cancels, DrawActions never runs
+    ui.Frame();                                  // the cancelling frame (still swallowed: the stamp covers it by design)
+    ui.Frame();
+    CHECK_FALSE(ui.doc->InputSwallowed());       // the capture is over
+    CHECK_FALSE(ui.doc->State().scrollRowToId.IsValid());   // pre-fix it lingered and scrolled the row a frame later with no capture live
 }
 
 TEST_CASE("input document: the Inspector page's Name row keeps a refused duplicate on Enter with no edit; a unique name commits", "[editor][input][inspector]")

@@ -185,3 +185,50 @@ TEST_CASE("PropertyGrid: a TextRow value refused on Enter keeps the typed text a
     CHECK(h.name == "Y");
     for (const auto& [id, d] : h.state.textDrafts) CHECK(d.text != "X");
 }
+
+TEST_CASE("PropertyGrid: a refused-Enter hold that expires because its row vanished never grabs focus later (final review)", "[editor][inspector]")
+{
+    GridHarness h;
+    h.validate = [](std::string_view v) -> std::optional<std::string> { return v == "X" ? std::optional<std::string>("taken") : std::nullopt; };
+    h.Frame();
+    h.Click(h.Centre("Name"));
+    h.Type("X");
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiKey_Enter, true); h.Frame();         // refused: hold + a re-arm queued for the next draw
+    h.drawName = false;                                      // the row vanishes before the re-arm lands
+    io.AddKeyEvent(ImGuiKey_Enter, false); h.Frame(); h.Frame();
+    h.drawName = true;                                       // back: the hold has expired
+    for (int i = 0; i < 6; ++i) h.Frame();
+    CHECK_FALSE(ImGui::IsAnyItemActive());                   // the box never took focus on its own
+    CHECK(h.commits == 0);
+    CHECK(h.name == "Alpha");
+    bool showsModel = false;
+    for (const auto& [id, d] : h.state.textDrafts)
+    {
+        CHECK_FALSE(d.active);
+        CHECK(d.text != "X");                                // the refused text is gone
+        showsModel = showsModel || d.text == "Alpha";
+    }
+    CHECK(showsModel);
+}
+
+TEST_CASE("PropertyGrid: a second Enter on a refused TextRow value, with no new typing, still keeps it and re-arms (D4, final review)", "[editor][inspector]")
+{
+    GridHarness h;
+    h.validate = [](std::string_view v) -> std::optional<std::string> { return v == "X" ? std::optional<std::string>("taken") : std::nullopt; };
+    h.Frame();
+    h.Click(h.Centre("Name"));
+    h.Type("X");
+    h.Key(ImGuiKey_Enter);                                   // refused: kept + re-armed
+    h.Frame(); h.Frame();
+    REQUIRE(h.state.textDrafts.size() == 1);
+    REQUIRE(h.state.textDrafts.begin()->second.text == "X");
+    REQUIRE(h.state.textDrafts.begin()->second.active);
+    h.Key(ImGuiKey_Enter);                                   // again, no typing: this activation has no edit
+    h.Frame(); h.Frame(); h.Frame();
+    CHECK(h.commits == 0);
+    CHECK(h.name == "Alpha");
+    REQUIRE(h.state.textDrafts.size() == 1);
+    CHECK(h.state.textDrafts.begin()->second.text == "X");      // still kept
+    CHECK(h.state.textDrafts.begin()->second.active);           // still re-armed
+}

@@ -955,7 +955,9 @@ namespace Arcane::Editor
         // and these callbacks only wrap them. Registered at the same Init
         // site. ReadLine re-applies the --view-mode seed after each line so
         // the ini's Mode can never overrule the flag (the ini is read at the
-        // FIRST NewFrame, which is after StageFinalize on a windowed run).
+        // FIRST NewFrame, which is after StageFinalize on a windowed run, and
+        // again on a windowed project switch: RetargetLayoutIni's
+        // ClearIniSettings + LoadIniSettingsFromDisk at the loop top).
         static void* ViewportSettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                               const char* name);
         static void  ViewportSettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
@@ -993,11 +995,10 @@ namespace Arcane::Editor
         // project-less). io.IniFilename BORROWS this string (ImGui never
         // copies it), so it lives here, never in a local. Retargeted at boot
         // (StageFinalize, before the first NewFrame auto-loads it) and on
-        // project switch. Switch rule, on purpose: the LIVE layout follows
-        // you -- each project remembers the layout you last had open in it,
-        // and a project's own saved layout applies on the next BOOT into it.
-        // No mid-session ini reload: ImGui applies loaded dock data only to
-        // windows as they appear, so a live reload would half-apply.
+        // project switch. A windowed switch loads the INCOMING project's
+        // layout: ClearIniSettings (every editor handler's ClearAllFn resets
+        // to defaults) then LoadIniSettingsFromDisk of the new file, at the
+        // loop-top safe point before the editor's ImGui frame (Task 13).
         //
         // THE STRING ITSELF IS DECLARED UP WITH m_config, ABOVE m_gpu -- ImGui
         // borrows it and saves through that borrow from ~ImGuiLayer, so it has

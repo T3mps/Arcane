@@ -253,7 +253,9 @@ namespace Arcane::Editor
         // read order irrelevant. Under --headless the seed layout is loaded
         // explicitly in RetargetLayoutIni (inside StageFinalize) and carries
         // no [EditorViewport] block anyway; StageFinalize's own call covers
-        // the "no block at all" case on both paths.
+        // the "no block at all" case on both paths. A windowed project switch
+        // re-reads the incoming project's ini (RetargetLayoutIni: Clear +
+        // LoadIniSettingsFromDisk), so the seed is re-applied there too.
         Arcane::Editor::ApplyViewModeSeed(self->m_config.viewMode, self->m_camera);
     }
 
