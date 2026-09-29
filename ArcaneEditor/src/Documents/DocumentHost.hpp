@@ -28,6 +28,17 @@ namespace Arcane::Editor
         // Cheap asset-identity probe (no document construction). Nil = unknown.
         using PeekGuid = std::function<Arcane::Guid(const std::filesystem::path&)>;
 
+        // Lifecycle observer (inspector-ownership arc): the app registers each
+        // opened document as an Inspector source and releases it on close.
+        // `closing` fires BEFORE the document is destroyed (Close and CloseAll
+        // both), so the observer may still read its identity.
+        struct DocumentObserver
+        {
+            std::function<void(EditorDocument&)> opened;
+            std::function<void(EditorDocument&)> closing;
+        };
+        void SetObserver(DocumentObserver observer) { m_observer = std::move(observer); }
+
         // ---- routing (Fold 3 skeleton) ----------------------------------
         // Register a factory for an asset extension (".arcmat"). Lowercase match.
         // `peek` (optional) lets OpenPath resolve focus-not-reopen BEFORE
@@ -106,6 +117,7 @@ namespace Arcane::Editor
 
         std::vector<std::unique_ptr<EditorDocument>> m_docs;
         std::vector<Route> m_factories;
+        DocumentObserver m_observer;
         EditorDocument* m_pendingClose = nullptr;
         // The document OpenPath last resolved, owed a window focus on its next
         // draw. Covers BOTH open paths: a brand-new document (which ImGui would

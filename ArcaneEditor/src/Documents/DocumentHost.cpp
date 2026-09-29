@@ -60,6 +60,7 @@ namespace Arcane::Editor
     EditorDocument* DocumentHost::Add(std::unique_ptr<EditorDocument> doc)
     {
         m_docs.push_back(std::move(doc));
+        if (m_observer.opened) m_observer.opened(*m_docs.back());
         return m_docs.back().get();
     }
 
@@ -137,6 +138,7 @@ namespace Arcane::Editor
     void DocumentHost::CloseAll()
     {
         m_pendingClose = nullptr;
+        if (m_observer.closing) for (const auto& d : m_docs) m_observer.closing(*d);
         m_docs.clear();
         m_dockPlaced.clear();
     }
@@ -144,6 +146,7 @@ namespace Arcane::Editor
     void DocumentHost::Close(EditorDocument* doc)
     {
         m_dockPlaced.erase(doc);   // a reopen docks fresh again
+        if (m_observer.closing) m_observer.closing(*doc);
         m_docs.erase(std::remove_if(m_docs.begin(), m_docs.end(),
                                     [doc](const auto& d) { return d.get() == doc; }),
                      m_docs.end());

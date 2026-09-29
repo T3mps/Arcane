@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 using Arcane::Editor::DocumentHost;
 using Arcane::Editor::EditorDocument;
@@ -188,6 +189,24 @@ TEST_CASE("DocumentHost::CloseAll drops every document and any pending confirm",
     CHECK(host.Count() == 0);
     CHECK_FALSE(host.HasPendingConfirm());
     CHECK_FALSE(host.AnyDirty());
+}
+
+TEST_CASE("DocumentHost tells its observer about every open and every close, before destruction", "[editor]")
+{
+    DocumentHost host;
+    std::vector<std::string> events;
+    host.SetObserver({
+        [&](EditorDocument& d) { events.push_back("open:" + d.Title()); },
+        [&](EditorDocument& d) { events.push_back("close:" + d.Title()); } });
+    auto* a = static_cast<FakeDoc*>(host.Add(std::make_unique<FakeDoc>("a", Arcane::Guid::Generate(), false)));
+    host.Add(std::make_unique<FakeDoc>("b", Arcane::Guid::Generate(), false));
+    host.RequestClose(a);                            // clean: closes now
+    host.CloseAll();                                 // b
+    REQUIRE(events.size() == 4);
+    CHECK(events[0] == "open:a");
+    CHECK(events[1] == "open:b");
+    CHECK(events[2] == "close:a");
+    CHECK(events[3] == "close:b");
 }
 
 TEST_CASE("Param decls map to their editor widgets", "[editor][material]")
