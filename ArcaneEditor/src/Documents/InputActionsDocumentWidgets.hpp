@@ -30,7 +30,16 @@ namespace Arcane::Editor
         Guid renameTarget;                            // inline rename (F2 / context menu); swept every frame when its row is not drawable
         std::string renameBuf;
         bool renameFocusPending = false;
-        bool scrollToSelection = false;               // consumed by the row that draws as selected (keyboard step, F2, a new row)
+        // Scroll-into-view requests, ONE PER COLUMN (the maps child draws first,
+        // so a shared flag would always be eaten by the selected map row):
+        // scrollMapToSelection is set by the maps column's keys, its `+`/
+        // Duplicate and a rename opened on a MAP, and consumed only by the
+        // selected map row (or its rename box); scrollRowToSelection is set by
+        // the actions column's keys, new actions/bindings/composites/parts and a
+        // rename opened on an ACTION, and consumed only by the selected actions
+        // row (or its rename box).
+        bool scrollMapToSelection = false;
+        bool scrollRowToSelection = false;
         enum class DragVerdict : std::uint8_t { None, Legal, Illegal };
         DragVerdict dragVerdict = DragVerdict::None;      // written by the hovered drop target this frame
         DragVerdict dragVerdictPrev = DragVerdict::None;  // read by the drag source's preview (one frame behind)

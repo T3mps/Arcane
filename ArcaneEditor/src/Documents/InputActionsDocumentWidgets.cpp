@@ -82,14 +82,22 @@ namespace Arcane::Editor
             if (ImGui::MenuItem("Move up"))   edit = [&model, id] { (void)model.MoveRow(id, -1); };
             if (ImGui::MenuItem("Move down")) edit = [&model, id] { (void)model.MoveRow(id, 1); };
         }
+        // Each column scrolls its OWN selection into view: the maps child draws
+        // first, so one shared flag was always eaten by the selected map row and
+        // the actions column never scrolled. A map id owns the maps column's
+        // flag; every other id (action, binding, part) the actions column's.
+        bool& ScrollFlagFor(const InputActionsEditorModel& model, InputActionsDocumentState& state, const Guid& id)
+        { return IsMapId(model.Draft(), id) ? state.scrollMapToSelection : state.scrollRowToSelection; }
+
         // A new map/action opens in a rename box on its (unique, Task 6) name --
         // UE's new-item kick-off. Shared by the toolbar, the maps `+`, the
-        // actions-column `+ Action` and both columns' Rename menu items.
+        // actions-column `+ Action`, F2 in both columns and both columns' Rename
+        // menu items.
         void OpenRenameOn(InputActionsEditorModel& model, InputActionsDocumentState& state, const Guid& id)
         {
             state.renameTarget = id;
             state.renameBuf = NameOf(model, id);
-            state.renameFocusPending = state.scrollToSelection = true;
+            state.renameFocusPending = ScrollFlagFor(model, state, id) = true;
         }
 
         // The inline rename box, ONE for the maps and actions columns (the caller
@@ -102,7 +110,7 @@ namespace Arcane::Editor
         void DrawRenameBox(InputActionsEditorModel& model, InputActionsDocumentState& state, const Guid& id,
                            const std::string& currentName, std::function<void()>& edit)
         {
-            if (state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+            if (bool& scroll = ScrollFlagFor(model, state, id); scroll) { ImGui::SetScrollHereY(); scroll = false; }   // this column's flag only
             if (state.renameFocusPending) { ImGui::SetKeyboardFocusHere(); state.renameFocusPending = false; }
             ImGui::SetNextItemWidth(-FLT_MIN);
             const bool entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
@@ -198,11 +206,11 @@ namespace Arcane::Editor
             // ("Action Map 2", "Action 3" -- Task 6); the new row opens in rename.
             if (ImGui::MenuItem("Action map")) edit = [&model, &state] { if (model.AddMap()) OpenRenameOn(model, state, model.SelectedMap()); };
             if (ImGui::MenuItem("Action", nullptr, false, map.IsValid())) edit = [&model, &state, map] { if (model.AddAction(map)) OpenRenameOn(model, state, model.SelectedAction()); };
-            if (ImGui::MenuItem("Binding", nullptr, false, action.IsValid())) edit = [&model, &state, map, action] { if (model.AddBinding(map, action)) state.scrollToSelection = true; };
+            if (ImGui::MenuItem("Binding", nullptr, false, action.IsValid())) edit = [&model, &state, map, action] { if (model.AddBinding(map, action)) state.scrollRowToSelection = true; };
             if (ImGui::BeginMenu("Composite", action.IsValid()))
             {
-                if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "1DAxis")) state.scrollToSelection = true; };
-                if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "2DVector")) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "1DAxis")) state.scrollRowToSelection = true; };
+                if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "2DVector")) state.scrollRowToSelection = true; };
                 ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Control scheme")) state.schemePopupPending = true;
@@ -262,11 +270,11 @@ namespace Arcane::Editor
             const auto row = RowWithThumb("##map", 0, ICON_LC_LAYERS, name.c_str(), model.SelectedMap() == id, 0.0f);
             const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // restored after the trailing pills (same rule as DrawRow)
             if (row.clicked) model.SelectMap(id);
-            if (model.SelectedMap() == id && state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+            if (model.SelectedMap() == id && state.scrollMapToSelection) { ImGui::SetScrollHereY(); state.scrollMapToSelection = false; }
             if (ImGui::BeginPopupContextItem("##mapmenu"))
             {
                 if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, id);
-                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id] { if (model.DuplicateRow(id)) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id] { if (model.DuplicateRow(id)) state.scrollMapToSelection = true; };
                 if (ImGui::MenuItem("Set as default", nullptr, Str(draft, "defaultMap") == id.ToString()))
                     edit = [&model, id] { (void)model.SetDefaultMap(id); };
                 ImGui::Separator();
@@ -340,7 +348,7 @@ namespace Arcane::Editor
             ImGui::PushStyleColor(ImGuiCol_Button, Theme::kNone);
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::kTextDim);
             if (ImGui::SmallButton(ICON_LC_PLUS " Binding") && !swallowed)
-                edit = [&model, &state, map, action = row.actionId] { if (model.AddBinding(map, action)) state.scrollToSelection = true; };
+                edit = [&model, &state, map, action = row.actionId] { if (model.AddBinding(map, action)) state.scrollRowToSelection = true; };
             ImGui::PopStyleColor(2);
             ImGui::PopID(); ImGui::PopID();
             return;
@@ -386,7 +394,7 @@ namespace Arcane::Editor
         if (rebinding) ImGui::PopStyleColor();
         const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // RowWithThumb parked the cursor at the next row's start; restored at the end
         if (r.clicked && !swallowed) SelectRow(model, row);
-        if (selected && state.scrollToSelection) { ImGui::SetScrollHereY(); state.scrollToSelection = false; }
+        if (selected && state.scrollRowToSelection) { ImGui::SetScrollHereY(); state.scrollRowToSelection = false; }
 
         // Live glow: an amber bar at the row's left edge + a faint wash.
         if (const float v = services.glow ? services.glow(row.id) : 0.0f; v > 0.0f && row.kind != InputRowKind::Action)
@@ -442,12 +450,12 @@ namespace Arcane::Editor
             if (row.kind == InputRowKind::Action)
             {
                 if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, row.id);
-                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollToSelection = true; };
-                if (ImGui::MenuItem("Add binding")) edit = [&model, &state, map, id = row.id] { if (model.AddBinding(map, id)) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollRowToSelection = true; };
+                if (ImGui::MenuItem("Add binding")) edit = [&model, &state, map, id = row.id] { if (model.AddBinding(map, id)) state.scrollRowToSelection = true; };
                 if (ImGui::BeginMenu("Add composite"))
                 {
-                    if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "1DAxis")) state.scrollToSelection = true; };
-                    if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "2DVector")) state.scrollToSelection = true; };
+                    if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "1DAxis")) state.scrollRowToSelection = true; };
+                    if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "2DVector")) state.scrollRowToSelection = true; };
                     ImGui::EndMenu();
                 }
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
@@ -459,17 +467,17 @@ namespace Arcane::Editor
                 {
                     const bool axis = row.name == "1D Axis";
                     for (const char* role : axis ? std::vector<const char*>{ "negative", "positive" } : std::vector<const char*>{ "up", "down", "left", "right" })
-                        if (ImGui::MenuItem(role)) edit = [&model, &state, id = row.id, role] { if (model.AddPart(id, role)) state.scrollToSelection = true; };
+                        if (ImGui::MenuItem(role)) edit = [&model, &state, id = row.id, role] { if (model.AddPart(id, role)) state.scrollRowToSelection = true; };
                     ImGui::EndMenu();
                 }
-                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
                 if (ImGui::MenuItem("Delete", "Del")) edit = [&model, map, action = row.actionId, id = row.id] { (void)model.RemoveBinding(map, action, id); };
             }
             else   // Binding / Part
             {
                 if (ImGui::MenuItem("Rebind...", "Enter") && services.beginRebind) services.beginRebind(row.id);
-                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollToSelection = true; };
+                if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
                 if (ImGui::MenuItem("Delete", "Del"))
                 {
@@ -598,7 +606,7 @@ namespace Arcane::Editor
         auto step = [&](int dir)
         {
             if (const auto next = StepSelection(rows, current, dir))
-                for (const auto& r : rows) if (r.id == *next && r.kind != InputRowKind::AddBinding) { SelectRow(model, r); state.scrollToSelection = true; break; }
+                for (const auto& r : rows) if (r.id == *next && r.kind != InputRowKind::AddBinding) { SelectRow(model, r); state.scrollRowToSelection = true; break; }
         };
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step(+1);   // navigation repeats (UE SListView)
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))   step(-1);
@@ -626,9 +634,9 @@ namespace Arcane::Editor
                 }
                 else if (row->kind == InputRowKind::Part)
                 {
-                    if (const auto* parent = rowById(InputRowKind::CompositeHeader, row->bindingId)) { SelectRow(model, *parent); state.scrollToSelection = true; }
+                    if (const auto* parent = rowById(InputRowKind::CompositeHeader, row->bindingId)) { SelectRow(model, *parent); state.scrollRowToSelection = true; }
                 }
-                else if (const auto* parent = rowById(InputRowKind::Action, row->actionId)) { SelectRow(model, *parent); state.scrollToSelection = true; }
+                else if (const auto* parent = rowById(InputRowKind::Action, row->actionId)) { SelectRow(model, *parent); state.scrollRowToSelection = true; }
             }
             if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false))
             {
@@ -637,7 +645,7 @@ namespace Arcane::Editor
                 {
                     const std::size_t at = static_cast<std::size_t>(row - rows.data());
                     if (at + 1 < rows.size() && rows[at + 1].depth > row->depth && rows[at + 1].kind != InputRowKind::AddBinding)
-                    { SelectRow(model, rows[at + 1]); state.scrollToSelection = true; }
+                    { SelectRow(model, rows[at + 1]); state.scrollRowToSelection = true; }
                 }
             }
         }
@@ -674,7 +682,7 @@ namespace Arcane::Editor
         {
             const std::ptrdiff_t i = index == ids.end() ? (dir > 0 ? 0 : static_cast<std::ptrdiff_t>(ids.size()) - 1)
                                                         : std::clamp<std::ptrdiff_t>((index - ids.begin()) + dir, 0, static_cast<std::ptrdiff_t>(ids.size()) - 1);
-            model.SelectMap(ids[static_cast<std::size_t>(i)]); state.scrollToSelection = true;
+            model.SelectMap(ids[static_cast<std::size_t>(i)]); state.scrollMapToSelection = true;
         };
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) step(+1);
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))   step(-1);
