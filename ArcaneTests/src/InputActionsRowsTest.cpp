@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Documents/InputActionsRows.hpp>
 #include <Documents/InputActionsEditorModel.hpp>
+#include <Documents/InputActionsDocumentWidgets.hpp>
 #include <unordered_set>
 
 using namespace Arcane::Editor;
@@ -142,4 +143,25 @@ TEST_CASE("input rows: ConflictTooltip names each other action once with its sch
     cs = { c1, c2, c3 };
     CHECK(ConflictTooltip(cs, a) == "Also bound by Crouch (KeyboardMouse), Fire (every scheme)");
     CHECK(ConflictTooltip(cs, b).empty());
+}
+
+TEST_CASE("input rows: ScrollsIntoView targets the capture row over the selection", "[editor][input]")
+{
+    const auto id = [](const char* s) { return *Arcane::Guid::FromString(s); };
+    const auto rows = BuildInputRows(Fixture(), kMap, {}, {}, {});
+    InputActionsEditorModel model(Fixture());
+    model.SelectMap(kMap); model.SelectAction(id("33333333-3333-4333-8333-333333333333")); model.SelectBinding(id("77777777-7777-4777-8777-777777777777"));
+    InputActionsDocumentState state;
+    auto hits = [&] { std::vector<std::string> out; for (const auto& r : rows) if (InputActionsDocumentWidgets::ScrollsIntoView(model, state, r)) out.push_back(r.id.ToString() + (r.kind == InputRowKind::CompositeHeader ? "#h" : "")); return out; };
+    state.scrollRowToSelection = true;
+    state.scrollRowToId = id("99999999-9999-4999-8999-999999999999");   // Jump's Space: not selected
+    CHECK(hits() == std::vector<std::string>{ "99999999-9999-4999-8999-999999999999" });
+    state.scrollRowToId = id("55555555-5555-4555-8555-555555555555");   // a part
+    CHECK(hits() == std::vector<std::string>{ "55555555-5555-4555-8555-555555555555" });
+    state.scrollRowToId = id("44444444-4444-4444-8444-444444444444");   // the composite id: its header is not a capture row
+    CHECK(hits().empty());
+    state.scrollRowToId = {};
+    CHECK(hits() == std::vector<std::string>{ "77777777-7777-4777-8777-777777777777" });   // the selection path is unchanged
+    state.scrollRowToSelection = false;
+    CHECK(hits().empty());
 }

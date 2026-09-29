@@ -40,6 +40,7 @@ namespace Arcane::Editor
         // row (or its rename box).
         bool scrollMapToSelection = false;
         bool scrollRowToSelection = false;
+        Guid scrollRowToId;   // one-shot, set by the Inspector page's Rebind...: scroll the actions column to THIS binding/part row (the capture row), winning over scrollRowToSelection; cleared on every DrawActions exit, so an undrawn target never fires later
         enum class DragVerdict : std::uint8_t { None, Legal, Illegal };
         DragVerdict dragVerdict = DragVerdict::None;      // written by the hovered drop target this frame
         DragVerdict dragVerdictPrev = DragVerdict::None;  // read by the drag source's preview (one frame behind)
@@ -86,6 +87,8 @@ namespace Arcane::Editor
             std::function<bool()> inputSwallowed;     // true while a capture is live and on its completing frame: keys and clicks belong to the capture
         };
         void Draw(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services);
+        // True when `row` is the row the actions column should scroll into view this frame: the one-shot scrollRowToId (a Binding/Part row only) wins, else the selected row while scrollRowToSelection is set. Pure; public for the row tests.
+        [[nodiscard]] static bool ScrollsIntoView(const InputActionsEditorModel& model, const InputActionsDocumentState& state, const InputRow& row);
 
     private:
         using Edit = std::function<void()>;

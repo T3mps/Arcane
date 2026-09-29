@@ -137,6 +137,13 @@ namespace Arcane::Editor
         }
     }
 
+    bool InputActionsDocumentWidgets::ScrollsIntoView(const InputActionsEditorModel& model, const InputActionsDocumentState& state, const InputRow& row)
+    {
+        if (state.scrollRowToId.IsValid())
+            return (row.kind == InputRowKind::Binding || row.kind == InputRowKind::Part) && row.id == state.scrollRowToId;
+        return state.scrollRowToSelection && RowSelected(model, row);
+    }
+
     bool InputActionsDocumentWidgets::RowSelected(const InputActionsEditorModel& model, const InputRow& row)
     {
         switch (row.kind)
@@ -281,6 +288,7 @@ namespace Arcane::Editor
     void InputActionsDocumentWidgets::DrawActions(InputActionsEditorModel& model, InputActionsDocumentState& state,
                                                    const Services& services, Edit& edit)
     {
+        struct ClearScrollToId { InputActionsDocumentState& s; ~ClearScrollToId() { s.scrollRowToId = {}; } } clearScrollToId{ state };   // every exit drops the one-shot
         const Guid map = model.SelectedMap();
         const nlohmann::json* m = FindMap(model.Draft(), map);
         if (!m) { ImGui::TextDisabled("Select an action map."); return; }
@@ -375,7 +383,11 @@ namespace Arcane::Editor
         if (rebinding) ImGui::PopStyleColor();
         const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // RowWithThumb parked the cursor at the next row's start; restored at the end
         if (r.clicked && !swallowed) SelectRow(model, row);
-        if (selected && state.scrollRowToSelection) { ImGui::SetScrollHereY(); state.scrollRowToSelection = false; }
+        if (ScrollsIntoView(model, state, row))
+        {
+            ImGui::SetScrollHereY();
+            if (state.scrollRowToId.IsValid()) state.scrollRowToId = {}; else state.scrollRowToSelection = false;
+        }
 
         // Live glow: an amber bar at the row's left edge + a faint wash.
         if (const float v = services.glow ? services.glow(row.id) : 0.0f; v > 0.0f && row.kind != InputRowKind::Action)

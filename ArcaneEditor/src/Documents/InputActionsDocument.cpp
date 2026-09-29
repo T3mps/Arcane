@@ -1,5 +1,6 @@
 #include "Documents/InputActionsDocument.hpp"
 
+#include "Documents/InputActionsJson.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
 
@@ -25,6 +26,19 @@ namespace Arcane::Editor
             const std::string raw(std::istreambuf_iterator<char>{stream}, {});
             auto parsed = nlohmann::json::parse(raw, nullptr, false);
             return parsed.is_discarded() ? nlohmann::json(raw) : parsed;
+        }
+
+        // The action whose bindings (or a composite's parts) carry `target`; nullptr when none.
+        const nlohmann::json* OwnerActionOfBinding(const nlohmann::json& draft, const Guid& target)
+        {
+            if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return nullptr;
+            for (const auto& m : draft["actionMaps"])
+            {
+                if (!m.is_object() || !m.contains("actions") || !m["actions"].is_array()) continue;
+                for (const auto& a : m["actions"])
+                    if (a.is_object() && a.contains("bindings") && FindById(a["bindings"], target)) return &a;
+            }
+            return nullptr;
         }
 
         Guid DraftGuid(const nlohmann::json& draft, const std::filesystem::path& path)
@@ -127,7 +141,9 @@ namespace Arcane::Editor
     {
         if (!target.IsValid()) return;
         focusRequest_ = true;                  // consumed before the next Begin: the cancel rule below stays intact
-        state_.scrollRowToSelection = true;    // the countdown row is in view when the document comes forward
+        state_.scrollRowToId = target;         // the countdown row, which a PINNED page's target need not be the selection of
+        // A collapsed owner would hide the countdown row: expand it (view state, not a selection event).
+        if (const auto* owner = OwnerActionOfBinding(model_.Draft(), target)) state_.collapsedActions.erase(IdOf(*owner).ToString());
         BeginRebind(target);
     }
 

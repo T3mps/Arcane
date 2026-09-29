@@ -96,7 +96,8 @@ namespace Arcane::Editor
         // The Inspector page's Rebind...: the page draws AFTER the document, so
         // the Inspector holds focus next frame and TickCapture would cancel at
         // once. The document takes focus for its next Begin (one-shot) and
-        // scrolls the selected row into view, then arms the capture.
+        // scrolls the CAPTURE row into view (expanding its collapsed action;
+        // a pinned page's binding need not be the selection), then arms the capture.
         void BeginRebindFromPage(const Guid& target);
 
         std::filesystem::path path_;
