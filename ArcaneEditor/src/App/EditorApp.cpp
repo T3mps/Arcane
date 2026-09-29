@@ -1595,7 +1595,8 @@ namespace Arcane::Editor
         // ===== PINNED UNDER --headless, AHEAD OF EVERYTHING ELSE =============
         // The per-project layout is USER STATE: it differs per machine, it is
         // whatever this desk last arranged, and the flush below WRITES IT BACK
-        // on every project switch (and ~ImGuiLayer saves it again at exit). An
+        // on every project switch (and Shutdown() saves it again at exit, while
+        // every member is alive, then disables ImGui's destructor save). An
         // agent run would therefore both READ a layout it did not choose and
         // MUTATE it, making run N+1 differ from run N for a reason that has
         // nothing to do with the engine. That is the imgui.ini veto class this
@@ -3428,14 +3429,22 @@ namespace Arcane::Editor
         // the DestroyContext-time save cannot run at all. A --headless run
         // already has IniFilename == nullptr (RetargetLayoutIni) and is left
         // untouched; a failed Create() has no context (m_gpu null).
-        if (m_gpu && ImGui::GetCurrentContext() != nullptr)
+        //
+        // SettingsLoaded mirrors ImGui's own shutdown guard (imgui.cpp,
+        // "CreateContext/DestroyContext without a call to NewFrame shouldn't
+        // save an empty file"): a boot that fails or quits before the first
+        // NewFrame (a fatal stage after gpu_core, or closing the splash right
+        // after finalize) never read the ini, so saving would clobber it --
+        // the cwd imgui.ini or the user's per-project layout -- with only the
+        // handlers' lines. The EDITOR context is pinned first: the offscreen
+        // layer can leave the game context current.
+        if (m_gpu && m_editorImguiContext != nullptr)
         {
+            ImGui::SetCurrentContext(m_editorImguiContext);
             ImGuiIO& io = ImGui::GetIO();
-            if (io.IniFilename && *io.IniFilename)
-            {
+            if (m_editorImguiContext->SettingsLoaded && io.IniFilename && *io.IniFilename)
                 ImGui::SaveIniSettingsToDisk(io.IniFilename);
-                io.IniFilename = nullptr;
-            }
+            io.IniFilename = nullptr;   // unconditional: ImGui::Shutdown must never save over destroyed members
         }
 
         // Inspector ownership: drop every document source (and the pins and
