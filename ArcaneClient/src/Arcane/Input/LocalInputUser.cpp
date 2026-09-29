@@ -16,7 +16,56 @@ namespace Arcane
     {
         if (projectId.IsNil()) return false;
         auto next = InputActions::Create();
-        if (!next->LoadAsset(asset)) return false;
+        if (!next->LoadAsset(asset)) return false;   // failure leaves the live session untouched
+        if (asset_.has_value() && projectId == projectId_)
+        {
+            // RE-ENTRY (input-editor spec B 2.6): the editor saved THIS project's
+            // asset while the session runs. Swap the evaluator in place and
+            // carry the session across it.
+            actions_ = std::move(next);
+            asset_ = asset;
+            // Overrides: a dirty profile is the user's unsaved work -- keep it
+            // and re-apply ("compatible overrides": one whose binding id
+            // vanished fails SetBindingPath and drops with ApplyProfile's WARN).
+            // A clean profile is re-read against the NEW asset (Load drops
+            // stale ids itself). Not LoadProfile(): that recompiles the
+            // evaluator and resets the base context, undoing the replay below.
+            if (!profile_.Dirty())
+            {
+                InputBindingProfile fresh;
+                ProfileLoadResult loaded;
+                if (!profileRoot_.empty())
+                    loaded = fresh.Load(profileRoot_ / (profileName_ + ".json"), *asset_);
+                if (loaded.status == ProfileLoadStatus::Invalid)
+                    ARC_WARN("input: invalid {} binding profile for project {}", profileName_, projectId.ToString());
+                else
+                    profile_ = std::move(fresh);
+            }
+            ApplyProfile();
+            // The scheme, while it still exists.
+            if (!scheme_.empty() && !actions_->SetControlScheme(scheme_)) scheme_.clear();
+            // Prime AFTER the overrides and the scheme (SetBindingPath zeroes
+            // the action it retargets; the scheme filters which bindings
+            // count): prev/cur both hold the held state, so the first live
+            // tick sees no edge; dt = 0 adds no hold time; no map is on the
+            // context stack yet (LoadAsset cleared it), so no fixed-step
+            // transition is queued (UE: a key held across a mapping rebuild
+            // is ignored until release).
+            actions_->Update(0.0, lastSnapshot_);
+            // Replay the map stack by id: the first id that still resolves is
+            // the base, later ones are pushed, vanished ids are skipped; none
+            // left -> the asset's default map.
+            const std::vector<Guid> stack = mapStack_;
+            mapStack_.clear();
+            for (const Guid& map : stack)
+            {
+                if (mapStack_.empty()) (void)SetBaseMap(map);
+                else (void)PushMap(map);
+            }
+            if (mapStack_.empty() && asset.defaultMap) (void)SetBaseMap(*asset.defaultMap);
+            rebind_ = {};   // a capture armed against the old evaluator is void
+            return true;
+        }
         Clear();
         actions_ = std::move(next);
         asset_ = asset;
@@ -49,6 +98,8 @@ namespace Arcane
         profileRoot_.clear();
         profileName_ = "Default";
         reportedQueries_.clear();
+        mapStack_.clear();
+        scheme_.clear();
     }
 
     void LocalInputUser::Update(double dt, const InputSnapshot& snapshot)
@@ -121,6 +172,7 @@ namespace Arcane
         const auto name = MapName(map);
         if (!name) return false;
         actions_->SetBaseContext(*name);
+        mapStack_.assign(1, map);
         return true;
     }
     bool LocalInputUser::PushMap(const Guid& map)
@@ -128,11 +180,20 @@ namespace Arcane
         const auto name = MapName(map);
         if (!name) return false;
         actions_->PushContext(*name);
+        mapStack_.push_back(map);
         return true;
     }
-    void LocalInputUser::PopMap() { actions_->PopContext(); }
+    void LocalInputUser::PopMap()
+    {
+        actions_->PopContext();                          // pops whatever is on top, the base included
+        if (!mapStack_.empty()) mapStack_.pop_back();
+    }
     bool LocalInputUser::SetControlScheme(std::string_view name)
-    { return actions_->SetControlScheme(name); }
+    {
+        if (!actions_->SetControlScheme(name)) return false;
+        scheme_.assign(name);                            // "" clears the scheme in both
+        return true;
+    }
     std::vector<InputMapInfo> LocalInputUser::Maps() const { return actions_->Maps(); }
     std::vector<InputActionInfo> LocalInputUser::Actions(const Guid& map) const
     { return actions_->Actions(map); }
@@ -173,6 +234,7 @@ namespace Arcane
         if (result.status == ProfileLoadStatus::Invalid) return result;
         if (!actions_->LoadAsset(*asset_))
             return { ProfileLoadStatus::Invalid, { "gameplay asset failed to recompile" } };
+        ForgetContextMirrors();
         if (asset_->defaultMap) (void)SetBaseMap(*asset_->defaultMap);
         profile_ = std::move(next);
         profileName_ = safe;
@@ -194,6 +256,7 @@ namespace Arcane
         {
             if (!actions_->LoadAsset(*asset_))
                 return { ProfileLoadStatus::Invalid, { "gameplay asset failed to recompile" } };
+            ForgetContextMirrors();
             if (asset_->defaultMap) (void)SetBaseMap(*asset_->defaultMap);
             profile_ = std::move(next);
             ApplyProfile();
@@ -242,9 +305,20 @@ namespace Arcane
     void LocalInputUser::ResetOverrides()
     {
         if (!asset_) return;
-        if (actions_->LoadAsset(*asset_) && asset_->defaultMap)
-            (void)SetBaseMap(*asset_->defaultMap);
+        if (actions_->LoadAsset(*asset_))
+        {
+            ForgetContextMirrors();
+            if (asset_->defaultMap) (void)SetBaseMap(*asset_->defaultMap);
+        }
         profile_.Reset();
+    }
+    void LocalInputUser::ForgetContextMirrors()
+    {
+        // A recompile (LoadAsset -> LoadJson) empties the evaluator's context
+        // stack and scheme group; the mirrors follow so ActiveMap() and
+        // ControlScheme() never report state the evaluator dropped.
+        mapStack_.clear();
+        scheme_.clear();
     }
     void LocalInputUser::ApplyProfile()
     {

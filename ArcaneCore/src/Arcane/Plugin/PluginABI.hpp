@@ -969,7 +969,13 @@ namespace Arcane
     //     .arcproj manifest gained `inputActions`. A v43 module was compiled
     //     against the old vtable and layout; reject the pairing.
     //     ReferenceProject.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 44;
+    // v45 (2026-09-28, inspector-ownership/input-editor arc): `InputActions`
+    //     gained the pure virtual `BindingValue`; `InputRebindOperation`
+    //     gained `heldModifiers_`; `LocalInputUser` (held by value inside
+    //     `ARCANE_API ClientRuntime`) gained `mapStack_`/`scheme_`. A v44
+    //     module was compiled against the old vtable and layouts; reject the
+    //     pairing. ReferenceProject.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 45;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

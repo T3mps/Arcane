@@ -11,6 +11,8 @@
 
 #include <Json.hpp>
 
+#include <algorithm>
+
 using Arcane::InputActions;
 using Arcane::InputSnapshot;
 using Catch::Approx;
@@ -744,4 +746,114 @@ TEST_CASE("input: binding path override affects evaluation without mutating asse
     CHECK_FALSE(input->BindingDisplayString(*jumpBinding).empty());
     CHECK(asset->ToJson()["actionMaps"][0]["actions"][2]["bindings"][0]["path"] == "<Keyboard>/space");
     CHECK_FALSE(input->SetBindingPath(Arcane::Guid::Nil(), "<Keyboard>/space"));
+}
+
+TEST_CASE("input: KnownControls is generated from the compiler's own tables and every entry compiles", "[input]")
+{
+    const auto known = Arcane::InputActions::KnownControls();
+    REQUIRE(known.size() > 40);
+    for (const auto& c : known)
+    {
+        INFO(c.path);
+        CHECK(Arcane::InputActions::IsKnownControlPath(c.path));
+        CHECK_FALSE(c.display.device.empty());
+        CHECK_FALSE(c.display.control.empty());
+    }
+    auto has = [&](const char* p) { return std::any_of(known.begin(), known.end(), [&](const auto& c) { return c.path == p; }); };
+    CHECK(has("<Keyboard>/space"));
+    CHECK(has("<Keyboard>/a"));
+    CHECK(has("<Keyboard>/f12"));
+    CHECK(has("<Mouse>/leftButton"));
+    CHECK(has("<Gamepad>/buttonSouth"));
+    CHECK(has("<Gamepad>/leftStick/x"));
+    CHECK(has("<Gamepad>/leftStick"));
+    CHECK(has("<Gamepad>/rightTrigger"));
+}
+
+TEST_CASE("input: IsKnownControlPath refuses what the compiler would zero-compile", "[input]")
+{
+    using Arcane::InputActions;
+    CHECK(InputActions::IsKnownControlPath("<Keyboard>/scancode/a"));
+    CHECK(InputActions::IsKnownControlPath("<Keyboard>/lshift+<Keyboard>/a"));
+    CHECK(InputActions::IsKnownControlPath("<Mouse>/button/4"));
+    CHECK_FALSE(InputActions::IsKnownControlPath("<Keyboard>/spaec"));
+    CHECK_FALSE(InputActions::IsKnownControlPath("<Wheel>/up"));
+    CHECK_FALSE(InputActions::IsKnownControlPath("space"));
+    CHECK_FALSE(InputActions::IsKnownControlPath(""));
+    CHECK_FALSE(InputActions::IsKnownControlPath("<Keyboard>/a+<Wheel>/up"));
+}
+
+TEST_CASE("input: DisplayForPath splits the device from a readable control name", "[input]")
+{
+    using Arcane::InputActions;
+    auto d = InputActions::DisplayForPath("<Keyboard>/space");
+    CHECK(d.device == "Keyboard"); CHECK(d.control == "Space");
+    d = InputActions::DisplayForPath("<Keyboard>/scancode/a");
+    CHECK(d.device == "Keyboard"); CHECK(d.control == "A");
+    d = InputActions::DisplayForPath("<Keyboard>/lshift");
+    CHECK(d.control == "Left Shift");
+    d = InputActions::DisplayForPath("<Gamepad>/buttonSouth");
+    CHECK(d.device == "Gamepad"); CHECK(d.control == "South Button");
+    d = InputActions::DisplayForPath("<Gamepad>/leftStick/x");
+    CHECK(d.control == "Left Stick X");
+    d = InputActions::DisplayForPath("<Gamepad>/dpadLeft");
+    CHECK(d.control == "D-Pad Left");
+    d = InputActions::DisplayForPath("<Mouse>/leftButton");
+    CHECK(d.device == "Mouse"); CHECK(d.control == "Left Button");
+    d = InputActions::DisplayForPath("<Keyboard>/lshift+<Keyboard>/a");
+    CHECK(d.control == "Left Shift + A");
+    d = InputActions::DisplayForPath("garbage");
+    CHECK(d.device.empty()); CHECK(d.control == "garbage");
+    // Captured paths carry SDL's own lower-cased scancode name: they display
+    // with SDL's canonical spelling, resolved by the compiler's lookup.
+    d = InputActions::DisplayForPath("<Keyboard>/scancode/left shift");
+    CHECK(d.control == "Left Shift");
+    d = InputActions::DisplayForPath("<Keyboard>/scancode/page down");
+    CHECK(d.control == "Page Down");
+    d = InputActions::DisplayForPath("<Keyboard>/scancode/keypad 1");
+    CHECK(d.control == "Keypad 1");
+}
+
+TEST_CASE("input: CanonicalControlKey is spelling-independent", "[input]")
+{
+    using Arcane::InputActions;
+    CHECK(InputActions::CanonicalControlKey("<Mouse>/button/1") == InputActions::CanonicalControlKey("<Mouse>/leftButton"));
+    CHECK(InputActions::CanonicalControlKey("<Keyboard>/scancode/space") == InputActions::CanonicalControlKey("<Keyboard>/space"));
+    CHECK(InputActions::CanonicalControlKey("<Keyboard>/lshift+<Keyboard>/a") == InputActions::CanonicalControlKey("<Keyboard>/a+<Keyboard>/lshift"));
+    CHECK(InputActions::CanonicalControlKey("<Keyboard>/a") != InputActions::CanonicalControlKey("<Keyboard>/b"));
+    CHECK(InputActions::CanonicalControlKey("<Keyboard>/spaec").empty());
+    CHECK(InputActions::CanonicalControlKey("").empty());
+}
+
+TEST_CASE("input: BindingValue reports one binding's raw value from the last snapshot", "[input]")
+{
+    auto input = Arcane::InputActions::Create();
+    const auto asset = Arcane::InputActionAsset::FromJson(nlohmann::json::parse(R"({
+      "version": 1, "id": "11111111-1111-4111-8111-111111111111", "defaultMap": "22222222-2222-4222-8222-222222222222",
+      "controlSchemes": [],
+      "actionMaps": [{ "id": "22222222-2222-4222-8222-222222222222", "name": "demo", "actions": [
+        { "id": "33333333-3333-4333-8333-333333333333", "name": "jump", "type": "Button", "bindings": [
+          { "id": "44444444-4444-4444-8444-444444444444", "path": "<Keyboard>/space" },
+          { "id": "55555555-5555-4555-8555-555555555555", "path": "<Gamepad>/buttonSouth" } ] },
+        { "id": "66666666-6666-4666-8666-666666666666", "name": "move", "type": "Axis1D", "bindings": [
+          { "id": "77777777-7777-4777-8777-777777777777", "composite": "1DAxis", "parts": [
+            { "id": "88888888-8888-4888-8888-888888888888", "name": "negative", "path": "<Keyboard>/a" },
+            { "id": "99999999-9999-4999-8999-999999999999", "name": "positive", "path": "<Keyboard>/d" } ] } ] }
+      ] }] })"));
+    REQUIRE(asset);
+    REQUIRE(input->LoadAsset(*asset));
+    const auto space = *Arcane::Guid::FromString("44444444-4444-4444-8444-444444444444");
+    const auto south = *Arcane::Guid::FromString("55555555-5555-4555-8555-555555555555");
+    const auto axis  = *Arcane::Guid::FromString("77777777-7777-4777-8777-777777777777");
+    CHECK(input->BindingValue(space) == 0.0f);          // before any Update
+    Arcane::InputSnapshot snap;
+    snap.AddKeycode(kKeycodeSpace);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->BindingValue(space) == 1.0f);
+    CHECK(input->BindingValue(south) == 0.0f);
+    CHECK(input->BindingValue(axis) == 0.0f);
+    Arcane::InputSnapshot d; d.AddKeycode('d');
+    input->Update(1.0 / 60.0, d);
+    CHECK(input->BindingValue(axis) == 1.0f);           // max over parts
+    CHECK(input->BindingValue(Arcane::Guid::Generate()) == 0.0f);
 }

@@ -77,118 +77,137 @@ namespace Arcane
             uint32_t code = 0;
         };
 
+        // ---- the path compiler's vocabulary tables ----
+        // Namespace-scope so the compiler (TryCompileSinglePath) and the
+        // vocabulary statics (KnownControls / DisplayForPath) read the SAME
+        // rows: a picker built from them can never offer a spelling the
+        // compiler refuses.
+
         // LOVE->SDL key name translation table
         // LOVE names appear in the asset JSON; SDL name-lookup functions want
         // SDL names. Everything not in this table passes through unchanged
         // (single letters, digits, f1..f24 all match SDL names directly).
+        // Each row also carries its scancode: SDL's name table is MUTABLE --
+        // the Windows video driver renames LGUI/RGUI to "Left/Right Windows"
+        // (SDL_windowskeyboard.c, SDL_SetScancodeName), Cocoa renames Alt and
+        // GUI -- so a name lookup of "Left GUI" returns UNKNOWN in any
+        // windowed host. The scancode is what the name meant.
+        struct LoveKeyName { const char* love; const char* sdl; SDL_Scancode scancode; };
+        constexpr LoveKeyName kLoveKeyNames[] = {
+            { "lshift",    "Left Shift",  SDL_SCANCODE_LSHIFT    },
+            { "rshift",    "Right Shift", SDL_SCANCODE_RSHIFT    },
+            { "lctrl",     "Left Ctrl",   SDL_SCANCODE_LCTRL     },
+            { "rctrl",     "Right Ctrl",  SDL_SCANCODE_RCTRL     },
+            { "lalt",      "Left Alt",    SDL_SCANCODE_LALT      },
+            { "ralt",      "Right Alt",   SDL_SCANCODE_RALT      },
+            { "lgui",      "Left GUI",    SDL_SCANCODE_LGUI      },
+            { "rgui",      "Right GUI",   SDL_SCANCODE_RGUI      },
+            { "return",    "Return",      SDL_SCANCODE_RETURN    },
+            { "escape",    "Escape",      SDL_SCANCODE_ESCAPE    },
+            { "grave",     "`",           SDL_SCANCODE_GRAVE     },   // SDL names this key by its glyph, not "Grave"
+            { "space",     "Space",       SDL_SCANCODE_SPACE     },
+            { "tab",       "Tab",         SDL_SCANCODE_TAB       },
+            { "backspace", "Backspace",   SDL_SCANCODE_BACKSPACE },
+            { "up",        "Up",          SDL_SCANCODE_UP        },
+            { "down",      "Down",        SDL_SCANCODE_DOWN      },
+            { "left",      "Left",        SDL_SCANCODE_LEFT      },
+            { "right",     "Right",       SDL_SCANCODE_RIGHT     },
+        };
+
+        const LoveKeyName* FindLoveKey(const std::string& loveName)
+        {
+            for (const auto& e : kLoveKeyNames)
+                if (loveName == e.love)
+                    return &e;
+            return nullptr;
+        }
+
         const char* LoveToSdlName(const std::string& loveName)
         {
-            struct Entry { const char* love; const char* sdl; };
-            static constexpr Entry kTable[] = {
-                { "lshift",    "Left Shift"  },
-                { "rshift",    "Right Shift" },
-                { "lctrl",     "Left Ctrl"   },
-                { "rctrl",     "Right Ctrl"  },
-                { "lalt",      "Left Alt"    },
-                { "ralt",      "Right Alt"   },
-                { "lgui",      "Left GUI"    },
-                { "rgui",      "Right GUI"   },
-                { "return",    "Return"      },
-                { "escape",    "Escape"      },
-                { "grave",     "`"           },   // SDL names this key by its glyph, not "Grave"
-                { "space",     "Space"       },
-                { "tab",       "Tab"         },
-                { "backspace", "Backspace"   },
-                { "up",        "Up"          },
-                { "down",      "Down"        },
-                { "left",      "Left"        },
-                { "right",     "Right"       },
-            };
-            for (const auto& e : kTable)
-                if (loveName == e.love)
-                    return e.sdl;
-            return nullptr;  // pass through
+            const LoveKeyName* e = FindLoveKey(loveName);
+            return e ? e->sdl : nullptr;  // nullptr = pass through
         }
 
-        // Gamepad token tables
-        // Token -> GamepadButton bit index (must match InputDevices bit order).
-        // Token tables: control name -> bit/index. The bit/index order MUST match
-        // the InputDevices sampler's snapshot layout (gamepadButtons bits, gamepadAxes).
+        // Gamepad token tables: control name -> bit/index, plus its readable
+        // name. The bit/index order MUST match the InputDevices sampler's
+        // snapshot layout (gamepadButtons bits, gamepadAxes).
         constexpr int kNoGamepadToken = -1;
 
-        int GamepadButtonToken(const std::string& token)
+        struct GamepadToken { const char* name; int index; const char* display; };
+
+        constexpr GamepadToken kGamepadButtonTokens[] = {
+            { "buttonSouth",      0,  "South Button"      },
+            { "buttonEast",       1,  "East Button"       },
+            { "buttonWest",       2,  "West Button"       },
+            { "buttonNorth",      3,  "North Button"      },
+            { "dpadUp",           4,  "D-Pad Up"          },
+            { "dpadDown",         5,  "D-Pad Down"        },
+            { "dpadLeft",         6,  "D-Pad Left"        },
+            { "dpadRight",        7,  "D-Pad Right"       },
+            { "leftShoulder",     8,  "Left Shoulder"     },
+            { "rightShoulder",    9,  "Right Shoulder"    },
+            { "start",            10, "Start"             },
+            { "back",             11, "Back"              },
+            { "guide",            12, "Guide"             },
+            { "leftStickPress",   13, "Left Stick Press"  },
+            { "rightStickPress",  14, "Right Stick Press" },
+        };
+
+        constexpr GamepadToken kGamepadAxisTokens[] = {
+            { "leftStick/x",   0, "Left Stick X"  },
+            { "leftStick/y",   1, "Left Stick Y"  },
+            { "rightStick/x",  2, "Right Stick X" },
+            { "rightStick/y",  3, "Right Stick Y" },
+            { "leftTrigger",   4, "Left Trigger"  },
+            { "rightTrigger",  5, "Right Trigger" },
+        };
+
+        // Sticks resolve as a 2D vector: 0 = leftStick, 1 = rightStick.
+        constexpr GamepadToken kGamepadStickTokens[] = {
+            { "leftStick",  0, "Left Stick"  },
+            { "rightStick", 1, "Right Stick" },
+        };
+
+        template <std::size_t N>
+        int FindGamepadToken(const GamepadToken (&table)[N], const std::string& token)
         {
-            struct Entry { const char* name; int bit; };
-            static constexpr Entry kTable[] = {
-                { "buttonSouth",      0  },
-                { "buttonEast",       1  },
-                { "buttonWest",       2  },
-                { "buttonNorth",      3  },
-                { "dpadUp",           4  },
-                { "dpadDown",         5  },
-                { "dpadLeft",         6  },
-                { "dpadRight",        7  },
-                { "leftShoulder",     8  },
-                { "rightShoulder",    9  },
-                { "start",            10 },
-                { "back",             11 },
-                { "guide",            12 },
-                { "leftStickPress",   13 },
-                { "rightStickPress",  14 },
-            };
-            for (const auto& e : kTable)
+            for (const auto& e : table)
                 if (token == e.name)
-                    return e.bit;
+                    return e.index;
             return kNoGamepadToken;
         }
 
-        int GamepadAxisToken(const std::string& token)
-        {
-            struct Entry { const char* name; int idx; };
-            static constexpr Entry kTable[] = {
-                { "leftStick/x",   0 },
-                { "leftStick/y",   1 },
-                { "rightStick/x",  2 },
-                { "rightStick/y",  3 },
-                { "leftTrigger",   4 },
-                { "rightTrigger",  5 },
-            };
-            for (const auto& e : kTable)
-                if (token == e.name)
-                    return e.idx;
-            return kNoGamepadToken;
-        }
+        int GamepadButtonToken(const std::string& token) { return FindGamepadToken(kGamepadButtonTokens, token); }
+        int GamepadAxisToken(const std::string& token)   { return FindGamepadToken(kGamepadAxisTokens, token); }
+        int GamepadStickToken(const std::string& token)  { return FindGamepadToken(kGamepadStickTokens, token); }
 
-        // Returns 0 for leftStick, 1 for rightStick, -1 if not a stick.
-        int GamepadStickToken(const std::string& token)
-        {
-            if (token == "leftStick")  return 0;
-            if (token == "rightStick") return 1;
-            return kNoGamepadToken;
-        }
+        // Mouse: the named buttons (array index = snapshot bit) and the
+        // numbered form "button/N", N in 1..kMouseButtonCount (bit N-1).
+        struct MouseButtonName { const char* name; const char* display; };
+        constexpr MouseButtonName kMouseNamedButtons[] = {
+            { "leftButton",   "Left Button"   },
+            { "rightButton",  "Right Button"  },
+            { "middleButton", "Middle Button" },
+        };
+        constexpr int kMouseButtonCount = 5;
 
         // Path compiler
-        // Compiles a single simple path (no '+') to a ControlId.
-        // Returns {None,0} + one ARC_WARN for unknown device tokens.
+        // The quiet core: compiles a single simple path (no '+') to a
+        // ControlId, nullopt for anything the compiler does not know, with NO
+        // warning -- IsKnownControlPath and the editor's picker ask this
+        // question thousands of times a session. An empty path is a silent
+        // None, as it always was.
         // <Gamepad>/ paths compile to typed GamepadButton/Axis/Stick ControlIds.
-        ControlId CompileSinglePath(const std::string& path,
-                                    const std::string& mapName,
-                                    const std::string& actionName)
+        std::optional<ControlId> TryCompileSinglePath(const std::string& path)
         {
             // Parse <Device>/ctrl
             if (path.empty())
-                return {};
+                return ControlId{};
             if (path[0] != '<')
-            {
-                ARC_WARN("input: unknown control path '{}' in {}/{}", path, mapName, actionName);
-                return {};
-            }
+                return std::nullopt;
             auto closeAngle = path.find('>');
             if (closeAngle == std::string::npos || closeAngle + 1 >= path.size() || path[closeAngle + 1] != '/')
-            {
-                ARC_WARN("input: unknown control path '{}' in {}/{}", path, mapName, actionName);
-                return {};
-            }
+                return std::nullopt;
             std::string device = path.substr(1, closeAngle - 1);
             std::string ctrl   = path.substr(closeAngle + 2);  // after '<Device>/'
 
@@ -200,108 +219,116 @@ namespace Arcane
                     ctrl.substr(0, kScanPrefix.size()) == kScanPrefix)
                 {
                     std::string scanName = ctrl.substr(kScanPrefix.size());
-                    const char* sdlName = LoveToSdlName(scanName);
-                    SDL_Scancode sc = SDL_GetScancodeFromName(sdlName ? sdlName : scanName.c_str());
+                    const LoveKeyName* love = FindLoveKey(scanName);
+                    SDL_Scancode sc = love ? love->scancode : SDL_GetScancodeFromName(scanName.c_str());
                     if (sc == SDL_SCANCODE_UNKNOWN)
-                    {
-                        ARC_WARN("input: unknown scancode name '{}' in path '{}' in {}/{}",
-                                 scanName, path, mapName, actionName);
-                        return {};
-                    }
-                    return { ControlSource::Scancode, (uint32_t)sc };
+                        return std::nullopt;
+                    return ControlId{ ControlSource::Scancode, (uint32_t)sc };
                 }
                 else
                 {
                     // Keycode path: translate LOVE name -> SDL name, then look up
-                    const char* sdlName = LoveToSdlName(ctrl);
-                    SDL_Keycode kc = SDL_GetKeyFromName(sdlName ? sdlName : ctrl.c_str());
+                    const LoveKeyName* love = FindLoveKey(ctrl);
+                    SDL_Keycode kc = SDL_GetKeyFromName(love ? love->sdl : ctrl.c_str());
+                    // A renamed SDL scancode name: resolve the row's scancode
+                    // through the layout exactly as SDL_GetKeyFromName would
+                    // have for the original name.
+                    if (kc == SDLK_UNKNOWN && love)
+                        kc = SDL_GetKeyFromScancode(love->scancode, SDL_KMOD_NONE, false);
                     if (kc == SDLK_UNKNOWN)
-                    {
-                        ARC_WARN("input: unknown key name '{}' in path '{}' in {}/{}",
-                                 ctrl, path, mapName, actionName);
-                        return {};
-                    }
-                    return { ControlSource::Keycode, (uint32_t)kc };
+                        return std::nullopt;
+                    return ControlId{ ControlSource::Keycode, (uint32_t)kc };
                 }
             }
             else if (device == "Mouse")
             {
                 // leftButton=bit0, rightButton=bit1, middleButton=bit2, button/N=bit(N-1)
-                if (ctrl == "leftButton")   return { ControlSource::MouseButton, 0 };
-                if (ctrl == "rightButton")  return { ControlSource::MouseButton, 1 };
-                if (ctrl == "middleButton") return { ControlSource::MouseButton, 2 };
+                for (uint32_t bit = 0; bit < std::size(kMouseNamedButtons); ++bit)
+                    if (ctrl == kMouseNamedButtons[bit].name)
+                        return ControlId{ ControlSource::MouseButton, bit };
                 // button/N form
                 if (ctrl.size() > 7 && ctrl.substr(0, 7) == "button/")
                 {
                     try
                     {
                         int n = std::stoi(ctrl.substr(7));
-                        if (n >= 1 && n <= 5)
-                            return { ControlSource::MouseButton, (uint32_t)(n - 1) };
+                        if (n >= 1 && n <= kMouseButtonCount)
+                            return ControlId{ ControlSource::MouseButton, (uint32_t)(n - 1) };
                     }
                     catch (...) {}
                 }
-                ARC_WARN("input: unknown mouse control '{}' in path '{}' in {}/{}",
-                         ctrl, path, mapName, actionName);
-                return {};
+                return std::nullopt;
             }
             else if (device == "Gamepad")
             {
                 // Stick vector (leftStick / rightStick)
                 int stick = GamepadStickToken(ctrl);
                 if (stick >= 0)
-                    return { ControlSource::GamepadStick, (uint32_t)stick };
+                    return ControlId{ ControlSource::GamepadStick, (uint32_t)stick };
 
                 // Axis (leftTrigger, rightTrigger, leftStick/x, etc.)
                 int axis = GamepadAxisToken(ctrl);
                 if (axis >= 0)
-                    return { ControlSource::GamepadAxis, (uint32_t)axis };
+                    return ControlId{ ControlSource::GamepadAxis, (uint32_t)axis };
 
                 // Button
                 int btn = GamepadButtonToken(ctrl);
                 if (btn >= 0)
-                    return { ControlSource::GamepadButton, (uint32_t)btn };
+                    return ControlId{ ControlSource::GamepadButton, (uint32_t)btn };
 
-                // Unknown gamepad token: warn + None
-                ARC_WARN("input: unknown gamepad control '{}' in path '{}' in {}/{}",
-                         ctrl, path, mapName, actionName);
-                return {};
+                return std::nullopt;
             }
-            else
-            {
-                // Unknown device (e.g. <Wheel>)
-                ARC_WARN("input: unknown control path '{}' in {}/{}", path, mapName, actionName);
-                return {};
-            }
+            // Unknown device (e.g. <Wheel>)
+            return std::nullopt;
         }
 
-        // Compiles a possibly-chorded path ('+'-split) to a list of ControlIds.
-        std::vector<ControlId> CompilePath(const std::string& path,
-                                           const std::string& mapName,
-                                           const std::string& actionName)
+        // The loading compiler: the quiet core plus ONE load-time warn naming
+        // map/action/path; an unknown path compiles to {None,0}.
+        ControlId CompileSinglePath(const std::string& path,
+                                    const std::string& mapName,
+                                    const std::string& actionName)
         {
-            std::vector<ControlId> chord;
-            // Split on '+'; handle the case that '<' is not a '+' separator
-            // We split by '+' that is NOT inside '<...>'
+            if (const auto id = TryCompileSinglePath(path)) return *id;
+            ARC_WARN("input: unknown control path '{}' in {}/{}", path, mapName, actionName);
+            return {};
+        }
+
+        // CompilePath's '+' rule: a '+' INSIDE '<...>' is not a separator. The
+        // last part is always emitted ("" for an empty path or a trailing '+'),
+        // so a caller that refuses empty parts refuses those.
+        std::vector<std::string> SplitChordParts(std::string_view path)
+        {
+            std::vector<std::string> parts;
             std::string part;
             bool inAngle = false;
             for (char c : path)
             {
                 if (c == '<') inAngle = true;
                 else if (c == '>') inAngle = false;
-                else if (c == '+' && !inAngle)
-                {
-                    chord.push_back(CompileSinglePath(part, mapName, actionName));
-                    part.clear();
-                    continue;
-                }
+                else if (c == '+' && !inAngle) { parts.push_back(part); part.clear(); continue; }
                 part += c;
             }
-            if (!part.empty())
-                chord.push_back(CompileSinglePath(part, mapName, actionName));
-            return chord;
+            parts.push_back(part);
+            return parts;
         }
 
+        // Compiles a possibly-chorded path ('+'-split) to a list of ControlIds.
+        // Exactly the pre-hoist behaviour: an empty INTERIOR part ("a++b",
+        // "+a") compiles to a silent {None}, so the chord can never fire; a
+        // trailing empty part (the whole of "" or "a+") is dropped.
+        std::vector<ControlId> CompilePath(const std::string& path,
+                                           const std::string& mapName,
+                                           const std::string& actionName)
+        {
+            std::vector<ControlId> chord;
+            const std::vector<std::string> parts = SplitChordParts(path);
+            for (std::size_t i = 0; i < parts.size(); ++i)
+            {
+                if (parts[i].empty() && i + 1 == parts.size()) continue;
+                chord.push_back(CompileSinglePath(parts[i], mapName, actionName));
+            }
+            return chord;
+        }
         // ResolveControl
         // Returns raw value [0,1] for buttons, signed float for axes.
         // Capture suppression lives HERE and only here (spec rule).
@@ -1005,28 +1032,21 @@ namespace Arcane
                 const CompiledBinding& binding = *it->second.binding;
                 if (binding.isComposite)
                     return binding.compositeType == "1DAxis" ? "1D Axis" : "2D Vector";
-                const std::string& path = binding.path;
-                const std::size_t close = path.find(">/");
-                if (path.empty() || path.front() != '<' || close == std::string::npos)
-                    return path;
-                std::string device = path.substr(1, close - 1);
-                std::string control = path.substr(close + 2);
-                constexpr std::string_view scanPrefix = "scancode/";
-                if (control.starts_with(scanPrefix)) control.erase(0, scanPrefix.size());
-                std::string readable;
-                for (char c : control)
-                {
-                    if (c == '/') readable += ' ';
-                    else if (std::isupper(static_cast<unsigned char>(c)) && !readable.empty() &&
-                             std::islower(static_cast<unsigned char>(readable.back())))
-                    {
-                        readable += ' ';
-                        readable += c;
-                    }
-                    else readable += c;
-                }
-                if (!readable.empty()) readable.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(readable.front())));
-                return device + " " + readable;
+                const auto d = DisplayForPath(binding.path);
+                return d.device.empty() ? d.control : d.device + " " + d.control;
+            }
+
+            float BindingValue(const Guid& bindingId) const override
+            {
+                const auto it = m_bindingById.find(bindingId);
+                if (it == m_bindingById.end()) return 0.0f;
+                const CompiledBinding& binding = *it->second.binding;
+                if (!binding.isComposite) return RawBindingValue(binding, m_lastSnap);
+                float best = 0.0f;
+                for (const auto& [role, parts] : binding.parts)
+                    for (const CompiledBinding& part : parts)
+                        best = std::max(best, std::abs(RawBindingValue(part, m_lastSnap)));
+                return best;
             }
 
             bool LoadFile(const std::filesystem::path& path) override
@@ -1056,6 +1076,7 @@ namespace Arcane
 
             void Update(double dt, const InputSnapshot& snap) override
             {
+                m_lastSnap = snap;
                 ++m_frame;
 
                 bool kbmActive = false;
@@ -1241,6 +1262,7 @@ namespace Arcane
             std::vector<InputActionTransition> m_pendingTransitions;
             std::vector<InputActionTransition> m_fixedTransitions;
             bool m_overflowReported = false;
+            InputSnapshot m_lastSnap{};   // the last Update's snapshot, for BindingValue
 
             void QueueTransition(const Guid& action, InputActionPhase phase)
             {
@@ -1599,6 +1621,16 @@ namespace Arcane
                 return glm::vec2(0.0f, 0.0f);
             }
 
+            // One simple/chord binding's raw value, before processors: the
+            // chord value, or a stick binding's vector length (ResolveChord
+            // reads a stick as 0 -- sticks resolve through the vector path).
+            static float RawBindingValue(const CompiledBinding& binding, const InputSnapshot& snap)
+            {
+                if (binding.chord.size() == 1 && binding.chord[0].source == ControlSource::GamepadStick)
+                    return glm::length(ResolveControlVec(binding.chord[0], snap));
+                return ResolveChord(binding.chord, snap);
+            }
+
             // Compute the max-magnitude scalar strength for a composite part's
             // binding array (oracle: partStrength in Input.lua).
             // Each binding in the array is a simple/chord path (no nested composites).
@@ -1620,6 +1652,153 @@ namespace Arcane
 
     }  // anonymous namespace
 
+    // ---- control-path vocabulary (input-editor redesign spec s2.4) ----
+    // Every function below reads the path compiler's own tables and its quiet
+    // core (TryCompileSinglePath): what they offer and what LoadAsset accepts
+    // are one vocabulary.
+    namespace
+    {
+        const char* GamepadDisplayName(const std::string& token)
+        {
+            for (std::span<const GamepadToken> table : { std::span<const GamepadToken>(kGamepadButtonTokens),
+                                       std::span<const GamepadToken>(kGamepadAxisTokens),
+                                       std::span<const GamepadToken>(kGamepadStickTokens) })
+                for (const auto& e : table)
+                    if (token == e.name) return e.display;
+            return nullptr;
+        }
+
+        // Camel-case split with every word capitalised: the generic readable
+        // form for a control the tables and SDL do not name
+        // ("someControl/x" -> "Some Control X", "page down" -> "Page Down").
+        std::string CamelToWords(const std::string& control)
+        {
+            std::string readable;
+            for (char c : control)
+            {
+                if (c == '/') readable += ' ';
+                else if (std::isupper(static_cast<unsigned char>(c)) && !readable.empty() &&
+                         std::islower(static_cast<unsigned char>(readable.back()))) { readable += ' '; readable += c; }
+                else readable += c;
+            }
+            for (std::size_t i = 0; i < readable.size(); ++i)
+                if (i == 0 || readable[i - 1] == ' ')
+                    readable[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(readable[i])));
+            return readable;
+        }
+
+        std::string ReadableControl(const std::string& device, std::string control)
+        {
+            if (device == "Gamepad")
+                if (const char* n = GamepadDisplayName(control)) return n;
+            if (device == "Keyboard")
+            {
+                constexpr std::string_view scan = "scancode/";
+                const bool isScancode = control.starts_with(scan);
+                if (isScancode) control.erase(0, scan.size());
+                if (const char* sdl = LoveToSdlName(control)) return sdl;   // "Left Shift", "Space"
+                if (control.size() == 1)
+                    return std::string(1, static_cast<char>(std::toupper(static_cast<unsigned char>(control[0]))));
+                if (control.size() >= 2 && control[0] == 'f' && std::isdigit(static_cast<unsigned char>(control[1])))
+                {
+                    control[0] = 'F';
+                    return control;
+                }
+                // A captured path carries SDL's own (lower-cased) name: resolve it
+                // through the same lookup the compiler uses so it displays with
+                // SDL's canonical spelling ("left shift" -> "Left Shift"), never
+                // through string surgery. Empty means SDL does not know the text.
+                if (isScancode)
+                {
+                    if (const char* n = SDL_GetScancodeName(SDL_GetScancodeFromName(control.c_str())); n && *n) return n;
+                }
+                else
+                {
+                    if (const char* n = SDL_GetKeyName(SDL_GetKeyFromName(control.c_str())); n && *n) return n;
+                }
+            }
+            if (device == "Mouse")
+            {
+                for (const auto& e : kMouseNamedButtons)
+                    if (control == e.name) return e.display;
+                if (control.starts_with("button/")) return "Button " + control.substr(7);
+            }
+            // Fallback: the camel-case split BindingDisplayString always did.
+            return CamelToWords(control);
+        }
+    }
+
+    InputControlDisplay InputActions::DisplayForPath(std::string_view pathView)
+    {
+        const std::string path(pathView);
+        InputControlDisplay out;
+        for (const std::string& part : SplitChordParts(path))
+        {
+            const std::size_t close = part.find(">/");
+            if (part.empty() || part.front() != '<' || close == std::string::npos)
+                return { {}, path };   // unparseable: hand the raw text back whole
+            const std::string device = part.substr(1, close - 1);
+            if (out.device.empty()) out.device = device;
+            if (!out.control.empty()) out.control += " + ";
+            out.control += ReadableControl(device, part.substr(close + 2));
+        }
+        return out;
+    }
+
+    bool InputActions::IsKnownControlPath(std::string_view path)
+    {
+        if (path.empty()) return false;
+        for (const std::string& part : SplitChordParts(path))
+            if (part.empty() || !TryCompileSinglePath(part)) return false;
+        return true;
+    }
+
+    std::string InputActions::CanonicalControlKey(std::string_view path)
+    {
+        if (path.empty()) return {};
+        std::vector<std::string> keys;
+        for (const std::string& part : SplitChordParts(path))
+        {
+            std::optional<ControlId> id;
+            if (!part.empty()) id = TryCompileSinglePath(part);
+            if (!id) return {};
+            if (id->source == ControlSource::Scancode)
+            {
+                // The running layout's translation -- the exact call
+                // InputDevices.cpp makes when it fills a snapshot -- so
+                // "<Keyboard>/scancode/space" and "<Keyboard>/space" meet at one
+                // keycode. An untranslatable scancode stays a Scancode part.
+                const SDL_Keycode kc = SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(id->code), SDL_KMOD_NONE, false);
+                if (kc != SDLK_UNKNOWN) id = ControlId{ ControlSource::Keycode, static_cast<uint32_t>(kc) };
+            }
+            keys.push_back(std::to_string(static_cast<int>(id->source)) + ':' + std::to_string(id->code));
+        }
+        std::sort(keys.begin(), keys.end());   // "a+b" == "b+a": ResolveChord needs every part down, order is spelling
+        std::string out;
+        for (const std::string& k : keys) { if (!out.empty()) out += '+'; out += k; }
+        return out;
+    }
+
+    std::vector<InputControlChoice> InputActions::KnownControls()
+    {
+        std::vector<InputControlChoice> out;
+        auto add = [&](std::string path) { InputControlDisplay d = DisplayForPath(path); out.push_back({ std::move(path), std::move(d) }); };
+        // Keyboard: the LOVE-named table, then the names the Keyboard branch
+        // passes straight to SDL (letters, digits, F1..F12).
+        for (const auto& e : kLoveKeyNames) add(std::string("<Keyboard>/") + e.love);
+        for (char c = 'a'; c <= 'z'; ++c) add(std::string("<Keyboard>/") + c);
+        for (char c = '0'; c <= '9'; ++c) add(std::string("<Keyboard>/") + c);
+        for (int f = 1; f <= 12; ++f) add("<Keyboard>/f" + std::to_string(f));
+        // Mouse: the named buttons, then the numbered ones they do not cover.
+        for (const auto& e : kMouseNamedButtons) add(std::string("<Mouse>/") + e.name);
+        for (int n = static_cast<int>(std::size(kMouseNamedButtons)) + 1; n <= kMouseButtonCount; ++n)
+            add("<Mouse>/button/" + std::to_string(n));
+        // Gamepad: buttons, axes, sticks -- the three token tables.
+        for (const auto& e : kGamepadButtonTokens) add(std::string("<Gamepad>/") + e.name);
+        for (const auto& e : kGamepadAxisTokens)   add(std::string("<Gamepad>/") + e.name);
+        for (const auto& e : kGamepadStickTokens)  add(std::string("<Gamepad>/") + e.name);
+        return out;
+    }
     std::unique_ptr<InputActions> InputActions::Create()
     {
         return std::make_unique<InputActionsImpl>();

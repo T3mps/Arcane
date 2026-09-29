@@ -82,6 +82,25 @@ namespace Arcane
         std::vector<InputBindingPartInfo> parts;
     };
 
+    // A control path's readable name with its device split out, for a UI that
+    // draws the device as an icon: "<Gamepad>/buttonSouth" -> {"Gamepad",
+    // "South Button"}, "<Keyboard>/scancode/a" -> {"Keyboard", "A"}. A path
+    // the compiler cannot parse comes back as {"", path}. Captured scancode
+    // paths display with SDL's canonical name, resolved by the compiler's own
+    // lookup ("<Keyboard>/scancode/left shift" -> "Left Shift").
+    struct InputControlDisplay
+    {
+        std::string device;
+        std::string control;
+    };
+
+    // One entry of KnownControls(): a simple path the compiler accepts.
+    struct InputControlChoice
+    {
+        std::string path;
+        InputControlDisplay display;
+    };
+
     class ARCANE_API InputActions
     {
     public:
@@ -118,6 +137,30 @@ namespace Arcane
         [[nodiscard]] virtual std::vector<InputActionInfo> Actions(const Guid& map) const = 0;
         [[nodiscard]] virtual std::vector<InputBindingInfo> Bindings(const Guid& action) const = 0;
         [[nodiscard]] virtual std::string BindingDisplayString(const Guid& binding) const = 0;
+
+        // ---- control-path vocabulary (input-editor redesign spec s2.4) ----
+        // Generated from the path compiler's OWN tables (LoveToSdlName, the
+        // gamepad token tables, the mouse branch), never a hand-kept list, so
+        // an editor picker built from it can never offer a path that compiles
+        // to a constant-zero binding (hygiene pass 2026-09-28: five did).
+        [[nodiscard]] static std::vector<InputControlChoice> KnownControls();
+        // True when every '+'-separated part compiles -- the exact test
+        // LoadAsset applies, minus its warning.
+        [[nodiscard]] static bool IsKnownControlPath(std::string_view path);
+        // The compiled identity of a control path, spelling-independent: two
+        // paths that drive the same physical control on the running layout
+        // yield the same key ("<Mouse>/button/1" and "<Mouse>/leftButton",
+        // "<Keyboard>/scancode/space" and "<Keyboard>/space", "a+b" and
+        // "b+a"). Empty when any part fails to compile. The editor's conflict
+        // detection compares THESE, never path strings: the rebind capture
+        // writes the scancode form while assets author the keycode form.
+        [[nodiscard]] static std::string CanonicalControlKey(std::string_view path);
+        [[nodiscard]] static InputControlDisplay DisplayForPath(std::string_view path);
+        // The binding's RAW value from the last Update's snapshot: 1/0 for a
+        // button chord, the signed axis value, the max over a composite's
+        // parts. 0 for an unknown id or before any Update. Feeds the editor's
+        // live-preview glow; the runtime asks actions, not bindings.
+        [[nodiscard]] virtual float BindingValue(const Guid& binding) const = 0;
 
         // Reads + parses the file. Relative paths resolve against the exe
         // (the engine-wide anchor). False on missing/unreadable/malformed.

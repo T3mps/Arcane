@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace Arcane
 {
@@ -50,6 +51,13 @@ namespace Arcane
         [[nodiscard]] bool PushMap(const Guid& map);
         void PopMap();
         [[nodiscard]] bool SetControlScheme(std::string_view name);
+        // The map on top of the stack: the base map when nothing is pushed,
+        // nullopt before Configure. A same-project re-Configure replays it.
+        [[nodiscard]] std::optional<Guid> ActiveMap() const noexcept
+        { return mapStack_.empty() ? std::nullopt : std::optional<Guid>{ mapStack_.back() }; }
+        // The active control scheme ("" = none): re-applied by a same-project
+        // re-Configure, cleared when the scheme no longer exists or on a cold start.
+        [[nodiscard]] std::string_view ControlScheme() const noexcept { return scheme_; }
         [[nodiscard]] std::vector<InputMapInfo> Maps() const;
         [[nodiscard]] std::vector<InputActionInfo> Actions(const Guid& map) const;
         [[nodiscard]] std::vector<InputBindingInfo> Bindings(const Guid& action) const;
@@ -74,6 +82,7 @@ namespace Arcane
     private:
         [[nodiscard]] std::optional<std::string> MapName(const Guid& map) const;
         [[nodiscard]] std::optional<std::string> AuthoredPath(const Guid& binding) const;
+        void ForgetContextMirrors();
         void ApplyProfile();
         void WarnQuery(const Guid& action, std::string_view requested) const;
         [[nodiscard]] static std::string SafeProfileName(std::string_view name);
@@ -83,6 +92,8 @@ namespace Arcane
         InputBindingProfile profile_;
         InputRebindOperation rebind_;
         InputSnapshot lastSnapshot_;
+        std::vector<Guid> mapStack_;   // SetBaseMap = {map}; PushMap appends on success; PopMap pops. Replayed by a same-project re-Configure.
+        std::string scheme_;           // the last SetControlScheme that succeeded ("" = none); re-applied by a same-project re-Configure
         Guid projectId_;
         std::filesystem::path profileRoot_;
         std::string profileName_ = "Default";

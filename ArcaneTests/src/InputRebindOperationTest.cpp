@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Input/InputRebindOperation.hpp>
@@ -74,4 +75,54 @@ TEST_CASE("input profile: capture ignores keys and buttons the UI has claimed", 
     capture.Observe(pressed, 0.1f);
     CHECK(capture.Result().state == Arcane::InputRebindState::Completed);
     CHECK(capture.Result().replacementPath == "<Keyboard>/scancode/w");
+}
+
+TEST_CASE("input profile: Remaining counts the capture timeout down", "[input][profile]")
+{
+    Arcane::InputRebindOperation capture;
+    capture.Begin(Binding(), std::nullopt, 10.0f, {});
+    CHECK(capture.Remaining() == Catch::Approx(10.0f));
+    capture.Observe({}, 1.0f);
+    CHECK(capture.Remaining() == Catch::Approx(9.0f));
+    capture.Cancel();
+    CHECK(capture.Remaining() == 0.0f);
+}
+
+// Modifier chords (SDL scancodes: LCTRL = 224, LSHIFT = 225, A = 4). '+' chords
+// are first-class in the path compiler; a capture must be able to write one.
+TEST_CASE("input profile: a held modifier prefixes the captured key as a chord", "[input][profile]")
+{
+    Arcane::InputRebindOperation capture;
+    capture.Begin(Binding(), Arcane::InputDevice::Kbm, 5.0f, {});
+    Arcane::InputSnapshot shift; shift.SetScancode(225);
+    capture.Observe(shift, 0.1f);
+    CHECK(capture.Result().state == Arcane::InputRebindState::Waiting);
+    Arcane::InputSnapshot chord = shift; chord.SetScancode(4);
+    capture.Observe(chord, 0.1f);
+    CHECK(capture.Result().state == Arcane::InputRebindState::Completed);
+    CHECK(capture.Result().replacementPath == "<Keyboard>/scancode/lshift+<Keyboard>/scancode/a");
+}
+TEST_CASE("input profile: a modifier pressed and released alone is captured bare", "[input][profile]")
+{
+    Arcane::InputRebindOperation capture;
+    capture.Begin(Binding(), Arcane::InputDevice::Kbm, 5.0f, {});
+    Arcane::InputSnapshot shift; shift.SetScancode(225);
+    capture.Observe(shift, 0.1f);
+    capture.Observe({}, 0.1f);
+    CHECK(capture.Result().state == Arcane::InputRebindState::Completed);
+    CHECK(capture.Result().replacementPath == "<Keyboard>/scancode/lshift");
+}
+TEST_CASE("input profile: releasing one modifier while another is held keeps waiting", "[input][profile]")
+{
+    Arcane::InputRebindOperation capture;
+    capture.Begin(Binding(), Arcane::InputDevice::Kbm, 5.0f, {});
+    Arcane::InputSnapshot shift; shift.SetScancode(225);
+    capture.Observe(shift, 0.1f);
+    Arcane::InputSnapshot both = shift; both.SetScancode(224);
+    capture.Observe(both, 0.1f);
+    capture.Observe(shift, 0.1f);                     // ctrl up, shift still down
+    CHECK(capture.Result().state == Arcane::InputRebindState::Waiting);
+    capture.Observe({}, 0.1f);                        // shift up, nothing else held
+    CHECK(capture.Result().state == Arcane::InputRebindState::Completed);
+    CHECK(capture.Result().replacementPath == "<Keyboard>/scancode/lshift");
 }
