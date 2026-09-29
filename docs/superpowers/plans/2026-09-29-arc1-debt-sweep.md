@@ -4,7 +4,7 @@
 
 **Goal:** Pay down the user-visible defects, the refactor and the missing tests left by editor mini-arc 1 (Inspector ownership + Input Actions editor, merged at 4e9796ba), so mini-arc 2 does not copy them.
 
-**Architecture:** Twelve small, independent fixes over the Input Actions document, its Inspector page, `PropertyGrid`, the app's shortcut gate and the engine's control-path helpers, each with the test that pins it. Where a behaviour is only reachable through ImGui, the test drives real ImGui frames device-less (the `PropertyGridTest` harness shape); everything else is a headless Catch2 case. No ABI change, no report-schema change.
+**Architecture:** Thirteen small, independent fixes over the Input Actions document, its Inspector page, `PropertyGrid`, the app's shortcut gate and the engine's control-path helpers, each with the test that pins it. Where a behaviour is only reachable through ImGui, the test drives real ImGui frames device-less (the `PropertyGridTest` harness shape); everything else is a headless Catch2 case. No ABI change, no report-schema change.
 
 **Tech Stack:** C++23, MSVC (VS 18), Dear ImGui 1.92.9 WIP (vendored), Catch2, SDL3 3.4.0 (vcpkg), premake5.
 
@@ -42,7 +42,7 @@
 - **D9 (item I3):** a mixed-device chord has an empty `device`; each part names its own device in `control`.
 - **D10 (item I4):** `"+<"` is the only chord separator; the control keeps SDL's name. `"<Keyboard>/a+"` stops compiling to `a` (it was already flagged unknown).
 - **D11 (item H4):** test-only E3b (exit 0, fallback breadcrumb, the stderr line); no report-schema bump.
-- **D12 (item F):** NOT a defect as written: `ClearAllFn` is never called and the instance list is layout by design (`EditorInspectorHostTest.cpp:199`). The real bug is bigger: a windowed project switch never loads the incoming project's `imgui.ini`. Recorded as a new owed item (Task 12); not fixed here.
+- **D12 (item F):** NOT a defect as written: `ClearAllFn` is never called today and the instance list is layout by design (`EditorInspectorHostTest.cpp:199`). The real bug is bigger: a windowed project switch never loads the incoming project's `imgui.ini`, so the outgoing layout carries over and overwrites it. **User ruling 2026-09-29: fix it in this sweep** (Task 13): on a switch, clear ImGui's settings and load the incoming file, with every editor ini handler resetting to defaults in a `ClearAllFn`.
 - **D13 (H2 sibling):** the Outliner's identical key guard gets the same `NoPopupHierarchy` flag (Task 10).
 
 ## Review Focus
@@ -1547,32 +1547,130 @@ git commit -am "test(editor): E3b witness -- an unresolvable --select-in-documen
 
   field `inspector.source` = the Inspector source's `SourceName()` (for an input document its filename, e.g. `"Player.arcinput"` -- not a path; the scene reports `"Scene"`), and the breadcrumb text (e.g. `"Player.arcinput > Player > Jump"`) in the report.
 
-- [ ] **Step 2: Record the F ruling and the owed item** in the owed section:
+- [ ] **Step 2: Record the F ruling** in the owed section:
 
-  - **`[EditorInspector][Instances]` has no ClearAllFn -- closed, not a defect (2026-09-29).** `ClearAllFn` runs only from `ImGui::ClearIniSettings`, which the editor never calls; no editor ini handler sets it; the instance list is layout by design (`EditorInspectorHostTest.cpp:199`). The headless path loads the ini once, when the list is already `{0}`.
-  - **OWED: a windowed project switch never loads the incoming project's layout.** `RetargetLayoutIni` saves the outgoing layout and repoints `io.IniFilename`, but ImGui reads the ini only while `!SettingsLoaded`, so the outgoing project's docking, windows, panel visibility, camera, play mode, Material-panel preference and Inspector instances stay live and then overwrite the incoming project's file. Fixing it means `ClearIniSettings` + `LoadIniSettingsFromDisk` after the flush, with every editor handler (PlayMode, Viewport, Panels, Inspector, ShaderEditorDocument's layout) resetting to defaults in a ReadInit hook, and a desk check of ImGui's mid-session dock re-application. Its own small arc.
+  - **`[EditorInspector][Instances]` had no ClearAllFn -- the symptom of a bigger bug, fixed 2026-09-29 (arc-1 debt sweep Task 13).** `ClearAllFn` ran only from `ImGui::ClearIniSettings`, which the editor never called, and the instance list is layout by design (`EditorInspectorHostTest.cpp:199`). The real defect: `RetargetLayoutIni` saved the outgoing layout and repointed `io.IniFilename` but never loaded the incoming file (ImGui reads the ini only while `!SettingsLoaded`), so a windowed project switch carried the outgoing project's docking, windows, panel visibility, camera, play mode, Material-panel preference and Inspector instances into the incoming project and then overwrote its file. A switch now clears and reloads, and every editor ini handler resets to defaults in its `ClearAllFn`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git commit -am "docs(editor): spec A s5 names inspector.source as the source's SourceName (a document's filename); the ClearAllFn debt closed as not-a-defect and the real bug (a windowed project switch never loads the incoming layout) recorded as owed (arc-1 debt G, F)"
+git commit -am "docs(editor): spec A s5 names inspector.source as the source's SourceName (a document's filename); the ClearAllFn debt recorded as the symptom of the windowed-switch layout carry-over (arc-1 debt G, F)"
 ```
 
 ---
 
-### Task 13: Final gate
+### Task 13: A windowed project switch loads the incoming project's layout (item F, user ruling)
+
+**Files:**
+- Modify: `ArcaneEditor/src/App/EditorApp.cpp:151-373` (ClearAllFn for PlayMode, Viewport, Panels; Inspector handler moves out), `:1612-1717` (`RetargetLayoutIni`), `EditorApp.hpp` (declarations)
+- Modify: `ArcaneEditor/src/Panels/InspectorWindows.hpp` / `.cpp` (new home of the `[EditorInspector][Instances]` handler)
+- Modify: `ArcaneEditor/src/Documents/ShaderEditorDocument.cpp` (its `[ArcaneEditorLayout][MaterialPanel]` handler gains a ClearAllFn)
+- Test: `ArcaneTests/src/EditorInspectorHostTest.cpp`, `ArcaneTests/src/ShaderEditorDocumentTest.cpp`
+
+**Why here:** every switch (`SwitchProject`, `EditorAppProject.cpp:2606-2610` and the failure fallback at `:2790-2794`) runs from `ConsumeProjectDialogResult` / `ConsumeDeferredSceneAction` at the TOP of the main loop (`EditorAppFrame.cpp:391-393`), before the editor's ImGui frame begins -- the safe point for a settings reload. After ImGui's `ClearIniSettings` the editor dockspace node is gone; if the incoming file has none, `EndDockSpace` (`EditorPanels.cpp:503`) builds the default layout exactly as on a first run.
+
+**Interfaces:**
+- Produces: `void RegisterInspectorInstancesSettings(InspectorHost& host);` in `Panels/InspectorWindows.hpp` (TypeName `"EditorInspector"`, section `Instances`, unchanged ini format; `UserData = &host`; ReadOpen/ReadLine/WriteAll bodies moved verbatim from EditorApp; ClearAllFn = `host.SetInstanceIds({})`). `EditorApp::RegisterInspectorSettingsHandler` and its three statics are deleted; `EditorApp.cpp:574` calls `RegisterInspectorInstancesSettings(m_inspectorHost)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`EditorInspectorHostTest.cpp` (its first bare-context ImGui case; add `#include <imgui.h>` and `#include "Panels/InspectorWindows.hpp"`; the `ShaderEditorDocumentTest.cpp:771-842` pattern):
+
+```cpp
+TEST_CASE("InspectorHost: the [EditorInspector][Instances] section round-trips, and a clear + reload without it resets to {0}", "[editor][inspector]")
+{
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGui::GetIO().IniFilename = nullptr;
+    Arcane::Editor::InspectorHost host;
+    Arcane::Editor::RegisterInspectorInstancesSettings(host);
+    Arcane::Editor::RegisterInspectorInstancesSettings(host);          // idempotent
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=2,3\n");
+    REQUIRE(host.Instances().size() == 3);
+    const std::string saved = ImGui::SaveIniSettingsToMemory();
+    CHECK(saved.find("[EditorInspector][Instances]\nIds=2,3") != std::string::npos);
+    CHECK(saved.find("[EditorInspector]") == saved.rfind("[EditorInspector]"));   // one section
+    ImGui::ClearIniSettings();                                          // the switch's reset
+    ImGui::LoadIniSettingsFromMemory("[EditorPanels][Visibility]\nConsole=1\n");
+    CHECK(host.Instances().size() == 1);
+    CHECK(host.Instances()[0].id == 0);
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=0,3,3,42,-1\n");
+    CHECK(host.Instances().size() == 2);                                // {0,3}
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+}
+```
+
+`ShaderEditorDocumentTest.cpp`, beside the `material panel layout round-trips through imgui.ini` case (`:771`): a case that loads that case's non-default MaterialPanel section, calls `ImGui::ClearIniSettings()`, and CHECKs that `ShaderEditorDocument::Layout()` equals a default-constructed `LayoutPrefs` (compare the field(s) that case already asserts).
+
+- [ ] **Step 2: Run to verify they fail** (compile error on `RegisterInspectorInstancesSettings`; the shader case fails because nothing resets the layout).
+
+- [ ] **Step 3: Implement the handlers**
+
+- Move the Inspector handler into `InspectorWindows.{hpp,cpp}` as described under Interfaces, adding `handler.ClearAllFn = [](ImGuiContext*, ImGuiSettingsHandler* h) { static_cast<InspectorHost*>(h->UserData)->SetInstanceIds({}); };` (a capture-less lambda converts to the function pointer).
+- `EditorApp.cpp`: add a ClearAllFn to each remaining handler, resetting to the value a fresh `EditorApp` member holds:
+  - PlayMode: `self->m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;`
+  - Viewport: `self->m_camera = {}; self->m_viewSettings = {}; self->m_cameraRestoredFromIni = false;` (use `decltype(member){}` if a member is not brace-default-constructible; do NOT cancel or re-issue the SceneOpen framing request here -- the reload's ReadLine does that when the incoming file has a camera).
+  - Panels: `self->m_panelVis = {};`
+  Declare each as a private static beside its siblings in `EditorApp.hpp`.
+- `ShaderEditorDocument`'s layout handler: ClearAllFn `Layout() = LayoutPrefs{};`.
+
+- [ ] **Step 4: Implement the reload in `RetargetLayoutIni`** (windowed branch only; the headless pin above it is unchanged)
+
+Pin the editor context for the whole windowed branch (the offscreen layer can leave the game context current; `Shutdown`'s `:3483-3485` precedent): at the start of the windowed branch, `if (m_editorImguiContext) ImGui::SetCurrentContext(m_editorImguiContext);`. Then replace the tail from `m_layoutIniPath = target.string();` with:
+
+```cpp
+        const bool switching = !m_layoutIniPath.empty();   // boot: ImGui's first NewFrame autoloads; a switch must reload by hand
+        // io.IniFilename is a BORROWED pointer (ImGui never copies it) -- the
+        // member string is its stable storage for the context's lifetime.
+        m_layoutIniPath = target.string();
+        io.IniFilename  = m_layoutIniPath.c_str();
+        if (switching)
+        {
+            // ImGui reads the ini only while !SettingsLoaded (its first
+            // NewFrame), so without this the OUTGOING layout -- docking,
+            // windows, panel visibility, camera, play mode, Inspector
+            // instances -- stays live and then overwrites the incoming file.
+            // Safe point: every switch runs at the top of the main loop,
+            // before the editor's ImGui frame. ClearIniSettings runs every
+            // handler's ClearAllFn (defaults), then the incoming file is read;
+            // with no dock nodes in it, EndDockSpace builds the default
+            // layout, as on a first run.
+            ImGui::ClearIniSettings();
+            if (std::filesystem::exists(target, ec))
+                ImGui::LoadIniSettingsFromDisk(m_layoutIniPath.c_str());
+            ARC_INFO("layout: switched to {}", m_layoutIniPath);
+        }
+```
+
+The flush of the outgoing file (`:1703-1704`) and the one-time migration stay where they are, BEFORE this block.
+
+- [ ] **Step 5: Run** `./ArcaneTests.exe "[editor]"` and `./ArcaneTests.exe "[inspector]"`; build the whole solution. Expected: pass. Then the headless witness lanes must be unchanged: `./ArcaneTests.exe "E1*"`, `"E2*"`, `"E3*"` pass (the headless branch never reaches the new code).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git commit -am "fix(editor): a windowed project switch loads the incoming project's layout -- RetargetLayoutIni clears ImGui's settings and reads the new file at the loop-top safe point; every editor ini handler (play mode, camera, panels, Inspector instances, Material panel) resets to defaults in a ClearAllFn; the Inspector instances handler moves beside InspectorWindows and is unit-tested (arc-1 debt F)"
+```
+
+**Desk check (required; nothing headless can reach a windowed switch):** with two projects A and B, in A move the Outliner to the right, hide the Console, open a second Inspector and orbit the camera; File > Open Recent > B. B shows B's own saved layout (or the default layout on its first open), with one Inspector. Switch back to A: A's arrangement, second Inspector and camera return. `%LOCALAPPDATA%\Arcane\editor\layouts\<guid>.ini` for A and B each keep their own content. Watch for windows left floating after the switch (ImGui re-applies dock ids to live windows on their next Begin); report any that do.
+
+---
+
+### Task 14: Final gate
 
 - [ ] **Step 1:** Build `Arcane.slnx` Debug and Release (see Global Constraints; Release needs the ReferenceProject slot rebuilt Release and restaged into `bin/Release-windows-x86_64-md/{ArcaneServer,ArcaneRuntime,ArcaneEditor}/ReferenceProject/Binaries/`, then back to Debug afterwards, exactly as `scripts/golden-gate.ps1` does).
 - [ ] **Step 2:** Debug `./ArcaneTests.exe "~[gpu]"`: 0 failed. Record cases/passed/skipped against the 2026-09-29 Release baseline (2147 / 2143 / 4) plus this plan's new cases.
 - [ ] **Step 3:** Debug `./ArcaneTests.exe "[gpu]~[witness]"` and `./ArcaneTests.exe "[witness][gpu]"` (G1 skips without `ARCANE_DIAG_DESK`): 0 failed.
 - [ ] **Step 4:** Release `./ArcaneTests.exe "~[gpu]"`: 0 failed.
 - [ ] **Step 5:** `powershell -File scripts/golden-gate.ps1 -Configuration Debug`: all lanes pass (the editor-input-doc golden must be unchanged; nothing here changes what that selection draws). Delete the exe-dir `imgui.ini` first if a lane fails on layout.
-- [ ] **Step 6:** Hand the user the desk list (Tasks 4, 5, 6, 7, 10's Outliner flag) and the integration choice. Do not merge or push.
+- [ ] **Step 6:** Hand the user the desk list (Tasks 4, 5, 6, 7, 10's Outliner flag, and Task 13's switch check, which is REQUIRED) and the integration choice. Do not merge or push.
 
 ---
 
 ## Self-Review
 
-- **Coverage:** A (T2), B (T4 + T10), C (T5), D (T3), E (T1), F (T12, ruled), G (T12), H1/H2 (T10), H3 (T2), H4 (T11), I1 (T6), I2 (T7), I3 (T9), I4 (T8). The Outliner sibling (T10). Every item from the direction record's step 2 has a task.
+- **Coverage:** A (T2), B (T4 + T10), C (T5), D (T3), E (T1), F (T12 record + T13 fix), G (T12), H1/H2 (T10), H3 (T2), H4 (T11), I1 (T6), I2 (T7), I3 (T9), I4 (T8). The Outliner sibling (T10). Every item from the direction record's step 2 has a task.
 - **Type consistency:** `scrollRowToId` (T6) is read by T10; `SnapshotForCapture`'s 3-argument form (T5) is the only form after T5; `TrimName`/`ResolveKey`/`EncodeSelectionKey` (T1) are not renamed later; `BindingConflict` fields are appended after `group` (T3); `TextRow`'s 5th parameter (T4) is used by T4's page change and exercised by T10.
 - **Known plan-code risk:** T4's and T10's frame counts are the harness's best reading of ImGui 1.92.9 timing (focus requests resolve through nav a frame or two late; popups take focus on the frame after they open); T8's evaluator case assumes `LoadJson` accepts `PadAndChordDoc()`'s shape. Implementers adjust these with a note, never by weakening an assertion.
