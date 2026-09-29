@@ -207,4 +207,19 @@ namespace Arcane::Editor
         visit(visit, draft, Guid{});
         return found;
     }
+
+    std::string ConflictTooltip(const std::vector<InputActionsEditorModel::BindingConflict>& conflicts, const Guid& row)
+    {
+        std::string out;
+        std::vector<std::string> seen;
+        for (const auto& c : conflicts)
+        {
+            if (c.binding != row) continue;
+            const std::string item = c.otherActionName + " (" + (c.group == "*" ? std::string("every scheme") : c.scheme) + ")";
+            if (std::find(seen.begin(), seen.end(), item) != seen.end()) continue;
+            seen.push_back(item);
+            out += out.empty() ? "Also bound by " + item : ", " + item;
+        }
+        return out;
+    }
 }

@@ -493,9 +493,7 @@ namespace Arcane::Editor
             ImGui::TextColored(Theme::kAmber, ICON_LC_CIRCLE_DOT);
             if (ImGui::IsItemHovered())
             {
-                std::string who;
-                for (const auto& c : model.Conflicts()) if (c.binding == row.id) { if (!who.empty()) who += ", "; who += c.otherActionName; }
-                ImGui::SetTooltip("Also bound by %s", who.c_str());
+                ImGui::SetTooltip("%s", ConflictTooltip(model.Conflicts(), row.id).c_str());
             }
             ImGui::SameLine();
         }

@@ -129,3 +129,17 @@ TEST_CASE("input rows: a binding in several schemes carries every group", "[edit
     REQUIRE(rows[1].groups.size() == 2);
     CHECK(rows[1].groups[1] == "Gamepad");
 }
+
+TEST_CASE("input rows: ConflictTooltip names each other action once with its schemes", "[editor][input]")
+{
+    using C = InputActionsEditorModel::BindingConflict;
+    const auto a = *Arcane::Guid::FromString("99999999-9999-4999-8999-999999999999");
+    const auto b = *Arcane::Guid::FromString("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    std::vector<C> cs;
+    C c1{}; c1.binding = a; c1.otherBinding = b; c1.otherActionName = "Crouch"; c1.group = "KeyboardMouse"; c1.scheme = "KeyboardMouse";
+    C c2 = c1;                                   // the same other action again: named once
+    C c3{}; c3.binding = a; c3.otherActionName = "Fire"; c3.group = "*";
+    cs = { c1, c2, c3 };
+    CHECK(ConflictTooltip(cs, a) == "Also bound by Crouch (KeyboardMouse), Fire (every scheme)");
+    CHECK(ConflictTooltip(cs, b).empty());
+}

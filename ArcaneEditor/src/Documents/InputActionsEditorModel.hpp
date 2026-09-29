@@ -88,7 +88,8 @@ namespace Arcane::Editor
         [[nodiscard]] bool AddScheme(std::string name, std::string group);
         [[nodiscard]] bool EditScheme(const Guid& scheme, std::string name, std::string group);
         [[nodiscard]] bool RemoveScheme(const Guid& scheme);
-        struct BindingConflict { Guid binding; Guid otherBinding; Guid otherAction; std::string otherActionName; std::string path; std::string group; };
+        struct BindingConflict { Guid binding; Guid otherBinding; Guid otherAction; std::string otherActionName; std::string path; std::string group;
+                                Guid action; std::string actionName; Guid map; std::string mapName; std::string scheme; };   // both sides always share one map (conflicts are per map, spec B s2.3); `scheme` is display text (empty for "*")
         // One entry PER DIRECTION (a and b each get one); compares the
         // compiled control (InputActions::CanonicalControlKey), never the spelling.
         [[nodiscard]] std::vector<BindingConflict> Conflicts() const;

@@ -740,19 +740,39 @@ namespace Arcane::Editor
                                                 InputActions::CanonicalControlKey(part.path),
                                                 part.groups.empty() ? binding.groups : part.groups });
                 }
-            auto overlap = [](const Entry& a, const Entry& b) -> std::string {
-                if (a.groups.empty() || b.groups.empty()) return "*";   // ungrouped = every scheme
+            // Every scheme group in which BOTH bindings are live. Ungrouped is
+            // live in every scheme: both ungrouped -> {"*"}; one ungrouped ->
+            // the grouped side's groups; else the intersection.
+            auto overlap = [](const Entry& a, const Entry& b) -> std::vector<std::string> {
+                if (a.groups.empty() && b.groups.empty()) return { "*" };
+                if (a.groups.empty()) return b.groups;
+                if (b.groups.empty()) return a.groups;
+                std::vector<std::string> out;
                 for (const auto& g : a.groups)
-                    if (std::find(b.groups.begin(), b.groups.end(), g) != b.groups.end()) return g;
-                return {}; };
+                    if (std::find(b.groups.begin(), b.groups.end(), g) != b.groups.end()) out.push_back(g);
+                return out; };
+            auto schemeNames = [&](const std::vector<std::string>& groups) {
+                std::string out;
+                if (groups.size() == 1 && groups[0] == "*") return out;
+                for (const auto& g : groups)
+                {
+                    std::string name = g;
+                    for (const auto& s : preview_->controlSchemes) if (s.bindingGroup == g) { name = s.name; break; }
+                    if (!out.empty()) out += ", ";
+                    out += name;
+                }
+                return out; };
             for (std::size_t i = 0; i < entries.size(); ++i)
                 for (std::size_t j = i + 1; j < entries.size(); ++j)
                 {
                     if (entries[i].key.empty() || entries[i].key != entries[j].key) continue;   // compare the COMPILED control, not the spelling: the rebind capture writes the scancode form while assets author the keycode form
-                    const std::string group = overlap(entries[i], entries[j]);
-                    if (group.empty()) continue;
-                    out.push_back({ entries[i].id, entries[j].id, entries[j].action, entries[j].actionName, entries[i].path, group });
-                    out.push_back({ entries[j].id, entries[i].id, entries[i].action, entries[i].actionName, entries[i].path, group });
+                    const auto groups = overlap(entries[i], entries[j]);
+                    if (groups.empty()) continue;
+                    const std::string group = groups.front(), scheme = schemeNames(groups);
+                    out.push_back({ entries[i].id, entries[j].id, entries[j].action, entries[j].actionName, entries[i].path, group,
+                                    entries[i].action, entries[i].actionName, map.id, map.name, scheme });
+                    out.push_back({ entries[j].id, entries[i].id, entries[i].action, entries[i].actionName, entries[i].path, group,
+                                    entries[j].action, entries[j].actionName, map.id, map.name, scheme });
                 }
         }
         return out;
@@ -802,8 +822,13 @@ namespace Arcane::Editor
         {
             const auto a = c.binding.ToString(), b = c.otherBinding.ToString();
             if (!seenPairs.emplace(std::min(a, b), std::max(a, b)).second) continue;   // one line per pair
-            warnings.push_back("Conflicting '" + c.path + "': " + c.otherActionName + " shares it" +
-                               (c.group == "*" ? std::string(" in every scheme") : " in " + c.group));
+            const std::string where = c.group == "*" ? std::string(" in every scheme")
+                                    : (c.scheme.find(", ") != std::string::npos ? " in schemes " : " in scheme ") + c.scheme;
+            if (c.action == c.otherAction)
+                warnings.push_back("Conflicting '" + c.path + "': " + c.mapName + "/" + c.actionName + " binds it twice" + where);
+            else
+                warnings.push_back("Conflicting '" + c.path + "': " + c.mapName + "/" + c.actionName + " and " +
+                                   c.mapName + "/" + c.otherActionName + " share it" + where);
         }
         return warnings;
     }

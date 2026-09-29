@@ -182,7 +182,30 @@ TEST_CASE("input editor: same path warnings remain nonblocking", "[editor][input
     const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
     REQUIRE(model.AddBinding(map, action, "<Keyboard>/space"));
     CHECK_FALSE(model.Warnings().empty());
+    const auto w = model.Warnings();
+    CHECK(std::find(w.begin(), w.end(), std::string("Conflicting '<Keyboard>/space': Player/Jump binds it twice in every scheme")) != w.end());
     REQUIRE(model.LastValidPreview());
+}
+
+TEST_CASE("input editor: a conflict line names the scheme's display name and every overlapping scheme; conflicts stay per map", "[editor][input]")
+{
+    auto json = nlohmann::json::parse(R"JSON({
+        "version":1,"id":"11111111-1111-4111-8111-111111111111","defaultMap":"22222222-2222-4222-8222-222222222222",
+        "controlSchemes":[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","name":"Keyboard and Mouse","bindingGroup":"KeyboardMouse"},
+                          {"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","name":"Gamepad","bindingGroup":"Gamepad"}],
+        "actionMaps":[{"id":"22222222-2222-4222-8222-222222222222","name":"Player","actions":[
+            {"id":"33333333-3333-4333-8333-333333333333","name":"Jump","type":"Button","bindings":[
+              {"id":"44444444-4444-4444-8444-444444444444","path":"<Keyboard>/space","groups":["KeyboardMouse","Gamepad"]}]},
+            {"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Crouch","type":"Button","bindings":[
+              {"id":"dddddddd-dddd-4ddd-8ddd-dddddddddddd","path":"<Keyboard>/space"}]}]},
+          {"id":"99999999-9999-4999-8999-999999999999","name":"Menus","actions":[
+            {"id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee","name":"Confirm","type":"Button","bindings":[
+              {"id":"ffffffff-ffff-4fff-8fff-ffffffffffff","path":"<Keyboard>/space"}]}]}]})JSON");
+    Arcane::Editor::InputActionsEditorModel model(std::move(json));
+    REQUIRE(model.LastValidPreview());
+    const auto w = model.Warnings();
+    CHECK(std::count_if(w.begin(), w.end(), [](const std::string& s) { return s.starts_with("Conflicting"); }) == 1);
+    CHECK(std::find(w.begin(), w.end(), std::string("Conflicting '<Keyboard>/space': Player/Jump and Player/Crouch share it in schemes Keyboard and Mouse, Gamepad")) != w.end());
 }
 
 TEST_CASE("input editor: composite parts can be added removed and reordered", "[editor][input]")
@@ -414,6 +437,19 @@ TEST_CASE("input editor: Conflicts and Warnings -- same scheme, ungrouped-vs-gro
     const auto warnings = model.Warnings();
     CHECK(std::count_if(warnings.begin(), warnings.end(), [](const std::string& w) { return w.starts_with("Unknown control path"); }) == 1);
     CHECK(std::count_if(warnings.begin(), warnings.end(), [](const std::string& w) { return w.starts_with("Conflicting"); }) == 4);   // one per PAIR: Jump/Crouch, Fire/Crouch, Aim/Block mouse, Aim/Block chord
+    for (const std::string expected : {
+            std::string("Conflicting '<Keyboard>/space': Player/Jump and Player/Crouch share it in scheme KeyboardMouse"),
+            std::string("Conflicting '<Keyboard>/scancode/space': Player/Crouch and Player/Fire share it in scheme Gamepad"),
+            std::string("Conflicting '<Mouse>/button/1': Player/Aim and Player/Block share it in every scheme"),
+            std::string("Conflicting '<Keyboard>/lshift+<Keyboard>/a': Player/Aim and Player/Block share it in every scheme") })
+    {
+        INFO(expected);
+        CHECK(std::find(warnings.begin(), warnings.end(), expected) != warnings.end());
+    }
+    const auto jumpConflict = std::find_if(conflicts.begin(), conflicts.end(), [](const auto& c) { return c.binding.ToString() == "44444444-4444-4444-8444-444444444444"; });
+    REQUIRE(jumpConflict != conflicts.end());
+    CHECK(jumpConflict->actionName == "Jump"); CHECK(jumpConflict->otherActionName == "Crouch");
+    CHECK(jumpConflict->mapName == "Player"); CHECK(jumpConflict->scheme == "KeyboardMouse");
 }
 
 TEST_CASE("input document: the capture snapshot ignores ImGui's mouse claim and keeps the keyboard's ActiveId claim", "[editor][input]")

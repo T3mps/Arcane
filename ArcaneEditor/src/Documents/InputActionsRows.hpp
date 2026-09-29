@@ -48,6 +48,10 @@ namespace Arcane::Editor
         const std::vector<InputActionsEditorModel::BindingConflict>& conflicts,
         const std::unordered_set<std::string>& collapsedActions);   // action ids as strings
 
+    // "Also bound by Crouch (KeyboardMouse), Fire (every scheme)": each OTHER
+    // action once with its scheme text; empty when `row` has no conflict.
+    [[nodiscard]] std::string ConflictTooltip(const std::vector<InputActionsEditorModel::BindingConflict>& conflicts, const Guid& row);
+
     // Up/Down over the selectable rows (every kind but AddBinding). Unknown
     // `current` lands on the first row; the ends clamp; empty rows -> nullopt.
     [[nodiscard]] std::optional<Guid> StepSelection(const std::vector<InputRow>& rows,
