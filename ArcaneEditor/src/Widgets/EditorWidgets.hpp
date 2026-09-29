@@ -133,6 +133,35 @@ namespace Arcane::Editor
         HeaderBand& operator=(const HeaderBand&) = delete;
     };
 
+    // A text box whose typed value is REFUSED (a rename its validator rejects):
+    // a 1px Theme::kError frame border and kError text, so the refusal reads at
+    // a glance; the reason is one hover away (RefusedFieldTooltip). The ONE
+    // styling both rename surfaces use -- PropertyGrid::TextRow's `validate`
+    // rows and the Input Actions document's inline rename box -- so they cannot
+    // drift. `refused == false` pushes nothing: a valid box looks exactly as
+    // before. FrameBorderSize only strokes the frame rect, it never changes the
+    // item's size, so toggling the outline shifts no layout.
+    //
+    // Scope it TIGHT around the input call only: the tooltip must be submitted
+    // AFTER it pops, or the tooltip's text and border turn red too.
+    // [[nodiscard]] for the same reason as FieldGrid above.
+    struct [[nodiscard]] RefusedFieldStyle
+    {
+        explicit RefusedFieldStyle(bool refused);
+        ~RefusedFieldStyle();
+        RefusedFieldStyle(const RefusedFieldStyle&) = delete;
+        RefusedFieldStyle& operator=(const RefusedFieldStyle&) = delete;
+    private:
+        bool m_refused;
+    };
+
+    // The refusal reason as a tooltip on the LAST item whenever the mouse
+    // hovers it (SetItemTooltip: hover-gated with the stock tooltip delay, so
+    // it never pops unasked) -- active or not, so a box holding a refused name
+    // after Enter still explains itself. No reason, no tooltip. Call right
+    // after the input, once RefusedFieldStyle has popped.
+    void RefusedFieldTooltip(const std::optional<std::string>& reason);
+
     // One inline stable-buffer text edit: seeds from `current`, holds typed
     // text across frames while active (keyed by `key`, unique per edit site),
     // fires `commit(newText)` EXACTLY ONCE on deactivate-after-edit when the

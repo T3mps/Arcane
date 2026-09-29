@@ -16,8 +16,8 @@
 // every frame (a page may preview it) but commits nothing; on commit `value`
 // holds the gesture's final number. Escape during a numeric drag cancels (no
 // commit). TextRow selects all its text on activation (single-line rows).
-// An optional `validate` returns a refusal reason: shown as a tooltip while
-// typing; Enter on a refused value keeps the text and re-arms the box; focus
+// An optional `validate` returns a refusal reason: a refused value draws red
+// (RefusedFieldStyle) with the reason as a hover tooltip; Enter on a refused value keeps the text and re-arms the box; focus
 // loss with a refused value reverts without committing. Mirrors the Input
 // Actions rename box.
 //
@@ -106,7 +106,8 @@ namespace Arcane::Editor
                      std::function<void(std::string)> commit, bool dimmed = false,
                      std::function<std::optional<std::string>(std::string_view)> validate = {});   // commit is STORED in the draft (see TextDraft)
         // `validate` (called synchronously, never stored) returns a refusal
-        // reason: shown as a tooltip while typing; Enter on a refused value
+        // reason: a refused value draws red (outline + text) with the reason as
+        // a hover tooltip, typing or held; Enter on a refused value
         // keeps the text and re-arms the box; focus loss with a refused value
         // reverts without committing. Mirrors the Input Actions rename box.
         // CommitOrphans flushes an orphaned ACTIVE draft through `commit`

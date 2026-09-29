@@ -3,7 +3,10 @@
 // harness shape: software atlas, window pinned at the origin, probe centres).
 #include <catch2/catch_test_macros.hpp>
 #include <Widgets/PropertyGrid.hpp>
+#include <Widgets/EditorTheme.hpp>   // Theme::kError (the refused-value look)
 #include <imgui.h>
+#include <imgui_internal.h>   // ColorStack / StyleVarStack (the refused-style balance check)
+#include <cstdlib>   // std::abs
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -28,6 +31,8 @@ namespace
         float scale = 1.0f;
         int scaleCommits = 0;
         std::function<std::optional<std::string>(std::string_view)> validate;   // the Name row's rule (empty = none)
+        int nameStackDrift = 0;          // |colour + style-var stack change| across the Name row, summed over every frame
+        bool errorDrawn = false;         // THIS frame: the Inspector window drew a vertex in Theme::kError
 
         GridHarness()
         {
@@ -60,8 +65,11 @@ namespace
                 Arcane::Editor::PropertyGrid::Rows rows(grid, "##fields");
                 if (rows)
                 {
+                    const ImGuiContext& g = *ImGui::GetCurrentContext();
+                    const int colours = g.ColorStack.Size, vars = g.StyleVarStack.Size;
                     if (drawName) grid.TextRow("Name", name, [&](std::string v) { name = std::move(v); ++commits; }, false, validate);
                     else { ImGui::PushID("B"); grid.TextRow("Name", nameB, [&](std::string v) { nameB = std::move(v); ++commitsB; }); ImGui::PopID(); }
+                    nameStackDrift += std::abs(g.ColorStack.Size - colours) + std::abs(g.StyleVarStack.Size - vars);
                     grid.CheckboxRow("Blocking", flag);
                     grid.ReadOnlyRow("Path", "<Keyboard>/space");
                     float seconds = storedSeconds;   // re-derived from the "model" EVERY frame, as the input pages do
@@ -71,6 +79,10 @@ namespace
             }
             ImGui::End();
             ImGui::Render();
+            // Draw data, not pixels: did anything in the Inspector use the refusal colour?
+            const ImU32 error = ImGui::ColorConvertFloat4ToU32(Arcane::Editor::Theme::kError);
+            errorDrawn = false;
+            for (const ImDrawVert& v : ImGui::FindWindowByName("Inspector")->DrawList->VtxBuffer) errorDrawn = errorDrawn || v.col == error;
         }
         ImVec2 Centre(const std::string& key) { INFO(key); REQUIRE(probe.count(key) == 1); return probe.at(key); }
         void Click(ImVec2 at)
@@ -231,4 +243,37 @@ TEST_CASE("PropertyGrid: a second Enter on a refused TextRow value, with no new 
     REQUIRE(h.state.textDrafts.size() == 1);
     CHECK(h.state.textDrafts.begin()->second.text == "X");      // still kept
     CHECK(h.state.textDrafts.begin()->second.active);           // still re-armed
+}
+
+TEST_CASE("PropertyGrid: a refused TextRow value draws in Theme::kError while typed and while held after Enter, a valid or committed value never does, and the style stacks balance", "[editor][inspector]")
+{
+    GridHarness h;
+    h.validate = [](std::string_view v) -> std::optional<std::string> { return v == "X" ? std::optional<std::string>("taken") : std::nullopt; };
+    h.Frame();
+    CHECK_FALSE(h.errorDrawn);                               // the model's own value: no red
+    h.Click(h.Centre("Name"));
+    CHECK_FALSE(h.errorDrawn);                               // active, unchanged: no red
+    h.Type("X"); h.Frame();                                  // the look trails the keystroke by one frame
+    CHECK(h.errorDrawn);                                     // typing a refused value: red
+    h.Key(ImGuiKey_Enter);                                   // refused: kept + re-armed (the hold)
+    h.Frame(); h.Frame();
+    REQUIRE(h.state.textDrafts.size() == 1);
+    REQUIRE(h.state.textDrafts.begin()->second.text == "X");
+    CHECK(h.errorDrawn);                                     // held after the refused Enter: still red
+    h.Type("Y"); h.Frame();                                  // re-armed select-all: "Y" replaces "X"
+    CHECK_FALSE(h.errorDrawn);                               // a valid value: no red
+    h.Click(ImVec2(600, 900));
+    h.Frame();
+    CHECK(h.commits == 1);
+    CHECK(h.name == "Y");
+    CHECK_FALSE(h.errorDrawn);                               // committed: no red
+
+    h.Click(h.Centre("Name"));
+    h.Type("X"); h.Frame();
+    CHECK(h.errorDrawn);
+    h.Click(ImVec2(600, 900));                               // focus loss with a refused value: revert
+    h.Frame();
+    CHECK(h.name == "Y");
+    CHECK_FALSE(h.errorDrawn);                               // reverted: no red
+    CHECK(h.nameStackDrift == 0);                            // every push popped inside the row, every frame
 }

@@ -112,6 +112,13 @@ namespace Arcane::Editor
         // Histogram bars are a data mark, exempt like the axis bars.
         inline constexpr ImVec4 kAmber      = ImVec4(1.000f, 0.650f, 0.100f, 1.00f);
         inline constexpr ImVec4 kAmberLight = ImVec4(1.000f, 0.780f, 0.350f, 1.00f);
+        // "Something is wrong here": a refused value in a text field (the
+        // RefusedFieldStyle outline + text, EditorWidgets.hpp). The same triple
+        // the editor already spells as a literal for DiagSeverity::Error (the
+        // Problems panel, the Console, the Inspector's dangling-reference
+        // text), named here so a new error mark reuses it rather than another
+        // copy of the literal.
+        inline constexpr ImVec4 kError      = ImVec4(0.900f, 0.350f, 0.350f, 1.00f); // #e65959
 
         // Fully transparent -- spelled once so the entries that mean "draw
         // nothing here" say so rather than repeating a zero vector.

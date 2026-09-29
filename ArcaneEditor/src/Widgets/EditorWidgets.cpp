@@ -584,6 +584,27 @@ namespace Arcane::Editor
         PopHeaderBandColors();
     }
 
+    RefusedFieldStyle::RefusedFieldStyle(bool refused)
+        : m_refused(refused)
+    {
+        if (!m_refused) return;
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Border, Theme::kError);
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::kError);
+    }
+
+    RefusedFieldStyle::~RefusedFieldStyle()
+    {
+        if (!m_refused) return;
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
+    }
+
+    void RefusedFieldTooltip(const std::optional<std::string>& reason)
+    {
+        if (reason) ImGui::SetItemTooltip("%s", reason->c_str());
+    }
+
     bool StableTextEdit(const char* imguiLabel, TextCommitState& st, std::uint64_t key,
                         std::string_view current, float width,
                         Arcane::FunctionRef<void(const char*)> commit)

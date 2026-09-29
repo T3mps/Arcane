@@ -81,11 +81,21 @@ namespace Arcane::Editor
         // Single-line property text selects all on activation (click or Tab/nav
         // into the box), the same rule as the document's inline rename box.
         if (draft.focusPending) { ImGui::SetKeyboardFocusHere(); draft.focusPending = false; }
-        InputTextString("##value", &draft.text, ImGuiInputTextFlags_AutoSelectAll);
-        // Still the last item: the refusal reason shows while typing (the
-        // Input Actions rename box's rule). An unchanged value is never refused.
-        const std::optional<std::string> reason = (validate && draft.text != current) ? validate(draft.text) : std::nullopt;
-        if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
+        // An unchanged value is never refused.
+        auto refusal = [&] { return (validate && draft.text != current) ? validate(draft.text) : std::nullopt; };
+        {
+            // A refused value draws red (outline + text) while typing AND while
+            // held after a refused Enter -- the document rename box's look (D4).
+            // Styled from the text as it enters this frame (the edit lands inside
+            // the call), so the look trails a keystroke by one frame; the logic
+            // below reads the fresh reason.
+            RefusedFieldStyle refused(refusal().has_value());
+            InputTextString("##value", &draft.text, ImGuiInputTextFlags_AutoSelectAll);
+        }
+        // Still the last item: the reason shows on hover whenever the value is
+        // refused, active or held (the Input Actions rename box's rule).
+        const std::optional<std::string> reason = refusal();
+        RefusedFieldTooltip(reason);
         ImGui::EndDisabled();
         Probe(label);
         draft.active = ImGui::IsItemActive();

@@ -89,9 +89,17 @@ namespace Arcane::Editor
             if (bool& scroll = ScrollFlagFor(model, state, id); scroll) { ImGui::SetScrollHereY(); scroll = false; }   // this column's flag only
             if (state.renameFocusPending) { ImGui::SetKeyboardFocusHere(); state.renameFocusPending = false; }
             ImGui::SetNextItemWidth(-FLT_MIN);
-            const bool entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            // A refused name draws red (outline + text) whether typing or held
+            // after a refused Enter -- styled from the buffer as it enters this
+            // frame (the edit lands inside the call), so the look trails a
+            // keystroke by one frame; the logic below reads the fresh reason.
+            bool entered = false;
+            {
+                RefusedFieldStyle refused(InputActionsEditorModel::ValidateName(model.Draft(), id, state.renameBuf).has_value());
+                entered = InputTextString("##rename", &state.renameBuf, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            }
             const auto reason = InputActionsEditorModel::ValidateName(model.Draft(), id, state.renameBuf);
-            if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
+            RefusedFieldTooltip(reason);   // on hover, active or held (the Inspector Name row's rule)
             if (ImGui::IsItemDeactivated())
             {
                 const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
