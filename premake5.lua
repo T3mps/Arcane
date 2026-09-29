@@ -1206,6 +1206,10 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Documents/InputActionsEditorModel.cpp",
         "%{wks.location}/ArcaneEditor/src/Documents/InputActionsDocument.cpp",
         "%{wks.location}/ArcaneEditor/src/Documents/InputActionsDocumentWidgets.cpp",
+        -- Input editor T7: InputActionsRows (the actions column as pure rows)
+        -- source-compiles here for InputActionsRowsTest, and the rewritten
+        -- InputActionsDocumentWidgets.cpp above links against it.
+        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsRows.cpp",
         -- Outliner slice 4: ComponentCatalog (registry enumeration + the one
         -- system-managed hide-list + selection-aware missing counts) source-
         -- compiles into the test exe so the [editor] units drive it directly --

@@ -471,7 +471,7 @@ namespace Arcane
         struct Interaction
         {
             enum class Kind { Press, Hold, Tap } kind = Kind::Press;
-            float duration = 0.4f;
+            float duration = kDefaultHoldSeconds;
         };
 
         Interaction ParseInteraction(const std::string& token)
@@ -485,7 +485,7 @@ namespace Arcane
             if (name == "hold")
             {
                 it.kind = Interaction::Kind::Hold;
-                it.duration = 0.4f;
+                it.duration = kDefaultHoldSeconds;
                 auto pos = argStr.find("duration=");
                 if (pos != std::string::npos)
                 {
@@ -496,7 +496,7 @@ namespace Arcane
             else if (name == "tap")
             {
                 it.kind = Interaction::Kind::Tap;
-                it.duration = 0.2f;
+                it.duration = kDefaultTapSeconds;
                 auto pos = argStr.find("duration=");
                 if (pos != std::string::npos)
                 {
