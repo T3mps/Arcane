@@ -119,6 +119,9 @@ editor only where a standalone use needs it, and we start with none).
   rows move to the asset page; the pane keeps only what is browser-specific (the
   thumbnail and the Open button), or goes entirely if that is all that is left.
   Decided 2026-09-28: part of this arc, not a later plan.
+  **Amended 2026-09-29:** the pane goes ENTIRELY; the Asset Browser becomes a source and the
+  default layout carries an "Assets only" Inspector beside it
+  (`2026-09-29-inspector-filters-design.md` s6).
 
 ## 4. Automation
 
