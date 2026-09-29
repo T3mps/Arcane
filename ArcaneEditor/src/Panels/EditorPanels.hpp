@@ -524,13 +524,14 @@ namespace Arcane::Editor
         // is rebuilt every frame and cannot itself carry state), but UNLIKE
         // the colour popup this is not exclusive -- more than one Quat row
         // can be on screen in the same frame (multiple components, or a
-        // future second glm::quat field) -- so it is keyed per field rather
-        // than a single shared slot. The key combines the owning component's
-        // descriptor hash with the field's own nameHash (see InspectorView.
-        // cpp); only the PRIMARY entity's rotation is ever cached, matching
-        // every other field kind's single-selection row, so switching the
-        // primary entity is just another external change SyncQuatEulerView
-        // already handles by re-deriving.
+        // future second glm::quat field) -- so it is keyed per (entity,
+        // component, field) rather than a single shared slot. The key combines the DRAWN entity (the
+        // primary of the selection the page draws), the owning component's
+        // descriptor hash and the field's own nameHash (see InspectorView.
+        // cpp): several Inspector instances (a follower and a pinned one)
+        // draw through this ONE state in the same frame, so a per-field key
+        // would let them overwrite each other's view every frame. The same
+        // entity shown in two instances shares one view, as it should.
         std::unordered_map<std::uint64_t, Arcane::Editor::QuatEulerView> quatEulerViews;
         // Live search text. A fixed buffer rather than std::string because
         // ImGui::InputText writes into it directly; 128 is far past any

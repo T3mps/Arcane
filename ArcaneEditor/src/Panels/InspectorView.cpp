@@ -924,14 +924,21 @@ namespace Arcane::Editor
                         // skin over them, same split as every other field kind.
                         const glm::quat live = f.Get<glm::quat>(instance);
 
-                        // Keyed per FIELD (component hash + field nameHash), not
-                        // per entity: only the PRIMARY's rotation is ever shown or
-                        // cached here (same as every other single-selection row --
-                        // `instance` below is always the primary's data), so a
-                        // selection change is just another external change the
-                        // cache already handles by re-deriving.
-                        const std::uint64_t quatKey =
+                        // Keyed per (ENTITY, component, field): the drawn entity
+                        // (`entity`, the primary of the selection THIS page draws)
+                        // + the component hash + the field nameHash. Several
+                        // Inspector instances can be on screen at once -- a
+                        // follower on entity A and a pinned instance on entity B
+                        // -- all drawing through the ONE InspectorState, so a
+                        // per-field key would let each draw overwrite the other's
+                        // view and re-derive Euler every frame (a pitch drag past
+                        // +-90 deg would flip). The same entity shown in two
+                        // instances correctly shares one view.
+                        const std::uint64_t fieldKey =
                             descriptor->hash ^ (f.nameHash * 0x9E3779B97F4A7C15ULL);
+                        const std::uint64_t quatKey =
+                            fieldKey ^ (static_cast<std::uint64_t>(entity.GetValue()) * 0xC2B2AE3D27D4EB4FULL
+                                        + 0x165667B19E3779F9ULL + (fieldKey << 6) + (fieldKey >> 2));
                         Arcane::Editor::QuatEulerView& view = (*quatEulerViews)[quatKey];
 
                         // Degrees unless the field explicitly asks for radians --

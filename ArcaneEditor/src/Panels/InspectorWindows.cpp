@@ -7,14 +7,46 @@
 #include <imgui_internal.h>   // FindWindowByName (the primary's dock node for a new instance)
 
 #include <algorithm>
+#include <functional>
+#include <optional>
 #include <string>
+#include <utility>
 
 namespace Arcane::Editor
 {
     namespace
     {
-        void DrawHeader(InspectorHost& host, const InspectorHost::Instance& inst, InspectorSource* src,
-                        InspectorPage* page, bool canPin)
+        // What the header's clicks ASK for. DrawHeader takes the host by
+        // const reference and only records here; ApplyHeaderActions performs
+        // them after ImGui::End(). Every one of these (GoBack/GoForward/JumpTo
+        // -> RefreshCursorLabel -> Page(); SetPinned -> CanPin -> PageFor; a
+        // crumb's select -> the source's selection) can re-target the view
+        // the instance resolved, so none may run between the page resolve
+        // and page->Draw (InspectorSource.hpp's page-view contract).
+        struct HeaderActions
+        {
+            bool back = false;
+            bool forward = false;
+            std::optional<std::size_t> jump;          // a history entry picked from a right-click list
+            bool togglePin = false;
+            bool unpin = false;                        // the pinned page-less note's "click to follow"
+            std::optional<std::string> repinKey;       // a pinned instance's crumb
+            std::function<void()> select;              // an unpinned instance's crumb
+        };
+
+        void ApplyHeaderActions(InspectorHost& host, const InspectorHost::Instance& inst, HeaderActions& a)
+        {
+            if (a.back) (void)host.GoBack();
+            if (a.forward) (void)host.GoForward();
+            if (a.jump) (void)host.JumpTo(*a.jump);
+            if (a.repinKey) host.RepinKey(inst.id, std::move(*a.repinKey));
+            if (a.select) a.select();
+            if (a.togglePin) host.SetPinned(inst.id, !inst.pinned);
+            if (a.unpin) host.SetPinned(inst.id, false);
+        }
+
+        void DrawHeader(const InspectorHost& host, const InspectorHost::Instance& inst, InspectorSource* src,
+                        InspectorPage* page, bool canPin, HeaderActions& actions)
         {
             const ImGuiStyle& style = ImGui::GetStyle();
             const float pinWidth = ImGui::CalcTextSize(ICON_LC_PIN).x + style.FramePadding.x * 2.0f;
@@ -23,7 +55,7 @@ namespace Arcane::Editor
             // target, and a right-click lists that side's entries nearest-first
             // (UE's Content Browser history). The disabled state suppresses both.
             ImGui::BeginDisabled(!host.CanGoBack());
-            if (ImGui::SmallButton(ICON_LC_CHEVRON_LEFT "##back")) (void)host.GoBack();
+            if (ImGui::SmallButton(ICON_LC_CHEVRON_LEFT "##back")) actions.back = true;
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 if (const auto* e = host.BackEntry()) ImGui::SetTooltip("Back to %s", e->label.c_str());
             if (ImGui::BeginPopupContextItem("##back_history"))
@@ -32,7 +64,7 @@ namespace Arcane::Editor
                 for (std::size_t i = cur; i-- > 0;)
                 {
                     ImGui::PushID(static_cast<int>(i));
-                    if (ImGui::Selectable(host.History()[i].label.c_str())) { (void)host.JumpTo(i); ImGui::PopID(); break; }   // JumpTo may erase: stop iterating
+                    if (ImGui::Selectable(host.History()[i].label.c_str())) actions.jump = i;
                     ImGui::PopID();
                 }
                 ImGui::EndPopup();
@@ -40,7 +72,7 @@ namespace Arcane::Editor
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::BeginDisabled(!host.CanGoForward());
-            if (ImGui::SmallButton(ICON_LC_CHEVRON_RIGHT "##forward")) (void)host.GoForward();
+            if (ImGui::SmallButton(ICON_LC_CHEVRON_RIGHT "##forward")) actions.forward = true;
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 if (const auto* e = host.ForwardEntry()) ImGui::SetTooltip("Forward to %s", e->label.c_str());
             if (ImGui::BeginPopupContextItem("##forward_history"))
@@ -48,7 +80,7 @@ namespace Arcane::Editor
                 for (std::size_t i = host.HistoryCursor() + 1; i < host.History().size(); ++i)
                 {
                     ImGui::PushID(static_cast<int>(i));
-                    if (ImGui::Selectable(host.History()[i].label.c_str())) { (void)host.JumpTo(i); ImGui::PopID(); break; }
+                    if (ImGui::Selectable(host.History()[i].label.c_str())) actions.jump = i;
                     ImGui::PopID();
                 }
                 ImGui::EndPopup();
@@ -79,11 +111,11 @@ namespace Arcane::Editor
                     // A pinned instance navigates ITSELF: re-target the pin, never the source.
                     ImGui::BeginDisabled(!crumbs[i].key.has_value());
                     if (ImGui::SmallButton(crumbs[i].label.c_str()) && crumbs[i].key)
-                        host.RepinKey(inst.id, *crumbs[i].key);
+                        actions.repinKey = *crumbs[i].key;
                     ImGui::EndDisabled();
                 }
                 else if (ImGui::SmallButton(crumbs[i].label.c_str()) && crumbs[i].select)
-                    crumbs[i].select();
+                    actions.select = crumbs[i].select;
                 ImGui::PopID();
             }
             ImGui::PopStyleVar();
@@ -99,7 +131,7 @@ namespace Arcane::Editor
             ImGui::BeginDisabled(!canPin);
             if (inst.pinned) ImGui::PushStyleColor(ImGuiCol_Text, Theme::kAmber);
             if (ImGui::SmallButton(inst.pinned ? ICON_LC_PIN "##pin" : ICON_LC_PIN_OFF "##pin"))
-                host.SetPinned(inst.id, !inst.pinned);
+                actions.togglePin = true;
             if (inst.pinned) ImGui::PopStyleColor();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip(inst.pinned ? "Pinned: this page stays while other things select. Click to follow."
@@ -115,7 +147,7 @@ namespace Arcane::Editor
     {
         InspectorWindowsResult result;
         host.PruneStale();   // once per frame, <= kHistoryDepth pure lookups: the arrows below are truthful (spec s6 rule 3)
-        // Snapshot the instances: SetPinned/GoBack/RepinKey inside the loop mutate host state.
+        // Snapshot the instances: the header actions applied after each End() mutate host state.
         const std::vector<InspectorHost::Instance> instances = host.Instances();
         for (const InspectorHost::Instance& inst : instances)
         {
@@ -133,7 +165,9 @@ namespace Arcane::Editor
                         ImGui::SetNextWindowDockID(primary->DockId, ImGuiCond_FirstUseEver);
             // BEFORE resolving the page: CanPin calls PageFor on the current
             // source, which re-targets the scene source's draw selection; the
-            // Page()/PageFor() call below restores it.
+            // Page()/PageFor() call below restores it. From that resolve to
+            // page->Draw NOTHING queries a source: the header only records its
+            // clicks (HeaderActions), applied after End().
             const bool canPin = inst.pinned || host.CanPin();
             // NO `if (Begin)` on purpose: the scene page's EditGesture::ScopeGuard
             // must run on collapsed/background-tab frames too (EditGesture.hpp:
@@ -150,7 +184,8 @@ namespace Arcane::Editor
             InspectorPage* page = nullptr;
             if (inst.pinned) page = src ? src->PageFor(inst.pinnedKey) : nullptr;
             else page = src ? src->Page() : nullptr;
-            DrawHeader(host, inst, src, page, canPin);
+            HeaderActions actions;
+            DrawHeader(host, inst, src, page, canPin, actions);
             if (inst.pinned && !page)
             {
                 // The pinned source closed or its selection went away: one line,
@@ -160,7 +195,7 @@ namespace Arcane::Editor
                 const std::string note = (inst.sourceClosed ? inst.pinnedName + " closed"
                                                             : "Pinned selection is gone")
                                          + " -- click to follow the selection";
-                if (ImGui::Selectable(note.c_str())) host.SetPinned(inst.id, false);
+                if (ImGui::Selectable(note.c_str())) actions.unpin = true;
             }
             else if (page)
             {
@@ -168,6 +203,7 @@ namespace Arcane::Editor
                 page->Draw(grid);
             }
             ImGui::End();
+            ApplyHeaderActions(host, inst, actions);   // after the page is done with: see HeaderActions
             if (inst.id != 0 && !open) result.closed.push_back(inst.id);
         }
         return result;

@@ -3417,6 +3417,27 @@ namespace Arcane::Editor
         // device. Idempotent and a no-op when the lens was never opened.
         Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetGraphUi);
 
+        // ===== THE LAYOUT INI IS SAVED HERE, NOT BY ImGui::Shutdown() ========
+        // ImGui's own final save runs inside ImGui::Shutdown() (reached from
+        // ~ImGuiLayerImpl, owned by m_gpu), and m_gpu is destroyed AFTER the
+        // members the editor's settings handlers read (m_inspectorHost's
+        // instance list, m_panelVis, ...). Left to ImGui, every WriteAll
+        // would iterate already-destroyed members -- the Inspector's `Ids=`
+        // line came out empty and the instance list never survived a restart.
+        // So: save now, while every member is alive, then null IniFilename so
+        // the DestroyContext-time save cannot run at all. A --headless run
+        // already has IniFilename == nullptr (RetargetLayoutIni) and is left
+        // untouched; a failed Create() has no context (m_gpu null).
+        if (m_gpu && ImGui::GetCurrentContext() != nullptr)
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.IniFilename && *io.IniFilename)
+            {
+                ImGui::SaveIniSettingsToDisk(io.IniFilename);
+                io.IniFilename = nullptr;
+            }
+        }
+
         // Inspector ownership: drop every document source (and the pins and
         // history naming them) BEFORE any document can be destroyed.
         // DocumentHost fires its `closing` observer only from Close/CloseAll,
