@@ -455,9 +455,30 @@ TEST_CASE("input editor: Conflicts and Warnings -- same scheme, ungrouped-vs-gro
 TEST_CASE("input document: the capture snapshot ignores ImGui's mouse claim and keeps the keyboard's ActiveId claim", "[editor][input]")
 {
     Arcane::InputSnapshot raw; raw.mouseButtons = 0x2; raw.wantCaptureMouse = true; raw.wantCaptureKeyboard = false;
-    const auto s = Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, false);
+    const auto s = Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, false, false);
     CHECK_FALSE(s.wantCaptureMouse); CHECK_FALSE(s.wantCaptureKeyboard); CHECK(s.mouseButtons == 0x2);
-    CHECK(Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, true).wantCaptureKeyboard);
+    CHECK(Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, true, false).wantCaptureKeyboard);
+    CHECK(Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, false, true).wantCaptureMouse);
+}
+
+TEST_CASE("input document: a press on the window's chrome is claimed -- it neither binds nor is heard later; a content press still binds", "[editor][input]")
+{
+    using Doc = Arcane::Editor::InputActionsDocument;
+    CHECK(Doc::PressOnChrome({ 50, 10 }, { 0, 20 }, { 400, 300 }, 4.0f));    // title bar
+    CHECK_FALSE(Doc::PressOnChrome({ 50, 100 }, { 0, 20 }, { 400, 300 }, 4.0f));
+    CHECK(Doc::PressOnChrome({ 398, 100 }, { 0, 20 }, { 400, 300 }, 4.0f));  // inner border band
+    Arcane::InputRebindOperation op;
+    op.Begin(*Arcane::Guid::FromString("44444444-4444-4444-8444-444444444444"), std::nullopt, 10.0f, Arcane::InputSnapshot{});
+    Arcane::InputSnapshot down; down.mouseButtons = 0x1;
+    op.Observe(Doc::SnapshotForCapture(down, false, true), 1.0f / 60.0f);         // the chrome press
+    CHECK(op.Result().state == Arcane::InputRebindState::Waiting);
+    op.Observe(Doc::SnapshotForCapture(down, false, false), 1.0f / 60.0f);        // still held, now over content
+    CHECK(op.Result().state == Arcane::InputRebindState::Waiting);
+    op.Observe(Doc::SnapshotForCapture(Arcane::InputSnapshot{}, false, false), 1.0f / 60.0f);
+    CHECK(op.Result().state == Arcane::InputRebindState::Waiting);
+    op.Observe(Doc::SnapshotForCapture(down, false, false), 1.0f / 60.0f);        // a fresh press in the content
+    CHECK(op.Result().state == Arcane::InputRebindState::Completed);
+    CHECK(op.Result().replacementPath == "<Mouse>/leftButton");
 }
 
 TEST_CASE("input document: is an Inspector source with keyed pages and a breadcrumb", "[editor][input][inspector]")

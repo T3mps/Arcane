@@ -6,6 +6,7 @@
 #include <Arcane/Base/Log.hpp>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <array>
 #include <fstream>
@@ -104,13 +105,16 @@ namespace Arcane::Editor
     Guid InputActionsDocument::PeekGuid(const std::filesystem::path& path)
     { return DraftGuid(ReadDraft(path), path); }
 
-    InputSnapshot InputActionsDocument::SnapshotForCapture(const InputSnapshot& raw, bool anyItemActive)
+    InputSnapshot InputActionsDocument::SnapshotForCapture(const InputSnapshot& raw, bool anyItemActive, bool pointerOnChrome)
     {
         InputSnapshot s = raw;
-        s.wantCaptureMouse = false;
+        s.wantCaptureMouse = pointerOnChrome;   // the document owns the pointer inside its content; its title bar, borders and grips belong to the window
         s.wantCaptureKeyboard = anyItemActive;
         return s;
     }
+
+    bool InputActionsDocument::PressOnChrome(ImVec2 p, ImVec2 lo, ImVec2 hi, float pad) noexcept
+    { return p.x < lo.x + pad || p.y < lo.y + pad || p.x > hi.x - pad || p.y > hi.y - pad; }
 
     void InputActionsDocument::BeginRebind(const Guid& target)
     {
@@ -150,9 +154,23 @@ namespace Arcane::Editor
         if (bodyDrawn && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
             for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
                 if (ImGui::IsMouseClicked(button)) { clickedAway = true; break; }
+        // A press that began on this window's own chrome (title bar, close/
+        // collapse buttons, resize border or grip) is the WINDOW's: claim it,
+        // so it neither binds nor is heard later (Observe latches the held bit
+        // into previous_ on the claimed frame). Docked, the tab belongs to the
+        // host window and the clickedAway rule above already cancels.
+        bool onChrome = false;
+        if (bodyDrawn)
+        {
+            const ImRect inner = ImGui::GetCurrentWindow()->InnerRect;
+            for (int b = 0; b < ImGuiMouseButton_COUNT; ++b)
+                if (ImGui::IsMouseDown(b) && PressOnChrome(ImGui::GetIO().MouseClickedPos[b], inner.Min, inner.Max, ImGui::GetStyle().WindowBorderHoverPadding))
+                    onChrome = true;
+            onChrome = onChrome || ImGui::IsAnyItemActive();   // the grip corner sits inside InnerRect; the columns are NoInputs, so an active item here is window decoration
+        }
         if (!bodyDrawn || !focused_ || clickedAway) capture_.Cancel();
         else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) capture_.Cancel();
-        else capture_.Observe(SnapshotForCapture(previewSnapshot_, ImGui::IsAnyItemActive()),
+        else capture_.Observe(SnapshotForCapture(previewSnapshot_, ImGui::IsAnyItemActive(), onChrome),
                               ImGui::GetIO().DeltaTime > 0.0f ? ImGui::GetIO().DeltaTime : 1.0f / 60.0f);
         const auto& result = capture_.Result();
         if (result.state == InputRebindState::Completed)

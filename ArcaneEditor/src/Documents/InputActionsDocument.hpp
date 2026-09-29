@@ -70,7 +70,12 @@ namespace Arcane::Editor
         // WantCaptureMouse is true over EVERY editor window, so it must not
         // gate the capture); the keyboard keeps ActiveId semantics (a text
         // field being typed into still claims keys). Pure; tested.
-        [[nodiscard]] static InputSnapshot SnapshotForCapture(const InputSnapshot& raw, bool anyItemActive);
+        // A press on a FLOATING window's own chrome (title bar, close/collapse,
+        // resize border or grip) belongs to the window: pointerOnChrome sets
+        // wantCaptureMouse so the press neither binds nor is heard later.
+        [[nodiscard]] static InputSnapshot SnapshotForCapture(const InputSnapshot& raw, bool anyItemActive, bool pointerOnChrome);
+        // True when pressPos lies outside the content rect shrunk by borderPad.
+        [[nodiscard]] static bool PressOnChrome(ImVec2 pressPos, ImVec2 contentMin, ImVec2 contentMax, float borderPad) noexcept;
         [[nodiscard]] const InputActionsDocumentState& State() const noexcept { return state_; }
         [[nodiscard]] const InputActionsPreview& Preview() const noexcept { return preview_; }
         void SetOnSaved(std::function<void(const Guid&, const InputActionAsset&)> fn) { onSaved_ = std::move(fn); }   // Task 11
