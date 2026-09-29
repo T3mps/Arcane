@@ -194,7 +194,8 @@ namespace Arcane::Editor
             if (rows)
             {
                 grid.TextRow("Name", Str(map, "name"), [this, id, w = std::weak_ptr<bool>(alive_)](std::string v)
-                             { if (w.expired()) return; Defer([m = &model_, id, v] { (void)m->SetField(id, "name", v); }); });
+                             { if (w.expired()) return; Defer([m = &model_, id, v] { (void)m->SetField(id, "name", v); }); }, false,
+                             [m = &model_, id](std::string_view v) { return InputActionsEditorModel::ValidateName(m->Draft(), id, v); });
                 bool blocking = Bool(map, "blocking", false);
                 if (grid.CheckboxRow("Blocking", blocking)) edit_.push_back([m = &model_, id, blocking] { (void)m->SetField(id, "blocking", blocking); });
                 int priority = Int(map, "priority", 0);
@@ -226,7 +227,8 @@ namespace Arcane::Editor
             if (rows)
             {
                 grid.TextRow("Name", Str(action, "name"), [this, id, w = std::weak_ptr<bool>(alive_)](std::string v)
-                             { if (w.expired()) return; Defer([m = &model_, id, v] { (void)m->SetField(id, "name", v); }); });
+                             { if (w.expired()) return; Defer([m = &model_, id, v] { (void)m->SetField(id, "name", v); }); }, false,
+                             [m = &model_, id](std::string_view v) { return InputActionsEditorModel::ValidateName(m->Draft(), id, v); });
                 const std::string type = Str(action, "type");
                 int current = 0; for (int i = 0; i < 3; ++i) if (type == kTypes[i]) current = i;
                 if (const int picked = grid.ComboRow("Type", kTypes, 3, current); picked >= 0)

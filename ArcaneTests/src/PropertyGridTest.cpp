@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Widgets/PropertyGrid.hpp>
 #include <imgui.h>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -26,6 +27,7 @@ namespace
         int floatCommits = 0;
         float scale = 1.0f;
         int scaleCommits = 0;
+        std::function<std::optional<std::string>(std::string_view)> validate;   // the Name row's rule (empty = none)
 
         GridHarness()
         {
@@ -58,7 +60,7 @@ namespace
                 Arcane::Editor::PropertyGrid::Rows rows(grid, "##fields");
                 if (rows)
                 {
-                    if (drawName) grid.TextRow("Name", name, [&](std::string v) { name = std::move(v); ++commits; });
+                    if (drawName) grid.TextRow("Name", name, [&](std::string v) { name = std::move(v); ++commits; }, false, validate);
                     else { ImGui::PushID("B"); grid.TextRow("Name", nameB, [&](std::string v) { nameB = std::move(v); ++commitsB; }); ImGui::PopID(); }
                     grid.CheckboxRow("Blocking", flag);
                     grid.ReadOnlyRow("Path", "<Keyboard>/space");
@@ -78,6 +80,8 @@ namespace
             io.AddMouseButtonEvent(0, true); Frame();
             io.AddMouseButtonEvent(0, false); Frame();
         }
+        void Type(const char* s) { ImGui::GetIO().AddInputCharactersUTF8(s); Frame(); }
+        void Key(ImGuiKey k) { ImGui::GetIO().AddKeyEvent(k, true); Frame(); ImGui::GetIO().AddKeyEvent(k, false); Frame(); }
         void Press(ImVec2 at) { ImGuiIO& io = ImGui::GetIO(); io.AddMousePosEvent(at.x, at.y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); }
     };
 }
@@ -152,4 +156,32 @@ TEST_CASE("PropertyGrid: Escape during a numeric drag restores the seed and comm
     io.AddMouseButtonEvent(0, false); h.Frame(); h.Frame();
     CHECK(h.scale == 1.0f);
     CHECK(h.scaleCommits == 0);
+}
+
+TEST_CASE("PropertyGrid: a TextRow value refused on Enter keeps the typed text and re-arms; focus loss with a refused value reverts", "[editor][inspector]")
+{
+    GridHarness h;
+    h.validate = [](std::string_view v) -> std::optional<std::string> { return v == "X" ? std::optional<std::string>("taken") : std::nullopt; };
+    h.Frame();
+    h.Click(h.Centre("Name"));
+    h.Type("X");                                      // AutoSelectAll: replaces "Alpha"
+    h.Key(ImGuiKey_Enter);
+    h.Frame(); h.Frame();
+    CHECK(h.commits == 0);
+    CHECK(h.name == "Alpha");
+    REQUIRE(h.state.textDrafts.size() == 1);
+    CHECK(h.state.textDrafts.begin()->second.text == "X");      // kept
+    CHECK(h.state.textDrafts.begin()->second.active);           // re-armed
+    h.Type("Y");                                      // re-activation selected all: "Y" replaces "X"
+    h.Click(ImVec2(600, 900));
+    CHECK(h.commits == 1);
+    CHECK(h.name == "Y");
+
+    h.Click(h.Centre("Name"));
+    h.Type("X");
+    h.Click(ImVec2(600, 900));                        // focus loss with a refused value
+    h.Frame();
+    CHECK(h.commits == 1);
+    CHECK(h.name == "Y");
+    for (const auto& [id, d] : h.state.textDrafts) CHECK(d.text != "X");
 }

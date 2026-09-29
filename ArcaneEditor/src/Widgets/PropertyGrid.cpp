@@ -45,7 +45,8 @@ namespace Arcane::Editor
     PropertyGrid::Rows::~Rows() = default;
 
     bool PropertyGrid::TextRow(const char* label, std::string_view current,
-                               std::function<void(std::string)> commit, bool dimmed)
+                               std::function<void(std::string)> commit, bool dimmed,
+                               std::function<std::optional<std::string>(std::string_view)> validate)
     {
         using TextDraft = PropertyGridState::TextDraft;
         (void)FieldLabelCell(label, dimmed);
@@ -55,6 +56,10 @@ namespace Arcane::Editor
         auto [it, inserted] = m_state.textDrafts.try_emplace(
             key, TextDraft{ std::string(current), std::string(current), false, now, {} });
         TextDraft& draft = it->second;
+        // A hold (Enter on a refused value) keeps the typed text while focus is
+        // re-armed; it expires if the row vanished or focus never came back, so
+        // a refused name never leaves stale text on screen.
+        if (draft.hold && (draft.lastFrame + 1 < now || now > draft.holdFrame + 3)) draft.hold = false;   // row vanished, or focus never came back
         // Re-seed from live data whenever THIS widget was not active on its
         // last draw, OR was not drawn last frame at all (page/source switched
         // while the box was active: CommitOrphans owns that edit, never this
@@ -62,7 +67,7 @@ namespace Arcane::Editor
         // frame a click elsewhere deactivates the box, ImGui may already have
         // moved ActiveId, and a global check would re-seed BEFORE InputText
         // reports IsItemDeactivatedAfterEdit -- wiping the edit it commits.
-        if (!inserted && (!draft.active || draft.lastFrame + 1 < now) && draft.text != current)
+        if (!inserted && !draft.hold && (!draft.active || draft.lastFrame + 1 < now) && draft.text != current)
         {
             draft.text.assign(current);
             draft.seed.assign(current);
@@ -73,10 +78,16 @@ namespace Arcane::Editor
         ImGui::BeginDisabled(dimmed);
         // Single-line property text selects all on activation (click or Tab/nav
         // into the box), the same rule as the document's inline rename box.
+        if (draft.focusPending) { ImGui::SetKeyboardFocusHere(); draft.focusPending = false; }
         InputTextString("##value", &draft.text, ImGuiInputTextFlags_AutoSelectAll);
+        // Still the last item: the refusal reason shows while typing (the
+        // Input Actions rename box's rule). An unchanged value is never refused.
+        const std::optional<std::string> reason = (validate && draft.text != current) ? validate(draft.text) : std::nullopt;
+        if (reason && ImGui::IsItemActive()) ImGui::SetItemTooltip("%s", reason->c_str());
         ImGui::EndDisabled();
         Probe(label);
         draft.active = ImGui::IsItemActive();
+        if (draft.active) draft.hold = false;   // focus came back: the hold has done its job
         bool committed = false;
         if (ImGui::IsItemDeactivatedAfterEdit())
         {
@@ -89,6 +100,9 @@ namespace Arcane::Editor
             }
             else
             {
+                const bool enter = ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+                if (reason && enter) { draft.hold = true; draft.holdFrame = now; draft.focusPending = true; ImGui::PopID(); return false; }   // keep text + re-arm (the rename box's rule)
+                if (reason) { m_state.textDrafts.erase(it); ImGui::PopID(); return false; }                                            // focus loss / Escape: revert, no commit
                 std::string edited = draft.text;
                 auto fn = std::move(draft.commit);
                 m_state.textDrafts.erase(it);

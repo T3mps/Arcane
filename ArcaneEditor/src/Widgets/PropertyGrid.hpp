@@ -16,6 +16,10 @@
 // every frame (a page may preview it) but commits nothing; on commit `value`
 // holds the gesture's final number. Escape during a numeric drag cancels (no
 // commit). TextRow selects all its text on activation (single-line rows).
+// An optional `validate` returns a refusal reason: shown as a tooltip while
+// typing; Enter on a refused value keeps the text and re-arms the box; focus
+// loss with a refused value reverts without committing. Mirrors the Input
+// Actions rename box.
 //
 // A row's ImGui id must include the TARGET's id -- the caller pushes it
 // around the Rows scope (Task 10 does; the scene body's component rows
@@ -24,6 +28,7 @@
 #include "Widgets/EditorWidgets.hpp"   // FieldGrid (Rows holds one)
 #include <imgui.h>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -48,6 +53,13 @@ namespace Arcane::Editor
             bool active = false;                          // active on its last draw
             int lastFrame = 0;                            // ImGui frame it was last drawn
             std::function<void(std::string)> commit;      // bound to the row's target
+            // Enter on a value `validate` refused: keep `text` (no re-seed) and
+            // re-arm focus once (`focusPending`, the rename box's one-shot).
+            // The hold expires when the row is not drawn, when focus returns,
+            // or 3 frames after `holdFrame` if focus never came back.
+            bool hold = false;
+            int holdFrame = 0;                            // ImGui frame the hold began
+            bool focusPending = false;                    // SetKeyboardFocusHere on the next draw
         };
         std::unordered_map<unsigned int, TextDraft> textDrafts;   // keyed by ImGui id
         // One in-flight numeric gesture per IntRow/FloatRow (drag, held step
@@ -91,7 +103,12 @@ namespace Arcane::Editor
         };
 
         bool TextRow(const char* label, std::string_view current,
-                     std::function<void(std::string)> commit, bool dimmed = false);   // commit is STORED in the draft (see TextDraft)
+                     std::function<void(std::string)> commit, bool dimmed = false,
+                     std::function<std::optional<std::string>(std::string_view)> validate = {});   // commit is STORED in the draft (see TextDraft)
+        // `validate` (called synchronously, never stored) returns a refusal
+        // reason: shown as a tooltip while typing; Enter on a refused value
+        // keeps the text and re-arms the box; focus loss with a refused value
+        // reverts without committing. Mirrors the Input Actions rename box.
         bool CheckboxRow(const char* label, bool& value);
         bool IntRow(const char* label, int& value);                          // true once per gesture, on deactivate-after-edit AND value != seed; value follows the gesture every frame
         bool FloatRow(const char* label, float& value, float speed = 0.01f); // same rule; Escape mid-drag = cancel, no commit
