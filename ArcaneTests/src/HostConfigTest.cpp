@@ -144,6 +144,18 @@ TEST_CASE("host config: --nri-graph composes with the EDITOR's launch vocabulary
     CHECK(faultRun.config->crashGpuFrame == 30u);
 }
 
+// --open-asset <guid> (hygiene pass 2026-09-28): the scripted document open.
+TEST_CASE("host config: --open-asset round-trips and defaults empty", "[host]") {
+    const auto plain = Run({"--project", "P", "--headless", "--frames", "1"});
+    REQUIRE(plain.config.has_value());
+    CHECK(plain.config->openAsset.empty());
+
+    const auto opened = Run({"--project", "P", "--headless", "--frames", "1",
+                             "--open-asset", "97260310-8b35-4b29-b12f-1fd6f8e99071"});
+    REQUIRE(opened.config.has_value());
+    CHECK(opened.config->openAsset == "97260310-8b35-4b29-b12f-1fd6f8e99071");
+}
+
 // --hang-main N (crash window plan 2, D10): the witness hang lane's trigger.
 // Parsed the same way --crash-gpu is, and honoured by both hosts.
 TEST_CASE("host config: --hang-main round-trips and kHangMainSeconds is 15", "[host]") {

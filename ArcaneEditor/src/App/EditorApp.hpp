@@ -1361,6 +1361,13 @@ namespace Arcane::Editor
         // fine only because the dtor never drains -- it just un-publishes.
         std::unique_ptr<Arcane::SceneRenderResolver> m_resolver;
         Arcane::Editor::DocumentHost            m_documents;
+        // --open-asset: frames left on which the scripted open re-requests
+        // focus for its document. A brand-new window docked on its first
+        // frame loses the tab selection to the seeded layout's persisted
+        // choice; OpenPath on an already-open document only re-arms the focus
+        // request (focus-not-reopen), so repeating it for a few frames is the
+        // contract-preserving way to make the tab stick. 0 = nothing pending.
+        int m_scriptedOpenFocusFrames = 0;
         bool m_projectSettingsOpen = false;
         // Asset-manager redesign, Plan 1 Task 9 -> panel-split Task 7: the
         // asset panels' session UI state, one struct per WINDOW now that the

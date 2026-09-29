@@ -1228,6 +1228,23 @@ namespace Arcane::Editor
                 FrameCamera(/*selectionOnly=*/true);
             }
         }
+        // --open-asset: a scripted document open, the Asset Browser's own
+        // path (OpenAssetDocument -> DocumentManager::OpenPath), so a headless
+        // capture can show an .arcinput / shader / mesh document without any
+        // desk input. Same loudness rule as --select-name.
+        if (!m_config.openAsset.empty())
+        {
+            const auto guid = Arcane::Guid::FromString(m_config.openAsset);
+            if (!guid || !OpenAssetDocument(*guid))
+            {
+                ARC_ERROR("--open-asset '{}': not a Guid, not in the project, or no document opens it",
+                          m_config.openAsset);
+            }
+            else
+            {
+                m_scriptedOpenFocusFrames = 3;   // see the member's comment
+            }
+        }
         if (!m_config.tool.empty())
         {
             if (m_config.tool == "select")

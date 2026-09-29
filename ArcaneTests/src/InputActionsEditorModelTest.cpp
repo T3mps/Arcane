@@ -214,3 +214,26 @@ TEST_CASE("input editor: renaming a scheme preserves binding membership", "[edit
           "KeyboardMouse");
     CHECK(model.LastValidPreview().has_value());
 }
+
+TEST_CASE("input editor: a document selects its first map and action on open", "[editor][input]")
+{
+    // A freshly opened document shows something, as Unity's editor does: the
+    // first map and that map's first action are selected, so the hierarchy
+    // and the properties are on screen rather than an empty "Select an
+    // action map." pane (hygiene pass 2026-09-28, the --open-asset capture).
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() /
+        ("arcane_input_document_" + Arcane::Guid::Generate().ToString() + ".arcinput");
+    std::ofstream(path) << DocumentJson().dump(2);
+    auto document = Arcane::Editor::InputActionsDocument::Open(path);
+    REQUIRE(document);
+    const auto& draft = document->Model().Draft();
+    const auto firstMap    = Arcane::Guid::FromString(draft["actionMaps"][0]["id"].get<std::string>());
+    const auto firstAction = Arcane::Guid::FromString(draft["actionMaps"][0]["actions"][0]["id"].get<std::string>());
+    REQUIRE(firstMap);
+    REQUIRE(firstAction);
+    CHECK(document->Model().SelectedMap() == *firstMap);
+    CHECK(document->Model().SelectedAction() == *firstAction);
+    CHECK_FALSE(document->Model().SelectedBinding().IsValid());
+    fs::remove(path);
+}

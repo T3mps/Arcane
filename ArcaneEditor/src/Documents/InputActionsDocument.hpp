@@ -34,6 +34,7 @@ namespace Arcane::Editor
         InputActionsDocument(std::filesystem::path path, nlohmann::json draft,
                              Arcane::CommandStack* commands);
         void RefreshText();
+        void SelectFirstMapAndAction();
 
         std::filesystem::path path_;
         std::string title_;

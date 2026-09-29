@@ -265,6 +265,15 @@ namespace Arcane
         // gizmo capture. ArcaneRuntime refuses the flag.
         std::string     tool = "";
 
+        // --open-asset: editor only. Open the document for this asset Guid at
+        // the end of boot (after the project is open), through the same
+        // OpenAssetDocument path the Asset Browser's double-click takes -- so
+        // a scripted capture can put an .arcinput / .arcshader / mesh
+        // document on screen with no desk input. Empty = none. An unknown or
+        // unresolvable Guid is a loud boot ERROR, not a silent skip, for the
+        // same reason --select-name is. ArcaneRuntime refuses the flag.
+        std::string     openAsset = "";
+
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have

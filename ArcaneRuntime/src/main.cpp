@@ -168,6 +168,12 @@ int main(int argc, char** argv)
                              "tool). Use ArcaneEditor.exe.\n");
         return 2;
     }
+    if (!parsed.config->openAsset.empty())
+    {
+        std::fprintf(stderr, "error: --open-asset is an EDITOR-only flag (this host has no "
+                             "documents). Use ArcaneEditor.exe.\n");
+        return 2;
+    }
 
     // (Diagnostics::Install USED TO BE HERE, after the refusals above. It now
     // runs right after the --print-engine-info probe -- see the block at the

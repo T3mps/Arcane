@@ -39,6 +39,33 @@ namespace Arcane::Editor
     {
         windowLabel_ = title_ + " (Input Actions)###inputdoc_" + guid_.ToString();
         RefreshText();
+        SelectFirstMapAndAction();
+    }
+
+    // A freshly opened document shows its first map and that map's first
+    // action selected, as Unity's Input Actions editor does: the hierarchy and
+    // the inspector are the document, and an empty "Select an action map."
+    // pane on open hides both. A malformed draft (no maps, no ids) selects
+    // nothing, which the widgets already tolerate.
+    void InputActionsDocument::SelectFirstMapAndAction()
+    {
+        const auto& draft = model_.Draft();
+        if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()
+            || draft["actionMaps"].empty())
+            return;
+        const auto& map = draft["actionMaps"][0];
+        if (!map.is_object() || !map.contains("id") || !map["id"].is_string())
+            return;
+        const auto mapId = Guid::FromString(map["id"].get<std::string>());
+        if (!mapId) return;
+        model_.SelectMap(*mapId);
+        if (map.contains("actions") && map["actions"].is_array() && !map["actions"].empty())
+        {
+            const auto& action = map["actions"][0];
+            if (action.is_object() && action.contains("id") && action["id"].is_string())
+                if (const auto actionId = Guid::FromString(action["id"].get<std::string>()))
+                    model_.SelectAction(*actionId);
+        }
     }
 
     std::unique_ptr<InputActionsDocument> InputActionsDocument::Open(

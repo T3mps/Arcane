@@ -112,6 +112,8 @@ namespace Arcane
                                       "at boot and frame it (empty = no seed)");
         cli.Option("tool", "", "editor only: viewport tool at boot: select | move | rotate | scale "
                                "(empty = select)").Choices({ "select", "move", "rotate", "scale" });
+        cli.Option("open-asset", "", "editor only: open the document for this asset Guid at boot, "
+                                     "as the Asset Browser would (empty = none)");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
                                          "for AT LEAST N attempts -- it gives up only once BOTH N attempts "
@@ -199,6 +201,7 @@ namespace Arcane
         cfg.playAs         = r.Get("play-as");
         cfg.viewMode       = r.Get("view-mode");   // Choices() already refused every other spelling
         cfg.selectName     = r.Get("select-name");
+        cfg.openAsset      = r.Get("open-asset");
         cfg.tool           = r.Get("tool");        // Choices() already refused every other spelling
         // Malformed --probe syntax is refused HERE, at parse time, not
         // deferred to evaluation. VerifyReport::Evaluate only ever sees specs

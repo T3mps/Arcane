@@ -2429,6 +2429,15 @@ namespace Arcane::Editor
             }
         }
 
+        // --open-asset: keep re-requesting focus for the scripted document
+        // over its first frames (the member's comment says why); OpenPath on
+        // an open document is focus-not-reopen, so this only re-arms focus.
+        if (m_scriptedOpenFocusFrames > 0)
+        {
+            --m_scriptedOpenFocusFrames;
+            if (const auto guid = Arcane::Guid::FromString(m_config.openAsset))
+                (void)OpenAssetDocument(*guid);
+        }
         // New documents tab into the Viewport's node (captured last frame).
         m_documents.DrawAll(m_viewportDockId);
     }
