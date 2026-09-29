@@ -309,7 +309,7 @@ namespace
         }
 
         // One frame of the REAL row path: the window pinned at the origin, the
-        // grid opened the way DrawInspectorPanel opens it, one component, the
+        // grid opened the way DrawInspectorBody opens it, one component, the
         // uncategorised pass (Collider2D's only field has no category).
         void Frame()
         {
@@ -321,7 +321,7 @@ namespace
             ImGui::SetNextWindowSize(ImVec2(640.0f, 1000.0f), ImGuiCond_Always);
             ImGui::Begin("Inspector");
             {
-                Arcane::Editor::FieldGrid grid("##fields", state.labelColWidth);
+                Arcane::Editor::FieldGrid grid("##fields", state.grid.labelColWidth);
                 if (grid)
                 {
                     const Astra::Registry::ComponentInfo ci = Collider();

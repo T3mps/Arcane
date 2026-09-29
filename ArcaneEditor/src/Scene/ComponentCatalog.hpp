@@ -24,7 +24,7 @@ namespace Arcane::Editor
     // could not express both statements about the same type at once.
     //
     // IsHiddenInInspector -- gates the Inspector's per-component DISPLAY only
-    // (EditorPanels.cpp, DrawInspectorPanel's component loop). The derived
+    // (EditorPanels.cpp, DrawInspectorBody's component loop). The derived
     // per-frame caches, plus the eye's marker:
     //   Arcane::WorldTransform    -- recomputed by TransformPropagationSystem
     //                                every frame; an edit would be stomped.
@@ -72,7 +72,7 @@ namespace Arcane::Editor
 
     // Inspector section order: identity first, spatial anchor second, everything
     // else in registry order. Matches UE's Details layout (name area, then
-    // Transform, then the rest). Consumed by DrawInspectorPanel's stable_sort,
+    // Transform, then the rest). Consumed by DrawInspectorBody's stable_sort,
     // so equal ranks keep their relative order.
     [[nodiscard]] int InspectorSectionRank(std::string_view typeName);
 

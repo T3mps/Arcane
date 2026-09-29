@@ -6,7 +6,7 @@
 // stopped being drawn, are EditGesture's (EditGesture.hpp); the visitor keeps
 // only the two thin wrappers its arms call.
 //
-// The panel (EditorPanels.cpp, DrawInspectorPanel) keeps the shell around it:
+// The panel (EditorPanels.cpp, DrawInspectorBody) keeps the shell around it:
 // the component loop, the component/category headers, the category
 // enumeration, Add/Remove Component, the search box, and the field grid each
 // group's rows are drawn into. It drives the rows through

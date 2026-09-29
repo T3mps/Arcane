@@ -1041,7 +1041,7 @@ namespace Arcane::Editor
         // ownership token across the frames the gesture spans (see InspectorState).
         Arcane::Editor::InspectorState  m_inspector;
         // Sprite-asset arc, Task 4: built ONCE in Init (mintSpriteForTexture
-        // wraps MintOrReuseSpriteForTexture) and handed to DrawInspectorPanel
+        // wraps MintOrReuseSpriteForTexture) and handed to DrawInspectorBody
         // every frame, so the field visitor's texture-drop auto-mint branch
         // never needs to know about EditorApp itself.
         Arcane::Editor::InspectorServices m_inspectorServices;

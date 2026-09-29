@@ -370,7 +370,7 @@ TEST_CASE("InspectorSectionRank pins Identity first and Transform second", "[edi
     CHECK(InspectorSectionRank("Arcane::SpriteRenderer") == 2);
     CHECK(InspectorSectionRank("Arcane::PostProcess") == 2);
 
-    // The three ranks are strictly ordered, so DrawInspectorPanel's
+    // The three ranks are strictly ordered, so DrawInspectorBody's
     // stable_sort places Identity before Transform before everything else
     // rather than relying on the constants happening to compare that way.
     CHECK(InspectorSectionRank("Arcane::Identity") < InspectorSectionRank("Arcane::Transform"));

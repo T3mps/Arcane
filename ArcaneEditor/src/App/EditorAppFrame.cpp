@@ -3591,15 +3591,17 @@ namespace Arcane::Editor
         // editor camera's (OutlinerState::addPrimitivePending's own comment).
         ConsumeAddPrimitive();
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Inspector))
+        {
             // F2b Task 13: the trailing fallback -- consulted only when
-            // nothing is entity-selected (DrawInspectorPanel's own tie-break).
+            // nothing is entity-selected (DrawInspectorBody's own tie-break).
             // Task 10: repointed from the frozen m_assetBrowser.selected to
             // m_assetModel.selected -- see Task 9's carry-over note.
-            Arcane::Editor::DrawInspectorPanel(m_runtime->Registry(), m_selection, *m_undo,
-                                               m_editBinding, m_runtime->CurrentProject(),
-                                               m_inspector, &m_inspectorServices,
-                                               m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector),
-                                               m_assetModel.selected);
+            ImGui::Begin("Inspector", m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector));
+            Arcane::Editor::DrawInspectorBody(m_runtime->Registry(), m_selection, *m_undo,
+                                              m_editBinding, m_runtime->CurrentProject(),
+                                              m_inspector, &m_inspectorServices, m_assetModel.selected);
+            ImGui::End();
+        }
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,
         // composited into the viewport texture above -- not the editor context.)

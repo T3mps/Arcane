@@ -81,7 +81,7 @@ namespace Arcane::Editor
 
         // How much of the panel the label column takes when nothing has been
         // dragged yet. Only ever consulted once per session -- after that
-        // InspectorState::labelColWidth is the authority.
+        // PropertyGridState::labelColWidth is the authority.
         constexpr float kLabelColumnFraction = 0.4f;
 
         // Open one field region's grid. Returns false exactly when
@@ -89,7 +89,7 @@ namespace Arcane::Editor
         // caller must draw NO rows and must NOT call EndFieldGrid.
         //
         // WIDTH SYNC PROTOCOL. There is no ImGui API to bind two tables'
-        // column widths, so InspectorState::labelColWidth is the shared
+        // column widths, so PropertyGridState::labelColWidth is the shared
         // authority and each table is pushed to match it. The push has to
         // happen HERE -- after TableSetupColumn, before the first row -- for
         // two reasons, both from the vendored imgui_tables.cpp:

@@ -8,6 +8,7 @@
 #include "Project/SceneRecents.hpp"   // SceneRecents::List (File -> Open Recent Scene)
 #include "Viewport/ViewportInput.hpp"
 #include "Viewport/ViewportSettings.hpp"   // ViewportToolState (ViewMode + ViewportSettings)
+#include "Widgets/PropertyGrid.hpp"   // PropertyGridState (InspectorState::grid)
 #include <Arcane/Edit/CommandStack.hpp>
 #include <imgui.h>   // ImDrawList / ImVec2 (ViewportImageOverlayFn)
 #include <Arcane/Edit/Gizmo.hpp>
@@ -417,11 +418,11 @@ namespace Arcane::Editor
     // effect until AFTER the asset panels return ("Row actions the APP
     // resolves after the draw", AssetPanelCommon.hpp) -- this callback runs
     // its file IO + project-registry mutation SYNCHRONOUSLY, DURING
-    // DrawInspectorPanel's own draw; there is no deferred step here. That is
+    // DrawInspectorBody's own draw; there is no deferred step here. That is
     // safe because the Inspector draws AFTER all three asset panels every
     // frame (EditorApp::MainLoop: DrawEditorUi, which owns
     // DrawAssetBrowserPanel/DrawAssetGraphPanel/DrawAssetStatusPanel, runs
-    // before DrawSelectionPanels, which owns DrawInspectorPanel) -- the asset
+    // before DrawSelectionPanels, which owns DrawInspectorBody) -- the asset
     // panels have already built and fully consumed their own per-frame entry
     // snapshot by the time this callback can run, so mutating the project's
     // asset registry here cannot invalidate anything an asset panel is still
@@ -535,13 +536,16 @@ namespace Arcane::Editor
         // plausible field name. Nothing clears it, so a typed filter persists
         // across selection changes -- the Outliner's search behaves the same way.
         char searchBuffer[128] = {};
-        // Width of the LABEL column, shared by every field grid in the panel.
+        // Width of the LABEL column, shared by every field grid in the panel --
+        // the shared split now lives on the PropertyGridState every page draws
+        // through (grid.labelColWidth), alongside that grid's in-flight row
+        // drafts.
         //
         // UE's Details panel has ONE draggable split for the whole panel, and
         // ImGui tables own their column widths individually with no
-        // cross-table binding -- so this float is the authority instead: each
+        // cross-table binding -- so that float is the authority instead: each
         // grid seeds its label column from it and adopts it back when the user
-        // moves THAT grid's split (this float is what the panel hands each
+        // moves THAT grid's split (PropertyGrid::Rows hands it to each
         // Arcane::Editor::FieldGrid -- see EditorWidgets.cpp's BeginFieldGrid,
         // which FieldGrid is the only public way to reach).
         // Session-scoped by design: the grids pass
@@ -550,7 +554,7 @@ namespace Arcane::Editor
         //
         // 0 means "no width chosen yet"; the first grid drawn seeds it from
         // the panel's available width.
-        float labelColWidth = 0.0f;
+        PropertyGridState grid;
 
         // TEST SEAM (2D physics wiring Plan 2, FieldKind::Vector). When
         // non-null, the vector editor records the screen-space CENTRE of every
@@ -565,7 +569,10 @@ namespace Arcane::Editor
         // it -- the test owns the map and clears it per frame.
         std::unordered_map<std::string, glm::vec2>* vectorProbe = nullptr;
     };
-    // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
+    // The scene page's BODY -- everything the Inspector shows for the scene
+    // selection, drawn into the CURRENT window (the caller Begins it; since
+    // the inspector-ownership arc that caller is the SceneInspectorSource
+    // page inside an Inspector instance window, never a panel of its own).
     // `selectedAsset` (F2b Task 13): the Assets panel's last-clicked row
     // (AssetPanelModel::selected). Consulted ONLY when there is no entity
     // selection -- an entity selection always wins, matching every other
@@ -574,10 +581,9 @@ namespace Arcane::Editor
     // never a browser selection). A nil guid (the default) behaves exactly
     // like the pre-Task-13 signature: "No selection" when nothing is
     // entity-selected either.
-    void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                            const Arcane::Project* project, InspectorState& state,
-                            const InspectorServices* services = nullptr,
-                            bool* open = nullptr,
-                            const Arcane::Guid& selectedAsset = Arcane::Guid{});
+    void DrawInspectorBody(Astra::Registry& registry, const SelectionContext& sel,
+                           Arcane::CommandStack& undo, const SceneEditBinding& binding,
+                           const Arcane::Project* project, InspectorState& state,
+                           const InspectorServices* services = nullptr,
+                           const Arcane::Guid& selectedAsset = Arcane::Guid{});
 }

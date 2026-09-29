@@ -2254,7 +2254,7 @@ namespace Arcane::Editor
 
         // ---- F2b Task 13: the Inspector's texture-asset panel --------------
         // Shown when the Asset Browser has a texture selected and NOTHING is
-        // entity-selected (DrawInspectorPanel's own tie-break). Spec sec 7:
+        // entity-selected (DrawInspectorBody's own tie-break). Spec sec 7:
         // "a texture preview in the INSPECTOR" (PixelsFor's thumbnail) PLUS
         // "the minimal inspector block" for the four .meta knobs -- spec
         // sec 4's set exactly, never UE's eighty. This is the FIRST asset
@@ -2364,16 +2364,19 @@ namespace Arcane::Editor
         }
     }
 
-    void DrawInspectorPanel(Astra::Registry& registry, const SelectionContext& sel,
-                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
-                            const Arcane::Project* project, InspectorState& state,
-                            const InspectorServices* services, bool* open,
-                            const Arcane::Guid& selectedAsset)
+    void DrawInspectorBody(Astra::Registry& registry, const SelectionContext& sel,
+                           Arcane::CommandStack& undo, const SceneEditBinding& binding,
+                           const Arcane::Project* project, InspectorState& state,
+                           const InspectorServices* services,
+                           const Arcane::Guid& selectedAsset)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
         const EditGesture::ScopeGuard gestureGuard{ &undo, state.gesture };
+        // The section headers and row grids below draw through the shared
+        // page primitives (Widgets/PropertyGrid.hpp); state.grid carries the
+        // panel-wide label split every grid seeds from and adopts back.
+        PropertyGrid pg(state.grid);
 
-        ImGui::Begin("Inspector", open);
         if (!sel.HasSelection())
         {
             // F2b Task 13: no entity selected -- fall back to the Asset
@@ -2386,12 +2389,10 @@ namespace Arcane::Editor
                     mount && Arcane::Editor::AssetKindOf(*mount) == Arcane::Editor::AssetKind::Texture)
                 {
                     DrawTextureAssetPanel(*project, selectedAsset, services);
-                    ImGui::End();
                     return;
                 }
             }
             ImGui::TextDisabled("No selection");
-            ImGui::End();
             return;
         }
 
@@ -2608,17 +2609,12 @@ namespace Arcane::Editor
             // below are deliberately nested rather than early-outs so the ID stack
             // stays balanced on every path.
             ImGui::PushID(static_cast<int>(ci.descriptor->hash));
-            // Scoped tight around the header call only -- the band colors
-            // must not leak into the tooltip/popup below, which read the
-            // theme's own ImGuiCol_* set like every other popup in the editor.
-            // The extra block IS that scope: HeaderBand pops at its closing
-            // brace, which is why the header's answer is assigned out of it.
-            bool open = false;
-            {
-                HeaderBand band;
-                open = ImGui::CollapsingHeader(headerLabel.c_str(),
-                                               ImGuiTreeNodeFlags_DefaultOpen);
-            }
+            // PropertyGrid::Section scopes the header band tight around the
+            // header call only -- the band colors must not leak into the
+            // tooltip/popup below, which read the theme's own ImGuiCol_* set
+            // like every other popup in the editor (the band pops as Section
+            // returns).
+            const bool open = pg.Section(headerLabel.c_str());
             // Safe to sit between the header and BeginPopupContextItem below,
             // which resolves its id from g.LastItemData: SetTooltip opens and
             // closes a window, and ImGui restores LastItemData in End()
@@ -2763,55 +2759,43 @@ namespace Arcane::Editor
                     // covers. The block scopes the grid closed before the
                     // category headers below, which must draw full-width.
                     {
-                        FieldGrid grid{ "##fields", state.labelColWidth };
-                        if (grid)
+                        PropertyGrid::Rows rows(pg, "##fields");
+                        if (rows)
                             DrawReflectedComponent(fieldArgs);
                     }
 
+                    // The view is into the Category attribute's own literal and
+                    // is NOT guaranteed NUL-terminated: PropertyGrid::SubSection
+                    // pushes it through the begin/end PushID overload and draws
+                    // a "%.*s" label rather than a c_str(), so the sub-header's
+                    // id comes from that push, not from the drawn text. Its
+                    // header band wraps only the call that reads Header/
+                    // HeaderHovered/HeaderActive, not the rows below.
+                    //
+                    // Each category draws its own grid, sharing the panel-wide
+                    // label WIDTH (state.grid.labelColWidth) with every
+                    // uncategorized grid -- but the visual split does NOT line
+                    // up across sections. This grid draws under
+                    // TreePushOverrideID's own Indent() call
+                    // (imgui_widgets.cpp:7233-7239 -- TreeNodeBehavior pushes it
+                    // when the category is open), which advances the cursor by
+                    // g.Style.IndentSpacing (imgui.cpp:12246; stock default
+                    // 21.0f, imgui.cpp:1538) before this table opens, so a
+                    // category grid's border sits one IndentSpacing right of the
+                    // uncategorized grids' border. Whether that offset reads
+                    // fine is a desk call -- the spec locks category indent to
+                    // the tree's own indent rather than fighting it back to 0.
                     for (const std::string_view cat : categories)
                     {
-                        // The view is into the Category attribute's own literal
-                        // and is NOT guaranteed NUL-terminated, so the name goes
-                        // through the begin/end PushID overload and a "%.*s"
-                        // label rather than a c_str(). The sub-header's id comes
-                        // from that push, not from the drawn text.
-                        ImGui::PushID(cat.data(), cat.data() + cat.size());
-                        // Same scoped pair as the component header above --
-                        // wraps only the call that reads Header/HeaderHovered/
-                        // HeaderActive, not the grid content the `if` guards.
-                        bool categoryOpen = false;
+                        if (!pg.SubSection(cat))
+                            continue;
+                        fieldArgs.activeCategory = cat;
                         {
-                            HeaderBand band;
-                            categoryOpen = ImGui::TreeNodeEx("##category",
-                                ImGuiTreeNodeFlags_DefaultOpen,
-                                "%.*s", static_cast<int>(cat.size()), cat.data());
+                            PropertyGrid::Rows rows(pg, "##fields");
+                            if (rows)
+                                DrawReflectedComponent(fieldArgs);
                         }
-                        if (categoryOpen)
-                        {
-                            fieldArgs.activeCategory = cat;
-                            // Its own grid, sharing the panel-wide label WIDTH
-                            // (state.labelColWidth) with every uncategorized
-                            // grid -- but the visual split does NOT line up
-                            // across sections. This grid draws under
-                            // TreePushOverrideID's own Indent() call
-                            // (imgui_widgets.cpp:7233-7239 -- TreeNodeBehavior
-                            // pushes it when the category is open), which
-                            // advances the cursor by g.Style.IndentSpacing
-                            // (imgui.cpp:12246; stock default 21.0f,
-                            // imgui.cpp:1538) before this table opens, so a
-                            // category grid's border sits one IndentSpacing
-                            // right of the uncategorized grids' border.
-                            // Whether that offset reads fine is a desk call --
-                            // the spec locks category indent to the tree's
-                            // own indent rather than fighting it back to 0.
-                            {
-                                FieldGrid grid{ "##fields", state.labelColWidth };
-                                if (grid)
-                                    DrawReflectedComponent(fieldArgs);
-                            }
-                            ImGui::TreePop();
-                        }
-                        ImGui::PopID();
+                        pg.EndSubSection();
                     }
                 }
             }
@@ -2841,8 +2825,6 @@ namespace Arcane::Editor
         // Drawn unconditionally at window scope: BeginPopup is a no-op until
         // the button above (or a previous frame's click) opened it.
         DrawAddComponentPopup(registry, sel.Entities(), undo, binding);
-
-        ImGui::End();
     }
     void DrawProjectSettings(const Arcane::Project* project, bool* open,
                              ProjectSettingsRequests& requests)

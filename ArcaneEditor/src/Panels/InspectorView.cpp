@@ -98,12 +98,12 @@ namespace Arcane::Editor
             const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
             // Sprite-asset arc, Task 4: texture-drop auto-mint on a Sprite-typed
             // AssetRef field. Wired UNCONDITIONALLY today -- EditorAppFrame.cpp
-            // passes &m_inspectorServices on every DrawInspectorPanel call, and
+            // passes &m_inspectorServices on every DrawInspectorBody call, and
             // EditorApp::Init sets mintSpriteForTexture unconditionally (not
             // gated on Play/Edit) -- so in the shipping app this is never
             // actually null. The null check in the AssetRef arm below is
             // defensive, for a caller that does not wire InspectorServices at
-            // all (DrawInspectorPanel's `services` parameter defaults to
+            // all (DrawInspectorBody's `services` parameter defaults to
             // nullptr).
             //
             // Play-mode note: `stack` above IS gated (null while Play runs,

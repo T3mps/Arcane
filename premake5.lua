@@ -1279,6 +1279,10 @@ project "ArcaneTests"
         -- row and the ConstColor node, and without this the test exe fails to
         -- link (LNK2019). Nothing in it is called headlessly; it is pure ImGui.
         "%{wks.location}/ArcaneEditor/src/Widgets/ColorPickerPopup.cpp",
+        -- Inspector ownership T1: PropertyGrid (the shared page rows) source-
+        -- compiles into the test exe: PropertyGridTest drives it under a real
+        -- ImGui context, and InputActionsInspectorPage.cpp (T10) links against it.
+        "%{wks.location}/ArcaneEditor/src/Widgets/PropertyGrid.cpp",
         -- Widget layer Task 7: SpriteDocument source-compiles into the test exe
         -- so the [editor] units drive its UNDO half directly (ApplySpriteData,
         -- the before/after step builder, and the doc-identity anchor after the
