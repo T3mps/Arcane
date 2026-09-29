@@ -1,6 +1,6 @@
 # Input Actions editor redesign
 
-**Status:** Proposed for user review, 2026-09-28
+**Status:** Approved 2026-09-28 (review decisions in section 6; arc sequence in section 7)
 **Builds on:** `2026-09-28-inspector-ownership-design.md` (approved) -- this document is the
 first non-scene Inspector source and the first `PropertyGrid` client.
 **Reference:** the interactive mockup https://claude.ai/artifact/TUEutRAVgF9MmokP8kiuFE (its
@@ -38,7 +38,9 @@ layout ini like the shell's splits); a toolbar above them.
   and the Inspector's Live preview block reads live values. Off by default.
 - No Save button and no JSON tab. Dirty state is the tab's dot and Ctrl+S (already
   routed to the focused document). JSON stays reachable as `Assets › Open as text` on the
-  asset row (read-only external editor), not as a peer of the visual editor.
+  asset row: the external editor for now, and the in-editor text editor once that
+  mini-arc lands (decided 2026-09-28: a fast, vim-capable, Sublime/VS Code-class text
+  editor is the LAST mini-arc of this editor-upgrade arc; it gets its own spec).
 
 ### 2.2 Maps column (left, 180 px default)
 - `ACTION MAPS` label row with a `+` icon button.
@@ -133,8 +135,17 @@ Runtime rebind conflict reporting to the game (`InputRebindResult` conflicts), d
 display glyphs (icons for individual keys), the unversioned legacy asset translation --
 all remain on the authoring spec's owed list.
 
-## 6. Review items (recommended pick first)
-- **JSON view**: drop the tab, keep `Open as text` (recommended) / keep a read-only JSON tab.
-- **Composites**: header row + part rows (recommended, mirrors Unity) / flat rows with a
-  part suffix only.
-- **Reorder**: drag-drop + context menu (recommended) / context menu only for the first cut.
+## 6. Decisions taken at review (2026-09-28)
+- **JSON view**: the tab is dropped; `Open as text` opens the external editor until the
+  in-editor text editor mini-arc (last in this editor-upgrade arc) replaces it.
+- **Composites**: header row + one row per part (mirrors Unity; parts stay individually
+  rebindable).
+- **Reorder**: drag-drop within the parent plus the context menu's Move up/down.
+
+## 7. This arc's sequence (as agreed)
+1. Inspector ownership + this redesign (one plan; `PropertyGrid` first).
+2. The asset page + Asset Browser preview-pane trim.
+3. The Material tab migration into the shader document's page.
+4. The in-editor text editor (own spec: buffer model, vim mode, search/replace, multi-
+   cursor, syntax highlighting, large-file performance; candidates to study before
+   designing: Zep, ImGuiColorTextEdit, and the editors named above).
