@@ -4,10 +4,13 @@
 
 #include <Json.hpp>
 
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Arcane { class CommandStack; }
@@ -34,11 +37,21 @@ namespace Arcane::Editor
         [[nodiscard]] bool Undo();
         [[nodiscard]] bool Redo();
         [[nodiscard]] bool Save(const std::filesystem::path& path);
-        void SelectAction(const Guid& action) noexcept { selectedAction_ = action; }
+        // Selection. Every Select* call with a VALID id bumps SelectionEpoch()
+        // (a re-click on the selected row is a gesture: it re-asserts the
+        // Inspector on this document); a clear bumps only when it changes
+        // something. Undo/redo restore the selection SILENTLY (no bump).
+        void SelectAction(const Guid& action) noexcept;
+        void SelectMap(const Guid& map) noexcept;
+        void SelectBinding(const Guid& binding) noexcept;
+        void SelectPart(const Guid& part) noexcept;
+        [[nodiscard]] std::uint64_t SelectionEpoch() const noexcept { return selectionEpoch_; }
+        [[nodiscard]] std::string SelectionKey() const;                    // "<map>/<action>/<binding>/<part>"; "" when no map
+        [[nodiscard]] bool RestoreSelection(std::string_view key);         // every non-empty segment must exist
+        [[nodiscard]] bool Resolves(std::string_view key) const;           // PURE: would RestoreSelection succeed? no selection, no bump
+        [[nodiscard]] const nlohmann::json* FindNode(const Guid& id) const; // nullptr when no node carries that id
+        [[nodiscard]] bool SelectByPath(std::string_view namePath);        // "<map>[/<action>[/<binding index>[/<part index>]]]"
         [[nodiscard]] Guid SelectedAction() const noexcept { return selectedAction_; }
-        void SelectMap(const Guid& map) noexcept { selectedMap_ = map; selectedAction_ = {}; selectedBinding_ = {}; selectedPart_ = {}; }
-        void SelectBinding(const Guid& binding) noexcept { selectedBinding_ = binding; selectedPart_ = {}; }
-        void SelectPart(const Guid& part) noexcept { selectedPart_ = part; }
         [[nodiscard]] Guid SelectedMap() const noexcept { return selectedMap_; }
         [[nodiscard]] Guid SelectedBinding() const noexcept { return selectedBinding_; }
         [[nodiscard]] Guid SelectedPart() const noexcept { return selectedPart_; }
@@ -58,18 +71,33 @@ namespace Arcane::Editor
         [[nodiscard]] bool RemovePart(const Guid& binding, const Guid& part);
         [[nodiscard]] bool DuplicateRow(const Guid& id);
         [[nodiscard]] bool MoveRow(const Guid& id, int direction);
+        [[nodiscard]] bool MoveRowTo(const Guid& id, std::size_t index);   // reorder within the row's own parent array (undoable)
         [[nodiscard]] bool SetField(const Guid& id, std::string key, nlohmann::json value);
         [[nodiscard]] bool SetDefaultMap(const Guid& map);
         [[nodiscard]] bool AddScheme(std::string name, std::string group);
         [[nodiscard]] bool EditScheme(const Guid& scheme, std::string name, std::string group);
         [[nodiscard]] bool RemoveScheme(const Guid& scheme);
+        struct BindingConflict { Guid binding; Guid otherBinding; Guid otherAction; std::string otherActionName; std::string path; std::string group; };
+        // One entry PER DIRECTION (a and b each get one); compares the
+        // compiled control (InputActions::CanonicalControlKey), never the spelling.
+        [[nodiscard]] std::vector<BindingConflict> Conflicts() const;
+        // Invalid names + unknown paths (the evaluator's own check) + one line per conflicting PAIR.
         [[nodiscard]] std::vector<std::string> Warnings() const;
+        // Name rules mirror the runtime's LoadAsset keys (InputActions.cpp:757-775):
+        // map names unique across the document, action names unique within
+        // their map; trimmed, case-sensitive. nullopt = acceptable (the
+        // unchanged name always is).
+        [[nodiscard]] static std::optional<std::string> ValidateName(const nlohmann::json& draft, const Guid& id, std::string_view proposed);
+        [[nodiscard]] bool SiblingNameTaken(const Guid& id, std::string_view name) const;
 
         // Called by an undo command after its weak document anchor is checked.
         void RestoreDraft(const nlohmann::json& draft);
+        void RestoreSelectionOrAncestor(std::string_view key);   // silent; trimmed to the deepest surviving ancestor
 
     private:
         void Validate();
+        [[nodiscard]] bool ParseKey(std::string_view key, std::array<Guid, 4>& ids) const;
+        void SetSelectionSilently(const std::array<Guid, 4>& ids);
         nlohmann::json draft_;
         nlohmann::json saved_;
         std::optional<InputActionAsset> preview_;
@@ -80,5 +108,6 @@ namespace Arcane::Editor
         Guid selectedMap_;
         Guid selectedBinding_;
         Guid selectedPart_;
+        std::uint64_t selectionEpoch_ = 0;
     };
 }
