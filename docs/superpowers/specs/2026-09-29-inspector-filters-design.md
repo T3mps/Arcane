@@ -44,14 +44,21 @@ panels only follow or lock.
   broken.
 - **Selection order.** The host keeps a monotonic counter; every selection EVENT
   (`NotifySelected`, behind the existing `SelectionEdge` filter -- a clear is never an event)
-  stamps its source with the next value. `RemoveSource` drops the stamp; `ReleaseAll` clears
-  them all.
+  and every history landing stamps its source with the next value. `RemoveSource` drops the
+  stamp; `ReleaseAll` clears them all.
+- **Permanent sources.** The Asset Browser's source lives as long as the app, like the scene:
+  `ReleaseAll` (project switch) keeps it registered and invalidates its keys (history entries,
+  pins) instead of dropping it.
 - **Routing.** `SourceFor(id)`:
   1. pinned -> the pinned source (unchanged);
   2. no exclusions -> `Current()` (unchanged);
-  3. otherwise -> among registered sources whose kind is NOT excluded, the one with the
-     highest stamp; if none has a stamp yet, the most recently added matching source; if no
-     matching source is registered, null.
+  3. `Current()` admitted by the filter -> `Current()` (a filtered instance agrees with an All
+     instance whenever it can: closing a document falls back to the scene for both);
+  4. otherwise -> among registered sources the filter admits, the one with the highest stamp;
+     if none has a stamp yet, the fallback (scene) when admitted, else the most recently added
+     admitted source; if none is admitted, null.
+  A source whose `Kind()` is empty (a document that never selects: mesh, sprite) is admitted
+  only by All.
 - **No matching source.** The instance draws one line naming what it waits for: "No Input
   Actions document open" for a single kind, "Nothing to show for this filter" otherwise.
 - **Deselect is per source.** What an instance shows is always its routed source's LIVE
@@ -112,8 +119,8 @@ panels only follow or lock.
   section with no `Filters=` line was written before this feature. On that first load the
   host applies the new default: instance 0 gets "All but Assets", and an "Assets only"
   instance (lowest free id) is docked into a split to the right of the Asset Browser's dock
-  node (if the Asset Browser is floating or closed, the instance opens floating beside where
-  the browser last was / at the default floating position). The next save writes `Filters=`,
+  node (if the Asset Browser is not docked, the instance takes New Inspector's placement: a tab
+  in the main Inspector's dock node). The next save writes `Filters=`,
   so the upgrade never repeats. A user who deliberately set everything back to All keeps it:
   an empty `Filters=` line is a real answer, not a missing one.
 
@@ -128,6 +135,8 @@ panels only follow or lock.
   `ReleaseAll` (project switch) keeps filters and releases sources, pins, history and the
   selection stamps exactly as today.
 - Pins stay unpersisted.
+- **Window > Reset Layout** restores the default: exactly instances {0, 1}, 0 = All but Assets,
+  1 = Assets only, docked as in the default layout.
 
 ## 8. Decisions taken in the brainstorm (2026-09-29)
 
@@ -155,8 +164,10 @@ panels only follow or lock.
 
 - Unit (`EditorInspectorHostTest`; the existing fake sources gain a kind):
   - routing by filter; no exclusions unchanged (every existing test passes untouched);
-  - two sources admitted by one filter: the higher stamp wins; closing it falls back to the
-    other; "All but X" follows Y and Z but never X;
+  - `Current()` wins when admitted; otherwise the higher stamp among admitted sources; closing
+    it falls back to the other; "All but X" follows Y and Z but never X; an empty-kind source
+    is admitted only by All;
+  - `ReleaseAll` keeps a permanent source registered and drops its history entries and pins;
   - no admitted source -> `SourceFor` null;
   - **a clear in source X never changes what an instance filtered away from X shows** (and a
     clear never moves an All instance off a different source);
