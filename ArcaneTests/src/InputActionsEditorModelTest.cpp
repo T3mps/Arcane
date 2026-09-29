@@ -465,3 +465,23 @@ TEST_CASE("input document: is an Inspector source with keyed pages and a breadcr
     CHECK(doc->Page()->Breadcrumb().size() == 1);
     fs::remove(path);
 }
+
+TEST_CASE("input document: Save invokes onSaved exactly once per successful save; a refused save does not", "[editor][input]")
+{
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / "on-saved.arcinput";
+    { std::ofstream out(path); out << DocumentJson().dump(2); }
+    auto doc = Arcane::Editor::InputActionsDocument::Open(path);
+    REQUIRE(doc);
+    int calls = 0;
+    Arcane::Guid seen;
+    doc->SetOnSaved([&](const Arcane::Guid& g, const Arcane::InputActionAsset&) { ++calls; seen = g; });
+    REQUIRE(doc->Save());
+    CHECK(calls == 1);
+    CHECK(seen == doc->AssetGuid());
+    auto invalid = doc->Model().Draft(); invalid["version"] = 99;
+    REQUIRE(doc->Model().ApplyEdit("break", doc->Model().Draft(), invalid));
+    CHECK_FALSE(doc->Save());                              // refused
+    CHECK(calls == 1);                                     // a refused save never fires the callback
+    fs::remove(path);
+}

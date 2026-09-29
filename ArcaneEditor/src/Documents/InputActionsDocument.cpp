@@ -44,6 +44,7 @@ namespace Arcane::Editor
                 { [this](const Guid& id) { BeginRebind(id); }, &state_, &preview_ })
     {
         windowLabel_ = title_ + " (Input Actions)###inputdoc_" + guid_.ToString();
+        diagKey_ = "input:" + guid_.ToString();
         SelectFirstMapAndAction();
     }
 
@@ -212,8 +213,33 @@ namespace Arcane::Editor
             services.glow            = [this](const Guid& id) { return state_.previewArmed ? preview_.BindingValue(id) : 0.0f; };
             services.inputSwallowed  = [this] { return InputSwallowed(); };
             widgets_.Draw(model_, state_, services);
+            PublishWarnings();
         }
         ImGui::End();
         requestClose = !open;
+    }
+
+    void InputActionsDocument::PublishWarnings()
+    {
+        std::vector<std::string> warnings = model_.Warnings();
+        if (warnings == publishedWarnings_) return;
+        publishedWarnings_ = std::move(warnings);
+        std::vector<Arcane::Diagnostic> diags;
+        for (const auto& w : publishedWarnings_)
+        {
+            Arcane::Diagnostic d;
+            d.severity = Arcane::DiagSeverity::Warning;
+            d.scope = Arcane::DiagScope::Assets;
+            // The model's three warning families (Task 6): unknown control
+            // paths, invalid/duplicate names, binding conflicts.
+            d.code = w.rfind("Unknown control path", 0) == 0 ? "input.path.unknown"
+                   : w.rfind("Invalid name", 0) == 0         ? "input.name.invalid"
+                                                             : "input.binding.conflict";
+            d.message = w;
+            d.detail = title_ + ".arcinput";
+            d.locator = Arcane::DiagLocator::Asset(guid_);
+            diags.push_back(std::move(d));
+        }
+        Arcane::Diagnostics::Publish(diagKey_, diags);
     }
 }

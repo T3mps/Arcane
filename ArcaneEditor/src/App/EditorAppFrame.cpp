@@ -2475,6 +2475,33 @@ namespace Arcane::Editor
         }
         // New documents tab into the Viewport's node (captured last frame).
         m_documents.DrawAll(m_viewportDockId);
+        // Input-editor spec s2.6: a saved input document pushed a republish
+        // request from Save(); apply it here, at the frame boundary, whether or
+        // not the document still exists (save-and-close destroys it inside
+        // DrawAll -- DocumentHost.cpp:208 -> :117-121). One slot: two saves in a
+        // frame collapse to the last, which is the disk state.
+        if (m_pendingInputRepublish)
+        {
+            auto req = std::move(*m_pendingInputRepublish);
+            m_pendingInputRepublish.reset();
+            RepublishGameInput(req.first, req.second);
+        }
+    }
+
+    void EditorApp::RepublishGameInput(const Arcane::Guid& asset, const Arcane::InputActionAsset& parsed)
+    {
+        const auto* project = m_runtime->CurrentProject();
+        if (!project) return;
+        const auto designated = Arcane::Guid::FromString(project->Manifest().inputActions);
+        if (!designated || *designated != asset) return;   // not the project's gameplay input: nothing to republish
+        const auto projectId = Arcane::Guid::FromString(project->Manifest().guid);
+        if (!projectId) return;
+        // Same project, same LocalInputUser: the re-Configure branch (Task 5,
+        // LocalInputUser::Configure) replays the pushed map stack, the control
+        // scheme and the dirty overrides, and primes the new evaluator with the
+        // last snapshot so a control held across the save does not re-fire.
+        if (!m_runtime->ConfigureGameInput(parsed, *projectId))
+            ARC_WARN("input: saved asset {} could not be compiled; the running session keeps the previous definition", asset.ToString());
     }
 
     void EditorApp::ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,

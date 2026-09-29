@@ -62,6 +62,7 @@
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/ImGui/OffscreenImGuiLayer.hpp>
@@ -277,6 +278,7 @@ namespace Arcane::Editor
         void ConsumeSceneDialogResults(LoopState& ls);
         void ConsumeProjectDialogResult();
         void ConsumeMaterialDialogResults();
+        void RepublishGameInput(const Arcane::Guid& asset, const Arcane::InputActionAsset& parsed);
         void FrameInput(LoopState& ls, FrameState& fs);
         void HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap, FrameState& fs);
         void HandleGizmoModeKeys(const Arcane::InputSnapshot& snap);
@@ -1081,6 +1083,7 @@ namespace Arcane::Editor
         Arcane::Editor::SelectionEdge         m_sceneSelectionEdge;   // epoch-based (Task 2): Observe(m_selection.Epoch(), key)
         std::unordered_map<const Arcane::Editor::EditorDocument*, std::uint64_t> m_docSelectionEpochs;
         Arcane::Editor::InspectorSource* m_inspectorFocusedSource = nullptr;   // latched each Inspector draw; read by the Ctrl+S gate
+        std::optional<std::pair<Arcane::Guid, Arcane::InputActionAsset>> m_pendingInputRepublish;   // pushed by a saved input document's onSaved, applied after DrawAll; one slot: two saves in a frame collapse to the last (= the disk state)
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
         // resolver (resolveAssetThumb), built once in StageSpriteTables next
         // to resolveTexturePreview above -- same [this]-capture idiom, same

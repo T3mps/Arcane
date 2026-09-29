@@ -879,7 +879,13 @@ namespace Arcane::Editor
         m_documents.RegisterFactory(".arcmesh", meshFactory, meshPeek);
         m_documents.RegisterFactory(".arcinput",
             [this](const std::filesystem::path& path) -> std::unique_ptr<Arcane::Editor::EditorDocument>
-            { return Arcane::Editor::InputActionsDocument::Open(path, m_undo ? &*m_undo : nullptr); },
+            {
+                auto doc = Arcane::Editor::InputActionsDocument::Open(path, m_undo ? &*m_undo : nullptr);
+                if (doc)
+                    doc->SetOnSaved([this](const Arcane::Guid& g, const Arcane::InputActionAsset& a)
+                    { m_pendingInputRepublish.emplace(g, a); });
+                return doc;
+            },
             [](const std::filesystem::path& path) -> Arcane::Guid
             { return Arcane::Editor::InputActionsDocument::PeekGuid(path); });
         // Every opened document is an Inspector source until it closes

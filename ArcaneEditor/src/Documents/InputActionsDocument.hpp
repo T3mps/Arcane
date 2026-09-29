@@ -4,6 +4,7 @@
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsDocumentWidgets.hpp"
 #include "Documents/InputActionsInspectorPage.hpp"
+#include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Input/InputRebindOperation.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 
@@ -30,7 +31,18 @@ namespace Arcane::Editor
         const std::string& Title() const override { return title_; }
         Guid AssetGuid() const override { return guid_; }
         bool Dirty() const override { return model_.Dirty(); }
-        bool Save() override { return model_.Save(path_); }
+        // Pushes the republish request from INSIDE Save(): DocumentHost::
+        // ConfirmSaveAndClose runs Save() then Close() within DrawAll
+        // (DocumentHost.cpp:208 -> :117-121), so a poll after DrawAll would
+        // never see a save-and-close. After a successful model Save,
+        // LastValidPreview() IS the asset just written -- no disk re-read.
+        bool Save() override
+        {
+            if (!model_.Save(path_)) return false;
+            if (onSaved_ && model_.LastValidPreview()) onSaved_(guid_, *model_.LastValidPreview());
+            return true;
+        }
+        ~InputActionsDocument() override { Arcane::Diagnostics::Clear(diagKey_); }
         bool WindowFocused() const override { return focused_; }
         void Draw(bool& requestClose) override;
         InputActionsEditorModel& Model() noexcept { return model_; }
@@ -59,6 +71,7 @@ namespace Arcane::Editor
         [[nodiscard]] static InputSnapshot SnapshotForCapture(const InputSnapshot& raw, bool anyItemActive);
         [[nodiscard]] const InputActionsDocumentState& State() const noexcept { return state_; }
         [[nodiscard]] const InputActionsPreview& Preview() const noexcept { return preview_; }
+        void SetOnSaved(std::function<void(const Guid&, const InputActionAsset&)> fn) { onSaved_ = std::move(fn); }   // Task 11
         // True while a capture is live and on the frame it completed/cancelled:
         // keys and clicks belong to the capture (UE consumes the heard key at
         // the selector; ImGui has no event consumption, so the frame stamp does).
@@ -90,5 +103,9 @@ namespace Arcane::Editor
         // Declared (and initialised) AFTER model_, state_ and preview_: it holds
         // their addresses.
         InputActionsInspectorPage page_;
+        void PublishWarnings();   // Task 11
+        std::function<void(const Guid&, const InputActionAsset&)> onSaved_;         // Task 11
+        std::string diagKey_;                                                     // Task 11: "input:" + guid
+        std::vector<std::string> publishedWarnings_;                              // Task 11
     };
 }
