@@ -7,6 +7,9 @@
 #include "Helpers/HostWitness.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 using namespace Arcane::Test;
 namespace
 {
@@ -130,4 +133,32 @@ TEST_CASE("E3: an opened input document with a scripted selection owns the Inspe
     CHECK(run.report["inspector"].at("breadcrumb") == "Player.arcinput > Player > Jump");
     REQUIRE(run.report.contains("compare"));
     CHECK(run.report["compare"].at("passed") == true);
+}
+
+// E3b: an unresolvable --select-in-document is loud (ERROR on stderr) but not
+// fatal; the Inspector keeps the document's opening selection (first map +
+// first action of Player.arcinput). No --compare: no golden slot for this state.
+TEST_CASE("E3b: an unresolvable --select-in-document is a loud ERROR, the run completes, and the Inspector keeps the document's opening selection", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e3b-input-doc-unresolved");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+                 "--report", inv.reportPath.generic_string(),
+                 "--open-asset", "97260310-8b35-4b29-b12f-1fd6f8e99071",
+                 "--select-in-document", "Player/NoSuchAction" };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    CHECK(run.report.at("exitReason") == "frames-complete");
+    REQUIRE(run.report.contains("inspector"));
+    CHECK(run.report["inspector"].at("source") == "Player.arcinput");
+    CHECK(run.report["inspector"].at("breadcrumb") == "Player.arcinput > Player > Move");
+    CHECK_FALSE(run.report.contains("compare"));
+    std::ifstream err(run.stderrPath);
+    const std::string all((std::istreambuf_iterator<char>(err)), std::istreambuf_iterator<char>());
+    CHECK(all.find("--select-in-document 'Player/NoSuchAction': the opened document has no such path") != std::string::npos);
 }

@@ -804,3 +804,22 @@ TEST_CASE("input editor: a captured Keypad + path is not an unknown control and 
     CHECK(std::none_of(w.begin(), w.end(), [](const std::string& s) { return s.starts_with("Unknown control path"); }));
     CHECK(std::count_if(w.begin(), w.end(), [](const std::string& s) { return s.starts_with("Conflicting"); }) == 1);
 }
+
+TEST_CASE("input document: a refused SelectByPath leaves the opening selection and epoch untouched", "[editor][input][inspector]")
+{
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / ("select-refused-" + Arcane::Guid::Generate().ToString() + ".arcinput");
+    { std::ofstream out(path); out << DocumentJson().dump(2); }
+    {
+        auto doc = Arcane::Editor::InputActionsDocument::Open(path);
+        REQUIRE(doc);
+        const std::string key = doc->SelectionKey();   // opening selection: first map + first action
+        const auto epoch = doc->SelectionEpoch();
+        Arcane::Editor::EditorDocument& base = *doc;    // the host's virtual dispatch
+        CHECK_FALSE(base.SelectByPath("Player/NoSuchAction"));
+        CHECK_FALSE(base.SelectByPath("Player/Jump/7"));
+        CHECK(doc->SelectionKey() == key);
+        CHECK(doc->SelectionEpoch() == epoch);
+    }
+    fs::remove(path);
+}
