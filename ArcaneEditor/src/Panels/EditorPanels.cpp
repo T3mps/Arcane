@@ -1669,7 +1669,12 @@ namespace Arcane::Editor
         }
 
         const bool renaming = state.renameTarget.IsValid();
-        const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+        // NoPopupHierarchy (the input document's ColumnKeysLive rule): a popup
+        // opened from the Outliner (a row's context menu advertising
+        // "Delete  Del" / "Rename  F2") must NOT count as the Outliner's focus,
+        // or Del/F2 would act on the selection behind the open menu. Keys stay
+        // inert while any popup owns focus; the menu's own items act instead.
+        const bool windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy);
         // Shortcuts must not fire while any text field owns the keyboard
         // (e.g. the search box above) -- else Delete/F2 hijack typing.
         if (binding.editMode && windowFocused && !renaming && !ImGui::GetIO().WantTextInput)

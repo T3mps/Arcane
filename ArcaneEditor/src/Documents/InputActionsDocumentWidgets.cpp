@@ -254,8 +254,10 @@ namespace Arcane::Editor
                 ImGui::PopID();
                 continue;
             }
+            const ImVec2 rowTop = ImGui::GetCursorScreenPos();
             const auto row = RowWithThumb("##map", 0, ICON_LC_LAYERS, name.c_str(), model.SelectedMap() == id, 0.0f);
             const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // restored after the trailing pills (same rule as DrawRow)
+            if (state.probe) (*state.probe)[id.ToString()] = ImVec2(rowTop.x + 40.0f, (rowTop.y + rowBottom.y) * 0.5f);   // TEST SEAM
             if (row.clicked) model.SelectMap(id);
             if (model.SelectedMap() == id && state.scrollMapToSelection) { ImGui::SetScrollHereY(); state.scrollMapToSelection = false; }
             if (ImGui::BeginPopupContextItem("##mapmenu"))

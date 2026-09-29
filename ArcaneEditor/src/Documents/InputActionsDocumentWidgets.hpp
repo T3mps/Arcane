@@ -11,11 +11,13 @@
 #include "Documents/InputActionsRows.hpp"
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
+#include <imgui.h>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -47,6 +49,7 @@ namespace Arcane::Editor
         bool schemePopupPending = false;              // opened at window scope (a popup cannot open from inside another)
         char newSchemeName[64] = "Gamepad";
         char newSchemeGroup[64] = "Gamepad";
+        std::unordered_map<std::string, ImVec2>* probe = nullptr;   // TEST SEAM (InputActionsDocumentUiTest): map rows record their centre under their id. Production: nullptr.
     };
 
     // The document-level preview evaluator (owned by InputActionsDocument;

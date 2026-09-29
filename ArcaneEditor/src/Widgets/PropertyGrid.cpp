@@ -248,6 +248,7 @@ namespace Arcane::Editor
             if (i > 0) ImGui::SameLine();
             ImGui::BeginDisabled(((enabledMask >> i) & 1u) == 0);
             if (ImGui::SmallButton(buttons[i])) clicked = i;
+            if (m_state.probe) Probe((std::string(label) + "#" + buttons[i]).c_str());   // TEST SEAM: each button's centre under "<label>#<text>"
             ImGui::EndDisabled();
         }
         Probe(label);
