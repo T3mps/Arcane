@@ -6,13 +6,17 @@
 // owns the list, the unsaved-close confirm flow, and the asset-type -> factory
 // routing. The shader editor is the first implementation.
 
+#include "Panels/InspectorSource.hpp"
+
 #include <Arcane/Guid.hpp>
 
+#include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace Arcane::Editor
 {
-    class EditorDocument
+    class EditorDocument : public InspectorSource
     {
     public:
         virtual ~EditorDocument() = default;
@@ -41,5 +45,24 @@ namespace Arcane::Editor
         // user asked to close it (window X / shortcut); the HOST runs the
         // dirty-confirm flow -- documents never delete themselves.
         virtual void Draw(bool& requestClose) = 0;
+
+        // ---- Inspector source (inspector-ownership spec s3.2) -----------
+        // A document that can SELECT opts in by overriding Page()/PageFor()/
+        // SelectionKey()/RestoreSelection()/Resolves() and bumping
+        // SelectionEpoch() on every selection change (the host's per-frame
+        // poll turns the bump into InspectorHost::NotifySelected). The
+        // defaults are "this document contributes no page and never drives
+        // the Inspector" (MeshDocument today).
+        std::string SourceName() const override { return Title(); }
+        InspectorPage* Page() override { return nullptr; }
+        InspectorPage* PageFor(std::string_view) override { return nullptr; }
+        std::string SelectionKey() const override { return {}; }
+        bool RestoreSelection(std::string_view) override { return false; }
+        bool Resolves(std::string_view) const override { return false; }
+        // Monotonic; changes whenever the document's own selection changes.
+        [[nodiscard]] virtual std::uint64_t SelectionEpoch() const { return 0; }
+        // --select-in-document: select by a human path ("Player/Jump"). False
+        // = the document has no such notion or the path did not resolve.
+        virtual bool SelectByPath(std::string_view) { return false; }
     };
 }

@@ -1222,6 +1222,11 @@ project "ArcaneTests"
         -- reads in the Inspector, and EditorPanels.cpp is not compiled here --
         -- so anything left in the draw loop would have no coverage at all.
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorMeta.cpp",
+        -- Inspector ownership T2: InspectorHost (pure routing, no ImGui) source-
+        -- compiles into the test exe so EditorInspectorHostTest drives it with
+        -- fake sources. SceneInspectorSource.cpp / InspectorWindows.cpp stay OUT
+        -- (they need EditorPanels.cpp).
+        "%{wks.location}/ArcaneEditor/src/Panels/InspectorHost.cpp",
         -- F2b Task 13: TextureMetaPanel (the Inspector's texture-asset
         -- settings block's PURE half -- reading/merge-writing the ".meta"
         -- sidecar's "texture" block) source-compiles into the test exe so

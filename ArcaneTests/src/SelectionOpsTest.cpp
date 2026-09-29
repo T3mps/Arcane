@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Scene/SelectionContext.hpp"
 #include "Scene/SelectionOps.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
@@ -69,4 +70,19 @@ TEST_CASE("InvertSelectionSet drops selected entries, keeps order", "[editor]")
     CHECK(std::find(inv.begin(), inv.end(), a) == inv.end());
     CHECK(std::find(inv.begin(), inv.end(), b) != inv.end());
     CHECK(inv.size() == all.size() - 1);
+}
+
+TEST_CASE("SelectionContext: every selection action bumps Epoch, including a re-select; Prune does not", "[editor][selection]")
+{
+    using Astra::Entity;
+    Arcane::Editor::SelectionContext sel;
+    const auto e0 = sel.Epoch();
+    const Entity a(static_cast<Entity::StorageType>(7)), b(static_cast<Entity::StorageType>(9));
+    sel.Select(a);                       CHECK(sel.Epoch() == e0 + 1);
+    sel.Select(a);                       CHECK(sel.Epoch() == e0 + 2);   // re-click on the selected entity IS an action
+    sel.Toggle(b);                       CHECK(sel.Epoch() == e0 + 3);
+    sel.Prune([&](Entity e) { return e != b; });                          // the primary (b) dies: primary falls back to a
+    CHECK(sel.Primary() == a);
+    CHECK(sel.Epoch() == e0 + 3);                                         // a sweep is not a gesture
+    sel.Clear();                         CHECK(sel.Epoch() == e0 + 4);
 }
