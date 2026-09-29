@@ -324,6 +324,14 @@ namespace Arcane::Editor
                     }
                     ImGui::Separator();
                 }
+                // Another Inspector instance (inspector-ownership spec s3.3):
+                // pin one, let the other follow.
+                // Stays enabled: InspectorHost::AddInstance() returns -1 when the
+                // pool of 8 is full and the app treats that as a no-op; the menu
+                // has no host access.
+                if (ImGui::MenuItem("New Inspector"))
+                    requests.newInspector = true;
+                ImGui::Separator();
                 // Rebuild the stock dock layout (the first-run path, on
                 // demand) and re-show everything -- also the standing cure for
                 // an old imgui.ini hiding newly shipped panels.

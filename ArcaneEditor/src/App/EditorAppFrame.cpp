@@ -2446,6 +2446,17 @@ namespace Arcane::Editor
                                         const FrameState& fs, LoopState& ls)
     {
         if (menuReq.showProjectSettings) m_projectSettingsOpen = true;
+        // Window > New Inspector -- reopen before create (UE's summon-details
+        // rule: reuse an open view, else the first CLOSED slot; never a copy
+        // beside a closed one). Instance 0 is the standing follower (spec
+        // s3.3) and its visibility is the Window > Inspector checkbox.
+        // Selection events never open an Inspector; only this path reopens.
+        if (menuReq.newInspector)
+        {
+            bool* primary = m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector);
+            if (primary && !*primary) *primary = true;       // hidden follower: bring it back, no new instance
+            else (void)m_inspectorHost.AddInstance();        // visible: another instance with its own pin (-1 = pool full, no-op)
+        }
         // Bare interactive launch: raise the picker as if the user had clicked
         // File -> Open Project, once. Routed through menuReq (rather than
         // calling the dialog directly) so there is exactly ONE launch site and
@@ -2634,11 +2645,17 @@ namespace Arcane::Editor
         // document AND the scene. Asking the host who is focused is what keeps
         // exactly one of them firing.
         //
+        // The same stand-down applies to an Inspector instance showing a
+        // DOCUMENT's page (the document's Ctrl+S then routes through that
+        // instance, InspectorWindows.cpp). An instance on the scene page
+        // leaves the scene keybind alone.
+        //
         // Only the SHORTCUT routes. The File menu's Save Scene item folds in
         // below unconditionally: an item that names the scene saves the scene,
         // whatever happens to hold focus.
         const bool docOwnsSave =
-            fs.scSaveScene && m_documents.FocusedDoc() != nullptr;
+            fs.scSaveScene && (m_documents.FocusedDoc() != nullptr ||
+                               InspectorSaveTarget(m_inspectorFocusedSource) != nullptr);
         menuReq.saveScene |= (fs.scSaveScene && !docOwnsSave);
 
         if (menuReq.newScene &&
@@ -3590,17 +3607,46 @@ namespace Arcane::Editor
         // touches the project registry + disk and the spawn point is the
         // editor camera's (OutlinerState::addPrimitivePending's own comment).
         ConsumeAddPrimitive();
-        if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Inspector))
+        // ---- Inspector ownership: sources -> host -> instances ----------
+        // Selection EVENTS only (spec s3.1): a scene selection GESTURE (the
+        // SelectionContext epoch moved -- Select/Toggle/AddRange/Clear, never
+        // the per-frame Prune above) that left a non-empty key, or a document
+        // whose SelectionEpoch moved AND now has a selection. Focus, tab
+        // activation, background clicks, and a prune that re-primaried after a
+        // deletion or a structural undo: none of these reach the host. Re-
+        // clicking the already-selected entity IS an event (it brings the
+        // Inspector back from a document); Push's echo compare keeps it out of
+        // history. The scene page's trailing fallback (F2b Task 13 / Task 10:
+        // m_assetModel.selected, consulted only when nothing is entity-
+        // selected -- DrawInspectorBody's own tie-break) rides the Deps.
+        m_sceneSource.Bind({ &m_runtime->Registry(), &m_selection, m_undo ? &*m_undo : nullptr,
+                             &m_editBinding, m_runtime->CurrentProject(), &m_inspector,
+                             &m_inspectorServices, &m_assetModel.selected });
+        if (m_sceneSelectionEdge.Observe(m_selection.Epoch(), m_sceneSource.SelectionKey()))
+            m_inspectorHost.NotifySelected(m_sceneSource);
+        m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
         {
-            // F2b Task 13: the trailing fallback -- consulted only when
-            // nothing is entity-selected (DrawInspectorBody's own tie-break).
-            // Task 10: repointed from the frozen m_assetBrowser.selected to
-            // m_assetModel.selected -- see Task 9's carry-over note.
-            ImGui::Begin("Inspector", m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector));
-            Arcane::Editor::DrawInspectorBody(m_runtime->Registry(), m_selection, *m_undo,
-                                              m_editBinding, m_runtime->CurrentProject(),
-                                              m_inspector, &m_inspectorServices, m_assetModel.selected);
-            ImGui::End();
+            std::uint64_t& last = m_docSelectionEpochs[&d];
+            const std::uint64_t epoch = d.SelectionEpoch();
+            if (epoch == last) return;
+            last = epoch;
+            if (!d.SelectionKey().empty())
+                m_inspectorHost.NotifySelected(d);
+        });
+        if (m_undo)   // the scene body needs the stack; DrawInspectorBody takes it by reference
+        {
+            const Arcane::Editor::InspectorWindowsResult res = Arcane::Editor::DrawInspectorWindows(
+                m_inspectorHost, m_inspectorWindows,
+                m_panelVis.OpenFlag(Arcane::Editor::PanelId::Inspector));
+            for (const int id : res.closed)
+            {
+                m_inspectorHost.RemoveInstance(id);
+                m_inspectorWindows.grids.erase(id);
+            }
+            m_inspectorFocusedSource = res.focusedSource;
+            for (Arcane::Editor::InspectorSource* src : res.saveRequested)
+                if (auto* doc = InspectorSaveTarget(src); doc && !doc->Save())
+                    ARC_WARN("Inspector: save refused for '{}'", doc->Title());
         }
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,

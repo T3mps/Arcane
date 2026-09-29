@@ -42,10 +42,12 @@ namespace Arcane::Editor
         // The first crumb: "Scene", "Player.arcinput".
         [[nodiscard]] virtual std::string SourceName() const = 0;
         // The page for the CURRENT selection. Null = nothing to show.
+        // The returned page is a VIEW valid until the next Page()/PageFor() call on this source: resolve it immediately before Breadcrumb() + Draw().
         [[nodiscard]] virtual InspectorPage* Page() = 0;
         // The page for a SPECIFIC selection key (a pinned instance). Null when
         // the key no longer resolves. Pages are keyed on purpose: "pinned =
         // keep THIS page" must survive the source selecting something else.
+        // The returned page is a VIEW valid until the next Page()/PageFor() call on this source: resolve it immediately before Breadcrumb() + Draw().
         [[nodiscard]] virtual InspectorPage* PageFor(std::string_view key) = 0;
         // Opaque, stable across frames; "" = nothing selected. The history
         // stores these, so a key must survive being handed back later.

@@ -80,6 +80,7 @@ namespace Arcane::Editor
         bool rebuildModule = false;  // Build -> Rebuild Game Module (worker premake+msbuild)
         bool openIde = false;        // Build -> Open Visual Studio (IdeLaunch; generates the .slnx first if missing)
         bool resetLayout = false;   // Window -> Reset Layout (rebuild default dock layout, re-show all)
+        bool newInspector = false;   // Window -> New Inspector (another Inspector instance, own pin)
         bool selectAll = false;        // Edit -> Select All
         bool deselectAll = false;      // Edit -> Deselect All
         bool invertSelection = false;  // Edit -> Invert Selection

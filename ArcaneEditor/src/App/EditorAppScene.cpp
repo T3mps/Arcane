@@ -148,6 +148,17 @@ namespace Arcane::Editor
         // token that Clear() below retires.
         m_gizmoDrag = {};
         m_inspector = {};
+        // Inspector ownership: the pinned keys and history entries naming
+        // entities of the OUTGOING registry die here too. A fresh registry
+        // (Runtime::ResetRegistry -> a new Astra::Registry, EntityIDStack from
+        // id 0 / version 1) re-mints the SAME (id,version) values, so
+        // SceneInspectorSource::Alive cannot tell an old key from a new entity
+        // -- the owner of the swap says so explicitly (UE pushes
+        // RemoveDeletedObjects into every details view for the same reason).
+        // Play > Stop is NOT such a swap: it restores the pre-Play snapshot, so
+        // the same keys name the same entities and pins/history survive it.
+        m_inspectorHost.InvalidateSource(m_sceneSource);
+        m_sceneSelectionEdge.lastEpoch = m_selection.Epoch();   // re-arm on the Clear() above: the first GESTURE in the new scene is the first event
         if (m_undo) m_undo->Clear();
     }
 

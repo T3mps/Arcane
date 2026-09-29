@@ -2161,6 +2161,12 @@ namespace Arcane::Editor
     // publish would resurrect every stale row alongside it).
     void EditorApp::ResetPerProjectState()
     {
+        // Inspector ownership (spec decision 2): every non-fallback source
+        // releases on a project switch, pins included. The scene half (fallback
+        // invalidation + its watermark) lives in ClearSceneReferences, which
+        // this function calls below.
+        m_inspectorHost.ReleaseAll();
+        m_docSelectionEpochs.clear();
         m_documents.CloseAll();
         if (m_resolver)
             m_resolver->Clear();

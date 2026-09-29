@@ -75,11 +75,13 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>   // std::strtol (InspectorSettingsReadLine)
 #include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Arcane::Editor
 {
@@ -319,6 +321,57 @@ namespace Arcane::Editor
         ImGui::AddSettingsHandler(&handler);
     }
 
+    // ---- [EditorInspector][Instances]: the Inspector instance ID LIST -------
+    // Extra ids only (instance 0 is implicit); an empty `Ids=` line restores
+    // {0}. Ids are dock slots (ImGui keys `###inspector_<id>` settings on the
+    // id), so a closed slot stays closed across a restart and Window > New
+    // Inspector reopens the lowest free one. Pins are deliberately NOT
+    // persisted: a pin names a selection, and a selection does not survive a
+    // restart (the reason history is never persisted either, spec s6.3).
+    void* EditorApp::InspectorSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler, const char* name)
+    {
+        return std::strcmp(name, "Instances") == 0 ? handler->UserData : nullptr;
+    }
+    void EditorApp::InspectorSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line)
+    {
+        auto* app = static_cast<EditorApp*>(entry);
+        if (std::strncmp(line, "Ids=", 4) != 0) return;
+        std::vector<int> ids;
+        for (const char* p = line + 4; *p;)
+        {
+            char* end = nullptr;
+            const long v = std::strtol(p, &end, 10);
+            if (end == p) break;
+            ids.push_back(static_cast<int>(v));
+            p = (*end == ',') ? end + 1 : end;
+        }
+        app->m_inspectorHost.SetInstanceIds(ids);   // 0, duplicates and out-of-range ids are dropped inside
+    }
+    void EditorApp::InspectorSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf)
+    {
+        auto* app = static_cast<EditorApp*>(handler->UserData);
+        buf->appendf("[%s][Instances]\nIds=", handler->TypeName);
+        bool first = true;
+        for (const auto& inst : app->m_inspectorHost.Instances())
+            if (inst.id != 0) { buf->appendf(first ? "%d" : ",%d", inst.id); first = false; }
+        buf->append("\n\n");
+    }
+    void EditorApp::RegisterInspectorSettingsHandler()
+    {
+        if (ImGui::GetCurrentContext() == nullptr ||
+            ImGui::FindSettingsHandler("EditorInspector") != nullptr)
+            return;   // same idempotence guard as RegisterPanelVisibilitySettings
+
+        ImGuiSettingsHandler handler;
+        handler.TypeName = "EditorInspector";
+        handler.TypeHash = ImHashStr("EditorInspector");
+        handler.UserData = this;
+        handler.ReadOpenFn = &EditorApp::InspectorSettingsReadOpen;
+        handler.ReadLineFn = &EditorApp::InspectorSettingsReadLine;
+        handler.WriteAllFn = &EditorApp::InspectorSettingsWriteAll;
+        ImGui::AddSettingsHandler(&handler);
+    }
+
     // ---- Boot stages (Task 8: EditorApp::Init folded into CoreStages) -------
     // Each method below is one block lifted verbatim (or near-verbatim; noted
     // where not) out of the old monolithic Init(). Run() wires each into the
@@ -518,6 +571,7 @@ namespace Arcane::Editor
         ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
         RegisterPanelVisibilitySettings();
+        RegisterInspectorSettingsHandler();
         RegisterViewportSettings();
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
@@ -828,6 +882,16 @@ namespace Arcane::Editor
             { return Arcane::Editor::InputActionsDocument::Open(path, m_undo ? &*m_undo : nullptr); },
             [](const std::filesystem::path& path) -> Arcane::Guid
             { return Arcane::Editor::InputActionsDocument::PeekGuid(path); });
+        // Every opened document is an Inspector source until it closes
+        // (inspector-ownership spec s3.1: "a source that closes releases").
+        m_documents.SetObserver({
+            [this](Arcane::Editor::EditorDocument& d) { m_inspectorHost.AddSource(d); },
+            [this](Arcane::Editor::EditorDocument& d)
+            {
+                m_inspectorHost.RemoveSource(d);
+                m_docSelectionEpochs.erase(&d);
+                if (m_inspectorFocusedSource == &d) m_inspectorFocusedSource = nullptr;   // the latch is a raw pointer into m_documents
+            } });
 
         // Scene asset resolution (sprite-resolution lift): ONE engine-side
         // service resolves everything a scene references into what the
@@ -3352,6 +3416,17 @@ namespace Arcane::Editor
         // should be gone before anything below starts dismantling the
         // device. Idempotent and a no-op when the lens was never opened.
         Arcane::Editor::DestroyAssetGraphPanelCanvas(m_assetGraphUi);
+
+        // Inspector ownership: drop every document source (and the pins and
+        // history naming them) BEFORE any document can be destroyed.
+        // DocumentHost fires its `closing` observer only from Close/CloseAll,
+        // and ShutdownGraphPath's CloseAll below is skipped on a run that
+        // never built a vehicle -- ~DocumentHost would then destroy the
+        // documents with the host still holding raw pointers to them. The
+        // host is never consulted after this point (no frame is drawn), and
+        // the instance LIST stays for the ini writer.
+        m_inspectorHost.ReleaseAll();
+        m_inspectorFocusedSource = nullptr;
 
         // The whole render teardown -- the view-before-texture invalidate,
         // both contexts, and the latch read-back -- in the one order that is

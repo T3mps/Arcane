@@ -41,6 +41,9 @@
 #include "Viewport/EditorCamera.hpp"
 #include "Viewport/ViewportSettings.hpp"
 #include "Panels/EditorPanels.hpp"
+#include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
+#include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
+#include "Panels/SceneInspectorSource.hpp"   // m_sceneSource
 #include "Project/CookQueue.hpp"
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
 #include "Project/ModuleBuild.hpp"
@@ -965,6 +968,22 @@ namespace Arcane::Editor
         static void  PanelVisibilitySettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler,
                                                      ImGuiTextBuffer* buf);
 
+        // ImGuiSettingsHandler callbacks for the Inspector instance list
+        // ("[EditorInspector][Instances]", one `Ids=<extra ids>` line; empty =
+        // {0}), mirroring the PanelVisibility handler above. Registered at the
+        // same Init site. Pins are NOT persisted: a pin names a selection.
+        void RegisterInspectorSettingsHandler();
+        static void* InspectorSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name);
+        static void  InspectorSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line);
+        static void  InspectorSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer* buf);
+        // The document an Inspector source IS, for the Ctrl+S routes: null for
+        // the scene source and for null (EditorDocument derives from
+        // InspectorSource, Task 2).
+        [[nodiscard]] Arcane::Editor::EditorDocument* InspectorSaveTarget(Arcane::Editor::InspectorSource* src) const
+        {
+            return dynamic_cast<Arcane::Editor::EditorDocument*>(src);
+        }
+
         // ---- Editor layout ini (imgui.ini), per project ---------------------
         // %LOCALAPPDATA%\Arcane\editor\layouts\<project-guid>.ini ("default"
         // project-less). io.IniFilename BORROWS this string (ImGui never
@@ -1045,6 +1064,23 @@ namespace Arcane::Editor
         // every frame, so the field visitor's texture-drop auto-mint branch
         // never needs to know about EditorApp itself.
         Arcane::Editor::InspectorServices m_inspectorServices;
+        // Inspector ownership (spec 2026-09-28): the scene source, the host
+        // that routes the last-selecting source to every Inspector instance,
+        // the per-instance draw state, and the two epoch watermarks (the
+        // scene's SelectionEdge over SelectionContext::Epoch(), the per-
+        // document map over SelectionEpoch()) that turn a selection GESTURE
+        // into a host event (never focus, never a prune). Declared in
+        // dependency order: the host holds a reference to the scene source.
+        // m_documents (declared far below) destructs FIRST: the host stores
+        // raw EditorDocument* sources, and ~InspectorHost is implicit and
+        // never touches them; Shutdown() also ReleaseAll()s the host before
+        // ShutdownGraphPath's CloseAll (see there).
+        Arcane::Editor::SceneInspectorSource  m_sceneSource;
+        Arcane::Editor::InspectorHost         m_inspectorHost{ m_sceneSource };
+        Arcane::Editor::InspectorWindowsState m_inspectorWindows;
+        Arcane::Editor::SelectionEdge         m_sceneSelectionEdge;   // epoch-based (Task 2): Observe(m_selection.Epoch(), key)
+        std::unordered_map<const Arcane::Editor::EditorDocument*, std::uint64_t> m_docSelectionEpochs;
+        Arcane::Editor::InspectorSource* m_inspectorFocusedSource = nullptr;   // latched each Inspector draw; read by the Ctrl+S gate
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
         // resolver (resolveAssetThumb), built once in StageSpriteTables next
         // to resolveTexturePreview above -- same [this]-capture idiom, same
