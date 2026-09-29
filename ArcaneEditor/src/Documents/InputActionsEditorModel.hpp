@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Documents/InputSelectionKey.hpp"
+
 #include <Arcane/Input/InputActionAsset.hpp>
 
 #include <Json.hpp>
@@ -56,6 +58,7 @@ namespace Arcane::Editor
         [[nodiscard]] std::uint64_t SelectionEpoch() const noexcept { return selectionEpoch_; }
         [[nodiscard]] std::string SelectionKey() const;                    // "<map>/<action>/<binding>/<part>"; "" when no map
         [[nodiscard]] bool RestoreSelection(std::string_view key);         // every non-empty segment must exist
+        [[nodiscard]] std::optional<std::array<Guid, 4>> ResolveKey(std::string_view key) const;   // ParseSelectionKey + every named id exists
         [[nodiscard]] bool Resolves(std::string_view key) const;           // PURE: would RestoreSelection succeed? no selection, no bump
         [[nodiscard]] const nlohmann::json* FindNode(const Guid& id) const; // nullptr when no node carries that id
         [[nodiscard]] bool SelectByPath(std::string_view namePath);        // "<map>[/<action>[/<binding index>[/<part index>]]]"
@@ -104,7 +107,7 @@ namespace Arcane::Editor
 
     private:
         void Validate();
-        [[nodiscard]] bool ParseKey(std::string_view key, std::array<Guid, 4>& ids) const;
+        bool OwnerOfBinding(const Guid& binding, Guid& map, Guid& action) const;
         void SetSelectionSilently(const std::array<Guid, 4>& ids);
         nlohmann::json draft_;
         nlohmann::json saved_;

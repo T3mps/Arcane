@@ -71,7 +71,7 @@ namespace Arcane::Editor
     {
         // `select` re-selects in the model (an unpinned instance follows);
         // `key` is that level's selection key in the model's 4-segment format
-        // -- three slashes ALWAYS, PageFor rejects fewer -- so a PINNED instance
+        // -- three slashes ALWAYS, PageFor rejects any other shape -- so a PINNED instance
         // re-targets its own pin (InspectorHost::RepinKey) and never touches
         // the source. The asset root's key is "": PageFor("") IS the asset page.
         std::vector<InspectorCrumb> crumbs;
@@ -79,29 +79,26 @@ namespace Arcane::Editor
         const auto& draft = model_.Draft();
         if (const auto* map = FindById(draft, sel_.map))
         {
-            const std::string mapKey = sel_.map.ToString();
             crumbs.push_back({ Str(*map, "name"), [m = &model_, id = sel_.map] { m->SelectMap(id); },
-                               std::optional<std::string>{ mapKey + "///" } });
+                               std::optional<std::string>{ EncodeSelectionKey({ sel_.map, {}, {}, {} }) } });
             if (const auto* action = FindById(*map, sel_.action))
             {
-                const std::string actionKey = mapKey + "/" + sel_.action.ToString();
                 crumbs.push_back({ Str(*action, "name"), [m = &model_, map = sel_.map, id = sel_.action]
                                    { m->SelectMap(map); m->SelectAction(id); },
-                                   std::optional<std::string>{ actionKey + "//" } });
+                                   std::optional<std::string>{ EncodeSelectionKey({ sel_.map, sel_.action, {}, {} }) } });
                 if (const auto* binding = FindById(*action, sel_.binding))
                 {
-                    const std::string bindingKey = actionKey + "/" + sel_.binding.ToString();
                     const std::string label = binding->contains("composite")
                         ? (Str(*binding, "composite") == "1DAxis" ? "1D Axis" : "2D Vector")
                         : InputActions::DisplayForPath(Str(*binding, "path")).control;
                     crumbs.push_back({ label, [m = &model_, map = sel_.map, a = sel_.action, id = sel_.binding]
                                        { m->SelectMap(map); m->SelectAction(a); m->SelectBinding(id); },
-                                       std::optional<std::string>{ bindingKey + "/" } });
+                                       std::optional<std::string>{ EncodeSelectionKey({ sel_.map, sel_.action, sel_.binding, {} }) } });
                     if (const auto* part = FindById(*binding, sel_.part))
                         crumbs.push_back({ Str(*part, "name") + " · " + InputActions::DisplayForPath(Str(*part, "path")).control,
                                            [m = &model_, map = sel_.map, a = sel_.action, b = sel_.binding, id = sel_.part]
                                            { m->SelectMap(map); m->SelectAction(a); m->SelectBinding(b); m->SelectPart(id); },
-                                           std::optional<std::string>{ bindingKey + "/" + sel_.part.ToString() } });
+                                           std::optional<std::string>{ EncodeSelectionKey({ sel_.map, sel_.action, sel_.binding, sel_.part }) } });
                 }
             }
         }

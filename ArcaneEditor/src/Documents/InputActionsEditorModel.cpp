@@ -164,13 +164,6 @@ namespace Arcane::Editor
             return false;
         }
 
-        std::string Trim(std::string_view s)
-        {
-            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
-            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
-            return std::string(s);
-        }
-
         // base, "base 2", "base 3"... until no sibling's "name" equals it: the
         // runtime keys maps and actions by name (InputActions.cpp:757-775), so
         // a default or a copy must never collide with a sibling.
@@ -251,59 +244,34 @@ namespace Arcane::Editor
     { const bool changed = selectedPart_ != part; selectedPart_ = part; if (part.IsValid() || changed) ++selectionEpoch_; }
 
     std::string InputActionsEditorModel::SelectionKey() const
-    {
-        if (!selectedMap_.IsValid()) return {};
-        auto seg = [](const Guid& g) { return g.IsValid() ? g.ToString() : std::string{}; };
-        return seg(selectedMap_) + "/" + seg(selectedAction_) + "/" + seg(selectedBinding_) + "/" + seg(selectedPart_);
-    }
+    { return EncodeSelectionKey({ selectedMap_, selectedAction_, selectedBinding_, selectedPart_ }); }
 
-    bool InputActionsEditorModel::ParseKey(std::string_view key, std::array<Guid, 4>& ids) const
+    std::optional<std::array<Guid, 4>> InputActionsEditorModel::ResolveKey(std::string_view key) const
     {
-        ids = {};
-        std::size_t start = 0;
-        for (std::size_t level = 0; level < 4; ++level)
-        {
-            const std::size_t slash = key.find('/', start);
-            if (level < 3 && slash == std::string_view::npos) return false;
-            const std::string_view seg = key.substr(start, slash == std::string_view::npos ? std::string_view::npos : slash - start);
-            if (!seg.empty())
-            {
-                const auto id = Guid::FromString(seg);
-                if (!id || !id->IsValid() || !FindNode(*id)) return false;
-                ids[level] = *id;
-            }
-            if (slash == std::string_view::npos) break;
-            start = slash + 1;
-        }
-        return ids[0].IsValid();
+        auto ids = ParseSelectionKey(key);
+        if (!ids) return std::nullopt;
+        for (const Guid& g : *ids) if (g.IsValid() && !FindNode(g)) return std::nullopt;
+        return ids;
     }
-    bool InputActionsEditorModel::Resolves(std::string_view key) const { std::array<Guid, 4> ids{}; return ParseKey(key, ids); }
+    bool InputActionsEditorModel::Resolves(std::string_view key) const { return ResolveKey(key).has_value(); }
     bool InputActionsEditorModel::RestoreSelection(std::string_view key)
     {
-        std::array<Guid, 4> ids{};
-        if (!ParseKey(key, ids)) return false;
-        SelectMap(ids[0]);
-        if (ids[1].IsValid()) SelectAction(ids[1]);
-        if (ids[2].IsValid()) SelectBinding(ids[2]);
-        if (ids[3].IsValid()) SelectPart(ids[3]);
+        const auto ids = ResolveKey(key);
+        if (!ids) return false;
+        SelectMap((*ids)[0]);
+        if ((*ids)[1].IsValid()) SelectAction((*ids)[1]);
+        if ((*ids)[2].IsValid()) SelectBinding((*ids)[2]);
+        if ((*ids)[3].IsValid()) SelectPart((*ids)[3]);
         return true;
     }
     void InputActionsEditorModel::SetSelectionSilently(const std::array<Guid, 4>& ids)
     { selectedMap_ = ids[0]; selectedAction_ = ids[1]; selectedBinding_ = ids[2]; selectedPart_ = ids[3]; }   // NO epoch bump: undo/redo is not a gesture
     void InputActionsEditorModel::RestoreSelectionOrAncestor(std::string_view key)
     {
-        // Lenient split (no existence check), then keep the deepest chain of
-        // levels that still exist: a deleted binding falls back to its action.
+        // Strict parse (a malformed key selects nothing), then keep the deepest
+        // chain of levels that still exist: a deleted binding falls back to its action.
         std::array<Guid, 4> raw{};
-        std::size_t start = 0;
-        for (std::size_t level = 0; level < 4 && start <= key.size(); ++level)
-        {
-            const std::size_t slash = key.find('/', start);
-            const std::string_view seg = key.substr(start, slash == std::string_view::npos ? std::string_view::npos : slash - start);
-            if (!seg.empty()) raw[level] = Guid::FromString(seg).value_or(Guid{});
-            if (slash == std::string_view::npos) break;
-            start = slash + 1;
-        }
+        if (const auto ids = ParseSelectionKey(key)) raw = *ids;
         std::array<Guid, 4> keep{};
         for (std::size_t level = 0; level < 4; ++level)
         {
@@ -312,6 +280,22 @@ namespace Arcane::Editor
         }
         SetSelectionSilently(keep);
     }
+    // The map and action that own `binding` in the draft; false when none.
+    bool InputActionsEditorModel::OwnerOfBinding(const Guid& binding, Guid& map, Guid& action) const
+    {
+        if (!draft_.is_object() || !draft_.contains("actionMaps") || !draft_["actionMaps"].is_array()) return false;
+        for (const auto& m : draft_["actionMaps"])
+        {
+            if (!m.is_object() || !m.contains("actions") || !m["actions"].is_array()) continue;
+            for (const auto& a : m["actions"])
+            {
+                if (!a.is_object() || !a.contains("bindings") || !a["bindings"].is_array()) continue;
+                for (const auto& b : a["bindings"])
+                    if (IdIs(b, binding)) { map = IdOf(m); action = IdOf(a); return map.IsValid() && action.IsValid(); }
+            }
+        }
+        return false;
+    }
     const nlohmann::json* InputActionsEditorModel::FindNode(const Guid& id) const { return FindId(draft_, id); }
 
     bool InputActionsEditorModel::SelectByPath(std::string_view namePath)
@@ -319,14 +303,7 @@ namespace Arcane::Editor
         // A name segment that matches more than one sibling is refused: the
         // runtime keys maps and actions by name and refuses such a file
         // (InputActions.cpp:757-775).
-        std::vector<std::string> segs;
-        for (std::size_t start = 0;;)
-        {
-            const std::size_t slash = namePath.find('/', start);
-            segs.emplace_back(namePath.substr(start, slash == std::string_view::npos ? std::string_view::npos : slash - start));
-            if (slash == std::string_view::npos) break;
-            start = slash + 1;
-        }
+        const auto segs = SplitKey(namePath);
         if (segs.empty() || segs.size() > 4 || segs[0].empty() || !draft_.is_object() || !draft_.contains("actionMaps") || !draft_["actionMaps"].is_array())
             return false;
         auto idOf = [](const nlohmann::json& row) { return IdOf(row); };
@@ -340,13 +317,13 @@ namespace Arcane::Editor
                 hit = &s;
             }
             return hit; };
-        const nlohmann::json* map = unique(draft_["actionMaps"], segs[0]);
+        const nlohmann::json* map = unique(draft_["actionMaps"], std::string(segs[0]));
         if (!map || !idOf(*map).IsValid()) return false;
         const nlohmann::json* action = nullptr;
         if (segs.size() > 1)
         {
             if (!map->contains("actions") || !(*map)["actions"].is_array()) return false;
-            action = unique((*map)["actions"], segs[1]);
+            action = unique((*map)["actions"], std::string(segs[1]));
             if (!action || !idOf(*action).IsValid()) return false;
         }
         auto index = [](const std::string& s, const nlohmann::json& arr) -> const nlohmann::json* {
@@ -356,13 +333,13 @@ namespace Arcane::Editor
         const nlohmann::json* binding = nullptr;
         if (segs.size() > 2)
         {
-            binding = action->contains("bindings") ? index(segs[2], (*action)["bindings"]) : nullptr;
+            binding = action->contains("bindings") ? index(std::string(segs[2]), (*action)["bindings"]) : nullptr;
             if (!binding || !idOf(*binding).IsValid()) return false;
         }
         const nlohmann::json* part = nullptr;
         if (segs.size() > 3)
         {
-            part = binding->contains("parts") ? index(segs[3], (*binding)["parts"]) : nullptr;
+            part = binding->contains("parts") ? index(std::string(segs[3]), (*binding)["parts"]) : nullptr;
             if (!part || !idOf(*part).IsValid()) return false;
         }
         SelectMap(idOf(*map));
@@ -461,7 +438,7 @@ namespace Arcane::Editor
 
     bool InputActionsEditorModel::AddMap(std::string name)
     {
-        name = Trim(name);
+        name = TrimName(name);
         if (name.empty() || !draft_.is_object() || !draft_.value("actionMaps", nlohmann::json{}).is_array()) return false;
         auto next = draft_;
         const auto id = Guid::Generate();
@@ -499,7 +476,7 @@ namespace Arcane::Editor
 
     bool InputActionsEditorModel::AddAction(const Guid& map, std::string name)
     {
-        name = Trim(name);
+        name = TrimName(name);
         if (name.empty()) return false;
         auto next = draft_;
         auto* owner = FindId(next, map);
@@ -583,6 +560,8 @@ namespace Arcane::Editor
         (*owner)["parts"].push_back({{"id", id.ToString()}, {"name", std::move(role)},
                                      {"path", std::move(path)}});
         if (!ApplyEdit("Add composite part", draft_, next)) return false;
+        Guid map, action;
+        if (OwnerOfBinding(binding, map, action)) { SelectMap(map); SelectAction(action); }
         SelectBinding(binding); SelectPart(id);
         return true;
     }
@@ -619,12 +598,12 @@ namespace Arcane::Editor
 
     std::optional<std::string> InputActionsEditorModel::ValidateName(const nlohmann::json& draft, const Guid& id, std::string_view proposed)
     {
-        const std::string name = Trim(proposed);
+        const std::string name = TrimName(proposed);
         if (name.empty()) return "Names cannot be blank";
         if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return std::nullopt;
         auto taken = [&](const nlohmann::json& siblings) {
             for (const auto& s : siblings)
-                if (s.is_object() && !IdIs(s, id) && Trim(Str(s, "name")) == name) return true;
+                if (s.is_object() && !IdIs(s, id) && TrimName(Str(s, "name")) == name) return true;
             return false; };
         for (const auto& map : draft["actionMaps"])
         {
@@ -641,7 +620,7 @@ namespace Arcane::Editor
 
     bool InputActionsEditorModel::SiblingNameTaken(const Guid& id, std::string_view name) const
     {
-        return !Trim(name).empty() && ValidateName(draft_, id, name).has_value();
+        return !TrimName(name).empty() && ValidateName(draft_, id, name).has_value();
     }
 
     bool InputActionsEditorModel::SetField(const Guid& id, std::string key, nlohmann::json value)
@@ -652,7 +631,7 @@ namespace Arcane::Editor
             // A name commits trimmed and validated: a refused name is no edit
             // and no undo entry (the rename box keeps it live, Task 8).
             if (!value.is_string()) return false;
-            const std::string name = Trim(value.get<std::string>());
+            const std::string name = TrimName(value.get<std::string>());
             if (ValidateName(draft_, id, name)) return false;
             value = name;
         }

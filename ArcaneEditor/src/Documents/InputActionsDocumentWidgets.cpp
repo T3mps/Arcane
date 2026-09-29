@@ -30,15 +30,6 @@ namespace Arcane::Editor
                     for (const auto& a : m["actions"]) if (IdOf(a) == id) return true;
             return false;
         }
-        // Leading/trailing spaces and tabs stripped: the model's name rules
-        // compare trimmed (Task 6 ValidateName), so the rename commits trimmed.
-        std::string Trim(std::string s)
-        {
-            const auto notBlank = [](unsigned char c) { return c != ' ' && c != '\t'; };
-            s.erase(s.begin(), std::find_if(s.begin(), s.end(), notBlank));
-            s.erase(std::find_if(s.rbegin(), s.rend(), notBlank).base(), s.end());
-            return s;
-        }
         std::string NameOf(const InputActionsEditorModel& model, const Guid& id)
         {
             const auto* n = model.FindNode(id);
@@ -106,7 +97,7 @@ namespace Arcane::Editor
                 const bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
                 if (cancelled || !reason)
                 {
-                    const std::string trimmed = Trim(state.renameBuf);
+                    const std::string trimmed = TrimName(state.renameBuf);
                     if (!cancelled && trimmed != currentName) edit = [&model, id, trimmed] { (void)model.SetField(id, "name", trimmed); };
                     state.renameTarget = {};
                 }

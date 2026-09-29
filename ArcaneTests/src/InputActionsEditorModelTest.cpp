@@ -2,6 +2,7 @@
 
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsDocument.hpp"
+#include "Documents/InputSelectionKey.hpp"
 #include "Documents/DocumentHost.hpp"
 
 #include <Arcane/Edit/CommandStack.hpp>
@@ -564,4 +565,92 @@ TEST_CASE("input editor: the container-fallback deselect is silent", "[editor][i
     CHECK(model.SelectionKey().empty());
     model.SelectMap(map);   // an ordinary Select* still bumps
     CHECK(model.SelectionEpoch() == epoch + 1);
+}
+
+TEST_CASE("input editor: Add part from a deselected column selects top-down, so its key resolves", "[editor][input][inspector]")
+{
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson());
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto jump = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    REQUIRE(model.AddComposite(map, jump, "1DAxis"));
+    const Arcane::Guid composite = model.SelectedBinding();
+    REQUIRE(composite.IsValid());
+    model.DeselectToMap(map);                                   // empty space under the rows
+    REQUIRE(model.AddPart(composite, "positive", "<Keyboard>/d")); // right-click the header > Add part
+    CHECK(model.SelectedMap() == map);
+    CHECK(model.SelectedAction() == jump);
+    CHECK(model.SelectedBinding() == composite);
+    CHECK(model.SelectedPart().IsValid());
+    CHECK(model.Resolves(model.SelectionKey()));
+}
+
+TEST_CASE("input editor: ParseSelectionKey is the one 4-segment grammar", "[editor][input]")
+{
+    using Arcane::Editor::ParseSelectionKey;
+    using Arcane::Editor::SplitKey;
+    const std::string M = "22222222-2222-4222-8222-222222222222", A = "33333333-3333-4333-8333-333333333333",
+                      B = "44444444-4444-4444-8444-444444444444", P = "55555555-5555-4555-8555-555555555555";
+    CHECK(ParseSelectionKey(M + "///"));
+    CHECK(ParseSelectionKey(M + "/" + A + "//"));
+    CHECK(ParseSelectionKey(M + "/" + A + "/" + B + "/"));
+    REQUIRE(ParseSelectionKey(M + "/" + A + "/" + B + "/" + P));
+    CHECK((*ParseSelectionKey(M + "/" + A + "/" + B + "/" + P))[3].ToString() == P);
+    for (const std::string bad : { std::string{}, std::string("///"), "/" + A + "//", M, M + "/", M + "//", M + "////",
+                                   M + "/" + A + "/" + B + "/" + P + "/", M + "/" + A + "/" + B + "/" + P + "/junk",
+                                   M + "//" + B + "/", M + "/bogus//", std::string("00000000-0000-0000-0000-000000000000///"),
+                                   std::string("not-a-key") })
+    {
+        INFO(bad);
+        CHECK_FALSE(ParseSelectionKey(bad));
+    }
+    CHECK(SplitKey("") == std::vector<std::string_view>{ "" });
+    CHECK(SplitKey("a/") == std::vector<std::string_view>{ "a", "" });
+    CHECK(SplitKey("a//b").size() == 3);
+    CHECK(Arcane::Editor::EncodeSelectionKey({ *Arcane::Guid::FromString(M), {}, {}, {} }) == M + "///");
+    CHECK(Arcane::Editor::EncodeSelectionKey({}).empty());
+}
+
+TEST_CASE("input document: PageFor and Resolves agree on every key shape", "[editor][input][inspector]")
+{
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / ("key-agree-" + Arcane::Guid::Generate().ToString() + ".arcinput");
+    { std::ofstream out(path); out << DocumentJson().dump(2); }
+    {
+        auto doc = Arcane::Editor::InputActionsDocument::Open(path);
+        REQUIRE(doc);
+        const std::string M = "22222222-2222-4222-8222-222222222222", A = "33333333-3333-4333-8333-333333333333",
+                          B = "44444444-4444-4444-8444-444444444444";
+        for (const std::string key : { std::string("///"), "/" + A + "//", M + "////", M + "/" + A + "/" + B + "/junk", M + "//" + B + "/" })
+        {
+            INFO(key);
+            CHECK(doc->PageFor(key) == nullptr);
+            CHECK_FALSE(doc->Resolves(key));
+        }
+        CHECK(doc->PageFor("") != nullptr);          // the asset root: the one intended asymmetry
+        CHECK_FALSE(doc->Resolves(""));
+        REQUIRE(doc->SelectByPath("Player/Jump/0"));
+        for (const auto& crumb : doc->Page()->Breadcrumb())
+        {
+            if (!crumb.key || crumb.key->empty()) continue;
+            INFO(*crumb.key);
+            CHECK(doc->PageFor(*crumb.key) != nullptr);
+            CHECK(doc->Resolves(*crumb.key));
+        }
+    }
+    fs::remove(path);
+}
+
+TEST_CASE("input editor: RestoreSelectionOrAncestor treats a malformed key as no selection", "[editor][input]")
+{
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson());
+    const std::string M = "22222222-2222-4222-8222-222222222222", A = "33333333-3333-4333-8333-333333333333";
+    model.SelectMap(*Arcane::Guid::FromString(M));
+    model.SelectAction(*Arcane::Guid::FromString(A));
+    const auto epoch = model.SelectionEpoch();
+    model.RestoreSelectionOrAncestor(M + "/bogus//");
+    CHECK(model.SelectionKey().empty());
+    model.RestoreSelectionOrAncestor(M + "/" + A + "/" + Arcane::Guid::Generate().ToString() + "/");   // a deleted binding
+    CHECK(model.SelectedAction().ToString() == A);                                                     // falls back to its action
+    CHECK_FALSE(model.SelectedBinding().IsValid());
+    CHECK(model.SelectionEpoch() == epoch);                                                            // silent throughout
 }

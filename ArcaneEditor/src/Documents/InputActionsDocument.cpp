@@ -53,25 +53,9 @@ namespace Arcane::Editor
         InputSelection sel;
         if (!key.empty())
         {
-            std::array<Guid*, 4> slots{ &sel.map, &sel.action, &sel.binding, &sel.part };
-            std::size_t start = 0;
-            for (std::size_t level = 0; level < 4; ++level)
-            {
-                const std::size_t slash = key.find('/', start);
-                const std::string_view seg = key.substr(start, slash == std::string_view::npos ? std::string_view::npos : slash - start);
-                if (level < 3 && slash == std::string_view::npos) return nullptr;
-                if (!seg.empty())
-                {
-                    const auto id = Guid::FromString(std::string(seg));
-                    if (!id || !id->IsValid()) return nullptr;
-                    *slots[level] = *id;
-                }
-                if (slash == std::string_view::npos) break;
-                start = slash + 1;
-            }
-            // Every named level must still exist (a pinned page for a deleted binding is "gone").
-            auto exists = [&](const Guid& id) { return !id.IsValid() || model_.FindNode(id) != nullptr; };
-            if (!exists(sel.map) || !exists(sel.action) || !exists(sel.binding) || !exists(sel.part)) return nullptr;
+            const auto ids = model_.ResolveKey(key);   // the model's one grammar + existence
+            if (!ids) return nullptr;                   // a pinned page for a deleted binding is "gone"
+            sel = { (*ids)[0], (*ids)[1], (*ids)[2], (*ids)[3] };
         }
         page_.SetSelection(sel);
         return &page_;   // an empty key IS a page: the asset page (spec A s3.1, container fallback)

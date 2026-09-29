@@ -4,7 +4,9 @@
 
 #include <Json.hpp>
 
+#include <cctype>
 #include <string>
+#include <string_view>
 
 // Tolerant reads over an input-actions DRAFT. The draft is whatever the user
 // last typed (a document opens a malformed source for repair, behind its
@@ -21,6 +23,14 @@ namespace Arcane::Editor
     {
         if (!row.is_object() || !row.contains("id") || !row["id"].is_string()) return {};
         return Guid::FromString(row["id"].get<std::string>()).value_or(Guid{});
+    }
+    // Leading/trailing whitespace (std::isspace) stripped: THE name-rule trim
+    // for ValidateName, SetField, AddMap/AddAction and the rename box.
+    [[nodiscard]] inline std::string TrimName(std::string_view s)
+    {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+        return std::string(s);
     }
     // True when `row` carries the VALID id `id` (an invalid id matches nothing,
     // so a row with a malformed id is never mistaken for the empty selection).
