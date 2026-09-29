@@ -792,3 +792,15 @@ TEST_CASE("input document: Tick publishes its Warnings as asset rows with no dra
     store.UninstallEngineSink();
     fs::remove(path);
 }
+
+TEST_CASE("input editor: a captured Keypad + path is not an unknown control and conflicts by compiled key", "[editor][input]")
+{
+    auto json = DocumentJson();
+    json["actionMaps"][0]["actions"][0]["bindings"][0]["path"] = "<Keyboard>/scancode/keypad +";
+    json["actionMaps"][0]["actions"].push_back(nlohmann::json::parse(R"JSON({"id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","name":"Crouch","type":"Button",
+        "bindings":[{"id":"dddddddd-dddd-4ddd-8ddd-dddddddddddd","path":"<Keyboard>/scancode/keypad +"}]})JSON"));
+    Arcane::Editor::InputActionsEditorModel model(std::move(json));
+    const auto w = model.Warnings();
+    CHECK(std::none_of(w.begin(), w.end(), [](const std::string& s) { return s.starts_with("Unknown control path"); }));
+    CHECK(std::count_if(w.begin(), w.end(), [](const std::string& s) { return s.starts_with("Conflicting"); }) == 1);
+}

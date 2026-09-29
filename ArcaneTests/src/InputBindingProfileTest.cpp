@@ -115,3 +115,10 @@ TEST_CASE("input profile: exports and imports a profile", "[input][profile]")
     CHECK(imported.Dirty());
     std::filesystem::remove(path);
 }
+
+TEST_CASE("input profile: a game-side rebind to Keypad + is accepted", "[input][profile]")
+{
+    const auto asset = ProfileAsset();
+    Arcane::InputBindingProfile profile;
+    CHECK(profile.SetOverride(kJump, "<Keyboard>/scancode/keypad +", asset));
+}

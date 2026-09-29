@@ -23,6 +23,8 @@ namespace
     // SDL3 headers (test exe does not include SDL); a mismatch fails the
     // round-trip tests loudly.
     constexpr uint32_t kScancodeW    = 26;   // SDL_SCANCODE_W
+    constexpr uint32_t kScancodeKpPlus = 87;   // SDL_SCANCODE_KP_PLUS
+    constexpr uint32_t kScancodeLShift = 225;  // SDL_SCANCODE_LSHIFT
     constexpr uint32_t kScancodeDown = 81;   // SDL_SCANCODE_DOWN
     constexpr uint32_t kKeycodeSpace = 32;   // SDLK_SPACE = ' '
     constexpr uint32_t kKeycodeS     = 115;  // SDLK_S = 's'
@@ -856,4 +858,38 @@ TEST_CASE("input: BindingValue reports one binding's raw value from the last sna
     input->Update(1.0 / 60.0, d);
     CHECK(input->BindingValue(axis) == 1.0f);           // max over parts
     CHECK(input->BindingValue(Arcane::Guid::Generate()) == 0.0f);
+}
+
+TEST_CASE("input: a control name containing '+' is not a chord separator", "[input]")
+{
+    using Arcane::InputActions;
+    CHECK(InputActions::IsKnownControlPath("<Keyboard>/scancode/keypad +"));
+    CHECK(InputActions::IsKnownControlPath("<Keyboard>/scancode/keypad +/-"));
+    CHECK(InputActions::IsKnownControlPath("<Keyboard>/scancode/lshift+<Keyboard>/scancode/keypad +"));
+    CHECK(InputActions::IsKnownControlPath("<Keyboard>/scancode/keypad <+<Keyboard>/a"));
+    CHECK_FALSE(InputActions::IsKnownControlPath("<Keyboard>/a+"));
+    CHECK_FALSE(InputActions::IsKnownControlPath("<Keyboard>/a++<Keyboard>/b"));
+    auto d = InputActions::DisplayForPath("<Keyboard>/scancode/keypad +");
+    CHECK(d.device == "Keyboard"); CHECK(d.control == "Keypad +");
+    CHECK(InputActions::DisplayForPath("<Keyboard>/scancode/lshift+<Keyboard>/scancode/keypad +").control == "Left Shift + Keypad +");
+    CHECK_FALSE(InputActions::CanonicalControlKey("<Keyboard>/scancode/keypad +").empty());
+    CHECK(InputActions::CanonicalControlKey("<Keyboard>/scancode/keypad +") != InputActions::CanonicalControlKey("<Keyboard>/scancode/keypad -"));
+}
+
+TEST_CASE("input: a captured Keypad + binding fires in the evaluator", "[input]")
+{
+    auto input = InputActions::Create();
+    REQUIRE(input->LoadJson(nlohmann::json::parse(R"JSON({"actionMaps":[{"name":"demo","actions":[
+        {"name":"plus","type":"Button","bindings":[{"path":"<Keyboard>/scancode/keypad +"}]},
+        {"name":"shiftPlus","type":"Button","bindings":[{"path":"<Keyboard>/scancode/lshift+<Keyboard>/scancode/keypad +"}]}]}]})JSON")));
+    input->SetBaseContext("demo");
+    InputSnapshot snap; snap.SetScancode(kScancodeKpPlus);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("plus")); CHECK(input->Pressed("plus"));
+    CHECK_FALSE(input->Down("shiftPlus"));
+    snap.SetScancode(kScancodeLShift);
+    input->Update(1.0 / 60.0, snap);
+    CHECK(input->Down("shiftPlus"));
+    input->Update(1.0 / 60.0, InputSnapshot{});
+    CHECK_FALSE(input->Down("plus"));
 }

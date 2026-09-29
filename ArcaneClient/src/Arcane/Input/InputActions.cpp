@@ -293,29 +293,25 @@ namespace Arcane
             return {};
         }
 
-        // CompilePath's '+' rule: a '+' INSIDE '<...>' is not a separator. The
-        // last part is always emitted ("" for an empty path or a trailing '+'),
-        // so a caller that refuses empty parts refuses those.
+        // CompilePath's '+' rule: a '+' separates chord parts only where the
+        // next part begins. Every simple path starts with '<Device>', so "+<"
+        // is the separator and any other '+' belongs to a control name (SDL's
+        // "Keypad +", "Keypad +/-"). The last part is always emitted.
         std::vector<std::string> SplitChordParts(std::string_view path)
         {
             std::vector<std::string> parts;
-            std::string part;
-            bool inAngle = false;
-            for (char c : path)
-            {
-                if (c == '<') inAngle = true;
-                else if (c == '>') inAngle = false;
-                else if (c == '+' && !inAngle) { parts.push_back(part); part.clear(); continue; }
-                part += c;
-            }
-            parts.push_back(part);
+            std::size_t start = 0;
+            for (std::size_t i = 0; i + 1 < path.size(); ++i)
+                if (path[i] == '+' && path[i + 1] == '<') { parts.emplace_back(path.substr(start, i - start)); start = i + 1; }
+            parts.emplace_back(path.substr(start));
             return parts;
         }
 
-        // Compiles a possibly-chorded path ('+'-split) to a list of ControlIds.
-        // Exactly the pre-hoist behaviour: an empty INTERIOR part ("a++b",
-        // "+a") compiles to a silent {None}, so the chord can never fire; a
-        // trailing empty part (the whole of "" or "a+") is dropped.
+        // Compiles a possibly-chorded path ("+<"-split) to a list of ControlIds.
+        // An empty INTERIOR part ("+<Keyboard>/a") compiles to a silent {None},
+        // so the chord can never fire; a trailing empty part (the whole of "")
+        // is dropped. A trailing '+' is now part of the control name
+        // ("<Keyboard>/a+" is one unknown control).
         std::vector<ControlId> CompilePath(const std::string& path,
                                            const std::string& mapName,
                                            const std::string& actionName)

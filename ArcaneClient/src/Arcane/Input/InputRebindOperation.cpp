@@ -125,7 +125,7 @@ namespace Arcane
                     && (snapshot.mouseButtons & (1u << bit)) && !(previous_.mouseButtons & (1u << bit)))
                 {
                     // "<Keyboard>/scancode/lshift+<Mouse>/leftButton" compiles:
-                    // CompilePath splits on '+' and each part is a simple path.
+                    // CompilePath splits on "+<" and each part is a simple path.
                     complete(heldPrefix() + "<Mouse>/" + mouseNames[bit]);
                     return;
                 }

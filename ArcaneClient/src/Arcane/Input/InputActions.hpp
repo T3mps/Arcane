@@ -1,7 +1,7 @@
 #pragma once
 
 // Input module facade: Unity-style action maps -> actions (Button|Value)
-// -> bindings (simple paths, '+' chords, 2DVector/1DAxis composites),
+// -> bindings (simple paths, "+<" chords, 2DVector/1DAxis composites),
 // evaluated once per frame from an InputSnapshot. Feature-parity port of
 // the client oracle's core subset (Client/src/services/Input.lua);
 // snapshot-driven architecture per the 2026-06-12 input-actions spec.
@@ -150,7 +150,7 @@ namespace Arcane
         // an editor picker built from it can never offer a path that compiles
         // to a constant-zero binding (hygiene pass 2026-09-28: five did).
         [[nodiscard]] static std::vector<InputControlChoice> KnownControls();
-        // True when every '+'-separated part compiles -- the exact test
+        // True when every "+<"-separated part compiles -- the exact test
         // LoadAsset applies, minus its warning.
         [[nodiscard]] static bool IsKnownControlPath(std::string_view path);
         // The compiled identity of a control path, spelling-independent: two

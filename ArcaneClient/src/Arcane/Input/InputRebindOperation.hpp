@@ -35,7 +35,7 @@ namespace Arcane
         InputSnapshot previous_;
         float remaining_ = 0.0f;
         // Modifier scancodes newly pressed during THIS capture, in press order.
-        // The first non-modifier completes with them prefixed as a '+' chord;
+        // The first non-modifier completes with them prefixed as a "+<" chord;
         // a modifier released while it is the last one held completes bare.
         // Modifiers already down at Begin are never seeded (the initiating
         // control must be released and re-pressed -- the existing rule).

@@ -1,6 +1,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputRebindOperation.hpp>
 
 namespace
@@ -125,4 +126,15 @@ TEST_CASE("input profile: releasing one modifier while another is held keeps wai
     capture.Observe({}, 0.1f);                        // shift up, nothing else held
     CHECK(capture.Result().state == Arcane::InputRebindState::Completed);
     CHECK(capture.Result().replacementPath == "<Keyboard>/scancode/lshift");
+}
+
+TEST_CASE("input profile: capturing Keypad + round-trips to a known, compilable path", "[input][profile]")
+{
+    Arcane::InputRebindOperation capture;
+    capture.Begin(Binding(), Arcane::InputDevice::Kbm, 5.0f, {});
+    Arcane::InputSnapshot plus; plus.SetScancode(87);
+    capture.Observe(plus, 0.1f);
+    REQUIRE(capture.Result().state == Arcane::InputRebindState::Completed);
+    CHECK(capture.Result().replacementPath == "<Keyboard>/scancode/keypad +");
+    CHECK(Arcane::InputActions::IsKnownControlPath(capture.Result().replacementPath));
 }
