@@ -1,6 +1,6 @@
 # Inspector ownership: selection sources, pages, pin, instances
 
-**Status:** Proposed for user review, 2026-09-28
+**Status:** Approved 2026-09-28 (review decisions in section 6)
 **Mockup:** https://claude.ai/artifact/TUEutRAVgF9MmokP8kiuFE (interactive, in the editor's theme)
 **Research:** `docs/research/2026-09-28-inspector-ownership-survey.md` (~30 products, cited)
 **Supersedes:** the per-editor top-level panel pattern the shader editor's "Material" tab established (`ShaderEditorDocument.hpp:891`, docked beside the Inspector). That tab is migrated, not removed, by a later plan.
@@ -44,8 +44,10 @@ by design: everything stays in the one window.
 ### 3.1 One Inspector, driven by selection sources
 
 - A **selection source** is anything that can select: the scene (Outliner + Viewport,
-  today's `m_selection`) and any `EditorDocument` that opts in. The Inspector shows the
-  page of the source that selected LAST.
+  today's `m_selection`), the **Asset Browser** (its row selection; the page is the
+  asset: path, GUID, kind, cook state, importer settings -- what its in-panel preview
+  pane shows today, which that pane then stops duplicating), and any `EditorDocument`
+  that opts in. The Inspector shows the page of the source that selected LAST.
 - **Focus is not selection.** Activating a tab, clicking the Console, the Asset Browser,
   a document's empty background or the viewport background changes nothing. Only a
   selection event moves the Inspector. (This is the Eclipse `currentPropSourcePart`
@@ -113,6 +115,10 @@ editor only where a standalone use needs it, and we start with none).
   plan after the input editor lands; until then the tab stays.
 - Per-document properties blocks. `InputActionsDocumentWidgets`' "PROPERTIES" section is
   replaced by the document's page in the redesign spec that follows this one.
+- The Asset Browser's preview pane as a properties surface. Its identity/cook/derived
+  rows move to the asset page; the pane keeps only what is browser-specific (the
+  thumbnail and the Open button), or goes entirely if that is all that is left.
+  Decided 2026-09-28: part of this arc, not a later plan.
 
 ## 4. Automation
 
@@ -135,21 +141,28 @@ editor only where a standalone use needs it, and we start with none).
   field `inspector.source` = the document path, breadcrumb text in the report.
 - Desk: the mockup's six steps, on the real editor.
 
-## 6. Open questions (for the review)
+## 6. Decisions taken at review (2026-09-28)
 
-1. Does the Outliner count as the same source as the Viewport (yes, proposed: both
-   write `m_selection`), or should the Asset Browser become a source too (selecting an
-   asset shows an asset page: path, GUID, importer settings)? Proposed: yes, later; it
-   is exactly the "select an asset in the Asset View and edit it in the grid" case
-   Stride and Unity have.
-2. Should a pinned Inspector survive a project switch? Proposed: no; every source
-   releases on switch.
-3. History depth: proposed 32 entries, per layout, not persisted.
+1. **The Asset Browser is a source in this arc.** Outliner and Viewport are one source
+   (both write `m_selection`). The Asset Browser's in-panel preview pane already shows
+   the selected asset's details; with the unification that content becomes the asset
+   page and the pane stops duplicating it (3.5).
+2. **A pinned Inspector does not survive a project switch**; every source releases on
+   switch. Per-user saved layouts (which could carry pins) are a later feature, not
+   this arc.
+3. **History depth 32, not persisted.** The cost that grows with depth is not memory
+   (an entry is a source descriptor, ~100 bytes) but staleness: entries naming a
+   deleted entity, a closed document or a removed binding must be skipped at
+   navigation time and pruned when their source invalidates, and each invalidation
+   walks the list. Depth is therefore a UX cap on how far "back" stays meaningful.
+   Rule: prune on invalidate; skip anything unresolvable at navigation; never persist.
 
 ## 7. Owed by this spec
 
 - The `PropertyGrid` extraction from `DrawInspectorPanel` (sections, rows, wells) is the
   only engine-wide code change; it is the first task of the input-editor plan because
   that document is its first non-scene client.
+- The asset page + the Asset Browser preview-pane trim (this arc, after the input
+  editor's page proves the seam).
 - The Material tab migration plan (after the input editor).
-- Asset Browser as a source (question 1) -- a later plan.
+- Per-user layouts (would carry pins and instances) -- later, its own spec.
