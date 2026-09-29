@@ -421,3 +421,47 @@ TEST_CASE("input document: the capture snapshot ignores ImGui's mouse claim and 
     CHECK_FALSE(s.wantCaptureMouse); CHECK_FALSE(s.wantCaptureKeyboard); CHECK(s.mouseButtons == 0x2);
     CHECK(Arcane::Editor::InputActionsDocument::SnapshotForCapture(raw, true).wantCaptureKeyboard);
 }
+
+TEST_CASE("input document: is an Inspector source with keyed pages and a breadcrumb", "[editor][input][inspector]")
+{
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / "inspector-source-test.arcinput";
+    { std::ofstream out(path); out << DocumentJson().dump(2); }
+    auto doc = Arcane::Editor::InputActionsDocument::Open(path);
+    REQUIRE(doc);
+    CHECK(doc->SourceName() == "inspector-source-test.arcinput");
+    // Open selects the first map + action (ca171951): the page is the action page.
+    const auto e0 = doc->SelectionEpoch();
+    REQUIRE(doc->Page() != nullptr);
+    auto crumbs = doc->Page()->Breadcrumb();
+    REQUIRE(crumbs.size() == 3);
+    CHECK(crumbs[0].label == "inspector-source-test.arcinput");
+    CHECK(crumbs[1].label == "Player");
+    CHECK(crumbs[2].label == "Jump");
+    REQUIRE(doc->SelectByPath("Player/Jump/0"));
+    CHECK(doc->SelectionEpoch() > e0);
+    crumbs = doc->Page()->Breadcrumb();
+    REQUIRE(crumbs.size() == 4);
+    CHECK(crumbs[2].label == "Jump");
+    CHECK(crumbs[3].label == "Space");
+    const std::string key = doc->SelectionKey();
+    const std::string mapId = "22222222-2222-4222-8222-222222222222", actionId = "33333333-3333-4333-8333-333333333333";
+    REQUIRE(crumbs[0].key); CHECK(crumbs[0].key->empty());                       // the asset root re-pins to the asset page
+    REQUIRE(crumbs[1].key); CHECK(*crumbs[1].key == mapId + "///");
+    REQUIRE(crumbs[2].key); CHECK(*crumbs[2].key == mapId + "/" + actionId + "//");
+    REQUIRE(crumbs[3].key); CHECK(*crumbs[3].key == key);
+    CHECK(doc->PageFor(*crumbs[1].key) != nullptr);
+    CHECK(doc->Resolves(key)); CHECK_FALSE(doc->Resolves("bogus"));
+    REQUIRE(crumbs[1].select);
+    crumbs[1].select();                                    // the map crumb selects the map
+    CHECK(doc->Page()->Breadcrumb().size() == 2);
+    REQUIRE(doc->PageFor(key) != nullptr);                 // a pinned page for the binding
+    CHECK(doc->PageFor(key)->Breadcrumb().size() == 4);
+    CHECK(doc->PageFor("bogus") == nullptr);
+    REQUIRE(doc->RestoreSelection(key));
+    CHECK(doc->SelectionKey() == key);
+    doc->Model().SelectMap({});                            // nothing selected: the ASSET page, never null
+    REQUIRE(doc->Page() != nullptr);
+    CHECK(doc->Page()->Breadcrumb().size() == 1);
+    fs::remove(path);
+}

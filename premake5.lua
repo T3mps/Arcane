@@ -1210,6 +1210,10 @@ project "ArcaneTests"
         -- source-compiles here for InputActionsRowsTest, and the rewritten
         -- InputActionsDocumentWidgets.cpp above links against it.
         "%{wks.location}/ArcaneEditor/src/Documents/InputActionsRows.cpp",
+        -- Input editor T10: InputActionsInspectorPage is a LINK dependency of
+        -- InputActionsDocument.cpp (Page/PageFor construct it); Draw is never
+        -- called headlessly, same reason as EditorWidgets.cpp below.
+        "%{wks.location}/ArcaneEditor/src/Documents/InputActionsInspectorPage.cpp",
         -- Outliner slice 4: ComponentCatalog (registry enumeration + the one
         -- system-managed hide-list + selection-aware missing counts) source-
         -- compiles into the test exe so the [editor] units drive it directly --

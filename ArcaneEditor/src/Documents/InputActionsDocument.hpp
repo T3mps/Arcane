@@ -3,6 +3,7 @@
 #include "Documents/EditorDocument.hpp"
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsDocumentWidgets.hpp"
+#include "Documents/InputActionsInspectorPage.hpp"
 #include <Arcane/Input/InputRebindOperation.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 
@@ -12,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Arcane { class CommandStack; }
@@ -34,6 +36,20 @@ namespace Arcane::Editor
         InputActionsEditorModel& Model() noexcept { return model_; }
         const InputActionsEditorModel& Model() const noexcept { return model_; }
         void SetPreviewSnapshot(const InputSnapshot& snapshot) { previewSnapshot_ = snapshot; }
+
+        // ---- Inspector source (input-editor spec s2.4) ------------------
+        // The document is the first NON-SCENE source: its pages are keyed in
+        // the model's 4-segment selection key. Page() = PageFor(the current
+        // key); PageFor validates every named id (nullptr when one is gone)
+        // and "" IS the asset page, never null.
+        std::string SourceName() const override { return path_.filename().string(); }
+        InspectorPage* Page() override { return PageFor(model_.SelectionKey()); }
+        InspectorPage* PageFor(std::string_view key) override;
+        std::string SelectionKey() const override { return model_.SelectionKey(); }
+        bool RestoreSelection(std::string_view key) override { return model_.RestoreSelection(key); }
+        bool Resolves(std::string_view key) const override { return model_.Resolves(key); }   // PURE: the host's PruneStale runs it once per frame per history entry
+        std::uint64_t SelectionEpoch() const override { return model_.SelectionEpoch(); }
+        bool SelectByPath(std::string_view path) override { return model_.SelectByPath(path); }
 
         // The snapshot a rebind capture observes: the document is the sole
         // claimant of the pointer while a capture is live (ImGui's
@@ -71,5 +87,8 @@ namespace Arcane::Editor
         Guid captureTarget_;
         int captureSwallowFrame_ = -1;
         bool focused_ = false;
+        // Declared (and initialised) AFTER model_, state_ and preview_: it holds
+        // their addresses.
+        InputActionsInspectorPage page_;
     };
 }
