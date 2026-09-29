@@ -748,10 +748,14 @@ namespace Arcane::Editor
             ls.lastFrameTime = now;
         }
         const Arcane::InputSnapshot snap = m_gpu->InDevices().Sample(m_gpu->Imgui().WantCaptureKeyboard(), m_gpu->Imgui().WantCaptureMouse());
+        m_rebindCaptureLive = false;
         m_documents.ForEach([&](EditorDocument& document)
         {
             if (auto* input = dynamic_cast<InputActionsDocument*>(&document))
+            {
                 input->SetPreviewSnapshot(snap);
+                m_rebindCaptureLive = m_rebindCaptureLive || input->InputSwallowed();
+            }
         });
 
         // The plugin only sees scene-relevant input when the Viewport panel
@@ -861,11 +865,18 @@ namespace Arcane::Editor
     // The one "may editor shortcuts fire" predicate (architecture pass sec 1):
     // collapses the three near-identical gates the phase methods below used to
     // hand-roll (undo/redo+scene shortcuts, gizmo mode keys, camera framing).
+    //
+    // An armed rebind capture (Input Actions document) owns the keyboard: its
+    // completing chord may be F, Alt+G, W or Ctrl+Z, and ImGui's
+    // WantCaptureKeyboard is false during a capture (no item is active), so
+    // without the m_rebindCaptureLive term the shortcut would fire alongside
+    // the bind. Computed at the top of FrameInput from the capture armed on an
+    // earlier frame -- the one this frame's keys complete.
     bool EditorApp::ShortcutsLive(const Arcane::InputSnapshot& snap,
                                   bool requireViewportFocus) const
     {
-        return !InPlayMode() && !snap.wantCaptureKeyboard
-            && (!requireViewportFocus || m_viewportActive);
+        return Arcane::Editor::EditorShortcutsLive(InPlayMode(), snap.wantCaptureKeyboard, m_rebindCaptureLive,
+                                                   requireViewportFocus, m_viewportActive);
     }
 
     // Phase 6a: undo/redo + the Ctrl+N/O/S scene shortcuts. Runs EARLIER in the
@@ -893,21 +904,7 @@ namespace Arcane::Editor
         m_edges.undo.Update(undoKeyDown);
         m_edges.redo.Update(redoKeyDown);
 
-        // An armed rebind capture (Input Actions document) owns the keyboard:
-        // its completing chord may be Ctrl+Z, and ImGui's WantCaptureKeyboard
-        // is false during a capture (no item is active), so without this an
-        // Undo would fire here AND the capture's SetField would land after it,
-        // truncating redo. This phase runs before the documents draw, so it
-        // reads the capture armed on an earlier frame -- the one this frame's
-        // keys complete. The same stand-down as the document's own Ctrl+S
-        // (InputActionsDocument.cpp, `!InputSwallowed() && Shortcut(Ctrl+S)`).
-        bool captureLive = false;
-        m_documents.ForEach([&](EditorDocument& document)
-        {
-            if (auto* input = dynamic_cast<InputActionsDocument*>(&document))
-                captureLive = captureLive || input->InputSwallowed();
-        });
-        const bool active = ShortcutsLive(snap, false) && !captureLive;
+        const bool active = ShortcutsLive(snap, false);
         // Also refuse while a transaction is open (e.g. a live gizmo drag):
         // CommandStack::Undo()/Redo() have no open-transaction guard, and this
         // keybind block runs earlier in the frame than the gizmo block below,

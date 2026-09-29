@@ -1289,6 +1289,7 @@ namespace Arcane::Editor
         ViewportTargets m_viewportTargets;
         Arcane::Editor::ViewportRect                   m_viewportRect{};
         bool                                     m_viewportActive = false;
+        bool                                     m_rebindCaptureLive = false;   // an Input Actions rebind capture owns the keyboard this frame; computed at the top of FrameInput, read by ShortcutsLive (every caller is inside FrameInput)
 
         // Viewport-local input snapshot for the game ImGui pass, captured inside
         // FrameInput (whose locals are out of scope at the render site) and read

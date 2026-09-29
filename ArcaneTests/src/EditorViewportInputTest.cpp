@@ -29,3 +29,15 @@ TEST_CASE("ToViewportLocal translates inside the rect and rejects outside", "[ed
     CHECK_FALSE(Arcane::Editor::ToViewportLocal(r, 200.0f, 49.0f, lx, ly));   // above rect
     CHECK_FALSE(Arcane::Editor::ToViewportLocal(r, 740.0f, 60.0f, lx, ly));   // right edge (w exclusive)
 }
+
+TEST_CASE("EditorShortcutsLive stands down while a rebind capture owns the keyboard", "[editor]")
+{
+    using Arcane::Editor::EditorShortcutsLive;
+    CHECK(EditorShortcutsLive(false, false, false, false, false));          // idle Edit mode
+    CHECK_FALSE(EditorShortcutsLive(false, false, true, false, false));     // F/Home, Alt+G/J, undo/redo gates
+    CHECK_FALSE(EditorShortcutsLive(false, false, true, true, true));       // W/E/R/Q over the Viewport
+    CHECK_FALSE(EditorShortcutsLive(true, false, false, false, false));     // Play
+    CHECK_FALSE(EditorShortcutsLive(false, true, false, false, false));     // typing
+    CHECK_FALSE(EditorShortcutsLive(false, false, false, true, false));     // viewport keys without viewport focus
+    CHECK(EditorShortcutsLive(false, false, false, true, true));
+}
