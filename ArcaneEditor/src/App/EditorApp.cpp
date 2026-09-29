@@ -1313,6 +1313,19 @@ namespace Arcane::Editor
             else
             {
                 m_scriptedOpenFocusFrames = 3;   // see the member's comment
+                // --select-in-document (inspector-ownership spec A s4): a
+                // scripted selection INSIDE the document just opened. The
+                // selection bumps the document's SelectionEpoch, which routes
+                // it to the Inspector like a click would. Unresolvable = a
+                // loud ERROR; the run still completes (the report then names
+                // whatever the Inspector actually resolved to).
+                if (!m_config.selectInDocument.empty())
+                {
+                    Arcane::Editor::EditorDocument* doc = m_documents.FindByGuid(*guid);
+                    if (!doc || !doc->SelectByPath(m_config.selectInDocument))
+                        ARC_ERROR("--select-in-document '{}': the opened document has no such path",
+                                  m_config.selectInDocument);
+                }
             }
         }
         if (!m_config.tool.empty())
@@ -2829,6 +2842,19 @@ namespace Arcane::Editor
         // CloseAll is the document host's own teardown (it is what a project
         // switch runs), so this is not a special exit path -- it is the
         // ordinary one, moved earlier.
+        //
+        // THE INSPECTOR IS READ BEFORE THE CLOSE (schemaVersion 11, the
+        // report's `inspector` block below): closing a document releases it
+        // as an Inspector source, and the host then falls back to the scene --
+        // so a read at report time would always say "Scene" and never what the
+        // run actually showed. Read from the host itself, never from the flags.
+        std::string inspectorSource;
+        std::string inspectorBreadcrumb;
+        {
+            Arcane::Editor::InspectorSource& src = m_inspectorHost.Current();
+            inspectorSource     = src.SourceName();
+            inspectorBreadcrumb = Arcane::Editor::InspectorCrumbText(src, src.Page());
+        }
         m_documents.CloseAll();
         // ...which hands their preview vehicles to the retire list rather than
         // destroying them inline, so the list has to be drained HERE, while
@@ -3214,6 +3240,16 @@ namespace Arcane::Editor
             report.SetViewMode(m_camera.mode == Arcane::Editor::ViewMode::Perspective
                                    ? "perspective" : "2d");
 
+            // THE INSPECTOR (schemaVersion 11, inspector-ownership spec s5):
+            // which source the Inspector resolved to and the breadcrumb it
+            // shows -- read from the host itself, never from the flags, so a
+            // --select-in-document that failed to apply reports what the
+            // Inspector really showed (the document's own opening selection,
+            // e.g. "Player.arcinput > Player > Move"), never the asked path.
+            // Snapshotted above, BEFORE m_documents.CloseAll() released the
+            // document as a source (a read here would always say "Scene").
+            report.SetInspector(inspectorSource, inspectorBreadcrumb);
+
             // The --compare verdict (Task 9), ported from RuntimeApp::
             // ShutdownGraphPath verbatim (structure and field meanings
             // unchanged -- see that function's own comments for the full
@@ -3453,21 +3489,27 @@ namespace Arcane::Editor
             io.IniFilename = nullptr;   // unconditional: ImGui::Shutdown must never save over destroyed members
         }
 
+        // The whole render teardown -- the view-before-texture invalidate,
+        // both contexts, and the latch read-back -- in the one order that is
+        // correct. See ShutdownGraphPath. It runs BEFORE the ReleaseAll below
+        // (input editor plan T12): the report's `inspector` block reads the
+        // host's Current() there, before its CloseAll, and a ReleaseAll first
+        // would always leave the scene fallback to report. Its CloseAll
+        // releases each document through the `closing` observer
+        // (RemoveSource), the ordinary path, so no raw pointer outlives a
+        // document either way.
+        ShutdownGraphPath();
+
         // Inspector ownership: drop every document source (and the pins and
         // history naming them) BEFORE any document can be destroyed.
         // DocumentHost fires its `closing` observer only from Close/CloseAll,
-        // and ShutdownGraphPath's CloseAll below is skipped on a run that
+        // and ShutdownGraphPath's CloseAll above is skipped on a run that
         // never built a vehicle -- ~DocumentHost would then destroy the
         // documents with the host still holding raw pointers to them. The
         // host is never consulted after this point (no frame is drawn), and
         // the instance LIST stays for the ini writer.
         m_inspectorHost.ReleaseAll();
         m_inspectorFocusedSource = nullptr;
-
-        // The whole render teardown -- the view-before-texture invalidate,
-        // both contexts, and the latch read-back -- in the one order that is
-        // correct. See ShutdownGraphPath.
-        ShutdownGraphPath();
 
         // NO DEVICE IDLE IS OWED HERE: ShutdownGraphPath above has already
         // destroyed both contexts, and each idles the shared device and drains

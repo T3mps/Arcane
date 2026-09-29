@@ -265,6 +265,13 @@ namespace Arcane
         m_viewMode    = std::move(mode);
     }
 
+    void VerifyReport::SetInspector(std::string source, std::string breadcrumb)
+    {
+        m_inspectorSet        = true;
+        m_inspectorSource     = std::move(source);
+        m_inspectorBreadcrumb = std::move(breadcrumb);
+    }
+
     void VerifyReport::SetForeignModules(std::vector<ForeignModules::Match> modules)
     {
         m_foreignModulesSet = true;
@@ -606,6 +613,11 @@ namespace Arcane
         // the host found injected into its process, so a red lane on a desk
         // with an overlay is attributable from the report alone. Absent on any
         // run that never scanned; 9 remains readable.
+        //
+        // Bumped 10 -> 11 by the inspector-ownership arc: the report gained
+        // `inspector` {source, breadcrumb} (see SetInspector) -- what the
+        // editor's Inspector resolved to. Absent on the runtime host and any
+        // run that never set it; 10 remains readable.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -717,6 +729,11 @@ namespace Arcane
         // never reads as a mode.
         if (m_viewModeSet)
             j["viewMode"] = m_viewMode;
+
+        // The Inspector (schemaVersion 11). ABSENT unless SetInspector was
+        // called -- the runtime host has no Inspector.
+        if (m_inspectorSet)
+            j["inspector"] = { { "source", m_inspectorSource }, { "breadcrumb", m_inspectorBreadcrumb } };
 
         // The injected modules (schemaVersion 10). ABSENT unless
         // SetForeignModules was called; an EMPTY array when the host scanned

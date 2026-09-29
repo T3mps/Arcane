@@ -156,6 +156,23 @@ TEST_CASE("host config: --open-asset round-trips and defaults empty", "[host]") 
     CHECK(opened.config->openAsset == "97260310-8b35-4b29-b12f-1fd6f8e99071");
 }
 
+// --select-in-document (inspector-ownership arc, spec A s4): the scripted
+// in-document selection a golden needs to show a document page.
+TEST_CASE("host config: --select-in-document round-trips and requires --open-asset", "[host]") {
+    const auto plain = Run({"--project", "P", "--headless", "--frames", "1"});
+    REQUIRE(plain.config.has_value());
+    CHECK(plain.config->selectInDocument.empty());
+    const auto both = Run({"--project", "P", "--headless", "--frames", "1",
+                           "--open-asset", "97260310-8b35-4b29-b12f-1fd6f8e99071",
+                           "--select-in-document", "Player/Jump"});
+    REQUIRE(both.config.has_value());
+    CHECK(both.config->selectInDocument == "Player/Jump");
+    const auto orphan = Run({"--project", "P", "--headless", "--frames", "1",
+                             "--select-in-document", "Player/Jump"});
+    CHECK_FALSE(orphan.config.has_value());   // refused at parse: nothing to select inside
+    CHECK(orphan.exitCode == 2);
+}
+
 // --hang-main N (crash window plan 2, D10): the witness hang lane's trigger.
 // Parsed the same way --crash-gpu is, and honoured by both hosts.
 TEST_CASE("host config: --hang-main round-trips and kHangMainSeconds is 15", "[host]") {

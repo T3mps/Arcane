@@ -198,6 +198,16 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          rotate | scale). Pairs with --select-name for a
 //                          scripted gizmo capture. THE FOURTH/FIFTH FLAGS
 //                          THIS HOST HONOURS THAT ArcaneRuntime REFUSES.
+//   --open-asset <guid> -- HONOURED: open the document for that asset Guid at
+//                          the end of boot (EditorApp::StageFinalize; a bad
+//                          Guid / no opener is a loud ARC_ERROR). REFUSED by
+//                          ArcaneRuntime (that exe's main.cpp:171-176).
+//   --select-in-document <path> -- HONOURED, only WITH --open-asset: select
+//                          Map[/Action[/binding index]] inside the opened
+//                          document and route it to the Inspector; an
+//                          unresolvable path is a loud ARC_ERROR with the run
+//                          completing. Refused at parse without --open-asset;
+//                          REFUSED outright by ArcaneRuntime.
 //   --view-mode <mode>  -- HONOURED as of F4 plan 1 T7: seed the editor
 //                          viewport camera's mode (2d | perspective) at the end
 //                          of boot, AFTER the persisted [EditorViewport][Camera]

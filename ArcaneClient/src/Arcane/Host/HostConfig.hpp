@@ -274,6 +274,15 @@ namespace Arcane
         // same reason --select-name is. ArcaneRuntime refuses the flag.
         std::string     openAsset = "";
 
+        // --select-in-document: editor only, and only WITH --open-asset. A
+        // human path inside the opened document -- "<map>[/<action>[/<binding
+        // index>]]" for an input asset -- selected after the open, so a golden
+        // can show that document's page in the Inspector (inspector-ownership
+        // spec s4). Refused at parse without --open-asset (nothing to select
+        // inside); an unresolvable path is a loud boot ERROR, the same rule as
+        // --select-name. ArcaneRuntime refuses the flag.
+        std::string     selectInDocument = "";
+
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have

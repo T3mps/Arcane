@@ -174,6 +174,12 @@ int main(int argc, char** argv)
                              "documents). Use ArcaneEditor.exe.\n");
         return 2;
     }
+    if (!parsed.config->selectInDocument.empty())
+    {
+        std::fprintf(stderr, "error: --select-in-document is an EDITOR-only flag (this host has no "
+                             "documents). Use ArcaneEditor.exe.\n");
+        return 2;
+    }
 
     // (Diagnostics::Install USED TO BE HERE, after the refusals above. It now
     // runs right after the --print-engine-info probe -- see the block at the

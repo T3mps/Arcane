@@ -104,3 +104,30 @@ TEST_CASE("E2: the editor boots into perspective on --view-mode, reports viewMod
     // transparent keys are never emitted to the cull (W5 pins that side).
     CHECK(vis.at("gpuVisible") == vis.at("coarseVisible"));
 }
+
+// E3: the INPUT DOCUMENT witness (inspector-ownership spec s5 / input-editor
+// spec s4). --open-asset puts Player.arcinput on screen, --select-in-document
+// selects Player/Jump inside it, and the report's `inspector` block says the
+// document -- not the scene -- owns the Inspector, with the breadcrumb a
+// person would read. Compared against its own golden slot once blessed.
+TEST_CASE("E3: an opened input document with a scripted selection owns the Inspector and matches the editor-input-doc golden", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e3-input-doc");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+                 "--settle", "10", "--report", inv.reportPath.generic_string(),
+                 "--open-asset", "97260310-8b35-4b29-b12f-1fd6f8e99071",
+                 "--select-in-document", "Player/Jump", "--compare", "editor-input-doc" };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("inspector"));
+    CHECK(run.report["inspector"].at("source") == "Player.arcinput");
+    CHECK(run.report["inspector"].at("breadcrumb") == "Player.arcinput > Player > Jump");
+    REQUIRE(run.report.contains("compare"));
+    CHECK(run.report["compare"].at("passed") == true);
+}

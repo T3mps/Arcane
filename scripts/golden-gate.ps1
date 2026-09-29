@@ -8,7 +8,7 @@
 # it is the gate that covers what an agent actually runs. Do not let a green
 # [gpu][golden] Catch2 run stand in for a green run of this script.
 #
-# Eight combinations, no --bless:
+# Ten combinations, no --bless:
 #   ArcaneRuntime --backend dx12    --compare runtime-scene
 #   ArcaneRuntime --backend vulkan  --compare runtime-scene
 #   ArcaneEditor  --backend dx12    --compare editor-ui
@@ -17,6 +17,8 @@
 #   ArcaneEditor  --backend vulkan  --compare editor-ui-perspective  --view-mode perspective
 #   ArcaneRuntime --backend dx12    --compare f3-cull-blend  --scene <the F3 fixture>
 #   ArcaneRuntime --backend vulkan  --compare f3-cull-blend  --scene <the F3 fixture>
+#   ArcaneEditor  --backend dx12    --compare editor-input-doc  --open-asset <Player.arcinput> --select-in-document Player/Jump
+#   ArcaneEditor  --backend vulkan  --compare editor-input-doc  --open-asset <Player.arcinput> --select-in-document Player/Jump
 #
 # THE VERDICT IS `exitReason` OUT OF THE REPORT JSON, NEVER THE RAW PROCESS
 # EXIT CODE ALONE (ArcaneEditor/src/main.cpp's own exit-code table names the
@@ -51,7 +53,7 @@
 #       restore. The ONE mode that writes to the tree -- Content/ only, never
 #       Verify/, never a bless. The mutation-to-restore window is a single
 #       try/finally (opened where the staging loop below begins) that covers
-#       restaging, all eight host launches, and any crash or Ctrl-C in
+#       restaging, every host launch, and any crash or Ctrl-C in
 #       between -- not just the tail after the lanes finish -- so the restore
 #       genuinely runs on every exit path out of that window, not only the
 #       happy one. Writes its verdict to golden-gate-selftest-summary.json
@@ -305,7 +307,7 @@ function Exit-GateRefusal {
 #                          Errored branch's own comment.
 #     Passed            -- the ordinary green run
 #
-# ---- The eight combinations. ----
+# ---- The combinations ($combos.Count lanes; ten today). ----
 # ExpectedLevel: which reference this lane is SUPPOSED to resolve against.
 # Nothing in the report can infer this -- a resolvedLevel of "shared" looks
 # identical whether that was the design or an oversight -- so it is declared
@@ -334,6 +336,13 @@ $combos = @(
     # docs/plans/2026-09-17-f4-plan1-rulings-ue-check.md).
     @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective'); SelfTestExpect = 'Failed' }
     @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-ui-perspective'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--view-mode', 'perspective'); SelfTestExpect = 'Failed' }
+    # Inspector-ownership arc: the input document open, Player/Jump selected,
+    # its page in the Inspector (spec B s4). Shared slot like editor-ui.
+    # SelfTestExpect 'Green' because the document tab covers the viewport: the
+    # boot-scene mutation the self-test makes is not in this picture (verified
+    # by the -SelfTest run in this task's Step 6; flip to 'Failed' if it fails).
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-input-doc'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '97260310-8b35-4b29-b12f-1fd6f8e99071', '--select-in-document', 'Player/Jump'); SelfTestExpect = 'Green' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-input-doc'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '97260310-8b35-4b29-b12f-1fd6f8e99071', '--select-in-document', 'Player/Jump'); SelfTestExpect = 'Green' }
     # THE F3 CULL/BLEND LANES (F3 plan 2 T6, spec s9). The boot scene cannot
     # express what plan 2 shipped -- it carries no masked, transparent or
     # two-sided material at all -- so these two render a FIXTURE scene instead,
@@ -388,10 +397,11 @@ $script:ReportSchemaMin = 3
 # 10 since the injected-overlay detection added `foreignModules` -- the
 # third-party modules a host found injected into its process, each with
 # product and tier, so a red lane on a desk with an overlay is attributable
-# from the report alone (VerifyReport::kSchemaVersion).
+# from the report alone; 11 since the inspector-ownership arc added the
+# editor's `inspector` {source, breadcrumb} block (VerifyReport::kSchemaVersion).
 # -SelfTest is what makes this a failure rather than a hope if the two halves
 # ever drift again.
-$script:ReportSchemaMax = 10
+$script:ReportSchemaMax = 11
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.
@@ -874,7 +884,7 @@ try {
 
         # Report/stderr land in the exe's own Saved/ (project-gitignored, so a
         # local run never leaves a tracked artifact behind) and are named per
-        # combo so eight runs in the same exe dir never clobber each other --
+        # combo so the runs in the same exe dir never clobber each other --
         # $hostName-$backend ALONE stopped being a unique combo key the moment
         # ArcaneEditor grew a second reference (editor-ui-perspective) on the
         # same backend, so $reference joins the filename too.

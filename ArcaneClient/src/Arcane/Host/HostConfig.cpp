@@ -114,6 +114,8 @@ namespace Arcane
                                "(empty = select)").Choices({ "select", "move", "rotate", "scale" });
         cli.Option("open-asset", "", "editor only: open the document for this asset Guid at boot, "
                                      "as the Asset Browser would (empty = none)");
+        cli.Option("select-in-document", "", "editor only, with --open-asset: select this path inside "
+                                             "the opened document, e.g. Player/Jump (empty = none)");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
                                          "for AT LEAST N attempts -- it gives up only once BOTH N attempts "
@@ -202,6 +204,7 @@ namespace Arcane
         cfg.viewMode       = r.Get("view-mode");   // Choices() already refused every other spelling
         cfg.selectName     = r.Get("select-name");
         cfg.openAsset      = r.Get("open-asset");
+        cfg.selectInDocument = r.Get("select-in-document");
         cfg.tool           = r.Get("tool");        // Choices() already refused every other spelling
         // Malformed --probe syntax is refused HERE, at parse time, not
         // deferred to evaluation. VerifyReport::Evaluate only ever sees specs
@@ -351,6 +354,14 @@ namespace Arcane
         {
             std::fprintf(stderr, "error: --settle-timeout requires --settle (it bounds the settle "
                                  "loop, which --settle is what turns on)\n");
+            return { std::nullopt, 2 };
+        }
+        // --select-in-document selects INSIDE the document --open-asset opens
+        // (inspector-ownership spec A s4); without that flag there is nothing
+        // to select inside, so it is refused rather than silently ignored.
+        if (r.Supplied("select-in-document") && cfg.openAsset.empty())
+        {
+            std::fprintf(stderr, "error: --select-in-document requires --open-asset (it selects INSIDE the document that flag opens)\n");
             return { std::nullopt, 2 };
         }
         // Settle compares CAPTURED frames (RuntimeFrame.cpp's CaptureTail) -- with

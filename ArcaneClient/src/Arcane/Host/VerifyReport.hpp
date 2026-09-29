@@ -217,7 +217,11 @@ namespace Arcane
         // it is attributable from the report alone. ABSENT on any run that
         // never scanned; an EMPTY array on one that scanned and found nothing.
         // 3..9 remain readable by the same rule.
-        static constexpr int kSchemaVersion                = 10;
+        //
+        // Bumped 10 -> 11 by the inspector-ownership arc: `inspector` {source,
+        // breadcrumb} -- see SetInspector. Absent on the runtime host and any
+        // run that never set it; 10 remains readable.
+        static constexpr int kSchemaVersion                = 11;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -475,6 +479,15 @@ namespace Arcane
         // upholds.
         void SetViewMode(std::string mode);
 
+        // The editor Inspector's RESOLVED source (schemaVersion 11, the
+        // inspector-ownership arc): the source's display name and the
+        // breadcrumb it shows, read from the Inspector host at shutdown --
+        // never from --select-in-document, so a scripted selection that failed
+        // to apply reports what the Inspector actually showed. Emitted as a
+        // top-level `inspector` {source, breadcrumb} ONLY when this was
+        // called: the runtime host has no Inspector.
+        void SetInspector(std::string source, std::string breadcrumb);
+
         // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5; plan 2
         // T5 for the last two arguments): the last frame's GpuSceneFrame as
         // the host saw it -- `total` live rows in the GPU-scene mirror (one
@@ -611,6 +624,9 @@ namespace Arcane
         // The view mode (schemaVersion 7) -- m_viewModeSet gates emission.
         bool        m_viewModeSet = false;
         std::string m_viewMode;
+        // The inspector block (schemaVersion 11) -- m_inspectorSet gates emission.
+        bool        m_inspectorSet = false;
+        std::string m_inspectorSource, m_inspectorBreadcrumb;
 
         // The visibility counts (schemaVersion 8; transparentRows + the
         // nullable gpuVisible are 9) -- m_visibilitySet gates emission, and
