@@ -41,7 +41,7 @@ namespace Arcane::Editor
         : path_(std::move(path)), title_(path_.stem().string()),
           guid_(DraftGuid(draft, path_)), model_(std::move(draft), commands),
           page_(model_, path_.filename().string(), path_.generic_string(),
-                { [this](const Guid& id) { BeginRebind(id); }, &state_, &preview_ })
+                { [this](const Guid& id) { BeginRebindFromPage(id); }, &state_, &preview_ })
     {
         windowLabel_ = title_ + " (Input Actions)###inputdoc_" + guid_.ToString();
         diagKey_ = "input:" + guid_.ToString();
@@ -135,6 +135,14 @@ namespace Arcane::Editor
         capture_.Begin(target, std::nullopt, 10.0f, previewSnapshot_);   // any device; the initiating control is not a capture (existing rule)
     }
 
+    void InputActionsDocument::BeginRebindFromPage(const Guid& target)
+    {
+        if (!target.IsValid()) return;
+        focusRequest_ = true;                  // consumed before the next Begin: the cancel rule below stays intact
+        state_.scrollRowToSelection = true;    // the countdown row is in view when the document comes forward
+        BeginRebind(target);
+    }
+
     void InputActionsDocument::TickCapture(bool bodyDrawn)
     {
         if (!captureTarget_.IsValid()) return;
@@ -179,6 +187,7 @@ namespace Arcane::Editor
         // ShaderEditorDocument pattern): undo back to the saved revision clears
         // it with no bookkeeping.
         const ImGuiWindowFlags flags = Dirty() ? ImGuiWindowFlags_UnsavedDocument : 0;
+        if (focusRequest_) { ImGui::SetNextWindowFocus(); focusRequest_ = false; }   // the page's Rebind... (BeginRebindFromPage)
         const bool bodyDrawn = ImGui::Begin(windowLabel_.c_str(), &open, flags);
         focused_ = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);   // valid on both branches
         TickCapture(bodyDrawn);                                                      // BEFORE the shortcut: the swallow stamp is written here

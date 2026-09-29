@@ -45,6 +45,14 @@ namespace Arcane::Editor
         void SelectMap(const Guid& map) noexcept;
         void SelectBinding(const Guid& binding) noexcept;
         void SelectPart(const Guid& part) noexcept;
+        // Container-fallback deselects from INSIDE the document (Ruling P18):
+        // empty space in the actions column drops to the map, in the maps
+        // column to the asset page. SILENT (no epoch bump): not a selection
+        // event, so it never moves the Inspector away from another source --
+        // but Page() re-reads the live key, so an Inspector already showing
+        // this document drops to the container page.
+        void DeselectToMap(const Guid& map) { SetSelectionSilently({ map, Guid{}, Guid{}, Guid{} }); }
+        void DeselectToAsset() { SetSelectionSilently({}); }
         [[nodiscard]] std::uint64_t SelectionEpoch() const noexcept { return selectionEpoch_; }
         [[nodiscard]] std::string SelectionKey() const;                    // "<map>/<action>/<binding>/<part>"; "" when no map
         [[nodiscard]] bool RestoreSelection(std::string_view key);         // every non-empty segment must exist

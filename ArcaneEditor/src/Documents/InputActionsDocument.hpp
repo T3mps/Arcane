@@ -86,6 +86,11 @@ namespace Arcane::Editor
         void SelectFirstMapAndAction();
         void TickCapture(bool bodyDrawn);
         void BeginRebind(const Guid& target);
+        // The Inspector page's Rebind...: the page draws AFTER the document, so
+        // the Inspector holds focus next frame and TickCapture would cancel at
+        // once. The document takes focus for its next Begin (one-shot) and
+        // scrolls the selected row into view, then arms the capture.
+        void BeginRebindFromPage(const Guid& target);
 
         std::filesystem::path path_;
         std::string title_;
@@ -100,6 +105,7 @@ namespace Arcane::Editor
         Guid captureTarget_;
         int captureSwallowFrame_ = -1;
         bool focused_ = false;
+        bool focusRequest_ = false;   // one-shot SetNextWindowFocus before the next Begin (DocumentHost's m_focusRequest pattern)
         // Declared (and initialised) AFTER model_, state_ and preview_: it holds
         // their addresses.
         InputActionsInspectorPage page_;

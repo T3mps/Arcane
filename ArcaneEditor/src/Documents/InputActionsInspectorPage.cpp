@@ -1,5 +1,7 @@
 #include "Documents/InputActionsInspectorPage.hpp"
 
+#include "Documents/InputActionsJson.hpp"
+
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
 
@@ -18,32 +20,6 @@ namespace Arcane::Editor
 {
     namespace
     {
-        Guid IdOf(const nlohmann::json& row)
-        {
-            if (!row.is_object() || !row.contains("id") || !row["id"].is_string()) return {};
-            return Guid::FromString(row["id"].get<std::string>()).value_or(Guid{});
-        }
-        std::string Str(const nlohmann::json& row, const char* key)
-        { return row.is_object() && row.contains(key) && row[key].is_string() ? row[key].get<std::string>() : std::string{}; }
-        // Tolerant scalar reads: json::value() THROWS when the key holds another
-        // type, and the draft is whatever the user last typed (a document opens
-        // malformed sources for repair) -- the Inspector must never crash on it.
-        bool Bool(const nlohmann::json& row, const char* key, bool fallback)
-        { return row.is_object() && row.contains(key) && row[key].is_boolean() ? row[key].get<bool>() : fallback; }
-        int Int(const nlohmann::json& row, const char* key, int fallback)
-        { return row.is_object() && row.contains(key) && row[key].is_number_integer() ? row[key].get<int>() : fallback; }
-        const nlohmann::json* Find(const nlohmann::json& node, const Guid& id)
-        {
-            if (!id.IsValid()) return nullptr;
-            if (node.is_object())
-            {
-                if (IdOf(node) == id) return &node;
-                for (const auto& [k, child] : node.items()) if (const auto* m = Find(child, id)) return m;
-            }
-            else if (node.is_array())
-                for (const auto& child : node) if (const auto* m = Find(child, id)) return m;
-            return nullptr;
-        }
         std::vector<std::string> Groups(const nlohmann::json& row)
         {
             std::vector<std::string> out;
@@ -101,18 +77,18 @@ namespace Arcane::Editor
         std::vector<InspectorCrumb> crumbs;
         crumbs.push_back({ assetName_, [m = &model_] { m->SelectMap({}); }, std::optional<std::string>{ std::string{} } });
         const auto& draft = model_.Draft();
-        if (const auto* map = Find(draft, sel_.map))
+        if (const auto* map = FindById(draft, sel_.map))
         {
             const std::string mapKey = sel_.map.ToString();
             crumbs.push_back({ Str(*map, "name"), [m = &model_, id = sel_.map] { m->SelectMap(id); },
                                std::optional<std::string>{ mapKey + "///" } });
-            if (const auto* action = Find(*map, sel_.action))
+            if (const auto* action = FindById(*map, sel_.action))
             {
                 const std::string actionKey = mapKey + "/" + sel_.action.ToString();
                 crumbs.push_back({ Str(*action, "name"), [m = &model_, map = sel_.map, id = sel_.action]
                                    { m->SelectMap(map); m->SelectAction(id); },
                                    std::optional<std::string>{ actionKey + "//" } });
-                if (const auto* binding = Find(*action, sel_.binding))
+                if (const auto* binding = FindById(*action, sel_.binding))
                 {
                     const std::string bindingKey = actionKey + "/" + sel_.binding.ToString();
                     const std::string label = binding->contains("composite")
@@ -121,7 +97,7 @@ namespace Arcane::Editor
                     crumbs.push_back({ label, [m = &model_, map = sel_.map, a = sel_.action, id = sel_.binding]
                                        { m->SelectMap(map); m->SelectAction(a); m->SelectBinding(id); },
                                        std::optional<std::string>{ bindingKey + "/" } });
-                    if (const auto* part = Find(*binding, sel_.part))
+                    if (const auto* part = FindById(*binding, sel_.part))
                         crumbs.push_back({ Str(*part, "name") + " · " + InputActions::DisplayForPath(Str(*part, "path")).control,
                                            [m = &model_, map = sel_.map, a = sel_.action, b = sel_.binding, id = sel_.part]
                                            { m->SelectMap(map); m->SelectAction(a); m->SelectBinding(b); m->SelectPart(id); },
@@ -137,10 +113,10 @@ namespace Arcane::Editor
         edit_.clear();
         drawing_ = true;   // Defer() queues until the end of this call
         const auto& draft = model_.Draft();
-        const auto* map = Find(draft, sel_.map);
-        const auto* action = map ? Find(*map, sel_.action) : nullptr;
-        const auto* binding = action ? Find(*action, sel_.binding) : nullptr;
-        const auto* part = binding ? Find(*binding, sel_.part) : nullptr;
+        const auto* map = FindById(draft, sel_.map);
+        const auto* action = map ? FindById(*map, sel_.action) : nullptr;
+        const auto* binding = action ? FindById(*action, sel_.binding) : nullptr;
+        const auto* part = binding ? FindById(*binding, sel_.part) : nullptr;
         if (part) DrawBinding(grid, *part, true);
         else if (binding) DrawBinding(grid, *binding, false);
         else if (action) DrawAction(grid, *action);

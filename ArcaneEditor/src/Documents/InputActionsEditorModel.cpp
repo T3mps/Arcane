@@ -1,5 +1,7 @@
 #include "Documents/InputActionsEditorModel.hpp"
 
+#include "Documents/InputActionsJson.hpp"
+
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Input/InputActions.hpp>
 
@@ -104,7 +106,7 @@ namespace Arcane::Editor
             auto* node = FindId(root, parent);
             if (!node || !node->contains(array) || !(*node)[array].is_array()) return nullptr;
             for (auto& item : (*node)[array])
-                if (item.is_object() && item.value("id", std::string{}) == child.ToString())
+                if (IdIs(item, child))
                     return &item;
             return nullptr;
         }
@@ -116,7 +118,7 @@ namespace Arcane::Editor
             if (!node || !node->contains(array) || !(*node)[array].is_array()) return false;
             auto& rows = (*node)[array];
             for (size_t i = 0; i < rows.size(); ++i)
-                if (rows[i].is_object() && rows[i].value("id", std::string{}) == child.ToString())
+                if (IdIs(rows[i], child))
                 { rows.erase(rows.begin() + i); return true; }
             return false;
         }
@@ -127,7 +129,7 @@ namespace Arcane::Editor
             {
                 for (size_t i = 0; i < node.size(); ++i)
                 {
-                    if (!node[i].is_object() || node[i].value("id", std::string{}) != id.ToString()) continue;
+                    if (!IdIs(node[i], id)) continue;
                     if ((direction < 0 && i == 0) || (direction > 0 && i + 1 == node.size())) return false;
                     if (direction == 0) return false;
                     std::swap(node[i], node[static_cast<size_t>(static_cast<int>(i) + direction)]);
@@ -146,7 +148,7 @@ namespace Arcane::Editor
             if (node.is_array())
             {
                 for (std::size_t i = 0; i < node.size(); ++i)
-                    if (node[i].is_object() && node[i].value("id", std::string{}) == id.ToString())
+                    if (IdIs(node[i], id))
                     {
                         if (index >= node.size()) index = node.size() - 1;
                         if (index == i) return false;
@@ -177,7 +179,7 @@ namespace Arcane::Editor
             auto used = [&](const std::string& candidate) {
                 if (!siblings.is_array()) return false;
                 for (const auto& s : siblings)
-                    if (s.is_object() && s.value("name", std::string{}) == candidate) return true;
+                    if (s.is_object() && Str(s, "name") == candidate) return true;
                 return false; };
             if (!used(base)) return base;
             for (int n = 2;; ++n)
@@ -193,7 +195,7 @@ namespace Arcane::Editor
             {
                 for (size_t i = 0; i < node.size(); ++i)
                 {
-                    if (!node[i].is_object() || node[i].value("id", std::string{}) != id.ToString()) continue;
+                    if (!IdIs(node[i], id)) continue;
                     auto copy = node[i];
                     RefreshIds(copy);
                     if (copy.contains("name") && copy["name"].is_string() &&
@@ -327,13 +329,13 @@ namespace Arcane::Editor
         }
         if (segs.empty() || segs.size() > 4 || segs[0].empty() || !draft_.is_object() || !draft_.contains("actionMaps") || !draft_["actionMaps"].is_array())
             return false;
-        auto idOf = [](const nlohmann::json& row) { return Guid::FromString(row.value("id", std::string{})).value_or(Guid{}); };
+        auto idOf = [](const nlohmann::json& row) { return IdOf(row); };
         // The ONE sibling named `name`; nullptr when none or more than one match.
         auto unique = [](const nlohmann::json& siblings, const std::string& name) -> const nlohmann::json* {
             const nlohmann::json* hit = nullptr;
             for (const auto& s : siblings)
             {
-                if (!s.is_object() || s.value("name", std::string{}) != name) continue;
+                if (!s.is_object() || Str(s, "name") != name) continue;
                 if (hit) return nullptr;   // ambiguous
                 hit = &s;
             }
@@ -441,14 +443,15 @@ namespace Arcane::Editor
         nlohmann::json next = draft_;
         for (auto& map : next["actionMaps"])
         {
-            if (!map.is_object() || map.value("id", std::string{}) != mapId.ToString() ||
+            if (!IdIs(map, mapId) ||
                 !map.contains("actions") || !map["actions"].is_array()) continue;
             for (size_t i = 0; i < map["actions"].size(); ++i)
             {
-                if (map["actions"][i].value("id", std::string{}) != actionId.ToString()) continue;
+                if (!IdIs(map["actions"][i], actionId)) continue;
                 auto duplicate = map["actions"][i];
                 RefreshIds(duplicate);
-                duplicate["name"] = UniqueSiblingName(map["actions"], duplicate.value("name", std::string("Action")) + " Copy");
+                const std::string base = duplicate.contains("name") && duplicate["name"].is_string() ? Str(duplicate, "name") : std::string("Action");
+                duplicate["name"] = UniqueSiblingName(map["actions"], base + " Copy");
                 map["actions"].insert(map["actions"].begin() + i + 1, std::move(duplicate));
                 return ApplyEdit("Duplicate action", draft_, next);
             }
@@ -477,15 +480,18 @@ namespace Arcane::Editor
         auto& rows = next["actionMaps"];
         for (size_t i = 0; i < rows.size(); ++i)
         {
-            if (rows[i].value("id", std::string{}) != map.ToString()) continue;
+            if (!IdIs(rows[i], map)) continue;
             rows.erase(rows.begin() + i);
-            if (next.value("defaultMap", std::string{}) == map.ToString())
+            // The survivor's id is whatever the text holds: a malformed one
+            // (a hand edit) neither becomes the default nor the selection.
+            const Guid survivor = rows.empty() ? Guid{} : IdOf(rows[0]);
+            if (Str(next, "defaultMap") == map.ToString())
             {
-                if (rows.empty()) next.erase("defaultMap");
-                else next["defaultMap"] = rows[0]["id"];
+                if (!survivor.IsValid()) next.erase("defaultMap");
+                else next["defaultMap"] = survivor.ToString();
             }
             if (!ApplyEdit("Remove action map", draft_, next)) return false;
-            SelectMap(rows.empty() ? Guid{} : *Guid::FromString(rows[0]["id"].get<std::string>()));
+            SelectMap(survivor);
             return true;
         }
         return false;
@@ -567,7 +573,7 @@ namespace Arcane::Editor
         auto* owner = FindId(next, binding);
         if (!owner || !owner->contains("composite") || !owner->contains("parts") ||
             !(*owner)["parts"].is_array() || path.empty()) return false;
-        const auto composite = owner->value("composite", std::string{});
+        const auto composite = Str(*owner, "composite");
         const bool valid = composite == "1DAxis"
             ? role == "negative" || role == "positive"
             : composite == "2DVector" &&
@@ -616,19 +622,18 @@ namespace Arcane::Editor
         const std::string name = Trim(proposed);
         if (name.empty()) return "Names cannot be blank";
         if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return std::nullopt;
-        const std::string self = id.ToString();
         auto taken = [&](const nlohmann::json& siblings) {
             for (const auto& s : siblings)
-                if (s.is_object() && s.value("id", std::string{}) != self && Trim(s.value("name", std::string{})) == name) return true;
+                if (s.is_object() && !IdIs(s, id) && Trim(Str(s, "name")) == name) return true;
             return false; };
         for (const auto& map : draft["actionMaps"])
         {
             if (!map.is_object()) continue;
-            if (map.value("id", std::string{}) == self)
+            if (IdIs(map, id))
                 return taken(draft["actionMaps"]) ? std::optional<std::string>("A map named '" + name + "' already exists") : std::nullopt;
             if (!map.contains("actions") || !map["actions"].is_array()) continue;
             for (const auto& action : map["actions"])
-                if (action.is_object() && action.value("id", std::string{}) == self)
+                if (IdIs(action, id))
                     return taken(map["actions"]) ? std::optional<std::string>("Another action in this map is already named '" + name + "'") : std::nullopt;
         }
         return std::nullopt;   // a part role or a scheme: only the blank rule applies
@@ -661,11 +666,7 @@ namespace Arcane::Editor
     bool InputActionsEditorModel::SetDefaultMap(const Guid& map)
     {
         auto next = draft_;
-        if (!FindId(next, map) || !next.contains("actionMaps")) return false;
-        bool found = false;
-        for (const auto& row : next["actionMaps"])
-            if (row.value("id", std::string{}) == map.ToString()) found = true;
-        if (!found) return false;
+        if (!FindMap(next, map)) return false;
         next["defaultMap"] = map.ToString();
         return ApplyEdit("Select default action map", draft_, next);
     }
@@ -688,7 +689,7 @@ namespace Arcane::Editor
         auto next = draft_;
         auto* row = FindId(next["controlSchemes"], scheme);
         if (!row) return false;
-        const auto oldGroup = row->value("bindingGroup", std::string{});
+        const auto oldGroup = Str(*row, "bindingGroup");
         (*row)["name"] = std::move(name);
         (*row)["bindingGroup"] = group;
         if (oldGroup != group && next.contains("actionMaps"))
@@ -716,8 +717,8 @@ namespace Arcane::Editor
         auto& schemes = next["controlSchemes"];
         for (size_t i = 0; i < schemes.size(); ++i)
         {
-            if (schemes[i].value("id", std::string{}) != scheme.ToString()) continue;
-            const auto group = schemes[i].value("bindingGroup", std::string{});
+            if (!IdIs(schemes[i], scheme)) continue;
+            const auto group = Str(schemes[i], "bindingGroup");
             schemes.erase(schemes.begin() + i);
             auto strip = [&](auto&& self, nlohmann::json& node) -> void
             {
@@ -733,7 +734,7 @@ namespace Arcane::Editor
                 }
                 else if (node.is_array()) for (auto& child : node) self(self, child);
             };
-            strip(strip, next["actionMaps"]);
+            if (next.contains("actionMaps")) strip(strip, next["actionMaps"]);
             return ApplyEdit("Remove control scheme", draft_, next);
         }
         return false;
@@ -788,8 +789,8 @@ namespace Arcane::Editor
             for (const auto& map : draft_["actionMaps"])
             {
                 if (!map.is_object()) continue;
-                const Guid mapId = Guid::FromString(map.value("id", std::string{})).value_or(Guid{});
-                const std::string mapName = map.value("name", std::string{});
+                const Guid mapId = IdOf(map);
+                const std::string mapName = Str(map, "name");
                 if (mapId.IsValid())
                     if (const auto why = ValidateName(draft_, mapId, mapName))
                         warnings.push_back("Invalid name in " + mapName + ": " + *why);
@@ -797,8 +798,8 @@ namespace Arcane::Editor
                 for (const auto& action : map["actions"])
                 {
                     if (!action.is_object()) continue;
-                    const Guid actionId = Guid::FromString(action.value("id", std::string{})).value_or(Guid{});
-                    const std::string actionName = action.value("name", std::string{});
+                    const Guid actionId = IdOf(action);
+                    const std::string actionName = Str(action, "name");
                     if (!actionId.IsValid()) continue;
                     if (const auto why = ValidateName(draft_, actionId, actionName))
                         warnings.push_back("Invalid name in " + mapName + "/" + actionName + ": " + *why);

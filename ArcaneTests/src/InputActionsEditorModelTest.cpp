@@ -485,3 +485,83 @@ TEST_CASE("input document: Save invokes onSaved exactly once per successful save
     CHECK(calls == 1);                                     // a refused save never fires the callback
     fs::remove(path);
 }
+
+// Final review C1: a hand-edited .arcinput whose map "name" or "id" is not a
+// string opens behind the repair banner; every model read the document's draw
+// makes (Warnings, every frame) and every public call must degrade, never
+// throw nlohmann's type_error.302.
+TEST_CASE("input editor: a non-string map name or id never throws from the model", "[editor][input]")
+{
+    const std::string mapId = "22222222-2222-4222-8222-222222222222";
+    const auto map = *Arcane::Guid::FromString(mapId);
+    SECTION("numeric name, valid id")
+    {
+        Arcane::Editor::InputActionsEditorModel model(nlohmann::json::parse(R"JSON({"actionMaps":[{"id":"22222222-2222-4222-8222-222222222222","name":5}]})JSON"));
+        std::vector<std::string> warnings;
+        CHECK_NOTHROW(warnings = model.Warnings());
+        REQUIRE(warnings.size() == 1);                        // the non-string name reads as blank: surfaced, not thrown
+        CHECK(warnings[0].rfind("Invalid name", 0) == 0);
+        std::optional<std::string> why = std::string("unset");
+        CHECK_NOTHROW(why = Arcane::Editor::InputActionsEditorModel::ValidateName(model.Draft(), map, "X"));
+        CHECK_FALSE(why.has_value());
+        bool selected = true;
+        CHECK_NOTHROW(selected = model.SelectByPath("Map"));
+        CHECK_FALSE(selected);
+        CHECK(model.SelectionKey().empty());
+        bool removed = false;
+        CHECK_NOTHROW(removed = model.RemoveMap(map));   // the id is valid: removal works
+        CHECK(removed);
+        CHECK(model.Draft()["actionMaps"].empty());
+    }
+    SECTION("numeric id, string name")
+    {
+        Arcane::Editor::InputActionsEditorModel model(nlohmann::json::parse(R"JSON({"actionMaps":[{"id":7,"name":"Map"}]})JSON"));
+        std::vector<std::string> warnings;
+        CHECK_NOTHROW(warnings = model.Warnings());
+        CHECK(warnings.empty());
+        std::optional<std::string> why = std::string("unset");
+        CHECK_NOTHROW(why = Arcane::Editor::InputActionsEditorModel::ValidateName(model.Draft(), map, "X"));
+        CHECK_FALSE(why.has_value());
+        bool selected = true;
+        CHECK_NOTHROW(selected = model.SelectByPath("Map"));   // the name matches, the id does not resolve
+        CHECK_FALSE(selected);
+        CHECK(model.SelectionKey().empty());
+        bool removed = true;
+        CHECK_NOTHROW(removed = model.RemoveMap(map));         // no map carries that id
+        CHECK_FALSE(removed);
+        CHECK(model.Draft()["actionMaps"].size() == 1);
+    }
+    SECTION("the survivor of a removal carries a malformed id")
+    {
+        // RemoveMap used to dereference Guid::FromString of the survivor's id.
+        Arcane::Editor::InputActionsEditorModel model(nlohmann::json::parse(R"JSON({"defaultMap":"22222222-2222-4222-8222-222222222222","actionMaps":[
+            {"id":"22222222-2222-4222-8222-222222222222","name":"A"},{"id":"x","name":"B"}]})JSON"));
+        bool removed = false;
+        CHECK_NOTHROW(removed = model.RemoveMap(map));
+        CHECK(removed);
+        CHECK(model.Draft()["actionMaps"].size() == 1);
+        CHECK_FALSE(model.Draft().contains("defaultMap"));   // a malformed survivor never becomes the default
+        CHECK_FALSE(model.SelectedMap().IsValid());
+    }
+}
+
+// Ruling P18: a container-fallback deselect INSIDE the document is silent --
+// never an event that moves the Inspector away from another source -- while
+// the live key (which Page() re-reads each frame) drops to the container.
+TEST_CASE("input editor: the container-fallback deselect is silent", "[editor][input]")
+{
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson());
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    model.SelectMap(map);
+    model.SelectAction(*Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333"));
+    const auto epoch = model.SelectionEpoch();
+    model.DeselectToMap(map);
+    CHECK(model.SelectionEpoch() == epoch);
+    CHECK(model.SelectionKey() == "22222222-2222-4222-8222-222222222222///");
+    CHECK_FALSE(model.SelectedAction().IsValid());
+    model.DeselectToAsset();
+    CHECK(model.SelectionEpoch() == epoch);
+    CHECK(model.SelectionKey().empty());
+    model.SelectMap(map);   // an ordinary Select* still bumps
+    CHECK(model.SelectionEpoch() == epoch + 1);
+}

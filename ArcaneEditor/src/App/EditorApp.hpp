@@ -279,6 +279,7 @@ namespace Arcane::Editor
         void ConsumeProjectDialogResult();
         void ConsumeMaterialDialogResults();
         void RepublishGameInput(const Arcane::Guid& asset, const Arcane::InputActionAsset& parsed);
+        [[nodiscard]] bool IsDesignatedInputAsset(const Arcane::Guid& asset);   // the open project's manifest inputActions names `asset`
         void FrameInput(LoopState& ls, FrameState& fs);
         void HandleUndoRedoAndSceneShortcuts(const Arcane::InputSnapshot& snap, FrameState& fs);
         void HandleGizmoModeKeys(const Arcane::InputSnapshot& snap);
@@ -1075,15 +1076,21 @@ namespace Arcane::Editor
         // dependency order: the host holds a reference to the scene source.
         // m_documents (declared far below) destructs FIRST: the host stores
         // raw EditorDocument* sources, and ~InspectorHost is implicit and
-        // never touches them; Shutdown() also ReleaseAll()s the host before
-        // ShutdownGraphPath's CloseAll (see there).
+        // never touches them; Shutdown() snapshots the Inspector BEFORE
+        // ShutdownGraphPath's CloseAll and ReleaseAll()s the host AFTER it
+        // (see there).
         Arcane::Editor::SceneInspectorSource  m_sceneSource;
         Arcane::Editor::InspectorHost         m_inspectorHost{ m_sceneSource };
         Arcane::Editor::InspectorWindowsState m_inspectorWindows;
         Arcane::Editor::SelectionEdge         m_sceneSelectionEdge;   // epoch-based (Task 2): Observe(m_selection.Epoch(), key)
         std::unordered_map<const Arcane::Editor::EditorDocument*, std::uint64_t> m_docSelectionEpochs;
         Arcane::Editor::InspectorSource* m_inspectorFocusedSource = nullptr;   // latched each Inspector draw; read by the Ctrl+S gate
-        std::optional<std::pair<Arcane::Guid, Arcane::InputActionAsset>> m_pendingInputRepublish;   // pushed by a saved input document's onSaved, applied after DrawAll; one slot: two saves in a frame collapse to the last (= the disk state)
+        // Pushed by a saved input document's onSaved, applied after DrawAll.
+        // ONLY the project's designated input asset is enqueued (a save of any
+        // other .arcinput republishes nothing, so Save All can never displace
+        // it); one slot, because every enqueued save is of that ONE asset and
+        // the last one in a frame is its disk state.
+        std::optional<std::pair<Arcane::Guid, Arcane::InputActionAsset>> m_pendingInputRepublish;
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
         // resolver (resolveAssetThumb), built once in StageSpriteTables next
         // to resolveTexturePreview above -- same [this]-capture idiom, same

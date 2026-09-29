@@ -1,5 +1,7 @@
 #include "Documents/InputActionsRows.hpp"
 
+#include "Documents/InputActionsJson.hpp"
+
 #include <Arcane/Input/InputActions.hpp>
 
 #include <algorithm>
@@ -11,15 +13,6 @@ namespace Arcane::Editor
 {
     namespace
     {
-        Guid IdOf(const nlohmann::json& row)
-        {
-            if (!row.is_object() || !row.contains("id") || !row["id"].is_string()) return {};
-            return Guid::FromString(row["id"].get<std::string>()).value_or(Guid{});
-        }
-        std::string Str(const nlohmann::json& row, const char* key)
-        {
-            return row.is_object() && row.contains(key) && row[key].is_string() ? row[key].get<std::string>() : std::string{};
-        }
         std::string Lower(std::string s)
         {
             std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -49,12 +42,6 @@ namespace Arcane::Editor
         bool Conflicted(const std::vector<InputActionsEditorModel::BindingConflict>& conflicts, const Guid& id)
         {
             return std::any_of(conflicts.begin(), conflicts.end(), [&](const auto& c) { return c.binding == id; });
-        }
-        const nlohmann::json* FindMap(const nlohmann::json& draft, const Guid& map)
-        {
-            if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return nullptr;
-            for (const auto& m : draft["actionMaps"]) if (IdOf(m) == map) return &m;
-            return nullptr;
         }
     }
 

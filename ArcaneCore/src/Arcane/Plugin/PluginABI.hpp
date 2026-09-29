@@ -974,7 +974,11 @@ namespace Arcane
     //     gained `heldModifiers_`; `LocalInputUser` (held by value inside
     //     `ARCANE_API ClientRuntime`) gained `mapStack_`/`scheme_`. A v44
     //     module was compiled against the old vtable and layouts; reject the
-    //     pairing. ReferenceProject.arcproj restamped.
+    //     pairing. ReferenceProject.arcproj restamped. Also in 45 (plan T12):
+    //     `HostConfig` gained `selectInDocument` (--select-in-document), and
+    //     `VerifyReport` gained `m_inspectorSet`/`m_inspectorSource`/
+    //     `m_inspectorBreadcrumb` behind the newly exported `SetInspector`
+    //     (report schemaVersion 11) -- both layouts moved.
     inline constexpr uint32_t kGamePluginABIVersion = 45;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the

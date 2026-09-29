@@ -883,7 +883,7 @@ namespace Arcane::Editor
                 auto doc = Arcane::Editor::InputActionsDocument::Open(path, m_undo ? &*m_undo : nullptr);
                 if (doc)
                     doc->SetOnSaved([this](const Arcane::Guid& g, const Arcane::InputActionAsset& a)
-                    { m_pendingInputRepublish.emplace(g, a); });
+                    { if (IsDesignatedInputAsset(g)) m_pendingInputRepublish.emplace(g, a); });   // a non-designated save never displaces the designated one (Save All)
                 return doc;
             },
             [](const std::filesystem::path& path) -> Arcane::Guid

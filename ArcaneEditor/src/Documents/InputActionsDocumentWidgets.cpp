@@ -1,5 +1,7 @@
 #include "Documents/InputActionsDocumentWidgets.hpp"
 
+#include "Documents/InputActionsJson.hpp"
+
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
@@ -18,24 +20,7 @@ namespace Arcane::Editor
         constexpr float kIndent = 16.0f;
         constexpr const char* kDragPayload = "ARC_INPUT_ROW";
 
-        Guid IdOf(const nlohmann::json& row)
-        {
-            if (!row.is_object() || !row.contains("id") || !row["id"].is_string()) return {};
-            return Guid::FromString(row["id"].get<std::string>()).value_or(Guid{});
-        }
-        std::string Str(const nlohmann::json& row, const char* key)
-        { return row.is_object() && row.contains(key) && row[key].is_string() ? row[key].get<std::string>() : std::string{}; }
-        // A hand-edited draft may carry any JSON type under any key (the repair
-        // banner sends users to the text): the draw reads with type checks and
-        // degrades, never through nlohmann's throwing value()/get<>.
-        bool Bool(const nlohmann::json& row, const char* key)
-        { return row.is_object() && row.contains(key) && row[key].is_boolean() && row[key].get<bool>(); }
-        const nlohmann::json* FindMap(const nlohmann::json& draft, const Guid& id)
-        {
-            if (!draft.is_object() || !draft.contains("actionMaps") || !draft["actionMaps"].is_array()) return nullptr;
-            for (const auto& m : draft["actionMaps"]) if (IdOf(m) == id) return &m;
-            return nullptr;
-        }
+        // IdOf / Str / Bool / FindMap: the tolerant draft reads (InputActionsJson.hpp).
         bool IsMapId(const nlohmann::json& draft, const Guid& id) { return FindMap(draft, id) != nullptr; }
         bool IsActionId(const nlohmann::json& draft, const Guid& id)
         {
@@ -140,7 +125,11 @@ namespace Arcane::Editor
         {
             if (services.inputSwallowed && services.inputSwallowed()) return false;
             if (ImGui::GetDragDropPayload() != nullptr) return false;   // the public form; IsDragDropActive is imgui_internal
-            if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) || ImGui::GetIO().WantTextInput) return false;
+            // NoPopupHierarchy: a popup opened from a column (a row's context
+            // menu advertising "Delete  Del") must NOT count as the column's
+            // focus, or Del would delete the SELECTED row, not the right-clicked
+            // one. Keys stay inert while any popup owns focus.
+            if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) || ImGui::GetIO().WantTextInput) return false;
             return !state.renameTarget.IsValid();   // safe: DrawActions/DrawMaps sweep a target whose row is not drawn this frame
         }
     }
@@ -294,7 +283,7 @@ namespace Arcane::Editor
         // (spec A s3.1). Not while an inline rename is live -- that click commits
         // the rename.
         if (!state.renameTarget.IsValid() && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered())
-            model.SelectMap({});
+            model.DeselectToAsset();   // silent (P18): not an event that takes the Inspector from another source
         HandleMapKeys(model, state, services, edit);   // still inside ##input_maps
     }
 
@@ -325,10 +314,11 @@ namespace Arcane::Editor
         state.dragVerdictPrev = state.dragVerdict;
         state.dragVerdict = InputActionsDocumentState::DragVerdict::Illegal;   // hovering no row reads "Cannot move" (the drag op starts invalid)
         for (const InputRow& row : rows) DrawRow(row, model, state, services, edit, rows);
-        // Empty space under the rows: the MAP is the container (spec A s3.1);
-        // SelectMap(same) clears action/binding/part.
+        // Empty space under the rows: the MAP is the container (spec A s3.1),
+        // clearing action/binding/part SILENTLY (Ruling P18): not a selection
+        // event, so it never takes the Inspector from the scene.
         if (!state.renameTarget.IsValid() && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered())
-            model.SelectMap(map);
+            model.DeselectToMap(map);
         HandleKeys(model, state, services, edit, rows);
     }
 
