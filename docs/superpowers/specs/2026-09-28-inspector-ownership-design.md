@@ -138,7 +138,10 @@ editor only where a standalone use needs it, and we start with none).
   releases; history back/forward restores selection in the source; a second instance
   follows while the first is pinned.
 - Witness: `E-lane` headless editor run: `--open-asset` + select-in-document, report
-  field `inspector.source` = the document path, breadcrumb text in the report.
+  field `inspector.source` = the Inspector source's `SourceName()` (for an input
+  document its filename, e.g. `"Player.arcinput"` -- not a path; the scene reports
+  `"Scene"`), and the breadcrumb text (e.g. `"Player.arcinput > Player > Jump"`) in
+  the report.
 - Desk: the mockup's six steps, on the real editor.
 
 ## 6. Decisions taken at review (2026-09-28)
@@ -166,3 +169,13 @@ editor only where a standalone use needs it, and we start with none).
   editor's page proves the seam).
 - The Material tab migration plan (after the input editor).
 - Per-user layouts (would carry pins and instances) -- later, its own spec.
+- `[EditorInspector][Instances]` had no ClearAllFn -- the symptom of a bigger bug,
+  fixed 2026-09-29 (arc-1 debt sweep Task 13). `ClearAllFn` ran only from
+  `ImGui::ClearIniSettings`, which the editor never called, and the instance list is
+  layout by design (`EditorInspectorHostTest.cpp:199`). The real defect:
+  `RetargetLayoutIni` saved the outgoing layout and repointed `io.IniFilename` but
+  never loaded the incoming file (ImGui reads the ini only while `!SettingsLoaded`),
+  so a windowed project switch carried the outgoing project's docking, windows, panel
+  visibility, camera, play mode, Material-panel preference and Inspector instances
+  into the incoming project and then overwrote its file. A switch now clears and
+  reloads, and every editor ini handler resets to defaults in its `ClearAllFn`.
