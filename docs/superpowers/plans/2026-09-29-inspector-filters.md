@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Every Inspector instance carries a checkbox filter over source kinds. The Asset Browser becomes an Inspector source, and its in-panel preview pane is removed. The default layout gets two Inspectors: the main one shows everything but Assets, and "Inspector 2" shows only Assets.
+**Goal:** Every Inspector instance carries a checkbox filter over source kinds. The Asset Browser becomes an Inspector source, and its in-panel preview pane is removed. The default layout gets two Inspectors: the main one shows everything but Assets, and "Inspector 2" shows only Assets. In the same phase, the shader editor's "Material" window retires into a material page in the Inspector, and the Sprite and Mesh documents' property forms move into Inspector pages too.
 
 **Architecture:**
 - `InspectorHost` stays pure (no ImGui). It gains:
@@ -22,7 +22,8 @@
 
 ## Global Constraints
 
-- Kind ids (exact strings): `"scene"`, `"input-actions"`, `"assets"`. Display names: `"Scene"`, `"Input Actions"`, `"Assets"`. `"shader"` is NOT added in this arc (mini-arc 3 adds it).
+- Kind catalog, in this exact order (id -> display name): `"scene"` Scene, `"assets"` Assets, `"input-actions"` Input Actions, `"material"` Materials, `"sprite"` Sprites, `"mesh"` Meshes. There is no `"shader"` id: the shader editor's documents are kind `"material"`.
+- One selection rule for EVERY source (spec s3): opening a document selects its page, a selection gesture inside a source (including a click in a document's content) is an event, and tab/focus/window activation never is. No source gets a focus-follow exception.
 - Filters persist the UNTICKED kinds (exclusions). Empty exclusions = All. A kind added to the catalog later is admitted by every existing filter.
 - At least one catalog kind stays ticked. A filter that excludes every catalog kind is refused, and on ini load it is sanitized to All.
 - A source whose `Kind()` is empty is admitted only by All.
@@ -33,7 +34,7 @@
   - instance 0: `"Inspector###Inspector"`, or `"Inspector - <label>###Inspector"` when filtered;
   - instance N >= 1: `"Inspector <N+1>###inspector_<N>"` or `"Inspector <N+1> - <label>###inspector_<N>"`.
   - Instance 0 MOVES from the bare name `"Inspector"` to the stable id `"###Inspector"`. `ImHashStr` resets its crc at `###` but still hashes the `###` characters (`imgui.cpp` ~line 2539), so `ImHashStr("X###Inspector") != ImHashStr("Inspector")`: no ### suffix keeps the old id. The one-time legacy upgrade (Task 7) re-docks `###Inspector` where `Inspector` was docked, so an existing layout keeps its main Inspector position. Every lookup of the primary window by name (`FindWindowByName("Inspector")`, `SelectDockTab("Inspector")`, `DockBuilderDockWindow("Inspector", ...)`) switches to `"###Inspector"` through one constant, `kPrimaryInspectorWindowId`.
-- Default layout = exactly instances {0, 1}: 0 = All but Assets (`excluded = {"assets"}`), 1 = Assets only (`excluded = every catalog kind except "assets"`), docked in a split to the RIGHT of the Asset Browser's node.
+- Default layout = exactly instances {0, 1}: 0 = All but Assets (`excluded = {"assets"}`), 1 = Assets only (`excluded = {"scene","input-actions","material","sprite","mesh"}`), docked in a split to the RIGHT of the Asset Browser's node.
 - Every new `Panels/*.cpp` the tests need must be added to the EXPLICIT `ArcaneTests` file list in `premake5.lua` (near line 1237/1552); the editor project globs, the test project does not. Re-run `generate.bat` (or `ThirdParty\premake5\premake5.exe vs2026`) after any file-list change.
 - Build: `msbuild Arcane.slnx /p:Configuration=Debug /p:Platform=x64 -m -nr:false`. Tests: run `bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe "[inspector]"` FROM ITS OWN DIRECTORY. The final suite gate is `~[gpu]` plus `[gpu]~[witness]` plus the witnesses.
 - Never push. Commit per task on branch `feat/inspector-filters` (already created off main `6f8a05e3`).
@@ -73,13 +74,17 @@
 
 using namespace Arcane::Editor;
 
-TEST_CASE("InspectorKinds: the catalog is scene, input-actions, assets in that order", "[editor][inspector]")
+TEST_CASE("InspectorKinds: the catalog order is scene, assets, input-actions, material, sprite, mesh", "[editor][inspector]")
 {
-    REQUIRE(kInspectorKinds.size() == 3);
+    REQUIRE(kInspectorKinds.size() == 6);
     CHECK(kInspectorKinds[0].id == "scene");
-    CHECK(kInspectorKinds[1].id == "input-actions");
-    CHECK(kInspectorKinds[2].id == "assets");
+    CHECK(kInspectorKinds[1].id == "assets");
+    CHECK(kInspectorKinds[2].id == "input-actions");
+    CHECK(kInspectorKinds[3].id == "material");
+    CHECK(kInspectorKinds[4].id == "sprite");
+    CHECK(kInspectorKinds[5].id == "mesh");
     CHECK(FindInspectorKind("assets")->displayName == "Assets");
+    CHECK(FindInspectorKind("material")->displayName == "Materials");
     CHECK(FindInspectorKind("shader") == nullptr);
 }
 
@@ -88,20 +93,22 @@ TEST_CASE("InspectorFilter: exclusions admit everything else, and an empty kind 
     InspectorFilter all;
     CHECK(all.IsAll());
     CHECK(all.Admits("scene"));
-    CHECK(all.Admits(""));                         // a non-selecting document: All only
-    CHECK(all.Admits("shader"));                   // a kind this build does not know: admitted
+    CHECK(all.Admits(""));                         // a document with nothing to edit: All only
+    CHECK(all.Admits("future-kind"));              // a kind this build does not know: admitted
 
     const InspectorFilter noAssets = InspectorFilter::AllBut("assets");
     CHECK_FALSE(noAssets.IsAll());
     CHECK(noAssets.Admits("scene"));
+    CHECK(noAssets.Admits("material"));
     CHECK_FALSE(noAssets.Admits("assets"));
     CHECK_FALSE(noAssets.Admits(""));              // filtered: empty kinds are out
-    CHECK(noAssets.Admits("shader"));              // a later kind appears (decision 8.3)
+    CHECK(noAssets.Admits("future-kind"));         // a later kind appears (decision 8.3)
 
     const InspectorFilter onlyAssets = InspectorFilter::Only("assets");
+    CHECK(onlyAssets.excluded == std::vector<std::string>{ "scene", "input-actions", "material", "sprite", "mesh" });
     CHECK(onlyAssets.Admits("assets"));
     CHECK_FALSE(onlyAssets.Admits("scene"));
-    CHECK_FALSE(onlyAssets.Admits("input-actions"));
+    CHECK_FALSE(onlyAssets.Admits("material"));
 }
 
 TEST_CASE("InspectorFilter: Sanitized drops unknown kinds, duplicates, and an all-excluded set", "[editor][inspector]")
@@ -109,7 +116,8 @@ TEST_CASE("InspectorFilter: Sanitized drops unknown kinds, duplicates, and an al
     InspectorFilter f;
     f.excluded = { "assets", "bogus", "assets", "scene" };
     CHECK(f.Sanitized().excluded == std::vector<std::string>{ "scene", "assets" });   // catalog order
-    f.excluded = { "scene", "input-actions", "assets" };
+    f.excluded = { "mesh", "scene", "sprite", "input-actions", "material", "assets" };
+    CHECK(f.ExcludesEveryKind());
     CHECK(f.Sanitized().IsAll());                  // nothing left to show: All, never empty
 }
 
@@ -119,14 +127,11 @@ TEST_CASE("InspectorFilterLabel: All, one name, All but X, or the ticked list", 
     CHECK(InspectorFilterLabel(InspectorFilter::Only("scene")) == "Scene");
     CHECK(InspectorFilterLabel(InspectorFilter::AllBut("assets")) == "All but Assets");
     InspectorFilter two;
-    two.excluded = { "input-actions" };            // 3 kinds, 1 unticked -> "All but"
-    CHECK(InspectorFilterLabel(two) == "All but Input Actions");
-    // With 3 catalog kinds, "one ticked" and "one unticked" cover every
-    // non-All case; the joined-list branch is exercised by a 2-excluded set
-    // whose remainder is ONE kind -- i.e. the "one ticked" rule wins first.
-    InspectorFilter one;
-    one.excluded = { "scene", "input-actions" };
-    CHECK(InspectorFilterLabel(one) == "Assets");
+    two.excluded = { "input-actions", "material", "sprite", "mesh" };   // Scene + Assets ticked
+    CHECK(InspectorFilterLabel(two) == "Scene, Assets");
+    InspectorFilter four;
+    four.excluded = { "scene", "assets" };
+    CHECK(InspectorFilterLabel(four) == "Input Actions, Materials, Sprites, Meshes");
 }
 ```
 
@@ -165,11 +170,14 @@ namespace Arcane::Editor
         std::string_view displayName;   // the dropdown row and the label
     };
 
-    // Catalog order = dropdown order = Sanitized() order. Mini-arc 3 appends "shader".
-    inline constexpr std::array<InspectorKind, 3> kInspectorKinds{ {
+    // Catalog order = dropdown order = Sanitized() order = the Filters= write order.
+    inline constexpr std::array<InspectorKind, 6> kInspectorKinds{ {
         { "scene",         "Scene" },
-        { "input-actions", "Input Actions" },
         { "assets",        "Assets" },
+        { "input-actions", "Input Actions" },
+        { "material",      "Materials" },       // ShaderEditorDocument
+        { "sprite",        "Sprites" },
+        { "mesh",          "Meshes" },
     } };
 
     [[nodiscard]] const InspectorKind* FindInspectorKind(std::string_view id);
@@ -396,7 +404,7 @@ TEST_CASE("InspectorHost filters: SetFilter refuses an all-excluded set and an u
 {
     World w;
     InspectorFilter none;
-    none.excluded = { "scene", "input-actions", "assets" };
+    none.excluded = { "scene", "assets", "input-actions", "material", "sprite", "mesh" };
     CHECK_FALSE(w.host.SetFilter(0, none));
     CHECK(w.host.Find(0)->filter.IsAll());
     CHECK_FALSE(w.host.SetFilter(5, InspectorFilter::Only("scene")));
@@ -459,6 +467,7 @@ Expected: compile errors (`Kind`, `SetFilter`, `CanPin(int)`, the `AddSource` ov
 - `SceneInspectorSource.hpp`: `std::string_view Kind() const override { return "scene"; }`
 - `EditorDocument.hpp` (next to its `SourceName()` default): `std::string_view Kind() const override { return {}; }`
 - `InputActionsDocument.hpp` (next to its `SourceName()`): `std::string_view Kind() const override { return "input-actions"; }`
+- `ShaderEditorDocument`, `SpriteDocument` and `MeshDocument` keep the empty default in this task; Tasks 8-9 give them their kinds with their pages.
 
 `InspectorHost.hpp` changes:
 - `#include "Panels/InspectorKinds.hpp"` and `#include <unordered_map>`.
@@ -799,13 +808,13 @@ TEST_CASE("InspectorHost ini: Filters= round-trips after Ids=; a Filters= line m
     FakeSource scene{ "Scene", "scene" };
     InspectorHost host{ scene };
     RegisterInspectorInstancesSettings(host);
-    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1,3\nFilters=0:assets,1:scene+input-actions\n");
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1,3\nFilters=0:assets,1:scene+input-actions+material+sprite+mesh\n");
     CHECK_FALSE(host.TakeLegacyLayoutUpgrade());
     CHECK(host.Find(0)->filter == InspectorFilter::AllBut("assets"));
     CHECK(host.Find(1)->filter == InspectorFilter::Only("assets"));
     CHECK(host.Find(3)->filter.IsAll());
     const std::string saved = ImGui::SaveIniSettingsToMemory();
-    CHECK(saved.find("Ids=1,3\nFilters=0:assets,1:scene+input-actions\n") != std::string::npos);
+    CHECK(saved.find("Ids=1,3\nFilters=0:assets,1:scene+input-actions+material+sprite+mesh\n") != std::string::npos);
 }
 
 TEST_CASE("InspectorHost ini: garbage Filters= entries are sanitized, never thrown on", "[editor][inspector]")
@@ -815,7 +824,7 @@ TEST_CASE("InspectorHost ini: garbage Filters= entries are sanitized, never thro
     InspectorHost host{ scene };
     RegisterInspectorInstancesSettings(host);
     ImGui::LoadIniSettingsFromMemory(
-        "[EditorInspector][Instances]\nIds=2\nFilters=7:scene,x:assets,2,0:bogus+assets,,2:scene+input-actions+assets,\n");
+        "[EditorInspector][Instances]\nIds=2\nFilters=7:scene,x:assets,2,0:bogus+assets,,2:scene+assets+input-actions+material+sprite+mesh,\n");
     CHECK_FALSE(host.TakeLegacyLayoutUpgrade());           // the line was present: not legacy
     CHECK(host.Find(0)->filter == InspectorFilter::AllBut("assets"));   // bogus dropped
     CHECK(host.Find(2)->filter.IsAll());                    // all-excluded -> All
@@ -1441,7 +1450,209 @@ git commit -m "feat(editor): Inspector filter dropdown + filtered titles/history
 
 ---
 
-### Task 8: Automation. Report `instances[].excluded`, `--select-asset`, re-author the seed, goldens
+### Task 8: The shared document-page selection; the material page; the Material window retires
+
+**Files:**
+- Create: `ArcaneEditor/src/Documents/DocumentPageSelection.hpp`
+- Modify: `ArcaneEditor/src/Documents/ShaderEditorDocument.hpp/.cpp`
+- Modify: `ArcaneEditor/src/App/EditorApp.hpp`, `ArcaneEditor/src/App/EditorAppFrame.cpp` (retire `DrawMaterialPanel`'s call ~line 2415, `ResolveActiveMaterialDoc` ~line 3229, the tab-follow block ~lines 3515-3549, `m_activeMaterialGuid`, `m_materialDocCount`)
+- Modify: `ArcaneEditor/src/Panels/EditorPanels.cpp` (`BuildDefaultLayout`: drop `DockBuilderDockWindow("Material", rightId)` and fix the comment above it)
+- Test: `ArcaneTests/src/DocumentPageSelectionTest.cpp` (new), plus the shader document test that exists today. Grep `ArcaneTests/src` for `ShaderEditorDocument` and extend the file that already constructs one headlessly (e.g. `ShaderEditorDocumentTest.cpp`, whose "material panel layout round-trips through imgui.ini" case is the precedent).
+
+**Interfaces:**
+- Consumes: `InspectorSource`/`InspectorPage`, `PropertyGrid`, `EditGesture::ScopeGuard`.
+- Produces:
+```cpp
+// Documents/DocumentPageSelection.hpp -- a document whose Inspector page is the
+// WHOLE document's (material, sprite, mesh): one key, selected when the
+// document opens, re-selected by a click in its content (spec s3's one
+// selection rule). Header-only; ImGui calls only in NoteContentClick.
+struct DocumentPageSelection
+{
+    std::string   key;         // "material" / "sprite" / "mesh"
+    std::uint64_t epoch = 1;   // 1 = selected at open: the app's per-document epoch map starts at 0, so frame 1 is an event
+    [[nodiscard]] std::string SelectionKey() const { return key; }
+    [[nodiscard]] bool Resolves(std::string_view k) const { return k == key; }
+    // Call between the document window's Begin/End, after its content: a
+    // mouse click (left/right/middle) inside the window's INNER rect -- never
+    // the title bar or a dock tab -- bumps the epoch. Tab switches and focus
+    // never do (they are not clicks in the content).
+    void NoteContentClick();
+};
+```
+- `ShaderEditorDocument` overrides:
+  - `Kind()` returns `"material"`.
+  - `Page()`/`PageFor(key)` return the material page when the key resolves.
+  - `SelectionKey()`, `RestoreSelection(key)` (true when it resolves, no epoch bump), `Resolves`, and `SelectionEpoch()` return `m_pageSel.epoch`.
+- The page is a private nested `MaterialInspectorPage final : InspectorPage` holding `ShaderEditorDocument&`:
+  - `Breadcrumb()` returns one crumb, `{ m_title, <select: no-op>, "material" }`.
+  - `Draw(PropertyGrid&)` calls `doc.DrawMaterialPageBody()`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`DocumentPageSelectionTest.cpp` (a device-less ImGui context, the `IniContext` shape from Task 4, plus `io.DisplaySize = {800,600}` and `io.Fonts->Build()`):
+```cpp
+TEST_CASE("DocumentPageSelection: selected at open; a content click re-selects; a click outside does not", "[editor][inspector]")
+{
+    DocumentPageSelection sel{ "material" };
+    CHECK(sel.epoch == 1);
+    CHECK(sel.Resolves("material"));
+    CHECK_FALSE(sel.Resolves("mesh"));
+    // Frame A: mouse inside the window's content, left click -> bump.
+    // Frame B: mouse over the window's TITLE BAR, click -> no bump.
+    // Frame C: no click -> no bump.
+    // (Drive io.AddMousePosEvent / AddMouseButtonEvent before NewFrame; Begin("doc") at a
+    //  fixed pos/size via SetNextWindowPos/Size; call sel.NoteContentClick() before End.)
+    CHECK(sel.epoch == 2);
+}
+```
+Write the three frames in full. The precedent for driving clicks on a bare context is `AssetPanelCommonTest.cpp`.
+
+In the shader document test, construct a document the way the existing test does, then:
+```cpp
+    CHECK(doc.Kind() == "material");
+    CHECK(doc.SelectionKey() == "material");
+    CHECK(doc.SelectionEpoch() == 1);                  // selected at open
+    REQUIRE(doc.Page() != nullptr);
+    CHECK(doc.Page()->Breadcrumb().size() == 1);
+    CHECK(doc.Page()->Breadcrumb()[0].key == std::optional<std::string>{ "material" });
+    CHECK(doc.RestoreSelection("material"));
+    CHECK(doc.SelectionEpoch() == 1);                  // a restore is not a click
+    CHECK_FALSE(doc.Resolves("node:7"));
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Expected: `DocumentPageSelection.hpp` missing; `Kind()` returns `""`.
+
+- [ ] **Step 3: Implement**
+
+`DocumentPageSelection::NoteContentClick` (inline in the header, `#include <imgui_internal.h>`):
+```cpp
+inline void DocumentPageSelection::NoteContentClick()
+{
+    ImGuiWindow* w = ImGui::GetCurrentWindow();
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)
+                      || ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+    if (clicked && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)
+        && w->InnerRect.Contains(io.MousePos))
+        ++epoch;
+}
+```
+`ShaderEditorDocument`:
+- **Selection member.** Add `DocumentPageSelection m_pageSel{ "material" };` and the overrides listed under Interfaces.
+- **Content click.** In `Draw`, after the window's content and before `ImGui::End()`, on the non-collapsed path, call `m_pageSel.NoteContentClick();`. The canvas (imgui-node-editor) is a child window of the document window, so `ChildWindows` covers a click on the background or a node. Verify it at the desk (Step 5).
+- **Page body.** Rename `DrawMaterialWindow()` to `DrawMaterialPageBody()` and drop its `Begin("Material")`/`End()`. KEEP its `EditGesture::ScopeGuard` as its first local. The page body now draws inside an Inspector instance window. Keep:
+  - the title line;
+  - "(Instance)";
+  - the `PaneSplitter`-over-`Layout().previewSplit` preview/params split, unchanged.
+- **Remove:**
+  - the free `DrawMaterialPanel` (declaration and definition);
+  - `TabBecameVisible` and `m_tabBecameVisible`, IF the tab-follow block was their only reader. Grep to confirm first.
+- **Comments.** Update the header's comments: the "SEAM" comment now points at the next phase's node page.
+
+App:
+- Delete the `DrawMaterialPanel(ResolveActiveMaterialDoc())` call.
+- Delete `ResolveActiveMaterialDoc` and the whole tab-follow block, including both `SelectDockTab` calls it makes.
+- Delete the `m_activeMaterialGuid`/`m_materialDocCount` members and their comments.
+- Grep for any other reader before deleting. `fs.vp.appearing` may have other readers; keep it if so.
+
+`InspectorSaveTarget` already maps a document source to its document, so Ctrl+S in the page saves the material. Confirm it with a grep and do not change it.
+
+- [ ] **Step 4: Run the tests**
+
+Run: build Debug, `ArcaneTests.exe "[inspector]"`, then the shader document test's tag, then `"~[gpu]"`.
+Expected: PASS.
+
+- [ ] **Step 5: Desk check (windowed, the user)**
+
+Open a material:
+- its page shows in the main Inspector (All but Assets), with the preview and params;
+- dragging a param undoes as one step;
+- the preview/params split drags;
+- clicking the canvas background after selecting an entity brings the material page back;
+- switching tabs between two material documents does NOT move the Inspector;
+- Ctrl+S with the Inspector focused saves the material;
+- no "Material" tab appears anywhere.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A ArcaneEditor/src ArcaneTests/src
+git commit -m "feat(editor): the Material window retires -- ShaderEditorDocument is an Inspector source (kind material) whose page is the preview + params; opened = selected, a content click re-selects, tab switches never do (inspector filters s6a)"
+```
+
+---
+
+### Task 9: The Sprite and Mesh pages
+
+**Files:**
+- Modify: `ArcaneEditor/src/Documents/SpriteDocument.hpp/.cpp`
+- Modify: `ArcaneEditor/src/Documents/MeshDocument.hpp/.cpp`
+- Test: the existing sprite/mesh document tests. Grep `ArcaneTests/src` for `SpriteDocument` / `MeshDocument` and extend the file that constructs each one.
+
+**Interfaces:**
+- Consumes: `DocumentPageSelection` (Task 8).
+- Produces:
+  - `SpriteDocument`: `Kind()` returns `"sprite"`, key `"sprite"`, and a private `SpriteInspectorPage` whose `Draw` calls `DrawFormBody()`.
+  - `MeshDocument`: `Kind()` returns `"mesh"`, key `"mesh"`, and a private `MeshInspectorPage` whose `Draw` calls `DrawFormBody()`.
+  - Each page's breadcrumb is one crumb, `{ <document title>, no-op, "<key>" }`.
+
+- [ ] **Step 1: Write the failing tests**
+
+For each document, in its existing test file:
+```cpp
+    CHECK(doc.Kind() == "sprite");                 // "mesh" for MeshDocument
+    CHECK(doc.SelectionKey() == "sprite");
+    CHECK(doc.SelectionEpoch() == 1);
+    REQUIRE(doc.Page() != nullptr);
+    CHECK(doc.Page()->Breadcrumb()[0].key == std::optional<std::string>{ "sprite" });
+```
+Also add a device-less draw case. Draw the page into a bare window, as `InputActionsDocumentUiTest.cpp:84` draws its page into `Begin("Inspector")`. Assert that the form's first widget id exists in THAT window and NOT in the document window:
+- sprite: the `"Pixels Per Meter"` drag; look it up through `ImGui::FindWindowByName(...)->GetID("Pixels Per Meter")` and `ImGui::GetCurrentContext()->LastItemData`, or through the hovered/active id after a click at its rect;
+- mesh: its first topology/source widget.
+
+If an id probe is not practical on this ImGui version, assert the observable effect instead: a scripted drag on the page's widget changes `doc`'s data and marks it dirty.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Expected: `Kind()` returns `""`.
+
+- [ ] **Step 3: Implement**
+
+For each document:
+- **Split the form.**
+  - Move everything in `Draw` after the preview block (sprite: after the texture preview; mesh: after `##meshpreview`'s `EndChild()` + `Separator()`, through the last form widget) into `void DrawFormBody();`.
+  - Move the `bracket`/`commit` lambdas along with the form.
+  - Give `DrawFormBody` its OWN `EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };` as its first local, because it now runs inside an Inspector window's Begin/End. The precedent is `DrawMaterialWindow`, which already held a second guard on the document's gesture.
+- **What stays in `Draw`:** the document's toolbar (Save button, "(unsaved)"), the preview, and `m_pageSel.NoteContentClick();` before `End()`.
+- **Ctrl+S.** The document keeps its own `ImGui::Shortcut(Ctrl+S)`.
+- **Source overrides.** Add `DocumentPageSelection m_pageSel{ "sprite" }` (`"mesh"`) and the overrides, exactly as Task 8 does for materials.
+- **Preview reads.** Check every preview read that USED a form-local value. Mesh's `m_validationReason` is computed from `m_data`, not from the form, so it should be unaffected. Any such dependency must read document state, never a local that moved.
+
+- [ ] **Step 4: Run the tests**
+
+Run: build, the two documents' test tags, then `"~[gpu]"`.
+Expected: PASS.
+
+- [ ] **Step 5: Desk check (windowed, the user)**
+
+- Open a sprite: its form is in the Inspector, and the document shows only the toolbar and preview.
+- A pivot drag updates the preview live and undoes as one step.
+- The same checks for a mesh: topology edits rebuild the preview.
+- A click in either preview re-selects the page after an entity click.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A ArcaneEditor/src ArcaneTests/src
+git commit -m "feat(editor): Sprite and Mesh forms move into Inspector pages (kinds sprite/mesh); the documents keep their toolbar + preview (inspector filters s6a)"
+```
+
+---
+
+### Task 10: Automation. Report `instances[].excluded`, `--select-asset`, re-author the seed, goldens
 
 **Files:**
 - Modify: `ArcaneClient/src/Arcane/Host/VerifyReport.hpp/.cpp` (schemaVersion 12, `SetInspector(source, breadcrumb, instances)`)
@@ -1465,13 +1676,18 @@ In `EditorWitnessTest.cpp` E3 (after the existing breadcrumb check):
     CHECK(inst[0].at("id") == 0);
     CHECK(inst[0].at("excluded") == nlohmann::json::array({ "assets" }));
     CHECK(inst[1].at("id") == 1);
-    CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions" }));
+    CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions", "material", "sprite", "mesh" }));
 ```
 Add a new E4 case, copying E3's harness exactly and swapping `--open-asset ... --select-in-document ...` for `--select-asset <brick texture guid from ReferenceProject>`. Pick a `.png` under `ReferenceProject/Content` and read its `.meta` guid:
 ```cpp
     CHECK(run.report["inspector"].at("source") == "Assets");          // Current(): the asset click
     CHECK(run.report["inspector"]["instances"][0].at("source") == "Scene");   // All but Assets: untouched
     CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");
+```
+Add E5, again copying E3's harness, three runs with `--open-asset <guid>` of a ReferenceProject material (`.arcmat`), sprite (`.arcsprite`) and mesh (`.arcmesh`). Read each guid from the file, and pick assets that exist under `ReferenceProject/Content`:
+```cpp
+    CHECK(run.report["inspector"]["instances"][0].at("source") == "<the document's SourceName(): its Title()>");
+    CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");   // untouched by a document open
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1526,19 +1742,20 @@ Pass it as `SetInspector`'s third argument. Use the real namespace of `VerifyRep
    del bin\Debug-windows-x86_64-md\ArcaneEditor\imgui.ini
    bin\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project ReferenceProject --headless --frames 90 --dump-layout %TEMP%\seed.ini
    ```
-   Because `--headless` pins the OLD seed, this run exercises the legacy upgrade: the old seed has no `Filters=`. Check that `%TEMP%\seed.ini` now carries `[EditorInspector][Instances]` with `Ids=1` and `Filters=0:assets,1:scene+input-actions`, plus `[Window][Inspector - All but Assets###Inspector]` and `[Window][Inspector 2 - Assets###inspector_1]` entries (ImGui keys window settings by the full title, and the ID is what matters) docked into the seed's nodes. Copy it over `ReferenceProject/Saved/verify-layout.ini`. Keep the file's hand-written header comment block (lines 1-60 explain the seed), and paste the dumped body under it.
-3. Add the lane pair to `scripts/golden-gate.ps1`, after `editor-input-doc`, then update the header list and "Ten combinations" to twelve:
+   Because `--headless` pins the OLD seed, this run exercises the legacy upgrade: the old seed has no `Filters=`. Check that `%TEMP%\seed.ini` now carries `[EditorInspector][Instances]` with `Ids=1` and `Filters=0:assets,1:scene+input-actions+material+sprite+mesh`, plus `[Window][Inspector - All but Assets###Inspector]` and `[Window][Inspector 2 - Assets###inspector_1]` entries (ImGui keys window settings by the full title, and the ID is what matters) docked into the seed's nodes. Copy it over `ReferenceProject/Saved/verify-layout.ini`. Keep the file's hand-written header comment block (lines 1-60 explain the seed), and paste the dumped body under it.
+3. Add TWO lane pairs to `scripts/golden-gate.ps1`, after `editor-input-doc`, then update the header list and "Ten combinations" to fourteen. The second pair is `editor-material-page`, with `ExtraArgs = @('--open-asset', '<material guid>')` and `SelfTestExpect = 'Green'` (the document tab covers the viewport, as with input-doc: verify with `-SelfTest`):
    ```powershell
    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', '<brick guid>'); SelfTestExpect = 'Failed' }
    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', '<brick guid>'); SelfTestExpect = 'Failed' }
    ```
    `SelfTestExpect 'Failed'`: the viewport is visible, so the self-test's boot-scene mutation shows. Verify with `-SelfTest` and flip it if wrong, as the input-doc lane's comment describes.
-4. Re-bless `editor-ui`, `editor-ui-perspective`, `editor-input-doc` and the new `editor-asset-page` on both backends with the staged-slot procedure. LOOK at every new image before copying it to source. Expected differences:
+4. Re-bless `editor-ui`, `editor-ui-perspective`, `editor-input-doc` and the new `editor-asset-page` and `editor-material-page` on both backends with the staged-slot procedure. LOOK at every new image before copying it to source. Expected differences:
    - editor-ui: no preview pane in the Asset Browser, an "Inspector 2 - Assets" pane on its right, and the main Inspector titled "Inspector - All but Assets";
    - editor-asset-page: the Assets Inspector showing the texture's page (thumbnail, rows, buttons, import settings) while the main Inspector still shows "No selection".
+   - editor-material-page: the material document in the center, its preview + params in the main Inspector, no "Material" tab.
 5. Run the full gate Debug and Release: `powershell -File scripts\golden-gate.ps1` (see its header for the config switch).
-   - Expected: Debug 12/12.
-   - Expected: Release 11/12 at worst, where the only permitted red is the known cook-counter race on the Release dx12 editor-ui status-bar count. Any other red is a failure to fix.
+   - Expected: Debug 14/14.
+   - Expected: Release 13/14 at worst, where the only permitted red is the known cook-counter race on the Release dx12 editor-ui status-bar count. Any other red is a failure to fix.
 
 - [ ] **Step 5: Run the full suites**
 
@@ -1549,21 +1766,21 @@ Expected: all green except documented pre-existing skips (the usual 4).
 
 ```bash
 git add -A ArcaneClient/src ArcaneEditor/src ArcaneTests/src ReferenceProject/Saved/verify-layout.ini scripts/golden-gate.ps1 ReferenceProject/Saved/Verify
-git commit -m "test(editor): report inspector.instances (schema 12), --select-asset, re-authored verify seed with the two-inspector layout, editor-asset-page golden lanes; editor goldens re-blessed (inspector filters s9)"
+git commit -m "test(editor): report inspector.instances (schema 12), --select-asset, re-authored verify seed with the two-inspector layout, editor-asset-page + editor-material-page golden lanes, document-page witnesses; editor goldens re-blessed (inspector filters s9)"
 ```
 (Stage the golden reference images from wherever the gate keeps source references. Grep `golden-gate.ps1` for the reference root, and never stage `bin/`.)
 
 ---
 
-### Task 9: Spec and doc close-out
+### Task 11: Spec and doc close-out
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-29-inspector-filters-design.md` (Status: "Implemented <date>, branch feat/inspector-filters"; §9 lists the witnesses/lanes actually added)
-- Modify: `ArcaneEditor/src/Documents/ShaderEditorDocument.hpp:892` comment. It names `BuildDefaultLayout`'s Inspector/Material right node, so re-read it and fix it if the layout description changed.
+- Record the NEXT phase in the spec's header: a full shader node page (spec s6a / decision 9).
 
 - [ ] **Step 1: Grep sweep for stale references**
 
-Run: `grep -rn "preview pane\|previewPaneWidth\|kAssetsPreviewPaneDefaultWidth\|selectedAsset\|CanPin()" ArcaneEditor ArcaneTests docs/superpowers/specs`
+Run: `grep -rn "preview pane\|previewPaneWidth\|kAssetsPreviewPaneDefaultWidth\|selectedAsset\|CanPin()\|DrawMaterialPanel\|DrawMaterialWindow\|ResolveActiveMaterialDoc\|\"Material\" panel\|Material tab" ArcaneEditor ArcaneTests docs/superpowers/specs`
 Expected: only historical mentions in older specs/plans, which stay as history, and none in live code. Fix any live one.
 
 - [ ] **Step 2: Commit**
@@ -1588,11 +1805,15 @@ git commit -m "docs(editor): inspector filters spec marked implemented; stale pr
   | s6 pane removal | 5, 6 |
   | s6 default layout and legacy upgrade | 4, 7 |
   | s7 persistence and Reset Layout | 4, 7 |
-  | s9 verification | every task, plus 8 |
+  | s6a material page, Material window retirement | 8 |
+  | s6a sprite and mesh pages | 9 |
+  | s3 one selection rule for every source | 2 (host), 8 (document-page selection), 9 |
+  | s9 verification | every task, plus 10 |
 
-- **Known consequence for mini-arc 3.** "Assets only" is stored as exclusions (`scene+input-actions`). When mini-arc 3 adds `"shader"`, every saved "Assets only" instance will start admitting Shader. Its title will say "Assets, Shader", so the change stays visible. That is decision 8.3 working as designed, but mini-arc 3's plan must decide whether the DEFAULT Assets instance should also exclude Shader. A one-line upgrade keyed on a `FiltersV=` marker would do it. Carry this into mini-arc 3's brainstorm.
+- **The mini-arc 3 consequence is gone.** The material kind ships in this phase, so the default "Assets only" filter excludes it from day one and no saved layout ever holds the old narrower list.
 - **Risky spots flagged in their tasks:**
   - instance 0's move to the stable id `###Inspector`, plus its re-dock in the legacy upgrade (Task 7, Steps 3-4);
   - the `DockBuilderSplitNode` direction and the leaf-node check (Task 7, Step 4);
   - the `assetPanelServices` local's lifetime (Task 6, Step 2);
-  - ArcaneClient ABI (Task 8, Step 3).
+  - ArcaneClient ABI (Task 10, Step 3);
+  - `NoteContentClick` must see clicks on the node-editor canvas (a child window) and must NOT see a click on the dock tab or the title bar (Task 8, Steps 1 and 5).

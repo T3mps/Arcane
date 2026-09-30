@@ -5,8 +5,9 @@
 instances) and s3.5 (the Asset Browser's preview pane goes ENTIRELY; the "keeps the thumbnail
 and the Open button" option is dropped).
 **Scheduled:** editor mini-arc 2, as ONE piece with the asset page and the preview-pane removal
-(s6 explains why they cannot land apart). Mini-arc 3 (the Material tab retirement) then adds
-the shader kind to a feature that already exists.
+(s6 explains why they cannot land apart). The Material tab retirement (formerly mini-arc 3) and
+the Sprite/Mesh property forms are FOLDED INTO THIS PHASE (s6a, user 2026-09-29). A full shader
+NODE page is the next phase, right after this one.
 
 ## 1. The problem
 
@@ -28,12 +29,22 @@ panels only follow or lock.
 ## 2. Kinds
 
 - `InspectorSource` gains `[[nodiscard]] virtual std::string_view Kind() const = 0;` -- a
-  stable id: `"scene"`, `"input-actions"`, `"assets"` (this arc), `"shader"` (mini-arc 3).
+  stable id. The catalog, in dropdown order: `"scene"` Scene, `"assets"` Assets,
+  `"input-actions"` Input Actions, `"material"` Materials (the shader editor's documents),
+  `"sprite"` Sprites, `"mesh"` Meshes. A document with nothing to edit (the crash-report
+  viewer) has an empty kind.
 - The kinds form a fixed editor-side CATALOG (id + display name, e.g. `"input-actions"` ->
   "Input Actions"), independent of which sources are open: a filter must be choosable and
   restorable before any source of a kind exists.
 
 ## 3. Model (`InspectorHost`)
+
+- **One selection rule for every source (user, 2026-09-29: "the same functionality for the
+  inspector throughout all editors/documents").** Opening a document selects its default page;
+  a selection gesture inside a source (including a click anywhere in a document's content that
+  re-selects its document-level page) is a selection event; switching tabs, focus and window
+  activation are NEVER events; a clear is never an event. Every source -- the scene, the Asset
+  Browser, every document kind -- follows it; no source gets a focus-follow exception.
 
 - **Per-instance filter.** `Instance` gains `std::vector<std::string> excluded;` -- the
   UNTICKED kinds. Empty = All (the default for every instance). The filter is stored as
@@ -124,6 +135,28 @@ panels only follow or lock.
   so the upgrade never repeats. A user who deliberately set everything back to All keeps it:
   an empty `Filters=` line is a real answer, not a missing one.
 
+## 6a. The Material tab retires; Sprite and Mesh forms move into the Inspector
+
+- **Material page.** `ShaderEditorDocument` becomes a source (kind `"material"`). Its page is the
+  whole document's -- NOT a node's (node pages are the next phase): the document title (plus
+  "(Instance)"), the live preview, the draggable preview/params split (still the one
+  editor-wide `previewSplit` preference, persisted as today), and the params editor (blend,
+  cull, parameters). Selection key `"material"`: opening the document selects it; a click
+  anywhere in the document's content (canvas background, a node, the preview, the snippet
+  text) re-selects it. Selecting a node in the canvas does not change the page this phase.
+- **Retired:** the "Material" window (`DrawMaterialPanel`/`DrawMaterialWindow`), its docking in
+  `BuildDefaultLayout`, and the app's tab-follow logic (`SelectDockTab("Material")` /
+  `SelectDockTab("Inspector")` on a material tab becoming visible). A stale `[Window][Material]`
+  ini entry is harmless (never submitted again).
+- **Sprite page / Mesh page.** `SpriteDocument` (kind `"sprite"`) and `MeshDocument` (kind
+  `"mesh"`) become sources with one document-level key each (`"sprite"`, `"mesh"`), same open +
+  click rule. Each document's FORM (sprite: texture, sub-rect, pivot and the rest of
+  SpriteAssetData; mesh: source + topology parameters) moves into its page; the document window
+  keeps only its preview (interactive where it is today). Edits keep riding each document's
+  own undo steps (its EditGesture bracket moves with the form).
+- **Save.** Ctrl+S in an Inspector showing any document page saves that document (the existing
+  `saveRequested` route).
+
 ## 7. Persistence
 
 - Filters are LAYOUT (like the instance list), persisted in `[EditorInspector][Instances]`
@@ -159,6 +192,12 @@ panels only follow or lock.
    cannot go before the filters exist.
 8. **Old layouts are upgraded once** to the two-inspector default (s6), rather than left on a
    single All inspector with a "Reset Layout" hint.
+9. **The Material tab retires in this phase**, material page only; a full node page is the
+   next phase (user: "ensure we do a full node page as a soon follow up").
+10. **One selection rule for every source**: open + click select, focus/tab switches never do
+    (the user kept the rule over a follow-the-tab exception for materials).
+11. **Sprite and Mesh forms move into Inspector pages in this phase** (the parent spec's
+    s3.5 "per-document properties blocks" retirement, completed).
 
 ## 9. Verification
 
@@ -180,7 +219,10 @@ panels only follow or lock.
 - Goldens: `editor-ui` changes (two inspectors, no preview pane) -- re-bless per the golden
   procedure; a new asset-selected golden (`--select` of an asset in the Browser, the Assets
   inspector on the asset page, the main Inspector unchanged).
-- Witness: the report's inspector block gains `instances[].excluded` (kind ids; `[]` = All).
+- Witness: the report's inspector block gains `instances[].excluded` (kind ids; `[]` = All);
+  `--open-asset` of a material, a sprite and a mesh each route the main Inspector to that
+  document's page (`instances[0].source` = the document's name).
+- Golden: `editor-material-page` (a material document open, its page in the main Inspector).
 - Desk: the s1 example with a Scene and an All instance; an empty-space viewport click with a
   Scene + an Input Actions instance; an asset click on the default layout (the entity page
   stays); a pre-feature ReferenceProject/Aphelyon layout upgrading once and not again; change
