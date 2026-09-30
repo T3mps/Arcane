@@ -41,6 +41,11 @@ namespace Arcane::Editor
         virtual ~InspectorSource() = default;
         // The first crumb: "Scene", "Player.arcinput".
         [[nodiscard]] virtual std::string SourceName() const = 0;
+        // The source's KIND (InspectorKinds.hpp's catalog id: "scene",
+        // "input-actions", "assets"); an Inspector instance's filter admits or
+        // excludes by it. "" = a source that never selects (mesh/sprite
+        // documents): admitted only by an unfiltered (All) instance.
+        [[nodiscard]] virtual std::string_view Kind() const = 0;
         // The page for the CURRENT selection. Null = nothing to show.
         // The returned page is a VIEW valid until the next Page()/PageFor() call on this source: resolve it immediately before Breadcrumb() + Draw().
         [[nodiscard]] virtual InspectorPage* Page() = 0;

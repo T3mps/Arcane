@@ -166,12 +166,12 @@ namespace Arcane::Editor
                 if (ImGuiWindow* primary = ImGui::FindWindowByName("Inspector"))
                     if (primary->DockId != 0)
                         ImGui::SetNextWindowDockID(primary->DockId, ImGuiCond_FirstUseEver);
-            // BEFORE resolving the page: CanPin calls PageFor on the current
-            // source, which re-targets the scene source's draw selection; the
+            // BEFORE resolving the page: CanPin calls PageFor on the instance's
+            // routed source, which re-targets the scene source's draw selection; the
             // Page()/PageFor() call below restores it. From that resolve to
             // page->Draw NOTHING queries a source: the header only records its
             // clicks (HeaderActions), applied after End().
-            const bool canPin = inst.pinned || host.CanPin();
+            const bool canPin = inst.pinned || host.CanPin(inst.id);
             // NO `if (Begin)` on purpose: the scene page's EditGesture::ScopeGuard
             // must run on collapsed/background-tab frames too (EditGesture.hpp:
             // 263-274) or an abandoned drag transaction stays open for the next

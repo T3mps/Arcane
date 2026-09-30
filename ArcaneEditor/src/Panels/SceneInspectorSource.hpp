@@ -34,6 +34,7 @@ namespace Arcane::Editor
 
         // InspectorSource
         std::string SourceName() const override { return "Scene"; }
+        std::string_view Kind() const override { return "scene"; }
         InspectorPage* Page() override;
         InspectorPage* PageFor(std::string_view key) override;
         std::string SelectionKey() const override;

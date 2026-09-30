@@ -6,9 +6,11 @@
 // never an event (there is no focus API here at all); pin holds a keyed page;
 // a closed source releases; history depth 32, prune-on-invalidate (PruneStale,
 // once per frame, through the sources' PURE Resolves), skip at navigation,
-// never persisted; every source but the fallback releases on project switch;
-// the fallback is INVALIDATED (history + pins) on every scene swap.
+// never persisted; every source but the fallback and a permanent one releases
+// on project switch; the fallback is INVALIDATED (history + pins) on every
+// scene swap; each instance routes through its own filter (spec 2026-09-29 s3).
 
+#include "Panels/InspectorKinds.hpp"
 #include "Panels/InspectorSource.hpp"
 
 #include <cstddef>
@@ -17,6 +19,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Arcane::Editor
@@ -56,6 +59,7 @@ namespace Arcane::Editor
             std::string pinnedKey;
             std::string pinnedName;         // survives the source's death (the "closed" note)
             bool sourceClosed = false;      // true only for a CLOSED source; a dead key on a live one reads "Pinned selection is gone"
+            InspectorFilter filter;         // per-instance; layout state (persisted in [EditorInspector][Instances], Task 4)
         };
         struct HistoryEntry
         {
@@ -67,7 +71,9 @@ namespace Arcane::Editor
         // `fallback` (the scene) is registered for the host's whole life.
         explicit InspectorHost(InspectorSource& fallback);
 
-        void AddSource(InspectorSource& source);
+        // `permanent`: lives as long as the host, like the fallback (the Asset
+        // Browser's source) -- ReleaseAll invalidates it instead of dropping it.
+        void AddSource(InspectorSource& source, bool permanent = false);
         // Mark pins on it closed, invalidate, erase. No-op for the fallback.
         void RemoveSource(InspectorSource& source);
         // The source's KEYS just died (the scene's registry was replaced by
@@ -82,7 +88,10 @@ namespace Arcane::Editor
         // unless the key is empty or equals the cursor entry (a navigation echo).
         void NotifySelected(InspectorSource& source);
         [[nodiscard]] InspectorSource& Current() const noexcept { return *m_current; }
-        // What instance `id` shows: its pinned source (null while dead/closed) or Current().
+        // What instance `id` shows: its pinned source (null while dead/closed);
+        // else Current() when its filter admits it (always, for All); else the
+        // admitted source with the latest selection stamp; else the fallback
+        // when admitted; else the most recently added admitted source; else null.
         [[nodiscard]] InspectorSource* SourceFor(int instanceId) const;
 
         [[nodiscard]] const std::vector<Instance>& Instances() const noexcept { return m_instances; }
@@ -90,11 +99,12 @@ namespace Arcane::Editor
         int  AddInstance();                              // lowest free id in [1, kMaxInstances); -1 when the pool is full
         void RemoveInstance(int id);                     // id 0 is refused
         void SetInstanceIds(std::span<const int> extras); // ini restore: exactly {0} + the valid, deduplicated ids exist afterwards
-        // True when Current() has a page for its current key: the pin is only
-        // offered for a resolvable page (UE's details lock exists only while
-        // objects are viewed). Non-const: PageFor is.
-        [[nodiscard]] bool CanPin();
-        void SetPinned(int id, bool pinned);   // pin captures Current() + key + name; REFUSED (no-op) when !CanPin()
+        // True when the page instance `instanceId` shows is resolvable: the
+        // pin is only offered for a resolvable page (UE's details lock exists
+        // only while objects are viewed). Non-const: PageFor is.
+        [[nodiscard]] bool CanPin(int instanceId);
+        void SetPinned(int id, bool pinned);   // pin captures SourceFor(id) + its key + name; REFUSED (no-op) when !CanPin(id)
+        bool SetFilter(int id, InspectorFilter filter);   // false: unknown id, or it excludes every catalog kind (refused, unchanged)
         // In-window navigation of a PINNED instance (a breadcrumb click): only
         // that instance's pinnedKey changes -- never Current(), the source's
         // selection or the history. No-op for an unknown, unpinned or closed instance.
@@ -115,9 +125,10 @@ namespace Arcane::Editor
         // key search). Once per frame from the draw: <= kHistoryDepth pure lookups.
         void PruneStale();
 
-        // Project switch: every non-fallback source is dropped, the history
-        // cleared, every instance unpinned. Instances themselves stay (they
-        // are layout, per-ini, not project state).
+        // Project switch: every source but the fallback and the permanent
+        // ones is dropped, the stamps and the history cleared, every instance
+        // unpinned. Instances and their filters stay (they are layout,
+        // per-ini, not project state).
         void ReleaseAll();
 
     private:
@@ -130,6 +141,7 @@ namespace Arcane::Editor
         // pointing at the same surviving entry). GoBack/GoForward/JumpTo share it.
         bool TryLand(std::size_t index);
         void EraseHistoryIf(const std::function<bool(const HistoryEntry&)>& pred);
+        void Stamp(InspectorSource& source) { m_stamps[&source] = ++m_stampClock; }
 
         InspectorSource* m_fallback;
         std::vector<InspectorSource*> m_sources;
@@ -137,5 +149,8 @@ namespace Arcane::Editor
         std::vector<HistoryEntry> m_history;
         std::size_t m_cursor = 0;
         std::vector<Instance> m_instances;
+        std::vector<InspectorSource*> m_permanent;                   // AddSource(.., true); the fallback is implicitly permanent
+        std::unordered_map<InspectorSource*, std::uint64_t> m_stamps; // last selection event / history landing per source
+        std::uint64_t m_stampClock = 0;
     };
 }

@@ -57,6 +57,7 @@ namespace Arcane::Editor
         // key); PageFor validates every named id (nullptr when one is gone)
         // and "" IS the asset page, never null.
         std::string SourceName() const override { return path_.filename().string(); }
+        std::string_view Kind() const override { return "input-actions"; }
         InspectorPage* Page() override { return PageFor(model_.SelectionKey()); }
         InspectorPage* PageFor(std::string_view key) override;
         std::string SelectionKey() const override { return model_.SelectionKey(); }

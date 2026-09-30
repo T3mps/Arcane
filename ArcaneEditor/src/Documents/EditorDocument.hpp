@@ -54,6 +54,7 @@ namespace Arcane::Editor
         // defaults are "this document contributes no page and never drives
         // the Inspector" (MeshDocument today).
         std::string SourceName() const override { return Title(); }
+        std::string_view Kind() const override { return {}; }
         InspectorPage* Page() override { return nullptr; }
         InspectorPage* PageFor(std::string_view) override { return nullptr; }
         std::string SelectionKey() const override { return {}; }

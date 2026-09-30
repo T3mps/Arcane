@@ -15,9 +15,11 @@ namespace Arcane::Editor
         return std::find(m_sources.begin(), m_sources.end(), s) != m_sources.end();
     }
 
-    void InspectorHost::AddSource(InspectorSource& source)
+    void InspectorHost::AddSource(InspectorSource& source, bool permanent)
     {
         if (!Registered(&source)) m_sources.push_back(&source);
+        if (permanent && std::find(m_permanent.begin(), m_permanent.end(), &source) == m_permanent.end())
+            m_permanent.push_back(&source);
     }
 
     void InspectorHost::EraseHistoryIf(const std::function<bool(const HistoryEntry&)>& pred)
@@ -51,6 +53,8 @@ namespace Arcane::Editor
                 inst.sourceClosed = true;
         InvalidateSource(source);
         std::erase(m_sources, &source);
+        m_stamps.erase(&source);
+        std::erase(m_permanent, &source);
         if (m_current == &source) m_current = m_fallback;
     }
 
@@ -81,14 +85,30 @@ namespace Arcane::Editor
         std::string key = source.SelectionKey();
         if (key.empty()) return;   // a deselect is not a selection event
         m_current = &source;
+        Stamp(source);
         Push(source, std::move(key));
     }
 
     InspectorSource* InspectorHost::SourceFor(int instanceId) const
     {
-        for (const Instance& inst : m_instances)
-            if (inst.id == instanceId)
-                return inst.pinned ? inst.pinnedSource : m_current;
+        const Instance* inst = nullptr;
+        for (const Instance& i : m_instances) if (i.id == instanceId) { inst = &i; break; }
+        if (!inst) return nullptr;
+        if (inst->pinned) return inst->pinnedSource;
+        const InspectorFilter& f = inst->filter;
+        if (f.Admits(m_current->Kind())) return m_current;          // All always lands here
+        InspectorSource* best = nullptr;
+        std::uint64_t bestStamp = 0;
+        for (InspectorSource* s : m_sources)
+        {
+            if (!f.Admits(s->Kind())) continue;
+            const auto it = m_stamps.find(s);
+            if (it != m_stamps.end() && it->second > bestStamp) { best = s; bestStamp = it->second; }
+        }
+        if (best) return best;
+        if (f.Admits(m_fallback->Kind())) return m_fallback;
+        for (auto it = m_sources.rbegin(); it != m_sources.rend(); ++it)   // most recently added
+            if (f.Admits((*it)->Kind())) return *it;
         return nullptr;
     }
 
@@ -114,27 +134,44 @@ namespace Arcane::Editor
 
     void InspectorHost::SetInstanceIds(std::span<const int> extras)
     {
-        std::erase_if(m_instances, [](const Instance& i) { return i.id != 0; });
+        std::vector<Instance> kept;
+        kept.push_back(*Find(0));
         for (const int id : extras)
-            if (id >= 1 && id < kMaxInstances && !Find(id)) { Instance inst; inst.id = id; m_instances.push_back(inst); }
-        std::sort(m_instances.begin(), m_instances.end(), [](const Instance& a, const Instance& b) { return a.id < b.id; });
+        {
+            if (id < 1 || id >= kMaxInstances) continue;
+            if (std::any_of(kept.begin(), kept.end(), [id](const Instance& i) { return i.id == id; })) continue;
+            if (const Instance* old = Find(id)) kept.push_back(*old);
+            else { Instance inst; inst.id = id; kept.push_back(inst); }
+        }
+        std::sort(kept.begin(), kept.end(), [](const Instance& a, const Instance& b) { return a.id < b.id; });
+        m_instances = std::move(kept);
     }
 
-    bool InspectorHost::CanPin()
+    bool InspectorHost::CanPin(int instanceId)
     {
-        return m_current->PageFor(m_current->SelectionKey()) != nullptr;
+        InspectorSource* src = SourceFor(instanceId);
+        return src && src->PageFor(src->SelectionKey()) != nullptr;
     }
 
     void InspectorHost::SetPinned(int id, bool pinned)
     {
         Instance* inst = Find(id);
         if (!inst) return;
-        if (pinned && !CanPin()) return;   // nothing to hold: a pin never holds emptiness
+        if (pinned && !CanPin(id)) return;   // nothing to hold: a pin never holds emptiness
+        InspectorSource* src = pinned ? SourceFor(id) : nullptr;   // BEFORE the flag flips: SourceFor reads it
         inst->pinned = pinned;
         inst->sourceClosed = false;
-        inst->pinnedSource = pinned ? m_current : nullptr;
-        inst->pinnedKey = pinned ? m_current->SelectionKey() : std::string{};
-        inst->pinnedName = pinned ? m_current->SourceName() : std::string{};
+        inst->pinnedSource = src;
+        inst->pinnedKey = src ? src->SelectionKey() : std::string{};
+        inst->pinnedName = src ? src->SourceName() : std::string{};
+    }
+
+    bool InspectorHost::SetFilter(int id, InspectorFilter filter)
+    {
+        Instance* inst = Find(id);
+        if (!inst || filter.ExcludesEveryKind()) return false;
+        inst->filter = filter.Sanitized();
+        return true;
     }
 
     void InspectorHost::RepinKey(int id, std::string key)
@@ -163,6 +200,7 @@ namespace Arcane::Editor
         {
             m_cursor = index;
             m_current = source;
+            Stamp(*source);
             m_history[index].key = source->SelectionKey();   // re-snapshot from live state: members may be gone, the source may normalize
             return true;
         }
@@ -199,6 +237,8 @@ namespace Arcane::Editor
     void InspectorHost::ReleaseAll()
     {
         m_sources.assign(1, m_fallback);
+        for (InspectorSource* p : m_permanent) m_sources.push_back(p);   // the asset source survives a project switch
+        m_stamps.clear();
         m_current = m_fallback;
         m_history.clear();
         m_cursor = 0;

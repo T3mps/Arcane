@@ -23,13 +23,15 @@ namespace
     struct FakeSource final : InspectorSource
     {
         std::string name;
+        std::string kind;
         std::string key;
         bool restoreOk = true;
         std::string normalizeTo;            // non-empty: RestoreSelection lands on THIS key, not the asked one (a member died in between)
         std::vector<std::string> restored;
         FakePage page;
-        explicit FakeSource(std::string n) : name(std::move(n)) {}
+        explicit FakeSource(std::string n, std::string k = "scene") : name(std::move(n)), kind(std::move(k)) {}
         std::string SourceName() const override { return name; }
+        std::string_view Kind() const override { return kind; }
         InspectorPage* Page() override { return &page; }
         InspectorPage* PageFor(std::string_view) override { return restoreOk ? &page : nullptr; }
         std::string SelectionKey() const override { return key; }
@@ -44,9 +46,9 @@ namespace
     };
     struct World
     {
-        FakeSource scene{ "Scene" }, doc{ "Player.arcinput" }, other{ "mat.arcshader" };
+        FakeSource scene{ "Scene", "scene" }, doc{ "Player.arcinput", "input-actions" }, other{ "brick.png", "assets" }, doc2{ "Menu.arcinput", "input-actions" };
         InspectorHost host{ scene };
-        World() { host.AddSource(doc); host.AddSource(other); }
+        World() { host.AddSource(doc); host.AddSource(other); host.AddSource(doc2); }
         void Select(FakeSource& s, std::string k) { s.key = std::move(k); host.NotifySelected(s); }
     };
 }
@@ -353,4 +355,132 @@ TEST_CASE("InspectorHost: the [EditorInspector][Instances] section round-trips, 
     CHECK(host.Instances()[0].id == 0);
     ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=0,3,3,42,-1\n");
     CHECK(host.Instances().size() == 2);                                // {0,3}
+}
+
+TEST_CASE("InspectorHost filters: a Scene instance keeps the scene while a document selects", "[editor][inspector]")
+{
+    World w;
+    const int scene = w.host.AddInstance();                        // 1
+    REQUIRE(w.host.SetFilter(scene, InspectorFilter::Only("scene")));
+    w.Select(w.scene, "A");
+    w.Select(w.scene, "B");
+    w.Select(w.doc, "Player/Jump");
+    CHECK(w.host.SourceFor(0) == &w.doc);                          // All follows the binding
+    CHECK(w.host.SourceFor(scene) == &w.scene);                    // Scene keeps B
+    CHECK(w.scene.key == "B");
+}
+
+TEST_CASE("InspectorHost filters: a clear in one source never moves an instance routed elsewhere", "[editor][inspector]")
+{
+    World w;
+    const int input = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(input, InspectorFilter::Only("input-actions")));
+    w.Select(w.doc, "Player/Jump");
+    w.Select(w.scene, "7");
+    w.Select(w.scene, "");                                         // empty-space click: a clear
+    CHECK(w.host.SourceFor(input) == &w.doc);
+    CHECK(w.doc.key == "Player/Jump");
+    // An All instance stays on the scene (a clear is not an event) and a
+    // document clear does not move it either.
+    CHECK(w.host.SourceFor(0) == &w.scene);
+    w.Select(w.doc, "");
+    CHECK(w.host.SourceFor(0) == &w.scene);
+}
+
+TEST_CASE("InspectorHost filters: Current wins when admitted, else the latest admitted stamp", "[editor][inspector]")
+{
+    World w;
+    const int noAssets = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(noAssets, InspectorFilter::AllBut("assets")));
+    w.Select(w.doc, "a");
+    w.Select(w.doc2, "b");
+    w.Select(w.other, "brick");                                    // an asset click
+    CHECK(w.host.SourceFor(0) == &w.other);
+    CHECK(w.host.SourceFor(noAssets) == &w.doc2);                  // the latest admitted, never the asset
+    w.host.RemoveSource(w.doc2);                                   // closing it falls back to the other
+    CHECK(w.host.SourceFor(noAssets) == &w.doc);
+    w.Select(w.scene, "7");
+    CHECK(w.host.SourceFor(noAssets) == &w.scene);                 // Current() admitted: agrees with All
+}
+
+TEST_CASE("InspectorHost filters: closing the last admitted source leaves null, never a dangling pointer", "[editor][inspector]")
+{
+    World w;
+    const int input = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(input, InspectorFilter::Only("input-actions")));
+    w.Select(w.doc, "a");
+    w.host.RemoveSource(w.doc);
+    w.host.RemoveSource(w.doc2);
+    CHECK(w.host.SourceFor(input) == nullptr);
+}
+
+TEST_CASE("InspectorHost filters: nothing stamped falls back to the scene, else the newest admitted source", "[editor][inspector]")
+{
+    World w;
+    const int noAssets = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(noAssets, InspectorFilter::AllBut("assets")));
+    CHECK(w.host.SourceFor(noAssets) == &w.scene);
+    const int input = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(input, InspectorFilter::Only("input-actions")));
+    CHECK(w.host.SourceFor(input) == &w.doc2);                     // most recently added
+}
+
+TEST_CASE("InspectorHost filters: an empty-kind source is admitted only by All", "[editor][inspector]")
+{
+    World w;
+    FakeSource mesh{ "rock.arcmesh", "" };
+    w.host.AddSource(mesh);
+    const int noAssets = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(noAssets, InspectorFilter::AllBut("assets")));
+    w.Select(mesh, "m");                                           // (a real mesh doc never selects; the rule still holds)
+    CHECK(w.host.SourceFor(0) == &mesh);
+    CHECK(w.host.SourceFor(noAssets) == &w.scene);
+}
+
+TEST_CASE("InspectorHost filters: SetFilter refuses an all-excluded set and an unknown id", "[editor][inspector]")
+{
+    World w;
+    InspectorFilter none;
+    none.excluded = { "scene", "assets", "input-actions", "material", "sprite", "mesh" };
+    CHECK_FALSE(w.host.SetFilter(0, none));
+    CHECK(w.host.Find(0)->filter.IsAll());
+    CHECK_FALSE(w.host.SetFilter(5, InspectorFilter::Only("scene")));
+}
+
+TEST_CASE("InspectorHost filters: a pin captures THIS instance's page; the pin wins over a filter change", "[editor][inspector]")
+{
+    World w;
+    const int scene = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(scene, InspectorFilter::Only("scene")));
+    w.Select(w.scene, "B");
+    w.Select(w.doc, "Player/Jump");                                // Current() is the document
+    REQUIRE(w.host.CanPin(scene));
+    w.host.SetPinned(scene, true);
+    CHECK(w.host.Find(scene)->pinnedSource == &w.scene);           // not the binding
+    CHECK(w.host.Find(scene)->pinnedKey == "B");
+    REQUIRE(w.host.SetFilter(scene, InspectorFilter::Only("input-actions")));
+    CHECK(w.host.SourceFor(scene) == &w.scene);                    // pinned: unchanged
+    w.host.SetPinned(scene, false);
+    CHECK(w.host.SourceFor(scene) == &w.doc);                      // follows the new filter
+}
+
+TEST_CASE("InspectorHost filters: ReleaseAll keeps a permanent source and drops its history and pins", "[editor][inspector]")
+{
+    FakeSource scene{ "Scene", "scene" }, assets{ "Assets", "assets" }, doc{ "P.arcinput", "input-actions" };
+    InspectorHost host{ scene };
+    host.AddSource(assets, /*permanent*/ true);
+    host.AddSource(doc);
+    const int onlyAssets = host.AddInstance();
+    REQUIRE(host.SetFilter(onlyAssets, InspectorFilter::Only("assets")));
+    assets.key = "g1"; host.NotifySelected(assets);
+    host.SetPinned(onlyAssets, true);
+    host.ReleaseAll();
+    CHECK(host.SourceFor(onlyAssets) == &assets);                  // still registered, pin released
+    CHECK_FALSE(host.Find(onlyAssets)->pinned);
+    CHECK(host.History().empty());
+    CHECK(host.Find(onlyAssets)->filter == InspectorFilter::Only("assets"));   // filters are layout
+    doc.key = "x"; host.NotifySelected(doc);                       // doc was dropped: ignored
+    CHECK(&host.Current() == &scene);
+    assets.key = "g2"; host.NotifySelected(assets);                // assets still live
+    CHECK(&host.Current() == &assets);
 }
