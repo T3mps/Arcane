@@ -28,10 +28,9 @@ namespace Arcane::Editor
             return key.empty() ? std::nullopt : Arcane::Guid::FromString(key);
         }
 
-        // The page's fixed geometry, copied from AssetBrowserPanel.cpp's
-        // preview pane (inspector filters Task 5; Task 6 deletes the
-        // originals with the pane -- internal linkage in both files keeps
-        // the duplicate names from clashing meanwhile). The thumb is 140px;
+        // The page's fixed geometry, carried over from the Asset Browser's
+        // old preview pane (inspector filters s6: the pane and its constants
+        // are gone; these are the only copy). The thumb is 140px;
         // the action buttons are full-width and 24px tall (spec s11.2's
         // table row height, reused rather than inventing a new pinned
         // value).

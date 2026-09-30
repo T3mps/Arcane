@@ -341,7 +341,7 @@ namespace Arcane::Editor
         // BeginCreateAsset is the ONE place a create dialog opens, and
         // ConsumeCreateResult the ONE place a create dispatches to a mint.
         // Every producer (the Assets menu, the panel's + Create popup, the
-        // rail's per-kind +, a row's Create submenu, the preview pane's New
+        // rail's per-kind +, a row's Create submenu, the Asset page's New
         // Instance..., and Plan 3's graph pin-drag) raises a request and stops
         // there; none of them opens a dialog or writes a file.
         void BeginCreateAsset(const Arcane::Editor::CreateAssetRequest& request);

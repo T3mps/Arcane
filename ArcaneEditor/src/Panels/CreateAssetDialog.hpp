@@ -4,7 +4,7 @@
 // flow. Spec s7's invariant, restated here because it is the whole point of
 // this unit: **no creation path may bypass `CreateAssetRequest`**. Every
 // producer -- the Assets menu, the panel's `+ Create` popup, the rail's `+`,
-// a row's `Create` submenu, the preview pane's `New Instance...`, and (Plan 3)
+// a row's `Create` submenu, the Asset page's `New Instance...`, and (Plan 3)
 // a graph pin-drag -- is a thin raiser of that request; `EditorApp::
 // BeginCreateAsset` is the ONE entry that opens this dialog and
 // `EditorApp::ConsumeCreateResult` the ONE dispatcher that mints from it.

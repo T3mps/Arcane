@@ -85,7 +85,7 @@ namespace Arcane::Editor
     // THREE ASCII DOTS on purpose: that is what every row this function already
     // draws has shipped with, and the golden editor-ui lane renders one of them
     // (the Assets panel's Browse lens). Changing the default would be a visual
-    // change to the Browse rows, the preview pane, the Status cards and the
+    // change to the Browse rows, the Asset page, the Status cards and the
     // Inspector all at once -- so the Graph lens, which wants the real U+2026,
     // passes it rather than moving everyone.
     [[nodiscard]] std::string EllipsisToWidth(std::string_view text, float maxWidth,

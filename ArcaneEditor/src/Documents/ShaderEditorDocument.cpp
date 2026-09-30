@@ -712,7 +712,9 @@ namespace Arcane::Editor
 
         // ---- Pane layout persistence (imgui.ini) ---------------------------
         // The ini section the ratio lives in: "[ArcaneEditorLayout]
-        // [MaterialPanel]". TypeName may not contain '[' or ']'
+        // [MaterialPanel]" (the name is kept for ini compatibility; the Material
+        // window itself retired into the Inspector page, inspector filters
+        // s6a, and the split now sizes that page). TypeName may not contain '[' or ']'
         // (imgui_internal.h:2214); the entry name is what ReadOpen matches on,
         // and the pair is what lets a future panel add its own entry under the
         // same type without touching this handler.

@@ -274,7 +274,7 @@ namespace Arcane::Editor
 
     // KindIcon/KindLabel (Task 15 consolidation): the Lucide glyph / display
     // string for a kind, shared by every representation (rail, table rows,
-    // peek tooltip, preview pane, drag-source label).
+    // peek tooltip, Asset page, drag-source label).
     inline const char* KindIcon(AssetKind kind)
     {
         switch (kind)
@@ -705,7 +705,7 @@ namespace Arcane::Editor
         // The live reference topology behind `unused` (Plan 2 Task 4), fed by
         // RebuildIfDirty from the very same refsFor answers each rebuilt entry
         // already fetches -- never a second parse. Read-only to consumers: the
-        // Status lens reads DanglingTargets()/InboundCount(), the preview pane
+        // Status lens reads DanglingTargets()/InboundCount(), the Asset page
         // reads Find()->outbound. Note Find() returns a pointer that is stable
         // across UNRELATED updates but invalidated if that node is
         // tombstone-GC'd -- never cache one across a rebuild pass.

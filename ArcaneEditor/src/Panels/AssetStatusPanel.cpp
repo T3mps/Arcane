@@ -696,8 +696,8 @@ namespace Arcane::Editor
         // available width, starving the stretch column and leaving
         // TimelineFeed's per-row hit target with a zero/negative avail
         // (ImGui::InvisibleButton asserts on exactly zero). Same
-        // "sane-range clamp" discipline ClampPreviewForLayout already
-        // uses for the preview pane -- capped to a fraction of what is
+        // "sane-range clamp" discipline (the Asset Browser's retired preview
+        // pane used the same one) -- capped to a fraction of what is
         // actually available THIS frame, floored so it is never <= 0.
         const float rightColumnWidth = std::max(1.0f,
             std::min(kStatusRightColumnWidth, ImGui::GetContentRegionAvail().x * 0.45f));

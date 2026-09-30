@@ -432,7 +432,7 @@ namespace Arcane::Editor
     }
 
     // ---- Task 10: the peek tooltip (spec s8) ---------------------------
-    // Cross-panel: Browser rows, child rows and the preview pane's Derived
+    // Cross-panel: Browser rows, child rows and the Asset page's Derived
     // list, the Graph panel's node hover, and the Status panel's activity
     // feed all hover the same asset. Text-and-images only -- never a button
     // (a tooltip is not interactable).

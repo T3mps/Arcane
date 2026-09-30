@@ -57,7 +57,7 @@ namespace Arcane::Editor
                      openAsText;   // Open as text: hand the asset file to the OS default editor (input editor spec s6)
         std::filesystem::path openScene;
         // Source/ in the Asset Browser, step 2: a Source row's Open (double-
-        // click, the preview pane's Open button, the context menu's Open --
+        // click, the Asset page's Open button, the context menu's Open --
         // all three land in OpenAssetRow) asks the host to open THIS file in
         // Visual Studio (EditorApp::OpenInIde -> IdeLaunch). A path, like
         // openScene, because the host needs the resolved file and the panel
@@ -246,12 +246,12 @@ namespace Arcane::Editor
 
     // Materials-only subkind pill text (spec s3.1/s6) -- see the
     // definition's own comment (AssetPanelCommon.cpp). A Browser row's pill,
-    // the preview pane's pill and a Graph node's body pill all read this
+    // the Asset page's pill and a Graph node's body pill all read this
     // same text.
     const char* SubkindPillText(const AssetPanelEntry& e);
 
     // CookState-to-display-string (spec s6/s8: "Cooked"/"Queued"/"Refused"/
-    // "Unknown") -- the preview pane's cook row and DrawAssetPeekTooltip's
+    // "Unknown") -- the Asset page's cook row and DrawAssetPeekTooltip's
     // own cook line format the same CookState the same way.
     const char* CookStateLabel(CookState cook);
 

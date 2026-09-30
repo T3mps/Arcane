@@ -1,13 +1,14 @@
 # Inspector filters: which source kinds an instance follows
 
-**Status:** Approved 2026-09-29 (brainstorm with the user; decisions in section 8)
+**Status:** Implemented 2026-09-30, branch feat/inspector-filters (approved 2026-09-29 after a
+brainstorm with the user; decisions in section 8). A full shader NODE page is the next phase,
+right after this one.
 **Amends:** `docs/superpowers/specs/2026-09-28-inspector-ownership-design.md` s3.3 (pin and
 instances) and s3.5 (the Asset Browser's preview pane goes ENTIRELY; the "keeps the thumbnail
 and the Open button" option is dropped).
 **Scheduled:** editor mini-arc 2, as ONE piece with the asset page and the preview-pane removal
 (s6 explains why they cannot land apart). The Material tab retirement (formerly mini-arc 3) and
-the Sprite/Mesh property forms are FOLDED INTO THIS PHASE (s6a, user 2026-09-29). A full shader
-NODE page is the next phase, right after this one.
+the Sprite/Mesh property forms are FOLDED INTO THIS PHASE (s6a, user 2026-09-29).
 
 ## 1. The problem
 
@@ -45,6 +46,10 @@ panels only follow or lock.
   re-selects its document-level page) is a selection event; switching tabs, focus and window
   activation are NEVER events; a clear is never an event. Every source -- the scene, the Asset
   Browser, every document kind -- follows it; no source gets a focus-follow exception.
+  Scoped exception: the Asset Graph lens mirrors its persistent canvas selection into the model
+  only on change, so re-clicking the already-selected Graph node is not a selection event; every
+  other asset click site (Browser, Status, feed, the Browser row context menu on its first frame)
+  is.
 
 - **Per-instance filter.** `Instance` gains `std::vector<std::string> excluded;` -- the
   UNTICKED kinds. Empty = All (the default for every instance). The filter is stored as
@@ -146,7 +151,11 @@ panels only follow or lock.
   text) re-selects it. Selecting a node in the canvas does not change the page this phase.
 - **Retired:** the "Material" window (`DrawMaterialPanel`/`DrawMaterialWindow`), its docking in
   `BuildDefaultLayout`, and the app's tab-follow logic (`SelectDockTab("Material")` /
-  `SelectDockTab("Inspector")` on a material tab becoming visible). A stale `[Window][Material]`
+  `SelectDockTab("Inspector")` on a material tab becoming visible) -- in fact all of
+  `EditorApp::SyncCenterTabFocus`, including its viewport-appearing -> `SelectDockTab("Inspector")`
+  branch and `ViewportPanelResult::appearing`. That branch existed only because Material shared
+  the Inspector's dock node. Accepted loss: a window the user docks into the Inspector's node no
+  longer gets the Inspector tab raised when the viewport tab appears. A stale `[Window][Material]`
   ini entry is harmless (never submitted again).
 - **Sprite page / Mesh page.** `SpriteDocument` (kind `"sprite"`) and `MeshDocument` (kind
   `"mesh"`) become sources with one document-level key each (`"sprite"`, `"mesh"`), same open +
@@ -228,3 +237,29 @@ panels only follow or lock.
   Scene + an Input Actions instance; an asset click on the default layout (the entity page
   stays); a pre-feature ReferenceProject/Aphelyon layout upgrading once and not again; change
   a docked instance's filter and confirm the dock slot holds.
+
+### What shipped (witnesses and lanes actually added)
+
+- Unit: `EditorInspectorHostTest` (routing, stamps, permanent sources, per-source deselect,
+  per-instance pin, filtered history, `Filters=` ini round-trip and the one-time legacy upgrade),
+  `AssetInspectorSourceTest`, and the sprite, mesh and material page tests (kind, open = selected,
+  content click re-selects, tab switches never do). `VerifyReportTest` pins schema 12 and the new
+  `inspector.instances` case; `HostConfigTest` covers `--select-asset`.
+- Automation: the report's inspector block carries `instances[]` = `{id, excluded, source}`
+  (`VerifyReport` schema 12; `golden-gate.ps1` `ReportSchemaMax` = 12). The `--select` of the
+  asset golden is spelled `--select-asset <guid>` (editor-only; ArcaneRuntime refuses it with
+  exit 2; the guid resolves through the project). Plugin ABI 45 -> 46 (`HostConfig::selectAsset`,
+  the report's instances); `ReferenceProject` is restamped, the Aphelyon restamp is owed.
+- Witnesses (`EditorWitnessTest`): E3 asserts `instances` on the input-actions run; E4 =
+  `--select-asset` against the `editor-asset-page` golden; E5 = `--open-asset` of a material (with
+  the `editor-material-page` compare), a sprite and a mesh, each routing the main Inspector to
+  that document's page.
+- Golden lanes (`golden-gate.ps1`, fourteen combinations): `editor-asset-page` and
+  `editor-material-page`, each on dx12 and vulkan; `editor-ui`, `editor-ui-perspective` and
+  `editor-input-doc` re-blessed for the two-inspector layout. The verify seed
+  (`ReferenceProject/Saved/verify-layout.ini`) was re-authored with `[Window][Inspector]` +
+  `[Window][inspector_1]`.
+- Known limits of the goldens: the Assets-only pane is about 182x180 px in the default layout,
+  so `editor-asset-page` shows the thumbnail only (the rows and import settings sit below the
+  fold); for a mesh material the document's preview panel shows "compiling..." (an existing
+  defect), and `editor-material-page` records that state.
