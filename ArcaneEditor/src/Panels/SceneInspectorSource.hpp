@@ -28,7 +28,6 @@ namespace Arcane::Editor
             const Arcane::Project*    project = nullptr;
             InspectorState*           state = nullptr;
             const InspectorServices*  services = nullptr;
-            const Arcane::Guid*       selectedAsset = nullptr;
         };
         void Bind(const Deps& deps) { m_deps = deps; }
 

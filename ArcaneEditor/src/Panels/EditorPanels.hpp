@@ -576,17 +576,13 @@ namespace Arcane::Editor
     // selection, drawn into the CURRENT window (the caller Begins it; since
     // the inspector-ownership arc that caller is the SceneInspectorSource
     // page inside an Inspector instance window, never a panel of its own).
-    // `selectedAsset` (F2b Task 13): the Assets panel's last-clicked row
-    // (AssetPanelModel::selected). Consulted ONLY when there is no entity
-    // selection -- an entity selection always wins, matching every other
-    // "two things could occupy this panel" tie-break in the editor (e.g. the
-    // Material panel's own free function below routes the ACTIVE DOCUMENT,
-    // never a browser selection). A nil guid (the default) behaves exactly
-    // like the pre-Task-13 signature: "No selection" when nothing is
-    // entity-selected either.
+    // No entity selected draws "No selection" -- the one empty-state string
+    // for a routed source (inspector filters spec 2026-09-29 s3, decision 5).
+    // The Asset Browser's selection is no longer a fallback here: it is its
+    // own Inspector source (AssetInspectorSource, spec s6), whose page
+    // carries the texture import settings this body used to show.
     void DrawInspectorBody(Astra::Registry& registry, const SelectionContext& sel,
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
                            const Arcane::Project* project, InspectorState& state,
-                           const InspectorServices* services = nullptr,
-                           const Arcane::Guid& selectedAsset = Arcane::Guid{});
+                           const InspectorServices* services = nullptr);
 }

@@ -73,9 +73,7 @@ namespace Arcane::Editor
         // the scene page keeps its own persistent state on purpose (gesture
         // token, quat views, search) rather than the instance's.
         if (!m_deps.registry || !m_drawSel || !m_deps.undo || !m_deps.binding || !m_deps.state) return;
-        const Arcane::Guid nil;
         DrawInspectorBody(*m_deps.registry, *m_drawSel, *m_deps.undo, *m_deps.binding,
-                          m_deps.project, *m_deps.state, m_deps.services,
-                          m_deps.selectedAsset ? *m_deps.selectedAsset : nil);
+                          m_deps.project, *m_deps.state, m_deps.services);
     }
 }

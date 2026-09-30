@@ -2361,6 +2361,11 @@ namespace Arcane::Editor
         assetPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph);
         assetPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus);
         assetPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
+        // Inspector filters s6: the asset Inspector page draws in
+        // DrawSelectionPanels, AFTER this function has returned, so it binds
+        // a MEMBER copy -- a pointer to the local above would dangle. The
+        // three panels below keep the local.
+        m_assetPanelServices = assetPanelServices;
 
         // The three asset windows, each gated on its own PanelId exactly like
         // Console/Problems below. Each returns its own AssetPanelActions;
@@ -2385,6 +2390,12 @@ namespace Arcane::Editor
         ConsumeAssetPanelActions(browserActions, ls);
         ConsumeAssetPanelActions(graphActions, ls);
         ConsumeAssetPanelActions(statusActions, ls);
+        // The asset page's clicks (Inspector filters s6): raised during LAST
+        // frame's Inspector draw, performed here with the panels' own -- one
+        // frame late, invisible, and the same handler as the three panels.
+        ConsumeAssetPanelActions(m_assetPageActions, ls);
+        m_assetPageActions = {};
+        m_assetSource.Bind({ &m_assetModel, proj, &m_documents, &m_assetPanelServices, &m_assetPageActions });
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
@@ -3684,14 +3695,18 @@ namespace Arcane::Editor
         // deletion or a structural undo: none of these reach the host. Re-
         // clicking the already-selected entity IS an event (it brings the
         // Inspector back from a document); Push's echo compare keeps it out of
-        // history. The scene page's trailing fallback (F2b Task 13 / Task 10:
-        // m_assetModel.selected, consulted only when nothing is entity-
-        // selected -- DrawInspectorBody's own tie-break) rides the Deps.
+        // history. The Asset Browser's selection is NOT a scene-page
+        // fallback any more: it routes as its own source (m_assetSource,
+        // bound in DrawEditorUi with the asset panels; inspector filters s6).
         m_sceneSource.Bind({ &m_runtime->Registry(), &m_selection, m_undo ? &*m_undo : nullptr,
                              &m_editBinding, m_runtime->CurrentProject(), &m_inspector,
-                             &m_inspectorServices, &m_assetModel.selected });
+                             &m_inspectorServices });
         if (m_sceneSelectionEdge.Observe(m_selection.Epoch(), m_sceneSource.SelectionKey()))
             m_inspectorHost.NotifySelected(m_sceneSource);
+        // selectionGesture, not selectionStamp: a re-click of the selected
+        // asset IS a selection event (spec s3), and the stamp moves only on change.
+        if (m_assetSelectionEdge.Observe(m_assetModel.selectionGesture, m_assetSource.SelectionKey()))
+            m_inspectorHost.NotifySelected(m_assetSource);
         m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
         {
             std::uint64_t& last = m_docSelectionEpochs[&d];

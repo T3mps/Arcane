@@ -42,8 +42,9 @@
 //     clause) are both that panel's now, so one calling TU: it moves INTO
 //     that TU rather than becoming a shared symbol nothing else asks for.
 //   * kAssetsPreviewPaneDefaultWidth -> AssetBrowserPanel.hpp, beside the
-//     state field whose default references it (the preview pane is
-//     Browser-only, spec s9.4).
+//     state field whose default referenced it (the preview pane was
+//     Browser-only, spec s9.4). Both are gone since inspector filters s6:
+//     the pane became the Assets Inspector's page (AssetInspectorSource).
 //   * AssetsGraphProjectionIsCurrent -- DELETED, not moved (spec s7.4).
 namespace Arcane::Editor
 {

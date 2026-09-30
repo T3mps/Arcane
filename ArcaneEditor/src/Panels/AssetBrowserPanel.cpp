@@ -12,7 +12,6 @@
 #include <imgui_internal.h>   // ImGuiSelectableFlags_NoPadWithHalfSpacing (ruling 4, 2026-09-07)
 
 #include <algorithm>
-#include <cfloat>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -21,13 +20,14 @@
 
 // AssetBrowserPanel (panel-split arc): the "Asset Browser" window. Task 6
 // moved the BODY here as pure motion out of AssetsPanel.cpp's DrawBrowseLens
-// (renamed DrawAssetBrowserBody) -- the rail, the grouped/folded asset table
-// (scroll-to-selection + arrow-key nav), the table<->preview drag splitter
-// and the resizable preview pane, plus that body's private helpers (the
-// row-interaction attachment, the row/rail/group/header painters, the
-// derived-list row, the preview-pane splitter and its clamp math) and the
-// Browser-only geometry constants they share, none of which any other view
-// ever called.
+// (renamed DrawAssetBrowserBody) -- the rail and the grouped/folded asset
+// table (scroll-to-selection + arrow-key nav), plus that body's private
+// helpers (the row-interaction attachment, the row/rail/group/header
+// painters) and the Browser-only geometry constants they share, none of
+// which any other view ever called. The body is the rail + the table; the
+// asset's details are the Assets Inspector's page (inspector filters spec
+// 2026-09-29 s6: the old preview pane, its splitter and its clamp math
+// moved to AssetInspectorSource.cpp or were deleted with the pane).
 //
 // Task 7 added the SHELL at the bottom of this file -- DrawAssetBrowserPanel,
 // the window itself: its own ImGui::Begin("Asset Browser"), the `+ Create` +
@@ -47,9 +47,8 @@
 //
 // kTooltipWidth/kTooltipThumbSize went to AssetPanelCommon.cpp with
 // DrawAssetPeekTooltip, their only reader. kRailWidth/kRailRowHeight/
-// kChildIndent/kGroupIndent and every Task 11 preview-pane geometry constant
-// (plus ClampPreviewSaneRange/ClampPreviewForLayout) live here in full:
-// nothing outside this panel ever read any of them.
+// kChildIndent/kGroupIndent live here in full: nothing outside this panel
+// ever read any of them.
 namespace Arcane::Editor
 {
     namespace
@@ -63,122 +62,6 @@ namespace Arcane::Editor
         // a value and COMPOUND (a fold child inside a depth-1 group sits at
         // depth*kGroupIndent + kChildIndent from the row's own base).
         constexpr float kGroupIndent      = 20.0f;
-
-        // Task 11 (spec s5/s6/s11.2) fixed geometry: the preview pane is
-        // hidden below a 720px panel width (the table never drops below
-        // readable width -- spec s5); its thumb is 140px; its action
-        // buttons are full-width and 24px tall (§11.2's table row height,
-        // reused rather than inventing a new pinned value).
-        //
-        // 2026-09-07 follow-up (spec s5/s11.2 addendum): the pane's width
-        // is no longer a single pinned constant -- it is user-resizable
-        // via a drag splitter (AssetBrowserPanelState::previewPaneWidth, the
-        // DESIRED width, session-only, matching every other field on that
-        // struct). What was `kPreviewPaneWidth = 330.0f` becomes a default
-        // (AssetBrowserPanel.hpp's kAssetsPreviewPaneDefaultWidth, half the old
-        // pinned width) + a clamp range, resizable within [min, max].
-        constexpr float kPreviewPaneMinWidth     = 120.0f;
-        constexpr float kPreviewPaneMaxWidth     = 480.0f;
-        // The table's own readable-width floor: the splitter clamps the
-        // pane down (rather than letting it squeeze the table into a
-        // sliver) before the <720px hide rule would otherwise have to do
-        // that job wholesale (requirement 3 of the follow-up brief).
-        constexpr float kMinReadableTableWidth   = 200.0f;
-        // The divider's hit width -- same recipe as ShaderEditorDocument.cpp's
-        // PaneSplitter (kSplitBarPx), a few-px InvisibleButton strip.
-        constexpr float kPreviewSplitBarPx       = 6.0f;
-        constexpr float kPreviewHidePanelWidth   = 720.0f;
-        constexpr float kPreviewThumbSize        = 140.0f;
-        constexpr float kActionButtonHeight      = 24.0f;
-
-        // 2026-09-07 user-directed, fourth revision (spec s6/s17): compact
-        // side-by-side preview header -- thumb left, name/pills/path/guid/
-        // cook stacked beside it, instead of always stacking thumb-above-
-        // metadata. kPreviewCompactHeaderMinWidth is the PANE width (this
-        // function's own `width` parameter, same units as
-        // kPreviewPaneMinWidth/kPreviewPaneMaxWidth above) at and above
-        // which the compact header draws; below it, today's stacked form is
-        // unchanged. The spec calls the exact number an "implementer tuning
-        // value, not a pinned constant" -- 250px is its own suggested
-        // figure, kept verbatim rather than re-deriving a different one; the
-        // shipped 165px default pane stays comfortably below it (spec's own
-        // "stays on the stacked fallback" requirement), see the impl report
-        // for the measured breakpoint math. kPreviewCompactTextColumnMin is
-        // the floor the thumb yields to when the pane is between this
-        // breakpoint and comfortably wide -- the "≥~110px text column"
-        // figure from the same directive.
-        constexpr float kPreviewCompactHeaderMinWidth = 250.0f;
-        constexpr float kPreviewCompactTextColumnMin  = 110.0f;
-
-        // The absolute sane-range clamp ONLY -- [kPreviewPaneMinWidth,
-        // kPreviewPaneMaxWidth] -- and nothing else. This is the ONLY clamp
-        // ever applied to a value before it is written into
-        // AssetBrowserPanelState::previewPaneWidth (the splitter's drag and its
-        // double-click reset, both below, are the field's only two
-        // writers). Keeping the table-floor cap OUT of this function is
-        // exactly what a 2026-09-07 review fix required: that cap (see
-        // ClampPreviewForLayout) depends on `panelWidth`, which changes on
-        // every window resize, so folding it into the STORED desired width
-        // would silently and PERMANENTLY forget the user's real preference
-        // the instant the panel transiently narrows, with no way back once
-        // it widens again -- a ratchet, not a clamp.
-        float ClampPreviewSaneRange(float desired)
-        {
-            return std::clamp(desired, kPreviewPaneMinWidth, kPreviewPaneMaxWidth);
-        }
-
-        // The full LAYOUT clamp: the sane range above, THEN a further cap on
-        // the pane so the table (rail + the splitter bar + the pane, all
-        // inside `panelWidth` -- see the 2026-09-07 flush-gutters note below,
-        // no ItemSpacing gaps are budgeted any more) never drops below
-        // kMinReadableTableWidth. Used every frame to compute a purely
-        // local, throwaway DRAWN width -- never fed back into the stored
-        // desired width (see ClampPreviewSaneRange's own comment on why
-        // not). The two floors cannot actually fight in practice --
-        // showPreview only ever calls this at panelWidth >= 720, where even
-        // the pane's own max clamp (kPreviewPaneMaxWidth) leaves the table
-        // comfortably above its floor.
-        //
-        // 2026-09-07 (user nitpick, mock parity): rail|table and
-        // table|splitter|pane now sit FLUSH (DrawAssetBrowserBody's SameLine(0,0)
-        // calls) -- OptionBC.dc.html has no gap between these regions, only
-        // 1px hairline borders the rail and the table each own on their own
-        // right edge. This budget must stay in lockstep with that layout:
-        // panelWidth == kRailWidth + tableWidth + kPreviewSplitBarPx +
-        // drawnWidth EXACTLY now (no `ItemSpacing.x * 3.0f` term), matching
-        // DrawAssetBrowserBody's own `tableWidth` formula term-for-term.
-        float ClampPreviewForLayout(float desired, float panelWidth)
-        {
-            float w = ClampPreviewSaneRange(desired);
-            // How far the pane's DRAWN width can grow this frame before the
-            // table would drop under its own readable floor -- a cap ON THE
-            // PANE (not a floor under the table; kMinReadableTableWidth is
-            // that floor, this is the same constraint expressed in the
-            // pane's own units).
-            const float previewWidthCap = panelWidth - kRailWidth
-                                         - kPreviewSplitBarPx - kMinReadableTableWidth;
-            if (previewWidthCap < w)
-                w = std::max(kPreviewPaneMinWidth, previewWidthCap);
-            return w;
-        }
-
-        // Ruling 5 (desk pass, 2026-09-07): "We can shorten it and have a
-        // hover tooltip for the full path?" -- mount paths carry a
-        // "scheme://" prefix (MountTable.hpp: "game", "engine",
-        // "plugin/<name>", "diag", ...; the preview pane's own mountPath
-        // field comment: `"game://materials/glow.arcmat"`), which at the
-        // pane's 165px default width ate most of the ellipsis budget
-        // (COMPARISON.md: `game://textures/uv...` vs the mock's clean
-        // `textures/uv_marker.png`). Strips whatever precedes "://" -- not
-        // just the literal "game" scheme -- so every mount stays readable.
-        // Falls back to the whole string unchanged if there is no "://" at
-        // all (should not happen for a real mount path, but this is display
-        // code, not a parser -- never assert on it).
-        std::string_view ContentRelativePath(std::string_view mountPath)
-        {
-            const std::size_t sep = mountPath.find("://");
-            return (sep == std::string_view::npos) ? mountPath : mountPath.substr(sep + 3);
-        }
 
         // Rail "+" gate (spec s6): only kinds with a Create-menu entry get
         // the hover create affordance. Textures/Data/Audio/Font/Diagnostic/
@@ -230,10 +113,13 @@ namespace Arcane::Editor
 
             // Right-click acts on this row: make it the tracked selection so
             // the highlight + the Inspector/Assets-menu follow (matches
-            // AssetBrowser.cpp's own old behavior). Idempotent per
-            // AssetPanelModel::Select (no stamp bump when the guid is already
-            // the selection), so re-running it every open frame is free.
-            model.Select(e.guid);
+            // AssetBrowser.cpp's own old behavior). ONCE, on the popup's first
+            // frame: Select bumps AssetPanelModel::selectionGesture on every
+            // call (a re-selection IS an Inspector selection event, spec
+            // 2026-09-29 s3), so a per-frame call would re-fire the Inspector's
+            // asset edge for as long as the menu stays open.
+            if (ImGui::IsWindowAppearing())
+                model.Select(e.guid);
 
             DrawAssetMenuItems(actions, e, kindSpecific, services);
 
@@ -773,11 +659,10 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: the table (spec s6/s11.2) ----------------------------
-        // `width` is 0.0f (ImGui's own "fill everything left on this line")
-        // when Task 11's preview pane is hidden; otherwise the caller passes
-        // the exact remainder after reserving the rail and the pinned 330px
-        // preview column, so the three stay side by side without the table
-        // fighting the preview for space.
+        // `width` is 0.0f (ImGui's own "fill everything left on this line"):
+        // the table takes the whole width after the rail. (The preview pane
+        // that used to share this line is the Assets Inspector's page since
+        // inspector filters s6.)
         void DrawTable(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                        DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                        const Arcane::Guid& bootGuid, float width)
@@ -858,8 +743,8 @@ namespace Arcane::Editor
                 // region, which is the CURRENT window right after
                 // BeginTable) fixes every origin uniformly: a mouse click
                 // (always already-visible) never re-centers, while keyboard
-                // Up/Down walking past the visible edge -- or a future
-                // external selector (Task 11's preview-pane Derived list)
+                // Up/Down walking past the visible edge -- or an external
+                // selector (the Assets Inspector page's Derived list)
                 // picking something scrolled away -- still correctly
                 // recenters. This subsumes tagging each panel-side
                 // model.Select() call site individually: there is exactly
@@ -953,365 +838,6 @@ namespace Arcane::Editor
 
             ImGui::EndChild();
         }
-
-        // ---- Task 11: one Derived-list row (spec s6/s11.2) -----------------
-        // "Derived (N) list (each row: sprite icon + name; click Selects the
-        // child)". `derivedChildren` is always a 1:1 folded sprite (the
-        // model's own fold rule, AssetPanelEntry::derivedChildren's doc
-        // comment: "1:1 sprites folded under me"), so `KindIcon(child->kind)`
-        // reads as the sprite glyph unconditionally -- resolved through the
-        // entry rather than hardcoding the icon so a future fold rule change
-        // cannot silently desync this row from what it actually names.
-        // Shares the same peek tooltip every other representation uses
-        // (spec s8).
-        void DrawDerivedRow(AssetPanelModel& model, const AssetPanelServices& services,
-                            const Arcane::Guid& childGuid)
-        {
-            const AssetPanelEntry* child = model.Find(childGuid);
-            if (!child)
-                return;
-
-            ImGui::PushID(child->guid.ToString().c_str());
-            const std::string label = std::string(KindIcon(child->kind)) + " " + child->fileName;
-            if (ImGui::Selectable(label.c_str(), model.selected == child->guid))
-                model.Select(child->guid);
-            DrawAssetPeekTooltip(model, services, child->guid);
-            ImGui::PopID();
-        }
-
-        // ---- 2026-09-07 follow-up: the table<->preview drag splitter --------
-        // Mirrors ShaderEditorDocument.cpp's `PaneSplitter` recipe -- an
-        // InvisibleButton owns the gap, and because ImGui holds ActiveId for
-        // as long as the button is held, MouseDelta keeps arriving every
-        // frame even after the cursor leaves the strip -- but works directly
-        // in PIXELS rather than a 0..1 fraction (this pane's width is
-        // already a pixel value, same convention as kRailWidth/kPreviewPane*
-        // above) and never calls MarkIniSettingsDirty: spec s5 keeps this
-        // panel's state session-only, unlike the Material panel's persisted
-        // split ratio. Double-click restores the default width, same as
-        // PaneSplitter's own reset gesture.
-        //
-        // 2026-09-07 review fix, round 2: the drag write baselines off the
-        // PRIOR `desiredWidth` itself -- NOT off `drawnWidth` (this frame's
-        // already-clamped layout width). Round 1's fix baselined off
-        // `drawnWidth` specifically so a capped drag would track the mouse
-        // from wherever the bar visually sat, but that reopened the same
-        // ratchet bug class through the write path instead of the read
-        // path: `IsItemActive()` goes true on the PRESS frame with
-        // `MouseDelta == (0,0)`, so `desiredWidth = Clamp(drawnWidth - 0) =
-        // drawnWidth` -- a bare, zero-motion click silently snapped the
-        // stored desired width down to whatever the table-floor cap
-        // currently was, and a sustained drag while capped re-baselined off
-        // that same (unchanging, while still capped) `drawnWidth` every
-        // frame instead of accumulating, so it never moved past one
-        // frame's delta. Baselining off `desiredWidth` fixes both: a
-        // zero-delta press is a no-op (`desiredWidth - 0 == desiredWidth`),
-        // and a multi-frame drag accumulates against the field's own
-        // running value exactly the way `ShaderEditorDocument.cpp`'s
-        // `PaneSplitter` accumulates its ratio, frame over frame, for as
-        // long as ActiveId is held. This function is `desiredWidth`'s ONLY
-        // writer (drag below, double-click reset below that), and both
-        // writes go through `ClampPreviewSaneRange` ONLY -- never
-        // `ClampPreviewForLayout` -- so the table-floor cap still never
-        // touches the stored value, only the caller's throwaway
-        // `drawnWidth` local (DrawAssetBrowserBody). The visible trade-off: a
-        // drag that SHRINKS the pane while it is already capped needs to
-        // first travel however many pixels separate the stale desired
-        // value from today's cap before the pane visibly moves (there is
-        // no way around this without re-corrupting the stored value on
-        // every capped frame, which is the exact bug this fixes) -- widening
-        // the panel afterward still snaps back to wherever that drag
-        // actually left `desiredWidth`, not to the cap.
-        void PreviewPaneSplitter(float& desiredWidth)
-        {
-            const ImVec2 size(kPreviewSplitBarPx, ImGui::GetContentRegionAvail().y);
-            if (size.x <= 0.0f || size.y <= 0.0f)
-                return;   // degenerate region -- InvisibleButton asserts on zero
-
-            const ImVec2 p0 = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton("##previewsplit", size);
-            const bool held    = ImGui::IsItemActive();
-            const bool hovered = ImGui::IsItemHovered();
-            if (held || hovered)
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-            if (held)
-            {
-                // Dragging the splitter LEFT (negative MouseDelta.x) hands
-                // the table's space to the pane -- width grows by the same
-                // distance the mouse moved, hence the sign flip. Baselined
-                // off `desiredWidth` itself (see the function comment) --
-                // a zero-motion press is a no-op, and a held multi-frame
-                // drag accumulates correctly instead of re-snapping to a
-                // capped value every frame.
-                desiredWidth = ClampPreviewSaneRange(desiredWidth - ImGui::GetIO().MouseDelta.x);
-            }
-            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                desiredWidth = kAssetsPreviewPaneDefaultWidth;
-
-            // Same three-tone ramp as ShaderEditorDocument's PaneSplitter
-            // and ImGui's own docking splitter: hairline at rest, one step
-            // brighter and one pixel wider on hover, brightest while held.
-            const ImU32 col = ImGui::GetColorU32(held    ? ImGuiCol_SeparatorActive
-                                               : hovered ? ImGuiCol_SeparatorHovered
-                                                         : ImGuiCol_Separator);
-            const float line = (held || hovered) ? 2.0f : 1.0f;
-            const ImVec2 a(p0.x + (size.x - line) * 0.5f, p0.y);
-            const ImVec2 b(a.x + line, p0.y + size.y);
-            ImGui::GetWindowDrawList()->AddRectFilled(a, b, col);
-        }
-
-        // ---- Task 11: the preview pane (spec s5/s6/s11.2) -------------------
-        // Layout order, pinned by the brief: 140px thumb -> name + kind/
-        // subkind/inst pills -> path row -> guid row (click copies) -> cook
-        // row -> separator -> Derived (N) list -> separator -> full-width
-        // action buttons (Open, Show in Explorer, Copy Path, + one
-        // kind-specific action). Empty selection is a dim "no selection"
-        // line -- no other row renders in that state.
-        void DrawPreviewPane(AssetPanelModel& model, const Arcane::Project* project, DocumentHost& docs,
-                            const AssetPanelServices& services, AssetPanelActions& actions, float width)
-        {
-            if (!ImGui::BeginChild("##assetspreview", ImVec2(width, 0.0f), ImGuiChildFlags_None))
-            {
-                ImGui::EndChild();
-                return;
-            }
-
-            const AssetPanelEntry* e = model.selected.IsValid() ? model.Find(model.selected) : nullptr;
-            if (!e)
-            {
-                ImGui::TextDisabled("No selection");
-                ImGui::EndChild();
-                return;
-            }
-
-            // ---- 140px thumb: real thumb when resolvable, else the kind
-            // icon centered over a `kWell` backdrop with a `kSeparator`
-            // border seam (spec s6.1: "the Lucide kind icon on a well
-            // background") -- the same image/icon composition
-            // `DrawAssetPeekTooltip` uses at 64px, scaled up and framed.
-            // Factored into a lambda (2026-09-07, compact-header revision)
-            // since it is now drawn from two call sites (compact/stacked
-            // below) with only `thumbSize` differing -- the drawing itself
-            // is byte-identical to every prior revision.
-            auto drawThumb = [&](float thumbSize)
-            {
-                const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
-                const ImVec2 thumbMax(thumbMin.x + thumbSize, thumbMin.y + thumbSize);
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-                const std::uint64_t thumb = services.resolveAssetThumb ? services.resolveAssetThumb(e->guid) : 0;
-                if (thumb != 0)
-                {
-                    dl->AddImage(static_cast<ImTextureID>(thumb), thumbMin, thumbMax);
-                }
-                else
-                {
-                    dl->AddRectFilled(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kWell));
-                    const char* icon = KindIcon(e->kind);
-                    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-                    dl->AddText(ImVec2(thumbMin.x + (thumbSize - iconSize.x) * 0.5f,
-                                       thumbMin.y + (thumbSize - iconSize.y) * 0.5f),
-                               ImGui::GetColorU32(ImGuiCol_Text), icon);
-                }
-                dl->AddRect(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kSeparator));
-                ImGui::Dummy(ImVec2(thumbSize, thumbSize));
-            };
-
-            // ---- name/pills + path/guid/cook rows. Factored into a lambda
-            // (2026-09-07, compact-header revision) for the same reason as
-            // `drawThumb` -- identical content and logic at both call sites,
-            // only the surrounding container differs. `EllipsisToWidth`'s
-            // `GetContentRegionAvail().x` call is UNCHANGED from every prior
-            // revision -- in the stacked branch it still measures the whole
-            // pane child, and in the compact branch it measures the
-            // `##previewMeta` child's own (zero-padding) width instead,
-            // simply by virtue of which window is current when this runs.
-            // That's the ImGui-native equivalent of the mock's own
-            // `min-width: 0` + `overflow: hidden` ellipsis fix (design
-            // report, fourth revision) -- a bounding container, not a width
-            // argument threaded through.
-            auto drawMeta = [&]()
-            {
-                // ---- name (stem) + kind pill + subkind/inst pills
-                //
-                // 2026-09-07 review note: unlike the `path` row below, the
-                // name here has NO EllipsisToWidth clamp in either branch --
-                // pre-existing (Task 11), not introduced by the compact
-                // header. It reads as a bigger risk now: the compact
-                // column can be as narrow as kPreviewCompactTextColumnMin
-                // (110px), and a long stem plus its trailing kind/subkind/
-                // inst pills (all SameLine-chained) has less room to
-                // overflow into than the old full-pane-width stacked row
-                // did. Deferred rather than fixed here: a correct clamp
-                // has to measure the pill run's own width FIRST and budget
-                // the name against what's left, not reuse EllipsisToWidth's
-                // single-string recipe -- a small feature of its own, out
-                // of scope for a geometry-only padding pass with the
-                // editor's own exe unavailable to re-capture against.
-                ImGui::TextUnformatted(e->name.c_str());
-                ImGui::SameLine();
-                AssetPill(KindLabel(e->kind));
-                if (const char* sub = SubkindPillText(*e))
-                {
-                    ImGui::SameLine();
-                    AssetPill(sub);
-                }
-                if (e->isInstance)
-                {
-                    ImGui::SameLine();
-                    AssetPill("inst");
-                }
-
-                // ---- path row: the content-relative path (scheme prefix
-                // stripped -- ruling 5, 2026-09-07), ellipsized to whatever's
-                // left on the line after the "path" label (EllipsisToWidth
-                // stays the fallback for a still-long relative path at the
-                // pane's narrower widths). A plain text hover tooltip carries
-                // the FULL mount path -- this is NOT the §8 210px peek-tooltip
-                // contract (no thumb, no kind/cook rows), just a path reveal.
-                ImGui::TextDisabled("path");
-                ImGui::SameLine();
-                const std::string_view relPath = ContentRelativePath(e->mountPath);
-                ImGui::TextUnformatted(EllipsisToWidth(relPath, ImGui::GetContentRegionAvail().x).c_str());
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", e->mountPath.c_str());
-
-                // ---- guid row: dim, click copies (spec s6: "guid
-                // (click-to-copy)"). Routed through `actions.copyGuid` -- the
-                // SAME field the row context menu's "Copy Guid" entry already
-                // sets (DrawRowContextMenu, this file) -- so the host's
-                // one existing consumer (EditorAppFrame.cpp's
-                // `ImGui::SetClipboardText(browserActions.copyGuid...)`) needs
-                // no new wiring; "panel reports, app performs" stays intact.
-                ImGui::TextDisabled("guid");
-                ImGui::SameLine();
-                ImGui::TextDisabled("%s", e->guid.ToString().c_str());
-                if (ImGui::IsItemHovered())
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                if (ImGui::IsItemClicked())
-                    actions.copyGuid = e->guid;
-
-                // ---- cook row: state string, refused in kAmber
-                ImGui::TextDisabled("cook");
-                ImGui::SameLine();
-                if (e->cook == CookState::Refused)
-                    ImGui::TextColored(Theme::kAmber, "%s", CookStateLabel(e->cook));
-                else
-                    ImGui::TextDisabled("%s", CookStateLabel(e->cook));
-            };
-
-            // 2026-09-07 user-directed, fourth revision (spec s6/s17):
-            // side-by-side header at/above kPreviewCompactHeaderMinWidth,
-            // today's stacked form (thumb above, metadata below -- every
-            // prior revision, unchanged) below it. Measured against the
-            // pane's own drawn `width` (this function's parameter, the same
-            // units as kPreviewPaneMinWidth/kPreviewHidePanelWidth), not the
-            // post-padding avail below -- so the breakpoint reads the same
-            // number the splitter drag/double-click reset already use.
-            const bool compactHeader = width >= kPreviewCompactHeaderMinWidth;
-            if (compactHeader)
-            {
-                // §11.2's 140px thumb is unchanged; it only yields (via the
-                // same std::min clamp every revision has used) when the
-                // pane is too narrow to also leave a
-                // kPreviewCompactTextColumnMin-wide text column beside it --
-                // exactly the pinned "scaled down via the existing min()
-                // logic" rule.
-                const float avail = ImGui::GetContentRegionAvail().x;
-                const float spacing = ImGui::GetStyle().ItemSpacing.x;
-                const float thumbSize = std::min(kPreviewThumbSize,
-                    std::max(0.0f, avail - spacing - kPreviewCompactTextColumnMin));
-                const float textColumnWidth = std::max(0.0f, avail - thumbSize - spacing);
-
-                ImGui::BeginGroup();
-                drawThumb(thumbSize);
-                ImGui::EndGroup();
-                ImGui::SameLine();
-
-                // Zero WindowPadding on this bounding-only column: it exists
-                // purely to give `drawMeta`'s GetContentRegionAvail() calls a
-                // column-width answer instead of a whole-pane one (see
-                // `drawMeta`'s own comment); a visible inset was never part
-                // of the mock.
-                //
-                // 2026-09-07 review note: this child's HEIGHT is `thumbSize`
-                // (116-140px at this breakpoint), coupled to the thumb, not
-                // to `drawMeta`'s own content -- at today's metrics (Inter
-                // 16px body, this row's four lines) the real content stands
-                // ~80px, comfortably inside even the smallest compact
-                // thumbSize, so this is a no-op in practice. A future
-                // larger body font or display scale could grow that content
-                // past `thumbSize` and start clipping/scrolling the `cook`
-                // row inside the box -- not exercised by any capture in
-                // this arc, flagged here rather than sized defensively
-                // against a metrics change nothing today asks for.
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-                if (ImGui::BeginChild("##previewMeta", ImVec2(textColumnWidth, thumbSize), ImGuiChildFlags_None))
-                    drawMeta();
-                ImGui::EndChild();
-                ImGui::PopStyleVar();
-            }
-            else
-            {
-                // 2026-09-07 follow-up: the pane can now be dragged down to
-                // kPreviewPaneMinWidth (120px), which minus this child's own
-                // WindowPadding does not clear 140px. Rather than add a
-                // second centering codepath, the thumb SCALES to whatever is
-                // actually available (min-clamped against the 140px pinned
-                // size). At the shipped 165px default (avail ~= 149px after
-                // padding) this is a no-op: 140 < avail, so `thumbSize` is
-                // still exactly 140 and nothing about the Task 11 layout
-                // changes.
-                const float thumbSize = std::min(kPreviewThumbSize, ImGui::GetContentRegionAvail().x);
-                drawThumb(thumbSize);
-                drawMeta();
-            }
-
-            ImGui::Separator();
-
-            // ---- Derived (N) list
-            char derivedHeader[32];
-            std::snprintf(derivedHeader, sizeof(derivedHeader), "Derived (%d)",
-                          static_cast<int>(e->derivedChildren.size()));
-            ImGui::TextUnformatted(derivedHeader);
-            for (const Arcane::Guid& childGuid : e->derivedChildren)
-                DrawDerivedRow(model, services, childGuid);
-
-            ImGui::Separator();
-
-            // ---- action buttons: full-width, 24px tall. Open reuses the
-            // SAME routing helper double-click/Enter use (spec: "Open (same
-            // routing as double-click)"); the trailing kind-specific action
-            // mirrors DrawRowContextMenu's own kind-specific entries exactly
-            // (same label text, same action field).
-            const ImVec2 btnSize(-FLT_MIN, kActionButtonHeight);
-            if (ImGui::Button(ICON_LC_EXTERNAL_LINK " Open", btnSize))
-                OpenAssetRow(*e, project, docs, actions);
-            if (ImGui::Button(ICON_LC_FOLDER_OPEN " Show in Explorer", btnSize))
-                actions.showInExplorer = e->guid;
-            if (ImGui::Button(ICON_LC_FILE_TEXT " Open as text", btnSize))
-                actions.openAsText = e->guid;
-            if (ImGui::Button(ICON_LC_COPY " Copy Path", btnSize))
-                actions.copyPath = e->guid;
-
-            if (e->kind == AssetKind::Material)
-            {
-                if (ImGui::Button(ICON_LC_LAYERS " New Instance...", btnSize))
-                    actions.createInstanceOf = e->guid;
-            }
-            else if (e->kind == AssetKind::Scene)
-            {
-                if (ImGui::Button(ICON_LC_FLAG " Set as Boot Scene", btnSize))
-                    actions.setBootScene = e->guid;
-            }
-            else if (e->kind == AssetKind::Texture)
-            {
-                if (ImGui::Button(ICON_LC_STICKER " Create Sprite", btnSize))
-                    actions.createSpriteFrom = e->guid;
-            }
-
-            ImGui::EndChild();
-        }
     }   // end anonymous namespace: DrawAssetBrowserBody below is the one
         // exported entry point (Task 6, panel-split) -- everything above it
         // stays internal-linkage; an anonymous namespace's members remain
@@ -1320,7 +846,7 @@ namespace Arcane::Editor
         // helper and constant unqualified. Same technique AssetGraphPanel.cpp/
         // AssetStatusPanel.cpp use for their own exported bodies.
 
-    // ---- Task 10/11: the Browse lens body (rail + table + preview) -----
+    // ---- Task 10: the Browse lens body (rail + table) ------------------
     void DrawAssetBrowserBody(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                               DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions)
     {
@@ -1328,63 +854,18 @@ namespace Arcane::Editor
         // (rather than per row) for the "boot" pill (spec s6).
         const Arcane::Guid bootGuid = BootSceneGuid(project);
 
-        // Spec s5: preview pane hidden below a 720px PANEL width so the
-        // table never drops below readable width. Measured here, before
-        // anything in this body has drawn -- at this exact point
-        // ImGui's content-region-avail IS the whole rail+table+preview
-        // budget for the frame, uncontested by anything this function
-        // itself has submitted yet.
-        const float panelWidth = ImGui::GetContentRegionAvail().x;
-        const bool showPreview = panelWidth >= kPreviewHidePanelWidth;
-
-        // 2026-09-07 review fix: `drawnWidth` is a purely LOCAL, per-frame
-        // clamp of `state.previewPaneWidth` (the stored DESIRED width) --
-        // it is what the layout below actually draws against, and it is
-        // thrown away at the end of this function. The first cut of this
-        // feature instead reassigned `state.previewPaneWidth` here
-        // directly, which meant a transient panel-narrowing (a plain
-        // window resize, no splitter interaction at all) silently and
-        // PERMANENTLY reduced whatever the user had actually dragged to,
-        // with no way back once the panel widened again -- a ratchet,
-        // not a clamp. Keeping the two separate means a WINDOW resize
-        // still reclamps the DRAWN width every frame (so the table never
-        // gets crushed), while the DESIRED width survives the narrow
-        // interval untouched and reasserts itself the moment there is
-        // room again.
-        const float drawnWidth = showPreview
-            ? ClampPreviewForLayout(state.previewPaneWidth, panelWidth)
-            : 0.0f;
-
-        // 2026-09-07 (user nitpick, mock parity): rail|table and
-        // table|splitter|pane sit FLUSH -- SameLine(0.0f, 0.0f) zeroes
-        // the ItemSpacing.x gutter SameLine() would otherwise insert.
-        // OptionBC.dc.html has no gap here either: the rail's own
-        // `border-right: 1px solid #333333` (DrawRail's new hairline,
-        // below) and the table's own `border-right` (the splitter's
-        // existing at-rest paint, already a 1px hairline centered in its
-        // hit strip -- PreviewPaneSplitter, untouched) are the ONLY
-        // separators, not an 8px void on each side of them. The width
-        // budget below is updated in lockstep -- see ClampPreviewForLayout's
-        // own 2026-09-07 comment for the identity this must hold.
+        // 2026-09-07 (user nitpick, mock parity): rail|table sit FLUSH --
+        // SameLine(0.0f, 0.0f) zeroes the ItemSpacing.x gutter SameLine()
+        // would otherwise insert. OptionBC.dc.html has no gap here either:
+        // the rail's own `border-right: 1px solid #333333` (DrawRail's
+        // hairline) is the separator, not an 8px void beside it.
         DrawRail(state, model, actions);
         ImGui::SameLine(0.0f, 0.0f);
 
-        // Reserve the (resizable) preview pane plus the splitter bar,
-        // with NO ItemSpacing gutters any more (see above); 0.0f keeps
-        // DrawTable's own "fill everything left on this line" default
-        // when the pane is hidden.
-        const float tableWidth = showPreview
-            ? std::max(0.0f, panelWidth - kRailWidth - kPreviewSplitBarPx - drawnWidth)
-            : 0.0f;
-        DrawTable(state, model, project, docs, services, actions, bootGuid, tableWidth);
-
-        if (showPreview)
-        {
-            ImGui::SameLine(0.0f, 0.0f);
-            PreviewPaneSplitter(state.previewPaneWidth);
-            ImGui::SameLine(0.0f, 0.0f);
-            DrawPreviewPane(model, project, docs, services, actions, drawnWidth);
-        }
+        // The table takes the width after the rail (0.0f = DrawTable's
+        // "fill everything left on this line"). The asset's details are the
+        // Assets Inspector's page (inspector filters s6), not a pane here.
+        DrawTable(state, model, project, docs, services, actions, bootGuid, /*tableWidth*/ 0.0f);
     }
 
     // ---- Panel-split Task 7: the window (spec s5/s9) -------------------

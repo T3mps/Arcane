@@ -43,6 +43,7 @@
 #include "Panels/EditorPanels.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
+#include "Panels/AssetInspectorSource.hpp"   // m_assetSource
 #include "Panels/SceneInspectorSource.hpp"   // m_sceneSource
 #include "Project/CookQueue.hpp"
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
@@ -983,7 +984,7 @@ namespace Arcane::Editor
         // lives beside the Inspector windows: RegisterInspectorInstancesSettings
         // (Panels/InspectorWindows.hpp), registered at the same Init site.
         // The document an Inspector source IS, for the Ctrl+S routes: null for
-        // the scene source and for null (EditorDocument derives from
+        // the scene and asset sources and for null (EditorDocument derives from
         // InspectorSource, Task 2).
         [[nodiscard]] Arcane::Editor::EditorDocument* InspectorSaveTarget(Arcane::Editor::InspectorSource* src) const
         {
@@ -1082,6 +1083,15 @@ namespace Arcane::Editor
         // ShutdownGraphPath's CloseAll and ReleaseAll()s the host AFTER it
         // (see there).
         Arcane::Editor::SceneInspectorSource  m_sceneSource;
+        // Inspector filters (spec 2026-09-29 s6): the Asset Browser's shared
+        // selection as its own PERMANENT source. Declared before the host for
+        // the same reason m_sceneSource is: the host holds a raw pointer to
+        // it, so it must outlive the host (declaration order = construction
+        // order; destruction runs in reverse).
+        Arcane::Editor::AssetPanelServices   m_assetPanelServices;   // the asset page's thumbnails + peeks; a MEMBER: the page draws after DrawEditorUi returns
+        Arcane::Editor::AssetInspectorSource m_assetSource;          // permanent Inspector source over m_assetModel.selected
+        Arcane::Editor::SelectionEdge        m_assetSelectionEdge;   // Observe(m_assetModel.selectionGesture, key)
+        Arcane::Editor::AssetPanelActions    m_assetPageActions;     // the asset page's clicks, drained next frame
         Arcane::Editor::InspectorHost         m_inspectorHost{ m_sceneSource };
         Arcane::Editor::InspectorWindowsState m_inspectorWindows;
         Arcane::Editor::SelectionEdge         m_sceneSelectionEdge;   // epoch-based (Task 2): Observe(m_selection.Epoch(), key)

@@ -567,6 +567,10 @@ namespace Arcane::Editor
         RegisterPlayModeSettings();
         RegisterPanelVisibilitySettings();
         Arcane::Editor::RegisterInspectorInstancesSettings(m_inspectorHost);
+        // Inspector filters s6: the Asset Browser's selection is a PERMANENT
+        // source -- registered once, never closed, and kept across a project
+        // switch's ReleaseAll (its history entries and pins still drop).
+        m_inspectorHost.AddSource(m_assetSource, /*permanent*/ true);
         RegisterViewportSettings();
 
         // Does NOT construct or bind the swapchain-backed m_presenter (Task
@@ -1568,6 +1572,7 @@ namespace Arcane::Editor
         // entry, and arm a full rebuild for whenever DrawEditorUi's
         // RebuildIfDirty next runs -- see m_assetModel's own declaration.
         m_assetModel.ResetForProjectSwitch();
+        m_assetSelectionEdge.lastEpoch = m_assetModel.selectionGesture;   // re-arm, as the scene edge does (EditorAppScene.cpp:161)
         m_assetPanelProviders = MakeAssetPanelProviders();
         m_assetModel.MarkAllDirty();
         // Asset-manager Plan 3 Task 3: the Graph lens's canvas context dies

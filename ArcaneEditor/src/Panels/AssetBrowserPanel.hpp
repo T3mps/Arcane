@@ -2,11 +2,12 @@
 
 // AssetBrowserPanel (panel-split arc): the "Asset Browser" window -- the
 // toolbar (`+ Create` + search), the kind rail, the grouped/folded asset
-// table (scroll-to-selection + arrow-key nav), the table<->preview drag
-// splitter, the resizable preview pane, and the bottom bar (context + health
-// digest). Task 6 moved the body here as pure motion out of AssetsPanel.cpp's
-// DrawBrowseLens; Task 7 wrapped it in its own panel shell and gave it the
-// half of AssetsPanelState it actually reads. See AssetBrowserPanel.cpp's own
+// table (scroll-to-selection + arrow-key nav), and the bottom bar (context +
+// health digest). The selected asset's details are the Assets Inspector's
+// page (AssetInspectorSource, inspector filters spec 2026-09-29 s6), not a
+// pane of this window. Task 6 moved the body here as pure motion out of
+// AssetsPanel.cpp's DrawBrowseLens; Task 7 wrapped it in its own panel shell
+// and gave it the half of AssetsPanelState it actually reads. See AssetBrowserPanel.cpp's own
 // header comment for the full section-by-section accounting.
 
 #include "Panels/AssetPanelCommon.hpp"   // AssetPanelActions/AssetPanelServices
@@ -23,16 +24,6 @@ namespace Arcane::Editor
 {
     class AssetPanelModel;
     class DocumentHost;
-
-    // The preview pane's default width (2026-09-07 follow-up). Lives here,
-    // not as a second literal duplicated in AssetBrowserPanel.cpp, so
-    // AssetBrowserPanelState's own field default below and the splitter's
-    // double-click-reset target (AssetBrowserPanel.cpp) can never drift
-    // apart -- a review minor on the first cut of this feature, where both
-    // spellings independently hardcoded 165.0f. (Panel-split Task 7 moved
-    // this constant here from AssetsPanel.hpp with the state field that
-    // references it; the preview pane is Browser-only, spec s9.4.)
-    inline constexpr float kAssetsPreviewPaneDefaultWidth = 165.0f;
 
     // The Asset Browser window's session-only UI state (spec s6: panel state
     // is session-only in v1). Panel-split Task 7: one of the two structs
@@ -51,27 +42,6 @@ namespace Arcane::Editor
         char search[128] = {};
         int  railKind = -1;                 // -1 = All
         std::uint32_t seenSelectionStamp = 0; // scroll-to-selection once
-
-        // 2026-09-07 follow-up (spec s5/s11.2 addendum, post-Task-11): the
-        // preview pane's DESIRED width, user-resizable via a drag splitter
-        // between the table and the pane. Session-only, same convention as
-        // every other field here -- NOT persisted to imgui.ini (contrast the
-        // Material panel's ShaderEditorDocument PaneSplitter ratio, which IS
-        // persisted; this one deliberately is not).
-        //
-        // "Desired", precisely: this field is written ONLY by the splitter's
-        // drag and its double-click reset (both in AssetBrowserPanel.cpp) --
-        // never by the per-frame layout clamp, which computes a separate,
-        // purely local DRAWN width instead (ClampPreviewForLayout). A review
-        // fix (2026-09-07): the first cut clamped this field itself every
-        // frame, which meant a transient panel-narrowing (a window resize,
-        // nothing the user asked of the pane) silently and PERMANENTLY
-        // reduced whatever the user had actually dragged to, with no way back
-        // once the panel widened again. Splitting "what the user wants" from
-        // "what fits on screen this frame" is what fixes that: the wide value
-        // survives the narrow interval untouched and reasserts itself the
-        // moment there is room again.
-        float previewPaneWidth = kAssetsPreviewPaneDefaultWidth;
 
         // Task 10: session-only fold/group open state, MIRRORING
         // AssetPanelModel's own private m_groupOpen/m_childrenOpen (same
@@ -94,9 +64,10 @@ namespace Arcane::Editor
     };
 
     // Draw the Browse lens body: the rail (all/per-kind counts + hover
-    // create affordance, spec s6), the grouped/folded asset table, the
-    // table<->preview drag splitter, and the resizable preview pane (thumb,
-    // name/pills, path/guid/cook rows, Derived list, action buttons).
+    // create affordance, spec s6) + the grouped/folded asset table, which
+    // takes the width after the rail. The asset's details (thumb, name/pills,
+    // path/guid/cook rows, Derived list, action buttons) are the Assets
+    // Inspector's page (inspector filters s6), no longer a pane here.
     // `model`/`project` are read; every effect travels through `actions`,
     // gated by `services`; `docs` routes a non-scene open the same way the
     // Graph panel's node double-click does (both call the SAME OpenAssetRow,

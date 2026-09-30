@@ -1,5 +1,4 @@
 #include "Panels/EditorPanels.hpp"
-#include "Panels/AssetPanelModel.hpp"   // AssetKindOf (F2b Task 13: the texture-asset panel's kind gate)
 #include "Scene/ComponentCatalog.hpp"
 #include "Panels/ConsoleBuffer.hpp"
 #include <cstdio>
@@ -15,7 +14,6 @@
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
-#include "Panels/TextureImportSettings.hpp"   // DrawTextureImportSettings: the no-entity texture fallback (moved out of this file, inspector filters Task 5)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 
@@ -23,7 +21,6 @@
 #include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
-#include <Arcane/Project/AssetId.hpp>   // AssetId::FromGuid (ResolveAsset's key)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Scene/Components.hpp>   // Arcane::Identity (the rename target)
 #include <Arcane/Sim/RunLoop.hpp>
@@ -2270,8 +2267,7 @@ namespace Arcane::Editor
     void DrawInspectorBody(Astra::Registry& registry, const SelectionContext& sel,
                            Arcane::CommandStack& undo, const SceneEditBinding& binding,
                            const Arcane::Project* project, InspectorState& state,
-                           const InspectorServices* services,
-                           const Arcane::Guid& selectedAsset)
+                           const InspectorServices* services)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
         const EditGesture::ScopeGuard gestureGuard{ &undo, state.gesture };
@@ -2282,20 +2278,6 @@ namespace Arcane::Editor
 
         if (!sel.HasSelection())
         {
-            // F2b Task 13: no entity selected -- fall back to the Asset
-            // Browser's last click, but ONLY for a texture (the browser
-            // thumbnail GRID and per-kind property panels for everything
-            // else are out of scope this arc, spec sec 7).
-            if (project && selectedAsset.IsValid())
-            {
-                if (const auto mount = project->Registry().Resolve(selectedAsset);
-                    mount && Arcane::Editor::AssetKindOf(*mount) == Arcane::Editor::AssetKind::Texture)
-                {
-                    if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(selectedAsset)))
-                        DrawTextureImportSettings(*path);
-                    return;
-                }
-            }
             ImGui::TextDisabled("No selection");
             return;
         }
