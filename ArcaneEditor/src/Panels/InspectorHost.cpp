@@ -128,13 +128,21 @@ namespace Arcane::Editor
     int InspectorHost::AddInstance()
     {
         for (int id = 1; id < kMaxInstances; ++id)
-            if (!Find(id)) { Instance inst; inst.id = id; m_instances.push_back(inst); return id; }
+            if (!Find(id))
+            {
+                Instance inst;
+                inst.id = id;
+                if (const auto it = m_closedFilters.find(id); it != m_closedFilters.end()) inst.filter = it->second;
+                m_instances.push_back(inst);
+                return id;
+            }
         return -1;
     }
 
     void InspectorHost::RemoveInstance(int id)
     {
         if (id == 0) return;
+        if (const Instance* inst = Find(id)) m_closedFilters[id] = inst->filter;
         std::erase_if(m_instances, [id](const Instance& i) { return i.id == id; });
     }
 

@@ -917,3 +917,27 @@ TEST_CASE("DrawInspectorWindows: a single-kind empty state names the kind in the
     CHECK(logged.find("No Material document open") != std::string::npos);
     CHECK(logged.find("Materials document") == std::string::npos);
 }
+
+TEST_CASE("InspectorHost: a closed slot's filter comes back when Window > New Inspector reuses the slot", "[editor][inspector]")
+{
+    // Final review m2: closing "Inspector 2 - Assets" and opening a New
+    // Inspector reused slot 1 UNFILTERED -- in the Assets dock slot its
+    // [Window][inspector_1] entry still names -- so it followed every scene
+    // and document selection. The host remembers each slot's last filter for
+    // the session.
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    host.ApplyDefaultInspectorLayout();
+    REQUIRE(host.Find(InspectorHost::kAssetsInstanceId)->filter == InspectorFilter::Only("assets"));
+    host.RemoveInstance(InspectorHost::kAssetsInstanceId);
+    const int reopened = host.AddInstance();
+    REQUIRE(reopened == InspectorHost::kAssetsInstanceId);
+    CHECK(host.Find(reopened)->filter == InspectorFilter::Only("assets"));
+    // A slot never used this session opens All, as before.
+    const int fresh = host.AddInstance();
+    CHECK(host.Find(fresh)->filter.IsAll());
+    // A filter change made before the close is what comes back.
+    REQUIRE(host.SetFilter(fresh, InspectorFilter::Only("scene")));
+    host.RemoveInstance(fresh);
+    CHECK(host.Find(host.AddInstance())->filter == InspectorFilter::Only("scene"));
+}

@@ -101,8 +101,12 @@ namespace Arcane::Editor
         [[nodiscard]] const std::vector<Instance>& Instances() const noexcept { return m_instances; }
         [[nodiscard]] Instance* Find(int id);
         [[nodiscard]] const Instance* Find(int id) const;
-        int  AddInstance();                              // lowest free id in [1, kMaxInstances); -1 when the pool is full
-        void RemoveInstance(int id);                     // id 0 is refused
+        // Lowest free id in [1, kMaxInstances); -1 when the pool is full. A
+        // slot closed earlier this session comes back with the filter it had
+        // (its [Window] entry still docks it where that filter made sense --
+        // final review m2); a never-used slot is All.
+        int  AddInstance();
+        void RemoveInstance(int id);                     // id 0 is refused; remembers the slot's filter for AddInstance
         void SetInstanceIds(std::span<const int> extras); // ini restore: exactly {0} + the valid, deduplicated ids exist afterwards
         // True when the page instance `instanceId` shows is resolvable: the
         // pin is only offered for a resolvable page (UE's details lock exists
@@ -197,6 +201,7 @@ namespace Arcane::Editor
         std::vector<InspectorSource*> m_permanent;                   // AddSource(.., true); the fallback is implicitly permanent
         std::unordered_map<InspectorSource*, std::uint64_t> m_stamps; // last selection event / history landing per source
         std::uint64_t m_stampClock = 0;
+        std::unordered_map<int, InspectorFilter> m_closedFilters;   // slot id -> its filter when it was closed (session only)
         bool m_sawFiltersLine = false;       // this ini load saw a Filters= line
         bool m_legacyLayoutPending = false;  // a load without one: TakeLegacyLayoutUpgrade's flag
     };
