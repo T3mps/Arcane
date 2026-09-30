@@ -108,15 +108,19 @@ panels only follow or lock.
 
 ## 5. UI
 
-- **Header:** a filter dropdown between the back/forward arrows and the breadcrumb:
-  `<- -> [All but Assets v]  Scene > Player  (pin)`. It opens a list of checkboxes, one per
-  catalog kind. Available on every instance, including id 0.
-- **Label** (dropdown face and window-title suffix):
-  - every kind ticked: "All" on the dropdown, no title suffix;
+- **Header:** a filter dropdown between the back/forward arrows and the breadcrumb. It opens a
+  list of checkboxes, one per catalog kind, each row showing the kind's icon left of its name.
+  Available on every instance, including id 0. When the row is too narrow, the breadcrumb moves
+  to its own full-width row and the pin is never clipped.
+- **Face** (user request, 2026-09-30): the dropdown face shows ICONS, not text -- the ticked
+  kinds' icons centered in catalog order (the Asset Browser's kind icons: Scene clapperboard,
+  Assets package, Input Actions gamepad, Materials palette, Sprites sticker, Meshes box), ONE
+  layers glyph for All, "+N" when the icons do not fit. Hovering the face shows the text label.
+- **Label** (the face's tooltip and the window-title suffix):
+  - every kind ticked: "All", no title suffix;
   - one kind ticked: its name ("Scene");
   - one kind unticked: "All but <name>" ("All but Assets");
-  - otherwise: the ticked names joined with ", ", ellipsized to the dropdown width (full list
-    in the tooltip).
+  - otherwise: the ticked names joined with ", ".
 - **Title:** "Inspector - All but Assets", "Inspector 2 - Assets"; the `###` window id is
   unchanged so the dock slot and `[Window]` entry survive a filter change.
 - A filtered window must be obviously filtered: an inspector that ignores some clicks
