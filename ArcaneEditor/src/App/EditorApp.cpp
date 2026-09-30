@@ -2886,8 +2886,12 @@ namespace Arcane::Editor
         std::vector<Arcane::VerifyReport::InspectorInstance> inspectorInstances;
         for (const auto& i : m_inspectorHost.Instances())
         {
+            // The breadcrumb THAT instance shows: its pinned page or its
+            // routed source's live page (the draw's own resolve).
             Arcane::Editor::InspectorSource* s = m_inspectorHost.SourceFor(i.id);
-            inspectorInstances.push_back({ i.id, i.filter.excluded, s ? s->SourceName() : std::string{} });
+            Arcane::Editor::InspectorPage* page = s ? (i.pinned ? s->PageFor(i.pinnedKey) : s->Page()) : nullptr;
+            inspectorInstances.push_back({ i.id, i.filter.excluded, s ? s->SourceName() : std::string{},
+                                           s ? Arcane::Editor::InspectorCrumbText(*s, page) : std::string{} });
         }
         m_documents.CloseAll();
         // ...which hands their preview vehicles to the retire list rather than

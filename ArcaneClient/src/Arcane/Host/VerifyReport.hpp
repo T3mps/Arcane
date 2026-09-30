@@ -223,8 +223,9 @@ namespace Arcane
         // run that never set it; 10 remains readable.
         //
         // 12: inspector.instances (inspector filters) -- one {id, excluded,
-        // source} entry per Inspector instance, what each one's filter admits
-        // and which source it routed to (see SetInspector). Present whenever
+        // source, breadcrumb} entry per Inspector instance, what each one's
+        // filter admits, which source it routed to and the breadcrumb it
+        // shows (see SetInspector). Present whenever
         // `inspector` is; 11 remains readable.
         static constexpr int kSchemaVersion                = 12;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
@@ -495,9 +496,12 @@ namespace Arcane
         // `instances` (schemaVersion 12, inspector filters): one entry per
         // Inspector instance -- its id, its filter's excluded kind ids (catalog
         // order; empty = All) and the SourceName() of the source it routed to
-        // ("" when it routed to none). Serialized as `inspector.instances`,
-        // always present (possibly empty) when this was called.
-        struct InspectorInstance { int id = 0; std::vector<std::string> excluded; std::string source; };
+        // ("" when it routed to none), and the breadcrumb THAT instance shows
+        // (InspectorCrumbText over its source and the page it draws -- its
+        // pinned PageFor or Page(); "" when it routed to none). Serialized as
+        // `inspector.instances`, always present (possibly empty) when this
+        // was called.
+        struct InspectorInstance { int id = 0; std::vector<std::string> excluded; std::string source; std::string breadcrumb; };
         void SetInspector(std::string source, std::string breadcrumb, std::vector<InspectorInstance> instances = {});
 
         // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5; plan 2

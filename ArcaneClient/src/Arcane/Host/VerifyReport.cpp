@@ -745,7 +745,8 @@ namespace Arcane
         {
             nlohmann::json instances = nlohmann::json::array();
             for (const InspectorInstance& i : m_inspectorInstances)
-                instances.push_back({ { "id", i.id }, { "excluded", i.excluded }, { "source", i.source } });
+                instances.push_back({ { "id", i.id }, { "excluded", i.excluded }, { "source", i.source },
+                                      { "breadcrumb", i.breadcrumb } });
             j["inspector"] = { { "source", m_inspectorSource }, { "breadcrumb", m_inspectorBreadcrumb },
                                { "instances", std::move(instances) } };
         }

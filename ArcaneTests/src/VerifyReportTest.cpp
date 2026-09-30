@@ -1171,9 +1171,9 @@ TEST_CASE("schema 12: inspector.instances carries each instance's id, exclusions
     Arcane::VerifyReport r;
     r.SetRun("dx12", 1, "frames-complete");
     r.SetInspector("Assets", "Assets > uv_marker.png",
-                   { { 0, { "assets" }, "Scene" },
-                     { 1, { "scene", "input-actions", "material", "sprite", "mesh" }, "Assets" },
-                     { 2, {}, "" } });
+                   { { 0, { "assets" }, "Scene", "Scene > Player" },
+                     { 1, { "scene", "input-actions", "material", "sprite", "mesh" }, "Assets", "Assets > uv_marker.png" },
+                     { 2, {}, "", "" } });
     const auto j = nlohmann::json::parse(r.ToJson());
     REQUIRE(j["schemaVersion"].get<int>() == 12);
     REQUIRE(j.contains("inspector"));
@@ -1185,13 +1185,16 @@ TEST_CASE("schema 12: inspector.instances carries each instance's id, exclusions
     CHECK(inst[0].at("id") == 0);
     CHECK(inst[0].at("excluded") == nlohmann::json::array({ "assets" }));
     CHECK(inst[0].at("source") == "Scene");
+    CHECK(inst[0].at("breadcrumb") == "Scene > Player");   // what THAT instance shows (final fix W)
     CHECK(inst[1].at("id") == 1);
     CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions", "material", "sprite", "mesh" }));
     CHECK(inst[1].at("source") == "Assets");
+    CHECK(inst[1].at("breadcrumb") == "Assets > uv_marker.png");
     CHECK(inst[2].at("id") == 2);
     CHECK(inst[2].at("excluded").is_array());
     CHECK(inst[2].at("excluded").empty());           // All
     CHECK(inst[2].at("source") == "");               // routed to nothing
+    CHECK(inst[2].at("breadcrumb") == "");
 
     // The two-argument form still emits the key, as an empty array: `instances`
     // is present whenever SetInspector ran.
