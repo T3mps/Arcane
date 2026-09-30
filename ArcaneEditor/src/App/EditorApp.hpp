@@ -346,14 +346,8 @@ namespace Arcane::Editor
         // there; none of them opens a dialog or writes a file.
         void BeginCreateAsset(const Arcane::Editor::CreateAssetRequest& request);
         void ConsumeCreateResult(const Arcane::Editor::CreateAssetResult& result);
-        Arcane::Editor::ShaderEditorDocument* ResolveActiveMaterialDoc();
         void DrawModals(LoopState& ls);
         void DrawViewportPanelPhase(FrameState& fs);
-        // Center-tab -> side-panel focus follow. Reads the one-frame
-        // "became visible" edges the Viewport panel and the material documents
-        // published THIS frame, and focuses the matching tab in their dock
-        // node. Must run after both have drawn.
-        void SyncCenterTabFocus(const FrameState& fs);
         void HandleViewportPick(const FrameState& fs);
         void DrawSelectionPanels();
         bool PresentFrame();
@@ -2215,25 +2209,6 @@ namespace Arcane::Editor
         // The dock node the Viewport occupied LAST frame (0 = floating):
         // where new document windows dock as sibling tabs (DrawAll).
         unsigned int m_viewportDockId = 0;
-
-        // ---- Material panel: which document it shows -----------------------
-        // The material document whose center tab is active, or the last one
-        // that was. Held as a GUID rather than a pointer because DocumentHost
-        // destroys documents synchronously on close (DocumentHost::Close erases
-        // the unique_ptr), so a cached raw pointer would dangle for the rest of
-        // the frame; the guid is re-resolved through FindByGuid every frame.
-        // Nil = no material open, so the panel is not submitted at all.
-        // Survives a project switch ON PURPOSE: re-resolved from the (now
-        // empty) DocumentHost next frame -- the ResolveActiveMaterialDoc
-        // fallback self-heals it. See ResetPerProjectState's rule.
-        Arcane::Guid m_activeMaterialGuid;
-        // Open material-document count LAST frame, so "the last one closed" is
-        // a detectable edge even when the Viewport does not report Appearing
-        // (a document that was floating rather than tabbed over the scene).
-        // Survives a project switch ON PURPOSE: re-resolved from the (now
-        // empty) DocumentHost next frame -- the ResolveActiveMaterialDoc
-        // fallback self-heals it. See ResetPerProjectState's rule.
-        std::size_t  m_materialDocCount = 0;
 
         // Failure surfacing for project-open, scene, and standalone-launch
         // refusals (architecture pass sec 7): SwitchProject's refusals used to

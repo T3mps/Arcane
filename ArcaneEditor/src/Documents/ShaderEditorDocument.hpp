@@ -21,6 +21,7 @@
 // document via ConsumeResult.
 
 #include "Scene/EditGesture.hpp"
+#include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 #include "Widgets/EditorWidgets.hpp"   // TextCommitState / StableTextEdit
 // The grid's PURE half, and its ONLY half: the two phase members below are
@@ -181,25 +182,26 @@ namespace Arcane::Editor
         void Tick(double dt) override;
         void Draw(bool& requestClose) override;
 
-        // Draw the dockable "Material" panel for THIS document -- the preview
-        // image over the params editor, split vertically. Owns its own
-        // ImGui::Begin/End (and its own EditGesture::ScopeGuard, because the
-        // param rows that open gestures are submitted inside it).
+        // ---- Inspector source (inspector filters spec s6a) ----------------
+        // Kind "material". ONE page, the whole document's -- title (plus
+        // "(Instance)"), the live preview, the preview/params split and the
+        // params editor -- under ONE key, "material": opening the document
+        // selects it (m_pageSel starts at epoch 1) and a click in the
+        // document's content re-selects it (Draw's NoteContentClick). Tab
+        // switches and focus never do (the spec's one selection rule).
         //
-        // The panel is a SEPARATE dock window from the document's center tab:
-        // it lives beside the Inspector, so a material's parameters sit where
-        // an entity's components do. The free DrawMaterialPanel below routes
-        // the active document here (and submits nothing when there is none).
-        void DrawMaterialWindow();
-
-        // True on the ONE frame this document's window became the visible tab
-        // (opened, or its tab was selected). Latched by Draw from
-        // ImGui::IsWindowAppearing (imgui.cpp:9236-9240 returns
-        // window->Appearing, which imgui.cpp:7905-7907 raises when a docked
-        // window's tab becomes visible after being hidden). The host reads it
-        // to fire the center-tab -> side-panel focus follow exactly once per
-        // transition rather than every frame.
-        bool TabBecameVisible() const { return m_tabBecameVisible; }
+        // SEAM: the next phase's NODE page (Unity Shader Graph's Graph
+        // Inspector shape -- click a node in the canvas, edit its properties
+        // in the Inspector) lands here as a second key; selecting a node does
+        // not change the page this phase.
+        std::string_view Kind() const override { return "material"; }
+        InspectorPage* Page() override { return &m_page; }
+        InspectorPage* PageFor(std::string_view key) override { return m_pageSel.Resolves(key) ? &m_page : nullptr; }
+        std::string SelectionKey() const override { return m_pageSel.SelectionKey(); }
+        // True when it resolves; NO epoch bump -- a restore is not a click.
+        bool RestoreSelection(std::string_view key) override { return m_pageSel.Resolves(key); }
+        bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
+        std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
 
         // ---- Pane layout: a GLOBAL editor preference, not per-document ----
         // The pane split is one editor-wide setting shared by every open
@@ -208,15 +210,15 @@ namespace Arcane::Editor
         // ratios -- makes the user re-drag the same split for each asset, and
         // there is no per-asset reason for the two to differ.
         //
-        // `previewSplit` is the fraction of the Material panel's height the
+        // `previewSplit` is the fraction of the material page's height the
         // PREVIEW takes, against the params editor below it, dragged
         // vertically. It is the only split left: the document's center tab is
         // now a single column (the graph/snippet for a base, the preview for an
-        // instance) since preview+params moved out to the Material panel, so
-        // the old horizontal `mainSplit` had nothing left to divide.
+        // instance) since preview+params moved out to the Inspector's material
+        // page, so the old horizontal `mainSplit` had nothing left to divide.
         //
         // The default is measured from the layout the user settled on at the
-        // desk: the preview takes a little over half the panel. Double-clicking
+        // desk: the preview takes a little over half the page. Double-clicking
         // the divider restores it.
         static constexpr float kPreviewSplitDefault = 0.55f;
 
@@ -381,6 +383,32 @@ namespace Arcane::Editor
         [[nodiscard]] std::uint64_t GraphPreviewTextureId() const noexcept;
 
     private:
+        // The material page: the preview over the params editor, split
+        // vertically, drawn by the Inspector instance showing it. Carries its
+        // own EditGesture::ScopeGuard (the param rows that open gestures are
+        // submitted inside it) and no Begin/End -- the Inspector window is its
+        // window.
+        void DrawMaterialPageBody();
+
+        // The one page this document contributes (kind "material", key
+        // "material"). The base MUST be public: Page() hands &m_page out as
+        // InspectorPage*, and a private base makes that conversion
+        // inaccessible (MSVC C2243).
+        class MaterialInspectorPage final : public InspectorPage
+        {
+        public:
+            explicit MaterialInspectorPage(ShaderEditorDocument& doc) : m_doc(doc) {}
+            std::vector<InspectorCrumb> Breadcrumb() const override
+            {
+                // One crumb; `select` is a no-op (the page IS the only level).
+                return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "material" } } };
+            }
+            void Draw(PropertyGrid&) override { m_doc.DrawMaterialPageBody(); }
+
+        private:
+            ShaderEditorDocument& m_doc;
+        };
+
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
         void   BindIfComplete();   // both stages landed -> createShader + SetMaterial
@@ -670,8 +698,8 @@ namespace Arcane::Editor
         // breadcrumb (up) and double-click-to-enter (down).
         //
         // m_activePass keeps its value while the overview is up rather than
-        // being cleared: the preview, the params panel and the side Material
-        // tab all key off it, and blanking it on every trip to the overview
+        // being cleared: the preview, the params panel and the Inspector's
+        // material page all key off it, and blanking it on every trip to the overview
         // would make them flicker back to the base and lose the user's place.
         // The overview is a NAVIGATION layer over the document, not a different
         // document -- so "which pass am I editing" survives a look at the map.
@@ -750,16 +778,23 @@ namespace Arcane::Editor
         // focus race.
         int    m_callbackJumpLine = 0;
 
-        // Latched by Draw from ImGui::IsWindowAppearing -- see TabBecameVisible.
-        bool   m_tabBecameVisible = false;
+        // The Inspector page's selection (key "material", epoch 1 = selected at
+        // open) and the page itself. m_page holds a reference to *this;
+        // documents live behind unique_ptr in DocumentHost and never move.
+        DocumentPageSelection  m_pageSel{ "material" };
+        MaterialInspectorPage  m_page{ *this };
 
         // The document's ONE edit-gesture bracket (EditGesture). TWO draw
-        // scopes open gestures against it now -- Draw (the graph's value/pin
-        // drags) and DrawMaterialWindow (the param rows) -- so BOTH declare a
-        // ScopeGuard as their first local. The host draws the Material panel
-        // BEFORE the documents (EditorApp::DrawEditorUi), which puts Draw's
-        // guard last in the frame: the guaranteed close still runs after every
-        // widget that can open a gesture has been submitted.
+        // scopes open gestures against it -- Draw (the graph's value/pin
+        // drags) and DrawMaterialPageBody (the param rows) -- so BOTH declare a
+        // ScopeGuard as their first local. The page body draws AFTER the
+        // document (the Inspector phase, EditorApp's DrawSelectionPanels, runs
+        // after DrawEditorUi's m_documents.DrawAll), so Draw's guard is no
+        // longer last in the frame: a gesture the page body opens is closed by
+        // the body's own guard, and a gesture parked across frames is closed
+        // by whichever guard runs once its widget has deactivated -- the
+        // EditGesture ownership and abandonment rules, not the draw order, are
+        // what guarantee every gesture closes.
         // Param-panel drags carry
         // the override value, graph value drags the WHOLE graph (small graphs --
         // the SG full-snapshot-undo pathology was per-edit reserialization plus
@@ -887,20 +922,4 @@ namespace Arcane::Editor
 
         friend struct SnippetCallbackForwarder;
     };
-
-    // The dockable "Material" panel. Docked as a TAB beside the Inspector by
-    // default (EditorPanels.cpp's BuildDefaultLayout); the user may re-dock it
-    // freely and imgui.ini remembers where.
-    //
-    // `active` is the material document whose content to show -- the one whose
-    // center tab is active, or the last one that was (EditorApp resolves it).
-    // Null submits NOTHING: with no material open the tab is ABSENT, not empty.
-    // Hiding it does not cost its dock slot -- cites at the definition.
-    //
-    // SEAM: this panel is the intended home of selected-NODE properties too
-    // (Unity Shader Graph's Graph Inspector shape -- click a node in the
-    // canvas, edit its properties here). Nothing is built for that yet; when it
-    // lands it becomes a second section of this window, above or beside the
-    // params, and the graph canvas will publish its node selection to it.
-    void DrawMaterialPanel(ShaderEditorDocument* active);
 }

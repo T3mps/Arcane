@@ -443,13 +443,10 @@ namespace Arcane::Editor
                                                                   nullptr, &assetsInspectorId);
 
         ImGui::DockBuilderDockWindow("Outliner", leftId);
-        // Inspector and Material share the right node as TABS: the scene's
-        // selection and the active material's parameters are the same kind of
-        // surface (the thing you are editing, in detail), and the host focuses
-        // whichever one matches the active center tab. Inspector first, so a
-        // fresh layout opens on it.
+        // The main Inspector owns the right node alone: a material's page
+        // (preview + params) is an Inspector page now (inspector filters
+        // s6a), so there is no separate "Material" window to tab beside it.
         ImGui::DockBuilderDockWindow(kPrimaryInspectorWindowId, rightId);   // the legacy "Inspector" id (### skipped)
-        ImGui::DockBuilderDockWindow("Material",  rightId);
         ImGui::DockBuilderDockWindow("Asset Browser", browserNodeId);
         ImGui::DockBuilderDockWindow("Console",       browserNodeId);
         ImGui::DockBuilderDockWindow("Problems",      browserNodeId);
@@ -1211,12 +1208,6 @@ namespace Arcane::Editor
         ViewportPanelResult r;
         ImGui::Begin("Viewport");
         r.dockId = static_cast<unsigned int>(ImGui::GetWindowDockID());
-        // One-frame edge: this window just became the visible tab (the scene
-        // was selected in the center node, or an asset document that was
-        // covering it closed). imgui.cpp:9236-9240 returns window->Appearing,
-        // raised for the docked case at imgui.cpp:7905-7907. The host turns it
-        // into "focus the Inspector" -- see EditorApp::SyncCenterTabFocus.
-        r.appearing = ImGui::IsWindowAppearing();
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         r.desiredW = avail.x > 0 ? static_cast<uint32_t>(avail.x) : 1;
         r.desiredH = avail.y > 0 ? static_cast<uint32_t>(avail.y) : 1;

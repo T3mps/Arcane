@@ -89,6 +89,37 @@ TEST_CASE("ShaderEditorDocument::Save before the first bind keeps saved params",
     CHECK(reloaded->id == data.id);
 }
 
+// Inspector filters s6a: the document is an Inspector source of kind
+// "material" whose ONE page is the whole document's (preview + params).
+// Opened = selected (epoch 1, so the app's per-document epoch map -- which
+// starts at 0 -- sees frame 1 as an event); a history restore re-selects
+// without a click and so moves no epoch.
+TEST_CASE("ShaderEditorDocument is a material Inspector source selected at open", "[editor][material][inspector]")
+{
+    const fs::path dir = TempDir("inspectorpage");
+    const fs::path file = dir / "page.arcmat";
+
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "Page";
+    data.snippet = kSnippet;
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+
+    ShaderEditorDocument doc(DocServices{}, file, *loaded);
+    CHECK(doc.Kind() == "material");
+    CHECK(doc.SelectionKey() == "material");
+    CHECK(doc.SelectionEpoch() == 1);                  // selected at open
+    REQUIRE(doc.Page() != nullptr);
+    CHECK(doc.Page()->Breadcrumb().size() == 1);
+    CHECK(doc.Page()->Breadcrumb()[0].key == std::optional<std::string>{ "material" });
+    CHECK(doc.RestoreSelection("material"));
+    CHECK(doc.SelectionEpoch() == 1);                  // a restore is not a click
+    CHECK_FALSE(doc.Resolves("node:7"));
+}
+
 // F2b Task 13: a "mesh"-kind document binds baseColor/albedo with NO
 // ShaderCompiler and NO ShaderSourceProvider at all -- Rebuild()'s mesh
 // branch runs BEFORE the compiler/sources null check (its own comment), so

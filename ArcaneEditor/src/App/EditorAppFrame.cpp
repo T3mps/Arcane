@@ -465,7 +465,6 @@ namespace Arcane::Editor
             DrawEditorUi(ls, fs);
             DrawModals(ls);
             DrawViewportPanelPhase(fs);
-            SyncCenterTabFocus(fs);
             HandleViewportPick(fs);
             DrawSelectionPanels();
             if (!PresentFrame())
@@ -2437,16 +2436,6 @@ namespace Arcane::Editor
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
-        // The Material panel draws BEFORE the documents, and that order is
-        // load-bearing rather than incidental: the panel's param rows and the
-        // document's graph widgets open gestures against the SAME
-        // EditGesture::GestureState, and each scope's ScopeGuard closes an
-        // abandoned one when it destructs. Drawing the panel first leaves
-        // ShaderEditorDocument::Draw's guard as the LAST one to run each frame,
-        // so a gesture the panel opened is never force-closed by the document
-        // before the panel's own EndOnDeactivate has had its say.
-        Arcane::Editor::DrawMaterialPanel(ResolveActiveMaterialDoc());
-
         if (m_projectSettingsOpen)
         {
             Arcane::Editor::ProjectSettingsRequests settings;
@@ -3259,29 +3248,6 @@ namespace Arcane::Editor
         m_assetModel.Select(created);
     }
 
-    Arcane::Editor::ShaderEditorDocument* EditorApp::ResolveActiveMaterialDoc()
-    {
-        // Resolved from the guid every frame (documents are destroyed
-        // synchronously on close), with a fallback to any open material
-        // document so the panel is never empty while one exists -- e.g. after
-        // the tracked document is closed and another remains.
-        Arcane::Editor::ShaderEditorDocument* activeMat = nullptr;
-        if (m_activeMaterialGuid.IsValid())
-            activeMat = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(
-                m_documents.FindByGuid(m_activeMaterialGuid));
-        if (!activeMat)
-        {
-            m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
-            {
-                if (!activeMat)
-                    activeMat = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
-            });
-            if (activeMat)
-                m_activeMaterialGuid = activeMat->AssetGuid();
-        }
-        return activeMat;
-    }
-
     // Phase 15: the modals. Opened and drawn at DOCKSPACE level, outside any
     // panel window -- that is why they live here and not inside a panel draw.
     void EditorApp::DrawModals(LoopState& ls)
@@ -3515,71 +3481,6 @@ namespace Arcane::Editor
         m_viewportTargets.pendingH = fs.vp.desiredH;
         m_viewportRect     = fs.vp.imageRect;
         m_viewportActive   = Arcane::Editor::SceneInputActive(fs.vp.hovered, fs.vp.focused);
-    }
-
-    // Phase 16b: center-tab -> side-panel focus follow. Runs after BOTH the
-    // documents (DrawEditorUi) and the Viewport panel have drawn, because it
-    // consumes the one-frame "became the visible tab" edges they publish.
-    //
-    // TRANSITIONS ONLY, and that is the whole design: the edges come from
-    // ImGui::IsWindowAppearing (imgui.cpp:9236-9240 -> window->Appearing, which
-    // imgui.cpp:7905-7907 raises when a docked window's tab becomes visible
-    // after being hidden), which is true for exactly one frame. A per-frame
-    // "focus whatever matches" would re-select the tab every frame and make it
-    // impossible to click the other one -- here, clicking Inspector while a
-    // material document is active raises no edge, so the click STICKS until the
-    // center tab actually changes again.
-    //
-    // The action is TAB SELECTION, NOT focus -- SelectDockTab, which parks
-    // NextSelectedTabId on the side node's tab bar. This split is a bug fix,
-    // not a preference: SetWindowFocus on a SIDE panel moves g.NavWindow, and
-    // because a dock node applies g.NavWindow back as its own selection every
-    // frame (imgui.cpp:19611-19613), one such call late in the frame silently
-    // undid the CENTER node's adoption of a freshly-opened document -- the
-    // document window focuses itself in Begin (imgui.cpp:8320-8326 sets
-    // want_focus for an appearing window, :8617 calls FocusWindow), and this
-    // phase, running afterwards, was overwriting it. Center = real focus
-    // (DocumentHost::DrawAll's SetNextWindowFocus); side = tab selection.
-    void EditorApp::SyncCenterTabFocus(const FrameState& fs)
-    {
-        Arcane::Editor::ShaderEditorDocument* becameActive = nullptr;
-        std::size_t materialDocs = 0;
-        m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
-        {
-            auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
-            if (!doc)
-                return;
-            ++materialDocs;
-            if (doc->TabBecameVisible())
-                becameActive = doc;
-        });
-
-        if (becameActive)
-        {
-            // A material document opened, or its tab was selected. TAB
-            // SELECTION only -- the center document owns keyboard focus (it is
-            // what you type into), and SetWindowFocus here would take it back.
-            m_activeMaterialGuid = becameActive->AssetGuid();
-            Arcane::Editor::SelectDockTab("Material");
-        }
-        else if (fs.vp.appearing)
-        {
-            // The scene became the active center tab. The Viewport keeps focus;
-            // only the side node's visible tab changes.
-            Arcane::Editor::SelectDockTab("Inspector");
-        }
-        else if (materialDocs == 0 && m_materialDocCount > 0)
-        {
-            // The last material document closed, so the Material window stops
-            // being submitted next frame and its tab disappears. Hand the side
-            // node's selection to the Inspector explicitly rather than leaving
-            // it on a tab that is about to vanish. Also the only branch that
-            // fires for a FLOATING document, which leaves the center tab (and
-            // so the Viewport's appearing edge) untouched.
-            m_activeMaterialGuid = Arcane::Guid::Nil();
-            Arcane::Editor::SelectDockTab("Inspector");
-        }
-        m_materialDocCount = materialDocs;
     }
 
     // Phase 17: click-pick. Must stay after the Viewport panel above (it reads
