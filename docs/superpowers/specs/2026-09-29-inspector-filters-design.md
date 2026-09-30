@@ -94,7 +94,14 @@ panels only follow or lock.
 - One shared history (depth 32, prune-on-invalidate, never persisted) -- unchanged.
 - A filtered instance's back/forward step only through entries whose source's kind passes its
   filter. `CanGoBack/CanGoForward/GoBack/GoForward/BackEntry/ForwardEntry` and the history
-  dropdown take the instance's filter; no exclusions = today's exact behaviour.
+  dropdown take the instance id; no exclusions = today's exact behaviour.
+- An instance's position is anchored on what it SHOWS (final fix wave, item N): the history
+  entry whose (source, key) equals its routed `SourceFor(id)` and that source's live
+  `SelectionKey()`, nearest the cursor. Only when no entry matches does it fall back to the
+  last admitted entry at or before the cursor. Back/Forward are the nearest admitted entries
+  before/after that position, so one instance navigating the shared cursor never makes
+  another instance's arrows lie. `Push`'s forward truncation stays global (browser
+  semantics; a per-kind truncation is parked).
 - Landing on an entry restores it in its source (unchanged `TryLand`), so it IS a selection:
   the cursor moves in the shared list and every instance whose filter admits that source
   follows.

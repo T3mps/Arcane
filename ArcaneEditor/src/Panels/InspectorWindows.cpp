@@ -45,9 +45,10 @@ namespace Arcane::Editor
         void ApplyHeaderActions(InspectorHost& host, const InspectorHost::Instance& inst, HeaderActions& a)
         {
             // The arrows walk the instance's FILTERED view of the shared
-            // history (spec s4); a landing is still one selection for everyone.
-            if (a.back) (void)host.GoBack(inst.filter);
-            if (a.forward) (void)host.GoForward(inst.filter);
+            // history from the entry it SHOWS (spec s4); a landing is still
+            // one selection for everyone.
+            if (a.back) (void)host.GoBack(inst.id);
+            if (a.forward) (void)host.GoForward(inst.id);
             if (a.jump) (void)host.JumpTo(*a.jump);
             if (a.repinKey) host.RepinKey(inst.id, std::move(*a.repinKey));
             if (a.select) a.select();
@@ -66,13 +67,13 @@ namespace Arcane::Editor
             // target, and a right-click lists that side's entries nearest-first
             // (UE's Content Browser history). The disabled state suppresses both.
             // Both walk only the entries this instance's filter admits (spec s4).
-            ImGui::BeginDisabled(!host.CanGoBack(inst.filter));
+            ImGui::BeginDisabled(!host.CanGoBack(inst.id));
             if (ImGui::SmallButton(ICON_LC_CHEVRON_LEFT "##back")) actions.back = true;
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-                if (const auto* e = host.BackEntry(inst.filter)) ImGui::SetTooltip("Back to %s", e->label.c_str());
+                if (const auto* e = host.BackEntry(inst.id)) ImGui::SetTooltip("Back to %s", e->label.c_str());
             if (ImGui::BeginPopupContextItem("##back_history"))
             {
-                for (const std::size_t i : host.BackIndices(inst.filter))
+                for (const std::size_t i : host.BackIndices(inst.id))
                 {
                     ImGui::PushID(static_cast<int>(i));
                     if (ImGui::Selectable(host.History()[i].label.c_str())) actions.jump = i;
@@ -82,13 +83,13 @@ namespace Arcane::Editor
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::BeginDisabled(!host.CanGoForward(inst.filter));
+            ImGui::BeginDisabled(!host.CanGoForward(inst.id));
             if (ImGui::SmallButton(ICON_LC_CHEVRON_RIGHT "##forward")) actions.forward = true;
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-                if (const auto* e = host.ForwardEntry(inst.filter)) ImGui::SetTooltip("Forward to %s", e->label.c_str());
+                if (const auto* e = host.ForwardEntry(inst.id)) ImGui::SetTooltip("Forward to %s", e->label.c_str());
             if (ImGui::BeginPopupContextItem("##forward_history"))
             {
-                for (const std::size_t i : host.ForwardIndices(inst.filter))
+                for (const std::size_t i : host.ForwardIndices(inst.id))
                 {
                     ImGui::PushID(static_cast<int>(i));
                     if (ImGui::Selectable(host.History()[i].label.c_str())) actions.jump = i;

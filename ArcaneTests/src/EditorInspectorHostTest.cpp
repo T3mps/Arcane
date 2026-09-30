@@ -650,11 +650,13 @@ TEST_CASE("InspectorHost filters: ReleaseAll keeps a permanent source and drops 
 TEST_CASE("InspectorHost filters: Back in a Scene instance skips document entries and re-selects in the scene", "[editor][inspector]")
 {
     World w;
-    const InspectorFilter scene = InspectorFilter::Only("scene");
+    const int scene = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(scene, InspectorFilter::Only("scene")));
     w.Select(w.scene, "A");        // 0
     w.Select(w.doc, "d1");         // 1
     w.Select(w.scene, "B");        // 2
     w.Select(w.doc, "d2");         // 3  <- cursor
+    CHECK(w.host.PositionFor(scene) == std::optional<std::size_t>{ 2 });   // the scene's live "B"
     REQUIRE(w.host.CanGoBack(scene));
     CHECK(w.host.BackEntry(scene)->key == "A");                     // position = 2 (B); back = 0 (A)
     CHECK(w.host.BackIndices(scene) == std::vector<std::size_t>{ 0 });
@@ -667,10 +669,10 @@ TEST_CASE("InspectorHost filters: Back in a Scene instance skips document entrie
     CHECK(w.host.ForwardIndices(scene) == std::vector<std::size_t>{ 2 });
 }
 
-TEST_CASE("InspectorHost filters: the All overloads match the unfiltered history exactly", "[editor][inspector]")
+TEST_CASE("InspectorHost filters: an All instance matches the unfiltered history exactly", "[editor][inspector]")
 {
     World w;
-    const InspectorFilter all;
+    constexpr int all = 0;
     w.Select(w.scene, "A");
     w.Select(w.doc, "d1");
     w.Select(w.scene, "B");
@@ -683,7 +685,8 @@ TEST_CASE("InspectorHost filters: the All overloads match the unfiltered history
 TEST_CASE("InspectorHost filters: a filtered GoBack prunes a stale admitted entry and keeps walking", "[editor][inspector]")
 {
     World w;
-    const InspectorFilter input = InspectorFilter::Only("input-actions");
+    const int input = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(input, InspectorFilter::Only("input-actions")));
     w.Select(w.doc2, "old");       // 0 -- will not restore
     w.Select(w.doc, "d1");         // 1
     w.Select(w.scene, "S");        // 2
@@ -693,4 +696,99 @@ TEST_CASE("InspectorHost filters: a filtered GoBack prunes a stale admitted entr
     CHECK(w.doc.key == "d1");
     CHECK_FALSE(w.host.GoBack(input));   // only the stale doc2 entry is left: pruned, no landing
     CHECK(w.host.History().size() == 3);
+}
+
+namespace
+{
+    // The default two-Inspector layout over one shared history: instance 0 =
+    // All but Assets, instance 1 = Assets only (spec s6).
+    struct DefaultLayoutWorld
+    {
+        FakeSource scene{ "Scene", "scene" }, assets{ "Assets", "assets" };
+        InspectorHost host{ scene };
+        DefaultLayoutWorld() { host.AddSource(assets, /*permanent*/ true); host.ApplyDefaultInspectorLayout(); }
+        void Select(FakeSource& s, std::string k) { s.key = std::move(k); host.NotifySelected(s); }
+    };
+}
+
+TEST_CASE("InspectorHost history: Back in the main Inspector leaves the Assets instance's arrows on the asset it shows", "[editor][inspector]")
+{
+    // Final review I2/F1: [S1,A1,S2,A2], Back in the main Inspector lands S1;
+    // Inspector 2 still SHOWS A2, so its Back is A1 and it has no Forward.
+    DefaultLayoutWorld w;
+    constexpr int kMain = 0, kAssets = InspectorHost::kAssetsInstanceId;
+    w.Select(w.scene, "S1"); w.Select(w.assets, "A1"); w.Select(w.scene, "S2"); w.Select(w.assets, "A2");
+    REQUIRE(w.host.GoBack(kMain));
+    CHECK(w.scene.key == "S1");
+    CHECK(w.assets.key == "A2");                                    // untouched: the asset model did not move
+    REQUIRE(w.host.SourceFor(kAssets) == &w.assets);
+    REQUIRE(w.host.BackEntry(kAssets) != nullptr);
+    CHECK(w.host.BackEntry(kAssets)->key == "A1");
+    CHECK(w.host.BackIndices(kAssets) == std::vector<std::size_t>{ 1 });
+    CHECK_FALSE(w.host.CanGoForward(kAssets));
+    CHECK(w.host.ForwardEntry(kAssets) == nullptr);
+    CHECK(w.host.ForwardIndices(kAssets).empty());
+    // The main Inspector is truthful too: it shows S1, Forward is S2.
+    CHECK_FALSE(w.host.CanGoBack(kMain));
+    REQUIRE(w.host.ForwardEntry(kMain) != nullptr);
+    CHECK(w.host.ForwardEntry(kMain)->key == "S2");
+}
+
+TEST_CASE("InspectorHost history: Back in the Assets Inspector leaves the main Inspector's arrows on the entity it shows", "[editor][inspector]")
+{
+    // Final review I4: [a1,A,a2,B], Back in Inspector 2 lands a1; the main
+    // Inspector still SHOWS B, so its Back is A and it has no Forward.
+    DefaultLayoutWorld w;
+    constexpr int kMain = 0, kAssets = InspectorHost::kAssetsInstanceId;
+    w.Select(w.assets, "a1"); w.Select(w.scene, "A"); w.Select(w.assets, "a2"); w.Select(w.scene, "B");
+    REQUIRE(w.host.GoBack(kAssets));
+    CHECK(w.assets.key == "a1");
+    CHECK(w.scene.key == "B");
+    REQUIRE(w.host.SourceFor(kMain) == &w.scene);
+    REQUIRE(w.host.BackEntry(kMain) != nullptr);
+    CHECK(w.host.BackEntry(kMain)->key == "A");
+    CHECK_FALSE(w.host.CanGoForward(kMain));
+    CHECK(w.host.ForwardEntry(kMain) == nullptr);
+    CHECK_FALSE(w.host.CanGoBack(kAssets));
+    REQUIRE(w.host.ForwardEntry(kAssets) != nullptr);
+    CHECK(w.host.ForwardEntry(kAssets)->key == "a2");
+    // Back in the main Inspector now walks from B, not from the cursor.
+    REQUIRE(w.host.GoBack(kMain));
+    CHECK(w.scene.key == "A");
+}
+
+TEST_CASE("InspectorHost history: a filtered GoForward prunes a stale admitted entry and keeps walking", "[editor][inspector]")
+{
+    World w;
+    const int input = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(input, InspectorFilter::Only("input-actions")));
+    w.Select(w.doc, "d1");         // 0
+    w.Select(w.scene, "S");        // 1
+    w.Select(w.doc2, "gone");      // 2 -- will not restore
+    w.Select(w.doc, "d3");         // 3
+    REQUIRE(w.host.GoBack(input)); // d3 -> doc2 (still restorable here)
+    CHECK(w.doc2.key == "gone");
+    REQUIRE(w.host.GoBack(input)); // -> d1
+    CHECK(w.doc.key == "d1");
+    w.doc2.restoreOk = false;
+    REQUIRE(w.host.GoForward(input));   // the stale doc2 entry is pruned on the way; lands d3
+    CHECK(w.doc.key == "d3");
+    CHECK(w.host.History().size() == 3);
+    CHECK_FALSE(w.host.CanGoForward(input));
+}
+
+TEST_CASE("InspectorHost history: nothing admitted before the cursor means no Back (the sentinel case)", "[editor][inspector]")
+{
+    World w;
+    const int scene = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(scene, InspectorFilter::Only("scene")));
+    w.Select(w.doc, "d1");
+    w.Select(w.doc, "d2");
+    CHECK(w.host.SourceFor(scene) == &w.scene);    // the fallback, nothing selected in it
+    CHECK_FALSE(w.host.CanGoBack(scene));
+    CHECK(w.host.BackEntry(scene) == nullptr);
+    CHECK(w.host.BackIndices(scene).empty());
+    CHECK_FALSE(w.host.CanGoForward(scene));
+    CHECK_FALSE(w.host.GoBack(scene));
+    CHECK(w.host.HistoryCursor() == 1);
 }

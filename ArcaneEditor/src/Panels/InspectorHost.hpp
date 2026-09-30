@@ -100,6 +100,7 @@ namespace Arcane::Editor
 
         [[nodiscard]] const std::vector<Instance>& Instances() const noexcept { return m_instances; }
         [[nodiscard]] Instance* Find(int id);
+        [[nodiscard]] const Instance* Find(int id) const;
         int  AddInstance();                              // lowest free id in [1, kMaxInstances); -1 when the pool is full
         void RemoveInstance(int id);                     // id 0 is refused
         void SetInstanceIds(std::span<const int> extras); // ini restore: exactly {0} + the valid, deduplicated ids exist afterwards
@@ -124,23 +125,29 @@ namespace Arcane::Editor
         [[nodiscard]] const HistoryEntry* ForwardEntry() const noexcept { return CanGoForward() ? &m_history[m_cursor + 1] : nullptr; }
         [[nodiscard]] const std::vector<HistoryEntry>& History() const noexcept { return m_history; }
         [[nodiscard]] std::size_t HistoryCursor() const noexcept { return m_cursor; }
-        // Filtered navigation over the SHARED history (spec 2026-09-29 s4). The
-        // instance's POSITION is the last admitted index at or before the cursor
-        // (the entry it is showing). Back = the nearest admitted index BEFORE the
-        // position; Forward = the nearest admitted index AFTER the cursor. With
-        // All these reduce to m_cursor - 1 / m_cursor + 1. A landing is a
-        // selection: it moves the cursor and Current() for every instance.
-        [[nodiscard]] std::optional<std::size_t> BackIndex(const InspectorFilter& f) const;
-        [[nodiscard]] std::optional<std::size_t> ForwardIndex(const InspectorFilter& f) const;
-        [[nodiscard]] bool CanGoBack(const InspectorFilter& f) const;
-        [[nodiscard]] bool CanGoForward(const InspectorFilter& f) const;
-        bool GoBack(const InspectorFilter& f);
-        bool GoForward(const InspectorFilter& f);
-        [[nodiscard]] const HistoryEntry* BackEntry(const InspectorFilter& f) const;
-        [[nodiscard]] const HistoryEntry* ForwardEntry(const InspectorFilter& f) const;
-        // The history dropdowns: admitted indices before the instance's position (nearest first) / after the cursor.
-        [[nodiscard]] std::vector<std::size_t> BackIndices(const InspectorFilter& f) const;
-        [[nodiscard]] std::vector<std::size_t> ForwardIndices(const InspectorFilter& f) const;
+        // Per-instance navigation over the SHARED history (spec 2026-09-29 s4).
+        // An instance's POSITION is anchored on what it SHOWS: the history
+        // entry whose (source, key) equals its routed SourceFor(id) and that
+        // source's live SelectionKey(), the one nearest the cursor. Only when
+        // no entry matches does it fall back to the last entry its filter
+        // admits at or before the cursor. Back = the nearest admitted index
+        // BEFORE the position; Forward = the nearest admitted index AFTER it.
+        // So another instance moving the shared cursor never makes these
+        // arrows lie (final review I2/F1). A landing is a selection: it moves
+        // the cursor and Current() for every instance. Push's forward
+        // truncation stays global (browser semantics; parked, final-fix N).
+        [[nodiscard]] std::optional<std::size_t> PositionFor(int id) const;
+        [[nodiscard]] std::optional<std::size_t> BackIndex(int id) const;
+        [[nodiscard]] std::optional<std::size_t> ForwardIndex(int id) const;
+        [[nodiscard]] bool CanGoBack(int id) const { return BackIndex(id).has_value(); }
+        [[nodiscard]] bool CanGoForward(int id) const { return ForwardIndex(id).has_value(); }
+        bool GoBack(int id);
+        bool GoForward(int id);
+        [[nodiscard]] const HistoryEntry* BackEntry(int id) const;
+        [[nodiscard]] const HistoryEntry* ForwardEntry(int id) const;
+        // The history dropdowns: admitted indices before the position (nearest first) / after it.
+        [[nodiscard]] std::vector<std::size_t> BackIndices(int id) const;
+        [[nodiscard]] std::vector<std::size_t> ForwardIndices(int id) const;
         // Drop every entry whose source no longer resolves its key; the cursor
         // keeps pointing at the same surviving entry (index arithmetic, never a
         // key search). Once per frame from the draw: <= kHistoryDepth pure lookups.
