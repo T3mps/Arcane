@@ -18,16 +18,17 @@ namespace Arcane::Editor
     {
         std::string_view id;            // InspectorSource::Kind(), persisted in imgui.ini
         std::string_view displayName;   // the dropdown row and the label
+        std::string_view singular;      // one of them: the empty state's "No <singular> document open"
     };
 
     // Catalog order = dropdown order = Sanitized() order = the Filters= write order.
     inline constexpr std::array<InspectorKind, 6> kInspectorKinds{ {
-        { "scene",         "Scene" },
-        { "assets",        "Assets" },
-        { "input-actions", "Input Actions" },
-        { "material",      "Materials" },       // ShaderEditorDocument
-        { "sprite",        "Sprites" },
-        { "mesh",          "Meshes" },
+        { "scene",         "Scene",         "Scene" },
+        { "assets",        "Assets",        "Asset" },
+        { "input-actions", "Input Actions", "Input Actions" },
+        { "material",      "Materials",     "Material" },       // ShaderEditorDocument
+        { "sprite",        "Sprites",       "Sprite" },
+        { "mesh",          "Meshes",        "Mesh" },
     } };
 
     [[nodiscard]] const InspectorKind* FindInspectorKind(std::string_view id);

@@ -2,6 +2,7 @@
 
 #include "Panels/InspectorKinds.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Widgets/EditorWidgets.hpp"   // EllipsisToWidth (the filter combo preview)
 #include "Widgets/IconsLucide.h"
 
 #include <imgui.h>
@@ -57,11 +58,41 @@ namespace Arcane::Editor
             if (a.filter) (void)host.SetFilter(inst.id, *a.filter);   // an all-excluded set is refused (the dropdown never offers one)
         }
 
+        void DrawPin(const InspectorHost::Instance& inst, bool canPin, HeaderActions& actions)
+        {
+            // The pin. Amber = pinned (the editor's acting-on hue). Offered only
+            // for a resolvable page (UE's details lock exists only while objects
+            // are viewed); the "closed"/"gone" notes stay for the page-less state.
+            ImGui::BeginDisabled(!canPin);
+            if (inst.pinned) ImGui::PushStyleColor(ImGuiCol_Text, Theme::kAmber);
+            if (ImGui::SmallButton(inst.pinned ? ICON_LC_PIN "##pin" : ICON_LC_PIN_OFF "##pin"))
+                actions.togglePin = true;
+            if (inst.pinned) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(inst.pinned ? "Pinned: this page stays while other things select. Click to follow."
+                                  : canPin    ? "Pin this page"
+                                              : "Nothing to pin");
+            ImGui::EndDisabled();
+        }
+
         void DrawHeader(const InspectorHost& host, const InspectorHost::Instance& inst, InspectorSource* src,
                         InspectorPage* page, bool canPin, HeaderActions& actions)
         {
             const ImGuiStyle& style = ImGui::GetStyle();
-            const float pinWidth = ImGui::CalcTextSize(ICON_LC_PIN).x + style.FramePadding.x * 2.0f;
+            const float pinWidth = std::max(ImGui::CalcTextSize(ICON_LC_PIN).x, ImGui::CalcTextSize(ICON_LC_PIN_OFF).x)
+                                 + style.FramePadding.x * 2.0f;
+            const std::string label = InspectorFilterLabel(inst.filter);
+            // The responsive layout (final fix H), measured before anything draws.
+            InspectorHeaderMetrics metrics;
+            metrics.avail = ImGui::GetContentRegionAvail().x;
+            metrics.arrows = ImGui::CalcTextSize(ICON_LC_CHEVRON_LEFT).x + ImGui::CalcTextSize(ICON_LC_CHEVRON_RIGHT).x
+                           + style.FramePadding.x * 4.0f + style.ItemSpacing.x;
+            metrics.comboFull = std::min(ImGui::CalcTextSize(label.c_str()).x + ImGui::GetFrameHeight() + style.FramePadding.x * 2.0f, 160.0f);
+            metrics.comboIcon = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize(ICON_LC_FILTER).x;
+            metrics.pin = pinWidth;
+            metrics.spacing = style.ItemSpacing.x;
+            const InspectorHeaderLayout layout = LayoutInspectorHeader(metrics);
+            const float rowStartX = ImGui::GetCursorPosX();
 
             // Back / forward over the selection history: each arrow names its
             // target, and a right-click lists that side's entries nearest-first
@@ -104,10 +135,21 @@ namespace Arcane::Editor
             // that can show nothing reads as broken). Drawn BEFORE the crumb
             // child, so the crumbs' GetContentRegionAvail() below already
             // excludes it (only the pin, drawn after, is subtracted by hand).
+            // Narrow: an icon-only combo (a filter glyph beside the arrow
+            // button); otherwise the label, ELLIPSIZED to the frame (spec s5),
+            // never hard-clipped. The tooltip always carries the full label.
             ImGui::SameLine();
-            const std::string label = InspectorFilterLabel(inst.filter);
-            ImGui::SetNextItemWidth(std::min(ImGui::CalcTextSize(label.c_str()).x + ImGui::GetFrameHeight() + style.FramePadding.x * 2.0f, 160.0f));
-            if (ImGui::BeginCombo("##filter", label.c_str()))
+            bool comboOpen = false;
+            if (layout.iconCombo)
+                comboOpen = ImGui::BeginCombo(ICON_LC_FILTER "##filter", nullptr, ImGuiComboFlags_NoPreview);
+            else
+            {
+                ImGui::SetNextItemWidth(layout.comboWidth);
+                const float previewWidth = layout.comboWidth - ImGui::GetFrameHeight() - style.FramePadding.x * 2.0f;
+                const std::string preview = EllipsisToWidth(label, std::max(previewWidth, 1.0f));
+                comboOpen = ImGui::BeginCombo("##filter", preview.c_str());
+            }
+            if (comboOpen)
             {
                 for (const InspectorKind& k : kInspectorKinds)
                 {
@@ -124,22 +166,45 @@ namespace Arcane::Editor
                 }
                 ImGui::EndCombo();
             }
-            // Spec s5: a long multi-kind label is clipped to the combo; the
-            // tooltip carries the full list (the combo frame is the last item
-            // whether or not it is open).
+            // Spec s5: the tooltip carries the full list (the combo frame is
+            // the last item whether or not it is open).
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-                ImGui::SetTooltip("%s", label.c_str());
-            ImGui::SameLine();
+                ImGui::SetTooltip("Filter: %s", label.c_str());
 
-            // Breadcrumb: a horizontal strip clipped to the width left of the pin
-            // and scrolled to its END, so the LEAF stays visible and the head
-            // scrolls off (UE's SBreadcrumbTrail); the pin can never overdraw the
-            // leaf in a narrow docked Inspector. Every crumb is a link-styled
-            // button; a dimmed chevron sits only BETWEEN crumbs.
+            // Wrapped header: the pin ends row 1 (right-aligned), and the
+            // breadcrumb takes the whole of row 2 -- or the pin leads row 2
+            // when even arrows + combo + pin do not fit. Never clipped.
+            float crumbWidth = 0.0f;
+            if (layout.crumbsOwnRow)
+            {
+                if (!layout.pinOnCrumbRow)
+                {
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), rowStartX + metrics.avail - pinWidth));
+                    DrawPin(inst, canPin, actions);
+                    crumbWidth = metrics.avail;
+                }
+                else
+                {
+                    DrawPin(inst, canPin, actions);
+                    ImGui::SameLine();
+                    crumbWidth = metrics.avail - pinWidth - style.ItemSpacing.x;
+                }
+            }
+            else
+            {
+                ImGui::SameLine();
+                crumbWidth = ImGui::GetContentRegionAvail().x - pinWidth - style.ItemSpacing.x;
+            }
+
+            // Breadcrumb: a horizontal strip clipped to its width and scrolled
+            // to its END, so the LEAF stays visible and the head scrolls off
+            // (UE's SBreadcrumbTrail); the pin can never overdraw the leaf in a
+            // narrow docked Inspector. Every crumb is a link-styled button; a
+            // dimmed chevron sits only BETWEEN crumbs.
             std::vector<InspectorCrumb> crumbs;
             if (page) crumbs = page->Breadcrumb();
             else if (src) crumbs.push_back({ src->SourceName(), {}, std::nullopt });
-            const float crumbWidth = ImGui::GetContentRegionAvail().x - pinWidth - style.ItemSpacing.x;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
             ImGui::BeginChild("##crumbs", ImVec2(std::max(crumbWidth, 1.0f), ImGui::GetFrameHeight()), ImGuiChildFlags_None,
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav);
@@ -166,23 +231,35 @@ namespace Arcane::Editor
             if (ImGui::GetScrollMaxX() > 0.0f) ImGui::SetScrollX(ImGui::GetScrollMaxX());   // last frame's width: one-frame lag, invisible at 90 frames + settle
             ImGui::EndChild();   // always, whatever BeginChild returned
             ImGui::PopStyleVar();
-            ImGui::SameLine();   // the child's fixed width right-aligns the pin
-
-            // The pin. Amber = pinned (the editor's acting-on hue). Offered only
-            // for a resolvable page (UE's details lock exists only while objects
-            // are viewed); the "closed"/"gone" notes stay for the page-less state.
-            ImGui::BeginDisabled(!canPin);
-            if (inst.pinned) ImGui::PushStyleColor(ImGuiCol_Text, Theme::kAmber);
-            if (ImGui::SmallButton(inst.pinned ? ICON_LC_PIN "##pin" : ICON_LC_PIN_OFF "##pin"))
-                actions.togglePin = true;
-            if (inst.pinned) ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip(inst.pinned ? "Pinned: this page stays while other things select. Click to follow."
-                                  : canPin    ? "Pin this page"
-                                              : "Nothing to pin");
-            ImGui::EndDisabled();
+            if (!layout.crumbsOwnRow)
+            {
+                ImGui::SameLine();   // the child's fixed width right-aligns the pin
+                DrawPin(inst, canPin, actions);
+            }
             ImGui::Separator();
         }
+    }
+
+    InspectorHeaderLayout LayoutInspectorHeader(const InspectorHeaderMetrics& m)
+    {
+        InspectorHeaderLayout l;
+        const float sp = m.spacing;
+        l.iconCombo = m.avail < kInspectorIconComboBelow;
+        const float combo = l.iconCombo ? m.comboIcon : m.comboFull;
+        l.crumbsOwnRow = m.avail < m.arrows + sp + combo + sp + kInspectorHeaderMinCrumbWidth + sp + m.pin;
+        if (l.iconCombo)
+            l.comboWidth = m.comboIcon;
+        else
+        {
+            // The labelled combo gives way before the pin does: on a wrapped
+            // header it takes what row 1 leaves beside the arrows and the pin
+            // (its preview is ellipsized to that), never less than the icon combo.
+            const float room = m.avail - m.arrows - m.pin - 2.0f * sp;
+            l.comboWidth = std::max(std::min(m.comboFull, room), m.comboIcon);
+        }
+        l.pinOnCrumbRow = m.arrows + sp + l.comboWidth + sp + m.pin > m.avail;
+        if (l.pinOnCrumbRow) l.crumbsOwnRow = true;
+        return l;
     }
 
     std::string InspectorWindowTitle(const InspectorHost::Instance& inst)
@@ -257,12 +334,13 @@ namespace Arcane::Editor
             else if (src == nullptr)
             {
                 // Unpinned and nothing routed: the filter admits no registered
-                // source (spec s5). A single-kind filter names its kind.
-                // displayName is a string_view: %.*s, never %s through "...".
+                // source (spec s5). A single-kind filter names its kind in the
+                // singular ("No Material document open"). A string_view:
+                // %.*s, never %s through "...".
                 std::string_view onlyName;
                 int admitted = 0;
                 for (const InspectorKind& k : kInspectorKinds)
-                    if (inst.filter.Admits(k.id)) { onlyName = k.displayName; ++admitted; }
+                    if (inst.filter.Admits(k.id)) { onlyName = k.singular; ++admitted; }
                 if (admitted == 1)
                     ImGui::TextDisabled("No %.*s document open", static_cast<int>(onlyName.size()), onlyName.data());
                 else

@@ -792,3 +792,128 @@ TEST_CASE("InspectorHost history: nothing admitted before the cursor means no Ba
     CHECK_FALSE(w.host.GoBack(scene));
     CHECK(w.host.HistoryCursor() == 1);
 }
+
+TEST_CASE("Inspector header layout: one row when it fits; the breadcrumb wraps, then the combo collapses, the pin never clips", "[editor][inspector]")
+{
+    InspectorHeaderMetrics m;
+    m.arrows = 56.0f; m.comboFull = 122.0f; m.comboIcon = 42.0f; m.pin = 24.0f; m.spacing = 8.0f;
+
+    m.avail = 800.0f;                       // wide: arrows | combo | crumbs | pin
+    InspectorHeaderLayout l = LayoutInspectorHeader(m);
+    CHECK_FALSE(l.crumbsOwnRow);
+    CHECK_FALSE(l.iconCombo);
+    CHECK_FALSE(l.pinOnCrumbRow);
+    CHECK(l.comboWidth == 122.0f);
+
+    m.avail = 250.0f;                       // no room for 120 px of crumbs: own row, full combo
+    l = LayoutInspectorHeader(m);
+    CHECK(l.crumbsOwnRow);
+    CHECK_FALSE(l.iconCombo);
+    CHECK_FALSE(l.pinOnCrumbRow);
+    CHECK(l.comboWidth == 122.0f);
+
+    m.avail = 210.0f;                       // the labelled combo shrinks (ellipsized) so the pin still fits row 1
+    l = LayoutInspectorHeader(m);
+    CHECK(l.crumbsOwnRow);
+    CHECK_FALSE(l.iconCombo);
+    CHECK_FALSE(l.pinOnCrumbRow);
+    CHECK(l.comboWidth <= 210.0f - 56.0f - 24.0f - 2.0f * 8.0f);
+
+    m.avail = 180.0f;                       // below 200: icon-only combo
+    l = LayoutInspectorHeader(m);
+    CHECK(l.crumbsOwnRow);
+    CHECK(l.iconCombo);
+    CHECK(l.comboWidth == 42.0f);
+    CHECK_FALSE(l.pinOnCrumbRow);
+
+    m.avail = 120.0f;                       // even arrows + icon + pin overflow: the pin leads the crumb row
+    l = LayoutInspectorHeader(m);
+    CHECK(l.crumbsOwnRow);
+    CHECK(l.iconCombo);
+    CHECK(l.pinOnCrumbRow);
+}
+
+namespace
+{
+    // One device-less Inspector frame loop at a forced window width; returns
+    // the primary window (after `frames` frames) for geometry probes.
+    ImGuiWindow* DrawPrimaryAtWidth(InspectorHost& host, InspectorWindowsState& state, float width, int frames = 3)
+    {
+        for (int f = 0; f < frames; ++f)
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            (void)DrawInspectorWindows(host, state, nullptr);
+            if (ImGuiWindow* w = ImGui::FindWindowByName(kPrimaryInspectorWindowId))
+                ImGui::SetWindowSize(w, ImVec2(width, 400.0f), ImGuiCond_Always);
+            ImGui::Render();
+        }
+        return ImGui::FindWindowByName(kPrimaryInspectorWindowId);
+    }
+    ImGuiWindow* CrumbsChildOf(ImGuiWindow* parent)
+    {
+        for (ImGuiWindow* c : ImGui::GetCurrentContext()->Windows)
+            if (c->ParentWindow == parent && std::string(c->Name).find("##crumbs") != std::string::npos) return c;
+        return nullptr;
+    }
+}
+
+TEST_CASE("DrawInspectorWindows: a narrow Inspector wraps the breadcrumb to its own row and never overflows; a wide one keeps one row", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    FakeSource scene{ "Scene", "scene" };
+    scene.page.crumbs = { { "Scene", {}, {} }, { "Player", {}, {} }, { "Camera", {}, {} } };
+    scene.key = "7";
+    InspectorHost host{ scene };
+    REQUIRE(host.SetFilter(0, InspectorFilter::AllBut("assets")));   // the longest default label
+    host.NotifySelected(scene);
+    InspectorWindowsState state;
+
+    SECTION("narrow (180 px)")
+    {
+        ImGuiWindow* w = DrawPrimaryAtWidth(host, state, 180.0f);
+        REQUIRE(w != nullptr);
+        ImGuiWindow* crumbs = CrumbsChildOf(w);
+        REQUIRE(crumbs != nullptr);
+        INFO("maxX " << w->DC.CursorMaxPos.x << " workMaxX " << w->WorkRect.Max.x);
+        CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);          // nothing (the pin included) past the edge
+        CHECK(crumbs->Pos.y > w->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f);   // row 2
+        CHECK(crumbs->Size.x >= w->WorkRect.GetWidth() - ImGui::GetStyle().ItemSpacing.x - 1.0f);   // full width
+    }
+    SECTION("wide (800 px)")
+    {
+        ImGuiWindow* w = DrawPrimaryAtWidth(host, state, 800.0f);
+        REQUIRE(w != nullptr);
+        ImGuiWindow* crumbs = CrumbsChildOf(w);
+        REQUIRE(crumbs != nullptr);
+        CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);
+        CHECK(crumbs->Pos.y < w->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f);   // row 1
+    }
+}
+
+TEST_CASE("DrawInspectorWindows: a single-kind empty state names the kind in the singular", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    REQUIRE(host.SetFilter(0, InspectorFilter::Only("material")));
+    InspectorWindowsState state;
+    ImGui::NewFrame();
+    ImGui::LogToBuffer();
+    (void)DrawInspectorWindows(host, state, nullptr);
+    const std::string logged = ImGui::GetCurrentContext()->LogBuffer.c_str();
+    ImGui::LogFinish();
+    ImGui::Render();
+    INFO(logged);
+    CHECK(logged.find("No Material document open") != std::string::npos);
+    CHECK(logged.find("Materials document") == std::string::npos);
+}
