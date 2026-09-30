@@ -3,20 +3,33 @@
 // The Inspector windows (inspector-ownership spec s3.2/s3.3): one window per
 // InspectorHost instance -- "Inspector" (id 0, the registry panel) and
 // "Inspector N" for Window -> New Inspector. Each draws the header (back /
-// forward, the clickable breadcrumb, the pin) and then the page body of the
-// source the host routes to it, through that instance's own PropertyGrid
-// state (so two instances showing the same page keep separate text drafts).
+// forward over the instance's FILTERED history, the kind-filter dropdown, the
+// clickable breadcrumb, the pin) and then the page body of the source the
+// host routes to it, through that instance's own PropertyGrid state (so two
+// instances showing the same page keep separate text drafts).
 // Instance ids are pool slots (InspectorHost::kMaxInstances), so a closed
 // instance's `[Window]` entry is the one its next opener inherits.
 
 #include "Panels/InspectorHost.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace Arcane::Editor
 {
+    // Instance 0's ImGui id. ImHashStr skips "###", so this is the same id as the
+    // legacy bare "Inspector" window: the constant is for clarity, not a new id.
+    inline constexpr const char* kPrimaryInspectorWindowId = "###Inspector";
+
+    // The window title for an instance (inspector filters spec s5):
+    // "Inspector" / "Inspector <N+1>", then " - <filter label>" when the
+    // filter is not All, then the stable id -- "###Inspector" for instance 0,
+    // "###inspector_<id>" otherwise -- so a filter change never moves the
+    // window, its dock slot or its [Window] ini entry.
+    [[nodiscard]] std::string InspectorWindowTitle(const InspectorHost::Instance& inst);
+
     struct InspectorWindowsState
     {
         std::unordered_map<int, PropertyGridState> grids;   // per instance id (ids are pool slots, InspectorHost::kMaxInstances)

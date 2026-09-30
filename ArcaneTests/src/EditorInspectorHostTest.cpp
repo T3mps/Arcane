@@ -1,7 +1,8 @@
 // InspectorHost (inspector-ownership spec s5): the PURE routing -- which
 // source's page an Inspector instance shows -- driven with fake sources, no
-// ImGui. Every rule in spec s3.1/s3.3/s6 has a case here. The one ImGui case
-// (last) is the instance list's ini section, on a bare context, no device.
+// ImGui. Every rule in spec s3.1/s3.3/s6 has a case here. The ImGui cases
+// (the instance list's ini section, one device-less frame of the windows)
+// run on bare contexts, no device.
 #include <catch2/catch_test_macros.hpp>
 #include <Panels/InspectorHost.hpp>
 #include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
@@ -27,13 +28,14 @@ namespace
         std::string kind;
         std::string key;
         bool restoreOk = true;
+        bool hasPage = true;                // false: Page() is null (an asset source with nothing selected)
         std::string normalizeTo;            // non-empty: RestoreSelection lands on THIS key, not the asked one (a member died in between)
         std::vector<std::string> restored;
         FakePage page;
         explicit FakeSource(std::string n, std::string k = "scene") : name(std::move(n)), kind(std::move(k)) {}
         std::string SourceName() const override { return name; }
         std::string_view Kind() const override { return kind; }
-        InspectorPage* Page() override { return &page; }
+        InspectorPage* Page() override { return hasPage ? &page : nullptr; }
         InspectorPage* PageFor(std::string_view) override { return restoreOk ? &page : nullptr; }
         std::string SelectionKey() const override { return key; }
         bool RestoreSelection(std::string_view k) override
@@ -441,6 +443,68 @@ TEST_CASE("InspectorHost: the default and the legacy-upgrade configurations", "[
     CHECK(legacy.Find(1)->filter.IsAll());
     CHECK(legacy.Find(0)->filter == InspectorFilter::AllBut("assets"));
     CHECK(legacy.Find(2)->filter == InspectorFilter::Only("assets"));
+}
+
+TEST_CASE("InspectorWindowTitle: the filter label rides the title; the ### id never changes", "[editor][inspector]")
+{
+    InspectorHost::Instance main;                        // id 0, All
+    CHECK(InspectorWindowTitle(main) == "Inspector###Inspector");
+    // The stable id: every title of instance 0 hashes to the same window id,
+    // and ImHashStr skips "###" (imgui.cpp:2539-2544), so that id IS the legacy
+    // bare "Inspector" one -- true by construction; these CHECKs pin it.
+    CHECK(ImHashStr("Inspector###Inspector") == ImHashStr("Inspector - Scene###Inspector"));
+    CHECK(ImHashStr("Inspector###Inspector") == ImHashStr(kPrimaryInspectorWindowId));
+    CHECK(ImHashStr(kPrimaryInspectorWindowId) == ImHashStr("Inspector"));   // [Window][Inspector] carries over
+    main.filter = InspectorFilter::AllBut("assets");
+    CHECK(InspectorWindowTitle(main) == "Inspector - All but Assets###Inspector");
+    InspectorHost::Instance second; second.id = 1;
+    CHECK(InspectorWindowTitle(second) == "Inspector 2###inspector_1");
+    second.filter = InspectorFilter::Only("assets");
+    CHECK(InspectorWindowTitle(second) == "Inspector 2 - Assets###inspector_1");
+}
+
+// The windows themselves, one device-less frame: the filtered title reaches
+// the ImGui window, and an instance whose filter admits nothing registered
+// draws its one-line note. The note text is probed through ImGui's own
+// LogToBuffer (every RenderText is logged while it is on), read BEFORE
+// Render: the log ends with the implicit Debug window at EndFrame.
+TEST_CASE("DrawInspectorWindows: filtered titles and the no-source / no-selection lines", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);   // the software atlas (InputActionsDocumentUiTest's shape)
+    FakeSource scene{ "Scene", "scene" };
+    scene.hasPage = false;                              // a routed source with nothing to show
+    InspectorHost host{ scene };
+    const int input = host.AddInstance();               // 1
+    REQUIRE(input == 1);
+    REQUIRE(host.SetFilter(input, InspectorFilter::Only("input-actions")));   // no input-actions source registered
+    const int docs = host.AddInstance();                // 2: several kinds admitted, none registered
+    InspectorFilter noSceneNoAssets;
+    noSceneNoAssets.excluded = { "scene", "assets" };
+    REQUIRE(host.SetFilter(docs, noSceneNoAssets));
+    InspectorWindowsState state;
+
+    ImGui::NewFrame();
+    ImGui::LogToBuffer();
+    (void)DrawInspectorWindows(host, state, nullptr);
+    const std::string logged = ImGui::GetCurrentContext()->LogBuffer.c_str();
+    ImGui::LogFinish();
+    ImGui::Render();
+
+    ImGuiWindow* w = ImGui::FindWindowByID(ImHashStr("###inspector_1"));
+    REQUIRE(w != nullptr);
+    CHECK(std::string(w->Name) == "Inspector 2 - Input Actions###inspector_1");
+    ImGuiWindow* primary = ImGui::FindWindowByName(kPrimaryInspectorWindowId);
+    REQUIRE(primary != nullptr);
+    CHECK(std::string(primary->Name) == "Inspector###Inspector");
+    INFO(logged);
+    CHECK(logged.find("No Input Actions document open") != std::string::npos);
+    CHECK(logged.find("Nothing to show for this filter") != std::string::npos);
+    CHECK(logged.find("No selection") != std::string::npos);   // instance 0: the scene is routed but has no page
 }
 
 TEST_CASE("InspectorHost ini: ClearAllFn resets filters with the list", "[editor][inspector]")

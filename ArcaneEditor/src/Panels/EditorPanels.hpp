@@ -158,11 +158,26 @@ namespace Arcane::Editor
                         const RecentSelection* recents = nullptr,
                         const SceneRecents::List* sceneRecents = nullptr);
 
+    // The default layout's "Assets only" Inspector window (inspector filters
+    // spec s6): InspectorWindowTitle's id for InspectorHost::kAssetsInstanceId.
+    inline constexpr const char* kAssetsInspectorWindowId = "###inspector_1";   // == InspectorHost::kAssetsInstanceId
+
+    // What EndDockSpace did to the layout this frame. The app answers a build
+    // with InspectorHost::ApplyDefaultInspectorLayout (the two-Inspector default).
+    struct DockSpaceResult
+    {
+        bool builtDefault = false;     // the default layout was (re)built: first run, or Window -> Reset Layout
+        bool upgradedLegacy = false;   // the one-time pre-feature upgrade ran
+    };
+
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
     // Everything drawn in between becomes a fixed (non-dockable, tab-less) strip above
     // the dockspace. `resetLayout` (Window -> Reset Layout) rebuilds the default dock
     // layout at this call's DockBuilder-safe point, same as the first-run path.
-    void EndDockSpace(bool resetLayout = false);
+    // `upgradeLegacyInspectorId` >= 1: dock that instance into a split right of the
+    // Asset Browser's node (the one-time pre-feature upgrade, spec s6); -1 = no
+    // upgrade this frame. Ignored on a frame that builds the default layout.
+    DockSpaceResult EndDockSpace(bool resetLayout = false, int upgradeLegacyInspectorId = -1);
 
     // Centered Play/Pause/Step transport, drawn as a FIXED STRIP into the current window
     // -- call between BeginDockSpace and EndDockSpace so it lands in the dockspace host.

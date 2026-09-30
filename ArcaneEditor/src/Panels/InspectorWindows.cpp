@@ -39,17 +39,21 @@ namespace Arcane::Editor
             bool unpin = false;                        // the pinned page-less note's "click to follow"
             std::optional<std::string> repinKey;       // a pinned instance's crumb
             std::function<void()> select;              // an unpinned instance's crumb
+            std::optional<InspectorFilter> filter;     // the kind dropdown's new filter (spec s5)
         };
 
         void ApplyHeaderActions(InspectorHost& host, const InspectorHost::Instance& inst, HeaderActions& a)
         {
-            if (a.back) (void)host.GoBack();
-            if (a.forward) (void)host.GoForward();
+            // The arrows walk the instance's FILTERED view of the shared
+            // history (spec s4); a landing is still one selection for everyone.
+            if (a.back) (void)host.GoBack(inst.filter);
+            if (a.forward) (void)host.GoForward(inst.filter);
             if (a.jump) (void)host.JumpTo(*a.jump);
             if (a.repinKey) host.RepinKey(inst.id, std::move(*a.repinKey));
             if (a.select) a.select();
             if (a.togglePin) host.SetPinned(inst.id, !inst.pinned);
             if (a.unpin) host.SetPinned(inst.id, false);
+            if (a.filter) (void)host.SetFilter(inst.id, *a.filter);   // an all-excluded set is refused (the dropdown never offers one)
         }
 
         void DrawHeader(const InspectorHost& host, const InspectorHost::Instance& inst, InspectorSource* src,
@@ -61,14 +65,14 @@ namespace Arcane::Editor
             // Back / forward over the selection history: each arrow names its
             // target, and a right-click lists that side's entries nearest-first
             // (UE's Content Browser history). The disabled state suppresses both.
-            ImGui::BeginDisabled(!host.CanGoBack());
+            // Both walk only the entries this instance's filter admits (spec s4).
+            ImGui::BeginDisabled(!host.CanGoBack(inst.filter));
             if (ImGui::SmallButton(ICON_LC_CHEVRON_LEFT "##back")) actions.back = true;
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-                if (const auto* e = host.BackEntry()) ImGui::SetTooltip("Back to %s", e->label.c_str());
+                if (const auto* e = host.BackEntry(inst.filter)) ImGui::SetTooltip("Back to %s", e->label.c_str());
             if (ImGui::BeginPopupContextItem("##back_history"))
             {
-                const std::size_t cur = host.HistoryCursor();
-                for (std::size_t i = cur; i-- > 0;)
+                for (const std::size_t i : host.BackIndices(inst.filter))
                 {
                     ImGui::PushID(static_cast<int>(i));
                     if (ImGui::Selectable(host.History()[i].label.c_str())) actions.jump = i;
@@ -78,13 +82,13 @@ namespace Arcane::Editor
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::BeginDisabled(!host.CanGoForward());
+            ImGui::BeginDisabled(!host.CanGoForward(inst.filter));
             if (ImGui::SmallButton(ICON_LC_CHEVRON_RIGHT "##forward")) actions.forward = true;
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-                if (const auto* e = host.ForwardEntry()) ImGui::SetTooltip("Forward to %s", e->label.c_str());
+                if (const auto* e = host.ForwardEntry(inst.filter)) ImGui::SetTooltip("Forward to %s", e->label.c_str());
             if (ImGui::BeginPopupContextItem("##forward_history"))
             {
-                for (std::size_t i = host.HistoryCursor() + 1; i < host.History().size(); ++i)
+                for (const std::size_t i : host.ForwardIndices(inst.filter))
                 {
                     ImGui::PushID(static_cast<int>(i));
                     if (ImGui::Selectable(host.History()[i].label.c_str())) actions.jump = i;
@@ -93,6 +97,37 @@ namespace Arcane::Editor
                 ImGui::EndPopup();
             }
             ImGui::EndDisabled();
+
+            // The kind filter (spec s5): one checkbox per catalog kind, ticked =
+            // admitted. The last ticked kind cannot be unticked (an instance
+            // that can show nothing reads as broken). Drawn BEFORE the crumb
+            // child, so the crumbs' GetContentRegionAvail() below already
+            // excludes it (only the pin, drawn after, is subtracted by hand).
+            ImGui::SameLine();
+            const std::string label = InspectorFilterLabel(inst.filter);
+            ImGui::SetNextItemWidth(std::min(ImGui::CalcTextSize(label.c_str()).x + ImGui::GetFrameHeight() + style.FramePadding.x * 2.0f, 160.0f));
+            if (ImGui::BeginCombo("##filter", label.c_str()))
+            {
+                for (const InspectorKind& k : kInspectorKinds)
+                {
+                    bool ticked = inst.filter.Admits(k.id);
+                    InspectorFilter next = inst.filter;
+                    if (ticked) next.excluded.emplace_back(k.id);
+                    else std::erase(next.excluded, std::string(k.id));
+                    const bool lastTicked = ticked && next.ExcludesEveryKind();
+                    ImGui::BeginDisabled(lastTicked);
+                    if (ImGui::Checkbox(std::string(k.displayName).c_str(), &ticked)) actions.filter = next;
+                    ImGui::EndDisabled();
+                    if (lastTicked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("An Inspector must show at least one kind");
+                }
+                ImGui::EndCombo();
+            }
+            // Spec s5: a long multi-kind label is clipped to the combo; the
+            // tooltip carries the full list (the combo frame is the last item
+            // whether or not it is open).
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                ImGui::SetTooltip("%s", label.c_str());
             ImGui::SameLine();
 
             // Breadcrumb: a horizontal strip clipped to the width left of the pin
@@ -149,6 +184,17 @@ namespace Arcane::Editor
         }
     }
 
+    std::string InspectorWindowTitle(const InspectorHost::Instance& inst)
+    {
+        std::string title = inst.id == 0 ? std::string("Inspector") : "Inspector " + std::to_string(inst.id + 1);
+        if (!inst.filter.IsAll()) title += " - " + InspectorFilterLabel(inst.filter);
+        // The ### suffix is the window's whole id (ImHashStr restarts at it),
+        // so the label may change freely. Instance 0's "###Inspector" hashes
+        // to the legacy bare "Inspector" id: old layouts carry over as-is.
+        title += inst.id == 0 ? std::string(kPrimaryInspectorWindowId) : "###inspector_" + std::to_string(inst.id);
+        return title;
+    }
+
     InspectorWindowsResult DrawInspectorWindows(InspectorHost& host, InspectorWindowsState& state,
                                                 bool* primaryOpen)
     {
@@ -162,12 +208,10 @@ namespace Arcane::Editor
             // page switched -- BEFORE Begin, whether or not the window shows.
             PropertyGrid(state.grids[inst.id]).CommitOrphans();
             if (inst.id == 0 && primaryOpen && !*primaryOpen) continue;
-            const std::string title = inst.id == 0
-                ? std::string("Inspector")
-                : "Inspector " + std::to_string(inst.id + 1) + "###inspector_" + std::to_string(inst.id);
+            const std::string title = InspectorWindowTitle(inst);
             bool open = true;
             if (inst.id != 0)
-                if (ImGuiWindow* primary = ImGui::FindWindowByName("Inspector"))
+                if (ImGuiWindow* primary = ImGui::FindWindowByName(kPrimaryInspectorWindowId))
                     if (primary->DockId != 0)
                         ImGui::SetNextWindowDockID(primary->DockId, ImGuiCond_FirstUseEver);
             // BEFORE resolving the page: CanPin calls PageFor on the instance's
@@ -208,6 +252,27 @@ namespace Arcane::Editor
             {
                 PropertyGrid grid(state.grids[inst.id]);
                 page->Draw(grid);
+            }
+            else if (src == nullptr)
+            {
+                // Unpinned and nothing routed: the filter admits no registered
+                // source (spec s5). A single-kind filter names its kind.
+                // displayName is a string_view: %.*s, never %s through "...".
+                std::string_view onlyName;
+                int admitted = 0;
+                for (const InspectorKind& k : kInspectorKinds)
+                    if (inst.filter.Admits(k.id)) { onlyName = k.displayName; ++admitted; }
+                if (admitted == 1)
+                    ImGui::TextDisabled("No %.*s document open", static_cast<int>(onlyName.size()), onlyName.data());
+                else
+                    ImGui::TextDisabled("Nothing to show for this filter");
+            }
+            else
+            {
+                // Unpinned and routed, but the source has no page (the Asset
+                // Browser with nothing selected): the one empty-state string,
+                // the scene body's own (EditorPanels.cpp's "No selection").
+                ImGui::TextDisabled("No selection");
             }
             ImGui::End();
             ApplyHeaderActions(host, inst, actions);   // after the page is done with: see HeaderActions

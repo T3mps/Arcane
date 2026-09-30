@@ -14,6 +14,7 @@
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
+#include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 
@@ -433,6 +434,13 @@ namespace Arcane::Editor
         ImGuiID bottomRightId = 0;
         const ImGuiID bottomLeftId = ImGui::DockBuilderSplitNode(bottomId, ImGuiDir_Left, 0.48f,
                                                                  nullptr, &bottomRightId);
+        // Inspector filters (spec s6): the "Assets only" Inspector sits where
+        // the Asset Browser's preview pane used to -- a split to the RIGHT of
+        // the browser's node -- so browsing assets never replaces the entity
+        // page in the main Inspector.
+        ImGuiID assetsInspectorId = 0;
+        const ImGuiID browserNodeId = ImGui::DockBuilderSplitNode(bottomLeftId, ImGuiDir_Left, 0.70f,
+                                                                  nullptr, &assetsInspectorId);
 
         ImGui::DockBuilderDockWindow("Outliner", leftId);
         // Inspector and Material share the right node as TABS: the scene's
@@ -440,11 +448,12 @@ namespace Arcane::Editor
         // surface (the thing you are editing, in detail), and the host focuses
         // whichever one matches the active center tab. Inspector first, so a
         // fresh layout opens on it.
-        ImGui::DockBuilderDockWindow("Inspector", rightId);
+        ImGui::DockBuilderDockWindow(kPrimaryInspectorWindowId, rightId);   // the legacy "Inspector" id (### skipped)
         ImGui::DockBuilderDockWindow("Material",  rightId);
-        ImGui::DockBuilderDockWindow("Asset Browser", bottomLeftId);
-        ImGui::DockBuilderDockWindow("Console",       bottomLeftId);
-        ImGui::DockBuilderDockWindow("Problems",      bottomLeftId);
+        ImGui::DockBuilderDockWindow("Asset Browser", browserNodeId);
+        ImGui::DockBuilderDockWindow("Console",       browserNodeId);
+        ImGui::DockBuilderDockWindow("Problems",      browserNodeId);
+        ImGui::DockBuilderDockWindow(kAssetsInspectorWindowId, assetsInspectorId);
         ImGui::DockBuilderDockWindow("Asset Graph",   bottomRightId);
         ImGui::DockBuilderDockWindow("Asset Status",  bottomRightId);
         ImGui::DockBuilderDockWindow("Viewport",      central);
@@ -489,15 +498,53 @@ namespace Arcane::Editor
         ImGui::SetWindowFocus(windowName);
     }
 
-    void EndDockSpace(bool resetLayout)
+    static_assert(InspectorHost::kAssetsInstanceId == 1, "kAssetsInspectorWindowId names ###inspector_1");
+
+    DockSpaceResult EndDockSpace(bool resetLayout, int upgradeLegacyInspectorId)
     {
         const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
+        DockSpaceResult result;
 
         // First run (no saved .ini layout) -- or an explicit Window -> Reset
         // Layout: arrange the default editor layout. Same call, same safe
         // point (DockBuilder mutations before the DockSpace() submission).
         if (resetLayout || ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+        {
             BuildDefaultLayout(dockspaceId);
+            result.builtDefault = true;
+        }
+        else if (upgradeLegacyInspectorId >= 1)
+        {
+            // The one-time pre-feature upgrade (spec s6): split the Asset
+            // Browser's node and dock the Assets instance on its right. The
+            // browser's DockId comes from its window (or its ini settings when
+            // the window has not been submitted yet this session).
+            ImGuiID browserDock = 0;
+            if (ImGuiWindow* w = ImGui::FindWindowByName("Asset Browser")) browserDock = w->DockId;
+            else if (ImGuiWindowSettings* s = ImGui::FindWindowSettingsByID(ImHashStr("Asset Browser"))) browserDock = s->DockId;
+            const std::string id = "###inspector_" + std::to_string(upgradeLegacyInspectorId);
+            // The main Inspector needs no re-dock: "###Inspector" hashes to the
+            // legacy bare "Inspector" id (ImHashStr skips "###", imgui.cpp:2539),
+            // so its [Window][Inspector] entry and DockId carry over unchanged.
+            //
+            // A window only ever docks into a LEAF, so its DockId names one;
+            // the IsLeafNode() guard is belt and braces: DockBuilderSplitNode
+            // on a split parent would re-split a node that already has
+            // children. DockBuilderSplitNode(node, Right, 0.30, at_dir,
+            // opposite): the node's current windows move to the child
+            // OPPOSITE the split direction (imgui.cpp:18399, child 0 for
+            // Right), so the browser's tab set stays LEFT and the new right
+            // 30% is the Inspector's.
+            ImGuiDockNode* node = browserDock != 0 ? ImGui::DockBuilderGetNode(browserDock) : nullptr;
+            if (node != nullptr && node->IsLeafNode())
+            {
+                ImGuiID left = browserDock;
+                const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.30f, nullptr, &left);
+                ImGui::DockBuilderDockWindow(id.c_str(), right);
+            }
+            ImGui::DockBuilderFinish(dockspaceId);
+            result.upgradedLegacy = true;   // undocked browser: DrawInspectorWindows' New Inspector placement applies
+        }
 
         // Emit the dockspace into the still-open host window. Anything drawn between
         // BeginDockSpace and here is a fixed strip above it.
@@ -541,6 +588,7 @@ namespace Arcane::Editor
         }
 
         ImGui::End();
+        return result;
     }
 
     bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,

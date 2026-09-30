@@ -2302,7 +2302,29 @@ namespace Arcane::Editor
         if (m_editBinding.editMode == InPlayMode())
             NoteSceneReplaced();
         m_editBinding.editMode = !InPlayMode();
-        Arcane::Editor::EndDockSpace(menuReq.resetLayout);
+        // ALWAYS consume the flag: on a Reset Layout frame a pending flag
+        // would otherwise survive into the next frame and split the freshly
+        // built default layout's browser node a second time.
+        //
+        // Ordering (inspector filters spec s6): on a FIRST run there is no
+        // ini, so TakeLegacyLayoutUpgrade() is false and builtDefault applies
+        // the defaults. If a loaded ini had no dock node (the build fires AND
+        // the legacy flag was set), UpgradeLegacyInspectorLayout runs first
+        // and ApplyDefaultInspectorLayout then overrides it to exactly {0, 1}
+        // -- the build wins, which is correct: the default layout just docked
+        // instance 1, not the upgrade's id.
+        const bool pendingLegacy = m_inspectorHost.TakeLegacyLayoutUpgrade();
+        const bool legacy = pendingLegacy && !menuReq.resetLayout;
+        const int legacyAssetsId = legacy ? m_inspectorHost.UpgradeLegacyInspectorLayout() : -1;
+        const Arcane::Editor::DockSpaceResult dock = Arcane::Editor::EndDockSpace(menuReq.resetLayout, legacyAssetsId);
+        if (dock.builtDefault)
+        {
+            m_inspectorHost.ApplyDefaultInspectorLayout();   // first run and Window > Reset Layout: exactly {0, 1}
+            // The instances it removed take their grids with them, as the
+            // closed-X loop after DrawInspectorWindows does.
+            std::erase_if(m_inspectorWindows.grids, [this](const auto& kv)
+                          { return m_inspectorHost.Find(kv.first) == nullptr; });
+        }
         if (menuReq.resetLayout)
             m_panelVis = Arcane::Editor::PanelVisibility{};   // reset re-shows everything
 
