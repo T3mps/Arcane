@@ -227,6 +227,78 @@ namespace Arcane::Editor
         return false;
     }
 
+    std::optional<std::size_t> InspectorHost::BackIndex(const InspectorFilter& f) const
+    {
+        if (m_history.empty()) return std::nullopt;
+        std::size_t pos = m_cursor + 1;                        // one past: the scan below walks down from the cursor
+        while (pos-- > 0)
+            if (f.Admits(m_history[pos].source->Kind())) break; // the entry this instance shows
+        if (pos == static_cast<std::size_t>(-1)) return std::nullopt;
+        for (std::size_t i = pos; i-- > 0;)
+            if (f.Admits(m_history[i].source->Kind())) return i;
+        return std::nullopt;
+    }
+
+    std::optional<std::size_t> InspectorHost::ForwardIndex(const InspectorFilter& f) const
+    {
+        for (std::size_t i = m_cursor + 1; i < m_history.size(); ++i)
+            if (f.Admits(m_history[i].source->Kind())) return i;
+        return std::nullopt;
+    }
+
+    bool InspectorHost::CanGoBack(const InspectorFilter& f) const { return BackIndex(f).has_value(); }
+    bool InspectorHost::CanGoForward(const InspectorFilter& f) const { return ForwardIndex(f).has_value(); }
+
+    const InspectorHost::HistoryEntry* InspectorHost::BackEntry(const InspectorFilter& f) const
+    {
+        const auto i = BackIndex(f);
+        return i ? &m_history[*i] : nullptr;
+    }
+
+    const InspectorHost::HistoryEntry* InspectorHost::ForwardEntry(const InspectorFilter& f) const
+    {
+        const auto i = ForwardIndex(f);
+        return i ? &m_history[*i] : nullptr;
+    }
+
+    bool InspectorHost::GoBack(const InspectorFilter& f)
+    {
+        RefreshCursorLabel();
+        while (const auto i = BackIndex(f))
+            if (TryLand(*i)) return true;                      // failure erased *i; recompute
+        return false;
+    }
+
+    bool InspectorHost::GoForward(const InspectorFilter& f)
+    {
+        RefreshCursorLabel();
+        while (const auto i = ForwardIndex(f))
+            if (TryLand(*i)) return true;
+        return false;
+    }
+
+    std::vector<std::size_t> InspectorHost::BackIndices(const InspectorFilter& f) const
+    {
+        std::vector<std::size_t> out;
+        for (auto i = BackIndex(f); i; )
+        {
+            out.push_back(*i);
+            std::optional<std::size_t> next;
+            for (std::size_t j = *i; j-- > 0;)
+                if (f.Admits(m_history[j].source->Kind())) { next = j; break; }
+            i = next;
+        }
+        return out;
+    }
+
+    std::vector<std::size_t> InspectorHost::ForwardIndices(const InspectorFilter& f) const
+    {
+        std::vector<std::size_t> out;
+        for (std::size_t i = m_cursor + 1; i < m_history.size(); ++i)
+            if (f.Admits(m_history[i].source->Kind())) out.push_back(i);
+        return out;
+    }
+
     bool InspectorHost::JumpTo(std::size_t index)
     {
         if (index >= m_history.size() || index == m_cursor) return false;

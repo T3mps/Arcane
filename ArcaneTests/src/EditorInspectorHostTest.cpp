@@ -7,6 +7,7 @@
 #include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -483,4 +484,52 @@ TEST_CASE("InspectorHost filters: ReleaseAll keeps a permanent source and drops 
     CHECK(&host.Current() == &scene);
     assets.key = "g2"; host.NotifySelected(assets);                // assets still live
     CHECK(&host.Current() == &assets);
+}
+
+TEST_CASE("InspectorHost filters: Back in a Scene instance skips document entries and re-selects in the scene", "[editor][inspector]")
+{
+    World w;
+    const InspectorFilter scene = InspectorFilter::Only("scene");
+    w.Select(w.scene, "A");        // 0
+    w.Select(w.doc, "d1");         // 1
+    w.Select(w.scene, "B");        // 2
+    w.Select(w.doc, "d2");         // 3  <- cursor
+    REQUIRE(w.host.CanGoBack(scene));
+    CHECK(w.host.BackEntry(scene)->key == "A");                     // position = 2 (B); back = 0 (A)
+    CHECK(w.host.BackIndices(scene) == std::vector<std::size_t>{ 0 });
+    CHECK_FALSE(w.host.CanGoForward(scene));
+    REQUIRE(w.host.GoBack(scene));
+    CHECK(w.scene.key == "A");
+    CHECK(&w.host.Current() == &w.scene);                           // a landing IS a selection: All follows
+    CHECK(w.host.HistoryCursor() == 0);
+    CHECK(w.host.ForwardEntry(scene)->key == "B");                  // skips d1
+    CHECK(w.host.ForwardIndices(scene) == std::vector<std::size_t>{ 2 });
+}
+
+TEST_CASE("InspectorHost filters: the All overloads match the unfiltered history exactly", "[editor][inspector]")
+{
+    World w;
+    const InspectorFilter all;
+    w.Select(w.scene, "A");
+    w.Select(w.doc, "d1");
+    w.Select(w.scene, "B");
+    CHECK(w.host.BackIndex(all) == std::optional<std::size_t>{ 1 });
+    CHECK(w.host.BackEntry(all) == w.host.BackEntry());
+    REQUIRE(w.host.GoBack(all));
+    CHECK(w.host.ForwardIndex(all) == std::optional<std::size_t>{ 2 });
+}
+
+TEST_CASE("InspectorHost filters: a filtered GoBack prunes a stale admitted entry and keeps walking", "[editor][inspector]")
+{
+    World w;
+    const InspectorFilter input = InspectorFilter::Only("input-actions");
+    w.Select(w.doc2, "old");       // 0 -- will not restore
+    w.Select(w.doc, "d1");         // 1
+    w.Select(w.scene, "S");        // 2
+    w.Select(w.doc, "d2");         // 3
+    w.doc2.restoreOk = false;
+    REQUIRE(w.host.GoBack(input)); // position 3 -> back 1 (d1) restores fine
+    CHECK(w.doc.key == "d1");
+    CHECK_FALSE(w.host.GoBack(input));   // only the stale doc2 entry is left: pruned, no landing
+    CHECK(w.host.History().size() == 3);
 }

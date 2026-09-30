@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -120,6 +121,23 @@ namespace Arcane::Editor
         [[nodiscard]] const HistoryEntry* ForwardEntry() const noexcept { return CanGoForward() ? &m_history[m_cursor + 1] : nullptr; }
         [[nodiscard]] const std::vector<HistoryEntry>& History() const noexcept { return m_history; }
         [[nodiscard]] std::size_t HistoryCursor() const noexcept { return m_cursor; }
+        // Filtered navigation over the SHARED history (spec 2026-09-29 s4). The
+        // instance's POSITION is the last admitted index at or before the cursor
+        // (the entry it is showing). Back = the nearest admitted index BEFORE the
+        // position; Forward = the nearest admitted index AFTER the cursor. With
+        // All these reduce to m_cursor - 1 / m_cursor + 1. A landing is a
+        // selection: it moves the cursor and Current() for every instance.
+        [[nodiscard]] std::optional<std::size_t> BackIndex(const InspectorFilter& f) const;
+        [[nodiscard]] std::optional<std::size_t> ForwardIndex(const InspectorFilter& f) const;
+        [[nodiscard]] bool CanGoBack(const InspectorFilter& f) const;
+        [[nodiscard]] bool CanGoForward(const InspectorFilter& f) const;
+        bool GoBack(const InspectorFilter& f);
+        bool GoForward(const InspectorFilter& f);
+        [[nodiscard]] const HistoryEntry* BackEntry(const InspectorFilter& f) const;
+        [[nodiscard]] const HistoryEntry* ForwardEntry(const InspectorFilter& f) const;
+        // The history dropdowns: admitted indices before the instance's position (nearest first) / after the cursor.
+        [[nodiscard]] std::vector<std::size_t> BackIndices(const InspectorFilter& f) const;
+        [[nodiscard]] std::vector<std::size_t> ForwardIndices(const InspectorFilter& f) const;
         // Drop every entry whose source no longer resolves its key; the cursor
         // keeps pointing at the same surviving entry (index arithmetic, never a
         // key search). Once per frame from the draw: <= kHistoryDepth pure lookups.
