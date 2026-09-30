@@ -744,9 +744,10 @@ namespace Arcane::Editor
         m_childrenOpen.clear();
         selected = Arcane::Guid{};
         selectionStamp = 0;
-        // entriesStamp is deliberately NOT reset here -- see its declaration:
-        // a monotonic counter can never compare equal to a stale "built at"
-        // value a consumer is still holding from the outgoing project.
+        // entriesStamp and selectionGesture are deliberately NOT reset here --
+        // see their declarations: a monotonic counter can never compare equal
+        // to a stale "built at" value a consumer is still holding from the
+        // outgoing project.
         ++entriesStamp;
     }
 }

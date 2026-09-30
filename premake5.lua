@@ -1248,9 +1248,9 @@ project "ArcaneTests"
         -- sidecar's "texture" block) source-compiles into the test exe so
         -- the [editor] units drive the merge-preserving write directly --
         -- no ImGui in it at all, same InspectorMeta/ConsoleModel split
-        -- applied to this problem. EditorPanels.cpp (the ImGui half that
-        -- calls it) is not compiled here, same reason InspectorMeta's own
-        -- comment states.
+        -- applied to this problem. Its ImGui half (TextureImportSettings.cpp,
+        -- the Asset page's import-settings block) IS compiled here since
+        -- inspector filters Task 5 -- see the asset-panel entries below.
         "%{wks.location}/ArcaneEditor/src/Panels/TextureMetaPanel.cpp",
         -- Scene authoring: EditorCamera (the editor's own viewport pan/zoom/
         -- framing math + the framing-bounds sweep) source-compiles into the
@@ -1554,6 +1554,12 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
+        -- Inspector filters Task 5: the asset source + its page (the old
+        -- preview pane's content) and the texture import settings block it
+        -- draws. AssetInspectorSourceTest.cpp drives DrawAssetPage through
+        -- device-less ImGui frames, the same reason as the panels above.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetInspectorSource.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/TextureImportSettings.cpp",
         -- 2D physics wiring Plan 2 (FieldKind::Vector): InspectorView -- the
         -- Inspector's reflected-field visitor, the ImGui half whose PURE
         -- halves (InspectorFields, InspectorMeta) are listed above. NOT a

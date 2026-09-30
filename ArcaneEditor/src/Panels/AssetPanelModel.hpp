@@ -711,7 +711,13 @@ namespace Arcane::Editor
         // equal to a stale "already built at" value a consumer is still
         // holding from the previous project.
         std::uint32_t  entriesStamp = 0;
-        void Select(const Arcane::Guid& g) { if (g != selected) { selected = g; ++selectionStamp; } }
+        // Bumped on EVERY Select call, a re-select of the selected guid
+        // included: the Inspector's asset source reads it as its selection
+        // epoch (spec 2026-09-29 s3: a re-selection IS an event).
+        // MONOTONIC: ResetForProjectSwitch deliberately leaves it alone, like
+        // entriesStamp, so no consumer can hold a stale equal value.
+        std::uint64_t  selectionGesture = 0;
+        void Select(const Arcane::Guid& g) { ++selectionGesture; if (g != selected) { selected = g; ++selectionStamp; } }
         void ResetForProjectSwitch();                     // clears everything incl. selected
 
     private:

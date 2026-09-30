@@ -15,11 +15,10 @@
 #include "Panels/InspectorFields.hpp"
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
-#include "Panels/TextureMetaPanel.hpp"   // the .meta "texture" block's PURE read/merge-write (F2b Task 13)
+#include "Panels/TextureImportSettings.hpp"   // DrawTextureImportSettings: the no-entity texture fallback (moved out of this file, inspector filters Task 5)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 
-#include <Arcane/AssetPipeline/TextureMetaSettings.hpp>   // the .meta "texture" block's four knobs (F2b Task 13)
 #include <Arcane/Base/Diagnostics.hpp>   // the refused-Play Problems row (final-review fix wave, minor 11)
 #include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
 #include <Arcane/Base/Runtime.hpp>
@@ -2266,117 +2265,6 @@ namespace Arcane::Editor
         // untouched by a change scoped to vertical rhythm.
         constexpr float kInspectorFramePaddingY = 3.0f;
         constexpr float kInspectorItemSpacingY  = 4.0f;
-
-        // ---- F2b Task 13: the Inspector's texture-asset panel --------------
-        // Shown when the Asset Browser has a texture selected and NOTHING is
-        // entity-selected (DrawInspectorBody's own tie-break). Spec sec 7:
-        // "a texture preview in the INSPECTOR" (PixelsFor's thumbnail) PLUS
-        // "the minimal inspector block" for the four .meta knobs -- spec
-        // sec 4's set exactly, never UE's eighty. This is the FIRST asset
-        // (as opposed to entity/component) content this panel has ever shown;
-        // it does not touch the entity-inspection code below at all beyond
-        // one early branch.
-
-        // Case-insensitive extension compare -- same rule AssetRegistry.cpp's
-        // own LowerExt uses, duplicated rather than shared (that one is file-
-        // local too; ArcaneEditor has at least two independent copies of this
-        // exact idiom already, an acknowledged stylistic duplication).
-        bool HasExtensionCI(const std::filesystem::path& p, std::string_view want)
-        {
-            std::string ext = p.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return ext == want;
-        }
-
-        // The four spec sec 4 knobs -- pinned, nothing more (the ceiling to
-        // grow into is UE's eight-ish core, never the eighty). Returns true
-        // on any edit THIS frame -- the caller merge-writes on that edge
-        // only, not every frame the block happens to be drawn.
-        bool DrawTextureMetaSettingsBlock(Arcane::AssetPipeline::TextureMetaSettings& settings)
-        {
-            bool changed = false;
-            int format = static_cast<int>(settings.format);
-            ImGui::SetNextItemWidth(120.0f);
-            if (ImGui::Combo("Format##texmeta", &format, "Auto\0Bc7\0Rgba8\0"))
-            {
-                settings.format =
-                    static_cast<Arcane::AssetPipeline::TextureMetaSettings::Format>(format);
-                changed = true;
-            }
-            if (ImGui::Checkbox("sRGB##texmeta", &settings.srgb))
-                changed = true;
-            if (ImGui::Checkbox("Generate Mips##texmeta", &settings.generateMips))
-                changed = true;
-            int maxSize = static_cast<int>(settings.maxSize);
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::DragInt("Max Size (0 = unlimited)##texmeta", &maxSize, 1.0f, 0, 16384);
-            // Minor fix (final-review wave, 2026-09-04): DragInt returns true on EVERY
-            // frame the value changes WHILE the drag is active -- against this function's
-            // OWN "true on any edit THIS frame" contract, a single drag gesture used to
-            // report `changed` (and so trigger the caller's sidecar write, and so the
-            // watcher's cook trigger) on every intermediate tick, not once per gesture.
-            // Keep the LIVE value flowing into `settings` every frame regardless (ImGui's
-            // own internal drag accumulator is what keeps the widget tracking the mouse
-            // smoothly -- it does not depend on the caller persisting intermediate values),
-            // but only report the edit -- the caller's actual write signal -- once the item
-            // DEACTIVATES after an edit (mouse release / Enter): one write per gesture.
-            settings.maxSize = maxSize > 0 ? static_cast<std::uint32_t>(maxSize) : 0;
-            if (ImGui::IsItemDeactivatedAfterEdit())
-                changed = true;
-            return changed;
-        }
-
-        void DrawTextureAssetPanel(const Arcane::Project& project, const Arcane::Guid& guid,
-                                   const InspectorServices* services)
-        {
-            const auto path = project.ResolveAsset(Arcane::AssetId::FromGuid(guid));
-            if (!path)
-            {
-                ImGui::TextDisabled("(asset not found)");
-                return;
-            }
-            ImGui::TextUnformatted(path->stem().string().c_str());
-            ImGui::Separator();
-
-            // The preview: PixelsFor's thumbnail, through the chrome
-            // context's texture cache -- see InspectorServices::
-            // resolveTexturePreview's own comment for the ColorSpace::
-            // Display routing and why chrome rather than the viewport.
-            if (services && services->resolveTexturePreview)
-            {
-                const std::uint64_t texId = services->resolveTexturePreview(guid);
-                if (texId != 0)
-                    ImGui::Image(static_cast<ImTextureID>(texId), ImVec2(128.0f, 128.0f));
-                else
-                    ImGui::TextDisabled("(preview unavailable -- still cooking, or refused)");
-            }
-            else
-            {
-                ImGui::TextDisabled("(no preview vehicle)");
-            }
-
-            ImGui::Separator();
-
-            // The four .meta knobs apply to a COOKABLE source only: ".png" is
-            // the one extension CookSession.cpp's EnumerateTextureSources
-            // actually cooks this slice, even though AssetKindOf classifies
-            // several other extensions Texture too (.jpg/.tga/.bmp/.hdr).
-            // Anything else shows no editing surface rather than a block
-            // that silently writes settings nothing will ever read.
-            if (!HasExtensionCI(*path, ".png"))
-            {
-                ImGui::TextDisabled("import settings apply to .png sources only");
-                return;
-            }
-
-            std::filesystem::path metaPath = *path;
-            metaPath += ".meta";
-            Arcane::AssetPipeline::TextureMetaSettings settings =
-                ReadTextureMetaSettingsDisplay(metaPath);
-            if (DrawTextureMetaSettingsBlock(settings))
-                WriteTextureMetaSettingsMerged(metaPath, settings);
-        }
     }
 
     void DrawInspectorBody(Astra::Registry& registry, const SelectionContext& sel,
@@ -2403,7 +2291,8 @@ namespace Arcane::Editor
                 if (const auto mount = project->Registry().Resolve(selectedAsset);
                     mount && Arcane::Editor::AssetKindOf(*mount) == Arcane::Editor::AssetKind::Texture)
                 {
-                    DrawTextureAssetPanel(*project, selectedAsset, services);
+                    if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(selectedAsset)))
+                        DrawTextureImportSettings(*path);
                     return;
                 }
             }

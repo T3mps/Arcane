@@ -1,13 +1,12 @@
 #pragma once
 
-// TextureMetaPanel: the PURE half of the Inspector's texture-asset settings
-// block (F2b Task 13) -- reading/merge-writing the ".meta" sidecar's "texture"
+// TextureMetaPanel: the PURE half of the texture import settings block
+// (F2b Task 13) -- reading/merge-writing the ".meta" sidecar's "texture"
 // block, separated from the ImGui widgets that edit it
-// (EditorPanels.cpp's DrawTextureMetaSettingsBlock/DrawTextureAssetPanel).
-// Pure by construction (no ImGui) because the test gate does not compile
-// EditorPanels.cpp -- the same InspectorMeta/ConsoleModel split applied to
-// this problem, so the [editor] units can drive the merge-preserving write
-// directly.
+// (TextureImportSettings.cpp's DrawTextureImportSettings, which the Asset
+// page draws). Pure by construction (no ImGui) -- the same
+// InspectorMeta/ConsoleModel split applied to this problem, so the [editor]
+// units can drive the merge-preserving write directly, without a frame.
 
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
 
