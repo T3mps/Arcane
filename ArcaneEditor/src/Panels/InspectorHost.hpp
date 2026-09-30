@@ -131,8 +131,9 @@ namespace Arcane::Editor
         [[nodiscard]] std::size_t HistoryCursor() const noexcept { return m_cursor; }
         // Per-instance navigation over the SHARED history (spec 2026-09-29 s4).
         // An instance's POSITION is anchored on what it SHOWS: the history
-        // entry whose (source, key) equals its routed SourceFor(id) and that
-        // source's live SelectionKey(), the one nearest the cursor. Only when
+        // entry whose (source, key) equals its routed SourceFor(id) and the
+        // key of the page it draws -- a pinned instance's pinnedKey, else that
+        // source's live SelectionKey() -- the one nearest the cursor. Only when
         // no entry matches does it fall back to the last entry its filter
         // admits at or before the cursor. Back = the nearest admitted index
         // BEFORE the position; Forward = the nearest admitted index AFTER it.

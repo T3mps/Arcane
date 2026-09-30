@@ -272,11 +272,13 @@ namespace Arcane::Editor
     {
         const Instance* inst = Find(id);
         if (!inst || m_history.empty()) return std::nullopt;
-        // Anchor: the entry the instance SHOWS -- its routed source + that
-        // source's live key -- nearest the cursor (ties prefer the earlier).
+        // Anchor: the entry the instance SHOWS -- its routed source + the key
+        // of the page it draws: a PINNED instance's pinnedKey (its
+        // pinnedSource is what SourceFor returns), else that source's live
+        // key -- nearest the cursor (ties prefer the earlier).
         if (const InspectorSource* src = SourceFor(id))
         {
-            const std::string key = src->SelectionKey();
+            const std::string key = inst->pinned ? inst->pinnedKey : src->SelectionKey();
             std::optional<std::size_t> best;
             std::size_t bestDist = 0;
             for (std::size_t i = 0; i < m_history.size(); ++i)

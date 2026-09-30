@@ -671,6 +671,32 @@ TEST_CASE("InspectorHost filters: Back in a Scene instance skips document entrie
     CHECK(w.host.ForwardIndices(scene) == std::vector<std::size_t>{ 2 });
 }
 
+TEST_CASE("InspectorHost filters: a PINNED instance anchors on the page it shows (pinnedSource + pinnedKey), not the source's live key", "[editor][inspector]")
+{
+    // Integration residual 2c: PositionFor anchored every instance on its
+    // routed source's LIVE SelectionKey(). A pinned instance shows its
+    // pinnedKey's page, so its arrows measured from the wrong entry.
+    World w;
+    const int scene = w.host.AddInstance();
+    REQUIRE(w.host.SetFilter(scene, InspectorFilter::Only("scene")));
+    w.Select(w.scene, "A");        // 0
+    w.Select(w.scene, "B");        // 1
+    w.host.SetPinned(scene, true); // holds B
+    w.Select(w.scene, "C");        // 2
+    w.Select(w.scene, "D");        // 3  <- cursor; the scene's live key is D
+    REQUIRE(w.host.Find(scene)->pinnedKey == "B");
+    CHECK(w.host.PositionFor(scene) == std::optional<std::size_t>{ 1 });   // the pinned B, not the live D
+    REQUIRE(w.host.BackEntry(scene) != nullptr);
+    CHECK(w.host.BackEntry(scene)->key == "A");
+    REQUIRE(w.host.ForwardEntry(scene) != nullptr);
+    CHECK(w.host.ForwardEntry(scene)->key == "C");
+    // A breadcrumb click inside the pin (RepinKey) moves the anchor with the page.
+    w.host.RepinKey(scene, "C");
+    CHECK(w.host.PositionFor(scene) == std::optional<std::size_t>{ 2 });
+    // The unpinned main instance still anchors on the live key.
+    CHECK(w.host.PositionFor(0) == std::optional<std::size_t>{ 3 });
+}
+
 TEST_CASE("InspectorHost filters: an All instance matches the unfiltered history exactly", "[editor][inspector]")
 {
     World w;
