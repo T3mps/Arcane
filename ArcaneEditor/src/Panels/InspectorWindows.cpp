@@ -2,7 +2,6 @@
 
 #include "Panels/InspectorKinds.hpp"
 #include "Widgets/EditorTheme.hpp"
-#include "Widgets/EditorWidgets.hpp"   // EllipsisToWidth (the filter combo preview)
 #include "Widgets/IconsLucide.h"
 
 #include <imgui.h>
@@ -75,6 +74,29 @@ namespace Arcane::Editor
             ImGui::EndDisabled();
         }
 
+        // The filter FACE, measured: at most `maxIcons` icons (InspectorFilterFace),
+        // ItemInnerSpacing apart, then the "+N" overflow -- built HERE, once,
+        // and drawn from `more` as measured.
+        struct MeasuredFace
+        {
+            FilterFace face;
+            std::string more;       // "+N", empty when nothing overflows
+            float width = 0.0f;     // icons + gaps + "+N" (no frame chrome)
+        };
+        MeasuredFace MeasureFilterFace(const InspectorFilter& filter, int maxIcons, float gap)
+        {
+            MeasuredFace m;
+            m.face = InspectorFilterFace(filter, maxIcons);
+            for (const char* icon : m.face.icons) m.width += ImGui::CalcTextSize(icon).x;
+            m.width += gap * static_cast<float>(m.face.icons.size() - 1);   // never empty (floor 1)
+            if (m.face.overflow > 0)
+            {
+                m.more = "+" + std::to_string(m.face.overflow);
+                m.width += gap + ImGui::CalcTextSize(m.more.c_str()).x;
+            }
+            return m;
+        }
+
         void DrawHeader(const InspectorHost& host, const InspectorHost::Instance& inst, InspectorSource* src,
                         InspectorPage* page, bool canPin, HeaderActions& actions)
         {
@@ -82,13 +104,19 @@ namespace Arcane::Editor
             const float pinWidth = std::max(ImGui::CalcTextSize(ICON_LC_PIN).x, ImGui::CalcTextSize(ICON_LC_PIN_OFF).x)
                                  + style.FramePadding.x * 2.0f;
             const std::string label = InspectorFilterLabel(inst.filter);
+            // The filter face (user request 2026-09-30): the ticked kinds' icons
+            // (All = one glyph), as many as fit, then "+N". The combo's width is
+            // the face plus its chrome (the arrow + the face's padding).
+            const float iconGap = style.ItemInnerSpacing.x;
+            const float chrome = ImGui::GetFrameHeight() + style.FramePadding.x * 2.0f;
+            const MeasuredFace fullFace = MeasureFilterFace(inst.filter, static_cast<int>(kInspectorKinds.size()), iconGap);
             // The responsive layout (final fix H), measured before anything draws.
             InspectorHeaderMetrics metrics;
             metrics.avail = ImGui::GetContentRegionAvail().x;
             metrics.arrows = ImGui::CalcTextSize(ICON_LC_CHEVRON_LEFT).x + ImGui::CalcTextSize(ICON_LC_CHEVRON_RIGHT).x
                            + style.FramePadding.x * 4.0f + style.ItemSpacing.x;
-            metrics.comboFull = std::min(ImGui::CalcTextSize(label.c_str()).x + ImGui::GetFrameHeight() + style.FramePadding.x * 2.0f, 160.0f);
-            metrics.comboIcon = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize(ICON_LC_FILTER).x;
+            metrics.comboFull = fullFace.width + chrome;
+            metrics.comboMin = MeasureFilterFace(inst.filter, 1, iconGap).width + chrome;
             metrics.pin = pinWidth;
             metrics.spacing = style.ItemSpacing.x;
             const InspectorHeaderLayout layout = LayoutInspectorHeader(metrics);
@@ -135,21 +163,18 @@ namespace Arcane::Editor
             // that can show nothing reads as broken). Drawn BEFORE the crumb
             // child, so the crumbs' GetContentRegionAvail() below already
             // excludes it (only the pin, drawn after, is subtracted by hand).
-            // Narrow: an icon-only combo (a filter glyph beside the arrow
-            // button); otherwise the label, ELLIPSIZED to the frame (spec s5),
-            // never hard-clipped. The tooltip always carries the full label.
+            // The FACE is icons, not text (user request 2026-09-30): the ticked
+            // kinds' glyphs centered in the frame (All = one glyph), as many as
+            // the layout's combo width allows, then "+N". The full text label
+            // is the tooltip. (Final fix H's icon-only collapse below 200 px and
+            // its ellipsized text preview are superseded: the face is always
+            // icons, and at one icon + "+N" it is already the narrow form.)
             ImGui::SameLine();
-            bool comboOpen = false;
-            if (layout.iconCombo)
-                comboOpen = ImGui::BeginCombo(ICON_LC_FILTER "##filter", nullptr, ImGuiComboFlags_NoPreview);
-            else
-            {
-                ImGui::SetNextItemWidth(layout.comboWidth);
-                const float previewWidth = layout.comboWidth - ImGui::GetFrameHeight() - style.FramePadding.x * 2.0f;
-                const std::string preview = EllipsisToWidth(label, std::max(previewWidth, 1.0f));
-                comboOpen = ImGui::BeginCombo("##filter", preview.c_str());
-            }
-            if (comboOpen)
+            MeasuredFace face = fullFace;
+            for (int fit = static_cast<int>(face.face.icons.size()); fit > 1 && face.width + chrome > layout.comboWidth; )
+                face = MeasureFilterFace(inst.filter, --fit, iconGap);
+            ImGui::SetNextItemWidth(layout.comboWidth);
+            if (ImGui::BeginCombo("##filter", nullptr, ImGuiComboFlags_CustomPreview))
             {
                 for (const InspectorKind& k : kInspectorKinds)
                 {
@@ -158,16 +183,47 @@ namespace Arcane::Editor
                     if (ticked) next.excluded.emplace_back(k.id);
                     else std::erase(next.excluded, std::string(k.id));
                     const bool lastTicked = ticked && next.ExcludesEveryKind();
+                    // Checkbox, icon, name: one label, so the icon and the name toggle too.
+                    const std::string row = std::string(k.icon) + " " + std::string(k.displayName);
                     ImGui::BeginDisabled(lastTicked);
-                    if (ImGui::Checkbox(std::string(k.displayName).c_str(), &ticked)) actions.filter = next;
+                    if (ImGui::Checkbox(row.c_str(), &ticked)) actions.filter = next;
                     ImGui::EndDisabled();
                     if (lastTicked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                         ImGui::SetTooltip("An Inspector must show at least one kind");
                 }
                 ImGui::EndCombo();
             }
-            // Spec s5: the tooltip carries the full list (the combo frame is
-            // the last item whether or not it is open).
+            if (ImGui::BeginComboPreview())
+            {
+                // RenderText (not items): the preview hosts no interactive
+                // elements, and the combo frame stays the last item for the tooltip.
+                const ImRect preview = ImGui::GetCurrentContext()->ComboPreviewData.PreviewRect;
+                float x = preview.Min.x + std::max((preview.GetWidth() - face.width) * 0.5f, style.FramePadding.x);
+                const float y = preview.Min.y + style.FramePadding.y;
+                float right = x;
+                for (const char* icon : face.face.icons)
+                {
+                    ImGui::RenderText(ImVec2(x, y), icon);
+                    right = x + ImGui::CalcTextSize(icon).x;
+                    x = right + iconGap;
+                }
+                if (!face.more.empty())
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::RenderText(ImVec2(x, y), face.more.c_str());
+                    ImGui::PopStyleColor();
+                    right = x + ImGui::CalcTextSize(face.more.c_str()).x;
+                }
+                // RenderText does not advance the cursor: report the face's
+                // extent so EndComboPreview keeps the preview clip when the
+                // face overflows (its CursorMaxPos test), instead of dropping
+                // it as for an empty preview. The fit loop keeps it inside today.
+                ImGuiWindow* window = ImGui::GetCurrentWindow();
+                window->DC.CursorMaxPos = ImMax(window->DC.CursorMaxPos, ImVec2(right, y + ImGui::GetTextLineHeight()));
+                ImGui::EndComboPreview();
+            }
+            // The face carries no text: the tooltip is the full label (the
+            // combo frame is the last item whether or not it is open).
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 ImGui::SetTooltip("Filter: %s", label.c_str());
 
@@ -244,19 +300,12 @@ namespace Arcane::Editor
     {
         InspectorHeaderLayout l;
         const float sp = m.spacing;
-        l.iconCombo = m.avail < kInspectorIconComboBelow;
-        const float combo = l.iconCombo ? m.comboIcon : m.comboFull;
-        l.crumbsOwnRow = m.avail < m.arrows + sp + combo + sp + kInspectorHeaderMinCrumbWidth + sp + m.pin;
-        if (l.iconCombo)
-            l.comboWidth = m.comboIcon;
-        else
-        {
-            // The labelled combo gives way before the pin does: on a wrapped
-            // header it takes what row 1 leaves beside the arrows and the pin
-            // (its preview is ellipsized to that), never less than the icon combo.
-            const float room = m.avail - m.arrows - m.pin - 2.0f * sp;
-            l.comboWidth = std::max(std::min(m.comboFull, room), m.comboIcon);
-        }
+        l.crumbsOwnRow = m.avail < m.arrows + sp + m.comboFull + sp + kInspectorHeaderMinCrumbWidth + sp + m.pin;
+        // The icon face gives way before the pin does: on a wrapped header it
+        // takes what row 1 leaves beside the arrows and the pin (DrawHeader
+        // drops icons into "+N" to fit), never less than one icon + "+N".
+        const float room = m.avail - m.arrows - m.pin - 2.0f * sp;
+        l.comboWidth = std::max(std::min(m.comboFull, room), m.comboMin);
         l.pinOnCrumbRow = m.arrows + sp + l.comboWidth + sp + m.pin > m.avail;
         if (l.pinOnCrumbRow) l.crumbsOwnRow = true;
         return l;

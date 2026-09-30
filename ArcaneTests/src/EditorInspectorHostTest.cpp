@@ -6,12 +6,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Panels/DefaultLayout.hpp>
 #include <Panels/InspectorHost.hpp>
+#include <Panels/InspectorKinds.hpp>     // kInspectorKinds / kInspectorAllIcon (the filter face)
 #include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
+#include <Widgets/IconsLucide.h>
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
 #include <cmath>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Arcane::Editor;
@@ -509,6 +512,104 @@ TEST_CASE("DrawInspectorWindows: filtered titles and the no-source / no-selectio
     CHECK(logged.find("No selection") != std::string::npos);   // instance 0: the scene is routed but has no page
 }
 
+// The filter dropdown's face and list (user request 2026-09-30): the face
+// shows the ticked kinds' ICONS (no text; All = one glyph), its tooltip
+// carries the text label, and every list row reads checkbox, icon, name.
+// Probed through ImGui's LogToBuffer like the case above; the combo is found
+// by its id (##filter under the window id) with a mouse sweep along the
+// header row, then hovered (tooltip) and clicked (popup).
+namespace
+{
+    std::string DrawLoggedFrame(InspectorHost& host, InspectorWindowsState& state)
+    {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(100.0f, 100.0f));    // the primary Inspector: the next Begin
+        ImGui::SetNextWindowSize(ImVec2(480.0f, 320.0f));
+        ImGui::LogToBuffer();
+        (void)DrawInspectorWindows(host, state, nullptr);
+        std::string logged = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+        ImGui::Render();
+        return logged;
+    }
+    std::size_t CountOf(const std::string& haystack, std::string_view needle)
+    {
+        std::size_t n = 0;
+        for (std::size_t at = haystack.find(needle); at != std::string::npos; at = haystack.find(needle, at + needle.size())) ++n;
+        return n;
+    }
+}
+
+TEST_CASE("DrawInspectorWindows: the filter face is icons, its tooltip the label, and list rows lead with the icon", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    InspectorWindowsState state;
+
+    // All: ONE "all" glyph, never the text "All" and never six icons.
+    std::string logged = DrawLoggedFrame(host, state);
+    INFO(logged);
+    CHECK(CountOf(logged, kInspectorAllIcon) == 1);
+    CHECK(logged.find("All") == std::string::npos);
+    CHECK(logged.find(ICON_LC_CLAPPERBOARD) == std::string::npos);
+
+    // All but Assets: the five other icons, catalog order; the label rides
+    // only the window title (the face draws no text).
+    REQUIRE(host.SetFilter(0, InspectorFilter::AllBut("assets")));
+    logged = DrawLoggedFrame(host, state);
+    CHECK(CountOf(logged, "All but Assets") == 1);   // the title
+    CHECK(logged.find(ICON_LC_PACKAGE) == std::string::npos);
+    std::size_t prev = 0;
+    for (const char* icon : { ICON_LC_CLAPPERBOARD, ICON_LC_GAMEPAD_2, ICON_LC_PALETTE, ICON_LC_STICKER, ICON_LC_BOX })
+    {
+        const std::size_t at = logged.find(icon);
+        REQUIRE(at != std::string::npos);
+        CHECK(at > prev);    // strictly after the previous icon (the first sits after the title)
+        prev = at;
+    }
+
+    // Find the face: sweep the mouse along the header row until the combo is hovered.
+    ImGuiWindow* primary = ImGui::FindWindowByName(kPrimaryInspectorWindowId);
+    REQUIRE(primary != nullptr);
+    const ImGuiID comboId = ImHashStr("##filter", 0, primary->ID);
+    const float rowY = primary->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f;
+    bool found = false;
+    for (float x = primary->DC.CursorStartPos.x; x < primary->Pos.x + primary->Size.x && !found; x += 4.0f)
+    {
+        io.AddMousePosEvent(x, rowY);
+        (void)DrawLoggedFrame(host, state);
+        found = ImGui::GetCurrentContext()->HoveredId == comboId;
+    }
+    REQUIRE(found);
+
+    // Hover (stationary): the tooltip carries the full text label.
+    bool tooltip = false;
+    for (int frame = 0; frame < 120 && !tooltip; ++frame)
+        tooltip = CountOf(DrawLoggedFrame(host, state), "All but Assets") == 2;   // the title + the tooltip
+    CHECK(tooltip);
+
+    // Click: the list opens, and each row is checkbox, icon, name.
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    std::string list = DrawLoggedFrame(host, state);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    list += DrawLoggedFrame(host, state);
+    list += DrawLoggedFrame(host, state);
+    INFO(list);
+    for (const InspectorKind& k : kInspectorKinds)
+    {
+        const std::string row = std::string(k.icon) + " " + std::string(k.displayName);
+        CHECK(list.find(row) != std::string::npos);
+    }
+    CHECK(list.find(std::string("[x] ") + ICON_LC_CLAPPERBOARD + " Scene") != std::string::npos);
+    CHECK(list.find(std::string("[ ] ") + ICON_LC_PACKAGE + " Assets") != std::string::npos);
+}
+
 TEST_CASE("InspectorHost ini: ClearAllFn resets filters with the list", "[editor][inspector]")
 {
     IniContext ic;
@@ -821,44 +922,50 @@ TEST_CASE("InspectorHost history: nothing admitted before the cursor means no Ba
     CHECK(w.host.HistoryCursor() == 1);
 }
 
-TEST_CASE("Inspector header layout: one row when it fits; the breadcrumb wraps, then the combo collapses, the pin never clips", "[editor][inspector]")
+TEST_CASE("Inspector header layout: one row when it fits; the breadcrumb wraps, then the icon face gives way, the pin never clips", "[editor][inspector]")
 {
+    // The combo's face is always icons (user request 2026-09-30): comboFull
+    // = every ticked kind's icon, comboMin = one icon + "+N". Final fix H's
+    // icon-only collapse below 200 px is superseded -- no threshold, the face
+    // just drops icons into "+N" as row 1 narrows.
     InspectorHeaderMetrics m;
-    m.arrows = 56.0f; m.comboFull = 122.0f; m.comboIcon = 42.0f; m.pin = 24.0f; m.spacing = 8.0f;
+    m.arrows = 56.0f; m.comboFull = 122.0f; m.comboMin = 42.0f; m.pin = 24.0f; m.spacing = 8.0f;
 
     m.avail = 800.0f;                       // wide: arrows | combo | crumbs | pin
     InspectorHeaderLayout l = LayoutInspectorHeader(m);
     CHECK_FALSE(l.crumbsOwnRow);
-    CHECK_FALSE(l.iconCombo);
     CHECK_FALSE(l.pinOnCrumbRow);
     CHECK(l.comboWidth == 122.0f);
 
-    m.avail = 250.0f;                       // no room for 120 px of crumbs: own row, full combo
+    m.avail = 250.0f;                       // no room for 120 px of crumbs: own row, every icon
     l = LayoutInspectorHeader(m);
     CHECK(l.crumbsOwnRow);
-    CHECK_FALSE(l.iconCombo);
     CHECK_FALSE(l.pinOnCrumbRow);
     CHECK(l.comboWidth == 122.0f);
 
-    m.avail = 210.0f;                       // the labelled combo shrinks (ellipsized) so the pin still fits row 1
+    m.avail = 200.0f;                       // the face gives way (fewer icons + "+N") so the pin still ends row 1
     l = LayoutInspectorHeader(m);
     CHECK(l.crumbsOwnRow);
-    CHECK_FALSE(l.iconCombo);
     CHECK_FALSE(l.pinOnCrumbRow);
-    CHECK(l.comboWidth <= 210.0f - 56.0f - 24.0f - 2.0f * 8.0f);
+    CHECK(l.comboWidth == 200.0f - 56.0f - 24.0f - 2.0f * 8.0f);
+    CHECK(l.comboWidth >= 42.0f);
 
-    m.avail = 180.0f;                       // below 200: icon-only combo
+    m.avail = 150.0f;                       // narrower still: never below one icon + "+N"
     l = LayoutInspectorHeader(m);
     CHECK(l.crumbsOwnRow);
-    CHECK(l.iconCombo);
-    CHECK(l.comboWidth == 42.0f);
     CHECK_FALSE(l.pinOnCrumbRow);
+    CHECK(l.comboWidth == 54.0f);
 
-    m.avail = 120.0f;                       // even arrows + icon + pin overflow: the pin leads the crumb row
+    m.avail = 120.0f;                       // even arrows + one icon + pin overflow: the pin leads the crumb row
     l = LayoutInspectorHeader(m);
     CHECK(l.crumbsOwnRow);
-    CHECK(l.iconCombo);
     CHECK(l.pinOnCrumbRow);
+    CHECK(l.comboWidth == 42.0f);
+
+    m.comboFull = m.comboMin = 38.0f;       // All: one glyph, full = min
+    m.avail = 180.0f;
+    l = LayoutInspectorHeader(m);
+    CHECK(l.comboWidth == 38.0f);
 }
 
 namespace
@@ -911,6 +1018,26 @@ TEST_CASE("DrawInspectorWindows: a narrow Inspector wraps the breadcrumb to its 
         CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);          // nothing (the pin included) past the edge
         CHECK(crumbs->Pos.y > w->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f);   // row 2
         CHECK(crumbs->Size.x >= w->WorkRect.GetWidth() - ImGui::GetStyle().ItemSpacing.x - 1.0f);   // full width
+    }
+    SECTION("very narrow (140 px): one icon + \"+4\", the pin leads the crumb row")
+    {
+        ImGuiWindow* w = DrawPrimaryAtWidth(host, state, 140.0f);
+        REQUIRE(w != nullptr);
+        INFO("maxX " << w->DC.CursorMaxPos.x << " workMaxX " << w->WorkRect.Max.x);
+        CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);
+        // One more frame, logged: the face is ONE icon and the "+4" overflow
+        // (All but Assets ticks five kinds), never a text label.
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::LogToBuffer();
+        (void)DrawInspectorWindows(host, state, nullptr);
+        const std::string logged = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+        ImGui::Render();
+        INFO(logged);
+        CHECK(logged.find("+4") != std::string::npos);
+        CHECK(logged.find(ICON_LC_CLAPPERBOARD) != std::string::npos);
+        CHECK(logged.find(ICON_LC_GAMEPAD_2) == std::string::npos);
     }
     SECTION("wide (800 px)")
     {

@@ -33,28 +33,27 @@ namespace Arcane::Editor
     // The Inspector header's responsive layout (final fix H): one row --
     // arrows, filter combo, breadcrumb, pin -- while that row fits the combo
     // and at least kInspectorHeaderMinCrumbWidth of breadcrumb; otherwise
-    // the breadcrumb takes its OWN full-width row under the others. Below
-    // kInspectorIconComboBelow the combo collapses to an icon-only combo (the
-    // full label in its tooltip). The pin is never clipped: it ends row 1,
-    // or leads the breadcrumb row when even arrows + combo + pin do not fit.
-    // Pure, so the thresholds are unit-tested.
+    // the breadcrumb takes its OWN full-width row under the others. The
+    // combo's face is always the filter's ICONS (user request 2026-09-30);
+    // on a wrapped header it gives way before the pin does, down to one icon
+    // + "+N" (the full label is always its tooltip). The pin is never
+    // clipped: it ends row 1, or leads the breadcrumb row when even arrows +
+    // combo + pin do not fit. Pure, so the thresholds are unit-tested.
     inline constexpr float kInspectorHeaderMinCrumbWidth = 120.0f;
-    inline constexpr float kInspectorIconComboBelow = 200.0f;
     struct InspectorHeaderMetrics
     {
         float avail = 0.0f;       // the header row's content width
         float arrows = 0.0f;      // back + spacing + forward
-        float comboFull = 0.0f;   // the labelled combo's natural width (capped)
-        float comboIcon = 0.0f;   // the icon-only combo's width
+        float comboFull = 0.0f;   // the combo with every ticked kind's icon (All: one glyph) + its chrome
+        float comboMin = 0.0f;    // the combo with one icon + "+N" + its chrome (the narrowest face)
         float pin = 0.0f;
         float spacing = 0.0f;     // ItemSpacing.x
     };
     struct InspectorHeaderLayout
     {
         bool  crumbsOwnRow = false;
-        bool  iconCombo = false;
         bool  pinOnCrumbRow = false;
-        float comboWidth = 0.0f;  // the combo's frame width as drawn (the preview is ellipsized to it)
+        float comboWidth = 0.0f;  // the combo's frame width as drawn (the face drops icons into "+N" to fit it)
     };
     [[nodiscard]] InspectorHeaderLayout LayoutInspectorHeader(const InspectorHeaderMetrics& m);
 

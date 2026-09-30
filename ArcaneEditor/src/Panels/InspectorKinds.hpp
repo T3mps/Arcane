@@ -5,7 +5,10 @@
 // itself. The filter stores the UNTICKED kinds, so a kind added to the
 // catalog later is admitted by every existing filter (decision 8.3: the tool
 // stays honest -- a filter never silently narrows when the catalog grows).
-// Pure: no ImGui (InspectorHost and the tests use it).
+// Pure: no ImGui (InspectorHost and the tests use it). IconsLucide.h is
+// glyph macros only.
+
+#include "Widgets/IconsLucide.h"
 
 #include <array>
 #include <string>
@@ -19,16 +22,17 @@ namespace Arcane::Editor
         std::string_view id;            // InspectorSource::Kind(), persisted in imgui.ini
         std::string_view displayName;   // the dropdown row and the label
         std::string_view singular;      // one of them: the empty state's "No <singular> document open"
+        const char* icon;               // the dropdown face + row glyph: the Asset Browser's KindIcon for the same thing
     };
 
     // Catalog order = dropdown order = Sanitized() order = the Filters= write order.
     inline constexpr std::array<InspectorKind, 6> kInspectorKinds{ {
-        { "scene",         "Scene",         "Scene" },
-        { "assets",        "Assets",        "Asset" },
-        { "input-actions", "Input Actions", "Input Actions" },
-        { "material",      "Materials",     "Material" },       // ShaderEditorDocument
-        { "sprite",        "Sprites",       "Sprite" },
-        { "mesh",          "Meshes",        "Mesh" },
+        { "scene",         "Scene",         "Scene",         ICON_LC_CLAPPERBOARD },
+        { "assets",        "Assets",        "Asset",         ICON_LC_PACKAGE },
+        { "input-actions", "Input Actions", "Input Actions", ICON_LC_GAMEPAD_2 },
+        { "material",      "Materials",     "Material",      ICON_LC_PALETTE },     // ShaderEditorDocument
+        { "sprite",        "Sprites",       "Sprite",        ICON_LC_STICKER },
+        { "mesh",          "Meshes",        "Mesh",          ICON_LC_BOX },
     } };
 
     [[nodiscard]] const InspectorKind* FindInspectorKind(std::string_view id);
@@ -54,4 +58,17 @@ namespace Arcane::Editor
     // "All" / "<name>" (one ticked) / "All but <name>" (one unticked) /
     // "<name>, <name>" (the ticked names, catalog order).
     [[nodiscard]] std::string InspectorFilterLabel(const InspectorFilter& filter);
+
+    // The dropdown FACE (user request 2026-09-30): All is ONE glyph (never
+    // every kind's icon); otherwise the ticked kinds' icons in catalog order,
+    // at most maxIcons of them (floor 1: never an empty face), the rest
+    // counted in `overflow` (drawn as "+N"). The label is the face's tooltip.
+    inline constexpr const char* kInspectorAllIcon = ICON_LC_LAYERS;
+
+    struct FilterFace
+    {
+        std::vector<const char*> icons;
+        int overflow = 0;
+    };
+    [[nodiscard]] FilterFace InspectorFilterFace(const InspectorFilter& filter, int maxIcons);
 }

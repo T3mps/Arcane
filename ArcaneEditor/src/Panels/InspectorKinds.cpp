@@ -61,4 +61,18 @@ namespace Arcane::Editor
         for (const std::string_view n : ticked) { if (!out.empty()) out += ", "; out += n; }
         return out;
     }
+
+    FilterFace InspectorFilterFace(const InspectorFilter& filter, int maxIcons)
+    {
+        FilterFace face;
+        if (filter.IsAll()) { face.icons.push_back(kInspectorAllIcon); return face; }
+        const std::size_t cap = static_cast<std::size_t>(std::max(maxIcons, 1));
+        for (const InspectorKind& k : kInspectorKinds)
+        {
+            if (!filter.Admits(k.id)) continue;
+            if (face.icons.size() < cap) face.icons.push_back(k.icon);
+            else ++face.overflow;
+        }
+        return face;
+    }
 }
