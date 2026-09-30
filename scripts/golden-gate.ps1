@@ -354,6 +354,9 @@ $combos = @(
     # mutation shows ('Failed'). editor-material-page opens
     # materials/reference_mesh.arcmat (7e5a0010-...): the document tab covers
     # the viewport, as with input-doc ('Green'). Both verified by -SelfTest.
+    # A mesh material is never compiled in the editor: its page shows the
+    # one-line "not compiled here" note and the params full height, no
+    # preview box (final fix P; the old golden blessed "compiling..." forever).
     @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page';    Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', 'd7f389fd-f687-407d-b9d7-9753eb6b0258'); SelfTestExpect = 'Failed' }
     @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page';    Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', 'd7f389fd-f687-407d-b9d7-9753eb6b0258'); SelfTestExpect = 'Failed' }
     @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-material-page'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '7e5a0010-0010-4010-8010-000000000010'); SelfTestExpect = 'Green' }

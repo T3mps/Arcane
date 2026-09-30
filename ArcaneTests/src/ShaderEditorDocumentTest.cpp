@@ -1270,3 +1270,55 @@ TEST_CASE("ShaderEditorDocument: the Inspector's Ctrl+S keeps the save-with-erro
     ImGui::SetCurrentContext(prev);
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("ShaderEditorDocument: a mesh material's page has no preview box -- a one-line note, the params take the page",
+          "[editor][material][mesh][inspector]")
+{
+    // Final fix P: mesh materials never compile here (Rebuild()'s guard), so a
+    // preview box would read "compiling..." forever (the toolbar already says
+    // "not compiled here").
+    const fs::path dir = TempDir("mesh_page");
+    const fs::path file = dir / "hero.arcmat";
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "Hero";
+    data.kind = "mesh";
+    data.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f));
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    ShaderEditorDocument doc(DocServices{}, file, *loaded);
+
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    Arcane::Editor::PropertyGridState grid;
+    std::string logged;
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 600.0f));
+        ImGui::Begin("Inspector");
+        if (frame == 1) ImGui::LogToBuffer();
+        Arcane::Editor::PropertyGrid pg(grid);
+        doc.Page()->Draw(pg);
+        if (frame == 1) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
+        ImGui::End();
+        ImGui::Render();
+    }
+    INFO(logged);
+    CHECK(logged.find("compiling...") == std::string::npos);
+    CHECK(logged.find("not compiled here") != std::string::npos);
+    bool previewChild = false;
+    for (ImGuiWindow* win : ctx->Windows)
+        if (std::string(win->Name).find("##preview") != std::string::npos) previewChild = true;
+    CHECK_FALSE(previewChild);
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+}

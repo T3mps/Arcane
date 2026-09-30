@@ -2084,6 +2084,15 @@ namespace Arcane::Editor
         // the ini handler persists). Preview on top, params below; the
         // divider sits BETWEEN them, so the height it occupies comes off
         // the span the fraction divides.
+        // A mesh material never compiles here (Rebuild()'s guard): no preview
+        // box that would read "compiling..." forever -- one line, and the
+        // params take the whole page (final fix P).
+        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+        {
+            DrawPreviewPanel(0.0f);
+            DrawParamsPanel();
+            return;
+        }
         LayoutPrefs& layout = Layout();
         const ImVec2 avail  = ImGui::GetContentRegionAvail();
         const float span    = (std::max)(avail.y - kSplitBarPx, 1.0f);
@@ -3350,6 +3359,13 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawPreviewPanel(float height)
     {
+        // Mirrors the toolbar's guard: a mesh surface is previewed in the
+        // viewport on its meshes, never compiled here -- a one-line note, no box.
+        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+        {
+            ImGui::TextDisabled("Mesh material: not compiled here -- preview it on a mesh in the viewport");
+            return;
+        }
         ImGui::BeginChild("##preview", ImVec2(0, height), ImGuiChildFlags_Borders);
         const PreviewImage image = PreviewImageOf();
         if (image.id != 0)
