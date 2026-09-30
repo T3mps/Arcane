@@ -1234,7 +1234,9 @@ TEST_CASE("ShaderEditorDocument: the Inspector's Ctrl+S keeps the save-with-erro
     std::error_code ec;
     fs::remove(file, ec);                          // a Save() would write it back
     REQUIRE_FALSE(fs::exists(file));
-    CHECK(Arcane::Editor::RequestSaveFromInspector(&doc) == &doc);
+    const Arcane::Editor::InspectorSaveOutcome out = Arcane::Editor::RequestSaveFromInspector(&doc);
+    CHECK(out.doc == &doc);
+    CHECK(out.result == Arcane::Editor::SaveGestureResult::Deferred);   // parked behind the confirm: not a refusal
     CHECK_FALSE(fs::exists(file));                 // nothing saved yet...
     CHECK(doc.SaveWithErrorsPending());            // ...the confirm is pending
 

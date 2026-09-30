@@ -16,6 +16,14 @@
 
 namespace Arcane::Editor
 {
+    // What a save GESTURE did (EditorDocument::RequestSave).
+    enum class SaveGestureResult : std::uint8_t
+    {
+        Saved,      // Save() ran and succeeded
+        Refused,    // Save() ran and failed/refused (read-only file, failed write)
+        Deferred,   // parked behind a confirm (the material's save-with-errors) -- not a refusal
+    };
+
     class EditorDocument : public InspectorSource
     {
     public:
@@ -29,7 +37,8 @@ namespace Arcane::Editor
         // Inspector page showing it) runs. Default: Save(). A document with a
         // pre-save guard (the material's save-with-errors confirm) overrides
         // it; Save() itself stays unguarded for the close flow's save-then-close.
-        virtual void RequestSave() { (void)Save(); }
+        // The result lets a caller report a refusal (the Inspector route warns).
+        virtual SaveGestureResult RequestSave() { return Save() ? SaveGestureResult::Saved : SaveGestureResult::Refused; }
 
         // True when this document's window, or a child of it, held keyboard
         // focus at its last Draw. The document owns its own Begin/End, so it is
@@ -79,12 +88,19 @@ namespace Arcane::Editor
     };
 
     // The Inspector's Ctrl+S (InspectorWindowsResult::saveRequested): the
-    // source is a document -> its save GESTURE. Null for the scene and asset
-    // sources (nothing saved). The app's route and the tests share it.
-    inline EditorDocument* RequestSaveFromInspector(InspectorSource* src)
+    // source is a document -> its save GESTURE. `doc` is null for the scene
+    // and asset sources (nothing saved). The app's route and the tests share
+    // it; the route warns on Refused (integration residual 2b).
+    struct InspectorSaveOutcome
     {
-        auto* doc = dynamic_cast<EditorDocument*>(src);
-        if (doc) doc->RequestSave();   // the guarded gesture, never the raw Save (final fix S)
-        return doc;
+        EditorDocument* doc = nullptr;
+        SaveGestureResult result = SaveGestureResult::Saved;   // meaningful only with a doc
+    };
+    inline InspectorSaveOutcome RequestSaveFromInspector(InspectorSource* src)
+    {
+        InspectorSaveOutcome out;
+        out.doc = dynamic_cast<EditorDocument*>(src);
+        if (out.doc) out.result = out.doc->RequestSave();   // the guarded gesture, never the raw Save (final fix S)
+        return out;
     }
 }

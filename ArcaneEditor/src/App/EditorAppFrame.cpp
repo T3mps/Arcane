@@ -3651,9 +3651,12 @@ namespace Arcane::Editor
             }
             m_inspectorFocusedSource = res.focusedSource;
             // The document's save GESTURE (RequestSave), never the raw Save:
-            // the material's save-with-errors confirm must hold here too.
+            // the material's save-with-errors confirm must hold here too. A
+            // REFUSED save is reported (a deferred confirm is not a refusal).
             for (Arcane::Editor::InspectorSource* src : res.saveRequested)
-                (void)Arcane::Editor::RequestSaveFromInspector(src);
+                if (const auto out = Arcane::Editor::RequestSaveFromInspector(src);
+                    out.doc && out.result == Arcane::Editor::SaveGestureResult::Refused)
+                    ARC_WARN("Inspector: save refused for '{}'", out.doc->Title());
         }
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,

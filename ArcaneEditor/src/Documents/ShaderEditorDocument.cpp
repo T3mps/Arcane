@@ -1694,7 +1694,7 @@ namespace Arcane::Editor
         return false;
     }
 
-    void ShaderEditorDocument::RequestSave()
+    SaveGestureResult ShaderEditorDocument::RequestSave()
     {
         // Error-guarded save (UE's pre-apply guard shape): saving broken WIP is
         // allowed, but only through an explicit confirm. This guard used to sit
@@ -1703,9 +1703,11 @@ namespace Arcane::Editor
         // The modal (DrawSaveWithErrorsConfirm) is drawn by the toolbar or the
         // material page, and still calls the unguarded Save on "Save Anyway".
         if (HasErrors())
+        {
             m_confirmSaveWithErrors = true;
-        else
-            Save();
+            return SaveGestureResult::Deferred;
+        }
+        return Save() ? SaveGestureResult::Saved : SaveGestureResult::Refused;
     }
 
     bool ShaderEditorDocument::Save()

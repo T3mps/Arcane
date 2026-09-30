@@ -42,6 +42,25 @@ namespace
     };
 }
 
+TEST_CASE("RequestSaveFromInspector reports the save gesture's outcome, so the app's route can warn on a refusal", "[editor][inspector]")
+{
+    // Integration residual 2b: the Inspector's Ctrl+S route discarded the
+    // result, so a refused save (read-only file, failed write) was silent.
+    FakeDoc doc("p.arcinput", Arcane::Guid::Generate(), true);
+    doc.saveSucceeds = false;
+    const Arcane::Editor::InspectorSaveOutcome refused = Arcane::Editor::RequestSaveFromInspector(&doc);
+    CHECK(refused.doc == &doc);
+    CHECK(refused.result == Arcane::Editor::SaveGestureResult::Refused);
+    CHECK(doc.saveCalls == 1);
+    doc.saveSucceeds = true;
+    const Arcane::Editor::InspectorSaveOutcome saved = Arcane::Editor::RequestSaveFromInspector(&doc);
+    CHECK(saved.doc == &doc);
+    CHECK(saved.result == Arcane::Editor::SaveGestureResult::Saved);
+    CHECK_FALSE(doc.Dirty());
+    // Not a document (the scene and asset sources): nothing saved, no doc.
+    CHECK(Arcane::Editor::RequestSaveFromInspector(nullptr).doc == nullptr);
+}
+
 TEST_CASE("DocumentHost closes clean docs immediately, confirms dirty ones", "[editor]")
 {
     DocumentHost host;

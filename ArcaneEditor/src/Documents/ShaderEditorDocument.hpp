@@ -392,7 +392,7 @@ namespace Arcane::Editor
         // pre-apply guard shape). Save() itself stays unguarded -- the close
         // flow's save-then-close needs it, and the confirm modal's "Save
         // Anyway" is the deliberate way past.
-        void RequestSave() override;
+        SaveGestureResult RequestSave() override;
 
     private:
         // The material page: the preview over the params editor, split
