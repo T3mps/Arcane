@@ -23,7 +23,8 @@
 ## Global Constraints
 
 - Kind catalog, in this exact order (id -> display name): `"scene"` Scene, `"assets"` Assets, `"input-actions"` Input Actions, `"material"` Materials, `"sprite"` Sprites, `"mesh"` Meshes. There is no `"shader"` id: the shader editor's documents are kind `"material"`.
-- One selection rule for EVERY source (spec s3): opening a document selects its page, a selection gesture inside a source (including a click in a document's content) is an event, and tab/focus/window activation never is. No source gets a focus-follow exception.
+- One selection rule for EVERY source (spec s3): opening a document selects its page, a selection gesture inside a source (including a click in a document's content, and a re-click of the already-selected asset) is an event, and tab/focus/window activation never is. No source gets a focus-follow exception. The asset source's epoch is `AssetPanelModel::selectionGesture` (bumped on every `Select`, monotonic), never the change-only `selectionStamp`. No call site may call `Select` every frame (Task 6 gates the Browser row context menu to its first frame). The one scoped exception: the Graph lens mirrors its persistent canvas selection only on change (`AssetGraphPanel.cpp:2152`), so re-clicking the already-selected Graph node is not an event.
+- The one empty-state string for a routed source with nothing selected is "No selection" (the scene body's existing literal, `EditorPanels.cpp:2410`; spec s3, decision 5).
 - Filters persist the UNTICKED kinds (exclusions). Empty exclusions = All. A kind added to the catalog later is admitted by every existing filter.
 - At least one catalog kind stays ticked. A filter that excludes every catalog kind is refused, and on ini load it is sanitized to All.
 - A source whose `Kind()` is empty is admitted only by All.
@@ -33,11 +34,12 @@
 - Window titles:
   - instance 0: `"Inspector###Inspector"`, or `"Inspector - <label>###Inspector"` when filtered;
   - instance N >= 1: `"Inspector <N+1>###inspector_<N>"` or `"Inspector <N+1> - <label>###inspector_<N>"`.
-  - Instance 0 MOVES from the bare name `"Inspector"` to the stable id `"###Inspector"`. `ImHashStr` resets its crc at `###` but still hashes the `###` characters (`imgui.cpp` ~line 2539), so `ImHashStr("X###Inspector") != ImHashStr("Inspector")`: no ### suffix keeps the old id. The one-time legacy upgrade (Task 7) re-docks `###Inspector` where `Inspector` was docked, so an existing layout keeps its main Inspector position. Every lookup of the primary window by name (`FindWindowByName("Inspector")`, `SelectDockTab("Inspector")`, `DockBuilderDockWindow("Inspector", ...)`) switches to `"###Inspector"` through one constant, `kPrimaryInspectorWindowId`.
+  - Instance 0 KEEPS its ImGui id. In the vendored 1.92.9, `ImHashStr` resets its crc at `###` AND skips the three `#` characters (`imgui.cpp:2539-2544`), so `ImHashStr("X###Inspector") == ImHashStr("Inspector")`: the titled window has the legacy bare-`"Inspector"` id, and the old `[Window][Inspector]` ini entry (its DockId included) carries over unchanged. `CreateNewWindowSettings` names a new entry by the text after `###` (`imgui.cpp:16416`), so the saved ini keys are `[Window][Inspector]` and `[Window][inspector_<N>]`, never the full title. No re-dock is needed. Lookups of the primary window by name (`FindWindowByName`, `DockBuilderDockWindow`) go through one constant, `kPrimaryInspectorWindowId = "###Inspector"`, for clarity (same id).
 - Default layout = exactly instances {0, 1}: 0 = All but Assets (`excluded = {"assets"}`), 1 = Assets only (`excluded = {"scene","input-actions","material","sprite","mesh"}`), docked in a split to the RIGHT of the Asset Browser's node.
 - Every new `Panels/*.cpp` the tests need must be added to the EXPLICIT `ArcaneTests` file list in `premake5.lua` (near line 1237/1552); the editor project globs, the test project does not. Re-run `generate.bat` (or `ThirdParty\premake5\premake5.exe vs2026`) after any file-list change.
 - Build: `msbuild Arcane.slnx /p:Configuration=Debug /p:Platform=x64 -m -nr:false`. Tests: run `bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe "[inspector]"` FROM ITS OWN DIRECTORY. The final suite gate is `~[gpu]` plus `[gpu]~[witness]` plus the witnesses.
 - Never push. Commit per task on branch `feat/inspector-filters` (already created off main `6f8a05e3`).
+- Plugin ABI: Task 10 bumps `kGamePluginABIVersion` 45 -> 46 unconditionally and restamps `ReferenceProject.arcproj`; the Aphelyon restamp is owed (report it, do not do it).
 
 ## Review Focus
 
@@ -45,11 +47,12 @@
 2. **Project switch with filtered instances.**
    - Filters survive.
    - The asset source stays registered (permanent). Its history entries and pins drop.
-   - The Assets instance shows "Nothing selected" because the model's selection is reset.
+   - The Assets instance shows "No selection" because the model's selection is reset.
    - Pinned test in Task 2 ("ReleaseAll keeps a permanent source").
-3. **A hand-edited or garbage `Filters=` line.** Cases: an id not in `Ids=`, unknown kinds, all kinds excluded, trailing commas, a missing colon. Expect it sanitized, never a throw, never an all-excluded instance. Pinned test in Task 4.
+3. **A hand-edited or garbage `Filters=` line.** Cases: an id not in `Ids=`, unknown kinds, all kinds excluded, trailing commas, a missing colon. Expect it sanitized, never a throw, never an all-excluded instance. An instance absent from the line reads as All, even on a second load without `ClearIniSettings` between (spec s7). Pinned tests in Task 4.
 4. **Changing the filter of a PINNED instance.** Expect the pin to win (the page stays) and the dropdown to stay usable. After unpinning, the instance follows the new filter. Pinned test in Task 2.
-5. **The selected asset is deleted or renamed on disk.** `Resolves` becomes false, its history entries are pruned, and the Assets inspector shows "Nothing selected", never a stale page or a crash. Pinned test in Task 5.
+5. **The selected asset is deleted or renamed on disk.** `Resolves` becomes false, its history entries are pruned, and the Assets inspector shows "No selection", never a stale page or a crash. Pinned test in Task 5.
+6. **Asset re-click and the row context menu.** Re-clicking the selected asset in the Browser re-routes it (spec s3; pinned test in Task 5). Holding the Browser row context menu open must NOT re-fire the asset edge every frame (Task 6's first-frame gate). Re-clicking the selected Graph node is not an event (the scoped exception).
 
 ---
 
@@ -581,7 +584,7 @@ Expected: compile errors (`Kind`, `SetFilter`, `CanPin(int)`, the `AddSource` ov
     }
 ```
 
-`InspectorWindows.cpp`: `const bool canPin = inst.pinned || host.CanPin();` becomes `host.CanPin(inst.id)`. The comment above it keeps its meaning. Replace "CanPin calls PageFor on the current source" with "CanPin calls PageFor on the instance's routed source".
+`InspectorWindows.cpp`: `const bool canPin = inst.pinned || host.CanPin();` (line 174) becomes `const bool canPin = inst.pinned || host.CanPin(inst.id);`. The comment above it keeps its meaning. Its phrase "CanPin calls PageFor on the current source" is split across two comment lines (169 ends "...CanPin calls PageFor on the current", 170 begins "// source, which re-targets..."), so rewrite lines 169-170 by hand to say "CanPin calls PageFor on the instance's routed source", keeping the rest of both lines' wording.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -842,8 +845,16 @@ TEST_CASE("InspectorHost ini: a layout without Filters= is flagged once for the 
     CHECK_FALSE(host.TakeLegacyLayoutUpgrade());            // consumed
     ImGui::LoadIniSettingsFromMemory("[EditorPanels][Visibility]\nConsole=1\n");   // no section at all: also legacy
     CHECK(host.TakeLegacyLayoutUpgrade());
-    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=\nFilters=\n");   // empty line: a real answer
+    // A second load WITHOUT ClearIniSettings between: instances absent from
+    // the Filters= line read as All (spec s7), survivors of Ids= included.
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1\nFilters=0:assets,1:scene\n");
     CHECK_FALSE(host.TakeLegacyLayoutUpgrade());
+    REQUIRE(host.Find(0)->filter == InspectorFilter::AllBut("assets"));
+    REQUIRE(host.Find(1)->filter == InspectorFilter::AllBut("scene"));
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1\nFilters=\n");   // empty line: a real answer
+    CHECK_FALSE(host.TakeLegacyLayoutUpgrade());
+    CHECK(host.Find(0)->filter.IsAll());
+    CHECK(host.Find(1)->filter.IsAll());
 }
 
 TEST_CASE("InspectorHost: the default and the legacy-upgrade configurations", "[editor][inspector]")
@@ -916,12 +927,26 @@ Also `ReleaseAll` must NOT touch `m_legacyLayoutPending` (a windowed project swi
 `InspectorWindows.cpp` settings handler:
 - **ReadInit.** Add `handler.ReadInitFn = [](ImGuiContext*, ImGuiSettingsHandler* h) { static_cast<InspectorHost*>(h->UserData)->NoteLayoutReadBegin(); };`
 - **ApplyAll.** Add `handler.ApplyAllFn = [](ImGuiContext*, ImGuiSettingsHandler* h) { static_cast<InspectorHost*>(h->UserData)->NoteLayoutReadEnd(); };`
-- **ClearAll.** Extend `handler.ClearAllFn` to also reset instance 0's filter: `host->SetInstanceIds({}); (void)host->SetFilter(0, InspectorFilter{});`.
+- **ClearAll.** Extend `handler.ClearAllFn` to also reset instance 0's filter. The lambda is captureless and has only `h`, so cast first:
+  ```cpp
+        handler.ClearAllFn = [](ImGuiContext*, ImGuiSettingsHandler* h)
+        {
+            auto* host = static_cast<InspectorHost*>(h->UserData);
+            host->SetInstanceIds({});
+            (void)host->SetFilter(0, InspectorFilter{});
+        };
+  ```
 - **ReadLine.** Parse `Filters=` after the `Ids=` branch:
 ```cpp
             if (std::strncmp(line, "Filters=", 8) == 0)
             {
                 host->NoteFiltersLine();
+                // Spec s7: an instance absent from the line is All. Reset every
+                // existing instance first -- instance 0 and every survivor of
+                // Ids= keep their old filter through SetInstanceIds otherwise.
+                std::vector<int> existing;
+                for (const auto& inst : host->Instances()) existing.push_back(inst.id);
+                for (const int id : existing) (void)host->SetFilter(id, InspectorFilter{});
                 std::string_view rest(line + 8);
                 while (!rest.empty())
                 {
@@ -985,12 +1010,21 @@ git commit -m "feat(editor): persist Inspector filters (Filters=), flag pre-feat
 - Create: `ArcaneEditor/src/Panels/AssetInspectorSource.cpp`
 - Create: `ArcaneEditor/src/Panels/TextureImportSettings.hpp`
 - Create: `ArcaneEditor/src/Panels/TextureImportSettings.cpp` (the ImGui block moved out of `EditorPanels.cpp`)
-- Modify: `ArcaneEditor/src/Panels/EditorPanels.cpp`. Delete `DrawTextureMetaSettingsBlock` and `DrawTextureAssetPanel` from its anonymous namespace. Their only caller is the scene fallback, which Task 6 removes. Do the deletion in THIS task and have `DrawInspectorBody`'s fallback call nothing yet: temporarily keep the branch but call `DrawTextureImportSettings` so the build stays green until Task 6.
+- Modify: `ArcaneEditor/src/Panels/EditorPanels.cpp`.
+  - Delete `DrawTextureMetaSettingsBlock`, `DrawTextureAssetPanel` and `HasExtensionCI` from its anonymous namespace, with the "F2b Task 13: the Inspector's texture-asset panel" comment block (~lines 2270-2283) and `HasExtensionCI`'s own comment. `HasExtensionCI`'s only caller is `DrawTextureAssetPanel` (:2367), `DrawTextureMetaSettingsBlock`'s only caller is `DrawTextureAssetPanel` (:2377), and `DrawTextureAssetPanel`'s only caller is the scene fallback (:2406), which Task 6 removes. So the three go together.
+  - Do the deletion in THIS task. Keep `DrawInspectorBody`'s fallback branch temporarily so the build stays green until Task 6, with its `DrawTextureAssetPanel(*project, selectedAsset, services);` call replaced by:
+    ```cpp
+                    if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(selectedAsset)))
+                        DrawTextureImportSettings(*path);
+    ```
+  - Add `#include "Panels/TextureImportSettings.hpp"` to its include block.
+- Modify: `ArcaneEditor/src/Panels/TextureMetaPanel.hpp` (its header comment names the two deleted functions: point it at `TextureImportSettings.cpp`'s `DrawTextureImportSettings`)
+- Modify: `ArcaneEditor/src/Panels/AssetPanelModel.hpp` (`selectionGesture`, below)
 - Modify: `premake5.lua` (ArcaneTests list: `AssetInspectorSource.cpp`, `TextureImportSettings.cpp`, beside `AssetBrowserPanel.cpp` ~line 1555)
 - Test: `ArcaneTests/src/AssetInspectorSourceTest.cpp`
 
 **Interfaces:**
-- Consumes: `AssetPanelModel` (`selected`, `selectionStamp`, `Select`, `Find`), `AssetPanelServices`, `AssetPanelActions`, `OpenAssetRow`, `DrawAssetPeekTooltip`, `KindIcon`, `KindLabel`, `SubkindPillText`, `CookStateLabel`, `AssetPill`, `EllipsisToWidth` (all existing), `PropertyGrid`.
+- Consumes: `AssetPanelModel` (`selected`, `Select`, `Find`), `AssetPanelServices`, `AssetPanelActions`, `OpenAssetRow`, `DrawAssetPeekTooltip`, `KindIcon`, `KindLabel`, `SubkindPillText`, `CookStateLabel`, `AssetPill`, `EllipsisToWidth` (all existing), `PropertyGrid`.
 - Produces:
 ```cpp
 namespace Arcane::Editor
@@ -1015,7 +1049,7 @@ namespace Arcane::Editor
         std::string SelectionKey() const override;            // model->selected.ToString(), "" when invalid
         bool RestoreSelection(std::string_view key) override; // Select(guid) when Find(guid) resolves
         bool Resolves(std::string_view key) const override;   // Find(guid) != nullptr
-        [[nodiscard]] std::uint64_t SelectionEpoch() const;   // model->selectionStamp (0 unbound)
+        [[nodiscard]] std::uint64_t SelectionEpoch() const;   // model->selectionGesture (0 unbound)
 
         std::vector<InspectorCrumb> Breadcrumb() const override;  // "Assets" (select: clears) > <fileName> (key = guid)
         void Draw(PropertyGrid& grid) override;
@@ -1034,11 +1068,24 @@ namespace Arcane::Editor
 ```
 - `TextureImportSettings.hpp`:
   `void DrawTextureImportSettings(const std::filesystem::path& sourcePath);`
-  It draws the `.png`-only note or the four knobs, and writes the `.meta` merge on edit. It is the body of the old `DrawTextureAssetPanel` after its `Separator()` following the preview, plus `DrawTextureMetaSettingsBlock`, moved verbatim with its comments. Use `AssetKindOf`/a local case-insensitive `.png` check in place of `EditorPanels.cpp`'s private `HasExtensionCI`.
+  It draws the `.png`-only note or the four knobs, and writes the `.meta` merge on edit. It is the body of the old `DrawTextureAssetPanel` after its `Separator()` following the preview, plus `DrawTextureMetaSettingsBlock`, moved verbatim with its comments. The `.png` gate stays a local case-insensitive extension check: copy `HasExtensionCI`'s body (`EditorPanels.cpp:2284-2290`) into this file's anonymous namespace. Do NOT substitute `AssetKindOf(...) == AssetKind::Texture`: it also classifies `.jpg/.tga/.bmp/.hdr` as Texture, and the moved comment says the knobs are `.png`-only because that is the one extension the cook enumerates.
+- `AssetPanelModel.hpp` gains a selection-GESTURE counter. `selectionStamp` keeps its only-on-change meaning (the Browser scroll at `AssetBrowserPanel.cpp:798` and the Graph re-center at `AssetGraphPanel.cpp:2106` key off it). The Browser, Status and feed click sites call `Select` on the click without comparing guids (e.g. `AssetBrowserPanel.cpp:625-626`, `:976-977`, `AssetStatusPanel.cpp:170-171`), so a re-click of the selected asset there bumps the gesture and IS a selection event (spec s3's one rule). Two sites need care:
+  - The row context menu (`AssetBrowserPanel.cpp:236`) calls `Select` on EVERY frame its popup is open, relying on the old no-bump idempotence (its comment, `:230-235`). With a per-call gesture it would fire the asset edge every open frame. Task 6 gates it to the popup's first frame; until Task 6 nothing observes the gesture.
+  - The Graph lens (`AssetGraphPanel.cpp:2152`) guards `Select` behind `if (e->guid != model.selected)`, and it must: the canvas selection persists, so that mirror runs every frame. A re-click of the already-selected Graph node is therefore NOT an event. This is the one scoped exception to the re-click rule, left as is. The Graph's right-click (`:2210`) is a one-shot and does count.
+  ```cpp
+        // Bumped on EVERY Select call, a re-select of the selected guid
+        // included: the Inspector's asset source reads it as its selection
+        // epoch (spec 2026-09-29 s3: a re-selection IS an event).
+        // MONOTONIC: ResetForProjectSwitch deliberately leaves it alone, like
+        // entriesStamp, so no consumer can hold a stale equal value.
+        std::uint64_t  selectionGesture = 0;
+        void Select(const Arcane::Guid& g) { ++selectionGesture; if (g != selected) { selected = g; ++selectionStamp; } }
+  ```
+  (This replaces the existing one-line `Select`. `ResetForProjectSwitch` does NOT reset `selectionGesture`.)
 
 - [ ] **Step 1: Write the failing test** (`ArcaneTests/src/AssetInspectorSourceTest.cpp`)
 
-Build the model the way `AssetPanelModelTest.cpp` does. Use a temp dir under `fs::temp_directory_path()`, `WriteFile` two `.png` files and an `.arcmat`, then `Arcane::AssetRegistry::ScanContent`. Then `model.RebuildIfDirty(&registry, providers)`, where the `FakeProviders` shape is copied into this file. Then:
+Cases 1, 2 and 3 are registry-only: build the model the way `AssetPanelModelTest.cpp` does. Use a temp dir under `fs::temp_directory_path()`, `WriteFile` two `.png` files (`brick.png`, `stone.png`) and an `.arcmat`, then `Arcane::AssetRegistry::ScanContent(dir, "game")`. Get `gBrick`/`gStone` (sidecar-minted) with `GuidForPath(registry.All(), "game://brick.png")` / `"game://stone.png"`. Then `model.MarkAllDirty(); model.RebuildIfDirty(&registry, fake.Make())`. Case 4 (`DrawAssetPage`) needs a real `Arcane::Project` and is written out in full below. Then:
 ```cpp
 TEST_CASE("AssetInspectorSource: the model's shared selection is the source's selection", "[editor][inspector]")
 {
@@ -1050,7 +1097,7 @@ TEST_CASE("AssetInspectorSource: the model's shared selection is the source's se
     CHECK(src.Page() == nullptr);                           // nothing selected: no page
     model.Select(gBrick);
     CHECK(src.SelectionKey() == gBrick.ToString());
-    CHECK(src.SelectionEpoch() == model.selectionStamp);
+    CHECK(src.SelectionEpoch() == model.selectionGesture);
     REQUIRE(src.Page() == &src);
     const auto crumbs = src.Breadcrumb();
     REQUIRE(crumbs.size() == 2);
@@ -1073,23 +1120,100 @@ TEST_CASE("AssetInspectorSource: a deleted asset stops resolving and its page go
     // ... fixture as above; select gBrick; delete brick.png on disk; re-scan the registry;
     //     model.MarkDirty/RebuildIfDirty exactly as AssetPanelModelTest's removal case does ...
     CHECK_FALSE(src.Resolves(gBrick.ToString()));
-    CHECK(src.Page() == nullptr);                           // "Nothing selected", never a stale page
+    CHECK(src.Page() == nullptr);                           // "No selection", never a stale page
     CHECK(src.PageFor(gBrick.ToString()) == nullptr);
 }
 
-TEST_CASE("DrawAssetPage: the Open/Copy Path/Show in Explorer buttons report actions, never act", "[editor][inspector]")
+TEST_CASE("AssetInspectorSource: re-selecting the selected asset is a selection gesture", "[editor][inspector]")
 {
-    // Device-less ImGui frames, the AssetPanelCommonTest.cpp / EditorInspectorVectorTest.cpp
-    // pattern (a bare context, io.DisplaySize set, the font atlas built, NewFrame/Render).
-    // Draw the page for gBrick inside a Begin("t"); click "Copy Path" by driving
-    // io.AddMousePosEvent/AddMouseButtonEvent at the button's rect (captured through
-    // ImGui::GetItemRectMin/Max in a first frame, exactly as those tests do), then:
-    CHECK(actions.copyPath == gBrick);
-    // and a Texture entry draws the import-settings block (the ".png" note is absent,
-    // the "sRGB##texmeta" checkbox exists: ImGui::FindWindowByName("t") + an id probe).
+    // ... fixture as above ...
+    AssetInspectorSource src;
+    src.Bind({ &model, nullptr, nullptr, nullptr, nullptr });
+    model.Select(gBrick);
+    const std::uint64_t epoch = src.SelectionEpoch();
+    const std::uint32_t stamp = model.selectionStamp;
+    model.Select(gBrick);                                   // a re-click: the Browser/Status click sites call Select without a guid compare
+    CHECK(src.SelectionEpoch() == epoch + 1);               // spec s3: a re-selection IS an event
+    CHECK(model.selectionStamp == stamp);                   // the Browser scroll / Graph re-center key stays change-only
+    model.ResetForProjectSwitch();
+    CHECK(src.SelectionEpoch() == epoch + 1);               // monotonic: a project switch never rewinds it
+}
+
+TEST_CASE("DrawAssetPage: Copy Path reports an action, never acts; a .png draws the import settings", "[editor][inspector]")
+{
+    // A REAL project: the texture block resolves its source path through
+    // Project::ResolveAsset and draws nothing without one
+    // (AssetStatusPanelClickTest.cpp's Project::Create shape).
+    const fs::path root = fs::temp_directory_path() / "arcane_asset_page_draw_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    REQUIRE(Arcane::Project::Create(root, "AssetPage").has_value());
+    WriteFile(root / "Content", "brick.png", "not a real png, just bytes");   // sidecar-minted guid
+    auto project = Arcane::Project::Open(root);
+    REQUIRE(project.has_value());
+    const Arcane::Guid gBrick = GuidForPath(project->Registry().All(), "game://brick.png");
+    REQUIRE(gBrick.IsValid());
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&project->Registry(), fake.Make()));
+    REQUIRE(model.Find(gBrick) != nullptr);
+    REQUIRE(model.Find(gBrick)->kind == AssetKind::Texture);
+
+    // Device-less ImGui: the EditorInspectorVectorTest.cpp:262-275 setup
+    // (no backend; a software font atlas satisfies NewFrame).
+    struct FrameContext
+    {
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGuiContext* ctx = ImGui::CreateContext();
+        FrameContext()
+        {
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1280.0f, 1024.0f);
+            io.IniFilename = nullptr;
+            unsigned char* pixels = nullptr;
+            int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+        }
+        ~FrameContext() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+    } fc;
+
+    AssetPanelServices services;                            // no thumbnails, no peeks
+    AssetPanelActions actions;
+    // One frame of the page. `activate` presses an item BY ID through ImGui's
+    // nav-activation path (ActivateItemByID, imgui_internal.h:3629; it lands
+    // on the NEXT frame's ButtonBehavior). A rect read after DrawAssetPage
+    // would be the LAST item's, never the button's.
+    auto frame = [&](const char* activate)
+    {
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(640.0f, 1000.0f), ImGuiCond_Always);
+        ImGui::Begin("t");
+        if (activate) ImGui::ActivateItemByID(ImGui::GetID(activate));
+        DrawAssetPage(*model.Find(gBrick), model, &*project, /*docs*/ nullptr, services, actions);
+        ImGui::End();
+        ImGui::Render();                                    // draw data discarded -- no backend
+    };
+
+    frame(nullptr);                                         // warm-up: the window exists
+    frame(ICON_LC_COPY " Copy Path");                       // queue the press
+    frame(nullptr);                                         // the press lands
+    CHECK(actions.copyPath == gBrick);                      // reported, never performed
+
+    // The import settings drew (the ".png only" note returns before the knobs):
+    // pressing sRGB flips the value merge-written into the .meta sidecar.
+    const fs::path meta = root / "Content" / "brick.png.meta";
+    const bool srgbBefore = ReadTextureMetaSettingsDisplay(meta).srgb;
+    frame("sRGB##texmeta");
+    frame(nullptr);
+    CHECK(ReadTextureMetaSettingsDisplay(meta).srgb != srgbBefore);
+    fs::remove_all(root, ec);
 }
 ```
-Write the fixture code in full in the file, not as comments: copy `WriteFile`/`FakeProviders` from `AssetPanelModelTest.cpp:36-110` and the device-less frame helper from `AssetPanelCommonTest.cpp`. The `// ...` lines above mark where that copy goes.
+Write the fixture code in full in the file, not as comments: copy `WriteFile`, `GuidForPath` and `FakeProviders` from `AssetPanelModelTest.cpp:36-119` (through `FakeProviders`' closing `};`). The `// ...` lines above mark where the registry-only fixture goes. Includes: `<imgui.h>`, `<imgui_internal.h>` (`ActivateItemByID`), `"Widgets/IconsLucide.h"` (`ICON_LC_COPY`), `"Panels/TextureMetaPanel.hpp"` (`ReadTextureMetaSettingsDisplay`), `<Arcane/Project/Project.hpp>`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1128,7 +1252,7 @@ namespace Arcane::Editor
 
     std::uint64_t AssetInspectorSource::SelectionEpoch() const
     {
-        return m_deps.model ? m_deps.model->selectionStamp : 0;
+        return m_deps.model ? m_deps.model->selectionGesture : 0;
     }
 
     bool AssetInspectorSource::Resolves(std::string_view key) const
@@ -1178,8 +1302,8 @@ namespace Arcane::Editor
 }
 ```
 `DrawAssetPage`, in the same file:
-- **Moved content.** Move the body of `DrawPreviewPane` (`AssetBrowserPanel.cpp:1071-1328`) here WITHOUT the `BeginChild("##assetspreview")`/`EndChild` and the "No selection" branch. The page only draws for a resolved entry, and the Inspector window is the container.
-- **Header layout.** Keep the compact/stacked header breakpoint logic, measured against `ImGui::GetContentRegionAvail().x` in place of the old `width` parameter. Move the constants it uses (`kPreviewThumbSize` as `kAssetPageThumbSize`, `kPreviewCompactHeaderMinWidth`, `kPreviewCompactTextColumnMin`, `kActionButtonHeight`), `ContentRelativePath`, and `DrawDerivedRow` into this file's anonymous namespace. Carry their comments and drop the pane-width history.
+- **Copied content.** COPY the body of `DrawPreviewPane` (`AssetBrowserPanel.cpp:1071-1313`) here WITHOUT the `BeginChild("##assetspreview")`/`EndChild` and the "No selection" branch. The page only draws for a resolved entry, and the Inspector window is the container. Copy, not move: `DrawAssetBrowserBody` still calls `DrawPreviewPane` (:1386) until Task 6 deletes the pane with its helpers, and `AssetBrowserPanel.cpp` is not touched in this task.
+- **Header layout.** Keep the compact/stacked header breakpoint logic, measured against `ImGui::GetContentRegionAvail().x` in place of the old `width` parameter. Copy the constants it uses (`kPreviewThumbSize` as `kAssetPageThumbSize`, `kPreviewCompactHeaderMinWidth`, `kPreviewCompactTextColumnMin`, `kActionButtonHeight`), `ContentRelativePath` and `DrawDerivedRow` into THIS file's anonymous namespace (Task 6 deletes the originals with the pane). Internal linkage in both files keeps the duplicate names from clashing. Carry their comments and drop the pane-width history.
 - **Open button.** Call `OpenAssetRow` only when `docs` is non-null.
 - **Texture settings.** After the action buttons, for `e.kind == AssetKind::Texture && project`, draw `ImGui::Separator();` and then `DrawTextureImportSettings(*project->ResolveAsset(Arcane::AssetId::FromGuid(e.guid)))`, guarded on the optional.
 
@@ -1200,18 +1324,17 @@ git commit -m "feat(editor): AssetInspectorSource -- the Asset Browser's shared 
 ### Task 6: Wire the asset source into the app; remove the preview pane and the scene page's asset fallback
 
 **Files:**
-- Modify: `ArcaneEditor/src/App/EditorApp.hpp` (members)
-- Modify: `ArcaneEditor/src/App/EditorApp.cpp` (register the source as permanent beside `RegisterInspectorInstancesSettings`, ~line 569)
-- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` (bind after `assetPanelServices` is built ~line 2340; drain the page actions after the three panel consumes ~line 2387; add the selection edge beside the scene's ~line 3693)
-- Modify: `ArcaneEditor/src/App/EditorAppScene.cpp`/`EditorAppProject.cpp` (a project switch: `m_assetModel.ResetForProjectSwitch()` already clears `selected`; re-arm the asset edge's `lastEpoch` to the new stamp exactly as `EditorAppScene.cpp:161` does for the scene)
+- Modify: `ArcaneEditor/src/App/EditorApp.hpp` (members, including `m_assetPanelServices`; `#include "Panels/AssetInspectorSource.hpp"`)
+- Modify: `ArcaneEditor/src/App/EditorApp.cpp` (register the source as permanent beside `RegisterInspectorInstancesSettings`, ~line 569; re-arm the asset edge in `OnProjectOpened` directly after `m_assetModel.ResetForProjectSwitch();` at ~line 1570, the model's only reset site)
+- Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` (fill `m_assetPanelServices` where `assetPanelServices` is built ~line 2340; drain the page actions and bind after the three panel consumes ~line 2387; add the selection edge beside the scene's ~line 3693)
 - Modify: `ArcaneEditor/src/Panels/SceneInspectorSource.hpp/.cpp` (drop `Deps::selectedAsset`)
-- Modify: `ArcaneEditor/src/Panels/EditorPanels.hpp/.cpp` (`DrawInspectorBody` loses the `selectedAsset` parameter and the no-selection texture branch: "No selection" only; update its doc comment)
-- Modify: `ArcaneEditor/src/Panels/AssetBrowserPanel.hpp/.cpp` (remove the preview pane: `kAssetsPreviewPaneDefaultWidth`, `previewPaneWidth`, `PreviewPaneSplitter`, `ClampPreview*`, `kPreview*` constants, `DrawPreviewPane`, `showPreview`; the table takes the width after the rail; update both header comments)
-- Test: `ArcaneTests/src/EditorInspectorHostTest.cpp` (no new host behaviour. The wiring is proven by the witness and golden in Task 8.) Search `ArcaneTests/src` for `previewPaneWidth|kAssetsPreviewPaneDefaultWidth|DrawInspectorBody(` and fix any compile fallout.
+- Modify: `ArcaneEditor/src/Panels/EditorPanels.hpp/.cpp` (`DrawInspectorBody` loses the `selectedAsset` parameter and the no-selection texture branch: `ImGui::TextDisabled("No selection");` only, the one empty-state string (spec s3, decision 5); drop the `TextureImportSettings.hpp` include Task 5 added if nothing else uses it; update its doc comment)
+- Modify: `ArcaneEditor/src/Panels/AssetBrowserPanel.hpp/.cpp` (gate `DrawRowContextMenu`'s `model.Select(e.guid)` (:236) to the popup's first frame and rewrite its comment (:230-235), below; remove the preview pane: `kAssetsPreviewPaneDefaultWidth`, `previewPaneWidth`, `PreviewPaneSplitter`, `ClampPreview*`, `kPreview*` constants, `DrawPreviewPane`, `showPreview`, and the anonymous-namespace symbols left with no user: `ContentRelativePath` (:177), `DrawDerivedRow` (:967), `kActionButtonHeight` (:92), `kMinReadableTableWidth` (:86, used only by `ClampPreviewForLayout`). Task 5 holds copies of the first three in `AssetInspectorSource.cpp`. The table takes the width after the rail; update both header comments.)
+- Test: `ArcaneTests/src/EditorInspectorHostTest.cpp` (no new host behaviour. The wiring is proven by the witness and golden in Task 10.) Search `ArcaneTests/src` for `previewPaneWidth|kAssetsPreviewPaneDefaultWidth|DrawInspectorBody(` and fix any compile fallout.
 
 **Interfaces:**
 - Consumes: `AssetInspectorSource` (Task 5), `InspectorHost::AddSource(.., true)` (Task 2), `SelectionEdge`.
-- Produces: `EditorApp::m_assetSource`, `m_assetSelectionEdge`, `m_assetPageActions`.
+- Produces: `EditorApp::m_assetSource`, `m_assetSelectionEdge`, `m_assetPageActions`, `m_assetPanelServices`.
 
 - [ ] **Step 1: Write the failing check**
 
@@ -1223,13 +1346,20 @@ ArcaneTests.exe "~[gpu]"     (from the exe dir)  -> note the case/pass counts
 - [ ] **Step 2: Implement**
 
 `EditorApp.hpp`:
+- **Include.** Add `#include "Panels/AssetInspectorSource.hpp"   // m_assetSource` beside the `SceneInspectorSource.hpp` include (line 46). The by-value member needs the complete type.
 - **Declaration order.** Declare the new members BEFORE `m_inspectorHost`. The host holds raw source pointers, so the source must outlive it. Declaration order = construction order, and destruction runs in reverse. Match the existing `m_sceneSource` placement comment.
 - **Members:**
 ```cpp
+        Arcane::Editor::AssetPanelServices   m_assetPanelServices;   // the asset page's thumbnails + peeks; a MEMBER: the page draws after DrawEditorUi returns
         Arcane::Editor::AssetInspectorSource m_assetSource;          // permanent Inspector source over m_assetModel.selected
-        Arcane::Editor::SelectionEdge        m_assetSelectionEdge;   // Observe(m_assetModel.selectionStamp, key)
+        Arcane::Editor::SelectionEdge        m_assetSelectionEdge;   // Observe(m_assetModel.selectionGesture, key)
         Arcane::Editor::AssetPanelActions    m_assetPageActions;     // the asset page's clicks, drained next frame
 ```
+`EditorApp.cpp`, `OnProjectOpened`, directly after `m_assetModel.ResetForProjectSwitch();` (~line 1570):
+```cpp
+        m_assetSelectionEdge.lastEpoch = m_assetModel.selectionGesture;   // re-arm, as the scene edge does (EditorAppScene.cpp:161)
+```
+`selectionGesture` is monotonic (Task 5: `ResetForProjectSwitch` does not reset it), so the next gesture in the new project is always an event; the re-arm keeps the two edges' shape identical.
 `EditorApp.cpp` (after `RegisterInspectorInstancesSettings(m_inspectorHost);`):
 ```cpp
         m_inspectorHost.AddSource(m_assetSource, /*permanent*/ true);
@@ -1241,23 +1371,38 @@ ArcaneTests.exe "~[gpu]"     (from the exe dir)  -> note the case/pass counts
         // frame late, invisible, and the same handler as the three panels.
         ConsumeAssetPanelActions(m_assetPageActions, ls);
         m_assetPageActions = {};
-        m_assetSource.Bind({ &m_assetModel, proj, &m_documents, &assetPanelServices, &m_assetPageActions });
+        m_assetSource.Bind({ &m_assetModel, proj, &m_documents, &m_assetPanelServices, &m_assetPageActions });
 ```
-- **Services lifetime.** `assetPanelServices` is a LOCAL here, but the Inspector draws later in the frame. If that draw is in a different function or scope, `&assetPanelServices` dangles. Make it a member `m_assetPanelServices` assigned at this site instead, and bind `&m_assetPanelServices`. Check the scopes of line ~2340 and line ~3690 before choosing. If both are in one function whose frame outlives the Inspector draw, the local is fine.
+- **Services lifetime.** `assetPanelServices` is a LOCAL of `EditorApp::DrawEditorUi` (declared ~line 2340). The Inspector windows draw in `EditorApp::DrawSelectionPanels` (~line 3664, `DrawInspectorWindows` at ~3706), which `MainLoop` calls at ~line 470, AFTER `DrawEditorUi` has returned (~line 465). A pointer to the local dangles. So bind the MEMBER: directly after the local is fully built at ~2340 (every field assigned), add `m_assetPanelServices = assetPanelServices;`. The three panels keep using the local.
 
 Beside the scene edge (~line 3693):
 ```cpp
-        if (m_assetSelectionEdge.Observe(m_assetModel.selectionStamp, m_assetSource.SelectionKey()))
+        // selectionGesture, not selectionStamp: a re-click of the selected
+        // asset IS a selection event (spec s3), and the stamp moves only on change.
+        if (m_assetSelectionEdge.Observe(m_assetModel.selectionGesture, m_assetSource.SelectionKey()))
             m_inspectorHost.NotifySelected(m_assetSource);
 ```
 Scene source bind: drop `&m_assetModel.selected` from the `Deps` initializer. Update the comment block above it: the "trailing fallback" sentence goes, and the asset selection now routes as its own source.
 
-`AssetBrowserPanel.cpp`, `DrawAssetBrowserBody`: delete `showPreview`, `drawnWidth` and the splitter/pane calls. `DrawTable(..., /*tableWidth*/ 0.0f)` fills the line. Delete the now-unused helpers and constants, the `previewPaneWidth` field and `kAssetsPreviewPaneDefaultWidth`. Update the file-header and `DrawAssetBrowserBody` doc comments ("the rail + the table; the asset's details are the Assets Inspector's page").
+`AssetBrowserPanel.cpp`, `DrawAssetBrowserBody`: delete `showPreview`, `drawnWidth` and the splitter/pane calls. `DrawTable(..., /*tableWidth*/ 0.0f)` fills the line. Delete the now-unused helpers and constants (`DrawPreviewPane`, `PreviewPaneSplitter`, `ClampPreview*`, `kPreview*`, `ContentRelativePath`, `DrawDerivedRow`, `kActionButtonHeight`, `kMinReadableTableWidth`), the `previewPaneWidth` field and `kAssetsPreviewPaneDefaultWidth`. Update the file-header and `DrawAssetBrowserBody` doc comments ("the rail + the table; the asset's details are the Assets Inspector's page").
+
+`AssetBrowserPanel.cpp`, `DrawRowContextMenu` (:228-236): the unconditional per-frame `model.Select(e.guid);` becomes a first-frame call. Task 5's `Select` bumps `selectionGesture` on every call, so the old per-frame call would fire the asset edge (and `NotifySelected` + a history `Stamp`) on every frame the popup is open. `BeginPopupContextItem` has made the popup the current window, so `IsWindowAppearing()` is true exactly on its first frame. Replace the comment and the call with:
+```cpp
+            // Right-click acts on this row: make it the tracked selection so
+            // the highlight + the Inspector/Assets-menu follow (matches
+            // AssetBrowser.cpp's own old behavior). ONCE, on the popup's first
+            // frame: Select bumps AssetPanelModel::selectionGesture on every
+            // call (a re-selection IS an Inspector selection event, spec
+            // 2026-09-29 s3), so a per-frame call would re-fire the Inspector's
+            // asset edge for as long as the menu stays open.
+            if (ImGui::IsWindowAppearing())
+                model.Select(e.guid);
+```
 
 - [ ] **Step 3: Build and run the suites**
 
 Run: build Debug, then `ArcaneTests.exe "~[gpu]"` from the exe dir.
-Expected: the same pass count as Step 1 plus Tasks 1-5's new cases, 0 failures.
+Expected: the same case/pass count as Step 1, 0 failures (Task 6 adds no tests; Tasks 1-5's cases are already in the Step 1 baseline).
 
 - [ ] **Step 4: Desk smoke (headless, no window)**
 
@@ -1276,8 +1421,8 @@ git commit -m "feat(editor): the Asset Browser is an Inspector source (permanent
 ### Task 7: The filter dropdown, titles and "no source" line; the default layout and the one-time upgrade
 
 **Files:**
-- Modify: `ArcaneEditor/src/Panels/InspectorWindows.cpp`
-- Modify: `ArcaneEditor/src/Panels/EditorPanels.hpp/.cpp` (`BuildDefaultLayout`, `EndDockSpace`)
+- Modify: `ArcaneEditor/src/Panels/InspectorWindows.hpp` (`kPrimaryInspectorWindowId`, `InspectorWindowTitle`), `ArcaneEditor/src/Panels/InspectorWindows.cpp`
+- Modify: `ArcaneEditor/src/Panels/EditorPanels.hpp/.cpp` (`BuildDefaultLayout`, `EndDockSpace`; `EditorPanels.cpp` gains `#include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId`: it does not include it today)
 - Modify: `ArcaneEditor/src/App/EditorAppFrame.cpp` (consume `EndDockSpace`'s result, ~line 2305)
 - Test: `ArcaneTests/src/EditorInspectorHostTest.cpp` (a device-less window test)
 
@@ -1285,8 +1430,10 @@ git commit -m "feat(editor): the Asset Browser is an Inspector source (permanent
 - Consumes: Tasks 2-4 host API; `InspectorFilterLabel`; `kInspectorKinds`.
 - Produces:
   ```cpp
-  // InspectorWindows.hpp (EditorPanels.cpp includes it)
-  inline constexpr const char* kPrimaryInspectorWindowId = "###Inspector";   // instance 0's stable ImGui id
+  // InspectorWindows.hpp (EditorPanels.cpp adds the include in Step 4)
+  // Instance 0's ImGui id. ImHashStr skips "###", so this is the same id as the
+  // legacy bare "Inspector" window: the constant is for clarity, not a new id.
+  inline constexpr const char* kPrimaryInspectorWindowId = "###Inspector";
   // EditorPanels.hpp
   inline constexpr const char* kAssetsInspectorWindowId = "###inspector_1";   // == InspectorHost::kAssetsInstanceId
   struct DockSpaceResult { bool builtDefault = false; bool upgradedLegacy = false; };
@@ -1304,9 +1451,12 @@ TEST_CASE("InspectorWindowTitle: the filter label rides the title; the ### id ne
 {
     InspectorHost::Instance main;                        // id 0, All
     CHECK(InspectorWindowTitle(main) == "Inspector###Inspector");
-    // The stable id: every title of instance 0 hashes to the same window id.
+    // The stable id: every title of instance 0 hashes to the same window id,
+    // and ImHashStr skips "###" (imgui.cpp:2539-2544), so that id IS the legacy
+    // bare "Inspector" one -- true by construction; these CHECKs pin it.
     CHECK(ImHashStr("Inspector###Inspector") == ImHashStr("Inspector - Scene###Inspector"));
     CHECK(ImHashStr("Inspector###Inspector") == ImHashStr(kPrimaryInspectorWindowId));
+    CHECK(ImHashStr(kPrimaryInspectorWindowId) == ImHashStr("Inspector"));   // [Window][Inspector] carries over
     main.filter = InspectorFilter::AllBut("assets");
     CHECK(InspectorWindowTitle(main) == "Inspector - All but Assets###Inspector");
     InspectorHost::Instance second; second.id = 1;
@@ -1337,10 +1487,10 @@ Expected: `InspectorWindowTitle` undefined.
   - Append the stable id: `"###Inspector"` for id 0, `"###inspector_" + std::to_string(id)` otherwise.
   - Replace the `title` computation in `DrawInspectorWindows` with it.
   - `FindWindowByName("Inspector")` (the primary's dock lookup for a new instance) becomes `FindWindowByName(kPrimaryInspectorWindowId)`. `FindWindowByName` hashes its argument, so `"###Inspector"` resolves.
-  - `EditorAppFrame.cpp`'s two `SelectDockTab("Inspector")` calls (~lines 3536/3547) become `SelectDockTab(kPrimaryInspectorWindowId)`. `SelectDockTab` looks the window up by name.
+  - `EditorAppFrame.cpp`'s two `SelectDockTab("Inspector")` calls (~lines 3536/3547) are left alone: they sit inside `EditorApp::SyncCenterTabFocus`, which Task 8 deletes entirely. (They still resolve meanwhile: `"Inspector"` and `"###Inspector"` are the same id.)
   - `PanelRegistry.hpp`'s `"Inspector"` entry is the Window-menu label and the visibility ini key, NOT a window name. Leave it.
   - Tests that `Begin("Inspector")` on their own context (`EditorInspectorVectorTest`, `InputActionsDocumentUiTest`, `PropertyGridTest`) draw their own window and are unaffected. `InputActionsDocumentUiTest` drives the real `DrawInspectorWindows` too: if it looks the primary window up by `"Inspector"`, switch it to the constant.
-- **Filter dropdown.** Draw it in `DrawHeader`, after the forward arrow and before the breadcrumb child. Reserve its width in `crumbWidth` like the pin's.
+- **Filter dropdown.** Draw it in `DrawHeader`, after the forward arrow and before the breadcrumb child: insert the snippet between line 91 (the forward arrow's `ImGui::EndDisabled();`) and line 92 (`ImGui::SameLine();`). The snippet opens with its own `SameLine()`, and the existing line-92 `SameLine()` then keeps the crumbs on the combo's row. Do NOT subtract the combo's width in `crumbWidth`: the combo is drawn BEFORE the crumb child, so `GetContentRegionAvail().x` at line 102 already excludes it (the pin is subtracted by hand only because it is drawn after).
   ```cpp
             ImGui::SameLine();
             const std::string label = InspectorFilterLabel(inst.filter);
@@ -1362,17 +1512,30 @@ Expected: `InspectorWindowTitle` undefined.
                 }
                 ImGui::EndCombo();
             }
+            // Spec s5: a long multi-kind label is clipped to the combo; the
+            // tooltip carries the full list (the combo frame is the last item
+            // whether or not it is open).
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                ImGui::SetTooltip("%s", label.c_str());
   ```
   `HeaderActions` gains `std::optional<InspectorFilter> filter;`, and `ApplyHeaderActions` runs `if (a.filter) (void)host.SetFilter(inst.id, *a.filter);`.
 - **Filtered arrows.** In `DrawHeader`, the back/forward arrows and their right-click lists use the filter overloads:
   - `host.CanGoBack(inst.filter)`, `host.BackEntry(inst.filter)`;
   - the back list iterates `host.BackIndices(inst.filter)`, and the forward list `host.ForwardIndices(inst.filter)`;
   - `actions.back` calls `host.GoBack(inst.filter)` in `ApplyHeaderActions`. `ApplyHeaderActions` receives `inst` already, so the forward arrow follows the same pattern.
-- **Empty states.** In `DrawInspectorWindows`, when `!inst.pinned && src == nullptr`:
-  - a single-kind filter draws `ImGui::TextDisabled("No %s document open", displayName)`, using the one admitted kind's name;
-  - otherwise it draws `ImGui::TextDisabled("Nothing to show for this filter")`.
+- **Empty states.** In `DrawInspectorWindows`, when `!inst.pinned && src == nullptr`, a single-kind filter names the one admitted kind, otherwise one generic line. `displayName` is a `std::string_view`, so pass it with `%.*s` (a string_view through `...` to `%s` is undefined behaviour, and MSVC does not check ImGui's format args):
+  ```cpp
+            std::string_view onlyName;
+            int admitted = 0;
+            for (const InspectorKind& k : kInspectorKinds)
+                if (inst.filter.Admits(k.id)) { onlyName = k.displayName; ++admitted; }
+            if (admitted == 1)
+                ImGui::TextDisabled("No %.*s document open", static_cast<int>(onlyName.size()), onlyName.data());
+            else
+                ImGui::TextDisabled("Nothing to show for this filter");
+  ```
 
-  A routed source with a null page keeps today's behaviour: the page-less header, and "No selection" drawn by the page. Check that the asset and scene sources both render "No selection"/"Nothing selected" consistently. The scene body prints "No selection". For a null asset `Page()` nothing draws, so add `else if (src && !page && !inst.pinned) ImGui::TextDisabled("No selection");` to match.
+  A routed source with a null page keeps today's behaviour: the page-less header, and the empty-state line drawn by the page. The one empty-state string is "No selection" (spec s3, decision 5), which the scene body already prints (`EditorPanels.cpp:2410`). For a null asset `Page()` nothing draws, so add `else if (src && !page && !inst.pinned) ImGui::TextDisabled("No selection");` to match.
 
 - [ ] **Step 4: Implement the default layout and the upgrade** (`EditorPanels.cpp`)
 
@@ -1386,9 +1549,30 @@ Expected: `InspectorWindowTitle` undefined.
         const ImGuiID browserNodeId = ImGui::DockBuilderSplitNode(bottomLeftId, ImGuiDir_Left, 0.70f,
                                                                   nullptr, &assetsInspectorId);
 ```
-- **Docking.** Dock `"Asset Browser"`/`"Console"`/`"Problems"` into `browserNodeId`, then `ImGui::DockBuilderDockWindow(kAssetsInspectorWindowId, assetsInspectorId);`. The right node's `DockBuilderDockWindow("Inspector", rightId)` becomes `DockBuilderDockWindow(kPrimaryInspectorWindowId, rightId)`.
-- **Return value.** `EndDockSpace` returns `{ .builtDefault = true }` when it builds.
-- **Upgrade branch.** Add it after the build check. Run it only when the layout was NOT just built and `upgradeLegacyInspectorId >= 1`:
+- **Include.** Add `#include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId` to `EditorPanels.cpp`'s include block (lines 1-52 have no path to it today; `EditorPanels.hpp` does not pull it in).
+- **Docking.** Dock `"Asset Browser"`/`"Console"`/`"Problems"` into `browserNodeId`, then `ImGui::DockBuilderDockWindow(kAssetsInspectorWindowId, assetsInspectorId);`. The right node's `DockBuilderDockWindow("Inspector", rightId)` becomes `DockBuilderDockWindow(kPrimaryInspectorWindowId, rightId)` (the same id; the constant is for clarity).
+- **Return value and shape.** `EndDockSpace` must still run `DockSpace()`, the two flag scrubs and `ImGui::End()` after a build, so it cannot return at the build site. Its body becomes:
+```cpp
+    DockSpaceResult EndDockSpace(bool resetLayout, int upgradeLegacyInspectorId)
+    {
+        const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
+        DockSpaceResult result;
+        if (resetLayout || ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+        {
+            BuildDefaultLayout(dockspaceId);
+            result.builtDefault = true;
+        }
+        else if (upgradeLegacyInspectorId >= 1)
+        {
+            // ... the upgrade branch below ...
+        }
+        // ... unchanged: the DockSpace() submission, the central-node scrub,
+        //     the HiddenTabBar scrub (with their comments) ...
+        ImGui::End();
+        return result;
+    }
+```
+- **Upgrade branch.** It runs only when the layout was NOT just built and `upgradeLegacyInspectorId >= 1`:
 ```cpp
         else if (upgradeLegacyInspectorId >= 1)
         {
@@ -1400,13 +1584,9 @@ Expected: `InspectorWindowTitle` undefined.
             if (ImGuiWindow* w = ImGui::FindWindowByName("Asset Browser")) browserDock = w->DockId;
             else if (ImGuiWindowSettings* s = ImGui::FindWindowSettingsByID(ImHashStr("Asset Browser"))) browserDock = s->DockId;
             const std::string id = "###inspector_" + std::to_string(upgradeLegacyInspectorId);
-            // The main Inspector moves from the bare name "Inspector" to the
-            // stable id "###Inspector" (a different ImGui id): re-dock it
-            // where the old window was, so the upgrade keeps its position.
-            ImGuiID oldInspectorDock = 0;
-            if (ImGuiWindowSettings* s = ImGui::FindWindowSettingsByID(ImHashStr("Inspector"))) oldInspectorDock = s->DockId;
-            if (oldInspectorDock != 0 && ImGui::DockBuilderGetNode(oldInspectorDock) != nullptr)
-                ImGui::DockBuilderDockWindow(kPrimaryInspectorWindowId, oldInspectorDock);
+            // The main Inspector needs no re-dock: "###Inspector" hashes to the
+            // legacy bare "Inspector" id (ImHashStr skips "###", imgui.cpp:2539),
+            // so its [Window][Inspector] entry and DockId carry over unchanged.
             if (browserDock != 0 && ImGui::DockBuilderGetNode(browserDock) != nullptr)
             {
                 ImGuiID right = 0, left = browserDock;
@@ -1421,7 +1601,11 @@ Expected: `InspectorWindowTitle` undefined.
 
 App (`EditorAppFrame.cpp`, replacing `Arcane::Editor::EndDockSpace(menuReq.resetLayout);`):
 ```cpp
-        const bool legacy = !menuReq.resetLayout && m_inspectorHost.TakeLegacyLayoutUpgrade();
+        // ALWAYS consume the flag: on a Reset Layout frame a pending flag
+        // would otherwise survive into the next frame and split the freshly
+        // built default layout's browser node a second time.
+        const bool pendingLegacy = m_inspectorHost.TakeLegacyLayoutUpgrade();
+        const bool legacy = pendingLegacy && !menuReq.resetLayout;
         const int legacyAssetsId = legacy ? m_inspectorHost.UpgradeLegacyInspectorLayout() : -1;
         const Arcane::Editor::DockSpaceResult dock = Arcane::Editor::EndDockSpace(menuReq.resetLayout, legacyAssetsId);
         if (dock.builtDefault)
@@ -1437,7 +1621,7 @@ Expected: PASS.
 
 Windowed (the user runs it): delete `%LOCALAPPDATA%\Arcane\editor\layouts\<ReferenceProject guid>.ini`, launch the editor on ReferenceProject, and confirm:
 - the two Inspectors;
-  - after restoring the OLD ini and relaunching, the main Inspector keeps its old dock position (the `###Inspector` re-dock) and "Inspector 2 - Assets" sits right of the Asset Browser;
+  - after restoring the OLD ini and relaunching, the main Inspector keeps its old dock position (`###Inspector` is the legacy `Inspector` id, so `[Window][Inspector]` and its DockId carry over) and "Inspector 2 - Assets" sits right of the Asset Browser;
 - an asset click leaves the main Inspector's entity page alone;
 - restoring an old ini (keep a copy BEFORE deleting) upgrades once, and relaunching does not re-upgrade.
 
@@ -1455,15 +1639,15 @@ git commit -m "feat(editor): Inspector filter dropdown + filtered titles/history
 **Files:**
 - Create: `ArcaneEditor/src/Documents/DocumentPageSelection.hpp`
 - Modify: `ArcaneEditor/src/Documents/ShaderEditorDocument.hpp/.cpp`
-- Modify: `ArcaneEditor/src/App/EditorApp.hpp`, `ArcaneEditor/src/App/EditorAppFrame.cpp` (retire `DrawMaterialPanel`'s call ~line 2415, `ResolveActiveMaterialDoc` ~line 3229, the tab-follow block ~lines 3515-3549, `m_activeMaterialGuid`, `m_materialDocCount`)
-- Modify: `ArcaneEditor/src/Panels/EditorPanels.cpp` (`BuildDefaultLayout`: drop `DockBuilderDockWindow("Material", rightId)` and fix the comment above it)
+- Modify: `ArcaneEditor/src/App/EditorApp.hpp`, `ArcaneEditor/src/App/EditorAppFrame.cpp` (retire `DrawMaterialPanel`'s call ~line 2415; `ResolveActiveMaterialDoc` (decl `EditorApp.hpp:348`, def ~`EditorAppFrame.cpp:3229-3250`); `EditorApp::SyncCenterTabFocus` ENTIRELY (decl + comment `EditorApp.hpp:351-355`, def + phase-16b comment ~`EditorAppFrame.cpp:3484-3550`, call `EditorAppFrame.cpp:468`); `m_activeMaterialGuid`, `m_materialDocCount`)
+- Modify: `ArcaneEditor/src/Panels/EditorPanels.hpp/.cpp` (`BuildDefaultLayout`: drop `DockBuilderDockWindow("Material", rightId)` and fix the comment above it; delete `ViewportPanelResult::appearing` (`EditorPanels.hpp:243-246`) and its assignment + comment (`EditorPanels.cpp:1170-1175`), whose only reader was `SyncCenterTabFocus`)
 - Test: `ArcaneTests/src/DocumentPageSelectionTest.cpp` (new), plus the shader document test that exists today. Grep `ArcaneTests/src` for `ShaderEditorDocument` and extend the file that already constructs one headlessly (e.g. `ShaderEditorDocumentTest.cpp`, whose "material panel layout round-trips through imgui.ini" case is the precedent).
 
 **Interfaces:**
 - Consumes: `InspectorSource`/`InspectorPage`, `PropertyGrid`, `EditGesture::ScopeGuard`.
 - Produces:
 ```cpp
-// Documents/DocumentPageSelection.hpp -- a document whose Inspector page is the
+// Documents/DocumentPageSelection.hpp (namespace Arcane::Editor) -- a document whose Inspector page is the
 // WHOLE document's (material, sprite, mesh): one key, selected when the
 // document opens, re-selected by a click in its content (spec s3's one
 // selection rule). Header-only; ImGui calls only in NoteContentClick.
@@ -1484,29 +1668,82 @@ struct DocumentPageSelection
   - `Kind()` returns `"material"`.
   - `Page()`/`PageFor(key)` return the material page when the key resolves.
   - `SelectionKey()`, `RestoreSelection(key)` (true when it resolves, no epoch bump), `Resolves`, and `SelectionEpoch()` return `m_pageSel.epoch`.
-- The page is a private nested `MaterialInspectorPage final : InspectorPage` holding `ShaderEditorDocument&`:
+- The page is a private nested `class MaterialInspectorPage final : public InspectorPage` holding `ShaderEditorDocument&`. The base MUST be public: with a private base, `Page()` returning `&m_page` as `InspectorPage*` is an inaccessible conversion (MSVC C2243).
   - `Breadcrumb()` returns one crumb, `{ m_title, <select: no-op>, "material" }`.
   - `Draw(PropertyGrid&)` calls `doc.DrawMaterialPageBody()`.
 
 - [ ] **Step 1: Write the failing tests**
 
-`DocumentPageSelectionTest.cpp` (a device-less ImGui context, the `IniContext` shape from Task 4, plus `io.DisplaySize = {800,600}` and `io.Fonts->Build()`):
+`DocumentPageSelectionTest.cpp` (a device-less ImGui context; the click-driving precedent is `AssetStatusPanelClickTest.cpp:183-193` / `InputActionsDocumentUiTest.cpp:89-90`):
 ```cpp
+// DocumentPageSelection (spec 2026-09-29 s3): opened = selected; a click in a
+// document's CONTENT re-selects its page; the title bar / a tab never does.
+#include <catch2/catch_test_macros.hpp>
+#include <Documents/DocumentPageSelection.hpp>
+#include <imgui.h>
+#include <optional>
+
+using namespace Arcane::Editor;
+
+namespace
+{
+    struct BareContext
+    {
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGuiContext* ctx = ImGui::CreateContext();
+        BareContext()
+        {
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.IniFilename = nullptr;
+            io.DisplaySize = ImVec2(800.0f, 600.0f);
+            unsigned char* pixels = nullptr;
+            int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+        }
+        ~BareContext() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+    };
+}
+
 TEST_CASE("DocumentPageSelection: selected at open; a content click re-selects; a click outside does not", "[editor][inspector]")
 {
+    BareContext bc;
     DocumentPageSelection sel{ "material" };
     CHECK(sel.epoch == 1);
     CHECK(sel.Resolves("material"));
     CHECK_FALSE(sel.Resolves("mesh"));
-    // Frame A: mouse inside the window's content, left click -> bump.
-    // Frame B: mouse over the window's TITLE BAR, click -> no bump.
-    // Frame C: no click -> no bump.
-    // (Drive io.AddMousePosEvent / AddMouseButtonEvent before NewFrame; Begin("doc") at a
-    //  fixed pos/size via SetNextWindowPos/Size; call sel.NoteContentClick() before End.)
+
+    const ImVec2 pos(100.0f, 100.0f), size(300.0f, 200.0f);
+    // Every frame submits the same window at the same rect: IsWindowHovered
+    // reads the hovered window NewFrame computed from the PREVIOUS frame's
+    // windows, so the first frame is a warm-up. A button event only registers
+    // as a click when it CHANGES the button state, hence the release frames.
+    auto frame = [&](std::optional<ImVec2> mouse, std::optional<bool> leftDown)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (mouse) io.AddMousePosEvent(mouse->x, mouse->y);
+        if (leftDown) io.AddMouseButtonEvent(ImGuiMouseButton_Left, *leftDown);
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        ImGui::Begin("doc");
+        sel.NoteContentClick();
+        ImGui::End();
+        ImGui::Render();                                             // draw data discarded -- no backend
+    };
+
+    frame(std::nullopt, std::nullopt);                               // warm-up: "doc" exists
+    frame(ImVec2(pos.x + 150.0f, pos.y + 100.0f), true);             // A: press in the content
+    CHECK(sel.epoch == 2);
+    frame(std::nullopt, false);                                      // release
+    frame(ImVec2(pos.x + 150.0f, pos.y + 4.0f), true);               // B: press on the TITLE BAR
+    CHECK(sel.epoch == 2);
+    frame(std::nullopt, false);                                      // release
+    frame(std::nullopt, std::nullopt);                               // C: no click
     CHECK(sel.epoch == 2);
 }
 ```
-Write the three frames in full. The precedent for driving clicks on a bare context is `AssetPanelCommonTest.cpp`.
 
 In the shader document test, construct a document the way the existing test does, then:
 ```cpp
@@ -1542,21 +1779,27 @@ inline void DocumentPageSelection::NoteContentClick()
 ```
 `ShaderEditorDocument`:
 - **Selection member.** Add `DocumentPageSelection m_pageSel{ "material" };` and the overrides listed under Interfaces.
-- **Content click.** In `Draw`, after the window's content and before `ImGui::End()`, on the non-collapsed path, call `m_pageSel.NoteContentClick();`. The canvas (imgui-node-editor) is a child window of the document window, so `ChildWindows` covers a click on the background or a node. Verify it at the desk (Step 5).
+- **Content click.** In `Draw`, after the window's content and before `ImGui::End()`, on the non-collapsed path, call `m_pageSel.NoteContentClick();`. The node-editor canvas draws directly in the document window: this vendored imgui-node-editor has its `BeginChild` commented out (`imgui_node_editor.cpp:1210-1214`), and `ImGuiEx::Canvas` changes `io.MousePos` only between `ed::Begin`/`ed::End`, restoring it at `ed::End`. So the check, which runs after the canvas, sees the document window hovered and screen-space coordinates. `ChildWindows` is there for the real children: the snippet `InputTextMultiline` and the `##preview` child. Verify it at the desk (Step 5).
 - **Page body.** Rename `DrawMaterialWindow()` to `DrawMaterialPageBody()` and drop its `Begin("Material")`/`End()`. KEEP its `EditGesture::ScopeGuard` as its first local. The page body now draws inside an Inspector instance window. Keep:
   - the title line;
   - "(Instance)";
   - the `PaneSplitter`-over-`Layout().previewSplit` preview/params split, unchanged.
+
+  Two behaviour changes, both intended: the body now draws AFTER the documents (the Inspector phase, `DrawSelectionPanels`, runs after `DrawEditorUi`'s `m_documents.DrawAll`), and it draws on collapsed and background-tab frames too (`InspectorWindows` calls `page->Draw` even when `Begin` returns false, `InspectorWindows.cpp:174-179`), where the old body ran only inside `if (ImGui::Begin("Material"))`. Its `BeginChild`/`PaneSplitter` are safe there.
 - **Remove:**
-  - the free `DrawMaterialPanel` (declaration and definition);
-  - `TabBecameVisible` and `m_tabBecameVisible`, IF the tab-follow block was their only reader. Grep to confirm first.
-- **Comments.** Update the header's comments: the "SEAM" comment now points at the next phase's node page.
+  - the free `DrawMaterialPanel` (declaration `ShaderEditorDocument.hpp:905` and definition);
+  - `TabBecameVisible` (with its comment, `ShaderEditorDocument.hpp:~196-202`) and `m_tabBecameVisible` (with its comment, `.hpp:753-754`, and both writes in `Draw`, `.cpp:~1911-1915` and `~1945-1949`, with their comments). `SyncCenterTabFocus` was their only reader, and the App step deletes it.
+- **Comments.**
+  - The header's "SEAM" comment now points at the next phase's node page.
+  - Rewrite the gesture-order comment at `ShaderEditorDocument.hpp:755-763`: the page body now draws AFTER the document (the Inspector phase), so `Draw`'s guard is no longer last in the frame; `Draw`'s guard plus the body's own guard still close every gesture through the ownership and abandonment rules.
+  - The mesh hint text `"author baseColor / albedo in the Material panel"` (`.cpp:~2022`) and the one-column comment at `.cpp:~1950-1956` say "the Inspector's material page" instead of the Material panel.
 
 App:
-- Delete the `DrawMaterialPanel(ResolveActiveMaterialDoc())` call.
-- Delete `ResolveActiveMaterialDoc` and the whole tab-follow block, including both `SelectDockTab` calls it makes.
-- Delete the `m_activeMaterialGuid`/`m_materialDocCount` members and their comments.
-- Grep for any other reader before deleting. `fs.vp.appearing` may have other readers; keep it if so.
+- Delete the `DrawMaterialPanel(ResolveActiveMaterialDoc())` call (~`EditorAppFrame.cpp:2415`) and the "The Material panel draws BEFORE the documents" comment above it (~:2407).
+- Delete `ResolveActiveMaterialDoc`: its declaration (`EditorApp.hpp:348`) and definition (`EditorAppFrame.cpp:3229-3250`).
+- Delete `EditorApp::SyncCenterTabFocus` ENTIRELY: its definition and phase-16b doc comment (`EditorAppFrame.cpp:~3484-3550`), its declaration and comment (`EditorApp.hpp:351-355`), and its call (`EditorAppFrame.cpp:468`, `SyncCenterTabFocus(fs);`). That removes all three `SelectDockTab` calls it made (`"Material"` at :3530, `"Inspector"` at :3536 and :3547). Its surviving branch (the viewport tab appearing -> select the Inspector tab) existed only because the Material window shared the Inspector's dock node; with Material gone it has no job. A deliberate loss: a user who docks another window into the Inspector's node no longer gets the Inspector tab raised when the viewport tab appears.
+- Delete the `m_activeMaterialGuid`/`m_materialDocCount` members, their comments and the "---- Material panel: which document it shows ----" section header (`EditorApp.hpp:~2209-2226`).
+- Grep `ArcaneEditor/src ArcaneTests/src` for `SyncCenterTabFocus|ResolveActiveMaterialDoc|m_activeMaterialGuid|m_materialDocCount|TabBecameVisible|vp.appearing|DrawMaterialPanel|DrawMaterialWindow` afterwards: expect no live hit.
 
 `InspectorSaveTarget` already maps a document source to its document, so Ctrl+S in the page saves the material. Confirm it with a grep and do not change it.
 
@@ -1570,6 +1813,7 @@ Expected: PASS.
 Open a material:
 - its page shows in the main Inspector (All but Assets), with the preview and params;
 - dragging a param undoes as one step;
+- Ctrl+click a param into text entry, type a value, then click the canvas: exactly ONE undo step (the gesture closes across the Inspector/document draw order);
 - the preview/params split drags;
 - clicking the canvas background after selecting an entity brings the material page back;
 - switching tabs between two material documents does NOT move the Inspector;
@@ -1609,11 +1853,21 @@ For each document, in its existing test file:
     REQUIRE(doc.Page() != nullptr);
     CHECK(doc.Page()->Breadcrumb()[0].key == std::optional<std::string>{ "sprite" });
 ```
-Also add a device-less draw case. Draw the page into a bare window, as `InputActionsDocumentUiTest.cpp:84` draws its page into `Begin("Inspector")`. Assert that the form's first widget id exists in THAT window and NOT in the document window:
-- sprite: the `"Pixels Per Meter"` drag; look it up through `ImGui::FindWindowByName(...)->GetID("Pixels Per Meter")` and `ImGui::GetCurrentContext()->LastItemData`, or through the hovered/active id after a click at its rect;
-- mesh: its first topology/source widget.
-
-If an id probe is not practical on this ImGui version, assert the observable effect instead: a scripted drag on the page's widget changes `doc`'s data and marks it dirty.
+Also add a device-less draw case, in the `InputActionsDocumentUiTest.cpp:75-92` harness shape: each frame draws the document (`doc.Draw(close)`), then pins the Inspector window (`SetNextWindowPos/Size(..., ImGuiCond_Always)`, as :82-83) and draws the page into `Begin("Inspector")`. Prove the form's first widget is submitted in THAT window through the ACTIVE id after a press (`ImGuiWindow::GetID` only hashes a label, and `LastItemData` is restored to the parent's at `End()`, `imgui.cpp:8849`, so neither shows a submission):
+```cpp
+    // (h = the harness; one warm-up Frame() first so the windows exist)
+    ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
+    REQUIRE(iw != nullptr);
+    const ImVec2 row(iw->ContentRegionRect.Min.x + 10.0f,
+                     iw->ContentRegionRect.Min.y + ImGui::GetFrameHeight() * 0.5f);   // the page's first row
+    h.Move(row);
+    h.Button(ImGuiMouseButton_Left, true);
+    CHECK(ImGui::GetActiveID() == iw->GetID("Pixels Per Meter"));      // sprite; mesh: its first form widget's label
+    CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);           // in the Inspector, not the document window
+    h.Button(ImGuiMouseButton_Left, false);
+```
+- sprite: `"Pixels Per Meter"` (`SpriteDocument.cpp:258`, the form's first widget);
+- mesh: the first widget `DrawFormBody` submits (read its label from `MeshDocument.cpp`'s source section).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1623,13 +1877,17 @@ Expected: `Kind()` returns `""`.
 
 For each document:
 - **Split the form.**
-  - Move everything in `Draw` after the preview block (sprite: after the texture preview; mesh: after `##meshpreview`'s `EndChild()` + `Separator()`, through the last form widget) into `void DrawFormBody();`.
+  - Sprite (it has NO preview, `SpriteDocument.hpp:53-56`): `DrawFormBody()` = `SpriteDocument.cpp:192-288`: the clamp-policy comment, the `bracket` lambda, the four drags, `if (changed) m_dirty = true;`, and the `Separator()` + read-only "Texture" line with its comment.
+  - Mesh: move everything in `Draw` after `##meshpreview`'s `EndChild()` + `Separator()`, through the last form widget, into `void DrawFormBody();`. `DrawFormBody` recomputes `const bool imported = (m_data.source == Arcane::MeshSource::Imported);` as a local: the form's source section reads it (`MeshDocument.cpp:551`) but it is declared in the preview block that stays in `Draw` (:456). `Draw` keeps its own copy for the preview branch.
   - Move the `bracket`/`commit` lambdas along with the form.
   - Give `DrawFormBody` its OWN `EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };` as its first local, because it now runs inside an Inspector window's Begin/End. The precedent is `DrawMaterialWindow`, which already held a second guard on the document's gesture.
-- **What stays in `Draw`:** the document's toolbar (Save button, "(unsaved)"), the preview, and `m_pageSel.NoteContentClick();` before `End()`.
+- **What stays in `Draw`:** the document's toolbar (Save button, "(saved)"/"(unsaved)"; spec s6a: a document keeps its toolbar and preview), then:
+  - sprite: the `Separator()` + "NO TEXTURE PREVIEW HERE" comment + `TextDisabled("(no texture)")` placeholder (`SpriteDocument.cpp:290-297`);
+  - mesh: the preview;
+  - and `m_pageSel.NoteContentClick();` before `End()`.
 - **Ctrl+S.** The document keeps its own `ImGui::Shortcut(Ctrl+S)`.
 - **Source overrides.** Add `DocumentPageSelection m_pageSel{ "sprite" }` (`"mesh"`) and the overrides, exactly as Task 8 does for materials.
-- **Preview reads.** Check every preview read that USED a form-local value. Mesh's `m_validationReason` is computed from `m_data`, not from the form, so it should be unaffected. Any such dependency must read document state, never a local that moved.
+- **Preview reads.** Check every preview read that USED a form-local value, and every form read of a preview-block local (the mesh's `imported`, above). Mesh's `m_validationReason` is computed from `m_data`, not from the form, so it should be unaffected. Any such dependency must read document state, never a local that moved.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1638,16 +1896,16 @@ Expected: PASS.
 
 - [ ] **Step 5: Desk check (windowed, the user)**
 
-- Open a sprite: its form is in the Inspector, and the document shows only the toolbar and preview.
-- A pivot drag updates the preview live and undoes as one step.
-- The same checks for a mesh: topology edits rebuild the preview.
-- A click in either preview re-selects the page after an entity click.
+- Open a sprite: its form (including the read-only Texture line) is in the Inspector, and the document window shows only the toolbar and the "(no texture)" placeholder.
+- A sprite pivot drag edits the sprite and marks the tab "(unsaved)"; one Ctrl+Z undoes it; Save shows it in the viewport (the sprite republishes on Save and undo/redo only, never live).
+- A click in the sprite document's content area (the "(no texture)" region) re-selects the page after an entity click.
+- Open a mesh: its form is in the Inspector; the document shows the toolbar and the preview; topology edits update the preview live and undo as one step; a click in the preview re-selects the page after an entity click.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add -A ArcaneEditor/src ArcaneTests/src
-git commit -m "feat(editor): Sprite and Mesh forms move into Inspector pages (kinds sprite/mesh); the documents keep their toolbar + preview (inspector filters s6a)"
+git commit -m "feat(editor): Sprite and Mesh forms move into Inspector pages (kinds sprite/mesh); the documents keep their toolbar (+ the mesh preview) (inspector filters s6a)"
 ```
 
 ---
@@ -1657,11 +1915,14 @@ git commit -m "feat(editor): Sprite and Mesh forms move into Inspector pages (ki
 **Files:**
 - Modify: `ArcaneClient/src/Arcane/Host/VerifyReport.hpp/.cpp` (schemaVersion 12, `SetInspector(source, breadcrumb, instances)`)
 - Modify: `ArcaneClient/src/Arcane/Host/HostConfig.hpp/.cpp` (`--select-asset <guid>`, editor only, beside `--open-asset`)
+- Modify: `ArcaneRuntime/src/main.cpp` (refuse `--select-asset` with exit 2, like the other editor-only flags at :152-182)
+- Modify: `ArcaneCore/src/Arcane/Plugin/PluginABI.hpp` (`kGamePluginABIVersion` 45 -> 46 + history entry) and `ReferenceProject/ReferenceProject.arcproj` (`"abi": 46`)
 - Modify: `ArcaneEditor/src/App/EditorApp.cpp` (apply `--select-asset` at boot beside `--open-asset` ~line 1300; snapshot the instances before `CloseAll` ~line 2872; pass them to `SetInspector`)
 - Modify: `ReferenceProject/Saved/verify-layout.ini` (re-authored with `--dump-layout`)
-- Modify: `scripts/golden-gate.ps1` (a new lane pair `editor-asset-page`; update the header list to twelve combinations)
-- Modify: `ArcaneTests/src/EditorWitnessTest.cpp` (E3 asserts `instances`; a new E4 asset-page witness)
-- Re-bless: `editor-ui`, `editor-ui-perspective`, `editor-input-doc` (both backends), plus the new `editor-asset-page`, per the procedure in memory "Golden RE-BLESS: bless the STAGED slot, copy to source IMMEDIATELY", and delete the exe-dir `imgui.ini` before any golden run.
+- Modify: `scripts/golden-gate.ps1` (`$script:ReportSchemaMax = 12` + its history comment; TWO new lane pairs, `editor-asset-page` and `editor-material-page`; "Ten combinations" in the header (line 11) and "ten today" (line 310) become fourteen)
+- Modify: `ArcaneTests/src/EditorWitnessTest.cpp` (E3 asserts `instances`; new E4 asset-page and E5 document-page witnesses)
+- Modify: `ArcaneTests/src/VerifyReportTest.cpp` (the schema-11 pins become 12), `ArcaneTests/src/HostConfigTest.cpp` (a `--select-asset` round-trip case)
+- Re-bless: `editor-ui`, `editor-ui-perspective`, `editor-input-doc` (both backends), plus the new `editor-asset-page` and `editor-material-page`, per the procedure in memory "Golden RE-BLESS: bless the STAGED slot, copy to source IMMEDIATELY", and delete the exe-dir `imgui.ini` before any golden run.
 
 **Interfaces:**
 - Produces: report JSON `inspector.instances: [ { "id": 0, "excluded": ["assets"], "source": "Scene" }, ... ]` and the `--select-asset <guid>` flag. `source` is the routed source's `SourceName()`, or `""` when null.
@@ -1678,22 +1939,83 @@ In `EditorWitnessTest.cpp` E3 (after the existing breadcrumb check):
     CHECK(inst[1].at("id") == 1);
     CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions", "material", "sprite", "mesh" }));
 ```
-Add a new E4 case, copying E3's harness exactly and swapping `--open-asset ... --select-in-document ...` for `--select-asset <brick texture guid from ReferenceProject>`. Pick a `.png` under `ReferenceProject/Content` and read its `.meta` guid:
+Add a new E4 case on E3's harness, with `--select-asset` of `ReferenceProject/Content/textures/uv_marker.png` (its `.meta` guid; the project's only `.png`) and its OWN golden slot:
 ```cpp
-    CHECK(run.report["inspector"].at("source") == "Assets");          // Current(): the asset click
+// E4: the ASSET PAGE witness (inspector filters s6). --select-asset selects
+// uv_marker.png in the Asset Browser the way a click does; the Assets-only
+// Inspector shows its page while the main (All but Assets) one stays on the scene.
+TEST_CASE("E4: a selected asset routes the Assets Inspector to its page and matches the editor-asset-page golden", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e4-asset-page");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+                 "--settle", "10", "--report", inv.reportPath.generic_string(),
+                 "--select-asset", "d7f389fd-f687-407d-b9d7-9753eb6b0258",   // textures/uv_marker.png
+                 "--compare", "editor-asset-page" };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("inspector"));
+    CHECK(run.report["inspector"].at("source") == "Assets");                  // Current(): the asset selection
+    REQUIRE(run.report["inspector"].contains("instances"));
     CHECK(run.report["inspector"]["instances"][0].at("source") == "Scene");   // All but Assets: untouched
     CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");
+    REQUIRE(run.report.contains("compare"));
+    CHECK(run.report["compare"].at("passed") == true);
+}
 ```
-Add E5, again copying E3's harness, three runs with `--open-asset <guid>` of a ReferenceProject material (`.arcmat`), sprite (`.arcsprite`) and mesh (`.arcmesh`). Read each guid from the file, and pick assets that exist under `ReferenceProject/Content`:
+Add E5 on the same harness: one run per document kind with `--open-asset`. Only the material run compares (against `editor-material-page`); no sprite or mesh golden exists, so those runs pass no `--compare` and assert no `compare`. The titles are each file's `name` field (`Title()` = `name`, else the stem):
 ```cpp
-    CHECK(run.report["inspector"]["instances"][0].at("source") == "<the document's SourceName(): its Title()>");
-    CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");   // untouched by a document open
+// E5: DOCUMENT PAGES (inspector filters s6a). Opening a material, a sprite or a
+// mesh selects that document's page: the main Inspector routes to it, and the
+// Assets-only Inspector is untouched.
+TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector to that document's page", "[witness][gpu]")
+{
+    struct Doc { const char* guid; const char* title; const char* compare; };
+    const Doc docs[] = {
+        { "7e5a0010-0010-4010-8010-000000000010", "ReferenceCubeMaterial", "editor-material-page" },   // materials/reference_mesh.arcmat
+        { "87bd4fd3-c9e6-4fc8-a8e0-cf799378f049", "UvMarkerSprite",        nullptr },                  // sprites/uv_marker.arcsprite
+        { "7e5a0011-0011-4011-8011-000000000011", "ReferenceCube",         nullptr },                  // meshes/reference_cube.arcmesh
+    };
+    for (const Doc& d : docs)
+    {
+        DYNAMIC_SECTION(d.title)
+        {
+            WitnessScratch scratch(StagedEditorDir(), std::string("e5-") + d.title);
+            WitnessInvocation inv;
+            inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+            inv.reportPath = scratch.Dir() / "witness-report.json";
+            inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+                         "--settle", "10", "--report", inv.reportPath.generic_string(),
+                         "--open-asset", d.guid };
+            if (d.compare) { inv.args.push_back("--compare"); inv.args.push_back(d.compare); }
+            inv.hardCapMs = 180000;
+            WitnessRun run = RunWitness(inv);
+            INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+            REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+            REQUIRE(run.exitCode == 0);
+            REQUIRE(run.report.contains("inspector"));
+            REQUIRE(run.report["inspector"].contains("instances"));
+            CHECK(run.report["inspector"]["instances"][0].at("source") == d.title);
+            CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");   // untouched by a document open
+            if (d.compare)
+            {
+                REQUIRE(run.report.contains("compare"));
+                CHECK(run.report["compare"].at("passed") == true);
+            }
+        }
+    }
+}
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `ArcaneTests.exe "[witness]" -# ` using the E3/E4 names (witnesses need the built editor and run from the exe dir).
-Expected: FAIL (no `instances`, unknown flag).
+Run: `ArcaneTests.exe "[witness]" -# ` using the E3/E4/E5 names (witnesses need the built editor and run from the exe dir).
+Expected: FAIL (no `instances`, unknown flag; the E4/E5-material compares stay red until Step 4 blesses their slots).
 
 - [ ] **Step 3: Implement**
 
@@ -1704,20 +2026,47 @@ Expected: FAIL (no `instances`, unknown flag).
 ```
 - **Serialization.** Serialize `"instances"` as an array of `{id, excluded, source}`, always present when `SetInspector` ran.
 - **Schema.** Bump `kSchemaVersion` to 12. Extend the schema-history comment: "12: inspector.instances (inspector filters)".
-- **Older consumers.** Check `kOldestSupportedSchemaVersion` and any consumer that pins 11: grep `schemaVersion.*11` across `ArcaneTests`/`scripts`.
-- **ABI.** `VerifyReport` lives in ArcaneClient. If its layout change trips the engine ABI check at build or boot, bump `engine.abi` per memory "ABI bumps are CHEAP", restamp ReferenceProject, and note that the Aphelyon restamp is owed.
+- **Schema consumers.** `kOldestSupportedSchemaVersion` stays 3. Two consumers pin 11 by name, and a `schemaVersion.*11` grep misses the first:
+  - `scripts/golden-gate.ps1:404`: `$script:ReportSchemaMax = 11` becomes `12`, and its history comment (:392-402) gains "12 since the inspector-filters arc added `inspector.instances` [{id, excluded, source}]". Without it every lane grades red ("outside this gate's supported range", :1071-1074).
+  - `ArcaneTests/src/VerifyReportTest.cpp`: every `== 11` schema pin becomes `== 12` (today :75, :736, :760, :857, :967, :985, :1021, :1042, :1070, :1112, :1158); the test name at :962 says "schemaVersion is 12"; add `CHECK(IsSupportedSchemaVersion(12))` and turn the `CHECK_FALSE(IsSupportedSchemaVersion(12))` into `CHECK_FALSE(IsSupportedSchemaVersion(13))` (11 stays supported).
+- **ABI (unconditional).** No build or boot check detects a `HostConfig`/`VerifyReport` layout change: the gate is the hand-maintained `kGamePluginABIVersion`, and v45 bumped for exactly this kind of change. Bump it to 46 in `ArcaneCore/src/Arcane/Plugin/PluginABI.hpp` with a history entry after v45's:
+  ```cpp
+    // v46 (2026-09-29, inspector filters): `HostConfig` gained `selectAsset`
+    //     (--select-asset), and `VerifyReport` gained `InspectorInstance` /
+    //     `m_inspectorInstances` behind a new `SetInspector(source, breadcrumb,
+    //     instances)` signature (report schemaVersion 12) -- both layouts moved.
+    //     ReferenceProject.arcproj restamped; the Aphelyon restamp is owed.
+    inline constexpr uint32_t kGamePluginABIVersion = 46;
+  ```
+  Restamp `ReferenceProject/ReferenceProject.arcproj` (`"abi": 45` -> `46`). The Aphelyon `Game/Aphelyon.arcproj` restamp is OWED (another repo): record it in the task report.
 
 `HostConfig`:
 - Add `cli.Option("select-asset", "", "editor only: select this asset guid in the Asset Browser at boot (its page shows in the Assets Inspector)");`.
 - Add `cfg.selectAsset = r.Get("select-asset");`.
 - Add the field `std::string selectAsset;` beside `openAsset`.
+- `HostConfigTest.cpp`: add a "host config: --select-asset round-trips and defaults empty" case, the `--open-asset` case at :148 with the flag and field swapped (guid `d7f389fd-f687-407d-b9d7-9753eb6b0258`).
+
+`ArcaneRuntime/src/main.cpp`, after the `--select-in-document` refusal (~:177-182):
+```cpp
+    if (!parsed.config->selectAsset.empty())
+    {
+        std::fprintf(stderr, "error: --select-asset is an EDITOR-only flag (this host has no "
+                             "Asset Browser). Use ArcaneEditor.exe.\n");
+        return 2;
+    }
+```
 
 `EditorApp.cpp` boot (beside `--open-asset`, same loudness rule):
 ```cpp
+        // --select-asset (inspector filters s6): a scripted Asset Browser
+        // selection. Validated through the PROJECT, the way OpenAssetDocument
+        // does (EditorAppProject.cpp:182-192): the model is not rebuilt until
+        // the first frame's DrawEditorUi, so its Find() misses every guid here.
         if (!m_config.selectAsset.empty())
         {
             const auto guid = Arcane::Guid::FromString(m_config.selectAsset);
-            if (!guid || !m_assetModel.Find(*guid))   // the model must be rebuilt first: call RebuildIfDirty here if Find misses on a fresh model
+            const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            if (!guid || !p || !p->ResolveAsset(Arcane::AssetId::FromGuid(*guid)))
                 ARC_ERROR("--select-asset '{}': not a Guid or not in the project", m_config.selectAsset);
             else
                 m_assetModel.Select(*guid);           // the asset edge routes it next frame, like a click
@@ -1742,12 +2091,20 @@ Pass it as `SetInspector`'s third argument. Use the real namespace of `VerifyRep
    del bin\Debug-windows-x86_64-md\ArcaneEditor\imgui.ini
    bin\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project ReferenceProject --headless --frames 90 --dump-layout %TEMP%\seed.ini
    ```
-   Because `--headless` pins the OLD seed, this run exercises the legacy upgrade: the old seed has no `Filters=`. Check that `%TEMP%\seed.ini` now carries `[EditorInspector][Instances]` with `Ids=1` and `Filters=0:assets,1:scene+input-actions+material+sprite+mesh`, plus `[Window][Inspector - All but Assets###Inspector]` and `[Window][Inspector 2 - Assets###inspector_1]` entries (ImGui keys window settings by the full title, and the ID is what matters) docked into the seed's nodes. Copy it over `ReferenceProject/Saved/verify-layout.ini`. Keep the file's hand-written header comment block (lines 1-60 explain the seed), and paste the dumped body under it.
-3. Add TWO lane pairs to `scripts/golden-gate.ps1`, after `editor-input-doc`, then update the header list and "Ten combinations" to fourteen. The second pair is `editor-material-page`, with `ExtraArgs = @('--open-asset', '<material guid>')` and `SelfTestExpect = 'Green'` (the document tab covers the viewport, as with input-doc: verify with `-SelfTest`):
+   Dump with the OLD seed IN PLACE. This deliberately deviates from the seed header's own "TO REGENERATE" steps (which say to move the file aside first): `--headless` pins the old seed, which has no `Filters=`, so this run exercises the legacy upgrade. Check that `%TEMP%\seed.ini` now carries:
+   - `[EditorInspector][Instances]` with `Ids=1` and `Filters=0:assets,1:scene+input-actions+material+sprite+mesh`;
+   - `[Window][Inspector]`, still docked where the seed's Inspector was (`ImHashStr` skips `###`, so `"...###Inspector"` reuses the seed's entry by id);
+   - `[Window][inspector_1]`, docked into the new split right of the Asset Browser. `CreateNewWindowSettings` names an entry by the text after `###` (`imgui.cpp:16416`), never by the full title.
+
+   Build the new seed: keep the file's hand-written header comment block (lines 1-71) and paste the dumped body under it. Delete the stale `[Window][Material]` section by hand (unclaimed entries re-emit verbatim, and Task 8 retired that window). Add a paragraph at the end of the header recording this regen: date, "dumped with the old seed in place to exercise the one-time legacy Inspector upgrade (inspector filters s6), deviating from TO REGENERATE", and the hand-deleted `[Window][Material]`. Copy the result over `ReferenceProject/Saved/verify-layout.ini`.
+3. Add TWO lane pairs to `scripts/golden-gate.ps1`, after `editor-input-doc`, then update the header list, "Ten combinations" (line 11) and "ten today" (line 310) to fourteen:
    ```powershell
-   @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', '<brick guid>'); SelfTestExpect = 'Failed' }
-   @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', '<brick guid>'); SelfTestExpect = 'Failed' }
+   @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page';    Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', 'd7f389fd-f687-407d-b9d7-9753eb6b0258'); SelfTestExpect = 'Failed' }
+   @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page';    Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', 'd7f389fd-f687-407d-b9d7-9753eb6b0258'); SelfTestExpect = 'Failed' }
+   @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-material-page'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '7e5a0010-0010-4010-8010-000000000010'); SelfTestExpect = 'Green' }
+   @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-material-page'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '7e5a0010-0010-4010-8010-000000000010'); SelfTestExpect = 'Green' }
    ```
+   (`d7f389fd-...` = `textures/uv_marker.png`; `7e5a0010-...` = `materials/reference_mesh.arcmat`.) `editor-material-page` is `'Green'` because the document tab covers the viewport, as with input-doc.
    `SelfTestExpect 'Failed'`: the viewport is visible, so the self-test's boot-scene mutation shows. Verify with `-SelfTest` and flip it if wrong, as the input-doc lane's comment describes.
 4. Re-bless `editor-ui`, `editor-ui-perspective`, `editor-input-doc` and the new `editor-asset-page` and `editor-material-page` on both backends with the staged-slot procedure. LOOK at every new image before copying it to source. Expected differences:
    - editor-ui: no preview pane in the Asset Browser, an "Inspector 2 - Assets" pane on its right, and the main Inspector titled "Inspector - All but Assets";
@@ -1765,8 +2122,8 @@ Expected: all green except documented pre-existing skips (the usual 4).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add -A ArcaneClient/src ArcaneEditor/src ArcaneTests/src ReferenceProject/Saved/verify-layout.ini scripts/golden-gate.ps1 ReferenceProject/Saved/Verify
-git commit -m "test(editor): report inspector.instances (schema 12), --select-asset, re-authored verify seed with the two-inspector layout, editor-asset-page + editor-material-page golden lanes, document-page witnesses; editor goldens re-blessed (inspector filters s9)"
+git add -A ArcaneClient/src ArcaneEditor/src ArcaneTests/src ArcaneRuntime/src/main.cpp ArcaneCore/src/Arcane/Plugin/PluginABI.hpp ReferenceProject/ReferenceProject.arcproj ReferenceProject/Saved/verify-layout.ini scripts/golden-gate.ps1 ReferenceProject/Saved/Verify
+git commit -m "test(editor): report inspector.instances (schema 12), --select-asset, re-authored verify seed with the two-inspector layout, editor-asset-page + editor-material-page golden lanes, document-page witnesses; plugin ABI 46 (ReferenceProject restamped; Aphelyon restamp owed); editor goldens re-blessed (inspector filters s9)"
 ```
 (Stage the golden reference images from wherever the gate keeps source references. Grep `golden-gate.ps1` for the reference root, and never stage `bin/`.)
 
@@ -1776,17 +2133,20 @@ git commit -m "test(editor): report inspector.instances (schema 12), --select-as
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-29-inspector-filters-design.md` (Status: "Implemented <date>, branch feat/inspector-filters"; §9 lists the witnesses/lanes actually added)
-- Record the NEXT phase in the spec's header: a full shader node page (spec s6a / decision 9).
+- Keep the header's existing next-phase line ("A full shader NODE page is the next phase, right after this one.", spec lines 9-10; s6a / decision 9) and fold it into the new Implemented status line. Do not add a duplicate.
+- Record what shipped where it differs from the spec text:
+  - s6a "Retired" bullet: after "(`SelectDockTab("Material")` / `SelectDockTab("Inspector")` on a material tab becoming visible)" add: "-- in fact all of `EditorApp::SyncCenterTabFocus`, including its viewport-appearing -> `SelectDockTab("Inspector")` branch and `ViewportPanelResult::appearing`. That branch existed only because Material shared the Inspector's dock node. Accepted loss: a window the user docks into the Inspector's node no longer gets the Inspector tab raised when the viewport tab appears."
+  - s3, after the one selection rule: "Scoped exception: the Asset Graph lens mirrors its persistent canvas selection into the model only on change, so re-clicking the already-selected Graph node is not a selection event; every other asset click site (Browser, Status, feed, the Browser row context menu on its first frame) is."
 
 - [ ] **Step 1: Grep sweep for stale references**
 
 Run: `grep -rn "preview pane\|previewPaneWidth\|kAssetsPreviewPaneDefaultWidth\|selectedAsset\|CanPin()\|DrawMaterialPanel\|DrawMaterialWindow\|ResolveActiveMaterialDoc\|\"Material\" panel\|Material tab" ArcaneEditor ArcaneTests docs/superpowers/specs`
-Expected: only historical mentions in older specs/plans, which stay as history, and none in live code. Fix any live one.
+Expected: only historical mentions in older specs/plans, which stay as history, and no live-code hit. COMMENT hits in files no task touched may remain (at least 14 today, e.g. "the preview pane's New Instance..." in `EditorApp.hpp:343` and the "Material panel" mentions in `AssetBrowserPanel.cpp:990` / `.hpp:59` and `EditorPanels.hpp:583`): rewrite each one whose statement is now false, leave true history alone. Fix any live one.
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add -A docs ArcaneEditor/src
+git add -A docs ArcaneEditor/src ArcaneTests/src
 git commit -m "docs(editor): inspector filters spec marked implemented; stale preview-pane references swept"
 ```
 
@@ -1812,8 +2172,11 @@ git commit -m "docs(editor): inspector filters spec marked implemented; stale pr
 
 - **The mini-arc 3 consequence is gone.** The material kind ships in this phase, so the default "Assets only" filter excludes it from day one and no saved layout ever holds the old narrower list.
 - **Risky spots flagged in their tasks:**
-  - instance 0's move to the stable id `###Inspector`, plus its re-dock in the legacy upgrade (Task 7, Steps 3-4);
+  - instance 0's stable id `###Inspector`, which `ImHashStr` hashes to the legacy bare `Inspector` id, so no re-dock is needed (a Task 7 test pins the equality; Task 10's seed expects `[Window][Inspector]` + `[Window][inspector_1]`);
   - the `DockBuilderSplitNode` direction and the leaf-node check (Task 7, Step 4);
-  - the `assetPanelServices` local's lifetime (Task 6, Step 2);
-  - ArcaneClient ABI (Task 10, Step 3);
-  - `NoteContentClick` must see clicks on the node-editor canvas (a child window) and must NOT see a click on the dock tab or the title bar (Task 8, Steps 1 and 5).
+  - the asset page's services pointer: a MEMBER (`m_assetPanelServices`), because `DrawEditorUi`'s local is dead by the Inspector phase (Task 6, Step 2);
+  - the asset re-click as a selection event: `AssetPanelModel::selectionGesture` (Task 5), observed by the asset edge (Task 6); the Browser row context menu's per-frame `Select` is gated to the popup's first frame (Task 6), and the Graph lens's change-only mirror is the one scoped exception (Task 5, recorded in the spec by Task 11);
+  - `SyncCenterTabFocus` deleted whole (Task 8, ruling R7): the viewport-appearing -> Inspector-tab raise goes with it, a deliberate loss the spec's s6a records at close-out (Task 11);
+  - the unconditional plugin ABI bump 45 -> 46 and the report schema 12 consumers (Task 10, Step 3);
+  - `NoteContentClick` must see clicks on the node-editor canvas (drawn directly in the document window, no child) and must NOT see a click on the dock tab or the title bar (Task 8, Steps 1 and 5);
+  - the sprite document window is nearly empty after Task 9 (toolbar + the "(no texture)" placeholder): a sprite preview is a natural follow-up.

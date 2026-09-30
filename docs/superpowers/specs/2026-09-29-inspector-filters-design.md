@@ -74,7 +74,7 @@ panels only follow or lock.
   Actions document open" for a single kind, "Nothing to show for this filter" otherwise.
 - **Deselect is per source.** What an instance shows is always its routed source's LIVE
   selection. A clear in source X changes only the instances routed to X: clicking empty space
-  in the viewport blanks a Scene inspector ("Nothing selected") and leaves an Input Actions
+  in the viewport blanks a Scene inspector ("No selection") and leaves an Input Actions
   inspector on its binding; an All inspector is unaffected unless it is currently routed to X
   (a clear is not an event, so it moves no stamp and never moves `Current()`). A filtered
   instance never keeps a stale page after its own source clears -- keeping a page is what pin
@@ -152,7 +152,7 @@ panels only follow or lock.
   `"mesh"`) become sources with one document-level key each (`"sprite"`, `"mesh"`), same open +
   click rule. Each document's FORM (sprite: texture, sub-rect, pivot and the rest of
   SpriteAssetData; mesh: source + topology parameters) moves into its page; the document window
-  keeps only its preview (interactive where it is today). Edits keep riding each document's
+  keeps its toolbar and preview (interactive where it is today). Edits keep riding each document's
   own undo steps (its EditGesture bracket moves with the form).
 - **Save.** Ctrl+S in an Inspector showing any document page saves that document (the existing
   `saveRequested` route).
@@ -183,7 +183,7 @@ panels only follow or lock.
    of surprise that makes a tool infuriating.
 4. **Back/forward = the shared history, filtered**; landing re-selects in the source. Not a
    per-instance history (a second list to keep in sync), not hidden arrows.
-5. **An emptied source shows "Nothing selected"**, never the last page (an unmarked auto-pin
+5. **An emptied source shows "No selection"**, never the last page (an unmarked auto-pin
    whose edits land on an entity selected nowhere). Deselect stays per source/editor: a scene
    clear never blanks an instance filtered to another kind (s3).
 6. **Header dropdown + title suffix**; any instance, including the main one.
