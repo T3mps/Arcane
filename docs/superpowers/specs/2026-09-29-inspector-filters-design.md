@@ -152,7 +152,8 @@ panels only follow or lock.
   `"mesh"`) become sources with one document-level key each (`"sprite"`, `"mesh"`), same open +
   click rule. Each document's FORM (sprite: texture, sub-rect, pivot and the rest of
   SpriteAssetData; mesh: source + topology parameters) moves into its page; the document window
-  keeps its toolbar and preview (interactive where it is today). Edits keep riding each document's
+  keeps its toolbar and, for the mesh, its preview (interactive where it is today); the sprite
+  window keeps its "(no texture)" placeholder (it never had a preview). Edits keep riding each document's
   own undo steps (its EditGesture bracket moves with the form).
 - **Save.** Ctrl+S in an Inspector showing any document page saves that document (the existing
   `saveRequested` route).
