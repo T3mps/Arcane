@@ -924,27 +924,40 @@ TEST_CASE("Default layout geometry: the user's ReferenceProject layout in pixels
 {
     // USER DECISION 2026-09-30: Inspector 380 w (full height, right), Outliner
     // 270 w, the bottom band 350 h (under the Outliner, left of the
-    // Inspector), Inspector 2 390 w at the band's right end.
+    // Inspector). These three splits each have the central node on one side,
+    // so ImGui keeps the OTHER side at its pixel size on resize.
     const DefaultLayoutPixels full = ComputeDefaultLayoutPixels(1920.0f, 954.0f);   // 1920x1080 maximized
     CHECK(full.inspector == 380.0f);
     CHECK(full.outliner == 270.0f);
     CHECK(full.bottomBand == 350.0f);
-    CHECK(full.assetsInspector == 390.0f);
 
     const DefaultLayoutPixels boot = ComputeDefaultLayoutPixels(1280.0f, 647.0f);   // the hidden 1280x720 boot window
     CHECK(boot.inspector == 380.0f);                                  // 650 of 1280: the central node keeps 49%
     CHECK(boot.outliner == 270.0f);
     CHECK(boot.bottomBand == 350.0f);                                 // 297 of 647 left: 46%
-    CHECK(boot.assetsInspector == 390.0f);
 
     const DefaultLayoutPixels small = ComputeDefaultLayoutPixels(800.0f, 500.0f);
     CHECK(small.inspector + small.outliner <= 800.0f * 0.6f + 0.01f);   // central >= 40% of the width
     CHECK(std::abs(small.inspector / small.outliner - 380.0f / 270.0f) < 1e-5f);   // both shrink by one factor
     CHECK(small.bottomBand == 500.0f * 0.6f);                           // central >= 40% of the height
-    CHECK(small.assetsInspector <= (800.0f - small.inspector) * 0.45f + 0.01f);
+}
 
-    CHECK(LegacyAssetsInspectorPixels(1144.0f) == 390.0f);           // the user's band at 1920
-    CHECK(LegacyAssetsInspectorPixels(500.0f) == 225.0f);            // clamped to 45% of the browser's node
+TEST_CASE("Default layout geometry: Inspector 2 splits the band by the user's 1920-scale PROPORTION, not a pixel target", "[editor][inspector]")
+{
+    // Integration residual 2a: the band's browser | Inspector 2 split has NO
+    // central node on either side, so ImGui re-divides it by the children's
+    // SizeRef RATIO on every resize (imgui.cpp DockNodeTreeUpdatePosSize,
+    // rule 4). A 390 px target built at the 1280x720 boot size (506:390)
+    // grew Inspector 2 to ~668 px maximized. The split is the user's own
+    // saved proportion instead -- browser 1144 : Inspector 2 392 -- the same
+    // at every build size, and exactly 392 px on a 1536 px band (1920x1080).
+    CHECK(kDefaultBandBrowserRefPx == 1144.0f);
+    CHECK(kDefaultAssetsInspectorRefPx == 392.0f);
+    CHECK(kDefaultAssetsInspectorBandFraction == 392.0f / 1536.0f);
+    CHECK(std::abs(1536.0f * kDefaultAssetsInspectorBandFraction - 392.0f) < 1e-3f);
+    // Well inside the split clamps at any size (it used to need a 45% cap).
+    CHECK(kDefaultAssetsInspectorBandFraction > 0.05f);
+    CHECK(kDefaultAssetsInspectorBandFraction < 0.45f);
 }
 
 TEST_CASE("InspectorHost: a closed slot's filter comes back when Window > New Inspector reuses the slot", "[editor][inspector]")

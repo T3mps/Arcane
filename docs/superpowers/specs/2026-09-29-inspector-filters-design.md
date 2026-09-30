@@ -273,12 +273,18 @@ panels only follow or lock.
   `Panels/DefaultLayout.hpp`): the main Inspector a full-height 380 px right column; the
   Outliner 270 px beside the central Viewport on top; a 350 px band under them, from the left
   edge to the Inspector, holding the Asset Browser/Graph/Status/Console/Problems tab node with
-  Inspector 2 ("Assets only") at 390 px on its right. At 1920x1080 (a ~1920x954 dockspace)
-  those are the pixels; a 1280x720 build keeps them too (the central node still has 49% of the
-  width and 46% of the height), and smaller builds clamp them so the central node keeps 40% of
-  each axis. THE SEED: since the same wave the verify seed IS that default at the headless
-  1280x720 (a bare no-seed dump), so every editor golden shows it -- Inspector 2 is 390x350 px
-  there, and `editor-asset-page` shows its breadcrumb, pin, thumbnail, rows and action buttons.
+  Inspector 2 ("Assets only") on its right. At 1920x1080 (a ~1920x954 dockspace) those are the
+  pixels; a 1280x720 build keeps them too (the central node still has 49% of the width and 46%
+  of the height), and smaller builds clamp them so the central node keeps 40% of each axis.
+  Inspector 2 is the exception (integration pass 2a): neither side of the band's split holds
+  the central node, so ImGui re-divides it by SizeRef RATIO on every resize -- a 390 px target
+  built at the 1280x720 boot size grew to ~668 px maximized. It is built from the user's own
+  1920-scale proportion instead (browser 1144 : Inspector 2 392, i.e. 392/1536 of the band;
+  their saved ini stores exactly those SizeRefs), so it is 392 px at 1920x1080 and ~229 px at
+  1280x720; the one-time legacy upgrade's split of the browser's node takes the same
+  proportion. THE SEED: since the same wave the verify seed IS that default at the headless
+  1280x720 (a bare no-seed dump), so every editor golden shows it -- Inspector 2 is ~229x350 px
+  there.
   (Before the wave the seed was the legacy-upgraded one, with a ~182x180 px Assets pane showing
   only the thumbnail, and `BuildDefaultLayout` gave ~177x300 px at 1920x1080.)
 - Mesh materials: the material page shows a one-line "not compiled here" note and the params

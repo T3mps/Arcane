@@ -370,10 +370,11 @@ TEST_CASE("E3b: an unresolvable --select-in-document is a loud ERROR, the run co
 // E6: THE DEFAULT LAYOUT (USER DECISION 2026-09-30; final fix W). With the
 // scratch copy's seed removed, a --headless run falls back to
 // BuildDefaultLayout (the seed-less branch of RetargetLayoutIni): the dumped
-// dock tree must be the user's ReferenceProject layout in pixels at the
-// headless 1280x720 -- the main Inspector a full-height right column, the
-// Outliner top-left beside the central Viewport, and the asset/console band
-// under the Outliner up to the Inspector with Inspector 2 at its right end --
+// dock tree must be the user's ReferenceProject layout at the headless
+// 1280x720 -- the main Inspector a full-height right column, the Outliner
+// top-left beside the central Viewport (pixel targets), and the asset/console
+// band under the Outliner up to the Inspector with Inspector 2 at its right
+// end (the user's 1144 : 392 proportion, the band's split being ratio-shared) --
 // and the picture must match editor-ui, whose seed IS that default.
 TEST_CASE("E6: with no layout seed the editor builds the default layout -- the user's ReferenceProject layout -- and matches editor-ui", "[witness][gpu]")
 {
@@ -442,7 +443,13 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
     REQUIRE(band != nullptr);
     CHECK(band->parent == leftBlock->id);                       // under the Outliner, left of the Inspector
     CHECK(std::abs(band->h - Arcane::Editor::kDefaultBottomBandPx) <= kTol);
-    CHECK(std::abs(assetsInsp->w - Arcane::Editor::kDefaultAssetsInspectorPx) <= kTol);
+    // The band's browser | Inspector 2 split has no central node, so ImGui
+    // re-divides it by the children's SizeRef RATIO on resize: the SizeRefs
+    // must carry the user's 1920-scale proportion (1144 : 392), not a pixel
+    // target taken at this 1280x720 build (integration residual 2a).
+    const float bandShare = assetsInsp->w / (browser->w + assetsInsp->w);
+    INFO("band SizeRef browser " << browser->w << " : Inspector 2 " << assetsInsp->w);
+    CHECK(std::abs(bandShare - Arcane::Editor::kDefaultAssetsInspectorBandFraction) <= 0.005f);
     REQUIRE(run.report.contains("compare"));
     CHECK(run.report["compare"].at("passed") == true);          // the seed IS this default
 }
@@ -452,9 +459,9 @@ TEST_CASE("E6: with no layout seed the editor builds the default layout -- the u
 // no extra instance, no [Window][inspector_1], the band's browser|Inspector 2
 // split folded back into one browser node -- and the run must upgrade it once:
 // instance 0 All but Assets, an Assets-only instance at slot 1, docked in a
-// split right of the Asset Browser's node at the default's 390 px target
-// (clamped to 45% of that node).
-TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspector 2 splits right of the Asset Browser at the default width", "[witness][gpu]")
+// split right of the Asset Browser's node at the default band's proportion
+// (1144 : 392 -- the split is ratio-shared, integration residual 2a).
+TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspector 2 splits right of the Asset Browser at the default proportion", "[witness][gpu]")
 {
     WitnessScratch scratch(StagedEditorDir(), "e7-legacy-upgrade");
     const std::filesystem::path seedPath = scratch.Dir() / "ReferenceProject" / "Saved" / "verify-layout.ini";
@@ -534,6 +541,9 @@ TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspe
     const DockRow* parent = FindRow(rows, browser->parent);
     REQUIRE(parent != nullptr);
     CHECK(parent->split == 'X');
-    const float nodeWidth = browser->w + assetsInsp->w + 2.0f;   // + one DockingSeparatorSize
-    CHECK(std::abs(assetsInsp->w - Arcane::Editor::LegacyAssetsInspectorPixels(nodeWidth)) <= 3.0f);
+    // A ratio-shared split (no central node on either side), like the
+    // default's band: the default's proportion, not a pixel target.
+    const float share = assetsInsp->w / (browser->w + assetsInsp->w);
+    INFO("SizeRef browser " << browser->w << " : Inspector 2 " << assetsInsp->w);
+    CHECK(std::abs(share - Arcane::Editor::kDefaultAssetsInspectorBandFraction) <= 0.005f);
 }

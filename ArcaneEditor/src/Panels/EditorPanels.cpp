@@ -416,7 +416,8 @@ namespace Arcane::Editor
 
     // ---- The default layout's geometry: Panels/DefaultLayout.hpp (USER
     // DECISION 2026-09-30 -- the user's ReferenceProject layout is the default;
-    // the pixel targets and their clamps are named there). ----
+    // the pixel targets, their clamps and the band's proportion are named
+    // there). ----
 
     namespace
     {
@@ -463,10 +464,14 @@ namespace Arcane::Editor
             PixelSplitRatio(top, ImGuiAxis_X, px.outliner), nullptr, &central);
         // Inspector filters (spec s6): the "Assets only" Inspector sits right
         // of the browser's tab node, so browsing assets never replaces the
-        // entity page in the main Inspector.
+        // entity page in the main Inspector. NOT a pixel target: neither
+        // side of this split holds the central node, so ImGui re-divides it
+        // by SizeRef ratio on every resize -- the user's 1920-scale
+        // proportion (kDefaultAssetsInspectorBandFraction) is right at every
+        // size, a pixel target only at the build size.
         ImGuiID browserNodeId = 0;
         const ImGuiID assetsInspectorId = ImGui::DockBuilderSplitNode(bandId, ImGuiDir_Right,
-            PixelSplitRatio(bandId, ImGuiAxis_X, px.assetsInspector), nullptr, &browserNodeId);
+            kDefaultAssetsInspectorBandFraction, nullptr, &browserNodeId);
 
         ImGui::DockBuilderDockWindow("Outliner", outlinerId);
         // The main Inspector owns the right column alone, full height: a
@@ -562,17 +567,20 @@ namespace Arcane::Editor
             // opposite): the node's current windows move to the child
             // OPPOSITE the split direction (imgui.cpp:18399, child 0 for
             // Right), so the browser's tab set stays LEFT and the new right
-            // child is the Inspector's -- the default layout's SAME
-            // kDefaultAssetsInspectorPx target, clamped to at most
-            // kAssetsInspectorMaxFraction of the browser's node.
+            // child is the Inspector's. Like the default's band, neither child
+            // holds the central node (a pre-feature browser tab set sits in
+            // its own bottom node), so ImGui divides this split by SizeRef
+            // ratio on resize: it takes the default's SAME proportion
+            // (kDefaultAssetsInspectorBandFraction), not pixels. (Were the
+            // browser docked INTO the central node, the central flag stays
+            // with the browser's child and Inspector 2 keeps the pixels that
+            // proportion gives it here -- still a sane width.)
             ImGuiDockNode* node = browserDock != 0 ? ImGui::DockBuilderGetNode(browserDock) : nullptr;
             if (node != nullptr && node->IsLeafNode())
             {
                 ImGuiID left = browserDock;
-                const float nodeWidth = DockNodeExtent(browserDock, ImGuiAxis_X);
-                const float targetPx = LegacyAssetsInspectorPixels(nodeWidth);
                 const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right,
-                    PixelSplitRatio(browserDock, ImGuiAxis_X, targetPx), nullptr, &left);
+                    kDefaultAssetsInspectorBandFraction, nullptr, &left);
                 ImGui::DockBuilderDockWindow(id.c_str(), right);
             }
             // An undocked (or non-leaf) browser splits nothing: the new
