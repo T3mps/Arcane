@@ -1235,6 +1235,7 @@ project "ArcaneTests"
         -- fake sources. SceneInspectorSource.cpp stays OUT (it needs
         -- EditorPanels.cpp).
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorHost.cpp",
+        "%{wks.location}/ArcaneEditor/src/Panels/InspectorKinds.cpp",
         -- Arc-1 debt F: InspectorWindows (the Inspector windows + the
         -- [EditorInspector][Instances] ini handler) source-compiles into the
         -- test exe so EditorInspectorHostTest drives the handler on a bare
