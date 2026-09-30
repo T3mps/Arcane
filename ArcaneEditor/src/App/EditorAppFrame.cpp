@@ -3650,9 +3650,10 @@ namespace Arcane::Editor
                 m_inspectorWindows.grids.erase(id);
             }
             m_inspectorFocusedSource = res.focusedSource;
+            // The document's save GESTURE (RequestSave), never the raw Save:
+            // the material's save-with-errors confirm must hold here too.
             for (Arcane::Editor::InspectorSource* src : res.saveRequested)
-                if (auto* doc = InspectorSaveTarget(src); doc && !doc->Save())
-                    ARC_WARN("Inspector: save refused for '{}'", doc->Title());
+                (void)Arcane::Editor::RequestSaveFromInspector(src);
         }
 
         // (The hosted plugin's DrawUI now renders into its OWN ImGui context,

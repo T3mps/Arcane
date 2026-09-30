@@ -25,6 +25,11 @@ namespace Arcane::Editor
         virtual Arcane::Guid AssetGuid() const = 0;       // identity (nil for unsaved-new)
         virtual bool Dirty() const = 0;
         virtual bool Save() = 0;                          // false = save failed/refused
+        // What a USER save gesture (Ctrl+S, from the document or from an
+        // Inspector page showing it) runs. Default: Save(). A document with a
+        // pre-save guard (the material's save-with-errors confirm) overrides
+        // it; Save() itself stays unguarded for the close flow's save-then-close.
+        virtual void RequestSave() { (void)Save(); }
 
         // True when this document's window, or a child of it, held keyboard
         // focus at its last Draw. The document owns its own Begin/End, so it is
@@ -72,4 +77,14 @@ namespace Arcane::Editor
         // click never calls this. Default: nothing to re-select.
         virtual void NoteReopened() {}
     };
+
+    // The Inspector's Ctrl+S (InspectorWindowsResult::saveRequested): the
+    // source is a document -> its save GESTURE. Null for the scene and asset
+    // sources (nothing saved). The app's route and the tests share it.
+    inline EditorDocument* RequestSaveFromInspector(InspectorSource* src)
+    {
+        auto* doc = dynamic_cast<EditorDocument*>(src);
+        if (doc) doc->RequestSave();   // the guarded gesture, never the raw Save (final fix S)
+        return doc;
+    }
 }

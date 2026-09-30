@@ -382,6 +382,17 @@ namespace Arcane::Editor
         // through uintptr_t -- ImGuiNri's convention). 0 when this document
         // has no preview vehicle, which is every headless test.
         [[nodiscard]] std::uint64_t GraphPreviewTextureId() const noexcept;
+        // A save gesture parked behind the save-with-errors confirm (the modal
+        // opens at the next draw of the document window or its page).
+        [[nodiscard]] bool SaveWithErrorsPending() const noexcept { return m_confirmSaveWithErrors; }
+        // What Ctrl+S runs -- the document's own Shortcut AND the Inspector
+        // page's (RequestSaveFromInspector). Carries the error guard the
+        // toolbar's Save button used to own: writing a material that does not
+        // compile is allowed, but only through an explicit confirm (UE's
+        // pre-apply guard shape). Save() itself stays unguarded -- the close
+        // flow's save-then-close needs it, and the confirm modal's "Save
+        // Anyway" is the deliberate way past.
+        void RequestSave() override;
 
     private:
         // The material page: the preview over the params editor, split
@@ -507,12 +518,11 @@ namespace Arcane::Editor
         const std::string& SnippetSource() const;
 
         void DrawToolbar();
-        // What Ctrl+S runs. Carries the error guard the toolbar's Save button
-        // used to own: writing a material that does not compile is allowed, but
-        // only through an explicit confirm (UE's pre-apply guard shape). Save()
-        // itself stays unguarded -- the close flow's save-then-close needs it,
-        // and the confirm modal's "Save Anyway" is the deliberate way past.
-        void RequestSave();
+        // The "Save With Errors?" modal: opened from m_confirmSaveWithErrors by
+        // whichever of the document window (its toolbar) or the Inspector
+        // page (DrawMaterialPageBody) draws first -- a background document
+        // tab never runs its toolbar, so the page must be able to raise it.
+        void DrawSaveWithErrorsConfirm();
         void DrawSnippetEditor();
         // ---- Diagnostics -> Problems panel (no in-document panel) ----
         // THE formatting seam. One traversal turns every diagnostic this

@@ -9,6 +9,7 @@
 
 #include "Panels/DiagnosticStore.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
+#include "Widgets/PropertyGrid.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
@@ -1202,4 +1203,70 @@ TEST_CASE("severance: a DEVICE-LESS sprite material publishes its blobs, not a c
     CHECK(doc.GraphPreviewTextureId() == 0);
 
     compiler.Shutdown();
+}
+
+TEST_CASE("ShaderEditorDocument: the Inspector's Ctrl+S keeps the save-with-errors guard, and the page draws the confirm",
+          "[editor][material][inspector]")
+{
+    // Final fix S: the material's params live on the Inspector page, so its
+    // Ctrl+S (InspectorWindows -> saveRequested -> the app's route) must go
+    // through RequestSave's HasErrors confirm, never straight to Save().
+    const fs::path dir = TempDir("inspectorsave");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "InspectorSave").has_value());
+    const fs::path content = dir / "Game" / "Content";
+    Arcane::MaterialAssetData orphan;              // parent never registered: parse errors, HasErrors()
+    orphan.id     = Arcane::Guid::Generate();
+    orphan.parent = Arcane::Guid::Generate();
+    orphan.name   = "Orphan";
+    const fs::path file = content / "orphan.arcmat";
+    REQUIRE(Arcane::SaveMaterialAsset(file, orphan));
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    DocServices services;
+    services.runtime = &rt;
+    const auto data = Arcane::LoadMaterialAsset(file);
+    REQUIRE(data.has_value());
+    ShaderEditorDocument doc(services, file, *data);
+    REQUIRE_FALSE(doc.ParseErrors().empty());      // => HasErrors()
+
+    std::error_code ec;
+    fs::remove(file, ec);                          // a Save() would write it back
+    REQUIRE_FALSE(fs::exists(file));
+    CHECK(Arcane::Editor::RequestSaveFromInspector(&doc) == &doc);
+    CHECK_FALSE(fs::exists(file));                 // nothing saved yet...
+    CHECK(doc.SaveWithErrorsPending());            // ...the confirm is pending
+
+    // The confirm is reachable from the PAGE: one device-less frame that
+    // draws only an Inspector-like window with the page (the document window
+    // is not drawn -- a background tab) opens the modal.
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    Arcane::Editor::PropertyGridState grid;
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 600.0f));
+        ImGui::Begin("Inspector");
+        REQUIRE(doc.Page() != nullptr);
+        Arcane::Editor::PropertyGrid pg(grid);
+        doc.Page()->Draw(pg);
+        ImGui::End();
+        ImGui::Render();
+    }
+    CHECK_FALSE(doc.SaveWithErrorsPending());      // consumed by the page's draw
+    bool modalOpen = false;
+    for (const ImGuiPopupData& p : ctx->OpenPopupStack)
+        if (p.Window && std::string(p.Window->Name).find("Save With Errors?") != std::string::npos) modalOpen = true;
+    CHECK(modalOpen);
+    CHECK_FALSE(fs::exists(file));
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+    fs::remove_all(dir, ec);
 }

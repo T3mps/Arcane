@@ -1699,8 +1699,9 @@ namespace Arcane::Editor
         // Error-guarded save (UE's pre-apply guard shape): saving broken WIP is
         // allowed, but only through an explicit confirm. This guard used to sit
         // inside the toolbar's Save button; it lives here now so the Ctrl+S
-        // route cannot walk past it. The modal itself is still drawn by Draw
-        // and still calls the unguarded Save on "Save Anyway".
+        // route (the document's AND the Inspector page's) cannot walk past it.
+        // The modal (DrawSaveWithErrorsConfirm) is drawn by the toolbar or the
+        // material page, and still calls the unguarded Save on "Save Anyway".
         if (HasErrors())
             m_confirmSaveWithErrors = true;
         else
@@ -2060,6 +2061,10 @@ namespace Arcane::Editor
         // covers. BeginChild/PaneSplitter are safe there.
         const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
 
+        // The Inspector's Ctrl+S parks here too (RequestSaveFromInspector): the
+        // page opens the confirm when the document window did not draw first.
+        DrawSaveWithErrorsConfirm();
+
         // Which material this is: the Inspector is a shared surface, so the
         // page names its subject the way the scene page names the entity.
         // m_title, NOT m_windowLabel -- the latter carries the "###matdoc_"
@@ -2215,7 +2220,11 @@ namespace Arcane::Editor
         else
             ImGui::TextDisabled("compiling...");
         ImGui::Separator();
+        DrawSaveWithErrorsConfirm();
+    }
 
+    void ShaderEditorDocument::DrawSaveWithErrorsConfirm()
+    {
         if (m_confirmSaveWithErrors)
         {
             ImGui::OpenPopup("Save With Errors?##matdoc");
