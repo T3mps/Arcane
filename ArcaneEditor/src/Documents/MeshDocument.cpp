@@ -209,7 +209,7 @@ namespace Arcane::Editor
         // NriMeshBufferCache, which caches by guid and only consults the supply on a
         // MISS. Without this the vehicle keeps serving the FIRST shape this document
         // ever built -- through all four rebuild paths (ctor, ApplyMeshData, Save,
-        // and Draw's live field edits), i.e. every topology drag, every source
+        // and the page's live field edits), i.e. every topology drag, every source
         // switch, every undo. It lives here, beside the flag, rather than at the four
         // call sites, for exactly the reason the flag does.
         //
@@ -405,7 +405,7 @@ namespace Arcane::Editor
     }
 
     // =========================================================================
-    // THE FORM
+    // THE WINDOW (toolbar + preview) AND THE FORM (the Inspector's mesh page)
     // =========================================================================
     void MeshDocument::Draw(bool& requestClose)
     {
@@ -505,8 +505,43 @@ namespace Arcane::Editor
         ImGui::EndChild();
         ImGui::Separator();
 
+        // The form (source, topology, material) is the Inspector's mesh page
+        // now (DrawFormBody, drawn by whichever Inspector instance shows this
+        // document -- inspector filters s6a). What stays is the toolbar above
+        // and the preview, which reads only document state (m_data,
+        // m_validationReason, the vehicle), never a form local -- so a live
+        // topology edit in the page shows here on the next frame.
+        //
+        // Opened = selected; a click anywhere in the content (the toolbar, the
+        // preview) re-selects the mesh page (spec s3's one selection rule).
+        // AFTER the content, and only on this non-collapsed path: a
+        // collapsed/background tab has no content to click.
+        m_pageSel.NoteContentClick();
+
+        ImGui::End();
+        requestClose = !open;
+    }
+
+    void MeshDocument::DrawFormBody()
+    {
+        // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
+        // The topology drags below open gestures against m_gesture. The body
+        // draws inside an Inspector instance window, AFTER the documents, and
+        // on collapsed/background-tab frames too (InspectorWindows calls
+        // page->Draw even when Begin returns false) -- where no widget inside
+        // can report its own deactivation, which is exactly what this guard
+        // covers. Draw keeps its own guard for the document window's refused-
+        // Begin path (ShaderEditorDocument's Draw + DrawMaterialPageBody are
+        // the precedent for two guards on one gesture).
+        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+
+        // Recomputed here, not shared: Draw's preview block declares its own
+        // copy for the preview branch, and this form (the source section) reads
+        // the same document state.
+        const bool imported = (m_data.source == Arcane::MeshSource::Imported);
+
         // Continuous-drag bracket (widget-layer Task 7 idiom) -- identical
-        // shape to SpriteDocument::Draw's `bracket` lambda. Call it
+        // shape to SpriteDocument::DrawFormBody's `bracket` lambda. Call it
         // IMMEDIATELY after each drag widget's field write.
         const auto bracket = [&](const char* label)
         {
@@ -700,8 +735,5 @@ namespace Arcane::Editor
                 commit("Clear Material", before);
             }
         }
-
-        ImGui::End();
-        requestClose = !open;
     }
 }

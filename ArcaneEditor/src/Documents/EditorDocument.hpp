@@ -52,7 +52,7 @@ namespace Arcane::Editor
         // SelectionEpoch() on every selection change (the host's per-frame
         // poll turns the bump into InspectorHost::NotifySelected). The
         // defaults are "this document contributes no page and never drives
-        // the Inspector" (MeshDocument today).
+        // the Inspector".
         std::string SourceName() const override { return Title(); }
         std::string_view Kind() const override { return {}; }
         InspectorPage* Page() override { return nullptr; }

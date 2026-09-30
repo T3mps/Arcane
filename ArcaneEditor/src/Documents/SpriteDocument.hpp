@@ -20,15 +20,19 @@
 // into a close or a pending confirm).
 
 #include "Scene/EditGesture.hpp"
+#include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // CommandStack arrives complete via EditGesture.hpp (which includes
 // <Arcane/Edit/CommandStack.hpp>) -- Services holds a pointer to one.
@@ -83,6 +87,23 @@ namespace Arcane::Editor
         bool WindowFocused() const override { return m_windowFocused; }
         void Draw(bool& requestClose) override;
 
+        // ---- Inspector source (inspector filters spec s6a) ----------------
+        // Kind "sprite". ONE page, the whole sprite form (the four drags and
+        // the read-only Texture line), under ONE key, "sprite": opening the
+        // document selects it (m_pageSel starts at epoch 1) and a click in the
+        // document's content re-selects it (Draw's NoteContentClick). Tab
+        // switches and focus never do (the spec's one selection rule). The
+        // document window keeps its toolbar and the "(no texture)"
+        // placeholder.
+        std::string_view Kind() const override { return "sprite"; }
+        InspectorPage* Page() override { return &m_page; }
+        InspectorPage* PageFor(std::string_view key) override { return m_pageSel.Resolves(key) ? &m_page : nullptr; }
+        std::string SelectionKey() const override { return m_pageSel.SelectionKey(); }
+        // True when it resolves; NO epoch bump -- a restore is not a click.
+        bool RestoreSelection(std::string_view key) override { return m_pageSel.Resolves(key); }
+        bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
+        std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
+
         // Undo plumbing (doc-identity commands, the same shape as
         // ShaderEditorDocument::ApplyParamEdit, ShaderEditorDocument.hpp:
         // 218-223): swap the whole authored data in and republish it exactly
@@ -98,11 +119,36 @@ namespace Arcane::Editor
         void PushDataEdit(std::string label, const Arcane::SpriteAssetData& before);
 
         // The live authored data. Exposed for the headless [editor] units --
-        // Draw is the only ImGui method and they never call it, so this is
-        // how they observe what a command did.
+        // the undo units never draw (Draw and the page's DrawFormBody are the
+        // only ImGui methods), so this is how they observe what a command did.
         const Arcane::SpriteAssetData& Data() const noexcept { return m_data; }
 
     private:
+        // The sprite page: the form, drawn by the Inspector instance showing
+        // it. Carries its own EditGesture::ScopeGuard (the drags that open
+        // gestures are submitted inside it) and no Begin/End -- the Inspector
+        // window is its window.
+        void DrawFormBody();
+
+        // The one page this document contributes (kind "sprite", key
+        // "sprite"). The base MUST be public: Page() hands &m_page out as
+        // InspectorPage*, and a private base makes that conversion
+        // inaccessible (MSVC C2243).
+        class SpriteInspectorPage final : public InspectorPage
+        {
+        public:
+            explicit SpriteInspectorPage(SpriteDocument& doc) : m_doc(doc) {}
+            std::vector<InspectorCrumb> Breadcrumb() const override
+            {
+                // One crumb; `select` is a no-op (the page IS the only level).
+                return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "sprite" } } };
+            }
+            void Draw(PropertyGrid&) override { m_doc.DrawFormBody(); }
+
+        private:
+            SpriteDocument& m_doc;
+        };
+
         Services                 m_services;
         std::filesystem::path    m_path;
         Arcane::SpriteAssetData  m_data;
@@ -113,10 +159,15 @@ namespace Arcane::Editor
         // scene-level Ctrl+S stands down while this document is focused.
         bool                     m_windowFocused = false;
 
-        // The document's ONE edit-gesture bracket (the ScopeGuard at the top
-        // of Draw is its guaranteed close). All four field drags share it:
-        // only one can hold ActiveId at a time, and EditGesture's ownership
-        // guard is what keeps the other three from closing it.
+        // The document's ONE edit-gesture bracket. All four field drags share
+        // it: only one can hold ActiveId at a time, and EditGesture's
+        // ownership guard is what keeps the other three from closing it. TWO
+        // draw scopes hold a ScopeGuard on it as their first local -- Draw
+        // (the document window, whose Begin can refuse on a background tab)
+        // and DrawFormBody (the Inspector page, where the drags now live and
+        // which draws AFTER the documents, inside an Inspector window's
+        // Begin/End) -- the same two-guard shape ShaderEditorDocument's Draw +
+        // DrawMaterialPageBody hold on its own gesture.
         EditGesture::GestureState m_gesture;
 
         // Doc-identity handle for undo steps, mirroring ShaderEditorDocument's
@@ -125,5 +176,11 @@ namespace Arcane::Editor
         // through the pointee, so steps left on the shared stack after this
         // document closes go inert instead of dereferencing a dead `this`.
         std::shared_ptr<SpriteDocument*> m_anchor;
+
+        // The Inspector page's selection (key "sprite", epoch 1 = selected at
+        // open) and the page itself. m_page holds a reference to *this;
+        // documents live behind unique_ptr in DocumentHost and never move.
+        DocumentPageSelection  m_pageSel{ "sprite" };
+        SpriteInspectorPage    m_page{ *this };
     };
 }

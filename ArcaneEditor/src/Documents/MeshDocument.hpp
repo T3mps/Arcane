@@ -58,6 +58,7 @@
 // routing, and the unsaved-close confirm modal.
 
 #include "Scene/EditGesture.hpp"
+#include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 
 #include <Arcane/Guid.hpp>
@@ -69,6 +70,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // CommandStack arrives complete via EditGesture.hpp. The preview vehicle is
 // forward-declared only -- see the block below for why (same reasoning
@@ -179,6 +182,22 @@ namespace Arcane::Editor
         void Tick(double dt) override;
         void Draw(bool& requestClose) override;
 
+        // ---- Inspector source (inspector filters spec s6a) ----------------
+        // Kind "mesh". ONE page, the whole mesh form (source, topology,
+        // material), under ONE key, "mesh": opening the document selects it
+        // (m_pageSel starts at epoch 1) and a click in the document's content
+        // re-selects it (Draw's NoteContentClick). Tab switches and focus never
+        // do (the spec's one selection rule). The document window keeps its
+        // toolbar and the preview.
+        std::string_view Kind() const override { return "mesh"; }
+        InspectorPage* Page() override { return &m_page; }
+        InspectorPage* PageFor(std::string_view key) override { return m_pageSel.Resolves(key) ? &m_page : nullptr; }
+        std::string SelectionKey() const override { return m_pageSel.SelectionKey(); }
+        // True when it resolves; NO epoch bump -- a restore is not a click.
+        bool RestoreSelection(std::string_view key) override { return m_pageSel.Resolves(key); }
+        bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
+        std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
+
         // Undo plumbing (doc-identity commands, the same shape as
         // SpriteDocument::ApplySpriteData): swap the whole authored data in
         // and rebuild the preview mesh from it, so an undo shows up in the
@@ -193,8 +212,8 @@ namespace Arcane::Editor
         void PushDataEdit(std::string label, const Arcane::MeshAssetData& before);
 
         // The live authored data. Exposed for the headless [editor] units --
-        // Draw is the only ImGui method and they never call it, so this is
-        // how they observe what a command did.
+        // the undo units never draw (Draw and the page's DrawFormBody are the
+        // only ImGui methods), so this is how they observe what a command did.
         const Arcane::MeshAssetData& Data() const noexcept { return m_data; }
 
         // THE SLOT-CLEAR RULE (final-review fix I4, 2026-09-11) -- what the
@@ -219,7 +238,7 @@ namespace Arcane::Editor
         static void ClearPrimarySlotMaterial(Arcane::MeshAssetData& data);
 
         // The CURRENT preview geometry, rebuilt every time m_data changes
-        // (construction, ApplyMeshData, or a live field edit in Draw).
+        // (construction, ApplyMeshData, or a live field edit in the page).
         // nullopt exactly when ValidationReason() is set -- BuildMeshData's
         // own contract, restated here so a headless test can observe both
         // halves of "an invalid param set yields no geometry and surfaces
@@ -259,9 +278,33 @@ namespace Arcane::Editor
         }
 
     private:
+        // The mesh page: the form, drawn by the Inspector instance showing it.
+        // Carries its own EditGesture::ScopeGuard (the topology drags that
+        // open gestures are submitted inside it) and no Begin/End -- the
+        // Inspector window is its window.
+        void DrawFormBody();
+
+        // The one page this document contributes (kind "mesh", key "mesh").
+        // The base MUST be public: Page() hands &m_page out as InspectorPage*,
+        // and a private base makes that conversion inaccessible (MSVC C2243).
+        class MeshInspectorPage final : public InspectorPage
+        {
+        public:
+            explicit MeshInspectorPage(MeshDocument& doc) : m_doc(doc) {}
+            std::vector<InspectorCrumb> Breadcrumb() const override
+            {
+                // One crumb; `select` is a no-op (the page IS the only level).
+                return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "mesh" } } };
+            }
+            void Draw(PropertyGrid&) override { m_doc.DrawFormBody(); }
+
+        private:
+            MeshDocument& m_doc;
+        };
+
         // Recompute m_previewMesh/m_validationReason from the CURRENT
         // m_data. Called from the ctor and from every path that mutates
-        // m_data (ApplyMeshData, and Draw's live field edits) -- there is no
+        // m_data (ApplyMeshData, and the page's live field edits) -- there is no
         // cache in front of the preview, so this is the whole of keeping it
         // in sync; see the file-top comment for why that is deliberately
         // simpler than SpriteDocument's cache-invalidate story.
@@ -340,9 +383,11 @@ namespace Arcane::Editor
         // see PreviewGeometryInvalidations() for why this counter exists.
         std::uint64_t m_previewGeometryInvalidations = 0;
 
-        // The document's ONE edit-gesture bracket (the ScopeGuard at the top
-        // of Draw is its guaranteed close). Every topology drag shares it --
-        // same shape as SpriteDocument::m_gesture.
+        // The document's ONE edit-gesture bracket. Every topology drag shares
+        // it -- same shape as SpriteDocument::m_gesture, including its TWO
+        // ScopeGuards: Draw's (the document window, whose Begin can refuse on
+        // a background tab) and DrawFormBody's (the Inspector page, where the
+        // drags now live and which draws AFTER the documents).
         EditGesture::GestureState m_gesture;
 
         // Doc-identity handle for undo steps, mirroring SpriteDocument's
@@ -361,5 +406,11 @@ namespace Arcane::Editor
         // constant keeps every open-document preview texture the same size
         // class.
         static constexpr std::uint32_t kPreviewSize = 512;
+
+        // The Inspector page's selection (key "mesh", epoch 1 = selected at
+        // open) and the page itself. m_page holds a reference to *this;
+        // documents live behind unique_ptr in DocumentHost and never move.
+        DocumentPageSelection  m_pageSel{ "mesh" };
+        MeshInspectorPage      m_page{ *this };
     };
 }

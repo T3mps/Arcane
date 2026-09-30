@@ -187,7 +187,42 @@ namespace Arcane::Editor
             Save();
         ImGui::SameLine();
         ImGui::TextDisabled(Dirty() ? "(unsaved)" : "(saved)");
+
+        // The form (the four drags and the read-only Texture line) is the
+        // Inspector's sprite page now (DrawFormBody, drawn by whichever
+        // Inspector instance shows this document -- inspector filters s6a).
+        // What stays is the toolbar above and the placeholder below.
         ImGui::Separator();
+        // NO TEXTURE PREVIEW HERE. The Assets facade hands out decoded pixels
+        // (Assets::PixelsFor), not GPU textures, so drawing one would mean
+        // uploading it through this document's own vehicle and owning the
+        // invalidate obligations that come with a chrome-side user texture --
+        // which the sprite inspector has never needed. If that changes,
+        // PixelsFor is the supply.
+        ImGui::TextDisabled("(no texture)");
+
+        // Opened = selected; a click anywhere in the content (the toolbar, the
+        // "(no texture)" region) re-selects the sprite page (spec s3's one
+        // selection rule). AFTER the content, and only on this non-collapsed
+        // path: a collapsed/background tab has no content to click.
+        m_pageSel.NoteContentClick();
+
+        ImGui::End();
+        requestClose = !open;
+    }
+
+    void SpriteDocument::DrawFormBody()
+    {
+        // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
+        // The drags below open gestures against m_gesture. The body draws
+        // inside an Inspector instance window, AFTER the documents, and on
+        // collapsed/background-tab frames too (InspectorWindows calls
+        // page->Draw even when Begin returns false) -- where no widget inside
+        // can report its own deactivation, which is exactly what this guard
+        // covers. Draw keeps its own guard for the document window's refused-
+        // Begin path (ShaderEditorDocument's Draw + DrawMaterialPageBody are
+        // the precedent for two guards on one gesture).
+        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
 
         // Field clamp policy: ClampOnInput, not AlwaysClamp. Ctrl+Click on a
         // Drag widget opens a text box whose typed value ImGui does NOT clamp
@@ -286,17 +321,5 @@ namespace Arcane::Editor
         ImGui::TextDisabled("%s", m_data.texture.IsValid()
                                        ? m_data.texture.ToString().c_str()
                                        : "(none)");
-
-        ImGui::Separator();
-        // NO TEXTURE PREVIEW HERE. The Assets facade hands out decoded pixels
-        // (Assets::PixelsFor), not GPU textures, so drawing one would mean
-        // uploading it through this document's own vehicle and owning the
-        // invalidate obligations that come with a chrome-side user texture --
-        // which the sprite inspector has never needed. If that changes,
-        // PixelsFor is the supply.
-        ImGui::TextDisabled("(no texture)");
-
-        ImGui::End();
-        requestClose = !open;
     }
 }

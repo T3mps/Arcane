@@ -7,6 +7,11 @@
 // pins for ShaderEditorDocument ("device-less services allocate no preview
 // resources").
 //
+// The one ImGui case is the Inspector page at the bottom (inspector filters
+// s6a): a device-less context (InputActionsDocumentUiTest's harness shape)
+// that draws the document and then its page inside an "Inspector" window, to
+// prove the form is submitted THERE.
+//
 // A real CommandStack is safe here: its resolve callback is only consulted by
 // the COMPONENT snapshot paths (CommandStack.cpp:35,:49), and a generic Push
 // never reaches them -- so no registry mutation, no TypeContext, and no bare
@@ -15,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/MeshDocument.hpp"
+#include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
@@ -31,8 +37,12 @@
 
 #include "Helpers/TestTypeContext.hpp"
 
+#include <imgui.h>
+#include <imgui_internal.h>   // FindWindowByName / GetActiveID / ActiveIdWindow
+
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 
@@ -482,4 +492,91 @@ TEST_CASE("MeshDocument::Save reaches the scene's MeshTable through the editor's
     CHECK(vertexCount() == 16);
 
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+// Inspector filters s6a: the document is an Inspector source of kind "mesh"
+// whose ONE page is the mesh form (the preview stays in the document window).
+// Opened = selected (epoch 1, so the app's per-document epoch map -- which
+// starts at 0 -- sees frame 1 as an event); a history restore re-selects
+// without a click and so moves no epoch.
+TEST_CASE("MeshDocument is a mesh Inspector source selected at open", "[editor][mesh][inspector]")
+{
+    MeshDocument doc(MeshDocument::Services{}, FixturePath(), Fixture());
+    CHECK(doc.Kind() == "mesh");
+    CHECK(doc.SelectionKey() == "mesh");
+    CHECK(doc.SelectionEpoch() == 1);                  // selected at open
+    REQUIRE(doc.Page() != nullptr);
+    CHECK(doc.Page()->Breadcrumb().size() == 1);
+    CHECK(doc.Page()->Breadcrumb()[0].label == doc.Title());
+    CHECK(doc.Page()->Breadcrumb()[0].key == std::optional<std::string>{ "mesh" });
+    CHECK(doc.PageFor("mesh") == doc.Page());
+    CHECK(doc.RestoreSelection("mesh"));
+    CHECK(doc.SelectionEpoch() == 1);                  // a restore is not a click
+    CHECK_FALSE(doc.Resolves("sprite"));
+}
+
+namespace
+{
+    // InputActionsDocumentUiTest.cpp's DocUi shape: own context, software font
+    // atlas, the document drawn FIRST (as DocumentHost::DrawAll does), then a
+    // pinned "Inspector" window drawing its page (as DrawInspectorWindows does).
+    // Device-less services: the preview child shows its "(no preview -- no GPU
+    // device)" line, so the document window still has content.
+    struct MeshPageUi
+    {
+        ImGuiContext* prev = nullptr;
+        ImGuiContext* ctx = nullptr;
+        Arcane::Editor::PropertyGridState grid;
+        MeshDocument doc{ MeshDocument::Services{}, FixturePath(), Fixture() };   // a Cube: the form's first widget is the Source combo
+        MeshPageUi()
+        {
+            prev = ImGui::GetCurrentContext();
+            ctx = ImGui::CreateContext();
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1600.0f, 900.0f);
+            io.IniFilename = nullptr;
+            unsigned char* px = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+        }
+        ~MeshPageUi() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+        void Frame()
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_Always);
+            bool close = false;
+            doc.Draw(close);
+            ImGui::SetNextWindowPos(ImVec2(820, 0), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(700, 880), ImGuiCond_Always);
+            ImGui::Begin("Inspector");
+            { Arcane::Editor::PropertyGrid g(grid); if (auto* page = doc.Page()) page->Draw(g); }
+            ImGui::End();
+            ImGui::Render();
+        }
+        void Move(ImVec2 p) { ImGui::GetIO().AddMousePosEvent(p.x, p.y); Frame(); }
+        void Button(int b, bool down) { ImGui::GetIO().AddMouseButtonEvent(b, down); Frame(); }
+    };
+}
+
+// The form moved OUT of the document window: its first widget (a generated
+// mesh's "Source" combo, MeshDocument.cpp's source section) is submitted in
+// the Inspector window. Proven through the ACTIVE id after a press on the
+// page's first row -- ImGuiWindow::GetID only hashes a label, and LastItemData
+// is restored to the parent's at End() (imgui.cpp:8849), so neither alone
+// shows a submission.
+TEST_CASE("MeshDocument's form draws in the Inspector window, not the document's", "[editor][mesh][inspector]")
+{
+    MeshPageUi h;
+    h.Frame();                                         // warm-up: both windows exist
+    ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
+    REQUIRE(iw != nullptr);
+    const ImVec2 row(iw->ContentRegionRect.Min.x + 10.0f,
+                     iw->ContentRegionRect.Min.y + ImGui::GetFrameHeight() * 0.5f);   // the page's first row
+    h.Move(row);
+    h.Button(ImGuiMouseButton_Left, true);
+    CHECK(ImGui::GetActiveID() == iw->GetID("Source"));
+    CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);   // in the Inspector, not the document window
+    h.Button(ImGuiMouseButton_Left, false);
 }
