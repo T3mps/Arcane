@@ -167,7 +167,6 @@ namespace Arcane::Editor
     struct DockSpaceResult
     {
         bool builtDefault = false;     // the default layout was (re)built: first run, or Window -> Reset Layout
-        bool upgradedLegacy = false;   // the one-time pre-feature upgrade ran
     };
 
     // Emit the DockSpace() into the host window opened by BeginDockSpace and close it.
@@ -451,15 +450,6 @@ namespace Arcane::Editor
     {
         std::function<Arcane::Guid(const Arcane::Guid&)> mintSpriteForTexture;
 
-        // F2b Task 13: Guid -> an ImGui texture id (the raw nri::Texture*
-        // through uintptr_t, ImGuiNri's convention -- 0 = unavailable) for the
-        // Inspector's texture-asset preview. Resolves through the CHROME
-        // context's texture cache via Assets::PixelsFor -- see
-        // EditorApp::StageSpriteTables' own comment for why chrome, not the
-        // viewport. Null callback (every headless test) degrades to "no
-        // preview", same shape as a null mintSpriteForTexture.
-        std::function<std::uint64_t(const Arcane::Guid&)> resolveTexturePreview;
-
         // Asset-manager arc, Task 14: the subkind-filtered material picker's
         // surface lookup. Points at EditorApp's OWN AssetPanelModel -- the
         // SAME cached, already-invalidation-correct surface answer the
@@ -470,17 +460,16 @@ namespace Arcane::Editor
         // adaptation needed) and it is a stable member for the app's whole
         // lifetime -- set ONCE (EditorApp::StageSpriteTables, beside
         // mintSpriteForTexture above). Null for every caller that does not
-        // wire InspectorServices at all (same convention as the other two
-        // members): the picker then degrades to unfiltered, exactly like an
+        // wire InspectorServices at all (same convention as
+        // mintSpriteForTexture): the picker then degrades to unfiltered, exactly like an
         // unrecognised owning component.
         const Arcane::Editor::AssetPanelModel* assetModel = nullptr;
     };
 
     // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
-    // resolver seam. Same convention as InspectorServices::resolveTexturePreview
-    // above (Guid -> an ImGui texture id via the CHROME context's texture
-    // cache, 0 = unavailable -- the caller falls back to the kind icon), kept
-    // as its own struct rather than folded into InspectorServices because the
+    // resolver seam (Guid -> an ImGui texture id via the CHROME context's
+    // texture cache, 0 = unavailable -- the caller falls back to the kind
+    // icon), kept as its own struct rather than folded into InspectorServices because the
     // consumer is a different panel (Tasks 9-11's Browse lens, not the
     // Inspector). Textures resolve directly; sprites resolve through their
     // referenced texture; materials route through Task 8's

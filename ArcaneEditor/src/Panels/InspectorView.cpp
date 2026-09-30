@@ -1268,8 +1268,7 @@ namespace Arcane::Editor
                                     // a caller that never wires
                                     // InspectorServices::assetModel at all
                                     // (every headless test, same convention
-                                    // as mintSpriteForTexture/
-                                    // resolveTexturePreview) -- `panelEntry`
+                                    // as mintSpriteForTexture) -- `panelEntry`
                                     // is unconditionally null in that case, so
                                     // gating on it alone would already read
                                     // as "nothing confirmed, show everything",

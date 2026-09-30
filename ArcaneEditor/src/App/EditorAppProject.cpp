@@ -821,8 +821,8 @@ namespace Arcane::Editor
                     m_viewportTargets.graph->InvalidateContentTexture(guid);
                     m_viewportTargets.graph->InvalidateMeshAlbedoSlot(guid);
                 }
-                // I2 fix (final-review wave, 2026-09-04): the Inspector's texture preview
-                // (EditorApp.cpp's `resolveTexturePreview` service) reads through
+                // I2 fix (final-review wave, 2026-09-04): the chrome thumbnails
+                // (EditorApp.cpp's `resolveAssetThumb` service) read through
                 // ChromeGraph()'s OWN texture cache in Display colour space -- a SEPARATE
                 // NriGraphContext from m_viewportTargets.graph above -- so invalidating
                 // only the viewport left a (guid, Display) memo in the chrome cache stuck

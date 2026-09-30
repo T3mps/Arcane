@@ -126,8 +126,7 @@ namespace Arcane::Editor
             // thumbnails are uploaded into, and the ImGuiNriNode owed an
             // InvalidateUserTextureNow on a re-harvest -- is reached through
             // this callback at CALL time. Same `[this]`-capture idiom
-            // EditorApp::Init already uses for resolveTexturePreview and
-            // resolveAssetThumb. Null (or a null return) is a hard no-op.
+            // EditorApp::Init already uses for resolveAssetThumb. Null (or a null return) is a hard no-op.
             std::function<Arcane::NriGraphContext*()> chromeGraph;
 
             // Read for backend/vsync-free knobs by CreateOffscreen, exactly as

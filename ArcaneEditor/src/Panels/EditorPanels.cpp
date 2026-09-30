@@ -539,8 +539,10 @@ namespace Arcane::Editor
                 const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.30f, nullptr, &left);
                 ImGui::DockBuilderDockWindow(id.c_str(), right);
             }
+            // An undocked (or non-leaf) browser splits nothing: the new
+            // instance then takes DrawInspectorWindows' New Inspector
+            // placement (the primary Inspector's dock node).
             ImGui::DockBuilderFinish(dockspaceId);
-            result.upgradedLegacy = true;   // undocked browser: DrawInspectorWindows' New Inspector placement applies
         }
 
         // Emit the dockspace into the still-open host window. Anything drawn between

@@ -991,47 +991,25 @@ namespace Arcane::Editor
         m_inspectorServices.mintSpriteForTexture =
             [this](const Arcane::Guid& textureGuid) { return MintOrReuseSpriteForTexture(textureGuid); };
 
-        // F2b Task 13: the Inspector's texture-asset preview. ChromeGraph()
-        // does not exist yet at this stage (CreateGraphVehicles runs later,
-        // from Main()) -- looked up LIVE at call time instead, the same
-        // [this]-capture idiom resolveMeshAlbedoSlot above already relies on.
-        // Resolves through the CHROME context's texture cache (its
-        // SetPixelSupply lambda answers arbitrary content guids via
-        // Assets::PixelsFor as of this task -- see CreateGraphVehicles' own
-        // comment), NOT the viewport's: the viewport prefers the cooked
-        // artifact route for scene content (Task 7), and the preview wants
-        // PixelsFor's small thumbnail specifically. 0 (no ImGui texture) when
-        // there is no chrome context yet, no texture cache, or the guid does
-        // not resolve to any pixels (not yet cooked, refused, or not a
-        // texture at all) -- the caller degrades to "(preview unavailable)".
-        m_inspectorServices.resolveTexturePreview =
-            [this](const Arcane::Guid& guid) -> std::uint64_t
-        {
-            Arcane::NriGraphContext* chrome = ChromeGraph();
-            Arcane::NriTextureCache* cache = chrome ? chrome->Textures() : nullptr;
-            if (!cache)
-                return 0;
-            nri::Texture* tex = cache->Resolve(guid, Arcane::NriTextureCache::ColorSpace::Display);
-            return tex ? (std::uint64_t)(std::intptr_t)tex : 0;
-        };
-
         // Asset-manager arc, Task 14: the subkind-filtered material picker's
         // surface lookup. Just a pointer, not a lambda -- m_assetModel is a
         // stable member for the app's whole lifetime (it survives project
         // switches via ResetForProjectSwitch, it is never re-seated), so
-        // there is nothing to look up live the way ChromeGraph() above needs
-        // to be. Wired here, alongside mintSpriteForTexture/
-        // resolveTexturePreview, for the same "built once at boot" reason.
+        // there is nothing to look up live the way the ChromeGraph() lambdas
+        // below need to be. Wired here, alongside mintSpriteForTexture, for the same
+        // "built once at boot" reason.
         m_inspectorServices.assetModel = &m_assetModel;
 
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
-        // resolver, built here for the same "ChromeGraph() doesn't exist yet
-        // at this stage" reason resolveTexturePreview just above is -- looked
-        // up LIVE at call time, same [this]-capture idiom. Resolves through
-        // the SAME chrome texture cache as resolveTexturePreview (one cache,
-        // two consumers; OnCookCompleted's InvalidateContentTexture call on
-        // the chrome context, EditorAppProject.cpp:461-462, already keeps
-        // BOTH fresh -- no new cache here). Textures resolve directly;
+        // resolver, built here because ChromeGraph() doesn't exist yet at
+        // this stage -- looked up LIVE at call time, the [this]-capture idiom
+        // resolveMeshAlbedoSlot above relies on. Resolves through the CHROME
+        // context's texture cache (OnCookCompleted's InvalidateContentTexture
+        // call on the chrome context keeps it fresh -- no new cache here).
+        // It is also the Asset Browser page's and the sprite document
+        // window's thumbnail seam (the Inspector's old resolveTexturePreview
+        // service lost its last reader with the scene page's texture
+        // fallback and was deleted, final fix m3). Textures resolve directly;
         // sprites resolve through their single texture ref (FirstTextureRefOf);
         // materials route through Task 8's MaterialPreviewHarvester;
         // everything else is 0 -- the caller falls back to the kind icon.

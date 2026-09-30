@@ -1098,9 +1098,8 @@ namespace Arcane::Editor
         // the last one in a frame is its disk state.
         std::optional<std::pair<Arcane::Guid, Arcane::InputActionAsset>> m_pendingInputRepublish;
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
-        // resolver (resolveAssetThumb), built once in StageSpriteTables next
-        // to resolveTexturePreview above -- same [this]-capture idiom, same
-        // chrome-texture-cache recipe. Nothing calls it yet (Task 9 hands it
+        // resolver (resolveAssetThumb), built once in StageSpriteTables --
+        // a [this]-capture over the chrome context's texture cache. Nothing calls it yet (Task 9 hands it
         // to the new Browse panel); wiring only, no behavior change.
         Arcane::Editor::AssetServices    m_assetServices;
 
