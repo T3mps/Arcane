@@ -578,6 +578,14 @@ namespace Arcane::Editor
             ImGuiDockNode* node = browserDock != 0 ? ImGui::DockBuilderGetNode(browserDock) : nullptr;
             if (node != nullptr && node->IsLeafNode())
             {
+                // A node just loaded from the ini has not been laid out yet:
+                // Size is 0 and only SizeRef is known. DockNodeTreeSplit sizes
+                // the children from node->Size (clamped up to 2x WindowMinSize,
+                // 64 px), and ImTrunc at that scale skews the stored SizeRef
+                // ratio -- which is all a ratio-shared split keeps (measured:
+                // 47 : 17, 26.6% instead of 25.5%). Split at the loaded size.
+                if (node->Size.x <= 0.0f && node->SizeRef.x > 0.0f)
+                    node->Size = node->SizeRef;
                 ImGuiID left = browserDock;
                 const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right,
                     kDefaultAssetsInspectorBandFraction, nullptr, &left);
