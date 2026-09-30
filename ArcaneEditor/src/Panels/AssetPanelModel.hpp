@@ -369,6 +369,30 @@ namespace Arcane::Editor
     // AssetPanelEntry::cook's own default).
     [[nodiscard]] CookState CookStateOf(AssetKind kind, bool permanentDiag, bool pending);
 
+    // When a FINISHED cook pass must re-ask every cached cook state (inspector
+    // filters Task 10, fix round 1). Two triggers, either sufficient:
+    //   cookedAny          -- something landed, so a Queued answer is now Cooked
+    //                         (and a sprite derives its answer from its texture);
+    //   !queueStillPending -- the queue is IDLE once this pass lands, so every
+    //                         answer that was "pending" only BECAUSE the queue was
+    //                         busy flips. EditorApp's cook-pending probe answers
+    //                         true for EVERY Mesh guid whose source exists while
+    //                         CookQueue::CookPending() holds, so a model rebuilt
+    //                         mid-pass records those meshes as Queued. When the
+    //                         pass cooks nothing, the cookedAny trigger alone never
+    //                         fires and the digest shows "N cooking" forever.
+    //                         Traced on ReferenceProject: the boot pass lands
+    //                         with a follow-up pass already running (CookPending()
+    //                         true) and both cook 0. A rebuild in that window
+    //                         latches, which matches the editor-material-page lane
+    //                         failure under load: "296 pixels are different" in
+    //                         the digest, identical for all 30 settle attempts.
+    // A pass that lands while ANOTHER is still running (cooked nothing,
+    // queueStillPending) waits: that later pass's own landing is the idle edge.
+    // Cost: post-settling passes run only on a real change or a Recook, never
+    // periodically, so this adds at most one rebuild per such pass.
+    [[nodiscard]] bool CookPassInvalidatesCookStates(bool cookedAny, bool queueStillPending);
+
     // Which kinds may ever be flagged `unused` (spec s9.1, VERBATIM as of its
     // original list; F2c s4.1 Task 9 adds Model to it): Texture, Material,
     // Sprite, Mesh and Model -- the kinds whose consumers the reference

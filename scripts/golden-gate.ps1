@@ -740,8 +740,37 @@ try {
             New-Item -ItemType Directory -Path $stagedArtifacts -Force | Out-Null
             Copy-Item -Path (Join-Path $sourceArtifacts '*') -Destination $stagedArtifacts -Force -Recurse
         }
+
+        # ---- Saved/verify-layout.ini HAS THE SAME HAZARD, one file wide (inspector
+        #      filters Task 10, fix round 1). --headless pins the editor's layout to
+        #      THIS file (ImGui never reads or writes an ini), so it is an INPUT to
+        #      every editor lane exactly like Content/ -- and, like Content/, it
+        #      reached a host only when that host's postbuild ran. MEASURED
+        #      2026-09-30: the seed was re-authored after the Debug editor last
+        #      linked, so the Debug gate, the Debug editor witnesses and a Debug
+        #      bless all ran on the 2026-09-10 seed (no [EditorInspector][Instances]
+        #      Filters=, a stale [Window][Material]) through the legacy upgrade,
+        #      while the Release staged copy was the committed file. Two configs,
+        #      two different inputs, both reported green.
+        #      THE ONE FILE, NOT Saved/: the rest of Saved/ is the host's own
+        #      accumulated state (thumbnails, logs, the Verify/ outputs this script
+        #      reads back), and premake5.lua's NOT-mirrored list keeps it that way.
+        #      Copied for both hosts, as the postbuild does; only the editor reads it.
+        $sourceSeed = Join-Path $referenceProjectDir 'Saved\verify-layout.ini'
+        if (-not (Test-Path $sourceSeed)) {
+            Exit-GateRefusal "restaging FAILED -- the committed layout seed $sourceSeed is missing; every headless editor lane pins it."
+        }
+        $stagedSaved = Join-Path $repoRoot "bin\$configDirName\$stageHost\ReferenceProject\Saved"
+        if (-not (Test-Path $stagedSaved)) {
+            New-Item -ItemType Directory -Path $stagedSaved -Force | Out-Null
+        }
+        $stagedSeed = Join-Path $stagedSaved 'verify-layout.ini'
+        Copy-Item -Path $sourceSeed -Destination $stagedSeed -Force
+        if ((Get-FileHash $sourceSeed -Algorithm MD5).Hash -ne (Get-FileHash $stagedSeed -Algorithm MD5).Hash) {
+            Exit-GateRefusal "restaging FAILED -- staged layout seed still differs from source after the copy ($stagedSeed)."
+        }
     }
-    Write-Host "-- ReferenceGame.dll + Content/ + Intermediate/Artifacts restaged beside both hosts --" -ForegroundColor Green
+    Write-Host "-- ReferenceGame.dll + Content/ + Intermediate/Artifacts + Saved/verify-layout.ini restaged beside both hosts --" -ForegroundColor Green
 
     $results = @()
 

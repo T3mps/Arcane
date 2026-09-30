@@ -98,6 +98,11 @@ namespace Arcane::Editor
         return pending ? CookState::Queued : CookState::Cooked;
     }
 
+    bool CookPassInvalidatesCookStates(bool cookedAny, bool queueStillPending)
+    {
+        return cookedAny || !queueStillPending;
+    }
+
     bool IsUnusedEligible(AssetKind kind)
     {
         // Spec s9.1's list, verbatim and exhaustive -- the kinds whose

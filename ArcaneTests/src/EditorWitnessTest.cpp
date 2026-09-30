@@ -5,6 +5,7 @@
 // vehicle), so it belongs with the other [gpu] scenarios and is INVISIBLE to a
 // `~[gpu]` run by design. The unfiltered suite is where it runs.
 #include "Helpers/HostWitness.hpp"
+#include "Helpers/ReferenceProjectDir.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
@@ -13,11 +14,37 @@
 using namespace Arcane::Test;
 namespace
 {
+    std::string ReadAllBytes(const std::filesystem::path& p)
+    {
+        std::ifstream in(p, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+
     std::filesystem::path StagedEditorDir()
     {
         const std::filesystem::path p = std::filesystem::absolute("../ArcaneEditor");
-        INFO("staged ArcaneEditor not found -- build Arcane.slnx first: " << p.string());
-        REQUIRE(std::filesystem::exists(p / "ArcaneEditor.exe"));
+        {
+            INFO("staged ArcaneEditor not found -- build Arcane.slnx first: " << p.string());
+            REQUIRE(std::filesystem::exists(p / "ArcaneEditor.exe"));
+        }
+
+        // Every editor witness runs --headless, which pins the layout to the
+        // STAGED Saved/verify-layout.ini. That copy is refreshed only when
+        // ArcaneEditor's postbuild runs (or golden-gate.ps1 restages it), so a
+        // seed edit made after the last editor link leaves the witnesses on
+        // the OLD seed while they report green (inspector filters Task 10, fix
+        // round 1: measured, the Debug witnesses ran the 2026-09-10 seed).
+        // Refuse rather than test the wrong input.
+        const std::filesystem::path sourceProject = Arcane::Test::FindReferenceProjectDir();
+        REQUIRE_FALSE(sourceProject.empty());
+        const std::filesystem::path sourceSeed = sourceProject / "Saved" / "verify-layout.ini";
+        const std::filesystem::path stagedSeed = p / "ReferenceProject" / "Saved" / "verify-layout.ini";
+        INFO("the staged layout seed is stale -- rebuild ArcaneEditor (its postbuild restages it) "
+             "or run scripts/golden-gate.ps1: " << stagedSeed.string() << " != " << sourceSeed.string());
+        REQUIRE(std::filesystem::exists(sourceSeed));
+        REQUIRE(std::filesystem::exists(stagedSeed));
+        const bool stagedSeedMatchesSource = ReadAllBytes(stagedSeed) == ReadAllBytes(sourceSeed);
+        REQUIRE(stagedSeedMatchesSource);   // a bool, so a failure prints the message, not two whole files
         return p;
     }
 }

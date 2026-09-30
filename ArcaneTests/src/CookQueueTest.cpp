@@ -10,11 +10,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Project/CookQueue.hpp"
+#include "Panels/AssetPanelModel.hpp"   // CookPassInvalidatesCookStates + the digest the rule keeps honest
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>
 #include <Arcane/AssetPipeline/CookKey.hpp>
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Project/AssetRegistry.hpp>
 
 #include <Json.hpp>
 #include <stb_image_write.h>
@@ -361,4 +363,92 @@ TEST_CASE("CookQueue: a fully-cooked project's open pass cooks 0 -- the hash gat
     CHECK(delivered[0].upToDate == 1u);
     CHECK(delivered[0].failed == 0u);
     CHECK(delivered[0].cookedGuids.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Inspector filters Task 10, fix round 1: the "N cooking" digest must not latch.
+// The editor's cook-pending probe answers a Mesh guid "pending" whenever the
+// queue is busy (EditorApp.cpp's SetCookPendingProbe, branch (b)), so a model
+// rebuilt while a follow-up pass runs records the mesh as Queued. The old
+// OnCookCompleted rule re-asked only when a pass COOKED something, so a
+// follow-up that cooked 0 left "1 cooking" on screen for good. That is the
+// editor-material-page golden-lane flake: 296 px in the status bar, stable for
+// 30 settle attempts.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("CookPassInvalidatesCookStates: a cooked batch or an idle landing re-asks; a pass under a running follow-up waits", "[editor][cook]")
+{
+    CHECK(Arcane::Editor::CookPassInvalidatesCookStates(/*cookedAny=*/true,  /*queueStillPending=*/true));
+    CHECK(Arcane::Editor::CookPassInvalidatesCookStates(/*cookedAny=*/true,  /*queueStillPending=*/false));
+    CHECK(Arcane::Editor::CookPassInvalidatesCookStates(/*cookedAny=*/false, /*queueStillPending=*/false));
+    CHECK_FALSE(Arcane::Editor::CookPassInvalidatesCookStates(/*cookedAny=*/false, /*queueStillPending=*/true));
+}
+
+TEST_CASE("CookQueue + AssetPanelModel: a mesh recorded Queued mid-pass reads Cooked once a nothing-cooked follow-up lands", "[editor][cook]")
+{
+    using Arcane::Editor::AssetPanelModel;
+    using Arcane::Editor::AssetPanelProviders;
+    using Arcane::Editor::CookState;
+
+    // The cook project: Content/ holds no sources, so every pass cooks 0 (the
+    // up-to-date shape the gate's staged tree produces).
+    const fs::path project = TempProjectDir("mesh_digest_unlatch");
+
+    // The model's own content: one asset. Its cook answer comes from the probe
+    // below, not from its extension.
+    const fs::path content = fs::temp_directory_path() / "arcane_cookqueue_test" / "mesh_digest_unlatch_content";
+    std::error_code ec;
+    fs::remove_all(content, ec);
+    fs::create_directories(content);
+    std::ofstream(content / "golden_prop.png", std::ios::binary) << "bytes";
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(content, "game") == 1);
+
+    ManualSubmit submit;
+    CookQueue queue(project, [&submit](std::function<void()> job) { submit(std::move(job)); });
+
+    AssetPanelModel model;
+    // The editor's Mesh answer, post-settling: CookStateOf(Mesh, no refusal,
+    // probe) where the probe is "queue busy (and the source exists)".
+    AssetPanelProviders providers;
+    providers.cookStateFor = [&queue](const Guid&)
+    { return Arcane::Editor::CookStateOf(Arcane::Editor::AssetKind::Mesh, false, queue.CookPending()); };
+
+    // OnCookCompleted's rule, verbatim in shape.
+    std::vector<std::size_t> cookedPerPass;
+    queue.SetOnCookComplete([&](const CookResult& r)
+    {
+        cookedPerPass.push_back(r.cookedGuids.size());
+        if (Arcane::Editor::CookPassInvalidatesCookStates(!r.cookedGuids.empty(), queue.CookPending()))
+            model.MarkAllDirty();
+    });
+
+    // Pass A runs; a follow-up pass B is already in flight when A is delivered
+    // (the traced desk run: A lands with CookPending() still true).
+    queue.NoteChanged();
+    submit.RunNext();
+    queue.NoteChanged();
+    REQUIRE(queue.CookPending());
+    queue.Pump();
+    REQUIRE(cookedPerPass.size() == 1u);
+
+    // Any rebuild while B runs records the mesh as Queued -- honest right now.
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    CHECK(model.Health().queued == 1);
+
+    // B lands having cooked NOTHING. The pre-fix rule (`cookedAny` alone) would
+    // not have marked, and the digest would read "1 cooking" forever.
+    submit.RunNext();
+    CHECK_FALSE(queue.CookPending());
+    queue.Pump();
+    REQUIRE(cookedPerPass.size() == 2u);
+    CHECK(cookedPerPass[1] == 0u);
+
+    CHECK(model.RebuildIfDirty(&registry, providers));
+    CHECK(model.Health().queued == 0);
+    CHECK(model.Health().cooked == 1);
+
+    fs::remove_all(content, ec);
+    fs::remove_all(project, ec);
 }

@@ -875,10 +875,20 @@ namespace Arcane::Editor
             // the material-save seam already makes and justifies (onAssetSaved,
             // this file: a derived answer invalidates more than its own guid,
             // and at current scale the whole-model rebuild is cheaper than the
-            // dependency walk that would narrow it). Bounded by the batch: a
-            // pass that cooked nothing marks nothing, so the steady state --
-            // PollAssetWatch's periodic trivial passes -- costs no rebuilds.
-            if (!result.cookedGuids.empty())
+            // dependency walk that would narrow it).
+            //
+            // WIDENED (inspector filters Task 10, fix round 1): a pass that
+            // cooked NOTHING also marks, once the queue is idle after it. A
+            // Mesh's pending answer is the cook-pending probe's (b) branch --
+            // "the queue is busy and the source exists" -- so a rebuild that
+            // lands while a follow-up pass runs records every mesh as Queued,
+            // and a follow-up that cooks 0 never un-latched it: "N cooking"
+            // forever, the golden-lane flake. CookPassInvalidatesCookStates
+            // (AssetPanelModel.hpp) owns the rule and its cost account.
+            // Settling-window passes are covered too: they end in this same
+            // idle landing.
+            if (Arcane::Editor::CookPassInvalidatesCookStates(
+                    !result.cookedGuids.empty(), m_cookQueue && m_cookQueue->CookPending()))
                 m_assetModel.MarkAllDirty();
 
             // Final-review fix I3 (2026-09-11): the companion mint ALSO runs over every
