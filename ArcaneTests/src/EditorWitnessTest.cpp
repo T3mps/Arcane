@@ -7,13 +7,97 @@
 #include "Helpers/HostWitness.hpp"
 #include "Helpers/ReferenceProjectDir.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <Panels/DefaultLayout.hpp>   // the default layout's pixel targets (E6/E7)
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <vector>
 using namespace Arcane::Test;
 namespace
 {
+    // ---- imgui.ini [Docking][Data] reading, for the layout witnesses (E6/E7) ----
+    // One row per "DockSpace"/"DockNode" line: its id, parent, SizeRef (the
+    // root carries Size), Split axis and CentralNode flag, plus the raw line.
+    struct DockRow
+    {
+        std::uint32_t id = 0, parent = 0;
+        float w = 0.0f, h = 0.0f;
+        char split = 0;
+        bool central = false;
+        std::string line;
+    };
+    std::string IniField(const std::string& line, const char* key)
+    {
+        const std::string needle = std::string(" ") + key + "=";
+        std::size_t p = line.find(needle);
+        if (p == std::string::npos) return {};
+        p += needle.size();
+        const std::size_t e = line.find(' ', p);
+        return line.substr(p, e == std::string::npos ? std::string::npos : e - p);
+    }
+    std::vector<DockRow> ParseDockRows(const std::string& ini)
+    {
+        std::vector<DockRow> rows;
+        std::istringstream in(ini);
+        std::string line;
+        bool inDocking = false;
+        while (std::getline(in, line))
+        {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty() && line[0] == '[') { inDocking = line == "[Docking][Data]"; continue; }
+            if (!inDocking) continue;
+            const std::size_t t = line.find_first_not_of(' ');
+            if (t == std::string::npos) continue;
+            if (line.compare(t, 8, "DockNode") != 0 && line.compare(t, 9, "DockSpace") != 0) continue;
+            DockRow r;
+            r.line = line;
+            r.id = static_cast<std::uint32_t>(std::stoul(IniField(line, "ID"), nullptr, 16));
+            if (const std::string par = IniField(line, "Parent"); !par.empty())
+                r.parent = static_cast<std::uint32_t>(std::stoul(par, nullptr, 16));
+            std::string size = IniField(line, "SizeRef");
+            if (size.empty()) size = IniField(line, "Size");
+            if (const std::size_t comma = size.find(','); comma != std::string::npos)
+            {
+                r.w = std::stof(size.substr(0, comma));
+                r.h = std::stof(size.substr(comma + 1));
+            }
+            if (const std::string sp = IniField(line, "Split"); !sp.empty()) r.split = sp[0];
+            r.central = IniField(line, "CentralNode") == "1";
+            rows.push_back(r);
+        }
+        return rows;
+    }
+    const DockRow* FindRow(const std::vector<DockRow>& rows, std::uint32_t id)
+    {
+        for (const DockRow& r : rows) if (r.id == id) return &r;
+        return nullptr;
+    }
+    // The [Window][<name>] section's DockId (0 = none / no section).
+    std::uint32_t WindowDockId(const std::string& iniText, const std::string& name)
+    {
+        // LINE-anchored (the committed seed's header comment names sections
+        // too); the leading newline lets a section on the file's first line match.
+        const std::string ini = "\n" + iniText;
+        const std::size_t at = ini.find("\n[Window][" + name + "]");
+        if (at == std::string::npos) return 0;
+        const std::size_t end = ini.find("\n[", at + 1);
+        const std::size_t d = ini.find("DockId=0x", at);
+        if (d == std::string::npos || (end != std::string::npos && d > end)) return 0;
+        return static_cast<std::uint32_t>(std::stoul(ini.substr(d + 9, 8), nullptr, 16));
+    }
+    std::string Hex8(std::uint32_t v)
+    {
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%08X", v);
+        return buf;
+    }
+
     std::string ReadAllBytes(const std::filesystem::path& p)
     {
         std::ifstream in(p, std::ios::binary);
@@ -168,6 +252,12 @@ TEST_CASE("E3: an opened input document with a scripted selection owns the Inspe
     CHECK(inst[0].at("excluded") == nlohmann::json::array({ "assets" }));
     CHECK(inst[1].at("id") == 1);
     CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions", "material", "sprite", "mesh" }));
+    // What each instance SHOWS (final fix W): the main one the document's
+    // page, the Assets-only one the Asset Browser with nothing selected.
+    CHECK(inst[0].at("source") == "Player.arcinput");
+    CHECK(inst[0].at("breadcrumb") == "Player.arcinput > Player > Jump");
+    CHECK(inst[1].at("source") == "Assets");
+    CHECK(inst[1].at("breadcrumb") == "Assets");
     REQUIRE(run.report.contains("compare"));
     CHECK(run.report["compare"].at("passed") == true);
 }
@@ -197,9 +287,12 @@ TEST_CASE("E4: a selected asset routes the Assets Inspector to its page and matc
     REQUIRE(run.exitCode == 0);
     REQUIRE(run.report.contains("inspector"));
     CHECK(run.report["inspector"].at("source") == "Assets");                  // Current(): the asset selection
+    CHECK(run.report["inspector"].at("breadcrumb") == "Assets > uv_marker.png");
     REQUIRE(run.report["inspector"].contains("instances"));
     CHECK(run.report["inspector"]["instances"][0].at("source") == "Scene");   // All but Assets: untouched
     CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");
+    // The asset page is what Inspector 2 SHOWS, not only where it routed (final fix W).
+    CHECK(run.report["inspector"]["instances"][1].at("breadcrumb") == "Assets > uv_marker.png");
     REQUIRE(run.report.contains("compare"));
     CHECK(run.report["compare"].at("passed") == true);
 }
@@ -236,6 +329,7 @@ TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector 
             REQUIRE(run.report["inspector"].contains("instances"));
             CHECK(run.report["inspector"]["instances"][0].at("source") == d.title);
             CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");   // untouched by a document open
+            CHECK(run.report["inspector"]["instances"][1].at("breadcrumb") == "Assets");   // ...and still showing no selection
             if (d.compare)
             {
                 REQUIRE(run.report.contains("compare"));
@@ -271,4 +365,175 @@ TEST_CASE("E3b: an unresolvable --select-in-document is a loud ERROR, the run co
     std::ifstream err(run.stderrPath);
     const std::string all((std::istreambuf_iterator<char>(err)), std::istreambuf_iterator<char>());
     CHECK(all.find("--select-in-document 'Player/NoSuchAction': the opened document has no such path") != std::string::npos);
+}
+
+// E6: THE DEFAULT LAYOUT (USER DECISION 2026-09-30; final fix W). With the
+// scratch copy's seed removed, a --headless run falls back to
+// BuildDefaultLayout (the seed-less branch of RetargetLayoutIni): the dumped
+// dock tree must be the user's ReferenceProject layout in pixels at the
+// headless 1280x720 -- the main Inspector a full-height right column, the
+// Outliner top-left beside the central Viewport, and the asset/console band
+// under the Outliner up to the Inspector with Inspector 2 at its right end --
+// and the picture must match editor-ui, whose seed IS that default.
+TEST_CASE("E6: with no layout seed the editor builds the default layout -- the user's ReferenceProject layout -- and matches editor-ui", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e6-default-layout");
+    std::filesystem::remove(scratch.Dir() / "ReferenceProject" / "Saved" / "verify-layout.ini");   // THIS copy only
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+                 "--settle", "30", "--report", inv.reportPath.generic_string(),
+                 "--dump-layout", dump.generic_string(), "--compare", "editor-ui" };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("inspector"));
+    const auto& inst = run.report["inspector"]["instances"];
+    REQUIRE(inst.size() == 2);
+    CHECK(inst[0].at("excluded") == nlohmann::json::array({ "assets" }));
+    CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions", "material", "sprite", "mesh" }));
+
+    REQUIRE(std::filesystem::exists(dump));
+    const std::string ini = ReadAllBytes(dump);
+    INFO("dumped layout:\n" << ini);
+    const std::vector<DockRow> rows = ParseDockRows(ini);
+    REQUIRE_FALSE(rows.empty());
+    const DockRow& root = rows.front();
+    CHECK(root.split == 'X');
+    constexpr float kTol = 3.0f;
+    // The main Inspector: a direct child of the root (full height), ~380 px.
+    const DockRow* insp = FindRow(rows, WindowDockId(ini, "Inspector"));
+    REQUIRE(insp != nullptr);
+    CHECK(insp->parent == root.id);
+    CHECK(std::abs(insp->w - Arcane::Editor::kDefaultInspectorWidthPx) <= kTol);
+    // Left of it: the block split top/bottom.
+    const DockRow* leftBlock = nullptr;
+    for (const DockRow& r : rows) if (r.parent == root.id && r.id != insp->id) leftBlock = &r;
+    REQUIRE(leftBlock != nullptr);
+    CHECK(leftBlock->split == 'Y');
+    // Top: the Outliner (~270 px) beside the central node, which holds the Viewport.
+    const DockRow* outliner = FindRow(rows, WindowDockId(ini, "Outliner"));
+    const DockRow* viewport = FindRow(rows, WindowDockId(ini, "Viewport"));
+    REQUIRE(outliner != nullptr);
+    REQUIRE(viewport != nullptr);
+    CHECK(std::abs(outliner->w - Arcane::Editor::kDefaultOutlinerWidthPx) <= kTol);
+    CHECK(viewport->central);
+    CHECK(outliner->parent == viewport->parent);
+    const DockRow* top = FindRow(rows, outliner->parent);
+    REQUIRE(top != nullptr);
+    CHECK(top->parent == leftBlock->id);
+    // Bottom: ONE tab node for the five asset/console panels, Inspector 2 on its right.
+    const std::uint32_t browserId = WindowDockId(ini, "Asset Browser");
+    for (const char* tab : { "Asset Graph", "Asset Status", "Console", "Problems" })
+    {
+        INFO(tab);
+        CHECK(WindowDockId(ini, tab) == browserId);
+    }
+    const DockRow* browser = FindRow(rows, browserId);
+    const DockRow* assetsInsp = FindRow(rows, WindowDockId(ini, "inspector_1"));
+    REQUIRE(browser != nullptr);
+    REQUIRE(assetsInsp != nullptr);
+    CHECK(browser->parent == assetsInsp->parent);
+    const DockRow* band = FindRow(rows, browser->parent);
+    REQUIRE(band != nullptr);
+    CHECK(band->parent == leftBlock->id);                       // under the Outliner, left of the Inspector
+    CHECK(std::abs(band->h - Arcane::Editor::kDefaultBottomBandPx) <= kTol);
+    CHECK(std::abs(assetsInsp->w - Arcane::Editor::kDefaultAssetsInspectorPx) <= kTol);
+    REQUIRE(run.report.contains("compare"));
+    CHECK(run.report["compare"].at("passed") == true);          // the seed IS this default
+}
+
+// E7: THE ONE-TIME LEGACY UPGRADE (inspector filters s6; final fix W). The
+// scratch copy's seed is turned into a PRE-FEATURE layout -- no Filters= line,
+// no extra instance, no [Window][inspector_1], the band's browser|Inspector 2
+// split folded back into one browser node -- and the run must upgrade it once:
+// instance 0 All but Assets, an Assets-only instance at slot 1, docked in a
+// split right of the Asset Browser's node at the default's 390 px target
+// (clamped to 45% of that node).
+TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspector 2 splits right of the Asset Browser at the default width", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e7-legacy-upgrade");
+    const std::filesystem::path seedPath = scratch.Dir() / "ReferenceProject" / "Saved" / "verify-layout.ini";
+    std::string seed = ReadAllBytes(seedPath);
+    {
+        // Fold the band's split: drop the browser and Inspector 2 leaves, make
+        // their parent the browser's node, retarget the tabs' DockIds to it.
+        const std::vector<DockRow> rows = ParseDockRows(seed);
+        const std::uint32_t a = WindowDockId(seed, "inspector_1");
+        const std::uint32_t b = WindowDockId(seed, "Asset Browser");
+        const DockRow* ra = FindRow(rows, a);
+        const DockRow* rb = FindRow(rows, b);
+        REQUIRE(ra != nullptr);
+        REQUIRE(rb != nullptr);
+        REQUIRE(ra->parent == rb->parent);
+        const DockRow* rp = FindRow(rows, ra->parent);
+        REQUIRE(rp != nullptr);
+        auto eraseLine = [&](const std::string& line)
+        {
+            const std::size_t at = seed.find(line);
+            REQUIRE(at != std::string::npos);
+            std::size_t end = seed.find('\n', at);
+            seed.erase(at, end == std::string::npos ? std::string::npos : end - at + 1);
+        };
+        eraseLine(ra->line);
+        eraseLine(rb->line);
+        std::string parentLine = rp->line;
+        const std::size_t split = parentLine.find(" Split=X");
+        REQUIRE(split != std::string::npos);
+        parentLine.erase(split, 8);
+        seed.replace(seed.find(rp->line), rp->line.size(), parentLine);
+        const std::string from = "DockId=0x" + Hex8(b) + ",", to = "DockId=0x" + Hex8(rp->id) + ",";
+        for (std::size_t at = seed.find(from); at != std::string::npos; at = seed.find(from, at + to.size()))
+            seed.replace(at, from.size(), to);
+        // No [Window][inspector_1], no extra instance, no Filters= line.
+        const std::size_t w = seed.find("\n[Window][inspector_1]");   // line-anchored: the header comment names it too
+        REQUIRE(w != std::string::npos);
+        seed.erase(w + 1, seed.find("\n[", w + 1) - w);
+        const std::size_t ids = seed.find("\nIds=1\n");
+        REQUIRE(ids != std::string::npos);
+        seed.replace(ids, 7, "\nIds=\n");
+        const std::size_t f = seed.find("\nFilters=");
+        REQUIRE(f != std::string::npos);
+        seed.erase(f + 1, seed.find('\n', f + 1) - f);
+        std::ofstream(seedPath, std::ios::binary | std::ios::trunc) << seed;   // THIS copy only
+    }
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    const std::filesystem::path dump = scratch.Dir() / "dumped-layout.ini";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+                 "--report", inv.reportPath.generic_string(), "--dump-layout", dump.generic_string() };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    INFO("edited seed:\n" << seed);
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("inspector"));
+    const auto& inst = run.report["inspector"]["instances"];
+    REQUIRE(inst.size() == 2);
+    CHECK(inst[0].at("id") == 0);
+    CHECK(inst[0].at("excluded") == nlohmann::json::array({ "assets" }));
+    CHECK(inst[1].at("id") == 1);
+    CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions", "material", "sprite", "mesh" }));
+
+    REQUIRE(std::filesystem::exists(dump));
+    const std::string ini = ReadAllBytes(dump);
+    INFO("dumped layout:\n" << ini);
+    CHECK(ini.find("\nFilters=0:assets,1:scene+input-actions+material+sprite+mesh") != std::string::npos);   // upgraded once, now persisted
+    const std::vector<DockRow> rows = ParseDockRows(ini);
+    const DockRow* browser = FindRow(rows, WindowDockId(ini, "Asset Browser"));
+    const DockRow* assetsInsp = FindRow(rows, WindowDockId(ini, "inspector_1"));
+    REQUIRE(browser != nullptr);
+    REQUIRE(assetsInsp != nullptr);
+    CHECK(browser->parent == assetsInsp->parent);               // a split OF the browser's node
+    const DockRow* parent = FindRow(rows, browser->parent);
+    REQUIRE(parent != nullptr);
+    CHECK(parent->split == 'X');
+    const float nodeWidth = browser->w + assetsInsp->w + 2.0f;   // + one DockingSeparatorSize
+    CHECK(std::abs(assetsInsp->w - Arcane::Editor::LegacyAssetsInspectorPixels(nodeWidth)) <= 3.0f);
 }

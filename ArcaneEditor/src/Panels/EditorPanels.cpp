@@ -5,6 +5,7 @@
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
+#include "Panels/DefaultLayout.hpp"   // the default layout's pixel geometry (BuildDefaultLayout)
 #include "Panels/DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -413,46 +414,72 @@ namespace Arcane::Editor
         // (DrawSimTimeToolbar) into it, then closes it via EndDockSpace().
     }
 
-    // Build the standard editor layout once (when there is no saved .ini node yet): the
-    // Viewport takes the central node; the tool panels are split off around it, so the
-    // Viewport's size is whatever those panels leave. Names must match each panel's
-    // ImGui::Begin() title.
-    static void BuildDefaultLayout(ImGuiID dockspaceId)
+    // ---- The default layout's geometry: Panels/DefaultLayout.hpp (USER
+    // DECISION 2026-09-30 -- the user's ReferenceProject layout is the default;
+    // the pixel targets and their clamps are named there). ----
+
+    namespace
+    {
+        // A node's size along `axis` for a split: its live Size, else (a node
+        // just loaded from the ini, never updated by a DockSpace() yet) its SizeRef.
+        float DockNodeExtent(ImGuiID nodeId, ImGuiAxis axis)
+        {
+            const ImGuiDockNode* n = ImGui::DockBuilderGetNode(nodeId);
+            if (!n) return 0.0f;
+            return n->Size[axis] > 0.0f ? n->Size[axis] : n->SizeRef[axis];
+        }
+
+        // DockBuilderSplitNode's ratio for giving the node at the split
+        // direction `px` pixels of `nodeId`: DockNodeTreeSplit divides the
+        // node's size minus one DockingSeparatorSize (imgui.cpp DockNodeTreeSplit).
+        float PixelSplitRatio(ImGuiID nodeId, ImGuiAxis axis, float px)
+        {
+            const float avail = DockNodeExtent(nodeId, axis) - ImGui::GetStyle().DockingSeparatorSize;
+            return avail > 1.0f ? std::clamp(px / avail, 0.05f, 0.95f) : 0.5f;
+        }
+    }
+
+    // Build the standard editor layout once (when there is no saved .ini node
+    // yet) or on Window -> Reset Layout -- the geometry above. Names must match
+    // each panel's ImGui::Begin() title. `size` is the dockspace's size THIS
+    // frame (what the DockSpace() call right after will occupy).
+    static void BuildDefaultLayout(ImGuiID dockspaceId, ImVec2 size)
     {
         ImGui::DockBuilderRemoveNode(dockspaceId);
         ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, size);
+        const DefaultLayoutPixels px = ComputeDefaultLayoutPixels(size.x, size.y);
 
-        ImGuiID central = dockspaceId;
-        const ImGuiID leftId   = ImGui::DockBuilderSplitNode(central, ImGuiDir_Left,  0.18f, nullptr, &central);
-        const ImGuiID rightId  = ImGui::DockBuilderSplitNode(central, ImGuiDir_Right, 0.22f, nullptr, &central);
-        const ImGuiID bottomId = ImGui::DockBuilderSplitNode(central, ImGuiDir_Down,  0.32f, nullptr, &central);
-        // AAA interoperability: Browser | Graph side by side on a fresh
-        // layout (the panel-split's reason for existing). Status tabs with
-        // Graph; Console/Problems tab with Browser. Graph is the selected
-        // tab on the right so the derivation web is visible without a click.
-        ImGuiID bottomRightId = 0;
-        const ImGuiID bottomLeftId = ImGui::DockBuilderSplitNode(bottomId, ImGuiDir_Left, 0.48f,
-                                                                 nullptr, &bottomRightId);
-        // Inspector filters (spec s6): the "Assets only" Inspector sits where
-        // the Asset Browser's preview pane used to -- a split to the RIGHT of
-        // the browser's node -- so browsing assets never replaces the entity
-        // page in the main Inspector.
-        ImGuiID assetsInspectorId = 0;
-        const ImGuiID browserNodeId = ImGui::DockBuilderSplitNode(bottomLeftId, ImGuiDir_Left, 0.70f,
-                                                                  nullptr, &assetsInspectorId);
+        // The central node follows the INHERITOR side of every split (the side
+        // opposite the direction), so it ends up top-right of the left block.
+        ImGuiID left = 0;
+        const ImGuiID inspectorId = ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Right,
+            PixelSplitRatio(dockspaceId, ImGuiAxis_X, px.inspector), nullptr, &left);
+        ImGuiID top = 0;
+        const ImGuiID bandId = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down,
+            PixelSplitRatio(left, ImGuiAxis_Y, px.bottomBand), nullptr, &top);
+        ImGuiID central = 0;
+        const ImGuiID outlinerId = ImGui::DockBuilderSplitNode(top, ImGuiDir_Left,
+            PixelSplitRatio(top, ImGuiAxis_X, px.outliner), nullptr, &central);
+        // Inspector filters (spec s6): the "Assets only" Inspector sits right
+        // of the browser's tab node, so browsing assets never replaces the
+        // entity page in the main Inspector.
+        ImGuiID browserNodeId = 0;
+        const ImGuiID assetsInspectorId = ImGui::DockBuilderSplitNode(bandId, ImGuiDir_Right,
+            PixelSplitRatio(bandId, ImGuiAxis_X, px.assetsInspector), nullptr, &browserNodeId);
 
-        ImGui::DockBuilderDockWindow("Outliner", leftId);
-        // The main Inspector owns the right node alone: a material's page
-        // (preview + params) is an Inspector page now (inspector filters
-        // s6a), so there is no separate "Material" window to tab beside it.
-        ImGui::DockBuilderDockWindow(kPrimaryInspectorWindowId, rightId);   // the legacy "Inspector" id (### skipped)
+        ImGui::DockBuilderDockWindow("Outliner", outlinerId);
+        // The main Inspector owns the right column alone, full height: a
+        // material's page (preview + params) is an Inspector page now
+        // (inspector filters s6a), so there is no "Material" window beside it.
+        ImGui::DockBuilderDockWindow(kPrimaryInspectorWindowId, inspectorId);   // the legacy "Inspector" id (### skipped)
+        // ONE tab node, Asset Browser first (the first docked is the selected tab).
         ImGui::DockBuilderDockWindow("Asset Browser", browserNodeId);
+        ImGui::DockBuilderDockWindow("Asset Graph",   browserNodeId);
+        ImGui::DockBuilderDockWindow("Asset Status",  browserNodeId);
         ImGui::DockBuilderDockWindow("Console",       browserNodeId);
         ImGui::DockBuilderDockWindow("Problems",      browserNodeId);
         ImGui::DockBuilderDockWindow(kAssetsInspectorWindowId, assetsInspectorId);
-        ImGui::DockBuilderDockWindow("Asset Graph",   bottomRightId);
-        ImGui::DockBuilderDockWindow("Asset Status",  bottomRightId);
         ImGui::DockBuilderDockWindow("Viewport",      central);
         ImGui::DockBuilderFinish(dockspaceId);
     }
@@ -507,7 +534,11 @@ namespace Arcane::Editor
         // point (DockBuilder mutations before the DockSpace() submission).
         if (resetLayout || ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
         {
-            BuildDefaultLayout(dockspaceId);
+            // The size the DockSpace() below takes (ImVec2(0, 0) = the
+            // remaining content region of the host window).
+            ImVec2 size = ImGui::GetContentRegionAvail();
+            if (size.x <= 1.0f || size.y <= 1.0f) size = ImGui::GetMainViewport()->WorkSize;
+            BuildDefaultLayout(dockspaceId, size);
             result.builtDefault = true;
         }
         else if (upgradeLegacyInspectorId >= 1)
@@ -527,16 +558,21 @@ namespace Arcane::Editor
             // A window only ever docks into a LEAF, so its DockId names one;
             // the IsLeafNode() guard is belt and braces: DockBuilderSplitNode
             // on a split parent would re-split a node that already has
-            // children. DockBuilderSplitNode(node, Right, 0.30, at_dir,
+            // children. DockBuilderSplitNode(node, Right, ratio, at_dir,
             // opposite): the node's current windows move to the child
             // OPPOSITE the split direction (imgui.cpp:18399, child 0 for
             // Right), so the browser's tab set stays LEFT and the new right
-            // 30% is the Inspector's.
+            // child is the Inspector's -- the default layout's SAME
+            // kDefaultAssetsInspectorPx target, clamped to at most
+            // kAssetsInspectorMaxFraction of the browser's node.
             ImGuiDockNode* node = browserDock != 0 ? ImGui::DockBuilderGetNode(browserDock) : nullptr;
             if (node != nullptr && node->IsLeafNode())
             {
                 ImGuiID left = browserDock;
-                const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right, 0.30f, nullptr, &left);
+                const float nodeWidth = DockNodeExtent(browserDock, ImGuiAxis_X);
+                const float targetPx = LegacyAssetsInspectorPixels(nodeWidth);
+                const ImGuiID right = ImGui::DockBuilderSplitNode(left, ImGuiDir_Right,
+                    PixelSplitRatio(browserDock, ImGuiAxis_X, targetPx), nullptr, &left);
                 ImGui::DockBuilderDockWindow(id.c_str(), right);
             }
             // An undocked (or non-leaf) browser splits nothing: the new

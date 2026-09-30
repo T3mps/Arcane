@@ -4,10 +4,12 @@
 // (the instance list's ini section, one device-less frame of the windows)
 // run on bare contexts, no device.
 #include <catch2/catch_test_macros.hpp>
+#include <Panels/DefaultLayout.hpp>
 #include <Panels/InspectorHost.hpp>
 #include <Panels/InspectorWindows.hpp>   // RegisterInspectorInstancesSettings
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -916,6 +918,33 @@ TEST_CASE("DrawInspectorWindows: a single-kind empty state names the kind in the
     INFO(logged);
     CHECK(logged.find("No Material document open") != std::string::npos);
     CHECK(logged.find("Materials document") == std::string::npos);
+}
+
+TEST_CASE("Default layout geometry: the user's ReferenceProject layout in pixels, clamped so the central node keeps 40%", "[editor][inspector]")
+{
+    // USER DECISION 2026-09-30: Inspector 380 w (full height, right), Outliner
+    // 270 w, the bottom band 350 h (under the Outliner, left of the
+    // Inspector), Inspector 2 390 w at the band's right end.
+    const DefaultLayoutPixels full = ComputeDefaultLayoutPixels(1920.0f, 954.0f);   // 1920x1080 maximized
+    CHECK(full.inspector == 380.0f);
+    CHECK(full.outliner == 270.0f);
+    CHECK(full.bottomBand == 350.0f);
+    CHECK(full.assetsInspector == 390.0f);
+
+    const DefaultLayoutPixels boot = ComputeDefaultLayoutPixels(1280.0f, 647.0f);   // the hidden 1280x720 boot window
+    CHECK(boot.inspector == 380.0f);                                  // 650 of 1280: the central node keeps 49%
+    CHECK(boot.outliner == 270.0f);
+    CHECK(boot.bottomBand == 350.0f);                                 // 297 of 647 left: 46%
+    CHECK(boot.assetsInspector == 390.0f);
+
+    const DefaultLayoutPixels small = ComputeDefaultLayoutPixels(800.0f, 500.0f);
+    CHECK(small.inspector + small.outliner <= 800.0f * 0.6f + 0.01f);   // central >= 40% of the width
+    CHECK(std::abs(small.inspector / small.outliner - 380.0f / 270.0f) < 1e-5f);   // both shrink by one factor
+    CHECK(small.bottomBand == 500.0f * 0.6f);                           // central >= 40% of the height
+    CHECK(small.assetsInspector <= (800.0f - small.inspector) * 0.45f + 0.01f);
+
+    CHECK(LegacyAssetsInspectorPixels(1144.0f) == 390.0f);           // the user's band at 1920
+    CHECK(LegacyAssetsInspectorPixels(500.0f) == 225.0f);            // clamped to 45% of the browser's node
 }
 
 TEST_CASE("InspectorHost: a closed slot's filter comes back when Window > New Inspector reuses the slot", "[editor][inspector]")
