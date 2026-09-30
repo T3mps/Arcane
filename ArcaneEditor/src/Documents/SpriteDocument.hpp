@@ -103,6 +103,7 @@ namespace Arcane::Editor
         bool RestoreSelection(std::string_view key) override { return m_pageSel.Resolves(key); }
         bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
+        void NoteReopened() override { m_pageSel.NoteReopened(); }
 
         // Undo plumbing (doc-identity commands, the same shape as
         // ShaderEditorDocument::ApplyParamEdit, ShaderEditorDocument.hpp:

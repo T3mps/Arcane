@@ -43,14 +43,20 @@ namespace Arcane::Editor
             if (route.peek)
                 if (const Arcane::Guid peeked = route.peek(path); peeked.IsValid())
                     if (EditorDocument* open = FindByGuid(peeked))
+                    {
+                        open->NoteReopened();   // re-select its page like a fresh open (final fix R)
                         return m_focusRequest = open;
+                    }
             std::unique_ptr<EditorDocument> doc = route.factory(path);
             if (!doc)
                 return nullptr;   // factory already logged the cause
             // Fallback dedup for peek-less routes.
             if (doc->AssetGuid().IsValid())
                 if (EditorDocument* open = FindByGuid(doc->AssetGuid()))
+                {
+                    open->NoteReopened();
                     return m_focusRequest = open;
+                }
             return m_focusRequest = Add(std::move(doc));
         }
         ARC_WARN("DocumentHost: no editor registered for '{}'", ext);

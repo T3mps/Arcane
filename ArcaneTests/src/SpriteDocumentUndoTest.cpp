@@ -19,6 +19,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Documents/DocumentHost.hpp"
 #include "Documents/SpriteDocument.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
@@ -194,6 +195,24 @@ TEST_CASE("SpriteDocument is a sprite Inspector source selected at open", "[edit
     CHECK(doc.RestoreSelection("sprite"));
     CHECK(doc.SelectionEpoch() == 1);                  // a restore is not a click
     CHECK_FALSE(doc.Resolves("material"));
+}
+
+TEST_CASE("SpriteDocument: opening it again through DocumentHost::OpenPath re-selects its page", "[editor][sprite][inspector]")
+{
+    // Final fix R: the focus-not-reopen branch bumps the page epoch like a
+    // fresh open, so the app's epoch poll routes the Inspector back to it.
+    const Arcane::SpriteAssetData data = Fixture();
+    Arcane::Editor::DocumentHost host;
+    host.RegisterFactory(".arcsprite", [&](const std::filesystem::path& p) -> std::unique_ptr<Arcane::Editor::EditorDocument>
+    { return std::make_unique<SpriteDocument>(SpriteDocument::Services{}, p, data); });
+    Arcane::Editor::EditorDocument* doc = host.OpenPath(FixturePath());
+    REQUIRE(doc != nullptr);
+    CHECK(doc->SelectionEpoch() == 1);                 // selected at open
+    CHECK(host.OpenPath(FixturePath()) == doc);        // focus-not-reopen
+    CHECK(doc->SelectionEpoch() == 2);                 // ...and re-selected
+    CHECK(host.OpenPath(FixturePath()) == doc);
+    CHECK(doc->SelectionEpoch() == 3);
+    CHECK(host.Count() == 1);
 }
 
 namespace

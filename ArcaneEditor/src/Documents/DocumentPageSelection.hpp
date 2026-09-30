@@ -27,6 +27,9 @@ namespace Arcane::Editor
         // the title bar or a dock tab -- bumps the epoch. Tab switches and focus
         // never do (they are not clicks in the content).
         void NoteContentClick();
+        // An explicit re-open of the already-open document (DocumentHost::
+        // OpenPath's focus-not-reopen): selected again, like the first open.
+        void NoteReopened() noexcept { ++epoch; }
     };
 
     inline void DocumentPageSelection::NoteContentClick()

@@ -132,7 +132,19 @@ TEST_CASE("input editor: opening the same asset focuses its document", "[editor]
         [](const fs::path& source) { return Arcane::Editor::InputActionsDocument::PeekGuid(source); });
     auto* first = host.OpenPath(path);
     REQUIRE(first);
+    // Final fix R: a re-open re-asserts a NON-EMPTY selection (the asset
+    // page's "" key is never a selection event, so nothing to re-assert).
+    auto* input = static_cast<Arcane::Editor::InputActionsDocument*>(first);
+    input->Model().DeselectToAsset();                  // the asset page: key ""
+    REQUIRE(first->SelectionKey().empty());
+    const auto epochAsset = first->SelectionEpoch();
     CHECK(host.OpenPath(path) == first);
+    CHECK(first->SelectionEpoch() == epochAsset);      // key "" -- no bump
+    REQUIRE(input->Model().SelectByPath("Player/Jump"));
+    REQUIRE_FALSE(first->SelectionKey().empty());
+    const auto epochSelected = first->SelectionEpoch();
+    CHECK(host.OpenPath(path) == first);
+    CHECK(first->SelectionEpoch() == epochSelected + 1);
     CHECK(host.Count() == 1);
     host.CloseAll();
     std::error_code error;

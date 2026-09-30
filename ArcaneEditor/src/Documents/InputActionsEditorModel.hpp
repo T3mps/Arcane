@@ -56,6 +56,10 @@ namespace Arcane::Editor
         void DeselectToMap(const Guid& map) { SetSelectionSilently({ map, Guid{}, Guid{}, Guid{} }); }
         void DeselectToAsset() { SetSelectionSilently({}); }
         [[nodiscard]] std::uint64_t SelectionEpoch() const noexcept { return selectionEpoch_; }
+        // The document was re-opened (DocumentHost::OpenPath focus-not-reopen):
+        // a gesture on the CURRENT selection -- bumps only when the key is
+        // non-empty (the asset page's "" is never a selection event).
+        void ReassertSelection() { if (!SelectionKey().empty()) ++selectionEpoch_; }
         [[nodiscard]] std::string SelectionKey() const;                    // "<map>/<action>/<binding>/<part>"; "" when no map
         [[nodiscard]] bool RestoreSelection(std::string_view key);         // every non-empty segment must exist
         [[nodiscard]] std::optional<std::array<Guid, 4>> ResolveKey(std::string_view key) const;   // ParseSelectionKey + every named id exists

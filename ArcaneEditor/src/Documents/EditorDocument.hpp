@@ -65,5 +65,11 @@ namespace Arcane::Editor
         // --select-in-document: select by a human path ("Player/Jump"). False
         // = the document has no such notion or the path did not resolve.
         virtual bool SelectByPath(std::string_view) { return false; }
+        // DocumentHost::OpenPath resolved to THIS already-open document (a
+        // double-click in the Browser, the asset page's Open, a Problems
+        // locator): re-select its page as a fresh open would (spec s3 "opening
+        // a document selects its default page"; final fix R). A plain tab
+        // click never calls this. Default: nothing to re-select.
+        virtual void NoteReopened() {}
     };
 }

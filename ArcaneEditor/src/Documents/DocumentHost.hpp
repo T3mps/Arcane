@@ -48,7 +48,8 @@ namespace Arcane::Editor
         void RegisterFactory(std::string extension, OpenFactory factory,
                              PeekGuid peek = nullptr);
         // Open a path through its extension's factory. Focus-not-reopen: when a
-        // document with the same asset Guid is already open, returns it instead.
+        // document with the same asset Guid is already open, returns it instead
+        // and calls its NoteReopened() (an explicit open re-selects its page).
         // Null when no factory matches or the factory fails.
         EditorDocument* OpenPath(const std::filesystem::path& path);
 

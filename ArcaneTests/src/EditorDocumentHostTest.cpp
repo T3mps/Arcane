@@ -24,6 +24,7 @@ namespace
         bool dirty = false;
         bool saveSucceeds = true;
         int  saveCalls = 0;
+        int  reopened = 0;
 
         FakeDoc(std::string t, Arcane::Guid g, bool d) : title(std::move(t)), guid(g), dirty(d) {}
 
@@ -37,6 +38,7 @@ namespace
             return saveSucceeds;
         }
         void Draw(bool&) override {}
+        void NoteReopened() override { ++reopened; }
     };
 }
 
@@ -220,4 +222,32 @@ TEST_CASE("Param decls map to their editor widgets", "[editor][material]")
     STATIC_CHECK(WidgetFor(MatParamType::Float4) == ParamWidget::DragFloat4);
     STATIC_CHECK(WidgetFor(MatParamType::Color) == ParamWidget::ColorEdit);
     STATIC_CHECK(WidgetFor(MatParamType::Texture) == ParamWidget::TexturePicker);
+}
+
+TEST_CASE("DocumentHost: an OpenPath that resolves to an open document re-selects it (both dedup branches)", "[editor][inspector]")
+{
+    // Final fix R: "open this asset" re-selects the page like a fresh open.
+    const Arcane::Guid stable = Arcane::Guid::Generate();
+    auto factory = [&](const std::filesystem::path& p) -> std::unique_ptr<EditorDocument>
+    { return std::make_unique<FakeDoc>(p.stem().string(), stable, false); };
+
+    SECTION("the peek branch")
+    {
+        DocumentHost host;
+        host.RegisterFactory(".arcmat", factory, [&](const std::filesystem::path&) { return stable; });
+        auto* first = static_cast<FakeDoc*>(host.OpenPath("materials/glow.arcmat"));
+        REQUIRE(first != nullptr);
+        CHECK(first->reopened == 0);             // a fresh open is not a RE-open
+        CHECK(host.OpenPath("materials/glow.arcmat") == first);
+        CHECK(first->reopened == 1);
+    }
+    SECTION("the peek-less fallback dedup branch")
+    {
+        DocumentHost host;
+        host.RegisterFactory(".arcmat", factory);
+        auto* first = static_cast<FakeDoc*>(host.OpenPath("materials/glow.arcmat"));
+        REQUIRE(first != nullptr);
+        CHECK(host.OpenPath("materials/glow.arcmat") == first);
+        CHECK(first->reopened == 1);
+    }
 }
