@@ -358,6 +358,103 @@ TEST_CASE("InspectorHost: the [EditorInspector][Instances] section round-trips, 
     CHECK(host.Instances().size() == 2);                                // {0,3}
 }
 
+// ---- Filters= persistence, the legacy upgrade, the default configuration (spec s6/s7) ----
+namespace
+{
+    // One bare ImGui context per case (the existing ini case's shape).
+    struct IniContext
+    {
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGuiContext* ctx = ImGui::CreateContext();
+        IniContext() { ImGui::SetCurrentContext(ctx); ImGui::GetIO().IniFilename = nullptr; }
+        ~IniContext() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+    };
+}
+
+TEST_CASE("InspectorHost ini: Filters= round-trips after Ids=; a Filters= line means no upgrade", "[editor][inspector]")
+{
+    IniContext ic;
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    RegisterInspectorInstancesSettings(host);
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1,3\nFilters=0:assets,1:scene+input-actions+material+sprite+mesh\n");
+    CHECK_FALSE(host.TakeLegacyLayoutUpgrade());
+    CHECK(host.Find(0)->filter == InspectorFilter::AllBut("assets"));
+    CHECK(host.Find(1)->filter == InspectorFilter::Only("assets"));
+    CHECK(host.Find(3)->filter.IsAll());
+    const std::string saved = ImGui::SaveIniSettingsToMemory();
+    CHECK(saved.find("Ids=1,3\nFilters=0:assets,1:scene+input-actions+material+sprite+mesh\n") != std::string::npos);
+}
+
+TEST_CASE("InspectorHost ini: garbage Filters= entries are sanitized, never thrown on", "[editor][inspector]")
+{
+    IniContext ic;
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    RegisterInspectorInstancesSettings(host);
+    ImGui::LoadIniSettingsFromMemory(
+        "[EditorInspector][Instances]\nIds=2\nFilters=7:scene,x:assets,2,0:bogus+assets,,2:scene+assets+input-actions+material+sprite+mesh,\n");
+    CHECK_FALSE(host.TakeLegacyLayoutUpgrade());           // the line was present: not legacy
+    CHECK(host.Find(0)->filter == InspectorFilter::AllBut("assets"));   // bogus dropped
+    CHECK(host.Find(2)->filter.IsAll());                    // all-excluded -> All
+    CHECK(host.Instances().size() == 2);                    // id 7 never created
+}
+
+TEST_CASE("InspectorHost ini: a layout without Filters= is flagged once for the legacy upgrade", "[editor][inspector]")
+{
+    IniContext ic;
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    RegisterInspectorInstancesSettings(host);
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=\n");
+    CHECK(host.TakeLegacyLayoutUpgrade());
+    CHECK_FALSE(host.TakeLegacyLayoutUpgrade());            // consumed
+    ImGui::LoadIniSettingsFromMemory("[EditorPanels][Visibility]\nConsole=1\n");   // no section at all: also legacy
+    CHECK(host.TakeLegacyLayoutUpgrade());
+    // A second load WITHOUT ClearIniSettings between: instances absent from
+    // the Filters= line read as All (spec s7), survivors of Ids= included.
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1\nFilters=0:assets,1:scene\n");
+    CHECK_FALSE(host.TakeLegacyLayoutUpgrade());
+    REQUIRE(host.Find(0)->filter == InspectorFilter::AllBut("assets"));
+    REQUIRE(host.Find(1)->filter == InspectorFilter::AllBut("scene"));
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1\nFilters=\n");   // empty line: a real answer
+    CHECK_FALSE(host.TakeLegacyLayoutUpgrade());
+    CHECK(host.Find(0)->filter.IsAll());
+    CHECK(host.Find(1)->filter.IsAll());
+}
+
+TEST_CASE("InspectorHost: the default and the legacy-upgrade configurations", "[editor][inspector]")
+{
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    (void)host.AddInstance(); (void)host.AddInstance();     // {0,1,2}
+    host.ApplyDefaultInspectorLayout();
+    REQUIRE(host.Instances().size() == 2);
+    CHECK(host.Find(0)->filter == InspectorFilter::AllBut("assets"));
+    CHECK(host.Find(InspectorHost::kAssetsInstanceId)->filter == InspectorFilter::Only("assets"));
+
+    InspectorHost legacy{ scene };
+    const int ids[] = { 1 };
+    legacy.SetInstanceIds(ids);                             // the user already had "Inspector 2"
+    const int assetsId = legacy.UpgradeLegacyInspectorLayout();
+    CHECK(assetsId == 2);                                   // lowest FREE id; the user's 1 is untouched
+    CHECK(legacy.Find(1)->filter.IsAll());
+    CHECK(legacy.Find(0)->filter == InspectorFilter::AllBut("assets"));
+    CHECK(legacy.Find(2)->filter == InspectorFilter::Only("assets"));
+}
+
+TEST_CASE("InspectorHost ini: ClearAllFn resets filters with the list", "[editor][inspector]")
+{
+    IniContext ic;
+    FakeSource scene{ "Scene", "scene" };
+    InspectorHost host{ scene };
+    RegisterInspectorInstancesSettings(host);
+    ImGui::LoadIniSettingsFromMemory("[EditorInspector][Instances]\nIds=1\nFilters=0:assets\n");
+    ImGui::ClearIniSettings();
+    CHECK(host.Instances().size() == 1);
+    CHECK(host.Find(0)->filter.IsAll());
+}
+
 TEST_CASE("InspectorHost filters: a Scene instance keeps the scene while a document selects", "[editor][inspector]")
 {
     World w;

@@ -44,11 +44,16 @@ namespace Arcane::Editor
 
     // The Inspector instance ID LIST's imgui.ini section,
     // "[EditorInspector][Instances]": one `Ids=<extra ids>` line (instance 0
-    // is implicit; an empty line restores {0}). Registered on the CURRENT
-    // ImGui context with UserData = &host, so `host` must outlive the
+    // is implicit; an empty line restores {0}), then one always-written
+    // `Filters=<id>:<kind>+<kind>,...` line (each instance's EXCLUDED kinds;
+    // an absent instance is All -- inspector filters spec s7). A load that
+    // sees no `Filters=` line flags the one-time legacy upgrade
+    // (InspectorHost::TakeLegacyLayoutUpgrade, spec s6). Registered on the
+    // CURRENT ImGui context with UserData = &host, so `host` must outlive the
     // context's settings use. Idempotent; a no-op with no current context.
     // Its ClearAllFn (ImGui::ClearIniSettings -- a windowed project switch)
-    // resets the list to exactly {0}. Pins are NOT persisted: a pin names a
-    // selection, and a selection does not survive a restart.
+    // resets the list to exactly {0} and instance 0's filter to All. Filters
+    // are layout and persisted; pins are NOT: a pin names a selection, and a
+    // selection does not survive a restart.
     void RegisterInspectorInstancesSettings(InspectorHost& host);
 }

@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Arcane::Editor
@@ -51,6 +52,8 @@ namespace Arcane::Editor
         // so a closed slot's imgui.ini dock entry is the one its next opener
         // inherits. Never minted, always the lowest free slot.
         static constexpr int kMaxInstances = 8;
+        // The default layout's "Assets only" instance ("Inspector 2", spec s6).
+        static constexpr int kAssetsInstanceId = 1;
 
         struct Instance
         {
@@ -60,7 +63,7 @@ namespace Arcane::Editor
             std::string pinnedKey;
             std::string pinnedName;         // survives the source's death (the "closed" note)
             bool sourceClosed = false;      // true only for a CLOSED source; a dead key on a live one reads "Pinned selection is gone"
-            InspectorFilter filter;         // per-instance; layout state (persisted in [EditorInspector][Instances], Task 4)
+            InspectorFilter filter;         // per-instance; layout state (persisted as Filters= in [EditorInspector][Instances], spec s7)
         };
         struct HistoryEntry
         {
@@ -149,6 +152,23 @@ namespace Arcane::Editor
         // per-ini, not project state).
         void ReleaseAll();
 
+        // Window > Reset Layout / a fresh layout (spec s6/s7): exactly {0, 1};
+        // 0 = All but Assets, 1 (kAssetsInstanceId) = Assets only. Pins released.
+        void ApplyDefaultInspectorLayout();
+        // A pre-feature layout (no Filters= line, spec s6): 0 = All but Assets,
+        // and an Assets-only instance at the lowest free id (kept if one already
+        // exists -- idempotent). Returns that instance's id (-1 = the pool is
+        // full: instance 0's filter still applies).
+        int  UpgradeLegacyInspectorLayout();
+        // Set by the ini handler's ApplyAllFn when a load saw no Filters= line;
+        // the app consumes it once. ReleaseAll never touches it (a windowed
+        // project switch loads the incoming ini AFTER releasing).
+        [[nodiscard]] bool TakeLegacyLayoutUpgrade() noexcept { return std::exchange(m_legacyLayoutPending, false); }
+        // Ini-handler plumbing (InspectorWindows.cpp), not for app code.
+        void NoteLayoutReadBegin() noexcept { m_sawFiltersLine = false; }
+        void NoteFiltersLine() noexcept { m_sawFiltersLine = true; }
+        void NoteLayoutReadEnd() noexcept { if (!m_sawFiltersLine) m_legacyLayoutPending = true; }
+
     private:
         [[nodiscard]] bool Registered(const InspectorSource* s) const;
         void Push(InspectorSource& source, std::string key);
@@ -170,5 +190,7 @@ namespace Arcane::Editor
         std::vector<InspectorSource*> m_permanent;                   // AddSource(.., true); the fallback is implicitly permanent
         std::unordered_map<InspectorSource*, std::uint64_t> m_stamps; // last selection event / history landing per source
         std::uint64_t m_stampClock = 0;
+        bool m_sawFiltersLine = false;       // this ini load saw a Filters= line
+        bool m_legacyLayoutPending = false;  // a load without one: TakeLegacyLayoutUpgrade's flag
     };
 }

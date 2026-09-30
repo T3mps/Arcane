@@ -1,5 +1,6 @@
 #include "Panels/InspectorWindows.hpp"
 
+#include "Panels/InspectorKinds.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
 
@@ -7,11 +8,14 @@
 #include <imgui_internal.h>   // FindWindowByName (the primary's dock node for a new instance); ImGuiSettingsHandler
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -216,10 +220,16 @@ namespace Arcane::Editor
     // Extra ids only (instance 0 is implicit); an empty `Ids=` line restores
     // {0}. Ids are dock slots (ImGui keys `###inspector_<id>` settings on the
     // id), so a closed slot stays closed across a restart and Window > New
-    // Inspector reopens the lowest free one. Pins are deliberately NOT
-    // persisted: a pin names a selection, and a selection does not survive a
-    // restart (the reason history is never persisted either, spec s6.3).
-    // Moved here from EditorApp (arc-1 debt F) so the test exe can drive it.
+    // Inspector reopens the lowest free one. Filters are LAYOUT too and are
+    // persisted on the line after it (inspector filters spec s7):
+    // `Filters=<id>:<kind>+<kind>,...` lists each instance's EXCLUDED kinds;
+    // an instance absent from it is All, and the line is always written, so a
+    // load WITHOUT it (a pre-feature section, or no section at all) flags the
+    // one-time legacy upgrade (spec s6; an empty `Filters=` is a real answer).
+    // Pins are deliberately NOT persisted: a pin names a selection, and a
+    // selection does not survive a restart (the reason history is never
+    // persisted either, spec s6.3). Moved here from EditorApp (arc-1 debt F)
+    // so the test exe can drive it.
     namespace
     {
         constexpr const char* kInstancesIniType = "EditorInspector";
@@ -232,17 +242,53 @@ namespace Arcane::Editor
         void InstancesSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line)
         {
             auto* host = static_cast<InspectorHost*>(entry);
-            if (std::strncmp(line, "Ids=", 4) != 0) return;
-            std::vector<int> ids;
-            for (const char* p = line + 4; *p;)
+            if (std::strncmp(line, "Ids=", 4) == 0)
             {
-                char* end = nullptr;
-                const long v = std::strtol(p, &end, 10);
-                if (end == p) break;
-                ids.push_back(static_cast<int>(v));
-                p = (*end == ',') ? end + 1 : end;
+                std::vector<int> ids;
+                for (const char* p = line + 4; *p;)
+                {
+                    char* end = nullptr;
+                    const long v = std::strtol(p, &end, 10);
+                    if (end == p) break;
+                    ids.push_back(static_cast<int>(v));
+                    p = (*end == ',') ? end + 1 : end;
+                }
+                host->SetInstanceIds(ids);   // 0, duplicates and out-of-range ids are dropped inside
             }
-            host->SetInstanceIds(ids);   // 0, duplicates and out-of-range ids are dropped inside
+            else if (std::strncmp(line, "Filters=", 8) == 0)
+            {
+                // Read AFTER Ids= (it is written after it): SetFilter refuses
+                // an id that does not exist yet.
+                host->NoteFiltersLine();
+                // Spec s7: an instance absent from the line is All. Reset every
+                // existing instance first -- instance 0 and every survivor of
+                // Ids= keep their old filter through SetInstanceIds otherwise.
+                std::vector<int> existing;
+                for (const auto& inst : host->Instances()) existing.push_back(inst.id);
+                for (const int id : existing) (void)host->SetFilter(id, InspectorFilter{});
+                std::string_view rest(line + 8);
+                while (!rest.empty())
+                {
+                    const std::size_t comma = rest.find(',');
+                    const std::string_view item = rest.substr(0, comma);
+                    rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+                    const std::size_t colon = item.find(':');
+                    if (colon == std::string_view::npos || colon == 0) continue;
+                    int id = -1;
+                    const auto [p, ec] = std::from_chars(item.data(), item.data() + colon, id);
+                    if (ec != std::errc{} || p != item.data() + colon) continue;
+                    InspectorFilter f;
+                    std::string_view kinds = item.substr(colon + 1);
+                    while (!kinds.empty())
+                    {
+                        const std::size_t plus = kinds.find('+');
+                        if (plus != 0) f.excluded.emplace_back(kinds.substr(0, plus));
+                        kinds = plus == std::string_view::npos ? std::string_view{} : kinds.substr(plus + 1);
+                    }
+                    f = f.Sanitized();                 // unknown kinds dropped; all-excluded -> All
+                    (void)host->SetFilter(id, f);      // unknown id: refused, harmless
+                }
+            }
         }
         void InstancesSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* buf)
         {
@@ -251,6 +297,18 @@ namespace Arcane::Editor
             bool first = true;
             for (const auto& inst : host->Instances())
                 if (inst.id != 0) { buf->appendf(first ? "%d" : ",%d", inst.id); first = false; }
+            // Always written, even empty: its absence is what marks a
+            // pre-feature layout (spec s6/s7).
+            buf->append("\nFilters=");
+            bool firstF = true;
+            for (const auto& inst : host->Instances())
+            {
+                if (inst.filter.IsAll()) continue;
+                buf->appendf(firstF ? "%d:" : ",%d:", inst.id);
+                firstF = false;
+                for (std::size_t k = 0; k < inst.filter.excluded.size(); ++k)
+                    buf->appendf(k ? "+%s" : "%s", inst.filter.excluded[k].c_str());
+            }
             buf->append("\n\n");
         }
     }
@@ -268,13 +326,26 @@ namespace Arcane::Editor
         handler.ReadOpenFn = &InstancesSettingsReadOpen;
         handler.ReadLineFn = &InstancesSettingsReadLine;
         handler.WriteAllFn = &InstancesSettingsWriteAll;
+        // Every ini load brackets its lines with ReadInit / ApplyAll: a load
+        // that never saw a Filters= line (no section at all, or a pre-feature
+        // one) flags the one-time legacy upgrade, which the app consumes
+        // through InspectorHost::TakeLegacyLayoutUpgrade (spec s6).
+        handler.ReadInitFn = [](ImGuiContext*, ImGuiSettingsHandler* h)
+        { static_cast<InspectorHost*>(h->UserData)->NoteLayoutReadBegin(); };
+        handler.ApplyAllFn = [](ImGuiContext*, ImGuiSettingsHandler* h)
+        { static_cast<InspectorHost*>(h->UserData)->NoteLayoutReadEnd(); };
         // ImGui::ClearIniSettings (a windowed project switch, EditorApp::
-        // RetargetLayoutIni) resets the list to exactly {0}, so an incoming
-        // file without this section never inherits the outgoing project's
-        // extra instances. ONLY here: the list is layout, not project state,
-        // so InspectorHost::ReleaseAll deliberately keeps it.
+        // RetargetLayoutIni) resets the list to exactly {0} and instance 0's
+        // filter to All, so an incoming file without this section never
+        // inherits the outgoing project's extra instances or filters. ONLY
+        // here: the list and the filters are layout, not project state, so
+        // InspectorHost::ReleaseAll deliberately keeps them.
         handler.ClearAllFn = [](ImGuiContext*, ImGuiSettingsHandler* h)
-        { static_cast<InspectorHost*>(h->UserData)->SetInstanceIds({}); };
+        {
+            auto* host = static_cast<InspectorHost*>(h->UserData);
+            host->SetInstanceIds({});
+            (void)host->SetFilter(0, InspectorFilter{});
+        };
         ImGui::AddSettingsHandler(&handler);
     }
 }

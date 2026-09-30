@@ -147,6 +147,33 @@ namespace Arcane::Editor
         m_instances = std::move(kept);
     }
 
+    void InspectorHost::ApplyDefaultInspectorLayout()
+    {
+        const int ids[] = { kAssetsInstanceId };
+        SetInstanceIds(ids);
+        for (Instance& inst : m_instances)
+        {
+            inst.pinned = false;
+            inst.pinnedSource = nullptr;
+            inst.pinnedKey.clear();
+            inst.pinnedName.clear();
+            inst.sourceClosed = false;
+        }
+        Find(0)->filter = InspectorFilter::AllBut("assets");
+        Find(kAssetsInstanceId)->filter = InspectorFilter::Only("assets");
+    }
+
+    int InspectorHost::UpgradeLegacyInspectorLayout()
+    {
+        Find(0)->filter = InspectorFilter::AllBut("assets");
+        const InspectorFilter assetsOnly = InspectorFilter::Only("assets");
+        for (const Instance& inst : m_instances)
+            if (inst.filter == assetsOnly) return inst.id;   // idempotent: an Assets-only instance already exists
+        const int id = AddInstance();
+        if (id >= 0) Find(id)->filter = assetsOnly;
+        return id;
+    }
+
     bool InspectorHost::CanPin(int instanceId)
     {
         InspectorSource* src = SourceFor(instanceId);
