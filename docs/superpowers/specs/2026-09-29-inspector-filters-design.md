@@ -268,7 +268,19 @@ panels only follow or lock.
   `editor-input-doc` re-blessed for the two-inspector layout. The verify seed
   (`ReferenceProject/Saved/verify-layout.ini`) was re-authored with `[Window][Inspector]` +
   `[Window][inspector_1]`.
-- Known limits of the goldens: the Assets-only pane is about 182x180 px in the default layout,
-  so `editor-asset-page` shows the thumbnail only (the rows and import settings sit below the
-  fold); for a mesh material the document's preview panel shows "compiling..." (an existing
-  defect), and `editor-material-page` records that state.
+- Geometry, stated separately (final fix wave, m4). THE DEFAULT (`BuildDefaultLayout`, USER
+  DECISION 2026-09-30 -- the user's ReferenceProject layout, pixel targets in
+  `Panels/DefaultLayout.hpp`): the main Inspector a full-height 380 px right column; the
+  Outliner 270 px beside the central Viewport on top; a 350 px band under them, from the left
+  edge to the Inspector, holding the Asset Browser/Graph/Status/Console/Problems tab node with
+  Inspector 2 ("Assets only") at 390 px on its right. At 1920x1080 (a ~1920x954 dockspace)
+  those are the pixels; a 1280x720 build keeps them too (the central node still has 49% of the
+  width and 46% of the height), and smaller builds clamp them so the central node keeps 40% of
+  each axis. THE SEED: since the same wave the verify seed IS that default at the headless
+  1280x720 (a bare no-seed dump), so every editor golden shows it -- Inspector 2 is 390x350 px
+  there, and `editor-asset-page` shows its breadcrumb, pin, thumbnail, rows and action buttons.
+  (Before the wave the seed was the legacy-upgraded one, with a ~182x180 px Assets pane showing
+  only the thumbnail, and `BuildDefaultLayout` gave ~177x300 px at 1920x1080.)
+- Mesh materials: the material page shows a one-line "not compiled here" note and the params
+  full height (final fix P); `editor-material-page` records that state (it used to bless a
+  "compiling..." preview that never finished).

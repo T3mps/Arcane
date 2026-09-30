@@ -177,7 +177,9 @@ TEST_CASE("AssetInspectorSource: the model's shared selection is the source's se
     CHECK_FALSE(src.RestoreSelection("not-a-guid"));
     CHECK(model.selected == gStone);                        // a failed restore selects nothing
     REQUIRE(src.PageFor(gBrick.ToString()) == &src);        // a pin's page, without touching the selection
-    CHECK(src.Breadcrumb()[1].label == "brick.png");
+    const auto pinned = src.Breadcrumb();
+    REQUIRE(pinned.size() == 2);
+    CHECK(pinned[1].label == "brick.png");
     CHECK(model.selected == gStone);
     crumbs[0].select();                                     // the "Assets" crumb clears
     CHECK_FALSE(model.selected.IsValid());
@@ -238,6 +240,8 @@ TEST_CASE("DrawAssetPage: Copy Path reports an action, never acts; a .png draws 
     const fs::path root = fs::temp_directory_path() / "arcane_asset_page_draw_test";
     std::error_code ec;
     fs::remove_all(root, ec);
+    // RAII: a REQUIRE failure below still removes the temp project.
+    struct RemoveOnExit { fs::path p; ~RemoveOnExit() { std::error_code e; fs::remove_all(p, e); } } cleanup{ root };
     REQUIRE(Arcane::Project::Create(root, "AssetPage").has_value());
     WriteFile(root / "Content", "brick.png", "not a real png, just bytes");   // sidecar-minted guid
     auto project = Arcane::Project::Open(root);
@@ -301,5 +305,4 @@ TEST_CASE("DrawAssetPage: Copy Path reports an action, never acts; a .png draws 
     frame("sRGB##texmeta");
     frame(nullptr);
     CHECK(ReadTextureMetaSettingsDisplay(meta).srgb != srgbBefore);
-    fs::remove_all(root, ec);
 }

@@ -797,9 +797,11 @@ TEST_CASE("ApplyPassListState swaps the pass list, clamps selection, dirties",
 // LoadIniSettingsFromMemory both work on a bare context.
 //
 // The section moved to [ArcaneEditorLayout][MaterialPanel] when the preview and
-// params moved out of the document window into the dockable Material panel, and
-// the horizontal "MainSplit" retired with the right column it used to size --
-// so this also pins that a PRE-MOVE ini loads inert rather than crashing.
+// params moved out of the document window (first into a dockable Material
+// panel, now the Inspector's material page -- inspector filters s6a; the
+// section name stayed), and the horizontal "MainSplit" retired with the right
+// column it used to size -- so this also pins that a PRE-MOVE ini loads inert
+// rather than crashing.
 // ---------------------------------------------------------------------------
 TEST_CASE("material panel layout round-trips through imgui.ini", "[editor][material]")
 {
@@ -844,13 +846,13 @@ TEST_CASE("material panel layout round-trips through imgui.ini", "[editor][mater
     CHECK(ShaderEditorDocument::Layout().previewSplit >= 0.15f);
 
     // A foreign entry under the same type is skipped (ReadOpen returns null),
-    // so an unknown section cannot overwrite the material panel's.
+    // so an unknown section cannot overwrite the material page's.
     ShaderEditorDocument::Layout().previewSplit = 0.6000f;
     ImGui::LoadIniSettingsFromMemory(
         "[ArcaneEditorLayout][SomeOtherPanel]\nPreviewSplit=0.2000\n");
     CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.60f));
 
-    // STALE ENTRIES from an ini written before the Material panel existed:
+    // STALE ENTRIES from an ini written before the MaterialPanel section existed:
     // the retired [ShaderEditor] section takes the same ReadOpen-returns-null
     // path as the foreign one above, and a retired "MainSplit=" line inside a
     // section that IS matched simply fails the one sscanf branch left. Neither

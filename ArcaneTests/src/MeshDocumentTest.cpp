@@ -1,5 +1,6 @@
-// MeshDocument, headless halves (F2a, Task 9). The ImGui form (Draw) is never
-// drawn -- these drive the pair the EditGesture bracket delegates to
+// MeshDocument, headless halves (F2a, Task 9). The form is the Inspector's
+// mesh page now (DrawFormBody, inspector filters s6a), and every case but the
+// one ImGui case below leaves it undrawn -- these drive the pair the EditGesture bracket delegates to
 // (ApplyMeshData, PushDataEdit's no-op guard and its doc-identity anchor),
 // the preview-rebuild hook every data mutation goes through, and the
 // device-less preview-vehicle lifecycle. Same split SpriteDocumentUndoTest

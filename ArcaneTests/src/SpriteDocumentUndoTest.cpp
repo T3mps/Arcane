@@ -1,14 +1,14 @@
-// SpriteDocument's undo half (widget-layer Task 7), headless. The ImGui form is
-// never drawn -- Draw is the only ImGui method and nothing here calls it, the
-// same split ShaderEditorDocumentTest uses. What these drive is the pair the
+// SpriteDocument's undo half (widget-layer Task 7), headless. The undo cases
+// draw nothing -- the form is the Inspector's sprite page now (DrawFormBody,
+// inspector filters s6a) and these never draw it. What these drive is the pair the
 // EditGesture bracket delegates to: ApplySpriteData (an undo step's re-entry
 // point, which must republish to the viewport the way a Save does) and
 // PushDataEdit (the before/after step builder, including its no-op guard), plus
 // the doc-identity anchor that keeps a step on the SHARED stack safe after the
 // document it edited is gone.
 //
-// The one exception is the Inspector-page case at the bottom (inspector
-// filters s6a): a device-less ImGui context (InputActionsDocumentUiTest's
+// The exceptions are the ImGui cases at the bottom (inspector filters s6a,
+// final fix D): a device-less ImGui context (InputActionsDocumentUiTest's
 // harness shape) that draws the document and then its page inside an
 // "Inspector" window, to prove the form is submitted THERE.
 //
