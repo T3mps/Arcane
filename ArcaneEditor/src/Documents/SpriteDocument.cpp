@@ -1,9 +1,11 @@
 #include "Documents/SpriteDocument.hpp"
 
+#include <Arcane/Assets/Assets.hpp>   // TextureInfoFor (the sprite rect crop)
 #include <Arcane/Edit/Command.hpp>
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cfloat>
 #include <functional>
 #include <memory>
@@ -191,18 +193,39 @@ namespace Arcane::Editor
         // The form (the four drags and the read-only Texture line) is the
         // Inspector's sprite page now (DrawFormBody, drawn by whichever
         // Inspector instance shows this document -- inspector filters s6a).
-        // What stays is the toolbar above and the placeholder below.
+        // What stays is the toolbar above, a pointer to the page, the texture
+        // line and the sprite itself (final fix D).
         ImGui::Separator();
-        // NO TEXTURE PREVIEW HERE. The Assets facade hands out decoded pixels
-        // (Assets::PixelsFor), not GPU textures, so drawing one would mean
-        // uploading it through this document's own vehicle and owning the
-        // invalidate obligations that come with a chrome-side user texture --
-        // which the sprite inspector has never needed. If that changes,
-        // PixelsFor is the supply.
-        ImGui::TextDisabled("(no texture)");
+        ImGui::TextDisabled("Sprite properties are in the Inspector");
+        const std::string texName = m_services.assetName ? m_services.assetName(m_data.texture) : std::string{};
+        ImGui::TextDisabled("Texture: %s", texName.empty() ? m_data.texture.ToString().c_str() : texName.c_str());
+        // The sprite through the chrome's thumbnail seam (the Asset Browser
+        // rows' resolveAssetThumb): the texture cache OWNS the ImGui texture
+        // and its invalidation, so this window uploads nothing. Cropped to
+        // the sprite's rect with ComputeSpriteGeom when the texture's true
+        // dims are known (a header read, memoized); the thumbnail is a
+        // downscale of the whole texture, so the UVs hold.
+        if (m_services.resolveThumb && m_data.texture.IsValid())
+            if (const std::uint64_t thumb = m_services.resolveThumb(m_data.texture); thumb != 0)
+            {
+                std::uint32_t texW = 0, texH = 0;
+                if (m_services.assets)
+                    if (const Arcane::TextureInfo* info = m_services.assets->TextureInfoFor(m_data.texture))
+                    { texW = info->width; texH = info->height; }
+                const Arcane::ResolvedSpriteGeom geom = Arcane::ComputeSpriteGeom(m_data, texW, texH);
+                // The rect's pixel aspect when known, else square.
+                const bool rect = texW != 0 && texH != 0 && m_data.sourceSize.x > 0.0f && m_data.sourceSize.y > 0.0f;
+                const float aspect = rect ? m_data.sourceSize.x / m_data.sourceSize.y
+                                   : (texW != 0 && texH != 0 ? static_cast<float>(texW) / static_cast<float>(texH) : 1.0f);
+                const ImVec2 avail = ImGui::GetContentRegionAvail();
+                const float side = std::max(std::min(avail.x, avail.y), 16.0f);
+                const ImVec2 size = aspect >= 1.0f ? ImVec2(side, side / aspect) : ImVec2(side * aspect, side);
+                ImGui::Image(static_cast<ImTextureID>(thumb), size,
+                             ImVec2(geom.uvMin.x, geom.uvMin.y), ImVec2(geom.uvMax.x, geom.uvMax.y));
+            }
 
-        // Opened = selected; a click anywhere in the content (the toolbar, the
-        // "(no texture)" region) re-selects the sprite page (spec s3's one
+        // Opened = selected; a click anywhere in the content (the toolbar,
+        // the hint, the sprite) re-selects the sprite page (spec s3's one
         // selection rule). AFTER the content, and only on this non-collapsed
         // path: a collapsed/background tab has no content to click.
         m_pageSel.NoteContentClick();

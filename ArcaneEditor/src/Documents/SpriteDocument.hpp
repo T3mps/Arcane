@@ -54,10 +54,18 @@ namespace Arcane::Editor
         // walks back through it exactly like an Inspector or graph edit.
         struct Services
         {
-            // Currently UNREAD: Draw() asks the facade for nothing (there is
-            // no texture preview -- see its site in the .cpp). Left wired
-            // because it is the supply any future preview would use.
+            // The texture's true dims (TextureInfoFor: an artifact HEADER read,
+            // memoized) so Draw can crop the thumbnail to the sprite's rect.
+            // Null = the whole texture is shown.
             Arcane::Assets* assets = nullptr;
+            // The editor chrome's thumbnail seam (the Asset Browser rows'
+            // resolveAssetThumb): the sprite's TEXTURE guid -> an ImGui
+            // texture id owned by the chrome texture cache, 0 = not yet
+            // available. Null (every headless test) = no image, hint only.
+            std::function<std::uint64_t(const Arcane::Guid&)> resolveThumb;
+            // An asset guid -> its display name (the texture line). Null or
+            // "" = the guid is printed.
+            std::function<std::string(const Arcane::Guid&)> assetName;
             // Null = no undo coverage (the EditGesture bracket then no-ops
             // whole, EditGesture.hpp:145-146) -- the document still edits and
             // saves, so an unwired stack degrades to "no history", never to a
@@ -93,8 +101,8 @@ namespace Arcane::Editor
         // document selects it (m_pageSel starts at epoch 1) and a click in the
         // document's content re-selects it (Draw's NoteContentClick). Tab
         // switches and focus never do (the spec's one selection rule). The
-        // document window keeps its toolbar and the "(no texture)"
-        // placeholder.
+        // document window keeps its toolbar, a "Sprite properties are in the
+        // Inspector" hint, the texture line and the sprite image (final fix D).
         std::string_view Kind() const override { return "sprite"; }
         InspectorPage* Page() override { return &m_page; }
         InspectorPage* PageFor(std::string_view key) override { return m_pageSel.Resolves(key) ? &m_page : nullptr; }

@@ -813,6 +813,18 @@ namespace Arcane::Editor
                     if (m_resolver)
                         m_resolver->InvalidateSprite(g);
                 };
+                // The window's sprite image + texture line (final fix D): the
+                // SAME chrome thumbnail seam and model the Asset Browser rows
+                // read, looked up at call time (both outlive every document).
+                spriteDocServices.resolveThumb = [this](const Arcane::Guid& g) -> std::uint64_t
+                {
+                    return m_assetServices.resolveAssetThumb ? m_assetServices.resolveAssetThumb(g) : 0;
+                };
+                spriteDocServices.assetName = [this](const Arcane::Guid& g) -> std::string
+                {
+                    const auto* e = m_assetModel.Find(g);
+                    return e ? e->fileName : std::string{};
+                };
                 return std::make_unique<Arcane::Editor::SpriteDocument>(
                     std::move(spriteDocServices), p, std::move(*data));
             };

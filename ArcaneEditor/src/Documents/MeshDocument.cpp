@@ -503,7 +503,6 @@ namespace Arcane::Editor
             ImGui::TextDisabled("(no preview -- the preview vehicle is unavailable; see the log)");
         }
         ImGui::EndChild();
-        ImGui::Separator();
 
         // The form (source, topology, material) is the Inspector's mesh page
         // now (DrawFormBody, drawn by whichever Inspector instance shows this

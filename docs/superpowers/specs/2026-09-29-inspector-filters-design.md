@@ -169,7 +169,9 @@ panels only follow or lock.
   click rule. Each document's FORM (sprite: texture, sub-rect, pivot and the rest of
   SpriteAssetData; mesh: source + topology parameters) moves into its page; the document window
   keeps its toolbar and, for the mesh, its preview (interactive where it is today); the sprite
-  window keeps its "(no texture)" placeholder (it never had a preview). Edits keep riding each document's
+  window says "Sprite properties are in the Inspector", names its texture and draws the sprite
+  through the chrome thumbnail seam, cropped to its rect (final fix D; the old "(no texture)"
+  placeholder read as a false fact once the Texture line moved out). Edits keep riding each document's
   own undo steps (its EditGesture bracket moves with the form).
 - **Save.** Ctrl+S in an Inspector showing any document page saves that document (the existing
   `saveRequested` route).

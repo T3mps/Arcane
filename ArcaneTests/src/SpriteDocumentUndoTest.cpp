@@ -37,6 +37,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 using Arcane::Editor::SpriteDocument;
 
@@ -276,4 +277,54 @@ TEST_CASE("SpriteDocument's form draws in the Inspector window, not the document
     CHECK(ImGui::GetActiveID() == iw->GetID("Pixels Per Meter"));
     CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);   // in the Inspector, not the document window
     h.Button(ImGuiMouseButton_Left, false);
+}
+
+TEST_CASE("SpriteDocument's window points at the Inspector and draws the sprite through the chrome thumbnail seam", "[editor][sprite][inspector]")
+{
+    // Final fix D: the old "(no texture)" line read as a fact about the
+    // sprite once the form moved out. The window now says where the
+    // properties are, names the texture, and draws it (cropped to the
+    // sprite's rect when the texture's dims are known).
+    SpriteDocument::Services services;
+    std::vector<Arcane::Guid> asked;
+    services.resolveThumb = [&](const Arcane::Guid& g) -> std::uint64_t { asked.push_back(g); return 0xBEEF; };
+    services.assetName = [](const Arcane::Guid&) { return std::string("hero_sheet.png"); };
+    const Arcane::SpriteAssetData data = Fixture();
+    SpriteDocument doc(services, FixturePath(), data);
+
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* px = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    std::string logged;
+    bool drewThumb = false;
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_Always);
+        if (frame == 1) ImGui::LogToBuffer();
+        bool close = false;
+        doc.Draw(close);
+        if (frame == 1) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
+        ImGui::Render();
+        if (frame == 1)
+            for (int l = 0; l < ImGui::GetDrawData()->CmdListsCount; ++l)
+                for (const ImDrawCmd& cmd : ImGui::GetDrawData()->CmdLists[l]->CmdBuffer)
+                    if (cmd.TexRef._TexData == nullptr && cmd.TexRef._TexID == static_cast<ImTextureID>(0xBEEF)) drewThumb = true;   // a user texture (the font atlas is a TexData ref)
+    }
+    INFO(logged);
+    CHECK(logged.find("Sprite properties are in the Inspector") != std::string::npos);
+    CHECK(logged.find("hero_sheet.png") != std::string::npos);
+    CHECK(logged.find("(no texture)") == std::string::npos);
+    CHECK(drewThumb);
+    REQUIRE_FALSE(asked.empty());
+    CHECK(asked.back() == data.texture);               // the sprite's TEXTURE through the seam
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
 }
