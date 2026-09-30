@@ -265,11 +265,13 @@ namespace Arcane
         m_viewMode    = std::move(mode);
     }
 
-    void VerifyReport::SetInspector(std::string source, std::string breadcrumb)
+    void VerifyReport::SetInspector(std::string source, std::string breadcrumb,
+                                    std::vector<InspectorInstance> instances)
     {
         m_inspectorSet        = true;
         m_inspectorSource     = std::move(source);
         m_inspectorBreadcrumb = std::move(breadcrumb);
+        m_inspectorInstances  = std::move(instances);
     }
 
     void VerifyReport::SetForeignModules(std::vector<ForeignModules::Match> modules)
@@ -618,6 +620,10 @@ namespace Arcane
         // `inspector` {source, breadcrumb} (see SetInspector) -- what the
         // editor's Inspector resolved to. Absent on the runtime host and any
         // run that never set it; 10 remains readable.
+        //
+        // Bumped 11 -> 12 by the inspector-filters arc: `inspector` gained
+        // `instances` [{id, excluded, source}] -- each Inspector instance's
+        // filter and the source it routed to. 11 remains readable.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -732,8 +738,17 @@ namespace Arcane
 
         // The Inspector (schemaVersion 11). ABSENT unless SetInspector was
         // called -- the runtime host has no Inspector.
+        // `instances` (schemaVersion 12) is always present inside it, possibly
+        // empty: an empty `excluded` is an All instance, an empty `source` one
+        // that routed to nothing.
         if (m_inspectorSet)
-            j["inspector"] = { { "source", m_inspectorSource }, { "breadcrumb", m_inspectorBreadcrumb } };
+        {
+            nlohmann::json instances = nlohmann::json::array();
+            for (const InspectorInstance& i : m_inspectorInstances)
+                instances.push_back({ { "id", i.id }, { "excluded", i.excluded }, { "source", i.source } });
+            j["inspector"] = { { "source", m_inspectorSource }, { "breadcrumb", m_inspectorBreadcrumb },
+                               { "instances", std::move(instances) } };
+        }
 
         // The injected modules (schemaVersion 10). ABSENT unless
         // SetForeignModules was called; an EMPTY array when the host scanned

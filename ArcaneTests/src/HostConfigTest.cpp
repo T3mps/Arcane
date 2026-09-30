@@ -156,6 +156,19 @@ TEST_CASE("host config: --open-asset round-trips and defaults empty", "[host]") 
     CHECK(opened.config->openAsset == "97260310-8b35-4b29-b12f-1fd6f8e99071");
 }
 
+// --select-asset <guid> (inspector filters s6): the scripted Asset Browser
+// selection -- its page shows in the Assets Inspector.
+TEST_CASE("host config: --select-asset round-trips and defaults empty", "[host]") {
+    const auto plain = Run({"--project", "P", "--headless", "--frames", "1"});
+    REQUIRE(plain.config.has_value());
+    CHECK(plain.config->selectAsset.empty());
+
+    const auto selected = Run({"--project", "P", "--headless", "--frames", "1",
+                               "--select-asset", "d7f389fd-f687-407d-b9d7-9753eb6b0258"});
+    REQUIRE(selected.config.has_value());
+    CHECK(selected.config->selectAsset == "d7f389fd-f687-407d-b9d7-9753eb6b0258");
+}
+
 // --select-in-document (inspector-ownership arc, spec A s4): the scripted
 // in-document selection a golden needs to show a document page.
 TEST_CASE("host config: --select-in-document round-trips and requires --open-asset", "[host]") {

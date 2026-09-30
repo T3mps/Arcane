@@ -979,7 +979,12 @@ namespace Arcane
     //     `VerifyReport` gained `m_inspectorSet`/`m_inspectorSource`/
     //     `m_inspectorBreadcrumb` behind the newly exported `SetInspector`
     //     (report schemaVersion 11) -- both layouts moved.
-    inline constexpr uint32_t kGamePluginABIVersion = 45;
+    // v46 (2026-09-29, inspector filters): `HostConfig` gained `selectAsset`
+    //     (--select-asset), and `VerifyReport` gained `InspectorInstance` /
+    //     `m_inspectorInstances` behind a new `SetInspector(source, breadcrumb,
+    //     instances)` signature (report schemaVersion 12) -- both layouts moved.
+    //     ReferenceProject.arcproj restamped; the Aphelyon restamp is owed.
+    inline constexpr uint32_t kGamePluginABIVersion = 46;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

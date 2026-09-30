@@ -274,6 +274,14 @@ namespace Arcane
         // same reason --select-name is. ArcaneRuntime refuses the flag.
         std::string     openAsset = "";
 
+        // --select-asset: editor only. Select this asset Guid in the Asset
+        // Browser at the end of boot, the way a click does -- its page shows
+        // in the Assets Inspector (inspector filters s6). Validated through
+        // the project (the browser's model is not built yet at boot); an
+        // unresolvable Guid is a loud boot ERROR, the --open-asset rule.
+        // ArcaneRuntime refuses the flag.
+        std::string     selectAsset = "";
+
         // --select-in-document: editor only, and only WITH --open-asset. A
         // human path inside the opened document -- "<map>[/<action>[/<binding
         // index>]]" for an input asset -- selected after the open, so a golden

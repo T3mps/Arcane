@@ -221,7 +221,12 @@ namespace Arcane
         // Bumped 10 -> 11 by the inspector-ownership arc: `inspector` {source,
         // breadcrumb} -- see SetInspector. Absent on the runtime host and any
         // run that never set it; 10 remains readable.
-        static constexpr int kSchemaVersion                = 11;
+        //
+        // 12: inspector.instances (inspector filters) -- one {id, excluded,
+        // source} entry per Inspector instance, what each one's filter admits
+        // and which source it routed to (see SetInspector). Present whenever
+        // `inspector` is; 11 remains readable.
+        static constexpr int kSchemaVersion                = 12;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -486,7 +491,14 @@ namespace Arcane
         // to apply reports what the Inspector actually showed. Emitted as a
         // top-level `inspector` {source, breadcrumb} ONLY when this was
         // called: the runtime host has no Inspector.
-        void SetInspector(std::string source, std::string breadcrumb);
+        //
+        // `instances` (schemaVersion 12, inspector filters): one entry per
+        // Inspector instance -- its id, its filter's excluded kind ids (catalog
+        // order; empty = All) and the SourceName() of the source it routed to
+        // ("" when it routed to none). Serialized as `inspector.instances`,
+        // always present (possibly empty) when this was called.
+        struct InspectorInstance { int id = 0; std::vector<std::string> excluded; std::string source; };
+        void SetInspector(std::string source, std::string breadcrumb, std::vector<InspectorInstance> instances = {});
 
         // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5; plan 2
         // T5 for the last two arguments): the last frame's GpuSceneFrame as
@@ -627,6 +639,7 @@ namespace Arcane
         // The inspector block (schemaVersion 11) -- m_inspectorSet gates emission.
         bool        m_inspectorSet = false;
         std::string m_inspectorSource, m_inspectorBreadcrumb;
+        std::vector<InspectorInstance> m_inspectorInstances;   // schemaVersion 12
 
         // The visibility counts (schemaVersion 8; transparentRows + the
         // nullable gpuVisible are 9) -- m_visibilitySet gates emission, and

@@ -114,6 +114,7 @@ namespace Arcane
                                "(empty = select)").Choices({ "select", "move", "rotate", "scale" });
         cli.Option("open-asset", "", "editor only: open the document for this asset Guid at boot, "
                                      "as the Asset Browser would (empty = none)");
+        cli.Option("select-asset", "", "editor only: select this asset guid in the Asset Browser at boot (its page shows in the Assets Inspector)");
         cli.Option("select-in-document", "", "editor only, with --open-asset: select this path inside "
                                              "the opened document, e.g. Player/Jump (empty = none)");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
@@ -204,6 +205,7 @@ namespace Arcane
         cfg.viewMode       = r.Get("view-mode");   // Choices() already refused every other spelling
         cfg.selectName     = r.Get("select-name");
         cfg.openAsset      = r.Get("open-asset");
+        cfg.selectAsset    = r.Get("select-asset");
         cfg.selectInDocument = r.Get("select-in-document");
         cfg.tool           = r.Get("tool");        // Choices() already refused every other spelling
         // Malformed --probe syntax is refused HERE, at parse time, not

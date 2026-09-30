@@ -1327,6 +1327,19 @@ namespace Arcane::Editor
                 }
             }
         }
+        // --select-asset (inspector filters s6): a scripted Asset Browser
+        // selection. Validated through the PROJECT, the way OpenAssetDocument
+        // does (EditorAppProject.cpp:182-192): the model is not rebuilt until
+        // the first frame's DrawEditorUi, so its Find() misses every guid here.
+        if (!m_config.selectAsset.empty())
+        {
+            const auto guid = Arcane::Guid::FromString(m_config.selectAsset);
+            const Arcane::Project* p = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            if (!guid || !p || !p->ResolveAsset(Arcane::AssetId::FromGuid(*guid)))
+                ARC_ERROR("--select-asset '{}': not a Guid or not in the project", m_config.selectAsset);
+            else
+                m_assetModel.Select(*guid);           // the asset edge routes it next frame, like a click
+        }
         if (!m_config.tool.empty())
         {
             if (m_config.tool == "select")
@@ -2878,6 +2891,14 @@ namespace Arcane::Editor
             inspectorSource     = src.SourceName();
             inspectorBreadcrumb = Arcane::Editor::InspectorCrumbText(src, src.Page());
         }
+        // Each instance's filter and routed source (schemaVersion 12, the
+        // inspector filters arc) -- snapshotted here for the same reason.
+        std::vector<Arcane::VerifyReport::InspectorInstance> inspectorInstances;
+        for (const auto& i : m_inspectorHost.Instances())
+        {
+            Arcane::Editor::InspectorSource* s = m_inspectorHost.SourceFor(i.id);
+            inspectorInstances.push_back({ i.id, i.filter.excluded, s ? s->SourceName() : std::string{} });
+        }
         m_documents.CloseAll();
         // ...which hands their preview vehicles to the retire list rather than
         // destroying them inline, so the list has to be drained HERE, while
@@ -3271,7 +3292,9 @@ namespace Arcane::Editor
             // e.g. "Player.arcinput > Player > Move"), never the asked path.
             // Snapshotted above, BEFORE m_documents.CloseAll() released the
             // document as a source (a read here would always say "Scene").
-            report.SetInspector(inspectorSource, inspectorBreadcrumb);
+            // `instances` (schemaVersion 12): every instance's filter + the
+            // source it routed to, snapshotted beside the two above.
+            report.SetInspector(inspectorSource, inspectorBreadcrumb, std::move(inspectorInstances));
 
             // The --compare verdict (Task 9), ported from RuntimeApp::
             // ShutdownGraphPath verbatim (structure and field meanings

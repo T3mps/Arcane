@@ -131,8 +131,91 @@ TEST_CASE("E3: an opened input document with a scripted selection owns the Inspe
     REQUIRE(run.report.contains("inspector"));
     CHECK(run.report["inspector"].at("source") == "Player.arcinput");
     CHECK(run.report["inspector"].at("breadcrumb") == "Player.arcinput > Player > Jump");
+    // inspector.instances (schemaVersion 12, inspector filters s9): the default
+    // layout's two instances -- the main one excludes only Assets, the second
+    // is Assets-only (it excludes every other catalog kind, catalog order).
+    REQUIRE(run.report["inspector"].contains("instances"));
+    const auto& inst = run.report["inspector"]["instances"];
+    REQUIRE(inst.size() == 2);
+    CHECK(inst[0].at("id") == 0);
+    CHECK(inst[0].at("excluded") == nlohmann::json::array({ "assets" }));
+    CHECK(inst[1].at("id") == 1);
+    CHECK(inst[1].at("excluded") == nlohmann::json::array({ "scene", "input-actions", "material", "sprite", "mesh" }));
     REQUIRE(run.report.contains("compare"));
     CHECK(run.report["compare"].at("passed") == true);
+}
+
+// E4: the ASSET PAGE witness (inspector filters s6). --select-asset selects
+// uv_marker.png in the Asset Browser the way a click does; the Assets-only
+// Inspector shows its page while the main (All but Assets) one stays on the scene.
+TEST_CASE("E4: a selected asset routes the Assets Inspector to its page and matches the editor-asset-page golden", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e4-asset-page");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    // --frames 60 --settle 30, E2's and the gate lane's values, NOT E3's 90/10:
+    // the viewport is visible in this capture, and the frozen PulseBox phase
+    // depends on the frame count, so the witness must render the frame the
+    // shared editor-asset-page slot was blessed at (a 90-frame run converges
+    // on a picture 4660 px off the golden, all of them the PulseBox).
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "60",
+                 "--settle", "30", "--report", inv.reportPath.generic_string(),
+                 "--select-asset", "d7f389fd-f687-407d-b9d7-9753eb6b0258",   // textures/uv_marker.png
+                 "--compare", "editor-asset-page" };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("inspector"));
+    CHECK(run.report["inspector"].at("source") == "Assets");                  // Current(): the asset selection
+    REQUIRE(run.report["inspector"].contains("instances"));
+    CHECK(run.report["inspector"]["instances"][0].at("source") == "Scene");   // All but Assets: untouched
+    CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");
+    REQUIRE(run.report.contains("compare"));
+    CHECK(run.report["compare"].at("passed") == true);
+}
+
+// E5: DOCUMENT PAGES (inspector filters s6a). Opening a material, a sprite or a
+// mesh selects that document's page: the main Inspector routes to it, and the
+// Assets-only Inspector is untouched.
+TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector to that document's page", "[witness][gpu]")
+{
+    struct Doc { const char* guid; const char* title; const char* compare; };
+    const Doc docs[] = {
+        { "7e5a0010-0010-4010-8010-000000000010", "ReferenceCubeMaterial", "editor-material-page" },   // materials/reference_mesh.arcmat
+        { "87bd4fd3-c9e6-4fc8-a8e0-cf799378f049", "UvMarkerSprite",        nullptr },                  // sprites/uv_marker.arcsprite
+        { "7e5a0011-0011-4011-8011-000000000011", "ReferenceCube",         nullptr },                  // meshes/reference_cube.arcmesh
+    };
+    for (const Doc& d : docs)
+    {
+        DYNAMIC_SECTION(d.title)
+        {
+            WitnessScratch scratch(StagedEditorDir(), std::string("e5-") + d.title);
+            WitnessInvocation inv;
+            inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+            inv.reportPath = scratch.Dir() / "witness-report.json";
+            inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+                         "--settle", "10", "--report", inv.reportPath.generic_string(),
+                         "--open-asset", d.guid };
+            if (d.compare) { inv.args.push_back("--compare"); inv.args.push_back(d.compare); }
+            inv.hardCapMs = 180000;
+            WitnessRun run = RunWitness(inv);
+            INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+            REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+            REQUIRE(run.exitCode == 0);
+            REQUIRE(run.report.contains("inspector"));
+            REQUIRE(run.report["inspector"].contains("instances"));
+            CHECK(run.report["inspector"]["instances"][0].at("source") == d.title);
+            CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");   // untouched by a document open
+            if (d.compare)
+            {
+                REQUIRE(run.report.contains("compare"));
+                CHECK(run.report["compare"].at("passed") == true);
+            }
+        }
+    }
 }
 
 // E3b: an unresolvable --select-in-document is loud (ERROR on stderr) but not

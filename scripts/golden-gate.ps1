@@ -8,7 +8,7 @@
 # it is the gate that covers what an agent actually runs. Do not let a green
 # [gpu][golden] Catch2 run stand in for a green run of this script.
 #
-# Ten combinations, no --bless:
+# Fourteen combinations, no --bless:
 #   ArcaneRuntime --backend dx12    --compare runtime-scene
 #   ArcaneRuntime --backend vulkan  --compare runtime-scene
 #   ArcaneEditor  --backend dx12    --compare editor-ui
@@ -19,6 +19,10 @@
 #   ArcaneRuntime --backend vulkan  --compare f3-cull-blend  --scene <the F3 fixture>
 #   ArcaneEditor  --backend dx12    --compare editor-input-doc  --open-asset <Player.arcinput> --select-in-document Player/Jump
 #   ArcaneEditor  --backend vulkan  --compare editor-input-doc  --open-asset <Player.arcinput> --select-in-document Player/Jump
+#   ArcaneEditor  --backend dx12    --compare editor-asset-page     --select-asset <textures/uv_marker.png>
+#   ArcaneEditor  --backend vulkan  --compare editor-asset-page     --select-asset <textures/uv_marker.png>
+#   ArcaneEditor  --backend dx12    --compare editor-material-page  --open-asset <materials/reference_mesh.arcmat>
+#   ArcaneEditor  --backend vulkan  --compare editor-material-page  --open-asset <materials/reference_mesh.arcmat>
 #
 # THE VERDICT IS `exitReason` OUT OF THE REPORT JSON, NEVER THE RAW PROCESS
 # EXIT CODE ALONE (ArcaneEditor/src/main.cpp's own exit-code table names the
@@ -307,7 +311,7 @@ function Exit-GateRefusal {
 #                          Errored branch's own comment.
 #     Passed            -- the ordinary green run
 #
-# ---- The combinations ($combos.Count lanes; ten today). ----
+# ---- The combinations ($combos.Count lanes; fourteen today). ----
 # ExpectedLevel: which reference this lane is SUPPOSED to resolve against.
 # Nothing in the report can infer this -- a resolvedLevel of "shared" looks
 # identical whether that was the design or an oversight -- so it is declared
@@ -343,6 +347,17 @@ $combos = @(
     # by the -SelfTest run in this task's Step 6; flip to 'Failed' if it fails).
     @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-input-doc'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '97260310-8b35-4b29-b12f-1fd6f8e99071', '--select-in-document', 'Player/Jump'); SelfTestExpect = 'Green' }
     @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-input-doc'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '97260310-8b35-4b29-b12f-1fd6f8e99071', '--select-in-document', 'Player/Jump'); SelfTestExpect = 'Green' }
+    # Inspector filters (s6/s6a): the asset page and a document page. Shared
+    # slots like editor-ui. editor-asset-page selects textures/uv_marker.png
+    # (d7f389fd-...) in the Asset Browser: its page shows in the Assets-only
+    # Inspector and the viewport stays visible, so the self-test's boot-scene
+    # mutation shows ('Failed'). editor-material-page opens
+    # materials/reference_mesh.arcmat (7e5a0010-...): the document tab covers
+    # the viewport, as with input-doc ('Green'). Both verified by -SelfTest.
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page';    Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', 'd7f389fd-f687-407d-b9d7-9753eb6b0258'); SelfTestExpect = 'Failed' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-asset-page';    Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--select-asset', 'd7f389fd-f687-407d-b9d7-9753eb6b0258'); SelfTestExpect = 'Failed' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-material-page'; Backend = 'dx12';   ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '7e5a0010-0010-4010-8010-000000000010'); SelfTestExpect = 'Green' }
+    @{ Host = 'ArcaneEditor';  Exe = 'ArcaneEditor.exe';  Reference = 'editor-material-page'; Backend = 'vulkan'; ExpectedLevel = 'shared'; ExtraArgs = @('--open-asset', '7e5a0010-0010-4010-8010-000000000010'); SelfTestExpect = 'Green' }
     # THE F3 CULL/BLEND LANES (F3 plan 2 T6, spec s9). The boot scene cannot
     # express what plan 2 shipped -- it carries no masked, transparent or
     # two-sided material at all -- so these two render a FIXTURE scene instead,
@@ -398,10 +413,12 @@ $script:ReportSchemaMin = 3
 # third-party modules a host found injected into its process, each with
 # product and tier, so a red lane on a desk with an overlay is attributable
 # from the report alone; 11 since the inspector-ownership arc added the
-# editor's `inspector` {source, breadcrumb} block (VerifyReport::kSchemaVersion).
+# editor's `inspector` {source, breadcrumb} block; 12 since the
+# inspector-filters arc added `inspector.instances` [{id, excluded, source}]
+# (VerifyReport::kSchemaVersion).
 # -SelfTest is what makes this a failure rather than a hope if the two halves
 # ever drift again.
-$script:ReportSchemaMax = 11
+$script:ReportSchemaMax = 12
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.
