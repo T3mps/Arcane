@@ -626,6 +626,40 @@ namespace Arcane::Editor
                 out[k] = nd.lanes == 1 ? nd.v[0] : nd.v[k];
         }
 
+        // Writes `pin`'s literal: ONE entry per pin, updated IN PLACE (born on
+        // first touch), its first `lanes` lanes from `v`, the rest zeroed. A
+        // duplicate would make serialization non-deterministic: the writer
+        // sorts by pin with std::sort, which is unstable
+        // (MaterialGraph.cpp:1382-1384), and the reader keeps the FIRST entry
+        // for a pin (:1561-1562). Both surfaces -- canvas and node page --
+        // write through here.
+        void SetPinLiteral(Arcane::GraphNode& node, std::uint32_t pin, int lanes, const float v[4])
+        {
+            Arcane::GraphPinLiteral* slot = nullptr;
+            for (Arcane::GraphPinLiteral& pl : node.pinLiterals)
+                if (pl.pin == pin)
+                {
+                    slot = &pl;
+                    break;
+                }
+            if (!slot)
+            {
+                Arcane::GraphPinLiteral fresh;
+                fresh.pin = pin;
+                node.pinLiterals.push_back(fresh);
+                slot = &node.pinLiterals.back();
+            }
+            for (int i = 0; i < 4; ++i)
+                slot->v[i] = i < lanes ? v[i] : 0.0f;
+        }
+
+        // Drops `pin`'s literal (the pin reads its neutral again). Not for the
+        // custom-pin removal, which renumbers the surviving entries afterwards.
+        void ErasePinLiteral(Arcane::GraphNode& node, std::uint32_t pin)
+        {
+            std::erase_if(node.pinLiterals, [pin](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+        }
+
         // The node page's target id scope (s5.1.4 step 3), RAII and pushed before
         // any Rows: TextRow / numeric drafts key per node, and a Rows table always
         // ends before its id pops (TargetIdScope's rule, InputActionsInspectorPage.cpp:51-61).
@@ -2485,7 +2519,7 @@ namespace Arcane::Editor
             {
                 (void)RunNodeEdit("Reset Pin Value", pass, id, [pin](Arcane::GraphNode& node, Arcane::MaterialGraph&)
                 {
-                    std::erase_if(node.pinLiterals, [pin](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+                    ErasePinLiteral(node, pin);
                 });
             });
         bool differs = false;
@@ -2500,22 +2534,9 @@ namespace Arcane::Editor
                 // A cancelled gesture, or one dragged back onto the neutral, never
                 // leaves a NEW literal behind; an existing one updates in place.
                 if (!m_nodePageLiteralExisted && (ev.cancelled || onNeutral))
-                    std::erase_if(w->pinLiterals, [pin](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+                    ErasePinLiteral(*w, pin);
                 else
-                {
-                    Arcane::GraphPinLiteral* slot = nullptr;
-                    for (Arcane::GraphPinLiteral& pl : w->pinLiterals)
-                        if (pl.pin == pin) { slot = &pl; break; }   // ONE entry per pin (MaterialGraph.hpp)
-                    if (!slot)
-                    {
-                        Arcane::GraphPinLiteral fresh;
-                        fresh.pin = pin;
-                        w->pinLiterals.push_back(fresh);
-                        slot = &w->pinLiterals.back();
-                    }
-                    for (int i = 0; i < 4; ++i)
-                        slot->v[i] = i < lanes ? local[i] : 0.0f;
-                }
+                    SetPinLiteral(*w, pin, lanes, local);
                 NoteGraphValueEdited();
             }
         EditGesture::EndAfterRow(stack, m_gesture, ev.cancelled);
@@ -5291,31 +5312,11 @@ namespace Arcane::Editor
                 gestureBegin("Pin Value");
                 if (changed)
                 {
-                    // ONE entry per pin, updated IN PLACE. A duplicate would
-                    // make serialization non-deterministic: the writer sorts by
-                    // pin with std::sort, which is unstable
-                    // (MaterialGraph.cpp:1382-1384), and the reader keeps the
-                    // FIRST entry for a pin (:1561-1562).
-                    Arcane::GraphPinLiteral* slot = nullptr;
-                    for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
-                        if (pl.pin == pin)
-                        {
-                            slot = &pl;
-                            break;
-                        }
-                    if (!slot)
-                    {
-                        // Absent-until-touched: the entry is BORN here, seeded
-                        // with what the field was already showing (the neutral),
-                        // so the first nudge moves the material by one drag step
-                        // instead of jumping to zero.
-                        Arcane::GraphPinLiteral fresh;
-                        fresh.pin = pin;
-                        n.pinLiterals.push_back(fresh);
-                        slot = &n.pinLiterals.back();
-                    }
-                    for (int i = 0; i < 4; ++i)
-                        slot->v[i] = i < lanes ? buf[i] : 0.0f;
+                    // Absent-until-touched: a pin's first edit CREATES its entry
+                    // from what the field was already showing (`buf` was seeded
+                    // with the neutral), so the first nudge moves the material
+                    // by one drag step instead of jumping to zero.
+                    SetPinLiteral(n, pin, lanes, buf);
                     valueEdited();
                 }
                 gestureEnd();
