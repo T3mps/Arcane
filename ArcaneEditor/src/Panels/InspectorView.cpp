@@ -824,67 +824,36 @@ namespace Arcane::Editor
                         }
                         if (isColor)
                         {
-                            // Four LINEAR float boxes -- storage, unconverted -- plus
-                            // a swatch that opens the dense popup. The swatch is ours
-                            // (NoSmallPreview) so it can be sRGB-ENCODED: imgui.hlsl's
-                            // colours are display-referred, so a raw linear fill
-                            // renders too dark.
-                            const std::string popupKey = widgetId + "##colorpopup";
-                            const ImGuiID popupId = ColorPopupId(popupKey.c_str());
-
-                            // Reserve the swatch's strip before the boxes claim the
-                            // cell. FieldLabelCell leaves SetNextItemWidth(-FLT_MIN)
-                            // pending and NoSmallPreview zeroes ColorEdit4's own
-                            // button width (imgui_widgets.cpp:5845), so without this
-                            // the boxes end exactly at the cell's right edge and the
-                            // SameLine'd swatch lands outside the column clip rect --
-                            // culled by ItemAdd, drawn never, clickable never.
-                            // A negative width means "to the right edge, minus this".
-                            ImGui::SetNextItemWidth(-(ImGui::GetFrameHeight()
-                                                      + ImGui::GetStyle().ItemSpacing.x));
-                            // DisplayRGB and InputRGB PIN the mode: NoOptions only
-                            // suppresses this row's own menu, and without a display
-                            // or input bit ColorEdit4 takes both from the global
-                            // g.ColorEditOptions, which any other colour widget
-                            // lacking NoOptions can flip to HSV. A row captioned as
-                            // linear storage must not silently become H/S/V, and
-                            // InputHSV would write HSV components into linear storage.
-                            bool changed = ImGui::ColorEdit4(widgetId.c_str(), &v.x,
-                                                             ImGuiColorEditFlags_Float
-                                                             | ImGuiColorEditFlags_NoSmallPreview
-                                                             | ImGuiColorEditFlags_NoPicker
-                                                             | ImGuiColorEditFlags_NoOptions
-                                                             | ImGuiColorEditFlags_DisplayRGB
-                                                             | ImGuiColorEditFlags_InputRGB);
-                            // The BOX row keeps the activation gesture it always had.
+                            // The shared colour VALUE cell (Widgets/ColorPickerPopup.hpp,
+                            // node-page s4.1(c)): the sRGB-ENCODED swatch first (LEFT of
+                            // the boxes since the migration, drafting pick 9.28), its
+                            // popup, then the four LINEAR boxes LAST -- so the boxes are
+                            // LastItemData here and keep the activation gesture they always
+                            // had. They keep `widgetId` as their label: box ids unchanged.
+                            // The Old/New latch stays in InspectorState (`originalColor`):
+                            // the visitor is rebuilt per frame (InspectorView.cpp:143).
+                            const ImVec2 cell = ImGui::GetCursorScreenPos();   // swatch top-left (probe seam)
+                            const ColorValueResult colorCell =
+                                ColorValue(widgetId.c_str(), &v.x, &originalColor->x, /*hdr*/ false);
+                            const bool changed = colorCell.changed;
                             BeginGestureIfActivated(rawName, instance);
-
-                            ImGui::SameLine();
-                            if (ColorSwatchButton("##sw", &v.x))
+                            if (probe)
                             {
-                                // Latch the open-time colour for the popup's Old
-                                // swatch. It MUST live in InspectorState, not on this
-                                // visitor: the visitor is rebuilt per frame (it holds
-                                // only a POINTER to the gesture state, see
-                                // InspectorView.cpp:143), so a member here would reset
-                                // every frame and the Old swatch would track New.
-                                // One slot is enough -- only one colour popup can be
-                                // open at a time.
-                                *originalColor = v;
-                                ImGui::OpenPopup(popupId);
+                                RecordProbe(rawName + "#boxes");
+                                const float fh = ImGui::GetFrameHeight();
+                                (*probe)[rawName + "#swatch"] = glm::vec2(cell.x + fh * 0.5f, cell.y + fh * 0.5f);
                             }
 
                             // POPUP-lifetime gesture, NOT the activation pair: ImGui
                             // only lends its ActiveId to popups it opened itself, and
                             // this one is ours (EditGesture.hpp, ShouldClosePopup).
-                            //
-                            // The onOpened body is BeginGestureIfActivated's fan-out
-                            // verbatim (InspectorView.cpp:192-194): one Begin + N
-                            // SnapshotComponent + one Commit = one undo step, and the
-                            // pending-commit slot stays empty because the before-state
-                            // rides the transaction.
+                            // The popup body already ran inside ColorValue, but its
+                            // writes land below (ForEachTarget), AFTER this pair, so the
+                            // open frame's snapshots still precede every write.
+                            // onOpened is BeginGestureIfActivated's fan-out verbatim:
+                            // one Begin + N SnapshotComponent + one Commit = one step.
                             EditGesture::BeginOnPopupOpen(
-                                stack, *gesture, popupId,
+                                stack, *gesture, colorCell.popupId,
                                 [&] { return "Edit " + typeName + "." + rawName; },
                                 [&]
                                 {
@@ -893,14 +862,7 @@ namespace Arcane::Editor
                                                   { stack->SnapshotComponent(e, descriptor); });
                                     return std::function<void()>{};
                                 });
-
-                            if (ImGui::BeginPopup(popupKey.c_str()))
-                            {
-                                if (ColorPopupBody(&v.x, &originalColor->x, /*hdr*/ false))
-                                    changed = true;
-                                ImGui::EndPopup();
-                            }
-                            EditGesture::EndOnPopupClose(stack, *gesture, popupId);
+                            EditGesture::EndOnPopupClose(stack, *gesture, colorCell.popupId);
 
                             if (changed)
                                 ForEachTarget(instance, [&](Astra::Entity, void* d)
