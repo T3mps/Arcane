@@ -227,7 +227,12 @@ namespace Arcane
         // filter admits, which source it routed to and the breadcrumb it
         // shows (see SetInspector). Present whenever
         // `inspector` is; 11 remains readable.
-        static constexpr int kSchemaVersion                = 12;
+        //
+        // 13: documents (node page + editor upgrades s3.2) -- one {guid, kind,
+        // name, compile, preview, image} entry per open shader or mesh
+        // document: its PreviewStatus ids (see SetDocumentPreviews). Absent
+        // unless the editor set it; 12 remains readable.
+        static constexpr int kSchemaVersion                = 13;
         static constexpr int kOldestSupportedSchemaVersion  = 3;
 
         [[nodiscard]] static constexpr bool IsSupportedSchemaVersion(int v) noexcept
@@ -504,6 +509,19 @@ namespace Arcane
         struct InspectorInstance { int id = 0; std::vector<std::string> excluded; std::string source; std::string breadcrumb; };
         void SetInspector(std::string source, std::string breadcrumb, std::vector<InspectorInstance> instances = {});
 
+        // The open preview documents (schemaVersion 13, node page + editor
+        // upgrades s3.2): one entry per open shader or mesh document -- its
+        // asset guid, its Inspector kind ("material" / "mesh"), its title, and
+        // the PreviewStatus ids (Documents/PreviewStatus.hpp): compile
+        // "not-compiled-here" | "compiler-unavailable" | "compiling" | "errors"
+        // | "ok", preview "ready" | "no-device" | "vehicle-failed" |
+        // "frame-failed", plus whether an image is bound. Emitted as a
+        // top-level `documents` array ONLY when this was called: the editor
+        // snapshots it beside SetInspector, before CloseAll; the runtime host
+        // never calls it.
+        struct DocumentPreview { std::string guid, kind, name, compile, preview; bool image = false; };
+        void SetDocumentPreviews(std::vector<DocumentPreview> documents);
+
         // The GPU scene's visibility counts (F3 plan 1 T8, spec s4/s5; plan 2
         // T5 for the last two arguments): the last frame's GpuSceneFrame as
         // the host saw it -- `total` live rows in the GPU-scene mirror (one
@@ -644,6 +662,9 @@ namespace Arcane
         bool        m_inspectorSet = false;
         std::string m_inspectorSource, m_inspectorBreadcrumb;
         std::vector<InspectorInstance> m_inspectorInstances;   // schemaVersion 12
+        // The open preview documents (schemaVersion 13) -- m_documentsSet gates emission.
+        bool                         m_documentsSet = false;
+        std::vector<DocumentPreview> m_documents;
 
         // The visibility counts (schemaVersion 8; transparentRows + the
         // nullable gpuVisible are 9) -- m_visibilitySet gates emission, and
