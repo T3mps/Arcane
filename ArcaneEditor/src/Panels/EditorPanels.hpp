@@ -136,7 +136,8 @@ namespace Arcane::Editor
     // point).
     // `hasSelection` gates the Edit menu's selection-dependent items
     // (Rename/Delete, and Cut/Copy/Duplicate -- Paste stays always-enabled,
-    // see its MenuItem call).
+    // see its MenuItem call). `selectionRootOnly` (s3.1): the selection is
+    // the scene root alone -- Cut/Copy/Duplicate/Delete grey with the reason.
     // `hasAssetSelection` gates the Assets menu's Show in Explorer / Copy
     // Path (the Assets panel's last-clicked row -- AssetPanelModel::selected).
     // `sceneRecents` is the PER-PROJECT scene history (SceneRecents.hpp) that
@@ -153,6 +154,7 @@ namespace Arcane::Editor
                         IdeMenuState ideState,
                         PanelVisibility& panels,
                         bool hasSelection,
+                        bool selectionRootOnly,
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents = nullptr,

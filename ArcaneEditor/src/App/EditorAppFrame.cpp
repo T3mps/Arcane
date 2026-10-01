@@ -2250,6 +2250,7 @@ namespace Arcane::Editor
                                        IdeMenuStateNow(),
                                        m_panelVis,
                                        m_selection.HasSelection(),
+                                       Arcane::Editor::IsSceneRootOnly(m_runtime->Registry(), m_selection.Entities()),
                                        m_assetModel.selected.IsValid(),
                                        m_physicsOverlay,
                                        &m_recents.projects,

@@ -18,6 +18,7 @@
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
+#include "Scene/SelectionOps.hpp"
 
 #include <Arcane/Base/Diagnostics.hpp>   // the refused-Play Problems row (final-review fix wave, minor 11)
 #include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
@@ -51,12 +52,26 @@
 
 namespace Arcane::Editor
 {
+    namespace
+    {
+        // The root guard's visible half (s3.1, 9.27.1): a root-only selection
+        // greys the verb, and this says why. ForTooltip's default mouse flags
+        // include AllowWhenDisabled (imgui.cpp:1587), which is what lets it
+        // reach a greyed item.
+        void RootRefusalTooltip(bool rootOnly, SceneRootVerb verb)
+        {
+            if (rootOnly && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                ImGui::SetTooltip("%s", SceneRootRefusal(verb));
+        }
+    }
+
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
                         IdeMenuState ideState,
                         PanelVisibility& panels,
                         bool hasSelection,
+                        bool selectionRootOnly,
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents,
@@ -200,19 +215,29 @@ namespace Arcane::Editor
                 // that a refusal is visible before the click -- 2026-08-10
                 // final review, user-ratified over the spec's old "no extra
                 // Play gating" line.
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection && !playing))
+                // The root guard (s3.1): a ROOT-ONLY selection greys the four
+                // structural verbs with the reason; a mixed one stays enabled
+                // and the verb drops the root itself (SelectionWithoutSceneRoot).
+                // Rename stays enabled: the root is renameable.
+                const bool structural     = hasSelection && !selectionRootOnly && !playing;
+                const bool showRootReason = selectionRootOnly && !playing;
+                if (ImGui::MenuItem("Cut", "Ctrl+X", false, structural))
                     requests.cutSelection = true;
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection && !playing))
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Cut);
+                if (ImGui::MenuItem("Copy", "Ctrl+C", false, structural))
                     requests.copySelection = true;
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Copy);
                 if (ImGui::MenuItem("Paste", "Ctrl+V", false, !playing))
                     requests.paste = true;
-                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, hasSelection && !playing))
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, structural))
                     requests.duplicateSelection = true;
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Duplicate);
                 // Same code paths as the Outliner's F2/Del bindings.
                 if (ImGui::MenuItem("Rename", "F2", false, hasSelection && !playing))
                     requests.renameSelected = true;
-                if (ImGui::MenuItem("Delete", "Del", false, hasSelection && !playing))
+                if (ImGui::MenuItem("Delete", "Del", false, structural))
                     requests.deleteSelected = true;
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Delete);
                 ImGui::Separator();
                 if (ImGui::MenuItem("Select All"))       requests.selectAll = true;
                 if (ImGui::MenuItem("Deselect All"))     requests.deselectAll = true;
@@ -1494,7 +1519,9 @@ namespace Arcane::Editor
     void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
                          Arcane::CommandStack& undo, const SceneEditBinding& binding)
     {
-        const std::vector<Astra::Entity> doomed = sel.Entities();   // copy: sel mutates after
+        // The root guard (s3.1): a mixed selection drops the root, a
+        // root-only one deletes nothing and pushes no step.
+        const std::vector<Astra::Entity> doomed = SelectionWithoutSceneRoot(registry, sel.Entities());
         if (doomed.empty())
             return;
         if (ApplyStructural(undo, binding, "Delete",
@@ -1508,9 +1535,10 @@ namespace Arcane::Editor
     // structural half wraps in ApplyStructural like the Outliner's ops.
     bool CopySelectionToClipboard(Astra::Registry& registry, const SelectionContext& sel)
     {
-        if (!sel.HasSelection())
-            return false;
-        nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, sel.Entities());
+        const std::vector<Astra::Entity> copied = SelectionWithoutSceneRoot(registry, sel.Entities());
+        if (copied.empty())
+            return false;   // nothing, or the scene root alone (s3.1)
+        nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, copied);
         if (payload["entities"].empty())
             return false;
         ImGui::SetClipboardText(
@@ -1533,7 +1561,7 @@ namespace Arcane::Editor
         // children up, so passing only the roots would orphan what the
         // clipboard just took (EntityOps.hpp, SubtreeEntities).
         const std::vector<Astra::Entity> roots =
-            Arcane::Edit::SelectionRoots(registry, sel.Entities());
+            Arcane::Edit::SelectionRoots(registry, SelectionWithoutSceneRoot(registry, sel.Entities()));
         const std::vector<Astra::Entity> doomed =
             Arcane::Edit::SubtreeEntities(registry, roots);
         if (Arcane::Editor::ApplyStructural(undo, binding, "Cut",
@@ -1580,9 +1608,10 @@ namespace Arcane::Editor
     void DuplicateSelection(Astra::Registry& registry, SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding)
     {
-        if (!sel.HasSelection())
-            return;
-        const nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, sel.Entities());
+        const std::vector<Astra::Entity> duplicated = SelectionWithoutSceneRoot(registry, sel.Entities());
+        if (duplicated.empty())
+            return;   // the root alone never duplicates -- it nested a second scene + Camera (s3.1)
+        const nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, duplicated);
         if (!payload["entities"].empty())
             InstantiateAndSelect(registry, sel, undo, binding, payload, "Duplicate");
     }
@@ -2139,17 +2168,25 @@ namespace Arcane::Editor
                         // it at the view's focus point, selected and framed).
                         DrawAddPrimitiveSubmenu(state, row.entity);
                         ImGui::Separator();
+                        // The root guard (s3.1). The right-click above already
+                        // selected this row when it was outside the selection.
+                        const bool rootOnly = sel.Contains(row.entity)
+                            ? IsSceneRootOnly(registry, sel.Entities())
+                            : Arcane::Edit::IsSceneRoot(registry, row.entity);
                         // Edit-menu parity via the shared functions above.
                         // Acts on the SELECTION -- the right-click already
                         // selected this row when it was outside it.
-                        if (ImGui::MenuItem("Cut", "Ctrl+X"))
+                        if (ImGui::MenuItem("Cut", "Ctrl+X", false, !rootOnly))
                             CutSelection(registry, sel, undo, binding);
-                        if (ImGui::MenuItem("Copy", "Ctrl+C"))
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Cut);
+                        if (ImGui::MenuItem("Copy", "Ctrl+C", false, !rootOnly))
                             CopySelectionToClipboard(registry, sel);
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Copy);
                         if (ImGui::MenuItem("Paste", "Ctrl+V"))
                             PasteFromClipboard(registry, sel, undo, binding);
-                        if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+                        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, !rootOnly))
                             DuplicateSelection(registry, sel, undo, binding);
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Duplicate);
                         ImGui::Separator();
                         // Disabled rather than hidden without an Identity, so
                         // the refusal is visible before the click -- the same
@@ -2169,12 +2206,13 @@ namespace Arcane::Editor
                         // scope below (the standard deferred-OpenPopup pattern).
                         if (ImGui::MenuItem("Add Component..."))
                             state.addComponentPending = true;
-                        if (ImGui::MenuItem("Delete", "Del"))
+                        if (ImGui::MenuItem("Delete", "Del", false, !rootOnly))
                         {
                             if (!sel.Contains(row.entity))
                                 sel.Select(row.entity);
                             DeleteSelection(registry, sel, undo, binding);
                         }
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Delete);
                         if (!canEditStructure)
                             ImGui::EndDisabled();
                         ImGui::EndPopup();
@@ -2182,7 +2220,11 @@ namespace Arcane::Editor
 
                     // Reparent-by-drag is structural too, so it honours the same
                     // predicate rather than starting a drag that will refuse.
-                    if (canEditStructure && ImGui::BeginDragDropSource())
+                    // The scene root is never a drag source (s3.1): dropping it
+                    // onto an orphan moved SceneRoot out of the subtree SaveJson
+                    // walks. Dropping ONTO the root row is unchanged.
+                    if (canEditStructure && !Arcane::Edit::IsSceneRoot(registry, row.entity)
+                        && ImGui::BeginDragDropSource())
                     {
                         ImGui::SetDragDropPayload(kOutlinerDragType,
                                                   &row.entity, sizeof(Astra::Entity));
@@ -2196,9 +2238,9 @@ namespace Arcane::Editor
                         {
                             Astra::Entity dragged;
                             std::memcpy(&dragged, p->Data, sizeof(dragged));
-                            const std::vector<Astra::Entity> moving =
+                            const std::vector<Astra::Entity> moving = SelectionWithoutSceneRoot(registry,
                                 sel.Contains(dragged) ? sel.Entities()
-                                                      : std::vector<Astra::Entity>{ dragged };
+                                                      : std::vector<Astra::Entity>{ dragged });
                             const Astra::Entity target = row.entity;
                             ApplyStructural(undo, binding, "Reparent",
                                 [&] { return Arcane::Edit::Reparent(registry, moving, target) > 0; },
@@ -2216,7 +2258,8 @@ namespace Arcane::Editor
             ImGui::EndTable();
         }
 
-        // Drop below the table = unparent to root. Only visible mid-drag, and
+        // Drop below the table = move to the TOP OF THE SCENE (s3.1: under
+        // SceneRoot, never a registry root beside it). Only visible mid-drag, and
         // only for our own entity payload -- GetDragDropPayload() returns
         // non-null for ANY active drag (e.g. an asset-browser drag), which
         // used to show this strip for foreign payloads too. The bool is kept:
@@ -2227,7 +2270,7 @@ namespace Arcane::Editor
             && activeDrag->IsDataType(kOutlinerDragType);
         if (droppingBelowTable)
         {
-            ImGui::Selectable("(drop here to unparent)", false,
+            ImGui::Selectable("(drop here to move to scene root)", false,
                               ImGuiSelectableFlags_Disabled);
             if (ImGui::BeginDragDropTarget())
             {
@@ -2236,12 +2279,14 @@ namespace Arcane::Editor
                 {
                     Astra::Entity dragged;
                     std::memcpy(&dragged, p->Data, sizeof(dragged));
-                    const std::vector<Astra::Entity> moving =
+                    const std::vector<Astra::Entity> moving = SelectionWithoutSceneRoot(registry,
                         sel.Contains(dragged) ? sel.Entities()
-                                              : std::vector<Astra::Entity>{ dragged };
+                                              : std::vector<Astra::Entity>{ dragged });
+                    // ONE undo step for a move; a refusal (no live root, or
+                    // nothing to move) returns 0 and pushes none.
                     ApplyStructural(undo, binding, "Unparent",
-                        [&] { return Arcane::Edit::Reparent(registry, moving,
-                                                            Astra::Entity::Invalid()) > 0; },
+                        [&] { return Arcane::Edit::ReparentInScene(registry, moving,
+                                                                   Astra::Entity::Invalid()) > 0; },
                         &moving);
                 }
                 ImGui::EndDragDropTarget();
