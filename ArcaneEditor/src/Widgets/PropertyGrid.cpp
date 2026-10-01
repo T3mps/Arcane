@@ -24,6 +24,33 @@ namespace Arcane::Editor
         return ImGui::CollapsingHeader(label, defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
     }
 
+    bool PropertyGrid::Section(const char* label, bool defaultOpen, const std::function<void()>& trailing)
+    {
+        bool open = false;
+        {
+            HeaderBand band;   // popped before the control: it reads the theme's own colours
+            ImGuiTreeNodeFlags flags = defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0;
+            if (trailing) flags |= ImGuiTreeNodeFlags_AllowOverlap;
+            open = ImGui::CollapsingHeader(label, flags);
+        }
+        if (!trailing || ImGui::GetCurrentWindowRead()->SkipItems)
+            return open;
+        const unsigned int key = ImGui::GetItemID();
+        const float headerRight = ImGui::GetItemRectMax().x - ImGui::GetStyle().FramePadding.x;
+        const auto it = m_state.trailingWidths.find(key);
+        const float width = it != m_state.trailingWidths.end() ? it->second : 0.0f;
+        // SameLine(offset) keeps the header's line without SetCursorPos (no
+        // boundary-extension assert); the control's own ItemSize ends the line.
+        ImGui::SameLine(headerRight - width - ImGui::GetWindowPos().x + ImGui::GetScrollX());
+        ImGui::PushID(label);
+        ImGui::BeginGroup();
+        trailing();
+        ImGui::EndGroup();
+        ImGui::PopID();
+        m_state.trailingWidths[key] = ImGui::GetItemRectSize().x;
+        return open;
+    }
+
     bool PropertyGrid::SubSection(std::string_view label, bool defaultOpen)
     {
         ImGui::PushID(label.data(), label.data() + label.size());

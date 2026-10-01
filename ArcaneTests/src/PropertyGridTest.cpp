@@ -959,3 +959,48 @@ TEST_CASE("EditGesture-after-row contract: on a grouped row EndOnDeactivate alon
         CHECK_FALSE(rig.stack.InTransaction());
     }
 }
+
+TEST_CASE("PropertyGrid::Section with a trailing control: right-aligned on the band; clicks reach it, not the header", "[editor][inspector]")
+{
+    Arcane::Editor::PropertyGridState state;
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* px = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    bool only = false, open = false;
+    ImVec2 lo{}, hi{};
+    float workMaxX = 0.0f;
+    const auto frame = [&]
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_Always);
+        ImGui::Begin("Inspector");
+        Arcane::Editor::PropertyGrid grid(state);
+        open = grid.Section("Parameters", true, [&]
+        {
+            ImGui::Checkbox("Only overridden", &only);
+            lo = ImGui::GetItemRectMin(); hi = ImGui::GetItemRectMax();
+        });
+        workMaxX = ImGui::GetCurrentWindow()->WorkRect.Max.x;
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame(); frame();                                           // frame 2 places it by frame 1's measured width
+    CHECK(open);
+    CHECK(hi.x <= workMaxX + 0.5f);
+    CHECK(hi.x >= workMaxX - ImGui::GetStyle().FramePadding.x - 1.0f);
+    const ImVec2 at((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);
+    io.AddMousePosEvent(at.x, at.y); frame();
+    io.AddMouseButtonEvent(0, true); frame();
+    io.AddMouseButtonEvent(0, false); frame();
+    CHECK(only);
+    CHECK(open);                                                // AllowOverlap: the header did not toggle
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+}

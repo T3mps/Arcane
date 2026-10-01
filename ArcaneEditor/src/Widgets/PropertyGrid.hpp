@@ -97,6 +97,9 @@ namespace Arcane::Editor
         // from its seed. Key unchanged: GetID("##value") under PushID(label).
         struct NumericDraft { double value[4]{}; double seed[4]{}; int count = 1; bool active = false; };
         std::unordered_map<unsigned int, NumericDraft> numericDrafts;   // keyed by ImGui id
+        // Section(label, open, trailing): each trailing control's measured width
+        // (last frame), keyed by the header's id -- right-aligns it on the band.
+        std::unordered_map<unsigned int, float> trailingWidths;
         // ColorRow (node-page s4.1(c)): the popup's Old swatch, latched at open
         // (one slot -- one colour popup at a time), and the popup id live last
         // frame, so the close frame can commit once.
@@ -144,6 +147,10 @@ namespace Arcane::Editor
 
         // Full-width headers -- draw these OUTSIDE a Rows scope.
         [[nodiscard]] bool Section(const char* label, bool defaultOpen = true);
+        // A header with a control on its band (UE's header-row widgets): `trailing`
+        // is drawn right-aligned on the header's line, under PushID(label); the
+        // header takes ImGuiTreeNodeFlags_AllowOverlap so clicks reach the control.
+        [[nodiscard]] bool Section(const char* label, bool defaultOpen, const std::function<void()>& trailing);
         // Tree-style sub-header (the scene Inspector's category band). When it
         // returns true the caller draws its content and calls EndSubSection().
         [[nodiscard]] bool SubSection(std::string_view label, bool defaultOpen = true);
