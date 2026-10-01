@@ -244,3 +244,33 @@ TEST_CASE("Dev cvars are absent when the registry is built without them", "[cvar
     REQUIRE(reg.Find("diagnostics.drawMarkers").IsStale());
     REQUIRE_FALSE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
 }
+
+namespace
+{
+    ARC_CVAR_RANGED("tests.rangedProbe", "tests", Int32, CVarValue::Int32(5),
+                    CVarValue::Int32(1), CVarValue::Int32(10), CVarFlags::Archive,
+                    "ARC_CVAR_RANGED probe (CVarRegistryTest).");
+}
+
+TEST_CASE("ARC_CVAR_RANGED registers its range and its module", "[cvar]") {
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle h = reg.Find("tests.rangedProbe");
+    REQUIRE_FALSE(h.IsStale());
+    CHECK(reg.Get(h)->AsInt32() == 5);
+
+    reg.Set(h, CVarValue::Int32(50), SetBy::Console);
+    reg.Publish();
+    CHECK(reg.Get(h)->AsInt32() == 10);            // max applied
+    reg.Set(h, CVarValue::Int32(-4), SetBy::Console);
+    reg.Publish();
+    CHECK(reg.Get(h)->AsInt32() == 1);             // min applied
+
+    const CVarHandle dup = reg.Register(CVarDesc{
+        "tests.rangedProbe", CVarType::Int32, CVarValue::Int32(5),
+        std::nullopt, std::nullopt, CVarFlags::None, "", "engine" });
+    CHECK(dup.IsStale());
+    CHECK(reg.LastError().find("module 'tests'") != std::string::npos);   // declared by the macro's module
+
+    reg.Set(h, CVarValue::Int32(5), SetBy::Console);
+    reg.Publish();
+}
