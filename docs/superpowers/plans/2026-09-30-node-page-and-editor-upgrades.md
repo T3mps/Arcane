@@ -18837,6 +18837,16 @@ git commit -m "docs(editor): T3 gate green -- Debug+Release build, ~[gpu] + witn
 ```
 Never push.
 
+#### T3 gate record (2026-10-01, T3-GATE; base 6365f361)
+
+- **Seeds.** `~[gpu]`: Release 3575318858, Debug 2190187028. `[witness]~[shell]`: Release 1082650076, Debug 3724494025.
+- **Counts.** `~[gpu]` 65508 assertions / 2436 cases (2440 incl. 4 SKIPs), 0 failed, in BOTH configs; booked over T2's 63795 / 2358 (+1713 / +78) in `38019ce4`. `[witness]~[shell]` 19 passed + 1 skipped (G1, desk-only) of 20 in both; E5, E8 and E9 green.
+- **Build + modules.** `Arcane.slnx` Release then Debug, 0 errors. Aphelyon and ReferenceProject arcbuilt Release then Debug, exit 0; ReferenceProject restaged beside the three hosts per config before each suite run.
+- **ABI.** N = 48 (`kGamePluginABIVersion`; `ReferenceProject.arcproj` and `Aphelyon.arcproj` both read 48). Aphelyon restamp = T3-A2's `0f393d4` (not stale; no new Aphelyon commit).
+- **Golden gate.** 14/14 Release, then 14/14 Debug (ended on Debug), exe-dir `imgui.ini` deleted first. Slots re-blessed in T3: `editor-material-page` `b087eebf`, `editor-asset-page` `3bf9af31`, `editor-ui` `844608e0`, `editor-ui-perspective` `4651b00f`, `editor-input-doc` `6365f361`.
+- **Desk (Step 5): PARTIAL, not green.** Run on a scratch Aphelyon copy, maximized 1920x1080 (client 1920x1027), fresh LOCALAPPDATA; stopped early because the user was using the desktop at the same time (SendInput races live input: an unexplained document close and entity selection appeared mid-run), and because the node-page click items are blocked on the pending fix/node-page-reselect cherry-pick (culled nodes' 0x0 pins swallow node clicks; a plain click on Add from an empty selection selected nothing). Seen: category colours read on the canvas (Math green, Input blue, Vector purple, Output red); the node page header, description, Inputs and Outputs render (Sine; Split through a marquee); logo_showcase's toolbar reads "ok"; the material page preview is a square and "Surface" labels the combo; the GlowTint VecRow clips its lane values at the 1080p Inspector width. **5.6 FAILS:** arcane_logo.png (one derived child) in Inspector 2 overflows by about 9 px with a scrollbar (Max Size cut), because the page child is about 288 px tall at 1080p while the s5.6 fit test draws in a 392x330 window. Owed after the reselect fix: the full s5.1.11 node-page list (click, marquee, Ctrl-click, LowDetail page edit, Esc mid-drag, Param rename with instances on disk, Edit HLSL with the HLSL view, canvas "Edit HLSL..." + one Ctrl+Z, pin + switch passes, A->B reselect), 5.2, 5.4, 5.5, 5.7, and the flush-band look (T3-C11 ruling).
+- **R5.** Not yet determined: node clicks select nothing until the reselect fix lands, so whether clicking the Sine `x` drag selects the node must be recorded at the post-fix desk.
+
 ### Task T4-A1: Accent tokens, the tab overline, and `kToggleOn*` re-pointed (s6.1)
 
 **Files:**
