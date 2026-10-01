@@ -7,14 +7,17 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Edit/Command.hpp>
+#include <Arcane/Edit/UndoPayload.hpp>
 
 #include <Astra/Entity/Entity.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -55,6 +58,19 @@ namespace Arcane
         // Takes effect at the next push or commit (eviction runs there).
         void SetLimits(UndoLimits limits);
         [[nodiscard]] const UndoLimits& Limits() const noexcept { return m_limits; }
+
+        // Spill target (<project>/Saved/UndoCache from the editor); empty =
+        // memory-only. The editor owns wiping it at project open/close.
+        void SetSpillDirectory(std::filesystem::path dir) { m_spillDir = std::move(dir); }
+        [[nodiscard]] const std::filesystem::path& SpillDirectory() const noexcept { return m_spillDir; }
+        // Payload factories. Above Limits().spillThreshold (and with a spill
+        // directory) the bytes go to the CURRENT step's file: the step about
+        // to be pushed/committed, or the one being undone/redone. A failed
+        // write keeps the payload in memory with one WARN.
+        [[nodiscard]] UndoPayload MakePayload(std::vector<std::byte>&& bytes);
+        // Streams in 1 MB chunks straight to the spill file above the
+        // threshold, else reads into memory. nullopt = source unreadable.
+        [[nodiscard]] std::optional<UndoPayload> MakePayloadFromFile(const std::filesystem::path& source);
 
         // Non-copyable: m_undo/m_redo hold move-only ICommand transactions, and
         // this class is dllexport'd -- MSVC eagerly instantiates implicit
@@ -185,6 +201,7 @@ namespace Arcane
             // Any part affects the scene (ICommand::AffectsScene). Fixed at
             // push/commit; a component snapshot always makes it true.
             bool affectsScene = true;
+            std::shared_ptr<Detail::UndoSpillFile> spill;   // this step's file (lazily made)
         };
         struct Pending
         {
@@ -202,6 +219,8 @@ namespace Arcane
         static const Transaction* TopLive(const std::deque<Transaction>& d) noexcept;
         // Oldest-first eviction while over either UndoLimits bound; never the top.
         void Evict();
+        // The current step's spill file, made on first use (<dir>/<seq>.bin).
+        std::shared_ptr<Detail::UndoSpillFile>& AssemblingSpill();
 
         std::function<Astra::Registry&()> m_resolve;
         UndoLimits                        m_limits;
@@ -219,6 +238,10 @@ namespace Arcane
         std::vector<std::unique_ptr<ICommand>> m_pendingGeneric;   // Push while open
         std::vector<Astra::Entity>             m_pendingTouched;   // Push's tags while open
         std::string                            m_clearedReason;    // why the last Clear ran
+
+        std::filesystem::path                  m_spillDir;         // empty = memory-only
+        std::shared_ptr<Detail::UndoSpillFile> m_assembling;       // the current step's file
+        std::uint64_t                          m_spillSeq = 1;     // next <seq>.bin
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)

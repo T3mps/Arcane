@@ -1,9 +1,28 @@
 #include <Arcane/Edit/CommandStack.hpp>
 
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Edit/ComponentEditCommand.hpp>
 
 #include <algorithm>
+#include <fstream>
+#include <string>
 #include <utility>
+
+namespace
+{
+    // Opens `file` for writing at its COMMITTED end. Bytes past it are a
+    // failed write's leftovers and get overwritten.
+    bool OpenAtEnd(const Arcane::Detail::UndoSpillFile& file, std::fstream& out)
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(file.path.parent_path(), ec);
+        out.open(file.path, std::ios::in | std::ios::out | std::ios::binary);
+        if (!out) { out.clear(); out.open(file.path, std::ios::out | std::ios::binary); }
+        if (!out) return false;
+        out.seekp(static_cast<std::streamoff>(file.size));
+        return static_cast<bool>(out);
+    }
+}
 
 namespace Arcane
 {
@@ -40,6 +59,77 @@ namespace Arcane
             total -= bytesOf(m_undo.front());
             m_undo.pop_front();
         }
+    }
+
+    std::shared_ptr<Detail::UndoSpillFile>& CommandStack::AssemblingSpill()
+    {
+        if (!m_assembling)
+            m_assembling = std::make_shared<Detail::UndoSpillFile>(
+                m_spillDir / (std::to_string(m_spillSeq++) + ".bin"));
+        return m_assembling;
+    }
+
+    UndoPayload CommandStack::MakePayload(std::vector<std::byte>&& bytes)
+    {
+        UndoPayload p;
+        p.m_size  = bytes.size();
+        p.m_bytes = std::move(bytes);
+        if (m_spillDir.empty() || p.m_size <= m_limits.spillThreshold)
+            return p;
+        auto& file = AssemblingSpill();
+        std::fstream out;
+        if (!OpenAtEnd(*file, out) ||
+            !out.write(reinterpret_cast<const char*>(p.m_bytes.data()), static_cast<std::streamsize>(p.m_size)) ||
+            !out.flush())
+        {
+            ARC_WARN("Undo: spilling a {}-byte payload to '{}' failed -- it stays in memory",
+                     p.m_size, file->path.generic_string());
+            return p;
+        }
+        p.m_file   = file;
+        p.m_offset = file->size;
+        file->size += p.m_size;
+        std::vector<std::byte>().swap(p.m_bytes);   // leaves memory
+        return p;
+    }
+
+    std::optional<UndoPayload> CommandStack::MakePayloadFromFile(const std::filesystem::path& source)
+    {
+        std::error_code ec;
+        const std::uintmax_t size = std::filesystem::file_size(source, ec);
+        if (ec) return std::nullopt;
+        std::ifstream in(source, std::ios::binary);
+        if (!in) return std::nullopt;
+        UndoPayload p;
+        p.m_size = static_cast<std::size_t>(size);
+        if (!m_spillDir.empty() && size > m_limits.spillThreshold)
+        {
+            auto& file = AssemblingSpill();
+            std::fstream out;
+            bool ok = OpenAtEnd(*file, out);
+            std::vector<char> chunk(std::size_t{1} << 20);   // 1 MB: never the whole file in RAM
+            for (std::uintmax_t left = size; ok && left > 0;)
+            {
+                const auto n = static_cast<std::streamsize>(std::min<std::uintmax_t>(left, chunk.size()));
+                ok = static_cast<bool>(in.read(chunk.data(), n)) && static_cast<bool>(out.write(chunk.data(), n));
+                left -= static_cast<std::uintmax_t>(n);
+            }
+            if (ok && out.flush())
+            {
+                p.m_file   = file;
+                p.m_offset = file->size;
+                file->size += size;
+                return p;
+            }
+            ARC_WARN("Undo: spilling '{}' to '{}' failed -- it stays in memory",
+                     source.generic_string(), file->path.generic_string());
+            in.clear();
+            in.seekg(0);
+        }
+        p.m_bytes.resize(p.m_size);
+        if (!in.read(reinterpret_cast<char*>(p.m_bytes.data()), static_cast<std::streamsize>(p.m_size)))
+            return std::nullopt;
+        return p;
     }
 
     TransactionId CommandStack::Begin(std::string label)
@@ -97,7 +187,10 @@ namespace Arcane
         m_pendingGeneric.clear();
         m_pendingTouched.clear();
         if (txn.commands.empty())
-            return;   // nothing changed -> no history entry
+        {
+            m_assembling.reset();   // nothing changed -> no history entry (and no file)
+            return;
+        }
         txn.affectsScene = std::any_of(txn.commands.begin(), txn.commands.end(),
                                        [](const std::unique_ptr<ICommand>& c) { return c->AffectsScene(); });
 
@@ -106,6 +199,7 @@ namespace Arcane
         // across BOTH uses and a committed state id can never collide with a
         // live transaction token.
         txn.id = m_nextId++;
+        txn.spill = std::move(m_assembling);   // the step adopts its file
         m_undo.push_back(std::move(txn));
         m_redo.clear();
         Evict();
@@ -116,6 +210,7 @@ namespace Arcane
         if (owner == TransactionId::None || owner != m_openId)
             return;   // see Commit: only the owner may discard.
         m_openId = TransactionId::None;
+        m_assembling.reset();
         m_pending.clear();
         m_pendingGeneric.clear();
         m_pendingTouched.clear();
@@ -139,6 +234,7 @@ namespace Arcane
         txn.commands.push_back(std::move(command));
         // See Commit: same stamp-before-push rule, same shared m_nextId source.
         txn.id = m_nextId++;
+        txn.spill = std::move(m_assembling);   // the step adopts its file
         m_undo.push_back(std::move(txn));
         m_redo.clear();
         Evict();
@@ -175,8 +271,12 @@ namespace Arcane
             return;
         Transaction txn = std::move(m_undo.back());
         m_undo.pop_back();
+        // Payloads made while this step replays (RegistryStateCommand's
+        // after-capture) land in ITS file, not the next step's.
+        std::swap(m_assembling, txn.spill);
         for (auto it = txn.commands.rbegin(); it != txn.commands.rend(); ++it)
             (*it)->Undo();   // reverse order
+        std::swap(m_assembling, txn.spill);
         m_redo.push_back(std::move(txn));
     }
 
@@ -187,8 +287,10 @@ namespace Arcane
             return;
         Transaction txn = std::move(m_redo.back());
         m_redo.pop_back();
+        std::swap(m_assembling, txn.spill);   // see Undo
         for (auto& c : txn.commands)
             c->Redo();       // forward order
+        std::swap(m_assembling, txn.spill);
         m_undo.push_back(std::move(txn));
     }
 
@@ -224,6 +326,7 @@ namespace Arcane
         m_pending.clear();
         m_pendingGeneric.clear();
         m_pendingTouched.clear();
+        m_assembling.reset();
     }
 
     CommandStack::TouchedSince CommandStack::TouchedSinceState(std::uint64_t savedStateId) const
