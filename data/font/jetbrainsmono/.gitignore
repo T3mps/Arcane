@@ -1,0 +1,6 @@
+# Only the JetBrains Mono cut Arcane Editor loads (EditorFonts.cpp) is tracked;
+# mirror this list if another cut is ever loaded.
+*
+!.gitignore
+!OFL.txt
+!JetBrainsMono-Regular.ttf

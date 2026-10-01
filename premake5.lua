@@ -1095,8 +1095,9 @@ project "ArcaneEditor"
         '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
-        -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
-        -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
+        -- Editor fonts: Inter (default) + Roboto + JetBrains Mono faces + lucide icon
+        -- font, merged into the ImGui atlas by EditorFonts.cpp (exe-relative paths --
+        -- must align w/ dests).
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/inter/static"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/roboto/static"',
@@ -1105,6 +1106,8 @@ project "ArcaneEditor"
         '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/aldotheapache"',
         '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/jetbrainsmono"',
+        '{COPYFILE} "%{wks.location}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf"',
         -- Arcane logo: window/taskbar icon (Window::SetIcon) + transport-toolbar mark
         -- (LoadDisplayTexture). Same PNG, exe-relative at "data/images/arcane_logo.png".
         '{MKDIR} "%{cfg.buildtarget.directory}/data/images"',

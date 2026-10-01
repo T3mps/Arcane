@@ -5,6 +5,7 @@
 // data scanned the way PropertyGridTest.cpp scans for Theme::kError.
 #include <catch2/catch_test_macros.hpp>
 
+#include <Widgets/EditorFonts.hpp>
 #include <Widgets/EditorWidgets.hpp>
 
 #include <imgui.h>
@@ -287,4 +288,24 @@ TEST_CASE("LinkText/LinkRow leave the hit item last, so a context menu attaches"
     CHECK(ContextOpensOn(false, false));
     CHECK(ContextOpensOn(true, true));
     CHECK(ContextOpensOn(true, false));
+}
+
+TEST_CASE("MonoFont with no fonts installed pushes nothing", "[editor][widgets]")
+{
+    CHECK(EditorFontSet{}.mono == nullptr);
+    REQUIRE(GetEditorFonts().mono == nullptr);   // headless: InstallEditorFonts never runs
+    WidgetHarness h;
+    int before = -1, inside = -1, after = -1;
+    h.body = [&]
+    {
+        before = h.ctx->FontStack.Size;
+        {
+            const MonoFont mono;
+            inside = h.ctx->FontStack.Size;
+        }
+        after = h.ctx->FontStack.Size;
+    };
+    h.Frame();
+    CHECK(inside == before);
+    CHECK(after == before);
 }
