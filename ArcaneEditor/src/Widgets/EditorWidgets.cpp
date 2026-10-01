@@ -494,12 +494,14 @@ namespace Arcane::Editor
     // here, against an internal layout detail no API contract holds still.
     //
     // This IS DragScalarN's body (imgui_widgets.cpp:2814-2849) specialised to
-    // float with no bounds, with the bar added, the trailing
-    // visible-label block (:2840-2845) dropped -- already dead for these
-    // callers, whose labels are the "##name" hidden-id form -- and the
-    // `flags` parameter dropped along with it, which also drops the
-    // ImGuiSliderFlags_ColorMarkers branch it gates (:2831-2832): none of
-    // these callers pass flags, so that branch was already unreachable
+    // float -- unbounded by default; an optional Astra::Range supplies the
+    // min/max and ImGuiSliderFlags_ClampOnInput, the one flag ever passed --
+    // with the bar added, the trailing visible-label block (:2840-2845)
+    // dropped -- already dead for these callers, whose labels are the
+    // "##name" hidden-id form -- and the caller-facing `flags` parameter
+    // dropped along with it, which also drops the
+    // ImGuiSliderFlags_ColorMarkers branch it gates (:2831-2832): no caller
+    // asks for colour markers, so that branch was already unreachable
     // here too. An ImGui upgrader re-diffing this against the vendored
     // body should expect both omissions, not just the label block:
     // FindRenderedTextEnd stops at the leading "##" (imgui.cpp:3918) and
@@ -510,7 +512,8 @@ namespace Arcane::Editor
     // each component keeps the exact ImGui id DragFloat2/3 gave it, and the
     // caller's BeginGestureIfActivated/EndGesture still read the id EndGroup
     // forwards out of the group (imgui.cpp:12477-12482) exactly as before.
-    bool AxisDragFloatN(const char* label, float* v, int count, float speed)
+    bool AxisDragFloatN(const char* label, float* v, int count, float speed,
+                        const std::optional<Astra::Range>& range, const char* format)
     {
         // DragScalarN's own guard (:2816-2818), kept in the same place and
         // for the same reason: it returns before the group opens, so there
@@ -526,14 +529,20 @@ namespace Arcane::Editor
             ImGui::PushID(i);
             if (i > 0)
                 ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-            // `speed` is the only argument these callers ever varied; every
-            // other one is DragFloat's default, and DragFloat's defaults ARE
-            // DragFloat2/3's defaults (imgui.h:687-689), so each component
-            // behaves exactly as it did inside the combined widget.
-            // Written as an if rather than |= only to keep the assignment
-            // bool-typed; like DragScalarN's |= it does not short-circuit,
-            // so every component is always submitted.
-            if (ImGui::DragFloat("", &v[i], speed))
+            // The defaults ARE today's call (DragFloat's own defaults, imgui.h:687),
+            // so the entity page's Vec arms are unchanged. A ranged component
+            // clamps typed input too (ClampOnInput, see RangedDragFloat).
+            // DragFloat's defaults ARE DragFloat2/3's defaults (imgui.h:687-689),
+            // so an unranged component behaves exactly as it did inside the
+            // combined widget. Written as an if rather than |= only to keep the
+            // assignment bool-typed; like DragScalarN's |= it does not
+            // short-circuit, so every component is always submitted.
+            const bool edited = range
+                ? ImGui::DragFloat("", &v[i], DragSpeedFor(*range, speed),
+                                   ToFloatClamped(range->min), ToFloatClamped(range->max),
+                                   format, ImGuiSliderFlags_ClampOnInput)
+                : ImGui::DragFloat("", &v[i], speed, 0.0f, 0.0f, format);
+            if (edited)
                 changed = true;
             DrawAxisBar(i);
             ImGui::PopID();

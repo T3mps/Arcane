@@ -15,7 +15,8 @@
 // keeps its own draft and writes the in-flight number back into `value`
 // every frame (a page may preview it) but commits nothing; on commit `value`
 // holds the gesture's final number. Escape during a numeric drag cancels (no
-// commit). TextRow selects all its text on activation (single-line rows).
+// commit; LastRowEvents().cancelled reports it). TextRow selects all its
+// text on activation (single-line rows).
 // An optional `validate` returns a refusal reason: a refused value draws red
 // (RefusedFieldStyle) with the reason as a hover tooltip; Enter on a refused value keeps the text and re-arms the box; focus
 // loss with a refused value reverts without committing. Mirrors the Input
@@ -62,7 +63,7 @@ namespace Arcane::Editor
             bool focusPending = false;                    // SetKeyboardFocusHere on the next draw
         };
         std::unordered_map<unsigned int, TextDraft> textDrafts;   // keyed by ImGui id
-        // One in-flight numeric gesture per IntRow/FloatRow (drag, held step
+        // One in-flight numeric gesture per IntRow/FloatRow/VecRow (drag, held step
         // button, Ctrl+click text). The ROW owns the number while the widget
         // is active (UE SSpinBox InternalValue): pages re-derive their locals
         // from the draft every frame, and ImGui's drag accumulator is consumed
@@ -70,12 +71,21 @@ namespace Arcane::Editor
         // every frame and the release commits the untouched original. `seed`
         // is the value at activation; a commit is reported only when the
         // released value differs from it (UE: LastSliderCommittedValue != New).
-        struct NumericDraft { double value = 0.0; double seed = 0.0; bool active = false; };
+        // node-page s4.1(a): one draft for 1-4 components (IntRow/FloatRow/
+        // SliderRow = 1, VecRow = n, ColorRow's boxes = 4). Commit rule: the
+        // widget deactivated after an edit AND at least one component differs
+        // from its seed. Key unchanged: GetID("##value") under PushID(label).
+        struct NumericDraft { double value[4]{}; double seed[4]{}; int count = 1; bool active = false; };
         std::unordered_map<unsigned int, NumericDraft> numericDrafts;   // keyed by ImGui id
         // TEST SEAM (PropertyGridTest): when non-null every row records the
         // centre of its VALUE widget under its label. Production: nullptr.
         std::unordered_map<std::string, ImVec2>* probe = nullptr;
     };
+
+    // What the LAST row reported this frame (node-page s4.1(d)); every row
+    // resets it. `cancelled` = Escape mid-drag on a numeric/vec/slider/colour
+    // row: the seed was restored and ActiveId cleared, and the row returned false.
+    struct RowEvents { bool overrideToggled = false; bool resetClicked = false; bool cancelled = false; };
 
     class PropertyGrid
     {
@@ -116,6 +126,10 @@ namespace Arcane::Editor
         bool CheckboxRow(const char* label, bool& value);
         bool IntRow(const char* label, int& value);                          // true once per gesture, on deactivate-after-edit AND value != seed; value follows the gesture every frame
         bool FloatRow(const char* label, float& value, float speed = 0.01f); // same rule; Escape mid-drag = cancel, no commit
+        // 2-4 float components through AxisDragFloatN (axis bars, per-component
+        // ids). Same draft/commit/Escape rules as FloatRow, across all n.
+        bool VecRow(const char* label, float* v, int n, float speed = 0.01f,
+                    const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%.3f");
         int  ComboRow(const char* label, const char* const* items, int count, int current);
         void ReadOnlyRow(const char* label, std::string_view text);
         int  ButtonRow(const char* label, const char* const* buttons, int count,
@@ -129,10 +143,21 @@ namespace Arcane::Editor
         // state BEFORE any window that draws this state Begins.
         void CommitOrphans();
 
+        [[nodiscard]] RowEvents LastRowEvents() const { return m_events; }
+        // TEST SEAM, public for model-aware wrappers (s4.2's AssetRow): records
+        // the LAST item's centre under `label` when PropertyGridState::probe is
+        // set. No-op in production.
+        void ProbeItem(const char* label);
+
         PropertyGridState& State() noexcept { return m_state; }
 
     private:
-        void Probe(const char* label);
+        // Value rows: label cell + PushID(label) / ProbeItem + PopID. Plain rows
+        // (Text/ReadOnly/Button/Meter) only reset the events.
+        void BeginValueCell(const char* label, bool dimmed);
+        void EndValueCell(const char* label);
+        void BeginPlainRow();
         PropertyGridState& m_state;
+        RowEvents m_events{};
     };
 }

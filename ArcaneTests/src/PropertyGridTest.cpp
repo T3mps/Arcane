@@ -395,3 +395,104 @@ TEST_CASE("PropertyGrid: ReadOnlyRow ellipsizes a long value and tooltips the fu
     h.Hover(h.Centre("Kind"));
     CHECK_FALSE(RowHarness::TooltipShown());
 }
+
+using Arcane::Editor::PropertyGrid;
+
+TEST_CASE("PropertyGrid: VecRow follows a 3-frame drag every frame and commits once with the final value", "[editor][inspector]")
+{
+    RowHarness h;
+    float v[3]{ 1.0f, 2.0f, 3.0f };
+    int commits = 0;
+    h.body = [&](PropertyGrid& g) { if (g.VecRow("Offset", v, 3)) ++commits; };
+    h.Frame();
+    const ImVec2 c = h.Centre("Offset");   // a 3-wide group's centre sits inside component 1 (y)
+    h.Press(c);
+    float last = v[1];
+    for (int i = 1; i <= 3; ++i)
+    {
+        h.MoveTo(ImVec2(c.x + 15.0f * i, c.y));
+        CHECK(v[1] > last);                 // write-through: `v` follows the gesture every frame
+        last = v[1];
+    }
+    CHECK(commits == 0);
+    h.Release();
+    CHECK(commits == 1);
+    CHECK(v[1] > 2.0f + 0.25f);             // the whole gesture, not one frame's delta
+    CHECK(v[0] == 1.0f);
+    CHECK(v[2] == 3.0f);
+    h.Frame();
+    CHECK(commits == 1);
+    CHECK(h.state.numericDrafts.empty());
+}
+
+TEST_CASE("PropertyGrid: VecRow released on its seed commits nothing", "[editor][inspector]")
+{
+    RowHarness h;
+    float v[3]{ 1.0f, 2.0f, 3.0f };
+    int commits = 0;
+    h.body = [&](PropertyGrid& g) { if (g.VecRow("Offset", v, 3)) ++commits; };
+    h.Frame();
+    const ImVec2 c = h.Centre("Offset");
+    h.Press(c);
+    h.MoveTo(ImVec2(c.x + 30.0f, c.y));
+    REQUIRE(v[1] != 2.0f);
+    h.MoveTo(c);                             // back: "%.3f" rounding lands exactly on 2.000
+    h.Release();
+    CHECK(v[1] == 2.0f);
+    CHECK(commits == 0);
+    h.Click(c);                              // a pure click: no edit, no commit
+    CHECK(commits == 0);
+}
+
+TEST_CASE("PropertyGrid: Escape mid-drag on a VecRow restores every component, returns false and reports cancelled", "[editor][inspector]")
+{
+    RowHarness h;
+    float v[3]{ 1.0f, 2.0f, 3.0f };
+    int commits = 0, cancels = 0;
+    bool returnedOnCancel = true;
+    h.body = [&](PropertyGrid& g)
+    {
+        const bool committed = g.VecRow("Offset", v, 3);
+        if (committed) ++commits;
+        if (g.LastRowEvents().cancelled) { ++cancels; returnedOnCancel = committed; }
+    };
+    h.Frame();
+    const ImVec2 c = h.Centre("Offset");
+    h.Press(c);
+    h.MoveTo(ImVec2(c.x + 40.0f, c.y));
+    h.Frame();
+    REQUIRE(v[1] != 2.0f);
+    h.Escape();
+    h.Release();
+    h.Frame();
+    CHECK(v[0] == 1.0f);
+    CHECK(v[1] == 2.0f);
+    CHECK(v[2] == 3.0f);
+    CHECK(commits == 0);
+    CHECK(cancels == 1);                     // exactly the Escape frame
+    CHECK_FALSE(returnedOnCancel);
+    CHECK(h.state.numericDrafts.empty());
+}
+
+TEST_CASE("PropertyGrid: a ranged VecRow clamps a Ctrl+click typed component and leaves the others alone", "[editor][inspector]")
+{
+    RowHarness h;
+    float v[3]{ 0.2f, 0.3f, 0.4f };
+    int commits = 0;
+    h.body = [&](PropertyGrid& g) { if (g.VecRow("Offset", v, 3, 0.01f, Astra::Range(0.0, 1.0))) ++commits; };
+    h.Frame();
+    const ImVec2 c = h.Centre("Offset");                  // the 3-wide group's centre: component 1 (y)
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(c.x, c.y); h.Frame();
+    io.AddKeyEvent(ImGuiMod_Ctrl, true); h.Frame();
+    io.AddMouseButtonEvent(0, true); h.Frame();           // Ctrl+click: that component's temp text input
+    io.AddMouseButtonEvent(0, false); h.Frame();
+    io.AddKeyEvent(ImGuiKey_A, true); h.Frame();
+    io.AddKeyEvent(ImGuiKey_A, false); io.AddKeyEvent(ImGuiMod_Ctrl, false); h.Frame();
+    h.Type("5");
+    h.Key(ImGuiKey_Enter);
+    CHECK(commits == 1);
+    CHECK(v[1] == 1.0f);                                   // ClampOnInput, per component
+    CHECK(v[0] == 0.2f);
+    CHECK(v[2] == 0.4f);
+}

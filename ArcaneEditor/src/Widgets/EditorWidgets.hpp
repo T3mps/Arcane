@@ -81,8 +81,12 @@ namespace Arcane::Editor
     // The component drags for a single-selection Vec2/Vec3 row, spelled out
     // rather than calling ImGui::DragFloat2/3 so each component's OWN frame
     // rect is reachable for the bar. Each component keeps the exact ImGui id
-    // DragFloat2/3 gave it.
-    [[nodiscard]] bool AxisDragFloatN(const char* label, float* v, int count, float speed);
+    // DragFloat2/3 gave it. `range` and `format` (node-page s4.1(b)) default
+    // to the call these rows always made; a range binds every component the
+    // way RangedDragFloat binds one (min, max, ClampOnInput).
+    [[nodiscard]] bool AxisDragFloatN(const char* label, float* v, int count, float speed,
+                                      const std::optional<Astra::Range>& range = std::nullopt,
+                                      const char* format = "%.3f");
 
     // Truncate `text` with a trailing ellipsis so it fits `maxWidth` pixels of
     // the CURRENT font; unchanged when it already fits. UTF-8-safe: a cut never
