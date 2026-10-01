@@ -2717,6 +2717,7 @@ namespace Arcane::Editor
                 const ImVec2 size = ed::GetNodeSize(ed::NodeId(nodeId));
                 ed::BeginNode(ed::NodeId(nodeId));
                 ImGui::PushID(static_cast<int>(nodeId));
+                const float startY = ImGui::GetCursorPosY();
                 const std::vector<std::uint32_t>& culledInputs =
                     c >= 1 ? m_data.passes[c - 1].inputs : m_data.baseInputs;
                 const std::size_t pinCount =
@@ -2735,8 +2736,16 @@ namespace Arcane::Editor
                 SetPinPivot(OutPin(nodeId, 0).Get(), ImGui::GetCursorScreenPos());
                 ImGui::Dummy(ImVec2(0.0f, 0.0f));
                 ed::EndPin();
+                // Pad out to the remembered footprint MINUS what the pin row
+                // already advanced, exactly as the graph canvas's stand-in
+                // does: a FIXED POINT. Padding the full height on top of the
+                // pin row's line advance grew the node by one item spacing per
+                // culled draw, and GetContentBounds (F, the s4.5 fit) then
+                // framed phantom bounds once the view came back.
+                const float usedY = ImGui::GetCursorPosY() - startY;
+                const float wantY = size.y - 2.0f * kNodePadY;
                 ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * kNodePadX),
-                                    (std::max)(0.0f, size.y - 2.0f * kNodePadY)));
+                                    (std::max)(0.0f, wantY - usedY)));
                 ImGui::PopID();
                 ed::EndNode();
                 continue;

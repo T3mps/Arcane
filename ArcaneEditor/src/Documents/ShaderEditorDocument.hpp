@@ -363,6 +363,10 @@ namespace Arcane::Editor
         // headless test can read the view the fit-on-open landed. Null until the
         // first DrawGraphPanel. Production never calls it.
         [[nodiscard]] ax::NodeEditor::EditorContext* GraphCanvasContext() const noexcept { return m_graphCtx; }
+        // TEST SEAM (GraphFitTest): the pass canvas's node-editor context, the
+        // chain overview's twin of GraphCanvasContext. Null until the first
+        // DrawPassCanvas. Production never calls it.
+        [[nodiscard]] ax::NodeEditor::EditorContext* PassCanvasContext() const noexcept { return m_passCanvasCtx; }
 
         // Publish this document's CURRENT diagnostic set under "material:<guid>".
         // No anti-spam gate is needed: publication groups replace, so republishing

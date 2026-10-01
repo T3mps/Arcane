@@ -363,3 +363,107 @@ TEST_CASE("A Problems focus survives a canvas resize while it is in flight", "[e
         CHECK(r.selectedAfter == 1);
     }
 }
+
+TEST_CASE("Pass canvas: a culled chain node keeps its measured size, so a later fit frames the real chain",
+          "[editor][graphfit]")
+{
+    // The pass canvas's off-screen stand-in (DrawPassCanvas, NodeCulled) must
+    // be a FIXED POINT, exactly like the graph canvas's: it measures back to
+    // the size it was built from. When the pin row's line advance was padded
+    // on top of the remembered height, every culled draw grew the node, and
+    // GetContentBounds -- which both F and the s4.5 fit read -- framed phantom
+    // bounds once the view came back (the T2-GATE desk's "tiny top-band"
+    // reframe after Add Pass / Ctrl+Z).
+    using namespace Arcane;
+    namespace ne = ax::NodeEditor;
+    MaterialAssetData data;
+    data.id = Guid::FromString("eeee6666-6666-4666-8666-666666666666").value();
+    data.name = "passcull";
+    data.kind = "fullscreen";   // the only surface with a chain overview (Draw's chainAvailable)
+    data.snippet = "float4 shade(Varyings v) { return float4(v.uv, 0.0, 1.0); }\n";
+    data.passes.push_back({ "a", "float4 shade(Varyings v) { return InputTexture.Sample(MaterialSampler, v.uv); }\n" });
+    data.passes.push_back({ "b", "float4 shade(Varyings v) { return InputTexture.Sample(MaterialSampler, v.uv); }\n" });
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    {
+        Arcane::Editor::DocServices services{};
+        Arcane::Editor::ShaderEditorDocument doc(services, std::filesystem::path("passcull.arcmat"), std::move(data));
+        auto frame = [&]
+        {
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            bool requestClose = false;
+            doc.Draw(requestClose);
+            ImGui::Render();
+        };
+        for (int i = 0; i < 10; ++i)   // seed, then the fit-on-open lands and confirms
+            frame();
+        REQUIRE(doc.PassCanvasContext() != nullptr);
+        auto* editor = reinterpret_cast<ne::Detail::EditorContext*>(doc.PassCanvasContext());
+        constexpr std::uint32_t kChain[] = { 1u, 2u, 3u };   // base + two passes (chain index c is node c+1)
+
+        ne::SetCurrentEditor(doc.PassCanvasContext());
+        const ImRect fitView = editor->GetViewRect();
+        ImVec2 sizes[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            const ImVec2 pos = ne::GetNodePosition(ne::NodeId(kChain[i]));
+            sizes[i] = ne::GetNodeSize(ne::NodeId(kChain[i]));
+            REQUIRE(sizes[i].x > 0.0f);
+            REQUIRE(sizes[i].y > 0.0f);
+            REQUIRE(fitView.Contains(ImRect(pos, pos + sizes[i])));   // the opening fit framed the chain
+        }
+        // Pan far away (no zoom change): every chain node is now off-screen,
+        // well beyond the cull guard band.
+        editor->NavigateTo(ImRect(ImVec2(100000.0f, 100000.0f), ImVec2(100010.0f, 100010.0f)), false, 0.0f);
+        ne::SetCurrentEditor(nullptr);
+
+        for (int i = 0; i < 30; ++i)   // 30 culled submissions
+            frame();
+
+        ne::SetCurrentEditor(doc.PassCanvasContext());
+        const ImRect away = editor->GetViewRect();
+        for (int i = 0; i < 3; ++i)
+        {
+            CAPTURE(i);
+            const ImVec2 pos = ne::GetNodePosition(ne::NodeId(kChain[i]));
+            const ImVec2 size = ne::GetNodeSize(ne::NodeId(kChain[i]));
+            REQUIRE_FALSE(away.Overlaps(ImRect(pos, pos + size)));   // really culled
+            CHECK(size.x == Approx(sizes[i].x).margin(0.5f));
+            CHECK(size.y == Approx(sizes[i].y).margin(0.5f));
+        }
+        ne::SetCurrentEditor(nullptr);
+
+        // A structural re-seed (what Add Pass / Ctrl+Z run through) re-arms the
+        // fit while the view is still away: it must frame the same chain the
+        // opening fit framed, not a taller phantom.
+        doc.ApplyPassListState(doc.CapturePassListState());
+        for (int i = 0; i < 10; ++i)
+            frame();
+
+        ne::SetCurrentEditor(doc.PassCanvasContext());
+        const ImRect refit = editor->GetViewRect();
+        CHECK(refit.Min.x == Approx(fitView.Min.x).margin(1.0f));
+        CHECK(refit.Min.y == Approx(fitView.Min.y).margin(1.0f));
+        CHECK(refit.Max.x == Approx(fitView.Max.x).margin(1.0f));
+        CHECK(refit.Max.y == Approx(fitView.Max.y).margin(1.0f));
+        for (int i = 0; i < 3; ++i)
+        {
+            CAPTURE(i);
+            const ImVec2 pos = ne::GetNodePosition(ne::NodeId(kChain[i]));
+            const ImVec2 size = ne::GetNodeSize(ne::NodeId(kChain[i]));
+            CHECK(refit.Contains(ImRect(pos, pos + size)));
+        }
+        ne::SetCurrentEditor(nullptr);
+    }
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+}
