@@ -109,6 +109,10 @@ namespace Arcane::Editor
     [[nodiscard]] std::string EllipsisToWidth(std::string_view text, float maxWidth,
                                               std::string_view ellipsis = "...");
 
+    // The no-image line of a preview box (s5.2): dim, wrapped to the current
+    // content region's width and centred in it on both axes.
+    void CenteredTextDisabled(std::string_view text);
+
     // Two-column field region (UE's Details-panel shape: label left in one
     // column, value right, one draggable split shared by every section).
     //

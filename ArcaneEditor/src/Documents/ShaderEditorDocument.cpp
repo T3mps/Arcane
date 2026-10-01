@@ -2206,6 +2206,7 @@ namespace Arcane::Editor
         // and a SameLine as a window's first call pulls the cursor up onto the
         // line above. Hence the explicit flag rather than an unconditional
         // SameLine.
+        const PreviewStatus status = ComputeStatus();   // T1's model (s3.2): the toolbar and the toggle read one answer
         bool anyBefore = false;
         if (!IsInstance())
         {
@@ -2223,12 +2224,16 @@ namespace Arcane::Editor
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
                 ImGui::SameLine();
-                // m_showNodePreviews gates DrawNodePreviewImage's Output-node
-                // branch -- the ONE live thumbnail on this canvas (the
-                // material's real preview). That is its whole job, which is
-                // why this is a plain Checkbox with no on-change action:
-                // there is nothing to resubmit on a flip.
-                ImGui::Checkbox("Thumbs", &m_showNodePreviews);
+                // "Output preview" (s5.2): gates DrawNodePreviewImage's
+                // Output-node copy only, and is disabled while there is no
+                // image to copy -- the tooltip says why.
+                ImGui::BeginDisabled(!status.image);
+                ImGui::Checkbox("Output preview", &m_showNodePreviews);
+                ImGui::EndDisabled();
+                if (!status.image &&
+                    ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Shows the material preview on the Output node. Unavailable: %s",
+                                      NoPreviewReason(status).c_str());
             }
             // The vertex stage (%{VERTEX_BODY}): graph-owned materials author
             // it with the Vertex Output NODE and view it inside the HLSL
@@ -2309,17 +2314,15 @@ namespace Arcane::Editor
             RegenerateFromGraph();
         }
         ImGui::SameLine();
-        // Mesh materials never compile here (Rebuild()'s own guard) -- without
-        // this branch the fallback below would read "compiling..." forever,
-        // implying a stuck job that was never submitted in the first place.
-        if (meshSurface)
-            ImGui::TextDisabled("not compiled here");
-        else if (HasErrors())
-            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "errors");
-        else if (PreviewReady())
-            ImGui::TextDisabled("ok");
+        // Two statuses in one line, compile then preview (s5.2, 9.8): never
+        // "compiling..." for a finished compile that simply has no device.
+        const std::string statusText = ToolbarStatusText(status);
+        if (status.compile == CompileStatus::Errors)
+            ImGui::TextColored(Theme::kError, "%s", statusText.c_str());
+        else if (status.compile == CompileStatus::CompilerUnavailable)
+            ImGui::TextColored(Theme::kAmber, "%s", statusText.c_str());
         else
-            ImGui::TextDisabled("compiling...");
+            ImGui::TextDisabled("%s", statusText.c_str());
         ImGui::Separator();
         DrawSaveWithErrorsConfirm();
     }
@@ -3489,7 +3492,7 @@ namespace Arcane::Editor
         }
         else
         {
-            ImGui::TextDisabled("compiling...");
+            CenteredTextDisabled(PreviewBoxText(ComputeStatus()));
         }
         ImGui::EndChild();
     }

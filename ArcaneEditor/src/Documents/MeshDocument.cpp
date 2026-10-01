@@ -1,7 +1,9 @@
 #include "Documents/MeshDocument.hpp"
 
 #include "Panels/AssetPanelModel.hpp"
-#include "Widgets/EditorWidgets.hpp"   // RangedDragFloat/RangedDragInt
+#include "Documents/PreviewStatus.hpp"
+#include "Widgets/EditorTheme.hpp"     // Theme::kError: the validation reason's colour
+#include "Widgets/EditorWidgets.hpp"   // RangedDragFloat/RangedDragInt, CenteredTextDisabled
 
 // The preview vehicle. Include-order note for anything moved above it: this
 // reaches <NRI.h> and Extensions/NRIDeviceCreation.h, whose nri::Message
@@ -489,70 +491,44 @@ namespace Arcane::Editor
         ImGui::Separator();
 
         // ---- preview -------------------------------------------------------
-        // ORDER IS LOAD-BEARING (fix-round Finding 1): m_validationReason is
-        // checked FIRST, ahead of the texture id. A vehicle's offscreen
-        // texture is non-null (PreviewTextureId() != 0) the INSTANT
-        // CreateOffscreen succeeds -- long before any frame has rendered
-        // into it -- so in ANY session that actually has a GPU device, the
-        // texture id is non-zero from the moment this document opens,
-        // regardless of whether the current data is valid. Checking the id
-        // first made the reason branch dead code in exactly the real-editor
-        // case it exists for: a hand-edited invalid file is the ONE
-        // situation ValidateMeshAsset's refusal is reachable at all (every
-        // WIDGET below is bounded at its floor), and that is precisely when
-        // the user needs to read why. RenderPreview() (see its own comment)
-        // still records a frame for the invalid case, so the texture holds a
-        // clean cleared image rather than garbage -- but this document shows
-        // the REASON over that image regardless, because a clean blank
-        // picture answers "what" and not "why".
-        const bool imported = (m_data.source == Arcane::MeshSource::Imported);
+        // ORDER IS LOAD-BEARING (fix-round Finding 1): the reason before the
+        // image. A vehicle's offscreen texture is non-null (PreviewTextureId()
+        // != 0) the INSTANT CreateOffscreen succeeds -- long before any frame
+        // has rendered into it -- so in ANY session that actually has a GPU
+        // device, an image check first would make the reason branch dead code
+        // in exactly the real-editor case it exists for: a hand-edited invalid
+        // file is the ONE situation ValidateMeshAsset's refusal is reachable
+        // at all (every WIDGET below is bounded at its floor), and that is
+        // precisely when the user needs to read why. RenderPreview() (see its
+        // own comment) still records a frame for the invalid case, so the
+        // texture holds a clean cleared image rather than garbage -- but this
+        // document shows the REASON over that image regardless, because a
+        // clean blank picture answers "what" and not "why".
         ImGui::BeginChild("##meshpreview", ImVec2(0.0f, 220.0f), ImGuiChildFlags_Borders);
-        const std::uint64_t texId = PreviewTextureId();
+        const PreviewStatus status = ComputeStatus();   // T1's mesh inputs (s3.2)
         if (m_validationReason)
         {
-            // Same severity colour ProblemsPanel/Console use for
-            // DiagSeverity::Error (InspectorView.cpp's dangling-reference
-            // styling cites the same literal -- no named Theme constant
-            // exists for it yet).
+            // The Errors arm: the reason IS this box's text -- ValidateMeshAsset names the field.
             ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.35f, 1.0f), "%s", m_validationReason->c_str());
+            ImGui::TextColored(Theme::kError, "%s", m_validationReason->c_str());
             ImGui::PopTextWrapPos();
         }
-        else if (imported)
+        else if (status.image && status.compile != CompileStatus::NotCompiledHere)
         {
-            // I4: no procedural preview for an imported mesh (RebuildPreviewMesh
-            // never builds one) -- its geometry is the cooked artifact's, drawn
-            // by the scene. Checked BEFORE the texture id for the same reason
-            // the validation reason is: a device-backed session has a non-zero
-            // id from construction, holding only a cleared frame here.
-            ImGui::TextDisabled("(imported mesh -- preview in the viewport)");
-        }
-        else if (texId != 0)
-        {
+            // I4: an imported mesh never gets a procedural preview
+            // (RebuildPreviewMesh never builds one) -- whatever the vehicle
+            // presented for it is a cleared frame, so it reads as its reason
+            // below instead (s3.2's image bit does not consult the compile).
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             const float fit = (std::min)(avail.x, avail.y) / static_cast<float>(kPreviewSize);
             const float side = static_cast<float>(kPreviewSize) * (fit > 0.0f ? fit : 1.0f);
-            ImGui::Image(static_cast<ImTextureID>(texId), ImVec2(side, side));
-        }
-        else if (ComputeStatus().preview == PreviewAvailability::NoDevice)
-        {
-            // The device-less test case, and any real session with no NRI
-            // device at all -- EnsurePreviewContext() never even attempted
-            // CreateOffscreen (fix-round Finding 3: this branch used to also
-            // catch the two cases below, which DO have a device).
-            ImGui::TextDisabled("(no preview -- no GPU device)");
+            ImGui::Image(static_cast<ImTextureID>(PreviewTextureId()), ImVec2(side, side));
         }
         else
         {
-            // A device exists, but there is no vehicle: either
-            // CreateOffscreen refused at construction, or a prior frame
-            // failed and DestroyPreviewContext dropped it (RenderPreview's
-            // FrameOutcome::Failed branch) -- both already logged (ARC_WARN/
-            // ARC_ERROR) at the point they happened. Deliberately NOT
-            // claiming "no GPU device" here, which fix-round Finding 3
-            // caught as false in exactly the situation someone would be
-            // debugging a real device.
-            ImGui::TextDisabled("(no preview -- the preview vehicle is unavailable; see the log)");
+            // Every other state names itself (s5.2): an imported mesh, no GPU
+            // device, a failed vehicle or frame -- never "compiling...".
+            CenteredTextDisabled(PreviewBoxText(status));
         }
         ImGui::EndChild();
 

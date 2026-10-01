@@ -580,6 +580,21 @@ namespace Arcane::Editor
         return out;
     }
 
+    void CenteredTextDisabled(std::string_view text)
+    {
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        const float wrap = (std::max)(avail.x, 1.0f);
+        const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size(), false, wrap);
+        const ImVec2 cur = ImGui::GetCursorPos();
+        ImGui::SetCursorPos(ImVec2(cur.x + (std::max)(0.0f, (avail.x - size.x) * 0.5f),
+                                   cur.y + (std::max)(0.0f, (avail.y - size.y) * 0.5f)));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + size.x + 1.0f);   // +1: re-wrap at the measured width, never earlier
+        ImGui::TextUnformatted(text.data(), text.data() + text.size());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+
     FieldGrid::FieldGrid(const char* id, float& labelColWidth)
         : m_open(BeginFieldGrid(id, labelColWidth))
     {

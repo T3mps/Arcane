@@ -47,10 +47,12 @@
 #include <imgui_internal.h>   // FindWindowByName / GetActiveID / ActiveIdWindow
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 
 using Arcane::Editor::MeshDocument;
 namespace fs = std::filesystem;
@@ -527,15 +529,20 @@ namespace
     // InputActionsDocumentUiTest.cpp's DocUi shape: own context, software font
     // atlas, the document drawn FIRST (as DocumentHost::DrawAll does), then a
     // pinned "Inspector" window drawing its page (as DrawInspectorWindows does).
-    // Device-less services: the preview child shows its "(no preview -- no GPU
-    // device)" line, so the document window still has content.
+    // Device-less services: the preview child shows its "No preview -- no GPU
+    // device" line, so the document window still has content.
     struct MeshPageUi
     {
         ImGuiContext* prev = nullptr;
         ImGuiContext* ctx = nullptr;
         Arcane::Editor::PropertyGridState grid;
-        MeshDocument doc{ MeshDocument::Services{}, FixturePath(), Fixture() };   // a Cube: the form's first widget is the Source combo
-        MeshPageUi()
+        std::unordered_map<std::string, ImVec2> probe;     // value-widget centres by row label
+        std::function<void()> beforePage;                  // runs inside "Inspector" before the page (ActivateItemByID)
+        bool log = false;
+        std::string docLog, pageLog;                       // each window's LogToBuffer text, when `log`
+        MeshDocument doc;                                  // default Fixture(): a Cube, the form's first widget is the Source combo
+        explicit MeshPageUi(MeshDocument::Services s = {}, Arcane::MeshAssetData d = Fixture())
+            : doc(std::move(s), FixturePath(), std::move(d))
         {
             prev = ImGui::GetCurrentContext();
             ctx = ImGui::CreateContext();
@@ -545,25 +552,33 @@ namespace
             io.IniFilename = nullptr;
             unsigned char* px = nullptr; int w = 0, h = 0;
             io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+            grid.probe = &probe;
         }
         ~MeshPageUi() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
         void Frame()
         {
             ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_Always);
             bool close = false;
+            if (log) ImGui::LogToBuffer();
             doc.Draw(close);
+            if (log) { docLog = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
             ImGui::SetNextWindowPos(ImVec2(820, 0), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(700, 880), ImGuiCond_Always);
             ImGui::Begin("Inspector");
+            if (beforePage) beforePage();
+            if (log) ImGui::LogToBuffer();
             { Arcane::Editor::PropertyGrid g(grid); if (auto* page = doc.Page()) page->Draw(g); }
+            if (log) { pageLog = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
             ImGui::End();
             ImGui::Render();
         }
         void Move(ImVec2 p) { ImGui::GetIO().AddMousePosEvent(p.x, p.y); Frame(); }
         void Button(int b, bool down) { ImGui::GetIO().AddMouseButtonEvent(b, down); Frame(); }
+        ImVec2 At(const std::string& label) { INFO(label); REQUIRE(probe.count(label) == 1); return probe.at(label); }
     };
 }
 
@@ -658,3 +673,13 @@ TEST_CASE("MeshDocument: the first non-null chromeGraph makes Tick build the pre
     CHECK(st.image);                             // a Presented frame landed
     CHECK(doc.PreviewTextureId() != 0);
 }   // no retire sink: ~MeshDocument invalidates against the hud recorded at creation, then chrome dies
+
+TEST_CASE("MeshDocument: a device-less document's preview box says why -- no GPU device (s5.2)", "[editor][mesh][preview]")
+{
+    MeshPageUi h;
+    h.log = true;
+    h.Frame(); h.Frame();
+    INFO(h.docLog);
+    CHECK(h.docLog.find("No preview -- no GPU device") != std::string::npos);
+    CHECK(Arcane::Editor::PreviewBoxText(h.doc.ComputeStatus()) == "No preview -- no GPU device");
+}

@@ -19,6 +19,7 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/OffscreenVehicle.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
+#include <Arcane/Material/MaterialGraph.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
@@ -1518,6 +1519,102 @@ TEST_CASE("ShaderEditorDocument: the material page body never repeats the title 
     INFO(logged);
     CHECK(logged.find("not compiled here") != std::string::npos);   // the control: the body drew
     CHECK(logged.find("TitleProbe") == std::string::npos);          // no title line
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+}
+
+TEST_CASE("ShaderEditorDocument: the toolbar names the real state -- no compiler, mesh surface (s5.2)", "[editor][material][preview]")
+{
+    const fs::path dir = TempDir("toolbar_status");
+    Arcane::MaterialAssetData full;
+    full.id = Arcane::Guid::Generate(); full.name = "Full"; full.snippet = kSnippet;
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "full.arcmat", full));
+    Arcane::MaterialAssetData mesh;
+    mesh.id = Arcane::Guid::Generate(); mesh.name = "Mesh"; mesh.kind = "mesh";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "mesh.arcmat", mesh));
+    ShaderEditorDocument noCompiler(DocServices{}, dir / "full.arcmat", *Arcane::LoadMaterialAsset(dir / "full.arcmat"));
+    CHECK(Arcane::Editor::ToolbarStatusText(noCompiler.ComputeStatus())
+          == "not compiled -- shader compiler unavailable (see the log)");
+    ShaderEditorDocument meshDoc(DocServices{}, dir / "mesh.arcmat", *Arcane::LoadMaterialAsset(dir / "mesh.arcmat"));
+    CHECK(Arcane::Editor::ToolbarStatusText(meshDoc.ComputeStatus()) == "not compiled here");
+}
+
+TEST_CASE("ShaderEditorDocument: \"Output preview\" replaces Thumbs and is disabled with no image", "[editor][material][preview]")
+{
+    Arcane::MaterialGraph g;
+    Arcane::GraphNode out; out.id = 1; out.type = Arcane::GraphNodeType::Output; out.posX = 420.0f; out.posY = 200.0f;
+    Arcane::GraphNode color; color.id = 2; color.type = Arcane::GraphNodeType::ConstColor; color.posX = 160.0f; color.posY = 200.0f;
+    g.nodes = { out, color };
+    Arcane::GraphLink l; l.fromNode = 2; l.toNode = 1;
+    g.links.push_back(l);
+    g.nextId = 3;
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate(); data.name = "thumbs"; data.kind = "fullscreen";
+    const auto gen = Arcane::GenerateGraphSnippet(g);
+    REQUIRE(gen.Ok());
+    data.snippet = gen.snippet;
+    data.graph = std::move(g);
+
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    {
+        ShaderEditorDocument doc(DocServices{}, fs::path("thumbs.arcmat"), std::move(data));
+        std::string logged;
+        ImGuiID toggle = 0;
+        const auto frame = [&](bool log)
+        {
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            if (toggle) ImGui::ActivateItemByID(toggle);
+            if (log) ImGui::LogToBuffer();
+            bool close = false;
+            doc.Draw(close);
+            if (log) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
+            ImGui::Render();
+        };
+        frame(false); frame(true);
+        INFO(logged);
+        CHECK(logged.find("Output preview") != std::string::npos);
+        CHECK(logged.find("Thumbs") == std::string::npos);
+        CHECK(logged.find("not compiled -- shader compiler unavailable (see the log)") != std::string::npos);
+        ImGuiWindow* docWindow = nullptr;
+        for (ImGuiWindow* win : ctx->Windows)
+            if (std::string(win->Name).find("###matdoc_") != std::string::npos && !(win->Flags & ImGuiWindowFlags_ChildWindow)) docWindow = win;
+        REQUIRE(docWindow != nullptr);
+        const ImGuiID toggleId = docWindow->GetID("Output preview");
+        toggle = toggleId;
+        frame(false);
+        toggle = 0;
+        frame(false);
+        CHECK(doc.ShowNodePreviews());      // a disabled checkbox refuses nav activation (imgui_widgets.cpp:693)
+
+        // ...and that refusal is the DISABLED flag, not a missed id: sweep the
+        // toolbar row until ImGui reports the toggle hovered. A disabled item
+        // still claims HoveredId but raises HoveredIdIsDisabled (ItemHoverable).
+        const float rowY = docWindow->ContentRegionRect.Min.y + ImGui::GetFrameHeight() * 0.5f;
+        bool hovered = false;
+        for (float x = docWindow->ContentRegionRect.Min.x; x < docWindow->ContentRegionRect.Max.x && !hovered; x += 4.0f)
+        {
+            io.AddMousePosEvent(x, rowY);
+            frame(false);
+            hovered = ctx->HoveredId == toggleId;
+        }
+        REQUIRE(hovered);
+        CHECK(ctx->HoveredIdIsDisabled);
+        // Held still past the tooltip delay, the box says why it is unavailable
+        // (NoPreviewReason: the device-less preview outranks the compile).
+        for (int i = 0; i < 30; ++i)
+            frame(false);
+        frame(true);
+        INFO(logged);
+        CHECK(logged.find("Shows the material preview on the Output node. Unavailable: no GPU device") != std::string::npos);
+    }
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 }

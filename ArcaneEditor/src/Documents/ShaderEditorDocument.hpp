@@ -417,6 +417,8 @@ namespace Arcane::Editor
         // A save gesture parked behind the save-with-errors confirm (the modal
         // opens at the next draw of the document window or its page).
         [[nodiscard]] bool SaveWithErrorsPending() const noexcept { return m_confirmSaveWithErrors; }
+        // The "Output preview" toggle's state (s5.2). Test seam.
+        [[nodiscard]] bool ShowNodePreviews() const noexcept { return m_showNodePreviews; }
         // What Ctrl+S runs -- the document's own Shortcut AND the Inspector
         // page's (RequestSaveFromInspector). Carries the error guard the
         // toolbar's Save button used to own: writing a material that does not
