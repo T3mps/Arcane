@@ -285,6 +285,10 @@ namespace Arcane::Editor
         // into the Problems panel, ahead of the compile diags. Exposed for
         // the headless tests.
         const std::vector<std::string>& ParseErrors() const { return m_parseErrors; }
+        // Pending assisted renames (BeginParamRename's queue). Exposed for the
+        // headless tests, like ParseErrors.
+        [[nodiscard]] const std::vector<std::pair<std::string, std::string>>& PendingParamRenames() const noexcept
+        { return m_paramRenames; }
 
         // Undo plumbing (doc-identity commands, review M3): apply a param
         // override edit to the CURRENT instance. Undo steps hold the document
@@ -496,6 +500,24 @@ namespace Arcane::Editor
         // neutral read-only, else a live literal row with Reset.
         void DrawNodePageInputRow(PropertyGrid& grid, std::size_t pass, std::uint32_t id, std::uint32_t pin);
         void DrawNodePageSettings(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        // One live numeric/vector row (s5.1.5): read into a local, draw, open the
+        // gesture with GraphEditBuilder(undoLabel, pass), write through to the
+        // RE-RESOLVED node when the local differs, close with EndAfterRow.
+        void LiveNodeFloats(PropertyGrid& grid, const char* label, const char* undoLabel,
+                            std::size_t pass, std::uint32_t id, int lanes,
+                            Arcane::FunctionRef<float*(Arcane::GraphNode&)> field);
+        // The colour form: the same plus ColorRow's popup pair under popupLabel.
+        void LiveNodeColor(PropertyGrid& grid, const char* label, const char* undoLabel, const char* popupLabel,
+                           std::size_t pass, std::uint32_t id, bool hdr,
+                           Arcane::FunctionRef<float*(Arcane::GraphNode&)> field);
+        // Commit-only text rows (s5.1.5): the STORED commit captures the anchor and
+        // (pass, id, pin) by value, re-resolves when it fires, and drops the edit
+        // when the document or the node is gone.
+        enum class NodeTextField : std::uint8_t { ParamName, SwizzleMask, CommentText, CustomPinName };
+        void NodeTextRow(PropertyGrid& grid, const char* label, std::string_view current,
+                         std::size_t pass, std::uint32_t id, NodeTextField field, std::uint32_t pin = 0);
+        void CommitNodeText(std::size_t pass, std::uint32_t id, NodeTextField field, std::uint32_t pin,
+                            const std::string& text);
         void DrawNodePageOutputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
         void DrawNodePageErrors(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
         // Compile diagnostics mapped to ONE node of ANY pass: the per-pass

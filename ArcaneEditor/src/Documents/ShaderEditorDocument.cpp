@@ -2542,7 +2542,275 @@ namespace Arcane::Editor
         EditGesture::EndAfterRow(stack, m_gesture, ev.cancelled);
     }
 
-    void ShaderEditorDocument::DrawNodePageSettings(PropertyGrid&, std::size_t, std::uint32_t) {}   // T3-B5
+    void ShaderEditorDocument::LiveNodeFloats(PropertyGrid& grid, const char* label, const char* undoLabel,
+                                              std::size_t pass, std::uint32_t id, int lanes,
+                                              Arcane::FunctionRef<float*(Arcane::GraphNode&)> field)
+    {
+        Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        float local[4] = {};
+        std::memcpy(local, field(*n), sizeof(float) * static_cast<std::size_t>(lanes));
+        if (lanes == 1)
+            (void)grid.FloatRow(label, local[0], 0.01f, std::nullopt, "%.3f");
+        else
+            (void)grid.VecRow(label, local, lanes, 0.01f, std::nullopt, "%.3f");
+        const bool cancelled = grid.LastRowEvents().cancelled;
+        Arcane::CommandStack* stack = UndoStack();
+        // The snapshot is taken BEFORE this frame's write: pre-edit on the activation frame.
+        EditGesture::BeginOnActivate(stack, m_gesture, [&] { return std::string(undoLabel); },
+                                     [&] { return GraphEditBuilder(undoLabel, pass); });
+        if (Arcane::GraphNode* w = FindGraphNode(pass, id))
+        {
+            float* dst = field(*w);
+            bool differs = false;
+            for (int i = 0; i < lanes; ++i)
+                differs = differs || dst[i] != local[i];
+            if (differs)   // includes the seed an Esc restored: written back, the graph compares equal, no step
+            {
+                std::memcpy(dst, local, sizeof(float) * static_cast<std::size_t>(lanes));
+                NoteGraphValueEdited();
+            }
+        }
+        EditGesture::EndAfterRow(stack, m_gesture, cancelled);
+    }
+
+    void ShaderEditorDocument::LiveNodeColor(PropertyGrid& grid, const char* label, const char* undoLabel,
+                                             const char* popupLabel, std::size_t pass, std::uint32_t id, bool hdr,
+                                             Arcane::FunctionRef<float*(Arcane::GraphNode&)> field)
+    {
+        Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        float local[4];
+        std::memcpy(local, field(*n), sizeof(local));
+        ImGuiID popupId = 0;
+        (void)grid.ColorRow(label, local, &popupId, hdr);
+        const bool cancelled = grid.LastRowEvents().cancelled;
+        Arcane::CommandStack* stack = UndoStack();
+        EditGesture::BeginOnActivate(stack, m_gesture, [&] { return std::string(undoLabel); },
+                                     [&] { return GraphEditBuilder(undoLabel, pass); });
+        if (popupId != 0)   // snapshot before this frame's write: pre-edit on the opening frame
+            EditGesture::BeginOnPopupOpen(stack, m_gesture, popupId, [&] { return std::string(popupLabel); },
+                                          [&] { return GraphEditBuilder(popupLabel, pass); });
+        if (Arcane::GraphNode* w = FindGraphNode(pass, id); w && std::memcmp(field(*w), local, sizeof(local)) != 0)
+        {
+            std::memcpy(field(*w), local, sizeof(local));
+            NoteGraphValueEdited();
+        }
+        EditGesture::EndAfterRow(stack, m_gesture, cancelled);
+        if (popupId != 0)
+            EditGesture::EndOnPopupClose(stack, m_gesture, popupId);
+    }
+
+    void ShaderEditorDocument::NodeTextRow(PropertyGrid& grid, const char* label, std::string_view current,
+                                           std::size_t pass, std::uint32_t id, NodeTextField field, std::uint32_t pin)
+    {
+        // CommitOrphans can fire this AFTER the selection moved or the document
+        // closed (InspectorWindows.cpp:337-340): never read the page's target or `this`.
+        std::weak_ptr<ShaderEditorDocument*> anchor = m_anchor;
+        (void)grid.TextRow(label, current, [anchor, pass, id, field, pin](std::string text)
+        {
+            const std::shared_ptr<ShaderEditorDocument*> doc = anchor.lock();
+            if (!doc || !*doc)
+                return;
+            (*doc)->DeferNodeEdit([anchor, pass, id, field, pin, text = std::move(text)]
+            {
+                const std::shared_ptr<ShaderEditorDocument*> live = anchor.lock();
+                if (live && *live)
+                    (*live)->CommitNodeText(pass, id, field, pin, text);
+            });
+        });
+    }
+
+    void ShaderEditorDocument::CommitNodeText(std::size_t pass, std::uint32_t id, NodeTextField field,
+                                              std::uint32_t pin, const std::string& text)
+    {
+        // No name validation here (drafting pick 9.28 #22): codegen is the one
+        // validator, and its verdict shows in Errors.
+        Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;   // the node died: drop the edit
+        switch (field)
+        {
+            case NodeTextField::ParamName:
+            {
+                const std::string oldName = n->paramName;
+                if (RunNodeEdit("Rename Param", pass, id, [&text](Arcane::GraphNode& node, Arcane::MaterialGraph&) { node.paramName = text; }))
+                    BeginParamRename(oldName, std::string(text));   // copies: it re-scans every pass's nodes
+                return;
+            }
+            case NodeTextField::SwizzleMask:
+                (void)RunNodeEdit("Edit Swizzle", pass, id, [&text](Arcane::GraphNode& node, Arcane::MaterialGraph&) { node.swizzleMask = text; });
+                return;
+            case NodeTextField::CommentText:
+                (void)RunNodeEdit("Edit Comment", pass, id, [&text](Arcane::GraphNode& node, Arcane::MaterialGraph&) { node.paramName = text; },
+                                  /*recompile*/ false);
+                return;
+            case NodeTextField::CustomPinName:
+                // Links address pins by index: nothing re-wires, and the HLSL body is never rewritten.
+                (void)RunNodeEdit("Rename Pin", pass, id, [&text, pin](Arcane::GraphNode& node, Arcane::MaterialGraph&)
+                                  { if (pin < node.customPins.size()) node.customPins[pin].name = text; });
+                return;
+        }
+    }
+
+    void ShaderEditorDocument::DrawNodePageSettings(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        using GT = Arcane::GraphNodeType;
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        switch (n->type)
+        {
+            case GT::ConstFloat: case GT::ConstFloat2: case GT::ConstFloat4: case GT::ConstColor:
+            case GT::Param: case GT::TextureSample: case GT::Swizzle: case GT::PassInput:
+            case GT::Panner: case GT::Custom: case GT::Comment:
+                break;
+            default:
+                return;   // pin literals only: no Settings section
+        }
+        if (!grid.Section("Settings"))
+            return;
+        static constexpr const char* kWidthNames[] = { "float", "float2", "float4" };
+        static constexpr int kWidths[] = { 1, 2, 4 };
+        const auto widthIndex = [](int w) { return w == 1 ? 0 : w == 2 ? 1 : 2; };
+        // Combos, checkboxes and buttons queue ONE discrete step each (s5.1.4 step 5).
+        const auto discrete = [this, pass, id](const char* label, std::function<void(Arcane::GraphNode&)> set)
+        {
+            DeferNodeEdit([this, pass, id, label, set = std::move(set)]
+            { (void)RunNodeEdit(label, pass, id, [&set](Arcane::GraphNode& node, Arcane::MaterialGraph&) { set(node); }); });
+        };
+
+        if (n->type == GT::Custom)
+        {
+            if (grid.SubSection("Pins"))
+            {
+                {
+                    PropertyGrid::Rows rows(grid, "##pins");
+                    if (rows)
+                    {
+                        const std::uint32_t count = static_cast<std::uint32_t>(n->customPins.size());
+                        for (std::uint32_t k = 0; k < count; ++k)
+                        {
+                            const Arcane::GraphNode* cur = FindGraphNode(pass, id);
+                            if (!cur || k >= cur->customPins.size())
+                                break;
+                            ImGui::PushID(static_cast<int>(k));
+                            NodeTextRow(grid, "Name", cur->customPins[k].name, pass, id, NodeTextField::CustomPinName, k);
+                            ImGui::SetItemTooltip("Renaming does not edit the HLSL body");
+                            if (const int picked = grid.ComboRow("Width", kWidthNames, 3, widthIndex(cur->customPins[k].width)); picked >= 0)
+                                discrete("Pin Width", [k, w = kWidths[picked]](Arcane::GraphNode& node)
+                                         { if (k < node.customPins.size()) node.customPins[k].width = w; });
+                            static constexpr const char* kRemove[] = { "Remove" };
+                            if (grid.ButtonRow("", kRemove, 1) == 0)
+                                DeferNodeEdit([this, pass, id, k] { (void)RemoveCustomPin(pass, id, k); });
+                            ImGui::PopID();
+                        }
+                        static constexpr const char* kAdd[] = { "Add Pin" };
+                        if (grid.ButtonRow("", kAdd, 1) == 0)
+                            DeferNodeEdit([this, pass, id] { (void)AddCustomPin(pass, id); });
+                    }
+                }
+                grid.EndSubSection();
+            }
+        }
+
+        PropertyGrid::Rows rows(grid, "##settings");
+        if (!rows)
+            return;
+        n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        switch (n->type)
+        {
+            case GT::ConstFloat:
+            case GT::ConstFloat2:
+            case GT::ConstFloat4:
+                LiveNodeFloats(grid, "Value", "Edit Value", pass, id,
+                               n->type == GT::ConstFloat ? 1 : n->type == GT::ConstFloat2 ? 2 : 4,
+                               [](Arcane::GraphNode& node) { return node.value; });
+                break;
+            case GT::ConstColor:   // hdr: a ConstColor feeds raw maths and may exceed 1
+                LiveNodeColor(grid, "Color", "Edit Value", "Edit Color", pass, id, /*hdr*/ true,
+                              [](Arcane::GraphNode& node) { return node.value; });
+                break;
+            case GT::Param:
+            {
+                NodeTextRow(grid, "Name", n->paramName, pass, id, NodeTextField::ParamName);
+                static constexpr const char* kTypeNames[] = { "float", "float2", "float4", "color" };
+                static constexpr Arcane::MatParamType kTypes[] = { Arcane::MatParamType::Float, Arcane::MatParamType::Float2,
+                                                                   Arcane::MatParamType::Float4, Arcane::MatParamType::Color };
+                int typeIdx = 0;
+                for (int t = 0; t < 4; ++t)
+                    if (kTypes[t] == n->paramType)
+                        typeIdx = t;
+                if (const int picked = grid.ComboRow("Type", kTypeNames, 4, typeIdx); picked >= 0)
+                    discrete("Param Type", [t = kTypes[picked]](Arcane::GraphNode& node) { node.paramType = t; node.paramDefault.type = t; });
+                if (n->paramType == Arcane::MatParamType::Color)
+                    LiveNodeColor(grid, "Default", "Param Default", "Param Default", pass, id, /*hdr*/ false,
+                                  [](Arcane::GraphNode& node) { return node.paramDefault.f; });
+                else
+                    LiveNodeFloats(grid, "Default", "Param Default", pass, id,
+                                   static_cast<int>(Arcane::ComponentCount(n->paramType)),
+                                   [](Arcane::GraphNode& node) { return node.paramDefault.f; });
+                n = FindGraphNode(pass, id);
+                if (!n)
+                    break;
+                bool ranged = n->hasRange;
+                if (grid.CheckboxRow("Range", ranged))
+                    discrete("Param Range", [ranged](Arcane::GraphNode& node) { node.hasRange = ranged; });
+                if (n->hasRange)
+                {
+                    LiveNodeFloats(grid, "Min", "Param Range", pass, id, 1, [](Arcane::GraphNode& node) { return &node.rangeMin; });
+                    LiveNodeFloats(grid, "Max", "Param Range", pass, id, 1, [](Arcane::GraphNode& node) { return &node.rangeMax; });
+                }
+                break;
+            }
+            case GT::TextureSample:
+                NodeTextRow(grid, "Texture Param", n->paramName, pass, id, NodeTextField::ParamName);
+                break;
+            case GT::Swizzle:
+                NodeTextRow(grid, "Mask", n->swizzleMask, pass, id, NodeTextField::SwizzleMask);
+                break;
+            case GT::PassInput:
+            {
+                static constexpr const char* kSlots[] = { "in0", "in1", "in2", "in3" };
+                static_assert(std::size(kSlots) == Arcane::kMaxPassInputs);
+                if (const int picked = grid.ComboRow("Slot", kSlots, 4, static_cast<int>(n->passInputSlot % Arcane::kMaxPassInputs)); picked >= 0)
+                    discrete("Input Slot", [picked](Arcane::GraphNode& node) { node.passInputSlot = static_cast<std::uint32_t>(picked); });
+                break;
+            }
+            case GT::Panner:
+            {
+                bool frac = n->pannerFractional;
+                if (grid.CheckboxRow("Fractional", frac))
+                    discrete("Panner Fraction", [frac](Arcane::GraphNode& node) { node.pannerFractional = frac; });
+                break;
+            }
+            case GT::Custom:
+            {
+                if (const int picked = grid.ComboRow("Output", kWidthNames, 3, widthIndex(n->customOutWidth)); picked >= 0)
+                    discrete("Output Width", [w = kWidths[picked]](Arcane::GraphNode& node) { node.customOutWidth = w; });
+                std::string_view first = n->customBody;
+                first = first.substr(0, first.find('\n'));
+                if (!first.empty() && first.back() == '\r')
+                    first.remove_suffix(1);
+                grid.ReadOnlyRow("Body", first);
+                if (!n->customBody.empty())
+                    ImGui::SetItemTooltip("%s", n->customBody.c_str());   // last-wins over the ellipsis tooltip
+                static constexpr const char* kEdit[] = { "Edit HLSL..." };
+                if (grid.ButtonRow("", kEdit, 1) == 0)
+                    RequestBodyEdit(pass, id);   // DrawGraphModals opens it, canvas drawn or not
+                break;
+            }
+            case GT::Comment:   // size is not exposed (s5.1.9)
+                NodeTextRow(grid, "Text", n->paramName, pass, id, NodeTextField::CommentText);
+                break;
+            default:
+                break;
+        }
+    }
 
     void ShaderEditorDocument::DrawNodePageOutputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
     {

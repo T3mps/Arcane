@@ -2518,3 +2518,142 @@ TEST_CASE("Node page: a page on a NON-active pass edits that pass", "[editor][ma
     h.stack.Undo();
     CHECK(h.Node(1, 3)->FindPinLiteral(0) == nullptr);      // undo targets pass 1 too
 }
+
+TEST_CASE("Node page Settings: the row set and sections per node type follow the s5.1.4 tables", "[editor][material][nodepage]")
+{
+    Arcane::MaterialGraph g;
+    AddNode(g, 1, T::Output);
+    AddNode(g, 2, T::ConstFloat);
+    AddNode(g, 3, T::ConstFloat2);
+    AddNode(g, 4, T::ConstColor);
+    { Arcane::GraphNode& p = AddNode(g, 5, T::Param); p.paramName = "k"; p.hasRange = true; }
+    { Arcane::GraphNode& t = AddNode(g, 6, T::TextureSample); t.paramName = "tex"; }
+    AddNode(g, 7, T::Swizzle);
+    AddNode(g, 8, T::PassInput);
+    AddNode(g, 9, T::Panner);
+    { Arcane::GraphNode& c = AddNode(g, 10, T::Custom); c.customPins = { { "p1", 1 } }; c.customBody = "return p1;\nreturn 2;"; }
+    { Arcane::GraphNode& c = AddNode(g, 11, T::Comment); c.paramName = "note"; }
+    AddNode(g, 12, T::Mul);
+    AddNode(g, 13, T::UV);
+    g.nextId = 14;
+    NodePageHarness h(GraphDoc(std::move(g)));
+    struct Expect { std::uint32_t id; std::vector<std::string> rows; bool inputs, settings, outputs; };
+    const Expect table[] = {
+        { 1,  { "color" },                                              true,  false, false },
+        { 2,  { "Value", "out" },                                       false, true,  true  },
+        { 3,  { "Value" },                                              false, true,  true  },
+        { 4,  { "Color" },                                              false, true,  true  },
+        { 5,  { "Name", "Type", "Default", "Range", "Min", "Max" },     false, true,  true  },
+        { 6,  { "uv", "Texture Param", "rgba", "a" },                   true,  true,  true  },
+        { 7,  { "x", "Mask", "out" },                                   true,  true,  true  },
+        { 8,  { "uv", "Slot" },                                         true,  true,  true  },
+        { 9,  { "uv", "speed", "Fractional" },                          true,  true,  true  },
+        { 10, { "p1", "Name", "Width", "#Remove", "#Add Pin", "Output", "Body", "#Edit HLSL..." }, true, true, true },
+        { 11, { "Text" },                                               false, true,  false },
+        { 12, { "a", "b", "out" },                                      true,  false, true  },
+        { 13, { "out" },                                                false, false, true  },
+    };
+    for (const Expect& e : table)
+    {
+        h.key = NodeKeyOf(0, e.id); h.Frame(); h.Frame();
+        INFO("node " << e.id << "\n" << h.log);
+        REQUIRE(h.pageDrawn);
+        for (const std::string& r : e.rows) { INFO(r); CHECK(h.probe.count(r) == 1); }
+        CHECK(HasSection(h.log, "Inputs") == e.inputs);
+        CHECK(HasSection(h.log, "Settings") == e.settings);
+        CHECK(HasSection(h.log, "Outputs") == e.outputs);
+    }
+    h.key = NodeKeyOf(0, 11); h.Frame();                     // s5.1.9: no Comment size row
+    CHECK(h.probe.size() == 1);                              // "Text" only
+    h.key = NodeKeyOf(0, 10); h.Frame();
+    CHECK(h.log.find("return p1;") != std::string::npos);    // Body = the FIRST line...
+    CHECK(h.log.find("return 2;") == std::string::npos);     // ...the rest is the tooltip
+}
+
+TEST_CASE("Node page Settings: a Param rename is ONE 'Rename Param' step and starts the assisted rename", "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    h.key = NodeKeyOf(0, 3); h.Frame(); h.Frame();
+    h.Click(h.Centre("Name"));
+    h.Type("glow");
+    h.Click(ImVec2(380.0f, 980.0f));                         // empty window space: deactivate = commit
+    CHECK(h.Node(0, 3)->paramName == "glow");
+    REQUIRE(h.stack.CanUndo());
+    CHECK(std::string(h.stack.UndoLabel()) == "Rename Param");
+    REQUIRE(h.doc->PendingParamRenames().size() == 1);
+    CHECK(h.doc->PendingParamRenames()[0] == std::pair<std::string, std::string>{ "tint", "glow" });
+    h.stack.Undo();
+    CHECK(h.Node(0, 3)->paramName == "tint");
+    CHECK_FALSE(h.stack.CanUndo());
+}
+
+TEST_CASE("Node page Settings: no page-side validation (codegen's verdict shows in Errors) and a pin rename never rewrites the body",
+          "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    h.key = NodeKeyOf(0, 3); h.Frame(); h.Frame();
+    h.Click(h.Centre("Name"));
+    h.Type("1bad");
+    h.Click(ImVec2(380.0f, 980.0f));
+    h.Frame();
+    CHECK(h.Node(0, 3)->paramName == "1bad");                // the page refused nothing
+    CHECK(HasSection(h.log, "Errors (1)"));
+    CHECK(h.log.find("not a valid identifier") != std::string::npos);
+
+    h.key = NodeKeyOf(0, 7); h.Frame(); h.Frame();
+    h.Click(h.Centre("Name"));
+    h.Type("q1");
+    h.Click(ImVec2(380.0f, 980.0f));
+    CHECK(h.Node(0, 7)->customPins[0].name == "q1");
+    CHECK(h.Node(0, 7)->customBody == "return p1;");         // untouched: the compile will say why
+    CHECK(std::string(h.stack.UndoLabel()) == "Rename Pin");
+}
+
+TEST_CASE("Node page Settings: Remove Pin routes through RemoveCustomPin as ONE step", "[editor][material][nodepage]")
+{
+    // Re-indexing an EARLIER pin is pinned on the shared member (T3-B2's test);
+    // the probe resolves "#Remove" to the LAST drawn pin, so this removes p2.
+    Arcane::MaterialGraph g = NodePageGraph();
+    g.FindNode(7)->customPins = { { "p1", 4 }, { "p2", 1 } };
+    AddNode(g, 10, T::ConstFloat);
+    g.links.push_back({ 10, 0, 7, 1 });
+    g.nextId = 11;
+    NodePageHarness h(GraphDoc(std::move(g)));
+    const std::string before = GraphJson(h, 0);
+    h.key = NodeKeyOf(0, 7); h.Frame(); h.Frame();
+    h.Click(h.Centre("#Remove"));
+    REQUIRE(h.Node(0, 7)->customPins.size() == 1);
+    CHECK(h.Node(0, 7)->customPins[0].name == "p1");
+    for (const Arcane::GraphLink& l : h.doc->PassGraph(0)->links) CHECK(l.fromNode != 10);
+    CHECK(std::string(h.stack.UndoLabel()) == "Remove Pin");
+    h.stack.Undo();
+    CHECK_FALSE(h.stack.CanUndo());
+    CHECK(GraphJson(h, 0) == before);
+}
+
+TEST_CASE("Node page Settings: a stored text commit is inert once the document or the node is gone", "[editor][material][nodepage]")
+{
+    SECTION("document destroyed with the box active")
+    {
+        NodePageHarness h(GraphDoc(NodePageGraph()));
+        h.key = NodeKeyOf(0, 6); h.Frame(); h.Frame();
+        h.Click(h.Centre("Mask"));
+        h.Type("zw");
+        h.doc.reset();
+        h.Frame(); h.Frame(); h.Frame();                     // CommitOrphans flushes through the stored commit
+        CHECK_FALSE(h.stack.CanUndo());                      // the anchor is dead: nothing ran, nothing crashed
+    }
+    SECTION("node deleted with the box active")
+    {
+        NodePageHarness h(GraphDoc(NodePageGraph()));
+        h.key = NodeKeyOf(0, 6); h.Frame(); h.Frame();
+        h.Click(h.Centre("Mask"));
+        h.Type("zw");
+        Arcane::MaterialGraph g = *h.doc->PassGraph(0);
+        std::erase_if(g.nodes, [](const Arcane::GraphNode& n) { return n.id == 6; });
+        h.doc->ApplyGraphState(0, g);                        // the row vanishes; its draft is orphaned
+        h.Frame(); h.Frame(); h.Frame();
+        CHECK_FALSE(h.stack.CanUndo());
+        CHECK(h.doc->PassGraph(0)->FindNode(6) == nullptr);
+    }
+}
