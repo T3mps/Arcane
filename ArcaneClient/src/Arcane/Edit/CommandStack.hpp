@@ -98,8 +98,9 @@ namespace Arcane
 
         void Undo();
         void Redo();
-        [[nodiscard]] bool CanUndo() const noexcept { return !m_undo.empty(); }
-        [[nodiscard]] bool CanRedo() const noexcept { return !m_redo.empty(); }
+        // Both look past EXPIRED entries (spec s3.3(c), UE skips expired transactions).
+        [[nodiscard]] bool CanUndo() const noexcept;
+        [[nodiscard]] bool CanRedo() const noexcept;
         // Structural mementos refuse to run inside an open gesture (Cancel
         // would discard their undo coverage without reverting the edit --
         // see ApplyRegistryMutation).
@@ -171,6 +172,14 @@ namespace Arcane
             const Astra::ComponentDescriptor* descriptor;
             std::vector<std::byte>            before;
         };
+
+        // A transaction with nothing left to act on: every command expired
+        // (a component snapshot never is, so a snapshot keeps it live).
+        static bool Expired(const Transaction& t) noexcept;
+        // Pop expired entries off the TOP, releasing their payloads. Discarding
+        // (not skipping in place) keeps undo/redo order sound.
+        static void DiscardExpired(std::deque<Transaction>& d) noexcept;
+        static const Transaction* TopLive(const std::deque<Transaction>& d) noexcept;
 
         std::function<Astra::Registry&()> m_resolve;
         std::size_t                       m_maxDepth;

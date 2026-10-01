@@ -1051,3 +1051,71 @@ TEST_CASE("SceneStateId follows scene steps only, through undo and redo", "[edit
     stack.Redo();
     CHECK(stack.SceneStateId() == sceneId);
 }
+
+TEST_CASE("an expired step is discarded, never spent on a Ctrl+Z", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0, du = 0, dr = 0;
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "Scene Step"));
+    auto anchor = std::make_shared<int>(0);
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "Edit Param"));
+    CHECK(std::string(stack.UndoLabel()) == "Edit Param");
+
+    anchor.reset();                                      // the document closed
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Scene Step");   // the label looks past it
+    stack.Undo();
+    CHECK(u == 1);                                       // ONE press undid the live step
+    CHECK(du == 0);
+    CHECK_FALSE(stack.CanUndo());
+    stack.Redo();
+    CHECK(r == 1);
+    CHECK_FALSE(stack.CanRedo());                        // discarded, not parked in redo
+}
+
+TEST_CASE("only expired entries left: nothing to undo or redo, empty labels", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int du = 0, dr = 0;
+    auto anchor = std::make_shared<int>(0);
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "a"));
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "b"));
+    stack.Undo();                                        // "b" moves to redo
+    REQUIRE(du == 1);
+
+    anchor.reset();
+    CHECK_FALSE(stack.CanUndo());
+    CHECK_FALSE(stack.CanRedo());
+    CHECK(std::string(stack.UndoLabel()).empty());
+    CHECK(std::string(stack.RedoLabel()).empty());
+    stack.Undo();
+    stack.Redo();
+    CHECK(du == 1);
+    CHECK(dr == 0);
+}
+
+TEST_CASE("an expired step buried under a live one is discarded when Undo reaches it", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0, du = 0, dr = 0;
+    auto anchor = std::make_shared<int>(0);
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "A"));
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "Edit Param"));
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "B"));
+    anchor.reset();                                      // the document closed under B
+    stack.Undo();                                        // B
+    CHECK(u == 1);
+    CHECK(std::string(stack.UndoLabel()) == "A");        // the label looks past the buried step
+    stack.Undo();                                        // ONE press reaches A
+    CHECK(u == 2);
+    CHECK_FALSE(stack.CanUndo());
+    stack.Redo();
+    stack.Redo();
+    CHECK(r == 2);
+    CHECK_FALSE(stack.CanRedo());
+    CHECK(du == 0);
+    CHECK(dr == 0);
+}

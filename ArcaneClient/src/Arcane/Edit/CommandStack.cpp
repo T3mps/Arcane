@@ -116,8 +116,33 @@ namespace Arcane
             m_undo.pop_front();
     }
 
+    bool CommandStack::Expired(const Transaction& t) noexcept
+    {
+        return !t.commands.empty() &&
+               std::all_of(t.commands.begin(), t.commands.end(),
+                           [](const std::unique_ptr<ICommand>& c) { return c->IsExpired(); });
+    }
+
+    void CommandStack::DiscardExpired(std::deque<Transaction>& d) noexcept
+    {
+        while (!d.empty() && Expired(d.back()))
+            d.pop_back();
+    }
+
+    const CommandStack::Transaction* CommandStack::TopLive(const std::deque<Transaction>& d) noexcept
+    {
+        for (auto it = d.rbegin(); it != d.rend(); ++it)
+            if (!Expired(*it))
+                return &*it;
+        return nullptr;
+    }
+
+    bool CommandStack::CanUndo() const noexcept { return TopLive(m_undo) != nullptr; }
+    bool CommandStack::CanRedo() const noexcept { return TopLive(m_redo) != nullptr; }
+
     void CommandStack::Undo()
     {
+        DiscardExpired(m_undo);
         if (m_undo.empty())
             return;
         Transaction txn = std::move(m_undo.back());
@@ -129,6 +154,7 @@ namespace Arcane
 
     void CommandStack::Redo()
     {
+        DiscardExpired(m_redo);
         if (m_redo.empty())
             return;
         Transaction txn = std::move(m_redo.back());
@@ -148,11 +174,13 @@ namespace Arcane
 
     const char* CommandStack::UndoLabel() const noexcept
     {
-        return m_undo.empty() ? "" : m_undo.back().label.c_str();
+        const Transaction* t = TopLive(m_undo);
+        return t ? t->label.c_str() : "";
     }
     const char* CommandStack::RedoLabel() const noexcept
     {
-        return m_redo.empty() ? "" : m_redo.back().label.c_str();
+        const Transaction* t = TopLive(m_redo);
+        return t ? t->label.c_str() : "";
     }
 
     void CommandStack::Clear() noexcept
