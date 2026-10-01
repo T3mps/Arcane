@@ -30,6 +30,7 @@ namespace Arcane::Editor
     // pointer type is needed below (ScenesByName's return), and pulling the
     // full header in here is not required for that.
     struct AssetPanelEntry;
+    struct PopupAnchor;   // Widgets/EditorWidgets.hpp -- by reference only
     // AssetPanelModel.hpp's CookState enum (fixed std::uint8_t underlying
     // type, forward-declarable the same way a scoped enum with an explicit
     // base always is) -- CookStateLabel below only needs the TYPE for its
@@ -181,7 +182,9 @@ namespace Arcane::Editor
     // submenu opens the SAME dialog the toolbar's `+ Create` does, empty
     // texture field and all.
     void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled);
-    void DrawCreateMenu(AssetPanelActions& actions);
+    // `anchor` = the "+ Create" button (LastItemAnchor right after it): the
+    // menu opens under it (node-page phase s4.4).
+    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor);
 
     // Panel-split spec s7.2 (Task 3): today's Reveal sequence (the
     // Unreferenced card's own click handler, pre-split), extracted to a

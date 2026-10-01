@@ -871,7 +871,9 @@ namespace Arcane::Editor
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kCaretPadX, st.FramePadding.y));
         if (playing) ImGui::PushStyleColor(ImGuiCol_Button,
                                            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        if (iconBtn(ICON_LC_CHEVRON_DOWN, "##sim_playmode", "Play mode"))
+        const bool caretClicked = iconBtn(ICON_LC_CHEVRON_DOWN, "##sim_playmode", "Play mode");
+        const PopupAnchor caretAnchor = LastItemAnchor();   // the dropdown opens under the caret (s4.4)
+        if (caretClicked)
             ImGui::OpenPopup("##play_mode");
         if (playing) ImGui::PopStyleColor();
         ImGui::PopStyleVar();
@@ -883,7 +885,7 @@ namespace Arcane::Editor
         // Core-DLL split's Task 7 is that future arriving: the three rows below are
         // the network TOPOLOGIES, landing here as rows rather than as a separate
         // UI-only concept bolted on elsewhere, exactly as promised.
-        if (ImGui::BeginPopup("##play_mode"))
+        if (BeginPopupBelow("##play_mode", caretAnchor))
         {
             // MarkIniSettingsDirty on change, as the shader editor's layout
             // handler does (ShaderEditorDocument.cpp): ImGui::Shutdown saves the

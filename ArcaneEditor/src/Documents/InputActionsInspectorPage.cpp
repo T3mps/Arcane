@@ -2,6 +2,7 @@
 
 #include "Documents/InputActionsJson.hpp"
 
+#include "Widgets/EditorWidgets.hpp"   // PopupAnchor / LastItemAnchor / BeginPopupBelow (Pick... opens under its button)
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
 
@@ -298,9 +299,11 @@ namespace Arcane::Editor
                                  { if (w.expired()) return; Defer([m = &model_, id, v] { (void)m->SetField(id, "path", v); }); });
                     static const char* const kButtons[] = { "Rebind...", "Pick..." };
                     const int clicked = grid.ButtonRow("", kButtons, 2);
+                    // ButtonRow's last item is its last button, Pick (PropertyGrid.cpp ButtonRow).
+                    const PopupAnchor pickAnchor = LastItemAnchor();
                     if (clicked == 0 && services_.beginRebind) services_.beginRebind(id);
                     if (clicked == 1) ImGui::OpenPopup("##input_pick");
-                    DrawPicker(id);
+                    DrawPicker(id, pickAnchor);
                 }
                 if (isPart) grid.ReadOnlyRow("Role", Str(row, "name"));
             }
@@ -380,9 +383,9 @@ namespace Arcane::Editor
         grid.MeterRow("Value", magnitude, overlay);
     }
 
-    void InputActionsInspectorPage::DrawPicker(const Guid& target)
+    void InputActionsInspectorPage::DrawPicker(const Guid& target, const PopupAnchor& anchor)
     {
-        if (!ImGui::BeginPopup("##input_pick")) return;
+        if (!BeginPopupBelow("##input_pick", anchor)) return;
         // Cleared and focused on EVERY opening: typing goes to the search box
         // and never reaches the document's row key handlers.
         if (ImGui::IsWindowAppearing()) { pickerSearch_[0] = '\0'; ImGui::SetKeyboardFocusHere(); }

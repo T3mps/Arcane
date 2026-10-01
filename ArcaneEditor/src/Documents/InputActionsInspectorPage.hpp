@@ -18,6 +18,8 @@
 
 namespace Arcane::Editor
 {
+    struct PopupAnchor;   // Widgets/EditorWidgets.hpp -- by reference only
+
     struct InputSelection
     {
         Guid map, action, binding, part;
@@ -51,7 +53,7 @@ namespace Arcane::Editor
         void DrawAction(PropertyGrid& grid, const nlohmann::json& action);
         void DrawBinding(PropertyGrid& grid, const nlohmann::json& row, bool isPart);
         void DrawLivePreview(PropertyGrid& grid, const Guid& action);
-        void DrawPicker(const Guid& target);
+        void DrawPicker(const Guid& target, const PopupAnchor& anchor);
         // Edits never mutate the draft under the row loop: inside Draw they are
         // QUEUED (edit_, every commit appended, never overwritten -- two rows can
         // commit in the same Draw, e.g. a text row's deactivate-commit plus a

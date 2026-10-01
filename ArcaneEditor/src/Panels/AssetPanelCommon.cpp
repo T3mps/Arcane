@@ -87,9 +87,9 @@ namespace Arcane::Editor
         ImGui::EndDisabled();
     }
 
-    void DrawCreateMenu(AssetPanelActions& actions)
+    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor)
     {
-        if (!ImGui::BeginPopup("##createmenu"))
+        if (!BeginPopupBelow("##createmenu", anchor))
             return;
         DrawCreateMenuEntries(actions, /*enabled=*/true);
         ImGui::EndPopup();

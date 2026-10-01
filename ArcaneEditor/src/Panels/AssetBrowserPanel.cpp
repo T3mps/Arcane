@@ -900,7 +900,8 @@ namespace Arcane::Editor
 
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
                 ImGui::OpenPopup("##createmenu");
-            DrawCreateMenu(actions);
+            const PopupAnchor createAnchor = LastItemAnchor();
+            DrawCreateMenu(actions, createAnchor);
 
             ImGui::SameLine();
             ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x));

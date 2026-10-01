@@ -195,7 +195,8 @@ namespace Arcane::Editor
     {
         const Guid map = model.SelectedMap(), action = model.SelectedAction();
         if (ImGui::Button(ICON_LC_PLUS " Add " ICON_LC_CHEVRON_DOWN)) ImGui::OpenPopup("##input_add");
-        if (ImGui::BeginPopup("##input_add"))
+        const PopupAnchor addAnchor = LastItemAnchor();
+        if (BeginPopupBelow("##input_add", addAnchor))
         {
             // The model selects the new row and gives it a unique sibling name
             // ("Action Map 2", "Action 3" -- Task 6); the new row opens in rename.
