@@ -2700,7 +2700,7 @@ namespace Arcane::Editor
             ed::SetNodePosition(kPassSceneNodeId,
                                 ImVec2(m_data.chainSceneX, m_data.chainSceneY));
             m_passCanvasSeeded = true;
-            m_passFitPending = true;
+            m_passFitPending.Arm();
         }
 
         // ---- nodes
@@ -3138,19 +3138,14 @@ namespace Arcane::Editor
                 ed::NavigateToSelection(true);
             else
                 ed::NavigateToContent();
+            m_passFitPending.Disarm();   // the user's own frame wins over a pending fit
         }
 
         // The pass canvas's twin of the graph canvas's fit-on-open (s4.5),
-        // under the same held-size rule (see the graph canvas).
-        const ImVec2 passCanvasSize = ed::GetScreenSize();
-        const bool passCanvasHeld = passCanvasSize.x == m_passCanvasLastSize.x &&
-                                    passCanvasSize.y == m_passCanvasLastSize.y;
-        m_passCanvasLastSize = passCanvasSize;
-        if (m_passFitPending && !seededThisFrame && passCanvasHeld)
-        {
-            (void)GraphFitToContent(GraphFitMaxZoom(), 0.0f);
-            m_passFitPending = false;
-        }
+        // through the same self-confirming latch (see the graph canvas).
+        if (m_passFitPending.Update(ed::GetScreenSize(), ImGui::GetTime(), 0.0f, !seededThisFrame) &&
+            !GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            m_passFitPending.Disarm();   // nothing to fit
 
         // ---- double-click ENTERS a pass (UE's collapsed-graph gesture).
         //
@@ -3911,7 +3906,7 @@ namespace Arcane::Editor
                                                   (std::max)(60.0f, n.value[1])));
             }
             m_graphPositionsApplied = true;
-            m_fitPending = true;
+            m_fitPending.Arm();
         }
 
         // ---- Rendering LOD: ONE read of the zoom, ONE tier, per frame ----
@@ -3989,24 +3984,28 @@ namespace Arcane::Editor
         // locator) -- the errors panel's rows were its only writer before
         // that panel was removed; console lines are not clickable.
         //
-        // Held-size rule (s4.5 fit + this focus): the node editor's Begin
-        // answers a canvas RESIZE by re-centring the view it showed LAST draw
+        // Both this focus and the s4.5 fit below go through a CanvasNavLatch
+        // (Widgets/GraphFit.hpp): the node editor's Begin answers a canvas
+        // RESIZE by re-centring the view it showed LAST draw
         // (imgui_node_editor.cpp:1221-1254), which discards any navigation
-        // issued since. A freshly opened document's canvas changes width over
-        // its first draws (a scrollbar comes and goes while the layout settles),
-        // so a navigation issued then is lost. Both wait for a draw whose canvas
-        // size matches the previous one.
+        // still in flight -- and a freshly opened document's canvas changes
+        // width over its first draws (a scrollbar comes and goes while the
+        // layout settles), as can any dock/splitter drag. The latch re-issues
+        // the navigation on a draw that sees a new size and disarms once the
+        // size held across it (and, for this animated focus, the animation's
+        // ScrollDuration elapsed). Not on the seed draw: no node is measured.
         const ImVec2 graphCanvasSize = ed::GetScreenSize();
-        const bool graphCanvasHeld = graphCanvasSize.x == m_graphCanvasLastSize.x &&
-                                     graphCanvasSize.y == m_graphCanvasLastSize.y;
-        m_graphCanvasLastSize = graphCanvasSize;
-        if (m_focusNode != 0 && graphCanvasHeld)
+        const double graphCanvasNow = ImGui::GetTime();
+        if (m_focusNode != 0 &&
+            m_focusPending.Update(graphCanvasSize, graphCanvasNow, ed::GetStyle().ScrollDuration, !seededThisFrame))
         {
             ed::SelectNode(ed::NodeId(m_focusNode));
             ed::NavigateToSelection(true);
-            m_focusNode = 0;
-            m_fitPending = false;   // a Problems focus outranks the open fit
         }
+        if (m_focusPending.Pending())
+            m_fitPending.Disarm();   // a Problems focus outranks the open fit
+        else
+            m_focusNode = 0;
 
         // F = frame (the UE/SG muscle memory): zoom to the selection, or to
         // everything when nothing is selected.
@@ -4017,19 +4016,22 @@ namespace Arcane::Editor
                 ed::NavigateToSelection(true);
             else
                 ed::NavigateToContent();
+            // The user's own frame wins over any pending automatic one.
+            m_fitPending.Disarm();
+            m_focusPending.Disarm();
+            m_focusNode = 0;
         }
 
-        // Frame-to-fit on open (s4.5): armed by the seed above, consumed on the
-        // first later draw whose canvas size held (see the focus block above),
-        // AFTER the node loop -- every node is live and carries the size it
-        // measured last frame (NodeCulled exempts unmeasured nodes). Capped by
-        // editor.graph.fitMaxZoom; the selection is never touched. F above stays
-        // the uncapped frame-selection / frame-all.
-        if (m_fitPending && !seededThisFrame && graphCanvasHeld)
-        {
-            (void)GraphFitToContent(GraphFitMaxZoom(), 0.0f);
-            m_fitPending = false;
-        }
+        // Frame-to-fit on open (s4.5): armed by the seed above, issued on the
+        // first later draw and re-issued until it LANDED (the latch, see the
+        // focus block above), AFTER the node loop -- every node is live and
+        // carries the size it measured last frame (NodeCulled exempts
+        // unmeasured nodes). Capped by editor.graph.fitMaxZoom; the selection
+        // is never touched. F above stays the uncapped frame-selection /
+        // frame-all. Duration 0: it lands at the next Begin, so settle 0.
+        if (m_fitPending.Update(graphCanvasSize, graphCanvasNow, 0.0f, !seededThisFrame) &&
+            !GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            m_fitPending.Disarm();   // nothing to fit
 
         // Node context menu -> alignment over the current selection.
         {

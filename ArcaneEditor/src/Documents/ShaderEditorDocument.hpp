@@ -30,6 +30,7 @@
 // what the canvas grid IS. Held BY VALUE because a canvas keeps its pan/zoom
 // history across view switches.
 #include "Widgets/GraphGridPhase.hpp"
+#include "Widgets/GraphFit.hpp"   // CanvasNavLatch -- the fit-on-open + focus latches, held by value
 // NodeLOD + its zoom boundaries. Moved out of this header (2026-09-09) so the
 // Assets panel's Graph lens reads the same table instead of copying one of its
 // numbers into a bare float compare -- see that header.
@@ -349,7 +350,14 @@ namespace Arcane::Editor
         // future driver -- so this task supplies the driver only; there is no
         // separate consumption step left for a later task.
         void RequestJumpToLine(int line) noexcept { m_jumpToLine = line; }
-        void RequestFocusGraphNode(std::uint32_t nodeId) noexcept { m_focusNode = nodeId; }
+        void RequestFocusGraphNode(std::uint32_t nodeId) noexcept
+        {
+            m_focusNode = nodeId;
+            if (nodeId != 0)
+                m_focusPending.Arm();   // consumed once it LANDED (CanvasNavLatch)
+            else
+                m_focusPending.Disarm();
+        }
 
         // TEST SEAM (GraphFitTest): the graph canvas's node-editor context, so a
         // headless test can read the view the fit-on-open landed. Null until the
@@ -726,8 +734,7 @@ namespace Arcane::Editor
         // index + 1, the Output node is kPassOutputNodeId).
         ax::NodeEditor::EditorContext* m_passCanvasCtx = nullptr;
         bool  m_passCanvasSeeded = false;   // re-seed positions after list edits
-        bool  m_passFitPending = false;     // s4.5: frame-to-fit on the first held-size draw after a seed
-        ImVec2 m_passCanvasLastSize{};      // last draw's canvas size: the fit waits for it to hold
+        CanvasNavLatch m_passFitPending;    // s4.5: frame-to-fit after a seed, re-issued until it lands
         std::uint32_t m_passCtxNode = 0;    // node the context menu opened on
         float m_passPopupX = 0.0f, m_passPopupY = 0.0f;
         int m_activePass = 0;   // which snippet the text editor shows (0 = base)
@@ -901,14 +908,15 @@ namespace Arcane::Editor
         // compiler diag lines back into snippet space (jump + badges).
         int  m_snippetLineOffset = 0;
         bool m_graphPositionsApplied = false;   // canvas seeded from stored node positions
-        bool m_fitPending = false;              // s4.5: frame-to-fit on the first held-size draw after a seed
-        ImVec2 m_graphCanvasLastSize{};         // last draw's canvas size: fit + focus wait for it to hold
+        CanvasNavLatch m_fitPending;            // s4.5: frame-to-fit after a seed, re-issued until it lands
         bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
         // Select + navigate the canvas to one node. Re-armed by
         // RequestFocusGraphNode (Task 5, the Problems panel) -- the errors
         // panel's rows were its only writer before that panel was removed;
-        // DrawGraphPanel still consumes it (ed::SelectNode + NavigateToSelection).
+        // DrawGraphPanel still consumes it (ed::SelectNode + NavigateToSelection),
+        // re-issuing until m_focusPending confirms the view landed.
         std::uint32_t m_focusNode = 0;
+        CanvasNavLatch m_focusPending;
         float m_graphPopupX = 0.0f, m_graphPopupY = 0.0f;   // create-menu screen pos
         // Drag-wire searcher (SG's signature interaction): releasing a new wire
         // over empty canvas opens the create menu filtered to types with a pin

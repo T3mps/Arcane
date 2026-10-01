@@ -30,4 +30,57 @@ namespace Arcane::Editor
 
     // editor.graph.fitMaxZoom's published value; 1.0 if it is absent.
     [[nodiscard]] float GraphFitMaxZoom();
+
+    // CanvasNavLatch: a one-shot canvas navigation (the fit-on-open, a Problems
+    // focus) that CONFIRMS it landed. The node editor's Begin answers a canvas
+    // RESIZE by re-centring the view of the PREVIOUS draw and dropping any
+    // navigation in flight (imgui_node_editor.cpp:1221-1254: previousVisibleRect
+    // is read from the canvas, which only receives a navigated view at the NEXT
+    // Begin). So a navigation issued at canvas size S has landed only once a
+    // later draw still sees S and its animation had time to finish; a draw that
+    // sees another size means it was discarded, and the caller re-issues it.
+    // This converges once the layout holds, whatever the transient pattern.
+    //
+    // Call Update ONCE PER DRAW while armed, after the canvas's node loop, with
+    // ed::GetScreenSize() -- also on draws that cannot issue (canIssue=false),
+    // so a resize there is still seen. PURE: no ImGui or node-editor state.
+    class CanvasNavLatch
+    {
+    public:
+        void Arm() noexcept { m_pending = true; m_issued = false; }
+        void Disarm() noexcept { m_pending = false; m_issued = false; }
+        [[nodiscard]] bool Pending() const noexcept { return m_pending; }
+
+        // true = (re-)issue the navigation NOW. A navigation issued earlier is
+        // confirmed (the latch disarms) on a draw whose size equals the size it
+        // was issued at, once settleSeconds (its animation length; 0 for a jump)
+        // have passed since; a different size re-issues it.
+        [[nodiscard]] bool Update(ImVec2 canvasSize, double now, float settleSeconds, bool canIssue = true) noexcept
+        {
+            if (!m_pending)
+                return false;
+            if (m_issued)
+            {
+                if (canvasSize.x == m_issuedAt.x && canvasSize.y == m_issuedAt.y)
+                {
+                    if (now - m_issuedTime >= static_cast<double>(settleSeconds))
+                        Disarm();
+                    return false;
+                }
+                m_issued = false;   // the resize discarded it
+            }
+            if (!canIssue)
+                return false;
+            m_issued = true;
+            m_issuedAt = canvasSize;
+            m_issuedTime = now;
+            return true;
+        }
+
+    private:
+        ImVec2 m_issuedAt{};
+        double m_issuedTime = 0.0;
+        bool   m_pending = false;
+        bool   m_issued = false;
+    };
 }
