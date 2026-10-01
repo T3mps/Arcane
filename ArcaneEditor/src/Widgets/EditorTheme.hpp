@@ -43,6 +43,7 @@
 // header-only home for it is owed (crash-window spec s13).
 
 #include <imgui.h>
+#include <cmath>
 
 namespace Arcane::Editor
 {
@@ -52,6 +53,18 @@ namespace Arcane::Editor
         // the tone it comes from instead of repeating its channels. constexpr
         // because ImVec4's 4-float constructor is (imgui.h:317).
         constexpr ImVec4 WithAlpha(const ImVec4& c, float a) { return ImVec4(c.x, c.y, c.z, a); }
+
+        // WCAG 2.x contrast ratio of two opaque sRGB colours (alpha ignored),
+        // 1..21. Pure. The node page's category-colour test (s5.1.11) and
+        // T4's dim-text test (s6.6) both measure with it.
+        [[nodiscard]] inline float ContrastRatio(const ImVec4& a, const ImVec4& b)
+        {
+            const auto lin = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); };
+            const auto lum = [&](const ImVec4& c) { return 0.2126f * lin(c.x) + 0.7152f * lin(c.y) + 0.0722f * lin(c.z); };
+            const float la = lum(a), lb = lum(b);
+            const float hi = la > lb ? la : lb, lo = la > lb ? lb : la;
+            return (hi + 0.05f) / (lo + 0.05f);
+        }
 
         // -- CHROME -------------------------------------------------------
         // Title bars sit at the bottom of the ramp (near-black in the

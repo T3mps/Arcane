@@ -1,5 +1,6 @@
 #include "Documents/ShaderEditorDocument.hpp"
 
+#include "Documents/ShaderGraphCategoryColors.hpp"   // GraphCategoryHeaderColor: the node title band fill (s5.1.4)
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/AssetReferenceField.hpp"   // AssetRefRow: the texture param row (s5.3)
 #include "Widgets/CanvasEditScope.hpp"   // CanvasCreateScope/CanvasDeleteScope: the unconditional-End rule
@@ -497,7 +498,7 @@ namespace Arcane::Editor
         // Returns the node's measured size (zero before its first layout), so a
         // caller that caches a width reads it off this same query instead of
         // asking the library twice.
-        ImVec2 DrawNodeTitleBand(std::uint32_t nodeId, float headerMaxY)
+        ImVec2 DrawNodeTitleBand(std::uint32_t nodeId, float headerMaxY, ImVec4 color = kNodeTitleColor)
         {
             const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(nodeId));
             const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(nodeId));
@@ -508,7 +509,7 @@ namespace Arcane::Editor
                     ImVec2(nodePos.x + kGraphNodeBorderWidth, nodePos.y + kGraphNodeBorderWidth),
                     ImVec2(nodePos.x + nodeSize.x - kGraphNodeBorderWidth,
                            headerMaxY + kNodePadY),
-                    ImGui::GetColorU32(kNodeTitleColor),
+                    ImGui::GetColorU32(color),
                     kGraphNodeRounding, ImDrawFlags_RoundCornersTop);
             return nodeSize;
         }
@@ -5325,7 +5326,10 @@ namespace Arcane::Editor
         //
         // The band/gap relationship, and why headerMaxY is what it is, lives on
         // DrawNodeTitleBand -- shared with the pass canvas.
-        const ImVec2 nodeSize = DrawNodeTitleBand(n.id, headerMaxY);
+        // The band takes the node's CATEGORY colour (s5.1.4); at LowestDetail it is
+        // the whole node, so the category stays legible zoomed out. The pass canvas
+        // (three calls above) and comment boxes (returned early) keep the neutral.
+        const ImVec2 nodeSize = DrawNodeTitleBand(n.id, headerMaxY, GraphCategoryHeaderColor(info.category));
         if (nodeSize.x > 0.0f)
             m_nodeWidths[n.id] = nodeSize.x;
     }
