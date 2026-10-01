@@ -648,6 +648,41 @@ namespace Arcane::Editor
             return width == 1 ? "float" : width == 2 ? "float2" : width == 4 ? "float4" : "dynamic";
         }
 
+        // "<display>[ '<param>'].<pin>" for a wired input's source (s5.1.4 pin table).
+        std::string WireSourceText(const Arcane::MaterialGraph& g, const Arcane::GraphLink& l)
+        {
+            const Arcane::GraphNode* src = g.FindNode(l.fromNode);
+            if (!src || l.fromPin >= Arcane::GraphNodeOutputCount(*src))
+                return "?";
+            std::string display = Arcane::GraphNodeInfo(src->type).display;
+            if (src->type == Arcane::GraphNodeType::Param || src->type == Arcane::GraphNodeType::TextureSample)
+                display += " '" + src->paramName + "'";
+            return display + "." + Arcane::GraphNodeOutputPin(*src, l.fromPin).name;
+        }
+
+        // Constant: %g for one lane, "(a, b[, c, d])" for more; Expression: its hlsl;
+        // Passthrough: the plain-language rule.
+        std::string FormatPinNeutral(const Arcane::GraphPinNeutral& p)
+        {
+            if (p.kind == Arcane::GraphPinNeutralKind::Expression)
+                return p.hlsl ? p.hlsl : "";
+            if (p.kind == Arcane::GraphPinNeutralKind::Passthrough)
+                return "unchanged (only a wire contributes)";
+            char buf[32];
+            if (p.lanes <= 1)
+            {
+                std::snprintf(buf, sizeof(buf), "%g", p.v[0]);
+                return buf;
+            }
+            std::string out = "(";
+            for (int i = 0; i < p.lanes && i < 4; ++i)
+            {
+                std::snprintf(buf, sizeof(buf), "%g", p.v[i]);
+                out += (i ? ", " : "") + std::string(buf);
+            }
+            return out + ")";
+        }
+
         // Value equality for a pass's optional graph, for the gesture builders'
         // no-op guard ONLY. MaterialGraph is a plain aggregate with no
         // operator== (MaterialGraph.hpp:334-372; neither GraphNode nor
@@ -2369,7 +2404,123 @@ namespace Arcane::Editor
         ImGui::PopStyleColor();
     }
 
-    void ShaderEditorDocument::DrawNodePageInputs(PropertyGrid&, std::size_t, std::uint32_t) {}     // T3-B4
+    void ShaderEditorDocument::DrawNodePageInputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || Arcane::GraphNodeInputCount(*n) == 0)
+            return;   // UV, Time, the Const nodes, Param, Comment, Vertex Color
+        if (!grid.Section("Inputs"))
+            return;
+        PropertyGrid::Rows rows(grid, "##inputs");
+        if (!rows)
+            return;
+        const std::uint32_t count = Arcane::GraphNodeInputCount(*n);   // pin edits are queued: stable here
+        for (std::uint32_t pin = 0; pin < count; ++pin)
+        {
+            ImGui::PushID(static_cast<int>(pin));
+            DrawNodePageInputRow(grid, pass, id, pin);
+            ImGui::PopID();
+        }
+    }
+
+    void ShaderEditorDocument::DrawNodePageInputRow(PropertyGrid& grid, std::size_t pass, std::uint32_t id,
+                                                    std::uint32_t pin)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        const Arcane::MaterialGraph& g = *GraphOptAt(pass);   // FindGraphNode range-checked `pass`
+        const Arcane::GraphPinDesc desc = Arcane::GraphNodeInputPin(*n, pin);
+        const std::string label = desc.name;   // a Custom pin's name points into the node: copy
+        for (const Arcane::GraphLink& l : g.links)
+            if (l.toNode == id && l.toPin == pin)
+            {
+                grid.ReadOnlyRow(label.c_str(), "<- " + WireSourceText(g, l));
+                return;
+            }
+        const Arcane::GraphPinNeutral neutral = Arcane::GraphPinNeutralDefault(*n, pin);
+        if (!Arcane::GraphPinAcceptsLiteral(*n, pin))
+        {
+            grid.ReadOnlyRow(label.c_str(), "default: " + FormatPinNeutral(neutral));
+            return;
+        }
+
+        // ---- The live literal row (s5.1.5) ----
+        const int lanes = Arcane::GraphPinLiteralLanes(desc.width);
+        const Arcane::GraphPinLiteral* lit = n->FindPinLiteral(pin);
+        // The neutral SPLATTED to this pin's lanes through SeedPinNeutral (the
+        // one seed canvas and page share): Tiling & Offset's width-1 `tiling`
+        // neutral (lanes 1, v {1}) must read (1, 1), not (1, 0). Zero for
+        // Expression/Passthrough.
+        float neutralV[4];
+        SeedPinNeutral(neutral, lanes, neutralV);
+        float shown[4] = {};
+        std::memcpy(shown, lit ? lit->v : neutralV, sizeof(shown));
+        // An Expression neutral (Panner uv) prints AS ITSELF: a format with no
+        // conversion is printed verbatim (the canvas trick, imgui_widgets.cpp:2496).
+        const char* format = (!lit && neutral.kind == Arcane::GraphPinNeutralKind::Expression) ? neutral.hlsl : "%.3f";
+        float local[4];
+        std::memcpy(local, shown, sizeof(local));
+        RowDecor decor;
+        decor.reset = true;                  // the slot is always reserved: values stay aligned
+        decor.resetActive = lit != nullptr;  // drawn only while a literal exists
+        grid.SetNextRowDecor(decor);
+        if (lanes == 1)
+            (void)grid.FloatRow(label.c_str(), local[0], 0.01f, std::nullopt, format);
+        else
+            (void)grid.VecRow(label.c_str(), local, lanes, 0.01f, std::nullopt, format);
+        const RowEvents ev = grid.LastRowEvents();
+        Arcane::CommandStack* stack = UndoStack();
+        // The snapshot is taken BEFORE this frame's write, so it is pre-edit on the
+        // activation frame (the canvas pin-literal ordering).
+        // Latched on ANY activation: BeginOnActivate skips both callbacks when the
+        // stack is null (Play, s3.3), and a stale flag would erase an existing
+        // literal on Esc or keep a new one.
+        if (ImGui::IsItemActivated())
+            m_nodePageLiteralExisted = lit != nullptr;
+        EditGesture::BeginOnActivate(stack, m_gesture, [] { return std::string("Pin Value"); },
+                                     [&] { return GraphEditBuilder("Pin Value", pass); });
+        if (ev.resetClicked)
+            DeferNodeEdit([this, pass, id, pin]
+            {
+                (void)RunNodeEdit("Reset Pin Value", pass, id, [pin](Arcane::GraphNode& node, Arcane::MaterialGraph&)
+                {
+                    std::erase_if(node.pinLiterals, [pin](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+                });
+            });
+        bool differs = false;
+        for (int i = 0; i < lanes; ++i)
+            differs = differs || local[i] != shown[i];
+        if (differs)
+            if (Arcane::GraphNode* w = FindGraphNode(pass, id))
+            {
+                bool onNeutral = neutral.kind == Arcane::GraphPinNeutralKind::Constant;
+                for (int i = 0; i < lanes && onNeutral; ++i)
+                    onNeutral = local[i] == neutralV[i];
+                // A cancelled gesture, or one dragged back onto the neutral, never
+                // leaves a NEW literal behind; an existing one updates in place.
+                if (!m_nodePageLiteralExisted && (ev.cancelled || onNeutral))
+                    std::erase_if(w->pinLiterals, [pin](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+                else
+                {
+                    Arcane::GraphPinLiteral* slot = nullptr;
+                    for (Arcane::GraphPinLiteral& pl : w->pinLiterals)
+                        if (pl.pin == pin) { slot = &pl; break; }   // ONE entry per pin (MaterialGraph.hpp)
+                    if (!slot)
+                    {
+                        Arcane::GraphPinLiteral fresh;
+                        fresh.pin = pin;
+                        w->pinLiterals.push_back(fresh);
+                        slot = &w->pinLiterals.back();
+                    }
+                    for (int i = 0; i < 4; ++i)
+                        slot->v[i] = i < lanes ? local[i] : 0.0f;
+                }
+                NoteGraphValueEdited();
+            }
+        EditGesture::EndAfterRow(stack, m_gesture, ev.cancelled);
+    }
+
     void ShaderEditorDocument::DrawNodePageSettings(PropertyGrid&, std::size_t, std::uint32_t) {}   // T3-B5
 
     void ShaderEditorDocument::DrawNodePageOutputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id)

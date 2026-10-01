@@ -492,6 +492,9 @@ namespace Arcane::Editor
         // id) itself -- a queued edit or a live write can run between them. ----
         void DrawNodePageHeader(const Arcane::GraphNode& n);   // chip + type + description; not a Section
         void DrawNodePageInputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        // One input pin (s5.1.4/5.1.5): wired = "<- source", refusing = its
+        // neutral read-only, else a live literal row with Reset.
+        void DrawNodePageInputRow(PropertyGrid& grid, std::size_t pass, std::uint32_t id, std::uint32_t pin);
         void DrawNodePageSettings(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
         void DrawNodePageOutputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
         void DrawNodePageErrors(PropertyGrid& grid, std::size_t pass, std::uint32_t id);

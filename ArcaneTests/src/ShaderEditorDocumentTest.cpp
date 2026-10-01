@@ -2380,3 +2380,141 @@ TEST_CASE("Node page: a page drawn after its node died says so and draws nothing
     CHECK(h.log.find("This node no longer exists") != std::string::npos);
     CHECK_FALSE(HasSection(h.log, "Outputs"));
 }
+
+TEST_CASE("Node page Inputs: wired, literal, expression-neutral and refusing pins draw the s5.1.4 pin rows",
+          "[editor][material][nodepage]")
+{
+    Arcane::MaterialGraph g = NodePageGraph();
+    AddNode(g, 10, T::Remap);          // ranges read their default directly
+    AddNode(g, 11, T::VertexOutput);   // passthrough pins
+    g.nextId = 12;
+    NodePageHarness h(GraphDoc(std::move(g)));
+    const auto at = [&](std::uint32_t id) { h.key = NodeKeyOf(0, id); h.Frame(); h.Frame(); return h.log; };
+    std::string log = at(4);
+    CHECK(log.find("<- Sprite Texture.rgba") != std::string::npos);
+    CHECK(log.find("<- Param 'tint'.out") != std::string::npos);
+    CHECK(at(1).find("<- Multiply.out") != std::string::npos);
+    CHECK(at(6).find("default: 0") != std::string::npos);                                   // Swizzle source
+    CHECK(at(10).find("default: (0, 1)") != std::string::npos);                             // Remap ranges
+    // The full "default: unchanged (only a wire contributes)" outruns the 392 px
+    // value cell, so ReadOnlyRow ellipsizes it (s4.1(e); the whole text is the
+    // hover tooltip): the log carries its head.
+    CHECK(at(11).find("default: unchanged") != std::string::npos);
+    log = at(8);                                                                             // Panner: uv's neutral is v.uv
+    CHECK(h.probe.count("uv") == 1);
+    CHECK(h.probe.count("speed") == 1);
+    CHECK(log.find("v.uv") != std::string::npos);
+    log = at(5);                                                                             // Power: a = neutral 0, b = literal 2
+    CHECK(h.probe.count("a") == 1);
+    CHECK(h.probe.count("b") == 1);
+    CHECK(log.find("2.000") != std::string::npos);
+    CHECK(log.find("default:") == std::string::npos);
+    CHECK(at(2).find("default: v.uv") != std::string::npos);                                // Sprite Texture uv refuses literals
+    CHECK(at(9).find("### Inputs") == std::string::npos);                                    // Comment: no Inputs
+}
+
+TEST_CASE("Node page Inputs: a width-1 neutral splats across a 2-lane pin (Tiling & Offset tiling reads (1, 1))",
+          "[editor][material][nodepage]")
+{
+    Arcane::MaterialGraph g = NodePageGraph();
+    AddNode(g, 10, T::TilingOffset);
+    g.nextId = 11;
+    NodePageHarness h(GraphDoc(std::move(g)));
+    h.key = NodeKeyOf(0, 10); h.Frame(); h.Frame();
+    INFO(h.log);
+    std::size_t ones = 0;   // uv reads "default: v.uv", offset (0.000, 0.000), tiling must be (1.000, 1.000)
+    for (std::size_t at = h.log.find("1.000"); at != std::string::npos; at = h.log.find("1.000", at + 1))
+        ++ones;
+    CHECK(ones == 2);
+    CHECK(h.Node(0, 10)->pinLiterals.empty());   // showing the neutral wrote nothing
+}
+
+TEST_CASE("Node page Inputs: a literal drag writes live and is ONE 'Pin Value' step; Reset is ONE 'Reset Pin Value' step",
+          "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    const std::string before = GraphJson(h, 0);
+    h.key = NodeKeyOf(0, 5); h.Frame(); h.Frame();
+    const ImVec2 c = h.Centre("a");
+    ImGuiIO& io = ImGui::GetIO();
+    h.Press(c);
+    io.AddMousePosEvent(c.x + 30.0f, c.y); h.Frame();
+    REQUIRE(h.Node(0, 5)->FindPinLiteral(0) != nullptr);     // live while dragging...
+    CHECK_FALSE(h.stack.CanUndo());                         // ...one step only at release
+    io.AddMousePosEvent(c.x + 60.0f, c.y); h.Frame();
+    io.AddMouseButtonEvent(0, false); h.Frame(); h.Frame();
+    REQUIRE(h.stack.CanUndo());
+    CHECK(std::string(h.stack.UndoLabel()) == "Pin Value");
+    CHECK(h.Node(0, 5)->FindPinLiteral(0)->v[0] > 0.0f);
+    h.stack.Undo();
+    CHECK_FALSE(h.stack.CanUndo());
+    CHECK(GraphJson(h, 0) == before);
+
+    h.Frame(); h.Frame();
+    h.Click(h.Centre("b#reset"));                            // T2's reset slot (s4.1(d))
+    CHECK(h.Node(0, 5)->FindPinLiteral(1) == nullptr);       // codegen reads the neutral again
+    REQUIRE(h.stack.CanUndo());
+    CHECK(std::string(h.stack.UndoLabel()) == "Reset Pin Value");
+    h.stack.Undo();
+    REQUIRE(h.Node(0, 5)->FindPinLiteral(1) != nullptr);
+    CHECK(h.Node(0, 5)->FindPinLiteral(1)->v[0] == 2.0f);
+    CHECK_FALSE(h.stack.CanUndo());
+}
+
+TEST_CASE("Node page Inputs: Esc mid-drag restores the pin, pushes nothing and leaves no new literal",
+          "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    const std::string before = GraphJson(h, 0);
+    h.key = NodeKeyOf(0, 5); h.Frame(); h.Frame();
+    const ImVec2 c = h.Centre("a");
+    ImGuiIO& io = ImGui::GetIO();
+    h.Press(c);
+    io.AddMousePosEvent(c.x + 40.0f, c.y); h.Frame(); h.Frame();
+    REQUIRE(h.Node(0, 5)->FindPinLiteral(0) != nullptr);
+    io.AddKeyEvent(ImGuiKey_Escape, true); h.Frame();
+    io.AddKeyEvent(ImGuiKey_Escape, false);
+    io.AddMouseButtonEvent(0, false); h.Frame(); h.Frame();
+    CHECK(h.Node(0, 5)->FindPinLiteral(0) == nullptr);
+    CHECK_FALSE(h.stack.CanUndo());
+    CHECK(GraphJson(h, 0) == before);
+}
+
+TEST_CASE("Node page Inputs: Esc mid-drag on an EXISTING literal restores it in place, keeps it, and pushes nothing",
+          "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    const std::string before = GraphJson(h, 0);
+    h.key = NodeKeyOf(0, 5); h.Frame(); h.Frame();
+    const ImVec2 c = h.Centre("b");
+    ImGuiIO& io = ImGui::GetIO();
+    h.Press(c);
+    io.AddMousePosEvent(c.x + 40.0f, c.y); h.Frame(); h.Frame();
+    REQUIRE(h.Node(0, 5)->FindPinLiteral(1) != nullptr);
+    CHECK(h.Node(0, 5)->FindPinLiteral(1)->v[0] != 2.0f);      // live while dragging
+    io.AddKeyEvent(ImGuiKey_Escape, true); h.Frame();
+    io.AddKeyEvent(ImGuiKey_Escape, false);
+    io.AddMouseButtonEvent(0, false); h.Frame(); h.Frame();
+    REQUIRE(h.Node(0, 5)->FindPinLiteral(1) != nullptr);       // the user's literal survives the cancel
+    CHECK(h.Node(0, 5)->FindPinLiteral(1)->v[0] == 2.0f);
+    CHECK_FALSE(h.stack.CanUndo());
+    CHECK(GraphJson(h, 0) == before);
+}
+
+TEST_CASE("Node page: a page on a NON-active pass edits that pass", "[editor][material][nodepage]")
+{
+    NodePageHarness h(ChainDoc());                          // opens on the base (active pass 0)
+    const std::string base = GraphJson(h, 0);
+    h.key = NodeKeyOf(1, 3); h.Frame(); h.Frame();          // pass 1's Custom, pin x
+    const ImVec2 c = h.Centre("x");
+    ImGuiIO& io = ImGui::GetIO();
+    h.Press(c);
+    io.AddMousePosEvent(c.x + 40.0f, c.y); h.Frame();
+    io.AddMouseButtonEvent(0, false); h.Frame(); h.Frame();
+    REQUIRE(h.Node(1, 3)->FindPinLiteral(0) != nullptr);
+    CHECK(GraphJson(h, 0) == base);                         // the base never moved
+    REQUIRE(h.stack.CanUndo());
+    CHECK(std::string(h.stack.UndoLabel()) == "Pin Value");
+    h.stack.Undo();
+    CHECK(h.Node(1, 3)->FindPinLiteral(0) == nullptr);      // undo targets pass 1 too
+}
