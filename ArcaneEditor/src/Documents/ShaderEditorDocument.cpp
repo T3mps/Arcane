@@ -2286,6 +2286,10 @@ namespace Arcane::Editor
         // std::bad_function_call on the first page draw.
         const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
         DrawSaveWithErrorsConfirm();
+        // In normal ImGui space, so "Edit HLSL..." and rename propagation work
+        // while the canvas is hidden (s5.1.7). Before the node's id scope:
+        // the popup ids must not depend on which node is shown.
+        DrawGraphModals();
         // Re-resolved EVERY call: create and paste reallocate `nodes`. A gone
         // node draws its one read-only line inside a Rows table -- a row
         // outside one would hit ImGui::TableNextRow with no current table.
@@ -4094,104 +4098,9 @@ namespace Arcane::Editor
             ImGui::OpenPopup("##graphcreate");
         }
 
-        // Custom-node body editor: a MODAL in suspended (screen) space -- the
-        // in-node widget can only be a preview (child windows drift under the
-        // canvas transform). Apply commits ONE undo step.
-        if (m_bodyEditRequest != 0)
-        {
-            if (const Arcane::GraphNode* n = g.FindNode(m_bodyEditRequest))
-            {
-                m_bodyEditNode = m_bodyEditRequest;
-                std::snprintf(m_bodyBuf, sizeof(m_bodyBuf), "%s", n->customBody.c_str());
-                ImGui::OpenPopup("Edit HLSL##graphbody");
-            }
-            m_bodyEditRequest = 0;
-        }
-        ImGui::SetNextWindowSize(ImVec2(560.0f, 380.0f), ImGuiCond_Appearing);
-        if (ImGui::BeginPopupModal("Edit HLSL##graphbody", nullptr))
-        {
-            ImGui::TextDisabled("Function body. Inputs arrive as the node's pins; params "
-                                "and Time are directly visible. End with a return.");
-            ImGui::InputTextMultiline("##bodyedit", m_bodyBuf, sizeof(m_bodyBuf),
-                                      ImVec2(-1.0f, ImGui::GetContentRegionAvail().y - 34.0f),
-                                      ImGuiInputTextFlags_AllowTabInput);
-            if (ImGui::Button("Apply"))
-            {
-                if (Arcane::GraphNode* n = g.FindNode(m_bodyEditNode);
-                    n && n->customBody != m_bodyBuf)
-                {
-                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                    n->customBody = m_bodyBuf;
-                    m_dirty = true;
-                    if (m_live)
-                        RegenerateFromGraph();
-                    PushGraphUndo("Edit HLSL Body", std::move(before));
-                }
-                m_bodyEditNode = 0;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel"))
-            {
-                m_bodyEditNode = 0;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-        // Assisted param rename: the consent modal (cross-FILE writes are not
-        // undoable -- this gate is their structural-edit standing).
-        if (m_renameRequest)
-        {
-            m_renameRequest = false;
-            ImGui::OpenPopup("Rename Param Everywhere?##prename");
-        }
-        if (ImGui::BeginPopupModal("Rename Param Everywhere?##prename", nullptr,
-                                   ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::Text("Renamed '%s' -> '%s'.", m_renameOld.c_str(), m_renameNew.c_str());
-            ImGui::Text("%zu instance file(s) carry a saved value under the old name:",
-                        m_renameTargets.size());
-            for (std::size_t i = 0; i < m_renameTargets.size() && i < 8; ++i)
-                ImGui::BulletText("%s", m_renameTargets[i].name.c_str());
-            if (m_renameTargets.size() > 8)
-                ImGui::TextDisabled("...and %zu more", m_renameTargets.size() - 8);
-            ImGui::TextDisabled("Files that already have a '%s' value keep it; the "
-                                "old entry drops.", m_renameNew.c_str());
-            ImGui::Separator();
-            if (ImGui::Button("Rename everywhere"))
-            {
-                for (const RenameTarget& t : m_renameTargets)
-                {
-                    auto data = Arcane::LoadMaterialAsset(t.path);
-                    if (!data)
-                    {
-                        ARC_ERROR("param rename: '{}' failed to load -- skipped",
-                                  t.path.generic_string());
-                        continue;
-                    }
-                    RekeySavedParam(data->params, m_renameOld, m_renameNew);
-                    if (!Arcane::SaveMaterialAsset(t.path, *data))
-                    {
-                        ARC_ERROR("param rename: '{}' failed to save -- skipped",
-                                  t.path.generic_string());
-                        continue;
-                    }
-                    if (m_services.onAssetSaved)
-                        m_services.onAssetSaved(t.id);   // sprite-cache invalidate
-                    if (m_services.onParamRenamed)
-                        m_services.onParamRenamed(t.id, m_renameOld, m_renameNew);
-                }
-                m_renameTargets.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Just here"))
-            {
-                m_renameTargets.clear();   // today's behavior: the wart, chosen
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
+        // The body editor and the rename consent modal (s5.1.7); still inside
+        // this Suspend, where they sat before the hoist.
+        DrawGraphModals();
 
         if (ImGui::BeginPopup("##graphcreate"))
         {
@@ -4432,6 +4341,110 @@ namespace Arcane::Editor
             m_nodeSelApplying = false;
         }
         ed::SetCurrentEditor(nullptr);
+    }
+
+    void ShaderEditorDocument::DrawGraphModals()
+    {
+        // Custom-node body editor: a MODAL in screen space -- the in-node
+        // widget can only be a preview (child windows drift under the canvas
+        // transform). Bound to m_bodyEditPass, so Apply writes the pass the
+        // request named, not whatever the canvas shows. ONE undo step.
+        if (m_bodyEditRequest != 0)
+        {
+            if (const Arcane::GraphNode* n = FindGraphNode(m_bodyEditPass, m_bodyEditRequest))
+            {
+                m_bodyEditNode = m_bodyEditRequest;
+                std::snprintf(m_bodyBuf, sizeof(m_bodyBuf), "%s", n->customBody.c_str());
+                ImGui::OpenPopup("Edit HLSL##graphbody");
+            }
+            m_bodyEditRequest = 0;
+        }
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 380.0f), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal("Edit HLSL##graphbody", nullptr))
+        {
+            ImGui::TextDisabled("Function body. Inputs arrive as the node's pins; params "
+                                "and Time are directly visible. End with a return.");
+            ImGui::InputTextMultiline("##bodyedit", m_bodyBuf, sizeof(m_bodyBuf),
+                                      ImVec2(-1.0f, ImGui::GetContentRegionAvail().y - 34.0f),
+                                      ImGuiInputTextFlags_AllowTabInput);
+            if (ImGui::Button("Apply"))
+            {
+                if (Arcane::GraphNode* n = FindGraphNode(m_bodyEditPass, m_bodyEditNode);
+                    n && n->customBody != m_bodyBuf)
+                {
+                    std::optional<Arcane::MaterialGraph> before = GraphOptAt(m_bodyEditPass);
+                    n->customBody = m_bodyBuf;
+                    m_dirty = true;
+                    if (m_live)
+                        RegenerateFromGraph();
+                    PushGraphUndo("Edit HLSL Body", std::move(before), m_bodyEditPass);
+                }
+                m_bodyEditNode = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                m_bodyEditNode = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        // Assisted param rename: the consent modal (cross-FILE writes are not
+        // undoable -- this gate is their structural-edit standing). Needs no
+        // pass: BeginParamRename already walked every pass.
+        if (m_renameRequest)
+        {
+            m_renameRequest = false;
+            ImGui::OpenPopup("Rename Param Everywhere?##prename");
+        }
+        if (ImGui::BeginPopupModal("Rename Param Everywhere?##prename", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Renamed '%s' -> '%s'.", m_renameOld.c_str(), m_renameNew.c_str());
+            ImGui::Text("%zu instance file(s) carry a saved value under the old name:",
+                        m_renameTargets.size());
+            for (std::size_t i = 0; i < m_renameTargets.size() && i < 8; ++i)
+                ImGui::BulletText("%s", m_renameTargets[i].name.c_str());
+            if (m_renameTargets.size() > 8)
+                ImGui::TextDisabled("...and %zu more", m_renameTargets.size() - 8);
+            ImGui::TextDisabled("Files that already have a '%s' value keep it; the "
+                                "old entry drops.", m_renameNew.c_str());
+            ImGui::Separator();
+            if (ImGui::Button("Rename everywhere"))
+            {
+                for (const RenameTarget& t : m_renameTargets)
+                {
+                    auto data = Arcane::LoadMaterialAsset(t.path);
+                    if (!data)
+                    {
+                        ARC_ERROR("param rename: '{}' failed to load -- skipped",
+                                  t.path.generic_string());
+                        continue;
+                    }
+                    RekeySavedParam(data->params, m_renameOld, m_renameNew);
+                    if (!Arcane::SaveMaterialAsset(t.path, *data))
+                    {
+                        ARC_ERROR("param rename: '{}' failed to save -- skipped",
+                                  t.path.generic_string());
+                        continue;
+                    }
+                    if (m_services.onAssetSaved)
+                        m_services.onAssetSaved(t.id);   // sprite-cache invalidate
+                    if (m_services.onParamRenamed)
+                        m_services.onParamRenamed(t.id, m_renameOld, m_renameNew);
+                }
+                m_renameTargets.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Just here"))
+            {
+                m_renameTargets.clear();   // today's behavior: the wart, chosen
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 
     void ShaderEditorDocument::DrawGraphNode(Arcane::GraphNode& n, NodeLOD canvasLod)
@@ -5252,7 +5265,7 @@ namespace Arcane::Editor
                         ImGui::TextDisabled("...");
                 }
                 if (ImGui::SmallButton("Edit HLSL..."))
-                    m_bodyEditRequest = n.id;
+                    RequestBodyEdit(static_cast<std::size_t>(std::max(0, m_activePass)), n.id);
                 break;
             }
             default:

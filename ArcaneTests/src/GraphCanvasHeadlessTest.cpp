@@ -15,9 +15,11 @@
 #include "Helpers/NodePageDocs.hpp"   // SpriteNodeDoc / ChainNodeDoc / HeadlessImGui (node page s5.1.11)
 
 #include <imgui.h>
+#include <imgui_internal.h>   // OpenPopupStack: the modal-hoist case
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 using namespace Arcane;
@@ -203,4 +205,17 @@ TEST_CASE("Node page mirror: restoring a node in another pass switches the canva
     DocFrame(doc);
     CHECK(doc.SelectionKey() == "node:1:2");         // the Select landed AFTER the switch's ClearSelection
     CHECK(doc.SelectionEpoch() == 1);                // a restore is never an event
+}
+
+TEST_CASE("Node page modal hoist: the canvas still opens the HLSL body editor", "[editor][graphcanvas][nodepage]")
+{
+    Arcane::Test::HeadlessImGui imgui;
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    DocFrame(doc);
+    doc.RequestBodyEdit(0, 4);
+    DocFrame(doc);
+    bool open = false;
+    for (const ImGuiPopupData& p : imgui.ctx->OpenPopupStack)
+        open = open || (p.Window && std::string(p.Window->Name).find("Edit HLSL") != std::string::npos);
+    CHECK(open);
 }

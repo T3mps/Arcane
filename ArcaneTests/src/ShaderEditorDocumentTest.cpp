@@ -2074,3 +2074,56 @@ TEST_CASE("ShaderEditorDocument node page: a node deleted under a held page draw
     INFO(logged);
     CHECK(logged.find("This node no longer exists") != std::string::npos);
 }
+
+TEST_CASE("ShaderEditorDocument node page: Edit HLSL opens from the page with no canvas, and Apply writes the PINNED pass",
+          "[editor][material][inspector][nodepage]")
+{
+    Arcane::Test::HeadlessImGui imgui;
+    Astra::Registry registry;
+    Arcane::CommandStack stack{ [&registry]() -> Astra::Registry& { return registry; } };
+    DocServices services;
+    services.undo = [&stack]() -> Arcane::CommandStack* { return &stack; };   // T1's resolver
+    ShaderEditorDocument doc(services, "chain.arcmat", Arcane::Test::ChainNodeDoc());
+    // Active pass 0 (the base); the page targets pass 1's Custom node, as a
+    // pinned page would. The document window is never drawn (canvas hidden).
+    Arcane::Editor::InspectorPage* page = doc.PageFor("node:1:2");
+    REQUIRE(page != nullptr);
+    doc.RequestBodyEdit(1, 2);
+
+    Arcane::Editor::PropertyGridState grid;
+    auto frame = [&](const char* activate)
+    {
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        if (activate)
+            if (ImGuiWindow* modal = ImGui::FindWindowByName("Edit HLSL##graphbody"))
+                ImGui::ActivateItemByID(modal->GetID(activate));   // lands on the NEXT frame
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 600.0f));
+        ImGui::Begin("Inspector");
+        Arcane::Editor::PropertyGrid pg(grid);
+        doc.PageFor("node:1:2")->Draw(pg);
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame(nullptr);                                  // the page consumes the request and opens the modal
+    bool open = false;
+    for (const ImGuiPopupData& p : imgui.ctx->OpenPopupStack)
+        open = open || (p.Window && std::string(p.Window->Name).find("Edit HLSL") != std::string::npos);
+    REQUIRE(open);
+
+    frame("##bodyedit");                             // queue focus on the body
+    frame(nullptr);                                  // the text box is active
+    ImGui::GetIO().AddInputCharactersUTF8("x");
+    frame(nullptr);                                  // the typed text lands in the buffer
+    frame("Apply");
+    frame(nullptr);                                  // Apply lands
+
+    const ShaderEditorDocument::PassListState after = doc.CapturePassListState();
+    REQUIRE(after.passes.size() == 1);
+    REQUIRE(after.passes[0].graph.has_value());
+    CHECK(after.passes[0].graph->FindNode(2)->customBody != "return p1;");   // pass 1 written
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Edit HLSL Body");
+    stack.Undo();
+    CHECK(doc.CapturePassListState().passes[0].graph->FindNode(2)->customBody == "return p1;");
+}

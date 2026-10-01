@@ -343,6 +343,13 @@ namespace Arcane::Editor
             else
                 m_focusPending.Disarm();
         }
+        // Open the Custom-node HLSL body editor for (pass, id) (node page
+        // s5.1.7). The canvas's "Edit HLSL..." passes the active pass, the
+        // node page its target -- so a pinned page edits a pass that is not
+        // the active one. Consumed by DrawGraphModals, which the canvas AND
+        // the page both draw.
+        void RequestBodyEdit(std::size_t pass, std::uint32_t id) noexcept
+        { m_bodyEditPass = pass; m_bodyEditRequest = id; }
 
         // TEST SEAM (GraphFitTest): the graph canvas's node-editor context, so a
         // headless test can read the view the fit-on-open landed. Null until the
@@ -630,6 +637,14 @@ namespace Arcane::Editor
         void DrawCanvasBackdrop(
                                 GraphGridPhase& phase);
         void DrawGraphPanel();
+        // The graph's two modals -- the HLSL body editor and the param-rename
+        // propagation -- hoisted out of DrawGraphPanel (s5.1.7). Drawn by the
+        // canvas (inside ed::Suspend) and by the node page (normal ImGui
+        // space): whichever draws first consumes the request flag, the other's
+        // BeginPopupModal returns false (the DrawSaveWithErrorsConfirm
+        // precedent). Takes no graph: the body editor is pass-bound, and the
+        // rename walks every pass itself.
+        void DrawGraphModals();
         // `lod` is the canvas tier for THIS frame, computed once by
         // DrawGraphPanel before the node loop and branched on at the draw sites
         // inside. Passed rather than stored so there is exactly one read of the
@@ -984,10 +999,11 @@ namespace Arcane::Editor
         TextCommitState m_textEdit;
         // Custom-node HLSL body editing: the node shows a plain-text preview
         // (child-window widgets drift inside the canvas); the body edits in a
-        // Suspend'ed MODAL. Request set by the node's button, consumed in
-        // DrawGraphPanel's popup block; the buffer holds the working copy
-        // until Apply commits it as one undo step.
+        // MODAL. Request set by RequestBodyEdit (the canvas button, the node
+        // page), consumed in DrawGraphModals; the buffer holds the working
+        // copy until Apply commits it as one undo step.
         std::uint32_t m_bodyEditRequest = 0;
+        std::size_t   m_bodyEditPass = 0;   // the pass the request AND the open modal edit
         std::uint32_t m_bodyEditNode = 0;
         char          m_bodyBuf[4096] = {};
 
