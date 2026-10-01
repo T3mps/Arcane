@@ -3195,6 +3195,8 @@ namespace Arcane::Editor
         const auto pluginModules = Arcane::HostBoot::PluginModules(proj);
         if (gameModule.empty() && pluginModules.empty())
             return;
+        if (m_undo)
+            Arcane::Editor::ClearHistoryForModuleReload(*m_undo, m_scene);   // before the new image registers (s3.3f)
         m_plugin.emplace(*m_process,
             gameModule.empty() ? std::filesystem::path{}
                                : std::filesystem::path(gameModule));

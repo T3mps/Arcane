@@ -64,6 +64,16 @@ namespace Arcane::Editor
         // The recorded save baseline, for per-entity dirty queries
         // (CommandStack::TouchedSinceState -- the Outliner's asterisks).
         [[nodiscard]] std::uint64_t SavedStateId() const noexcept { return m_savedStateId; }
+        // After a history Clear that is NOT a scene swap (module reload): a
+        // clean scene re-baselines clean; a dirty one stays dirty even when it
+        // was saved at state 0, because SceneStateId() is 0 again after the
+        // clear (R15: never drop an unsaved warning).
+        void RebaseAfterHistoryClear(bool wasDirty, const Arcane::CommandStack& stack) noexcept
+        {
+            if (wasDirty) m_savedStateId = kUnreachableStateId;
+            else          MarkSaved(stack);
+        }
+        static constexpr std::uint64_t kUnreachableStateId = ~std::uint64_t{0};   // m_nextId never gets there
 
         // ---- retargeting -------------------------------------------------
         // After a successful save-as or open: adopt the file and go clean.
@@ -140,4 +150,13 @@ namespace Arcane::Editor
         SceneIntent           m_pending = SceneIntent::None;
         std::filesystem::path m_pendingPath;
     };
+
+    // Spec s3.3(f) verdict CONFIRMED: a rebuilt module can keep a component's
+    // id with a new layout, so no undo step may survive the swap.
+    inline void ClearHistoryForModuleReload(Arcane::CommandStack& stack, SceneSession& scene)
+    {
+        const bool wasDirty = scene.IsDirty(stack);
+        stack.Clear("Game module reloaded");
+        scene.RebaseAfterHistoryClear(wasDirty, stack);
+    }
 }

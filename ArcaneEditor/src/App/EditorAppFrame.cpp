@@ -4243,7 +4243,16 @@ namespace Arcane::Editor
 
     void EditorApp::EndFrame(LoopState& ls)
     {
-        if (m_plugin) m_plugin->Poll();
+        if (m_plugin)
+        {
+            // Poll decides internally whether to swap (PluginHost.cpp:1003-1006).
+            // Clear in the same EndFrame, before any undo can run: no command's
+            // destructor calls module code (spec s3.3f, verdict CONFIRMED).
+            const std::uint32_t generation = m_plugin->Generation();
+            m_plugin->Poll();
+            if (m_undo && m_plugin->Generation() != generation)
+                Arcane::Editor::ClearHistoryForModuleReload(*m_undo, m_scene);
+        }
 
         ++m_frameCount;
 

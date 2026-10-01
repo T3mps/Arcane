@@ -333,3 +333,28 @@ TEST_CASE("a second Request while LaunchStandalone is parked is ignored", "[edit
     CHECK_FALSE(s.Request(SceneIntent::OpenScene, "other.arcscene", h.stack));
     CHECK(s.Pending() == SceneIntent::LaunchStandalone);
 }
+
+TEST_CASE("a module-reload clear names its cause and keeps dirty/clean as it was", "[editor][scene][undo][reload]")
+{
+    Harness h;
+    SceneSession s;
+    SECTION("clean stays clean")
+    {
+        h.Edit(1.0f);
+        s.MarkSaved(h.stack);
+        ClearHistoryForModuleReload(h.stack, s);
+        CHECK_FALSE(h.stack.CanUndo());
+        CHECK(h.stack.ClearedReason() == "Game module reloaded");
+        CHECK_FALSE(s.IsDirty(h.stack));
+    }
+    SECTION("dirty stays dirty, even saved at state 0")
+    {
+        s.MarkSaved(h.stack);                     // saved at 0
+        h.Edit(1.0f);
+        REQUIRE(s.IsDirty(h.stack));
+        ClearHistoryForModuleReload(h.stack, s);  // SceneStateId is 0 again...
+        CHECK(s.IsDirty(h.stack));                // ...but the edits are unsaved
+        h.Edit(2.0f);
+        CHECK(s.IsDirty(h.stack));
+    }
+}
