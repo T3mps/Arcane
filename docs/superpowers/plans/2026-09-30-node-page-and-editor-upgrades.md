@@ -18707,7 +18707,7 @@ git commit -m "feat(editor): the asset page fits the Assets-only Inspector at 10
 ### Task T3-C11: Re-bless the golden slots T3 forces, one slot at a time (s2.6, R1)
 
 **Files:**
-- Modify: `ReferenceProject/Verify/References/editor-material-page.png` and `ReferenceProject/Verify/References/editor-asset-page.png`, plus only those of `editor-ui.png`, `editor-ui-perspective.png` and `editor-input-doc.png` whose diff is attributable to T3. The fixture's asset counts were re-blessed in the fixture task, so what remains is the pinned header (5.7).
+- Modify: all five editor slots -- `ReferenceProject/Verify/References/editor-material-page.png`, `editor-asset-page.png`, `editor-ui.png`, `editor-ui-perspective.png` and `editor-input-doc.png`. The fixture's asset-count / Asset Browser row change (s5.1.10, owed by T3-A1: every editor slot shows the Asset Browser counts and the status-bar asset count) is blessed here, together with each slot's own T3 cause (5.3, 5.6, the 5.7 pinned header).
 
 **Interfaces:**
 - Consumes: every T3 commit before this one. This task changes no code.
@@ -18718,14 +18718,15 @@ git commit -m "feat(editor): the asset page fits the Assets-only Inspector at 10
 2. Delete `bin\Release-windows-x86_64-md\ArcaneEditor\imgui.ini` and `bin\Debug-windows-x86_64-md\ArcaneEditor\imgui.ini`.
 3. Run `powershell -File scripts\golden-gate.ps1 -Configuration Debug`. This leaves the single-slot `ReferenceProject\Binaries\` on Debug, which the Debug editor that blesses in Step 3 needs. Release is gated in Step 4.
 
-Expected: red `editor-material-page` (5.3) and `editor-asset-page` (5.6) lanes, plus possibly `editor-ui`, `editor-ui-perspective` and `editor-input-doc` (5.7). `runtime-scene` and `f3-cull-blend` should be green.
+Expected: all five editor slots red, dx12 and vulkan lanes: `editor-material-page` (s5.1.10 fixture counts + 5.3) and `editor-asset-page` (s5.1.10 fixture counts + 5.6), and `editor-ui` / `editor-ui-perspective` / `editor-input-doc` (the s5.1.10 fixture's Asset Browser count/row, plus the 5.7 header). `runtime-scene` and `f3-cull-blend` should be green.
 
 - [ ] **Step 2: Read every diff and attribute it**
 
-Open `bin\Debug-windows-x86_64-md\ArcaneEditor\ReferenceProject\Saved\Verify\<slot>-dx12-diff.png` for each red slot. Each slot's delta must be exactly one T3 cause:
-- `editor-material-page`: the Preview band with its one-line status, then Rendering and Parameters as rows;
-- `editor-asset-page`: the smaller thumb, the icon row, and the Derived and Import bands;
-- any other slot: only the scrollbar, now starting under the header (5.7).
+Open `bin\Debug-windows-x86_64-md\ArcaneEditor\ReferenceProject\Saved\Verify\<slot>-dx12-diff.png` for each red slot. Each slot's delta must be explained entirely by the T3 causes listed for it:
+- `editor-material-page`: s5.1.10 fixture counts (Asset Browser All/Material/materials-folder/status-bar counts); the toolbar's Surface label before the disabled surface combo (s5.3, T3-C5), the Preview band with its one-line status, then Rendering and Parameters as rows (s5.3); plus any T3-C3 toolbar status/toggle text change (s5.2) visible on this mesh material;
+- `editor-asset-page`: s5.1.10 fixture counts (Asset Browser All/Material/materials-folder/status-bar counts; the list shifted one row); the smaller thumb, the icon row, and the Derived and Import bands (s5.6);
+- `editor-ui` and `editor-ui-perspective`: the s5.1.10 fixture's Asset Browser count/row change (the new NodePageGraph entry) and the scrollbar now starting under the header (5.7);
+- `editor-input-doc`: s5.1.10 fixture counts (Asset Browser / status-bar counts) + the 5.7 scrollbar.
 
 Any other delta is a defect. Fix it forward before blessing.
 
@@ -18739,13 +18740,15 @@ Copy-Item .\ReferenceProject\Verify\References\editor-material-page.png D:\dev\s
 View the PNG, then:
 ```bash
 git add ReferenceProject/Verify/References/editor-material-page.png
-git commit -m "test(editor): re-bless editor-material-page for the PropertyGrid material page -- Preview band + one-line status, Rendering and Parameters rows (node page arc T3, s5.3)"
+git commit -m "test(editor): re-bless editor-material-page for the node-page fixture counts and the PropertyGrid material page -- Asset Browser counts, toolbar Surface label, Preview band + one-line status, Rendering and Parameters rows (node page arc T3, s5.1.10/s5.2/s5.3)"
 ```
-Repeat for each red slot, one commit each, naming its cause:
-- `editor-asset-page`: `--select-asset d7f389fd-f687-407d-b9d7-9753eb6b0258`, cause s5.6;
-- `editor-ui`: no extra args, cause s5.7;
-- `editor-ui-perspective`: `--view-mode perspective`, cause s5.7;
-- `editor-input-doc`: `--open-asset 97260310-8b35-4b29-b12f-1fd6f8e99071 --select-in-document Player/Jump`, cause s5.7.
+Repeat for each red slot, one commit each; every commit message names the s5.1.10 fixture-count cause alongside the slot's own cause:
+- `editor-asset-page`: `--select-asset d7f389fd-f687-407d-b9d7-9753eb6b0258`, cause s5.1.10 fixture counts (list shifted one row) + s5.6;
+- `editor-ui`: no extra args, cause s5.1.10 fixture counts + s5.7;
+- `editor-ui-perspective`: `--view-mode perspective`, cause s5.1.10 fixture counts + s5.7;
+- `editor-input-doc`: `--open-asset 97260310-8b35-4b29-b12f-1fd6f8e99071 --select-in-document Player/Jump`, cause s5.1.10 fixture counts + s5.7.
+
+This closes T3-A1's "owed: re-bless at T3 end (fixture counts)" ledger note (all five editor slots, dx12 and vulkan lanes).
 
 - [ ] **Step 4: Re-run the gate in both configs, ending on Debug**
 
