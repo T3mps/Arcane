@@ -89,6 +89,7 @@ namespace Arcane
         p.m_file   = file;
         p.m_offset = file->size;
         file->size += p.m_size;
+        file->live += p.m_size;   // released by the payload's dtor / move-over
         std::vector<std::byte>().swap(p.m_bytes);   // leaves memory
         return p;
     }
@@ -119,6 +120,7 @@ namespace Arcane
                 p.m_file   = file;
                 p.m_offset = file->size;
                 file->size += size;
+                file->live += size;   // see MakePayload
                 return p;
             }
             ARC_WARN("Undo: spilling '{}' to '{}' failed -- it stays in memory",

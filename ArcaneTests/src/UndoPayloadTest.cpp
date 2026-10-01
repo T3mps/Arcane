@@ -198,3 +198,85 @@ TEST_CASE("UndoPayload: an empty spill directory means memory-only; a failed wri
         CHECK(*p.Load() == Bytes(64, 9));
     }
 }
+
+namespace
+{
+    // A step that re-captures on every replay, like T5's RegistryStateCommand:
+    // it drops its old payload FIRST, then makes a new one through the stack.
+    struct RemakingCommand final : Arcane::ICommand
+    {
+        Arcane::CommandStack*            stack = nullptr;
+        std::vector<Arcane::UndoPayload> payloads;
+        unsigned char                    seed = 0;
+        void Remake()
+        {
+            payloads.clear();
+            payloads.push_back(stack->MakePayload(Bytes(64, ++seed)));
+        }
+        void Undo() override { Remake(); }
+        void Redo() override { Remake(); }
+        const char* Label() const override { return "remake"; }
+        std::size_t PayloadBytes() const override
+        {
+            std::size_t n = 0;
+            for (const auto& p : payloads) n += p.Size();
+            return n;
+        }
+    };
+}
+
+TEST_CASE("UndoPayload: a step that re-makes its payloads on replay keeps its file at the live bytes", "[edit][undo][spill]")
+{
+    Fixture fx;
+    auto owned = std::make_unique<RemakingCommand>();
+    RemakingCommand& cmd = *owned;
+    cmd.stack = &fx.stack;
+    cmd.payloads.push_back(fx.Make(64, 1));
+    REQUIRE(cmd.payloads[0].Spilled());
+    const fs::path file = cmd.payloads[0].SpillPath();
+    fx.stack.Push(std::move(owned));
+    CHECK(fs::file_size(file) == 64);
+
+    for (int i = 0; i < 5; ++i)
+    {
+        fx.stack.Undo();
+        REQUIRE(cmd.payloads.size() == 1);
+        REQUIRE(cmd.payloads[0].Spilled());
+        CHECK(cmd.payloads[0].SpillPath() == file);   // the replayed step's own file
+        CHECK(fs::file_size(file) <= cmd.PayloadBytes());
+        CHECK(*cmd.payloads[0].Load() == Bytes(64, cmd.seed));
+
+        fx.stack.Redo();
+        REQUIRE(cmd.payloads[0].Spilled());
+        CHECK(cmd.payloads[0].SpillPath() == file);
+        CHECK(fs::file_size(file) <= cmd.PayloadBytes());
+        CHECK(*cmd.payloads[0].Load() == Bytes(64, cmd.seed));
+    }
+}
+
+TEST_CASE("UndoPayload: moving a spilled payload transfers its live bytes; the moved-from one holds nothing", "[edit][undo][spill]")
+{
+    Fixture fx;
+    Arcane::UndoPayload a = fx.Make(64, 4);
+    REQUIRE(a.Spilled());
+    const fs::path file = a.SpillPath();
+
+    Arcane::UndoPayload b = std::move(a);
+    CHECK_FALSE(a.Spilled());
+    CHECK(a.Empty());
+    CHECK(b.Spilled());
+    CHECK(*b.Load() == Bytes(64, 4));
+
+    Arcane::UndoPayload c = fx.Make(32, 5);   // same assembling step: offset 64
+    c = std::move(b);                         // c's own 32 bytes leave; b's 64 stay live
+    CHECK(c.Spilled());
+    CHECK(*c.Load() == Bytes(64, 4));
+    CHECK(fs::file_size(file) == 96);         // still live: no truncation yet
+
+    c = Arcane::UndoPayload{};                // the last live bytes go: the file empties
+    CHECK(fs::file_size(file) == 0);
+    const Arcane::UndoPayload d = fx.Make(48, 6);
+    CHECK(d.SpillPath() == file);
+    CHECK(fs::file_size(file) == 48);         // rewritten from offset 0
+    CHECK(*d.Load() == Bytes(48, 6));
+}
