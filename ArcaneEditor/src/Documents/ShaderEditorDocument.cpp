@@ -1908,7 +1908,7 @@ namespace Arcane::Editor
             else
                 m_inChainView = false;
 
-            if (chainAvailable && m_inChainView)
+            if (ChainViewShowing())
                 DrawPassCanvas();
             // A mesh base material has no snippet, no graph and no pass
             // canvas to show here (Rebuild()'s own guard) -- falling through
@@ -2161,6 +2161,75 @@ namespace Arcane::Editor
             ImGui::EndPopup();
         }
 
+    }
+
+    // ---------------------------------------------- node page selection (s5.1.1)
+    const Arcane::GraphNode* ShaderEditorDocument::FindGraphNode(std::size_t pass, std::uint32_t id) const
+    {
+        if (IsInstance() || pass > m_data.passes.size())
+            return nullptr;
+        const std::optional<Arcane::MaterialGraph>& g =
+            pass == 0 ? m_data.graph : m_data.passes[pass - 1].graph;
+        return g ? g->FindNode(id) : nullptr;
+    }
+
+    Arcane::GraphNode* ShaderEditorDocument::FindGraphNode(std::size_t pass, std::uint32_t id)
+    {
+        return const_cast<Arcane::GraphNode*>(std::as_const(*this).FindGraphNode(pass, id));
+    }
+
+    bool ShaderEditorDocument::Resolves(std::string_view key) const
+    {
+        if (m_pageSel.Resolves(key))
+            return true;
+        const std::optional<NodeKey> k = ParseNodeKey(key);
+        return k && FindGraphNode(k->pass, k->id) != nullptr;
+    }
+
+    std::string ShaderEditorDocument::SelectionKey() const
+    {
+        // Chain-overview pass nodes keep the material page; the mirror
+        // survives the overview, so leaving it restores the node page with no
+        // event. An undo that deleted the node falls back here too.
+        if (m_nodeSel && !ChainViewShowing())
+            if (std::string k = FormatNodeKey(*m_nodeSel); Resolves(k))
+                return k;
+        return m_pageSel.SelectionKey();
+    }
+
+    bool ShaderEditorDocument::RestoreSelection(std::string_view key)
+    {
+        if (!Resolves(key))
+            return false;
+        if (m_pageSel.Resolves(key))
+        {
+            m_nodeSel.reset();
+            m_nodeSelRequest = NodeSelRequest{ NodeSelRequest::Clear, 0 };
+            return true;
+        }
+        const NodeKey k = *ParseNodeKey(key);
+        // Resolves range-checked the pass, so the cast cannot clamp. EnterPass
+        // leaves the overview and records the document's own navigation.
+        if (static_cast<int>(k.pass) != m_activePass || ChainViewShowing())
+            EnterPass(static_cast<int>(k.pass));
+        // IMMEDIATELY: InspectorHost::TryLand re-reads SelectionKey() right
+        // after this returns (Panels/InspectorHost.cpp:240-245).
+        m_nodeSel = k;
+        m_nodeSelRequest = NodeSelRequest{ NodeSelRequest::Select, k.id };
+        return true;
+    }
+
+    bool ShaderEditorDocument::SelectByPath(std::string_view path)
+    {
+        // StageFinalize runs this before the first draw: the key is valid at
+        // once (checked against the data), the request lands on the first
+        // canvas frame.
+        const std::optional<NodeKey> k =
+            ParseNodeSelectPath(path, static_cast<std::size_t>(std::max(0, m_activePass)));
+        if (!k || !RestoreSelection(FormatNodeKey(*k)))
+            return false;
+        ++m_pageSel.epoch;
+        return true;
     }
 
     void ShaderEditorDocument::DrawSnippetEditor()

@@ -24,6 +24,7 @@
 #include "Scene/UndoGate.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
+#include "Documents/ShaderNodeKey.hpp"   // NodeKey: the node page's "node:<pass>:<id>" key
 #include "Documents/PreviewStatus.hpp"
 #include "Widgets/EditorWidgets.hpp"   // TextCommitState / StableTextEdit
 // The grid's PURE half, and its ONLY half: the two phase members below are
@@ -197,20 +198,34 @@ namespace Arcane::Editor
         // selects it (m_pageSel starts at epoch 1) and a click in the
         // document's content re-selects it (Draw's NoteContentClick). Tab
         // switches and focus never do (the spec's one selection rule).
-        //
-        // SEAM: the next phase's NODE page (Unity Shader Graph's Graph
-        // Inspector shape -- click a node in the canvas, edit its properties
-        // in the Inspector) lands here as a second key; selecting a node does
-        // not change the page this phase.
         std::string_view Kind() const override { return "material"; }
         InspectorPage* Page() override { return &m_page; }
         InspectorPage* PageFor(std::string_view key) override { return m_pageSel.Resolves(key) ? &m_page : nullptr; }
-        std::string SelectionKey() const override { return m_pageSel.SelectionKey(); }
+        // The NODE page (node page s5.1): a second key, "node:<pass>:<id>"
+        // (ShaderNodeKey.hpp), mirrored from the graph canvas's selection.
+        // SelectionKey answers the node key when exactly one node is selected,
+        // the chain overview is not showing, and the key still resolves;
+        // otherwise "material".
+        std::string SelectionKey() const override;
         // True when it resolves; NO epoch bump -- a restore is not a click.
-        bool RestoreSelection(std::string_view key) override { return m_pageSel.Resolves(key); }
-        bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
+        // A node key enters its pass if needed and arms a canvas Select.
+        bool RestoreSelection(std::string_view key) override;
+        // PURE. "material", or a node key whose pass is in range (checked
+        // BEFORE the graph lookup) and whose graph holds the id. Instances
+        // and graphless bases resolve only "material".
+        bool Resolves(std::string_view key) const override;
+        // --select-in-document: "<id>" (active pass) or "<pass>/<id>"; a
+        // scripted select IS a selection (one epoch bump).
+        bool SelectByPath(std::string_view path) override;
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
         void NoteReopened() override { m_pageSel.NoteReopened(); }
+        // The chain OVERVIEW is what the canvas area shows. m_inChainView is
+        // seeded true for every document and Draw clears it only once a
+        // non-chain surface draws, so the raw flag would report an overview
+        // that is not there before the first draw.
+        [[nodiscard]] bool ChainViewShowing() const noexcept { return m_surface == 0 && m_inChainView; }
+        // Exposed for the headless tests (ParseErrors precedent).
+        [[nodiscard]] std::size_t NavHistoryDepth() const noexcept { return m_navHistory.size(); }
         void FlushGesture() override;
 
         // True when the result belonged to this document's in-flight compiles.
@@ -553,6 +568,12 @@ namespace Arcane::Editor
         // Graph mode (Slice 9, imgui-node-editor canvas). The canvas edits the
         // ACTIVE pass's graph; these resolve which optional that is.
         std::optional<Arcane::MaterialGraph>& GraphOptAt(std::size_t pass);
+        // (pass, id) -> the node, or null. Range-checks the pass FIRST
+        // (GraphOptAt silently falls back to the base); null for instances and
+        // graphless passes. Never hold the result across frames: create and
+        // paste reallocate `nodes`.
+        [[nodiscard]] const Arcane::GraphNode* FindGraphNode(std::size_t pass, std::uint32_t id) const;
+        [[nodiscard]] Arcane::GraphNode* FindGraphNode(std::size_t pass, std::uint32_t id);
         std::optional<Arcane::MaterialGraph>& ActiveGraphOpt();
         bool ActiveGraphOwned() { return ActiveGraphOpt().has_value(); }
         // Regenerate EVERY graph-owned pass's snippet, then Rebuild. Safe to
@@ -813,6 +834,21 @@ namespace Arcane::Editor
         // open) and the page itself. m_page holds a reference to *this;
         // documents live behind unique_ptr in DocumentHost and never move.
         DocumentPageSelection  m_pageSel{ "material" };
+        // ---- The node page's selection mirror (node page s5.1.1) ----
+        // m_nodeSel: the canvas's one selected node, rebuilt after ed::End on
+        // every DRAWN canvas frame and kept as-is when the canvas does not
+        // draw (HLSL view, background tab). Canvas WRITES go only through
+        // m_nodeSelRequest, applied inside ed::Begin/End (DrawGraphPanel);
+        // m_nodeSelApplying marks that frame so the read raises no event.
+        std::optional<NodeKey> m_nodeSel;
+        struct NodeSelRequest
+        {
+            enum Op : std::uint8_t { Select, Clear };
+            Op            op = Select;
+            std::uint32_t id = 0;
+        };
+        std::optional<NodeSelRequest> m_nodeSelRequest;
+        bool m_nodeSelApplying = false;
         MaterialInspectorPage  m_page{ *this };
 
         // The document's ONE edit-gesture bracket (EditGesture). TWO draw

@@ -14,6 +14,7 @@
 #include "Widgets/IconsLucide.h"   // ICON_LC_X: the asset cell's clear button
 #include "Widgets/PropertyGrid.hpp"
 #include "Helpers/GpuCapability.hpp"
+#include "Helpers/NodePageDocs.hpp"   // SpriteNodeDoc / ChainNodeDoc (node page s5.1.11)
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
@@ -33,6 +34,7 @@
 #include <imgui.h>   // the stale-ini case drives ImGui's settings API
 #include <imgui_internal.h>   // ClearIniSettings (a windowed project switch's reset)
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -1911,4 +1913,89 @@ TEST_CASE("material page: a base texture row's reset slot never covers the asset
     h.Frame(*fx.doc);
     h.Click(*fx.doc, h.At("albedo#reset"));
     CHECK(fx.UndoLabel() == "Reset albedo");
+}
+
+// Node page s5.1.1: node keys resolve purely against the data -- the pass is
+// range-checked BEFORE the graph (GraphOptAt would silently fall back to the base).
+TEST_CASE("ShaderEditorDocument node keys: Resolves is pure and refuses an out-of-range pass",
+          "[editor][material][inspector][nodepage]")
+{
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    CHECK(doc.Resolves("material"));
+    CHECK(doc.Resolves("node:0:3"));
+    CHECK_FALSE(doc.Resolves("node:0:99"));          // no such id
+    CHECK_FALSE(doc.Resolves("node:1:3"));           // pass 1 does not exist: NOT the base fallback
+    CHECK_FALSE(doc.Resolves("node:00:3"));          // non-canonical
+    CHECK_FALSE(doc.Resolves("node:7"));             // malformed (the :121 case)
+    CHECK(doc.SelectionKey() == "material");
+    CHECK(doc.SelectionEpoch() == 1);                // Resolves never selects
+
+    // A graphless (text-owned) base resolves only "material".
+    Arcane::MaterialAssetData text;
+    text.id = Arcane::Guid::Generate();
+    text.name = "Text";
+    text.snippet = kSnippet;
+    ShaderEditorDocument textDoc(DocServices{}, "text.arcmat", text);
+    CHECK(textDoc.Resolves("material"));
+    CHECK_FALSE(textDoc.Resolves("node:0:1"));
+}
+
+TEST_CASE("ShaderEditorDocument RestoreSelection: the key is live at once, no epoch, no pass entry on a sprite base",
+          "[editor][material][inspector][nodepage]")
+{
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    CHECK_FALSE(doc.ChainViewShowing());             // sprite surface: there is no overview
+    REQUIRE(doc.RestoreSelection("node:0:3"));
+    CHECK(doc.SelectionKey() == "node:0:3");         // TryLand re-reads it straight after
+    CHECK(doc.SelectionEpoch() == 1);                // a restore is not a selection event
+    CHECK(doc.NavHistoryDepth() == 1);               // no EnterPass on the active pass
+    CHECK_FALSE(doc.RestoreSelection("node:0:99"));
+    CHECK(doc.SelectionKey() == "node:0:3");         // a failed restore changes nothing
+    REQUIRE(doc.RestoreSelection("material"));
+    CHECK(doc.SelectionKey() == "material");
+    CHECK(doc.SelectionEpoch() == 1);
+}
+
+TEST_CASE("ShaderEditorDocument RestoreSelection: a node key leaves the chain overview through EnterPass",
+          "[editor][material][inspector][nodepage]")
+{
+    ShaderEditorDocument doc(DocServices{}, "chain.arcmat", Arcane::Test::ChainNodeDoc());
+    CHECK(doc.ChainViewShowing());                   // seeded true, fullscreen surface
+    REQUIRE(doc.RestoreSelection("node:1:2"));
+    CHECK_FALSE(doc.ChainViewShowing());
+    CHECK(doc.NavHistoryDepth() == 2);               // EnterPass recorded the navigation
+    CHECK(doc.SelectionKey() == "node:1:2");
+    CHECK(doc.SelectionEpoch() == 1);
+}
+
+TEST_CASE("ShaderEditorDocument SelectByPath: a scripted select bumps the epoch exactly once",
+          "[editor][material][inspector][nodepage]")
+{
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    REQUIRE(doc.SelectByPath("3"));                  // <id> = the active pass
+    CHECK(doc.SelectionKey() == "node:0:3");
+    CHECK(doc.SelectionEpoch() == 2);
+    REQUIRE(doc.SelectByPath("0/2"));
+    CHECK(doc.SelectionKey() == "node:0:2");
+    CHECK(doc.SelectionEpoch() == 3);
+    CHECK_FALSE(doc.SelectByPath("9"));              // no such node
+    CHECK_FALSE(doc.SelectByPath("1/3"));            // no such pass
+    CHECK_FALSE(doc.SelectByPath("Player/Jump"));
+    CHECK(doc.SelectionEpoch() == 3);
+}
+
+TEST_CASE("ShaderEditorDocument: undoing the selected node's creation falls back to material with no event; redo restores it",
+          "[editor][material][inspector][nodepage]")
+{
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    REQUIRE(doc.RestoreSelection("node:0:4"));
+    std::optional<Arcane::MaterialGraph> with = Arcane::Test::SpriteNodeDoc().graph;
+    std::optional<Arcane::MaterialGraph> without = with;
+    std::erase_if(without->nodes, [](const Arcane::GraphNode& n) { return n.id == 4; });
+    doc.ApplyGraphState(0, without);                 // GraphEditCommand::Undo's path
+    CHECK(doc.SelectionKey() == "material");
+    CHECK(doc.SelectionEpoch() == 1);
+    doc.ApplyGraphState(0, with);                    // Redo restores the same id
+    CHECK(doc.SelectionKey() == "node:0:4");
+    CHECK(doc.SelectionEpoch() == 1);
 }
