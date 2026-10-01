@@ -22,6 +22,26 @@
 // loss with a refused value reverts without committing. Mirrors the Input
 // Actions rename box.
 //
+// ROWS STAY UNDO-AGNOSTIC. THE EDITGESTURE-AFTER-ROW CONTRACT (node-page spec
+// s4.1(f)) is how a page brackets them:
+//   1. ACTIVATION. After IntRow / FloatRow / SliderRow / VecRow / ColorRow the
+//      VALUE widget is g.LastItemData -- decorations submit BEFORE it
+//      (SetNextRowDecor) -- so EditGesture::BeginOnActivate(stack, st, label,
+//      onOpened) called right after the row fires on the activation frame,
+//      grouped rows included (EndGroup forwards the active id,
+//      imgui.cpp:12477-12482). ColorRow's popup is bracketed separately:
+//      BeginOnPopupOpen / EndOnPopupClose on *popupIdOut.
+//   2. LIVE WRITE-THROUGH. A live-preview page writes `value` to its live
+//      target whenever the two differ -- including the seed Escape restored.
+//   3. CLOSE. EditGesture::EndAfterRow(stack, st, grid.LastRowEvents().cancelled).
+//      A grouped row's Escape is invisible to IsItemDeactivated, so
+//      EndOnDeactivate alone leaves the gesture parked until a ScopeGuard;
+//      EndAfterRow closes it at the row, before any later row can activate.
+//      Required for an adopter without a ScopeGuard.
+// After an Escape the close commits an UNCHANGED value: the page's
+// before == after guard (ShaderEditorDocument.cpp:5954-5957) or CommandStack's
+// unchanged-snapshot drop pushes nothing.
+//
 // A row's ImGui id must include the TARGET's id -- the caller pushes it
 // around the Rows scope (Task 10 does; the scene body's component rows
 // already sit under the entity's id); the label alone is not an identity.

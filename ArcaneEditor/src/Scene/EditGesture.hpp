@@ -260,6 +260,22 @@ namespace Arcane::Editor::EditGesture
     //     lands exactly where Cancel would.
     void ClosePending(Arcane::CommandStack& stack, GestureState& st);
 
+    // The PropertyGrid row close (node-page s4.1(f); drafting pick 9.28; the
+    // contract is written in Widgets/PropertyGrid.hpp). Call right after a row
+    // and its BeginOnActivate, with grid.LastRowEvents().cancelled.
+    // Cancelled = the row restored its seed and called ClearActiveID AFTER the
+    // widget ran. A scalar widget still reports that deactivation on the same
+    // frame (SetActiveID stamps ElapseFrame = FrameCount, imgui.cpp:4805-4808);
+    // a GROUPED row (VecRow's AxisDragFloatN, ColorRow's ColorEdit4) never
+    // does: EndGroup already set HasDeactivated (imgui.cpp:12494-12497),
+    // IsItemDeactivated answers from those group flags, and the late record is
+    // dropped at the next NewFrame. So EndOnDeactivate alone parks the gesture
+    // until a ScopeGuard; this closes it AT THE ROW, through ClosePending, whose
+    // commit sees the restored value and pushes nothing (the builder's
+    // before == after guard, or the stack's unchanged-snapshot drop).
+    // Not cancelled: EndOnDeactivate. REQUIRED for adopters without a ScopeGuard.
+    void EndAfterRow(Arcane::CommandStack* stack, GestureState& st, bool cancelled);
+
     // The guaranteed close path: declare as the FIRST local of every
     // panel/document draw scope that opens gestures, so it destructs LAST --
     // it closes abandoned gestures on every exit path, including early

@@ -6,12 +6,15 @@
 #include <Widgets/EditorTheme.hpp>   // Theme::kError (the refused-value look)
 #include <Scene/EditGesture.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
+#include <Astra/Component/ComponentRegistry.hpp>
+#include <Astra/Registry/Registry.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>   // ColorStack / StyleVarStack (the refused-style balance check)
 #include <array>
 #include <cmath>     // std::round
 #include <cstdlib>   // std::abs
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -804,5 +807,155 @@ TEST_CASE("PropertyGrid: a decorated scalar row's GetItemID() is its own ##value
     {
         CHECK(after != 0);
         CHECK(after == want);
+    }
+}
+
+namespace
+{
+    namespace EG = Arcane::Editor::EditGesture;
+
+    // The "counting builder"'s product: one step over a 4-float document.
+    struct SetModelCommand final : Arcane::ICommand
+    {
+        std::array<float, 4>* model;
+        std::array<float, 4> before, after;
+        SetModelCommand(std::array<float, 4>* m, std::array<float, 4> b, std::array<float, 4> a)
+            : model(m), before(b), after(a) {}
+        void Undo() override { *model = before; }
+        void Redo() override { *model = after; }
+        const char* Label() const override { return "Edit Row"; }
+    };
+
+    enum class CloseMode { EndAfterRow, EndOnDeactivateOnly };
+
+    // A live-preview page over ONE row (s4.1(f)): `model` is the document (it
+    // changes only through a step), `live` is the preview target (it follows the
+    // row every frame, the Escape seed included). The builder is parked at
+    // activation and runs once at close, with the page's before == after guard.
+    struct ContractRig
+    {
+        std::shared_ptr<Astra::ComponentRegistry> creg = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{ creg };
+        Arcane::CommandStack stack{ [this]() -> Astra::Registry& { return reg; } };
+        EG::GestureState gesture;
+        const std::array<float, 4> initial{ 0.5f, 0.5f, 0.5f, 1.0f };
+        std::array<float, 4> model = initial;
+        std::array<float, 4> live = initial;
+        int built = 0;
+        bool sawCancel = false, slotsEmptyAtCancel = false, parkedAtCancel = false;
+
+        void Body(PropertyGrid& g, RowKind kind, CloseMode mode)
+        {
+            std::array<float, 4> v = model;                 // re-derived every frame, as pages do
+            (void)DrawKind(g, kind, v);                     // the gesture, not the row's bool, owns the step
+            if (live != v) live = v;                        // (2) live write-through
+            EG::BeginOnActivate(&stack, gesture, [] { return std::string("Edit Row"); },
+                [this]() -> std::function<void()>
+                {
+                    const std::array<float, 4> before = model;
+                    return [this, before]
+                    {
+                        ++built;
+                        if (live == before) return;         // before == after: no step (R2)
+                        stack.Push(std::make_unique<SetModelCommand>(&model, before, live));
+                        model = live;
+                    };
+                });
+            const bool cancelled = g.LastRowEvents().cancelled;
+            if (mode == CloseMode::EndAfterRow) EG::EndAfterRow(&stack, gesture, cancelled);   // (3)
+            else                                EG::EndOnDeactivate(&stack, gesture);
+            if (cancelled)
+            {
+                sawCancel = true;
+                slotsEmptyAtCancel = gesture.slots.item == 0 && gesture.slots.txn == Arcane::TransactionId::None;
+                parkedAtCancel = gesture.slots.item != 0;
+            }
+        }
+    };
+}
+
+TEST_CASE("EditGesture-after-row contract: one step per drag and none for a pure click, for every row type", "[editor][inspector]")
+{
+    for (const RowKind kind : kRowKinds)
+    {
+        INFO(KindName(kind));
+        {
+            ContractRig rig;
+            RowHarness h;
+            h.body = [&](PropertyGrid& g) { rig.Body(g, kind, CloseMode::EndAfterRow); };
+            h.Frame();
+            h.Drag(ValueTarget(kind, h.Centre("Row")), 45.0f);
+            h.Frame();
+            CHECK(rig.model != rig.initial);
+            CHECK(rig.built == 1);
+            REQUIRE(rig.stack.CanUndo());
+            rig.stack.Undo();
+            CHECK(rig.model == rig.initial);
+            CHECK_FALSE(rig.stack.CanUndo());               // exactly one step
+            CHECK_FALSE(rig.stack.InTransaction());
+        }
+        {
+            ContractRig rig;
+            RowHarness h;
+            h.body = [&](PropertyGrid& g) { rig.Body(g, kind, CloseMode::EndAfterRow); };
+            h.Frame();
+            h.Click(ValueTarget(kind, h.Centre("Row")));    // Slider: pressing ON the grab does not move it
+            h.Frame();
+            CHECK(rig.model == rig.initial);
+            CHECK_FALSE(rig.stack.CanUndo());
+            CHECK_FALSE(rig.stack.InTransaction());         // a pure click cancels, nothing stranded
+        }
+    }
+}
+
+TEST_CASE("EditGesture-after-row contract: Escape with a live target restores the seed, adds no step, and EndAfterRow empties the slots on the Escape frame", "[editor][inspector]")
+{
+    for (const RowKind kind : kRowKinds)
+    {
+        INFO(KindName(kind));
+        ContractRig rig;
+        RowHarness h;
+        h.body = [&](PropertyGrid& g) { rig.Body(g, kind, CloseMode::EndAfterRow); };
+        h.Frame();
+        const ImVec2 at = ValueTarget(kind, h.Centre("Row"));
+        h.Press(at);
+        h.MoveTo(ImVec2(at.x + 40.0f, at.y));
+        h.Frame();
+        REQUIRE(rig.live != rig.model);                     // previewing the in-flight drag
+        h.Escape();
+        CHECK(rig.sawCancel);
+        CHECK(rig.slotsEmptyAtCancel);                      // closed AT the row, before any later row
+        CHECK(rig.live == rig.model);                       // the restored seed re-applied to the preview
+        h.Release();
+        h.Frame();
+        CHECK_FALSE(rig.stack.CanUndo());
+        CHECK_FALSE(rig.stack.InTransaction());
+    }
+}
+
+TEST_CASE("EditGesture-after-row contract: on a grouped row EndOnDeactivate alone leaves an Escape parked until the ScopeGuard", "[editor][inspector]")
+{
+    for (const RowKind kind : { RowKind::Vec, RowKind::Color })
+    {
+        INFO(KindName(kind));
+        ContractRig rig;
+        RowHarness h;
+        h.guardStack = &rig.stack;
+        h.guardState = &rig.gesture;
+        h.body = [&](PropertyGrid& g) { rig.Body(g, kind, CloseMode::EndOnDeactivateOnly); };
+        h.Frame();
+        const ImVec2 at = ValueTarget(kind, h.Centre("Row"));
+        h.Press(at);
+        h.MoveTo(ImVec2(at.x + 40.0f, at.y));
+        h.Frame();
+        h.Escape();
+        CHECK(rig.sawCancel);
+        CHECK(rig.parkedAtCancel);                          // EndGroup set HasDeactivated before the clear (imgui.cpp:12494-12497)
+        CHECK(rig.gesture.slots.item == 0);                 // the ScopeGuard closed it at scope end, same frame
+        CHECK(rig.live == rig.model);
+        h.Release();
+        h.Frame();
+        CHECK_FALSE(rig.stack.CanUndo());                   // ClosePending's commit saw before == after
+        CHECK_FALSE(rig.stack.InTransaction());
     }
 }

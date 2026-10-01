@@ -136,6 +136,16 @@ namespace Arcane::Editor::EditGesture
             ClosePending(*stack, st);
     }
 
+    void EndAfterRow(Arcane::CommandStack* stack, GestureState& st, bool cancelled)
+    {
+        if (cancelled && stack)
+        {
+            ClosePending(*stack, st);
+            return;
+        }
+        EndOnDeactivate(stack, st);
+    }
+
     ScopeGuard::~ScopeGuard()
     {
         if (!stack)
