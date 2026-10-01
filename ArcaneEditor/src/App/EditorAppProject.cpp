@@ -58,6 +58,7 @@
 #include <span>
 #include <string>
 #include <string_view>   // take()'s id parameter
+#include <system_error>  // RetargetUndoCache's remove_all error_code
 #include <unordered_map>   // F2c Task 15: MintImportMaterials' name -> Guid return map
 #include <unordered_set>   // SweepArtifactOrphans' live-guid set (F2b Task 12)
 #include <utility>       // std::move (F2b Task 12's cook-diagnostics bookkeeping)
@@ -2181,6 +2182,7 @@ namespace Arcane::Editor
             m_resolver->Clear();
         m_consoleDiag.store.ClearAll();
         ClearSceneReferences("Switched project");
+        RetargetUndoCache(nullptr);   // the outgoing project's UndoCache, now that its steps are gone
         if (m_undo) m_scene.Reset(*m_undo);
         m_recents.scenes = {};
         // Asset-manager Task 12: an in-flight create dialog names the OUTGOING
@@ -2233,6 +2235,19 @@ namespace Arcane::Editor
             m_pendingReports.clear();
         }
         m_reportDiagnostics.clear();
+    }
+
+    void EditorApp::RetargetUndoCache(const Arcane::Project* project)
+    {
+        if (!m_undo) return;
+        std::error_code ec;
+        if (const std::filesystem::path& old = m_undo->SpillDirectory(); !old.empty())
+            std::filesystem::remove_all(old, ec);
+        const std::filesystem::path dir = project ? project->Root() / "Saved" / "UndoCache"
+                                                  : std::filesystem::path{};
+        if (!dir.empty())
+            std::filesystem::remove_all(dir, ec);   // safe: the stack is empty at open, editor.lock keeps one editor per project
+        m_undo->SetSpillDirectory(dir);
     }
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)

@@ -701,6 +701,8 @@ namespace Arcane::Editor
         // (stable across that swap -- only the registry INSIDE it is replaced),
         // safe because m_undo destructs before m_runtime (declaration order).
         m_undo.emplace([rt = &*m_runtime]() -> Astra::Registry& { return rt->Registry(); });
+        m_undoLimitsApplied = Arcane::Editor::ReadUndoLimits();
+        m_undo->SetLimits(m_undoLimitsApplied);
 
         // Structural-edit binding: whole-registry snapshot/restore through the
         // SAME Runtime the resolver reads, so the memento survives registry swaps.
@@ -1385,6 +1387,8 @@ namespace Arcane::Editor
     // never reorder the recents lists.
     void EditorApp::OnProjectOpened(bool recordRecents)
     {
+        RetargetUndoCache(m_runtime->CurrentProject());
+
         // Build -> Open Visual Studio needs to know whether devenv exists
         // BEFORE its first draw (it greys with a tooltip otherwise); resolve
         // once per process, here, rather than spawning vswhere from the menu
@@ -3460,6 +3464,7 @@ namespace Arcane::Editor
         // Same reasoning, the per-refusal observer (F2b Task 12):
         // OnArtifactRefused's `user` is also `this`.
         Arcane::SetArtifactRefusalObserver(nullptr, nullptr);
+        RetargetUndoCache(nullptr);   // project close: wipe Saved/UndoCache
 
         // Reclaim the module-rebuild worker before member teardown: it only
         // touches its own mutex-guarded queue, but a thread outliving the

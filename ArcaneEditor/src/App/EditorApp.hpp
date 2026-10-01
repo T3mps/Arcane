@@ -37,6 +37,7 @@
 #include "App/DialogSlot.hpp"
 #include "App/InputEdges.hpp"
 #include "App/ModalErrorQueue.hpp"
+#include "App/UndoSettings.hpp"           // m_undoLimitsApplied + ReadUndoLimits (editor.undo.*)
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Viewport/ViewportSettings.hpp"
@@ -1115,6 +1116,7 @@ namespace Arcane::Editor
         // BEFORE them -- its resolver lambda captures `&*m_runtime` (a raw
         // Runtime*, dereferenced fresh each call), so it must not outlive it.
         std::optional<Arcane::CommandStack> m_undo;
+        Arcane::UndoLimits m_undoLimitsApplied;   // last limits pushed (per-frame change check)
 
         // Editor keybind + mouse edge tracking (architecture pass sec 6). All
         // Updated within FrameInput's phases (6a-6d) at the site each chord's
@@ -2143,6 +2145,10 @@ namespace Arcane::Editor
         // Editor state naming entities of the OUTGOING scene, torn down before any
         // registry swap. Shared by SwitchProject and the scene effects below.
         void ClearSceneReferences(std::string reason);
+        // Saved/UndoCache follows the project (spec s3.3, R12): wipe the
+        // outgoing dir, wipe the incoming one (crash leftovers), retarget the
+        // stack. Null = no project = memory-only.
+        void RetargetUndoCache(const Arcane::Project* project);
         // Establish an empty scene when nothing published a SceneRoot, so the editor
         // always has one open. Never clears a registry a plugin already populated.
         void EnsureScene();

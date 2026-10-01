@@ -439,6 +439,14 @@ namespace Arcane::Editor
             // visible here, to all of this frame's readers at once. The
             // runtime does the same at the top of AdvanceSim.
             Arcane::CVarRegistry::Get().Publish();
+            // editor.undo.* -> the stack (s2.4): pushed on change, never read by the stack.
+            if (m_undo)
+                if (const Arcane::UndoLimits limits = Arcane::Editor::ReadUndoLimits();
+                    limits != m_undoLimitsApplied)
+                {
+                    m_undo->SetLimits(limits);
+                    m_undoLimitsApplied = limits;
+                }
             FrameInput(ls, fs);
             AdvanceSim(ls);
             ApplyPendingViewportResize();

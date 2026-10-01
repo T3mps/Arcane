@@ -1226,6 +1226,9 @@ project "ArcaneTests"
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
         "%{wks.location}/ArcaneEditor/src/Scene/SceneSession.cpp",
+        -- editor.undo.* (T1-B10): the three Archive cvars + ReadUndoLimits, so
+        -- [undo] drives the read and its range clamps without EditorApp.
+        "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
