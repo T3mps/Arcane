@@ -68,6 +68,8 @@ namespace Arcane
         m_pendingTouched.clear();
         if (txn.commands.empty())
             return;   // nothing changed -> no history entry
+        txn.affectsScene = std::any_of(txn.commands.begin(), txn.commands.end(),
+                                       [](const std::unique_ptr<ICommand>& c) { return c->AffectsScene(); });
 
         // Stamp the state this transaction produced. m_nextId is the same
         // monotonic source TransactionId::Begin draws from, so ids are unique
@@ -104,6 +106,7 @@ namespace Arcane
         Transaction txn;
         txn.label = command->Label();
         txn.touched.assign(touched.begin(), touched.end());
+        txn.affectsScene = command->AffectsScene();
         txn.commands.push_back(std::move(command));
         // See Commit: same stamp-before-push rule, same shared m_nextId source.
         txn.id = m_nextId++;
@@ -133,6 +136,14 @@ namespace Arcane
         for (auto& c : txn.commands)
             c->Redo();       // forward order
         m_undo.push_back(std::move(txn));
+    }
+
+    std::uint64_t CommandStack::SceneStateId() const noexcept
+    {
+        for (auto it = m_undo.rbegin(); it != m_undo.rend(); ++it)
+            if (it->affectsScene)
+                return it->id;
+        return 0;
     }
 
     const char* CommandStack::UndoLabel() const noexcept

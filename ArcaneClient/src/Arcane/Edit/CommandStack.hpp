@@ -123,6 +123,12 @@ namespace Arcane
             return m_undo.empty() ? 0u : m_undo.back().id;
         }
 
+        // The id of the topmost undo entry that AFFECTS THE SCENE, 0 when
+        // none (spec s3.3(a)). SceneSession's dirty flag compares this, so a
+        // material/sprite/mesh/input-actions step never marks the scene
+        // unsaved, and undo back to the save point still reads clean.
+        [[nodiscard]] std::uint64_t SceneStateId() const noexcept;
+
         // The entities whose state differs from `savedStateId` (the value
         // StateId() returned when the caller saved) -- the per-entity form of
         // the StateId dirty test, and the source for the Outliner's unsaved
@@ -155,6 +161,9 @@ namespace Arcane
             // id is never re-minted and a retired state can never be mistaken
             // for a live one.
             std::uint64_t id = 0;
+            // Any part affects the scene (ICommand::AffectsScene). Fixed at
+            // push/commit; a component snapshot always makes it true.
+            bool affectsScene = true;
         };
         struct Pending
         {

@@ -321,6 +321,24 @@ namespace
         void Redo() override { ++*redos; }
         const char* Label() const override { return label.c_str(); }
     };
+
+    // A document-style step (spec 2026-09-30 s3.3): never a scene step, and
+    // expired once its weak anchor (the "document") dies.
+    struct DocStep final : Arcane::ICommand
+    {
+        std::weak_ptr<int> anchor;
+        int* undos;
+        int* redos;
+        std::string label;
+
+        DocStep(std::weak_ptr<int> a, int* u, int* r, std::string l)
+            : anchor(std::move(a)), undos(u), redos(r), label(std::move(l)) {}
+        void Undo() override { if (!anchor.expired()) ++*undos; }
+        void Redo() override { if (!anchor.expired()) ++*redos; }
+        const char* Label() const override { return label.c_str(); }
+        bool AffectsScene() const override { return false; }
+        bool IsExpired() const override { return anchor.expired(); }
+    };
 }
 
 TEST_CASE("CommandStack::Push: standalone step, transaction join, redo-clear", "[edit]")
@@ -986,4 +1004,50 @@ TEST_CASE("TouchedSinceState: the per-entity diff against a saved baseline", "[e
     auto r5 = stack.TouchedSinceState(0);
     REQUIRE(r5.baselineFound);
     CHECK(r5.entities.size() == 1);
+}
+
+TEST_CASE("ICommand defaults: a scene step, never expired, holding no payload", "[edit][undo]")
+{
+    int u = 0, r = 0;
+    const CountingCommand c(&u, &r, "c");
+    CHECK(c.AffectsScene());
+    CHECK_FALSE(c.IsExpired());
+    CHECK(c.PayloadBytes() == 0);
+}
+
+TEST_CASE("SceneStateId follows scene steps only, through undo and redo", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0;
+    const auto anchor = std::make_shared<int>(0);
+
+    CHECK(stack.SceneStateId() == 0);
+    const Arcane::TransactionId t = stack.Begin("Move");
+    stack.SnapshotComponent(e, desc);
+    reg->GetComponent<Arcane::Transform>(e)->position.x = 1.0f;
+    stack.Commit(t);
+    const std::uint64_t sceneId = stack.SceneStateId();
+    CHECK(sceneId != 0);
+    CHECK(sceneId == stack.StateId());            // a Begin/Commit with a snapshot is a scene step
+
+    stack.Push(std::make_unique<DocStep>(anchor, &u, &r, "Edit Param"));
+    CHECK(stack.StateId() != sceneId);            // the document step moved StateId...
+    CHECK(stack.SceneStateId() == sceneId);       // ...but not the scene's
+
+    const Arcane::TransactionId g = stack.Begin("Drag Param");
+    stack.Push(std::make_unique<DocStep>(anchor, &u, &r, "joined"));
+    stack.Commit(g);
+    CHECK(stack.SceneStateId() == sceneId);       // a gesture of document commands only is not a scene step
+
+    stack.Undo();
+    stack.Undo();
+    CHECK(stack.SceneStateId() == sceneId);
+    stack.Undo();
+    CHECK(stack.SceneStateId() == 0);
+    stack.Redo();
+    CHECK(stack.SceneStateId() == sceneId);
 }
