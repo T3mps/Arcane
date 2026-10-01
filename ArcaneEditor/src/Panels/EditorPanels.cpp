@@ -19,6 +19,7 @@
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Scene/SelectionOps.hpp"
+#include "Scene/UndoGate.hpp"   // UndoMenuState: Edit > Undo/Redo (spec s3.3b/d)
 
 #include <Arcane/Base/Diagnostics.hpp>   // the refused-Play Problems row (final-review fix wave, minor 11)
 #include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
@@ -201,14 +202,17 @@ namespace Arcane::Editor
             {
                 // Undo/Redo share the CommandStack with the Ctrl+Z / Ctrl+Y shortcuts
                 // (handled in the app input loop); the shortcut text here is display-only.
-                const bool canUndo = undo.CanUndo();
-                const bool canRedo = undo.CanRedo();
-                const std::string undoLabel = canUndo ? (std::string("Undo ") + undo.UndoLabel())
-                                                      : std::string("Undo");
-                const std::string redoLabel = canRedo ? (std::string("Redo ") + undo.RedoLabel())
-                                                      : std::string("Redo");
-                if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo)) undo.Undo();
-                if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, canRedo)) undo.Redo();
+                const bool inTxn = undo.InTransaction();
+                const UndoMenuItem undoItem = UndoMenuState(undo.CanUndo(), playing, inTxn,
+                                                            undo.ClearedReason(), undo.UndoLabel());
+                const UndoMenuItem redoItem = UndoMenuState(undo.CanRedo(), playing, inTxn,
+                                                            {}, undo.RedoLabel(), /*redo*/ true);
+                if (ImGui::MenuItem(undoItem.label.c_str(), "Ctrl+Z", false, undoItem.enabled)) undo.Undo();
+                if (!undoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", undoItem.tooltip.c_str());
+                if (ImGui::MenuItem(redoItem.label.c_str(), "Ctrl+Y", false, redoItem.enabled)) undo.Redo();
+                if (!redoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", redoItem.tooltip.c_str());
                 ImGui::Separator();
                 // Play greys the whole group: structural edits refuse in Play
                 // (ApplyStructural's editMode gate), and the affordance rule is

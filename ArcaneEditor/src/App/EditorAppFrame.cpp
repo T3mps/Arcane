@@ -15,6 +15,7 @@
 #include "Panels/EditorPanels.hpp"
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
+#include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Viewport/ViewportGrid.hpp"   // the 2D reference grid (F4 plan 1 T9, spec s5.1)
 #include "Viewport/ViewportImGuiInput.hpp"
 
@@ -921,8 +922,9 @@ namespace Arcane::Editor
         // undo and clobbers the redo entry. Ctrl is also the gizmo SNAP
         // modifier, so Ctrl-held drags are the normal case, not an edge case.
         const bool noOpenTxn = !m_undo->InTransaction();
-        if (active && noOpenTxn && m_edges.undo.pressed) m_undo->Undo();
-        if (active && noOpenTxn && m_edges.redo.pressed) m_undo->Redo();
+        const bool barred    = Arcane::Editor::UndoBarred(InPlayMode());   // the ONE Play barrier (s3.3b)
+        if (active && !barred && noOpenTxn && m_edges.undo.pressed) m_undo->Undo();
+        if (active && !barred && noOpenTxn && m_edges.redo.pressed) m_undo->Redo();
 
         // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
         // beside New Scene / Open Scene / Save Scene. Raised as requests
