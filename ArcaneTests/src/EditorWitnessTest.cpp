@@ -474,6 +474,10 @@ TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspe
     WitnessScratch scratch(StagedEditorDir(), "e7-legacy-upgrade");
     const std::filesystem::path seedPath = scratch.Dir() / "ReferenceProject" / "Saved" / "verify-layout.ini";
     std::string seed = ReadAllBytes(seedPath);
+    // A text=auto checkout under core.autocrlf stages the seed CRLF, and every
+    // edit below searches LF-anchored patterns ("\nIds=1\n", "\n[Window]..."):
+    // normalise THIS copy to LF first (ImGui's ini reader takes either).
+    std::erase(seed, '\r');
     {
         // Fold the band's split: drop the browser and Inspector 2 leaves, make
         // their parent the browser's node, retarget the tabs' DockIds to it.
