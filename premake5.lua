@@ -1578,6 +1578,10 @@ project "ArcaneTests"
         -- (CreateAssetDialog.hpp's pill text, AssetPanelModel.hpp's three
         -- field-name heuristics).
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorView.cpp",
+        -- Node page + editor upgrades s4.2: the shared asset-reference field
+        -- (its pure halves here; the cell joins in T2-B2). InspectorView's
+        -- AssetRef arm draws it, AssetReferenceFieldTest.cpp drives it.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceField.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
