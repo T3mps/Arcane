@@ -75,4 +75,21 @@ namespace Arcane::Editor
     // BuildAssetEntries per popup frame. Pure.
     [[nodiscard]] std::vector<const AssetPanelEntry*> AssetRefCandidates(const AssetPanelModel& model, int kindFilter,
                                                                          int surfaceFilter, std::string_view search);
+
+    class PropertyGrid;
+
+    // THE CELL, left to right: a 20 px thumb (resolveThumb, else the kind
+    // glyph); the ellipsized name (an AllowDoubleClick Selectable: a
+    // double-click QUEUES open() when browsable, a single click does
+    // nothing); the picker chevron (hidden when read-only); browse-to
+    // (browsable only; disabled while the Asset Browser is closed); clear
+    // (!readOnly && (guid valid || mixed)). The whole cell is a drop target
+    // for kAssetDragType unless read-only. Returns Set/Clear for the CALLER
+    // to route through its undo. ownTooltip draws the tooltip; otherwise
+    // hovered / truncated / fullText are the caller's to compose.
+    [[nodiscard]] AssetRefEdit AssetReferenceValue(const char* id, const AssetRefArgs& args,
+                                                   const AssetRefServices& services);
+    // FieldLabelCell + PushID(label) + AssetReferenceValue("##value") + grid.ProbeItem(label).
+    [[nodiscard]] AssetRefEdit AssetRefRow(PropertyGrid& grid, const char* label, const AssetRefArgs& args,
+                                           const AssetRefServices& services);
 }
