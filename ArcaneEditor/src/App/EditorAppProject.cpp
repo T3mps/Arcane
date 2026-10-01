@@ -65,7 +65,7 @@
 
 namespace Arcane::Editor
 {
-    // A document gets the GRAPH SEAM (nriDevice/hostConfig/chromeHud) rather
+    // A document gets the GRAPH SEAM (chromeGraph/hostConfig) rather
     // than a device handle of its own: one that needs a render target builds
     // its own small NriGraphContext::CreateOffscreen over the process's one
     // device.
@@ -83,44 +83,43 @@ namespace Arcane::Editor
         s.undo     = m_undo ? &*m_undo : nullptr;
         s.clock    = &m_editorClock;
         s.backend  = m_config.backend;
-        if (ChromeGraph())
+        // THE PREVIEW SEAM IS LATE-BOUND (node page + editor upgrades s3.2),
+        // and set UNCONDITIONALLY: a document opened during boot (--open-asset
+        // opens inside StageFinalize) is constructed BEFORE CreateGraphVehicles
+        // makes the chrome context, so it resolves ChromeGraph() at each use
+        // and retries its vehicle from Tick -- the material-preview harvester's
+        // precedent (hs.chromeGraph, EditorApp.cpp).
+        //
+        // THE PROCESS'S ONE DEVICE is owned by the chrome context: a
+        // document's preview context BORROWS it, exactly as the viewport
+        // context does, and must therefore be destroyed before the chrome
+        // context is.
+        //
+        // THE DECLARATION ORDER THAT MAKES THAT TRUE:
+        // m_graphChrome is declared FIRST (EditorApp.hpp:350) and
+        // m_documents LAST (:886), with m_retiredDocPreviews (:380)
+        // deliberately between them. Reverse-order destruction therefore
+        // runs ~m_documents -> ~m_retiredDocPreviews -> ~m_graphChrome:
+        // every borrower dies before the owner of the device it borrowed.
+        //
+        // BUT DESTRUCTION ORDER IS NOT WHAT ACTUALLY CLOSES THESE.
+        // EditorApp::ShutdownGraphPath destroys both contexts EXPLICITLY,
+        // long before any member destructor runs, so it does its own
+        // CloseAll + drain first -- and a project switch owes the same
+        // sequence, which is what EditorApp::TeardownGraphForSwitch is:
+        // ResetPerProjectState's CloseAll retires every open
+        // document's preview vehicle, and that function drains the retire
+        // list inside the same stage, while the chrome context whose node
+        // the drain invalidates against is still alive.
+        s.chromeGraph = [this] { return ChromeGraph(); };
+        s.hostConfig  = &m_config;
+        // ...and the one-frame retire, which is what makes closing a document
+        // safe at all on this arm. See DocServices' retireGraphPreview for why
+        // the destroy cannot happen inline.
+        s.retireGraphPreview = [this](std::unique_ptr<Arcane::NriGraphContext> v)
         {
-            // THE PROCESS'S ONE DEVICE is owned by the chrome context: a
-            // document's preview context BORROWS it, exactly as the viewport
-            // context does, and must therefore be destroyed before the chrome
-            // context is.
-            //
-            // THE DECLARATION ORDER THAT MAKES THAT TRUE:
-            // m_graphChrome is declared FIRST (EditorApp.hpp:350) and
-            // m_documents LAST (:886), with m_retiredDocPreviews (:380)
-            // deliberately between them. Reverse-order destruction therefore
-            // runs ~m_documents -> ~m_retiredDocPreviews -> ~m_graphChrome:
-            // every borrower dies before the owner of the device it borrowed.
-            //
-            // BUT DESTRUCTION ORDER IS NOT WHAT ACTUALLY CLOSES THESE.
-            // EditorApp::ShutdownGraphPath destroys both contexts EXPLICITLY,
-            // long before any member destructor runs, so it does its own
-            // CloseAll + drain first -- and a project switch owes the same
-            // sequence, which is what EditorApp::TeardownGraphForSwitch is:
-            // ResetPerProjectState's CloseAll retires every open
-            // document's preview vehicle, and that function drains the retire
-            // list inside the same stage, while the chrome context whose node
-            // the drain invalidates against is still alive.
-            s.nriDevice  = &ChromeGraph()->Device();
-            s.hostConfig = &m_config;
-            // The backend that will CACHE the preview texture when
-            // ImGui::Image draws it, and therefore the one owed an
-            // InvalidateUserTextureNow before that texture dies. The document
-            // makes that call from its destructor.
-            s.chromeHud  = ChromeGraph()->ImGuiHud();
-            // ...and the one-frame retire, which is what makes closing a
-            // document safe at all on this arm. See DocServices'
-            // retireGraphPreview for why the destroy cannot happen inline.
-            s.retireGraphPreview = [this](std::unique_ptr<Arcane::NriGraphContext> v)
-            {
-                RetireDocPreview(std::move(v));
-            };
-        }
+            RetireDocPreview(std::move(v));
+        };
         s.onAssetSaved = [this](const Arcane::Guid& id)
         {
             if (m_resolver)

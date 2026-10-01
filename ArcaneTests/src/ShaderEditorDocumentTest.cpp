@@ -8,14 +8,19 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Panels/DiagnosticStore.hpp"
+#include "Documents/PreviewStatus.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
 #include "Widgets/PropertyGrid.hpp"
+#include "Helpers/GpuCapability.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>   // the mesh-metadata undo step rides the ONE undo history
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Host/OffscreenVehicle.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
@@ -1325,4 +1330,146 @@ TEST_CASE("ShaderEditorDocument: a mesh material's page has no preview box -- a 
     CHECK_FALSE(previewChild);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
+}
+
+// ---- Node page + editor upgrades s3.2: the late-bound seam + PreviewStatus ----
+namespace
+{
+    std::optional<Arcane::MaterialAssetData> WriteAndLoad(const fs::path& file, const char* kind)
+    {
+        Arcane::MaterialAssetData data;
+        data.id   = Arcane::Guid::Generate();
+        data.name = "Status";
+        data.kind = kind;
+        if (std::string(kind) != "mesh")
+            data.snippet = kSnippet;
+        else
+        {
+            data.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f));
+            data.params.emplace_back("albedo", Arcane::MatParamValue::MakeTexture(Arcane::Guid{}));
+        }
+        if (!Arcane::SaveMaterialAsset(file, data))
+            return std::nullopt;
+        return Arcane::LoadMaterialAsset(file);
+    }
+}
+
+TEST_CASE("ShaderEditorDocument status: no compiler reads compiler-unavailable, a mesh surface not-compiled-here, no seam no-device without latching", "[editor][material][preview]")
+{
+    using Arcane::Editor::CompileStatus;
+    using Arcane::Editor::PreviewAvailability;
+    const fs::path dir = TempDir("status_bare");
+    {
+        const auto loaded = WriteAndLoad(dir / "glow.arcmat", "fullscreen");
+        REQUIRE(loaded.has_value());
+        ShaderEditorDocument doc(DocServices{}, dir / "glow.arcmat", *loaded);
+        for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+        const auto st = doc.ComputeStatus();
+        CHECK(st.compile == CompileStatus::CompilerUnavailable);
+        CHECK(st.preview == PreviewAvailability::NoDevice);
+        CHECK_FALSE(st.image);
+        CHECK(doc.PreviewVehicleAttempts() == 0);
+    }
+    {
+        // Wired but not up (the boot window): still no-device, never a latch.
+        const auto loaded = WriteAndLoad(dir / "glow2.arcmat", "fullscreen");
+        REQUIRE(loaded.has_value());
+        Arcane::HostConfig cfg;
+        DocServices services;
+        services.hostConfig  = &cfg;
+        services.chromeGraph = [] { return static_cast<Arcane::NriGraphContext*>(nullptr); };
+        ShaderEditorDocument doc(services, dir / "glow2.arcmat", *loaded);
+        for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+        CHECK(doc.ComputeStatus().preview == PreviewAvailability::NoDevice);
+        CHECK(doc.PreviewVehicleAttempts() == 0);
+    }
+    {
+        const auto loaded = WriteAndLoad(dir / "hero.arcmat", "mesh");
+        REQUIRE(loaded.has_value());
+        ShaderEditorDocument doc(DocServices{}, dir / "hero.arcmat", *loaded);
+        CHECK(doc.ComputeStatus().compile == CompileStatus::NotCompiledHere);
+    }
+}
+
+TEST_CASE("ShaderEditorDocument status: compiling while jobs are in flight, ok once both stages land -- never compiling with no seam", "[editor][material][shadercompile][preview]")
+{
+    using Arcane::Editor::CompileStatus;
+    using Arcane::Editor::PreviewAvailability;
+    const fs::path dir = TempDir("status_compile");
+    const auto loaded = WriteAndLoad(dir / "glow.arcmat", "fullscreen");
+    REQUIRE(loaded.has_value());
+
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("data/shaders");
+    DocServices services;
+    services.compiler = &compiler;
+    services.sources  = &sources;
+    ShaderEditorDocument doc(services, dir / "glow.arcmat", *loaded);
+    CHECK(doc.ComputeStatus().compile == CompileStatus::Compiling);   // two stages submitted
+
+    DrainInto(compiler, doc, 2);
+    const auto st = doc.ComputeStatus();
+    CHECK(st.compile == CompileStatus::Ok);                // the old toolbar read "compiling..." forever here
+    CHECK(st.preview == PreviewAvailability::NoDevice);
+    CHECK_FALSE(st.image);
+}
+
+
+
+TEST_CASE("ShaderEditorDocument status: a recompile before the first lands (reload mid-compile) still ends ok, never stuck compiling", "[editor][material][shadercompile][preview]")
+{
+    using Arcane::Editor::CompileStatus;
+    const fs::path dir = TempDir("status_recompile");
+    const auto loaded = WriteAndLoad(dir / "glow.arcmat", "fullscreen");
+    REQUIRE(loaded.has_value());
+
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("data/shaders");
+    DocServices services;
+    services.compiler = &compiler;
+    services.sources  = &sources;
+    ShaderEditorDocument doc(services, dir / "glow.arcmat", *loaded);
+    REQUIRE(doc.ComputeStatus().compile == CompileStatus::Compiling);
+
+    // RegenerateFromGraph -> Rebuild: both live ids invalidated, the counter
+    // zeroed, a fresh pair submitted under the same coalesce keys.
+    doc.ReloadFromDisk();
+    CHECK(doc.ComputeStatus().compile == CompileStatus::Compiling);
+
+    DrainInto(compiler, doc, 2);   // the superseded pair never runs; only the live pair lands
+    CHECK(doc.ComputeStatus().compile == CompileStatus::Ok);
+}
+
+TEST_CASE("ShaderEditorDocument: the first non-null chromeGraph makes Tick build the preview vehicle exactly once", "[editor][material][preview][gpu]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    using Arcane::Editor::PreviewAvailability;
+    Arcane::HostConfig cfg;
+    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.headless = true;
+    auto chrome = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
+    REQUIRE(chrome != nullptr);
+
+    const fs::path dir = TempDir("status_gpu");
+    const auto loaded = WriteAndLoad(dir / "glow.arcmat", "fullscreen");
+    REQUIRE(loaded.has_value());
+    Arcane::NriGraphContext* live = nullptr;
+    DocServices services;
+    services.hostConfig  = &cfg;
+    services.chromeGraph = [&] { return live; };
+    ShaderEditorDocument doc(services, dir / "glow.arcmat", *loaded);
+    for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 0);
+
+    live = &chrome->Graph();
+    doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 1);
+    for (int i = 0; i < 5; ++i) doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 1);
+    CHECK(doc.ComputeStatus().preview == PreviewAvailability::Ready);
+    CHECK(doc.GraphPreviewTextureId() != 0);
 }

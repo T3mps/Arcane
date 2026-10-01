@@ -1081,6 +1081,8 @@ namespace Arcane::Editor
         if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
         {
             m_vsJob = m_psJob = 0;
+            m_jobsInFlight  = 0;      // s3.2: every live id was just invalidated
+            m_submitRefused = false;
             m_vsBytes.clear();
             m_psBytes.clear();
             m_passJobs.clear();
@@ -1105,6 +1107,8 @@ namespace Arcane::Editor
         // Invalidate every in-flight job (both paths): a result for a source
         // this Rebuild replaced must not bind.
         m_vsJob = m_psJob = 0;
+        m_jobsInFlight  = 0;      // s3.2: every live id was just invalidated
+        m_submitRefused = false;
         m_vsBytes.clear();
         m_psBytes.clear();
         m_passJobs.clear();
@@ -1158,11 +1162,11 @@ namespace Arcane::Editor
                 req.entry = Arcane::kPsEntry;
                 req.profile = Arcane::kPsProfile;
                 req.coalesceKey = StageKey(m_data.id, /*vertex=*/false, p);
-                m_passJobs[p].psJob = m_services.compiler->Submit(req, Now());
+                m_passJobs[p].psJob = SubmitCompile(req);   // a copy -- req is reused
                 req.entry = Arcane::kVsEntry;
                 req.profile = Arcane::kVsProfile;
                 req.coalesceKey = StageKey(m_data.id, /*vertex=*/true, p);
-                m_passJobs[p].vsJob = m_services.compiler->Submit(std::move(req), Now());
+                m_passJobs[p].vsJob = SubmitCompile(std::move(req));
             }
             return;
         }
@@ -1199,13 +1203,23 @@ namespace Arcane::Editor
         req.entry = Arcane::kPsEntry;
         req.profile = Arcane::kPsProfile;
         req.coalesceKey = StageKey(m_data.id, /*vertex=*/false);
-        m_psJob = m_services.compiler->Submit(req, Now());
+        m_psJob = SubmitCompile(req);   // a copy -- req is reused
         req.entry = Arcane::kVsEntry;
         req.profile = Arcane::kVsProfile;
         req.coalesceKey = StageKey(m_data.id, /*vertex=*/true);
-        m_vsJob = m_services.compiler->Submit(std::move(req), Now());
+        m_vsJob = SubmitCompile(std::move(req));
         m_vsBytes.clear();
         m_psBytes.clear();
+    }
+
+    std::uint64_t ShaderEditorDocument::SubmitCompile(Arcane::ShaderCompileRequest req)
+    {
+        const std::uint64_t id = m_services.compiler->Submit(std::move(req), Now());
+        if (id != 0)
+            ++m_jobsInFlight;
+        else
+            m_submitRefused = true;   // ShaderCompiler::Submit returns 0 when unavailable
+        return id;
     }
 
     bool ShaderEditorDocument::ConsumeResult(const Arcane::ShaderCompileResult& result)
@@ -1219,6 +1233,7 @@ namespace Arcane::Editor
             const bool chainPs = result.jobId == pj.psJob && pj.psJob != 0;
             if (!chainVs && !chainPs)
                 continue;
+            if (m_jobsInFlight > 0) --m_jobsInFlight;   // a live job answered (s3.2)
             const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
                                      ? result.spirv : result.dxil;
             if (chainPs)
@@ -1244,6 +1259,7 @@ namespace Arcane::Editor
         const bool isPs = result.jobId == m_psJob && m_psJob != 0;
         if (!isVs && !isPs)
             return false;
+        if (m_jobsInFlight > 0) --m_jobsInFlight;   // a live job answered (s3.2)
 
         const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
                                  ? result.spirv : result.dxil;
@@ -1413,27 +1429,35 @@ namespace Arcane::Editor
     // contexts, neither of which is a preview.
     void ShaderEditorDocument::EnsureGraphPreviewContext()
     {
-        // The seam is null in every headless test (no EditorApp at all),
-        // which is the whole gate: this function is a no-op there.
-        if (m_graphPreview || !m_services.nriDevice || !m_services.hostConfig)
+        // The seam is unset in every headless test (no EditorApp at all),
+        // and its resolver returns null during boot: either way this is a
+        // null check that never latches (s3.2).
+        if (m_graphPreview || !m_services.hostConfig || !m_services.chromeGraph)
             return;
+        Arcane::NriGraphContext* chrome = m_services.chromeGraph();
+        if (!chrome)
+            return;   // the seam is not up yet (boot): a null check, never a latch
 
         // NodeSet{} -- batch + post + tonemap and nothing else. A preview has
         // no host chrome, no game HUD and nothing to pick, and NodeSet's own
         // doc says a node a context will never declare is a descriptor pool
         // nobody reads.
+        ++m_previewVehicleAttempts;
         m_graphPreview = Arcane::NriGraphContext::CreateOffscreen(
-            *m_services.hostConfig, *m_services.nriDevice,
+            *m_services.hostConfig, chrome->Device(),
             kGraphPreviewSize, kGraphPreviewSize);
         if (!m_graphPreview)
         {
             // Degraded, not fatal, and it degrades to exactly what a missing
             // device already degrades to: no preview image. The refusal is
-            // already logged + latched inside CreateOffscreen.
+            // already logged inside CreateOffscreen.
+            m_previewVehicleFailed = true;   // Tick stops retrying; a later bind still tries (s3.2)
             ARC_WARN("ShaderEditorDocument '{}': the graph preview context could not be created "
                      "-- this document shows no preview", m_title);
             return;
         }
+        m_previewVehicleFailed = false;
+        m_previewHud = chrome->ImGuiHud();
 
         // The two injected seams, copied from EditorApp::CreateGraphVehicles'
         // viewport block and for the same reason: a material's texture params
@@ -1615,7 +1639,12 @@ namespace Arcane::Editor
         {
             ARC_ERROR("ShaderEditorDocument '{}': the graph preview frame failed -- dropping this "
                       "document's preview vehicle", m_title);
+            m_previewFrameFailed = true;   // Tick stops retrying; the next bind rebuilds (s3.2)
             DestroyGraphPreview();
+        }
+        else if (outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
+        {
+            m_previewFrameFailed = false;  // the next good frame clears the latch
         }
     }
 
@@ -1630,6 +1659,7 @@ namespace Arcane::Editor
         m_graphSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
         m_graphSpriteStamp = nullptr;
         m_graphBatch.reset();
+        Arcane::ImGuiNriNode* hud = std::exchange(m_previewHud, nullptr);
 
         // ===== THE VEHICLE IS RETIRED, NOT DESTROYED (see DocServices::
         // retireGraphPreview for the full reasoning) =====
@@ -1646,8 +1676,8 @@ namespace Arcane::Editor
 
         // ===== NO SINK: THE CROSS-CONTEXT INVALIDATE, OWED *BEFORE* =====
         // Reached only where no further frame will be recorded (the app drains
-        // its retire list and then closes every document at shutdown, and the
-        // headless tests build no vehicle at all).
+        // its retire list and then closes every document at shutdown, and a
+        // [gpu] test that wires no retire sink).
         //
         // The chrome context's ImGuiNri caches per texture BY RAW POINTER --
         // and NRI does not ref-count, so the next allocation may land on the
@@ -1661,8 +1691,8 @@ namespace Arcane::Editor
         //
         // Unconditional and idempotent: a miss is routine (a preview that
         // never drew), and a null node is an early-out inside the hook.
-        if (m_services.chromeHud)
-            (void)m_services.chromeHud->InvalidateUserTextureNow(m_graphPreview->OffscreenOutput());
+        if (hud)
+            (void)hud->InvalidateUserTextureNow(m_graphPreview->OffscreenOutput());   // the node recorded at creation (s3.2)
         m_graphPreview.reset();
     }
 
@@ -1836,6 +1866,21 @@ namespace Arcane::Editor
                       !m_graphPost.passes.empty());
     }
 
+    PreviewStatus ShaderEditorDocument::ComputeStatus() const
+    {
+        PreviewStatusInputs in;
+        in.notCompiledHere   = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh;
+        in.compilerAvailable = m_services.compiler && m_services.sources
+                            && m_services.compiler->IsAvailable() && !m_submitRefused;
+        in.jobsInFlight      = m_jobsInFlight;
+        in.hasErrors         = HasErrors();
+        in.deviceSeam        = m_services.chromeGraph && m_services.chromeGraph() != nullptr;
+        in.vehicleFailed     = m_previewVehicleFailed;
+        in.frameFailed       = m_previewFrameFailed;
+        in.imageBound        = PreviewReady();
+        return ComputePreviewStatus(in);
+    }
+
     std::string& ShaderEditorDocument::ActiveSnippet()
     {
         if (m_editVertex)
@@ -1869,6 +1914,21 @@ namespace Arcane::Editor
         // THE WHOLE RENDER PHASE. A missing vehicle simply means no preview
         // this Tick -- the same degraded-not-fatal outcome as any other
         // vehicle failure (see EnsureGraphPreviewContext).
+        //
+        // THE LATE-BOUND SEAM'S RETRY (s3.2): a document opened during boot
+        // compiled and bound with no vehicle; PublishGraphPreview builds it and
+        // re-registers the sprite binding the bind could not make. Not after a
+        // creation refusal, and not after a frame failure (that rebuilds on
+        // the next bind -- today's drop-and-rebuild-on-bind).
+        // A MESH-surface material never builds a preview here (Rebuild()'s
+        // guard, DrawPreviewPanel's one-line note): before this seam it never
+        // reached a bind site, so it never had a vehicle. Without the surface
+        // gate the retry would give every open mesh material its own 512x512
+        // offscreen context and record a frame for it every editor frame,
+        // for an image nothing ever draws.
+        if (!m_graphPreview && !m_previewVehicleFailed && !m_previewFrameFailed
+            && SurfaceOf(m_surface) != Arcane::MaterialSurface::Mesh)
+            PublishGraphPreview();
         if (m_graphPreview)
             RenderGraphPreview(dt);
     }

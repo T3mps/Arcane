@@ -23,6 +23,7 @@
 #include "Scene/EditGesture.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
+#include "Documents/PreviewStatus.hpp"
 #include "Widgets/EditorWidgets.hpp"   // TextCommitState / StableTextEdit
 // The grid's PURE half, and its ONLY half: the two phase members below are
 // what the canvas grid IS. Held BY VALUE because a canvas keeps its pan/zoom
@@ -69,7 +70,6 @@ namespace Arcane
     class Batcher2D;
     struct HostConfig;
     class ImGuiNriNode;
-    class NriDevice;
     class NriGraphContext;
 }
 
@@ -108,34 +108,31 @@ namespace Arcane::Editor
         std::function<void(const Arcane::Guid&, const std::string&, const std::string&)>
             onParamRenamed;
 
-        // ===== THE PREVIEW SEAM =============================================
-        // These three are what let a document render a preview at all, and all
-        // three are BORROWED from EditorApp (which outlives the document
-        // list):
+        // ===== THE PREVIEW SEAM (late-bound; node page + editor upgrades s3.2) =====
+        // Both BORROWED from EditorApp (which outlives the document list):
         //
-        //   nriDevice  -- the ONE device in the process, created and owned by
-        //                 the chrome context. The document builds its own small
-        //                 NriGraphContext::CreateOffscreen over it, which is
-        //                 the documented pattern for a render-to-texture
-        //                 surface and gives the document its own graveyard lane
-        //                 (see NriGraphContext.hpp, TWO CONTEXTS TWO LANES).
-        //   hostConfig -- the backend/validation knobs CreateOffscreen reads.
-        //                 Borrowed: EditorApp holds m_config for the run.
-        //   chromeHud  -- the CHROME context's ImGuiNriNode, i.e. the backend
-        //                 that CACHES this document's preview texture by raw
-        //                 pointer when ImGui::Image draws it. The document owes
-        //                 it an InvalidateUserTextureNow with that pointer
-        //                 BEFORE its own context is destroyed -- a document
-        //                 closes MID-SESSION while chrome keeps presenting,
-        //                 which is exactly the cross-context case that rule
-        //                 exists for. ~ShaderEditorDocument is the site.
+        //   chromeGraph -- resolves the CHROME context at each use. Its
+        //                  Device() is the ONE device in the process; the
+        //                  document builds its own small CreateOffscreen
+        //                  vehicle over it (its own graveyard lane --
+        //                  NriGraphContext.hpp, TWO CONTEXTS TWO LANES). Its
+        //                  ImGuiHud() is the backend that CACHES this
+        //                  document's preview texture by raw pointer; the
+        //                  document records that node at vehicle creation and
+        //                  owes it an InvalidateUserTextureNow before the
+        //                  texture dies (~ShaderEditorDocument), never
+        //                  re-resolving it, because ChromeGraph() is null after
+        //                  ShutdownGraphPath.
+        //                  LATE-BOUND because a document opened during boot
+        //                  (--open-asset opens inside StageFinalize) exists
+        //                  before CreateGraphVehicles makes the chrome context:
+        //                  a copied pointer was null forever. Tick retries the
+        //                  vehicle until it resolves.
+        //   hostConfig  -- the backend/validation knobs CreateOffscreen reads.
         //
-        // All three null in the headless tests (no EditorApp at all) and
-        // before EditorApp's own chrome context exists, which is what keeps
-        // every gate below a single `if`.
-        Arcane::NriDevice*             nriDevice = nullptr;
+        // Both unset in the headless tests (no EditorApp at all).
+        std::function<Arcane::NriGraphContext*()> chromeGraph;
         const Arcane::HostConfig*      hostConfig = nullptr;
-        Arcane::ImGuiNriNode*          chromeHud = nullptr;
 
         // ===== AND THE ONE-FRAME RETIRE, WHICH IS NOT OPTIONAL =============
         // A document is DESTROYED INSIDE the editor's ImGui pass:
@@ -382,6 +379,14 @@ namespace Arcane::Editor
         // through uintptr_t -- ImGuiNri's convention). 0 when this document
         // has no preview vehicle, which is every headless test.
         [[nodiscard]] std::uint64_t GraphPreviewTextureId() const noexcept;
+        // The PreviewStatus inputs (s3.2): mesh surface -> NotCompiledHere; no
+        // compiler, no sources, an unavailable compiler or a refused Submit ->
+        // CompilerUnavailable; HasErrors -> Errors; jobs in flight ->
+        // Compiling; the seam, the two latches and PreviewReady(). What the
+        // report's documents[] carries; T3 reads it for the toolbar.
+        [[nodiscard]] PreviewStatus ComputeStatus() const;
+        // CreateOffscreen calls this document has made (the [gpu] test's instrument).
+        [[nodiscard]] std::uint32_t PreviewVehicleAttempts() const noexcept { return m_previewVehicleAttempts; }
         // A save gesture parked behind the save-with-errors confirm (the modal
         // opens at the next draw of the document window or its page).
         [[nodiscard]] bool SaveWithErrorsPending() const noexcept { return m_confirmSaveWithErrors; }
@@ -448,6 +453,9 @@ namespace Arcane::Editor
         // Build (once) this document's own offscreen vehicle. No-op without
         // the DocServices graph seam, i.e. everywhere but a --nri-graph editor.
         void   EnsureGraphPreviewContext();
+        // Submit + count: a non-zero id is one more job in flight; a zero
+        // return is a refused submit (CompilerUnavailable, s3.2).
+        std::uint64_t SubmitCompile(Arcane::ShaderCompileRequest req);
         // One preview frame into that vehicle.
         void   RenderGraphPreview(double dt);
         // Re-register the sprite preview material on the OWN device-less
@@ -767,6 +775,13 @@ namespace Arcane::Editor
         // destruction (NriGraphContext.hpp, item (2)).
         static constexpr std::uint32_t kGraphPreviewSize = 512;
         std::unique_ptr<Arcane::NriGraphContext> m_graphPreview;
+        // ===== The late-bound seam's state (s3.2) =====
+        Arcane::ImGuiNriNode* m_previewHud = nullptr;     // the chrome node captured at vehicle creation
+        bool          m_previewVehicleFailed = false;     // CreateOffscreen returned null: Tick stops retrying
+        bool          m_previewFrameFailed   = false;     // a frame failed (vehicle dropped); the next Presented frame clears it
+        std::uint32_t m_previewVehicleAttempts = 0;
+        std::uint32_t m_jobsInFlight = 0;                 // non-zero Submits not yet answered by ConsumeResult
+        bool          m_submitRefused = false;            // a Submit since the last invalidation returned 0
         // The document's OWN device-less batcher -- the sprite surface's
         // recorder, and the checkerboard backdrop's for every surface. Owned
         // rather than shared with the editor's scene batcher: this frame is
