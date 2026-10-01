@@ -119,15 +119,9 @@ namespace Astra
                 return false;
             }
 
-            // Calculate next version with wraparound (mask-correct for any VersionBits)
-            const VersionType nextVersion = Detail::NextEntityVersion<VersionType>(
-                currentVersion, static_cast<VersionType>(Entity::VERSION_MASK), NULL_VERSION, INITIAL_VERSION);
-
-            // Mark as destroyed in table
+            // Mark as destroyed in table, then recycle or retire (one rule, RecycleOrRetire)
             m_table.Destroy(id);
-
-            // Recycle the ID with next version
-            m_idStack.Recycle(id, nextVersion, true);  // preferLocal = true for segment locality
+            RecycleOrRetire(id, currentVersion);
 
             return true;
         }
@@ -147,15 +141,9 @@ namespace Astra
 
             const IDType id = entity.GetID();
 
-            // Calculate next version with wraparound (mask-correct for any VersionBits)
-            const VersionType nextVersion = Detail::NextEntityVersion<VersionType>(
-                currentVersion, static_cast<VersionType>(Entity::VERSION_MASK), NULL_VERSION, INITIAL_VERSION);
-
-            // Mark as destroyed in table
+            // Mark as destroyed in table, then recycle or retire (one rule, RecycleOrRetire)
             m_table.Destroy(id);
-
-            // Recycle the ID with next version
-            m_idStack.Recycle(id, nextVersion, true);  // preferLocal = true for segment locality
+            RecycleOrRetire(id, currentVersion);
 
             return true;
         }
@@ -193,14 +181,12 @@ namespace Astra
                 // Verify version matches
                 if (m_table.GetVersion(id) != currentVersion) ASTRA_UNLIKELY continue;
                 
-                // Calculate next version (mask-correct for any VersionBits)
-                const VersionType nextVersion = Detail::NextEntityVersion<VersionType>(
-                    currentVersion, static_cast<VersionType>(Entity::VERSION_MASK), NULL_VERSION, INITIAL_VERSION);
-                
-                // Mark as destroyed
+                // Mark as destroyed; an exhausted slot retires (RecycleOrRetire's rule)
                 m_table.Destroy(id);
-                toRecycle.push_back({id, nextVersion});
                 ++destroyed;
+                VersionType nextVersion = NULL_VERSION;
+                if (RetireIfExhausted(currentVersion, nextVersion)) ASTRA_UNLIKELY continue;
+                toRecycle.push_back({id, nextVersion});
             }
             
             // Batch recycle the IDs
@@ -233,9 +219,19 @@ namespace Astra
         ASTRA_NODISCARD EntityTable&       GetRecordTable()       noexcept { return m_table; }
         ASTRA_NODISCARD const EntityTable& GetRecordTable() const noexcept { return m_table; }
 
+        // Clear() RECYCLES (Astra "now" batch, 2026-09-30). Every live id goes
+        // back on the free list at its next version, and an exhausted one
+        // retires. The free list and m_nextID are KEPT, then the table empties.
+        // Ids freed before Clear stay free and are reused after it; LIFO hands
+        // out the just-cleared ids first. EntityIDStack::Clear (the raw reset)
+        // is no longer called here.
         void Clear() noexcept
         {
-            m_idStack.Clear();
+            for (auto it = m_table.begin(); it != m_table.end(); ++it)
+            {
+                const auto [id, version] = *it;
+                RecycleOrRetire(id, version);
+            }
             m_table.Clear();
         }
 
@@ -258,6 +254,14 @@ namespace Astra
         ASTRA_NODISCARD std::size_t RecycledCount() const noexcept
         {
             return m_idStack.RecycledCount();
+        }
+
+        // Slots retired by this instance (exhausted versions, never recycled).
+        // A per-instance diagnostic: not serialized, so a Load starts at 0.
+        // The retired ids themselves stay retired across Save/Load.
+        ASTRA_NODISCARD std::size_t GetRetiredCount() const noexcept
+        {
+            return m_retiredCount;
         }
 
         ASTRA_NODISCARD bool Empty() const noexcept
@@ -535,6 +539,16 @@ namespace Astra
                     return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
                 }
 
+                // A recycled nextVersion is what Allocate() hands back out.
+                // NULL_VERSION (0) is IsValid()'s "dead" value and the
+                // CommandBuffer placeholder encoding, and no valid save carries
+                // it: Destroy recycles at 1..VERSION_MASK or retires the slot
+                // (never recycled). Reject it before a version-0 handle exists.
+                if (nextVersion == NULL_VERSION)
+                {
+                    return Result<std::unique_ptr<EntityManager>, SerializationError>::Err(SerializationError::CorruptedData);
+                }
+
                 recycledEntries.push_back({id, nextVersion});
             }
 
@@ -612,8 +626,39 @@ namespace Astra
         }
 
     private:
+        // The retire rule, shared by RecycleOrRetire and DestroyBatch's large
+        // branch (which batches its recycles). Writes the next version to `next`,
+        // or counts a retirement and returns true when the version is exhausted.
+        bool RetireIfExhausted(VersionType currentVersion, VersionType& next) noexcept
+        {
+            next = Detail::NextEntityVersion<VersionType>(
+                currentVersion, static_cast<VersionType>(Entity::VERSION_MASK), NULL_VERSION);
+            if (next == NULL_VERSION) ASTRA_UNLIKELY
+            {
+                ++m_retiredCount;
+                return true;
+            }
+            return false;
+        }
+
+        // The one recycle rule for every destroy path and Clear(). Recycle `id`
+        // at its next version, or RETIRE it when the version is exhausted. A
+        // retired id stays below m_nextID, dead in the table and on no free
+        // list, so it is never handed out again. Save/Load reproduce that with
+        // no format change.
+        void RecycleOrRetire(IDType id, VersionType currentVersion) noexcept
+        {
+            VersionType nextVersion = NULL_VERSION;
+            if (RetireIfExhausted(currentVersion, nextVersion)) ASTRA_UNLIKELY
+            {
+                return;
+            }
+            m_idStack.Recycle(id, nextVersion, true);   // preferLocal is ignored (LIFO)
+        }
+
         EntityIDStack m_idStack;
         EntityTable m_table;
         Config m_config;
+        std::size_t m_retiredCount = 0;
     };
 }
