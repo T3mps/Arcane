@@ -77,6 +77,11 @@ namespace Arcane::Editor
         // from its seed. Key unchanged: GetID("##value") under PushID(label).
         struct NumericDraft { double value[4]{}; double seed[4]{}; int count = 1; bool active = false; };
         std::unordered_map<unsigned int, NumericDraft> numericDrafts;   // keyed by ImGui id
+        // ColorRow (node-page s4.1(c)): the popup's Old swatch, latched at open
+        // (one slot -- one colour popup at a time), and the popup id live last
+        // frame, so the close frame can commit once.
+        float colorOriginal[4]{ 1.0f, 1.0f, 1.0f, 1.0f };
+        ImGuiID colorPopupLive = 0;
         // TEST SEAM (PropertyGridTest): when non-null every row records the
         // centre of its VALUE widget under its label. Production: nullptr.
         std::unordered_map<std::string, ImVec2>* probe = nullptr;
@@ -141,6 +146,12 @@ namespace Arcane::Editor
         // ids). Same draft/commit/Escape rules as FloatRow, across all n.
         bool VecRow(const char* label, float* v, int n, float speed = 0.01f,
                     const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%.3f");
+        // FieldLabelCell + a 4-channel draft + ColorValue("##value"). The boxes
+        // behave like VecRow; the popup writes through every frame and commits
+        // on the frame it closes if the value differs from colorOriginal.
+        // *popupIdOut feeds the caller's EditGesture popup pair; `hdr` reaches
+        // ColorPopupBody (T3's ConstColor) and lifts the boxes' 0..1 clamp.
+        bool ColorRow(const char* label, float linear[4], ImGuiID* popupIdOut = nullptr, bool hdr = false);
         int  ComboRow(const char* label, const char* const* items, int count, int current);
         void ReadOnlyRow(const char* label, std::string_view text);
         int  ButtonRow(const char* label, const char* const* buttons, int count,

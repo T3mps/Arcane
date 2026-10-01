@@ -220,4 +220,40 @@ namespace Arcane::Editor
 
         return changed;
     }
+
+    ColorValueResult ColorValue(const char* id, float linear[4], float original[4], bool hdr)
+    {
+        ColorValueResult result;
+        const float total = ImGui::CalcItemWidth();   // read BEFORE the swatch consumes the pending width
+        const float swatch = ImGui::GetFrameHeight();
+        ImGui::PushID(id);
+        result.popupId = ColorPopupId("##popup");
+        if (ColorSwatchButton("##swatch", linear))
+        {
+            for (int i = 0; i < 4; ++i) original[i] = linear[i];
+            ImGui::OpenPopup(result.popupId);
+        }
+        if (ImGui::BeginPopup("##popup"))
+        {
+            if (ColorPopupBody(linear, original, hdr))
+                result.changed = true;
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        const float boxes = total - swatch - ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetNextItemWidth(boxes > 1.0f ? boxes : 1.0f);
+        // DisplayRGB and InputRGB PIN the mode: NoOptions only suppresses this
+        // row's menu, and without them ColorEdit4 reads the global
+        // g.ColorEditOptions, which another widget can flip to HSV -- InputHSV
+        // would write HSV components into linear storage. HDR (when `hdr`)
+        // lifts the boxes' 0..1 drag clamp, matching ColorPopupBody's Linear row.
+        if (ImGui::ColorEdit4(id, linear,
+                              ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoSmallPreview
+                              | ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoOptions
+                              | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_InputRGB
+                              | (hdr ? ImGuiColorEditFlags_HDR : 0)))
+            result.changed = true;
+        return result;
+    }
 }

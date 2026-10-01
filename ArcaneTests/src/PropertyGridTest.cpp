@@ -566,3 +566,66 @@ TEST_CASE("PropertyGrid: SliderRow commits once per gesture", "[editor][inspecto
     h.Frame();
     CHECK(commits == 1);
 }
+
+TEST_CASE("PropertyGrid: ColorRow box drag commits once; one popup session commits once on close, original latched at open", "[editor][inspector]")
+{
+    RowHarness h;
+    float tint[4]{ 0.25f, 0.25f, 0.25f, 1.0f };
+    int commits = 0;
+    ImGuiID popupId = 0;
+    h.body = [&](PropertyGrid& g) { if (g.ColorRow("Tint", tint, &popupId)) ++commits; };
+    h.Frame();
+
+    // The four linear boxes are the probed (last) item. Four equal boxes put the
+    // group centre on the 1|2 gap; 12 px left is inside box 1 (G).
+    const ImVec2 boxes = h.Centre("Tint");
+    h.Drag(ImVec2(boxes.x - 12.0f, boxes.y), 45.0f);
+    CHECK(commits == 1);
+    CHECK(tint[1] > 0.25f + 0.1f);                     // ColorEdit4's float speed: 1/255 per px
+    CHECK(tint[0] == 0.25f);
+    CHECK(tint[2] == 0.25f);
+    CHECK(tint[3] == 1.0f);
+    h.Frame();
+    CHECK(commits == 1);
+
+    const float atOpen[4]{ tint[0], tint[1], tint[2], tint[3] };
+    CHECK(h.Centre("Tint#swatch").x < boxes.x);        // the swatch sits LEFT of the boxes
+    h.Click(h.Centre("Tint#swatch"));
+    REQUIRE(popupId != 0);
+    REQUIRE(ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None));
+    for (int i = 0; i < 4; ++i) CHECK(h.state.colorOriginal[i] == atOpen[i]);
+    // The popup body writes through into the row's storage every frame; a write
+    // to that storage while it is open stands in for a picker drag.
+    tint[0] = 0.8f;
+    h.Frame(); h.Frame();
+    CHECK(commits == 1);                                // open: nothing committed yet
+    h.Click(ImVec2(1200.0f, 1000.0f));                  // outside every window: the popup closes
+    CHECK_FALSE(ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None));
+    CHECK(commits == 2);                                // one commit for the whole session
+    CHECK(tint[0] == 0.8f);
+    h.Frame();
+    CHECK(commits == 2);
+}
+
+TEST_CASE("PropertyGrid: an hdr ColorRow's box drag keeps a component above 1; a plain one clamps it", "[editor][inspector]")
+{
+    // T2-A4 carry ruling (s4.1(c) step 3 clarification): `hdr` also ORs
+    // ImGuiColorEditFlags_HDR into the linear boxes, so a leftward drag on a
+    // component above 1 does not snap it into 0..1.
+    for (const bool hdr : { true, false })
+    {
+        INFO("hdr = " << hdr);
+        RowHarness h;
+        float glow[4]{ 0.5f, 2.0f, 0.5f, 1.0f };
+        int commits = 0;
+        h.body = [&](PropertyGrid& g) { if (g.ColorRow("Glow", glow, nullptr, hdr)) ++commits; };
+        h.Frame();
+        const ImVec2 boxes = h.Centre("Glow");
+        h.Drag(ImVec2(boxes.x - 12.0f, boxes.y), -45.0f);   // box 1 (G), leftward
+        CHECK(commits == 1);
+        if (hdr) { CHECK(glow[1] > 1.0f); CHECK(glow[1] < 2.0f); }
+        else     CHECK(glow[1] <= 1.0f);
+        CHECK(glow[0] == 0.5f);
+        CHECK(glow[2] == 0.5f);
+    }
+}

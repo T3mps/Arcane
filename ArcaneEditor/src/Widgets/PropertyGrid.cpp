@@ -1,4 +1,5 @@
 #include "Widgets/PropertyGrid.hpp"
+#include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include <imgui_internal.h>   // ClearActiveID (numeric-row Escape cancel)
 
@@ -294,6 +295,36 @@ namespace Arcane::Editor
         m_events.cancelled = r.cancelled;
         EndValueCell(label);
         return r.committed;
+    }
+
+    bool PropertyGrid::ColorRow(const char* label, float linear[4], ImGuiID* popupIdOut, bool hdr)
+    {
+        BeginValueCell(label, false);
+        const ImVec2 cell = ImGui::GetCursorScreenPos();   // the swatch's top-left: ColorValue draws it first
+        ImGuiID popupId = 0;
+        const NumericResult r = NumericRow(m_state, linear, 4, [&](float* local)
+        {
+            popupId = ColorValue("##value", local, m_state.colorOriginal, hdr).popupId;
+        });
+        m_events.cancelled = r.cancelled;
+        bool committed = r.committed;
+        if (ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None))
+            m_state.colorPopupLive = popupId;
+        else if (popupId != 0 && m_state.colorPopupLive == popupId)
+        {
+            m_state.colorPopupLive = 0;                      // the close frame: one commit per session
+            for (int i = 0; i < 4; ++i)
+                committed = committed || linear[i] != m_state.colorOriginal[i];
+        }
+        if (popupIdOut)
+            *popupIdOut = popupId;
+        if (m_state.probe)                                   // TEST SEAM: the swatch's centre
+        {
+            const float fh = ImGui::GetFrameHeight();
+            (*m_state.probe)[std::string(label) + "#swatch"] = ImVec2(cell.x + fh * 0.5f, cell.y + fh * 0.5f);
+        }
+        EndValueCell(label);                                 // probes the boxes (still LastItemData)
+        return committed;
     }
 
     int PropertyGrid::ComboRow(const char* label, const char* const* items, int count, int current)
