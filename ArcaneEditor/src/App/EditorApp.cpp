@@ -802,11 +802,11 @@ namespace Arcane::Editor
                 Arcane::Editor::SpriteDocument::Services spriteDocServices;
                 spriteDocServices.assets = &m_runtime->AssetsFacade();
                 // The SAME shared stack MakeDocServices hands the material
-                // documents (EditorAppProject.cpp:39) and the Inspector/gizmo
-                // push to -- one editor-wide history, so Ctrl+Z walks back
-                // through sprite field edits in the order they happened
-                // alongside everything else.
-                spriteDocServices.undo = m_undo ? &*m_undo : nullptr;
+                // documents (through the same DocumentUndo resolver) and the
+                // Inspector/gizmo push to -- one editor-wide history, so Ctrl+Z
+                // walks back through sprite field edits in the order they
+                // happened alongside everything else. Null in Play (s3.3b).
+                spriteDocServices.undo = [this]() { return DocumentUndo(); };
                 // Evict-then-re-resolve on a sprite re-save. The no-gap
                 // requirement (a frame must never render the 1x1 placeholder in
                 // between) is the resolver's contract now, so this is one call:
@@ -857,7 +857,7 @@ namespace Arcane::Editor
                     return nullptr;
                 Arcane::Editor::MeshDocument::Services meshDocServices;
                 meshDocServices.runtime = &m_runtime->Core();
-                meshDocServices.undo = m_undo ? &*m_undo : nullptr;
+                meshDocServices.undo = [this]() { return DocumentUndo(); };   // null in Play (s3.3b)
                 // Evict-then-re-resolve on a mesh re-save OR an undo/redo,
                 // the same one-call route the .arcsprite factory above takes
                 // for its own asset: the no-gap requirement (no frame may

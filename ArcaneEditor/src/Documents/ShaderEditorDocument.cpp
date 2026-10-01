@@ -999,8 +999,8 @@ namespace Arcane::Editor
         // cost of ClosePending's commit-not-cancel rule, which exists because
         // Cancel would discard the transaction WITHOUT reverting the edits the
         // user already watched happen.
-        if (m_services.undo)
-            EditGesture::ClosePending(*m_services.undo, m_gesture);
+        if (UndoStack())
+            EditGesture::ClosePending(*UndoStack(), m_gesture);
 
         if (m_graphCtx)
         {
@@ -1860,14 +1860,14 @@ namespace Arcane::Editor
         const std::optional<MeshMaterialMetadataState> after = CaptureMeshMaterialMetadata();
         if (!after || *after == before)
             return;   // nothing changed (or the clamp collapsed the request back) -- no step, redo intact
-        if (!m_services.undo)
+        if (!UndoStack())
             return;
         // Labelled by the field that changed, blend first when several did (a
         // blend switch is the edit the others ride along with).
         const char* label = before.blend != after->blend             ? "Edit Blend"
                           : before.alphaCutoff != after->alphaCutoff ? "Edit Alpha Cutoff"
                                                                      : "Edit Two Sided";
-        m_services.undo->Push(std::make_unique<MeshMaterialMetadataCommand>(m_anchor, label, before, *after));
+        UndoStack()->Push(std::make_unique<MeshMaterialMetadataCommand>(m_anchor, label, before, *after));
     }
 
     void ShaderEditorDocument::ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
@@ -2003,7 +2003,7 @@ namespace Arcane::Editor
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard. It
         // covers the early return below (Begin refused: collapsed window or a
         // background tab, where no widget inside can report its deactivation).
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
@@ -2153,7 +2153,7 @@ namespace Arcane::Editor
         // page->Draw even when Begin returns false) -- where no widget inside
         // can report its own deactivation, which is exactly what this guard
         // covers. BeginChild/PaneSplitter are safe there.
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         // The Inspector's Ctrl+S parks here too (RequestSaveFromInspector): the
         // page opens the confirm when the document window did not draw first.
@@ -3560,8 +3560,8 @@ namespace Arcane::Editor
         // covered by either check and would write to that other pass: a
         // pre-existing GraphEditCommand weakness (every step stores a bare
         // index), not one this bracket introduces.
-        if (m_services.undo)
-            m_services.undo->Push(std::make_unique<GraphEditCommand>(
+        if (UndoStack())
+            UndoStack()->Push(std::make_unique<GraphEditCommand>(
                 m_anchor, label, pass, std::move(before), GraphOptAt(pass)));
     }
 
@@ -3763,8 +3763,8 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::PushPassUndo(const char* label, PassListState before)
     {
-        if (m_services.undo)
-            m_services.undo->Push(std::make_unique<PassListCommand>(
+        if (UndoStack())
+            UndoStack()->Push(std::make_unique<PassListCommand>(
                 m_anchor, label, std::move(before), CapturePassListState()));
     }
 
@@ -4673,23 +4673,23 @@ namespace Arcane::Editor
         };
         auto gestureBegin = [&](const char* label)
         {
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
                 [&] { return std::string(label); },
                 [&] { return buildGraphEdit(label); });
         };
-        auto gestureEnd = [&] { EditGesture::EndOnDeactivate(m_services.undo, m_gesture); };
+        auto gestureEnd = [&] { EditGesture::EndOnDeactivate(UndoStack(), m_gesture); };
         // The popup pair, keyed on a popup id instead of the last submitted
         // item -- a hand-rolled popup's edits come from FOREIGN widgets, so
         // IsItemActivated() never fires for it (EditGesture.hpp:121-133).
         auto popupGestureBegin = [&](const char* label, std::uint32_t popupId)
         {
-            EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture, popupId,
+            EditGesture::BeginOnPopupOpen(UndoStack(), m_gesture, popupId,
                                           [&] { return std::string(label); },
                                           [&] { return buildGraphEdit(label); });
         };
         auto popupGestureEnd = [&](std::uint32_t popupId)
         {
-            EditGesture::EndOnPopupClose(m_services.undo, m_gesture, popupId);
+            EditGesture::EndOnPopupClose(UndoStack(), m_gesture, popupId);
         };
         auto valueEdited = [&]
         {
@@ -5756,8 +5756,8 @@ namespace Arcane::Editor
             m_instance->GetParam(d.nameHash, before);
         if (!m_instance->Set(d.nameHash, value))
             return;
-        if (m_services.undo)
-            m_services.undo->Push(std::make_unique<ParamEditCommand>(
+        if (UndoStack())
+            UndoStack()->Push(std::make_unique<ParamEditCommand>(
                 m_anchor, d.nameHash, "Edit " + d.name,
                 hadBefore, before, /*hasAfter=*/true, value));
         // No binding refresh on a texture pick: texture params resolve by
@@ -5843,7 +5843,7 @@ namespace Arcane::Editor
             // already written through), parked as the step's before-state; the
             // step itself is built at close, against whatever the drag left --
             // and a pure click that moved nothing pushes nothing.
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
                 [] { return std::string("Edit Alpha Cutoff"); },
                 [&]() -> std::function<void()>
                 {
@@ -5855,7 +5855,7 @@ namespace Arcane::Editor
                 metadata->alphaCutoff = cutoff;
                 ApplyMeshMaterialMetadata(*metadata);   // LIVE; the step lands when the drag closes
             }
-            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
+            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
             if (IsInstance() && !cutoffOverride) ImGui::EndDisabled();
 
             bool twoSidedOverride = metadata->twoSided.has_value();
@@ -5908,8 +5908,8 @@ namespace Arcane::Editor
                         Arcane::MatParamValue before;
                         m_instance->GetParam(d.nameHash, before);
                         m_instance->ClearOverride(d.nameHash);
-                        if (m_services.undo)
-                            m_services.undo->Push(std::make_unique<ParamEditCommand>(
+                        if (UndoStack())
+                            UndoStack()->Push(std::make_unique<ParamEditCommand>(
                                 m_anchor, d.nameHash, "Reset " + d.name,
                                 /*hadBefore=*/true, before, /*hasAfter=*/false,
                                 Arcane::MatParamValue{}));
@@ -6047,13 +6047,16 @@ namespace Arcane::Editor
                         if (hadBefore == hasAfter &&
                             (!hadBefore || before == after))
                             return;   // nothing changed -- no step, redo intact
-                        m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                            m_anchor, nameHash, "Edit " + name,
-                            hadBefore, before, hasAfter, after));
+                        // Re-resolved here (the builder runs at close):
+                        // null-guarded like every other resolver use.
+                        if (Arcane::CommandStack* stack = UndoStack())
+                            stack->Push(std::make_unique<ParamEditCommand>(
+                                m_anchor, nameHash, "Edit " + name,
+                                hadBefore, before, hasAfter, after));
                     });
             };
 
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
                 [&] { return "Edit " + d.name; },
                 buildParamEdit);
 
@@ -6064,7 +6067,7 @@ namespace Arcane::Editor
                 m_instance->Set(d.nameHash, value);
             }
 
-            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
+            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
 
             // The popup gesture pair: separate from the box row's
             // BeginOnActivate/EndOnDeactivate above because the popup's
@@ -6073,11 +6076,11 @@ namespace Arcane::Editor
             // popup this frame.
             if (WidgetFor(d.type) == ParamWidget::ColorEdit)
             {
-                EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture,
+                EditGesture::BeginOnPopupOpen(UndoStack(), m_gesture,
                                               ColorPopupId((d.name + "##colorpopup").c_str()),
                                               [&] { return std::string("Edit ") + d.name; },
                                               buildParamEdit);
-                EditGesture::EndOnPopupClose(m_services.undo, m_gesture,
+                EditGesture::EndOnPopupClose(UndoStack(), m_gesture,
                                              ColorPopupId((d.name + "##colorpopup").c_str()));
             }
 
@@ -6092,8 +6095,8 @@ namespace Arcane::Editor
                     Arcane::MatParamValue before;
                     m_instance->GetParam(d.nameHash, before);
                     m_instance->ClearOverride(d.nameHash);
-                    if (m_services.undo)
-                        m_services.undo->Push(std::make_unique<ParamEditCommand>(
+                    if (UndoStack())
+                        UndoStack()->Push(std::make_unique<ParamEditCommand>(
                             m_anchor, d.nameHash, "Reset " + d.name,
                             /*hadBefore=*/true, before, /*hasAfter=*/false,
                             Arcane::MatParamValue{}));

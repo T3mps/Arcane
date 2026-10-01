@@ -58,6 +58,7 @@
 // routing, and the unsaved-close confirm modal.
 
 #include "Scene/EditGesture.hpp"
+#include "Scene/UndoGate.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 #include "Documents/PreviewStatus.hpp"
@@ -113,13 +114,14 @@ namespace Arcane::Editor
             // all.
             Arcane::Runtime* runtime = nullptr;
 
-            // The SAME shared editor CommandStack every other surface pushes
-            // to (EditorAppProject.cpp's MakeDocServices hands the identical
-            // pointer to DocServices::undo) -- one global history, so a mesh
-            // param edit undoes alongside everything else in the order it
-            // happened. Null = no undo coverage (the EditGesture bracket
-            // no-ops whole); the document still edits and saves.
-            Arcane::CommandStack* undo = nullptr;
+            // Resolves to the SAME shared editor CommandStack every other
+            // surface pushes to (EditorApp::DocumentUndo, the resolver
+            // MakeDocServices hands DocServices::undo) -- one global history,
+            // so a mesh param edit undoes alongside everything else in the
+            // order it happened. Asked per edit (UndoStack()); unset or null
+            // (Play) = no undo coverage (the EditGesture bracket no-ops
+            // whole); the document still edits and saves.
+            UndoResolver undo;   // the ONE history, resolved per edit; returns null in Play (s3.3b)
 
             // Fired with this asset's Guid after a successful Save AND after
             // every undo/redo apply -- routed to SceneRenderResolver::
@@ -354,6 +356,7 @@ namespace Arcane::Editor
         // comment for the full ordering argument.
         void DestroyPreviewContext();
 
+        [[nodiscard]] Arcane::CommandStack* UndoStack() const { return m_services.undo ? m_services.undo() : nullptr; }
         Services                 m_services;
         std::filesystem::path    m_path;
         Arcane::MeshAssetData    m_data;

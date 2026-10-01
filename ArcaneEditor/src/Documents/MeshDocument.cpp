@@ -134,8 +134,8 @@ namespace Arcane::Editor
         // (SpriteDocument.cpp:76-103): a close that lands between a gesture
         // parking and its next Draw would otherwise strand InTransaction()
         // true editor-wide.
-        if (m_services.undo)
-            EditGesture::ClosePending(*m_services.undo, m_gesture);
+        if (UndoStack())
+            EditGesture::ClosePending(*UndoStack(), m_gesture);
 
         // LAST: the chrome context's ImGuiNri may hold a view over this
         // document's preview output, so that view has to be handled before
@@ -166,9 +166,9 @@ namespace Arcane::Editor
     {
         // No stack (Play mode / an unwired document) or nothing actually
         // moved -> no step -- identical guard to SpriteDocument::PushDataEdit.
-        if (!m_services.undo || before == m_data)
+        if (!UndoStack() || before == m_data)
             return;
-        m_services.undo->Push(std::make_unique<MeshDataEditCommand>(
+        UndoStack()->Push(std::make_unique<MeshDataEditCommand>(
             m_anchor, std::move(label), before, m_data));
     }
 
@@ -460,7 +460,7 @@ namespace Arcane::Editor
         // placement for why: it covers the early return below (a collapsed
         // window or a background tab, where no widget inside can report its
         // own deactivation).
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(420.0f, 640.0f), ImGuiCond_FirstUseEver);
@@ -578,7 +578,7 @@ namespace Arcane::Editor
         // covers. Draw keeps its own guard for the document window's refused-
         // Begin path (ShaderEditorDocument's Draw + DrawMaterialPageBody are
         // the precedent for two guards on one gesture).
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         // Recomputed here, not shared: Draw's preview block declares its own
         // copy for the preview branch, and this form (the source section) reads
@@ -590,7 +590,7 @@ namespace Arcane::Editor
         // IMMEDIATELY after each drag widget's field write.
         const auto bracket = [&](const char* label)
         {
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
                 [&] { return std::string(label); },
                 [&]
                 {
@@ -598,7 +598,7 @@ namespace Arcane::Editor
                         [this, label = std::string(label), before = m_data]
                         { PushDataEdit(label, before); });
                 });
-            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
+            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
         };
 
         // Single-frame commit for non-drag edits (the source combo, the

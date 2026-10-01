@@ -81,7 +81,7 @@ namespace Arcane::Editor
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
         s.runtime  = &m_runtime->Core();
-        s.undo     = m_undo ? &*m_undo : nullptr;
+        s.undo     = [this]() { return DocumentUndo(); };   // per edit; null in Play (s3.3b)
         s.clock    = &m_editorClock;
         s.backend  = m_config.backend;
         // THE PREVIEW SEAM IS LATE-BOUND (node page + editor upgrades s3.2),

@@ -21,6 +21,7 @@
 // document via ConsumeResult.
 
 #include "Scene/EditGesture.hpp"
+#include "Scene/UndoGate.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 #include "Documents/PreviewStatus.hpp"
@@ -95,7 +96,7 @@ namespace Arcane::Editor
         Arcane::ShaderCompiler*       compiler = nullptr;   // app-shared service
         Arcane::ShaderSourceProvider* sources = nullptr;    // template text
         Arcane::Runtime*              runtime = nullptr;    // Assets facade + open project (picker)
-        Arcane::CommandStack*         undo = nullptr;       // the ONE undo history
+        UndoResolver                  undo;                 // the ONE history, resolved per edit; returns null in Play (s3.3b)
         const double*                 clock = nullptr;      // app compile clock (Poll's `now`)
         Arcane::GraphicsBackend       backend{};
         // Fired after a successful Save with the asset's Guid -- the app
@@ -648,6 +649,7 @@ namespace Arcane::Editor
         // cutoff drag's gesture close both end here.
         void PushMeshMaterialMetadataUndo(const MeshMaterialMetadataState& before);
 
+        [[nodiscard]] Arcane::CommandStack* UndoStack() const { return m_services.undo ? m_services.undo() : nullptr; }
         DocServices                     m_services;
         std::filesystem::path           m_path;
         Arcane::MaterialAssetData       m_data;      // id/name/kind (+ save target)

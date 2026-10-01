@@ -21,6 +21,7 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Documents/SpriteDocument.hpp"
+#include "Scene/UndoGate.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Edit/CommandStack.hpp>
@@ -113,7 +114,7 @@ TEST_CASE("SpriteDocument edits round-trip through the shared CommandStack", "[e
     const Arcane::SpriteAssetData before = Fixture();
 
     SpriteDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     SpriteDocument doc(services, FixturePath(), before);
 
     // What a completed drag does: the live edit already happened, then the
@@ -141,7 +142,7 @@ TEST_CASE("SpriteDocument: a gesture that moved nothing pushes no step", "[edito
     const Arcane::SpriteAssetData data = Fixture();
 
     SpriteDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     SpriteDocument doc(services, FixturePath(), data);
 
     // Press-and-release on a drag without moving it: before == after.
@@ -163,7 +164,7 @@ TEST_CASE("SpriteDocument undo steps go inert once the document closes", "[edito
 
     {
         SpriteDocument::Services services;
-        services.undo = &fx.stack;
+        services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
         SpriteDocument doc(services, FixturePath(), before);
 
         Arcane::SpriteAssetData after = before;
@@ -185,7 +186,7 @@ TEST_CASE("SpriteDocument: closing the document expires its steps; they never co
     const Arcane::SpriteAssetData before = Fixture();
     {
         SpriteDocument::Services services;
-        services.undo = &fx.stack;
+        services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
         SpriteDocument doc(services, FixturePath(), before);
         Arcane::SpriteAssetData after = before;
         after.sourceSize = {48.0f, 24.0f};
@@ -346,4 +347,28 @@ TEST_CASE("SpriteDocument's window points at the Inspector and draws the sprite 
     CHECK(asked.back() == data.texture);               // the sprite's TEXTURE through the seam
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
+}
+
+TEST_CASE("SpriteDocument: the undo resolver is asked per edit -- null in Play pushes nothing", "[editor][sprite][undo]")
+{
+    UndoFixture fx;
+    const Arcane::SpriteAssetData before = Fixture();
+    bool playing = true;
+    SpriteDocument::Services services;
+    services.undo = [&]() { return Arcane::Editor::ResolveDocumentUndo(playing, &fx.stack); };
+    SpriteDocument doc(services, FixturePath(), before);
+
+    Arcane::SpriteAssetData after = before;
+    after.sourceSize = {48.0f, 24.0f};
+    doc.ApplySpriteData(after);
+    doc.PushDataEdit("Edit Source Size", before);
+    CHECK(doc.Data() == after);                 // the edit stands...
+    CHECK_FALSE(fx.stack.CanUndo());            // ...with no step in Play
+
+    playing = false;                            // Stop
+    Arcane::SpriteAssetData again = after;
+    again.sourceSize = {64.0f, 24.0f};
+    doc.ApplySpriteData(again);
+    doc.PushDataEdit("Edit Source Size", after);
+    CHECK(fx.stack.CanUndo());
 }

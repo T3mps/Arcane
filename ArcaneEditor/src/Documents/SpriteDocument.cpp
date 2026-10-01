@@ -108,8 +108,8 @@ namespace Arcane::Editor
         // destroyed, so the pendingCommit builder ClosePending fires still sees
         // a live m_data and a live m_anchor. Every step it just pushed goes
         // inert an instant later, when m_anchor's control block drops.
-        if (m_services.undo)
-            EditGesture::ClosePending(*m_services.undo, m_gesture);
+        if (UndoStack())
+            EditGesture::ClosePending(*UndoStack(), m_gesture);
     }
 
     void SpriteDocument::ApplySpriteData(const Arcane::SpriteAssetData& data)
@@ -137,9 +137,9 @@ namespace Arcane::Editor
         // out of the history; the stack drops empty TRANSACTIONS on its own
         // (CommandStack.cpp:61-62) but a generic Push is unconditional
         // (:84-102), so the compare has to happen here.
-        if (!m_services.undo || before == m_data)
+        if (!UndoStack() || before == m_data)
             return;
-        m_services.undo->Push(std::make_unique<SpriteDataEditCommand>(
+        UndoStack()->Push(std::make_unique<SpriteDataEditCommand>(
             m_anchor, std::move(label), before, m_data));
     }
 
@@ -164,7 +164,7 @@ namespace Arcane::Editor
         // can report its own deactivation), which for a DOCUMENT window is the
         // routine case, not an edge one: any other tab in the same dock node
         // being in front puts this document exactly there.
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(420.0f, 560.0f), ImGuiCond_FirstUseEver);
@@ -253,7 +253,7 @@ namespace Arcane::Editor
         // covers. Draw keeps its own guard for the document window's refused-
         // Begin path (ShaderEditorDocument's Draw + DrawMaterialPageBody are
         // the precedent for two guards on one gesture).
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         // Field clamp policy: ClampOnInput, not AlwaysClamp. Ctrl+Click on a
         // Drag widget opens a text box whose typed value ImGui does NOT clamp
@@ -306,7 +306,7 @@ namespace Arcane::Editor
         // self-consistent, never another target's data.
         const auto bracket = [&](const char* label)
         {
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
                 [&] { return std::string(label); },
                 [&]
                 {
@@ -314,7 +314,7 @@ namespace Arcane::Editor
                         [this, label = std::string(label), before = m_data]
                         { PushDataEdit(label, before); });
                 });
-            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
+            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
         };
 
         // m_dirty and the undo history are SEPARATE ledgers: Save clears dirty

@@ -279,7 +279,7 @@ TEST_CASE("ShaderEditorDocument: a mesh metadata edit is one undo step -- undo r
     Astra::Registry registry;
     Arcane::CommandStack stack{[&registry]() -> Astra::Registry& { return registry; }};
     DocServices services;
-    services.undo = &stack;
+    services.undo = [p = &stack]() -> Arcane::CommandStack* { return p; };
     ShaderEditorDocument doc(services, meshFile, *loaded);
 
     using State = ShaderEditorDocument::MeshMaterialMetadataState;
@@ -370,7 +370,7 @@ TEST_CASE("ShaderEditorDocument: a mesh metadata edit is one undo step -- undo r
         Astra::Registry spriteRegistry;
         Arcane::CommandStack spriteStack{[&spriteRegistry]() -> Astra::Registry& { return spriteRegistry; }};
         DocServices spriteServices;
-        spriteServices.undo = &spriteStack;
+        spriteServices.undo = [p = &spriteStack]() -> Arcane::CommandStack* { return p; };
         ShaderEditorDocument spriteDoc(spriteServices, spriteFile, *loadedSprite);
         spriteDoc.SetMeshMaterialMetadataWithUndo(edit);
         CHECK_FALSE(spriteStack.CanUndo());

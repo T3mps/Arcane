@@ -20,6 +20,7 @@
 // into a close or a pending confirm).
 
 #include "Scene/EditGesture.hpp"
+#include "Scene/UndoGate.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 
@@ -47,9 +48,9 @@ namespace Arcane::Editor
         // document list -- same "services struct" shape as
         // ShaderEditorDocument's DocServices, ShaderEditorDocument.hpp:85-104,
         // just with far less in it: a sprite has no compiler and no clock,
-        // because it has nothing async to drive. `undo` IS the same one shared
+        // because it has nothing async to drive. `undo` resolves to the same one shared
         // editor CommandStack every other surface pushes to (the app hands the
-        // same pointer to DocServices::undo, EditorAppProject.cpp:39), so a
+        // same resolver to DocServices::undo, EditorApp::DocumentUndo), so a
         // sprite field edit is one step in the ONE global history -- Ctrl+Z
         // walks back through it exactly like an Inspector or graph edit.
         struct Services
@@ -66,11 +67,11 @@ namespace Arcane::Editor
             // An asset guid -> its display name (the texture line). Null or
             // "" = the guid is printed.
             std::function<std::string(const Arcane::Guid&)> assetName;
-            // Null = no undo coverage (the EditGesture bracket then no-ops
-            // whole, EditGesture.hpp:145-146) -- the document still edits and
-            // saves, so an unwired stack degrades to "no history", never to a
-            // lost edit.
-            Arcane::CommandStack* undo = nullptr;
+            // Asked per edit (UndoStack()). Unset, or returning null (Play), =
+            // no undo coverage (the EditGesture bracket then no-ops whole) --
+            // the document still edits and saves, so a missing stack degrades
+            // to "no history", never to a lost edit.
+            UndoResolver undo;   // the ONE history, resolved per edit; returns null in Play (s3.3b)
             // Fired after a successful Save with the asset's Guid -- lets the
             // app's SpriteCache drop its cached resolve
             // (Render/SpriteCache.hpp:69-76 Invalidate), so the NEXT Request()
@@ -158,6 +159,7 @@ namespace Arcane::Editor
             SpriteDocument& m_doc;
         };
 
+        [[nodiscard]] Arcane::CommandStack* UndoStack() const { return m_services.undo ? m_services.undo() : nullptr; }
         Services                 m_services;
         std::filesystem::path    m_path;
         Arcane::SpriteAssetData  m_data;

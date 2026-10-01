@@ -38,6 +38,7 @@
 #include "App/InputEdges.hpp"
 #include "App/ModalErrorQueue.hpp"
 #include "App/UndoSettings.hpp"           // m_undoLimitsApplied + ReadUndoLimits (editor.undo.*)
+#include "Scene/UndoGate.hpp"             // ResolveDocumentUndo (DocumentUndo)
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Viewport/ViewportSettings.hpp"
@@ -852,6 +853,12 @@ namespace Arcane::Editor
         // THE Play/edit predicate (architecture pass sec 1). Editor code asks this,
         // never m_play.IsPlaying() raw, so the predicate has one greppable name.
         [[nodiscard]] bool InPlayMode() const noexcept { return m_play.IsPlaying(); }
+
+        // Every document's undo resolver target (spec s3.3b): null while Play runs.
+        [[nodiscard]] Arcane::CommandStack* DocumentUndo() noexcept
+        {
+            return Arcane::Editor::ResolveDocumentUndo(InPlayMode(), m_undo ? &*m_undo : nullptr);
+        }
 
         // ---- THE HOVER predicate --------------------------------------------
         // "The pointer is over the Viewport panel AND that fact is allowed to

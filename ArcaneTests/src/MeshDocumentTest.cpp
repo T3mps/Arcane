@@ -192,7 +192,7 @@ TEST_CASE("MeshDocument edits round-trip through the shared CommandStack", "[edi
     const Arcane::MeshAssetData before = Fixture();
 
     MeshDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     MeshDocument doc(services, FixturePath(), before);
 
     // What a completed drag does: the live edit already happened, then the
@@ -223,7 +223,7 @@ TEST_CASE("MeshDocument: an undo bracket that moved nothing pushes no step, "
     const Arcane::MeshAssetData data = Fixture();
 
     MeshDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     MeshDocument doc(services, FixturePath(), data);
 
     // Press-and-release on a drag without moving it: before == after.
@@ -248,7 +248,7 @@ TEST_CASE("MeshDocument undo steps go inert once the document closes", "[editor]
 
     {
         MeshDocument::Services services;
-        services.undo = &fx.stack;
+        services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
         MeshDocument doc(services, FixturePath(), before);
 
         Arcane::MeshAssetData after = before;
