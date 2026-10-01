@@ -24,8 +24,10 @@
 #include "Scene/UndoGate.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
+#include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
 
 #include <Astra/Component/ComponentRegistry.hpp>
@@ -34,10 +36,13 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // FindWindowByName / GetActiveID / ActiveIdWindow
 
+#include <glm/glm.hpp>
+
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using Arcane::Editor::SpriteDocument;
@@ -246,8 +251,10 @@ namespace
         ImGuiContext* prev = nullptr;
         ImGuiContext* ctx = nullptr;
         Arcane::Editor::PropertyGridState grid;
-        SpriteDocument doc{ SpriteDocument::Services{}, FixturePath(), Fixture() };
-        SpritePageUi()
+        std::unordered_map<std::string, ImVec2> probe;   // PropertyGrid's test seam: label -> the row's value centre
+        SpriteDocument doc;
+        explicit SpritePageUi(SpriteDocument::Services s = {}, Arcane::SpriteAssetData d = Fixture())
+            : doc(std::move(s), FixturePath(), std::move(d))
         {
             prev = ImGui::GetCurrentContext();
             ctx = ImGui::CreateContext();
@@ -257,11 +264,13 @@ namespace
             io.IniFilename = nullptr;
             unsigned char* px = nullptr; int w = 0, h = 0;
             io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+            grid.probe = &probe;
         }
         ~SpritePageUi() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
         void Frame()
         {
             ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_Always);
@@ -276,25 +285,55 @@ namespace
         }
         void Move(ImVec2 p) { ImGui::GetIO().AddMousePosEvent(p.x, p.y); Frame(); }
         void Button(int b, bool down) { ImGui::GetIO().AddMouseButtonEvent(b, down); Frame(); }
+        void Click(ImVec2 p) { Move(p); Button(0, true); Button(0, false); }
+        ImVec2 At(const std::string& label) { INFO(label); REQUIRE(probe.count(label) == 1); return probe.at(label); }
+    };
+
+    // An Assets facade that knows one texture size -- TextureInfoFor is all the page reads.
+    class DimsAssets final : public Arcane::Assets
+    {
+    public:
+        DimsAssets(std::uint32_t w, std::uint32_t h) { m_info.width = w; m_info.height = h; m_info.mipCount = 1; }
+        void SetContentRoot(const std::filesystem::path&) override {}
+        void SetAssetResolver(AssetResolver) override {}
+        const Arcane::TextureInfo* TextureInfoFor(const Arcane::Guid&) override { return &m_info; }
+        const Arcane::PixelData* PixelsFor(const Arcane::Guid&) override { return nullptr; }
+        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const std::filesystem::path&) override { return nullptr; }
+        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const Arcane::AssetId&) override { return nullptr; }
+        std::shared_ptr<const nlohmann::json> GetJson(const std::filesystem::path&) override { return nullptr; }
+        std::shared_ptr<const nlohmann::json> GetJson(const Arcane::AssetId&) override { return nullptr; }
+        Arcane::AssetStats Stats() const override { return {}; }
+        const Arcane::LoadedClientArtifact* ArtifactFor(const Arcane::Guid&) override { return nullptr; }
+        void InvalidateArtifact(const Arcane::Guid&) override {}
+        void SetCookPendingProbe(std::function<bool(const Arcane::Guid&)>) override {}
+        std::optional<Arcane::MaterialSurface> MaterialSurfaceFor(const Arcane::Guid&) override { return std::nullopt; }
+        std::optional<std::vector<Arcane::AssetRef>> ListAssetReferences(const Arcane::Guid&) override { return std::nullopt; }
+        const Arcane::LoadedClientMesh* MeshArtifactFor(const Arcane::Guid&) override { return nullptr; }
+        void InvalidateMeshArtifact(const Arcane::Guid&) override {}
+        bool CookPending(const Arcane::Guid&) const override { return false; }
+    private:
+        Arcane::TextureInfo m_info;
     };
 }
 
-// The form moved OUT of the document window: its first widget ("Pixels Per
+// The form moved OUT of the document window: its first drag ("Pixels Per
 // Meter") is submitted in the Inspector window. Proven through the ACTIVE id
-// after a press on the page's first row -- ImGuiWindow::GetID only hashes a
-// label, and LastItemData is restored to the parent's at End()
-// (imgui.cpp:8849), so neither alone shows a submission.
+// after a press on that row (located by the PropertyGrid probe) --
+// ImGuiWindow::GetID only hashes a label, and LastItemData is restored to the
+// parent's at End() (imgui.cpp:8849), so neither alone shows a submission.
 TEST_CASE("SpriteDocument's form draws in the Inspector window, not the document's", "[editor][sprite][inspector]")
 {
     SpritePageUi h;
     h.Frame();                                         // warm-up: both windows exist
     ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
     REQUIRE(iw != nullptr);
-    const ImVec2 row(iw->ContentRegionRect.Min.x + 10.0f,
-                     iw->ContentRegionRect.Min.y + ImGui::GetFrameHeight() * 0.5f);   // the page's first row
-    h.Move(row);
+    h.Frame();
+    const ImVec2 at = h.At("Pixels Per Meter");
+    h.Move(at);
     h.Button(ImGuiMouseButton_Left, true);
-    CHECK(ImGui::GetActiveID() == iw->GetID("Pixels Per Meter"));
+    // PropertyGrid ids: PushID(label) + "##value" under the section's Rows table ("##sprite").
+    CHECK(ImGui::GetActiveID() == ImGui::GetIDWithSeed("##value", nullptr,
+                                  ImGui::GetIDWithSeed("Pixels Per Meter", nullptr, iw->GetID("##sprite"))));
     CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);   // in the Inspector, not the document window
     h.Button(ImGuiMouseButton_Left, false);
 }
@@ -371,4 +410,72 @@ TEST_CASE("SpriteDocument: the undo resolver is asked per edit -- null in Play p
     doc.ApplySpriteData(again);
     doc.PushDataEdit("Edit Source Size", after);
     CHECK(fx.stack.CanUndo());
+}
+
+TEST_CASE("SpriteDocument::SetWholeTexture: ticked is (0,0); unticked is the texture's size; unknown dims refuse", "[editor][sprite]")
+{
+    Arcane::SpriteAssetData d = Fixture();
+    REQUIRE(SpriteDocument::SetWholeTexture(d, true, 0, 0));
+    CHECK(d.sourcePos == glm::vec2(0.0f)); CHECK(d.sourceSize == glm::vec2(0.0f));
+    CHECK_FALSE(SpriteDocument::SetWholeTexture(d, false, 0, 0));      // dims unknown: untouched
+    CHECK(d.sourceSize == glm::vec2(0.0f));
+    REQUIRE(SpriteDocument::SetWholeTexture(d, false, 256, 128));
+    CHECK(d.sourcePos == glm::vec2(0.0f)); CHECK(d.sourceSize == glm::vec2(256.0f, 128.0f));
+    CHECK(SpriteDocument::TextureRefArgs(d).readOnly);                 // the Texture row: no picker, clear or drop
+    CHECK(SpriteDocument::TextureRefArgs(d).guid == d.texture);
+}
+
+TEST_CASE("SpriteDocument page: each Whole texture flip is one step and round-trips (0,0)", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    DimsAssets dims(256, 128);
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    s.assets = &dims;
+    SpritePageUi h(s);                                                   // Fixture: a (32, 32) sub-rect
+    h.Frame(); h.Frame();
+    h.Click(h.At("Whole texture"));
+    CHECK(h.doc.Data().sourceSize == glm::vec2(0.0f));
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Whole Texture");
+    h.Click(h.At("Whole texture"));
+    CHECK(h.doc.Data().sourceSize == glm::vec2(256.0f, 128.0f));
+    fx.stack.Undo();
+    CHECK(h.doc.Data().sourceSize == glm::vec2(0.0f));
+    fx.stack.Undo();
+    CHECK(h.doc.Data().sourceSize == glm::vec2(32.0f, 32.0f));
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+TEST_CASE("SpriteDocument page: with the texture size unknown the ticked box stays disabled", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };                              // no Assets: dims unknown
+    Arcane::SpriteAssetData d = Fixture();
+    d.sourceSize = { 0.0f, 0.0f };
+    SpritePageUi h(s, d);
+    h.Frame(); h.Frame();
+    h.Click(h.At("Whole texture"));
+    CHECK(h.doc.Data().sourceSize == glm::vec2(0.0f));
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+TEST_CASE("SpriteDocument page: a Pixels Per Meter drag is one step", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    SpritePageUi h(s);
+    h.Frame(); h.Frame();
+    const ImVec2 at = h.At("Pixels Per Meter");
+    h.Move(at); h.Button(0, true);
+    h.Move(ImVec2(at.x + 40.0f, at.y));
+    h.Button(0, false); h.Frame();
+    CHECK(h.doc.Data().ppu != 100.0f);
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Edit Pixels Per Meter");
+    fx.stack.Undo();
+    CHECK(h.doc.Data().ppu == 100.0f);
+    CHECK_FALSE(fx.stack.CanUndo());
 }

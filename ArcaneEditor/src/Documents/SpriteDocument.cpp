@@ -1,7 +1,12 @@
 #include "Documents/SpriteDocument.hpp"
 
-#include <Arcane/Assets/Assets.hpp>   // TextureInfoFor (the sprite rect crop)
+#include "Panels/AssetPanelModel.hpp"   // AssetKind (the Texture row's kind)
+#include "Widgets/PropertyGrid.hpp"
+
+#include <Arcane/Assets/Assets.hpp>   // TextureInfoFor (the sprite rect crop, the Whole texture untick)
 #include <Arcane/Edit/Command.hpp>
+
+#include <Astra/Reflection/Attribute.hpp>   // Astra::Range (the ranged rows)
 
 #include <imgui.h>
 
@@ -204,9 +209,10 @@ namespace Arcane::Editor
         ImGui::SameLine();
         ImGui::TextDisabled(Dirty() ? "(unsaved)" : "(saved)");
 
-        // The form (the four drags and the read-only Texture line) is the
-        // Inspector's sprite page now (DrawFormBody, drawn by whichever
-        // Inspector instance shows this document -- inspector filters s6a).
+        // The form (the read-only Texture row, the four drags and "Whole
+        // texture") is the Inspector's sprite page now (DrawFormBody, drawn
+        // by whichever Inspector instance shows this document -- inspector
+        // filters s6a).
         // What stays is the toolbar above, a pointer to the page, the texture
         // line and the sprite itself (final fix D).
         ImGui::Separator();
@@ -248,10 +254,33 @@ namespace Arcane::Editor
         requestClose = !open;
     }
 
-    void SpriteDocument::DrawFormBody()
+    bool SpriteDocument::SetWholeTexture(Arcane::SpriteAssetData& data, bool whole, std::uint32_t texW, std::uint32_t texH)
+    {
+        if (whole) { data.sourcePos = { 0.0f, 0.0f }; data.sourceSize = { 0.0f, 0.0f }; return true; }
+        if (texW == 0 || texH == 0) return false;
+        data.sourcePos = { 0.0f, 0.0f };
+        data.sourceSize = { static_cast<float>(texW), static_cast<float>(texH) };
+        return true;
+    }
+
+    AssetRefArgs SpriteDocument::TextureRefArgs(const Arcane::SpriteAssetData& data)
+    {
+        // v1 is read-only by design: reassigning the source texture goes
+        // through "Create Sprite" on a DIFFERENT texture (mints a new sibling
+        // .arcsprite, EditorAppProject.cpp MintOrReuseSpriteForTexture), not an
+        // in-place swap of this asset's `texture` field. readOnly hides the
+        // picker and the clear and refuses drops (AssetReferenceField.hpp).
+        AssetRefArgs args;
+        args.guid = data.texture;
+        args.kindFilter = static_cast<int>(AssetKind::Texture);
+        args.readOnly = true;
+        return args;
+    }
+
+    void SpriteDocument::DrawFormBody(PropertyGrid& grid)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
-        // The drags below open gestures against m_gesture. The body draws
+        // The rows below open gestures against m_gesture. The body draws
         // inside an Inspector instance window, AFTER the documents, and on
         // collapsed/background-tab frames too (InspectorWindows calls
         // page->Draw even when Begin returns false) -- where no widget inside
@@ -259,31 +288,34 @@ namespace Arcane::Editor
         // covers. Draw keeps its own guard for the document window's refused-
         // Begin path (ShaderEditorDocument's Draw + DrawMaterialPageBody are
         // the precedent for two guards on one gesture).
-        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
+        Arcane::CommandStack* const undo = UndoStack();
+        const EditGesture::ScopeGuard gestureGuard{ undo, m_gesture };
 
-        // Field clamp policy: ClampOnInput, not AlwaysClamp. Ctrl+Click on a
+        // Field clamp policy: ClampOnInput, not AlwaysClamp. The ranged
+        // FloatRow/VecRow route through RangedDragFloat / AxisDragFloatN with
+        // ImGuiSliderFlags_ClampOnInput (PropertyGrid.hpp): Ctrl+Click on a
         // Drag widget opens a text box whose typed value ImGui does NOT clamp
-        // to v_min/v_max unless ImGuiSliderFlags_ClampOnInput is set --
-        // confirmed at the call site (imgui_widgets.cpp:2781-2784 routes into
-        // TempInputScalar only when TempInputIsClampEnabled agrees) and in
-        // the header's own doc comment (imgui.h:676,701). AlwaysClamp
-        // (imgui.h:2030-2034) is ClampOnInput | ClampZeroRange; ClampZeroRange
-        // only changes behavior for a DEGENERATE v_min==v_max==0.0f range
-        // (DragBehaviorT's is_bounded test, imgui_widgets.cpp:2540, and
+        // to v_min/v_max unless ClampOnInput is set -- confirmed at the call
+        // site (imgui_widgets.cpp:2781-2784 routes into TempInputScalar only
+        // when TempInputIsClampEnabled agrees) and in the header's own doc
+        // comment (imgui.h:676,701). AlwaysClamp (imgui.h:2030-2034) is
+        // ClampOnInput | ClampZeroRange; ClampZeroRange only changes behavior
+        // for a DEGENERATE v_min==v_max==0.0f range (DragBehaviorT's
+        // is_bounded test, imgui_widgets.cpp:2540, and
         // TempInputIsClampEnabled's own zero-range branch, :2711-2712) -- none
         // of the ranges below are degenerate (ppu/pivot have a real max;
         // sourcePos/sourceSize use FLT_MAX, not 0.0f, as their "no real
         // upper bound" sentinel specifically so min==0/max==0 never happens,
         // which would otherwise make BOTH mouse-drag and keyboard entry fully
         // unbounded, not just keyboard entry -- is_bounded already requires
-        // v_min<v_max at :2540). ClampOnInput is also the established local
-        // convention for exactly this "keyboard entry must not defeat a
-        // drag's bound" concern (EditorWidgets.hpp:43-49's RangedDragFloat).
+        // v_min<v_max at :2540).
 
-        // Undo bracket for the four drags below (widget-layer Task 7). Call it
-        // IMMEDIATELY after each widget: both halves read ImGui's LastItemData,
-        // so anything submitted in between (the TextDisabled hint) would move
-        // the id out from under them.
+        // Undo bracket for the numeric rows below (widget-layer Task 7; the
+        // close is EndAfterRow, s4.1). Call it IMMEDIATELY after each row:
+        // both halves read ImGui's LastItemData (the row's value widget,
+        // s4.1(f)), so anything submitted in between would move the id out
+        // from under them; EndAfterRow's `cancelled` is the row's Escape, so
+        // an Esc on a grouped VecRow closes at the row.
         //
         // Deferred/builder style: `before` is pinned when the widget ACTIVATES,
         // the command is built at CLOSE from that plus whatever m_data holds
@@ -309,54 +341,75 @@ namespace Arcane::Editor
         // None) does open a window after that owner commits, but the worst it
         // yields is a step whose `before` is this drag's activation state and
         // whose `after` is what the document actually shows -- one object,
-        // self-consistent, never another target's data.
+        // self-consistent, never another target's data. The "Whole texture"
+        // flip is not a gesture: it pushes its own step on the frame it lands.
         const auto bracket = [&](const char* label)
         {
-            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
+            EditGesture::BeginOnActivate(undo, m_gesture,
                 [&] { return std::string(label); },
                 [&]
                 {
                     return std::function<void()>(
-                        [this, label = std::string(label), before = m_data]
-                        { PushDataEdit(label, before); });
+                        [this, label = std::string(label), before = m_data] { PushDataEdit(label, before); });
                 });
-            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
+            EditGesture::EndAfterRow(undo, m_gesture, grid.LastRowEvents().cancelled);
         };
+
+        if (!grid.Section("Sprite"))
+            return;
+        PropertyGrid::Rows rows(grid, "##sprite");
+        if (!rows)
+            return;
+
+        static const AssetRefServices kNoRefs{};   // the null services: kind glyph + raw guid
+        (void)AssetRefRow(grid, "Texture", TextureRefArgs(m_data), m_services.assetRefs ? *m_services.assetRefs : kNoRefs);
 
         // m_dirty and the undo history are SEPARATE ledgers: Save clears dirty
         // and never touches history, undo pushes history and never clears
-        // dirty. `changed` keeps driving dirty exactly as before.
-        bool changed = false;
-        changed |= ImGui::DragFloat("Pixels Per Meter", &m_data.ppu, 0.5f, 1.0f, 4096.0f,
-                                    "%.3f", ImGuiSliderFlags_ClampOnInput);
+        // dirty. m_data still mutates live (the document's crop follows a
+        // drag), so dirt is "m_data moved this frame", compared at the end.
+        const Arcane::SpriteAssetData shown = m_data;
+        (void)grid.FloatRow("Pixels Per Meter", m_data.ppu, 0.5f, Astra::Range(1.0, 4096.0), "%g");
         bracket("Edit Pixels Per Meter");
-        changed |= ImGui::DragFloat2("Source Pos", &m_data.sourcePos.x, 1.0f, 0.0f, FLT_MAX,
-                                     "%.3f", ImGuiSliderFlags_ClampOnInput);
+
+        // "Whole texture": a UI view over sourceSize == (0,0) (s5.4). Unticking
+        // needs the texture's true size (an artifact HEADER read, memoized);
+        // with it unknown the ticked box is disabled -- typing a non-zero
+        // Source Size below unticks it by construction.
+        std::uint32_t texW = 0, texH = 0;
+        if (m_services.assets)
+            if (const Arcane::TextureInfo* info = m_services.assets->TextureInfoFor(m_data.texture))
+            { texW = info->width; texH = info->height; }
+        const bool whole = m_data.sourceSize.x == 0.0f && m_data.sourceSize.y == 0.0f;
+        const bool locked = whole && (texW == 0 || texH == 0);
+        bool wholeBox = whole;
+        ImGui::BeginDisabled(locked);
+        const bool flipped = grid.CheckboxRow("Whole texture", wholeBox);
+        ImGui::EndDisabled();
+        if (locked && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Texture size unknown -- type a Source Size to use a sub-rect");
+        if (flipped)
+        {
+            const Arcane::SpriteAssetData before = m_data;
+            if (SetWholeTexture(m_data, wholeBox, texW, texH))
+            {
+                m_dirty = true;
+                PushDataEdit("Whole Texture", before);
+            }
+        }
+
+        // "%.0f": integer pixel fields -- a drag rounds to the format (Mesh & Sprite #10).
+        (void)grid.VecRow("Source Pos", &m_data.sourcePos.x, 2, 1.0f, Astra::Range(0.0, FLT_MAX), "%.0f");
         bracket("Edit Source Pos");
-        changed |= ImGui::DragFloat2("Source Size", &m_data.sourceSize.x, 1.0f, 0.0f, FLT_MAX,
-                                     "%.3f", ImGuiSliderFlags_ClampOnInput);
+        (void)grid.VecRow("Source Size", &m_data.sourceSize.x, 2, 1.0f, Astra::Range(0.0, FLT_MAX), "%.0f");
         bracket("Edit Source Size");
-        ImGui::TextDisabled("(0, 0) = whole texture");
-        changed |= ImGui::DragFloat2("Pivot", &m_data.pivot.x, 0.005f, 0.0f, 1.0f,
-                                     "%.3f", ImGuiSliderFlags_ClampOnInput);
+        (void)grid.VecRow("Pivot", &m_data.pivot.x, 2, 0.005f, Astra::Range(0.0, 1.0), "%.3f");
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
             ImGui::SetTooltip("Normalized: (0, 0) = bottom-left, (1, 1) = top-right (+Y up).\n"
                               "Sprites authored before F4 used y = 0 = top; an off-centre pivot\n"
                               "from then now anchors on the other side -- re-author it here.");
         bracket("Edit Pivot");
-        if (changed)
+        if (!(m_data == shown))
             m_dirty = true;
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Texture");
-        ImGui::SameLine();
-        // v1 is read-only by design: reassigning the source texture goes
-        // through "Create Sprite" on a DIFFERENT texture (mints a new sibling
-        // .arcsprite, EditorAppProject.cpp:191-251
-        // MintOrReuseSpriteForTexture / EditorAppFrame.cpp:1139-1153), not an
-        // in-place swap of this asset's `texture` field.
-        ImGui::TextDisabled("%s", m_data.texture.IsValid()
-                                       ? m_data.texture.ToString().c_str()
-                                       : "(none)");
     }
 }

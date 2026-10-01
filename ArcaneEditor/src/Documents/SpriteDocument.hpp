@@ -23,6 +23,7 @@
 #include "Scene/UndoGate.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
+#include "Panels/AssetReferenceField.hpp"   // AssetRefArgs (TextureRefArgs), AssetRefServices (Services::assetRefs)
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
@@ -41,8 +42,6 @@ namespace Arcane { class Assets; }
 
 namespace Arcane::Editor
 {
-    struct AssetRefServices;   // Panels/AssetReferenceField.hpp (Services::assetRefs)
-
     class SpriteDocument final : public EditorDocument
     {
     public:
@@ -105,11 +104,12 @@ namespace Arcane::Editor
         void Draw(bool& requestClose) override;
 
         // ---- Inspector source (inspector filters spec s6a) ----------------
-        // Kind "sprite". ONE page, the whole sprite form (the four drags and
-        // the read-only Texture line), under ONE key, "sprite": opening the
-        // document selects it (m_pageSel starts at epoch 1) and a click in the
-        // document's content re-selects it (Draw's NoteContentClick). Tab
-        // switches and focus never do (the spec's one selection rule). The
+        // Kind "sprite". ONE page, the whole sprite form (s5.4: the read-only
+        // Texture row, the four drags and "Whole texture"), under ONE key,
+        // "sprite": opening the document selects it (m_pageSel starts at
+        // epoch 1) and a click in the document's content re-selects it
+        // (Draw's NoteContentClick). Tab switches and focus never do (the
+        // spec's one selection rule). The
         // document window keeps its toolbar, a "Sprite properties are in the
         // Inspector" hint, the texture line and the sprite image (final fix D).
         std::string_view Kind() const override { return "sprite"; }
@@ -142,12 +142,21 @@ namespace Arcane::Editor
         // only ImGui methods), so this is how they observe what a command did.
         const Arcane::SpriteAssetData& Data() const noexcept { return m_data; }
 
+        // s5.4: "Whole texture" is a UI view over sourceSize == (0,0) (the file
+        // format is unchanged). Ticked writes sourcePos = sourceSize = (0,0);
+        // unticked writes sourcePos = (0,0), sourceSize = (texW, texH). False,
+        // data untouched, when unticking with unknown dims (0).
+        static bool SetWholeTexture(Arcane::SpriteAssetData& data, bool whole, std::uint32_t texW, std::uint32_t texH);
+        // The Texture row's cell: thumb + name + browse-to, READ-ONLY (v1:
+        // reassigning goes through "Create Sprite" on another texture).
+        static AssetRefArgs TextureRefArgs(const Arcane::SpriteAssetData& data);
+
     private:
         // The sprite page: the form, drawn by the Inspector instance showing
-        // it. Carries its own EditGesture::ScopeGuard (the drags that open
-        // gestures are submitted inside it) and no Begin/End -- the Inspector
-        // window is its window.
-        void DrawFormBody();
+        // it on that instance's PropertyGrid (s5.4). Carries its own
+        // EditGesture::ScopeGuard (the drags that open gestures are submitted
+        // inside it) and no Begin/End -- the Inspector window is its window.
+        void DrawFormBody(PropertyGrid& grid);
 
         // The one page this document contributes (kind "sprite", key
         // "sprite"). The base MUST be public: Page() hands &m_page out as
@@ -162,7 +171,7 @@ namespace Arcane::Editor
                 // One crumb; `select` is a no-op (the page IS the only level).
                 return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "sprite" } } };
             }
-            void Draw(PropertyGrid&) override { m_doc.DrawFormBody(); }
+            void Draw(PropertyGrid& g) override { m_doc.DrawFormBody(g); }
 
         private:
             SpriteDocument& m_doc;
