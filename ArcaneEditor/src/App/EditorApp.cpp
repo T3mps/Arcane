@@ -895,7 +895,7 @@ namespace Arcane::Editor
         m_documents.RegisterFactory(".arcinput",
             [this](const std::filesystem::path& path) -> std::unique_ptr<Arcane::Editor::EditorDocument>
             {
-                auto doc = Arcane::Editor::InputActionsDocument::Open(path, m_undo ? &*m_undo : nullptr);
+                auto doc = Arcane::Editor::InputActionsDocument::Open(path, [this]() { return DocumentUndo(); });   // null in Play (s3.3b)
                 if (doc)
                     doc->SetOnSaved([this](const Arcane::Guid& g, const Arcane::InputActionAsset& a)
                     { if (IsDesignatedInputAsset(g)) m_pendingInputRepublish.emplace(g, a); });   // a non-designated save never displaces the designated one (Save All)

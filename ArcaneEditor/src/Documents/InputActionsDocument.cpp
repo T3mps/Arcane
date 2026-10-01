@@ -52,9 +52,9 @@ namespace Arcane::Editor
 
     InputActionsDocument::InputActionsDocument(std::filesystem::path path,
                                                nlohmann::json draft,
-                                               Arcane::CommandStack* commands)
+                                               UndoResolver undo)
         : path_(std::move(path)), title_(path_.stem().string()),
-          guid_(DraftGuid(draft, path_)), model_(std::move(draft), commands),
+          guid_(DraftGuid(draft, path_)), model_(std::move(draft), std::move(undo)),
           page_(model_, path_.filename().string(), path_.generic_string(),
                 { [this](const Guid& id) { BeginRebindFromPage(id); }, &state_, &preview_ })
     {
@@ -103,7 +103,7 @@ namespace Arcane::Editor
     }
 
     std::unique_ptr<InputActionsDocument> InputActionsDocument::Open(
-        const std::filesystem::path& path, Arcane::CommandStack* commands)
+        const std::filesystem::path& path, UndoResolver undo)
     {
         std::ifstream stream(path, std::ios::binary);
         if (!stream)
@@ -113,7 +113,7 @@ namespace Arcane::Editor
         }
         stream.close();
         return std::unique_ptr<InputActionsDocument>(
-            new InputActionsDocument(path, ReadDraft(path), commands));
+            new InputActionsDocument(path, ReadDraft(path), std::move(undo)));
     }
 
     Guid InputActionsDocument::PeekGuid(const std::filesystem::path& path)

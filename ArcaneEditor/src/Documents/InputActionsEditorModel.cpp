@@ -208,9 +208,8 @@ namespace Arcane::Editor
         }
     }
 
-    InputActionsEditorModel::InputActionsEditorModel(nlohmann::json draft,
-                                                     Arcane::CommandStack* commands)
-        : draft_(std::move(draft)), saved_(draft_), commands_(commands),
+    InputActionsEditorModel::InputActionsEditorModel(nlohmann::json draft, UndoResolver undo)
+        : draft_(std::move(draft)), saved_(draft_), undo_(std::move(undo)),
           anchor_(std::make_shared<InputActionsEditorModel*>(this))
     { Validate(); }
 
@@ -358,24 +357,26 @@ namespace Arcane::Editor
         if (before != draft_ || before == after) return false;
         std::string undoKey = SelectionKey();   // what was selected BEFORE the edit; ApplyEdit itself never touches the selection
         RestoreDraft(after);
-        if (commands_)
-            commands_->Push(std::make_unique<DraftEditCommand>(anchor_, std::move(label),
-                                                                std::move(before), std::move(after),
-                                                                std::move(undoKey)));
+        if (Arcane::CommandStack* stack = undo_ ? undo_() : nullptr)
+            stack->Push(std::make_unique<DraftEditCommand>(anchor_, std::move(label),
+                                                            std::move(before), std::move(after),
+                                                            std::move(undoKey)));
         return true;
     }
 
     bool InputActionsEditorModel::Undo()
     {
-        if (!commands_ || !commands_->CanUndo()) return false;
-        commands_->Undo();
+        Arcane::CommandStack* stack = undo_ ? undo_() : nullptr;
+        if (!stack || !stack->CanUndo()) return false;
+        stack->Undo();
         return true;
     }
 
     bool InputActionsEditorModel::Redo()
     {
-        if (!commands_ || !commands_->CanRedo()) return false;
-        commands_->Redo();
+        Arcane::CommandStack* stack = undo_ ? undo_() : nullptr;
+        if (!stack || !stack->CanRedo()) return false;
+        stack->Redo();
         return true;
     }
 

@@ -4,6 +4,7 @@
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsDocumentWidgets.hpp"
 #include "Documents/InputActionsInspectorPage.hpp"
+#include "Scene/UndoGate.hpp"
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Input/InputRebindOperation.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -17,15 +18,13 @@
 #include <string_view>
 #include <vector>
 
-namespace Arcane { class CommandStack; }
-
 namespace Arcane::Editor
 {
     class InputActionsDocument final : public EditorDocument
     {
     public:
         [[nodiscard]] static std::unique_ptr<InputActionsDocument> Open(
-            const std::filesystem::path& path, Arcane::CommandStack* commands = nullptr);
+            const std::filesystem::path& path, UndoResolver undo = {});
         [[nodiscard]] static Guid PeekGuid(const std::filesystem::path& path);
 
         const std::string& Title() const override { return title_; }
@@ -91,7 +90,7 @@ namespace Arcane::Editor
 
     private:
         InputActionsDocument(std::filesystem::path path, nlohmann::json draft,
-                             Arcane::CommandStack* commands);
+                             UndoResolver undo);
         void SelectFirstMapAndAction();
         void TickCapture(bool bodyDrawn);
         void BeginRebind(const Guid& target);

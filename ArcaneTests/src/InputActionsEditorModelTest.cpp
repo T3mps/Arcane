@@ -34,7 +34,7 @@ TEST_CASE("input editor: stable selection and one-step undo redo", "[editor][inp
 {
     Arcane::Runtime runtime(Arcane::Test::Process());
     Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
-    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), &commands);
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), [&commands]() -> Arcane::CommandStack* { return &commands; });
     REQUIRE(model.LastValidPreview());
     const auto selected = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
     model.SelectMap(*Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222"));
@@ -314,7 +314,7 @@ TEST_CASE("input editor: undo of a structural edit restores a live selection, si
 {
     Arcane::Runtime runtime(Arcane::Test::Process());
     Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
-    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), &commands);
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), [&commands]() -> Arcane::CommandStack* { return &commands; });
     const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
     const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
     model.SelectMap(map); model.SelectAction(action);
@@ -354,7 +354,7 @@ TEST_CASE("input editor: MoveRowTo reorders within the parent and is one undo st
 {
     Arcane::Runtime runtime(Arcane::Test::Process());
     Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
-    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), &commands);
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), [&commands]() -> Arcane::CommandStack* { return &commands; });
     const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
     const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
     REQUIRE(model.AddBinding(map, action, "<Keyboard>/w"));
@@ -745,7 +745,7 @@ TEST_CASE("input editor: DraftRevision bumps on every draft change and never on 
 {
     Arcane::Runtime runtime(Arcane::Test::Process());
     Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
-    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), &commands);
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), [&commands]() -> Arcane::CommandStack* { return &commands; });
     const auto r0 = model.DraftRevision();
     model.SelectMap(*Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222"));
     model.SelectAction(*Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333"));
@@ -835,4 +835,27 @@ TEST_CASE("input document: a refused SelectByPath leaves the opening selection a
         CHECK(doc->SelectionEpoch() == epoch);
     }
     fs::remove(path);
+}
+
+TEST_CASE("input editor: a null resolver (Play) pushes nothing and undoes nothing", "[editor][input][undo]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
+    bool playing = true;
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(),
+        [&]() -> Arcane::CommandStack* { return playing ? nullptr : &commands; });
+    auto after = model.Draft();
+    after["actionMaps"][0]["actions"][0]["name"] = "Leap";
+    REQUIRE(model.ApplyEdit("Rename action", model.Draft(), after));
+    CHECK(model.Draft()["actionMaps"][0]["actions"][0]["name"] == "Leap");   // the edit stands
+    CHECK_FALSE(commands.CanUndo());                                          // no step in Play
+    CHECK_FALSE(model.Undo());
+    CHECK(model.Draft()["actionMaps"][0]["actions"][0]["name"] == "Leap");
+
+    playing = false;
+    auto again = model.Draft();
+    again["actionMaps"][0]["actions"][0]["name"] = "Hop";
+    REQUIRE(model.ApplyEdit("Rename action", model.Draft(), again));
+    REQUIRE(model.Undo());
+    CHECK(model.Draft()["actionMaps"][0]["actions"][0]["name"] == "Leap");
 }

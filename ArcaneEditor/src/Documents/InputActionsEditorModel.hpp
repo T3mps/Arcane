@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Documents/InputSelectionKey.hpp"
+#include "Scene/UndoGate.hpp"
 
 #include <Arcane/Input/InputActionAsset.hpp>
 
@@ -15,15 +16,12 @@
 #include <string_view>
 #include <vector>
 
-namespace Arcane { class CommandStack; }
-
 namespace Arcane::Editor
 {
     class InputActionsEditorModel
     {
     public:
-        explicit InputActionsEditorModel(nlohmann::json draft,
-                                          Arcane::CommandStack* commands = nullptr);
+        explicit InputActionsEditorModel(nlohmann::json draft, UndoResolver undo = {});
         ~InputActionsEditorModel();
         InputActionsEditorModel(const InputActionsEditorModel&) = delete;
         InputActionsEditorModel& operator=(const InputActionsEditorModel&) = delete;
@@ -120,7 +118,7 @@ namespace Arcane::Editor
         nlohmann::json saved_;
         std::optional<InputActionAsset> preview_;
         std::vector<std::string> diagnostics_;
-        Arcane::CommandStack* commands_ = nullptr;
+        UndoResolver undo_;   // resolved per edit/press; null = Play (s3.3b)
         std::shared_ptr<InputActionsEditorModel*> anchor_;
         Guid selectedAction_;
         Guid selectedMap_;
