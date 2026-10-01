@@ -82,6 +82,7 @@ namespace ax::NodeEditor
 
 namespace Arcane::Editor
 {
+    struct AssetRefEdit;       // Panels/AssetReferenceField.hpp (ApplyParamRefEdit)
     struct AssetRefServices;   // Panels/AssetReferenceField.hpp (DocServices::assetRefs)
 
     // NodeLOD, the kLod* boundaries and NodeLODForScale now live in
@@ -253,6 +254,10 @@ namespace Arcane::Editor
         // forwarding by name hash here is what lets history survive rebinds.
         void ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
                             const Arcane::MatParamValue& value);
+        // s5.3: the texture param row's one write path. Set binds edit.guid,
+        // Clear binds the nil guid (the never-assigned state); one undo step
+        // each (SetParamWithUndo). False when `nameHash` names no bound texture param.
+        bool ApplyParamRefEdit(std::uint32_t nameHash, const AssetRefEdit& edit);
 
         // Mesh render metadata stays on MaterialAssetData rather than joining
         // the shader-param/template state. nullopt from Capture means this
@@ -627,11 +632,17 @@ namespace Arcane::Editor
         // spans the node). Zero on a node's first frame -- no width has been
         // measured yet -- which falls back to the minimum thumbnail size.
         void DrawNodePreviewImage(const Arcane::GraphNode& node, float width);
-        void DrawParamsPanel();
+        void DrawRenderingSection(PropertyGrid& grid, Arcane::CommandStack* undo);   // mesh materials only
+        void DrawParamsSection(PropertyGrid& grid, Arcane::CommandStack* undo);
+        void ResetParamWithUndo(const Arcane::ParamDecl& decl);                     // clear the override, "Reset <name>"
+        // R2: what a live param gesture started from, so Esc restores the
+        // override FLAG as well as the value (a fresh override would otherwise
+        // survive the cancel and push a junk step). Latched by buildParamEdit.
+        struct LiveParamSeed { std::uint32_t nameHash = 0; bool hadBefore = false; Arcane::MatParamValue before{}; };
+        LiveParamSeed m_liveParamSeed;
+        std::optional<MeshMaterialMetadataState> m_cutoffGestureBefore;   // the same, for the cutoff drag
         // True when the ACTIVE surface has something bound to show.
         bool PreviewReady() const;
-        void DrawTextureParam(const Arcane::ParamDecl& decl,
-                              const Arcane::MatParamValue& current);
         void SetParamWithUndo(const Arcane::ParamDecl& decl,
                               const Arcane::MatParamValue& value);
         // One mesh-metadata step for whatever differs between `before` and the
@@ -824,10 +835,10 @@ namespace Arcane::Editor
         // cross shared statics.
         EditGesture::GestureState m_gesture;
 
-        // Latched on the frame a colour swatch opens its popup (material param
-        // row and the ConstColor node both use this one buffer -- neither can be
-        // mid-gesture while the other opens, since only one popup is open at a
-        // time): the Old half of ColorPopupBody's Old/New pair.
+        // Latched on the frame the ConstColor node's swatch opens its popup:
+        // the Old half of ColorPopupBody's Old/New pair. (The material page's
+        // Color param rows are PropertyGrid::ColorRow since s5.3, which keeps
+        // its own draft.)
         float m_colorPopupOriginal[4] = {};
 
         // ---- Graph mode (Slice 9; per-pass graphs) ----

@@ -1,6 +1,7 @@
 #include "Documents/ShaderEditorDocument.hpp"
 
 #include "Panels/AssetPanelModel.hpp"
+#include "Panels/AssetReferenceField.hpp"   // AssetRefRow: the texture param row (s5.3)
 #include "Widgets/CanvasEditScope.hpp"   // CanvasCreateScope/CanvasDeleteScope: the unconditional-End rule
 #include "Widgets/CanvasPopupScope.hpp"
 #include "Widgets/ColorPickerPopup.hpp"
@@ -41,6 +42,8 @@
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
 
+#include <Astra/Reflection/Attribute.hpp>   // Astra::Range: the Alpha cutoff row
+
 #include <imgui.h>
 // AddSettingsHandler / FindSettingsHandler (:3502-3504), ImGuiSettingsHandler
 // (:2212-2225) and MarkIniSettingsDirty (:3499) are internal-only -- ImGui's
@@ -73,6 +76,19 @@ namespace Arcane::Editor
             const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
             const auto v = reg.Get(reg.Find("editor.inspector.materialPreviewFraction"));
             return (v && v->type == Arcane::CVarType::Float32) ? v->AsFloat32() : 0.45f;
+        }
+
+        const AssetRefServices& NoAssetRefServices()
+        {
+            static const AssetRefServices none{};   // headless documents: the cell's null-services behaviour (s4.2)
+            return none;
+        }
+        // The label cell of the row just drawn is hovered: the value widget is
+        // LastItemData, so its rect bounds the row and its left edge ends the label.
+        bool LabelCellHovered()
+        {
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax(), m = ImGui::GetMousePos();
+            return ImGui::IsWindowHovered() && m.y >= lo.y && m.y < hi.y && m.x < lo.x && m.x >= ImGui::GetWindowPos().x;
         }
 
         // m_surface is an INDEX -- ImGui::Combo hands back an int -- and these
@@ -2010,7 +2026,8 @@ namespace Arcane::Editor
                 DrawPreviewPanel(ImVec2(side, side));
             }
         }
-        DrawParamsPanel();   // T3-C6 replaces this with the Rendering + Parameters sections
+        DrawRenderingSection(grid, UndoStack());
+        DrawParamsSection(grid, UndoStack());
     }
 
     void ShaderEditorDocument::DrawToolbar()
@@ -5556,65 +5573,32 @@ namespace Arcane::Editor
         PushGraphUndo("Paste", std::move(before));
     }
 
-    // One texture param row: current binding + [pick] popup over the project's
-    // texture assets + a browser-drag drop target. All three routes land in
-    // SetParamWithUndo (single-step undo, no gesture bracketing needed).
-    void ShaderEditorDocument::DrawTextureParam(const Arcane::ParamDecl& d,
-                                                const Arcane::MatParamValue& current)
+    bool ShaderEditorDocument::ApplyParamRefEdit(std::uint32_t nameHash, const AssetRefEdit& edit)
     {
-        const Arcane::Project* project =
-            m_services.runtime ? m_services.runtime->CurrentProject() : nullptr;
-
-        std::string display = "(none)";
-        if (current.tex.IsValid())
+        if (!m_boundTemplate || !m_instance || edit.op == AssetRefEdit::Op::None)
+            return false;
+        for (const Arcane::ParamDecl& d : m_boundTemplate->Params())
         {
-            display = current.tex.ToString();
-            if (project)
-                if (const auto mount = project->Registry().Resolve(current.tex))
-                    display = *mount;
+            if (d.nameHash != nameHash || d.type != Arcane::MatParamType::Texture)
+                continue;
+            SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(
+                edit.op == AssetRefEdit::Op::Set ? edit.guid : Arcane::Guid::Nil()));
+            return true;
         }
-        ImGui::TextUnformatted(d.name.c_str());
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", display.c_str());
+        return false;
+    }
 
-        // Drop target: accept a texture asset dragged from the browser.
-        if (ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kAssetDragType))
-            {
-                const auto* payload = static_cast<const AssetDragPayload*>(p->Data);
-                if (payload->kind == AssetKind::Texture)
-                    SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(payload->guid));
-            }
-            ImGui::EndDragDropTarget();
-        }
-
-        ImGui::SameLine();
-        const std::string pickId = "pick##" + d.name;
-        const std::string popupId = "##texpick_" + d.name;
-        if (ImGui::SmallButton(pickId.c_str()))
-            ImGui::OpenPopup(popupId.c_str());
-        if (ImGui::BeginPopup(popupId.c_str()))
-        {
-            if (!project)
-            {
-                ImGui::TextDisabled("no project open");
-            }
-            else
-            {
-                if (ImGui::Selectable("(none)"))
-                    SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(Arcane::Guid::Nil()));
-                for (const AssetEntry& e : BuildAssetEntries(project->Registry()))
-                {
-                    if (e.kind != AssetKind::Texture)
-                        continue;
-                    const std::string label = e.name + "##" + e.mountPath;
-                    if (ImGui::Selectable(label.c_str(), e.guid == current.tex))
-                        SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(e.guid));
-                }
-            }
-            ImGui::EndPopup();
-        }
+    void ShaderEditorDocument::ResetParamWithUndo(const Arcane::ParamDecl& d)
+    {
+        if (!m_instance || !m_instance->HasOverride(d.nameHash))
+            return;
+        Arcane::MatParamValue before;
+        m_instance->GetParam(d.nameHash, before);
+        m_instance->ClearOverride(d.nameHash);
+        if (Arcane::CommandStack* undo = m_services.undo ? m_services.undo() : nullptr)
+            undo->Push(std::make_unique<ParamEditCommand>(
+                m_anchor, d.nameHash, "Reset " + d.name,
+                /*hadBefore=*/true, before, /*hasAfter=*/false, Arcane::MatParamValue{}));
     }
 
     void ShaderEditorDocument::SetParamWithUndo(const Arcane::ParamDecl& d,
@@ -5637,344 +5621,222 @@ namespace Arcane::Editor
         // to invalidate.
     }
 
-    void ShaderEditorDocument::DrawParamsPanel()
+    void ShaderEditorDocument::DrawRenderingSection(PropertyGrid& grid, Arcane::CommandStack* undo)
     {
-        ImGui::BeginChild("##params", ImVec2(0, 0), ImGuiChildFlags_Borders);
+        std::optional<MeshMaterialMetadataState> metadata = CaptureMeshMaterialMetadata();
+        if (!metadata)
+            return;
+        Arcane::MaterialBlendMode inheritedBlend = Arcane::MaterialBlendMode::Opaque;
+        float inheritedCutoff = 0.5f;
+        bool inheritedTwoSided = false;
+        for (auto it = m_parentChain.rbegin(); it != m_parentChain.rend(); ++it)
+        {
+            if (it->blend) inheritedBlend = *it->blend;
+            if (it->alphaCutoff) inheritedCutoff = *it->alphaCutoff;
+            if (it->twoSided) inheritedTwoSided = *it->twoSided;
+        }
+        if (!grid.Section("Rendering"))
+            return;
+        PropertyGrid::Rows rows(grid, "##rendering");
+        if (!rows)
+            return;
+        const bool inst = IsInstance();
+        // EVERY ROW IS AN UNDO STEP (F3 plan 2, I2). On instances the T2
+        // override cell replaces the unlabelled ##*_override boxes; inherited
+        // rows draw dimmed and disabled.
+        static constexpr const char* kBlendItems[] = { "Opaque", "Masked", "Transparent" };
+        bool blendOverride = metadata->blend.has_value();
+        if (inst) grid.SetNextRowDecor(RowDecor{ &blendOverride });
+        const int picked = grid.ComboRow("Blend", kBlendItems, 3,
+                                         static_cast<int>(metadata->blend.value_or(inheritedBlend)));
+        if (inst && grid.LastRowEvents().overrideToggled)
+        {
+            metadata->blend = blendOverride ? std::optional<Arcane::MaterialBlendMode>(inheritedBlend) : std::nullopt;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+        else if (picked >= 0)
+        {
+            metadata->blend = static_cast<Arcane::MaterialBlendMode>(picked);
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+
+        bool cutoffOverride = metadata->alphaCutoff.has_value();
+        if (inst) grid.SetNextRowDecor(RowDecor{ &cutoffOverride });
+        const float shownCutoff = metadata->alphaCutoff.value_or(inheritedCutoff);
+        float cutoff = shownCutoff;
+        (void)grid.FloatRow("Alpha cutoff", cutoff, 0.01f, Astra::Range(0.0, 1.0), "%.2f");
+        const RowEvents cutoffEvents = grid.LastRowEvents();
+        // ONE DRAG = ONE STEP: the before-state is latched at activation, the
+        // step builds at close; live Apply while dragging (cpp :5747-5768).
+        EditGesture::BeginOnActivate(undo, m_gesture,
+            [] { return std::string("Edit Alpha Cutoff"); },
+            [&]() -> std::function<void()>
+            {
+                m_cutoffGestureBefore = *metadata;
+                return std::function<void()>([this, before = *metadata] { PushMeshMaterialMetadataUndo(before); });
+            });
+        if (inst && cutoffEvents.overrideToggled)
+        {
+            metadata->alphaCutoff = cutoffOverride ? std::optional<float>(inheritedCutoff) : std::nullopt;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+        else if (cutoffEvents.cancelled && m_cutoffGestureBefore)
+        {
+            *metadata = *m_cutoffGestureBefore;           // R2: back to the activation state, nullopt included
+            ApplyMeshMaterialMetadata(*metadata);
+        }
+        else if (cutoff != shownCutoff)
+        {
+            metadata->alphaCutoff = cutoff;
+            ApplyMeshMaterialMetadata(*metadata);         // LIVE; the step lands when the drag closes
+        }
+        EditGesture::EndAfterRow(undo, m_gesture, cutoffEvents.cancelled);
+        if (!ImGui::IsItemActive())
+            m_cutoffGestureBefore.reset();
+
+        bool twoSidedOverride = metadata->twoSided.has_value();
+        if (inst) grid.SetNextRowDecor(RowDecor{ &twoSidedOverride });
+        bool twoSided = metadata->twoSided.value_or(inheritedTwoSided);
+        const bool flipped = grid.CheckboxRow("Two sided", twoSided);
+        if (inst && grid.LastRowEvents().overrideToggled)
+        {
+            metadata->twoSided = twoSidedOverride ? std::optional<bool>(inheritedTwoSided) : std::nullopt;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+        else if (flipped)
+        {
+            metadata->twoSided = twoSided;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+    }
+
+    void ShaderEditorDocument::DrawParamsSection(PropertyGrid& grid, Arcane::CommandStack* undo)
+    {
+        const bool inst = IsInstance();
+        const bool open = inst
+            ? grid.Section("Parameters", true, [this] { ImGui::Checkbox("Only overridden", &m_showOnlyOverridden); })
+            : grid.Section("Parameters");
+        if (!open)
+            return;
+        PropertyGrid::Rows rows(grid, "##params");
+        if (!rows)
+            return;
         if (!m_instance || !m_boundTemplate)
         {
-            ImGui::TextDisabled("params appear after the first successful compile");
-            ImGui::EndChild();
+            grid.ReadOnlyRow("Status", "params appear after the first successful compile");
             return;
         }
-
-        // Each param row's drag rides the document's EditGesture bracket
-        // (BeginOnActivate / EndOnDeactivate around the live Set below): before-
-        // state on activation, one undo step at close -- one drag = one step.
-        if (IsInstance())
-            ImGui::Checkbox("Only overridden", &m_showOnlyOverridden);
-
-        if (auto metadata = CaptureMeshMaterialMetadata())
-        {
-            Arcane::MaterialBlendMode inheritedBlend = Arcane::MaterialBlendMode::Opaque;
-            float inheritedCutoff = 0.5f;
-            bool inheritedTwoSided = false;
-            const auto applyLayer = [&](const Arcane::MaterialAssetData& layer)
-            {
-                if (layer.blend) inheritedBlend = *layer.blend;
-                if (layer.alphaCutoff) inheritedCutoff = *layer.alphaCutoff;
-                if (layer.twoSided) inheritedTwoSided = *layer.twoSided;
-            };
-            for (auto it = m_parentChain.rbegin(); it != m_parentChain.rend(); ++it)
-                applyLayer(*it);
-
-            ImGui::SeparatorText("Rendering");
-
-            // EVERY ROW HERE IS AN UNDO STEP (F3 plan 2 final review, I2), like
-            // the param rows below it: the single-shot widgets go through
-            // SetMeshMaterialMetadataWithUndo; the cutoff drag rides the
-            // document's EditGesture bracket so one drag is one step.
-            bool blendOverride = metadata->blend.has_value();
-            if (IsInstance())
-            {
-                if (ImGui::Checkbox("##blend_override", &blendOverride))
-                {
-                    metadata->blend = blendOverride
-                        ? std::optional<Arcane::MaterialBlendMode>(inheritedBlend)
-                        : std::nullopt;
-                    SetMeshMaterialMetadataWithUndo(*metadata);
-                }
-                ImGui::SameLine();
-            }
-            int blend = static_cast<int>(metadata->blend.value_or(inheritedBlend));
-            if (IsInstance() && !blendOverride) ImGui::BeginDisabled();
-            if (ImGui::Combo("Blend", &blend, "Opaque\0Masked\0Transparent\0"))
-            {
-                metadata->blend = static_cast<Arcane::MaterialBlendMode>(blend);
-                SetMeshMaterialMetadataWithUndo(*metadata);
-            }
-            if (IsInstance() && !blendOverride) ImGui::EndDisabled();
-
-            bool cutoffOverride = metadata->alphaCutoff.has_value();
-            if (IsInstance())
-            {
-                if (ImGui::Checkbox("##cutoff_override", &cutoffOverride))
-                {
-                    metadata->alphaCutoff = cutoffOverride
-                        ? std::optional<float>(inheritedCutoff)
-                        : std::nullopt;
-                    SetMeshMaterialMetadataWithUndo(*metadata);
-                }
-                ImGui::SameLine();
-            }
-            float cutoff = metadata->alphaCutoff.value_or(inheritedCutoff);
-            if (IsInstance() && !cutoffOverride) ImGui::BeginDisabled();
-            const bool cutoffEdited = ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f,
-                                                       "%.3f", ImGuiSliderFlags_AlwaysClamp);
-            // ONE DRAG = ONE STEP, the param rows' bracket: `*metadata` is the
-            // document's state at activation (this frame's earlier rows have
-            // already written through), parked as the step's before-state; the
-            // step itself is built at close, against whatever the drag left --
-            // and a pure click that moved nothing pushes nothing.
-            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
-                [] { return std::string("Edit Alpha Cutoff"); },
-                [&]() -> std::function<void()>
-                {
-                    return std::function<void()>(
-                        [this, before = *metadata] { PushMeshMaterialMetadataUndo(before); });
-                });
-            if (cutoffEdited)
-            {
-                metadata->alphaCutoff = cutoff;
-                ApplyMeshMaterialMetadata(*metadata);   // LIVE; the step lands when the drag closes
-            }
-            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
-            if (IsInstance() && !cutoffOverride) ImGui::EndDisabled();
-
-            bool twoSidedOverride = metadata->twoSided.has_value();
-            if (IsInstance())
-            {
-                if (ImGui::Checkbox("##twosided_override", &twoSidedOverride))
-                {
-                    metadata->twoSided = twoSidedOverride
-                        ? std::optional<bool>(inheritedTwoSided)
-                        : std::nullopt;
-                    SetMeshMaterialMetadataWithUndo(*metadata);
-                }
-                ImGui::SameLine();
-            }
-            bool twoSided = metadata->twoSided.value_or(inheritedTwoSided);
-            if (IsInstance() && !twoSidedOverride) ImGui::BeginDisabled();
-            if (ImGui::Checkbox("Two sided", &twoSided))
-            {
-                metadata->twoSided = twoSided;
-                SetMeshMaterialMetadataWithUndo(*metadata);
-            }
-            if (IsInstance() && !twoSidedOverride) ImGui::EndDisabled();
-            ImGui::Separator();
-        }
-
+        const AssetRefServices& refs = m_services.assetRefs ? *m_services.assetRefs : NoAssetRefServices();
         const auto& params = m_boundTemplate->Params();
         for (std::size_t i = 0; i < params.size(); ++i)
         {
             const Arcane::ParamDecl& d = params[i];
-            if (IsInstance() && m_showOnlyOverridden && !m_instance->HasOverride(d.nameHash))
+            if (inst && m_showOnlyOverridden && !m_instance->HasOverride(d.nameHash))
                 continue;
-
-            // Instance mode: the per-param override checkbox (UE's model) --
-            // checking materializes an override at the currently-resolved value,
-            // unchecking clears it (parent/default shows through). Undoable.
-            if (IsInstance())
-            {
-                bool ov = m_instance->HasOverride(d.nameHash);
-                const std::string ovId = "##ov_" + d.name;
-                if (ImGui::Checkbox(ovId.c_str(), &ov))
-                {
-                    if (ov)
-                    {
-                        Arcane::MatParamValue resolved;
-                        if (m_instance->GetParam(d.nameHash, resolved))
-                            SetParamWithUndo(d, resolved);
-                    }
-                    else
-                    {
-                        Arcane::MatParamValue before;
-                        m_instance->GetParam(d.nameHash, before);
-                        m_instance->ClearOverride(d.nameHash);
-                        if (UndoStack())
-                            UndoStack()->Push(std::make_unique<ParamEditCommand>(
-                                m_anchor, d.nameHash, "Reset " + d.name,
-                                /*hadBefore=*/true, before, /*hasAfter=*/false,
-                                Arcane::MatParamValue{}));
-                    }
-                }
-                ImGui::SameLine();
-            }
-            const Arcane::ParamMeta meta = i < m_boundMetas.size() ? m_boundMetas[i]
-                                                                   : Arcane::ParamMeta{};
+            const Arcane::ParamMeta meta = i < m_boundMetas.size() ? m_boundMetas[i] : Arcane::ParamMeta{};
             Arcane::MatParamValue value;
             if (!m_instance->GetParam(d.nameHash, value))
                 continue;
-
-            bool edited = false;
-            switch (WidgetFor(d.type))
+            const Arcane::MatParamValue shown = value;
+            bool overridden = m_instance->HasOverride(d.nameHash);
+            ImGui::PushID(d.name.c_str());
+            // Instances: the override cell (the only override control, no reset).
+            // Bases: the reset slot, live when an override exists (s4.1(d)).
+            if (inst) grid.SetNextRowDecor(RowDecor{ &overridden });
+            else      grid.SetNextRowDecor(RowDecor{ nullptr, true, overridden });
+            const ParamWidget widget = WidgetFor(d.type);
+            ImGuiID popupId = 0;
+            AssetRefEdit texEdit;
+            switch (widget)
             {
                 case ParamWidget::SliderFloat:
-                    edited = ImGui::SliderFloat(d.name.c_str(), &value.f[0],
-                                                meta.sliderMin, meta.sliderMax);
+                    (void)grid.SliderRow(d.name.c_str(), value.f[0], meta.sliderMin, meta.sliderMax);
                     break;
                 case ParamWidget::DragFloat2:
-                    edited = ImGui::DragFloat2(d.name.c_str(), value.f, 0.01f);
+                    (void)grid.VecRow(d.name.c_str(), value.f, 2, 0.01f, std::nullopt, "%.3f");
                     break;
                 case ParamWidget::DragFloat4:
-                    edited = ImGui::DragFloat4(d.name.c_str(), value.f, 0.01f);
+                    (void)grid.VecRow(d.name.c_str(), value.f, 4, 0.01f, std::nullopt, "%.3f");
                     break;
                 case ParamWidget::ColorEdit:
+                    (void)grid.ColorRow(d.name.c_str(), value.f, &popupId, /*hdr=*/false);   // a Color param IS a colour
+                    break;
+                case ParamWidget::TexturePicker:
                 {
-                    // Same shape as the Inspector row: an sRGB-ENCODED swatch that
-                    // opens the dense popup, beside four LINEAR float boxes.
-                    //
-                    // hdr = false because MatParamType::Color exists precisely so
-                    // "the editor shows a color picker" (MaterialTypes.hpp:26) -- it
-                    // IS a colour. Nothing declares one as HDR (ParamMeta carries
-                    // only sliderMin/sliderMax, MaterialTypes.hpp:133-139). A param
-                    // wanting an unclamped multiplier is a Float4.
-                    //
-                    // SUBMISSION ORDER IS LOAD-BEARING: the shared gesture pair
-                    // after this switch reads g.LastItemData, so the ColorEdit4 that
-                    // owns the box drags has to be the last item this arm submits
-                    // (EditGesture.hpp:176). Hence swatch first, boxes last, and the
-                    // name back on ColorEdit4's own label rather than a separate
-                    // TextUnformatted -- a text item carries id 0 and would make
-                    // IsItemActivated() unsatisfiable for the whole row.
-                    // BeginPopup/EndPopup in between are safe: End() restores
-                    // g.LastItemData from the parent window's backup.
-                    //
-                    // DisplayRGB and InputRGB PIN the mode: NoOptions only
-                    // suppresses this row's own right-click menu, and without a
-                    // display or input bit ColorEdit4 takes both from the global
-                    // g.ColorEditOptions (imgui_widgets.cpp:5830-5837), which any
-                    // colour widget lacking NoOptions can flip to HSV -- writing
-                    // HSV components into storage this row promises is linear.
-                    const std::string popupKey = d.name + "##colorpopup";
-                    const ImGuiID     popupId  = ColorPopupId(popupKey.c_str());
-
-                    // This loop has no PushID, so the swatch id must carry the
-                    // param name -- same reason "##ov_" and "x##reset_" do
-                    // above/below. A bare "##sw" would mint the same ImGuiID
-                    // for every Color param in the template, and with two the
-                    // first swatch would clear the shared ActiveId before the
-                    // second is even submitted, so the second could never
-                    // report a press.
-                    const std::string swatchId = "##sw_" + d.name;
-                    if (ColorSwatchButton(swatchId.c_str(), value.f))
-                    {
-                        std::memcpy(m_colorPopupOriginal, value.f, sizeof(m_colorPopupOriginal));
-                        ImGui::OpenPopup(popupId);
-                    }
-                    if (ImGui::BeginPopup(popupKey.c_str()))
-                    {
-                        if (ColorPopupBody(value.f, m_colorPopupOriginal, /*hdr*/ false))
-                            edited = true;
-                        ImGui::EndPopup();
-                    }
-                    ImGui::SameLine();
-                    const bool boxesEdited =
-                        ImGui::ColorEdit4(d.name.c_str(), value.f,
-                                          ImGuiColorEditFlags_Float
-                                          | ImGuiColorEditFlags_NoSmallPreview
-                                          | ImGuiColorEditFlags_NoPicker
-                                          | ImGuiColorEditFlags_NoOptions
-                                          | ImGuiColorEditFlags_DisplayRGB
-                                          | ImGuiColorEditFlags_InputRGB);
-                    edited = edited || boxesEdited;
+                    AssetRefArgs args;
+                    args.guid = value.tex;
+                    args.kindFilter = static_cast<int>(AssetKind::Texture);
+                    args.readOnly = inst && !overridden;   // inherited: shown, not editable
+                    texEdit = AssetRefRow(grid, d.name.c_str(), args, refs);
                     break;
                 }
-                case ParamWidget::TexturePicker:
-                    DrawTextureParam(d, value);
-                    break;
             }
+            const RowEvents events = grid.LastRowEvents();
+            if (!meta.tooltip.empty() && LabelCellHovered())
+                ImGui::SetTooltip("%s\n%s", d.name.c_str(), meta.tooltip.c_str());
 
-            // The override before-state is read INSIDE the open call, which runs
-            // on the activation frame only -- i.e. before the live Set below has
-            // touched anything. The step itself builds at close (an abandoned
-            // drag lands on the stack rather than vanishing), and the
-            // transaction carries the label CommandStack::Commit stamps.
-            //
-            // NO-OP GUARD: the close runs on EVERY close path, including the
-            // abandonment ones (stale-close, collapsed window, document
-            // teardown) where the gesture never edited anything. Pushing there
-            // would leave a junk step whose before == after AND clear the redo
-            // stack (CommandStack.cpp:70) -- a generic Push is its own
-            // transaction, so it never meets Commit's empty-transaction drop at
-            // :61-62. The after-state is the CLOSE-TIME override state, so
-            // "no override, nothing typed" reads as unchanged; an EDITED
-            // gesture still differs (its live Set both creates the override and
-            // moves the value) and still pushes exactly one step.
-            //
-            // ONE builder for both boundaries. The box row closes on widget
-            // deactivation and the popup closes on the popup going away, but the
-            // step they owe the stack is identical -- and an empty builder would
-            // record nothing at all here, because this document is not
-            // registry-backed, so Commit's empty-transaction drop
-            // (CommandStack.cpp:61-62) swallows the whole transaction.
+            // The step builder (unchanged contract, cpp :5915-5957): before-state
+            // read on the activation frame, the step built at close, a no-op
+            // guard for unchanged closes. It also latches m_liveParamSeed.
             auto buildParamEdit = [&]() -> std::function<void()>
             {
                 const bool hadBefore = m_instance->HasOverride(d.nameHash);
                 Arcane::MatParamValue before{};
                 if (hadBefore)
                     m_instance->GetParam(d.nameHash, before);
+                m_liveParamSeed = LiveParamSeed{ d.nameHash, hadBefore, before };
                 return std::function<void()>(
                     [this, nameHash = d.nameHash, name = d.name, hadBefore, before]
                     {
                         Arcane::MatParamValue after;
                         if (!m_instance || !m_instance->GetParam(nameHash, after))
-                            return;   // the snippet dropped the param
-                        // Read the override flag, not a hardcoded true: it
-                        // is what distinguishes "the drag created an
-                        // override" from "nothing happened", and it is the
-                        // truthful Redo target either way (ApplyParamEdit
-                        // clears the override when hasAfter is false, the
-                        // shape the reset button below pushes).
+                            return;
                         const bool hasAfter = m_instance->HasOverride(nameHash);
-                        if (hadBefore == hasAfter &&
-                            (!hadBefore || before == after))
+                        if (hadBefore == hasAfter && (!hadBefore || before == after))
                             return;   // nothing changed -- no step, redo intact
-                        // Re-resolved here (the builder runs at close):
-                        // null-guarded like every other resolver use.
-                        if (Arcane::CommandStack* stack = UndoStack())
-                            stack->Push(std::make_unique<ParamEditCommand>(
-                                m_anchor, nameHash, "Edit " + name,
-                                hadBefore, before, hasAfter, after));
+                        if (Arcane::CommandStack* s = m_services.undo ? m_services.undo() : nullptr)
+                            s->Push(std::make_unique<ParamEditCommand>(
+                                m_anchor, nameHash, "Edit " + name, hadBefore, before, hasAfter, after));
                     });
             };
-
-            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
-                [&] { return "Edit " + d.name; },
-                buildParamEdit);
-
-            if (edited)
+            if (widget == ParamWidget::TexturePicker)
             {
-                // LIVE: straight into the instance -> next Tick packs the CB.
-                // No recompile -- the whole point of the declared-param model.
-                m_instance->Set(d.nameHash, value);
+                (void)ApplyParamRefEdit(d.nameHash, texEdit);   // single-shot: no gesture (cpp :5594-5596)
             }
-
-            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
-
-            // The popup gesture pair: separate from the box row's
-            // BeginOnActivate/EndOnDeactivate above because the popup's
-            // ActiveId is ImGui's own (EditGesture.hpp's ShouldClosePopup
-            // note) -- only sites with a ColorEdit case actually opened a
-            // popup this frame.
-            if (WidgetFor(d.type) == ParamWidget::ColorEdit)
+            else
             {
-                EditGesture::BeginOnPopupOpen(UndoStack(), m_gesture,
-                                              ColorPopupId((d.name + "##colorpopup").c_str()),
-                                              [&] { return std::string("Edit ") + d.name; },
-                                              buildParamEdit);
-                EditGesture::EndOnPopupClose(UndoStack(), m_gesture,
-                                             ColorPopupId((d.name + "##colorpopup").c_str()));
-            }
-
-            // Reset-to-default: clears the override so the //@param default (or
-            // a parent's value, Slice 7) shows through. Undoable.
-            if (m_instance->HasOverride(d.nameHash))
-            {
-                ImGui::SameLine();
-                std::string resetId = "x##reset_" + d.name;
-                if (ImGui::SmallButton(resetId.c_str()))
+                EditGesture::BeginOnActivate(undo, m_gesture, [&] { return "Edit " + d.name; }, buildParamEdit);
+                if (events.cancelled && m_liveParamSeed.nameHash == d.nameHash)
                 {
-                    Arcane::MatParamValue before;
-                    m_instance->GetParam(d.nameHash, before);
-                    m_instance->ClearOverride(d.nameHash);
-                    if (UndoStack())
-                        UndoStack()->Push(std::make_unique<ParamEditCommand>(
-                            m_anchor, d.nameHash, "Reset " + d.name,
-                            /*hadBefore=*/true, before, /*hasAfter=*/false,
-                            Arcane::MatParamValue{}));
+                    if (m_liveParamSeed.hadBefore) m_instance->Set(d.nameHash, m_liveParamSeed.before);
+                    else                           m_instance->ClearOverride(d.nameHash);
+                }
+                else if (!(value == shown))
+                {
+                    m_instance->Set(d.nameHash, value);   // LIVE: the next Tick packs the CB, no recompile
+                }
+                EditGesture::EndAfterRow(undo, m_gesture, events.cancelled);
+                if (widget == ParamWidget::ColorEdit && popupId != 0)
+                {
+                    EditGesture::BeginOnPopupOpen(undo, m_gesture, popupId,
+                                                  [&] { return "Edit " + d.name; }, buildParamEdit);
+                    EditGesture::EndOnPopupClose(undo, m_gesture, popupId);
                 }
             }
+            if (inst && events.overrideToggled)
+            {
+                if (overridden)
+                {
+                    Arcane::MatParamValue resolved;
+                    if (m_instance->GetParam(d.nameHash, resolved))
+                        SetParamWithUndo(d, resolved);      // "Edit <name>" (cpp :5805-5812)
+                }
+                else
+                    ResetParamWithUndo(d);                  // "Reset <name>"
+            }
+            else if (!inst && events.resetClicked)
+                ResetParamWithUndo(d);
+            ImGui::PopID();
         }
-        ImGui::EndChild();
     }
 }

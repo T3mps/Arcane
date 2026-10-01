@@ -7,9 +7,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Panels/AssetReferenceField.hpp"   // AssetRefEdit: the texture row's write (T3-C6)
 #include "Panels/DiagnosticStore.hpp"
 #include "Documents/PreviewStatus.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
+#include "Widgets/IconsLucide.h"   // ICON_LC_X: the asset cell's clear button
 #include "Widgets/PropertyGrid.hpp"
 #include "Helpers/GpuCapability.hpp"
 #include "Helpers/TestTypeContext.hpp"
@@ -1646,4 +1648,267 @@ TEST_CASE("material toolbar: the surface combo carries a Surface label; a re-kin
     CHECK_FALSE(stack.CanUndo());      // ...without a step (cpp :2208-2219; the combo did not move)
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
+}
+
+TEST_CASE("material page: params are PropertyGrid rows; Esc on a slider drag restores and pushes nothing",
+          "[editor][material][inspector][shadercompile]")
+{
+    const fs::path dir = TempDir("page_rows");
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate(); data.name = "Rows";
+    data.snippet = "//@param float Speed = 2.0 [0..4]\n"
+                   "//@param float2 Scale = (2, 3)\n"
+                   "//@param float4 Rect = (0, 1, 2, 3)\n"
+                   "//@param color Tint = (1, 0, 0, 1)\n"
+                   "//@param texture Noise\n"
+                   "float4 shade(Varyings v) { return Tint * Speed; }\n";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "rows.arcmat", data));
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("data/shaders");
+    Astra::Registry registry;
+    Arcane::CommandStack stack{ [&registry]() -> Astra::Registry& { return registry; } };
+    DocServices services;
+    services.compiler = &compiler; services.sources = &sources;
+    services.undo = [&stack] { return &stack; };
+    ShaderEditorDocument doc(services, dir / "rows.arcmat", *Arcane::LoadMaterialAsset(dir / "rows.arcmat"));
+    DrainInto(compiler, doc, 2);
+    PageUi h;
+    h.Frame(doc); h.Frame(doc);
+    for (const char* p : { "Speed", "Scale", "Rect", "Tint", "Noise" }) { INFO(p); CHECK(h.probe.count(p) == 1); }
+    const std::uint32_t speed = Arcane::HashParamName("Speed");
+    const auto overridden = [&] { return doc.GraphPreviewDesc().instance->HasOverride(speed); };
+    REQUIRE(doc.GraphPreviewDesc().instance != nullptr);
+    REQUIRE_FALSE(overridden());
+    const ImVec2 at = h.At("Speed");
+    h.Move(doc, at); h.Button(doc, true);
+    h.Move(doc, ImVec2(at.x + 60.0f, at.y));
+    CHECK(overridden());                                  // live write-through
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true); h.Frame(doc);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false); h.Button(doc, false);
+    CHECK_FALSE(overridden());                            // Esc restored the activation state, override flag included (R2)
+    CHECK_FALSE(stack.CanUndo());
+    compiler.Shutdown();
+}
+
+namespace
+{
+    // A mesh base (baseColor + albedo) on a real stack: binds with no compiler (Rebuild's mesh branch).
+    struct MeshMaterialFixture
+    {
+        fs::path dir, file;
+        Astra::Registry registry;
+        Arcane::CommandStack stack{ [this]() -> Astra::Registry& { return registry; } };
+        std::optional<ShaderEditorDocument> doc;
+        explicit MeshMaterialFixture(const char* leaf) : dir(TempDir(leaf)), file(dir / "mesh.arcmat")
+        {
+            Arcane::MaterialAssetData d;
+            d.id = Arcane::Guid::Generate(); d.name = "Mesh"; d.kind = "mesh";
+            REQUIRE(Arcane::SaveMaterialAsset(file, d));
+            DocServices s;
+            s.undo = [this] { return &stack; };
+            doc.emplace(s, file, *Arcane::LoadMaterialAsset(file));
+        }
+        std::string UndoLabel() const { return stack.CanUndo() ? std::string(stack.UndoLabel()) : std::string(); }
+    };
+}
+
+TEST_CASE("material page: a base's reset decoration pushes Reset <name>", "[editor][material][inspector]")
+{
+    MeshMaterialFixture fx("page_reset");
+    fx.doc->ApplyParamEdit(Arcane::HashParamName("baseColor"), true, Arcane::MatParamValue::MakeColor(0.5f, 0.5f, 0.5f, 1.0f));
+    PageUi h;
+    h.Frame(*fx.doc); h.Frame(*fx.doc);
+    ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
+    const ImVec2 row = h.At("baseColor");
+    h.Click(*fx.doc, ImVec2(iw->ContentRegionRect.Max.x - 8.0f, row.y));   // the reset slot ends the value cell
+    CHECK(fx.UndoLabel() == "Reset baseColor");
+}
+
+TEST_CASE("material page: a texture param's Set and Clear are one step each", "[editor][material][inspector]")
+{
+    MeshMaterialFixture fx("page_texture");
+    const std::uint32_t albedo = Arcane::HashParamName("albedo");
+    const Arcane::Guid tex = Arcane::Guid::Generate();
+    Arcane::Editor::AssetRefEdit set;
+    set.op = Arcane::Editor::AssetRefEdit::Op::Set; set.guid = tex;
+    REQUIRE(fx.doc->ApplyParamRefEdit(albedo, set));
+    CHECK(fx.UndoLabel() == "Edit albedo");
+    Arcane::Editor::AssetRefEdit clear;
+    clear.op = Arcane::Editor::AssetRefEdit::Op::Clear;
+    REQUIRE(fx.doc->ApplyParamRefEdit(albedo, clear));
+    CHECK_FALSE(fx.doc->ApplyParamRefEdit(Arcane::HashParamName("baseColor"), set));   // not a texture param
+    fx.stack.Undo();                                                                 // back to the Set
+    REQUIRE(fx.doc->Save());
+    const auto saved = Arcane::LoadMaterialAsset(fx.file);
+    REQUIRE(saved.has_value());
+    bool found = false;
+    for (const auto& [name, value] : saved->params)
+        if (name == "albedo") { found = true; CHECK(value.tex == tex); }
+    CHECK(found);
+    fx.stack.Undo();
+    CHECK_FALSE(fx.stack.CanUndo());                                                 // exactly two steps
+}
+
+TEST_CASE("material page: the Alpha cutoff drag applies live and lands as one step", "[editor][material][inspector][mesh]")
+{
+    MeshMaterialFixture fx("page_cutoff");
+    PageUi h;
+    h.Frame(*fx.doc); h.Frame(*fx.doc);
+    const ImVec2 at = h.At("Alpha cutoff");
+    h.Move(*fx.doc, at); h.Button(*fx.doc, true);
+    h.Move(*fx.doc, ImVec2(at.x + 50.0f, at.y));
+    const auto live = fx.doc->CaptureMeshMaterialMetadata();
+    REQUIRE(live.has_value());
+    CHECK(live->alphaCutoff.has_value());                // applied mid-drag
+    CHECK_FALSE(fx.stack.CanUndo());                     // ...with no step yet
+    h.Button(*fx.doc, false);
+    h.Frame(*fx.doc);
+    CHECK(fx.UndoLabel() == "Edit Alpha Cutoff");
+    fx.stack.Undo();
+    CHECK_FALSE(fx.stack.CanUndo());
+    CHECK_FALSE(fx.doc->CaptureMeshMaterialMetadata()->alphaCutoff.has_value());
+}
+
+
+
+TEST_CASE("material page: Esc on the Alpha cutoff drag restores nullopt and pushes nothing", "[editor][material][inspector][mesh]")
+{
+    MeshMaterialFixture fx("page_cutoff_esc");
+    PageUi h;
+    h.Frame(*fx.doc); h.Frame(*fx.doc);
+    const ImVec2 at = h.At("Alpha cutoff");
+    h.Move(*fx.doc, at); h.Button(*fx.doc, true);
+    h.Move(*fx.doc, ImVec2(at.x + 50.0f, at.y));
+    REQUIRE(fx.doc->CaptureMeshMaterialMetadata()->alphaCutoff.has_value());       // live mid-drag
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true); h.Frame(*fx.doc);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false); h.Button(*fx.doc, false);
+    h.Frame(*fx.doc);
+    CHECK_FALSE(fx.doc->CaptureMeshMaterialMetadata()->alphaCutoff.has_value());   // R2: the activation state, nullopt included
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+TEST_CASE("material page: an instance's override cell materialises and clears, one step each, undoable", "[editor][material][inspector]")
+{
+    const fs::path dir = TempDir("page_instance");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "PageInstance").has_value());
+    const fs::path content = dir / "Game" / "Content";
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate(); base.name = "Base"; base.kind = "mesh";
+    base.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(0.2f, 0.4f, 0.6f, 1.0f));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "base.arcmat", base));
+    Arcane::MaterialAssetData child;
+    child.id = Arcane::Guid::Generate(); child.parent = base.id; child.name = "Child"; child.kind = "mesh";
+    const fs::path file = content / "child.arcmat";
+    REQUIRE(Arcane::SaveMaterialAsset(file, child));
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    Astra::Registry registry;
+    Arcane::CommandStack stack{ [&registry]() -> Astra::Registry& { return registry; } };
+    DocServices services;
+    services.runtime = &rt;
+    services.undo = [&stack] { return &stack; };
+    ShaderEditorDocument doc(services, file, *Arcane::LoadMaterialAsset(file));
+    REQUIRE(doc.IsInstance());
+    REQUIRE(doc.ParseErrors().empty());
+    PageUi h;
+    h.Frame(doc); h.Frame(doc, true);
+    CHECK(h.logged.find("Only overridden") != std::string::npos);   // on the Parameters band (T3-C4)
+    ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
+    const ImVec2 row = h.At("baseColor");
+    const ImVec2 cell(iw->ContentRegionRect.Min.x + ImGui::GetStyle().CellPadding.x + ImGui::GetFrameHeight() * 0.5f, row.y);
+    h.Click(doc, cell);                                              // tick: materialise the inherited value
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Edit baseColor");
+    h.Click(doc, cell);                                              // untick: inherit again
+    CHECK(std::string(stack.UndoLabel()) == "Reset baseColor");
+    stack.Undo();
+    CHECK(std::string(stack.UndoLabel()) == "Edit baseColor");
+    REQUIRE(doc.Save());
+    const auto saved = Arcane::LoadMaterialAsset(file);
+    REQUIRE(saved.has_value());
+    REQUIRE(saved->params.size() == 1);                              // the override is back
+    CHECK(saved->params[0].first == "baseColor");
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+
+
+TEST_CASE("material page: an instance's texture row has its own override cell; a neighbour's toggle never leaks onto it", "[editor][material][inspector]")
+{
+    const fs::path dir = TempDir("page_instance_tex");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "PageInstanceTex").has_value());
+    const fs::path content = dir / "Game" / "Content";
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate(); base.name = "Base"; base.kind = "mesh";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "base.arcmat", base));
+    Arcane::MaterialAssetData child;
+    child.id = Arcane::Guid::Generate(); child.parent = base.id; child.name = "Child"; child.kind = "mesh";
+    const fs::path file = content / "child.arcmat";
+    REQUIRE(Arcane::SaveMaterialAsset(file, child));
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    Astra::Registry registry;
+    Arcane::CommandStack stack{ [&registry]() -> Astra::Registry& { return registry; } };
+    DocServices services;
+    services.runtime = &rt;
+    services.undo = [&stack] { return &stack; };
+    ShaderEditorDocument doc(services, file, *Arcane::LoadMaterialAsset(file));
+    REQUIRE(doc.IsInstance());
+    Arcane::Editor::AssetRefEdit set;
+    set.op = Arcane::Editor::AssetRefEdit::Op::Set; set.guid = Arcane::Guid::Generate();
+    REQUIRE(doc.ApplyParamRefEdit(Arcane::HashParamName("albedo"), set));   // albedo overridden on the instance
+    PageUi h;
+    h.Frame(doc); h.Frame(doc);
+    REQUIRE(h.probe.count("albedo#override") == 1);                        // the texture row carries the cell
+    h.Click(doc, h.At("baseColor#override"));                              // tick the row ABOVE albedo (MeshParamTemplate order)
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Edit baseColor");             // no spurious "Edit albedo" rode along
+    stack.Undo();
+    CHECK(std::string(stack.UndoLabel()) == "Edit albedo");                // only the Set is left
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("material page: a base texture row's reset slot never covers the asset cell's clear button", "[editor][material][inspector]")
+{
+    // Carry ruling (T3-C6): the asset cell honours BeginValueCell's reserved
+    // reset strip, so the trailing picker/clear buttons end before it. The
+    // reset is submitted first and would otherwise take the clear's hover.
+    MeshMaterialFixture fx("page_texture_reset");
+    const std::uint32_t albedo = Arcane::HashParamName("albedo");
+    Arcane::Editor::AssetRefEdit set;
+    set.op = Arcane::Editor::AssetRefEdit::Op::Set; set.guid = Arcane::Guid::Generate();
+    REQUIRE(fx.doc->ApplyParamRefEdit(albedo, set));   // an override with a valid guid: clear + reset both drawn
+    PageUi h;
+    h.Frame(*fx.doc); h.Frame(*fx.doc);
+    const ImVec2 resetC = h.At("albedo#reset");
+    // The row's probe is the cell's LAST item -- the clear button (no popup open,
+    // no drag active), a SmallButton: FramePadding.y = 0.
+    const ImVec2 clearC = h.At("albedo");
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float frameH = ImGui::GetFrameHeight();
+    const ImVec2 clearHalf(ImGui::CalcTextSize(ICON_LC_X).x * 0.5f + st.FramePadding.x, ImGui::GetFontSize() * 0.5f);
+    const ImRect resetR(ImVec2(resetC.x - frameH * 0.5f, resetC.y - frameH * 0.5f),
+                        ImVec2(resetC.x + frameH * 0.5f, resetC.y + frameH * 0.5f));
+    const ImRect clearR(ImVec2(clearC.x - clearHalf.x, clearC.y - clearHalf.y),
+                        ImVec2(clearC.x + clearHalf.x, clearC.y + clearHalf.y));
+    INFO("reset [" << resetR.Min.x << ", " << resetR.Max.x << "] clear [" << clearR.Min.x << ", " << clearR.Max.x << "]");
+    CHECK_FALSE(resetR.Overlaps(clearR));
+
+    h.Click(*fx.doc, clearC);                          // Op::Clear -> the nil guid, "Edit albedo"
+    CHECK(fx.UndoLabel() == "Edit albedo");            // not "Reset albedo": the reset never took the click
+    REQUIRE(fx.doc->Save());
+    const auto cleared = Arcane::LoadMaterialAsset(fx.file);
+    REQUIRE(cleared.has_value());
+    bool found = false;
+    for (const auto& [name, value] : cleared->params)
+        if (name == "albedo") { found = true; CHECK_FALSE(value.tex.IsValid()); }   // still overridden, now nil
+    CHECK(found);
+
+    h.Frame(*fx.doc);
+    h.Click(*fx.doc, h.At("albedo#reset"));
+    CHECK(fx.UndoLabel() == "Reset albedo");
 }

@@ -86,10 +86,14 @@ namespace Arcane::Editor
     // (!readOnly && (guid valid || mixed)). The whole cell is a drop target
     // for kAssetDragType unless read-only. Returns Set/Clear for the CALLER
     // to route through its undo. ownTooltip draws the tooltip; otherwise
-    // hovered / truncated / fullText are the caller's to compose.
+    // hovered / truncated / fullText are the caller's to compose. A caller's
+    // pending SetNextItemWidth (a reserved reset strip) is honoured; without
+    // one the cell spans the available width.
     [[nodiscard]] AssetRefEdit AssetReferenceValue(const char* id, const AssetRefArgs& args,
                                                    const AssetRefServices& services);
-    // FieldLabelCell + PushID(label) + AssetReferenceValue("##value") + grid.ProbeItem(label).
+    // grid.BeginCustomRow(label) (the label cell + any SetNextRowDecor override
+    // cell / reset slot, PushID(label)) + AssetReferenceValue("##value") +
+    // grid.EndCustomRow(label) (ProbeItem + PopID). Resets LastRowEvents.
     [[nodiscard]] AssetRefEdit AssetRefRow(PropertyGrid& grid, const char* label, const AssetRefArgs& args,
                                            const AssetRefServices& services);
 }

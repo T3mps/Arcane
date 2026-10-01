@@ -3,7 +3,7 @@
 #include "Panels/AssetPanelCommon.hpp"    // PillWidth
 #include "Panels/CreateAssetDialog.hpp"   // MaterialSurfacePillText (the Create dialog's own pill text)
 #include "Widgets/EditorTheme.hpp"        // Theme::kError (a dangling reference)
-#include "Widgets/EditorWidgets.hpp"      // EllipsisToWidth, RowWithThumb, AssetPill, BeginPopupBelow, FieldLabelCell
+#include "Widgets/EditorWidgets.hpp"      // EllipsisToWidth, RowWithThumb, AssetPill, BeginPopupBelow
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
 
@@ -183,6 +183,14 @@ namespace Arcane::Editor
     AssetRefEdit AssetReferenceValue(const char* id, const AssetRefArgs& args, const AssetRefServices& services)
     {
         AssetRefEdit edit;
+        // A caller's pending SetNextItemWidth (a PropertyGrid reserved reset
+        // strip, s5.3) is honoured: read it here, before the thumb's Dummy would
+        // consume it, then clear it. Without one the cell spans the available
+        // width (CalcItemWidth would return the table's ItemWidth instead).
+        ImGuiContext& g = *GImGui;
+        const float cellW = std::max((g.NextItemData.HasFlags & ImGuiNextItemDataFlags_HasWidth)
+                                         ? ImGui::CalcItemWidth() : ImGui::GetContentRegionAvail().x, 1.0f);
+        g.NextItemData.ClearFlags();
         if (ImGui::GetCurrentWindowRead()->SkipItems)
             return edit;
         ImGui::PushID(id);
@@ -191,7 +199,6 @@ namespace Arcane::Editor
         const float frameH = ImGui::GetFrameHeight();
         ImGui::AlignTextToFramePadding();   // the name rides level with framed neighbours
         const ImVec2 cellMin = ImGui::GetCursorScreenPos();
-        const float cellW = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
         const ImRect cell(cellMin, ImVec2(cellMin.x + cellW, cellMin.y + frameH));
 
         const bool showPicker = !args.readOnly;
@@ -303,11 +310,11 @@ namespace Arcane::Editor
     AssetRefEdit AssetRefRow(PropertyGrid& grid, const char* label, const AssetRefArgs& args,
                              const AssetRefServices& services)
     {
-        (void)FieldLabelCell(label, args.readOnly);
-        ImGui::PushID(label);
+        // The decorated-row cell (s5.3): honours SetNextRowDecor (the override
+        // cell / reset slot) and resets LastRowEvents like the built-in rows.
+        grid.BeginCustomRow(label, args.readOnly);
         const AssetRefEdit edit = AssetReferenceValue("##value", args, services);
-        grid.ProbeItem(label);
-        ImGui::PopID();
+        grid.EndCustomRow(label);   // probes `label`, pops the PushID: ids unchanged
         return edit;
     }
 }

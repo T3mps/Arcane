@@ -223,6 +223,12 @@ namespace Arcane::Editor
         // the LAST item's centre under `label` when PropertyGridState::probe is
         // set. No-op in production.
         void ProbeItem(const char* label);
+        // A custom value widget on a decorated row (s5.3): opens the label /
+        // override / reset cell under PushID(label) exactly as the built-in rows
+        // do (honours SetNextRowDecor, resets LastRowEvents). Draw ONE value
+        // widget, then EndCustomRow probes it and pops.
+        void BeginCustomRow(const char* label, bool dimmed) { BeginValueCell(label, dimmed); }
+        void EndCustomRow(const char* label) { EndValueCell(label); }
 
         PropertyGridState& State() noexcept { return m_state; }
 
