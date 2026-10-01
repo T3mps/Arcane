@@ -1999,3 +1999,78 @@ TEST_CASE("ShaderEditorDocument: undoing the selected node's creation falls back
     CHECK(doc.SelectionKey() == "node:0:4");
     CHECK(doc.SelectionEpoch() == 1);
 }
+
+TEST_CASE("ShaderEditorDocument PageFor: material page, node page, and null for a missing id or pass",
+          "[editor][material][inspector][nodepage]")
+{
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    Arcane::Editor::InspectorPage* material = doc.PageFor("material");
+    REQUIRE(material != nullptr);
+    CHECK(doc.Page() == material);                   // nothing selected: the material page
+    Arcane::Editor::InspectorPage* node = doc.PageFor("node:0:3");
+    REQUIRE(node != nullptr);
+    CHECK(node != material);
+    CHECK(doc.PageFor("node:0:99") == nullptr);      // missing id
+    CHECK(doc.PageFor("node:1:3") == nullptr);       // out-of-range pass, NOT the base fallback
+    CHECK(doc.PageFor("bogus") == nullptr);
+    REQUIRE(doc.RestoreSelection("node:0:3"));
+    CHECK(doc.Page() == node);                       // Page() = PageFor(SelectionKey())
+    CHECK(doc.Kind() == "material");                 // the kind never changes (filters untouched)
+}
+
+TEST_CASE("ShaderEditorDocument node page crumbs: [material, node], or [material, pass, node] in a chain",
+          "[editor][material][inspector][nodepage]")
+{
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    REQUIRE(doc.RestoreSelection("node:0:3"));
+    std::vector<Arcane::Editor::InspectorCrumb> crumbs = doc.Page()->Breadcrumb();
+    REQUIRE(crumbs.size() == 2);
+    CHECK(crumbs[0].label == "Nodes");
+    CHECK(crumbs[0].key == std::optional<std::string>{ "material" });
+    CHECK(crumbs[1].label == "Multiply");
+    CHECK(crumbs[1].key == std::optional<std::string>{ "node:0:3" });
+    CHECK(Arcane::Editor::InspectorCrumbText(doc, doc.Page()) == "Nodes > Multiply");
+    crumbs[0].select();                              // a crumb click is a selection
+    CHECK(doc.SelectionKey() == "material");
+    CHECK(doc.SelectionEpoch() == 2);
+
+    ShaderEditorDocument chain(DocServices{}, "chain.arcmat", Arcane::Test::ChainNodeDoc());
+    REQUIRE(chain.RestoreSelection("node:1:2"));
+    crumbs = chain.Page()->Breadcrumb();
+    REQUIRE(crumbs.size() == 3);
+    CHECK(crumbs[0].label == "Chain");
+    CHECK(crumbs[1].label == "blur");
+    CHECK_FALSE(crumbs[1].key.has_value());          // inert while pinned
+    CHECK(crumbs[2].label == "Custom (HLSL)");
+    CHECK(crumbs[2].key == std::optional<std::string>{ "node:1:2" });
+    crumbs[1].select();                              // EnterPass(1), then the material crumb's select
+    CHECK(chain.SelectionKey() == "material");
+    CHECK(chain.SelectionEpoch() == 2);
+}
+
+TEST_CASE("ShaderEditorDocument node page: a node deleted under a held page draws one read-only line",
+          "[editor][material][inspector][nodepage]")
+{
+    Arcane::Test::HeadlessImGui imgui;
+    ShaderEditorDocument doc(DocServices{}, "nodes.arcmat", Arcane::Test::SpriteNodeDoc());
+    Arcane::Editor::InspectorPage* page = doc.PageFor("node:0:4");
+    REQUIRE(page != nullptr);
+    std::optional<Arcane::MaterialGraph> without = Arcane::Test::SpriteNodeDoc().graph;
+    std::erase_if(without->nodes, [](const Arcane::GraphNode& n) { return n.id == 4; });
+    doc.ApplyGraphState(0, without);                 // the transient frame after an undo
+    Arcane::Editor::PropertyGridState grid;
+    std::string logged;
+    ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowSize(ImVec2(400.0f, 600.0f));
+    ImGui::Begin("Inspector");
+    ImGui::LogToBuffer();
+    Arcane::Editor::PropertyGrid pg(grid);
+    page->Draw(pg);
+    logged = imgui.ctx->LogBuffer.c_str();
+    ImGui::LogFinish();
+    ImGui::End();
+    ImGui::Render();
+    INFO(logged);
+    CHECK(logged.find("This node no longer exists") != std::string::npos);
+}

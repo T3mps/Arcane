@@ -2232,6 +2232,73 @@ namespace Arcane::Editor
         return true;
     }
 
+    InspectorPage* ShaderEditorDocument::PageFor(std::string_view key)
+    {
+        if (m_pageSel.Resolves(key))
+            return &m_page;
+        if (const std::optional<NodeKey> k = ParseNodeKey(key); k && FindGraphNode(k->pass, k->id))
+        {
+            m_nodePage.SetTarget(k->pass, k->id);
+            return &m_nodePage;
+        }
+        return nullptr;
+    }
+
+    void ShaderEditorDocument::SelectMaterialFromCrumb()
+    {
+        m_nodeSel.reset();
+        m_nodeSelRequest = NodeSelRequest{ NodeSelRequest::Clear, 0 };
+        ++m_pageSel.epoch;
+    }
+
+    std::vector<InspectorCrumb> ShaderEditorDocument::NodeInspectorPage::Breadcrumb() const
+    {
+        // node page s5.1.3. Landings on a node select it through the canvas
+        // request and NEVER call NavigateToSelection.
+        ShaderEditorDocument& d = m_doc;
+        std::vector<InspectorCrumb> crumbs;
+        // The material crumb's label is the material page's own (s4.3); a
+        // node page never exists on an instance, so it reads m_title.
+        crumbs.push_back({ d.m_title, [doc = &d] { doc->SelectMaterialFromCrumb(); },
+                           std::string{ "material" } });
+        if (d.ChainMode())   // every pass, base included
+            crumbs.push_back({ d.PassLabel(m_pass),
+                               [doc = &d, pass = m_pass]
+                               {
+                                   doc->EnterPass(static_cast<int>(pass));
+                                   doc->SelectMaterialFromCrumb();
+                               },
+                               std::nullopt });
+        const Arcane::GraphNode* n = d.FindGraphNode(m_pass, m_id);
+        crumbs.push_back({ n ? std::string(Arcane::GraphNodeInfo(n->type).display) : std::string("Node"),
+                           [] {}, FormatNodeKey({ m_pass, m_id }) });
+        return crumbs;
+    }
+
+    void ShaderEditorDocument::DrawNodePageBody(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        // FIRST local, destructs LAST (EditGesture::ScopeGuard): the page
+        // draws on collapsed and background frames too, like
+        // DrawMaterialPageBody.
+        // UndoStack() (T1-B12) is the null-tolerant resolver read: a default
+        // DocServices{} -- every headless page test -- holds an EMPTY
+        // std::function, and calling m_services.undo() directly would throw
+        // std::bad_function_call on the first page draw.
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
+        DrawSaveWithErrorsConfirm();
+        // Re-resolved EVERY call: create and paste reallocate `nodes`. A gone
+        // node draws its one read-only line inside a Rows table -- a row
+        // outside one would hit ImGui::TableNextRow with no current table.
+        if (!FindGraphNode(pass, id))
+        {
+            PropertyGrid::Rows rows(grid, "##nodegone");
+            if (rows)
+                grid.ReadOnlyRow("Node", "This node no longer exists");
+            return;
+        }
+        // The id scope, header and sections follow here (s5.1.4, T3-B).
+    }
+
     void ShaderEditorDocument::DrawSnippetEditor()
     {
         // Graph-owned + HLSL toggle = UE's code viewer: ONE read-only window

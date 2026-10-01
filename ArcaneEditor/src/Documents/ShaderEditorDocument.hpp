@@ -199,8 +199,13 @@ namespace Arcane::Editor
         // document's content re-selects it (Draw's NoteContentClick). Tab
         // switches and focus never do (the spec's one selection rule).
         std::string_view Kind() const override { return "material"; }
-        InspectorPage* Page() override { return &m_page; }
-        InspectorPage* PageFor(std::string_view key) override { return m_pageSel.Resolves(key) ? &m_page : nullptr; }
+        // "material" -> the material page; a resolving node key retargets the
+        // ONE node page object and returns it (a returned page is valid until
+        // the next Page()/PageFor(), InspectorSource.hpp:48-55, so two
+        // Inspector instances -- one pinned to A, one following -- each
+        // resolve right before they draw; precedent InputActionsDocument.cpp:66-77).
+        InspectorPage* Page() override { return PageFor(SelectionKey()); }
+        InspectorPage* PageFor(std::string_view key) override;
         // The NODE page (node page s5.1): a second key, "node:<pass>:<id>"
         // (ShaderNodeKey.hpp), mirrored from the graph canvas's selection.
         // SelectionKey answers the node key when exactly one node is selected,
@@ -437,6 +442,30 @@ namespace Arcane::Editor
         private:
             ShaderEditorDocument& m_doc;
         };
+
+        // The NODE page (node page s5.1.2). Holds (pass, id), never a
+        // GraphNode*: DrawNodePageBody re-resolves every call.
+        class NodeInspectorPage final : public InspectorPage
+        {
+        public:
+            explicit NodeInspectorPage(ShaderEditorDocument& doc) : m_doc(doc) {}
+            void SetTarget(std::size_t pass, std::uint32_t id) noexcept { m_pass = pass; m_id = id; }
+            std::vector<InspectorCrumb> Breadcrumb() const override;
+            void Draw(PropertyGrid& g) override { m_doc.DrawNodePageBody(g, m_pass, m_id); }
+
+        private:
+            ShaderEditorDocument& m_doc;
+            std::size_t   m_pass = 0;
+            std::uint32_t m_id = 0;
+        };
+
+        // The node page body: FIRST the gesture guard, then the save-with-errors
+        // confirm and the graph modals, then the node re-resolved by (pass, id)
+        // -- one read-only line when it is gone -- then its sections (s5.1.4).
+        void DrawNodePageBody(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        // The material crumb's `select` (s5.1.3): back to the material page as
+        // a SELECTION (precedent SelectMap({}), InputActionsInspectorPage.cpp:78).
+        void SelectMaterialFromCrumb();
 
         double Now() const { return m_services.clock ? *m_services.clock : 0.0; }
         void   Rebuild();          // parse + stitch + submit both stages (structural edit)
@@ -850,6 +879,7 @@ namespace Arcane::Editor
         std::optional<NodeSelRequest> m_nodeSelRequest;
         bool m_nodeSelApplying = false;
         MaterialInspectorPage  m_page{ *this };
+        NodeInspectorPage      m_nodePage{ *this };
 
         // The document's ONE edit-gesture bracket (EditGesture). TWO draw
         // scopes open gestures against it -- Draw (the graph's value/pin
