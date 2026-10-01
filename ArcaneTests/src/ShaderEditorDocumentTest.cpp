@@ -2570,6 +2570,34 @@ TEST_CASE("Node page Settings: the row set and sections per node type follow the
     CHECK(h.log.find("return 2;") == std::string::npos);     // ...the rest is the tooltip
 }
 
+TEST_CASE("Node page Settings: a Texture-typed Param draws a read-only Default row, never a 0-lane VecRow", "[editor][material][nodepage]")
+{
+    // MatParamType::Texture is outside the Type combo but loads (codegen
+    // diagnoses it); ComponentCount(Texture) == 0 must not reach VecRow's
+    // n >= 2 assert, and nothing may write paramDefault.f on it.
+    Arcane::MaterialGraph g = NodePageGraph();
+    {
+        Arcane::GraphNode& p = *g.FindNode(3);
+        p.paramType = Arcane::MatParamType::Texture;
+        p.paramDefault.type = Arcane::MatParamType::Texture;
+        p.paramDefault.f[0] = 0.5f;
+    }
+    NodePageHarness h(GraphDoc(std::move(g)));
+    h.key = NodeKeyOf(0, 3); h.Frame(); h.Frame();           // Debug: an abort here before the fix
+    INFO(h.log);
+    REQUIRE(h.pageDrawn);
+    CHECK(HasSection(h.log, "Settings"));
+    for (const char* r : { "Name", "Type", "Default", "Range" }) { INFO(r); CHECK(h.probe.count(r) == 1); }
+    CHECK(h.log.find("n/a") != std::string::npos);          // the read-only text (ellipsized past the cell)
+    h.Press(h.Centre("Default"));
+    const ImGuiID moveId = ImGui::FindWindowByName("Inspector")->MoveId;   // a press on plain text grabs the window
+    CHECK((h.ctx->ActiveId == 0 || h.ctx->ActiveId == moveId));            // no drag/box under the row: read-only
+    ImGui::GetIO().AddMouseButtonEvent(0, false); h.Frame();
+    CHECK_FALSE(h.stack.CanUndo());
+    CHECK(h.Node(0, 3)->paramType == Arcane::MatParamType::Texture);
+    CHECK(h.Node(0, 3)->paramDefault.f[0] == 0.5f);
+}
+
 TEST_CASE("Node page Settings: a Param rename is ONE 'Rename Param' step and starts the assisted rename", "[editor][material][nodepage]")
 {
     NodePageHarness h(GraphDoc(NodePageGraph()));

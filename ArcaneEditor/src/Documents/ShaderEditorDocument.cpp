@@ -2747,7 +2747,13 @@ namespace Arcane::Editor
                         typeIdx = t;
                 if (const int picked = grid.ComboRow("Type", kTypeNames, 4, typeIdx); picked >= 0)
                     discrete("Param Type", [t = kTypes[picked]](Arcane::GraphNode& node) { node.paramType = t; node.paramDefault.type = t; });
-                if (n->paramType == Arcane::MatParamType::Color)
+                // A Texture-typed Param loads (codegen diagnoses it) but has no
+                // lanes: ComponentCount(Texture) == 0 would reach VecRow's n >= 2
+                // assert. Read-only, so nothing writes paramDefault.f on it; the
+                // Type combo (index 0 'float') is the repair path.
+                if (n->paramType == Arcane::MatParamType::Texture)
+                    grid.ReadOnlyRow("Default", "n/a (texture is invalid on a Param)");
+                else if (n->paramType == Arcane::MatParamType::Color)
                     LiveNodeColor(grid, "Default", "Param Default", "Param Default", pass, id, /*hdr*/ false,
                                   [](Arcane::GraphNode& node) { return node.paramDefault.f; });
                 else
