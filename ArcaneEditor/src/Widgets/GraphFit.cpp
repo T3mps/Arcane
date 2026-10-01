@@ -62,5 +62,26 @@ namespace Arcane::Editor
                  ImVec2(centre.x + cw * 0.5f, centre.y + ch * 0.5f) };
     }
 
-    bool GraphFitToContent(float, float) { return false; }   // T2-C4
+    bool GraphFitToContent(float maxZoom, float durationSeconds)
+    {
+        namespace ed = ax::NodeEditor;
+        auto* editor = reinterpret_cast<ed::Detail::EditorContext*>(ed::GetCurrentEditor());
+        if (!editor)
+            return false;
+        // Live nodes only (GetBounds skips !m_IsLive): call AFTER this frame's
+        // BeginNode/EndNode pass, or the frame's nodes have not gone live yet.
+        const ImRect bounds = editor->GetContentBounds();
+        if (ImRect_IsEmpty(bounds))
+            return false;
+        const ImVec2 view = ed::GetScreenSize();
+        if (view.x <= 0.0f || view.y <= 0.0f)
+            return false;
+        const GraphRect fitted = ComputeGraphFitRect({ bounds.Min, bounds.Max }, view, maxZoom);
+        // zoomIn = WithMargin: c_NavigationZoomMargin (imgui_node_editor.cpp:144, :3543) only
+        // LOWERS the zoom, so the cap holds; at the floor the fit may land a little under 0.1.
+        // Not snapped to kZoomLevels: SetViewRect takes CalcCenterView's scale as-is
+        // (:3635-3640); the next wheel step snaps through MatchZoom.
+        editor->NavigateTo(ImRect(fitted.min, fitted.max), /*zoomIn*/ true, std::max(0.0f, durationSeconds));
+        return true;
+    }
 }

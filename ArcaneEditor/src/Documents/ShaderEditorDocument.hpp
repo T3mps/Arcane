@@ -351,6 +351,11 @@ namespace Arcane::Editor
         void RequestJumpToLine(int line) noexcept { m_jumpToLine = line; }
         void RequestFocusGraphNode(std::uint32_t nodeId) noexcept { m_focusNode = nodeId; }
 
+        // TEST SEAM (GraphFitTest): the graph canvas's node-editor context, so a
+        // headless test can read the view the fit-on-open landed. Null until the
+        // first DrawGraphPanel. Production never calls it.
+        [[nodiscard]] ax::NodeEditor::EditorContext* GraphCanvasContext() const noexcept { return m_graphCtx; }
+
         // Publish this document's CURRENT diagnostic set under "material:<guid>".
         // No anti-spam gate is needed: publication groups replace, so republishing
         // an identical set is idempotent by construction. Public so the
@@ -721,6 +726,8 @@ namespace Arcane::Editor
         // index + 1, the Output node is kPassOutputNodeId).
         ax::NodeEditor::EditorContext* m_passCanvasCtx = nullptr;
         bool  m_passCanvasSeeded = false;   // re-seed positions after list edits
+        bool  m_passFitPending = false;     // s4.5: frame-to-fit on the first held-size draw after a seed
+        ImVec2 m_passCanvasLastSize{};      // last draw's canvas size: the fit waits for it to hold
         std::uint32_t m_passCtxNode = 0;    // node the context menu opened on
         float m_passPopupX = 0.0f, m_passPopupY = 0.0f;
         int m_activePass = 0;   // which snippet the text editor shows (0 = base)
@@ -894,6 +901,8 @@ namespace Arcane::Editor
         // compiler diag lines back into snippet space (jump + badges).
         int  m_snippetLineOffset = 0;
         bool m_graphPositionsApplied = false;   // canvas seeded from stored node positions
+        bool m_fitPending = false;              // s4.5: frame-to-fit on the first held-size draw after a seed
+        ImVec2 m_graphCanvasLastSize{};         // last draw's canvas size: fit + focus wait for it to hold
         bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
         // Select + navigate the canvas to one node. Re-armed by
         // RequestFocusGraphNode (Task 5, the Problems panel) -- the errors

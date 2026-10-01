@@ -8,6 +8,7 @@
 #include "Widgets/EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
 #include "Widgets/GraphCanvasBackdrop.hpp"   // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"   // node chrome metrics + grid palette + accents -- shared with the Graph lens
+#include "Widgets/GraphFit.hpp"         // GraphFitToContent -- capped fit-on-open (s4.5)
 #include "Widgets/GraphPinDot.hpp"       // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel -- ditto
 #include "Widgets/GraphZoomLevels.hpp"   // kZoomLevels / ApplyZoomLevels -- shared with the Graph lens
@@ -2699,6 +2700,7 @@ namespace Arcane::Editor
             ed::SetNodePosition(kPassSceneNodeId,
                                 ImVec2(m_data.chainSceneX, m_data.chainSceneY));
             m_passCanvasSeeded = true;
+            m_passFitPending = true;
         }
 
         // ---- nodes
@@ -3136,6 +3138,18 @@ namespace Arcane::Editor
                 ed::NavigateToSelection(true);
             else
                 ed::NavigateToContent();
+        }
+
+        // The pass canvas's twin of the graph canvas's fit-on-open (s4.5),
+        // under the same held-size rule (see the graph canvas).
+        const ImVec2 passCanvasSize = ed::GetScreenSize();
+        const bool passCanvasHeld = passCanvasSize.x == m_passCanvasLastSize.x &&
+                                    passCanvasSize.y == m_passCanvasLastSize.y;
+        m_passCanvasLastSize = passCanvasSize;
+        if (m_passFitPending && !seededThisFrame && passCanvasHeld)
+        {
+            (void)GraphFitToContent(GraphFitMaxZoom(), 0.0f);
+            m_passFitPending = false;
         }
 
         // ---- double-click ENTERS a pass (UE's collapsed-graph gesture).
@@ -3897,6 +3911,7 @@ namespace Arcane::Editor
                                                   (std::max)(60.0f, n.value[1])));
             }
             m_graphPositionsApplied = true;
+            m_fitPending = true;
         }
 
         // ---- Rendering LOD: ONE read of the zoom, ONE tier, per frame ----
@@ -3973,11 +3988,24 @@ namespace Arcane::Editor
         // RequestFocusGraphNode (Task 5, the Problems panel's GraphNode
         // locator) -- the errors panel's rows were its only writer before
         // that panel was removed; console lines are not clickable.
-        if (m_focusNode != 0)
+        //
+        // Held-size rule (s4.5 fit + this focus): the node editor's Begin
+        // answers a canvas RESIZE by re-centring the view it showed LAST draw
+        // (imgui_node_editor.cpp:1221-1254), which discards any navigation
+        // issued since. A freshly opened document's canvas changes width over
+        // its first draws (a scrollbar comes and goes while the layout settles),
+        // so a navigation issued then is lost. Both wait for a draw whose canvas
+        // size matches the previous one.
+        const ImVec2 graphCanvasSize = ed::GetScreenSize();
+        const bool graphCanvasHeld = graphCanvasSize.x == m_graphCanvasLastSize.x &&
+                                     graphCanvasSize.y == m_graphCanvasLastSize.y;
+        m_graphCanvasLastSize = graphCanvasSize;
+        if (m_focusNode != 0 && graphCanvasHeld)
         {
             ed::SelectNode(ed::NodeId(m_focusNode));
             ed::NavigateToSelection(true);
             m_focusNode = 0;
+            m_fitPending = false;   // a Problems focus outranks the open fit
         }
 
         // F = frame (the UE/SG muscle memory): zoom to the selection, or to
@@ -3989,6 +4017,18 @@ namespace Arcane::Editor
                 ed::NavigateToSelection(true);
             else
                 ed::NavigateToContent();
+        }
+
+        // Frame-to-fit on open (s4.5): armed by the seed above, consumed on the
+        // first later draw whose canvas size held (see the focus block above),
+        // AFTER the node loop -- every node is live and carries the size it
+        // measured last frame (NodeCulled exempts unmeasured nodes). Capped by
+        // editor.graph.fitMaxZoom; the selection is never touched. F above stays
+        // the uncapped frame-selection / frame-all.
+        if (m_fitPending && !seededThisFrame && graphCanvasHeld)
+        {
+            (void)GraphFitToContent(GraphFitMaxZoom(), 0.0f);
+            m_fitPending = false;
         }
 
         // Node context menu -> alignment over the current selection.
