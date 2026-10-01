@@ -356,6 +356,25 @@ namespace Arcane::Editor
     // entry its own hover/click hit target; see TimelineFeedResult.
     TimelineFeedResult TimelineFeed(const char* id, const TimelineEntry* entries, int count);
 
+    // ---- popups (node-page phase T2, spec 2026-09-30 s4.4) ------------------
+    // A bare OpenPopup + BeginPopup opens at the MOUSE and can cover the very
+    // button that opened it. BeginPopupBelow places the popup the way a combo
+    // places its list: below the anchor and left-aligned with it, flipped
+    // above when there is no room below, clamped to the viewport.
+    //
+    // Capture the anchor RIGHT AFTER the item that opens the popup, EVERY
+    // frame (the popup re-places itself every frame, as a combo does):
+    //     if (ImGui::Button("Add")) ImGui::OpenPopup("##add");
+    //     const PopupAnchor a = LastItemAnchor();
+    //     if (BeginPopupBelow("##add", a)) { ...; ImGui::EndPopup(); }
+    // Same id scope as the OpenPopup, same EndPopup contract as BeginPopup.
+    // Not for context menus (they stay at the mouse) and not for the viewport
+    // gear (its right-aligned pivot is deliberate).
+    struct PopupAnchor { ImVec2 min, max; };
+    [[nodiscard]] PopupAnchor LastItemAnchor();
+    [[nodiscard]] bool BeginPopupBelow(const char* id, const PopupAnchor& anchor,
+                                       float minWidth = 0.0f, ImGuiWindowFlags flags = 0);
+
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME
     // transfer nri::Format::RGBA8_SRGB applies in hardware when a texture is

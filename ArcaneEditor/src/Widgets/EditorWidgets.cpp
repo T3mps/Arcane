@@ -1197,6 +1197,52 @@ namespace Arcane::Editor
         return result;
     }
 
+    PopupAnchor LastItemAnchor()
+    {
+        return { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+    }
+
+    // BeginComboPopup's placement (imgui_widgets.cpp:2059-2069), applied to an
+    // ordinary BeginPopup window. The popup's window name is formatted exactly
+    // as BeginPopupEx does (imgui.cpp:13155), so FindWindowByName finds the
+    // window BeginPopup is about to Begin. The size constraint goes in BEFORE
+    // the placement, as in BeginComboPopup (:2051): CalcWindowNextAutoFitSize
+    // applies a pending constraint (CalcWindowSizeAfterConstraint, imgui.cpp:7036),
+    // so the flip test measures the width the popup will really have.
+    bool BeginPopupBelow(const char* id, const PopupAnchor& anchor, float minWidth, ImGuiWindowFlags flags)
+    {
+        const ImGuiID popupId = ImGui::GetID(id);
+        if (!ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None))
+            return ImGui::BeginPopup(id, flags);   // false, and it clears NextWindowData like a bare BeginPopup
+
+        if (minWidth > 0.0f)
+            ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+
+        const ImRect anchorRect(anchor.min, anchor.max);
+        char name[20];
+        ImFormatString(name, IM_COUNTOF(name), "##Popup_%08x", popupId);
+        ImGuiWindow* popup = ImGui::FindWindowByName(name);
+        if (popup && popup->WasActive)
+        {
+            // Always override the last direction, as the combo does, so no past
+            // frame's choice can bias this one.
+            popup->AutoPosLastDirection = ImGuiDir_Down;
+            const ImVec2 expected = ImGui::CalcWindowNextAutoFitSize(popup);
+            const ImRect outer = ImGui::GetPopupAllowedExtentRect(popup);
+            const ImVec2 pos = ImGui::FindBestWindowPosForPopupEx(anchorRect.GetBL(), expected,
+                                                                  &popup->AutoPosLastDirection, outer, anchorRect,
+                                                                  ImGuiPopupPositionPolicy_ComboBox);
+            ImGui::SetNextWindowPos(pos);
+        }
+        else
+        {
+            // First frame: the size is not measured yet (auto-fit hides this
+            // frame), so start at the anchor's bottom-left.
+            ImGui::SetNextWindowPos(anchorRect.GetBL());
+        }
+        return ImGui::BeginPopup(id, flags);
+    }
+
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
     // form), which cites THIS file -- so an edit here changes rendered output.
     // NOTHING PINS THE TWO AGAINST EACH OTHER: no test evaluates both and
