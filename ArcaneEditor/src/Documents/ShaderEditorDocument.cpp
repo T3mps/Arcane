@@ -2165,18 +2165,9 @@ namespace Arcane::Editor
         // page opens the confirm when the document window did not draw first.
         DrawSaveWithErrorsConfirm();
 
-        // Which material this is: the Inspector is a shared surface, so the
-        // page names its subject the way the scene page names the entity.
-        // m_title, NOT m_windowLabel -- the latter carries the "###matdoc_"
-        // id suffix that only ImGui::Begin strips, so a Text* call would
-        // print it verbatim.
-        ImGui::TextUnformatted(m_title.c_str());
-        if (IsInstance())
-        {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(Instance)");
-        }
-        ImGui::Separator();
+        // No title line (spec 2026-09-30 s4.3): the Inspector header's crumb
+        // names this material ("<title> (Instance)" for an instance); the
+        // body starts at the preview / its first section.
 
         // The one surviving draggable split (PaneSplitter) over the SHARED
         // layout preference -- every open shader document reads the same

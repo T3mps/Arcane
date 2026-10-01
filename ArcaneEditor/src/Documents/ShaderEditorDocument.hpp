@@ -427,8 +427,11 @@ namespace Arcane::Editor
             explicit MaterialInspectorPage(ShaderEditorDocument& doc) : m_doc(doc) {}
             std::vector<InspectorCrumb> Breadcrumb() const override
             {
-                // One crumb; `select` is a no-op (the page IS the only level).
-                return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "material" } } };
+                // One crumb; `select` is a no-op (the page IS the only level). An
+                // instance reads "<title> (Instance)", like the window label --
+                // the page body no longer carries its own title (spec s4.3).
+                return { InspectorCrumb{ m_doc.IsInstance() ? m_doc.m_title + " (Instance)" : m_doc.m_title,
+                                         [] {}, std::string{ "material" } } };
             }
             void Draw(PropertyGrid&) override { m_doc.DrawMaterialPageBody(); }
 

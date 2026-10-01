@@ -120,6 +120,7 @@ TEST_CASE("ShaderEditorDocument is a material Inspector source selected at open"
     CHECK(doc.SelectionEpoch() == 1);                  // selected at open
     REQUIRE(doc.Page() != nullptr);
     CHECK(doc.Page()->Breadcrumb().size() == 1);
+    CHECK(doc.Page()->Breadcrumb()[0].label == "Page");          // the header names the subject (s4.3)
     CHECK(doc.Page()->Breadcrumb()[0].key == std::optional<std::string>{ "material" });
     CHECK(doc.RestoreSelection("material"));
     CHECK(doc.SelectionEpoch() == 1);                  // a restore is not a click
@@ -424,6 +425,8 @@ TEST_CASE("ShaderEditorDocument resolves, and refuses, instance parent chains", 
         REQUIRE(data.has_value());
         ShaderEditorDocument doc(services, content / "inst.arcmat", *data);
         CHECK(doc.IsInstance());
+        REQUIRE(doc.Page() != nullptr);
+        CHECK(doc.Page()->Breadcrumb()[0].label == "Inst (Instance)");   // matches the window label (s4.3)
         CHECK(doc.ParseErrors().empty());
     }
 
@@ -1473,4 +1476,48 @@ TEST_CASE("ShaderEditorDocument: the first non-null chromeGraph makes Tick build
     CHECK(doc.PreviewVehicleAttempts() == 1);
     CHECK(doc.ComputeStatus().preview == PreviewAvailability::Ready);
     CHECK(doc.GraphPreviewTextureId() != 0);
+}
+
+TEST_CASE("ShaderEditorDocument: the material page body never repeats the title the header crumb carries", "[editor][material][inspector]")
+{
+    const fs::path dir = TempDir("page_no_title");
+    const fs::path file = dir / "probe.arcmat";
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "TitleProbe";
+    data.kind = "mesh";                                   // no preview box: the body is the note + params
+    data.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f));
+    REQUIRE(Arcane::SaveMaterialAsset(file, data));
+    const auto loaded = Arcane::LoadMaterialAsset(file);
+    REQUIRE(loaded.has_value());
+    ShaderEditorDocument doc(DocServices{}, file, *loaded);
+
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    Arcane::Editor::PropertyGridState grid;
+    std::string logged;
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 600.0f));
+        ImGui::Begin("Inspector");
+        if (frame == 1) ImGui::LogToBuffer();
+        Arcane::Editor::PropertyGrid pg(grid);
+        doc.Page()->Draw(pg);
+        if (frame == 1) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
+        ImGui::End();
+        ImGui::Render();
+    }
+    INFO(logged);
+    CHECK(logged.find("not compiled here") != std::string::npos);   // the control: the body drew
+    CHECK(logged.find("TitleProbe") == std::string::npos);          // no title line
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
 }

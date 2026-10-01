@@ -2427,12 +2427,9 @@ namespace Arcane::Editor
         }
 
         const Astra::Entity primary = sel.Primary();
-        const std::string primaryName = Arcane::Edit::DisplayName(registry, primary);
-        if (sel.Count() > 1)
-            ImGui::Text("%s (+%zu)", primaryName.c_str(), sel.Count() - 1);
-        else
-            ImGui::TextUnformatted(primaryName.c_str());
-        ImGui::Separator();
+        // No name line (spec 2026-09-30 s4.3): the header's leaf crumb already
+        // names the entity and its " (+N)" (SceneInspectorSource::Breadcrumb);
+        // the body starts at its first control.
 
         // Search, UE's Details-panel shape (SDetailsViewBase.cpp:1016 --
         // OnFilterTextChanged -> FilterView). Filters components AND fields live.
