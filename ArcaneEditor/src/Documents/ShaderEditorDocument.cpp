@@ -3867,6 +3867,22 @@ namespace Arcane::Editor
 
         HandleGraphEdits();
 
+        // Node page selection mirror, WRITE half (s5.1.1): the only place the
+        // document writes `ed` selection besides the Problems locator below.
+        // Here, because this frame's nodes now exist (SelectNode resolves
+        // through the context's node list) and ed::End has not yet run this
+        // frame's selection actions. Never NavigateToSelection: history,
+        // crumb and restore landings select without framing (s5.1.3).
+        if (m_nodeSelRequest)
+        {
+            if (m_nodeSelRequest->op == NodeSelRequest::Select)
+                ed::SelectNode(ed::NodeId(m_nodeSelRequest->id));
+            else
+                ed::ClearSelection();
+            m_nodeSelApplying = true;
+            m_nodeSelRequest.reset();
+        }
+
         // Requested focus: select + frame the offending node. Written by
         // RequestFocusGraphNode (Task 5, the Problems panel's GraphNode
         // locator) -- the errors panel's rows were its only writer before
@@ -4328,6 +4344,26 @@ namespace Arcane::Editor
         }
 
         ed::End();
+
+        // READ half, AFTER ed::End (drafting pick, 9.28 #20): the library runs
+        // this frame's click/marquee selection actions inside End
+        // (imgui_node_editor.cpp:1353) against the snapshot Begin took
+        // (:1266-1269), and HasSelectionChanged compares the two (:1850-1853)
+        // -- a read before End would see last frame's selection and never a
+        // click. GetSelectedNodes caps at the buffer
+        // (imgui_node_editor_api.cpp:22-36), so 2 means "two or more".
+        {
+            ed::NodeId selected[2];
+            const int count = ed::GetSelectedNodes(selected, 2);
+            const CanvasSelectionRead read = ReadCanvasSelection(
+                count, count > 0 ? static_cast<std::uint32_t>(selected[0].Get()) : 0u,
+                static_cast<std::size_t>(std::max(0, m_activePass)),
+                ed::HasSelectionChanged(), m_nodeSelApplying);
+            m_nodeSel = read.sel;
+            if (read.event)
+                ++m_pageSel.epoch;   // click, Ctrl-click, marquee, background clear, paste, the locator
+            m_nodeSelApplying = false;
+        }
         ed::SetCurrentEditor(nullptr);
     }
 
