@@ -3531,6 +3531,114 @@ namespace Arcane::Editor
                 m_anchor, label, pass, std::move(before), GraphOptAt(pass)));
     }
 
+    // -------------------------------- node-edit plumbing (s5.1.4/5.1.5)
+    std::function<void()> ShaderEditorDocument::GraphEditBuilder(const char* label, std::size_t pass)
+    {
+        // Whole-graph before AND the pass it belongs to, both pinned at
+        // activation. The command builds at CLOSE from this plus whatever the
+        // gesture did -- which is why an abandoned drag lands on the stack
+        // instead of vanishing. Pinning the PASS is what keeps that safe: a
+        // close can land after the active pass moved (a ctrl+click text entry
+        // parks a gesture without deactivating it, the pass canvas is submitted
+        // before the graph panel, and the abandoned close runs later still at
+        // the ScopeGuard), and a node page may be pinned to a pass other than
+        // the active one. A command pairing pass B's index with pass A's
+        // `before` would have Undo overwrite B's graph with A's.
+        //
+        // NO-OP GUARD: the close runs on EVERY close path, including the
+        // abandonment ones (stale-close, collapsed window, document teardown)
+        // where the gesture never edited anything. Pushing there would leave a
+        // junk step whose before == after AND clear the redo stack
+        // (CommandStack.cpp:70) -- a generic Push is its own transaction, so it
+        // never meets Commit's empty-transaction drop at :61-62. So compare
+        // first; an EDITED gesture still differs and still pushes one step.
+        return [this, label = std::string(label), pass, before = GraphOptAt(pass)]() mutable
+        {
+            if (GraphOptEqual(before, GraphOptAt(pass)))
+                return;   // nothing changed -- no step, redo intact
+            PushGraphUndo(label.c_str(), std::move(before), pass);
+        };
+    }
+
+    void ShaderEditorDocument::NoteGraphValueEdited()
+    {
+        m_dirty = true;
+        if (m_live)
+            RegenerateFromGraph();
+    }
+
+    bool ShaderEditorDocument::RunNodeEdit(const char* label, std::size_t pass, std::uint32_t id,
+                                           Arcane::FunctionRef<void(Arcane::GraphNode&, Arcane::MaterialGraph&)> mutate,
+                                           bool recompile)
+    {
+        Arcane::GraphNode* n = FindGraphNode(pass, id);   // range-checks the pass FIRST
+        if (!n)
+            return false;
+        std::optional<Arcane::MaterialGraph> before = GraphOptAt(pass);
+        mutate(*n, *GraphOptAt(pass));
+        if (GraphOptEqual(before, GraphOptAt(pass)))
+            return false;
+        if (recompile)
+            NoteGraphValueEdited();
+        else
+            m_dirty = true;   // annotation only (Comment text): no recompile
+        PushGraphUndo(label, std::move(before), pass);
+        return true;
+    }
+
+    void ShaderEditorDocument::DeferNodeEdit(std::function<void()> fn)
+    {
+        if (m_nodePageDrawing)
+            m_nodePageEdits.push_back(std::move(fn));
+        else
+            fn();
+    }
+
+    bool ShaderEditorDocument::AddCustomPin(std::size_t pass, std::uint32_t id)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || n->type != Arcane::GraphNodeType::Custom)
+            return false;
+        return RunNodeEdit("Add Pin", pass, id, [](Arcane::GraphNode& node, Arcane::MaterialGraph&)
+        {
+            Arcane::GraphCustomPin p;
+            for (std::uint32_t k = 1;; ++k)
+            {
+                p.name = "p" + std::to_string(k);
+                bool taken = false;
+                for (const Arcane::GraphCustomPin& other : node.customPins)
+                    taken = taken || other.name == p.name;
+                if (!taken)
+                    break;
+            }
+            node.customPins.push_back(std::move(p));
+        });
+    }
+
+    bool ShaderEditorDocument::RemoveCustomPin(std::size_t pass, std::uint32_t id, std::uint32_t pin)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || n->type != Arcane::GraphNodeType::Custom || pin >= n->customPins.size())
+            return false;
+        return RunNodeEdit("Remove Pin", pass, id, [id, pin](Arcane::GraphNode& node, Arcane::MaterialGraph& g)
+        {
+            // Drop the pin's links, re-index links to later pins (toPin is a
+            // bare index into this node's pin list).
+            std::erase_if(g.links, [&](const Arcane::GraphLink& l) { return l.toNode == id && l.toPin == pin; });
+            for (Arcane::GraphLink& l : g.links)
+                if (l.toNode == id && l.toPin > pin)
+                    --l.toPin;
+            node.customPins.erase(node.customPins.begin() + pin);
+            // Literals index pins exactly like links: same drop + re-index, or a
+            // removed pin's value resurfaces on whatever pin slid into its index
+            // (silently, since the reader only range-checks).
+            std::erase_if(node.pinLiterals, [&](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+            for (Arcane::GraphPinLiteral& pl : node.pinLiterals)
+                if (pl.pin > pin)
+                    --pl.pin;
+        });
+    }
+
     // --------------------------------------------- external file changes
     void ShaderEditorDocument::ReloadFromDisk()
     {
@@ -4684,36 +4792,10 @@ namespace Arcane::Editor
         // applied live and recorded nowhere.
         auto buildGraphEdit = [&](const char* label) -> std::function<void()>
         {
-            // Whole-graph before AND the pass it belongs to, both
-            // pinned at activation. The command builds at CLOSE from
-            // this plus whatever the drag did -- which is why an
-            // abandoned drag now lands on the stack instead of
-            // vanishing. Pinning the PASS is what keeps that safe: a
-            // close can land after the active pass moved (a ctrl+click
-            // text entry parks a gesture without deactivating it, the
-            // pass canvas is submitted before this panel, and the
-            // abandoned close runs later still at the ScopeGuard), and
-            // a command pairing pass B's index with pass A's `before`
-            // would have Undo overwrite B's graph with A's.
-            //
-            // NO-OP GUARD: the close runs on EVERY close path, including
-            // the abandonment ones (stale-close, collapsed window,
-            // document teardown) where the gesture never edited
-            // anything. Pushing there would leave a junk step whose
-            // before == after AND clear the redo stack
-            // (CommandStack.cpp:70) -- a generic Push is its own
-            // transaction, so it never meets Commit's empty-transaction
-            // drop at :61-62. So compare first; an EDITED gesture still
-            // differs and still pushes exactly one step.
-            return std::function<void()>(
-                [this, label = std::string(label),
-                 pass = static_cast<std::size_t>((std::max)(0, m_activePass)),
-                 before = ActiveGraphOpt()]() mutable
-                {
-                    if (GraphOptEqual(before, GraphOptAt(pass)))
-                        return;   // nothing changed -- no step, redo intact
-                    PushGraphUndo(label.c_str(), std::move(before), pass);
-                });
+            // GraphEditBuilder pins the pass AND `before` at activation and
+            // skips the push when the close finds nothing changed (the
+            // abandonment paths: stale-close, collapsed window, teardown).
+            return GraphEditBuilder(label, static_cast<std::size_t>((std::max)(0, m_activePass)));
         };
         auto gestureBegin = [&](const char* label)
         {
@@ -4735,12 +4817,7 @@ namespace Arcane::Editor
         {
             EditGesture::EndOnPopupClose(UndoStack(), m_gesture, popupId);
         };
-        auto valueEdited = [&]
-        {
-            m_dirty = true;
-            if (m_live)
-                RegenerateFromGraph();
-        };
+        auto valueEdited = [&] { NoteGraphValueEdited(); };
 
         // An inline literal is hidden while a wire feeds the pin. One edge per
         // input is a canvas invariant (HandleGraphEdits replaces silently), so
@@ -4872,28 +4949,9 @@ namespace Arcane::Editor
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x"))
                 {
-                    // Remove the pin: drop its links, re-index links to later
-                    // pins (toPin is a bare index into this node's pin list).
-                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                    Arcane::MaterialGraph& gg = *ActiveGraphOpt();
-                    std::erase_if(gg.links, [&](const Arcane::GraphLink& l)
-                                  { return l.toNode == n.id && l.toPin == pin; });
-                    for (Arcane::GraphLink& l : gg.links)
-                        if (l.toNode == n.id && l.toPin > pin)
-                            --l.toPin;
-                    n.customPins.erase(n.customPins.begin() + pin);
-                    // Pin literals index pins exactly like links do, so they
-                    // need the same re-index -- otherwise a removed pin's
-                    // value would resurface on whatever pin slid into its
-                    // index (silently, since the reader only range-checks).
-                    std::erase_if(n.pinLiterals,
-                                  [&](const Arcane::GraphPinLiteral& pl)
-                                  { return pl.pin == pin; });
-                    for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
-                        if (pl.pin > pin)
-                            --pl.pin;
-                    valueEdited();
-                    PushGraphUndo("Remove Pin", std::move(before));
+                    // One step; drops the pin's links + literal and re-indexes
+                    // the later pins' (the node page calls the same member).
+                    (void)RemoveCustomPin(static_cast<std::size_t>((std::max)(0, m_activePass)), n.id, pin);
                     ImGui::PopID();
                     break;   // pin list changed under this loop -- redraw next frame
                 }
@@ -5211,22 +5269,7 @@ namespace Arcane::Editor
                 // Add-pin + output width; the pin rows above carry the per-pin
                 // width/remove controls.
                 if (ImGui::SmallButton("+ pin"))
-                {
-                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                    Arcane::GraphCustomPin p;
-                    for (std::uint32_t k = 1;; ++k)
-                    {
-                        p.name = "p" + std::to_string(k);
-                        bool taken = false;
-                        for (const Arcane::GraphCustomPin& other : n.customPins)
-                            taken = taken || other.name == p.name;
-                        if (!taken)
-                            break;
-                    }
-                    n.customPins.push_back(std::move(p));
-                    valueEdited();
-                    PushGraphUndo("Add Pin", std::move(before));
-                }
+                    (void)AddCustomPin(static_cast<std::size_t>((std::max)(0, m_activePass)), n.id);
                 ImGui::SameLine();
                 const char* ow = n.customOutWidth == 1 ? "out: f1"
                                 : n.customOutWidth == 2 ? "out: f2" : "out: f4";

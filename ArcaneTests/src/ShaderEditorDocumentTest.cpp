@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -2126,4 +2127,67 @@ TEST_CASE("ShaderEditorDocument node page: Edit HLSL opens from the page with no
     CHECK(std::string(stack.UndoLabel()) == "Edit HLSL Body");
     stack.Undo();
     CHECK(doc.CapturePassListState().passes[0].graph->FindNode(2)->customBody == "return p1;");
+}
+
+// ---- Node page plumbing (spec 2026-09-30 s5.1.4): the pin add/remove both
+// the canvas and the node page call. One step each; links AND literals
+// re-index (they address pins by bare index). ----
+TEST_CASE("ShaderEditorDocument: RemoveCustomPin drops the pin's link and literal and re-indexes later pins; AddCustomPin takes the next free p<k>",
+          "[editor][material][nodepage]")
+{
+    Arcane::MaterialGraph g;
+    Arcane::GraphNode out;  out.id = 1;  out.type = Arcane::GraphNodeType::Output;
+    Arcane::GraphNode c;    c.id = 2;    c.type = Arcane::GraphNodeType::Custom;
+    c.customPins = { { "p1", 1 }, { "p2", 1 }, { "p3", 1 } };
+    c.customBody = "return float4(p1, p2, p3, 1.0);";
+    Arcane::GraphPinLiteral l1; l1.pin = 1; l1.v[0] = 0.5f;
+    Arcane::GraphPinLiteral l2; l2.pin = 2; l2.v[0] = 0.7f;
+    c.pinLiterals = { l1, l2 };
+    Arcane::GraphNode f3;   f3.id = 3;   f3.type = Arcane::GraphNodeType::ConstFloat;
+    Arcane::GraphNode f4;   f4.id = 4;   f4.type = Arcane::GraphNodeType::ConstFloat;
+    g.nodes = { out, c, f3, f4 };
+    g.links = { { 3, 0, 2, 0 }, { 4, 0, 2, 2 }, { 2, 0, 1, 0 } };
+    g.nextId = 5;
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate();
+    data.name = "Pins";
+    data.kind = "sprite";
+    data.graph = g;
+
+    Astra::Registry registry;
+    Arcane::CommandStack stack{ [&registry]() -> Astra::Registry& { return registry; } };
+    DocServices services;
+    services.undo = [&stack]() -> Arcane::CommandStack* { return &stack; };
+    ShaderEditorDocument doc(services, fs::path("pins.arcmat"), data);
+    const std::string before = Arcane::GraphToJson(*doc.PassGraph(0)).dump();
+
+    REQUIRE(doc.RemoveCustomPin(0, 2, 0));
+    const Arcane::GraphNode* n = doc.PassGraph(0)->FindNode(2);
+    REQUIRE(n->customPins.size() == 2);
+    CHECK(n->customPins[0].name == "p2");
+    CHECK(n->FindPinLiteral(0) != nullptr);  CHECK(n->FindPinLiteral(0)->v[0] == 0.5f);   // was pin 1
+    CHECK(n->FindPinLiteral(1) != nullptr);  CHECK(n->FindPinLiteral(1)->v[0] == 0.7f);   // was pin 2
+    CHECK(n->FindPinLiteral(2) == nullptr);
+    bool fromF3 = false, f4ToPin1 = false;
+    for (const Arcane::GraphLink& l : doc.PassGraph(0)->links)
+    {
+        fromF3 = fromF3 || l.fromNode == 3;
+        f4ToPin1 = f4ToPin1 || (l.fromNode == 4 && l.toNode == 2 && l.toPin == 1);
+    }
+    CHECK_FALSE(fromF3);                     // the removed pin's wire is gone
+    CHECK(f4ToPin1);                         // the later wire slid down one index
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Remove Pin");
+
+    REQUIRE(doc.AddCustomPin(0, 2));
+    CHECK(doc.PassGraph(0)->FindNode(2)->customPins.back().name == "p1");   // the first free p<k>
+    CHECK(std::string(stack.UndoLabel()) == "Add Pin");
+
+    stack.Undo();
+    stack.Undo();
+    CHECK_FALSE(stack.CanUndo());            // one step each
+    CHECK(Arcane::GraphToJson(*doc.PassGraph(0)).dump() == before);
+    CHECK_FALSE(doc.RemoveCustomPin(0, 2, 9));   // out of range: no edit, no step
+    CHECK_FALSE(doc.RemoveCustomPin(4, 2, 0));   // no such pass: never the base fallback
+    CHECK_FALSE(stack.CanUndo());
 }

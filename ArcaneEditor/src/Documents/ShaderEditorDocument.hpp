@@ -246,6 +246,24 @@ namespace Arcane::Editor
         // ApplyParamEdit): swap in a whole graph state for ONE pass (0 = base)
         // and regenerate/recompile.
         void ApplyGraphState(std::size_t pass, std::optional<Arcane::MaterialGraph> state);
+        // The graph pass `pass` edits (0 = base), or null when `pass` is out of
+        // range or that pass is text-owned. Range-checked BEFORE indexing --
+        // never GraphOptAt's silent base fallback. Read-only; tests and the
+        // node page read graph state through it.
+        [[nodiscard]] const Arcane::MaterialGraph* PassGraph(std::size_t pass) const noexcept
+        {
+            if (pass == 0) return m_data.graph ? &*m_data.graph : nullptr;
+            if (pass > m_data.passes.size()) return nullptr;
+            const std::optional<Arcane::MaterialGraph>& g = m_data.passes[pass - 1].graph;
+            return g ? &*g : nullptr;
+        }
+        // Custom-node pin edits, ONE undo step each ("Add Pin" / "Remove Pin"),
+        // called by BOTH the canvas and the node page (s5.1.4). Remove drops the
+        // pin's links and literal and re-indexes later pins' links and literals
+        // (both address pins by bare index). Add takes the first free "p<k>".
+        // False when (pass, id[, pin]) does not resolve to a Custom node pin.
+        bool AddCustomPin(std::size_t pass, std::uint32_t id);
+        bool RemoveCustomPin(std::size_t pass, std::uint32_t id, std::uint32_t pin);
 
         // Undo plumbing for pass-canvas STRUCTURAL edits (add/remove/rewire/
         // reorder/rename): whole pass-list before/after, one step per gesture.
@@ -686,6 +704,26 @@ namespace Arcane::Editor
                            std::size_t pass);
         // One undo step per completed pass-canvas gesture (after = current).
         void PushPassUndo(const char* label, PassListState before);
+        // ---- Node-edit plumbing shared by the canvas and the node page (s5.1.4/5.1.5) ----
+        // Nodes resolve through FindGraphNode (one (pass, id) lookup, one set
+        // of guards); never cache the result across frames.
+        // The gesture close step, lifted from DrawGraphNode's buildGraphEdit:
+        // `before` and `pass` pinned NOW; at close, one PushGraphUndo(label,
+        // before, pass) unless the graph compares equal (no junk step).
+        [[nodiscard]] std::function<void()> GraphEditBuilder(const char* label, std::size_t pass);
+        // m_dirty always; RegenerateFromGraph only when m_live (was `valueEdited`).
+        void NoteGraphValueEdited();
+        // One DISCRETE edit as one step: re-resolve, capture before, mutate, then
+        // NoteGraphValueEdited (or m_dirty only when !recompile -- Comment text)
+        // and PushGraphUndo(label, before, pass). Nothing when the node is gone or
+        // the graph compares equal.
+        bool RunNodeEdit(const char* label, std::size_t pass, std::uint32_t id,
+                         Arcane::FunctionRef<void(Arcane::GraphNode&, Arcane::MaterialGraph&)> mutate,
+                         bool recompile = true);
+        // The InputActionsInspectorPage::Defer rule: queued while the node page
+        // draws (run in order after its last section, so no edit invalidates the
+        // row loop), run at once otherwise (a TextRow draft flushed by CommitOrphans).
+        void DeferNodeEdit(std::function<void()> fn);
         bool NodeBadged(std::uint32_t nodeId) const;
         void RebuildDiagBadges();            // compile diags -> line map -> node ids
         void DrawPreviewPanel(ImVec2 size);   // the bordered preview child: the image fitted, else PreviewBoxText
@@ -921,6 +959,14 @@ namespace Arcane::Editor
         // Color param rows are PropertyGrid::ColorRow since s5.3, which keeps
         // its own draft.)
         float m_colorPopupOriginal[4] = {};
+
+        // The node page's queued discrete edits (DeferNodeEdit), whether its body
+        // is mid-draw, and whether the pin literal under the live gesture existed
+        // at activation (s5.1.5: a cancelled or back-to-neutral drag leaves no NEW
+        // literal). One gesture at a time per document, so one flag suffices.
+        std::vector<std::function<void()>> m_nodePageEdits;
+        bool m_nodePageDrawing = false;
+        bool m_nodePageLiteralExisted = false;
 
         // ---- Graph mode (Slice 9; per-pass graphs) ----
         ax::NodeEditor::EditorContext* m_graphCtx = nullptr;   // lazy; dtor destroys
