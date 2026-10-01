@@ -312,6 +312,7 @@ TEST_CASE("ShaderEditorDocument: a mesh metadata edit is one undo step -- undo r
     REQUIRE(stack.CanUndo());
     CHECK_FALSE(stack.CanRedo());
     CHECK(std::string(stack.UndoLabel()) == "Edit Blend");
+    CHECK(stack.SceneStateId() == 0);
 
     // ONE undo restores all three fields to the capture...
     stack.Undo();

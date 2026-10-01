@@ -125,6 +125,7 @@ TEST_CASE("SpriteDocument edits round-trip through the shared CommandStack", "[e
 
     REQUIRE(fx.stack.CanUndo());
     CHECK(std::string(fx.stack.UndoLabel()) == "Edit Source Size");
+    CHECK(fx.stack.SceneStateId() == 0);   // a document step never dirties the scene (s3.3a)
 
     fx.stack.Undo();
     CHECK(doc.Data() == before);
@@ -176,6 +177,24 @@ TEST_CASE("SpriteDocument undo steps go inert once the document closes", "[edito
     // themselves rather than dereferencing a dead document.
     CHECK_NOTHROW(fx.stack.Undo());
     CHECK_NOTHROW(fx.stack.Redo());
+}
+
+TEST_CASE("SpriteDocument: closing the document expires its steps; they never cost a Ctrl+Z", "[editor][sprite][undo]")
+{
+    UndoFixture fx;
+    const Arcane::SpriteAssetData before = Fixture();
+    {
+        SpriteDocument::Services services;
+        services.undo = &fx.stack;
+        SpriteDocument doc(services, FixturePath(), before);
+        Arcane::SpriteAssetData after = before;
+        after.sourceSize = {48.0f, 24.0f};
+        doc.ApplySpriteData(after);
+        doc.PushDataEdit("Edit Source Size", before);
+        REQUIRE(fx.stack.CanUndo());
+    }   // the document closes: its anchor dies
+    CHECK_FALSE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()).empty());
 }
 
 // Inspector filters s6a: the document is an Inspector source of kind "sprite"

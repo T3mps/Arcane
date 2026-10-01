@@ -80,6 +80,14 @@ namespace Arcane::Editor
             void Undo() override { Apply(m_before); }
             void Redo() override { Apply(m_after); }
             const char* Label() const override { return m_label.c_str(); }
+            // Spec s3.3: a document step never dirties the scene, and it is
+            // EXPIRED once its document closed (the anchor died).
+            bool AffectsScene() const override { return false; }
+            bool IsExpired() const override
+            {
+                const auto doc = m_anchor.lock();
+                return !doc || !*doc;
+            }
 
         private:
             void Apply(const Arcane::MeshAssetData& data)

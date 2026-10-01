@@ -205,6 +205,7 @@ TEST_CASE("MeshDocument edits round-trip through the shared CommandStack", "[edi
 
     REQUIRE(fx.stack.CanUndo());
     CHECK(std::string(fx.stack.UndoLabel()) == "Edit Subdivisions");
+    CHECK(fx.stack.SceneStateId() == 0);
 
     fx.stack.Undo();
     CHECK(doc.Data() == before);

@@ -43,6 +43,7 @@ TEST_CASE("input editor: stable selection and one-step undo redo", "[editor][inp
     after["actionMaps"][0]["actions"][0]["name"] = "Leap";
     REQUIRE(model.ApplyEdit("Rename action", model.Draft(), after));
     CHECK(model.Dirty());
+    CHECK(commands.SceneStateId() == 0);
     CHECK(model.SelectedAction() == selected);
     CHECK(model.LastValidPreview()->actionMaps[0].actions[0].name == "Leap");
     REQUIRE(model.Undo());

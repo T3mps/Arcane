@@ -45,6 +45,8 @@ namespace Arcane::Editor
                 if (auto* m = Model()) { undoKey_ = m->SelectionKey(); m->RestoreDraft(after_); m->RestoreSelectionOrAncestor(redoKey_); }
             }
             const char* Label() const override { return label_.c_str(); }
+            bool AffectsScene() const override { return false; }
+            bool IsExpired() const override { return Model() == nullptr; }   // ~InputActionsEditorModel nulls the anchor
         private:
             [[nodiscard]] InputActionsEditorModel* Model() const
             {
