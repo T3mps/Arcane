@@ -16,13 +16,19 @@
 #pragma warning(pop)
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Material/MaterialGraph.hpp>
+#include <Arcane/Edit/CommandStack.hpp>
+#include <Astra/Registry/Registry.hpp>
 
 #include "Documents/DocumentHost.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
 #include "Documents/ShaderNodeKey.hpp"   // FormatNodeKey: the s5.1.11 canvas cases
+#include "Panels/InspectorHost.hpp"      // the harness routes the doc's page like the editor
+#include "Panels/InspectorWindows.hpp"
+#include "Widgets/PropertyGrid.hpp"
 #include "Helpers/NodePageDocs.hpp"   // SpriteNodeDoc / ChainNodeDoc / HeadlessImGui (node page s5.1.11)
 
 #include <imgui.h>
@@ -246,20 +252,89 @@ namespace
     struct CanvasHarness
     {
         Arcane::Test::HeadlessImGui imgui;
+        // A real undo stack over an EMPTY registry (ShaderEditorDocumentTest's
+        // fixture): the node page's live rows open gestures on it.
+        Astra::Registry registry;
+        Arcane::CommandStack stack{ [this]() -> Astra::Registry& { return registry; } };
         std::unique_ptr<ShaderEditorDocument> doc;
 
         explicit CanvasHarness(MaterialAssetData data)
-            : doc(std::make_unique<ShaderEditorDocument>(DocServices{}, std::filesystem::path("canvas.arcmat"), std::move(data)))
+            : doc(std::make_unique<ShaderEditorDocument>(Services(&stack), std::filesystem::path("canvas.arcmat"), std::move(data)))
         {
+        }
+        static DocServices Services(Arcane::CommandStack* stack)
+        {
+            DocServices services{};
+            services.undo = [stack]() -> Arcane::CommandStack* { return stack; };
+            return services;
         }
         ~CanvasHarness() { doc.reset(); }   // inside the context (DestroyEditor)
         CanvasHarness(const CanvasHarness&) = delete;
         CanvasHarness& operator=(const CanvasHarness&) = delete;
 
+        // The editor's frame order (EditorAppFrame.cpp: DrawAll, then the
+        // epoch -> NotifySelected loop, then DrawInspectorWindows). PageMode:
+        // None = the canvas alone; Plain = the document's CURRENT page in a
+        // bare window; Host = the real InspectorHost + DrawInspectorWindows
+        // over a real undo stack, the way the editor routes and draws it.
+        enum class PageMode { None, Plain, Host };
+        PageMode pageMode = PageMode::None;
+        PropertyGridState grid;
+        struct NullSource final : InspectorSource
+        {
+            std::string SourceName() const override { return "Scene"; }
+            std::string_view Kind() const override { return "scene"; }
+            InspectorPage* Page() override { return nullptr; }
+            InspectorPage* PageFor(std::string_view) override { return nullptr; }
+            std::string SelectionKey() const override { return {}; }
+            bool RestoreSelection(std::string_view) override { return false; }
+            bool Resolves(std::string_view) const override { return false; }
+        } scene;
+        InspectorHost host{ scene };
+        InspectorWindowsState windows;
+        std::uint64_t lastEpoch = 0;
+
+        void UseHost()
+        {
+            pageMode = PageMode::Host;
+            host.AddSource(*doc);
+        }
+
         void Frame(int n = 1)
         {
             for (int i = 0; i < n; ++i)
-                DocFrame(*doc);
+            {
+                ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+                ImGui::NewFrame();
+                bool requestClose = false;
+                doc->Draw(requestClose);
+                if (pageMode == PageMode::Plain)
+                {
+                    PropertyGrid(grid).CommitOrphans();
+                    ImGui::SetNextWindowPos(ImVec2(1060.0f, 0.0f));
+                    ImGui::SetNextWindowSize(ImVec2(220.0f, 720.0f));
+                    (void)ImGui::Begin("Inspector");
+                    if (InspectorPage* page = doc->Page())
+                    {
+                        PropertyGrid g(grid);
+                        page->Draw(g);
+                    }
+                    ImGui::End();
+                }
+                else if (pageMode == PageMode::Host)
+                {
+                    if (const std::uint64_t e = doc->SelectionEpoch(); e != lastEpoch)
+                    {
+                        lastEpoch = e;
+                        if (!doc->SelectionKey().empty())
+                            host.NotifySelected(*doc);
+                    }
+                    ImGui::SetNextWindowPos(ImVec2(1060.0f, 0.0f));
+                    ImGui::SetNextWindowSize(ImVec2(220.0f, 720.0f));
+                    (void)DrawInspectorWindows(host, windows, nullptr);
+                }
+                ImGui::Render();
+            }
         }
         void Click(ImVec2 at)
         {
@@ -465,4 +540,25 @@ TEST_CASE("Node page R5 record: a click on a node's inline widget (the Sine x li
         CHECK(h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(3)); }));
         CHECK(h.doc->SelectionKey() == Key(0, 3));
     }
+}
+
+TEST_CASE("Node page s5.1.11 canvas: a click on node A then DIRECTLY on node B lands on B, page drawn or not",
+          "[editor][graphcanvas][nodepage]")
+{
+    const int mode = GENERATE(0, 1, 2);
+    INFO("page mode (0 none, 1 plain window, 2 real InspectorHost): " << mode);
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    if (mode == 1) h.pageMode = CanvasHarness::PageMode::Plain;
+    if (mode == 2) h.UseHost();
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));                          // settles the open fit: NodeTitle reads the landed view
+    h.Click(h.NodeTitle(2));
+    REQUIRE(h.doc->SelectionKey() == Key(0, 2));
+    const std::uint64_t e1 = h.doc->SelectionEpoch();
+    h.Click(h.NodeTitle(3));                                    // no deselect in between
+    CHECK(h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(3)); }));
+    CHECK(h.doc->SelectionKey() == Key(0, 3));
+    CHECK(h.doc->SelectionEpoch() > e1);
+    h.Click(h.NodeTitle(2));                                    // and straight back
+    CHECK(h.doc->SelectionKey() == Key(0, 2));
 }
