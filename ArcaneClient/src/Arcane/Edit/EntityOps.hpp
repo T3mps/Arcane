@@ -17,6 +17,7 @@
 #include <Json.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -55,14 +56,27 @@ namespace Arcane::Edit
     // TransformPropagationSystem both walk ONLY the SceneRoot subtree, so a
     // sibling of it never renders and is silently dropped by the next Save.
     // Refuses (returns Astra::Entity::Invalid(), creates nothing) when there
-    // is no SceneRoot resource at all: an entity created here would have
-    // nowhere safe to live, and DoSaveScene already refuses to save a
+    // is no LIVE scene root (no SceneRoot resource, or one naming a deleted
+    // entity -- LiveSceneRoot): an entity created here would have nowhere
+    // safe to live, and DoSaveScene already refuses to save a
     // rootless registry (EditorApp.cpp), so creating one would only relocate
     // the same data-loss bug rather than fix it. A refused create is
     // recoverable (open or start a scene, then try again); a silent create-
     // then-lose is not.
     ARCANE_API Astra::Entity CreateEntityInScene(Astra::Registry& reg,
                                                  Astra::Entity parent);
+
+    // The ONE live-root check (node page + editor upgrades s3.1): the
+    // SceneRoot resource's entity when the resource exists AND that entity is
+    // alive. Deleting the root row leaves the resource holding a DEAD handle,
+    // so "the resource exists" is not "there is a scene": SaveJson would seed
+    // its walk with the dead entity and write one empty entity. Every
+    // "add/move/save into the scene" path asks this, never the bare resource.
+    ARCANE_API std::optional<Astra::Entity> LiveSceneRoot(const Astra::Registry& reg);
+
+    // `e` is valid and is the live scene root. The structural verbs' root
+    // guard (the editor's SelectionWithoutSceneRoot) is built on this.
+    ARCANE_API bool IsSceneRoot(const Astra::Registry& reg, Astra::Entity e);
 
     // F4 plan 1 Task 11 (spec s8): the scene's `Add > 3D Object > <primitive>`.
     // CreateEntityInScene(reg, parent) -- so the same SceneRoot fallback and
@@ -95,6 +109,17 @@ namespace Arcane::Edit
     ARCANE_API std::size_t Reparent(Astra::Registry& reg,
                                     std::span<const Astra::Entity> set,
                                     Astra::Entity parent);
+
+    // The scene-aware Reparent, mirroring CreateEntity/CreateEntityInScene.
+    // A valid `parent` is exactly Reparent. An invalid `parent` means "move
+    // to the top of the SCENE": it resolves to LiveSceneRoot, never to a
+    // registry root beside it, which SaveJson and transform propagation
+    // never walk. Returns 0 and moves nothing when there is no live root.
+    // Raw Reparent(Invalid) keeps its unparent-to-registry-root meaning
+    // (pinned by EntityOpsTest and RegistryStateCommandTest).
+    ARCANE_API std::size_t ReparentInScene(Astra::Registry& reg,
+                                           std::span<const Astra::Entity> set,
+                                           Astra::Entity parent);
 
     // Add (hidden=true) or remove the Hidden marker on `e` AND every
     // descendant. Returns how many entities changed state.
@@ -186,9 +211,10 @@ namespace Arcane::Edit
     // Guid matches its recorded rootParentGuid, else under SceneRoot --
     // one rule that makes Duplicate a sibling and cross-instance Paste sane.
     // Returns the created ROOT entities. Refuses (returns {}, creates
-    // nothing lasting) when the registry has no SceneRoot, on a version
-    // mismatch, on a malformed document, or on a component field error --
-    // partial creations are destroyed (all-or-nothing). A component type the
+    // nothing lasting) when the registry has no live scene root
+    // (LiveSceneRoot), on a version mismatch, on a malformed document, or on
+    // a component field error -- partial creations are destroyed
+    // (all-or-nothing). A component type the
     // destination registry cannot instantiate (unknown or reflected-but-
     // unregistered -- likely on a cross-plugin-roster paste) does NOT refuse
     // the paste; it is skipped and reported the way LoadJson reports the same
