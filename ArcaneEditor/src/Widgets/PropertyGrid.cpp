@@ -253,7 +253,11 @@ namespace Arcane::Editor
     {
         (void)FieldLabelCell(label, true);
         ImGui::PushID(label);
-        ImGui::TextDisabled("%.*s", static_cast<int>(text.size()), text.data());
+        // Cut to the cell (node-page s4.1(e)); the full text is one hover away.
+        const std::string shown = EllipsisToWidth(text, ImGui::GetContentRegionAvail().x);
+        ImGui::TextDisabled("%s", shown.c_str());
+        if (shown != text)
+            ImGui::SetItemTooltip("%.*s", static_cast<int>(text.size()), text.data());
         Probe(label);
         ImGui::PopID();
     }

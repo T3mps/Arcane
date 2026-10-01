@@ -577,8 +577,9 @@ namespace Arcane::Editor
                 // in the value cell -- and deliberately before BeginDisabled: a
                 // disabled scope also multiplies alpha (imgui.cpp:8899-8900),
                 // which on top of the grey below would dim the name twice.
+                bool labelTruncated = false;
                 const bool labelHovered =
-                    FieldLabelCell(label, readOnly || kind == Arcane::Editor::FieldKind::ReadOnly);
+                    FieldLabelCell(label, readOnly || kind == Arcane::Editor::FieldKind::ReadOnly, &labelTruncated);
                 if (readOnly)
                     ImGui::BeginDisabled();
 
@@ -1573,11 +1574,17 @@ namespace Arcane::Editor
                     hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
                 if (labelHovered || *hovered)
                 {
-                    // Order: the full truncated value first (it is what the
-                    // user is squinting at), the authored prose next, the
-                    // greppable identifier last.
+                    // Order: the full LABEL first when its cell cut it (node-page
+                    // s4.1(e); SetTooltip is last-wins, so this tail replaces
+                    // FieldLabelCell's own label tooltip), then the full truncated
+                    // value, the authored prose, and the greppable identifier last.
                     const std::string_view tip = Arcane::Editor::TooltipOfField(f);
                     std::string text;
+                    if (labelTruncated)
+                    {
+                        text += label;
+                        text += "\n\n";
+                    }
                     if (tooltipValue)
                     {
                         text += *tooltipValue;

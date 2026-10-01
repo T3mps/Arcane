@@ -4,9 +4,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <Widgets/PropertyGrid.hpp>
 #include <Widgets/EditorTheme.hpp>   // Theme::kError (the refused-value look)
+#include <Scene/EditGesture.hpp>
+#include <Arcane/Edit/CommandStack.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>   // ColorStack / StyleVarStack (the refused-style balance check)
+#include <array>
 #include <cstdlib>   // std::abs
+#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -276,4 +280,118 @@ TEST_CASE("PropertyGrid: a refused TextRow value draws in Theme::kError while ty
     CHECK(h.name == "Y");
     CHECK_FALSE(h.errorDrawn);                               // reverted: no red
     CHECK(h.nameStackDrift == 0);                            // every push popped inside the row, every frame
+}
+
+// ===========================================================================
+// node-page spec s4.1: the row set's second half. RowHarness is GridHarness's
+// shape (software atlas, window pinned at the origin, probe centres) with
+// the rows supplied PER CASE through `body`. It can also wrap the window in an
+// EditGesture::ScopeGuard (T2-A7's companion case).
+// ===========================================================================
+namespace
+{
+    struct RowHarness
+    {
+        Arcane::Editor::PropertyGridState state;
+        std::unordered_map<std::string, ImVec2> probe;
+        std::function<void(Arcane::Editor::PropertyGrid&)> body;
+        float width = 640.0f;
+        // Non-null: a ScopeGuard is the first local of the window scope, so it
+        // closes last (EditGesture.hpp:263-285).
+        Arcane::CommandStack* guardStack = nullptr;
+        Arcane::Editor::EditGesture::GestureState* guardState = nullptr;
+        Arcane::Editor::EditGesture::GestureState unguarded;
+        ImGuiContext* prev = nullptr;
+        ImGuiContext* ctx = nullptr;
+
+        RowHarness()
+        {
+            IMGUI_CHECKVERSION();
+            prev = ImGui::GetCurrentContext();
+            ctx = ImGui::CreateContext();
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1280.0f, 1024.0f);
+            io.IniFilename = nullptr;
+            unsigned char* pixels = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+            state.probe = &probe;
+        }
+        ~RowHarness() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+
+        void Frame()
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
+            ImGui::NewFrame();
+            Arcane::Editor::PropertyGrid(state).CommitOrphans();
+            {
+                Arcane::Editor::EditGesture::ScopeGuard guard{ guardStack, guardState ? *guardState : unguarded };
+                ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+                ImGui::SetNextWindowSize(ImVec2(width, 1000), ImGuiCond_Always);
+                ImGui::Begin("Inspector");
+                Arcane::Editor::PropertyGrid grid(state);
+                {
+                    Arcane::Editor::PropertyGrid::Rows rows(grid, "##fields");
+                    if (rows && body) body(grid);
+                }
+                ImGui::End();
+            }
+            ImGui::Render();
+        }
+        ImVec2 Centre(const std::string& key) { INFO(key); REQUIRE(probe.count(key) == 1); return probe.at(key); }
+        // ForTooltip = Stationary + DelayShort (style.HoverFlagsForTooltipMouse): ~0.3 s still.
+        void Hover(ImVec2 at, int frames = 40) { ImGui::GetIO().AddMousePosEvent(at.x, at.y); for (int i = 0; i < frames; ++i) Frame(); }
+        void Press(ImVec2 at) { ImGuiIO& io = ImGui::GetIO(); io.AddMousePosEvent(at.x, at.y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); }
+        void MoveTo(ImVec2 at) { ImGui::GetIO().AddMousePosEvent(at.x, at.y); Frame(); }
+        void Release() { ImGui::GetIO().AddMouseButtonEvent(0, false); Frame(); }
+        void Click(ImVec2 at) { Press(at); Release(); }
+        // Press, three equal moves (each past the 3 px drag threshold), release.
+        void Drag(ImVec2 at, float dx) { Press(at); for (int i = 1; i <= 3; ++i) MoveTo(ImVec2(at.x + dx * i / 3.0f, at.y)); Release(); }
+        // Escape DOWN lands on this frame; the key-up rides the next one.
+        void Escape() { ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true); Frame(); ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false); }
+        void Type(const char* s) { ImGui::GetIO().AddInputCharactersUTF8(s); Frame(); }
+        void Key(ImGuiKey k) { ImGui::GetIO().AddKeyEvent(k, true); Frame(); ImGui::GetIO().AddKeyEvent(k, false); Frame(); }
+        static bool TooltipShown() { ImGuiWindow* w = ImGui::FindWindowByName("##Tooltip_00"); return w && w->Active; }
+    };
+}
+
+TEST_CASE("FieldLabelCell: a label wider than its column is ellipsized, reports truncated, and tooltips on hover", "[editor][inspector]")
+{
+    RowHarness h;
+    h.width = 392.0f;   // the Inspector 2 width the asset page fits (s5.6)
+    const std::string longLabel = "Angular damping applied while the body is resting underwater";
+    REQUIRE(longLabel.size() == 60);
+    bool longCut = false, shortCut = true;
+    ImVec2 lo{}, hi{}, shortLo{}, shortHi{};
+    h.body = [&](Arcane::Editor::PropertyGrid&)
+    {
+        (void)Arcane::Editor::FieldLabelCell(longLabel, false, &longCut);
+        lo = ImGui::GetItemRectMin(); hi = ImGui::GetItemRectMax();   // still the label: the cell adds no item after it
+        ImGui::TextUnformatted("value");
+        (void)Arcane::Editor::FieldLabelCell("Mass", false, &shortCut);
+        shortLo = ImGui::GetItemRectMin(); shortHi = ImGui::GetItemRectMax();
+        ImGui::TextUnformatted("1.0");
+    };
+    h.Frame();
+    CHECK(longCut);
+    CHECK_FALSE(shortCut);
+    CHECK(hi.x - lo.x < 392.0f * 0.5f);   // the full label is ~400 px; the cut one fits the 40% column
+    h.Hover(ImVec2((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f));
+    CHECK(RowHarness::TooltipShown());
+    h.Hover(ImVec2((shortLo.x + shortHi.x) * 0.5f, (shortLo.y + shortHi.y) * 0.5f));
+    CHECK_FALSE(RowHarness::TooltipShown());   // an uncut label has nothing to reveal
+}
+
+TEST_CASE("PropertyGrid: ReadOnlyRow ellipsizes a long value and tooltips the full text on hover", "[editor][inspector]")
+{
+    RowHarness h;
+    h.width = 392.0f;
+    const std::string path = "/Game/Content/Textures/Environment/Foliage/pine_bark_albedo.png";
+    h.body = [&](Arcane::Editor::PropertyGrid& g) { g.ReadOnlyRow("Path", path); g.ReadOnlyRow("Kind", "Texture"); };
+    h.Frame();
+    h.Hover(h.Centre("Path"));
+    CHECK(RowHarness::TooltipShown());
+    h.Hover(h.Centre("Kind"));
+    CHECK_FALSE(RowHarness::TooltipShown());
 }

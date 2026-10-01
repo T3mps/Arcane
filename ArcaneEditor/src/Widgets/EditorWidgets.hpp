@@ -60,8 +60,17 @@ namespace Arcane::Editor
     // the VALUE widget and would never fire over the name.
     //
     // `dimmed` is UE's disabled-label treatment for a field that cannot be
-    // edited.
-    [[nodiscard]] bool FieldLabelCell(const std::string& label, bool dimmed);
+    // edited. A label wider than the column is cut with the ASCII "..." the
+    // goldens already carry (node-page spec s4.1(e)); hovering a cut label
+    // tooltips the full one, and `truncated` (optional) reports the cut so a
+    // caller with its own last-wins tooltip can put the label first.
+    [[nodiscard]] bool FieldLabelCell(const std::string& label, bool dimmed, bool* truncated = nullptr);
+
+    // FieldLabelCell's text half: the ellipsized label at the CURSOR, cut to
+    // the remaining cell width, with the same dim/tooltip/truncated rules. For
+    // a label cell that draws something before the name (PropertyGrid's
+    // override checkbox, s4.1(d)).
+    [[nodiscard]] bool FieldLabelText(const std::string& label, bool dimmed, bool* truncated = nullptr);
 
     // Paint the axis strip (X red, Y green, Z blue) over the left edge of the
     // item just submitted. `component` indexes the palette; an index past it

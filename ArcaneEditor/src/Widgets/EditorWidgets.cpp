@@ -413,7 +413,27 @@ namespace Arcane::Editor
     // edited. The color push is exactly what ImGui::TextDisabled does
     // (imgui_widgets.cpp:316-322), spelled out so the text can go through
     // TextUnformatted rather than a format string.
-    bool FieldLabelCell(const std::string& label, bool dimmed)
+    bool FieldLabelText(const std::string& label, bool dimmed, bool* truncated)
+    {
+        const std::string shown = EllipsisToWidth(label, ImGui::GetContentRegionAvail().x);
+        const bool cut = shown != label;
+        if (truncated)
+            *truncated = cut;
+        if (dimmed)
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextUnformatted(shown.c_str());
+        if (dimmed)
+            ImGui::PopStyleColor();
+        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
+        // Last-wins per frame: a caller's own tail tooltip (the entity row)
+        // replaces this one and carries the full label itself.
+        if (cut && hovered)
+            ImGui::SetTooltip("%s", label.c_str());
+        return hovered;
+    }
+
+    bool FieldLabelCell(const std::string& label, bool dimmed, bool* truncated)
     {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -425,13 +445,7 @@ namespace Arcane::Editor
         // RowTextBaseline for cells submitted LATER in the row
         // (imgui_tables.cpp:2273), and this is the first one.
         ImGui::AlignTextToFramePadding();
-        if (dimmed)
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextUnformatted(label.c_str());
-        if (dimmed)
-            ImGui::PopStyleColor();
-        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
+        const bool hovered = FieldLabelText(label, dimmed, truncated);
         ImGui::TableSetColumnIndex(1);
         // -FLT_MIN is ImGui's "fill the remaining width" spelling
         // (CalcItemWidth resolves a negative width against
