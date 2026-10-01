@@ -4452,7 +4452,7 @@ Toolbar: in `EditorPanels.hpp:217-220` and `EditorPanels.cpp:645-648`, append th
 
 - [ ] **Step 4: Run the tests and confirm they pass.** Run `ArcaneTests.exe "[editor]"` and note the seed. Expected: PASS.
 
-- [ ] **Step 5: Desk check.** At 1920x1080, in the scratch `logo_showcase` material, start dragging a parameter slider and press F5 (Play) without releasing the mouse. After Stop, Edit > Undo shows the parameter step, and it undoes the drag in one press.
+- [ ] **Step 5: Desk check (deferred to the T1-GATE desk pass).** The editor has no F5 or keyboard Play, so the original "drag a slider and press F5" check cannot be reproduced. Instead, at 1920x1080 in the scratch `logo_showcase` material, ctrl+click a parameter field, type a new value without pressing Enter, then click toolbar Play. After Stop, Edit > Undo shows the parameter step, and one press undoes it. This checks the user-visible outcome only. The toolbar draws before documents (`EditorAppFrame.cpp:2280` vs `:2507`) and the Play button fires on release, so the gesture closes through `EndOnDeactivate` on the mouse-down frame. `FlushGestures` itself is therefore proven only by the headless `[undo]` case. It becomes desk-reachable once a Play hotkey exists (owed with the F5 arc or a future keybinding).
 
 - [ ] **Step 6: Commit.**
 
