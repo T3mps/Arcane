@@ -562,3 +562,44 @@ TEST_CASE("Node page s5.1.11 canvas: a click on node A then DIRECTLY on node B l
     h.Click(h.NodeTitle(2));                                    // and straight back
     CHECK(h.doc->SelectionKey() == Key(0, 2));
 }
+
+TEST_CASE("Node page s5.1.11 canvas: a click on a visible node lands while another node is CULLED off-screen",
+          "[editor][graphcanvas][nodepage]")
+{
+    // The desk reselect report. A culled node (NodeCulled) is submitted as a
+    // stand-in whose pins are ImGui::Dummy(0,0), so their bounds are zero-size.
+    // Upstream imgui-node-editor's invisibleButtonEx returned `false` (= 0, i.e.
+    // "clicked with button 0") for a zero-size area, so every culled pin
+    // reported a left click on every frame. BuildControl walks m_Nodes back to
+    // front and OVERWRITES clickedObject on each hit, so a real node click lost
+    // to whichever culled pin was walked after it: the Control carried a
+    // ClickedPin and no ClickedNode, and SelectAction selected nothing.
+    //
+    // Order matters, so it is arranged: m_Nodes is creation order (the doc
+    // draws g.nodes in order: 1, 2, 3) with the pressed node rotated to the
+    // back, and the walk is in REVERSE. Culling node 1 (the FIRST created)
+    // puts its pins LAST in the walk, after whichever visible node is clicked.
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));                          // settles the open fit (and measures every node)
+
+    // Move node 1 far outside the cull rect (viewport + its 0.25 guard band).
+    // It was drawn already, so it has a measured size and NodeCulled applies.
+    h.InCanvas([] { ed::SetNodePosition(ed::NodeId(1), ImVec2(40000.0f, 40000.0f)); return 0; });
+    h.Frame(3);
+    const ImVec2 parked = h.InCanvas([] { return ed::CanvasToScreen(ed::GetNodePosition(ed::NodeId(1))); });
+    INFO("node 1 screen pos " << parked.x << ", " << parked.y);
+    REQUIRE((parked.x > 1280.0f * 1.25f || parked.y > 720.0f * 1.25f));   // beyond the guard band: culled
+
+    const std::uint64_t e0 = h.doc->SelectionEpoch();
+    h.Click(h.NodeTitle(2));
+    CHECK(h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(2)); }));
+    CHECK(h.doc->SelectionKey() == Key(0, 2));
+    CHECK(h.doc->SelectionEpoch() > e0);
+
+    const std::uint64_t e1 = h.doc->SelectionEpoch();
+    h.Click(h.NodeTitle(3));                                    // A then B, no deselect in between
+    CHECK(h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(3)); }));
+    CHECK(h.doc->SelectionKey() == Key(0, 3));
+    CHECK(h.doc->SelectionEpoch() > e1);
+}

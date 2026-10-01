@@ -2383,8 +2383,14 @@ ed::Control ed::EditorContext::BuildControl(bool allowOffscreen)
         if (window->SkipItems)
             return -1;
 
+        // ARCANE LOCAL FIX (vendored imgui-node-editor): upstream returned
+        // `false` here, which this int lambda turns into 0 -- "clicked with
+        // mouse button 0" to every caller (`>= 0` means clicked). So every
+        // zero-size pin or node reported a left click on every frame, and
+        // BuildControl's clickedObject overwrite let it steal real node clicks.
+        // -1 is the not-clicked sentinel every other path here returns.
         if (size_arg.x == 0.0f || size_arg.y == 0.0f)
-            return false;
+            return -1;
 
         const ImGuiID id = window->GetID(str_id);
         ImVec2 size = CalcItemSize(size_arg, 0.0f, 0.0f);
