@@ -1388,6 +1388,10 @@ project "ArcaneTests"
         -- ARCANE_IDE_DESK is set) -- same desk-verify rule as ModuleBuild's
         -- Runner and RuntimeLaunch's SpawnDetached above.
         "%{wks.location}/ArcaneEditor/src/Project/IdeLaunch.cpp",
+        -- Node-page phase T2 (s4.6): OsShell -- the one "open / show / open as
+        -- text" path helper. Pure halves [editor]-tested; the ShellExecuteW half is
+        -- compiled (CrashReportDocument.cpp above links it) but desk-verified.
+        "%{wks.location}/ArcaneEditor/src/Project/OsShell.cpp",
         -- Assets -> Create -> C++ Class: ClassTemplates (name validation, the
         -- project-name -> namespace rule, the three rendered templates as
         -- strings) source-compiles into the test exe so the [editor] units
