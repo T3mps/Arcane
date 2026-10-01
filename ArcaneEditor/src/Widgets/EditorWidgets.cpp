@@ -1262,6 +1262,72 @@ namespace Arcane::Editor
         return ImGui::BeginPopup(id, flags);
     }
 
+    bool LinkText(const char* label, bool live)
+    {
+        if (live)
+            return ImGui::TextLink(label);
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (window->SkipItems)
+            return false;
+        const char* labelEnd = ImGui::FindRenderedTextEnd(label);
+        const ImVec2 size = ImGui::CalcTextSize(label, labelEnd, false);
+        // InvisibleButton asserts a non-zero size; an all-"##" label still gets a hit cell.
+        (void)ImGui::InvisibleButton(label, ImVec2(std::max(size.x, 1.0f), std::max(size.y, 1.0f)));
+        window->DrawList->AddText(ImGui::GetItemRectMin(), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                  label, labelEnd);
+        return false;
+    }
+
+    LinkRowResult LinkRow(const char* id, std::string_view text, bool live,
+                          const char* leadIcon, ImU32 leadColor)
+    {
+        LinkRowResult r;
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (window->SkipItems)
+            return r;
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        // Where the Selectable puts its own text (imgui_widgets.cpp Selectable: pos.y += CurrLineTextBaseOffset).
+        const ImVec2 textPos(window->DC.CursorPos.x, window->DC.CursorPos.y + window->DC.CurrLineTextBaseOffset);
+
+        ImGui::PushID(id);
+        if (!live)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Header, Theme::kNone);
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, Theme::kNone);
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, Theme::kNone);
+        }
+        const bool pressed = ImGui::Selectable("##linkrow", false);
+        if (!live)
+            ImGui::PopStyleColor(3);
+        ImGui::PopID();
+
+        r.hovered = ImGui::IsItemHovered();
+        r.clicked = live && pressed;
+        if (live && r.hovered)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+        // Pure overdraw from here: the Selectable stays the last item.
+        ImDrawList* dl = window->DrawList;
+        float x = textPos.x;
+        if (leadIcon)
+        {
+            dl->AddText(ImVec2(x, textPos.y), leadColor != 0 ? leadColor : ImGui::GetColorU32(ImGuiCol_Text), leadIcon);
+            x += ImGui::CalcTextSize(leadIcon).x + g.Style.ItemInnerSpacing.x;
+        }
+        const char* b = text.data();
+        const char* e = text.data() + text.size();
+        const ImU32 col = ImGui::GetColorU32(live ? ImGuiCol_TextLink : ImGuiCol_Text);
+        dl->AddText(ImVec2(x, textPos.y), col, b, e);
+        if (live && r.hovered)
+        {
+            const ImVec2 ts = ImGui::CalcTextSize(b, e, false);
+            // TextLink's underline offset (imgui_widgets.cpp:1564).
+            const float lineY = textPos.y + ts.y + std::floor(g.FontBaked->Descent * g.FontBakedScale * 0.20f);
+            dl->AddLine(ImVec2(x, lineY), ImVec2(x + ts.x, lineY), col, 1.0f);
+        }
+        return r;
+    }
+
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
     // form), which cites THIS file -- so an edit here changes rendered output.
     // NOTHING PINS THE TWO AGAINST EACH OTHER: no test evaluates both and

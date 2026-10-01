@@ -193,3 +193,98 @@ TEST_CASE("BeginPopupBelow on a closed popup returns false and consumes the next
     CHECK(flagsAfter == 0);
     CHECK(h.ctx->BeginPopupStack.Size == 0);
 }
+
+TEST_CASE("LinkText: a live link clicks once and shows the hand cursor", "[editor][widgets]")
+{
+    WidgetHarness h;
+    int clicks = 0; PopupAnchor rect{};
+    h.body = [&] { ImGui::SetCursorScreenPos(ImVec2(40.0f, 40.0f));
+                   if (LinkText("Player.arcinput##live")) ++clicks;
+                   rect = LastItemAnchor(); };
+    h.Frame();
+    h.MoveTo(Centre(rect));
+    CHECK(ImGui::GetMouseCursor() == ImGuiMouseCursor_Hand);
+    h.Click(Centre(rect));
+    CHECK(clicks == 1);
+}
+
+TEST_CASE("LinkText: a dead link never fires and keeps the arrow", "[editor][widgets]")
+{
+    WidgetHarness h;
+    int clicks = 0; PopupAnchor rect{};
+    h.body = [&] { ImGui::SetCursorScreenPos(ImVec2(40.0f, 40.0f));
+                   if (LinkText("missing.txt##dead", false)) ++clicks;
+                   rect = LastItemAnchor(); };
+    h.Frame();
+    CHECK(rect.max.x - rect.min.x > 0.0f);   // sized to its text: a real hover target
+    h.MoveTo(Centre(rect));
+    CHECK(ImGui::GetMouseCursor() != ImGuiMouseCursor_Hand);
+    h.Click(Centre(rect));
+    CHECK(clicks == 0);
+}
+
+TEST_CASE("LinkRow: a live row highlights, shows the hand and reports the click", "[editor][widgets]")
+{
+    WidgetHarness h;
+    LinkRowResult last; int clicks = 0; PopupAnchor rect{};
+    h.body = [&] { ImGui::SetCursorScreenPos(ImVec2(10.0f, 60.0f));
+                   last = LinkRow("row", "Content/brick.png: refused", true);
+                   if (last.clicked) ++clicks;
+                   rect = LastItemAnchor(); };
+    h.Frame();
+    const ImU32 hoveredCol = ImGui::GetColorU32(ImGuiCol_HeaderHovered);
+    h.MoveTo(Centre(rect));
+    CHECK(last.hovered);
+    CHECK(ImGui::GetMouseCursor() == ImGuiMouseCursor_Hand);
+    CHECK(h.HostDrew(hoveredCol));   // positive control for the dead-row scan below
+    h.Click(Centre(rect));
+    CHECK(clicks == 1);
+}
+
+TEST_CASE("LinkRow: a dead row has no hover highlight and never clicks", "[editor][widgets]")
+{
+    WidgetHarness h;
+    LinkRowResult last; int clicks = 0; PopupAnchor rect{};
+    h.body = [&] { ImGui::SetCursorScreenPos(ImVec2(10.0f, 60.0f));
+                   last = LinkRow("row", "engine: device lost", false);
+                   if (last.clicked) ++clicks;
+                   rect = LastItemAnchor(); };
+    h.Frame();
+    const ImU32 hoveredCol = ImGui::GetColorU32(ImGuiCol_HeaderHovered);
+    h.MoveTo(Centre(rect));
+    CHECK(last.hovered);                       // hovered is still reported (tooltips need it)
+    CHECK_FALSE(h.HostDrew(hoveredCol));
+    CHECK(ImGui::GetMouseCursor() != ImGuiMouseCursor_Hand);
+    h.Click(Centre(rect));
+    CHECK(clicks == 0);
+}
+
+namespace
+{
+    // Right-click the widget; did BeginPopupContextItem submitted RIGHT AFTER it open?
+    bool ContextOpensOn(bool row, bool live)
+    {
+        WidgetHarness h;
+        bool opened = false; PopupAnchor rect{};
+        h.body = [&]
+        {
+            ImGui::SetCursorScreenPos(ImVec2(40.0f, 40.0f));
+            if (row) (void)LinkRow("ctxrow", "Content/brick.png", live);
+            else     (void)LinkText("brick.png##ctx", live);
+            rect = LastItemAnchor();
+            if (ImGui::BeginPopupContextItem("##linkctx")) { opened = true; ImGui::EndPopup(); }
+        };
+        h.Frame();
+        h.Click(Centre(rect), 1);
+        h.Frame();
+        return opened;
+    }
+}
+
+TEST_CASE("LinkText/LinkRow leave the hit item last, so a context menu attaches", "[editor][widgets]")
+{
+    CHECK(ContextOpensOn(false, true));
+    CHECK(ContextOpensOn(false, false));
+    CHECK(ContextOpensOn(true, true));
+    CHECK(ContextOpensOn(true, false));
+}

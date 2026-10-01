@@ -393,6 +393,27 @@ namespace Arcane::Editor
     [[nodiscard]] bool BeginPopupBelow(const char* id, const PopupAnchor& anchor,
                                        float minWidth = 0.0f, ImGuiWindowFlags flags = 0);
 
+    // ---- links (s4.7) ----------------------------------------------------------
+    // A link says whether it goes anywhere. live: ImGui::TextLink (hand cursor,
+    // underline, ImGuiCol_TextLink). NOT live: the same text in TextDisabled, no
+    // underline, the arrow cursor, never returns true -- an InvisibleButton sized
+    // to the text, id = `label`, so a tooltip ("File not found on this machine")
+    // or a context menu still attaches. Either way the hit item stays
+    // LastItemData: SetItemTooltip / BeginPopupContextItem go right after.
+    [[nodiscard]] bool LinkText(const char* label, bool live = true);
+
+    struct LinkRowResult { bool clicked = false; bool hovered = false; };
+
+    // Full-width row (one text line). live: the Selectable hover highlight, hand
+    // cursor, text in ImGuiCol_TextLink, underlined while hovered. NOT live: NO
+    // hover highlight (Header/HeaderHovered/HeaderActive pushed to Theme::kNone),
+    // ambient ImGuiCol_Text, arrow cursor, `clicked` never true (`hovered` still
+    // reports, for tooltips). `id` scopes the row (PushID); `leadIcon` is drawn in
+    // `leadColor` (0 = ambient text) before the text, so Problems keeps its
+    // severity colour on the icon. Same LastItemData rule as LinkText.
+    [[nodiscard]] LinkRowResult LinkRow(const char* id, std::string_view text, bool live,
+                                        const char* leadIcon = nullptr, ImU32 leadColor = 0);
+
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME
     // transfer nri::Format::RGBA8_SRGB applies in hardware when a texture is
