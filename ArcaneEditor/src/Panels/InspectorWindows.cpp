@@ -434,6 +434,14 @@ namespace Arcane::Editor
             else page = src ? src->Page() : nullptr;
             HeaderActions actions;
             DrawHeader(host, inst, src, page, canPin, actions);
+            // s5.7: everything below the header scrolls in its own child, so a
+            // tall page never takes the crumbs, the filter or the pin with it.
+            // NO `if (BeginChild)`, for the same reason as the Begin above: the
+            // page's EditGesture::ScopeGuard must run on collapsed, refused and
+            // background frames; widgets bail on SkipItems. EndChild always.
+            // NavFlattened keeps the child in the parent's focus route, so the
+            // Shortcut(Ctrl+S) and IsWindowFocused above still see a focused page.
+            (void)ImGui::BeginChild("##page", ImVec2(0.0f, 0.0f), ImGuiChildFlags_NavFlattened);
             if (inst.pinned && !page)
             {
                 // The pinned source closed or its selection went away: one line,
@@ -472,6 +480,7 @@ namespace Arcane::Editor
                 // the scene body's own (EditorPanels.cpp's "No selection").
                 ImGui::TextDisabled("No selection");
             }
+            ImGui::EndChild();
             ImGui::End();
             ApplyHeaderActions(host, inst, actions);   // after the page is done with: see HeaderActions
             if (inst.id != 0 && !open) result.closed.push_back(inst.id);

@@ -25,8 +25,14 @@ namespace
     struct FakePage final : InspectorPage
     {
         std::vector<InspectorCrumb> crumbs;
+        int rows = 0;    // s5.7: > 0 draws that many lines (a page taller than its window)
+        int draws = 0;   // Draw calls, collapsed and refused-Begin frames included
         std::vector<InspectorCrumb> Breadcrumb() const override { return crumbs; }
-        void Draw(PropertyGrid&) override {}
+        void Draw(PropertyGrid&) override
+        {
+            ++draws;
+            for (int i = 0; i < rows; ++i) ImGui::Text("row %d", i);
+        }
     };
     struct FakeSource final : InspectorSource
     {
@@ -1278,4 +1284,78 @@ TEST_CASE("InspectorHost: a closed slot's filter comes back when Window > New In
     REQUIRE(host.SetFilter(fresh, InspectorFilter::Only("scene")));
     host.RemoveInstance(fresh);
     CHECK(host.Find(host.AddInstance())->filter == InspectorFilter::Only("scene"));
+}
+
+// s5.7: the header (crumbs, filter, pin) stays put while a tall page scrolls in
+// "##page"; the page still draws on collapsed frames (its ScopeGuard must run);
+// Ctrl+S still routes from inside it (the child is in the parent's focus route).
+TEST_CASE("DrawInspectorWindows: the page scrolls in ##page under a pinned header", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    FakeSource scene{ "Scene", "scene" };
+    scene.page.crumbs = { { "Scene", {}, {} }, { "Player", {}, {} } };
+    scene.page.rows = 60;
+    scene.key = "7";
+    InspectorHost host{ scene };
+    host.NotifySelected(scene);
+    InspectorWindowsState state;
+    const auto frame = [&](bool collapsed = false)
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(100.0f, 100.0f));   // the primary Inspector: the next Begin
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 300.0f));
+        ImGui::SetNextWindowCollapsed(collapsed);
+        InspectorWindowsResult r = DrawInspectorWindows(host, state, nullptr);
+        ImGui::Render();
+        return r;
+    };
+    const auto pageOf = [](ImGuiWindow* parent) -> ImGuiWindow*
+    {
+        for (ImGuiWindow* c : ImGui::GetCurrentContext()->Windows)
+            if (c->ParentWindow == parent && std::string(c->Name).find("##page") != std::string::npos) return c;
+        return nullptr;
+    };
+    frame(); frame();
+    ImGuiWindow* w = ImGui::FindWindowByName(kPrimaryInspectorWindowId);
+    REQUIRE(w != nullptr);
+    ImGuiWindow* page = pageOf(w);
+    REQUIRE(page != nullptr);
+
+    SECTION("scrolled to the end, the window never scrolls and the crumbs stay above the page")
+    {
+        REQUIRE(page->ScrollMax.y > 0.0f);                 // 60 rows overflow 300 px
+        ImGui::SetScrollY(page, page->ScrollMax.y);        // imgui_internal overload; lands next frame
+        frame(); frame();
+        CHECK(page->Scroll.y > 0.0f);
+        CHECK(w->ScrollMax.y == 0.0f);                     // the header's window has nothing to scroll
+        ImGuiWindow* crumbs = CrumbsChildOf(w);
+        REQUIRE(crumbs != nullptr);
+        CHECK(crumbs->Pos.y >= w->InnerRect.Min.y - 0.5f);
+        CHECK(crumbs->Pos.y + crumbs->Size.y <= page->Pos.y + 0.5f);
+    }
+    SECTION("a collapsed window still draws the page once per frame")
+    {
+        const int before = scene.page.draws;
+        frame(true); frame(true); frame(true);
+        CHECK(scene.page.draws == before + 3);
+    }
+    SECTION("Ctrl+S with focus inside ##page reports the source")
+    {
+        ImGui::FocusWindow(page);
+        frame(); frame();                                  // the focus route settles
+        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        io.AddKeyEvent(ImGuiKey_S, true);
+        const InspectorWindowsResult r = frame();
+        io.AddKeyEvent(ImGuiKey_S, false);
+        io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        frame();
+        REQUIRE(r.saveRequested.size() == 1);
+        CHECK(r.saveRequested[0] == &scene);
+        CHECK(r.focusedSource == &scene);
+    }
 }
