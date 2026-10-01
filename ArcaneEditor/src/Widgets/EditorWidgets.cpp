@@ -380,28 +380,30 @@ namespace Arcane::Editor
                                 StringResizeCallback, s);
     }
 
-    // The format strings are spelled out only because `flags` sits after them
-    // in the signature; both are the header's own defaults (imgui.h:687/692),
-    // so nothing about how a value reads changes.
+    // `format` reaches both arms: the unranged one passes DragFloat's/DragInt's
+    // own unbounded min/max (0, 0) so it can name the format. The header's
+    // defaults are those widgets' own (imgui.h:687/692), so a call that omits
+    // `format` reads exactly as before.
     bool RangedDragFloat(const char* label, float* v, float fallbackSpeed,
-                         const std::optional<Astra::Range>& range)
+                         const std::optional<Astra::Range>& range, const char* format)
     {
         if (range)
             return ImGui::DragFloat(label, v, DragSpeedFor(*range, fallbackSpeed),
                                     ToFloatClamped(range->min), ToFloatClamped(range->max),
-                                    "%.3f", ImGuiSliderFlags_ClampOnInput);
-        return ImGui::DragFloat(label, v, fallbackSpeed);
+                                    format, ImGuiSliderFlags_ClampOnInput);
+        return ImGui::DragFloat(label, v, fallbackSpeed, 0.0f, 0.0f, format);
     }
 
-    bool RangedDragInt(const char* label, int* v, const std::optional<Astra::Range>& range)
+    bool RangedDragInt(const char* label, int* v, const std::optional<Astra::Range>& range,
+                       const char* format)
     {
         if (range)
             // 1.0f is DragInt's own default speed (imgui.h:692), passed
             // explicitly because the bounded overload leaves no way to omit it.
             return ImGui::DragInt(label, v, DragSpeedFor(*range, 1.0f),
                                   ToInt32Clamped(range->min), ToInt32Clamped(range->max),
-                                  "%d", ImGuiSliderFlags_ClampOnInput);
-        return ImGui::DragInt(label, v);
+                                  format, ImGuiSliderFlags_ClampOnInput);
+        return ImGui::DragInt(label, v, 1.0f, 0, 0, format);
     }
 
     // Returns whether the LABEL is hovered. The label is its own ImGui item
@@ -529,20 +531,14 @@ namespace Arcane::Editor
             ImGui::PushID(i);
             if (i > 0)
                 ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-            // The defaults ARE today's call (DragFloat's own defaults, imgui.h:687),
-            // so the entity page's Vec arms are unchanged. A ranged component
-            // clamps typed input too (ClampOnInput, see RangedDragFloat).
-            // DragFloat's defaults ARE DragFloat2/3's defaults (imgui.h:687-689),
-            // so an unranged component behaves exactly as it did inside the
+            // Each component is one RangedDragFloat: a ranged component clamps
+            // typed input too (ClampOnInput), and an unranged one is the plain
+            // DragFloat whose defaults ARE DragFloat2/3's (imgui.h:687-689), so
+            // the entity page's Vec arms behave exactly as they did inside the
             // combined widget. Written as an if rather than |= only to keep the
             // assignment bool-typed; like DragScalarN's |= it does not
             // short-circuit, so every component is always submitted.
-            const bool edited = range
-                ? ImGui::DragFloat("", &v[i], DragSpeedFor(*range, speed),
-                                   ToFloatClamped(range->min), ToFloatClamped(range->max),
-                                   format, ImGuiSliderFlags_ClampOnInput)
-                : ImGui::DragFloat("", &v[i], speed, 0.0f, 0.0f, format);
-            if (edited)
+            if (RangedDragFloat("", &v[i], speed, range, format))
                 changed = true;
             DrawAxisBar(i);
             ImGui::PopID();

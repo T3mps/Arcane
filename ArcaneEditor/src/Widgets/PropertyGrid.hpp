@@ -124,8 +124,19 @@ namespace Arcane::Editor
         // WITHOUT `validate`: a commit that does not re-validate can land a
         // refused value that way.
         bool CheckboxRow(const char* label, bool& value);
-        bool IntRow(const char* label, int& value);                          // true once per gesture, on deactivate-after-edit AND value != seed; value follows the gesture every frame
-        bool FloatRow(const char* label, float& value, float speed = 0.01f); // same rule; Escape mid-drag = cancel, no commit
+        // Numeric rows: true once per gesture, on deactivate-after-edit AND
+        // value != seed; value follows the gesture every frame; Escape
+        // mid-drag = cancel (LastRowEvents().cancelled), no commit.
+        // IntRow: no range = InputInt with step buttons (the input page's
+        // Priority row); a range = DragInt + ClampOnInput.
+        bool IntRow(const char* label, int& value,
+                    const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%d");
+        // FloatRow: a range routes through RangedDragFloat (DragSpeedFor + ClampOnInput).
+        bool FloatRow(const char* label, float& value, float speed = 0.01f,
+                      const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%.2f");
+        // SliderRow (drafting pick, 9.28): SliderFloat(min, max, format), the
+        // widget material Float params use today; no clamp flags.
+        bool SliderRow(const char* label, float& value, float min, float max, const char* format = "%.3f");
         // 2-4 float components through AxisDragFloatN (axis bars, per-component
         // ids). Same draft/commit/Escape rules as FloatRow, across all n.
         bool VecRow(const char* label, float* v, int n, float speed = 0.01f,

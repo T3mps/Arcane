@@ -236,20 +236,49 @@ namespace Arcane::Editor
         }
     }
 
-    bool PropertyGrid::IntRow(const char* label, int& value)
+    bool PropertyGrid::IntRow(const char* label, int& value,
+                              const std::optional<Astra::Range>& range, const char* format)
     {
         BeginValueCell(label, false);
-        const NumericResult r = NumericRow(m_state, &value, 1, [](int* v) { ImGui::InputInt("##value", v); });
+        const NumericResult r = NumericRow(m_state, &value, 1, [&](int* v)
+        {
+            if (range)
+                (void)RangedDragInt("##value", v, range, format);
+            else
+            {
+                // InputInt spelled out (imgui_widgets.cpp: InputScalar S32,
+                // step 1, fast 100) so it can take `format`; same id, same
+                // step buttons.
+                const int step = 1, stepFast = 100;
+                ImGui::InputScalar("##value", ImGuiDataType_S32, v, &step, &stepFast, format);
+            }
+        });
         m_events.cancelled = r.cancelled;
         EndValueCell(label);
         return r.committed;
     }
 
-    bool PropertyGrid::FloatRow(const char* label, float& value, float speed)
+    bool PropertyGrid::FloatRow(const char* label, float& value, float speed,
+                                const std::optional<Astra::Range>& range, const char* format)
+    {
+        BeginValueCell(label, false);
+        const NumericResult r = NumericRow(m_state, &value, 1, [&](float* v)
+        {
+            if (range)
+                (void)RangedDragFloat("##value", v, speed, range, format);
+            else
+                ImGui::DragFloat("##value", v, speed, 0.0f, 0.0f, format);
+        });
+        m_events.cancelled = r.cancelled;
+        EndValueCell(label);
+        return r.committed;
+    }
+
+    bool PropertyGrid::SliderRow(const char* label, float& value, float min, float max, const char* format)
     {
         BeginValueCell(label, false);
         const NumericResult r = NumericRow(m_state, &value, 1,
-            [speed](float* v) { ImGui::DragFloat("##value", v, speed, 0.0f, 0.0f, "%.2f"); });
+            [&](float* v) { ImGui::SliderFloat("##value", v, min, max, format); });
         m_events.cancelled = r.cancelled;
         EndValueCell(label);
         return r.committed;

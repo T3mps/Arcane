@@ -9,6 +9,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // ColorStack / StyleVarStack (the refused-style balance check)
 #include <array>
+#include <cmath>     // std::round
 #include <cstdlib>   // std::abs
 #include <functional>
 #include <optional>
@@ -495,4 +496,73 @@ TEST_CASE("PropertyGrid: a ranged VecRow clamps a Ctrl+click typed component and
     CHECK(v[1] == 1.0f);                                   // ClampOnInput, per component
     CHECK(v[0] == 0.2f);
     CHECK(v[2] == 0.4f);
+}
+
+TEST_CASE("PropertyGrid: a ranged FloatRow clamps a Ctrl+click typed 5 to 1 and commits it", "[editor][inspector]")
+{
+    RowHarness h;
+    float v = 0.5f;
+    int commits = 0;
+    h.body = [&](PropertyGrid& g) { if (g.FloatRow("Metallic", v, 0.01f, Astra::Range(0.0, 1.0))) ++commits; };
+    h.Frame();
+    const ImVec2 c = h.Centre("Metallic");
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(c.x, c.y); h.Frame();
+    io.AddKeyEvent(ImGuiMod_Ctrl, true); h.Frame();
+    io.AddMouseButtonEvent(0, true); h.Frame();      // Ctrl+click: DragScalar enters its temp text input
+    io.AddMouseButtonEvent(0, false); h.Frame();
+    io.AddKeyEvent(ImGuiKey_A, true); h.Frame();     // Ctrl+A on top of TempInputScalar's AutoSelectAll (imgui_widgets.cpp:3828)
+    io.AddKeyEvent(ImGuiKey_A, false); io.AddKeyEvent(ImGuiMod_Ctrl, false); h.Frame();
+    h.Type("5");
+    h.Key(ImGuiKey_Enter);
+    CHECK(commits == 1);
+    CHECK(v == 1.0f);                                // ClampOnInput: typed input obeys the range
+}
+
+TEST_CASE("PropertyGrid: FloatRow with \"%.0f\" commits an integral value", "[editor][inspector]")
+{
+    RowHarness h;
+    float v = 3.0f;
+    int commits = 0;
+    h.body = [&](PropertyGrid& g) { if (g.FloatRow("Pixels", v, 1.0f, std::nullopt, "%.0f")) ++commits; };
+    h.Frame();
+    h.Drag(h.Centre("Pixels"), 45.0f);
+    CHECK(commits == 1);
+    CHECK(v > 3.0f);
+    CHECK(v == std::round(v));                       // DragBehavior rounds to the format's precision
+}
+
+TEST_CASE("PropertyGrid: an unranged IntRow keeps its step buttons; a ranged one drags and clamps", "[editor][inspector]")
+{
+    RowHarness h;
+    int priority = 5, px = 10, pxCommits = 0;
+    ImVec2 lo{}, hi{};
+    float frameH = 0.0f;
+    h.body = [&](PropertyGrid& g)
+    {
+        (void)g.IntRow("Priority", priority);
+        lo = ImGui::GetItemRectMin(); hi = ImGui::GetItemRectMax();   // InputScalar's group: text + "-" + "+"
+        frameH = ImGui::GetFrameHeight();
+        if (g.IntRow("Pixels", px, Astra::Range(0.0, 64.0))) ++pxCommits;
+    };
+    h.Frame();
+    h.Click(ImVec2(hi.x - frameH * 0.5f, (lo.y + hi.y) * 0.5f));   // the right-most square button is "+"
+    CHECK(priority == 6);
+    h.Drag(h.Centre("Pixels"), 300.0f);
+    CHECK(px == 64);                                 // DragInt clamps at the range max
+    CHECK(pxCommits == 1);
+}
+
+TEST_CASE("PropertyGrid: SliderRow commits once per gesture", "[editor][inspector]")
+{
+    RowHarness h;
+    float rough = 0.5f;
+    int commits = 0;
+    h.body = [&](PropertyGrid& g) { if (g.SliderRow("Roughness", rough, 0.0f, 1.0f)) ++commits; };
+    h.Frame();
+    h.Drag(h.Centre("Roughness"), 45.0f);            // pressing ON the grab does not jump (SliderGrabClickOffset)
+    CHECK(rough > 0.5f);
+    CHECK(commits == 1);
+    h.Frame();
+    CHECK(commits == 1);
 }

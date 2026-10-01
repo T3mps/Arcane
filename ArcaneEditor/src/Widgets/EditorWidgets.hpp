@@ -39,6 +39,9 @@ namespace Arcane::Editor
 
     // Drags that honour an Astra::Range when the caller resolved one, and are
     // otherwise the exact call these sites made before ranges were read.
+    // `format` is the display/round format, both ranged and not; its default
+    // is DragFloat's/DragInt's own (imgui.h:687/692), so a caller that omits
+    // it reads exactly as before.
     //
     // ClampOnInput is what makes the bound real. Dragging clamps on its own,
     // but Ctrl+click text entry into the same widget is clamped ONLY under
@@ -48,10 +51,12 @@ namespace Arcane::Editor
     // degenerate ranges bind -- see BindingRange in InspectorView.cpp, which
     // encodes that same binding rule for the rows ImGui does not clamp.
     [[nodiscard]] bool RangedDragFloat(const char* label, float* v, float fallbackSpeed,
-                                       const std::optional<Astra::Range>& range);
+                                       const std::optional<Astra::Range>& range,
+                                       const char* format = "%.3f");
 
     [[nodiscard]] bool RangedDragInt(const char* label, int* v,
-                                     const std::optional<Astra::Range>& range);
+                                     const std::optional<Astra::Range>& range,
+                                     const char* format = "%d");
 
     // One field row's label cell. Opens the row, writes the display name into
     // column 0, and leaves the cursor in column 1 with the next item sized to
