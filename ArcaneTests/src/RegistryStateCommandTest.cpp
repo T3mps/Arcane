@@ -11,13 +11,16 @@
 #include <Arcane/Edit/RegistryStateCommand.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Serialization/SceneAsset.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
 #include <array>
 #include <memory>
+#include <vector>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Scene/SelectionOps.hpp"
 
 using namespace Arcane;
 
@@ -248,4 +251,31 @@ TEST_CASE("failed redo-capture latches: redo stays a warned no-op", "[outliner]"
     // re-invoke the snapshot fn (a retry would capture the already-restored
     // BEFORE state and make Redo silently "succeed" into a no-change state).
     CHECK(calls == 2);
+}
+
+TEST_CASE("a root-only Delete pushes NO step and destroys nothing; a mixed Delete keeps the root", "[outliner]")
+{
+    // The verbs' shape (EditorPanels.cpp DeleteSelection): the root filter
+    // first, then ApplyStructural -> ApplyRegistryMutation over what is left.
+    World w;
+    const Astra::Entity root = Scene::CreateEmpty(*w.reg);
+    const Astra::Entity a = Edit::CreateEntityInScene(*w.reg, Astra::Entity::Invalid());
+
+    const std::vector<Astra::Entity> rootOnly =
+        Editor::SelectionWithoutSceneRoot(*w.reg, std::vector<Astra::Entity>{ root });
+    CHECK(rootOnly.empty());
+    CHECK_FALSE(ApplyRegistryMutation(w.stack, "Delete", w.Snapshot(), w.Restore(),
+        [&] { return Edit::DeleteEntities(*w.reg, rootOnly) > 0; }));
+    CHECK_FALSE(w.stack.CanUndo());
+    CHECK(w.reg->IsValid(root));
+
+    const std::vector<Astra::Entity> mixed =
+        Editor::SelectionWithoutSceneRoot(*w.reg, std::vector<Astra::Entity>{ root, a });
+    REQUIRE(mixed == std::vector<Astra::Entity>{ a });
+    CHECK(ApplyRegistryMutation(w.stack, "Delete", w.Snapshot(), w.Restore(),
+        [&] { return Edit::DeleteEntities(*w.reg, mixed) > 0; }));
+    CHECK(w.reg->IsValid(root));
+    CHECK_FALSE(w.reg->IsValid(a));
+    REQUIRE(Edit::LiveSceneRoot(*w.reg).has_value());
+    CHECK(*Edit::LiveSceneRoot(*w.reg) == root);
 }

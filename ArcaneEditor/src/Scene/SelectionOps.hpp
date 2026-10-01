@@ -7,10 +7,13 @@
 
 #include "Scene/SelectionContext.hpp"
 
+#include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <cstdint>
+#include <span>
 #include <vector>
 
 namespace Arcane::Editor
@@ -30,6 +33,45 @@ namespace Arcane::Editor
         reg.GetRelations(root->entity).ForEachDescendant(
             [&](Astra::Entity e, std::size_t) { out.push_back(e); });
         return out;
+    }
+
+    // The root guard for the structural verbs (node page + editor upgrades
+    // s3.1): Delete, Cut, Copy and Duplicate call this, and a drag's `moving`
+    // set goes through it too. A mixed selection drops the root and the verb
+    // proceeds over the rest; a root-only selection comes back empty and the
+    // verb is a no-op (its menu item is greyed with SceneRootRefusal). Order
+    // is preserved; dead entries are kept (each verb already tolerates them).
+    [[nodiscard]] inline std::vector<Astra::Entity>
+    SelectionWithoutSceneRoot(const Astra::Registry& reg, std::span<const Astra::Entity> entities)
+    {
+        std::vector<Astra::Entity> out;
+        out.reserve(entities.size());
+        for (Astra::Entity e : entities)
+            if (!Arcane::Edit::IsSceneRoot(reg, e))
+                out.push_back(e);
+        return out;
+    }
+
+    // Non-empty and nothing but the root: the state that greys the verbs.
+    [[nodiscard]] inline bool
+    IsSceneRootOnly(const Astra::Registry& reg, std::span<const Astra::Entity> entities)
+    {
+        return !entities.empty() && SelectionWithoutSceneRoot(reg, entities).empty();
+    }
+
+    enum class SceneRootVerb : std::uint8_t { Delete, Cut, Copy, Duplicate };
+
+    // The disabled item's reason (drafting pick, 9.28.7).
+    [[nodiscard]] constexpr const char* SceneRootRefusal(SceneRootVerb verb) noexcept
+    {
+        switch (verb)
+        {
+            case SceneRootVerb::Delete:    return "The scene root can't be deleted";
+            case SceneRootVerb::Cut:       return "The scene root can't be cut";
+            case SceneRootVerb::Copy:      return "The scene root can't be copied";
+            case SceneRootVerb::Duplicate: return "The scene root can't be duplicated";
+        }
+        return "";
     }
 
     // The entries of `all` not currently selected, order preserved.
