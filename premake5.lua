@@ -1197,6 +1197,8 @@ project "ArcaneTests"
         -- into the test exe so the [editor] units drive the PURE close flow
         -- with fake documents -- DrawAll (the only ImGui method) is not called.
         "%{wks.location}/ArcaneEditor/src/Documents/DocumentHost.cpp",
+        -- Node page + editor upgrades s3.2: the pure PreviewStatus model.
+        "%{wks.location}/ArcaneEditor/src/Documents/PreviewStatus.cpp",
         -- Shader-editor review fixes: ShaderEditorDocument source-compiles into
         -- the test exe so the [editor] units drive its HEADLESS halves directly
         -- (save-before-bind, parent-chain resolution, compile-result routing).
