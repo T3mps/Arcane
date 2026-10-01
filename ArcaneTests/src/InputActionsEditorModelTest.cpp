@@ -2,6 +2,7 @@
 
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsDocument.hpp"
+#include "Documents/InputActionsJson.hpp"
 #include "Documents/InputSelectionKey.hpp"
 #include "Documents/DocumentHost.hpp"
 #include "Panels/DiagnosticStore.hpp"
@@ -177,7 +178,7 @@ TEST_CASE("input editor: action binding composite and scheme edits", "[editor][i
     const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
     REQUIRE(model.AddScheme("Gamepad", "Gamepad"));
     REQUIRE(model.SetField(action, "type", "Axis1D"));
-    REQUIRE(model.AddComposite(map, action, "1DAxis"));
+    REQUIRE(model.AddComposite(map, action, "1DAxis", {{"negative", "<Keyboard>/a"}, {"positive", "<Keyboard>/d"}}));
     const auto binding = model.SelectedBinding();
     REQUIRE(model.LastValidPreview());
     CHECK(model.Draft()["actionMaps"][0]["actions"][0]["bindings"].size() == 2);
@@ -226,7 +227,7 @@ TEST_CASE("input editor: composite parts can be added removed and reordered", "[
     Arcane::Editor::InputActionsEditorModel model(DocumentJson());
     const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
     const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
-    REQUIRE(model.AddComposite(map, action, "1DAxis"));
+    REQUIRE(model.AddComposite(map, action, "1DAxis", {{"negative", "<Keyboard>/a"}, {"positive", "<Keyboard>/d"}}));
     const auto binding = model.SelectedBinding();
     REQUIRE(model.AddPart(binding, "positive", "<Keyboard>/d"));
     const auto part = model.SelectedPart();
@@ -643,7 +644,7 @@ TEST_CASE("input editor: Add part from a deselected column selects top-down, so 
     Arcane::Editor::InputActionsEditorModel model(DocumentJson());
     const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
     const auto jump = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
-    REQUIRE(model.AddComposite(map, jump, "1DAxis"));
+    REQUIRE(model.AddComposite(map, jump, "1DAxis", {{"negative", "<Keyboard>/a"}, {"positive", "<Keyboard>/d"}}));
     const Arcane::Guid composite = model.SelectedBinding();
     REQUIRE(composite.IsValid());
     model.DeselectToMap(map);                                   // empty space under the rows
@@ -858,4 +859,80 @@ TEST_CASE("input editor: a null resolver (Play) pushes nothing and undoes nothin
     REQUIRE(model.ApplyEdit("Rename action", model.Draft(), again));
     REQUIRE(model.Undo());
     CHECK(model.Draft()["actionMaps"][0]["actions"][0]["name"] == "Leap");
+}
+
+namespace
+{
+    nlohmann::json DocumentWithScheme()
+    {
+        auto json = DocumentJson();
+        json["controlSchemes"] = nlohmann::json::array({ {{"id", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
+                                                          {"name", "Keyboard and Mouse"}, {"bindingGroup", "KeyboardMouse"}} });
+        return json;
+    }
+}
+
+TEST_CASE("input editor: AddComposite writes exactly the given parts and groups in one undo step", "[editor][input]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
+    Arcane::Editor::InputActionsEditorModel model(DocumentWithScheme(), [&commands]() -> Arcane::CommandStack* { return &commands; });
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    const nlohmann::json before = model.Draft();
+    REQUIRE(model.AddComposite(map, action, "2DVector", {{"up", "<Keyboard>/w"}, {"down", "<Keyboard>/s"}}, {"KeyboardMouse"}));
+    const nlohmann::json composite = model.Draft()["actionMaps"][0]["actions"][0]["bindings"][1];
+    CHECK(composite["composite"] == "2DVector");
+    CHECK(composite["groups"] == nlohmann::json::array({ "KeyboardMouse" }));
+    REQUIRE(composite["parts"].size() == 2);                       // only the given roles: no Space fill-ins
+    CHECK(composite["parts"][0]["name"] == "up");   CHECK(composite["parts"][0]["path"] == "<Keyboard>/w");
+    CHECK(composite["parts"][1]["name"] == "down"); CHECK(composite["parts"][1]["path"] == "<Keyboard>/s");
+    CHECK(model.SelectedBinding() == Arcane::Editor::IdOf(composite));
+    CHECK(std::string(commands.UndoLabel()) == "Add composite binding");
+    REQUIRE(model.Undo());
+    CHECK(model.Draft() == before);
+    CHECK_FALSE(commands.CanUndo());                                // exactly one step
+}
+
+TEST_CASE("input editor: the add calls refuse an empty parts list, a bad role, an empty path and an unknown group -- no edit, no step", "[editor][input]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), [&commands]() -> Arcane::CommandStack* { return &commands; });   // controlSchemes: [] -- no group exists
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    const nlohmann::json before = model.Draft();
+    CHECK_FALSE(model.AddComposite(map, action, "2DVector", {}));
+    CHECK_FALSE(model.AddComposite(map, action, "2DVector", {{"negative", "<Keyboard>/a"}}));   // a 1DAxis role
+    CHECK_FALSE(model.AddComposite(map, action, "1DAxis", {{"negative", ""}}));
+    CHECK_FALSE(model.AddComposite(map, action, "1DAxis", {{"negative", "<Keyboard>/a"}}, {"Gamepad"}));
+    CHECK_FALSE(model.AddBinding(map, action, "<Keyboard>/a", {"Gamepad"}));
+    CHECK_FALSE(model.AddBinding(map, action, ""));
+    CHECK(model.Draft() == before);
+    CHECK_FALSE(commands.CanUndo());
+}
+
+TEST_CASE("input editor: SetPartPaths rebinds several parts in ONE 'Rebind composite' step and refuses a foreign part", "[editor][input]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::CommandStack commands([&]() -> Astra::Registry& { return runtime.Registry(); });
+    Arcane::Editor::InputActionsEditorModel model(DocumentJson(), [&commands]() -> Arcane::CommandStack* { return &commands; });
+    const auto map = *Arcane::Guid::FromString("22222222-2222-4222-8222-222222222222");
+    const auto action = *Arcane::Guid::FromString("33333333-3333-4333-8333-333333333333");
+    REQUIRE(model.AddComposite(map, action, "1DAxis", {{"negative", "<Keyboard>/a"}, {"positive", "<Keyboard>/d"}}));
+    const Arcane::Guid composite = model.SelectedBinding();
+    auto parts = [&] { return model.Draft()["actionMaps"][0]["actions"][0]["bindings"][1]["parts"]; };
+    const Arcane::Guid neg = Arcane::Editor::IdOf(parts()[0]), pos = Arcane::Editor::IdOf(parts()[1]);
+    REQUIRE(model.SetPartPaths(composite, {{neg, "<Keyboard>/q"}, {pos, "<Keyboard>/e"}}));
+    CHECK(parts()[0]["path"] == "<Keyboard>/q");
+    CHECK(parts()[1]["path"] == "<Keyboard>/e");
+    CHECK(std::string(commands.UndoLabel()) == "Rebind composite");
+    REQUIRE(model.Undo());
+    CHECK(parts()[0]["path"] == "<Keyboard>/a");
+    CHECK(parts()[1]["path"] == "<Keyboard>/d");
+    CHECK(std::string(commands.UndoLabel()) == "Add composite binding");   // the rebind was one step
+    const auto jumpBinding = *Arcane::Guid::FromString("44444444-4444-4444-8444-444444444444");
+    CHECK_FALSE(model.SetPartPaths(composite, {{jumpBinding, "<Keyboard>/x"}}));   // not one of its parts
+    CHECK_FALSE(model.SetPartPaths(composite, {}));
+    CHECK_FALSE(model.SetPartPaths(composite, {{neg, ""}}));
 }

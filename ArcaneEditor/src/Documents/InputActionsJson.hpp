@@ -62,4 +62,12 @@ namespace Arcane::Editor
             for (const auto& child : node) if (const auto* m = FindById(child, id)) return m;
         return nullptr;
     }
+    // True when some controlSchemes[].bindingGroup equals `group` -- the
+    // loader's knownGroups (InputActionAsset.cpp:73-87). "" never exists.
+    [[nodiscard]] inline bool SchemeGroupExists(const nlohmann::json& draft, std::string_view group)
+    {
+        if (group.empty() || !draft.is_object() || !draft.contains("controlSchemes") || !draft["controlSchemes"].is_array()) return false;
+        for (const auto& s : draft["controlSchemes"]) if (Str(s, "bindingGroup") == group) return true;
+        return false;
+    }
 }

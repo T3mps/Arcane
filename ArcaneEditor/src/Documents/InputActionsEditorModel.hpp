@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Arcane::Editor
@@ -73,15 +74,27 @@ namespace Arcane::Editor
         [[nodiscard]] bool RemoveMap(const Guid& map);
         [[nodiscard]] bool AddAction(const Guid& map, std::string name = "Action");
         [[nodiscard]] bool RemoveAction(const Guid& map, const Guid& action);
+        // Add-and-listen (spec 2026-09-30 s8.3): every add carries the paths the
+        // capture heard and the groups prefilled from the scheme filter. Refused:
+        // an empty path, an empty parts list, an invalid role, a group no
+        // scheme's bindingGroup names (ApplyEdit does not validate).
         [[nodiscard]] bool AddBinding(const Guid& map, const Guid& action,
-                                      std::string path = "<Keyboard>/space");
+                                      std::string path = "<Keyboard>/space",   // default deleted in T6-B4
+                                      std::vector<std::string> groups = {});
         [[nodiscard]] bool AddComposite(const Guid& map, const Guid& action,
-                                        std::string composite);
+                                        std::string composite);                // deleted in T6-B4
+        [[nodiscard]] bool AddComposite(const Guid& map, const Guid& action, std::string composite,
+                                        std::vector<std::pair<std::string, std::string>> parts,   // (role, path), capture order
+                                        std::vector<std::string> groups = {});
         [[nodiscard]] bool RemoveBinding(const Guid& map, const Guid& action,
                                          const Guid& binding);
         [[nodiscard]] bool AddPart(const Guid& binding, std::string role,
                                    std::string path = "<Keyboard>/space");
         [[nodiscard]] bool RemovePart(const Guid& binding, const Guid& part);
+        // Re-path several parts of ONE composite in one "Rebind composite" step
+        // (a whole-composite double-click rebind). Refuses a part id the
+        // composite does not hold, an empty path, an empty list.
+        [[nodiscard]] bool SetPartPaths(const Guid& binding, std::vector<std::pair<Guid, std::string>> paths);
         [[nodiscard]] bool DuplicateRow(const Guid& id);
         [[nodiscard]] bool MoveRow(const Guid& id, int direction);
         [[nodiscard]] bool MoveRowTo(const Guid& id, std::size_t index);   // reorder within the row's own parent array (undoable)
