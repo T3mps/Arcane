@@ -7,6 +7,8 @@
 #include "Helpers/HostWitness.hpp"
 #include "Helpers/ReferenceProjectDir.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <Arcane/Material/MaterialAsset.hpp>   // E9: the fixture's node id
+#include <Arcane/Material/MaterialGraph.hpp>
 #include <Panels/DefaultLayout.hpp>   // the default layout's pixel targets (E6/E7)
 #include <cmath>
 #include <cstdint>
@@ -345,6 +347,51 @@ TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector 
             }
         }
     }
+}
+
+// E9: the NODE PAGE (spec 2026-09-30 s5.1.11). --select-in-document on the
+// graph-owned fixture selects its Multiply node: the main Inspector shows the
+// node page, the Assets-only Inspector is untouched, and the document compiled
+// and previews. No --compare: this spec adds no node-page golden slot.
+TEST_CASE("E9: --select-in-document on a shader node routes the main Inspector to the node page", "[witness][gpu]")
+{
+    // The node id comes from the fixture itself, so the witness never hard-codes it.
+    const auto fixture = Arcane::LoadMaterialAsset(FindReferenceProjectDir() / "Content" / "materials" / "node_page_graph.arcmat");
+    REQUIRE(fixture.has_value());
+    REQUIRE(fixture->graph.has_value());
+    std::uint32_t mulId = 0;
+    for (const Arcane::GraphNode& n : fixture->graph->nodes)
+        if (n.type == Arcane::GraphNodeType::Mul) mulId = n.id;
+    REQUIRE(mulId != 0);
+
+    WitnessScratch scratch(StagedEditorDir(), "e9-node-page");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+                 "--settle", "10", "--report", inv.reportPath.generic_string(),
+                 "--open-asset", "7e5a0012-0012-4012-8012-000000000012",
+                 "--select-in-document", std::to_string(mulId) };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("inspector"));
+    CHECK(run.report["inspector"]["instances"][0].at("breadcrumb") == "NodePageGraph > Multiply");
+    CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");
+    CHECK(run.report["inspector"]["instances"][1].at("breadcrumb") == "Assets");
+    REQUIRE(run.report.contains("documents"));
+    bool found = false;
+    for (const auto& d : run.report["documents"])
+    {
+        if (d.at("name") != "NodePageGraph") continue;
+        found = true;
+        CHECK(d.at("compile") == "ok");
+        CHECK(d.at("preview") == "ready");
+        CHECK(d.at("image") == true);
+    }
+    CHECK(found);
 }
 
 // E3b: an unresolvable --select-in-document is loud (ERROR on stderr) but not

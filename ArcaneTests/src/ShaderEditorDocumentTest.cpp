@@ -21,6 +21,7 @@
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>   // editor.inspector.materialPreviewFraction
+#include <Arcane/Edit/Command.hpp>   // GraphSwap: a whole-graph undo step (node page s5.1.11)
 #include <Arcane/Edit/CommandStack.hpp>   // the mesh-metadata undo step rides the ONE undo history
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/OffscreenVehicle.hpp>
@@ -2735,4 +2736,74 @@ TEST_CASE("Node page s5.1.9: the page never creates, deletes, copies or pastes n
     io.AddKeyEvent(ImGuiMod_Ctrl, false); h.Frame();
     CHECK(h.doc->PassGraph(0)->nodes.size() == count);
     CHECK_FALSE(h.stack.CanUndo());
+}
+
+// ==== Node page s5.1.11 document acceptance (T3-B7) ====
+namespace
+{
+    // A whole-graph swap as an undo step, so a test can undo a CREATE (= a
+    // delete of the selected node) without the canvas.
+    struct GraphSwap final : Arcane::ICommand
+    {
+        ShaderEditorDocument& doc;
+        Arcane::MaterialGraph before, after;
+        GraphSwap(ShaderEditorDocument& d, Arcane::MaterialGraph b, Arcane::MaterialGraph a) : doc(d), before(std::move(b)), after(std::move(a)) {}
+        void Undo() override { doc.ApplyGraphState(0, before); }
+        void Redo() override { doc.ApplyGraphState(0, after); }
+        const char* Label() const override { return "Create Node"; }
+    };
+}
+
+TEST_CASE("Node page s5.1.11 document: PageFor, RestoreSelection, SelectByPath, crumbs, and undo of the selected node",
+          "[editor][material][nodepage][inspector]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    ShaderEditorDocument& doc = *h.doc;
+    CHECK(doc.PageFor("material") == doc.Page());              // the material page (closes an untested gap)
+    CHECK(doc.PageFor(NodeKeyOf(0, 4)) != nullptr);
+    CHECK(doc.PageFor(NodeKeyOf(0, 4)) != doc.PageFor("material"));
+    CHECK(doc.PageFor(NodeKeyOf(0, 99)) == nullptr);           // missing id
+    CHECK(doc.PageFor(NodeKeyOf(5, 4)) == nullptr);            // out-of-range pass: NOT the base fallback
+
+    const std::uint64_t e0 = doc.SelectionEpoch();
+    REQUIRE(doc.RestoreSelection(NodeKeyOf(0, 4)));
+    CHECK(doc.SelectionKey() == NodeKeyOf(0, 4));              // immediately, before any draw
+    CHECK(doc.SelectionEpoch() == e0);
+    doc.SelectByPath("5");
+    CHECK(doc.SelectionKey() == NodeKeyOf(0, 5));
+    CHECK(doc.SelectionEpoch() == e0 + 1);                     // a scripted select is ONE event
+
+    const auto crumbs = doc.PageFor(NodeKeyOf(0, 4))->Breadcrumb();
+    REQUIRE(crumbs.size() == 2);
+    CHECK(crumbs[0].label == "NodePageGraph");
+    CHECK(crumbs[0].key == std::optional<std::string>{ "material" });
+    CHECK(crumbs[1].label == "Multiply");
+    CHECK(crumbs[1].key == std::optional<std::string>{ NodeKeyOf(0, 4) });
+
+    Arcane::MaterialGraph without = *doc.PassGraph(0);
+    Arcane::MaterialGraph with = without;
+    Arcane::GraphNode fresh; fresh.id = 10; fresh.type = T::ConstFloat;
+    with.nodes.push_back(fresh); with.nextId = 11;
+    doc.ApplyGraphState(0, with);
+    h.stack.Push(std::make_unique<GraphSwap>(doc, without, with));
+    REQUIRE(doc.RestoreSelection(NodeKeyOf(0, 10)));
+    const std::uint64_t e1 = doc.SelectionEpoch();
+    h.stack.Undo();                                             // deletes the selected node
+    CHECK(doc.SelectionKey() == "material");
+    CHECK(doc.SelectionEpoch() == e1);
+    h.stack.Redo();
+    CHECK(doc.SelectionKey() == NodeKeyOf(0, 10));
+}
+
+TEST_CASE("Node page s5.1.11 document: chain crumbs are material > pass > node, with the pass crumb inert while pinned",
+          "[editor][material][nodepage][inspector]")
+{
+    NodePageHarness h(ChainDoc());
+    const auto crumbs = h.doc->PageFor(NodeKeyOf(1, 2))->Breadcrumb();
+    REQUIRE(crumbs.size() == 3);
+    CHECK(crumbs[0].key == std::optional<std::string>{ "material" });
+    CHECK(crumbs[1].label == "blur");
+    CHECK_FALSE(crumbs[1].key.has_value());
+    CHECK(crumbs[2].label == "Float");
+    CHECK(crumbs[2].key == std::optional<std::string>{ NodeKeyOf(1, 2) });
 }
