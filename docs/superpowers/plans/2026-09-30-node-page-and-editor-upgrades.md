@@ -18816,7 +18816,7 @@ Use a maximized window and a scratch `LOCALAPPDATA`. Vet graphs on a SCRATCH COP
   - **R5**: does clicking an inline widget (the Sine `x` drag) select the node? Record the answer; do not fix it.
 - **5.2:** the fixture's toolbar reads "ok" with an image; `reference_mesh` reads "not compiled here"; "Output preview" is greyed with its reason when there is no device.
 - **5.3:** an instance of a material with Color and Texture params shows labelled override cells, dimmed inherited rows and no "x"; a base shows the reset decoration; the preview is a square at 1080p; "Surface" labels the combo.
-- **5.4:** the pixel fields read as integers ("64", "0 0"); "Whole texture" ticks and unticks.
+- **5.4:** the pixel fields read as integers ("64", "0 0"); "Whole texture" ticks and unticks; hovering either Pivot value box shows the +Y-up tooltip (spec s5.4, :1515).
 - **5.5:** ReferenceCube shows its Source, topology and Info sections; one imported `.glb` with more than one slot shows one asset cell per slot.
 - **5.6:** the asset page fits the Assets-only Inspector with no scrollbar, with Derived and Import open.
 - **5.7:** scroll a long entity page and the asset page; the pin stays reachable.

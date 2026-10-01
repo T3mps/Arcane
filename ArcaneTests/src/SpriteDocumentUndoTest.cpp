@@ -38,6 +38,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -477,5 +478,32 @@ TEST_CASE("SpriteDocument page: a Pixels Per Meter drag is one step", "[editor][
     CHECK(std::string(fx.stack.UndoLabel()) == "Edit Pixels Per Meter");
     fx.stack.Undo();
     CHECK(h.doc.Data().ppu == 100.0f);
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+// The grouped VecRow bracket (closed by EndAfterRow) is its own path, apart
+// from the FloatRow one above: a Source Size drag is one step too (s5.4
+// "each drag is one step"). A 2-box group's probed centre is the 0|1 gap, so
+// the press lands 20 px left of it, inside box 0 (sourceSize.x).
+TEST_CASE("SpriteDocument page: a Source Size drag is one whole-pixel step", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    SpritePageUi h(s);                                                   // Fixture: a (32, 32) sub-rect
+    h.Frame(); h.Frame();
+    const ImVec2 c = h.At("Source Size");
+    const ImVec2 at(c.x - 20.0f, c.y);
+    h.Move(at); h.Button(0, true);
+    h.Move(ImVec2(at.x + 40.0f, at.y));
+    h.Button(0, false); h.Frame();
+    const glm::vec2 dragged = h.doc.Data().sourceSize;
+    CHECK(dragged.x != 32.0f);
+    CHECK(dragged.x == std::floor(dragged.x));                          // "%.0f": a whole number of pixels
+    CHECK(dragged.y == 32.0f);
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Edit Source Size");
+    fx.stack.Undo();
+    CHECK(h.doc.Data().sourceSize == glm::vec2(32.0f, 32.0f));
     CHECK_FALSE(fx.stack.CanUndo());
 }
