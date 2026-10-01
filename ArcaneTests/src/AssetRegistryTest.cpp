@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -575,4 +576,44 @@ TEST_CASE("AssetRegistry keeps embedded input action GUID across a rename", "[pr
     stream.close();
     std::error_code error;
     fs::remove_all(dir, error);
+}
+
+// T5 s7.2: PeekId is the scan's READ half -- the executor's TOCTOU check and the
+// commands' expiry probe call it on every op, so it must never mint or write.
+TEST_CASE("AssetRegistry::PeekId reads the id the scan would and never mints or writes", "[project][assetops]")
+{
+    namespace fs = std::filesystem;
+    const auto dir = TempDir("peek_id");
+    std::ofstream(dir / "a.arcmat", std::ios::binary) << R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })";
+    std::ofstream(dir / "noid.arcmat", std::ios::binary) << R"({ "name": "x" })";
+    std::ofstream(dir / "t.png", std::ios::binary) << "png";
+    std::ofstream(dir / "u.png", std::ios::binary) << "png";
+    std::ofstream(dir / "u.png.meta", std::ios::binary) << R"({ "guid": "bbbb2222-2222-4222-8222-222222222222", "version": 1 })";
+    std::ofstream(dir / "x.cpp", std::ios::binary) << "int x;";
+    std::ofstream(dir / "n.txt", std::ios::binary) << "n";
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "hang";
+    REQUIRE(Arcane::Diag::WriteFile(env, dir / "r.arcdiag"));
+
+    const auto slurp = [](const fs::path& p)
+    { std::ifstream in(p, std::ios::binary); return std::string(std::istreambuf_iterator<char>(in), {}); };
+    const std::string noIdBefore = slurp(dir / "noid.arcmat");
+
+    using R = Arcane::AssetRegistry;
+    CHECK(R::PeekId(dir / "a.arcmat") == Arcane::Guid::FromString("aaaa1111-1111-4111-8111-111111111111"));
+    CHECK(R::PeekId(dir / "u.png") == Arcane::Guid::FromString("bbbb2222-2222-4222-8222-222222222222"));
+    CHECK(R::PeekId(dir / "r.arcdiag") == env.guid);
+    CHECK_FALSE(R::PeekId(dir / "noid.arcmat").has_value());   // would be minted by a scan
+    CHECK_FALSE(R::PeekId(dir / "t.png").has_value());         // no sidecar yet
+    CHECK_FALSE(R::PeekId(dir / "u.png.meta").has_value());    // a sidecar is not an asset
+    CHECK_FALSE(R::PeekId(dir / "x.cpp").has_value());         // a source id is its path
+    CHECK_FALSE(R::PeekId(dir / "n.txt").has_value());
+    CHECK_FALSE(R::PeekId(dir / "missing.arcmat").has_value());
+
+    CHECK(slurp(dir / "noid.arcmat") == noIdBefore);           // byte-identical
+    CHECK_FALSE(fs::exists(dir / "t.png.meta"));               // no sidecar written
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
 }

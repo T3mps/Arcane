@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -53,6 +55,53 @@ namespace Arcane
             return std::nullopt;
         }
 
+        // The native-JSON kinds: id embedded as a top-level "id".
+        bool IsNativeJson(std::string_view extLower)
+        {
+            return extLower == ".json" || extLower == ".arcmat" || extLower == ".arcscene" ||
+                   extLower == ".arcsprite" || extLower == ".arcmesh" || extLower == ".arcinput";
+        }
+
+        // ---- READ halves (PeekId, spec 2026-09-30 s7.2): parse only -- never mint,
+        // never write, never warn. The Resolve* functions below add warn + mint + write.
+        enum class ReadFail : std::uint8_t { None, Unreadable, NotObject };
+
+        std::optional<nlohmann::json> ReadJsonObject(const std::filesystem::path& file, ReadFail* why = nullptr)
+        {
+            std::ifstream in(file, std::ios::binary);
+            if (!in) { if (why) *why = ReadFail::Unreadable; return std::nullopt; }
+            auto doc = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
+            if (!doc.is_object()) { if (why) *why = ReadFail::NotObject; return std::nullopt; }
+            return doc;
+        }
+
+        std::filesystem::path SidecarOf(const std::filesystem::path& file)
+        {
+            std::filesystem::path meta = file;
+            meta += ".meta";
+            return meta;
+        }
+
+        std::optional<Guid> PeekNativeId(const std::filesystem::path& file)
+        {
+            const auto doc = ReadJsonObject(file);
+            return doc ? ReadGuidField(*doc, "id") : std::nullopt;
+        }
+
+        std::optional<Guid> PeekSidecarId(const std::filesystem::path& file)
+        {
+            const auto doc = ReadJsonObject(SidecarOf(file));
+            return doc ? ReadGuidField(*doc, "guid") : std::nullopt;
+        }
+
+        std::optional<Guid> PeekDiagId(const std::filesystem::path& file)
+        {
+            const auto envelope = Diag::ReadFile(file);
+            if (!envelope || !envelope->guid.IsValid())
+                return std::nullopt;
+            return envelope->guid;
+        }
+
         // Native asset: id embedded as a top-level "id". A missing/invalid id is minted and
         // written back into the asset (auto-import), so it is born with a durable identity.
         //
@@ -62,23 +111,23 @@ namespace Arcane
         // an invalid Guid, which AddFile treats as "already warned, skip".
         Guid ResolveNativeId(const std::filesystem::path& file, bool* writeFailed = nullptr)
         {
-            std::ifstream in(file, std::ios::binary);
-            if (!in) { ARC_WARN("AssetRegistry: cannot read '{}'", file.generic_string()); return {}; }
-            auto doc = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
-            in.close();
-            if (!doc.is_object())
+            ReadFail why = ReadFail::None;
+            auto doc = ReadJsonObject(file, &why);
+            if (!doc)
             {
-                ARC_WARN("AssetRegistry: '{}' is not a JSON object -- skipped", file.generic_string());
+                if (why == ReadFail::Unreadable)
+                    ARC_WARN("AssetRegistry: cannot read '{}'", file.generic_string());
+                else
+                    ARC_WARN("AssetRegistry: '{}' is not a JSON object -- skipped", file.generic_string());
                 return {};
             }
-
-            if (auto id = ReadGuidField(doc, "id"))
+            if (auto id = ReadGuidField(*doc, "id"))
                 return *id;
 
             Guid id = Guid::Generate();
-            doc["id"] = id.ToString();
+            (*doc)["id"] = id.ToString();
             std::ofstream out(file, std::ios::binary);
-            if (out) out << doc.dump(2) << '\n';
+            if (out) out << doc->dump(2) << '\n';
             else
             {
                 ARC_WARN("AssetRegistry: cannot write id back to '{}'", file.generic_string());
@@ -96,21 +145,13 @@ namespace Arcane
         // "assets.id.write-failed" code for either identity-persistence route.
         Guid ResolveSidecarId(const std::filesystem::path& file, bool* writeFailed = nullptr)
         {
-            std::filesystem::path meta = file;
-            meta += ".meta";
+            const std::filesystem::path meta = SidecarOf(file);
 
             std::error_code ec;
             if (std::filesystem::exists(meta, ec))
             {
-                std::ifstream in(meta, std::ios::binary);
-                if (in)
-                {
-                    auto doc = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
-                    in.close();
-                    if (doc.is_object())
-                        if (auto id = ReadGuidField(doc, "guid"))
-                            return *id;
-                }
+                if (auto id = PeekSidecarId(file))
+                    return *id;
                 ARC_WARN("AssetRegistry: sidecar '{}' has no valid guid -- regenerating",
                          meta.generic_string());
             }
@@ -181,14 +222,11 @@ namespace Arcane
         // refuses a missing/unparsable/nil guid on its own.
         Guid ResolveDiagId(const std::filesystem::path& file)
         {
-            auto envelope = Diag::ReadFile(file);
-            if (!envelope)
-            {
-                ARC_WARN("AssetRegistry: '{}' is not a valid .arcdiag envelope -- skipped",
-                         file.generic_string());
-                return {};
-            }
-            return envelope->guid;
+            if (auto id = PeekDiagId(file))
+                return *id;
+            ARC_WARN("AssetRegistry: '{}' is not a valid .arcdiag envelope -- skipped",
+                     file.generic_string());
+            return {};
         }
     }
 
@@ -387,8 +425,7 @@ namespace Arcane
                 return std::nullopt;
             id = ResolveSourceId(mountPath);   // derived, never written -- see IsSourceFile
         }
-        else if (ext == ".json" || ext == ".arcmat" || ext == ".arcscene" || ext == ".arcsprite" ||
-            ext == ".arcmesh" || ext == ".arcinput")
+        else if (IsNativeJson(ext))
             id = ResolveNativeId(file, &idWriteFailed);
         else if (ext == ".arcdiag")
             id = ResolveDiagId(file);   // F-7 CRITICAL: never ResolveNativeId -- see above
@@ -457,6 +494,20 @@ namespace Arcane
         if (it == m_byGuid.end())
             return std::nullopt;
         return it->second;
+    }
+
+    std::optional<Guid> AssetRegistry::PeekId(const std::filesystem::path& file)
+    {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(file, ec))
+            return std::nullopt;   // the scan only ever sees files that exist
+        const std::string ext = LowerExt(file);
+        if (ext == ".meta" || IsSourceFile(ext))
+            return std::nullopt;
+        if (IsNativeJson(ext))     return PeekNativeId(file);
+        if (ext == ".arcdiag")     return PeekDiagId(file);
+        if (IsImportedBinary(ext)) return PeekSidecarId(file);
+        return std::nullopt;
     }
 
     std::vector<std::pair<Guid, std::string>> AssetRegistry::All() const

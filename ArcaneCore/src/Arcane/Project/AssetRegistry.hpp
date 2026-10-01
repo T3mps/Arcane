@@ -96,6 +96,13 @@ namespace Arcane
                                     const std::filesystem::path& contentDir,
                                     std::string_view scheme);
 
+        // T5 (spec 2026-09-30 s7.2): the id a scan WOULD read for `file` -- embedded
+        // "id" (native JSON), "<file>.meta" "guid" (imported binary), envelope "guid"
+        // (.arcdiag) -- but NEVER minted, written or warned about. nullopt for a missing
+        // file, a .meta, C/C++ source (its id is its path), an unknown kind, or an
+        // unreadable/absent id. The asset file-op executor's TOCTOU and expiry probe.
+        static std::optional<Guid> PeekId(const std::filesystem::path& file);
+
         // Guid -> mount path ("game://a/b.json"); nullopt if the id is unknown.
         std::optional<std::string> Resolve(const Guid& id) const;
 
