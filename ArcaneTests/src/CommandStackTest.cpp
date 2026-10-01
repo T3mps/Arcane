@@ -1193,3 +1193,23 @@ TEST_CASE("UndoLimits: maxSteps 0 clamps to 1; the byte budget evicts oldest-fir
         CHECK(UndoDepth(stack) == 2);
     }
 }
+
+TEST_CASE("component steps report their blobs to the byte budget", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    Arcane::UndoLimits limits;
+    limits.byteBudget = 1;
+    stack.SetLimits(limits);
+    for (float x : { 1.0f, 2.0f })
+    {
+        const Arcane::TransactionId t = stack.Begin("Move");
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = x;
+        stack.Commit(t);
+    }
+    CHECK(UndoDepth(stack) == 1);
+}

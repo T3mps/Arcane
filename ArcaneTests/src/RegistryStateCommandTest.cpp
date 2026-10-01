@@ -9,6 +9,7 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 #include <Arcane/Serialization/SceneAsset.hpp>
@@ -16,6 +17,7 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <array>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -278,4 +280,51 @@ TEST_CASE("a root-only Delete pushes NO step and destroys nothing; a mixed Delet
     CHECK_FALSE(w.reg->IsValid(a));
     REQUIRE(Edit::LiveSceneRoot(*w.reg).has_value());
     CHECK(*Edit::LiveSceneRoot(*w.reg) == root);
+}
+
+TEST_CASE("a spilled structural memento still undoes and redoes, and frees its file", "[outliner][undo]")
+{
+    World w;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("arcane-undo-" + Guid::Generate().ToString());
+    UndoLimits limits;
+    limits.spillThreshold = 16;                       // every registry blob is larger
+    w.stack.SetLimits(limits);
+    w.stack.SetSpillDirectory(dir);
+
+    const Astra::Entity top = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+    const std::array<Astra::Entity, 1> doomed{ top };
+    REQUIRE(ApplyRegistryMutation(w.stack, "Delete Entity", w.Snapshot(), w.Restore(),
+        [&] { return Edit::DeleteEntities(*w.reg, doomed) > 0; }));
+    REQUIRE(std::filesystem::exists(dir));
+    CHECK_FALSE(std::filesystem::is_empty(dir));      // the before blob left memory
+
+    w.stack.Undo();                                   // Load() from disk
+    CHECK(w.reg->GetComponent<Identity>(top) != nullptr);
+    w.stack.Redo();                                   // the after blob, captured on Undo, spilled too
+    CHECK(w.reg->GetComponent<Identity>(top) == nullptr);
+
+    w.stack.Clear("test");
+    CHECK(std::filesystem::is_empty(dir));            // freed with the step
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("structural mementos count toward the byte budget", "[outliner][undo]")
+{
+    World w;
+    UndoLimits limits;
+    limits.byteBudget = 1;                            // any memento busts it
+    w.stack.SetLimits(limits);
+    const Astra::Entity a = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+    const Astra::Entity b = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+    for (const Astra::Entity e : { a, b })
+    {
+        const std::array<Astra::Entity, 1> doomed{ e };
+        REQUIRE(ApplyRegistryMutation(w.stack, "Delete Entity", w.Snapshot(), w.Restore(),
+            [&] { return Edit::DeleteEntities(*w.reg, doomed) > 0; }));
+    }
+    w.stack.Undo();
+    CHECK(w.reg->GetComponent<Identity>(b) != nullptr);   // the top survives...
+    CHECK_FALSE(w.stack.CanUndo());                       // ...the older step was evicted
 }
