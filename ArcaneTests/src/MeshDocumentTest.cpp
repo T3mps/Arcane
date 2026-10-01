@@ -23,6 +23,7 @@
 #include "Documents/MeshDocument.hpp"
 #include "Documents/PreviewStatus.hpp"
 #include "Helpers/GpuCapability.hpp"
+#include "Panels/AssetReferenceField.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
@@ -46,6 +47,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // FindWindowByName / GetActiveID / ActiveIdWindow
 
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -583,9 +585,10 @@ namespace
 }
 
 // The form moved OUT of the document window: its first widget (a generated
-// mesh's "Source" combo, MeshDocument.cpp's source section) is submitted in
-// the Inspector window. Proven through the ACTIVE id after a press on the
-// page's first row -- ImGuiWindow::GetID only hashes a label, and LastItemData
+// mesh's "Source" ComboRow, s5.5) is submitted in the Inspector window, keyed
+// "##value" under PushID("Source") inside the "##mesh" Rows table. Proven
+// through the ACTIVE id after a press on the row's probed value widget --
+// ImGuiWindow::GetID only hashes a label, and LastItemData
 // is restored to the parent's at End() (imgui.cpp:8849), so neither alone
 // shows a submission.
 TEST_CASE("MeshDocument's form draws in the Inspector window, not the document's", "[editor][mesh][inspector]")
@@ -594,11 +597,12 @@ TEST_CASE("MeshDocument's form draws in the Inspector window, not the document's
     h.Frame();                                         // warm-up: both windows exist
     ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
     REQUIRE(iw != nullptr);
-    const ImVec2 row(iw->ContentRegionRect.Min.x + 10.0f,
-                     iw->ContentRegionRect.Min.y + ImGui::GetFrameHeight() * 0.5f);   // the page's first row
-    h.Move(row);
+    h.Frame();
+    const ImVec2 at = h.At("Source");
+    h.Move(at);
     h.Button(ImGuiMouseButton_Left, true);
-    CHECK(ImGui::GetActiveID() == iw->GetID("Source"));
+    CHECK(ImGui::GetActiveID() == ImGui::GetIDWithSeed("##value", nullptr,
+                                  ImGui::GetIDWithSeed("Source", nullptr, iw->GetID("##mesh"))));
     CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);   // in the Inspector, not the document window
     h.Button(ImGuiMouseButton_Left, false);
 }
@@ -682,4 +686,113 @@ TEST_CASE("MeshDocument: a device-less document's preview box says why -- no GPU
     INFO(h.docLog);
     CHECK(h.docLog.find("No preview -- no GPU device") != std::string::npos);
     CHECK(Arcane::Editor::PreviewBoxText(h.doc.ComputeStatus()) == "No preview -- no GPU device");
+}
+
+// ---- Node page + editor upgrades s5.5: the mesh page on PropertyGrid ----
+TEST_CASE("MeshDocument::ClearSlotMaterial: imported nils slot k and keeps it; generated erases; out of range is a no-op", "[editor][mesh]")
+{
+    const Arcane::Guid matA = Arcane::Guid::Generate(), matB = Arcane::Guid::Generate();
+    Arcane::MeshAssetData imported = Fixture();
+    imported.source = Arcane::MeshSource::Imported;
+    imported.importedSource = Arcane::Guid::Generate();
+    imported.slots = { { "Metal", matA }, { "Paint", matB } };
+    MeshDocument::ClearSlotMaterial(imported, 1);
+    REQUIRE(imported.slots.size() == 2u);
+    CHECK(imported.slots[1].name == "Paint");
+    CHECK_FALSE(imported.slots[1].material.IsValid());
+    CHECK(imported.slots[0].material == matA);
+    MeshDocument::ClearSlotMaterial(imported, 7);
+    CHECK(imported.slots.size() == 2u);
+    Arcane::MeshAssetData generated = Fixture();
+    generated.slots = { { "", matA } };
+    MeshDocument::ClearSlotMaterial(generated, 0);
+    CHECK(generated.slots.empty());
+}
+
+TEST_CASE("MeshDocument::ApplySlotMaterialEdit: one step per Set and Clear, generated and imported", "[editor][mesh]")
+{
+    UndoFixture fx;
+    MeshDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    const Arcane::Guid matA = Arcane::Guid::Generate(), matB = Arcane::Guid::Generate();
+    Arcane::Editor::AssetRefEdit set, clear;
+    set.op = Arcane::Editor::AssetRefEdit::Op::Set;
+    clear.op = Arcane::Editor::AssetRefEdit::Op::Clear;
+    {
+        MeshDocument doc(s, FixturePath(), Fixture());               // a Cube with no slot
+        set.guid = matA;
+        doc.ApplySlotMaterialEdit(0, set);
+        REQUIRE(doc.Data().slots.size() == 1u);
+        CHECK(doc.Data().slots[0].material == matA);
+        CHECK(std::string(fx.stack.UndoLabel()) == "Assign Material");
+        doc.ApplySlotMaterialEdit(0, clear);
+        CHECK(doc.Data().slots.empty());                             // generated: erase
+        CHECK(std::string(fx.stack.UndoLabel()) == "Clear Material");
+        fx.stack.Undo(); CHECK(doc.Data().slots.size() == 1u);
+        fx.stack.Undo(); CHECK(doc.Data().slots.empty());
+        CHECK_FALSE(fx.stack.CanUndo());
+    }
+    {
+        Arcane::MeshAssetData d = Fixture();
+        d.source = Arcane::MeshSource::Imported;
+        d.importedSource = Arcane::Guid::Generate();
+        d.slots = { { "Metal", matA }, { "Paint", Arcane::Guid{} } };
+        MeshDocument doc(s, FixturePath(), d);
+        set.guid = matB;
+        doc.ApplySlotMaterialEdit(1, set);
+        CHECK(doc.Data().slots[1].material == matB);
+        doc.ApplySlotMaterialEdit(1, clear);
+        REQUIRE(doc.Data().slots.size() == 2u);                      // imported: nil, keep the slot
+        CHECK_FALSE(doc.Data().slots[1].material.IsValid());
+        CHECK(doc.Data().slots[1].name == "Paint");
+        fx.stack.Undo(); CHECK(doc.Data().slots[1].material == matB);
+        fx.stack.Undo(); CHECK_FALSE(doc.Data().slots[1].material.IsValid());
+        CHECK_FALSE(fx.stack.CanUndo());
+    }
+}
+
+TEST_CASE("MeshDocument page: a Source pick is one step and swaps the topology rows", "[editor][mesh][inspector]")
+{
+    UndoFixture fx;
+    MeshDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    MeshPageUi h(s);
+    h.Frame(); h.Frame();
+    CHECK(h.probe.count("Rings") == 0);                              // a Cube has no topology rows
+    ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
+    REQUIRE(iw != nullptr);
+    const ImGuiID combo = ImGui::GetIDWithSeed("##value", nullptr, ImGui::GetIDWithSeed("Source", nullptr, iw->GetID("##mesh")));
+    h.beforePage = [&] { ImGui::ActivateItemByID(combo); };
+    h.Frame(); h.beforePage = nullptr; h.Frame();                    // the press lands: the popup opens
+    REQUIRE(ImGui::GetCurrentContext()->OpenPopupStack.Size == 1);
+    ImGuiWindow* popup = ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+    REQUIRE(popup != nullptr);
+    const ImGuiID sphere = popup->GetID("UV Sphere");                // ComboRow's Selectables push no index id
+    h.beforePage = [&] { ImGui::ActivateItemByID(sphere); };
+    h.Frame(); h.beforePage = nullptr; h.Frame();
+    CHECK(h.doc.Data().source == Arcane::MeshSource::UvSphere);
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Change Source");
+    CHECK(h.probe.count("Rings") == 1);
+    CHECK(h.probe.count("Segments") == 1);
+    fx.stack.Undo();
+    CHECK(h.doc.Data().source == Arcane::MeshSource::Cube);
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+TEST_CASE("MeshDocument page: Info reads BuildMeshData's counts and the bounds", "[editor][mesh][inspector]")
+{
+    MeshPageUi h;
+    h.log = true;
+    h.Frame(); h.Frame();
+    const auto mesh = Arcane::BuildMeshData(Fixture());
+    REQUIRE(mesh.has_value());
+    const Arcane::MeshBounds b = Arcane::ComputeMeshBounds(*mesh);
+    char bounds[96];
+    std::snprintf(bounds, sizeof(bounds), "%.2f \xC3\x97 %.2f \xC3\x97 %.2f m", b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z);
+    INFO(h.pageLog);
+    for (const char* row : { "Vertices", "Triangles", "Bounds" }) { INFO(row); CHECK(h.probe.count(row) == 1); }
+    CHECK(h.pageLog.find(std::to_string(mesh->vertices.size())) != std::string::npos);
+    CHECK(h.pageLog.find(std::to_string(mesh->indices.size() / 3)) != std::string::npos);
+    CHECK(h.pageLog.find(bounds) != std::string::npos);
 }

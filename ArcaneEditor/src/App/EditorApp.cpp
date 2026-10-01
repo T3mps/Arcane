@@ -849,7 +849,6 @@ namespace Arcane::Editor
                 if (!data)
                     return nullptr;
                 Arcane::Editor::MeshDocument::Services meshDocServices;
-                meshDocServices.runtime = &m_runtime->Core();
                 meshDocServices.undo = [this]() { return DocumentUndo(); };   // null in Play (s3.3b)
                 meshDocServices.assetRefs = &m_assetRefServices;
                 // Evict-then-re-resolve on a mesh re-save OR an undo/redo,

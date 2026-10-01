@@ -66,6 +66,7 @@
 #include <Arcane/Guid.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>          // MeshAssetData; also brings MeshBuilder.hpp (MeshData)
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -81,7 +82,6 @@
 namespace Arcane
 {
     class CommandStack;
-    class Runtime;
 
     // Forward-declared, never included here: NriGraphContext.hpp pulls
     // <NRI.h> plus every render-graph node header, and this header is
@@ -96,26 +96,19 @@ namespace Arcane
 namespace Arcane::Editor
 {
     struct AssetRefServices;   // Panels/AssetReferenceField.hpp (Services::assetRefs)
+    struct AssetRefEdit;       // Panels/AssetReferenceField.hpp (ApplySlotMaterialEdit)
 
     class MeshDocument final : public EditorDocument
     {
     public:
         // Everything the document borrows from the app. Two shapes glued
         // together: the small "services struct" SpriteDocument::Services
-        // uses (runtime + undo), plus the three-borrow preview seam
+        // uses (undo + invalidate), plus the three-borrow preview seam
         // DocServices carries for ShaderEditorDocument (ShaderEditorDocument.
         // hpp:120-172) -- read there for the full mechanism; restated only
         // briefly below.
         struct Services
         {
-            // Resolves the material Guid field's DISPLAY name (the current
-            // project's registry, mount path for a Guid) -- the only thing
-            // this document reads a Runtime for. Null just means the field
-            // shows the raw Guid instead of a mount path; the assignment
-            // itself (drag-drop from the Asset Browser) needs no Runtime at
-            // all.
-            Arcane::Runtime* runtime = nullptr;
-
             // Resolves to the SAME shared editor CommandStack every other
             // surface pushes to (EditorApp::DocumentUndo, the resolver
             // MakeDocServices hands DocServices::undo) -- one global history,
@@ -247,8 +240,18 @@ namespace Arcane::Editor
         //     material. Applied to EVERY imported slot count (a single-slot
         //     imported mesh keeps its one named-but-unassigned slot too --
         //     the correspondence rule has no size threshold).
-        // A no-op on an empty slot array.
+        // A no-op on an empty slot array. = ClearSlotMaterial(data, 0).
         static void ClearPrimarySlotMaterial(Arcane::MeshAssetData& data);
+
+        // s5.5: the I4 rule for any slot k -- imported meshes nil slots[k].material
+        // and KEEP the slot (positional correspondence with the artifact);
+        // generated meshes erase it. No-op when k is out of range.
+        static void ClearSlotMaterial(Arcane::MeshAssetData& data, std::size_t slot);
+        // One material row's AssetRefEdit (s5.5). Generated: Set creates slot 0
+        // when absent, else writes slots[0]; Clear = ClearPrimarySlotMaterial.
+        // Imported: Set/Clear on slots[k]. One step each ("Assign Material" /
+        // "Clear Material"); None does nothing.
+        void ApplySlotMaterialEdit(std::size_t slot, const AssetRefEdit& edit);
 
         // The CURRENT preview geometry, rebuilt every time m_data changes
         // (construction, ApplyMeshData, or a live field edit in the page).
@@ -304,8 +307,12 @@ namespace Arcane::Editor
         // The mesh page: the form, drawn by the Inspector instance showing it.
         // Carries its own EditGesture::ScopeGuard (the topology drags that
         // open gestures are submitted inside it) and no Begin/End -- the
-        // Inspector window is its window.
-        void DrawFormBody();
+        // Inspector window is its window. Sections Mesh / Material / Info (s5.5).
+        void DrawFormBody(PropertyGrid& grid);
+
+        // A single-frame commit (the Source combo, a material Set/Clear): marks
+        // dirty, rebuilds the preview and pushes ONE step; nothing when unchanged.
+        void CommitDataEdit(const char* label, const Arcane::MeshAssetData& before);
 
         // The one page this document contributes (kind "mesh", key "mesh").
         // The base MUST be public: Page() hands &m_page out as InspectorPage*,
@@ -319,7 +326,7 @@ namespace Arcane::Editor
                 // One crumb; `select` is a no-op (the page IS the only level).
                 return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "mesh" } } };
             }
-            void Draw(PropertyGrid&) override { m_doc.DrawFormBody(); }
+            void Draw(PropertyGrid& g) override { m_doc.DrawFormBody(g); }
 
         private:
             MeshDocument& m_doc;

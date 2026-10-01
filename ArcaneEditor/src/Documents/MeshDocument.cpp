@@ -1,9 +1,11 @@
 #include "Documents/MeshDocument.hpp"
 
-#include "Panels/AssetPanelModel.hpp"
+#include "Panels/AssetPanelModel.hpp"         // AssetKind (the material row's kind filter)
+#include "Panels/AssetReferenceField.hpp"     // AssetRefRow / AssetRefArgs / AssetRefEdit
 #include "Documents/PreviewStatus.hpp"
 #include "Widgets/EditorTheme.hpp"     // Theme::kError: the validation reason's colour
-#include "Widgets/EditorWidgets.hpp"   // RangedDragFloat/RangedDragInt, CenteredTextDisabled
+#include "Widgets/EditorWidgets.hpp"   // CenteredTextDisabled
+#include "Widgets/PropertyGrid.hpp"
 
 // The preview vehicle. Include-order note for anything moved above it: this
 // reaches <NRI.h> and Extensions/NRIDeviceCreation.h, whose nri::Message
@@ -16,9 +18,8 @@
 #include <Arcane/Host/HostConfig.hpp>                  // CreateOffscreen's knobs
 
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Edit/Command.hpp>
-#include <Arcane/Project/Project.hpp>
+#include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (the material row's surface filter)
 
 #include <Astra/Reflection/Attribute.hpp>   // Astra::Range
 
@@ -28,7 +29,9 @@
 #include <imgui.h>
 
 #include <cmath>
+#include <cstdio>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <span>
 #include <string>
@@ -46,20 +49,6 @@ namespace Arcane::Editor
         // that can drift. NOT an asset guid: nothing in the project registry mints
         // it, and it never leaves this document's vehicle.
         inline constexpr Arcane::Guid kPreviewMeshGuid{ 0x50525657ull, 1ull };
-
-        const char* SourceLabel(Arcane::MeshSource s)
-        {
-            switch (s)
-            {
-                case Arcane::MeshSource::Plane:    return "Plane";
-                case Arcane::MeshSource::Cube:     return "Cube";
-                case Arcane::MeshSource::UvSphere: return "UV Sphere";
-                case Arcane::MeshSource::Cylinder: return "Cylinder";
-                case Arcane::MeshSource::Capsule:  return "Capsule";
-                case Arcane::MeshSource::Imported: return "Imported";   // I4: F2c's companion .arcmesh
-            }
-            return "Unknown";   // unreachable for a well-formed enum value; never refuses a draw
-        }
 
         // One completed field gesture (or single-frame commit) as an undo
         // step -- same shape and doc-identity reasoning as SpriteDocument.cpp's
@@ -180,22 +169,60 @@ namespace Arcane::Editor
             m_anchor, std::move(label), before, m_data));
     }
 
-    void MeshDocument::ClearPrimarySlotMaterial(Arcane::MeshAssetData& data)
+    void MeshDocument::ClearSlotMaterial(Arcane::MeshAssetData& data, std::size_t slot)
     {
-        if (data.slots.empty())
+        if (slot >= data.slots.size())
             return;
         if (data.source == Arcane::MeshSource::Imported)
         {
             // Keep the slot, drop the assignment -- see the declaration
             // (MeshDocument.hpp) for the positional-correspondence rule.
-            data.slots[0].material = Arcane::Guid{};
+            data.slots[slot].material = Arcane::Guid{};
             return;
         }
         // Erase, not nil-out: an unnamed slot with a nil material is a
         // different (and here, unreachable-through-this-picker) state from
         // "no slot at all" -- the same "nil legacy material yields NO slot"
         // rule MeshAsset.cpp's loader applies.
-        data.slots.erase(data.slots.begin());
+        data.slots.erase(data.slots.begin() + static_cast<std::ptrdiff_t>(slot));
+    }
+
+    void MeshDocument::ClearPrimarySlotMaterial(Arcane::MeshAssetData& data) { ClearSlotMaterial(data, 0); }
+
+    void MeshDocument::CommitDataEdit(const char* label, const Arcane::MeshAssetData& before)
+    {
+        // Single-frame commit for non-drag edits (the source combo, a material
+        // Set/Clear): there is no ActiveId to bracket around a Selectable click
+        // or a drop, so this pushes directly instead of through EditGesture --
+        // the "no gesture bracketing needed" idiom ShaderEditorDocument::
+        // SetParamWithUndo documents for its own texture-param drops.
+        if (before == m_data)
+            return;
+        m_dirty = true;
+        RebuildPreviewMesh();
+        PushDataEdit(label, before);
+    }
+
+    void MeshDocument::ApplySlotMaterialEdit(std::size_t slot, const AssetRefEdit& edit)
+    {
+        if (edit.op == AssetRefEdit::Op::None)
+            return;
+        const Arcane::MeshAssetData before = m_data;
+        const bool imported = m_data.source == Arcane::MeshSource::Imported;
+        if (edit.op == AssetRefEdit::Op::Set)
+        {
+            // A generated mesh's first assignment creates its one unnamed slot
+            // (the F2a single-material UX); an imported mesh never grows its
+            // slot table -- it mirrors the artifact's by position.
+            if (!imported && m_data.slots.empty())
+                m_data.slots.push_back(Arcane::MeshSlot{ std::string(), edit.guid });
+            else if (slot < m_data.slots.size())
+                m_data.slots[slot].material = edit.guid;
+            CommitDataEdit("Assign Material", before);
+            return;
+        }
+        ClearSlotMaterial(m_data, imported ? slot : 0);
+        CommitDataEdit("Clear Material", before);
     }
 
     void MeshDocument::RebuildPreviewMesh()
@@ -549,10 +576,10 @@ namespace Arcane::Editor
         requestClose = !open;
     }
 
-    void MeshDocument::DrawFormBody()
+    void MeshDocument::DrawFormBody(PropertyGrid& grid)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
-        // The topology drags below open gestures against m_gesture. The body
+        // The topology rows below open gestures against m_gesture. The body
         // draws inside an Inspector instance window, AFTER the documents, and
         // on collapsed/background-tab frames too (InspectorWindows calls
         // page->Draw even when Begin returns false) -- where no widget inside
@@ -560,19 +587,19 @@ namespace Arcane::Editor
         // covers. Draw keeps its own guard for the document window's refused-
         // Begin path (ShaderEditorDocument's Draw + DrawMaterialPageBody are
         // the precedent for two guards on one gesture).
-        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
+        Arcane::CommandStack* const undo = UndoStack();
+        const EditGesture::ScopeGuard gestureGuard{ undo, m_gesture };
 
-        // Recomputed here, not shared: Draw's preview block declares its own
-        // copy for the preview branch, and this form (the source section) reads
-        // the same document state.
         const bool imported = (m_data.source == Arcane::MeshSource::Imported);
 
-        // Continuous-drag bracket (widget-layer Task 7 idiom) -- identical
-        // shape to SpriteDocument::DrawFormBody's `bracket` lambda. Call it
-        // IMMEDIATELY after each drag widget's field write.
+        // Continuous-drag bracket (widget-layer Task 7 idiom), called right
+        // after each ranged row: the row's VALUE widget is g.LastItemData, so
+        // the gesture opens on its activation frame. The close is EndAfterRow
+        // (s4.1): an Escape mid-drag closes the gesture AT the row, where the
+        // builder's before == after guard pushes nothing.
         const auto bracket = [&](const char* label)
         {
-            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
+            EditGesture::BeginOnActivate(undo, m_gesture,
                 [&] { return std::string(label); },
                 [&]
                 {
@@ -580,186 +607,177 @@ namespace Arcane::Editor
                         [this, label = std::string(label), before = m_data]
                         { PushDataEdit(label, before); });
                 });
-            EditGesture::EndOnDeactivate(UndoStack(), m_gesture);
+            EditGesture::EndAfterRow(undo, m_gesture, grid.LastRowEvents().cancelled);
         };
 
-        // Single-frame commit for non-drag edits (the source combo, the
-        // material drag-drop/clear): there is no ActiveId to bracket around a
-        // Selectable click or a drop, so this pushes directly instead of
-        // through EditGesture -- the same "no gesture bracketing needed"
-        // idiom ShaderEditorDocument::SetParamWithUndo documents for its own
-        // texture-param drops.
-        const auto commit = [&](const char* label, const Arcane::MeshAssetData& before)
-        {
-            if (before == m_data)
-                return;
-            m_dirty = true;
-            RebuildPreviewMesh();
-            PushDataEdit(label, before);
-        };
+        // Null in the headless tests: the cell's null services (s4.2).
+        static const AssetRefServices kNoRefs{};
+        const AssetRefServices& refs = m_services.assetRefs ? *m_services.assetRefs : kNoRefs;
 
-        // ---- source ---------------------------------------------------------
         // I4: an IMPORTED mesh's source is not a choice -- it IS its model
-        // (importedSource), and the five generated sources below would be a
-        // silent way to detach a companion from the artifact it mirrors. The
-        // combo is replaced by a read-only line naming the model; the
-        // generated table (kSources) deliberately does NOT carry Imported, so
-        // there is no arm through which a generated mesh could be flipped to
-        // Imported by hand either.
+        // (importedSource), and the five generated sources would be a silent
+        // way to detach a companion from the artifact it mirrors. The generated
+        // table deliberately does NOT carry Imported, so no arm flips a
+        // generated mesh to Imported by hand either.
         static constexpr Arcane::MeshSource kSources[] = {
             Arcane::MeshSource::Plane, Arcane::MeshSource::Cube, Arcane::MeshSource::UvSphere,
             Arcane::MeshSource::Cylinder, Arcane::MeshSource::Capsule,
         };
-        if (imported)
+        static constexpr const char* kSourceLabels[] = { "Plane", "Cube", "UV Sphere", "Cylinder", "Capsule" };
+        static constexpr int kSourceCount = static_cast<int>(std::size(kSources));
+        static_assert(std::size(kSourceLabels) == std::size(kSources));
+
+        if (grid.Section("Mesh"))
         {
-            std::string model = m_data.importedSource.ToString();
-            if (m_services.runtime)
-                if (const Arcane::Project* project = m_services.runtime->CurrentProject())
-                    if (const auto mount = project->Registry().Resolve(m_data.importedSource))
-                        model = *mount;
-            ImGui::TextDisabled("Source: Imported (from %s)", model.c_str());
-        }
-        else if (ImGui::BeginCombo("Source", SourceLabel(m_data.source)))
-        {
-            for (Arcane::MeshSource s : kSources)
+            PropertyGrid::Rows rows(grid, "##mesh");
+            if (rows)
             {
-                if (ImGui::Selectable(SourceLabel(s), m_data.source == s))
+                if (imported)
                 {
-                    const Arcane::MeshAssetData before = m_data;
-                    m_data.source = s;
-                    commit("Change Source", before);
+                    // The source IS the model: browse-to only (no picker, no
+                    // clear, drops refused).
+                    AssetRefArgs source;
+                    source.guid = m_data.importedSource;
+                    source.readOnly = true;
+                    (void)AssetRefRow(grid, "Source model", source, refs);
+                }
+                else
+                {
+                    int current = 0;
+                    for (int i = 0; i < kSourceCount; ++i)
+                        if (kSources[i] == m_data.source)
+                            current = i;
+                    if (const int picked = grid.ComboRow("Source", kSourceLabels, kSourceCount, current); picked >= 0)
+                    {
+                        const Arcane::MeshAssetData before = m_data;
+                        m_data.source = kSources[picked];
+                        CommitDataEdit("Change Source", before);
+                    }
+                }
+
+                // ---- per-source topology ------------------------------------
+                // ONLY the fields THIS source's generator reads (MeshAsset.hpp's
+                // table) -- a Plane shows no rings/segments, a Cube and an
+                // imported mesh no topology at all. Every floor is exactly
+                // ValidateMeshAsset's per-source rule, so normal interaction can
+                // never drive the document into a refused state; the ceilings
+                // are generous UI-only bounds against a mis-drag producing a
+                // million-triangle mesh. Live: the row writes its draft every
+                // frame, so the preview rebuilds as the value moves.
+                bool changed = false;
+                const auto intRow = [&](const char* label, std::uint32_t& field, double lo, double hi)
+                {
+                    int v = static_cast<int>(field);
+                    (void)grid.IntRow(label, v, Astra::Range(lo, hi, 1.0));
+                    if (static_cast<std::uint32_t>(v) != field)
+                    {
+                        field = static_cast<std::uint32_t>(v);
+                        changed = true;
+                    }
+                    bracket(label);
+                };
+                switch (m_data.source)
+                {
+                    case Arcane::MeshSource::Plane:
+                        intRow("Subdivisions", m_data.subdivisions, 1.0, 64.0);
+                        break;
+                    case Arcane::MeshSource::UvSphere:
+                        intRow("Rings", m_data.rings, 3.0, 128.0);
+                        intRow("Segments", m_data.segments, 3.0, 128.0);
+                        break;
+                    case Arcane::MeshSource::Cylinder:
+                        // Deliberately NOT `rings` -- BuildCylinder never reads it.
+                        intRow("Segments", m_data.segments, 3.0, 128.0);
+                        break;
+                    case Arcane::MeshSource::Capsule:
+                    {
+                        // The cap-ring floor is 2, not 3 -- a two-step arc still
+                        // closes a hemisphere; UvSphere's rings span pole to pole.
+                        intRow("Rings", m_data.rings, 2.0, 64.0);
+                        intRow("Segments", m_data.segments, 3.0, 128.0);
+                        float ratio = m_data.capsuleLengthRatio;
+                        (void)grid.FloatRow("Length Ratio", ratio, 0.02f, Astra::Range(1.0, 20.0), "%.2f");
+                        if (ratio != m_data.capsuleLengthRatio)
+                        {
+                            m_data.capsuleLengthRatio = ratio;
+                            changed = true;
+                        }
+                        bracket("Length Ratio");
+                        break;
+                    }
+                    case Arcane::MeshSource::Cube:
+                    case Arcane::MeshSource::Imported:
+                        break;   // no topology rows
+                }
+                if (changed)
+                {
+                    m_dirty = true;
+                    RebuildPreviewMesh();
                 }
             }
-            ImGui::EndCombo();
         }
 
-        // ---- per-source topology --------------------------------------------
-        // ONLY the fields THIS source's generator reads (MeshAsset.hpp's
-        // table; MeshBuilder.hpp's per-field comments name the same set) --
-        // the flat tagged struct's per-source meaning is a UI concern too, so
-        // a Plane shows no rings/segments and a Cube shows no topology at
-        // all. Every widget's floor is exactly ValidateMeshAsset's per-source
-        // rule, so normal interaction can never drive this document into a
-        // refused state -- the widget's max is a generous, unvalidated UI-only
-        // ceiling against a mis-drag producing a million-triangle mesh.
-        //
-        // Two tiny local helpers carry the repeated shape (RangedDrag* takes
-        // an `int`/`float*`, the field is `uint32_t`/`float`; write back, then
-        // bracket): rings and segments each appear on two sources below, and
-        // without this every one of the four would repeat the same five lines.
-        bool changed = false;
-        const auto dragUint = [&](const char* label, std::uint32_t& field,
-                                  double lo, double hi) -> bool
+        // ---- material (F2c's slots[]) --------------------------------------------
+        // A generated mesh keeps the F2a single-material UX over slot 0 (Set
+        // creates the one unnamed slot, Clear erases it); an imported mesh gets
+        // one cell per slot of its artifact, Clear nilling and KEEPING the slot
+        // (ClearSlotMaterial, I4). Both route through ApplySlotMaterialEdit.
+        if (grid.Section("Material"))
         {
-            int v = static_cast<int>(field);
-            const bool ch = RangedDragInt(label, &v, Astra::Range(lo, hi, 1.0));
-            field = static_cast<std::uint32_t>(v);
-            bracket(label);
-            return ch;
-        };
-        const auto dragFloatField = [&](const char* label, float& field, float speed,
-                                        double lo, double hi) -> bool
-        {
-            const bool ch = RangedDragFloat(label, &field, speed, Astra::Range(lo, hi));
-            bracket(label);
-            return ch;
-        };
-
-        switch (m_data.source)
-        {
-            case Arcane::MeshSource::Plane:
-                changed |= dragUint("Subdivisions", m_data.subdivisions, 1.0, 64.0);
-                break;
-            case Arcane::MeshSource::Cube:
-                ImGui::TextDisabled("(no topology parameters)");
-                break;
-            case Arcane::MeshSource::UvSphere:
-                changed |= dragUint("Rings", m_data.rings, 3.0, 128.0);
-                changed |= dragUint("Segments", m_data.segments, 3.0, 128.0);
-                break;
-            case Arcane::MeshSource::Cylinder:
-                // Deliberately NOT `rings` -- BuildCylinder never reads it
-                // (MeshAssetData::rings' own comment: "UvSphere; Capsule").
-                changed |= dragUint("Segments", m_data.segments, 3.0, 128.0);
-                break;
-            case Arcane::MeshSource::Capsule:
-                // The cap-ring floor is 2, not 3 -- a two-step arc still
-                // closes a hemisphere; UvSphere's floor is 3 because ITS
-                // rings span pole-to-pole (a full sphere, twice the arc).
-                changed |= dragUint("Rings", m_data.rings, 2.0, 64.0);
-                changed |= dragUint("Segments", m_data.segments, 3.0, 128.0);
-                changed |= dragFloatField("Length Ratio", m_data.capsuleLengthRatio, 0.02f, 1.0, 20.0);
-                break;
-            case Arcane::MeshSource::Imported:
-                // I4: rings/segments/subdivisions/capsuleLengthRatio mean nothing
-                // to a cooked-artifact source (ValidateMeshAsset's own Imported
-                // arm reads only importedSource) -- no topology widgets at all.
-                ImGui::TextDisabled("(imported mesh -- topology comes from the cooked artifact)");
-                break;
-        }
-        if (changed)
-        {
-            m_dirty = true;
-            RebuildPreviewMesh();
-        }
-
-        // ---- material ----------------------------------------------------------
-        // F2c Task 10: the F2a scalar `material` retired into `slots[]`. This
-        // picker deliberately operates on slots[0] ONLY -- the same
-        // single-material UX F2a had, now expressed through the array: create
-        // one unnamed slot on first assignment, erase it on clear (for a
-        // GENERATED mesh; an IMPORTED mesh's clear nils the assignment and
-        // keeps the slot -- ClearPrimarySlotMaterial, I4). A per-slot list UI
-        // (so an imported mesh's second, third, ... slot can be assigned here
-        // too) is NOT in either F2c plan; until it exists, an imported mesh's
-        // extra slots are editable by hand in the .arcmesh JSON only.
-        ImGui::Separator();
-        ImGui::TextUnformatted("Material");
-        ImGui::SameLine();
-        std::string display = "(none)";
-        const Arcane::Guid slot0Material =
-            m_data.slots.empty() ? Arcane::Guid{} : m_data.slots[0].material;
-        if (slot0Material.IsValid())
-        {
-            display = slot0Material.ToString();
-            if (m_services.runtime)
-                if (const Arcane::Project* project = m_services.runtime->CurrentProject())
-                    if (const auto mount = project->Registry().Resolve(slot0Material))
-                        display = *mount;
-        }
-        ImGui::TextDisabled("%s", display.c_str());
-
-        // Drop target: accept a .arcmat asset dragged from the Asset Browser
-        // -- the whole of this field's "picker", same drop-only shape
-        // ShaderEditorDocument::DrawTextureParam uses for a texture param.
-        if (ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kAssetDragType))
+            PropertyGrid::Rows rows(grid, "##material");
+            if (rows)
             {
-                const auto* payload = static_cast<const AssetDragPayload*>(p->Data);
-                if (payload->kind == AssetKind::Material)
+                AssetRefArgs args;
+                args.kindFilter = static_cast<int>(AssetKind::Material);
+                args.surfaceFilter = static_cast<int>(Arcane::MaterialSurface::Mesh);
+                if (!imported)
                 {
-                    const Arcane::MeshAssetData before = m_data;
-                    if (m_data.slots.empty())
-                        m_data.slots.push_back(Arcane::MeshSlot{ std::string(), payload->guid });
-                    else
-                        m_data.slots[0].material = payload->guid;
-                    commit("Assign Material", before);
+                    args.guid = m_data.slots.empty() ? Arcane::Guid{} : m_data.slots[0].material;
+                    ApplySlotMaterialEdit(0, AssetRefRow(grid, "Material", args, refs));
+                }
+                else if (m_data.slots.empty())
+                {
+                    grid.ReadOnlyRow("Material", "(the model defines no material slots)");
+                }
+                else
+                {
+                    for (std::size_t k = 0; k < m_data.slots.size(); ++k)
+                    {
+                        const std::string label = m_data.slots[k].name.empty() ? "Slot " + std::to_string(k)
+                                                                               : m_data.slots[k].name;
+                        args.guid = m_data.slots[k].material;
+                        ImGui::PushID(static_cast<int>(k));   // two slots may share a name
+                        const AssetRefEdit edit = AssetRefRow(grid, label.c_str(), args, refs);
+                        ImGui::PopID();
+                        if (edit.op != AssetRefEdit::Op::None)
+                        {
+                            ApplySlotMaterialEdit(k, edit);
+                            break;   // m_data changed under the loop: the rest draws next frame
+                        }
+                    }
                 }
             }
-            ImGui::EndDragDropTarget();
         }
-        if (slot0Material.IsValid())
+
+        // ---- info (generated meshes only, 9.28 #27) -----------------------------
+        // An imported mesh's geometry lives in the cooked artifact, and
+        // m_previewMesh is null for it (RebuildPreviewMesh); an invalid param
+        // set has no geometry either -- no section rather than zeros.
+        if (!imported && m_previewMesh && grid.Section("Info"))
         {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("x##clearmaterial"))
+            PropertyGrid::Rows rows(grid, "##info");
+            if (rows)
             {
-                const Arcane::MeshAssetData before = m_data;
-                // The rule lives in ClearPrimarySlotMaterial (pure, pinned by the
-                // headless units): erase for a generated mesh, nil-out-and-keep
-                // for an imported one -- see its declaration for why.
-                ClearPrimarySlotMaterial(m_data);
-                commit("Clear Material", before);
+                grid.ReadOnlyRow("Vertices", std::to_string(m_previewMesh->vertices.size()));
+                grid.ReadOnlyRow("Triangles", std::to_string(m_previewMesh->indices.size() / 3));
+                const Arcane::MeshBounds b = Arcane::ComputeMeshBounds(*m_previewMesh);
+                char text[96];
+                std::snprintf(text, sizeof(text), "%.2f \xC3\x97 %.2f \xC3\x97 %.2f m",
+                              b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z);
+                grid.ReadOnlyRow("Bounds", text);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                    ImGui::SetTooltip("min (%.3f, %.3f, %.3f)\nmax (%.3f, %.3f, %.3f)",
+                                      b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z);
             }
         }
     }
