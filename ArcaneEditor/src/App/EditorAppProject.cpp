@@ -84,6 +84,7 @@ namespace Arcane::Editor
         s.undo     = [this]() { return DocumentUndo(); };   // per edit; null in Play (s3.3b)
         s.clock    = &m_editorClock;
         s.backend  = m_config.backend;
+        s.assetRefs = &m_assetRefServices;
         // THE PREVIEW SEAM IS LATE-BOUND (node page + editor upgrades s3.2),
         // and set UNCONDITIONALLY: a document opened during boot (--open-asset
         // opens inside StageFinalize) is constructed BEFORE CreateGraphVehicles

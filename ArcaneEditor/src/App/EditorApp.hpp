@@ -30,6 +30,7 @@
 #include "Panels/AssetBrowserPanel.hpp"   // AssetBrowserPanelState (m_assetBrowserUi)
 #include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState (m_assetGraphUi) + the canvas teardown seam
 #include "Panels/AssetPanelModel.hpp"
+#include "Panels/AssetReferenceField.hpp"   // m_assetRefServices
 #include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusPanel -- Status carries no state of its own
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/CreateAssetDialog.hpp"
@@ -1067,11 +1068,12 @@ namespace Arcane::Editor
         // Inspector panel state: holds the field-edit gesture's CommandStack
         // ownership token across the frames the gesture spans (see InspectorState).
         Arcane::Editor::InspectorState  m_inspector;
-        // Sprite-asset arc, Task 4: built ONCE in Init (mintSpriteForTexture
-        // wraps MintOrReuseSpriteForTexture) and handed to DrawInspectorBody
-        // every frame, so the field visitor's texture-drop auto-mint branch
-        // never needs to know about EditorApp itself.
+        // Built ONCE in Init: the reflected rows' borrowed app seams (assetRefs).
         Arcane::Editor::InspectorServices m_inspectorServices;
+        // Spec 2026-09-30 s4.2: the ONE asset-reference services value. The
+        // Inspector and every document's Services point here (app lifetime;
+        // m_documents, declared below, destructs first).
+        Arcane::Editor::AssetRefServices  m_assetRefServices;
         // Inspector ownership (spec 2026-09-28): the scene source, the host
         // that routes the last-selecting source to every Inspector instance,
         // the per-instance draw state, and the two epoch watermarks (the

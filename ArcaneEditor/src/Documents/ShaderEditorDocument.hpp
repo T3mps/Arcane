@@ -81,6 +81,8 @@ namespace ax::NodeEditor
 
 namespace Arcane::Editor
 {
+    struct AssetRefServices;   // Panels/AssetReferenceField.hpp (DocServices::assetRefs)
+
     // NodeLOD, the kLod* boundaries and NodeLODForScale now live in
     // Widgets/GraphNodeLod.hpp (included above) so both node canvases read one
     // table; only the per-tier DEGRADATION -- which branches in DrawGraphNode
@@ -159,6 +161,12 @@ namespace Arcane::Editor
         // vehicle inline, which is correct at shutdown (no
         // further frame is recorded) and unreachable anywhere else.
         std::function<void(std::unique_ptr<Arcane::NriGraphContext>)> retireGraphPreview;
+
+        // The shared asset-reference cell's services (spec 2026-09-30 s4.2):
+        // EditorApp::m_assetRefServices, app-lifetime; its callables read state
+        // at call time, so a document made during a boot stage is not stale.
+        // Null in the headless tests (the cell's null services). T3's ports read it.
+        const AssetRefServices* assetRefs = nullptr;
     };
 
     class ShaderEditorDocument final : public EditorDocument

@@ -2924,6 +2924,18 @@ namespace Arcane::Editor
                                                  panelActions.revealInBrowse);
             Arcane::Editor::FocusDockTab("Asset Browser");
         }
+        // `openAsset` (an asset-reference cell's name double-click, spec
+        // 2026-09-30 s4.2): opened HERE, a frame after the cell queued it,
+        // exactly like a Browser double-click (OpenAssetRow: a scene through
+        // openScene, a source file to the IDE). Its follow-ups are consumed at
+        // once; OpenAssetRow never sets openAsset, so this recurses one level.
+        if (panelActions.openAsset.IsValid())
+            if (const Arcane::Editor::AssetPanelEntry* e = m_assetModel.Find(panelActions.openAsset))
+            {
+                Arcane::Editor::AssetPanelActions follow;
+                Arcane::Editor::OpenAssetRow(*e, m_runtime->CurrentProject(), m_documents, follow);
+                ConsumeAssetPanelActions(follow, ls);
+            }
 
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
         // Recook, per the plan's Ruling 8: invalidate the artifact, ERASE this

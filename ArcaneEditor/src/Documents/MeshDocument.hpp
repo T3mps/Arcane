@@ -95,6 +95,8 @@ namespace Arcane
 
 namespace Arcane::Editor
 {
+    struct AssetRefServices;   // Panels/AssetReferenceField.hpp (Services::assetRefs)
+
     class MeshDocument final : public EditorDocument
     {
     public:
@@ -168,6 +170,12 @@ namespace Arcane::Editor
             // tests and at shutdown; a document with no sink destroys its
             // vehicle inline (see DestroyPreviewContext).
             std::function<void(std::unique_ptr<Arcane::NriGraphContext>)> retireGraphPreview;
+
+            // The shared asset-reference cell's services (spec 2026-09-30 s4.2):
+            // EditorApp::m_assetRefServices, app-lifetime; its callables read state
+            // at call time, so a document made during a boot stage is not stale.
+            // Null in the headless tests (the cell's null services). T3's ports read it.
+            const AssetRefServices* assetRefs = nullptr;
         };
 
         // `data` is already loaded (LoadMeshAsset happens in the factory,

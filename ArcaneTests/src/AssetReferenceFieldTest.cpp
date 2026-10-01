@@ -7,18 +7,32 @@
 
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/AssetReferenceField.hpp"
+#include "Panels/InspectorView.hpp"     // DrawReflectedComponent, ReflectedComponentArgs, InspectorServices
+#include "Widgets/EditorWidgets.hpp"    // FieldGrid
 #include "Widgets/IconsLucide.h"
 #include "Widgets/PropertyGrid.hpp"
+#include "Helpers/TestTypeContext.hpp"
 
+#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Scene/Components.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
+
+#include <Astra/Reflection/TypeMeta.hpp>
+#include <Astra/Registry/Registry.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <glm/vec2.hpp>
+
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -513,4 +527,156 @@ TEST_CASE("AssetRefRow: label cell + cell inside a PropertyGrid, probed under it
     CHECK(probe.count("Texture") == 1);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
+}
+
+// ---- Part 3: the entity page's AssetRef arm (EditorInspectorVectorTest.cpp shape) ----
+namespace
+{
+    struct EntityRefHarness
+    {
+        RefFixture fx{ "arcane_assetref_entity_test" };
+        std::shared_ptr<Astra::ComponentRegistry> creg = std::make_shared<Astra::ComponentRegistry>();
+        Astra::Registry reg{ creg };
+        Astra::Entity e{};
+        Arcane::CommandStack undo{ [this]() -> Astra::Registry& { return reg; } };
+        Arcane::Editor::InspectorState state;
+        Arcane::Editor::InspectorServices inspectorServices;
+        std::unordered_map<std::string, glm::vec2> probe;
+        std::vector<Astra::Entity> selection;
+        ImGuiContext* prev = nullptr;
+        ImGuiContext* ctx = nullptr;
+        ImGuiID activate = 0, pickId = 0, popupId = 0;    // the materialOverride cell's chevron + popup
+        int materialOverrideHash = 0;
+        std::optional<AssetDragPayload> drag;
+        ImVec2 srcCentre{};
+
+        EntityRefHarness()
+        {
+            Arcane::Runtime pin(Arcane::Test::Process());  // shared TypeContext BEFORE registration
+            Arcane::RegisterSceneComponents(reg);
+            e = reg.CreateEntity();
+            reg.AddComponent<Arcane::MeshRenderer>(e, Arcane::MeshRenderer{});
+            Arcane::Identity ident;
+            ident.id = Arcane::Guid::Generate();
+            ident.name = "E";
+            reg.AddComponent<Arcane::Identity>(e, ident);
+            selection = { e };
+            for (const Astra::FieldInfo& f : Astra::GetMeta<Arcane::MeshRenderer>()->fields)
+                if (f.name == "materialOverride") materialOverrideHash = static_cast<int>(f.nameHash);
+            inspectorServices.assetRefs = &fx.services;
+            prev = ImGui::GetCurrentContext();
+            ctx = ImGui::CreateContext();
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1280.0f, 1024.0f);
+            io.IniFilename = nullptr;
+            unsigned char* pixels = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+            state.vectorProbe = &probe;
+        }
+        ~EntityRefHarness() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+
+        Astra::Registry::ComponentInfo Component(std::string_view typeName)
+        {
+            for (const Astra::Registry::ComponentInfo& ci : reg.InspectEntity(e))
+                if (ci.meta && ci.meta->typeName == typeName) return ci;
+            FAIL("the harness entity carries no " << typeName);
+            return {};
+        }
+        Arcane::Guid MaterialOverride() { return reg.GetComponent<Arcane::MeshRenderer>(e)->materialOverride; }
+        Arcane::Guid IdentityId() { return reg.GetComponent<Arcane::Identity>(e)->id; }
+
+        void Frame()
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
+            ImGui::NewFrame();
+            if (activate) { ImGui::ActivateItemByID(activate); activate = 0; }
+            ImGui::SetNextWindowPos(ImVec2(700.0f, 0.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(200.0f, 100.0f), ImGuiCond_Always);
+            ImGui::Begin("src");
+            ImGui::Button("drag me");
+            srcCentre = ImVec2((ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x) * 0.5f,
+                               (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
+            if (drag && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
+            {
+                ImGui::SetDragDropPayload(kAssetDragType, &*drag, sizeof(AssetDragPayload));
+                ImGui::EndDragDropSource();
+            }
+            ImGui::End();
+            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(640.0f, 600.0f), ImGuiCond_Always);
+            ImGui::Begin("Inspector");
+            {
+                Arcane::Editor::FieldGrid grid("##fields", state.grid.labelColWidth);
+                if (grid)
+                {
+                    const Astra::Registry::ComponentInfo mesh = Component("Arcane::MeshRenderer");
+                    Arcane::Editor::DrawReflectedComponent({ reg, mesh, e, std::span<const Astra::Entity>(selection), &undo,
+                        &*fx.project, &inspectorServices, state, "Mesh Renderer", "Appearance", std::string_view{} });
+                    const Astra::Registry::ComponentInfo ident = Component("Arcane::Identity");
+                    Arcane::Editor::DrawReflectedComponent({ reg, ident, e, std::span<const Astra::Entity>(selection), &undo,
+                        &*fx.project, &inspectorServices, state, "Identity", std::string_view{}, std::string_view{} });
+                }
+            }
+            // The stack the visitor pushes: the grid's table id (BeginTable ->
+            // PushOverrideID, imgui_tables.cpp:462), the field's nameHash, the cell's "##assetref".
+            ImGui::PushOverrideID(ImGui::GetID("##fields"));
+            ImGui::PushID(materialOverrideHash);
+            ImGui::PushID("##assetref");
+            pickId = ImGui::GetID(ICON_LC_CHEVRON_DOWN "##pick");
+            popupId = ImGui::GetID("##assetpick");
+            ImGui::PopID(); ImGui::PopID(); ImGui::PopID();
+            ImGui::End();
+            ImGui::Render();
+        }
+        void Frames(int n) { for (int i = 0; i < n; ++i) Frame(); }
+        void DragTo(glm::vec2 target)
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMousePosEvent(srcCentre.x, srcCentre.y); Frame();
+            io.AddMouseButtonEvent(0, true); Frame();
+            io.AddMousePosEvent(srcCentre.x + 20.0f, srcCentre.y); Frame();
+            io.AddMousePosEvent(target.x, target.y); Frame();
+            Frame();
+            io.AddMouseButtonEvent(0, false); Frame();
+            Frame();
+            drag.reset();
+        }
+        glm::vec2 Centre(const std::string& key) { INFO(key); REQUIRE(probe.count(key) == 1); return probe.at(key); }
+    };
+}
+
+TEST_CASE("Entity page: a MeshRenderer material picked in the cell is ONE undo step; undo restores it", "[editor][inspector][assetref]")
+{
+    EntityRefHarness h;
+    h.Frames(2);                                          // frame 1 seeds the label column
+    REQUIRE_FALSE(h.MaterialOverride().IsValid());
+    h.activate = h.pickId;
+    h.Frames(3);
+    ImGuiWindow* popup = PopupWindow(h.popupId);
+    REQUIRE(popup != nullptr);
+    REQUIRE(popup->Active);
+    h.activate = ImHashStr("##row", 0, ImHashStr("game://wall.arcmat", 0, popup->ID));   // Mesh surface: offered
+    h.Frames(3);
+    CHECK(h.MaterialOverride() == h.fx.gWall);
+    REQUIRE(h.undo.CanUndo());
+    h.undo.Undo();
+    CHECK_FALSE(h.MaterialOverride().IsValid());
+    CHECK_FALSE(h.undo.CanUndo());                        // exactly one step
+}
+
+TEST_CASE("Entity page: Identity::id refuses a texture drop (the control drop on a material field lands)", "[editor][inspector][assetref]")
+{
+    EntityRefHarness h;
+    h.Frames(2);
+    h.drag = AssetDragPayload{ h.fx.gWall, AssetKind::Material };
+    h.DragTo(h.Centre("materialOverride.cell"));
+    REQUIRE(h.MaterialOverride() == h.fx.gWall);          // the harness delivers
+    const Arcane::Guid before = h.IdentityId();
+    h.drag = AssetDragPayload{ h.fx.gBrick, AssetKind::Texture };
+    h.DragTo(h.Centre("id.cell"));
+    CHECK(h.IdentityId() == before);
+    h.undo.Undo();                                        // the material drop's step...
+    CHECK_FALSE(h.undo.CanUndo());                        // ...is the only one
 }

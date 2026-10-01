@@ -1,7 +1,7 @@
 #include "Panels/InspectorView.hpp"
 
-#include "Panels/AssetPanelModel.hpp"    // AssetKind/AssetKindFilterForFieldName/MaterialSurfaceFilterForComponent + AssetPanelEntry::surface (Task 14 pill + filter)
-#include "Panels/CreateAssetDialog.hpp"  // MaterialSurfacePillText (SAME pill text as the Create dialog)
+#include "Panels/AssetPanelModel.hpp"    // AssetKind/AssetKindFilterForFieldName/MaterialSurfaceFilterForComponent (the cell's kind + surface filters)
+#include "Panels/AssetReferenceField.hpp"   // the shared asset-reference cell (spec 2026-09-30 s4.2)
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Scene/EditGesture.hpp"
 #include "Widgets/EditorWidgets.hpp"
@@ -11,7 +11,6 @@
 
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
-#include <Arcane/Project/Project.hpp>
 
 #include <Astra/Reflection/FieldVisitor.hpp>
 
@@ -95,29 +94,10 @@ namespace Arcane::Editor
             Astra::Entity                     entity{};
             const Astra::ComponentDescriptor* descriptor = nullptr;
             std::string                       typeName;
-            const Arcane::Project*            project = nullptr;   // asset-ref resolve/pick; may be null
-            // Sprite-asset arc, Task 4: texture-drop auto-mint on a Sprite-typed
-            // AssetRef field. Wired UNCONDITIONALLY today -- EditorAppFrame.cpp
-            // passes &m_inspectorServices on every DrawInspectorBody call, and
-            // EditorApp::Init sets mintSpriteForTexture unconditionally (not
-            // gated on Play/Edit) -- so in the shipping app this is never
-            // actually null. The null check in the AssetRef arm below is
-            // defensive, for a caller that does not wire InspectorServices at
-            // all (DrawInspectorBody's `services` parameter defaults to
-            // nullptr).
-            //
-            // Play-mode note: `stack` above IS gated (null while Play runs,
-            // binding.editMode -> nullptr), but `services` is not, so a
-            // texture drop during Play still mints/reuses the .arcsprite and
-            // calls ApplyGuidImmediate, which applies the Guid edit via its
-            // unconditional ForEachTarget even with stack == nullptr (it only
-            // skips opening the ScopedTransaction and taking the per-target
-            // Snapshot -- both live inside the same `if (stack)` block,
-            // InspectorView.cpp:347-352). A Play-mode texture drop
-            // therefore mints the file and writes the Guid with NO undo step
-            // -- exactly the no-undo-in-Play behavior every other AssetRef
-            // drop already has; this branch adds a minted file as a
-            // consequence, not a new undo hole.
+            // The asset-reference cell's services ride InspectorServices::
+            // assetRefs. A texture drop on a sprite field mints the .arcsprite
+            // outside ApplyGuidImmediate's transaction; in Play (stack null)
+            // the Guid edit lands with no undo step, like every AssetRef edit.
             const InspectorServices*          services = nullptr;
 
             // The Inspector's live search, set per component before the visit.
@@ -988,299 +968,43 @@ namespace Arcane::Editor
                     }
                     case Arcane::Editor::FieldKind::AssetRef:
                     {
-                        // Asset-reference (Guid) field: button shows the resolved
-                        // mount path (or raw guid), opens a pick popup, and accepts
-                        // browser drags; an "x" clears an EDITABLE one (see below).
-                        // Kind filter is inferred from the field name
-                        // (AssetKindFilterForFieldName).
-                        const Arcane::Guid v = f.Get<Arcane::Guid>(instance);
-                        // rawName, NOT the display label: this heuristic reads the
-                        // C++ identifier, which is what its documented contract
-                        // (Panels/AssetPanelModel.hpp) is written against.
+                        // The shared asset-reference cell (spec 2026-09-30 s4.2):
+                        // thumb + file name (the mount path is the tooltip),
+                        // chevron picker, browse-to, clear, whole-cell drop. It
+                        // keeps this arm's rules: "--" when mixed, no drop on a
+                        // read-only field, an Identity guid never resolved,
+                        // texture -> sprite mint. rawName (the C++ identifier)
+                        // feeds the kind heuristic; typeName (the OWNING
+                        // component) narrows a material field's surface.
+                        static const Arcane::Editor::AssetRefServices kNoAssetRefServices{};
                         const int kindFilter = Arcane::Editor::AssetKindFilterForFieldName(rawName);
-                        const bool materialField =
-                            kindFilter == static_cast<int>(Arcane::Editor::AssetKind::Material);
-                        // Task 14: the OWNING COMPONENT'S context narrows a
-                        // material field further -- SpriteRenderer::material
-                        // wants Sprite-surface candidates, MeshRenderer::
-                        // materialOverride wants Mesh-surface ones. `typeName`,
-                        // not rawName: this heuristic reads the component the
-                        // field lives ON, not the field itself. -1 (unfiltered)
-                        // for every non-material field and every unrecognised
-                        // component -- "do not break other material fields".
-                        const int surfaceFilter =
-                            materialField ? Arcane::Editor::MaterialSurfaceFilterForComponent(typeName)
-                                          : -1;
-
-                        // Mixed asset refs render BLANK, same rule as the numeric
-                        // kinds. This was the one kind the "mixed shows blank" work
-                        // missed: ComputeFieldMixed already handles AssetRef (width
-                        // 1), but the result was never consulted here, so a
-                        // multi-selection showed the PRIMARY's asset as if the whole
-                        // selection shared it.
-                        const bool refMixed = Multi() && MixedFor(f).Any();
-
-                        std::string display = "(none)";
-                        // A non-nil guid whose registry Resolve() fails is a DANGLING
-                        // reference (the asset it named is gone/moved/never
-                        // registered) -- flagged with the editor's established
-                        // error-text color (ProblemsPanel.cpp's severity coloring
-                        // and EditorPanels.cpp's Console panel both use this same
-                        // ImVec4(0.90, 0.35, 0.35, 1.0) literal for
-                        // DiagSeverity::Error; there is no named Theme constant for
-                        // it -- EditorTheme.hpp's domain-color note says exactly
-                        // this kind of color-coding is deliberately NOT
-                        // monochrome/centralized) plus a "(missing)" suffix, so a
-                        // broken reference reads as broken rather than as an
-                        // ordinary grey guid. No diagnostic is published from HERE
-                        // -- AssetRegistry::ScanContent already owns "assets" for
-                        // the registry's own view of what is broken; this is only
-                        // this one field's display.
-                        bool dangling = false;
-                        if (refMixed)
-                        {
-                            display = "--";   // differing values across the selection
-                        }
-                        else if (v.IsValid())
-                        {
-                            display = v.ToString();
-                            // Identity guids (Arcane::Identity.id) are not asset
-                            // references -- the registry can never resolve them, so
-                            // asking it would flag every healthy entity "(missing)".
-                            if (project && !Arcane::Editor::IsIdentityGuidFieldName(rawName))
-                            {
-                                if (const auto mount = project->Registry().Resolve(v))
-                                    display = *mount;
-                                else
-                                {
-                                    dangling = true;
-                                    display += " (missing)";
-                                }
-                            }
-                        }
-
-                        // SIZED to the cell, minus the clear button's seat when
-                        // one will render: an unsized button grows with its
-                        // label, and a long mount path pushed the "x" (and its
-                        // own text) off the panel. The label truncates with an
-                        // ellipsis to match; the FULL string joins the row
-                        // tooltip via tooltipValue.
-                        const bool wantClear = !readOnly && (v.IsValid() || refMixed);
-                        const ImGuiStyle& st = ImGui::GetStyle();
-                        const float clearW = wantClear
-                            ? ImGui::CalcTextSize("x").x + st.FramePadding.x * 2.0f
-                                  + st.ItemSpacing.x
-                            : 0.0f;
-                        const float btnW =
-                            std::max(ImGui::GetContentRegionAvail().x - clearW, 40.0f);
-                        const std::string shown = Arcane::Editor::EllipsisToWidth(
-                            display, btnW - st.FramePadding.x * 2.0f);
-                        if (shown.size() != display.size())
-                            tooltipValue = display;
-                        // Left-aligned like every value widget -- a centred
-                        // path reads as decoration, not data.
-                        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
-                        // Button() draws its label through ImGuiCol_Text, so pushing
-                        // it here recolors exactly the "<guid> (missing)" text set
-                        // above, matching Button's normal text-color mechanism.
-                        if (dangling)
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.35f, 0.35f, 1.0f));
-                        // "###", not "##": only "###" resets the id hash
-                        // (ImHashStr, imgui.cpp:2557), so with "##" the button's id
-                        // was seeded by `display` -- a MUTABLE string that changes
-                        // the moment an asset is picked. The id then changed under
-                        // ImGui mid-interaction, dropping the item's state.
-                        const bool pickPressed =
-                            ImGui::Button((shown + "###assetref").c_str(), ImVec2(btnW, 0.0f));
-                        if (dangling)
-                            ImGui::PopStyleColor();
-                        ImGui::PopStyleVar();
-                        if (pickPressed)
-                            ImGui::OpenPopup("##assetpick");
-                        // This row may end on the clear button rather than on the
-                        // asset button, so the tail below would ask about THAT and
-                        // the identifier tooltip would never appear over the
-                        // asset. Asked here, while the button IS the last item.
-                        hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
-                        // `!readOnly` GUARDS THE DROP, and the BeginDisabled wrap
-                        // above does NOT: drag-drop acceptance never consults
-                        // ImGuiItemFlags_Disabled. BeginDragDropTarget tests only
-                        // DragDropActive, the item's ImGuiItemStatusFlags_HoveredRect,
-                        // and the hovered window (imgui.cpp:15823-15834), and ItemAdd
-                        // stamps HoveredRect from a plain IsMouseHoveringRect
-                        // regardless of the disabled flag (imgui.cpp:12070-12071);
-                        // AcceptDragDropPayload checks the payload type and the target
-                        // rect, nothing about being disabled (imgui.cpp:15860-15905).
-                        // So a drag from the Asset Browser onto the disabled
-                        // Identity::id row landed here and fanned that asset's Guid
-                        // into the durable identity of every selected entity --
-                        // AssetKindFilterForFieldName("id") returns -1, which accepts
-                        // ANY kind. Read-only means read-only on every path in.
-                        if (!readOnly && ImGui::BeginDragDropTarget())
-                        {
-                            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(Arcane::Editor::kAssetDragType))
-                            {
-                                const auto* payload = static_cast<const Arcane::Editor::AssetDragPayload*>(p->Data);
-                                if (kindFilter < 0 || static_cast<int>(payload->kind) == kindFilter)
-                                    ApplyGuidImmediate(rawName, f, instance, payload->guid);
-                                // Sprite-asset arc, Task 4: dropping a TEXTURE on a sprite-typed
-                                // field auto-mints (or reuses) the wrapping .arcsprite -- Unity's
-                                // drop-and-go on UE's explicit-asset storage (sprite-asset spec,
-                                // Section 3). The mint runs OUTSIDE ApplyGuidImmediate's
-                                // ScopedTransaction (see MintOrReuseSpriteForTexture,
-                                // EditorAppProject.cpp), so undo covers only the Guid edit --
-                                // undoing this drop does NOT delete the minted file, same as any
-                                // created asset outliving a later edit to a field referencing it.
-                                else if (kindFilter == static_cast<int>(Arcane::Editor::AssetKind::Sprite)
-                                        && payload->kind == Arcane::Editor::AssetKind::Texture
-                                        && services && services->mintSpriteForTexture)
-                                {
-                                    if (const Arcane::Guid minted = services->mintSpriteForTexture(payload->guid);
-                                        minted.IsValid())
-                                        ApplyGuidImmediate(rawName, f, instance, minted);
-                                }
-                            }
-                            ImGui::EndDragDropTarget();
-                        }
-                        // Offered when MIXED too: "clear all of them" is a
-                        // meaningful action even though the primary may be nil.
-                        //
-                        // NOT offered on a read-only ref, where it used to render
-                        // as a disabled "x" -- an affordance promising an action
-                        // that is not merely unavailable right now but can never
-                        // exist. Dropping it removes no reachable write: a
-                        // disabled item is refused by ItemHoverable
-                        // (imgui.cpp:5128-5134), so ButtonBehavior could never
-                        // press it. Note this is the OPPOSITE of the drop target
-                        // above, which the disabled wrap does not gate at all --
-                        // hence its own explicit `!readOnly`.
-                        if (!readOnly && (v.IsValid() || refMixed))
-                        {
-                            ImGui::SameLine();
-                            if (ImGui::SmallButton("x##assetclear"))
-                                ApplyGuidImmediate(rawName, f, instance, Arcane::Guid::Nil());
-                        }
-
-                        if (ImGui::BeginPopup("##assetpick"))
-                        {
-                            if (!project)
-                            {
-                                ImGui::TextDisabled("no project open");
-                            }
-                            else
-                            {
-                                // Type-to-filter (one popup is open at a time,
-                                // so a function-local buffer serves them all).
-                                static char s_pickSearch[64] = {};
-                                if (ImGui::IsWindowAppearing())
-                                {
-                                    s_pickSearch[0] = '\0';
-                                    ImGui::SetKeyboardFocusHere();
-                                }
-                                ImGui::InputTextWithHint("##assetsearch", "Search...",
-                                                         s_pickSearch, sizeof(s_pickSearch));
-                                ImGui::Separator();
-                                if (ImGui::Selectable("(none)"))
-                                    ApplyGuidImmediate(rawName, f, instance, Arcane::Guid::Nil());
-                                for (const Arcane::Editor::AssetEntry& e :
-                                     Arcane::Editor::BuildAssetEntries(project->Registry()))
-                                {
-                                    if (!Arcane::Editor::MatchesFilter(e, kindFilter, s_pickSearch))
-                                        continue;
-
-                                    // Task 14: a material candidate's subkind,
-                                    // read from the SAME cached model the
-                                    // Assets panel's Browse lens shows (never
-                                    // a fresh facade query) -- so the picker
-                                    // and the panel can never disagree about
-                                    // one material's surface. Looked up only
-                                    // for material fields; every other
-                                    // AssetRef kind never touches the model.
-                                    const bool modelReachable =
-                                        materialField && services && services->assetModel;
-                                    const Arcane::Editor::AssetPanelEntry* panelEntry =
-                                        modelReachable ? services->assetModel->Find(e.guid) : nullptr;
-
-                                    // The subkind filter: exclude a candidate
-                                    // ONLY on a CONFIRMED differing surface --
-                                    // `panelEntry` present AND its `surface`
-                                    // resolved AND that value disagrees with
-                                    // `surfaceFilter`. Fix round 1 (review):
-                                    // the first draft also excluded on
-                                    // `!panelEntry` and on a resolved-but-
-                                    // nullopt `surface`, treating "we don't
-                                    // know" the same as "confirmed wrong" --
-                                    // but `MaterialSurfaceFor` returns nullopt
-                                    // for a REAL, registered material whose
-                                    // JSON can't be read or whose parent
-                                    // chain is broken/cyclic, not a phantom
-                                    // asset. `CreateAssetDialog.cpp`'s own
-                                    // parent-material picker (the only other
-                                    // consumer of this exact ambiguity, its
-                                    // `if (e->surface)` guard around the pill)
-                                    // never excludes on a missing surface
-                                    // either -- it omits the pill and leaves
-                                    // the candidate selectable. "Show what we
-                                    // know, say nothing about what we don't":
-                                    // a candidate the model cannot vouch for
-                                    // (guid absent from `Entries()`, or
-                                    // present with an unresolved surface) is
-                                    // shown WITHOUT a pill, same as an
-                                    // unfiltered field. `modelReachable`
-                                    // still degrades the WHOLE filter off for
-                                    // a caller that never wires
-                                    // InspectorServices::assetModel at all
-                                    // (every headless test, same convention
-                                    // as mintSpriteForTexture) -- `panelEntry`
-                                    // is unconditionally null in that case, so
-                                    // gating on it alone would already read
-                                    // as "nothing confirmed, show everything",
-                                    // but the explicit `modelReachable`
-                                    // conjunct keeps that reasoning visible
-                                    // rather than incidental.
-                                    if (surfaceFilter >= 0 && modelReachable
-                                        && panelEntry && panelEntry->surface
-                                        && static_cast<int>(*panelEntry->surface) != surfaceFilter)
-                                        continue;
-
-                                    // Every material candidate gets its
-                                    // subkind pill -- NOT gated on
-                                    // surfaceFilter, so an unfiltered
-                                    // material field (e.g. the post stack's
-                                    // Fullscreen picker) still shows what
-                                    // each candidate IS, matching
-                                    // CreateAssetDialog.cpp's parent-material
-                                    // picker (same MaterialSurfacePillText).
-                                    const char* pillText = (panelEntry && panelEntry->surface)
-                                        ? Arcane::Editor::MaterialSurfacePillText(*panelEntry->surface)
-                                        : nullptr;
-                                    // Reserve the pill's width the same way
-                                    // the row button above reserves the clear
-                                    // button's -- an unsized Selectable fills
-                                    // the whole row (imgui_widgets.cpp's
-                                    // Selectable does not support size < 0),
-                                    // so the pill needs its own seat carved
-                                    // out BEFORE the row draws.
-                                    float rowW = ImGui::GetContentRegionAvail().x;
-                                    if (pillText)
-                                    {
-                                        const ImGuiStyle& pickSt = ImGui::GetStyle();
-                                        const float pillW = ImGui::CalcTextSize(pillText).x
-                                            + pickSt.FramePadding.x * 2.0f + pickSt.ItemSpacing.x;
-                                        rowW = std::max(rowW - pillW, 40.0f);
-                                    }
-                                    if (ImGui::Selectable((e.name + "##" + e.mountPath).c_str(), e.guid == v,
-                                                          ImGuiSelectableFlags_None, ImVec2(rowW, 0.0f)))
-                                        ApplyGuidImmediate(rawName, f, instance, e.guid);
-                                    if (pillText)
-                                    {
-                                        ImGui::SameLine();
-                                        Arcane::Editor::AssetPill(pillText);
-                                    }
-                                }
-                            }
-                            ImGui::EndPopup();
-                        }
+                        Arcane::Editor::AssetRefArgs refArgs;
+                        refArgs.guid = f.Get<Arcane::Guid>(instance);
+                        refArgs.kindFilter = kindFilter;
+                        refArgs.surfaceFilter = kindFilter == static_cast<int>(Arcane::Editor::AssetKind::Material)
+                            ? Arcane::Editor::MaterialSurfaceFilterForComponent(typeName) : -1;
+                        refArgs.readOnly = readOnly;
+                        refArgs.mixed = Multi() && MixedFor(f).Any();
+                        refArgs.allowTextureMint = true;
+                        refArgs.identityGuid = Arcane::Editor::IsIdentityGuidFieldName(rawName);
+                        refArgs.ownTooltip = false;   // the row's tail composes label, value, prose, identifier
+                        const Arcane::Editor::AssetRefServices& refServices =
+                            (services && services->assetRefs) ? *services->assetRefs : kNoAssetRefServices;
+                        const ImVec2 cellMin = ImGui::GetCursorScreenPos();
+                        const float cellW = ImGui::GetContentRegionAvail().x;
+                        const Arcane::Editor::AssetRefEdit edit =
+                            Arcane::Editor::AssetReferenceValue("##assetref", refArgs, refServices);
+                        if (edit.op == Arcane::Editor::AssetRefEdit::Op::Set)
+                            ApplyGuidImmediate(rawName, f, instance, edit.guid);
+                        else if (edit.op == Arcane::Editor::AssetRefEdit::Op::Clear)
+                            ApplyGuidImmediate(rawName, f, instance, Arcane::Guid::Nil());
+                        // The cell may end on a button: it answered for its name.
+                        hovered = edit.hovered;
+                        if (!edit.fullText.empty())
+                            tooltipValue = edit.fullText;
+                        if (probe)   // TEST SEAM (null in production): the cell's centre
+                            (*probe)[(elementCtx ? elementCtx->prefix : std::string{}) + rawName + ".cell"] =
+                                glm::vec2(cellMin.x + cellW * 0.5f, cellMin.y + ImGui::GetFrameHeight() * 0.5f);
                         break;
                     }
                     case Arcane::Editor::FieldKind::String:
@@ -1575,7 +1299,6 @@ namespace Arcane::Editor
         // larger compile-time literal; the member is a std::string because
         // every undo label below is built by concatenating onto it.
         visitor.typeName   = args.component.meta->typeName;
-        visitor.project    = args.project;
         visitor.services   = args.services;
         // Wired UNCONDITIONALLY -- also while Play runs, unlike `stack`: the
         // slots must outlive the per-frame visitor, and the string seed carries

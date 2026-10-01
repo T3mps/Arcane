@@ -807,6 +807,7 @@ namespace Arcane::Editor
                 // walks back through sprite field edits in the order they
                 // happened alongside everything else. Null in Play (s3.3b).
                 spriteDocServices.undo = [this]() { return DocumentUndo(); };
+                spriteDocServices.assetRefs = &m_assetRefServices;
                 // Evict-then-re-resolve on a sprite re-save. The no-gap
                 // requirement (a frame must never render the 1x1 placeholder in
                 // between) is the resolver's contract now, so this is one call:
@@ -858,6 +859,7 @@ namespace Arcane::Editor
                 Arcane::Editor::MeshDocument::Services meshDocServices;
                 meshDocServices.runtime = &m_runtime->Core();
                 meshDocServices.undo = [this]() { return DocumentUndo(); };   // null in Play (s3.3b)
+                meshDocServices.assetRefs = &m_assetRefServices;
                 // Evict-then-re-resolve on a mesh re-save OR an undo/redo,
                 // the same one-call route the .arcsprite factory above takes
                 // for its own asset: the no-gap requirement (no frame may
@@ -989,20 +991,24 @@ namespace Arcane::Editor
                 std::make_unique<Arcane::SceneRenderResolver>(std::move(rs));
         }
 
-        // Sprite-asset arc, Task 4: built once here rather than per-frame in
-        // DrawSelectionPanels -- the callback itself is stable (always routes
-        // through MintOrReuseSpriteForTexture), only the argument changes.
-        m_inspectorServices.mintSpriteForTexture =
+        // Spec 2026-09-30 s4.2: the asset-reference cell's services, built
+        // ONCE. Every callable reads app state at CALL time (a project switch,
+        // a document opened during a boot stage). reveal/open only QUEUE into
+        // m_assetPageActions: ConsumeAssetPanelActions performs them next
+        // frame, because opening mid-draw would mutate DocumentHost's list
+        // while a page from that list is being drawn. tombstoneName: T5.
+        m_assetRefServices.model = &m_assetModel;
+        m_assetRefServices.project = [this]() -> const Arcane::Project*
+        { return m_runtime ? m_runtime->CurrentProject() : nullptr; };
+        m_assetRefServices.resolveThumb = [this](const Arcane::Guid& g) -> std::uint64_t
+        { return m_assetServices.resolveAssetThumb ? m_assetServices.resolveAssetThumb(g) : 0; };
+        m_assetRefServices.canReveal = [this]
+        { return m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser); };
+        m_assetRefServices.reveal = [this](const Arcane::Guid& g) { m_assetPageActions.revealInBrowse = g; };
+        m_assetRefServices.open = [this](const Arcane::Guid& g) { m_assetPageActions.openAsset = g; };
+        m_assetRefServices.mintSpriteForTexture =
             [this](const Arcane::Guid& textureGuid) { return MintOrReuseSpriteForTexture(textureGuid); };
-
-        // Asset-manager arc, Task 14: the subkind-filtered material picker's
-        // surface lookup. Just a pointer, not a lambda -- m_assetModel is a
-        // stable member for the app's whole lifetime (it survives project
-        // switches via ResetForProjectSwitch, it is never re-seated), so
-        // there is nothing to look up live the way the ChromeGraph() lambdas
-        // below need to be. Wired here, alongside mintSpriteForTexture, for the same
-        // "built once at boot" reason.
-        m_inspectorServices.assetModel = &m_assetModel;
+        m_inspectorServices.assetRefs = &m_assetRefServices;
 
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
         // resolver, built here because ChromeGraph() doesn't exist yet at

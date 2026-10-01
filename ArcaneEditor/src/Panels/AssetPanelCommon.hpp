@@ -112,6 +112,10 @@ namespace Arcane::Editor
         bool         showStatus = false;   // digest chip (Browse/Graph -> Status)
         Arcane::Guid revealInBrowse;       // Unreferenced card -> Browse
         Arcane::Guid focusInGraph;         // Scenes card -> Graph
+        // An asset-reference cell's name double-click (spec 2026-09-30 s4.2):
+        // QUEUED so the open never mutates DocumentHost's list mid-draw; the
+        // host routes it through OpenAssetRow next frame.
+        Arcane::Guid openAsset;
     };
 
     // The Assets panel's read-only host seams. Originally just the

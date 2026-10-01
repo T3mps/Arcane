@@ -13,7 +13,7 @@
 #include <imgui.h>   // ImDrawList / ImVec2 (ViewportImageOverlayFn)
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
-#include <Arcane/Guid.hpp>   // InspectorServices::mintSpriteForTexture
+#include <Arcane/Guid.hpp>   // Arcane::Guid
 #include <Arcane/Util/FunctionRef.hpp>   // ApplyStructural's mutate callback
 #include <cstdint>
 #include <functional>
@@ -33,7 +33,8 @@ namespace Arcane::Editor
     class PlaySession;
     enum class PlayLaunchMode;   // full definition in PlayMode.hpp
     struct SelectionContext;
-    class AssetPanelModel;   // full definition in AssetPanelModel.hpp (InspectorServices::assetModel)
+    class AssetPanelModel;   // full definition in AssetPanelModel.hpp
+    struct AssetRefServices;   // Panels/AssetReferenceField.hpp (InspectorServices::assetRefs)
 
     // Menu-bar requests the app resolves AFTER the frame's dockspace is drawn
     // (dialog launches happen at the call site, never inside the menu draw).
@@ -433,45 +434,15 @@ namespace Arcane::Editor
                            OutlinerState& state, std::uint64_t savedStateId,
                            bool* open = nullptr);
 
-    // App-level effect the Inspector panel triggers but does not own. UNLIKE
-    // AssetPanelActions -- which only RETURNS a request and defers every
-    // effect until AFTER the asset panels return ("Row actions the APP
-    // resolves after the draw", AssetPanelCommon.hpp) -- this callback runs
-    // its file IO + project-registry mutation SYNCHRONOUSLY, DURING
-    // DrawInspectorBody's own draw; there is no deferred step here. That is
-    // safe because the Inspector draws AFTER all three asset panels every
-    // frame (EditorApp::MainLoop: DrawEditorUi, which owns
-    // DrawAssetBrowserPanel/DrawAssetGraphPanel/DrawAssetStatusPanel, runs
-    // before DrawSelectionPanels, which owns DrawInspectorBody) -- the asset
-    // panels have already built and fully consumed their own per-frame entry
-    // snapshot by the time this callback can run, so mutating the project's
-    // asset registry here cannot invalidate anything an asset panel is still
-    // iterating this frame. The one rule that DOES carry over
-    // unchanged: no dialogs launch from inside a panel draw, on either path.
-    //
-    // Sprite-asset arc, Task 4: dropping a TEXTURE onto a sprite-typed
-    // AssetRef field mints (or reuses) the wrapping .arcsprite; EditorApp
-    // builds this ONCE (mintSpriteForTexture wraps
-    // EditorApp::MintOrReuseSpriteForTexture) and passes it in by pointer every
-    // frame, so the field visitor never needs to know about EditorApp itself.
+    // What the Inspector's reflected rows borrow from the app. The asset-
+    // reference cell (spec 2026-09-30 s4.2) reads EditorApp::m_assetRefServices
+    // through this pointer: thumbnails, the picker's model, browse-to/open
+    // (QUEUED -- performed next frame by ConsumeAssetPanelActions) and the
+    // texture->sprite mint (which writes a file, outside the field's undo).
+    // Null = the cell's null services (every headless caller).
     struct InspectorServices
     {
-        std::function<Arcane::Guid(const Arcane::Guid&)> mintSpriteForTexture;
-
-        // Asset-manager arc, Task 14: the subkind-filtered material picker's
-        // surface lookup. Points at EditorApp's OWN AssetPanelModel -- the
-        // SAME cached, already-invalidation-correct surface answer the
-        // Assets panel's Browse lens shows (AssetPanelModel::Find(guid)->
-        // surface), not a fresh facade query -- so the Inspector's picker and
-        // the Browse lens can never disagree about a material's surface. A
-        // raw pointer, not a callable, because the model IS the answer (no
-        // adaptation needed) and it is a stable member for the app's whole
-        // lifetime -- set ONCE (EditorApp::StageSpriteTables, beside
-        // mintSpriteForTexture above). Null for every caller that does not
-        // wire InspectorServices at all (same convention as
-        // mintSpriteForTexture): the picker then degrades to unfiltered, exactly like an
-        // unrecognised owning component.
-        const Arcane::Editor::AssetPanelModel* assetModel = nullptr;
+        const AssetRefServices* assetRefs = nullptr;
     };
 
     // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail

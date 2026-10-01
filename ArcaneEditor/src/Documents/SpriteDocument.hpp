@@ -41,6 +41,8 @@ namespace Arcane { class Assets; }
 
 namespace Arcane::Editor
 {
+    struct AssetRefServices;   // Panels/AssetReferenceField.hpp (Services::assetRefs)
+
     class SpriteDocument final : public EditorDocument
     {
     public:
@@ -79,6 +81,12 @@ namespace Arcane::Editor
             // an edit show up in the viewport (SpriteCache::Request is
             // otherwise a once-per-Guid cache, Render/SpriteCache.cpp:37).
             std::function<void(const Arcane::Guid&)> invalidateSprite;
+
+            // The shared asset-reference cell's services (spec 2026-09-30 s4.2):
+            // EditorApp::m_assetRefServices, app-lifetime; its callables read state
+            // at call time, so a document made during a boot stage is not stale.
+            // Null in the headless tests (the cell's null services). T3's ports read it.
+            const AssetRefServices* assetRefs = nullptr;
         };
 
         // `data` is already loaded (LoadSpriteAsset happens in the factory,
