@@ -120,9 +120,21 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
         // only thing that can tell it from a deliberate one.
         INFO(info.token);
         CHECK(info.category != GraphNodeCategory::Uncategorized);
+        // Node page s5.1.6: every row describes itself (the Inspector header's
+        // wrapped line). Appended after category, so a forgotten row is a
+        // value-initialized null -- this is what tells it from a real one.
+        CHECK((info.description != nullptr && info.description[0] != '\0'));
     }
     GraphNodeType t{};
     CHECK_FALSE(GraphNodeTypeFromToken("not_a_node", t));
+
+    // The spec's three worked examples, verbatim (s5.1.6).
+    CHECK(std::string_view(GraphNodeInfo(GraphNodeType::Mul).description) ==
+          "A times B, per component (a * b); a scalar input splats to the other's width.");
+    CHECK(std::string_view(GraphNodeInfo(GraphNodeType::Panner).description) ==
+          "Scrolls UV by Time x Speed; Fractional wraps the offset to [0, 1) to keep precision.");
+    CHECK(std::string_view(GraphNodeInfo(GraphNodeType::Comment).description) ==
+          "A labelled box; nodes inside it move with it. It has no effect on the shader.");
 
     // Pin-order contract spot checks (append-only; these indices are serialized).
     CHECK(GraphNodeInfo(GraphNodeType::Lerp).inputs.size() == 3);

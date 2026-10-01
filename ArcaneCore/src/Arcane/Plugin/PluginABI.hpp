@@ -998,7 +998,13 @@ namespace Arcane
     //     (`documents[]`). A v46 module was compiled against the old vtables
     //     and layouts; reject the pairing. ReferenceProject.arcproj and
     //     Aphelyon.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 47;
+    // v48 (2026-09-30, node page T3): `GraphNodeTypeInfo` gained the appended
+    //     `description` column (an exported Core struct returned by reference
+    //     from GraphNodeInfo/AllGraphNodeInfos -- its layout moved), and Core
+    //     exports `GraphPinNeutralDefault` (same tranche, same bump; s5.1.8).
+    //     ReferenceProject.arcproj and Aphelyon.arcproj restamped; both game
+    //     modules rebuilt.
+    inline constexpr uint32_t kGamePluginABIVersion = 48;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

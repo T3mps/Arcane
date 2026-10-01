@@ -198,6 +198,12 @@ namespace Arcane
         // Last on purpose: the member order is the table's initializer order,
         // so appending leaves all 49 existing rows' meaning untouched.
         GraphNodeCategory category;
+        // APPENDED (2026-09-30, node page s5.1.6), display-only: one plain
+        // sentence saying what the output is in terms of the inputs, naming
+        // the HLSL intrinsic where there is one. The Inspector's node page
+        // shows it under the header. Last for the same reason as `category`:
+        // appending leaves every existing initializer's meaning untouched.
+        const char*   description;
     };
 
     [[nodiscard]] ARCANE_CORE_API const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept;
