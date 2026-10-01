@@ -626,6 +626,28 @@ namespace Arcane::Editor
                 out[k] = nd.lanes == 1 ? nd.v[0] : nd.v[k];
         }
 
+        // The node page's target id scope (s5.1.4 step 3), RAII and pushed before
+        // any Rows: TextRow / numeric drafts key per node, and a Rows table always
+        // ends before its id pops (TargetIdScope's rule, InputActionsInspectorPage.cpp:51-61).
+        struct NodePageIdScope
+        {
+            NodePageIdScope(std::size_t pass, std::uint32_t id)
+            {
+                ImGui::PushID("node");
+                ImGui::PushID(static_cast<int>(pass));
+                ImGui::PushID(static_cast<int>(id));
+            }
+            ~NodePageIdScope() { ImGui::PopID(); ImGui::PopID(); ImGui::PopID(); }
+            NodePageIdScope(const NodePageIdScope&) = delete;
+            NodePageIdScope& operator=(const NodePageIdScope&) = delete;
+        };
+
+        // An Outputs row's width word: GraphPinDesc::width 1/2/4, 0 = dynamic.
+        const char* PinWidthName(int width)
+        {
+            return width == 1 ? "float" : width == 2 ? "float2" : width == 4 ? "float4" : "dynamic";
+        }
+
         // Value equality for a pass's optional graph, for the gesture builders'
         // no-op guard ONLY. MaterialGraph is a plain aggregate with no
         // operator== (MaterialGraph.hpp:334-372; neither GraphNode nor
@@ -2291,17 +2313,124 @@ namespace Arcane::Editor
         // while the canvas is hidden (s5.1.7). Before the node's id scope:
         // the popup ids must not depend on which node is shown.
         DrawGraphModals();
-        // Re-resolved EVERY call: create and paste reallocate `nodes`. A gone
-        // node draws its one read-only line inside a Rows table -- a row
-        // outside one would hit ImGui::TableNextRow with no current table.
-        if (!FindGraphNode(pass, id))
+        // Re-resolved EVERY call (never a GraphNode* across frames): create
+        // and paste reallocate `nodes`. A gone node draws its one read-only
+        // line inside a Rows table -- a row outside one would hit
+        // ImGui::TableNextRow with no current table.
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
         {
             PropertyGrid::Rows rows(grid, "##nodegone");
             if (rows)
                 grid.ReadOnlyRow("Node", "This node no longer exists");
             return;
         }
-        // The id scope, header and sections follow here (s5.1.4, T3-B).
+        const NodePageIdScope idScope{ pass, id };
+        // The sections. Discrete edits queue (DeferNodeEdit); numeric
+        // write-through stays inline (s5.1.5). `n` is read by the header
+        // only: every later section re-resolves.
+        m_nodePageDrawing = true;
+        DrawNodePageHeader(*n);
+        DrawNodePageInputs(grid, pass, id);
+        DrawNodePageSettings(grid, pass, id);
+        DrawNodePageOutputs(grid, pass, id);
+        DrawNodePageErrors(grid, pass, id);
+        m_nodePageDrawing = false;
+        // The queued discrete edits, in order, after the last row (a Remove
+        // Pin mid-loop would otherwise invalidate the loop).
+        std::vector<std::function<void()>> edits = std::move(m_nodePageEdits);
+        m_nodePageEdits.clear();
+        for (std::function<void()>& edit : edits)
+            edit();
+    }
+
+    void ShaderEditorDocument::DrawNodePageHeader(const Arcane::GraphNode& n)
+    {
+        // The crumb leaf's one sanctioned repeat (s5.1.4): it shares the chip's line.
+        const Arcane::GraphNodeTypeInfo& info = Arcane::GraphNodeInfo(n.type);
+        const char* category = Arcane::GraphNodeCategoryName(info.category);
+        const float padX = ImGui::GetStyle().FramePadding.x;
+        ImGui::AlignTextToFramePadding();
+        const ImVec2 start = ImGui::GetCursorScreenPos();
+        const ImVec2 text = ImGui::CalcTextSize(category);
+        const float h = ImGui::GetFrameHeight();
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            start, ImVec2(start.x + text.x + padX * 2.0f, start.y + h),
+            ImGui::GetColorU32(GraphCategoryHeaderColor(info.category)), h * 0.5f);
+        ImGui::SetCursorScreenPos(ImVec2(start.x + padX, start.y));
+        ImGui::PushStyleColor(ImGuiCol_Text, kNodeTitleText);
+        ImGui::TextUnformatted(category);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.0f, padX * 2.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::kTextDim);
+        ImGui::TextUnformatted(info.display);
+        if (info.description && info.description[0] != '\0')
+            ImGui::TextWrapped("%s", info.description);
+        ImGui::PopStyleColor();
+    }
+
+    void ShaderEditorDocument::DrawNodePageInputs(PropertyGrid&, std::size_t, std::uint32_t) {}     // T3-B4
+    void ShaderEditorDocument::DrawNodePageSettings(PropertyGrid&, std::size_t, std::uint32_t) {}   // T3-B5
+
+    void ShaderEditorDocument::DrawNodePageOutputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || Arcane::GraphNodeOutputCount(*n) == 0)
+            return;   // Output, Vertex Output, Comment
+        if (!grid.Section("Outputs"))
+            return;
+        PropertyGrid::Rows rows(grid, "##outputs");
+        if (!rows)
+            return;
+        const Arcane::MaterialGraph& g = *GraphOptAt(pass);   // FindGraphNode range-checked `pass`
+        for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(*n); ++pin)
+        {
+            const Arcane::GraphPinDesc desc = Arcane::GraphNodeOutputPin(*n, pin);   // Custom: customOutWidth
+            std::string targets;
+            for (const Arcane::GraphLink& l : g.links)
+            {
+                if (l.fromNode != id || l.fromPin != pin)
+                    continue;
+                const Arcane::GraphNode* dst = g.FindNode(l.toNode);
+                if (!dst || l.toPin >= Arcane::GraphNodeInputCount(*dst))
+                    continue;
+                if (!targets.empty())
+                    targets += ", ";
+                targets += std::string(Arcane::GraphNodeInfo(dst->type).display) + "." +
+                           Arcane::GraphNodeInputPin(*dst, l.toPin).name;
+            }
+            const std::string text = std::string(PinWidthName(desc.width)) +
+                                     (targets.empty() ? std::string(" (unused)") : " -> " + targets);
+            ImGui::PushID(static_cast<int>(pin));
+            grid.ReadOnlyRow(desc.name, text);
+            ImGui::PopID();
+        }
+    }
+
+    void ShaderEditorDocument::DrawNodePageErrors(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        // Graph-level errors (nodeId 0) stay on the material page and in Problems.
+        std::vector<std::string> lines;
+        if (pass < m_passGraphErrors.size())
+            for (const Arcane::GraphError& e : m_passGraphErrors[pass])
+                if (e.nodeId == id)
+                    lines.push_back(e.message);
+        ForEachNodeDiagnostic(pass, id, [&](std::string_view m) { lines.emplace_back(m); });
+        if (lines.empty())
+            return;
+        const std::string label = "Errors (" + std::to_string(lines.size()) + ")###errors";   // stable id across N
+        if (!grid.Section(label.c_str()))
+            return;
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::kError);
+        for (const std::string& line : lines)
+            ImGui::TextWrapped("%s", line.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    void ShaderEditorDocument::ForEachNodeDiagnostic(std::size_t pass, std::uint32_t nodeId,
+                                                     const std::function<void(std::string_view)>& fn) const
+    {
+        ForEachPassErrorDiag(pass, [&](std::uint32_t id, std::string_view m) { if (id == nodeId) fn(m); });
     }
 
     void ShaderEditorDocument::DrawSnippetEditor()
@@ -3857,21 +3986,32 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::RebuildDiagBadges()
     {
-        // Compile-diag badges for the ACTIVE pass's canvas: that pass's diags,
-        // line offset, and line map (single-path docs are pass 0 throughout).
+        // Compile-diag badges for the ACTIVE pass's canvas (single-path docs
+        // are pass 0 throughout); graph-level lines (node 0) badge nothing.
         m_diagBadgeNodes.clear();
-        const std::size_t c = static_cast<std::size_t>(std::max(0, m_activePass));
-        if (c >= m_passLineNodeIds.size() || m_passLineNodeIds[c].empty())
+        ForEachPassErrorDiag(static_cast<std::size_t>(std::max(0, m_activePass)),
+                             [&](std::uint32_t id, std::string_view)
+                             {
+                                 if (id != 0)
+                                     m_diagBadgeNodes.push_back(id);
+                             });
+    }
+
+    void ShaderEditorDocument::ForEachPassErrorDiag(
+        std::size_t pass, const std::function<void(std::uint32_t nodeId, std::string_view message)>& fn) const
+    {
+        // That pass's diags, line offset, and line map.
+        if (pass >= m_passLineNodeIds.size() || m_passLineNodeIds[pass].empty())
             return;
         const std::vector<Arcane::ShaderDiag>* diags = &m_diags;
         int offset = m_snippetLineOffset;
-        if (ChainMode() && c < m_passJobs.size())
+        if (ChainMode() && pass < m_passJobs.size())
         {
-            diags = &m_passJobs[c].diags;
-            if (c < m_passLineOffsets.size())
-                offset = m_passLineOffsets[c];
+            diags = &m_passJobs[pass].diags;
+            if (pass < m_passLineOffsets.size())
+                offset = m_passLineOffsets[pass];
         }
-        const std::vector<std::uint32_t>& lineMap = m_passLineNodeIds[c];
+        const std::vector<std::uint32_t>& lineMap = m_passLineNodeIds[pass];
         for (const Arcane::ShaderDiag& d : *diags)
         {
             if (d.severity != Arcane::ShaderDiagSeverity::Error)
@@ -3879,8 +4019,8 @@ namespace Arcane::Editor
             // stitched line -> snippet line -> statement's node (the line map).
             const int snippetLine = d.line - offset;
             const std::size_t idx = static_cast<std::size_t>(snippetLine) - 1;
-            if (snippetLine >= 1 && idx < lineMap.size() && lineMap[idx] != 0)
-                m_diagBadgeNodes.push_back(lineMap[idx]);
+            if (snippetLine >= 1 && idx < lineMap.size())
+                fn(lineMap[idx], d.message);
         }
     }
 

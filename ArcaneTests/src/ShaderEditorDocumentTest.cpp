@@ -11,7 +11,9 @@
 #include "Panels/DiagnosticStore.hpp"
 #include "Documents/PreviewStatus.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
+#include "Documents/ShaderNodeKey.hpp"   // FormatNodeKey: the node page harness keys (T3-B3)
 #include "Widgets/IconsLucide.h"   // ICON_LC_X: the asset cell's clear button
+#include "Widgets/EditorTheme.hpp"   // Theme::kError: the node page Errors colour probe
 #include "Widgets/PropertyGrid.hpp"
 #include "Helpers/GpuCapability.hpp"
 #include "Helpers/NodePageDocs.hpp"   // SpriteNodeDoc / ChainNodeDoc (node page s5.1.11)
@@ -2190,4 +2192,191 @@ TEST_CASE("ShaderEditorDocument: RemoveCustomPin drops the pin's link and litera
     CHECK_FALSE(doc.RemoveCustomPin(0, 2, 9));   // out of range: no edit, no step
     CHECK_FALSE(doc.RemoveCustomPin(4, 2, 0));   // no such pass: never the base fallback
     CHECK_FALSE(stack.CanUndo());
+}
+
+// ==== The NODE PAGE (spec 2026-09-30 s5.1.4/5.1.5/5.1.9/5.1.11) ====
+namespace
+{
+    using T = Arcane::GraphNodeType;
+
+    // The s5.1.10 fixture's SHAPE, built in code with fixed ids so no test depends on
+    // the ReferenceProject file: 1 Output, 2 Sprite Texture, 3 Param 'tint' (color),
+    // 4 Multiply (rgba -> a, tint -> b, -> Output.color), 5 Power (b literal 2, a
+    // unwired), 6 Swizzle "xy", 7 Custom (p1 float4, "return p1;", out float4),
+    // 8 Panner (Fractional), 9 Comment.
+    Arcane::GraphNode& AddNode(Arcane::MaterialGraph& g, std::uint32_t id, T type)
+    {
+        Arcane::GraphNode n;
+        n.id = id; n.type = type;
+        n.posX = 40.0f + 200.0f * static_cast<float>((id - 1) % 3);
+        n.posY = 40.0f + 150.0f * static_cast<float>((id - 1) / 3);
+        g.nodes.push_back(std::move(n));
+        return g.nodes.back();   // use immediately: the next AddNode may reallocate
+    }
+    Arcane::MaterialGraph NodePageGraph()
+    {
+        Arcane::MaterialGraph g;
+        AddNode(g, 1, T::Output);
+        AddNode(g, 2, T::SpriteTexture);
+        { Arcane::GraphNode& p = AddNode(g, 3, T::Param); p.paramName = "tint"; p.paramType = Arcane::MatParamType::Color;
+          p.paramDefault = Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f); }
+        AddNode(g, 4, T::Mul);
+        { Arcane::GraphNode& p = AddNode(g, 5, T::Power); Arcane::GraphPinLiteral l; l.pin = 1; l.v[0] = 2.0f; p.pinLiterals.push_back(l); }
+        { Arcane::GraphNode& s = AddNode(g, 6, T::Swizzle); s.swizzleMask = "xy"; }
+        { Arcane::GraphNode& c = AddNode(g, 7, T::Custom); c.customPins = { { "p1", 4 } }; c.customBody = "return p1;"; c.customOutWidth = 4; }
+        { Arcane::GraphNode& p = AddNode(g, 8, T::Panner); p.pannerFractional = true; }
+        { Arcane::GraphNode& c = AddNode(g, 9, T::Comment); c.paramName = "Node page fixture"; c.value[0] = 240.0f; c.value[1] = 120.0f; }
+        g.links = { { 2, 0, 4, 0 }, { 3, 0, 4, 1 }, { 4, 0, 1, 0 } };
+        g.nextId = 10;
+        return g;
+    }
+    Arcane::MaterialAssetData GraphDoc(Arcane::MaterialGraph g, const char* kind = "sprite")
+    {
+        Arcane::MaterialAssetData data;
+        data.id = Arcane::Guid::Generate();
+        data.name = "NodePageGraph";
+        data.kind = kind;
+        data.graph = std::move(g);   // the ctor's RegenerateFromGraph writes the snippet
+        return data;
+    }
+    // A fullscreen base graph + one graph-owned pass "blur", each holding the SAME
+    // ids: 1 Output, 2 Float (-> Output.color), 3 Custom (pin x, float).
+    Arcane::MaterialAssetData ChainDoc()
+    {
+        const auto graph = [](float v)
+        {
+            Arcane::MaterialGraph g;
+            AddNode(g, 1, T::Output);
+            { Arcane::GraphNode& f = AddNode(g, 2, T::ConstFloat); f.value[0] = v; }
+            { Arcane::GraphNode& c = AddNode(g, 3, T::Custom); c.customPins = { { "x", 1 } }; c.customBody = "return float4(x, x, x, 1.0);"; }
+            g.links = { { 2, 0, 1, 0 } };
+            g.nextId = 4;
+            return g;
+        };
+        Arcane::MaterialAssetData data = GraphDoc(graph(0.25f), "fullscreen");
+        Arcane::MaterialPass blur;
+        blur.name = "blur";
+        blur.inputs = { 0 };
+        blur.graph = graph(0.75f);
+        data.passes.push_back(std::move(blur));
+        return data;
+    }
+    std::string NodeKeyOf(std::size_t pass, std::uint32_t id) { return Arcane::Editor::FormatNodeKey({ pass, id }); }
+    // A CollapsingHeader logs as "### <label> ###" (imgui_widgets.cpp:7116).
+    bool HasSection(const std::string& log, const char* label) { return log.find(std::string("### ") + label) != std::string::npos; }
+
+    // Device-less ImGui (HeadlessImGui, FIRST member so it destructs last) + a real
+    // CommandStack + the document; each Frame draws an Inspector-like 392 px window
+    // (the 1080p Inspector width) with PageFor(key) -- or a fixed page pointer --
+    // logging its text and recording PropertyGrid probes.
+    struct NodePageHarness
+    {
+        Arcane::Test::HeadlessImGui imgui;
+        ImGuiContext* ctx = imgui.ctx;
+        Astra::Registry registry;
+        Arcane::CommandStack stack{ [this]() -> Astra::Registry& { return registry; } };
+        Arcane::Editor::PropertyGridState state;
+        std::unordered_map<std::string, ImVec2> probe;
+        std::unique_ptr<ShaderEditorDocument> doc;
+        std::string key, log;
+        bool pageDrawn = false, errorDrawn = false;
+
+        explicit NodePageHarness(Arcane::MaterialAssetData data)
+        {
+            ImGui::GetIO().DisplaySize = ImVec2(1280.0f, 1024.0f);   // room for the 1000 px window
+            state.probe = &probe;
+            DocServices services;
+            services.undo = [this]() -> Arcane::CommandStack* { return &stack; };
+            doc = std::make_unique<ShaderEditorDocument>(services, fs::path("nodepage.arcmat"), std::move(data));
+        }
+        ~NodePageHarness() { doc.reset(); }   // inside the context (the document's dtor may touch ImGui)
+        NodePageHarness(const NodePageHarness&) = delete;
+        NodePageHarness& operator=(const NodePageHarness&) = delete;
+
+        void Frame(Arcane::Editor::InspectorPage* fixed = nullptr)
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
+            ImGui::NewFrame();
+            Arcane::Editor::PropertyGrid(state).CommitOrphans();
+            ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(392, 1000), ImGuiCond_Always);
+            ImGui::Begin("Inspector");
+            ImGui::LogToBuffer();
+            pageDrawn = false;
+            Arcane::Editor::InspectorPage* page = fixed ? fixed : (doc ? doc->PageFor(key) : nullptr);
+            if (page) { Arcane::Editor::PropertyGrid grid(state); page->Draw(grid); pageDrawn = true; }
+            log = ctx->LogBuffer.c_str();
+            ImGui::LogFinish();
+            ImGui::End();
+            ImGui::Render();
+            const ImU32 error = ImGui::ColorConvertFloat4ToU32(Arcane::Editor::Theme::kError);
+            errorDrawn = false;
+            for (const ImDrawVert& v : ImGui::FindWindowByName("Inspector")->DrawList->VtxBuffer) errorDrawn = errorDrawn || v.col == error;
+        }
+        ImVec2 Centre(const std::string& label) { INFO(label); REQUIRE(probe.count(label) == 1); return probe.at(label); }
+        void Press(ImVec2 at) { ImGuiIO& io = ImGui::GetIO(); io.AddMousePosEvent(at.x, at.y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); }
+        void Click(ImVec2 at) { Press(at); ImGui::GetIO().AddMouseButtonEvent(0, false); Frame(); }
+        void Type(const char* s) { ImGui::GetIO().AddInputCharactersUTF8(s); Frame(); }
+        void Key(ImGuiKey k) { ImGui::GetIO().AddKeyEvent(k, true); Frame(); ImGui::GetIO().AddKeyEvent(k, false); Frame(); }
+        const Arcane::GraphNode* Node(std::size_t pass, std::uint32_t id) const
+        {
+            const Arcane::MaterialGraph* g = doc->PassGraph(pass);
+            return g ? g->FindNode(id) : nullptr;
+        }
+    };
+    std::string GraphJson(const NodePageHarness& h, std::size_t pass) { return Arcane::GraphToJson(*h.doc->PassGraph(pass)).dump(); }
+}
+
+TEST_CASE("Node page: the header shows category, type and description; Outputs list widths and targets; no preview",
+          "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    h.key = NodeKeyOf(0, 4);   // Multiply
+    h.Frame(); h.Frame();
+    REQUIRE(h.pageDrawn);
+    INFO(h.log);
+    const Arcane::GraphNodeTypeInfo& mul = Arcane::GraphNodeInfo(T::Mul);
+    CHECK(h.log.find("Math") != std::string::npos);            // the category chip
+    CHECK(h.log.find("Multiply") != std::string::npos);        // the type display
+    CHECK(h.log.find(mul.description) != std::string::npos);   // wrapped, dim
+    CHECK(HasSection(h.log, "Outputs"));
+    CHECK(h.log.find("dynamic -> Output.color") != std::string::npos);
+    CHECK_FALSE(HasSection(h.log, "Errors"));
+    for (ImGuiWindow* w : h.ctx->Windows)                       // s5.1.9: no per-node preview, no copy of the material's
+        CHECK(std::string(w->Name).find("##preview") == std::string::npos);
+
+    h.key = NodeKeyOf(0, 2); h.Frame();                         // Sprite Texture: one wired output, one not
+    CHECK(h.log.find("float4 -> Multiply.a") != std::string::npos);
+    CHECK(h.log.find("float (unused)") != std::string::npos);
+    h.key = NodeKeyOf(0, 1); h.Frame();                         // Output has no Outputs section
+    CHECK_FALSE(HasSection(h.log, "Outputs"));
+}
+
+TEST_CASE("Node page: Errors (N) carries this node's codegen errors only, in kError", "[editor][material][nodepage]")
+{
+    Arcane::MaterialGraph g = NodePageGraph();
+    g.FindNode(3)->paramName = "1bad";            // codegen refuses the name (MaterialGraph.cpp:503-507)
+    NodePageHarness h(GraphDoc(std::move(g)));
+    h.key = NodeKeyOf(0, 3); h.Frame(); h.Frame();
+    INFO(h.log);
+    CHECK(HasSection(h.log, "Errors (1)"));
+    CHECK(h.log.find("not a valid identifier") != std::string::npos);
+    CHECK(h.errorDrawn);
+    h.key = NodeKeyOf(0, 9); h.Frame();           // the Comment: codegen never names it
+    CHECK_FALSE(HasSection(h.log, "Errors"));
+}
+
+TEST_CASE("Node page: a page drawn after its node died says so and draws nothing else", "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    h.key = NodeKeyOf(0, 6); h.Frame();
+    Arcane::Editor::InspectorPage* page = h.doc->PageFor(h.key);   // resolved BEFORE the delete: the transient frame
+    REQUIRE(page != nullptr);
+    Arcane::MaterialGraph g = *h.doc->PassGraph(0);
+    std::erase_if(g.nodes, [](const Arcane::GraphNode& n) { return n.id == 6; });
+    h.doc->ApplyGraphState(0, g);
+    h.Frame(page);
+    CHECK(h.log.find("This node no longer exists") != std::string::npos);
+    CHECK_FALSE(HasSection(h.log, "Outputs"));
 }

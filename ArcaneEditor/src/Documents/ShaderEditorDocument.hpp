@@ -488,6 +488,24 @@ namespace Arcane::Editor
         // confirm and the graph modals, then the node re-resolved by (pass, id)
         // -- one read-only line when it is gone -- then its sections (s5.1.4).
         void DrawNodePageBody(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        // ---- The NODE page body (spec s5.1.4). Each section re-resolves (pass,
+        // id) itself -- a queued edit or a live write can run between them. ----
+        void DrawNodePageHeader(const Arcane::GraphNode& n);   // chip + type + description; not a Section
+        void DrawNodePageInputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        void DrawNodePageSettings(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        void DrawNodePageOutputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        void DrawNodePageErrors(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
+        // Compile diagnostics mapped to ONE node of ANY pass: the per-pass
+        // generalisation of RebuildDiagBadges' line map (that one serves only the
+        // active pass; a pinned node page may show another).
+        void ForEachNodeDiagnostic(std::size_t pass, std::uint32_t nodeId,
+                                   const std::function<void(std::string_view)>& fn) const;
+        // The ONE traversal both read: `pass`'s Error-severity compile diags
+        // (its chain job's, or the single-path m_diags), stitched line ->
+        // snippet line -> the line map's node id. `fn` sees every in-range
+        // mapped line, nodeId 0 (graph-level statements) included.
+        void ForEachPassErrorDiag(std::size_t pass,
+                                  const std::function<void(std::uint32_t nodeId, std::string_view message)>& fn) const;
         // The material crumb's `select` (s5.1.3): back to the material page as
         // a SELECTION (precedent SelectMap({}), InputActionsInspectorPage.cpp:78).
         void SelectMaterialFromCrumb();
