@@ -191,7 +191,7 @@ namespace Arcane::Editor
 
         // ---- Inspector source (inspector filters spec s6a) ----------------
         // Kind "material". ONE page, the whole document's -- title (plus
-        // "(Instance)"), the live preview, the preview/params split and the
+        // "(Instance)"), the Preview section (a collapsible square, s5.3) and the
         // params editor -- under ONE key, "material": opening the document
         // selects it (m_pageSel starts at epoch 1) and a click in the
         // document's content re-selects it (Draw's NoteContentClick). Tab
@@ -211,46 +211,6 @@ namespace Arcane::Editor
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
         void NoteReopened() override { m_pageSel.NoteReopened(); }
         void FlushGesture() override;
-
-        // ---- Pane layout: a GLOBAL editor preference, not per-document ----
-        // The pane split is one editor-wide setting shared by every open
-        // shader document (last drag wins), so a layout set once is the layout
-        // every material opens with. Deliberate: the alternative -- per-document
-        // ratios -- makes the user re-drag the same split for each asset, and
-        // there is no per-asset reason for the two to differ.
-        //
-        // `previewSplit` is the fraction of the material page's height the
-        // PREVIEW takes, against the params editor below it, dragged
-        // vertically. It is the only split left: the document's center tab is
-        // now a single column (the graph/snippet for a base, the preview for an
-        // instance) since preview+params moved out to the Inspector's material
-        // page, so the old horizontal `mainSplit` had nothing left to divide.
-        //
-        // The default is measured from the layout the user settled on at the
-        // desk: the preview takes a little over half the page. Double-clicking
-        // the divider restores it.
-        static constexpr float kPreviewSplitDefault = 0.55f;
-
-        struct LayoutPrefs
-        {
-            float previewSplit = kPreviewSplitDefault;
-        };
-        // The one instance (process-wide). Draw reads and the dividers write it.
-        static LayoutPrefs& Layout();
-
-        // Persistence: an ImGuiSettingsHandler registered on the CURRENT ImGui
-        // context, so the ratios ride the editor's existing imgui.ini next to
-        // ImGui's own window/dock state -- the editor has no settings store of
-        // its own, and this is ImGui's supported extension point for exactly
-        // this (imgui_internal.h:2212-2225 declares the handler struct,
-        // imgui.cpp:4498-4505 registers the stock "Window" one the same way).
-        //
-        // ORDERING: must run after ImGui::CreateContext and BEFORE the first
-        // NewFrame -- NewFrame is where ImGui loads the ini file, and handlers
-        // registered after that load see nothing. EditorApp::Init calls it.
-        // Idempotent; a no-op with no current context (the headless tests that
-        // never make one).
-        static void RegisterLayoutSettings();
 
         // True when the result belonged to this document's in-flight compiles.
         bool ConsumeResult(const Arcane::ShaderCompileResult& result);
@@ -429,12 +389,12 @@ namespace Arcane::Editor
         SaveGestureResult RequestSave() override;
 
     private:
-        // The material page: the preview over the params editor, split
-        // vertically, drawn by the Inspector instance showing it. Carries its
-        // own EditGesture::ScopeGuard (the param rows that open gestures are
-        // submitted inside it) and no Begin/End -- the Inspector window is its
-        // window.
-        void DrawMaterialPageBody();
+        // The material page: the Preview section, Rendering (mesh), Parameters
+        // -- PropertyGrid sections (s5.3), drawn by the Inspector instance
+        // showing it. Carries its own EditGesture::ScopeGuard (the param rows
+        // that open gestures are submitted inside it) and no Begin/End -- the
+        // Inspector window is its window.
+        void DrawMaterialPageBody(PropertyGrid& grid);
 
         // The one page this document contributes (kind "material", key
         // "material"). The base MUST be public: Page() hands &m_page out as
@@ -452,7 +412,7 @@ namespace Arcane::Editor
                 return { InspectorCrumb{ m_doc.IsInstance() ? m_doc.m_title + " (Instance)" : m_doc.m_title,
                                          [] {}, std::string{ "material" } } };
             }
-            void Draw(PropertyGrid&) override { m_doc.DrawMaterialPageBody(); }
+            void Draw(PropertyGrid& g) override { m_doc.DrawMaterialPageBody(g); }
 
         private:
             ShaderEditorDocument& m_doc;
@@ -658,7 +618,7 @@ namespace Arcane::Editor
         void PushPassUndo(const char* label, PassListState before);
         bool NodeBadged(std::uint32_t nodeId) const;
         void RebuildDiagBadges();            // compile diags -> line map -> node ids
-        void DrawPreviewPanel(float height);
+        void DrawPreviewPanel(ImVec2 size);   // the bordered preview child: the image fitted, else PreviewBoxText
         // ---- THERE ARE NO PER-NODE PREVIEW THUMBNAILS ----
         // DrawNodePreviewImage below draws the ONE thumbnail the graph canvas
         // has: the Output node's own image, the material's real preview

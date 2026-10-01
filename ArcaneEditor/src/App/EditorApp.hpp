@@ -930,13 +930,12 @@ namespace Arcane::Editor
         // m_play above, unchanged. SeparateWindow = LaunchStandalone (below) --
         // m_play/its toggle are never touched by that path. Persisted across
         // restarts via an ImGuiSettingsHandler ("[EditorPlayMode][State]"),
-        // registered in Init beside ShaderEditorDocument::RegisterLayoutSettings;
+        // registered in Init;
         // a malformed or absent ini line leaves this at its Viewport default.
         Arcane::Editor::PlayLaunchMode m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
 
-        // ImGuiSettingsHandler callbacks for m_playMode, mirroring
-        // ShaderEditorDocument's layout handler (same registration site, same
-        // read/write shape) -- static member functions rather than free
+        // ImGuiSettingsHandler callbacks for m_playMode, in the standard
+        // ImGuiSettingsHandler read/write shape -- static member functions rather than free
         // functions (like the scene/project dialog Thunks below) so they can
         // reach the private m_playMode of the instance handed through
         // handler->UserData; there is exactly one EditorApp per process.
@@ -950,7 +949,7 @@ namespace Arcane::Editor
         // project switch, RetargetLayoutIni) resets its members to a fresh
         // EditorApp's values before the incoming file is read.
         static void  PlayModeSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
-        void RegisterPlayModeSettings();   // called from Init, beside RegisterLayoutSettings
+        void RegisterPlayModeSettings();   // called from Init
 
         // ImGuiSettingsHandler callbacks for m_camera + m_viewSettings
         // ("[EditorViewport][Camera]", F4 plan 1 T7), mirroring the PlayMode

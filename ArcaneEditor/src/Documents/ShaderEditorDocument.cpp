@@ -14,6 +14,7 @@
 #include "Widgets/GraphZoomLevels.hpp"   // kZoomLevels / ApplyZoomLevels -- shared with the Graph lens
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
+#include "Widgets/PropertyGrid.hpp"   // the material page's sections (s5.3)
 
 // The preview vehicle. Include-order note
 // for anything moved above it: this header reaches <NRI.h> and
@@ -30,6 +31,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarDecl.hpp>   // ARC_CVAR_RANGED (s2.4)
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
@@ -60,6 +62,19 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // s5.3 (9.28 #25): the preview square's height cap, as a share of the page.
+        ARC_CVAR_RANGED("editor.inspector.materialPreviewFraction", "editor", Float32,
+                        ::Arcane::CVarValue::Float32(0.45f), ::Arcane::CVarValue::Float32(0.2f),
+                        ::Arcane::CVarValue::Float32(0.8f), ::Arcane::CVarFlags::Archive,
+                        "Largest share of the Inspector's height the material page's preview square may take");
+
+        float MaterialPreviewFraction()
+        {
+            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            const auto v = reg.Get(reg.Find("editor.inspector.materialPreviewFraction"));
+            return (v && v->type == Arcane::CVarType::Float32) ? v->AsFloat32() : 0.45f;
+        }
+
         // m_surface is an INDEX -- ImGui::Combo hands back an int -- and these
         // three functions are the ONLY conversion between it and the real
         // MaterialSurface / .arcmat `kind`. They are TOTAL in every direction
@@ -733,165 +748,6 @@ namespace Arcane::Editor
             std::string m_label;
             ShaderEditorDocument::PassListState m_before, m_after;
         };
-
-        // ---- Pane splitters ------------------------------------------------
-        // Divider geometry and limits, shared by both of Draw's splits.
-        constexpr float kSplitBarPx  = 6.0f;     // the divider's hit width
-        constexpr float kSplitLinePx = 1.0f;     // hairline drawn at rest
-        constexpr float kSplitHotPx  = 2.0f;     // ... and while hovered/held
-        constexpr float kPaneMinPx   = 120.0f;   // neither pane goes under this
-        constexpr float kSplitMinF   = 0.15f;    // ... unless the span is too
-        constexpr float kSplitMaxF   = 0.85f;    //     small for two floors
-
-        // ---- Pane layout persistence (imgui.ini) ---------------------------
-        // The ini section the ratio lives in: "[ArcaneEditorLayout]
-        // [MaterialPanel]" (the name is kept for ini compatibility; the Material
-        // window itself retired into the Inspector page, inspector filters
-        // s6a, and the split now sizes that page). TypeName may not contain '[' or ']'
-        // (imgui_internal.h:2214); the entry name is what ReadOpen matches on,
-        // and the pair is what lets a future panel add its own entry under the
-        // same type without touching this handler.
-        //
-        // STALE ENTRIES from before the Material panel existed are inert, by
-        // the two mechanisms already in place: the retired "[ArcaneEditorLayout]
-        // [ShaderEditor]" section makes ReadOpen return null (which is how it
-        // has always rejected an unknown name -- ImGui then skips that entry's
-        // lines), and a retired "MainSplit=" line inside a section that IS
-        // matched simply fails both sscanf branches in ReadLine and is dropped.
-        // Neither path allocates or dereferences, so an old imgui.ini loads
-        // clean; the next save rewrites the file without them.
-        constexpr const char* kLayoutIniType = "ArcaneEditorLayout";
-        constexpr const char* kLayoutIniName = "MaterialPanel";
-
-        // A stored ratio arrives from a text file a human can edit, so it is
-        // not trusted: anything non-finite or outside the working range is
-        // pulled back to the fraction limits. The per-frame ClampSplit still
-        // applies the pixel floors on top of this -- this only has to keep a
-        // garbage line from parking a pane off-screen.
-        float SanitizeSplit(float v)
-        {
-            if (!(v > 0.0f) || !(v < 1.0f))   // false for NaN, by construction
-                return 0.5f;
-            return (std::min)((std::max)(v, kSplitMinF), kSplitMaxF);
-        }
-
-        // ReadOpen returns the entry the following lines write into; returning
-        // null makes ImGui skip the entry's lines, which is what an unknown
-        // name should do (imgui.cpp:4498-4505 registers the stock "Window"
-        // handler in this same shape).
-        void* LayoutSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name)
-        {
-            return std::strcmp(name, kLayoutIniName) == 0
-                       ? static_cast<void*>(&ShaderEditorDocument::Layout())
-                       : nullptr;
-        }
-
-        void LayoutSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
-                                    void* entry, const char* line)
-        {
-            auto* prefs = static_cast<ShaderEditorDocument::LayoutPrefs*>(entry);
-            float v = 0.0f;
-            if (std::sscanf(line, "PreviewSplit=%f", &v) == 1)
-                prefs->previewSplit = SanitizeSplit(v);
-        }
-
-        void LayoutSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
-                                    ImGuiTextBuffer* buf)
-        {
-            const ShaderEditorDocument::LayoutPrefs& prefs = ShaderEditorDocument::Layout();
-            buf->reserve(buf->size() + 64);
-            buf->appendf("[%s][%s]\n", handler->TypeName, kLayoutIniName);
-            buf->appendf("PreviewSplit=%.4f\n", prefs.previewSplit);
-            buf->append("\n");
-        }
-
-        // The fraction a split may actually use, given `span` pixels of shared
-        // extent. The PIXEL floor is what keeps a pane usable in a large
-        // window; the FRACTION floor is what keeps both panes alive in a small
-        // one -- under 2 * kPaneMinPx the two pixel floors would cross, so each
-        // is folded against 0.5 first, which leaves lo <= 0.5 <= hi always (an
-        // inverted range would make the clamp order-dependent).
-        float ClampSplit(float ratio, float span)
-        {
-            float lo = kSplitMinF, hi = kSplitMaxF;
-            if (span > 0.0f)
-            {
-                lo = (std::max)(lo, (std::min)(kPaneMinPx / span, 0.5f));
-                hi = (std::min)(hi, (std::max)(1.0f - kPaneMinPx / span, 0.5f));
-            }
-            return (std::min)((std::max)(ratio, lo), hi);
-        }
-
-        // A draggable divider between two sibling panes -- ImGui's standard
-        // splitter recipe: an InvisibleButton owns the gap, and because ImGui
-        // holds ActiveId for as long as the button is held, MouseDelta keeps
-        // arriving every frame even after the cursor leaves the rect. `span`
-        // is the extent the two panes SHARE (their region minus this divider),
-        // so pixels convert into the same fraction the caller laid out with.
-        // Double-click restores `defaultRatio` -- the only way back to a round
-        // split once dragged.
-        //
-        // Two axes, but only the vertical one (dragX=false) has a caller today
-        // -- the material page's preview/params divider. The horizontal branch
-        // is kept because the axis is the ONLY thing that differs between them
-        // (four ternaries), so specialising it would not shrink this function,
-        // and the node-properties section this panel is slated to grow is the
-        // obvious next horizontal split.
-        //
-        // Submit it OUTSIDE ed::Begin/End (both callers do; the canvas's
-        // Begin/End is down inside DrawGraphPanel): within the canvas the node editor
-        // takes ImGui's input for itself and moves ImGui into canvas space
-        // (imgui_canvas.cpp), so a divider there would both compete with the
-        // pan/zoom gestures and drag at the zoom's rate rather than the
-        // cursor's.
-        void PaneSplitter(const char* id, bool dragX, float crossSize, float span,
-                          float& ratio, float defaultRatio)
-        {
-            const ImVec2 size = dragX ? ImVec2(kSplitBarPx, crossSize)
-                                      : ImVec2(crossSize, kSplitBarPx);
-            if (size.x <= 0.0f || size.y <= 0.0f)
-                return;   // degenerate region (InvisibleButton asserts on zero)
-
-            const ImVec2 p0 = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton(id, size);
-            const bool held    = ImGui::IsItemActive();
-            const bool hovered = ImGui::IsItemHovered();
-            if (held || hovered)
-                ImGui::SetMouseCursor(dragX ? ImGuiMouseCursor_ResizeEW
-                                            : ImGuiMouseCursor_ResizeNS);
-            if (held && span > 0.0f)
-            {
-                const ImVec2 d = ImGui::GetIO().MouseDelta;
-                ratio = ClampSplit(ratio + (dragX ? d.x : d.y) / span, span);
-            }
-            // After the drag, so the reset wins on the frame it fires (that
-            // frame's own drag delta is ~0 anyway -- the click did not move).
-            const bool reset = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-            if (reset)
-                ratio = defaultRatio;
-            // Persist on RELEASE, not per frame: MarkIniSettingsDirty starts
-            // ImGui's own save timer (IniSavingRate), so marking every frame of
-            // a drag would keep re-arming a timer that writes the same file
-            // anyway. IsItemDeactivated is true on the frame the drag ends
-            // (imgui_internal.h's ActiveIdPreviousFrame bookkeeping), which is
-            // exactly one mark per gesture.
-            if (reset || ImGui::IsItemDeactivated())
-                ImGui::MarkIniSettingsDirty();
-
-            // Style-relative and three-tone, the same ramp ImGui's own docking
-            // splitter uses: a hairline in Separator at rest, one step brighter
-            // and one pixel wider on hover, brightest while held. The editor
-            // theme fills all three entries (EditorTheme.hpp:175-177).
-            const ImU32 col = ImGui::GetColorU32(held    ? ImGuiCol_SeparatorActive
-                                               : hovered ? ImGuiCol_SeparatorHovered
-                                                         : ImGuiCol_Separator);
-            const float line = (held || hovered) ? kSplitHotPx : kSplitLinePx;
-            const ImVec2 a = dragX ? ImVec2(p0.x + (size.x - line) * 0.5f, p0.y)
-                                   : ImVec2(p0.x, p0.y + (size.y - line) * 0.5f);
-            const ImVec2 b = dragX ? ImVec2(a.x + line, p0.y + size.y)
-                                   : ImVec2(p0.x + size.x, a.y + line);
-            ImGui::GetWindowDrawList()->AddRectFilled(a, b, col);
-        }
     }
 
     // InputTextMultiline over std::string (the imgui_stdlib resize pattern) +
@@ -1972,39 +1828,6 @@ namespace Arcane::Editor
             RenderGraphPreview(dt);
     }
 
-    ShaderEditorDocument::LayoutPrefs& ShaderEditorDocument::Layout()
-    {
-        // One per process, defaulted from the class constants. Function-local so
-        // there is no static-init order question with the ini handler, which is
-        // registered from EditorApp::Init and may read this on its first line.
-        static LayoutPrefs prefs;
-        return prefs;
-    }
-
-    void ShaderEditorDocument::RegisterLayoutSettings()
-    {
-        // No context (headless) or already registered: nothing to do. ImGui
-        // COPIES the handler into the context (imgui.cpp's AddSettingsHandler
-        // does a push_back by value), so the local below may die here -- the
-        // stock handlers are registered from a local exactly the same way.
-        if (ImGui::GetCurrentContext() == nullptr ||
-            ImGui::FindSettingsHandler(kLayoutIniType) != nullptr)
-            return;
-
-        ImGuiSettingsHandler handler;
-        handler.TypeName   = kLayoutIniType;
-        handler.TypeHash   = ImHashStr(kLayoutIniType);
-        handler.ReadOpenFn = LayoutSettingsReadOpen;
-        handler.ReadLineFn = LayoutSettingsReadLine;
-        handler.WriteAllFn = LayoutSettingsWriteAll;
-        // ImGui::ClearIniSettings (a windowed project switch, EditorApp::
-        // RetargetLayoutIni, before it reads the incoming file): back to the
-        // default, so a file without the section never inherits the outgoing
-        // project's split.
-        handler.ClearAllFn = [](ImGuiContext*, ImGuiSettingsHandler*) { ShaderEditorDocument::Layout() = LayoutPrefs{}; };
-        ImGui::AddSettingsHandler(&handler);
-    }
-
     void ShaderEditorDocument::Draw(bool& requestClose)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard. It
@@ -2048,7 +1871,7 @@ namespace Arcane::Editor
         // window's right column and the horizontal "##splitmain" divider that
         // used to size it: with the right column gone there was nothing left
         // for a horizontal split to divide.
-        // The surviving split -- preview against params -- went with them.
+        // The page has no split either: its preview is a collapsible square (s5.3).
         if (!IsInstance())
         {
             if (m_activePass > static_cast<int>(m_data.passes.size()))
@@ -2133,7 +1956,7 @@ namespace Arcane::Editor
             // cannot (the page's preview is Inspector-column narrow). The toolbar
             // above keeps the parent-chain affordances reachable; saving is
             // Ctrl+S, which needs no toolbar room at all.
-            DrawPreviewPanel(ImGui::GetContentRegionAvail().y);
+            DrawPreviewPanel(ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
         }
 
         // Opened = selected; a click anywhere in the content (canvas
@@ -2151,15 +1974,14 @@ namespace Arcane::Editor
         requestClose = !open;
     }
 
-    void ShaderEditorDocument::DrawMaterialPageBody()
+    void ShaderEditorDocument::DrawMaterialPageBody(PropertyGrid& grid)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
-        // The param rows below open gestures against m_gesture. The body now
+        // The param rows below open gestures against m_gesture. The body
         // draws inside an Inspector instance window, AFTER the documents, and
-        // on collapsed/background-tab frames too (InspectorWindows calls
-        // page->Draw even when Begin returns false) -- where no widget inside
-        // can report its own deactivation, which is exactly what this guard
-        // covers. BeginChild/PaneSplitter are safe there.
+        // on collapsed/refused frames too (InspectorWindows, s5.7) -- where no
+        // widget inside can report its own deactivation, which is exactly
+        // what this guard covers.
         const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         // The Inspector's Ctrl+S parks here too (RequestSaveFromInspector): the
@@ -2168,30 +1990,27 @@ namespace Arcane::Editor
 
         // No title line (spec 2026-09-30 s4.3): the Inspector header's crumb
         // names this material ("<title> (Instance)" for an instance); the
-        // body starts at the preview / its first section.
-
-        // The one surviving draggable split (PaneSplitter) over the SHARED
-        // layout preference -- every open shader document reads the same
-        // ratio, and a drag is the layout all of them use (Layout(), which
-        // the ini handler persists). Preview on top, params below; the
-        // divider sits BETWEEN them, so the height it occupies comes off
-        // the span the fraction divides.
-        // A mesh material never compiles here (Rebuild()'s guard): no preview
-        // box that would read "compiling..." forever -- one line, and the
-        // params take the whole page (final fix P).
-        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+        // body opens on the Preview section.
+        // The page child's height (s5.7), read before anything is laid out.
+        const float pageHeight = ImGui::GetWindowHeight();
+        if (grid.Section("Preview"))
         {
-            DrawPreviewPanel(0.0f);
-            DrawParamsPanel();
-            return;
+            if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+            {
+                // Never compiled here (Rebuild()'s guard): one dim line, no box (s5.3).
+                ImGui::TextDisabled("%s", ToolbarStatusText(ComputeStatus()).c_str());
+            }
+            else
+            {
+                // A square: the column's width, capped at a share of the page
+                // (editor.inspector.materialPreviewFraction), centred.
+                const float availX = ImGui::GetContentRegionAvail().x;
+                const float side = (std::max)(1.0f, (std::min)(availX, MaterialPreviewFraction() * pageHeight));
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (std::max)(0.0f, (availX - side) * 0.5f));
+                DrawPreviewPanel(ImVec2(side, side));
+            }
         }
-        LayoutPrefs& layout = Layout();
-        const ImVec2 avail  = ImGui::GetContentRegionAvail();
-        const float span    = (std::max)(avail.y - kSplitBarPx, 1.0f);
-        DrawPreviewPanel(span * ClampSplit(layout.previewSplit, span));
-        PaneSplitter("##splitpreview", /*dragX=*/false, avail.x, span,
-                     layout.previewSplit, kPreviewSplitDefault);
-        DrawParamsPanel();   // fills whatever the preview left
+        DrawParamsPanel();   // T3-C6 replaces this with the Rendering + Parameters sections
     }
 
     void ShaderEditorDocument::DrawToolbar()
@@ -2255,6 +2074,8 @@ namespace Arcane::Editor
         }
         if (anyBefore)
             ImGui::SameLine();
+        ImGui::TextDisabled("Surface");   // s5.3: the combo names itself; it stays here, so a re-kind is still no step
+        ImGui::SameLine();
         ImGui::SetNextItemWidth(120.0f);
         // Preview-surface selector (Slice 8). On a base material this is a
         // STRUCTURAL edit: it re-kinds the asset (the surface is what the
@@ -3469,7 +3290,7 @@ namespace Arcane::Editor
                  static_cast<float>(kGraphPreviewSize) };
     }
 
-    void ShaderEditorDocument::DrawPreviewPanel(float height)
+    void ShaderEditorDocument::DrawPreviewPanel(ImVec2 size)
     {
         // Mirrors the toolbar's guard: a mesh surface is previewed in the
         // viewport on its meshes, never compiled here -- a one-line note, no box.
@@ -3478,7 +3299,7 @@ namespace Arcane::Editor
             ImGui::TextDisabled("Mesh material: not compiled here -- preview it on a mesh in the viewport");
             return;
         }
-        ImGui::BeginChild("##preview", ImVec2(0, height), ImGuiChildFlags_Borders);
+        ImGui::BeginChild("##preview", size, ImGuiChildFlags_Borders);
         const PreviewImage image = PreviewImageOf();
         if (image.id != 0)
         {

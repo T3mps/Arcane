@@ -136,11 +136,9 @@ namespace Arcane::Editor
         }
 
         // Persistence for EditorApp::m_playMode: an ImGuiSettingsHandler section
-        // "[EditorPlayMode][State]", one "Mode=%d" line -- same shape as
-        // ShaderEditorDocument's "[ArcaneEditorLayout][MaterialPanel]" handler
-        // (ShaderEditorDocument.cpp:757-815), registered at the same site
-        // (Init, right after ImGui's context exists and before the first
-        // NewFrame reads the ini).
+        // "[EditorPlayMode][State]", one "Mode=%d" line, registered in Init,
+        // right after ImGui's context exists and before the first NewFrame
+        // reads the ini.
         constexpr const char* kPlayModeIniType = "EditorPlayMode";
         constexpr const char* kPlayModeIniName = "State";
     }
@@ -152,10 +150,8 @@ namespace Arcane::Editor
     void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
                                               const char* name)
     {
-        // handler->UserData is `this` (set in RegisterPlayModeSettings) -- there
-        // is exactly one EditorApp per process, so this doubles as the "entry"
-        // ReadLine receives, same as LayoutSettingsReadOpen returning
-        // &ShaderEditorDocument::Layout().
+        // handler->UserData is `this` (set in RegisterPlayModeSettings) -- exactly
+        // one EditorApp per process, so it doubles as the "entry" ReadLine receives.
         return std::strcmp(name, kPlayModeIniName) == 0 ? handler->UserData : nullptr;
     }
 
@@ -197,8 +193,7 @@ namespace Arcane::Editor
 
     void EditorApp::RegisterPlayModeSettings()
     {
-        // No context (headless) or already registered: nothing to do -- same
-        // idempotency guard as ShaderEditorDocument::RegisterLayoutSettings.
+        // No context (headless) or already registered: nothing to do.
         if (ImGui::GetCurrentContext() == nullptr ||
             ImGui::FindSettingsHandler(kPlayModeIniType) != nullptr)
             return;
@@ -558,13 +553,10 @@ namespace Arcane::Editor
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
         Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
-        // The shader editor's pane splits are a persisted editor preference, and
-        // they ride the editor's imgui.ini through an ImGuiSettingsHandler. It
-        // has to be registered HERE -- after the context exists (GpuContext::
+        // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later
         // would never see the saved entry.
-        ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
         RegisterPanelVisibilitySettings();
         Arcane::Editor::RegisterInspectorInstancesSettings(m_inspectorHost);

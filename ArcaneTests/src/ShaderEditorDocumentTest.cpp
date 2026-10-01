@@ -15,6 +15,7 @@
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>   // editor.inspector.materialPreviewFraction
 #include <Arcane/Edit/CommandStack.hpp>   // the mesh-metadata undo step rides the ONE undo history
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/OffscreenVehicle.hpp>
@@ -27,15 +28,18 @@
 
 #include <Astra/Registry/Registry.hpp>   // CommandStack's resolver target (never called here)
 
-#include <imgui.h>   // the pane-layout ini round-trip drives ImGui's settings API
+#include <imgui.h>   // the stale-ini case drives ImGui's settings API
 #include <imgui_internal.h>   // ClearIniSettings (a windowed project switch's reset)
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 using Arcane::Editor::DocServices;
@@ -799,125 +803,75 @@ TEST_CASE("ApplyPassListState swaps the pass list, clamps selection, dirties",
 }
 
 // ---------------------------------------------------------------------------
-// Pane-layout preference: the preview/params split is ONE editor-wide setting
-// that persists through ImGui's own ini (the editor has no settings store of
-// its own). This drives the handler RegisterLayoutSettings installs directly --
-// load from memory, save to memory -- so the round-trip is verified headlessly,
-// with no window, no frame and no file: SaveIniSettingsToMemory and
-// LoadIniSettingsFromMemory both work on a bare context.
-//
-// The section moved to [ArcaneEditorLayout][MaterialPanel] when the preview and
-// params moved out of the document window (first into a dockable Material
-// panel, now the Inspector's material page -- inspector filters s6a; the
-// section name stayed), and the horizontal "MainSplit" retired with the right
-// column it used to size -- so this also pins that a PRE-MOVE ini loads inert
-// rather than crashing.
+// s5.3: the material page on PropertyGrid. The preview/params split retired
+// with its ini handler; a stale [ArcaneEditorLayout][MaterialPanel] section
+// loads inert (no handler: ImGui skips it) and is never written back.
 // ---------------------------------------------------------------------------
-TEST_CASE("material panel layout round-trips through imgui.ini", "[editor][material]")
+namespace
 {
-    using Layout = ShaderEditorDocument::LayoutPrefs;
-    ImGuiContext* ctx = ImGui::CreateContext();
-    ImGui::SetCurrentContext(ctx);
-    ImGui::GetIO().IniFilename = nullptr;   // never let a test touch a real ini
+    // LogToBuffer prints a framed header as "### <label> ###": true when only
+    // that decoration precedes `label`, i.e. the header is the body's first item.
+    bool LogStartsWithHeader(const std::string& log, std::string_view label)
+    {
+        const std::size_t at = log.find(label);
+        if (at == std::string::npos) return false;
+        for (std::size_t i = 0; i < at; ++i)
+            if (log[i] != '#' && !std::isspace(static_cast<unsigned char>(log[i]))) return false;
+        return true;
+    }
 
-    ShaderEditorDocument::Layout() = Layout{};   // the process default
-    ShaderEditorDocument::RegisterLayoutSettings();
-
-    auto approx = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
-
-    // The default is the user's measured desk layout.
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.55f));
-
-    // READ: a saved entry lands on the shared preference.
-    ImGui::LoadIniSettingsFromMemory(
-        "[ArcaneEditorLayout][MaterialPanel]\nPreviewSplit=0.6900\n");
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.69f));
-
-    // WRITE: what the divider holds is what the ini gets, under the same
-    // section the reader matches on.
-    ShaderEditorDocument::Layout().previewSplit = 0.5800f;
-    const char* out = ImGui::SaveIniSettingsToMemory(nullptr);
-    const std::string text = out ? out : "";
-    CHECK(text.find("[ArcaneEditorLayout][MaterialPanel]") != std::string::npos);
-    CHECK(text.find("PreviewSplit=0.5800") != std::string::npos);
-    // The retired horizontal split is GONE from what we write.
-    CHECK(text.find("MainSplit=") == std::string::npos);
-
-    // ... and that text reloads to the same layout (the actual round trip).
-    ShaderEditorDocument::Layout() = Layout{};
-    ImGui::LoadIniSettingsFromMemory(text.c_str());
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.58f));
-
-    // A hand-edited ini is not trusted: out-of-range values are pulled back
-    // inside the working limits rather than parking a pane off-screen.
-    ImGui::LoadIniSettingsFromMemory(
-        "[ArcaneEditorLayout][MaterialPanel]\nPreviewSplit=-3.0\n");
-    CHECK(ShaderEditorDocument::Layout().previewSplit <= 0.85f);
-    CHECK(ShaderEditorDocument::Layout().previewSplit >= 0.15f);
-
-    // A foreign entry under the same type is skipped (ReadOpen returns null),
-    // so an unknown section cannot overwrite the material page's.
-    ShaderEditorDocument::Layout().previewSplit = 0.6000f;
-    ImGui::LoadIniSettingsFromMemory(
-        "[ArcaneEditorLayout][SomeOtherPanel]\nPreviewSplit=0.2000\n");
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.60f));
-
-    // STALE ENTRIES from an ini written before the MaterialPanel section existed:
-    // the retired [ShaderEditor] section takes the same ReadOpen-returns-null
-    // path as the foreign one above, and a retired "MainSplit=" line inside a
-    // section that IS matched simply fails the one sscanf branch left. Neither
-    // may fault, and neither may move the live preference.
-    ImGui::LoadIniSettingsFromMemory(
-        "[ArcaneEditorLayout][ShaderEditor]\nMainSplit=0.7400\nRightSplit=0.1600\n"
-        "[ArcaneEditorLayout][MaterialPanel]\nMainSplit=0.2000\n");
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.60f));
-
-    // Registration is idempotent -- a second call must not stack a duplicate
-    // handler (which would write the section twice into one ini).
-    ShaderEditorDocument::RegisterLayoutSettings();
-    const char* twice = ImGui::SaveIniSettingsToMemory(nullptr);
-    const std::string once = twice ? twice : "";
-    const std::size_t first = once.find("[ArcaneEditorLayout][MaterialPanel]");
-    REQUIRE(first != std::string::npos);
-    CHECK(once.find("[ArcaneEditorLayout][MaterialPanel]", first + 1) == std::string::npos);
-
-    ImGui::DestroyContext(ctx);
-    ImGui::SetCurrentContext(nullptr);
-    ShaderEditorDocument::Layout() = Layout{};   // leave the default for other tests
+    // The page in a 400x600 "Inspector" window at the origin, device-less.
+    struct PageUi
+    {
+        ImGuiContext* prev = ImGui::GetCurrentContext();
+        ImGuiContext* ctx = ImGui::CreateContext();
+        Arcane::Editor::PropertyGridState grid;
+        std::unordered_map<std::string, ImVec2> probe;
+        std::string logged;
+        PageUi()
+        {
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1280.0f, 900.0f);
+            io.IniFilename = nullptr;
+            unsigned char* px = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+            grid.probe = &probe;
+        }
+        ~PageUi() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
+        void Frame(ShaderEditorDocument& doc, bool log = false)
+        {
+            ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
+            ImGui::NewFrame();
+            Arcane::Editor::PropertyGrid(grid).CommitOrphans();
+            ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_Always);
+            ImGui::Begin("Inspector");
+            if (log) ImGui::LogToBuffer();
+            { Arcane::Editor::PropertyGrid g(grid); doc.Page()->Draw(g); }
+            if (log) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
+            ImGui::End();
+            ImGui::Render();
+        }
+        ImVec2 At(const std::string& label) { INFO(label); REQUIRE(probe.count(label) == 1); return probe.at(label); }
+        void Move(ShaderEditorDocument& d, ImVec2 p) { ImGui::GetIO().AddMousePosEvent(p.x, p.y); Frame(d); }
+        void Button(ShaderEditorDocument& d, bool down) { ImGui::GetIO().AddMouseButtonEvent(0, down); Frame(d); }
+        void Click(ShaderEditorDocument& d, ImVec2 p) { Move(d, p); Button(d, true); Button(d, false); }
+    };
 }
 
-// A WINDOWED project switch (EditorApp::RetargetLayoutIni, arc-1 debt F)
-// clears ImGui's settings and then reads the incoming project's file. Every
-// handler's ClearAllFn must put its preference back to the default, so an
-// incoming file WITHOUT this section shows the default split -- never the
-// outgoing project's.
-TEST_CASE("material panel layout resets to the default on ClearIniSettings", "[editor][material]")
+TEST_CASE("material page: a stale MaterialPanel ini section loads inert and is never written back", "[editor][material]")
 {
-    using Layout = ShaderEditorDocument::LayoutPrefs;
+    ImGuiContext* prev = ImGui::GetCurrentContext();
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(ctx);
-    ImGui::GetIO().IniFilename = nullptr;   // never let a test touch a real ini
-
-    ShaderEditorDocument::Layout() = Layout{};
-    ShaderEditorDocument::RegisterLayoutSettings();
-
-    auto approx = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
-
-    // The round-trip case's non-default section: the outgoing project's split.
-    ImGui::LoadIniSettingsFromMemory(
-        "[ArcaneEditorLayout][MaterialPanel]\nPreviewSplit=0.6900\n");
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, 0.69f));
-
-    ImGui::ClearIniSettings();   // the switch's reset
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, Layout{}.previewSplit));
-
-    // ... and an incoming file without the section leaves it there.
-    ImGui::LoadIniSettingsFromMemory("[EditorPanels][Visibility]\nConsole=1\n");
-    CHECK(approx(ShaderEditorDocument::Layout().previewSplit, Layout{}.previewSplit));
-
+    ImGui::GetIO().IniFilename = nullptr;
+    CHECK(ImGui::FindSettingsHandler("ArcaneEditorLayout") == nullptr);   // no handler registers it any more
+    ImGui::LoadIniSettingsFromMemory("[ArcaneEditorLayout][MaterialPanel]\nPreviewSplit=0.6900\n");
+    CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("MaterialPanel") == std::string::npos);
     ImGui::DestroyContext(ctx);
-    ImGui::SetCurrentContext(nullptr);
-    ShaderEditorDocument::Layout() = Layout{};   // leave the default for other tests
+    ImGui::SetCurrentContext(prev);
 }
 
 TEST_CASE("A material document publishes its diagnostics under its own key", "[diagnostics]")
@@ -1615,6 +1569,81 @@ TEST_CASE("ShaderEditorDocument: \"Output preview\" replaces Thumbs and is disab
         INFO(logged);
         CHECK(logged.find("Shows the material preview on the Output node. Unavailable: no GPU device") != std::string::npos);
     }
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+}
+
+TEST_CASE("material page: the body opens on Preview; the box is a square of min(width, 0.45 x page height)", "[editor][material][inspector]")
+{
+    const fs::path dir = TempDir("page_square");
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate(); data.name = "Square"; data.snippet = kSnippet;
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "square.arcmat", data));
+    ShaderEditorDocument doc(DocServices{}, dir / "square.arcmat", *Arcane::LoadMaterialAsset(dir / "square.arcmat"));
+    PageUi h;
+    h.Frame(doc); h.Frame(doc, true);
+    INFO(h.logged);
+    CHECK(LogStartsWithHeader(h.logged, "Preview"));
+    ImGuiWindow* box = nullptr;
+    for (ImGuiWindow* win : h.ctx->Windows)
+        if (std::string(win->Name).find("##preview") != std::string::npos) box = win;
+    REQUIRE(box != nullptr);
+    const float side = (std::min)(400.0f - 16.0f, 0.45f * 600.0f);   // availX vs f x pageHeight
+    CHECK(std::abs(box->Size.x - side) < 1.0f);
+    CHECK(std::abs(box->Size.y - side) < 1.0f);
+    CHECK(h.logged.find("Not compiled -- shader compiler unavailable (see the log)") != std::string::npos);
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    const auto f = reg.Get(reg.Find("editor.inspector.materialPreviewFraction"));
+    REQUIRE(f.has_value());
+    CHECK(f->AsFloat32() == 0.45f);
+}
+
+TEST_CASE("material toolbar: the surface combo carries a Surface label; a re-kind pushes no undo step", "[editor][material]")
+{
+    const fs::path dir = TempDir("surface_label");
+    Arcane::MaterialAssetData data;
+    data.id = Arcane::Guid::Generate(); data.name = "Rekind"; data.snippet = kSnippet;
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "rekind.arcmat", data));
+    Astra::Registry registry;
+    Arcane::CommandStack stack{ [&registry]() -> Astra::Registry& { return registry; } };
+    DocServices services;
+    services.undo = [&stack] { return &stack; };
+    ShaderEditorDocument doc(services, dir / "rekind.arcmat", *Arcane::LoadMaterialAsset(dir / "rekind.arcmat"));
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* px = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    std::string logged;
+    ImGuiID activate = 0;
+    const auto frame = [&](bool log = false)
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        if (activate) ImGui::ActivateItemByID(activate);
+        if (log) ImGui::LogToBuffer();
+        bool close = false;
+        doc.Draw(close);
+        if (log) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
+        ImGui::Render();
+    };
+    frame(); frame(true);
+    CHECK(logged.find("Surface") != std::string::npos);
+    ImGuiWindow* dw = nullptr;
+    for (ImGuiWindow* win : ctx->Windows)
+        if (std::string(win->Name).find("###matdoc_") != std::string::npos && !(win->Flags & ImGuiWindowFlags_ChildWindow)) dw = win;
+    REQUIRE(dw != nullptr);
+    activate = dw->GetID("##surface"); frame(); activate = 0; frame();      // the combo opens
+    REQUIRE(ctx->OpenPopupStack.Size == 1);
+    ImGuiWindow* popup = ctx->OpenPopupStack.back().Window;
+    REQUIRE(popup != nullptr);
+    activate = ImGui::GetIDWithSeed("Sprite", nullptr, ImGui::GetIDWithSeed(1, popup->ID));   // Combo pushes ID(i)
+    frame(); activate = 0; frame();
+    CHECK(doc.Dirty());                // re-kinded...
+    CHECK_FALSE(stack.CanUndo());      // ...without a step (cpp :2208-2219; the combo did not move)
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 }
