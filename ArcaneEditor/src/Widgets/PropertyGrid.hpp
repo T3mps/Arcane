@@ -92,6 +92,31 @@ namespace Arcane::Editor
     // row: the seed was restored and ActiveId cleared, and the row returned false.
     struct RowEvents { bool overrideToggled = false; bool resetClicked = false; bool cancelled = false; };
 
+    // One-shot decoration for the NEXT row (ImGui SetNextItem* style;
+    // node-page s4.1(d)). `overridden` and `reset` are mutually exclusive
+    // (IM_ASSERT): on an instance the checkbox is the only override control.
+    //  - overridden: the label cell draws Checkbox("##override") then the
+    //    ellipsized label; while *overridden == false the value sits inside
+    //    BeginDisabled (inherited rows read dimmed + read-only). A toggle writes
+    //    *overridden and raises RowEvents::overrideToggled -- the PAGE routes the
+    //    undo step (as ShaderEditorDocument.cpp:5802-5827 does today).
+    //  - reset: ICON_LC_ROTATE_CCW "##reset" ("Reset to default"), right-aligned
+    //    in the value cell, drawn only when resetActive; otherwise the slot is
+    //    reserved but empty so values stay aligned. A click raises resetClicked.
+    // SUBMISSION ORDER (binding, R3): every decoration is submitted BEFORE the
+    // value widget -- the reset button is placed at the cell's right edge, the
+    // cursor returns to the cell start and the value is sized
+    // -(resetW + ItemSpacing.x) -- so the VALUE widget is always LastItemData
+    // when the row returns. Tab visiting reset before the value is accepted.
+    // Honoured by Checkbox/Int/Float/Slider/Vec/Color/Combo rows; Text,
+    // ReadOnly, Button and Meter rows take none (IM_ASSERT).
+    struct RowDecor
+    {
+        bool* overridden = nullptr;   // instance override cell (UE shape)
+        bool  reset = false;          // base/default reset slot
+        bool  resetActive = false;    // value differs from its default: button drawn; else the slot is empty
+    };
+
     class PropertyGrid
     {
     public:
@@ -165,6 +190,7 @@ namespace Arcane::Editor
         // state BEFORE any window that draws this state Begins.
         void CommitOrphans();
 
+        void SetNextRowDecor(const RowDecor& decor) { m_decor = decor; m_hasDecor = true; }
         [[nodiscard]] RowEvents LastRowEvents() const { return m_events; }
         // TEST SEAM, public for model-aware wrappers (s4.2's AssetRow): records
         // the LAST item's centre under `label` when PropertyGridState::probe is
@@ -174,12 +200,17 @@ namespace Arcane::Editor
         PropertyGridState& State() noexcept { return m_state; }
 
     private:
-        // Value rows: label cell + PushID(label) / ProbeItem + PopID. Plain rows
-        // (Text/ReadOnly/Button/Meter) only reset the events.
+        // Value rows: label cell (+ the pending RowDecor: override checkbox,
+        // reset slot, inherited BeginDisabled) + PushID(label) / ProbeItem +
+        // PopID. Plain rows (Text/ReadOnly/Button/Meter) reset the events and
+        // IM_ASSERT that no decoration is pending.
         void BeginValueCell(const char* label, bool dimmed);
         void EndValueCell(const char* label);
         void BeginPlainRow();
         PropertyGridState& m_state;
         RowEvents m_events{};
+        RowDecor m_decor{};
+        bool m_hasDecor = false;
+        bool m_valueDisabled = false;   // BeginValueCell opened a BeginDisabled for an inherited row
     };
 }

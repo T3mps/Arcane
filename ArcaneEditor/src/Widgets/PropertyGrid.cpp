@@ -1,9 +1,11 @@
 #include "Widgets/PropertyGrid.hpp"
 #include "Widgets/ColorPickerPopup.hpp"
 #include "Widgets/EditorTheme.hpp"
+#include "Widgets/IconsLucide.h"   // ICON_LC_ROTATE_CCW (the reset slot)
 #include <imgui_internal.h>   // ClearActiveID (numeric-row Escape cancel)
 
 #include <cfloat>
+#include <string>
 
 namespace Arcane::Editor
 {
@@ -159,17 +161,72 @@ namespace Arcane::Editor
         }
     }
 
-    void PropertyGrid::BeginPlainRow() { m_events = {}; }
+    void PropertyGrid::BeginPlainRow()
+    {
+        m_events = {};
+        IM_ASSERT(!m_hasDecor && "SetNextRowDecor: this row type takes no decoration");
+        m_hasDecor = false;
+    }
 
     void PropertyGrid::BeginValueCell(const char* label, bool dimmed)
     {
         m_events = {};
-        (void)FieldLabelCell(label, dimmed);
+        const RowDecor decor = m_hasDecor ? m_decor : RowDecor{};
+        m_hasDecor = false;   // one-shot
+        IM_ASSERT(!(decor.overridden && decor.reset) && "RowDecor: override and reset are mutually exclusive");
+        if (decor.overridden)
+        {
+            // FieldLabelCell's shape (see its comments: AlignTextToFramePadding,
+            // -FLT_MIN) with the override checkbox ahead of the name.
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::PushID(label);
+            if (ImGui::Checkbox("##override", decor.overridden))
+                m_events.overrideToggled = true;
+            ImGui::SetItemTooltip("%s", *decor.overridden
+                ? "Overridden -- untick to inherit the parent's value"
+                : "Inherited -- tick to override");   // drafting pick, 9.28
+            if (m_state.probe) ProbeItem((std::string(label) + "#override").c_str());
+            ImGui::PopID();
+            ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+            (void)FieldLabelText(label, dimmed);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+        }
+        else
+            (void)FieldLabelCell(label, dimmed);
         ImGui::PushID(label);
+        if (decor.reset)
+        {
+            // BEFORE the value (R3): place reset at the cell's right edge, then
+            // return to the cell start so the value stays LastItemData.
+            const float resetW = ImGui::GetFrameHeight();
+            const float cellX = ImGui::GetCursorPosX();
+            if (decor.resetActive)
+            {
+                ImGui::SetCursorPosX(cellX + ImGui::GetContentRegionAvail().x - resetW);
+                if (ImGui::Button(ICON_LC_ROTATE_CCW "##reset", ImVec2(resetW, 0.0f)))
+                    m_events.resetClicked = true;
+                ImGui::SetItemTooltip("Reset to default");
+                if (m_state.probe) ProbeItem((std::string(label) + "#reset").c_str());
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(cellX);
+            }
+            ImGui::SetNextItemWidth(-(resetW + ImGui::GetStyle().ItemSpacing.x));   // reserved either way
+        }
+        m_valueDisabled = decor.overridden && !*decor.overridden;
+        if (m_valueDisabled)
+            ImGui::BeginDisabled();
     }
 
     void PropertyGrid::EndValueCell(const char* label)
     {
+        if (m_valueDisabled)
+        {
+            ImGui::EndDisabled();
+            m_valueDisabled = false;
+        }
         ProbeItem(label);   // the value widget is still LastItemData
         ImGui::PopID();
     }

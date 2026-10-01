@@ -15,6 +15,8 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace
 {
@@ -627,5 +629,180 @@ TEST_CASE("PropertyGrid: an hdr ColorRow's box drag keeps a component above 1; a
         else     CHECK(glow[1] <= 1.0f);
         CHECK(glow[0] == 0.5f);
         CHECK(glow[2] == 0.5f);
+    }
+}
+
+using Arcane::Editor::RowDecor;
+
+namespace
+{
+    // The value rows the EditGesture-after-row contract covers (s4.1(f)).
+    enum class RowKind { Int, Float, Slider, Vec, Color };
+    constexpr RowKind kRowKinds[]{ RowKind::Int, RowKind::Float, RowKind::Slider, RowKind::Vec, RowKind::Color };
+    const char* KindName(RowKind k)
+    {
+        switch (k) { case RowKind::Int: return "IntRow"; case RowKind::Float: return "FloatRow";
+                     case RowKind::Slider: return "SliderRow"; case RowKind::Vec: return "VecRow"; default: return "ColorRow"; }
+    }
+    // One row of `kind`, labelled "Row", over `v`: Int reads v[0] in HUNDREDTHS
+    // (0.5 <-> 50, ranged 0..1000 -> DragInt) so the non-integral seed survives
+    // the int round trip exactly, Slider is 0..1, Vec uses 3 components, Color all 4.
+    bool DrawKind(PropertyGrid& g, RowKind k, std::array<float, 4>& v)
+    {
+        switch (k)
+        {
+            case RowKind::Int:
+            {
+                int i = static_cast<int>(std::lround(v[0] * 100.0f));   // <cmath>, added in T2-A3
+                const bool c = g.IntRow("Row", i, Astra::Range(0.0, 1000.0));
+                v[0] = static_cast<float>(i) / 100.0f;
+                return c;
+            }
+            case RowKind::Float:  return g.FloatRow("Row", v[0]);
+            case RowKind::Slider: return g.SliderRow("Row", v[0], 0.0f, 1.0f);
+            case RowKind::Vec:    return g.VecRow("Row", v.data(), 3);
+            default:              return g.ColorRow("Row", v.data());
+        }
+    }
+    // Where to press: the probed value centre, except ColorRow's 4-box group,
+    // whose centre is the 1|2 gap (12 px left = box 1).
+    ImVec2 ValueTarget(RowKind k, ImVec2 c) { return k == RowKind::Color ? ImVec2(c.x - 12.0f, c.y) : c; }
+}
+
+TEST_CASE("PropertyGrid: an inherited row disables its value; ticking the override raises overrideToggled once", "[editor][inspector]")
+{
+    RowHarness h;
+    bool overridden = false;
+    float rough = 0.5f;
+    int commits = 0, toggles = 0;
+    bool disabled = false;
+    h.body = [&](PropertyGrid& g)
+    {
+        g.SetNextRowDecor(RowDecor{ &overridden });
+        if (g.FloatRow("Roughness", rough)) ++commits;
+        disabled = (ImGui::GetCurrentContext()->LastItemData.ItemFlags & ImGuiItemFlags_Disabled) != 0;
+        if (g.LastRowEvents().overrideToggled) ++toggles;
+    };
+    h.Frame();
+    CHECK(disabled);                                   // inherited: dimmed and read-only (Inspector #9)
+    h.Drag(h.Centre("Roughness"), 45.0f);
+    CHECK(rough == 0.5f);
+    CHECK(commits == 0);
+    h.Click(h.Centre("Roughness#override"));
+    CHECK(overridden);
+    CHECK(toggles == 1);
+    h.Frame();
+    CHECK(toggles == 1);                               // one-shot: raised on the toggle frame only
+    CHECK_FALSE(disabled);
+    h.Drag(h.Centre("Roughness"), 45.0f);
+    CHECK(rough > 0.5f);
+    CHECK(commits == 1);
+}
+
+TEST_CASE("PropertyGrid: the reset slot is reserved at default and drawn when changed; a click raises resetClicked", "[editor][inspector]")
+{
+    RowHarness h;
+    float a = 0.7f, b = 0.5f;
+    int resets = 0;
+    float wChanged = 0.0f, wDefault = 0.0f;
+    h.body = [&](PropertyGrid& g)
+    {
+        g.SetNextRowDecor(RowDecor{ nullptr, true, true });
+        (void)g.FloatRow("Changed", a);
+        wChanged = ImGui::GetItemRectSize().x;
+        if (g.LastRowEvents().resetClicked) ++resets;
+        g.SetNextRowDecor(RowDecor{ nullptr, true, false });
+        (void)g.FloatRow("Default", b);
+        wDefault = ImGui::GetItemRectSize().x;
+    };
+    h.Frame();
+    CHECK(h.probe.count("Changed#reset") == 1);
+    CHECK(h.probe.count("Default#reset") == 0);        // at default the slot is empty...
+    CHECK(wChanged > 0.0f);
+    CHECK(wChanged == wDefault);                       // ...but reserved: values stay aligned (9.28)
+    h.Click(h.Centre("Changed#reset"));
+    CHECK(resets == 1);
+    h.Frame();
+    CHECK(resets == 1);
+}
+
+TEST_CASE("PropertyGrid: an override row's long label is cut after the checkbox and tooltips the full name", "[editor][inspector]")
+{
+    RowHarness h;
+    h.width = 392.0f;
+    const std::string longLabel = "Angular damping applied while the body is resting underwater";
+    bool overridden = true;
+    float v = 0.5f;
+    float fh = 0.0f;
+    h.body = [&](PropertyGrid& g)
+    {
+        g.SetNextRowDecor(RowDecor{ &overridden });
+        (void)g.FloatRow(longLabel.c_str(), v);
+        fh = ImGui::GetFrameHeight();
+    };
+    h.Frame();
+    const ImVec2 box = h.Centre(longLabel + "#override");
+    const ImVec2 onLabel(box.x + fh + 20.0f, box.y);    // past the square checkbox, inside the cut name
+    CHECK(onLabel.x < h.Centre(longLabel).x);
+    h.Hover(onLabel);
+    CHECK(RowHarness::TooltipShown());                  // FieldLabelText: the cut name is one hover away
+    CHECK(overridden);                                  // hovering the name never toggles the override
+}
+
+TEST_CASE("PropertyGrid: after a decorated row the VALUE widget is LastItemData, for every row type", "[editor][inspector]")
+{
+    for (const RowKind kind : kRowKinds)
+        for (const bool viaOverride : { false, true })
+        {
+            INFO(KindName(kind) << (viaOverride ? " + override" : " + reset"));
+            RowHarness h;
+            std::array<float, 4> v{ 0.5f, 0.5f, 0.5f, 1.0f };
+            bool overridden = true;
+            bool activated = false;
+            ImGuiID idAfterRow = 0, activeAfterRow = 0;
+            h.body = [&](PropertyGrid& g)
+            {
+                g.SetNextRowDecor(viaOverride ? RowDecor{ &overridden } : RowDecor{ nullptr, true, true });
+                (void)DrawKind(g, kind, v);
+                if (ImGui::IsItemActivated())          // exactly what EditGesture::BeginOnActivate asks
+                {
+                    activated = true;
+                    idAfterRow = ImGui::GetItemID();
+                    activeAfterRow = ImGui::GetActiveID();
+                }
+            };
+            h.Frame();
+            h.Press(ValueTarget(kind, h.Centre("Row")));
+            CHECK(activated);                          // a trailing decoration would have stolen LastItemData
+            CHECK(idAfterRow == activeAfterRow);
+            h.Release();
+        }
+}
+
+TEST_CASE("PropertyGrid: a decorated scalar row's GetItemID() is its own ##value id", "[editor][inspector]")
+{
+    RowHarness h;
+    float f = 0.7f, s = 0.5f;
+    int i = 3;
+    bool b = false;
+    const char* items[]{ "A", "B" };
+    std::vector<std::pair<ImGuiID, ImGuiID>> got;      // (GetItemID after the row, the value widget's id)
+    const auto valueId = [](const char* label) { ImGui::PushID(label); const ImGuiID id = ImGui::GetID("##value"); ImGui::PopID(); return id; };
+    h.body = [&](PropertyGrid& g)
+    {
+        got.clear();
+        const RowDecor reset{ nullptr, true, true };
+        g.SetNextRowDecor(reset); (void)g.FloatRow("F", f);                        { const ImGuiID id = ImGui::GetItemID(); got.emplace_back(id, valueId("F")); }
+        g.SetNextRowDecor(reset); (void)g.IntRow("I", i, Astra::Range(0.0, 10.0)); { const ImGuiID id = ImGui::GetItemID(); got.emplace_back(id, valueId("I")); }
+        g.SetNextRowDecor(reset); (void)g.SliderRow("S", s, 0.0f, 1.0f);           { const ImGuiID id = ImGui::GetItemID(); got.emplace_back(id, valueId("S")); }
+        g.SetNextRowDecor(reset); (void)g.CheckboxRow("B", b);                     { const ImGuiID id = ImGui::GetItemID(); got.emplace_back(id, valueId("B")); }
+        g.SetNextRowDecor(reset); (void)g.ComboRow("C", items, 2, 0);              { const ImGuiID id = ImGui::GetItemID(); got.emplace_back(id, valueId("C")); }
+    };
+    h.Frame();
+    REQUIRE(got.size() == 5);
+    for (const auto& [after, want] : got)
+    {
+        CHECK(after != 0);
+        CHECK(after == want);
     }
 }
