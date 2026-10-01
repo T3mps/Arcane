@@ -5,13 +5,14 @@
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/PropertyGrid.hpp"
 
+#include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Project/AssetId.hpp>   // AssetId::FromGuid (ResolveAsset's key)
 #include <Arcane/Project/Project.hpp>
 #include <imgui.h>
 
 #include <algorithm>
-#include <cfloat>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -31,12 +32,29 @@ namespace Arcane::Editor
 
         // The page's fixed geometry, carried over from the Asset Browser's
         // old preview pane (inspector filters s6: the pane and its constants
-        // are gone; these are the only copy). The thumb is 140px;
-        // the action buttons are full-width and 24px tall (spec s11.2's
-        // table row height, reused rather than inventing a new pinned
-        // value).
+        // are gone; these are the only copy). The thumb is at most 140px;
+        // how far it shrinks in a short Inspector is the two cvars below.
         constexpr float kAssetPageThumbSize = 140.0f;
-        constexpr float kActionButtonHeight = 24.0f;
+
+        ARC_CVAR_RANGED("editor.inspector.assetThumbMinPx", "editor", Int32,
+                        ::Arcane::CVarValue::Int32(64), ::Arcane::CVarValue::Int32(32), ::Arcane::CVarValue::Int32(140),
+                        ::Arcane::CVarFlags::Archive, "Smallest the asset page's thumbnail shrinks to in a short Inspector");
+        ARC_CVAR_RANGED("editor.inspector.assetThumbHeightFraction", "editor", Float32,
+                        ::Arcane::CVarValue::Float32(0.30f), ::Arcane::CVarValue::Float32(0.1f), ::Arcane::CVarValue::Float32(0.6f),
+                        ::Arcane::CVarFlags::Archive, "Share of the Inspector's height the asset page's thumbnail may take");
+
+        float ThumbFloor()
+        {
+            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            const auto v = reg.Get(reg.Find("editor.inspector.assetThumbMinPx"));
+            return (v && v->type == Arcane::CVarType::Int32) ? static_cast<float>(v->AsInt32()) : 64.0f;
+        }
+        float ThumbHeightFraction()
+        {
+            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            const auto v = reg.Get(reg.Find("editor.inspector.assetThumbHeightFraction"));
+            return (v && v->type == Arcane::CVarType::Float32) ? v->AsFloat32() : 0.30f;
+        }
 
         // Compact side-by-side header (spec s6/s17): thumb left, name/pills/
         // path/guid/cook stacked beside it, instead of thumb-above-metadata.
@@ -158,26 +176,69 @@ namespace Arcane::Editor
         return crumbs;
     }
 
-    void AssetInspectorSource::Draw(PropertyGrid&)
+    void AssetInspectorSource::Draw(PropertyGrid& grid)
     {
         if (!m_deps.model || !m_deps.services || !m_deps.actions) return;
         if (const AssetPanelEntry* e = m_deps.model->Find(m_drawGuid))
-            DrawAssetPage(*e, *m_deps.model, m_deps.project, m_deps.docs, *m_deps.services, *m_deps.actions);
+            DrawAssetPage(grid, *e, *m_deps.model, m_deps.project, *m_deps.services, *m_deps.actions);
     }
 
-    // ---- the Asset page (the old preview pane's content, spec s5/s6/s11.2) --
-    // Layout order: 140px thumb -> name + kind/subkind/inst pills -> path row
-    // -> guid row (click copies) -> cook row -> separator -> Derived (N) list
-    // -> separator -> full-width action buttons (Open, Show in Explorer, Open
-    // as text, Copy Path, + one kind-specific action) -> (texture) separator +
-    // import settings. Drawn only for a resolved entry: the Inspector window
-    // is the container, and it owns the "No selection" state.
-    void DrawAssetPage(const AssetPanelEntry& entry, AssetPanelModel& model, const Arcane::Project* project,
-                       DocumentHost* docs, const AssetPanelServices& services, AssetPanelActions& actions)
+    void DrawActionRow(std::span<const PageAction> list)
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        std::vector<float> widths;
+        widths.reserve(list.size());
+        for (const PageAction& a : list)
+            widths.push_back(ImGui::CalcTextSize(a.icon).x + style.FramePadding.x * 2.0f);
+        const float moreWidth = ImGui::CalcTextSize(ICON_LC_ELLIPSIS).x + style.FramePadding.x * 2.0f;
+        const std::size_t shown = ActionsThatFit(widths, moreWidth, style.ItemSpacing.x, ImGui::GetContentRegionAvail().x);
+        for (std::size_t i = 0; i < shown; ++i)
+        {
+            const PageAction& a = list[i];
+            if (i > 0) ImGui::SameLine();
+            ImGui::BeginDisabled(!a.enabled);
+            const std::string label = std::string(a.icon) + a.id;
+            if (ImGui::Button(label.c_str()) && a.run) a.run();
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip("%s", a.tooltip);
+        }
+        if (shown == list.size())
+            return;
+        if (shown > 0) ImGui::SameLine();
+        if (ImGui::Button(ICON_LC_ELLIPSIS "##asset_more"))
+            ImGui::OpenPopup("##asset_more");
+        ImGui::SetItemTooltip("More actions");
+        const PopupAnchor anchor = LastItemAnchor();
+        if (BeginPopupBelow("##asset_more", anchor))
+        {
+            for (std::size_t i = shown; i < list.size(); ++i)
+            {
+                const PageAction& a = list[i];
+                const std::string label = std::string(a.icon) + " " + a.tooltip + a.id;
+                if (ImGui::MenuItem(label.c_str(), nullptr, false, a.enabled) && a.run) a.run();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    // ---- the Asset page (the old preview pane's content, spec s5/s6/s11.2,
+    // fitted to the Assets-only Inspector at 1080p by node-page s5.6)
+    // Layout order: thumb (height-aware) beside or above name + kind/subkind/
+    // inst pills -> path row -> guid row (click copies) -> cook row -> ONE icon
+    // row (Open, Show in Explorer, Open as text, Copy Path, + one kind-specific
+    // action; what does not fit overflows into ##asset_more) -> "Derived (N)"
+    // section -> (texture) "Import" section. Drawn only for a resolved entry:
+    // the Inspector window is the container, and it owns the "No selection"
+    // state. Every action is REPORTED (AssetPanelActions); the app performs it
+    // next frame -- Open included (ConsumeAssetPanelActions -> OpenAssetRow).
+    void DrawAssetPage(PropertyGrid& grid, const AssetPanelEntry& entry, AssetPanelModel& model,
+                       const Arcane::Project* project, const AssetPanelServices& services, AssetPanelActions& actions)
     {
         const AssetPanelEntry* e = &entry;
+        // Read before anything is laid out: the page child's height (s5.7).
+        const float innerHeight = ImGui::GetWindowHeight();
 
-        // ---- 140px thumb: real thumb when resolvable, else the kind
+        // ---- the thumb (at most 140px): real thumb when resolvable, else the kind
         // icon centered over a `kWell` backdrop with a `kSeparator`
         // border seam (spec s6.1: "the Lucide kind icon on a well
         // background") -- the same image/icon composition
@@ -205,49 +266,39 @@ namespace Arcane::Editor
             }
             dl->AddRect(thumbMin, thumbMax, ImGui::GetColorU32(Theme::kSeparator));
             ImGui::Dummy(ImVec2(thumbSize, thumbSize));
+            grid.ProbeItem("##asset_thumb");   // TEST SEAM: the drawn side (no-op in production)
         };
 
         // ---- name/pills + path/guid/cook rows. A lambda for the same
         // reason as `drawThumb` -- identical content and logic at both call
-        // sites, only the surrounding container differs. `EllipsisToWidth`'s
-        // `GetContentRegionAvail().x` call measures the whole page in the
-        // stacked branch, and the `##previewMeta` child's own (zero-padding)
-        // width in the compact branch, simply by virtue of which window is
-        // current when this runs -- the ImGui-native equivalent of the mock's
-        // own `min-width: 0` + `overflow: hidden` ellipsis fix: a bounding
-        // container, not a width argument threaded through.
+        // sites, only the surrounding container differs. Every
+        // `GetContentRegionAvail().x` call below measures the whole page in
+        // the stacked branch, and the `##previewMeta` child's own (zero-
+        // padding) width in the compact branch, simply by virtue of which
+        // window is current when this runs -- a bounding container, not a
+        // width argument threaded through.
         auto drawMeta = [&]()
         {
-            // ---- name (stem) + kind pill + subkind/inst pills
-            //
-            // 2026-09-07 review note: unlike the `path` row below, the
-            // name here has NO EllipsisToWidth clamp in either branch.
-            // The compact column can be as narrow as
-            // kPreviewCompactTextColumnMin (110px), and a long stem plus
-            // its trailing kind/subkind/inst pills (all SameLine-chained)
-            // can overflow it. Deferred: a correct clamp has to measure the
-            // pill run's own width FIRST and budget the name against what's
-            // left, not reuse EllipsisToWidth's single-string recipe.
-            ImGui::TextUnformatted(e->name.c_str());
+            // Name budget = the line minus the pill run, measured first (the
+            // 2026-09-07 deferred clamp); a cut name carries the full name as tooltip.
+            const float spacing = ImGui::GetStyle().ItemSpacing.x;
+            const char* sub = SubkindPillText(*e);
+            const float pills = PillWidth(KindLabel(e->kind)) + spacing
+                              + (sub ? PillWidth(sub) + spacing : 0.0f)
+                              + (e->isInstance ? PillWidth("inst") + spacing : 0.0f);
+            const std::string name = EllipsisToWidth(e->name, std::max(0.0f, ImGui::GetContentRegionAvail().x - pills));
+            ImGui::TextUnformatted(name.c_str());
+            if (name != e->name) ImGui::SetItemTooltip("%s", e->name.c_str());
             ImGui::SameLine();
             AssetPill(KindLabel(e->kind));
-            if (const char* sub = SubkindPillText(*e))
-            {
-                ImGui::SameLine();
-                AssetPill(sub);
-            }
-            if (e->isInstance)
-            {
-                ImGui::SameLine();
-                AssetPill("inst");
-            }
+            if (sub) { ImGui::SameLine(); AssetPill(sub); }
+            if (e->isInstance) { ImGui::SameLine(); AssetPill("inst"); }
 
             // ---- path row: the content-relative path (scheme prefix
-            // stripped -- ruling 5, 2026-09-07), ellipsized to whatever's
-            // left on the line after the "path" label. A plain text hover
-            // tooltip carries the FULL mount path -- this is NOT the s8
-            // 210px peek-tooltip contract (no thumb, no kind/cook rows),
-            // just a path reveal.
+            // stripped -- ruling 5, 2026-09-07), ellipsized to what is left on
+            // the line after the "path" label. A plain text hover tooltip
+            // carries the FULL mount path -- NOT the s8 210px peek-tooltip
+            // contract, just a path reveal.
             ImGui::TextDisabled("path");
             ImGui::SameLine();
             const std::string_view relPath = ContentRelativePath(e->mountPath);
@@ -255,17 +306,17 @@ namespace Arcane::Editor
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", e->mountPath.c_str());
 
-            // ---- guid row: dim, click copies (spec s6: "guid
-            // (click-to-copy)"). Routed through `actions.copyGuid` -- the
-            // SAME field the row context menu's "Copy Guid" entry sets -- so
-            // the host's one existing consumer (EditorAppFrame.cpp's
-            // `ImGui::SetClipboardText(...copyGuid...)`) needs no new wiring;
-            // "panel reports, app performs" stays intact.
+            // ---- guid row: dim, ellipsized, click copies. Routed through
+            // `actions.copyGuid` -- the SAME field the row context menu's
+            // "Copy Guid" entry sets -- so the host's one existing consumer
+            // needs no new wiring; "panel reports, app performs" stays intact.
             ImGui::TextDisabled("guid");
             ImGui::SameLine();
-            ImGui::TextDisabled("%s", e->guid.ToString().c_str());
+            const std::string guid = e->guid.ToString();
+            ImGui::TextDisabled("%s", EllipsisToWidth(guid, ImGui::GetContentRegionAvail().x).c_str());
             if (ImGui::IsItemHovered())
                 ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::SetItemTooltip("%s\nclick to copy", guid.c_str());
             if (ImGui::IsItemClicked())
                 actions.copyGuid = e->guid;
 
@@ -280,108 +331,68 @@ namespace Arcane::Editor
 
         // Side-by-side header at/above kPreviewCompactHeaderMinWidth, the
         // stacked form (thumb above, metadata below) below it -- measured
-        // against the page's own content width.
-        const bool compactHeader = ImGui::GetContentRegionAvail().x >= kPreviewCompactHeaderMinWidth;
+        // against the page's own content width. The thumb follows the s5.6
+        // formula (AssetPageThumbSize): never above 140, never wider than the
+        // form allows, and a share of the Inspector's height clamped up to the
+        // cvar floor.
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const bool compactHeader = avail >= kPreviewCompactHeaderMinWidth;
+        const float thumbSize = AssetPageThumbSize(compactHeader, avail, spacing, innerHeight,
+                                                   ThumbHeightFraction(), ThumbFloor());
         if (compactHeader)
         {
-            // The 140px thumb only yields (the std::min clamp) when the page
-            // is too narrow to also leave a kPreviewCompactTextColumnMin-wide
-            // text column beside it.
-            const float avail = ImGui::GetContentRegionAvail().x;
-            const float spacing = ImGui::GetStyle().ItemSpacing.x;
-            const float thumbSize = std::min(kAssetPageThumbSize,
-                std::max(0.0f, avail - spacing - kPreviewCompactTextColumnMin));
-            const float textColumnWidth = std::max(0.0f, avail - thumbSize - spacing);
-
             ImGui::BeginGroup();
             drawThumb(thumbSize);
             ImGui::EndGroup();
             ImGui::SameLine();
-
-            // Zero WindowPadding on this bounding-only column: it exists
-            // purely to give `drawMeta`'s GetContentRegionAvail() calls a
-            // column-width answer instead of a whole-page one (see
-            // `drawMeta`'s own comment); a visible inset was never part
-            // of the mock.
-            //
-            // 2026-09-07 review note: this child's HEIGHT is `thumbSize`
-            // (116-140px at this breakpoint), coupled to the thumb, not
-            // to `drawMeta`'s own content -- at today's metrics (Inter
-            // 16px body, this row's four lines) the real content stands
-            // ~80px, comfortably inside even the smallest compact
-            // thumbSize. A future larger body font or display scale could
-            // grow that content past `thumbSize` and start clipping/
-            // scrolling the `cook` row inside the box.
+            // Zero WindowPadding on this bounding-only column: it exists to give
+            // `drawMeta`'s GetContentRegionAvail() calls a column-width answer.
+            // Sized by its content, not the thumb (s5.6): a shrunken thumb never
+            // clips the cook row.
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            if (ImGui::BeginChild("##previewMeta", ImVec2(textColumnWidth, thumbSize), ImGuiChildFlags_None))
+            if (ImGui::BeginChild("##previewMeta", ImVec2(std::max(0.0f, avail - thumbSize - spacing), 0.0f),
+                                  ImGuiChildFlags_AutoResizeY))
                 drawMeta();
             ImGui::EndChild();
             ImGui::PopStyleVar();
         }
         else
         {
-            // Stacked: the thumb SCALES to whatever is actually available
-            // (min-clamped against the 140px pinned size) rather than adding
-            // a second centering codepath.
-            const float thumbSize = std::min(kAssetPageThumbSize, ImGui::GetContentRegionAvail().x);
             drawThumb(thumbSize);
             drawMeta();
         }
 
-        ImGui::Separator();
-
-        // ---- Derived (N) list
-        char derivedHeader[32];
-        std::snprintf(derivedHeader, sizeof(derivedHeader), "Derived (%d)",
-                      static_cast<int>(e->derivedChildren.size()));
-        ImGui::TextUnformatted(derivedHeader);
-        for (const Arcane::Guid& childGuid : e->derivedChildren)
-            DrawDerivedRow(model, services, childGuid);
-
-        ImGui::Separator();
-
-        // ---- action buttons: full-width, 24px tall. Open reuses the
-        // SAME routing helper double-click/Enter use (spec: "Open (same
-        // routing as double-click)") -- only when a DocumentHost is bound;
-        // the trailing kind-specific action mirrors the row context menu's
-        // own kind-specific entries exactly (same label text, same action
-        // field).
-        const ImVec2 btnSize(-FLT_MIN, kActionButtonHeight);
-        if (ImGui::Button(ICON_LC_EXTERNAL_LINK " Open", btnSize) && docs)
-            OpenAssetRow(*e, project, *docs, actions);
-        if (ImGui::Button(ICON_LC_FOLDER_OPEN " Show in Explorer", btnSize))
-            actions.showInExplorer = e->guid;
-        if (ImGui::Button(ICON_LC_FILE_TEXT " Open as text", btnSize))
-            actions.openAsText = e->guid;
-        if (ImGui::Button(ICON_LC_COPY " Copy Path", btnSize))
-            actions.copyPath = e->guid;
-
+        // One icon row; actions stay REPORTED (the app drains them next frame).
+        // The trailing kind-specific action mirrors the row context menu's own
+        // kind-specific entries (same label text, same action field).
+        std::vector<PageAction> row;
+        row.push_back({ ICON_LC_EXTERNAL_LINK, "Open", "##asset_open", true, [&] { actions.openAsset = e->guid; } });
+        row.push_back({ ICON_LC_FOLDER_OPEN, "Show in Explorer", "##asset_explorer", true, [&] { actions.showInExplorer = e->guid; } });
+        row.push_back({ ICON_LC_FILE_TEXT, "Open as text", "##asset_astext", true, [&] { actions.openAsText = e->guid; } });
+        row.push_back({ ICON_LC_COPY, "Copy Path", "##asset_copypath", true, [&] { actions.copyPath = e->guid; } });
         if (e->kind == AssetKind::Material)
-        {
-            if (ImGui::Button(ICON_LC_LAYERS " New Instance...", btnSize))
-                actions.createInstanceOf = e->guid;
-        }
+            row.push_back({ ICON_LC_LAYERS, "New Instance...", "##asset_newinstance", true, [&] { actions.createInstanceOf = e->guid; } });
         else if (e->kind == AssetKind::Scene)
-        {
-            if (ImGui::Button(ICON_LC_FLAG " Set as Boot Scene", btnSize))
-                actions.setBootScene = e->guid;
-        }
+            row.push_back({ ICON_LC_FLAG, "Set as Boot Scene", "##asset_bootscene", true, [&] { actions.setBootScene = e->guid; } });
         else if (e->kind == AssetKind::Texture)
-        {
-            if (ImGui::Button(ICON_LC_STICKER " Create Sprite", btnSize))
-                actions.createSpriteFrom = e->guid;
-        }
+            row.push_back({ ICON_LC_STICKER, "Create Sprite", "##asset_createsprite", true, [&] { actions.createSpriteFrom = e->guid; } });
+        DrawActionRow(row);
+
+        // Section bands replace the separators (critique Inspector #10).
+        char derivedHeader[48];
+        std::snprintf(derivedHeader, sizeof(derivedHeader), "Derived (%d)###derived",
+                      static_cast<int>(e->derivedChildren.size()));   // ###: the open state survives a count change
+        if (grid.Section(derivedHeader))
+            for (const Arcane::Guid& childGuid : e->derivedChildren)
+                DrawDerivedRow(model, services, childGuid);
 
         // ---- texture import settings (the old Inspector texture-asset
         // panel's four .meta knobs, F2b Task 13), resolved through the
         // project to the SOURCE file; nothing without a project.
         if (e->kind == AssetKind::Texture && project)
-        {
             if (const auto path = project->ResolveAsset(Arcane::AssetId::FromGuid(e->guid)))
-            {
-                ImGui::Separator();
-                DrawTextureImportSettings(*path);
-            }
-        }
+                if (grid.Section("Import"))
+                    DrawTextureImportSettings(grid, *path);
     }
 }

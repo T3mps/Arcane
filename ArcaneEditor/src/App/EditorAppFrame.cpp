@@ -2407,7 +2407,7 @@ namespace Arcane::Editor
         // frame late, invisible, and the same handler as the three panels.
         ConsumeAssetPanelActions(m_assetPageActions, ls);
         m_assetPageActions = {};
-        m_assetSource.Bind({ &m_assetModel, proj, &m_documents, &m_assetPanelServices, &m_assetPageActions });
+        m_assetSource.Bind({ &m_assetModel, proj, &m_assetPanelServices, &m_assetPageActions });
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));

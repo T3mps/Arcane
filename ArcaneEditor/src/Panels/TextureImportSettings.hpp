@@ -11,8 +11,12 @@
 
 namespace Arcane::Editor
 {
-    // Draws the ".png only" note, or the four knobs for a .png source, and
-    // merge-writes the `.meta` sidecar (`sourcePath` + ".meta") on an edit.
-    // `sourcePath` is the asset's resolved SOURCE file (Project::ResolveAsset).
-    void DrawTextureImportSettings(const std::filesystem::path& sourcePath);
+    class PropertyGrid;
+
+    // Draws the ".png only" note, or the four knobs as PropertyGrid rows
+    // (s5.6); merge-written on commit, no undo, to the `.meta` sidecar
+    // (`sourcePath` + ".meta"). `sourcePath` is the asset's resolved SOURCE
+    // file (Project::ResolveAsset). Draw it OUTSIDE a Rows scope: it opens its
+    // own ("##texmeta").
+    void DrawTextureImportSettings(PropertyGrid& grid, const std::filesystem::path& sourcePath);
 }
