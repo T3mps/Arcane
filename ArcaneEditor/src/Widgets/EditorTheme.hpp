@@ -80,6 +80,17 @@ namespace Arcane::Editor
         inline constexpr ImVec4 kButtonHovered = ImVec4(0.239f, 0.239f, 0.239f, 1.00f); // #3d3d3d
         inline constexpr ImVec4 kButtonActive  = ImVec4(0.294f, 0.294f, 0.294f, 1.00f); // #4b4b4b
 
+        // -- TOGGLE "ON" (node-page phase s4.9, drafting pick 9.28 #18) ----
+        // A lit icon toggle pushes ALL THREE button colours (PushToggleOnColors,
+        // EditorWidgets.hpp): pushing only Button let hover paint kButtonHovered
+        // #3d3d3d, DARKER than the lit #4b4b4b, so "on" vanished under the
+        // cursor, and an unlit press looked like "on". T2 aliases kButtonActive
+        // (the one pixel change: a lit toggle no longer darkens on hover); T4
+        // (s6.1) re-points them at kAccent / kAccentHovered / kAccentActive.
+        inline constexpr ImVec4 kToggleOn        = kButtonActive;
+        inline constexpr ImVec4 kToggleOnHovered = kButtonActive;
+        inline constexpr ImVec4 kToggleOnActive  = kButtonActive;
+
         // -- SELECTION ----------------------------------------------------
         // The ONE hue in the theme: UE's selected-row blue-gray, desaturated
         // far enough that it reads as "a gray with a cast" beside the ramp.

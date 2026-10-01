@@ -414,6 +414,16 @@ namespace Arcane::Editor
     [[nodiscard]] LinkRowResult LinkRow(const char* id, std::string_view text, bool live,
                                         const char* leadIcon = nullptr, ImU32 leadColor = 0);
 
+    // ---- toggles (s4.9) -------------------------------------------------------
+    // THE definition of a lit toggle (s6.2 only adopts it). Push/Pop cover
+    // Button, ButtonHovered AND ButtonActive (Theme::kToggleOn*). IconToggle =
+    // Button(label) inside that push when `on`, nothing pushed when not; `label`
+    // carries the icon and the ## id. It draws NO tooltip: the button stays the
+    // last item, so callers attach their own (including AllowWhenDisabled ones).
+    void PushToggleOnColors();
+    void PopToggleOnColors();
+    [[nodiscard]] bool IconToggle(const char* label, bool on);
+
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME
     // transfer nri::Format::RGBA8_SRGB applies in hardware when a texture is

@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Widgets/EditorFonts.hpp>
+#include <Widgets/EditorTheme.hpp>
 #include <Widgets/EditorWidgets.hpp>
 
 #include <imgui.h>
@@ -308,4 +309,79 @@ TEST_CASE("MonoFont with no fonts installed pushes nothing", "[editor][widgets]"
     h.Frame();
     CHECK(inside == before);
     CHECK(after == before);
+}
+
+namespace
+{
+    bool SameColour(const ImVec4& a, const ImVec4& b) { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; }
+}
+
+TEST_CASE("PushToggleOnColors sets all three Button colours to the toggle-on tokens; Pop restores", "[editor][widgets]")
+{
+    WidgetHarness h;
+    bool pushed = false, restored = false;
+    h.body = [&]
+    {
+        const ImVec4 b = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+        const ImVec4 hv = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+        const ImVec4 ac = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+        PushToggleOnColors();
+        pushed = SameColour(ImGui::GetStyleColorVec4(ImGuiCol_Button), Theme::kToggleOn) &&
+                 SameColour(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), Theme::kToggleOnHovered) &&
+                 SameColour(ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive), Theme::kToggleOnActive);
+        PopToggleOnColors();
+        restored = SameColour(ImGui::GetStyleColorVec4(ImGuiCol_Button), b) &&
+                   SameColour(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), hv) &&
+                   SameColour(ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive), ac);
+    };
+    h.Frame();
+    CHECK(pushed);
+    CHECK(restored);
+}
+
+TEST_CASE("IconToggle off draws with the ambient Button colour", "[editor][widgets]")
+{
+    WidgetHarness h;
+    h.body = [&] { ImGui::SetCursorScreenPos(ImVec2(40.0f, 40.0f)); (void)IconToggle("T##unlit", false); };
+    h.Frame();
+    CHECK(h.HostDrew(ImGui::GetColorU32(ImGuiCol_Button)));
+    CHECK_FALSE(h.HostDrew(ImGui::ColorConvertFloat4ToU32(Theme::kToggleOn)));
+}
+
+TEST_CASE("IconToggle on keeps the toggle-on colour under hover (the darken-on-hover bug)", "[editor][widgets]")
+{
+    WidgetHarness h;
+    PopupAnchor rect{};
+    h.body = [&] { ImGui::SetCursorScreenPos(ImVec2(40.0f, 40.0f)); (void)IconToggle("T##lit", true); rect = LastItemAnchor(); };
+    h.Frame();
+    CHECK(h.HostDrew(ImGui::ColorConvertFloat4ToU32(Theme::kToggleOn)));
+    h.MoveTo(Centre(rect));
+    CHECK(h.HostDrew(ImGui::ColorConvertFloat4ToU32(Theme::kToggleOnHovered)));
+    CHECK_FALSE(h.HostDrew(ImGui::GetColorU32(ImGuiCol_ButtonHovered)));
+}
+
+TEST_CASE("IconToggle leaves the colour and style-var stacks balanced, lit or not, disabled or not", "[editor][widgets]")
+{
+    WidgetHarness h;
+    int drift = 0, clicks = 0;
+    PopupAnchor rect{};
+    h.body = [&]
+    {
+        for (int i = 0; i < 4; ++i)
+        {
+            const bool on = (i & 1) != 0, disabled = (i & 2) != 0;
+            ImGui::PushID(i);
+            if (disabled) ImGui::BeginDisabled();
+            const int c = h.ctx->ColorStack.Size, v = h.ctx->StyleVarStack.Size;
+            if (IconToggle("T", on) && i == 0) ++clicks;
+            if (i == 0) rect = LastItemAnchor();   // the button is the last item: callers attach tooltips
+            drift += std::abs(h.ctx->ColorStack.Size - c) + std::abs(h.ctx->StyleVarStack.Size - v);
+            if (disabled) ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+    };
+    h.Frame();
+    h.Click(Centre(rect));
+    CHECK(drift == 0);
+    CHECK(clicks == 1);
 }

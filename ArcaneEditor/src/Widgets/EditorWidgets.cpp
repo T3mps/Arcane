@@ -1328,6 +1328,23 @@ namespace Arcane::Editor
         return r;
     }
 
+    void PushToggleOnColors()
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, Theme::kToggleOn);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::kToggleOnHovered);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::kToggleOnActive);
+    }
+
+    void PopToggleOnColors() { ImGui::PopStyleColor(3); }
+
+    bool IconToggle(const char* label, bool on)
+    {
+        if (on) PushToggleOnColors();
+        const bool clicked = ImGui::Button(label);
+        if (on) PopToggleOnColors();
+        return clicked;
+    }
+
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
     // form), which cites THIS file -- so an edit here changes rendered output.
     // NOTHING PINS THE TWO AGAINST EACH OTHER: no test evaluates both and
