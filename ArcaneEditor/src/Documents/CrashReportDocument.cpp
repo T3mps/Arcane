@@ -1,6 +1,9 @@
 #include "Documents/CrashReportDocument.hpp"
 
 #include "Widgets/EditorTheme.hpp"
+#include "Project/OsShell.hpp"   // ShowInExplorer -- the one shell route (s4.6)
+
+#include <Arcane/Base/Log.hpp>
 
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // Diag::ReadGpuDump / ParseGpuDump
 
@@ -8,42 +11,8 @@
 
 #include <system_error>
 
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <shellapi.h>   // ShellExecuteW -- mirrors EditorAppFrame.cpp's AssetPathAction show-in-explorer branch
-#endif
-
 namespace Arcane::Editor
 {
-    namespace
-    {
-        // Same recipe as EditorAppFrame.cpp's AssetPathAction show-in-
-        // explorer branch (:144-150): "explorer /select" opens the
-        // containing folder WITH the file focused. Duplicated in full
-        // (rather than shared) because that helper is a file-local
-        // (anonymous-namespace) function in a TU this task's binding file
-        // list does not include -- EditorAppFrame.cpp is not among the
-        // files this task modifies.
-#ifdef _WIN32
-        void ShowInExplorer(const std::string& path)
-        {
-            if (path.empty())
-                return;
-            const std::filesystem::path p(path);
-            const std::wstring args = L"/select,\"" + p.wstring() + L"\"";
-            ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
-        }
-#else
-        void ShowInExplorer(const std::string&) {}
-#endif
-    }
-
     CrashReportDocument::CrashReportDocument(std::filesystem::path path, Arcane::Diag::Envelope envelope)
         : m_path(std::move(path)), m_envelope(std::move(envelope))
     {
@@ -270,7 +239,10 @@ namespace Arcane::Editor
             }
             else if (ImGui::Button(label))
             {
-                ShowInExplorer(resolved.string());
+                const OsShell::ShellResult r = OsShell::ShowInExplorer(resolved);
+                if (r != OsShell::ShellResult::Ok)
+                    ARC_WARN("Crash report: Show in Explorer failed for '{}' ({})",
+                             resolved.generic_string(), OsShell::Describe(r));
             }
         };
         siblingButton("Show .txt", m_envelope.siblingTxt, m_siblingTxtResolved);

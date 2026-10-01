@@ -13,6 +13,7 @@
 
 #include "App/EditorApp.hpp"
 #include "Panels/EditorPanels.hpp"
+#include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
@@ -61,17 +62,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <shellapi.h>   // ShellExecuteW (Assets -> Show in Explorer)
-#endif
 
 namespace Arcane::Editor
 {
@@ -185,33 +175,23 @@ namespace Arcane::Editor
             }
             if (showInExplorer)
             {
-                // explorer /select opens the folder WITH the file focused.
-                const std::wstring args = L"/select,\"" + assetPath->wstring() + L"\"";
-                ShellExecuteW(nullptr, L"open", L"explorer.exe",
-                              args.c_str(), nullptr, SW_SHOWNORMAL);
+                const OsShell::ShellResult r = OsShell::ShowInExplorer(*assetPath);
+                if (r != OsShell::ShellResult::Ok)
+                    ARC_WARN("Assets: Show in Explorer failed for '{}' ({})",
+                             assetPath->generic_string(), OsShell::Describe(r));
             }
             if (copyPath)
                 ImGui::SetClipboardText(assetPath->string().c_str());
             if (openAsText)
             {
-                // The OS default handler for the file (a .arcinput is JSON: the
-                // user's text editor). No SDL_OpenURL: a file path, not a URL.
-                // ShellExecuteW returns a value <= 32 on failure; an extension
-                // with no association (.arcinput/.json on a stock machine) has
-                // no `open` handler, so fall back to `openas` (the Windows Open
-                // With picker) and say so if even that fails -- with the JSON
-                // tab retired this is the repair banner's only route.
-                const std::wstring file = assetPath->wstring();
-                const auto opened = reinterpret_cast<INT_PTR>(
-                    ShellExecuteW(nullptr, L"open", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-                if (opened <= 32)
-                {
-                    const auto picked = reinterpret_cast<INT_PTR>(
-                        ShellExecuteW(nullptr, L"openas", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-                    if (picked <= 32)
-                        ARC_WARN("Assets: Open as text failed for '{}' (no handler; ShellExecute {} / openas {})",
-                                 assetPath->generic_string(), static_cast<long long>(opened), static_cast<long long>(picked));
-                }
+                // The OS default handler (a .arcinput is JSON: the user's text
+                // editor); no association falls back to Open With inside
+                // OsShell::OpenAsText. With the JSON tab retired this is the
+                // repair banner's only route.
+                const OsShell::ShellResult r = OsShell::OpenAsText(*assetPath);
+                if (r != OsShell::ShellResult::Ok)
+                    ARC_WARN("Assets: Open as text failed for '{}' ({})",
+                             assetPath->generic_string(), OsShell::Describe(r));
             }
         }
     }
