@@ -984,7 +984,21 @@ namespace Arcane
     //     `m_inspectorInstances` behind a new `SetInspector(source, breadcrumb,
     //     instances)` signature (report schemaVersion 12) -- both layouts moved.
     //     ReferenceProject.arcproj restamped; the Aphelyon restamp is owed.
-    inline constexpr uint32_t kGamePluginABIVersion = 46;
+    // v47 (2026-10-01, node page + editor upgrades T1 correctness): `ICommand`
+    //     gained the virtuals `AffectsScene`, `IsExpired` and `PayloadBytes`
+    //     (vtable); `CommandStack` gained `UndoLimits`/`SetLimits` (the depth
+    //     ctor parameter is gone), `Clear(reason)`/`ClearedReason`,
+    //     `SceneStateId` and spill state (API and layout moved), beside the
+    //     newly exported `UndoPayload`/`Detail::UndoSpillFile`;
+    //     `RegistryStateCommand` holds `UndoPayload`s (layout); vendored Astra
+    //     975cdb7: `Registry` gained `m_instanceId` (layout), `SetParent`
+    //     returns `bool` and takes an index, exhausted entity slots retire
+    //     instead of wrapping and `Clear()` recycles (allocator rules both
+    //     sides must agree on); `VerifyReport` schemaVersion 13
+    //     (`documents[]`). A v46 module was compiled against the old vtables
+    //     and layouts; reject the pairing. ReferenceProject.arcproj and
+    //     Aphelyon.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 47;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
