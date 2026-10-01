@@ -29,6 +29,16 @@ namespace Arcane
     // other id -- see Begin for why that has to be enforced rather than trusted.
     enum class TransactionId : std::uint64_t { None = 0 };
 
+    // Undo bounds (spec 2026-09-30 s3.3(e)). The stack never reads a cvar:
+    // the editor pushes editor.undo.* in through SetLimits (s2.4).
+    struct UndoLimits
+    {
+        std::size_t   maxSteps       = 100;                    // 0 clamps to 1
+        std::uint64_t byteBudget     = 512ull * 1024 * 1024;   // RAM + spilled bytes
+        std::uint64_t spillThreshold = 256ull * 1024;          // payloads ABOVE it spill
+        friend bool operator==(const UndoLimits&, const UndoLimits&) = default;
+    };
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)  // std::function/deque/vector/string members on a dll-exported class: benign under /MD (shared CRT heap)
@@ -40,7 +50,11 @@ namespace Arcane
         // ComponentEditCommand's ctor comment) -- the stack never caches a
         // Registry& itself, so it survives Runtime::RestoreRegistry/ResetRegistry
         // swapping the registry object out from under it.
-        explicit CommandStack(std::function<Astra::Registry&()> resolve, std::size_t maxDepth = 100);
+        explicit CommandStack(std::function<Astra::Registry&()> resolve);
+
+        // Takes effect at the next push or commit (eviction runs there).
+        void SetLimits(UndoLimits limits);
+        [[nodiscard]] const UndoLimits& Limits() const noexcept { return m_limits; }
 
         // Non-copyable: m_undo/m_redo hold move-only ICommand transactions, and
         // this class is dllexport'd -- MSVC eagerly instantiates implicit
@@ -120,7 +134,7 @@ namespace Arcane
         // whether anything has changed since. Undoing back to that state
         // restores its id, so undo-to-the-save-point reads as clean -- which a
         // simple change counter gets wrong. If the recorded transaction is
-        // evicted by the depth cap its id becomes unreachable and the caller
+        // evicted (SetLimits bounds) its id becomes unreachable and the caller
         // stays dirty; that is the safe direction, and the same caveat Qt
         // documents for QUndoStack's clean state.
         [[nodiscard]] std::uint64_t StateId() const noexcept
@@ -128,10 +142,12 @@ namespace Arcane
             return m_undo.empty() ? 0u : m_undo.back().id;
         }
 
-        // The id of the topmost undo entry that AFFECTS THE SCENE, 0 when
-        // none (spec s3.3(a)). SceneSession's dirty flag compares this, so a
+        // The id of the topmost undo entry that AFFECTS THE SCENE (spec
+        // s3.3(a)). SceneSession's dirty flag compares this, so a
         // material/sprite/mesh/input-actions step never marks the scene
-        // unsaved, and undo back to the save point still reads clean.
+        // unsaved, and undo back to the save point still reads clean. With no
+        // scene step left it is the newest EVICTED scene step's id (the state
+        // the scene is still in), or 0 when none was evicted since Clear.
         [[nodiscard]] std::uint64_t SceneStateId() const noexcept;
 
         // The entities whose state differs from `savedStateId` (the value
@@ -143,7 +159,7 @@ namespace Arcane
         struct TouchedSince
         {
             // False when the baseline is UNREACHABLE from the current state:
-            // its transaction was evicted by the depth cap, or the user
+            // its transaction was evicted (SetLimits bounds), or the user
             // undid past the save point and then committed new work (which
             // clears redo). The per-entity answer is then unknowable, and
             // callers should treat EVERY entity as possibly modified -- the
@@ -184,9 +200,12 @@ namespace Arcane
         // (not skipping in place) keeps undo/redo order sound.
         static void DiscardExpired(std::deque<Transaction>& d) noexcept;
         static const Transaction* TopLive(const std::deque<Transaction>& d) noexcept;
+        // Oldest-first eviction while over either UndoLimits bound; never the top.
+        void Evict();
 
         std::function<Astra::Registry&()> m_resolve;
-        std::size_t                       m_maxDepth;
+        UndoLimits                        m_limits;
+        std::uint64_t                     m_evictedSceneId = 0;   // the newest EVICTED scene step: SceneStateId's floor
 
         std::deque<Transaction> m_undo;
         std::deque<Transaction> m_redo;

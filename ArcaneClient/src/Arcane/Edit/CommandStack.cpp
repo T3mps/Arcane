@@ -7,9 +7,39 @@
 
 namespace Arcane
 {
-    CommandStack::CommandStack(std::function<Astra::Registry&()> resolve, std::size_t maxDepth)
-        : m_resolve(std::move(resolve)), m_maxDepth(maxDepth ? maxDepth : 1)
+    CommandStack::CommandStack(std::function<Astra::Registry&()> resolve)
+        : m_resolve(std::move(resolve))
     {
+    }
+
+    void CommandStack::SetLimits(UndoLimits limits)
+    {
+        m_limits = limits;
+        if (m_limits.maxSteps == 0)
+            m_limits.maxSteps = 1;   // the old ctor's clamp
+    }
+
+    // Oldest-first while over EITHER bound. The top is never evicted.
+    // PayloadBytes is summed live: a RegistryStateCommand gains its redo blob
+    // on first Undo, after it was pushed.
+    void CommandStack::Evict()
+    {
+        const auto bytesOf = [](const Transaction& t)
+        {
+            std::uint64_t n = 0;
+            for (const auto& c : t.commands) n += c->PayloadBytes();
+            return n;
+        };
+        std::uint64_t total = 0;
+        for (const Transaction& t : m_undo) total += bytesOf(t);
+        while (m_undo.size() > 1 &&
+               (m_undo.size() > m_limits.maxSteps || total > m_limits.byteBudget))
+        {
+            if (m_undo.front().affectsScene)
+                m_evictedSceneId = m_undo.front().id;   // oldest-first: the last one popped is the newest
+            total -= bytesOf(m_undo.front());
+            m_undo.pop_front();
+        }
     }
 
     TransactionId CommandStack::Begin(std::string label)
@@ -78,8 +108,7 @@ namespace Arcane
         txn.id = m_nextId++;
         m_undo.push_back(std::move(txn));
         m_redo.clear();
-        while (m_undo.size() > m_maxDepth)
-            m_undo.pop_front();   // drop the oldest
+        Evict();
     }
 
     void CommandStack::Cancel(TransactionId owner)
@@ -112,8 +141,7 @@ namespace Arcane
         txn.id = m_nextId++;
         m_undo.push_back(std::move(txn));
         m_redo.clear();
-        while (m_undo.size() > m_maxDepth)
-            m_undo.pop_front();
+        Evict();
     }
 
     bool CommandStack::Expired(const Transaction& t) noexcept
@@ -169,7 +197,10 @@ namespace Arcane
         for (auto it = m_undo.rbegin(); it != m_undo.rend(); ++it)
             if (it->affectsScene)
                 return it->id;
-        return 0;
+        // Eviction took every scene step: the scene is still in the state the
+        // newest evicted one produced, so a save under N document edits keeps
+        // reading clean and undo can never reach below it.
+        return m_evictedSceneId;
     }
 
     const char* CommandStack::UndoLabel() const noexcept
@@ -188,6 +219,7 @@ namespace Arcane
         m_clearedReason = std::move(reason);
         m_undo.clear();
         m_redo.clear();
+        m_evictedSceneId = 0;
         m_openId = TransactionId::None;
         m_pending.clear();
         m_pendingGeneric.clear();
@@ -214,7 +246,7 @@ namespace Arcane
         // Baseline BELOW the current state (the normal case): every undo entry
         // ABOVE it is the diff. savedStateId 0 is the empty-stack bottom, so
         // the whole stack is the diff -- with the StateId eviction caveat
-        // mapped here: entries the depth cap evicted took their touched lists
+        // mapped here: entries Evict() dropped took their touched lists
         // with them, so a 0-baseline diff can understate after 100+ steps.
         for (auto it = m_undo.rbegin(); it != m_undo.rend(); ++it)
         {
@@ -225,7 +257,10 @@ namespace Arcane
             }
             add(it->touched);
         }
-        if (savedStateId == 0)
+        // m_evictedSceneId is a reachable bottom too: only document steps
+        // (touched empty) can have been evicted after it, so the diff above
+        // it is complete.
+        if (savedStateId == 0 || savedStateId == m_evictedSceneId)
         {
             out.baselineFound = true;
             return out;

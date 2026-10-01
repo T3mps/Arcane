@@ -339,6 +339,24 @@ namespace
         bool AffectsScene() const override { return false; }
         bool IsExpired() const override { return anchor.expired(); }
     };
+
+    // Reports a fixed payload size: the byte-budget unit without real bytes.
+    struct SizedCommand final : Arcane::ICommand
+    {
+        std::size_t bytes;
+        explicit SizedCommand(std::size_t b) : bytes(b) {}
+        void Undo() override {}
+        void Redo() override {}
+        const char* Label() const override { return "sized"; }
+        std::size_t PayloadBytes() const override { return bytes; }
+    };
+
+    int UndoDepth(Arcane::CommandStack& s)   // destructive: undoes everything
+    {
+        int n = 0;
+        while (s.CanUndo()) { s.Undo(); ++n; }
+        return n;
+    }
 }
 
 TEST_CASE("CommandStack::Push: standalone step, transaction join, redo-clear", "[edit]")
@@ -565,7 +583,10 @@ TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
     reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
 
-    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; }, /*maxDepth*/ 2);
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 2;
+    stack.SetLimits(limits);
     for (int i = 1; i <= 3; ++i)
     {
         const Arcane::TransactionId txn = stack.Begin("e");
@@ -699,7 +720,7 @@ TEST_CASE("StateId: Push (one-shot command path) mints and retires ids too, not 
 TEST_CASE("StateId: an id evicted by the depth cap is never observed again", "[edit]")
 {
     // Gap 2 (review of the StateId() work, 2026-07-27): CommandStack::Commit's
-    // depth cap -- `while (m_undo.size() > m_maxDepth) m_undo.pop_front();` --
+    // depth cap -- now `Evict()` over `UndoLimits::maxSteps`, oldest-first --
     // physically destroys the oldest Transaction, including its id, and ids
     // are never re-minted. CommandStack.hpp's StateId comment documents this
     // as the deliberately safe direction: a caller who recorded an evicted id
@@ -719,8 +740,10 @@ TEST_CASE("StateId: an id evicted by the depth cap is never observed again", "[e
     const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
     REQUIRE(desc != nullptr);
 
-    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); },
-                                /*maxDepth*/ 2);
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 2;
+    stack.SetLimits(limits);
 
     auto edit = [&](float x)
     {
@@ -1136,4 +1159,37 @@ TEST_CASE("Clear(reason) drops history and remembers why until the next Clear", 
     CHECK(stack.ClearedReason() == "Opened scene level_one");   // a push does not retire it
     stack.Clear("Switched project");
     CHECK(stack.ClearedReason() == "Switched project");
+}
+
+TEST_CASE("UndoLimits: maxSteps 0 clamps to 1; the byte budget evicts oldest-first, never the top", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    CHECK(stack.Limits() == Arcane::UndoLimits{});
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 0;
+    stack.SetLimits(limits);
+    CHECK(stack.Limits().maxSteps == 1);
+
+    limits.maxSteps = 100;
+    limits.byteBudget = 100;
+    stack.SetLimits(limits);
+    SECTION("over budget: the oldest goes")
+    {
+        stack.Push(std::make_unique<SizedCommand>(60));
+        stack.Push(std::make_unique<SizedCommand>(60));
+        CHECK(UndoDepth(stack) == 1);
+    }
+    SECTION("a single step over budget stays; everything older goes")
+    {
+        stack.Push(std::make_unique<SizedCommand>(10));
+        stack.Push(std::make_unique<SizedCommand>(500));
+        CHECK(UndoDepth(stack) == 1);
+    }
+    SECTION("under budget: nothing goes")
+    {
+        stack.Push(std::make_unique<SizedCommand>(40));
+        stack.Push(std::make_unique<SizedCommand>(40));
+        CHECK(UndoDepth(stack) == 2);
+    }
 }
