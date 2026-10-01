@@ -759,13 +759,16 @@ namespace Arcane
             // a literal outranks `def`, which is why it also overrides every
             // NON-ZERO neutral -- Combine alpha, Clamp max, Smoothstep edge1,
             // Power exponent, TilingOffset tiling, SimpleNoise scale, Panner
-            // uv, ScaleOffset scale: the eight argOr call sites that pass
-            // something other than "0.0". Unconnected and literal-free inputs
-            // read `def` exactly as before, so a graph with no literals emits
+            // uv, ScaleOffset scale. Every call site reaches argOr through
+            // `arg` below, which takes `def` and `defWidth` from
+            // GraphPinNeutralDefault (s5.1.8, the one neutral table; the
+            // direct-read sites take their text from it too, via
+            // `neutralText`). Unconnected and literal-free inputs read `def`
+            // exactly as before, so a graph with no literals emits
             // byte-identical text.
             //
-            // `defWidth` is the width of `def` ITSELF. Every constant neutral
-            // is a width-1 string that splats (the default), but Panner's
+            // `defWidth` is the width of `def` ITSELF. Every constant neutral argOr
+            // sees is a width-1 string that splats (the default), but Panner's
             // `v.uv` is already a float2 and must be handed to Adapt as one --
             // Adapt(.., 1, 2) would turn it into "(v.uv).xx" (Adapt's scalar
             // rule, this file's Adapt above), duplicating u into both lanes.
@@ -786,7 +789,17 @@ namespace Arcane
                 }
                 return Adapt(def, defWidth, t);
             };
-            auto arg = [&](std::uint32_t pin, int t) { return argOr(pin, t, "0.0"); };
+            // Every argOr operand's neutral comes from the one table
+            // (GraphPinNeutralDefault, s5.1.8); `def`/`defWidth` stay
+            // argOr's parameters so the seam's shape is unchanged.
+            auto arg = [&](std::uint32_t pin, int t)
+            {
+                const GraphPinNeutral nd = GraphPinNeutralDefault(*n, pin);
+                return argOr(pin, t, nd.hlsl ? nd.hlsl : "0.0", nd.lanes);
+            };
+            // A direct-read pin's unconnected text, same table.
+            auto neutralText = [&](std::uint32_t pin)
+            { return std::string(GraphPinNeutralDefault(*n, pin).hlsl); };
 
             const std::string id = std::to_string(n->id);
             auto stmt = [&](std::string s) { body.emplace_back(std::move(s), n->id); };
@@ -798,7 +811,7 @@ namespace Arcane
                 case GraphNodeType::Output:
                     stmt("return " + (in[0].connected
                                           ? Adapt(in[0].expr, in[0].width, 4)
-                                          : std::string("float4(0.0, 0.0, 0.0, 1.0)")) + ";");
+                                          : neutralText(0)) + ";");
                     break;
                 case GraphNodeType::ConstFloat:
                     local(1, FormatF(n->value[0]));
@@ -824,7 +837,7 @@ namespace Arcane
                     const std::string tex =
                         n->type == GraphNodeType::SpriteTexture ? "SpriteTexture" : n->paramName;
                     const std::string uv = in[0].connected ? Adapt(in[0].expr, in[0].width, 2)
-                                                           : std::string("v.uv");
+                                                           : neutralText(0);
                     // The vertex stage samples at mip 0 explicitly -- Sample's
                     // implicit derivatives only exist in the pixel stage.
                     const std::string call = vertexWalk
@@ -918,7 +931,7 @@ namespace Arcane
                     // SG Split rule: lanes beyond the source width read 0. The
                     // input is read at its NATIVE width (no adaptation).
                     const int sw = in[0].connected ? in[0].width : 1;
-                    const std::string src = in[0].connected ? in[0].expr : std::string("0.0");
+                    const std::string src = in[0].connected ? in[0].expr : neutralText(0);
                     const char* lane[4] = { ".x", ".y", ".z", ".w" };
                     const auto& outs = GraphNodeInfo(n->type).outputs;
                     for (std::uint32_t pin = 0; pin < outs.size(); ++pin)
@@ -937,21 +950,21 @@ namespace Arcane
                 }
                 case GraphNodeType::Combine:
                     local(4, "float4(" + arg(0, 1) + ", " + arg(1, 1) + ", " + arg(2, 1) +
-                             ", " + argOr(3, 1, "1.0") + ")");
+                             ", " + arg(3, 1) + ")");
                     break;
                 case GraphNodeType::Clamp:
                     local(w, "clamp(" + arg(0, 0) + ", " + arg(1, 0) + ", " +
-                             argOr(2, 0, "1.0") + ")");
+                             arg(2, 0) + ")");
                     break;
                 case GraphNodeType::Smoothstep:
-                    local(w, "smoothstep(" + arg(0, 0) + ", " + argOr(1, 0, "1.0") + ", " +
+                    local(w, "smoothstep(" + arg(0, 0) + ", " + arg(1, 0) + ", " +
                              arg(2, 0) + ")");
                     break;
                 case GraphNodeType::Step:
                     local(w, "step(" + arg(0, 0) + ", " + arg(1, 0) + ")");
                     break;
                 case GraphNodeType::Power:
-                    local(w, "pow(" + arg(0, 0) + ", " + argOr(1, 0, "1.0") + ")");
+                    local(w, "pow(" + arg(0, 0) + ", " + arg(1, 0) + ")");
                     break;
                 case GraphNodeType::Remap:
                 {
@@ -961,10 +974,10 @@ namespace Arcane
                     const std::string x = arg(0, 0);
                     const std::string ir = in[1].connected
                                                ? Adapt(in[1].expr, in[1].width, 2)
-                                               : std::string("float2(0.0, 1.0)");
+                                               : neutralText(1);
                     const std::string outr = in[2].connected
                                                  ? Adapt(in[2].expr, in[2].width, 2)
-                                                 : std::string("float2(0.0, 1.0)");
+                                                 : neutralText(2);
                     local(w, "(" + outr + ").x + (" + x + " - (" + ir + ").x) * ((" + outr +
                              ").y - (" + outr + ").x) / ((" + ir + ").y - (" + ir + ").x)");
                     break;
@@ -973,8 +986,8 @@ namespace Arcane
                 {
                     const std::string uv = in[0].connected
                                                ? Adapt(in[0].expr, in[0].width, 2)
-                                               : std::string("v.uv");
-                    local(2, uv + " * " + argOr(1, 2, "1.0") + " + " + arg(2, 2));
+                                               : neutralText(0);
+                    local(2, uv + " * " + arg(1, 2) + " + " + arg(2, 2));
                     break;
                 }
                 case GraphNodeType::Cos:
@@ -995,7 +1008,7 @@ namespace Arcane
                     // (the Split rule). All-present masks emit a real HLSL
                     // swizzle; mixed masks build a constructor.
                     const int sw = in[0].connected ? in[0].width : 1;
-                    const std::string src = in[0].connected ? in[0].expr : std::string("0.0");
+                    const std::string src = in[0].connected ? in[0].expr : neutralText(0);
                     const std::string& mask = n->swizzleMask;
                     const int mlen = static_cast<int>(mask.size());
                     widthOf[n->id] = mlen;   // the output pin's dynamic width
@@ -1037,8 +1050,8 @@ namespace Arcane
                     emitHelperOnce("simple_noise", kSimpleNoiseHelper);
                     local(1, "_g_simple_noise((" +
                              (in[0].connected ? Adapt(in[0].expr, in[0].width, 2)
-                                              : std::string("v.uv")) +
-                             ") * " + argOr(1, 1, "10.0") + ")");
+                                              : neutralText(0)) +
+                             ") * " + arg(1, 1) + ")");
                     break;
                 case GraphNodeType::VertexOutput:
                     // Only connected pins emit -- an untouched pin is a true
@@ -1059,7 +1072,7 @@ namespace Arcane
                             : "InputTexture" + std::to_string(n->passInputSlot);
                     const std::string uv = in[0].connected
                                                ? Adapt(in[0].expr, in[0].width, 2)
-                                               : std::string("v.uv");
+                                               : neutralText(0);
                     stmt("float4 _n" + id + "_rgba = " + tex +
                          ".Sample(MaterialSampler, " + uv + ");");
                     if (pinConsumed(n->id, 1))
@@ -1140,7 +1153,7 @@ namespace Arcane
                     // space; this form only bounds the offset. HLSL frac() is
                     // per-component, so one call covers UE's two.
                     const std::string scroll = "Time * " + arg(1, 2);
-                    local(2, argOr(0, 2, "v.uv", 2) + " + " +
+                    local(2, arg(0, 2) + " + " +
                              (n->pannerFractional ? "frac(" + scroll + ")" : scroll));
                     break;
                 }
@@ -1155,8 +1168,8 @@ namespace Arcane
                     // operand itself, which keeps the text readable when x is
                     // a float2/float4, and a wider wire narrows through the
                     // adaptation table exactly as a width-1 pin promises.
-                    local(w, "(" + arg(0, 0) + " + " + argOr(1, 1, "0.0") + ") * " +
-                             argOr(2, 1, "1.0"));
+                    local(w, "(" + arg(0, 0) + " + " + arg(1, 1) + ") * " +
+                             arg(2, 1));
                     break;
             }
 
@@ -1366,6 +1379,50 @@ namespace Arcane
                 // uv, which -- unlike TilingOffset's -- takes its v.uv
                 // neutral THROUGH the seam as a width-2 default (:1058).
                 return true;
+        }
+    }
+
+    GraphPinNeutral GraphPinNeutralDefault(const GraphNode& n, std::uint32_t pin) noexcept
+    {
+        // THE neutral table (s5.1.8): the emission switch above reads `hlsl`
+        // and `lanes` from here, so a neutral changes in exactly one place.
+        // MaterialGraphTest's truth table is the tripwire.
+        using K = GraphPinNeutralKind;
+        constexpr GraphPinNeutral kZero{};
+        constexpr GraphPinNeutral kOne{ K::Constant, 1, { 1.0f, 0.0f, 0.0f, 0.0f }, "1.0" };
+        constexpr GraphPinNeutral kUv{ K::Expression, 2, {}, "v.uv" };
+        switch (n.type)
+        {
+            case GraphNodeType::Output:
+                return pin == 0
+                    ? GraphPinNeutral{ K::Constant, 4, { 0.0f, 0.0f, 0.0f, 1.0f }, "float4(0.0, 0.0, 0.0, 1.0)" }
+                    : kZero;
+            case GraphNodeType::TextureSample:
+            case GraphNodeType::SpriteTexture:
+            case GraphNodeType::PassInput:
+                return pin == 0 ? kUv : kZero;
+            case GraphNodeType::TilingOffset:
+                return pin == 0 ? kUv : pin == 1 ? kOne : kZero;
+            case GraphNodeType::SimpleNoise:
+                return pin == 0 ? kUv
+                     : pin == 1 ? GraphPinNeutral{ K::Constant, 1, { 10.0f, 0.0f, 0.0f, 0.0f }, "10.0" }
+                                : kZero;
+            case GraphNodeType::Panner:
+                return pin == 0 ? kUv : kZero;
+            case GraphNodeType::Combine:     return pin == 3 ? kOne : kZero;
+            case GraphNodeType::Clamp:       return pin == 2 ? kOne : kZero;
+            case GraphNodeType::Smoothstep:  return pin == 1 ? kOne : kZero;
+            case GraphNodeType::Power:       return pin == 1 ? kOne : kZero;
+            case GraphNodeType::ScaleOffset: return pin == 2 ? kOne : kZero;
+            case GraphNodeType::Remap:
+                return pin == 1 || pin == 2
+                    ? GraphPinNeutral{ K::Constant, 2, { 0.0f, 1.0f, 0.0f, 0.0f }, "float2(0.0, 1.0)" }
+                    : kZero;
+            case GraphNodeType::VertexOutput:
+                return pin < 3 ? GraphPinNeutral{ K::Passthrough, GraphNodeInputPin(n, pin).width, {}, nullptr }
+                               : kZero;
+            default:
+                return kZero;   // every other operand, Split/Swizzle's source, Custom pins
         }
     }
 

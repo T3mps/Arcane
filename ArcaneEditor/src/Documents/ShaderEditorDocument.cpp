@@ -608,52 +608,21 @@ namespace Arcane::Editor
         // a silent dead widget with nothing to fail; the engine copy has a
         // truth-table test over every node type instead.
 
-        // What the widget shows on a pin that carries no literal yet: codegen's
-        // NEUTRAL for that pin, so an untouched field never lies about the
-        // value the shader is using and a first drag starts from it instead of
-        // snapping the material to zero. The eight argOr call sites that pass
-        // something other than "0.0" are enumerated at MaterialGraph.cpp:674-680
-        // and each is cited below. Returns false when the neutral is not a
-        // constant at all (Panner's v.uv), which the caller renders as a
-        // non-numeric placeholder.
-        bool PinNeutralDefault(const Arcane::GraphNode& n, std::uint32_t pin, float out[4])
+        // The literal widget's starting value on a pin with no literal yet:
+        // codegen's Constant neutral (Arcane::GraphPinNeutralDefault, the one
+        // truth -- node page s5.1.8), splatted to the widget's lanes the way
+        // Adapt splats a width-1 default (Tiling & Offset's tiling shows
+        // (1, 1)), so an untouched field never lies and a first drag starts
+        // from the value the shader uses. Expression/Passthrough leave 0 (the
+        // caller prints `hlsl` instead). Both surfaces -- canvas and node page
+        // -- seed through here.
+        void SeedPinNeutral(const Arcane::GraphPinNeutral& nd, int lanes, float out[4]) noexcept
         {
             out[0] = out[1] = out[2] = out[3] = 0.0f;
-            switch (n.type)
-            {
-                case Arcane::GraphNodeType::Combine:        // alpha opaque (:855)
-                    if (pin == 3)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::Clamp:          // max (:859)
-                    if (pin == 2)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::Smoothstep:     // edge1 (:862)
-                    if (pin == 1)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::Power:          // exponent (:869)
-                    if (pin == 1)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::TilingOffset:   // tiling, splat (:892)
-                    if (pin == 1)
-                        out[0] = out[1] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::SimpleNoise:    // scale (:956)
-                    if (pin == 1)
-                        out[0] = 10.0f;
-                    return true;
-                case Arcane::GraphNodeType::Panner:         // uv -> v.uv (:1058)
-                    return pin != 0;
-                case Arcane::GraphNodeType::ScaleOffset:    // scale = identity (:1074)
-                    if (pin == 2)
-                        out[0] = 1.0f;
-                    return true;
-                default:
-                    return true;
-            }
+            if (nd.kind != Arcane::GraphPinNeutralKind::Constant)
+                return;
+            for (int k = 0; k < lanes && k < 4; ++k)
+                out[k] = nd.lanes == 1 ? nd.v[0] : nd.v[k];
         }
 
         // Value equality for a pass's optional graph, for the gesture builders'
@@ -4761,17 +4730,21 @@ namespace Arcane::Editor
                     Arcane::GraphPinLiteralLanes(Arcane::GraphNodeInputPin(n, pin).width);
                 float buf[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
                 const Arcane::GraphPinLiteral* lit = n.FindPinLiteral(pin);
-                bool numericDefault = true;
-                if (lit)
-                    std::memcpy(buf, lit->v, sizeof(buf));
-                else
-                    numericDefault = PinNeutralDefault(n, pin, buf);
                 // A non-constant neutral (Panner's v.uv) prints as ITSELF: a
                 // format string carrying no conversion is explicitly tolerated
                 // by ImGui -- RoundScalarWithFormatT returns the value
                 // untouched when "the value is not visible in the format
                 // string" (ThirdParty/imgui/imgui_widgets.cpp:2496).
-                const char* fmt = numericDefault ? "%.3f" : "v.uv";
+                const char* fmt = "%.3f";
+                if (lit)
+                    std::memcpy(buf, lit->v, sizeof(buf));
+                else
+                {
+                    const Arcane::GraphPinNeutral nd = Arcane::GraphPinNeutralDefault(n, pin);
+                    SeedPinNeutral(nd, lanes, buf);
+                    if (nd.kind == Arcane::GraphPinNeutralKind::Expression)
+                        fmt = nd.hlsl;
+                }
                 ImGui::SetNextItemWidth(lanes == 1 ? 64.0f : lanes == 2 ? 106.0f : 190.0f);
                 const bool changed =
                     lanes == 1 ? ImGui::DragFloat("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)

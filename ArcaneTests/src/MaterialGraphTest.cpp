@@ -16,11 +16,14 @@
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace Arcane;
 
@@ -989,6 +992,119 @@ TEST_CASE("GraphPinAcceptsLiteral agrees with the emission switch, pin by pin",
             }
         }
     }
+}
+
+namespace
+{
+    // Every number in an HLSL constant, skipping digits inside identifiers
+    // ("float4(0.0, 1.0)" -> {0, 1}, never the 4).
+    std::vector<float> NumbersIn(std::string_view s)
+    {
+        std::vector<float> out;
+        const std::string str(s);
+        const char* p = str.c_str();
+        char prev = ' ';
+        while (*p)
+        {
+            const bool ident = std::isalnum(static_cast<unsigned char>(prev)) || prev == '_';
+            const bool start = !ident && (std::isdigit(static_cast<unsigned char>(*p)) ||
+                ((*p == '-' || *p == '.') && std::isdigit(static_cast<unsigned char>(p[1]))));
+            if (start)
+            {
+                char* end = nullptr;
+                out.push_back(std::strtof(p, &end));
+                prev = end[-1];
+                p = end;
+            }
+            else
+                prev = *p++;
+        }
+        return out;
+    }
+}
+
+TEST_CASE("GraphPinNeutralDefault: one truth table over every node type and input pin", "[material][graph]")
+{
+    // Node page s5.1.8. The rows are DATA, not a mirror of the switch. Every
+    // (type, pin) absent from kNonZero must read Constant 1 lane 0 / "0.0".
+    // `hlsl` is codegen's text VERBATIM ("1.0", never FormatF's "1"), which is
+    // why every snippet expectation in this file stays byte-identical.
+    struct Row { const char* token; std::uint32_t pin; GraphPinNeutralKind kind; int lanes;
+                 float v[4]; const char* hlsl; };
+    using K = GraphPinNeutralKind;
+    static const Row kNonZero[] = {
+        { "output",         0, K::Constant,    4, { 0, 0, 0, 1 }, "float4(0.0, 0.0, 0.0, 1.0)" },
+        { "texture_sample", 0, K::Expression,  2, {},             "v.uv" },
+        { "sprite_texture", 0, K::Expression,  2, {},             "v.uv" },
+        { "pass_input",     0, K::Expression,  2, {},             "v.uv" },
+        { "tiling_offset",  0, K::Expression,  2, {},             "v.uv" },
+        { "tiling_offset",  1, K::Constant,    1, { 1 },          "1.0" },   // splats to (1, 1)
+        { "simple_noise",   0, K::Expression,  2, {},             "v.uv" },
+        { "simple_noise",   1, K::Constant,    1, { 10 },         "10.0" },
+        { "panner",         0, K::Expression,  2, {},             "v.uv" },
+        { "combine",        3, K::Constant,    1, { 1 },          "1.0" },
+        { "clamp",          2, K::Constant,    1, { 1 },          "1.0" },
+        { "smoothstep",     1, K::Constant,    1, { 1 },          "1.0" },
+        { "power",          1, K::Constant,    1, { 1 },          "1.0" },
+        { "scale_offset",   2, K::Constant,    1, { 1 },          "1.0" },
+        { "remap",          1, K::Constant,    2, { 0, 1 },       "float2(0.0, 1.0)" },
+        { "remap",          2, K::Constant,    2, { 0, 1 },       "float2(0.0, 1.0)" },
+        { "vertex_output",  0, K::Passthrough, 2, {},             nullptr },
+        { "vertex_output",  1, K::Passthrough, 2, {},             nullptr },
+        { "vertex_output",  2, K::Passthrough, 4, {},             nullptr },
+    };
+    auto expect = [](const GraphPinNeutral& got, K kind, int lanes, const float* v, const char* hlsl)
+    {
+        CHECK(got.kind == kind);
+        CHECK(got.lanes == lanes);
+        for (int i = 0; i < 4; ++i)
+            CHECK(got.v[i] == (v ? v[i] : 0.0f));
+        if (hlsl == nullptr)
+            CHECK(got.hlsl == nullptr);
+        else
+        {
+            REQUIRE(got.hlsl != nullptr);
+            CHECK(std::string_view(got.hlsl) == hlsl);
+        }
+        // A Constant's text and its numbers are one fact (lanes numbers, = v).
+        if (got.kind == K::Constant && got.hlsl)
+        {
+            const std::vector<float> parsed = NumbersIn(got.hlsl);
+            REQUIRE(parsed.size() == static_cast<std::size_t>(got.lanes));
+            for (int i = 0; i < got.lanes; ++i)
+                CHECK(parsed[static_cast<std::size_t>(i)] == got.v[i]);
+        }
+    };
+
+    static constexpr float kZero[4] = { 0, 0, 0, 0 };
+    for (const GraphNodeTypeInfo& info : AllGraphNodeInfos())
+    {
+        const GraphNode n = Node(1, info.type);
+        for (std::uint32_t pin = 0; pin < GraphNodeInputCount(n); ++pin)
+        {
+            INFO(info.token << " pin " << pin);
+            const Row* row = nullptr;
+            for (const Row& r : kNonZero)
+                if (std::string_view(info.token) == r.token && r.pin == pin)
+                    row = &r;
+            const GraphPinNeutral got = GraphPinNeutralDefault(n, pin);
+            if (row)
+                expect(got, row->kind, row->lanes, row->v, row->hlsl);
+            else
+                expect(got, K::Constant, 1, kZero, "0.0");
+        }
+    }
+
+    // Custom pins are per-node data: plain argOr operands, neutral 0 whatever the width.
+    GraphNode custom = Node(1, GraphNodeType::Custom);
+    custom.customPins = { { "uv", 2 }, { "tint", 4 } };
+    for (std::uint32_t pin = 0; pin < 2; ++pin)
+    {
+        INFO("custom pin " << pin);
+        expect(GraphPinNeutralDefault(custom, pin), K::Constant, 1, kZero, "0.0");
+    }
+    // Out of range is harmless (the zero row), never a crash.
+    expect(GraphPinNeutralDefault(Node(1, GraphNodeType::Add), 7), K::Constant, 1, kZero, "0.0");
 }
 
 TEST_CASE("Codegen: Split lanes follow the SG rule", "[material]")

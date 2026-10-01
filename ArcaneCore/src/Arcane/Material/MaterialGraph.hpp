@@ -400,6 +400,25 @@ namespace Arcane
     [[nodiscard]] ARCANE_CORE_API bool GraphPinAcceptsLiteral(const GraphNode& n,
                                                     std::uint32_t pin) noexcept;
 
+    // What an UNWIRED, literal-free input pin reads -- codegen's NEUTRAL, the
+    // one truth codegen's argOr sites, its direct-read sites and the editor
+    // all take it from (node page s5.1.8). Constant: `lanes` numbers in `v`
+    // (a width-1 neutral splats, Adapt's scalar rule). Expression: a
+    // non-constant default ("v.uv"). Passthrough: only a wire contributes
+    // (Vertex Output's pins). `hlsl` is the EXACT text codegen emits, in
+    // static storage, nullptr for Passthrough; `lanes` is the neutral's own
+    // width (Adapt's defWidth), the pin's declared width for Passthrough.
+    enum class GraphPinNeutralKind : std::uint8_t { Constant, Expression, Passthrough };
+    struct GraphPinNeutral
+    {
+        GraphPinNeutralKind kind  = GraphPinNeutralKind::Constant;
+        int                 lanes = 1;
+        float               v[4]  = {};
+        const char*         hlsl  = "0.0";
+    };
+    [[nodiscard]] ARCANE_CORE_API GraphPinNeutral GraphPinNeutralDefault(const GraphNode& n,
+                                                                         std::uint32_t pin) noexcept;
+
     // How many lanes a literal stores for a pin of `declaredWidth` (the
     // GraphPinDesc.width of the pin, hence int): fixed 2/4 keep their lanes,
     // everything else -- INCLUDING dynamic (width-0) pins -- is a scalar.
