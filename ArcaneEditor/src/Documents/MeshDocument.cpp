@@ -111,10 +111,12 @@ namespace Arcane::Editor
 
         RebuildPreviewMesh();
         // No bind/compile event to wait for (BuildMeshData is synchronous and
-        // pure), so the vehicle is built right here rather than lazily from
-        // Tick/Draw -- this IS the "device-less services allocate no preview
-        // resources" behaviour: with nriDevice/hostConfig null, this call is
-        // a single `if` that returns immediately.
+        // pure), so the vehicle is built right here when the seam is already
+        // up; a document built during boot gets it from Tick's retry instead
+        // (s3.2). This IS the "device-less services allocate no preview
+        // resources" behaviour: with chromeGraph/hostConfig unset, or
+        // chromeGraph() still null during boot, this call is a null check
+        // that never latches.
         EnsurePreviewContext();
     }
 
@@ -246,6 +248,12 @@ namespace Arcane::Editor
         // vehicle simply means no preview this Tick -- the same
         // degraded-not-fatal outcome EnsurePreviewContext and RenderPreview
         // both already carry.
+        //
+        // THE LATE-BOUND SEAM'S RETRY (s3.2): a document built during boot has
+        // no vehicle yet. Not after a creation refusal (the latch) and not
+        // after a frame failure (today's drop stays permanent for a mesh).
+        if (!m_preview && !m_previewVehicleFailed && !m_previewFrameFailed)
+            EnsurePreviewContext();
         if (m_preview && m_previewDirty)
             RenderPreview();
     }
@@ -255,24 +263,34 @@ namespace Arcane::Editor
     // =========================================================================
     void MeshDocument::EnsurePreviewContext()
     {
-        // The seam is null in every headless test (no EditorApp at all),
-        // which is the whole gate: this function is a no-op there.
-        if (m_preview || !m_services.nriDevice || !m_services.hostConfig)
+        // The seam is unset in every headless test (no EditorApp at all),
+        // and its resolver returns null during boot: either way this is a
+        // null check that never latches (s3.2).
+        if (m_preview || !m_services.hostConfig || !m_services.chromeGraph)
             return;
+        Arcane::NriGraphContext* chrome = m_services.chromeGraph();
+        if (!chrome)
+            return;   // the seam is not up yet (boot): a null check, never a latch
 
         // Default NodeSet{} -- this preview draws no chrome, no game HUD and
         // has nothing to pick, exactly like ShaderEditorDocument's own
         // graph-preview vehicle.
+        ++m_previewVehicleAttempts;
         m_preview = Arcane::NriGraphContext::CreateOffscreen(
-            *m_services.hostConfig, *m_services.nriDevice, kPreviewSize, kPreviewSize);
+            *m_services.hostConfig, chrome->Device(), kPreviewSize, kPreviewSize);
         if (!m_preview)
         {
-            // Degraded, not fatal: no preview image, already logged + latched
-            // inside CreateOffscreen.
+            // Degraded, not fatal: no preview image, already logged inside
+            // CreateOffscreen. The latch stops Tick retrying (s3.2).
+            m_previewVehicleFailed = true;
             ARC_WARN("MeshDocument '{}': the preview context could not be created -- "
                      "this document shows no preview", m_title);
             return;
         }
+        m_previewVehicleFailed = false;
+        m_previewHud       = chrome->ImGuiHud();
+        m_previewPresented = false;
+        m_previewDirty     = true;   // a fresh texture holds nothing yet
         m_preview->SetMeshSupply(
             [this](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
             {
@@ -363,6 +381,7 @@ namespace Arcane::Editor
         {
             ARC_ERROR("MeshDocument '{}': the preview frame failed -- dropping this "
                       "document's preview vehicle", m_title);
+            m_previewFrameFailed = true;   // s3.2's FrameFailed
             DestroyPreviewContext();
             return;
         }
@@ -373,7 +392,11 @@ namespace Arcane::Editor
         // or the preview would stay blank for the document's lifetime once a
         // single Tick was skipped.
         if (outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
-            m_previewDirty = false;
+        {
+            m_previewDirty       = false;
+            m_previewPresented   = true;
+            m_previewFrameFailed = false;   // the next good frame clears the latch
+        }
     }
 
     std::uint64_t MeshDocument::PreviewTextureId() const noexcept
@@ -381,10 +404,24 @@ namespace Arcane::Editor
         return m_preview ? m_preview->OffscreenTextureId() : 0;
     }
 
+    PreviewStatus MeshDocument::ComputeStatus() const
+    {
+        PreviewStatusInputs in;
+        in.notCompiledHere = m_data.source == Arcane::MeshSource::Imported;
+        in.hasErrors       = m_validationReason.has_value();
+        in.deviceSeam      = m_services.chromeGraph && m_services.chromeGraph() != nullptr;
+        in.vehicleFailed   = m_previewVehicleFailed;
+        in.frameFailed     = m_previewFrameFailed;
+        in.imageBound      = m_preview && m_previewPresented;
+        return ComputePreviewStatus(in);
+    }
+
     void MeshDocument::DestroyPreviewContext()
     {
         if (!m_preview)
             return;
+        m_previewPresented = false;
+        Arcane::ImGuiNriNode* hud = std::exchange(m_previewHud, nullptr);
 
         // ===== THE VEHICLE IS RETIRED, NOT DESTROYED (see Services::
         // retireGraphPreview / DocServices' identical field for the full
@@ -397,10 +434,11 @@ namespace Arcane::Editor
 
         // ===== NO SINK: THE CROSS-CONTEXT INVALIDATE, OWED *BEFORE* =====
         // Reached only where no further frame will be recorded (shutdown's
-        // drain, or the headless tests, which build no vehicle at all and so
-        // never reach this branch either).
-        if (m_services.chromeHud)
-            (void)m_services.chromeHud->InvalidateUserTextureNow(m_preview->OffscreenOutput());
+        // drain, or a [gpu] test that wires no retire sink) -- against the
+        // node recorded at creation (s3.2): ChromeGraph() is already null
+        // after ShutdownGraphPath.
+        if (hud)
+            (void)hud->InvalidateUserTextureNow(m_preview->OffscreenOutput());
         m_preview.reset();
     }
 
@@ -482,7 +520,7 @@ namespace Arcane::Editor
             const float side = static_cast<float>(kPreviewSize) * (fit > 0.0f ? fit : 1.0f);
             ImGui::Image(static_cast<ImTextureID>(texId), ImVec2(side, side));
         }
-        else if (!m_services.nriDevice || !m_services.hostConfig)
+        else if (ComputeStatus().preview == PreviewAvailability::NoDevice)
         {
             // The device-less test case, and any real session with no NRI
             // device at all -- EnsurePreviewContext() never even attempted

@@ -21,15 +21,20 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/MeshDocument.hpp"
+#include "Documents/PreviewStatus.hpp"
+#include "Helpers/GpuCapability.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Host/OffscreenVehicle.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
@@ -94,8 +99,8 @@ namespace
 
 TEST_CASE("MeshDocument: device-less services allocate no preview resources", "[editor][mesh]")
 {
-    // Default-constructed Services carries nriDevice/hostConfig/chromeHud all
-    // null -- exactly what a headless run (no EditorApp at all) hands every
+    // Default-constructed Services carries no chromeGraph and no hostConfig --
+    // exactly what a headless run (no EditorApp at all) hands every
     // document. Construction itself calls EnsurePreviewContext(); this pins
     // that the call is a genuine no-op rather than a crash or a lazily-built
     // vehicle on the first Tick.
@@ -581,3 +586,74 @@ TEST_CASE("MeshDocument's form draws in the Inspector window, not the document's
     CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);   // in the Inspector, not the document window
     h.Button(ImGuiMouseButton_Left, false);
 }
+
+// ---- Node page + editor upgrades s3.2: the late-bound seam + PreviewStatus ----
+TEST_CASE("MeshDocument status: no seam reads no-device and never latches; imported reads not-compiled-here; a validation reason reads errors", "[editor][mesh][preview]")
+{
+    using Arcane::Editor::CompileStatus;
+    using Arcane::Editor::PreviewAvailability;
+    {
+        MeshDocument doc(MeshDocument::Services{}, FixturePath(), Fixture());   // chromeGraph unset
+        for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+        const auto st = doc.ComputeStatus();
+        CHECK(st.compile == CompileStatus::Ok);
+        CHECK(st.preview == PreviewAvailability::NoDevice);
+        CHECK_FALSE(st.image);
+        CHECK(doc.PreviewVehicleAttempts() == 0);
+    }
+    {
+        // The boot window: the seam is WIRED but the chrome context is not up yet.
+        Arcane::HostConfig cfg;
+        MeshDocument::Services services;
+        services.hostConfig  = &cfg;
+        services.chromeGraph = [] { return static_cast<Arcane::NriGraphContext*>(nullptr); };
+        MeshDocument doc(services, FixturePath(), Fixture());
+        for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+        CHECK(doc.ComputeStatus().preview == PreviewAvailability::NoDevice);   // never vehicle-failed
+        CHECK(doc.PreviewVehicleAttempts() == 0);
+    }
+    {
+        Arcane::MeshAssetData imported = Fixture();
+        imported.source         = Arcane::MeshSource::Imported;
+        imported.importedSource = Arcane::Guid::Generate();
+        MeshDocument doc(MeshDocument::Services{}, FixturePath(), imported);
+        CHECK(doc.ComputeStatus().compile == CompileStatus::NotCompiledHere);
+    }
+    {
+        Arcane::MeshAssetData invalid = Fixture();
+        invalid.source   = Arcane::MeshSource::Cylinder;
+        invalid.segments = 1;   // floor is 3
+        MeshDocument doc(MeshDocument::Services{}, FixturePath(), invalid);
+        CHECK(doc.ComputeStatus().compile == CompileStatus::Errors);
+    }
+}
+
+TEST_CASE("MeshDocument: the first non-null chromeGraph makes Tick build the preview vehicle exactly once", "[editor][mesh][preview][gpu]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    using Arcane::Editor::PreviewAvailability;
+    Arcane::HostConfig cfg;
+    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.headless = true;
+    auto chrome = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
+    REQUIRE(chrome != nullptr);
+
+    Arcane::NriGraphContext* live = nullptr;     // ChromeGraph() before CreateGraphVehicles
+    MeshDocument::Services services;
+    services.hostConfig  = &cfg;
+    services.chromeGraph = [&] { return live; };
+    MeshDocument doc(services, FixturePath(), Fixture());   // constructed during "boot"
+    for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 0);
+    CHECK(doc.ComputeStatus().preview == PreviewAvailability::NoDevice);
+
+    live = &chrome->Graph();                     // CreateGraphVehicles ran
+    doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 1);
+    for (int i = 0; i < 5; ++i) doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 1);    // built: Tick stops retrying
+    const auto st = doc.ComputeStatus();
+    CHECK(st.preview == PreviewAvailability::Ready);
+    CHECK(st.image);                             // a Presented frame landed
+    CHECK(doc.PreviewTextureId() != 0);
+}   // no retire sink: ~MeshDocument invalidates against the hud recorded at creation, then chrome dies

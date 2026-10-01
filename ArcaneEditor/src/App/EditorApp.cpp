@@ -838,8 +838,8 @@ namespace Arcane::Editor
 
         // F2a, Task 9: .arcmesh -> MeshDocument routing, registered right
         // beside the .arcsprite route above (same factory+peek shape). The
-        // preview-seam wiring (nriDevice/hostConfig/chromeHud/
-        // retireGraphPreview) is the same four fields MakeDocServices sets
+        // preview-seam wiring (chromeGraph/hostConfig/retireGraphPreview)
+        // is the same three fields MakeDocServices sets
         // for the shader documents (EditorAppProject.cpp:57-94, read there
         // for the full ordering argument) -- inlined here rather than shared,
         // because MeshDocument::Services is deliberately its own small
@@ -867,17 +867,18 @@ namespace Arcane::Editor
                     if (m_resolver)
                         m_resolver->InvalidateMesh(g);
                 };
-                if (ChromeGraph())
+                // The late-bound preview seam (s3.2), set UNCONDITIONALLY: a
+                // mesh opened by --open-asset is built inside StageFinalize,
+                // before CreateGraphVehicles makes the chrome context, so the
+                // document resolves ChromeGraph() at each use and retries its
+                // vehicle from Tick (the harvester's hs.chromeGraph precedent).
+                meshDocServices.chromeGraph = [this] { return ChromeGraph(); };
+                meshDocServices.hostConfig  = &m_config;
+                meshDocServices.retireGraphPreview =
+                    [this](std::unique_ptr<Arcane::NriGraphContext> v)
                 {
-                    meshDocServices.nriDevice  = &ChromeGraph()->Device();
-                    meshDocServices.hostConfig = &m_config;
-                    meshDocServices.chromeHud  = ChromeGraph()->ImGuiHud();
-                    meshDocServices.retireGraphPreview =
-                        [this](std::unique_ptr<Arcane::NriGraphContext> v)
-                    {
-                        RetireDocPreview(std::move(v));
-                    };
-                }
+                    RetireDocPreview(std::move(v));
+                };
                 return std::make_unique<Arcane::Editor::MeshDocument>(
                     std::move(meshDocServices), p, std::move(*data));
             };

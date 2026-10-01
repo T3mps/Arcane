@@ -60,6 +60,7 @@
 #include "Scene/EditGesture.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
+#include "Documents/PreviewStatus.hpp"
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>          // MeshAssetData; also brings MeshBuilder.hpp (MeshData)
@@ -88,7 +89,6 @@ namespace Arcane
     // ~MeshDocument is out of line (MeshDocument.cpp).
     struct HostConfig;
     class ImGuiNriNode;
-    class NriDevice;
     class NriGraphContext;
 }
 
@@ -139,22 +139,23 @@ namespace Arcane::Editor
             // file", never to a lost edit.
             std::function<void(const Arcane::Guid&)> invalidateMesh;
 
-            // ===== THE PREVIEW SEAM ==========================================
+            // ===== THE PREVIEW SEAM (late-bound; node page + editor upgrades s3.2) =====
             // Borrowed from EditorApp, which outlives the document list.
-            //   nriDevice/hostConfig -- what CreateOffscreen needs to build
-            //                           this document's own small vehicle
-            //                           over the process's one device.
-            //   chromeHud            -- the chrome context's ImGuiNriNode,
-            //                           owed an InvalidateUserTextureNow
-            //                           before this preview's texture dies
-            //                           on the no-sink teardown path.
-            // All three null in the headless tests (no EditorApp at all) --
-            // what keeps EnsurePreviewContext() a single `if`, and what this
-            // task's pinned behaviour ("device-less services allocate no
-            // preview resources") exercises directly.
-            Arcane::NriDevice*        nriDevice  = nullptr;
+            //   chromeGraph -- resolves the CHROME context at each use (its
+            //                  Device() for CreateOffscreen). Late-bound because a
+            //                  document opened during boot (--open-asset opens
+            //                  inside StageFinalize) exists BEFORE
+            //                  CreateGraphVehicles makes that context; Tick
+            //                  retries the vehicle until it resolves (the
+            //                  material-preview harvester's precedent).
+            //   hostConfig  -- the knobs CreateOffscreen reads.
+            // The chrome ImGuiNriNode is NOT re-resolved at teardown: the
+            // document records the one it bound through (m_previewHud),
+            // because ChromeGraph() is null after ShutdownGraphPath.
+            // Both unset in the headless tests: EnsurePreviewContext is then a
+            // null check that never latches.
+            std::function<Arcane::NriGraphContext*()> chromeGraph;
             const Arcane::HostConfig* hostConfig = nullptr;
-            Arcane::ImGuiNriNode*     chromeHud  = nullptr;
 
             // ===== AND THE ONE-FRAME RETIRE, NOT OPTIONAL =====
             // A document can be destroyed INSIDE the editor's ImGui pass
@@ -278,6 +279,16 @@ namespace Arcane::Editor
             return m_previewGeometryInvalidations;
         }
 
+        // The PreviewStatus inputs (s3.2): a validation reason -> Errors,
+        // imported -> NotCompiledHere, no seam -> NoDevice, vehicle unavailable
+        // -> VehicleFailed, a rendered image -> Ready. What the report's
+        // documents[] carries; T3 reads it for the UI.
+        [[nodiscard]] PreviewStatus ComputeStatus() const;
+
+        // CreateOffscreen calls this document has made -- the [gpu] test's
+        // "the first non-null seam builds the vehicle exactly once" instrument.
+        [[nodiscard]] std::uint32_t PreviewVehicleAttempts() const noexcept { return m_previewVehicleAttempts; }
+
     private:
         // The mesh page: the form, drawn by the Inspector instance showing it.
         // Carries its own EditGesture::ScopeGuard (the topology drags that
@@ -311,13 +322,11 @@ namespace Arcane::Editor
         // simpler than SpriteDocument's cache-invalidate story.
         void RebuildPreviewMesh();
 
-        // Build this document's own offscreen vehicle, once, the moment
-        // Services says a device exists. A no-op when one already exists or
-        // when nriDevice/hostConfig is null -- the whole of what makes
-        // "device-less services allocate no preview resources" true, and
-        // called from the CONSTRUCTOR (not lazily from Tick/Draw) because a
-        // mesh preview has no bind/compile event to wait for: the moment
-        // Services is known, whether a device exists is already decided.
+        // Build this document's own offscreen vehicle, once, when the chrome
+        // context resolves. Called from the constructor AND retried from Tick
+        // while there is no vehicle and neither latch is set (s3.2): a null
+        // chromeGraph() costs one check and never latches; the first non-null
+        // attempt builds the vehicle or latches m_previewVehicleFailed.
         void EnsurePreviewContext();
 
         // Render one frame of the preview: with a valid m_previewMesh, a
@@ -398,9 +407,18 @@ namespace Arcane::Editor
         std::shared_ptr<MeshDocument*> m_anchor;
 
         // This document's own offscreen preview vehicle -- null in every
-        // device-less test (Services carries no device there) and whenever
+        // device-less test (Services carries no chromeGraph there) and whenever
         // CreateOffscreen itself refuses (already logged).
         std::unique_ptr<Arcane::NriGraphContext> m_preview;
+
+        // ===== The late-bound seam's state (s3.2) =====
+        // The chrome ImGuiNriNode this vehicle's image was bound through,
+        // captured at creation -- the no-sink destroy invalidates against IT.
+        Arcane::ImGuiNriNode* m_previewHud = nullptr;
+        bool          m_previewVehicleFailed = false;   // CreateOffscreen returned null: Tick stops retrying
+        bool          m_previewFrameFailed   = false;   // a frame failed and dropped the vehicle (today's permanent drop)
+        bool          m_previewPresented     = false;   // a frame has landed in THIS vehicle's texture
+        std::uint32_t m_previewVehicleAttempts = 0;
 
         // Square, matching ShaderEditorDocument::kGraphPreviewSize -- there is
         // no shape reason for a mesh preview to differ, and reusing the same
