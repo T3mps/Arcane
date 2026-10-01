@@ -44,4 +44,50 @@ namespace Arcane::Editor
         }
         return "";
     }
+
+    std::string NoPreviewReason(const PreviewStatus& s)
+    {
+        if (s.image) return {};
+        switch (s.preview)
+        {
+            case PreviewAvailability::NoDevice:      return "no GPU device";
+            case PreviewAvailability::VehicleFailed: return "preview context failed -- see the log";
+            case PreviewAvailability::FrameFailed:   return "preview frame failed -- see the log";
+            case PreviewAvailability::Ready:         break;
+        }
+        switch (s.compile)
+        {
+            case CompileStatus::NotCompiledHere:     return "not compiled here";
+            case CompileStatus::CompilerUnavailable: return "not compiled";
+            case CompileStatus::Compiling:           return "still compiling";
+            case CompileStatus::Errors:              return "no successful compile yet";
+            case CompileStatus::Ok:                  break;
+        }
+        return "nothing rendered yet";   // vehicle up, the bind lands next frame
+    }
+
+    std::string ToolbarStatusText(const PreviewStatus& s)
+    {
+        switch (s.compile)
+        {
+            case CompileStatus::NotCompiledHere:     return "not compiled here";
+            case CompileStatus::CompilerUnavailable: return "not compiled -- shader compiler unavailable (see the log)";
+            case CompileStatus::Compiling:           return "compiling...";
+            case CompileStatus::Errors:
+                return s.preview == PreviewAvailability::Ready ? std::string("errors")
+                                                               : "errors, no preview (" + NoPreviewReason(s) + ")";
+            case CompileStatus::Ok:                  break;
+        }
+        return s.image ? std::string("ok") : "compiled, no preview (" + NoPreviewReason(s) + ")";
+    }
+
+    std::string PreviewBoxText(const PreviewStatus& s)
+    {
+        if (s.compile == CompileStatus::NotCompiledHere)     return "Imported mesh -- preview it on a mesh in the viewport";
+        if (s.compile == CompileStatus::CompilerUnavailable) return "Not compiled -- shader compiler unavailable (see the log)";
+        if (s.preview != PreviewAvailability::Ready)         return "No preview -- " + NoPreviewReason(s);
+        if (s.compile == CompileStatus::Compiling)           return "compiling...";
+        if (s.compile == CompileStatus::Errors)              return "Errors -- no successful compile yet";
+        return "Preview pending -- nothing rendered yet";
+    }
 }

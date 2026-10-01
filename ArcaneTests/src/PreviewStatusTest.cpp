@@ -79,3 +79,55 @@ TEST_CASE("PreviewStatus: the report ids are lowercase kebab", "[editor][preview
     CHECK(std::string(PreviewAvailabilityId(PreviewAvailability::VehicleFailed)) == "vehicle-failed");
     CHECK(std::string(PreviewAvailabilityId(PreviewAvailability::FrameFailed))   == "frame-failed");
 }
+
+TEST_CASE("PreviewStatus text: every (compile, preview) pair has its toolbar line", "[editor][preview]")
+{
+    using C = Arcane::Editor::CompileStatus;
+    using P = Arcane::Editor::PreviewAvailability;
+    using Arcane::Editor::ToolbarStatusText;
+    const P previews[] = { P::Ready, P::NoDevice, P::VehicleFailed, P::FrameFailed };
+    const char* const why[] = { "nothing rendered yet", "no GPU device",
+                                "preview context failed -- see the log", "preview frame failed -- see the log" };
+    for (int i = 0; i < 4; ++i)
+    {
+        INFO("preview " << Arcane::Editor::PreviewAvailabilityId(previews[i]));
+        CHECK(ToolbarStatusText({ C::NotCompiledHere, previews[i], false }) == "not compiled here");
+        CHECK(ToolbarStatusText({ C::CompilerUnavailable, previews[i], false })
+              == "not compiled -- shader compiler unavailable (see the log)");
+        CHECK(ToolbarStatusText({ C::Compiling, previews[i], false }) == "compiling...");
+        if (i == 0) continue;
+        CHECK(ToolbarStatusText({ C::Errors, previews[i], false }) == std::string("errors, no preview (") + why[i] + ")");
+        CHECK(ToolbarStatusText({ C::Ok, previews[i], false }) == std::string("compiled, no preview (") + why[i] + ")");
+    }
+    CHECK(ToolbarStatusText({ C::Ok, P::Ready, true }) == "ok");
+    CHECK(ToolbarStatusText({ C::Ok, P::Ready, false }) == "compiled, no preview (nothing rendered yet)");
+    CHECK(ToolbarStatusText({ C::Errors, P::Ready, false }) == "errors");
+}
+
+TEST_CASE("PreviewStatus text: errors keep the last good image; a lost preview appends its reason", "[editor][preview]")
+{
+    Arcane::Editor::PreviewStatusInputs in;
+    in.hasErrors = true; in.deviceSeam = true; in.imageBound = true;
+    const auto bound = Arcane::Editor::ComputePreviewStatus(in);
+    CHECK(bound.image);                                                     // last good stays bound (cpp :3436)
+    CHECK(Arcane::Editor::ToolbarStatusText(bound) == "errors");
+    in.frameFailed = true;
+    CHECK(Arcane::Editor::ToolbarStatusText(Arcane::Editor::ComputePreviewStatus(in))
+          == "errors, no preview (preview frame failed -- see the log)");
+}
+
+TEST_CASE("PreviewStatus text: the box line for each no-image state", "[editor][preview]")
+{
+    using C = Arcane::Editor::CompileStatus;
+    using P = Arcane::Editor::PreviewAvailability;
+    using Arcane::Editor::PreviewBoxText;
+    CHECK(PreviewBoxText({ C::NotCompiledHere, P::NoDevice, false }) == "Imported mesh -- preview it on a mesh in the viewport");
+    CHECK(PreviewBoxText({ C::CompilerUnavailable, P::Ready, false }) == "Not compiled -- shader compiler unavailable (see the log)");
+    CHECK(PreviewBoxText({ C::Ok, P::NoDevice, false }) == "No preview -- no GPU device");
+    CHECK(PreviewBoxText({ C::Ok, P::VehicleFailed, false }) == "No preview -- preview context failed -- see the log");
+    CHECK(PreviewBoxText({ C::Errors, P::FrameFailed, false }) == "No preview -- preview frame failed -- see the log");
+    CHECK(PreviewBoxText({ C::Compiling, P::Ready, false }) == "compiling...");
+    CHECK(PreviewBoxText({ C::Errors, P::Ready, false }) == "Errors -- no successful compile yet");
+    CHECK(PreviewBoxText({ C::Ok, P::Ready, false }) == "Preview pending -- nothing rendered yet");
+    CHECK(Arcane::Editor::NoPreviewReason({ C::Ok, P::Ready, true }).empty());
+}
