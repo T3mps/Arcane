@@ -1105,6 +1105,9 @@ TEST_CASE("GraphPinNeutralDefault: one truth table over every node type and inpu
     }
     // Out of range is harmless (the zero row), never a crash.
     expect(GraphPinNeutralDefault(Node(1, GraphNodeType::Add), 7), K::Constant, 1, kZero, "0.0");
+    // Output included: its float4 neutral is pin 0 ONLY, so a stray pin is the
+    // zero row too (the one row that would otherwise ignore `pin`).
+    expect(GraphPinNeutralDefault(Node(1, GraphNodeType::Output), 1), K::Constant, 1, kZero, "0.0");
 }
 
 TEST_CASE("Codegen: Split lanes follow the SG rule", "[material]")
