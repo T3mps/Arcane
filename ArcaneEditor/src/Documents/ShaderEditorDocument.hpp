@@ -373,9 +373,10 @@ namespace Arcane::Editor
         void RequestBodyEdit(std::size_t pass, std::uint32_t id) noexcept
         { m_bodyEditPass = pass; m_bodyEditRequest = id; }
 
-        // TEST SEAM (GraphFitTest): the graph canvas's node-editor context, so a
-        // headless test can read the view the fit-on-open landed. Null until the
-        // first DrawGraphPanel. Production never calls it.
+        // TEST SEAM (GraphFitTest, GraphCanvasHeadlessTest): the graph canvas's
+        // node-editor context, so a headless test can read the view the
+        // fit-on-open landed, and ask what is selected and where a node sits.
+        // Null until the first DrawGraphPanel. Production never calls it.
         [[nodiscard]] ax::NodeEditor::EditorContext* GraphCanvasContext() const noexcept { return m_graphCtx; }
         // TEST SEAM (GraphFitTest): the pass canvas's node-editor context, the
         // chain overview's twin of GraphCanvasContext. Null until the first

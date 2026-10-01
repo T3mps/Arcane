@@ -12,12 +12,16 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
+#include "Documents/ShaderNodeKey.hpp"   // FormatNodeKey: the s5.1.11 canvas cases
 #include "Helpers/NodePageDocs.hpp"   // SpriteNodeDoc / ChainNodeDoc / HeadlessImGui (node page s5.1.11)
 
 #include <imgui.h>
 #include <imgui_internal.h>   // OpenPopupStack: the modal-hoist case
+#include <imgui_node_editor.h>   // the s5.1.11 canvas cases ask the canvas what is selected
 
+#include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -218,4 +222,146 @@ TEST_CASE("Node page modal hoist: the canvas still opens the HLSL body editor", 
     for (const ImGuiPopupData& p : imgui.ctx->OpenPopupStack)
         open = open || (p.Window && std::string(p.Window->Name).find("Edit HLSL") != std::string::npos);
     CHECK(open);
+}
+
+// ---- Node page s5.1.11 canvas acceptance: the selection mirror (s5.1.1) seen
+// from the canvas side -- what imgui-node-editor itself holds selected, a real
+// mouse click, a programmatic multi-select, pass switches and the chain view. ----
+namespace
+{
+    namespace ed = ax::NodeEditor;
+
+    // Device-less ImGui (HeadlessImGui, FIRST member so it destructs last) + a
+    // document drawn through its REAL Draw() (the canvas), one DocFrame per frame.
+    struct CanvasHarness
+    {
+        Arcane::Test::HeadlessImGui imgui;
+        std::unique_ptr<ShaderEditorDocument> doc;
+
+        explicit CanvasHarness(MaterialAssetData data)
+            : doc(std::make_unique<ShaderEditorDocument>(DocServices{}, std::filesystem::path("canvas.arcmat"), std::move(data)))
+        {
+        }
+        ~CanvasHarness() { doc.reset(); }   // inside the context (DestroyEditor)
+        CanvasHarness(const CanvasHarness&) = delete;
+        CanvasHarness& operator=(const CanvasHarness&) = delete;
+
+        void Frame(int n = 1)
+        {
+            for (int i = 0; i < n; ++i)
+                DocFrame(*doc);
+        }
+        void Click(ImVec2 at)
+        {
+            ImGuiIO& io = ImGui::GetIO();
+            io.AddMousePosEvent(at.x, at.y); Frame();
+            io.AddMouseButtonEvent(0, true); Frame();
+            io.AddMouseButtonEvent(0, false); Frame(2);
+        }
+        template <typename F> auto InCanvas(F&& f)
+        {
+            ed::SetCurrentEditor(doc->GraphCanvasContext());
+            auto r = f();
+            ed::SetCurrentEditor(nullptr);
+            return r;
+        }
+        // A point inside the node's title band, in screen space.
+        ImVec2 NodeTitle(std::uint32_t id)
+        {
+            return InCanvas([&]
+            {
+                const ImVec2 p = ed::CanvasToScreen(ed::GetNodePosition(ed::NodeId(id)));
+                return ImVec2(p.x + ed::GetNodeSize(ed::NodeId(id)).x * 0.5f, p.y + 8.0f);
+            });
+        }
+    };
+    MaterialAssetData TwoNodeGraph(const char* kind, MaterialGraph g)
+    {
+        MaterialAssetData data;
+        data.id = Guid::Generate();
+        data.name = "Canvas";
+        data.kind = kind;
+        data.graph = std::move(g);
+        return data;
+    }
+    // Output 1 <- Float 2; Float 3 unwired.
+    MaterialGraph OutputAndFloats()
+    {
+        MaterialGraph g;
+        GraphNode out; out.id = 1; out.type = GraphNodeType::Output; out.posX = 420.0f; out.posY = 80.0f;
+        GraphNode a;   a.id = 2;   a.type = GraphNodeType::ConstFloat; a.posX = 60.0f; a.posY = 80.0f;
+        GraphNode b;   b.id = 3;   b.type = GraphNodeType::ConstFloat; b.posX = 60.0f; b.posY = 220.0f;
+        g.nodes = { out, a, b };
+        g.links = { { 2, 0, 1, 0 } };
+        g.nextId = 4;
+        return g;
+    }
+    std::string Key(std::size_t pass, std::uint32_t id) { return FormatNodeKey({ pass, id }); }
+}
+
+TEST_CASE("Node page s5.1.11 canvas: a restore selects in the canvas with no event; 2+ selected is the material page",
+          "[editor][graphcanvas][nodepage]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(2);
+    REQUIRE(h.doc->RestoreSelection(Key(0, 2)));
+    const std::uint64_t e0 = h.doc->SelectionEpoch();
+    h.Frame(2);
+    CHECK(h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(2)); }));
+    CHECK(h.doc->SelectionKey() == Key(0, 2));
+    CHECK(h.doc->SelectionEpoch() == e0);                      // a restore is not an event
+
+    h.InCanvas([] { ed::SelectNode(ed::NodeId(3), /*append*/ true); return 0; });   // programmatic 2-node selection
+    h.Frame(2);
+    CHECK(h.doc->SelectionKey() == "material");                // s5.1.9: no multi-select page
+}
+
+TEST_CASE("Node page s5.1.11 canvas: a click on a node is exactly ONE selection event beyond the content click",
+          "[editor][graphcanvas][nodepage]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(3);
+    const std::uint64_t e0 = h.doc->SelectionEpoch();
+    h.Click(ImVec2(1000.0f, 650.0f));                          // empty canvas: a content click, no selection change
+    const std::uint64_t e1 = h.doc->SelectionEpoch();
+    CHECK(h.doc->SelectionKey() == "material");
+    const ImVec2 title = h.NodeTitle(2);
+    INFO("node 2 title point " << title.x << ", " << title.y);
+    h.Click(title);
+    CHECK(h.doc->SelectionKey() == Key(0, 2));
+    CHECK(h.doc->SelectionEpoch() - e1 == (e1 - e0) + 1);      // the same content click + one selection bump
+}
+
+TEST_CASE("Node page s5.1.11 canvas: pass switches and the chain view move no epoch; leaving the chain view restores the node",
+          "[editor][graphcanvas][nodepage]")
+{
+    MaterialAssetData data = TwoNodeGraph("fullscreen", OutputAndFloats());
+    MaterialPass blur; blur.name = "blur"; blur.inputs = { 0 }; blur.graph = OutputAndFloats();
+    data.passes.push_back(std::move(blur));
+    CanvasHarness h(std::move(data));
+    h.Frame(2);                                                 // opens on the chain overview
+    CHECK(h.doc->SelectionKey() == "material");
+    const std::uint64_t e0 = h.doc->SelectionEpoch();
+    REQUIRE(h.doc->RestoreSelection(Key(1, 2)));                // enters pass 1 (history: chain, pass 1)
+    h.Frame(3);
+    CHECK(h.doc->SelectionKey() == Key(1, 2));
+
+    SECTION("pass switch")
+    {
+        REQUIRE(h.doc->RestoreSelection(Key(0, 2)));            // rebuilds the canvas context for the base
+        h.Frame(3);
+        CHECK(h.doc->SelectionKey() == Key(0, 2));
+        CHECK(h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(2)); }));
+        CHECK(h.doc->SelectionEpoch() == e0);
+    }
+    SECTION("chain view")
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddMousePosEvent(500.0f, 400.0f); h.Frame();
+        io.AddMouseButtonEvent(3, true); h.Frame(); io.AddMouseButtonEvent(3, false); h.Frame(2);   // back: the overview
+        CHECK(h.doc->SelectionKey() == "material");             // pass-canvas nodes keep the material page
+        io.AddMouseButtonEvent(4, true); h.Frame(); io.AddMouseButtonEvent(4, false); h.Frame(2);   // forward: pass 1
+        CHECK(h.doc->SelectionKey() == Key(1, 2));              // the mirror survived the overview
+        CHECK(h.doc->SelectionEpoch() == e0);
+    }
 }

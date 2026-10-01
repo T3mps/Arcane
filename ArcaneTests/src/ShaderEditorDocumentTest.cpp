@@ -2685,3 +2685,54 @@ TEST_CASE("Node page Settings: a stored text commit is inert once the document o
         CHECK(h.doc->PassGraph(0)->FindNode(6) == nullptr);
     }
 }
+
+// ---- Node page s5.1.11 / s5.1.9 page-side acceptance. The body-modal case
+// extends "Edit HLSL opens from the page with no canvas" above through the
+// page's own button route (a real click on "Edit HLSL..."), not RequestBodyEdit. ----
+TEST_CASE("Node page s5.1.11: Edit HLSL... opens the body modal with the canvas NOT drawn, and Apply writes the page's pass",
+          "[editor][material][nodepage]")
+{
+    NodePageHarness h(ChainDoc());
+    const std::string base = GraphJson(h, 0);
+    h.key = NodeKeyOf(1, 3); h.Frame(); h.Frame();              // the document window never draws in this test
+    h.Click(h.Centre("#Edit HLSL..."));
+    h.Frame(); h.Frame();                                       // the modal opens, then settles at its centred position
+    ImGuiWindow* modal = nullptr;
+    for (const ImGuiPopupData& p : h.ctx->OpenPopupStack)
+        if (p.Window && std::string(p.Window->Name).find("Edit HLSL") != std::string::npos) modal = p.Window;
+    REQUIRE(modal != nullptr);
+    ImGuiWindow* box = nullptr;                                 // the multiline's child window
+    for (ImGuiWindow* w : h.ctx->Windows)
+        if (std::string(w->Name).find("bodyedit") != std::string::npos) box = w;
+    REQUIRE(box != nullptr);
+    h.Click(ImVec2((box->Rect().Min.x + box->Rect().Max.x) * 0.5f, (box->Rect().Min.y + box->Rect().Max.y) * 0.5f));
+    h.Type("//");
+    ImGui::ActivateItemByID(modal->GetID("Apply")); h.Frame(); h.Frame();
+    CHECK(h.Node(1, 3)->customBody != "return float4(x, x, x, 1.0);");   // pass 1 took the edit...
+    CHECK(GraphJson(h, 0) == base);                                     // ...never the active base
+    REQUIRE(h.stack.CanUndo());
+    CHECK(std::string(h.stack.UndoLabel()) == "Edit HLSL Body");
+}
+
+TEST_CASE("Node page s5.1.9: the page never creates, deletes, copies or pastes nodes", "[editor][material][nodepage]")
+{
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    for (std::uint32_t id = 1; id <= 9; ++id)
+    {
+        h.key = NodeKeyOf(0, id); h.Frame(); h.Frame();
+        INFO("node " << id);
+        for (const auto& [label, at] : h.probe)
+            for (const char* verb : { "Delete", "Duplicate", "Copy", "Paste", "Create" })
+                CHECK(label.find(verb) == std::string::npos);
+    }
+    const std::size_t count = h.doc->PassGraph(0)->nodes.size();
+    h.key = NodeKeyOf(0, 4); h.Frame();
+    h.Click(ImVec2(380.0f, 980.0f));                            // focus the page's window
+    h.Key(ImGuiKey_Delete);
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    h.Key(ImGuiKey_C); h.Key(ImGuiKey_V); h.Key(ImGuiKey_D);
+    io.AddKeyEvent(ImGuiMod_Ctrl, false); h.Frame();
+    CHECK(h.doc->PassGraph(0)->nodes.size() == count);
+    CHECK_FALSE(h.stack.CanUndo());
+}
