@@ -89,6 +89,7 @@ namespace Arcane::Editor
 
         // ---- per-frame -----------------------------------------------------
         void TickAll(double dt);
+        void FlushGestures();   // FlushGesture on every open document (Play entry)
         // Draw every document window + the pending-close confirm modal.
         // `dockId` (an ImGuiID; 0 = none): the dock node a document window is
         // FORCED into on its first draw after opening -- the host passes the

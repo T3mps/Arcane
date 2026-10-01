@@ -164,6 +164,12 @@ namespace Arcane::Editor
             d->Tick(dt);
     }
 
+    void DocumentHost::FlushGestures()
+    {
+        for (const auto& d : m_docs)
+            d->FlushGesture();
+    }
+
     void DocumentHost::DrawAll(unsigned int dockId)
     {
         // Snapshot the pointers: a close request mutates m_docs after the loop.

@@ -112,6 +112,12 @@ namespace Arcane::Editor
             EditGesture::ClosePending(*UndoStack(), m_gesture);
     }
 
+    void SpriteDocument::FlushGesture()
+    {
+        if (Arcane::CommandStack* s = UndoStack())
+            EditGesture::ClosePending(*s, m_gesture);
+    }
+
     void SpriteDocument::ApplySpriteData(const Arcane::SpriteAssetData& data)
     {
         m_data = data;

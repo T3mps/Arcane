@@ -85,6 +85,11 @@ namespace Arcane::Editor
         // a document selects its default page"; final fix R). A plain tab
         // click never calls this. Default: nothing to re-select.
         virtual void NoteReopened() {}
+
+        // Commit-close any parked edit gesture NOW. Play entry calls it on
+        // every document (spec s3.3(b), drafting pick 9.28.5), so a drag open
+        // when Play starts lands as one Edit-mode step before InPlayMode() flips.
+        virtual void FlushGesture() {}
     };
 
     // The Inspector's Ctrl+S (InspectorWindowsResult::saveRequested): the

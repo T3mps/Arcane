@@ -201,6 +201,7 @@ namespace Arcane::Editor
         bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
         void NoteReopened() override { m_pageSel.NoteReopened(); }
+        void FlushGesture() override;
 
         // ---- Pane layout: a GLOBAL editor preference, not per-document ----
         // The pane split is one editor-wide setting shared by every open

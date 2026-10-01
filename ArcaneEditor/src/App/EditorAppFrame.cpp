@@ -2280,7 +2280,7 @@ namespace Arcane::Editor
         if (Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
                                                m_plugin ? &*m_plugin : nullptr, m_playMode,
                                                launchServerRequested,
-                                               ToolbarLogoTextureId()))
+                                               ToolbarLogoTextureId(), [this]() { m_documents.FlushGestures(); }))
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
             // comment): clean+saved acts next frame top; dirty/never-saved parks

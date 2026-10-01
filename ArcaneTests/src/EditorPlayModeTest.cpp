@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <Astra/Core/TypeContext.hpp>
@@ -30,6 +31,7 @@
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
@@ -46,6 +48,9 @@
 #include "../plugins/HotReloadShared.hpp"
 
 #include <App/PlayMode.hpp>
+#include "Documents/DocumentHost.hpp"
+#include "Scene/EditGesture.hpp"
+#include "Scene/UndoGate.hpp"
 
 TEST_CASE("Play snapshots and Stop restores the authored registry", "[editor]")
 {
@@ -716,4 +721,61 @@ TEST_CASE("an embedded-server session Stopped before its PlaySession dies leaves
     CHECK(host.Runtimes()[0] == &runtime);
     host.Unload();                                             // clean: no freed world in the loop
     CHECK_FALSE(host.IsLoaded());
+}
+
+namespace
+{
+    struct DocStepNote final : Arcane::ICommand
+    {
+        void Undo() override {}
+        void Redo() override {}
+        const char* Label() const override { return "joined"; }
+        bool AffectsScene() const override { return false; }
+    };
+
+    struct GestureDoc final : Arcane::Editor::EditorDocument
+    {
+        std::string title = "gesture.arcmat";
+        Arcane::Editor::UndoResolver undo;
+        Arcane::Editor::EditGesture::GestureState gesture;
+        const std::string& Title() const override { return title; }
+        Arcane::Guid AssetGuid() const override { return {}; }
+        bool Dirty() const override { return false; }
+        bool Save() override { return true; }
+        void Draw(bool&) override {}
+        void FlushGesture() override   // the documents' real override, verbatim
+        {
+            if (Arcane::CommandStack* s = undo ? undo() : nullptr)
+                Arcane::Editor::EditGesture::ClosePending(*s, gesture);
+        }
+    };
+}
+
+TEST_CASE("Play entry flushes an open document drag into ONE Edit-mode step first", "[editor][undo]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Arcane::RegisterSceneComponents(runtime.Registry());
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
+    Arcane::Editor::PlaySession play;
+    Arcane::Editor::DocumentHost host;
+    auto* doc = static_cast<GestureDoc*>(host.Add(std::make_unique<GestureDoc>()));
+    doc->undo = [&]() { return Arcane::Editor::ResolveDocumentUndo(play.IsPlaying(), &stack); };
+
+    // A drag mid-flight: the gesture owns the open transaction and parks its step.
+    doc->gesture.slots.txn = stack.Begin("Edit Roughness");
+    doc->gesture.pendingCommit = [&stack] { stack.Push(std::make_unique<DocStepNote>()); };
+    REQUIRE(stack.InTransaction());
+
+    host.FlushGestures();                       // the toolbar's beforePlay, BEFORE play.Play
+    CHECK_FALSE(stack.InTransaction());
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Edit Roughness");
+    REQUIRE(play.Play(runtime));
+    CHECK(doc->undo() == nullptr);              // during Play nothing is pushed
+
+    const std::uint64_t id = stack.StateId();
+    host.FlushGestures();                       // nothing open: no new step
+    CHECK(stack.StateId() == id);
+    REQUIRE(play.Stop(runtime));
+    CHECK(doc->undo() == &stack);
 }

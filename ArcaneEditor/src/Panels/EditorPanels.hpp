@@ -216,10 +216,16 @@ namespace Arcane::Editor
     // reports, app performs" split as the return value above, in its own out
     // parameter because the two requests are independent and can never both be
     // true. It is always written (true or false) before this returns.
+    //
+    // `beforePlay` runs immediately before every play.Play this strip makes,
+    // while the editor is still in Edit: the host flushes open document
+    // gestures there (DocumentHost::FlushGestures, spec s3.3(b)), so a drag
+    // still held when Play is pressed lands as one Edit-mode undo step.
     [[nodiscard]] bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                                           Arcane::PluginHost* host,
                                           PlayLaunchMode& mode, bool& launchServerRequested,
-                                          uint64_t logoTex = 0);
+                                          uint64_t logoTex = 0,
+                                          const std::function<void()>& beforePlay = {});
 
     // (The three asset panels are the REAL browser now --
     // AssetBrowserPanel/AssetGraphPanel/AssetStatusPanel, panel-split Task 7;

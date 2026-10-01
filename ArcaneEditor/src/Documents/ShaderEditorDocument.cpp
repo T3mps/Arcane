@@ -1027,6 +1027,12 @@ namespace Arcane::Editor
         DestroyGraphPreview();
     }
 
+    void ShaderEditorDocument::FlushGesture()
+    {
+        if (Arcane::CommandStack* s = UndoStack())
+            EditGesture::ClosePending(*s, m_gesture);
+    }
+
     bool ShaderEditorDocument::ResolveParentChain()
     {
         m_parentChain.clear();

@@ -144,6 +144,12 @@ namespace Arcane::Editor
         DestroyPreviewContext();
     }
 
+    void MeshDocument::FlushGesture()
+    {
+        if (Arcane::CommandStack* s = UndoStack())
+            EditGesture::ClosePending(*s, m_gesture);
+    }
+
     void MeshDocument::ApplyMeshData(const Arcane::MeshAssetData& data)
     {
         m_data = data;

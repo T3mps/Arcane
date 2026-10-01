@@ -674,7 +674,8 @@ namespace Arcane::Editor
     bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                             Arcane::PluginHost* host,
                             PlayLaunchMode& mode, bool& launchServerRequested,
-                            uint64_t logoTex)
+                            uint64_t logoTex,
+                            const std::function<void()>& beforePlay)
     {
         launchServerRequested = false;   // always written before this returns
 
@@ -820,6 +821,7 @@ namespace Arcane::Editor
                 };
                 const auto tryPlay = [&](PlayTopology topology, const char* what)
                 {
+                    if (beforePlay) beforePlay();   // flush document gestures while still in Edit (s3.3b)
                     if (play.Play(runtime, host, topology))
                         Arcane::Diagnostics::Clear("editor:play");
                     else

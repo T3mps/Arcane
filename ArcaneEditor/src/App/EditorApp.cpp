@@ -1369,6 +1369,7 @@ namespace Arcane::Editor
                                                                     : Topo::Standalone;
             // HostConfig::Parse already refused every other spelling, so the
             // fall-through above is "standalone" and nothing else.
+            m_documents.FlushGestures();
             if (!m_play.Play(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr, topo))
                 ARC_ERROR("--play-as {}: Play refused", m_config.playAs);
         }
