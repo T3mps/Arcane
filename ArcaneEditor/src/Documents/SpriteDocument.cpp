@@ -117,7 +117,7 @@ namespace Arcane::Editor
         m_data = data;
         // Dirty is a COARSE ledger here: undoing all the way back to the saved
         // bytes still reads dirty, because this document tracks a bool rather
-        // than a save-point state id (SceneSession rides CommandStack::StateId
+        // than a save-point state id (SceneSession rides CommandStack::SceneStateId
         // for that; a five-field asset does not earn it). That errs toward
         // offering a redundant save, never toward silently dropping one.
         m_dirty = true;

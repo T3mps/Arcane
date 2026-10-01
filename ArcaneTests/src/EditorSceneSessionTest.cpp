@@ -8,11 +8,14 @@
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+
+#include <memory>
 
 using namespace Arcane::Editor;
 
@@ -34,7 +37,7 @@ namespace
         return nullptr;
     }
 
-    // A real CommandStack over a real Runtime -- StateId is what dirty rides on,
+    // A real CommandStack over a real Runtime -- SceneStateId is what dirty rides on,
     // and a fake would not exercise the undo/redo id restoration that matters.
     struct Harness
     {
@@ -59,6 +62,14 @@ namespace
             runtime.Registry().GetComponent<Arcane::Transform>(entity)->position.x = x;
             stack.Commit(t);
         }
+    };
+
+    struct DocumentStep final : Arcane::ICommand   // a material/sprite/mesh-style step
+    {
+        void Undo() override {}
+        void Redo() override {}
+        const char* Label() const override { return "Edit Param"; }
+        bool AffectsScene() const override { return false; }
     };
 }
 
@@ -90,7 +101,7 @@ TEST_CASE("editing dirties the session and saving cleans it", "[editor][scene]")
 
 TEST_CASE("undoing back to the save point goes clean again", "[editor][scene]")
 {
-    // The reason dirty rides StateId rather than an edit counter.
+    // The reason dirty rides SceneStateId rather than an edit counter.
     Harness h;
     SceneSession s;
 
@@ -103,6 +114,53 @@ TEST_CASE("undoing back to the save point goes clean again", "[editor][scene]")
     CHECK_FALSE(s.IsDirty(h.stack));
 
     h.stack.Redo();
+    CHECK(s.IsDirty(h.stack));
+}
+
+TEST_CASE("a document step leaves the scene clean", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    h.stack.Push(std::make_unique<DocumentStep>());
+    CHECK_FALSE(s.IsDirty(h.stack));
+}
+
+TEST_CASE("save, document step, undo: the scene stays clean throughout", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    h.Edit(1.0f);
+    s.MarkSaved(h.stack);
+    h.stack.Push(std::make_unique<DocumentStep>());
+    CHECK_FALSE(s.IsDirty(h.stack));
+    h.stack.Undo();                                 // the document step
+    CHECK_FALSE(s.IsDirty(h.stack));
+}
+
+TEST_CASE("document steps that evict the saved scene step leave the scene clean", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 2;
+    h.stack.SetLimits(limits);
+    h.Edit(1.0f);
+    s.MarkSaved(h.stack);
+    for (int i = 0; i < 3; ++i)
+        h.stack.Push(std::make_unique<DocumentStep>());   // the saved scene step falls off the cap
+    CHECK(h.stack.TouchedSinceState(s.SavedStateId()).baselineFound);   // no all-entities asterisks
+    CHECK_FALSE(s.IsDirty(h.stack));
+}
+
+TEST_CASE("undoing a scene step past the save point reads dirty, even under a document step", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    h.Edit(1.0f);
+    s.MarkSaved(h.stack);
+    h.stack.Push(std::make_unique<DocumentStep>());
+    h.stack.Undo();
+    h.stack.Undo();                                 // past the saved scene step
     CHECK(s.IsDirty(h.stack));
 }
 

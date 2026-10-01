@@ -1106,7 +1106,7 @@ namespace Arcane::Editor
         // Editor undo/redo history. Deliberately NOT cleared on Play: Stop restores
         // the pre-Play registry, so the edits behind these entries are still on
         // screen and must stay undoable -- and because SceneSession reads this
-        // stack's StateId as the SOLE input to the scene's dirty flag
+        // stack's SceneStateId as the SOLE input to the scene's dirty flag
         // (SceneSession.hpp), clearing it would silently report an unsaved scene as
         // clean. It is cleared only where no entity handle in it could survive:
         // ClearSceneReferences, ahead of a registry swap. Constructed in

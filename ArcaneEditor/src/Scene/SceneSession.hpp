@@ -43,7 +43,7 @@ namespace Arcane::Editor
         [[nodiscard]] std::string DisplayName() const;
 
         // ---- dirty -------------------------------------------------------
-        // Compares the stack's CURRENT state against the one recorded at save.
+        // Compares the stack's topmost SCENE step against the one recorded at save.
         //
         // ASSUMPTION, and it is load-bearing: the CommandStack is a faithful
         // proxy for authored change. True today -- the RunLoop is paused in Edit
@@ -53,11 +53,13 @@ namespace Arcane::Editor
         // this.
         [[nodiscard]] bool IsDirty(const Arcane::CommandStack& stack) const noexcept
         {
-            return stack.StateId() != m_savedStateId;
+            // SCENE steps only (spec 2026-09-30 s3.3(a)): a material/sprite/
+            // mesh/input-actions step never parks Exit/Open behind the modal.
+            return stack.SceneStateId() != m_savedStateId;
         }
         void MarkSaved(const Arcane::CommandStack& stack) noexcept
         {
-            m_savedStateId = stack.StateId();
+            m_savedStateId = stack.SceneStateId();
         }
         // The recorded save baseline, for per-entity dirty queries
         // (CommandStack::TouchedSinceState -- the Outliner's asterisks).
