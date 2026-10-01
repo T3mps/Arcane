@@ -968,6 +968,54 @@ TEST_CASE("Inspector header layout: one row when it fits; the breadcrumb wraps, 
     CHECK(l.comboWidth == 38.0f);
 }
 
+TEST_CASE("Inspector header layout: row 1 reserves the crumbs' NATURAL width (spec 2026-09-30 s4.3)", "[editor][inspector]")
+{
+    // 1080p main-Inspector metrics (s4.3): avail 380, arrows 56, combo 130,
+    // pin 24, stock ItemSpacing 8 -> row 1 holds at most 380 - 234 = 146 px
+    // of crumbs. (s4.3 names "~145" for "Scene > MeshCube"; at these exact
+    // metrics the boundary is 146, so the boundary itself is pinned.)
+    InspectorHeaderMetrics m;
+    m.avail = 380.0f; m.arrows = 56.0f; m.comboFull = 130.0f; m.comboMin = 42.0f; m.pin = 24.0f; m.spacing = 8.0f;
+    m.crumbsNatural = 60.0f;
+    CHECK_FALSE(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 146.0f;                             // exactly fits
+    CHECK_FALSE(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 147.0f;                             // one px over: its own row
+    CHECK(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 160.0f;
+    CHECK(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 0.0f;                               // unknown: the old 120 px reservation
+    CHECK_FALSE(LayoutInspectorHeader(m).crumbsOwnRow);
+}
+
+TEST_CASE("FitCrumbs: fits, one head hidden, two hidden, leaf ellipsized; a single crumb never overflows", "[editor][inspector]")
+{
+    const float chevron = 20.0f, more = 24.0f;
+    CrumbFit f = FitCrumbs(std::vector<float>{ 50.0f, 60.0f }, chevron, more, 200.0f);   // 130 <= 200
+    CHECK(f.firstShown == 0);
+    CHECK_FALSE(f.overflow);
+    CHECK(f.leafMax == 60.0f);
+    f = FitCrumbs(std::vector<float>{ 50.0f, 60.0f, 70.0f }, chevron, more, 200.0f);       // 220 > 200; 24+20+60+20+70 = 194
+    CHECK(f.firstShown == 1);
+    CHECK(f.overflow);
+    CHECK(f.leafMax == 70.0f);
+    f = FitCrumbs(std::vector<float>{ 50.0f, 60.0f, 70.0f }, chevron, more, 150.0f);       // 194 > 150; 24+20+70 = 114
+    CHECK(f.firstShown == 2);
+    CHECK(f.overflow);
+    CHECK(f.leafMax == 70.0f);
+    f = FitCrumbs(std::vector<float>{ 50.0f, 300.0f }, chevron, more, 200.0f);             // the leaf alone: 344 > 200
+    CHECK(f.firstShown == 1);                             // the leaf is never hidden
+    CHECK(f.overflow);
+    CHECK(f.leafMax == 200.0f - more - chevron);
+    f = FitCrumbs(std::vector<float>{ 300.0f }, chevron, more, 200.0f);
+    CHECK(f.firstShown == 0);
+    CHECK_FALSE(f.overflow);                              // nothing to hide behind a button
+    CHECK(f.leafMax == 200.0f);
+    f = FitCrumbs(std::vector<float>{ 100.0f }, chevron, more, 200.0f);
+    CHECK_FALSE(f.overflow);
+    CHECK(f.leafMax == 100.0f);
+}
+
 namespace
 {
     // One device-less Inspector frame loop at a forced window width; returns

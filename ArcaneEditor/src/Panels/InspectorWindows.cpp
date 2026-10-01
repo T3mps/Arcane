@@ -300,7 +300,10 @@ namespace Arcane::Editor
     {
         InspectorHeaderLayout l;
         const float sp = m.spacing;
-        l.crumbsOwnRow = m.avail < m.arrows + sp + m.comboFull + sp + kInspectorHeaderMinCrumbWidth + sp + m.pin;
+        // Row 1 reserves the trail's natural width (s4.3): a 145 px trail that
+        // only got 120 px stayed on row 1 and lost its head.
+        const float crumbs = m.crumbsNatural > 0.0f ? m.crumbsNatural : kInspectorHeaderMinCrumbWidth;
+        l.crumbsOwnRow = m.avail < m.arrows + sp + m.comboFull + sp + crumbs + sp + m.pin;
         // The icon face gives way before the pin does: on a wrapped header it
         // takes what row 1 leaves beside the arrows and the pin (DrawHeader
         // drops icons into "+N" to fit), never less than one icon + "+N".
@@ -309,6 +312,31 @@ namespace Arcane::Editor
         l.pinOnCrumbRow = m.arrows + sp + l.comboWidth + sp + m.pin > m.avail;
         if (l.pinOnCrumbRow) l.crumbsOwnRow = true;
         return l;
+    }
+
+    CrumbFit FitCrumbs(std::span<const float> widths, float chevron, float overflowButton, float avail)
+    {
+        CrumbFit fit;
+        if (widths.empty()) return fit;
+        const std::size_t n = widths.size();
+        float total = chevron * static_cast<float>(n - 1);
+        for (const float w : widths) total += w;
+        if (total <= avail || n == 1)
+        {
+            fit.leafMax = std::min(widths.back(), std::max(avail, 0.0f));
+            return fit;
+        }
+        fit.overflow = true;
+        fit.leafMax = widths.back();
+        for (std::size_t k = 1; k < n; ++k)   // show k..n-1 behind the button
+        {
+            float need = overflowButton + chevron;
+            for (std::size_t i = k; i < n; ++i) need += widths[i] + (i > k ? chevron : 0.0f);
+            if (need <= avail) { fit.firstShown = k; return fit; }
+        }
+        fit.firstShown = n - 1;
+        fit.leafMax = std::max(avail - overflowButton - chevron, 0.0f);
+        return fit;
     }
 
     std::string InspectorWindowTitle(const InspectorHost::Instance& inst)
