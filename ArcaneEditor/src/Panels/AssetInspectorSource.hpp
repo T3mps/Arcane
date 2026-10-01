@@ -13,7 +13,10 @@
 
 #include <Arcane/Guid.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -59,6 +62,25 @@ namespace Arcane::Editor
         Deps m_deps{};
         Arcane::Guid m_drawGuid;   // what Draw/Breadcrumb read: Page() -> selected, PageFor(key) -> key
     };
+
+    // s5.6: one verb on the asset page's icon row. Reported, never performed:
+    // `run` writes an AssetPanelActions field the app drains next frame.
+    struct PageAction
+    {
+        const char* icon = nullptr;
+        const char* tooltip = nullptr;   // today's button label ("Copy Path"): tooltip + overflow menu text
+        const char* id = nullptr;        // stable "##asset_<verb>"
+        bool enabled = true;
+        std::function<void()> run;
+    };
+    // How many of `widths` fit one row of `avail` px: all when the whole run
+    // fits, else the most that fit beside an overflow button of `moreWidth`.
+    [[nodiscard]] std::size_t ActionsThatFit(std::span<const float> widths, float moreWidth,
+                                             float spacing, float avail) noexcept;
+    // The thumbnail side. compact: min(140, availX - spacing - 110, clamp(f x H,
+    // floor, 140)); stacked: min(140, availX, clamp(f x H, floor, 140)).
+    [[nodiscard]] float AssetPageThumbSize(bool compact, float availX, float spacing, float innerHeight,
+                                           float heightFraction, float floorPx) noexcept;
 
     // The thumbnail + identity + Derived list + action buttons + (texture) import
     // settings -- the old Asset Browser preview pane, now an Inspector page.

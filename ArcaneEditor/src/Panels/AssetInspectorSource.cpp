@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -84,6 +85,29 @@ namespace Arcane::Editor
             DrawAssetPeekTooltip(model, services, child->guid);
             ImGui::PopID();
         }
+    }
+
+    std::size_t ActionsThatFit(std::span<const float> widths, float moreWidth, float spacing, float avail) noexcept
+    {
+        float total = 0.0f;
+        for (std::size_t i = 0; i < widths.size(); ++i)
+            total += widths[i] + (i > 0 ? spacing : 0.0f);
+        if (total <= avail)
+            return widths.size();
+        float used = moreWidth;
+        std::size_t k = 0;
+        while (k < widths.size() && used + widths[k] + spacing <= avail)
+            used += widths[k++] + spacing;
+        return k;
+    }
+
+    float AssetPageThumbSize(bool compact, float availX, float spacing, float innerHeight,
+                             float heightFraction, float floorPx) noexcept
+    {
+        const float byHeight = std::clamp(heightFraction * innerHeight, floorPx, kAssetPageThumbSize);
+        const float byWidth = compact ? std::max(0.0f, availX - spacing - kPreviewCompactTextColumnMin)
+                                      : std::max(0.0f, availX);
+        return std::min({ kAssetPageThumbSize, byWidth, byHeight });
     }
 
     std::string AssetInspectorSource::SelectionKey() const

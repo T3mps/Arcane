@@ -306,3 +306,24 @@ TEST_CASE("DrawAssetPage: Copy Path reports an action, never acts; a .png draws 
     frame(nullptr);
     CHECK(ReadTextureMetaSettingsDisplay(meta).srgb != srgbBefore);
 }
+
+TEST_CASE("AssetPageThumbSize: compact and stacked forms clamp the height share between the floor and 140", "[editor][inspector]")
+{
+    CHECK(AssetPageThumbSize(true, 376.0f, 8.0f, 330.0f, 0.30f, 64.0f) > 98.99f);     // the 392x330 fit: 0.30f x 330 is 99.00001f in float,
+    CHECK(AssetPageThumbSize(true, 376.0f, 8.0f, 330.0f, 0.30f, 64.0f) < 99.01f);     // so never compare it with ==
+    CHECK(AssetPageThumbSize(true, 250.0f, 8.0f, 600.0f, 0.30f, 64.0f) == 132.0f);    // leaves a 110 px text column
+    CHECK(AssetPageThumbSize(true, 376.0f, 8.0f, 1000.0f, 0.30f, 64.0f) == 140.0f);   // never above 140
+    CHECK(AssetPageThumbSize(true, 376.0f, 8.0f, 100.0f, 0.30f, 64.0f) == 64.0f);     // never below the floor...
+    CHECK(AssetPageThumbSize(false, 50.0f, 8.0f, 100.0f, 0.30f, 64.0f) == 50.0f);     // ...unless the width is smaller
+    CHECK(AssetPageThumbSize(false, 213.0f, 8.0f, 350.0f, 0.30f, 64.0f) > 104.99f);   // the 229x350 stacked case (0.30f x 350 = 105.00001f)
+    CHECK(AssetPageThumbSize(false, 213.0f, 8.0f, 350.0f, 0.30f, 64.0f) < 105.01f);
+}
+
+TEST_CASE("ActionsThatFit: all of the row, else the most that fit beside the overflow button", "[editor][inspector]")
+{
+    const float w[] = { 30.0f, 30.0f, 30.0f };
+    CHECK(ActionsThatFit(w, 30.0f, 8.0f, 106.0f) == 3);    // 30+8+30+8+30 = 106: no overflow button
+    CHECK(ActionsThatFit(w, 30.0f, 8.0f, 105.0f) == 1);    // more(30) + 38 = 68; + 38 = 106 > 105
+    CHECK(ActionsThatFit(w, 30.0f, 8.0f, 20.0f) == 0);
+    CHECK(ActionsThatFit({}, 30.0f, 8.0f, 0.0f) == 0);
+}
