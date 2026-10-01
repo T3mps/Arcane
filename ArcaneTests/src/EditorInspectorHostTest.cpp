@@ -12,6 +12,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
 #include <cmath>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1095,6 +1096,100 @@ TEST_CASE("DrawInspectorWindows: a narrow Inspector wraps the breadcrumb to its 
         REQUIRE(crumbs != nullptr);
         CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);
         CHECK(crumbs->Pos.y < w->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f);   // row 1
+    }
+}
+
+namespace
+{
+    // One logged frame with the primary Inspector forced to `size` at (100,100);
+    // `activate` (optional) is pressed through nav on the NEXT frame.
+    std::string DrawLoggedAt(InspectorHost& host, InspectorWindowsState& state, ImVec2 size, ImGuiID activate = 0)
+    {
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        if (activate) ImGui::ActivateItemByID(activate);
+        ImGui::SetNextWindowPos(ImVec2(100.0f, 100.0f));
+        ImGui::SetNextWindowSize(size);
+        ImGui::LogToBuffer();
+        (void)DrawInspectorWindows(host, state, nullptr);
+        std::string logged = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+        ImGui::Render();
+        return logged;
+    }
+}
+
+TEST_CASE("DrawInspectorWindows: an overflowing breadcrumb hides its head behind \"...\", ellipsizes the leaf, never clips (s4.3)", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    const std::string name = "ReferenceCubeMaterialWithALongName";
+    bool headSelected = false;
+    FakeSource scene{ "Scene", "scene" };
+    scene.key = "7";
+    InspectorHost host{ scene };
+    host.NotifySelected(scene);
+    InspectorWindowsState state;
+    const ImVec2 size(392.0f, 330.0f);                    // the 1080p Assets-only Inspector (spec 9.3)
+
+    SECTION("the spec's pair fits its row whole at the test atlas: no overflow button")
+    {
+        scene.page.crumbs = { { "Scene", {}, {} }, { name, {}, {} } };
+        std::string logged;
+        for (int f = 0; f < 3; ++f) logged = DrawLoggedAt(host, state, size);
+        INFO(logged);
+        CHECK(logged.find(ICON_LC_ELLIPSIS) == std::string::npos);
+        CHECK(logged.find("Scene") != std::string::npos);
+        CHECK(logged.find(name) != std::string::npos);
+    }
+    SECTION("a leaf wider than the row: head behind \"...\", leaf cut, tooltip carries it")
+    {
+        // The spec's leaf, doubled: ~490 px at the test atlas's 7 px advance,
+        // wider than the 376 px row on any face >= 5.5 px (the single name
+        // fits whole here -- the section above).
+        const std::string leaf = name + name;
+        scene.page.crumbs = { { "Scene", [&] { headSelected = true; }, {} }, { leaf, {}, {} } };
+        std::string logged;
+        for (int f = 0; f < 3; ++f) logged = DrawLoggedAt(host, state, size);
+        ImGuiWindow* w = ImGui::FindWindowByName(kPrimaryInspectorWindowId);
+        REQUIRE(w != nullptr);
+        ImGuiWindow* crumbs = CrumbsChildOf(w);
+        REQUIRE(crumbs != nullptr);
+        INFO(logged);
+        CHECK(logged.find(ICON_LC_ELLIPSIS) != std::string::npos);    // the overflow button
+        CHECK(logged.find("Scene") == std::string::npos);             // the head hides behind it
+        CHECK(logged.find(leaf) == std::string::npos);                // the leaf is cut...
+        CHECK(logged.find(name.substr(0, 12)) != std::string::npos);  // ...its head shows
+        CHECK(crumbs->DC.CursorMaxPos.x <= crumbs->Pos.x + crumbs->Size.x + 0.5f);   // every crumb inside the row
+        CHECK(crumbs->Pos.x + crumbs->Size.x <= w->WorkRect.Max.x + 0.5f);
+        CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);
+
+        // Click "...": the popup lists the hidden head; its row performs the crumb's select.
+        const ImVec2 more(crumbs->Pos.x + 4.0f, crumbs->Pos.y + ImGui::GetTextLineHeight() * 0.5f);
+        io.AddMousePosEvent(more.x, more.y); (void)DrawLoggedAt(host, state, size);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true); (void)DrawLoggedAt(host, state, size);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false); (void)DrawLoggedAt(host, state, size);
+        const std::string listed = DrawLoggedAt(host, state, size);
+        CHECK(listed.find("Scene") != std::string::npos);
+        char popupName[32];
+        std::snprintf(popupName, sizeof(popupName), "##Popup_%08x", ImHashStr("##crumbmore", 0, crumbs->ID));
+        ImGuiWindow* popup = ImGui::FindWindowByName(popupName);
+        REQUIRE(popup != nullptr);
+        REQUIRE(popup->Active);
+        CHECK(popup->Pos.y >= crumbs->Pos.y + ImGui::GetTextLineHeight() - 0.5f);   // under the button
+        (void)DrawLoggedAt(host, state, size, ImHashStr("Scene##crumbhidden0", 0, popup->ID));
+        (void)DrawLoggedAt(host, state, size);
+        CHECK(headSelected);
+
+        // Hover the leaf (stationary): its tooltip is the full label.
+        io.AddMousePosEvent(crumbs->Pos.x + crumbs->Size.x * 0.6f, more.y);
+        bool tooltip = false;
+        for (int frame = 0; frame < 120 && !tooltip; ++frame)
+            tooltip = DrawLoggedAt(host, state, size).find(leaf) != std::string::npos;
+        CHECK(tooltip);
     }
 }
 

@@ -3,6 +3,7 @@
 #include "Panels/InspectorKinds.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Widgets/IconsLucide.h"
+#include "Widgets/EditorWidgets.hpp"   // EllipsisToWidth, BeginPopupBelow, LastItemAnchor
 
 #include <imgui.h>
 #include <imgui_internal.h>   // FindWindowByName (the primary's dock node for a new instance); ImGuiSettingsHandler
@@ -118,6 +119,21 @@ namespace Arcane::Editor
             metrics.comboFull = fullFace.width + chrome;
             metrics.comboMin = MeasureFilterFace(inst.filter, 1, iconGap).width + chrome;
             metrics.pin = pinWidth;
+            // The breadcrumb, built and MEASURED before the layout (spec 2026-09-30
+            // s4.3): row 1 reserves its natural width, and the same widths fit it
+            // when it gets a row of its own.
+            std::vector<InspectorCrumb> crumbs;
+            if (page) crumbs = page->Breadcrumb();
+            else if (src) crumbs.push_back({ src->SourceName(), {}, std::nullopt });
+            const float chevronW = ImGui::CalcTextSize(ICON_LC_CHEVRON_RIGHT).x + style.ItemSpacing.x * 2.0f;
+            std::vector<float> crumbWidths;
+            crumbWidths.reserve(crumbs.size());
+            for (const InspectorCrumb& c : crumbs)
+            {
+                crumbWidths.push_back(ImGui::CalcTextSize(c.label.c_str(), nullptr, true).x + style.FramePadding.x * 2.0f);
+                metrics.crumbsNatural += crumbWidths.back();
+            }
+            if (!crumbs.empty()) metrics.crumbsNatural += chevronW * static_cast<float>(crumbs.size() - 1);
             metrics.spacing = style.ItemSpacing.x;
             const InspectorHeaderLayout layout = LayoutInspectorHeader(metrics);
             const float rowStartX = ImGui::GetCursorPosX();
@@ -253,38 +269,64 @@ namespace Arcane::Editor
                 crumbWidth = ImGui::GetContentRegionAvail().x - pinWidth - style.ItemSpacing.x;
             }
 
-            // Breadcrumb: a horizontal strip clipped to its width and scrolled
-            // to its END, so the LEAF stays visible and the head scrolls off
-            // (UE's SBreadcrumbTrail); the pin can never overdraw the leaf in a
-            // narrow docked Inspector. Every crumb is a link-styled button; a
-            // dimmed chevron sits only BETWEEN crumbs.
-            std::vector<InspectorCrumb> crumbs;
-            if (page) crumbs = page->Breadcrumb();
-            else if (src) crumbs.push_back({ src->SourceName(), {}, std::nullopt });
+            // Breadcrumb (s4.3). The LEAF is never hidden: when the trail is wider
+            // than its row, head crumbs hide behind "..." (its popup lists them
+            // head-first) and a leaf that still does not fit is ellipsized with
+            // its full label as the tooltip. The child is only a clip safety net
+            // now -- nothing scrolls it. Every crumb is a link-styled button; a
+            // dimmed chevron sits only BETWEEN shown crumbs.
+            const float stripW = std::max(crumbWidth, 1.0f);
+            const float overflowW = ImGui::CalcTextSize(ICON_LC_ELLIPSIS).x + style.FramePadding.x * 2.0f;
+            const CrumbFit fit = FitCrumbs(crumbWidths, chevronW, overflowW, stripW);
+            const ImVec2 popupPadding = style.WindowPadding;   // read before the strip zeroes it: the "..." popup is a window
+            // A crumb's click: a pinned instance re-targets ITSELF, an unpinned one selects.
+            auto takeCrumb = [&](const InspectorCrumb& c)
+            {
+                if (inst.pinned) { if (c.key) actions.repinKey = *c.key; }
+                else if (c.select) actions.select = c.select;
+            };
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::BeginChild("##crumbs", ImVec2(std::max(crumbWidth, 1.0f), ImGui::GetFrameHeight()), ImGuiChildFlags_None,
+            ImGui::BeginChild("##crumbs", ImVec2(stripW, ImGui::GetFrameHeight()), ImGuiChildFlags_None,
                               ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav);
             ImGui::PushStyleColor(ImGuiCol_Button, Theme::kNone);
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);   // link-styled: the theme's 1 px frame border would box every crumb
-            for (std::size_t i = 0; i < crumbs.size(); ++i)
+            if (fit.overflow)
             {
-                if (i > 0) { ImGui::SameLine(); ImGui::TextDisabled(ICON_LC_CHEVRON_RIGHT); ImGui::SameLine(); }
-                ImGui::PushID(static_cast<int>(i));
-                if (inst.pinned)
+                if (ImGui::SmallButton(ICON_LC_ELLIPSIS "##crumbmore_btn")) ImGui::OpenPopup("##crumbmore");
+                ImGui::SetItemTooltip("Show the hidden levels");
+                const PopupAnchor anchor = LastItemAnchor();
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, popupPadding);   // Begin reads it; pop right after
+                const bool open = BeginPopupBelow("##crumbmore", anchor);
+                ImGui::PopStyleVar();
+                if (open)
                 {
-                    // A pinned instance navigates ITSELF: re-target the pin, never the source.
-                    ImGui::BeginDisabled(!crumbs[i].key.has_value());
-                    if (ImGui::SmallButton(crumbs[i].label.c_str()) && crumbs[i].key)
-                        actions.repinKey = *crumbs[i].key;
-                    ImGui::EndDisabled();
+                    for (std::size_t i = 0; i < fit.firstShown; ++i)
+                    {
+                        const std::string row = crumbs[i].label + "##crumbhidden" + std::to_string(i);
+                        ImGui::BeginDisabled(inst.pinned && !crumbs[i].key.has_value());   // the buttons' pinned branch
+                        if (ImGui::Selectable(row.c_str())) takeCrumb(crumbs[i]);
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::EndPopup();
                 }
-                else if (ImGui::SmallButton(crumbs[i].label.c_str()) && crumbs[i].select)
-                    actions.select = crumbs[i].select;
+                ImGui::SameLine(); ImGui::TextDisabled(ICON_LC_CHEVRON_RIGHT); ImGui::SameLine();
+            }
+            for (std::size_t i = fit.firstShown; i < crumbs.size(); ++i)
+            {
+                if (i > fit.firstShown) { ImGui::SameLine(); ImGui::TextDisabled(ICON_LC_CHEVRON_RIGHT); ImGui::SameLine(); }
+                ImGui::PushID(static_cast<int>(i));
+                const bool leaf = i + 1 == crumbs.size();
+                const std::string shown = leaf
+                    ? EllipsisToWidth(crumbs[i].label, std::max(fit.leafMax - style.FramePadding.x * 2.0f, ImGui::CalcTextSize("...").x))
+                    : crumbs[i].label;
+                ImGui::BeginDisabled(inst.pinned && !crumbs[i].key.has_value());
+                if (ImGui::SmallButton((shown + "###crumb").c_str())) takeCrumb(crumbs[i]);   // ### : the id survives the cut
+                ImGui::EndDisabled();
+                if (shown != crumbs[i].label) ImGui::SetItemTooltip("%s", crumbs[i].label.c_str());
                 ImGui::PopID();
             }
             ImGui::PopStyleVar();
             ImGui::PopStyleColor();
-            if (ImGui::GetScrollMaxX() > 0.0f) ImGui::SetScrollX(ImGui::GetScrollMaxX());   // last frame's width: one-frame lag, invisible at 90 frames + settle
             ImGui::EndChild();   // always, whatever BeginChild returned
             ImGui::PopStyleVar();
             if (!layout.crumbsOwnRow)
