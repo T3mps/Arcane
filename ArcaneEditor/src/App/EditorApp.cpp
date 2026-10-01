@@ -79,6 +79,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -2894,6 +2895,24 @@ namespace Arcane::Editor
             inspectorInstances.push_back({ i.id, i.filter.excluded, s ? s->SourceName() : std::string{},
                                            s ? Arcane::Editor::InspectorCrumbText(*s, page) : std::string{} });
         }
+        // The open preview documents (schemaVersion 13, s3.2) -- snapshotted
+        // here for the inspector's reason: CloseAll destroys them, and the
+        // chrome context their status reads is still alive at this point.
+        std::vector<Arcane::VerifyReport::DocumentPreview> documentPreviews;
+        m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+        {
+            std::optional<Arcane::Editor::PreviewStatus> st;
+            if (auto* shader = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d))
+                st = shader->ComputeStatus();
+            else if (auto* mesh = dynamic_cast<Arcane::Editor::MeshDocument*>(&d))
+                st = mesh->ComputeStatus();
+            if (!st)
+                return;   // only shader and mesh documents preview
+            documentPreviews.push_back({ d.AssetGuid().ToString(), std::string(d.Kind()), d.Title(),
+                                         Arcane::Editor::CompileStatusId(st->compile),
+                                         Arcane::Editor::PreviewAvailabilityId(st->preview),
+                                         st->image });
+        });
         m_documents.CloseAll();
         // ...which hands their preview vehicles to the retire list rather than
         // destroying them inline, so the list has to be drained HERE, while
@@ -3290,6 +3309,10 @@ namespace Arcane::Editor
             // `instances` (schemaVersion 12): every instance's filter + the
             // source it routed to, snapshotted beside the two above.
             report.SetInspector(inspectorSource, inspectorBreadcrumb, std::move(inspectorInstances));
+
+            // documents[] (schemaVersion 13, s3.2): every open shader/mesh
+            // document's PreviewStatus, snapshotted above before CloseAll.
+            report.SetDocumentPreviews(std::move(documentPreviews));
 
             // The --compare verdict (Task 9), ported from RuntimeApp::
             // ShutdownGraphPath verbatim (structure and field meanings
