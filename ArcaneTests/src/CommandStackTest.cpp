@@ -400,7 +400,7 @@ TEST_CASE("CommandStack::Clear discards generics pushed into an open gesture", "
 
     (void)stack.Begin("doomed");
     stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "leaky"));
-    stack.Clear();   // e.g. project switch mid-gesture
+    stack.Clear("project switch");   // e.g. project switch mid-gesture
 
     const Arcane::TransactionId fresh = stack.Begin("fresh");
     stack.SnapshotComponent(e, desc);
@@ -638,7 +638,7 @@ TEST_CASE("StateId identifies the current state, not the number of edits", "[edi
     CHECK(stack.StateId() != afterFirst);
     CHECK(stack.StateId() != afterSecond);
 
-    stack.Clear();
+    stack.Clear("test");
     CHECK(stack.StateId() == 0);
 }
 
@@ -1118,4 +1118,22 @@ TEST_CASE("an expired step buried under a live one is discarded when Undo reache
     CHECK_FALSE(stack.CanRedo());
     CHECK(du == 0);
     CHECK(dr == 0);
+}
+
+TEST_CASE("Clear(reason) drops history and remembers why until the next Clear", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0;
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "a"));
+    CHECK(stack.ClearedReason().empty());
+
+    stack.Clear("Opened scene level_one");
+    CHECK_FALSE(stack.CanUndo());
+    CHECK(stack.ClearedReason() == "Opened scene level_one");
+
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "b"));
+    CHECK(stack.ClearedReason() == "Opened scene level_one");   // a push does not retire it
+    stack.Clear("Switched project");
+    CHECK(stack.ClearedReason() == "Switched project");
 }

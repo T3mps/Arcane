@@ -107,7 +107,11 @@ namespace Arcane
         [[nodiscard]] bool InTransaction() const noexcept { return m_openId != TransactionId::None; }
         [[nodiscard]] const char* UndoLabel() const noexcept;
         [[nodiscard]] const char* RedoLabel() const noexcept;
-        void Clear() noexcept;
+        // Drops all history (scene open, project switch, module reload). The
+        // reason feeds Edit > "Can't undo after: <reason>" (spec s3.3(d), UE
+        // ET:1490-1496) and lasts until the next Clear.
+        void Clear(std::string reason);
+        [[nodiscard]] const std::string& ClearedReason() const noexcept { return m_clearedReason; }
 
         // Identifies the CURRENT state: the id of the transaction on top of the
         // undo stack, 0 when the stack is empty.
@@ -195,6 +199,7 @@ namespace Arcane
         std::vector<Pending> m_pending;
         std::vector<std::unique_ptr<ICommand>> m_pendingGeneric;   // Push while open
         std::vector<Astra::Entity>             m_pendingTouched;   // Push's tags while open
+        std::string                            m_clearedReason;    // why the last Clear ran
     };
 #if defined(_MSC_VER)
 #pragma warning(pop)

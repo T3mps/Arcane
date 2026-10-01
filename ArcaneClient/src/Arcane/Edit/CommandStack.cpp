@@ -183,8 +183,9 @@ namespace Arcane
         return t ? t->label.c_str() : "";
     }
 
-    void CommandStack::Clear() noexcept
+    void CommandStack::Clear(std::string reason)
     {
+        m_clearedReason = std::move(reason);
         m_undo.clear();
         m_redo.clear();
         m_openId = TransactionId::None;

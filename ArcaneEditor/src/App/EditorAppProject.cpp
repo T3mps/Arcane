@@ -2180,7 +2180,7 @@ namespace Arcane::Editor
         if (m_resolver)
             m_resolver->Clear();
         m_consoleDiag.store.ClearAll();
-        ClearSceneReferences();
+        ClearSceneReferences("Switched project");
         if (m_undo) m_scene.Reset(*m_undo);
         m_recents.scenes = {};
         // Asset-manager Task 12: an in-flight create dialog names the OUTGOING

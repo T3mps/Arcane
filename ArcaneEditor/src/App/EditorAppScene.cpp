@@ -122,7 +122,7 @@ namespace Arcane::Editor
             dir.empty() ? nullptr : dir.c_str());
     }
 
-    void EditorApp::ClearSceneReferences()
+    void EditorApp::ClearSceneReferences(std::string reason)
     {
         // Every entity handle the editor is holding names an entity of the OUTGOING
         // scene, and none of them survive the registry swap that follows (Runtime::
@@ -159,12 +159,12 @@ namespace Arcane::Editor
         // the same keys name the same entities and pins/history survive it.
         m_inspectorHost.InvalidateSource(m_sceneSource);
         m_sceneSelectionEdge.lastEpoch = m_selection.Epoch();   // re-arm on the Clear() above: the first GESTURE in the new scene is the first event
-        if (m_undo) m_undo->Clear();
+        if (m_undo) m_undo->Clear(std::move(reason));
     }
 
     bool EditorApp::DoNewScene()
     {
-        ClearSceneReferences();
+        ClearSceneReferences("New scene");
         m_runtime->ResetRegistry();
         Arcane::Scene::CreateEmpty(m_runtime->Registry());
         m_scene.Reset(*m_undo);
@@ -192,7 +192,7 @@ namespace Arcane::Editor
             return false;
         }
 
-        ClearSceneReferences();
+        ClearSceneReferences("Opened scene " + file.stem().string());
         m_runtime->ResetRegistry();
         if (!Arcane::Scene::ApplySceneDocument(*doc, m_runtime->Registry()))
         {

@@ -134,7 +134,7 @@ TEST_CASE("Reset returns the session to Untitled and clean", "[editor][scene]")
     h.Edit(2.0f);
 
     // New Scene clears the undo stack, which is what the host does around Reset.
-    h.stack.Clear();
+    h.stack.Clear("New scene");
     s.Reset(h.stack);
 
     CHECK(s.Path().empty());
