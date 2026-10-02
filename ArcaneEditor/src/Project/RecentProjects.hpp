@@ -47,6 +47,7 @@ namespace Arcane::Editor
         std::string   path;             // the Hub's ORIGINAL spelling (display + open)
         std::string   name;
         std::uint32_t engineAbi = 0;
+        std::uint64_t lastOpenedUnix = 0;   // on-disk `lastOpenedUtc` (UNIX seconds; string or number), 0 = unknown/garbage
     };
 
     struct RecentSelection
@@ -101,6 +102,10 @@ namespace Arcane::Editor
                                              std::string_view currentProjectPath,
                                              const std::function<bool(const std::string&)>& exists,
                                              std::size_t cap = kMaxShown);
+
+        // "N project(s) hidden (built for another engine version)" -- the File
+        // menu's line and the start page's (spec 2026-09-30 s8.4).
+        [[nodiscard]] std::string HiddenForAbiLine(std::size_t hidden);
 
         // --- write ----------------------------------------------------------
 

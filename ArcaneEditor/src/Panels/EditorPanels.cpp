@@ -237,13 +237,9 @@ namespace Arcane::Editor
                     {
                         if (!recents->visible.empty())
                             ImGui::Separator();
-                        char hidden[128];
-                        std::snprintf(hidden, sizeof(hidden),
-                                      "%zu project%s hidden (built for another engine version)",
-                                      recents->hiddenForAbi,
-                                      recents->hiddenForAbi == 1 ? "" : "s");
+                        const std::string hidden = Recents::HiddenForAbiLine(recents->hiddenForAbi);
                         ImGui::BeginDisabled();
-                        ImGui::MenuItem(hidden);
+                        ImGui::MenuItem(hidden.c_str());
                         ImGui::EndDisabled();
                     }
                     ImGui::EndMenu();
