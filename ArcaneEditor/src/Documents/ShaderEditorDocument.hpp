@@ -573,6 +573,27 @@ namespace Arcane::Editor
             return m_surface == 0 && !IsInstance() &&
                    (!m_data.passes.empty() || !m_data.baseInputs.empty());
         }
+        // The material whose SOURCE this document compiles: the base at the
+        // end of the parent chain for an instance (an instance carries no
+        // snippets, passes or scene inputs of its own), else this document's
+        // own data. Null for an instance whose chain did not resolve.
+        const Arcane::MaterialAssetData* CompiledSource() const
+        {
+            if (!IsInstance())
+                return &m_data;
+            return m_parentChain.empty() ? nullptr : &m_parentChain.back();
+        }
+        // The COMPILE predicate (T3-D6): ChainMode() is the AUTHORING one --
+        // an instance has no canvas and no pass strip -- but an instance of a
+        // chain base must still compile and preview its base's whole chain
+        // (UE: a Material Instance previews its parent's material). Rebuild and
+        // BindIfComplete read this; every authoring surface keeps ChainMode().
+        bool   CompilesAsChain() const
+        {
+            const Arcane::MaterialAssetData* src = CompiledSource();
+            return m_surface == 0 && src &&
+                   (!src->passes.empty() || !src->baseInputs.empty());
+        }
         void   BindChainIfComplete();
 
         // ---- The preview ----

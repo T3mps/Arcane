@@ -583,6 +583,82 @@ TEST_CASE("ShaderEditorDocument compiles a pass chain per-pass and routes result
     compiler.Shutdown();
 }
 
+TEST_CASE("ShaderEditorDocument T3-D6: an instance of a pass-chain material compiles its BASE's chain (one job pair per pass)",
+          "[editor][material][shadercompile]")
+{
+    // T3-D6 desk finding: reference_post_Inst (an instance of the multi-pass
+    // ReferencePost) read "errors" with no preview, in the editor and
+    // headless alike. ChainMode() is the AUTHORING predicate (an instance has
+    // no canvas, no pass strip), and Rebuild/BindIfComplete used it as the
+    // COMPILE predicate too -- so an instance of a chain base went down the
+    // single-pass path with the base snippet alone: the base's extra passes
+    // were dropped and a scene-reading base snippet failed outright. An
+    // instance must compile exactly what its base compiles (UE: a Material
+    // Instance previews its parent's whole material), with its own params.
+    const fs::path dir = TempDir("chaininstance");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "ChainInstance").has_value());
+    const fs::path content = dir / "Game" / "Content";
+
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate();
+    base.name = "ChainBase";
+    base.snippet = kSnippet;
+    base.passes.push_back({ "swap",
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv).grba; }\n" });
+    base.passes.push_back({ "gain",
+        "//@param float Gain = 1\n"
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv) * Gain; }\n" });
+    REQUIRE(Arcane::SaveMaterialAsset(content / "chain_base.arcmat", base));
+
+    Arcane::MaterialAssetData inst;
+    inst.id = Arcane::Guid::Generate();
+    inst.parent = base.id;
+    inst.name = "ChainBase_Inst";
+    inst.params.emplace_back("Gain", Arcane::MatParamValue::MakeFloat(0.5f));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "chain_base_inst.arcmat", inst));
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("data/shaders");
+    DocServices services;
+    services.runtime = &rt;
+    services.compiler = &compiler;
+    services.sources = &sources;
+
+    const auto loaded = Arcane::LoadMaterialAsset(content / "chain_base_inst.arcmat");
+    REQUIRE(loaded.has_value());
+    ShaderEditorDocument doc(services, content / "chain_base_inst.arcmat", *loaded);
+    REQUIRE(doc.IsInstance());
+    INFO("parse errors: " << (doc.ParseErrors().empty() ? std::string("none") : doc.ParseErrors().front()));
+    CHECK(doc.ParseErrors().empty());
+
+    // Base + 2 passes = 3 passes x 2 stages. The single-pass path submits 2.
+    std::vector<Arcane::ShaderCompileResult> results;
+    for (int i = 0; i < 2000 && results.size() < 6; ++i)
+    {
+        compiler.Poll(/*now=*/0.0);
+        auto batch = compiler.Drain();
+        results.insert(results.end(), std::make_move_iterator(batch.begin()),
+                       std::make_move_iterator(batch.end()));
+        if (results.size() < 6)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(results.size() == 6);
+    for (Arcane::ShaderCompileResult& r : results)
+    {
+        INFO("chain stage result " << r.debugName);
+        CHECK(r.AllSucceeded());
+        CHECK(doc.ConsumeResult(r));
+    }
+    CHECK(doc.ComputeStatus().compile == Arcane::Editor::CompileStatus::Ok);   // all stages landed, none failed
+    compiler.Shutdown();
+}
+
 TEST_CASE("ReloadFromDisk discards the working copy; DependsOn walks the chain",
           "[editor][material]")
 {

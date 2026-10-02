@@ -1152,25 +1152,28 @@ namespace Arcane::Editor
         m_psBytes.clear();
         m_passJobs.clear();
 
-        if (ChainMode())
+        if (CompilesAsChain())
         {
+            // An instance compiles its BASE's chain (CompilesAsChain); a base
+            // compiles its own, with the LIVE base snippet (SnippetSource).
+            const Arcane::MaterialAssetData& src = *CompiledSource();
             std::vector<Arcane::MaterialChainPassDesc> descs;
-            descs.reserve(1 + m_data.passes.size());
-            descs.push_back({ m_snippet, m_data.baseInputs });
-            for (const Arcane::MaterialPass& p : m_data.passes)
+            descs.reserve(1 + src.passes.size());
+            descs.push_back({ SnippetSource(), src.baseInputs });
+            for (const Arcane::MaterialPass& p : src.passes)
                 descs.push_back({ p.snippet, p.inputs });
 
             // The editor ALWAYS builds in post mode: scene reads must author
             // and preview here (the stand-in feeds them); only a non-post
             // RUNTIME consumer refuses them.
             Arcane::MaterialChainBuildResult build = Arcane::BuildMaterialChainSource(
-                *templateText, descs, m_title, m_data.vertexSnippet,
+                *templateText, descs, m_title, src.vertexSnippet,
                 /*externalInput=*/true);
             m_passInputs = std::move(build.passInputs);
             m_chainInputSlots = build.chainInputSlots;
             m_vsLineOffset = 0;
-            if (!m_data.vertexSnippet.empty() && !build.hlsl.empty())
-                if (const std::size_t at = build.hlsl[0].find(m_data.vertexSnippet);
+            if (!src.vertexSnippet.empty() && !build.hlsl.empty())
+                if (const std::size_t at = build.hlsl[0].find(src.vertexSnippet);
                     at != std::string::npos)
                     m_vsLineOffset = static_cast<int>(std::count(
                         build.hlsl[0].begin(),
@@ -1319,7 +1322,7 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::BindIfComplete()
     {
-        if (ChainMode())
+        if (CompilesAsChain())
         {
             BindChainIfComplete();
             return;
@@ -1934,9 +1937,11 @@ namespace Arcane::Editor
     {
         if (pass == 0)
             return "base";
-        if (pass <= m_data.passes.size())
+        // CompiledSource: an instance's pass errors name its BASE's passes.
+        const Arcane::MaterialAssetData* src = CompiledSource();
+        if (src && pass <= src->passes.size())
         {
-            const std::string& n = m_data.passes[pass - 1].name;
+            const std::string& n = src->passes[pass - 1].name;
             if (!n.empty())
                 return n;
         }
