@@ -829,6 +829,7 @@ namespace Arcane::Editor
                                            ImGuiSelectableFlags_AllowDoubleClick |
                                            ImGuiSelectableFlags_NoPadWithHalfSpacing,
                                            ImVec2(0.0f, rowHeight));
+        result.doubleClicked = result.clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
         result.hovered = ImGui::IsItemHovered();
 
         ImDrawList* dl = ImGui::GetWindowDrawList();

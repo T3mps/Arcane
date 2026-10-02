@@ -476,3 +476,45 @@ TEST_CASE("input document: the Rebind column is painted at rest at ONE x, and an
     ui.Click(ui.At(std::string("rebind:") + kCrouchBinding));   // Crouch is not selected
     CHECK(armed == G(kCrouchBinding));
 }
+
+TEST_CASE("input document: double-click on a binding arms its rebind", "[editor][input]")
+{
+    DocUi ui(kCaptureDoc);
+    ui.Frame(); ui.Frame();
+    ui.DoubleClick(ui.At(kJumpBinding));
+    CHECK(ui.doc->InputSwallowed());
+    CHECK_FALSE(ui.doc->Pending());                       // a rebind, not an add
+    ui.Press(26);
+    CHECK((*ui.doc->Model().FindNode(G(kJumpBinding)))["path"] == "<Keyboard>/scancode/w");
+}
+
+TEST_CASE("input document: double-click on an action opens its rename", "[editor][input]")
+{
+    DocUi ui(kCaptureDoc);
+    ui.Frame(); ui.Frame();
+    ui.DoubleClick(ui.At(kCrouchId));
+    CHECK(ui.doc->State().renameTarget == G(kCrouchId));
+    CHECK_FALSE(ui.doc->InputSwallowed());
+}
+
+TEST_CASE("input document: double-click on a composite header steps its parts; W, S, Esc re-path up and down in ONE step", "[editor][input]")
+{
+    UndoRig rig;
+    DocUi ui(kCaptureDoc, &rig.commands);
+    ui.Frame(); ui.Frame();
+    ui.DoubleClick(ui.At(kMoveComposite));
+    REQUIRE(ui.doc->Pending());
+    CHECK(ui.doc->Pending()->kind == Arcane::Editor::PendingAdd::Kind::RebindComposite);
+    ui.Press(26);                                         // W -> up
+    ui.Press(22);                                         // S -> down
+    ui.Key(ImGuiKey_Escape);
+    CHECK_FALSE(ui.doc->Pending());
+    const nlohmann::json parts = (*ui.doc->Model().FindNode(G(kMoveComposite)))["parts"];
+    CHECK(parts[0]["path"] == "<Keyboard>/scancode/w");
+    CHECK(parts[1]["path"] == "<Keyboard>/scancode/s");
+    CHECK(parts[2]["path"] == "<Keyboard>/j");
+    CHECK(parts[3]["path"] == "<Keyboard>/l");
+    CHECK(std::string(rig.commands.UndoLabel()) == "Rebind composite");
+    REQUIRE(ui.doc->Model().Undo());
+    CHECK_FALSE(rig.commands.CanUndo());
+}

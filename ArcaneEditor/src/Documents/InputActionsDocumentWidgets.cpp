@@ -444,6 +444,23 @@ namespace Arcane::Editor
         const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // RowWithThumb parked the cursor at the next row's start; restored at the end
         if (state.probe) (*state.probe)[row.id.ToString()] = ImVec2(rowTop.x + 40.0f, (rowTop.y + rowBottom.y) * 0.5f);   // TEST SEAM (the maps column's rule)
         if (r.clicked && !swallowed) SelectRow(model, row);
+        // Double-click (spec 2026-09-30 s8.3). Safe while the button is still
+        // down: TickCapture already ran this frame (InputActionsDocument.cpp:260)
+        // and the held control is ignored until it is released.
+        if (r.doubleClicked && !swallowed)
+        {
+            switch (row.kind)
+            {
+            case InputRowKind::Binding:
+            case InputRowKind::Part:            if (services.beginRebind) services.beginRebind(row.id); break;
+            case InputRowKind::Action:          OpenRenameOn(model, state, row.id); break;
+            case InputRowKind::CompositeHeader:
+                if (services.beginAdd)
+                    if (auto add = MakeRebindComposite(model.Draft(), row.id)) services.beginAdd(std::move(*add));
+                break;
+            default: break;
+            }
+        }
         if (ScrollsIntoView(model, state, row))
         {
             ImGui::SetScrollHereY();

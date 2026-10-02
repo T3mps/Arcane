@@ -299,6 +299,7 @@ namespace Arcane::Editor
     struct [[nodiscard]] AssetRowResult
     {
         bool clicked = false;
+        bool doubleClicked = false;   // the second press of a left double-click (the Selectable passes AllowDoubleClick)
         bool hovered = false;
         ImVec2 trailingPos{};
     };
