@@ -149,6 +149,10 @@ namespace Arcane::Editor
         // nullopt = applied; a string = refused (nothing touched) or failed (rolled back).
         [[nodiscard]] std::optional<std::string> PreflightMove(std::span<const AssetMove> moves, Side side) const;
         [[nodiscard]] std::optional<std::string> ApplyMove(std::span<const AssetMove> moves, Side side);
+        // s7.4 expiry: true when an asset's id-bearing file on `side`'s source end no
+        // longer holds its guid (deleted, or re-identified outside the editor). One
+        // PeekId per asset: a stat plus the .meta/JSON header, never the binary.
+        [[nodiscard]] bool MoveSourceLost(std::span<const AssetMove> moves, Side side) const;
         void ReportRefusal(std::string title, std::string message) { m_host.ReportError(std::move(title), std::move(message)); }
         [[nodiscard]] std::string Display(const std::filesystem::path& p) const;   // "textures/uv.png"
         void SetRenameForTest(RenameFn fn) { m_rename = std::move(fn); }
@@ -172,13 +176,20 @@ namespace Arcane::Editor
         void Redo() final { Step(false); }
         const char* Label() const final { return m_label.c_str(); }
         bool AffectsScene() const final { return false; }   // s3.3: file steps never dirty the scene
-        bool IsExpired() const override { return m_blocked || !Exec(); }
+        bool IsExpired() const override
+        {
+            const AssetFileOpExecutor* exec = Exec();
+            return m_blocked || !exec || SourceLost(*exec, /*undo side next*/ m_applied);
+        }
 
     protected:
         AssetFileCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label)
             : m_exec(std::move(exec)), m_label(std::move(label)) {}
         // Run the side about to happen (pre-check, primitive with rollback, follow-up).
         virtual std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) = 0;
+        // True when the side about to run (undo if m_applied) has nothing left to act
+        // on. An OCCUPIED destination is not expiry (it may be temporary; Run refuses it).
+        virtual bool SourceLost(const AssetFileOpExecutor& exec, bool undo) const = 0;
         [[nodiscard]] AssetFileOpExecutor* Exec() const { const auto p = m_exec.lock(); return p ? *p : nullptr; }
 
         std::weak_ptr<AssetFileOpExecutor*> m_exec;
@@ -199,6 +210,10 @@ namespace Arcane::Editor
         std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) override
         {
             return exec.ApplyMove(m_moves, undo ? AssetFileOpExecutor::Side::Backward : AssetFileOpExecutor::Side::Forward);
+        }
+        bool SourceLost(const AssetFileOpExecutor& exec, bool undo) const override
+        {
+            return exec.MoveSourceLost(m_moves, undo ? AssetFileOpExecutor::Side::Backward : AssetFileOpExecutor::Side::Forward);
         }
     private:
         std::vector<AssetMove> m_moves;

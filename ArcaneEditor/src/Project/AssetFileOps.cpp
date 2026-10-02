@@ -309,6 +309,14 @@ namespace Arcane::Editor
         return std::nullopt;
     }
 
+    bool AssetFileOpExecutor::MoveSourceLost(std::span<const AssetMove> moves, Side side) const
+    {
+        for (const AssetMove& m : moves)
+            if (Arcane::AssetRegistry::PeekId(side == Side::Forward ? m.files[0].from : m.files[0].to) != m.guid)
+                return true;
+        return false;
+    }
+
     std::optional<std::string> AssetFileOpExecutor::RollBack(std::span<const FileMove> done)
     {
         for (std::size_t i = done.size(); i-- > 0;)

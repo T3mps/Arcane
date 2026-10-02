@@ -467,6 +467,29 @@ TEST_CASE("AssetFileOps: undoing onto an occupied path refuses loudly, writes no
     CHECK_FALSE(stack.CanRedo());
 }
 
+TEST_CASE("AssetFileOps: a moved file deleted or re-identified outside the editor expires its step", "[editor][assetops]")
+{
+    AssetOpsWorld w("exec_expiry");
+    const auto tex = w.Write("textures/uv.png", "png-bytes");
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    AssetFileOpExecutor exec(host, stack, w.content);
+    REQUIRE(exec.Execute(w.Plan(AssetOpKind::Rename, { tex }, "uv2"), stack).ok);
+    REQUIRE(stack.CanUndo());
+
+    SECTION("deleted: the primary is gone (its .meta alone is not the asset)")
+    {
+        fs::remove(w.content / "textures" / "uv2.png");
+        CHECK_FALSE(stack.CanUndo());
+    }
+    SECTION("re-identified: the .meta now names another guid")
+    {
+        w.WriteRaw("textures/uv2.png.meta", R"({ "guid": "dddd4444-4444-4444-8444-444444444444", "version": 1 })");
+        CHECK_FALSE(stack.CanUndo());
+    }
+    CHECK(host.errors.empty());   // expiry is silent; only a refused side reports
+}
+
 TEST_CASE("AssetFileOps: a step outliving its executor is inert", "[editor][assetops]")
 {
     AssetOpsWorld w("exec_dead");
