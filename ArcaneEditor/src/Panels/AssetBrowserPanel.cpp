@@ -1136,9 +1136,13 @@ namespace Arcane::Editor
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                                 ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
 
+            ImGui::BeginDisabled(project == nullptr);
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
                 ImGui::OpenPopup("##createmenu");
-            const PopupAnchor createAnchor = LastItemAnchor();
+            const PopupAnchor createAnchor = LastItemAnchor();   // T2-C2's anchor; EndDisabled leaves the button as the last item
+            ImGui::EndDisabled();
+            if (project == nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Open a project to create assets");
             // The selection is the menu's subject: a selected material is what
             // "Material Instance..." derives from (T3-D4), a selected texture
             // what "Sprite..." is cut from (T3-D5); with none selected the

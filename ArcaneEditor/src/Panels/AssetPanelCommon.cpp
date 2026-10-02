@@ -125,7 +125,7 @@ namespace Arcane::Editor
     // `if (!project)` guard drew inline.
     void DrawAssetPanelNoProjectMessage()
     {
-        ImGui::TextDisabled("No project open (data/-next-to-exe)");
+        ImGui::TextDisabled("No project open");   // the start page (Viewport node) is the way in
     }
 
     // Panel-split spec s7.2 (Task 3). Ported verbatim from the Unreferenced
