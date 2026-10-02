@@ -10,6 +10,7 @@
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasBackdrop.hpp" // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"    // node chrome metrics + grid palette + accents -- one definition, both canvases
+#include "Widgets/GraphFit.hpp"            // GraphFitToContent + GraphFitMaxZoom -- the capped frame-to-fit and its cvar reader (T2-C3/C4, s4.5)
 #include "Widgets/GraphLegend.hpp"         // the legend box chrome -- shared with the shader graph's pin legend
 #include "Widgets/GraphNodeLod.hpp"        // NodeLOD / NodeLODForScale -- the zoom table's third column
 #include "Widgets/GraphPinDot.hpp"         // DrawGraphPinDot -- the filled/ring port dot, paint only
@@ -1291,6 +1292,14 @@ namespace Arcane::Editor
             state.graphBuiltFocus != state.graphFocus ||
             state.graphBuiltKindFilter != state.graphKindFilter)
         {
+            // s6.9: a NEW scope (first build, focus, kind filter) frames itself;
+            // an entriesStamp-only rebuild keeps the user's view.
+            if (!state.graphBuilt || state.graphBuiltFocus != state.graphFocus ||
+                state.graphBuiltKindFilter != state.graphKindFilter)
+            {
+                state.graphFitPending.Arm();
+                state.graphFitCounted = false;
+            }
             GraphBuildInput in;
             in.entries    = &model.Entries();
             in.index      = &model.RefIndex();
@@ -1332,6 +1341,8 @@ namespace Arcane::Editor
             ApplyGraphCanvasStyle(AssetGraphCanvasStyleDesc());
             ed::SetCurrentEditor(nullptr);
             state.graphLayoutDirty = true;
+            state.graphFitPending.Arm();   // s6.9: a fresh context frames itself
+            state.graphFitCounted = false;
         }
         ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
 
@@ -2293,6 +2304,28 @@ namespace Arcane::Editor
             }
         }
 
+        // ---- s6.9: frame-to-fit, issued once the layout is measured --------
+        // AFTER 8b's select-and-centre, so when both fire on one frame the
+        // fitted view wins (8b's SelectNode mirror still happened). Content
+        // bounds only: the fit never touches selection (s4.5). The latch sees
+        // EVERY draw while armed (the layout-write draw too, which cannot
+        // issue: node sizes are unmeasured there) and re-issues the fit if a
+        // canvas resize discarded it (GraphFit.hpp's CanvasNavLatch, T2-C4).
+        // A duration-0 fit settles at once. An empty graph drops the request
+        // without fitting.
+        if (state.graphFitPending.Update(ed::GetScreenSize(), ImGui::GetTime(), 0.0f, !applyLayout))
+        {
+            if (!nodes.empty() && GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            {
+                // The seam counts each ARMING's fit once, not its re-issues.
+                if (!state.graphFitCounted)
+                    ++state.graphFitCount;
+                state.graphFitCounted = true;
+            }
+            else
+                state.graphFitPending.Disarm();
+        }
+
         ed::End();
         ed::SetCurrentEditor(nullptr);
 
@@ -2665,6 +2698,7 @@ namespace Arcane::Editor
         state.graphFocusFilterLen = 0;
         state.graphFocusTypedLen = 0;
         state.graphLayoutDirty = false;
+        state.graphFitPending.Disarm();   // the next lazy create re-arms it
         state.graphFocus = Arcane::Guid{};
         // ...and re-arm the boot-scene seed with it (Task 5): the incoming
         // project has its OWN boot scene, and this is the seam that tells the

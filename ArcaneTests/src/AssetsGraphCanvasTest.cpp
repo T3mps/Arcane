@@ -53,6 +53,8 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -775,6 +777,84 @@ TEST_CASE("Asset Graph (s6.9): the canvas ends where the selection strip starts,
     CHECK(rig.state.graphLegendMin.y >= rig.state.graphCanvasMin.y);
     CHECK(rig.state.graphLegendMax.x <= rig.state.graphCanvasMax.x);
     CHECK(rig.state.graphLegendMax.y <= rig.state.graphCanvasMax.y);
+}
+
+// ---------------------------------------------------------------------------
+// s6.9 -- frame-to-fit. Armed by canvas creation and by a rebuild whose focus or
+// kind filter moved, never by an entriesStamp-only rebuild (cook churn must not
+// yank the view); consumed on the first canvas frame after the layout was
+// written. The rig's ~200 px canvas is shorter than the four-row referencer
+// column, so an UNFITTED view leaves the bottom row below the canvas.
+
+TEST_CASE("Asset Graph (s6.9): creation frames every node inside the shrunk canvas", "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_fit_test");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+    CHECK(rig.state.graphFitCount == 1u);
+
+    int maxRow = 0;
+    for (const GraphNode& n : rig.state.graph.nodes) maxRow = std::max(maxRow, n.row);
+    REQUIRE(maxRow >= 2);                         // >= 3 layout rows: unfitted, the last one is below the canvas
+    for (std::size_t i = 0; i < rig.state.graph.nodes.size(); ++i)
+    {
+        const std::uint64_t id = i + 1;           // GraphNodeIdOf: index + 1
+        INFO(id);
+        const ImVec2 mn = rig.hw.NodeScreenMin(id), mx = rig.hw.NodeScreenMax(id);
+        CHECK(mn.x >= rig.state.graphCanvasMin.x);
+        CHECK(mn.y >= rig.state.graphCanvasMin.y);
+        CHECK(mx.x <= rig.state.graphCanvasMax.x);
+        CHECK(mx.y <= rig.state.graphCanvasMax.y);
+    }
+}
+
+TEST_CASE("Asset Graph (s6.9): only creation, a focus change and a kind-filter change refit -- never an entriesStamp rebuild",
+          "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_refit_test");
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    REQUIRE(rig.state.graphFitCount == 1u);
+
+    // Cook churn / a new reference: entriesStamp moves, the graph rebuilds, no refit.
+    const std::uint32_t stampBefore = rig.model.entriesStamp;
+    rig.fx.fake.refsByGuid[rig.fx.referencers[0]].push_back({ rig.fx.referencers[1], AssetRefKind::References });
+    rig.model.MarkAllDirty();
+    REQUIRE(rig.model.RebuildIfDirty(&rig.fx.project->Registry(), rig.fx.fake.Make()));
+    REQUIRE(rig.model.entriesStamp != stampBefore);
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    CHECK(rig.state.graphBuiltStamp == rig.model.entriesStamp);   // it DID rebuild
+    CHECK(rig.state.graphFitCount == 1u);
+
+    rig.state.graphFocus = rig.fx.hub;
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    CHECK(rig.state.graphFitCount == 2u);
+
+    rig.state.graphKindFilter = AssetKind::Material;
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    CHECK(rig.state.graphFitCount == 3u);
+}
+
+TEST_CASE("Asset Graph (s6.9): a fit frame leaves the model and canvas selections alone", "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_fitsel_test");
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    rig.model.Select(rig.fx.referencers[1]);
+    for (int i = 0; i < 2; ++i) rig.hw.Frame();   // 8b mirrors the selection onto the canvas
+
+    rig.state.graphFocus = rig.fx.hub;            // arms a fit
+    rig.hw.Frame();                               // rebuild frame: layout written, fit still pending
+    REQUIRE(rig.state.graphFitCount == 1u);
+    auto* edCtx = static_cast<ax::NodeEditor::EditorContext*>(rig.state.graphCanvas);
+    ax::NodeEditor::SetCurrentEditor(edCtx);
+    const int selectedBefore = ax::NodeEditor::GetSelectedObjectCount();
+    ax::NodeEditor::SetCurrentEditor(nullptr);
+
+    rig.hw.Frame();                               // the fit frame
+    REQUIRE(rig.state.graphFitCount == 2u);
+    CHECK(rig.model.selected == rig.fx.referencers[1]);
+    ax::NodeEditor::SetCurrentEditor(edCtx);
+    CHECK(ax::NodeEditor::GetSelectedObjectCount() == selectedBefore);
+    ax::NodeEditor::SetCurrentEditor(nullptr);
 }
 
 // ---------------------------------------------------------------------------
