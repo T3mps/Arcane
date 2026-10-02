@@ -195,9 +195,9 @@ namespace Arcane
         // between two bare calls). Under a scheduler that advance is one extra
         // tick per pass, taken in an exclusive group (above): ticks are cheap and
         // only ever compared, and no other system can be mid-stamp when it moves.
-        // ARCANE_INTERNAL_BEGIN: the system body drives Astra's registry, relationship graph and tick API directly
-        void operator()(Astra::Registry& reg)
+        void operator()(Arcane::Registry& reg)
         {
+            // ARCANE_INTERNAL_BEGIN: the system body drives Astra's registry, relationship graph and tick API directly
             const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
             if (!sceneRoot) return;
             const Astra::Entity root = sceneRoot->entity;

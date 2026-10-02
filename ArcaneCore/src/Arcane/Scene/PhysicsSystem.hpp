@@ -307,9 +307,9 @@ namespace Arcane
         explicit PhysicsSystem(float fixedDt, bool stepWorld = true) noexcept
             : m_fixedDt(fixedDt), m_stepWorld(stepWorld) {}
 
-        // ARCANE_INTERNAL_BEGIN: the system's passes drive Astra's registry, views and tick API directly
-        void operator()(Astra::Registry& reg)
+        void operator()(Arcane::Registry& reg)
         {
+            // ARCANE_INTERNAL_BEGIN: the system's passes drive Astra's registry, views and tick API directly
             PhysicsResource* res = reg.GetResource<PhysicsResource>();
             if (!res || !res->world) return;
 
