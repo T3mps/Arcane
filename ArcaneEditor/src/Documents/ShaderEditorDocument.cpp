@@ -3258,6 +3258,7 @@ namespace Arcane::Editor
             ApplyGraphCanvasStyle(ShaderCanvasStyleDesc());
             ed::SetCurrentEditor(nullptr);
             m_passCanvasSeeded = false;
+            m_passFitOnSeed = true;
         }
         const std::size_t total = 1 + m_data.passes.size();
         auto nodeOf = [](std::size_t chain) { return static_cast<std::uint32_t>(chain) + 1; };
@@ -3311,7 +3312,14 @@ namespace Arcane::Editor
             ed::SetNodePosition(kPassSceneNodeId,
                                 ImVec2(m_data.chainSceneX, m_data.chainSceneY));
             m_passCanvasSeeded = true;
-            m_passFitPending.Arm();
+            // Fit a FRESH view only (the context was just made, or the file
+            // reloaded), never the re-seed after a structural edit or a
+            // pass-list undo/redo: the user's view survives those (T3-D3).
+            if (m_passFitOnSeed)
+            {
+                m_passFitPending.Arm();
+                m_passFitOnSeed = false;
+            }
         }
 
         // ---- nodes
@@ -4325,6 +4333,7 @@ namespace Arcane::Editor
         m_activePass = 0;
         m_viewPass = -1;
         m_passCanvasSeeded = false;
+        m_passFitOnSeed = true;   // the reloaded file is a fresh view (the graph canvas rebuilds its context)
         m_graphPositionsApplied = false;
         m_graphShownPass = -1;
         if (!IsInstance() || ResolveParentChain())
@@ -4688,7 +4697,13 @@ namespace Arcane::Editor
                                                   (std::max)(60.0f, n.value[1])));
             }
             m_graphPositionsApplied = true;
-            m_fitPending.Arm();
+            // s4.5's fit belongs to a FRESH view: the open, a pass switch, a
+            // reload or a pass-list undo -- each rebuilt the context above, so
+            // there is no view to keep. An undo/redo of a graph edit
+            // (ApplyGraphState) re-seeds positions too, but on the SAME context,
+            // and the user's zoom and scroll must survive it (T3-D3).
+            if (switchedPass)
+                m_fitPending.Arm();
         }
 
         // ---- Rendering LOD: ONE read of the zoom, ONE tier, per frame ----
@@ -4845,7 +4860,7 @@ namespace Arcane::Editor
             m_focusNode = 0;
         }
 
-        // Frame-to-fit on open (s4.5): armed by the seed above, issued on the
+        // Frame-to-fit on open (s4.5): armed by a fresh-view seed above, issued on the
         // first later draw and re-issued until it LANDED (the latch, see the
         // focus block above), AFTER the node loop -- every node is live and
         // carries the size it measured last frame (NodeCulled exempts

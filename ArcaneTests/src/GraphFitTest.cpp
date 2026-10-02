@@ -444,10 +444,20 @@ TEST_CASE("Pass canvas: a culled chain node keeps its measured size, so a later 
         }
         ne::SetCurrentEditor(nullptr);
 
-        // A structural re-seed (what Add Pass / Ctrl+Z run through) re-arms the
-        // fit while the view is still away: it must frame the same chain the
-        // opening fit framed, not a taller phantom.
+        // A structural re-seed (what Add Pass / Ctrl+Z run through) keeps the
+        // user's view (T3-D3: the fit-on-open fires for a fresh view only) ...
         doc.ApplyPassListState(doc.CapturePassListState());
+        for (int i = 0; i < 10; ++i)
+            frame();
+        ne::SetCurrentEditor(doc.PassCanvasContext());
+        const ImRect kept = editor->GetViewRect();
+        CHECK(kept.Min.x == Approx(away.Min.x).margin(1.0f));
+        CHECK(kept.Min.y == Approx(away.Min.y).margin(1.0f));
+        // ... so the same capped fit the latch issues is issued by hand, with
+        // the view still away: it must frame the same chain the opening fit
+        // framed, not a taller phantom.
+        REQUIRE(Arcane::Editor::GraphFitToContent(Arcane::Editor::GraphFitMaxZoom(), 0.0f));
+        ne::SetCurrentEditor(nullptr);
         for (int i = 0; i < 10; ++i)
             frame();
 

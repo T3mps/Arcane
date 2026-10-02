@@ -876,6 +876,7 @@ namespace Arcane::Editor
         ax::NodeEditor::EditorContext* m_passCanvasCtx = nullptr;
         bool  m_passCanvasSeeded = false;   // re-seed positions after list edits
         CanvasNavLatch m_passFitPending;    // s4.5: frame-to-fit after a seed, re-issued until it lands
+        bool  m_passFitOnSeed = false;      // the next seed is a fresh view (new context / reload): fit it
         std::uint32_t m_passCtxNode = 0;    // node the context menu opened on
         float m_passPopupX = 0.0f, m_passPopupY = 0.0f;
         int m_activePass = 0;   // which snippet the text editor shows (0 = base)
@@ -1085,7 +1086,7 @@ namespace Arcane::Editor
         // compiler diag lines back into snippet space (jump + badges).
         int  m_snippetLineOffset = 0;
         bool m_graphPositionsApplied = false;   // canvas seeded from stored node positions
-        CanvasNavLatch m_fitPending;            // s4.5: frame-to-fit after a seed, re-issued until it lands
+        CanvasNavLatch m_fitPending;            // s4.5: frame-to-fit after a pass-switch seed (fresh context), re-issued until it lands
         bool m_showGeneratedText = false;       // toolbar toggle: canvas <-> read-only HLSL
         // Select + navigate the canvas to one node. Re-armed by
         // RequestFocusGraphNode (Task 5, the Problems panel) -- the errors

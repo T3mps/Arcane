@@ -36,6 +36,7 @@
 #include <imgui_node_editor.h>   // the s5.1.11 canvas cases ask the canvas what is selected
 
 #include <cfloat>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -765,4 +766,78 @@ TEST_CASE("Canvas click (T3-D3): Shift+click on a node adds it to the selection,
     CHECK(h.doc->SelectionKey() == "material");
     ClickWith(h, h.NodeTitle(3), ImGuiMod_Shift);               // adds, never toggles (Ctrl toggles)
     CHECK(Selected(h, 3));
+}
+
+namespace
+{
+    // The Sine x literal's centre in screen space (the R5 probe point): right
+    // of the x pin's bounds -- pin, SameLine, a 64 px drag -- on the pin's row.
+    ImVec2 SineLiteralPoint(CanvasHarness& h)
+    {
+        return h.InCanvas([]
+        {
+            auto* editor = reinterpret_cast<ed::Detail::EditorContext*>(ed::GetCurrentEditor());
+            const ed::Detail::Pin* pin = editor->FindPin(ed::PinId(2 * 1000ull + 1 + 0));   // InPin(2, 0)
+            REQUIRE(pin != nullptr);
+            const ImRect b = pin->m_Bounds;
+            return ed::CanvasToScreen(ImVec2(b.Max.x + ImGui::GetStyle().ItemSpacing.x + 32.0f, (b.Min.y + b.Max.y) * 0.5f));
+        });
+    }
+    struct CanvasView
+    {
+        float zoom = 0.0f;
+        ImVec2 origin;   // canvas (0,0) on screen
+    };
+    CanvasView ViewOf(CanvasHarness& h)
+    {
+        return h.InCanvas([] { return CanvasView{ ed::GetCurrentZoom(), ed::CanvasToScreen(ImVec2(0.0f, 0.0f)) }; });
+    }
+    bool SameView(const CanvasView& a, const CanvasView& b)
+    {
+        constexpr float kEps = 1e-3f;
+        return std::abs(a.zoom - b.zoom) <= kEps && std::abs(a.origin.x - b.origin.x) <= kEps &&
+               std::abs(a.origin.y - b.origin.y) <= kEps;
+    }
+}
+
+TEST_CASE("Canvas view (T3-D3): undo and redo of a graph edit keep the user's zoom and scroll -- the fit-on-open fires once per open, not per reseed",
+          "[editor][graphcanvas]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputSineFloat()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));                          // the open fit has landed
+    const CanvasView fitted = ViewOf(h);
+
+    // The user's own view: two wheel notches in, off-centre (zoom AND scroll move).
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(300.0f, 250.0f); h.Frame();
+    io.AddMouseWheelEvent(0.0f, 1.0f); h.Frame();
+    io.AddMouseWheelEvent(0.0f, 1.0f); h.Frame(20);
+    const CanvasView user = ViewOf(h);
+    INFO("fitted zoom " << fitted.zoom << " user zoom " << user.zoom);
+    REQUIRE_FALSE(SameView(fitted, user));
+
+    // A real edit: drag the Sine x literal (one undo step on release).
+    const ImVec2 lit = SineLiteralPoint(h);
+    io.AddMousePosEvent(lit.x, lit.y); h.Frame();
+    io.AddMouseButtonEvent(0, true); h.Frame();
+    io.AddMousePosEvent(lit.x + 30.0f, lit.y); h.Frame(2);
+    io.AddMouseButtonEvent(0, false); h.Frame(2);
+    REQUIRE(SineLiteral(*h.doc) != nullptr);
+    REQUIRE(h.stack.CanUndo());
+    const CanvasView edited = ViewOf(h);
+    CHECK(SameView(user, edited));
+
+    h.stack.Undo();
+    h.Frame(10);
+    CHECK(SineLiteral(*h.doc) == nullptr);                      // the edit is gone ...
+    const CanvasView afterUndo = ViewOf(h);
+    INFO("after undo zoom " << afterUndo.zoom << " origin " << afterUndo.origin.x << ", " << afterUndo.origin.y
+         << "; user origin " << user.origin.x << ", " << user.origin.y);
+    CHECK(SameView(user, afterUndo));                           // ... the view is not
+
+    h.stack.Redo();
+    h.Frame(10);
+    CHECK(SineLiteral(*h.doc) != nullptr);
+    CHECK(SameView(user, ViewOf(h)));
 }
