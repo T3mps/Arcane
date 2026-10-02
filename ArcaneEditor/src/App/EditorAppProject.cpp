@@ -2485,6 +2485,11 @@ namespace Arcane::Editor
             teardown.weight = 2;
             teardown.run = [&]
             {
+                // The outgoing project's user cvar archive (T3-D2), BEFORE its
+                // game module unloads below and takes that module's Archive
+                // cvars with it. OpenProject archives again and drops the
+                // User layer; this earlier write is the module's last chance.
+                (void)m_runtime->Core().SaveUserCVars();
                 ResetPerProjectState();
                 TeardownGraphForSwitch(keepViewportW, keepViewportH);
                 m_plugin.reset();

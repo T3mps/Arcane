@@ -404,6 +404,12 @@ namespace Arcane::Editor
         // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
         // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
         m_runtime.emplace(*m_process, m_config.maxFrames == 0);
+        // The user cvar archive (T3-D2, Runtime.hpp): an INTERACTIVE windowed
+        // session writes the open project's User-rung Archive cvars (the pin
+        // legend's fold, the undo budgets, ...) back to its Saved/Config/ on a
+        // project switch and at exit. A scripted --frames or --headless run
+        // reads them but never writes: a verify run must not rewrite them.
+        m_runtime->Core().SetUserCVarArchiving(m_config.maxFrames == 0 && !m_config.headless);
         // THIS EXE asks about ITS OWN caches (2026-09-16). VerifySharedTypeContext
         // is inline, so it only ever answers for the module holding the call --
         // ProjectBoot.cpp's type_context_install stage compiles into
@@ -3507,6 +3513,12 @@ namespace Arcane::Editor
             ImGui::SaveIniSettingsToDisk(m_config.dumpLayoutPath.c_str());
             ARC_INFO("--dump-layout: wrote the live ImGui layout to {}", m_config.dumpLayoutPath);
         }
+
+        // The user cvar archive (T3-D2): written while the game module -- and
+        // every Archive cvar it declared -- is still loaded. A no-op unless
+        // this session archives (StageRuntimeCreate sets SetUserCVarArchiving).
+        if (m_bootCompleted && m_runtime)
+            (void)m_runtime->Core().SaveUserCVars();
 
         // Release the editor lock: this project is no longer open anywhere.
         if (m_bootCompleted && m_runtime)

@@ -4,9 +4,13 @@
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 #include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
+#include <string>
 
 using namespace Arcane;
 
@@ -167,11 +171,167 @@ TEST_CASE("config apply warns on a cvar category and ignores a document", "[cvar
     WriteCVarArchive(reg, user);
     REQUIRE_FALSE(std::filesystem::exists(user / "diagnostics.json"));
 
+    // T3-D2: only the User rung is archived -- a console set is a session value.
     REQUIRE(reg.Set(reg.Find("diagnostics.drawMarkers"), CVarValue::Bool(false), SetBy::Console) == SetResult::Applied);
     reg.Publish();
     WriteCVarArchive(reg, user);
+    REQUIRE_FALSE(std::filesystem::exists(user / "diagnostics.json"));
+
+    CVarRegistry userReg;
+    REQUIRE_FALSE(userReg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "", "engine" }).IsStale());
+    REQUIRE(userReg.Set(userReg.Find("diagnostics.drawMarkers"), CVarValue::Bool(true), SetBy::User) == SetResult::Applied);
+    userReg.Publish();
+    WriteCVarArchive(userReg, user);
     REQUIRE(std::filesystem::exists(user / "diagnostics.json"));
     std::filesystem::remove_all(user);
+}
+
+namespace
+{
+    std::string ReadText(const std::filesystem::path& file)
+    {
+        std::ifstream in(file, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    void WriteText(const std::filesystem::path& file, const std::string& text)
+    {
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << text;
+    }
+    // The T3-D2 roster: what the archive may and may not write.
+    void RegisterArchiveRoster(CVarRegistry& reg)
+    {
+        const auto add = [&](const char* name, CVarType type, CVarValue def, CVarFlags flags)
+        {
+            REQUIRE_FALSE(reg.Register(CVarDesc{ name, type, def, {}, {}, flags, "", "test" }).IsStale());
+        };
+        add("editor.legend", CVarType::Bool, CVarValue::Bool(true), CVarFlags::Archive);
+        add("editor.graph.zoom", CVarType::Float32, CVarValue::Float32(1.0f), CVarFlags::Archive);   // a dotted key
+        add("editor.plain", CVarType::Bool, CVarValue::Bool(false), CVarFlags::UserSettable);        // not Archive
+        add("editor.untouched", CVarType::Int32, CVarValue::Int32(3), CVarFlags::Archive);           // default only
+        add("editor.cheat", CVarType::Bool, CVarValue::Bool(false), CVarFlags::Archive | CVarFlags::Cheat);
+        add("editor.dev", CVarType::Bool, CVarValue::Bool(false), CVarFlags::Archive | CVarFlags::Dev);
+        add("editor.cli", CVarType::Int32, CVarValue::Int32(1), CVarFlags::Archive);                 // command line only
+        add("editor.project", CVarType::Int32, CVarValue::Int32(1), CVarFlags::Archive);             // project layer only
+        add("editor.layered", CVarType::Int32, CVarValue::Int32(1), CVarFlags::Archive);             // user, then command line
+        add("input.bindings", CVarType::Int32, CVarValue::Int32(0), CVarFlags::Archive);             // a document category
+    }
+}
+
+TEST_CASE("cvar archive T3-D2: only Archive values the User rung holds round-trip through the user dir", "[cvar]") {
+    const auto user = std::filesystem::temp_directory_path() / "arcane-cvar-archive-t3d2";
+    std::filesystem::remove_all(user);
+
+    CVarRegistry reg;
+    RegisterArchiveRoster(reg);
+    const auto set = [&](const char* name, CVarValue v, SetBy by) { REQUIRE(reg.Set(reg.Find(name), std::move(v), by, "test") == SetResult::Applied); };
+    set("editor.legend", CVarValue::Bool(false), SetBy::User);
+    set("editor.graph.zoom", CVarValue::Float32(1.5f), SetBy::User);
+    set("editor.plain", CVarValue::Bool(true), SetBy::User);
+    set("editor.cheat", CVarValue::Bool(true), SetBy::User);
+    set("editor.dev", CVarValue::Bool(true), SetBy::User);
+    set("editor.cli", CVarValue::Int32(9), SetBy::CommandLine);
+    set("editor.project", CVarValue::Int32(7), SetBy::Project);
+    set("editor.layered", CVarValue::Int32(5), SetBy::User);
+    set("editor.layered", CVarValue::Int32(9), SetBy::CommandLine);   // wins the session, never the file
+    set("input.bindings", CVarValue::Int32(4), SetBy::User);
+    reg.Publish();
+    WriteCVarArchive(reg, user);
+
+    REQUIRE(std::filesystem::exists(user / "editor.json"));
+    CHECK_FALSE(std::filesystem::exists(user / "input.json"));       // a document category is never touched
+    CHECK_FALSE(std::filesystem::exists(user / "editor.json.tmp"));  // written, then renamed over
+    const auto doc = nlohmann::json::parse(ReadText(user / "editor.json"));
+    INFO(doc.dump());
+    CHECK(doc.size() == 3);
+    CHECK(doc.at("legend") == false);
+    CHECK(doc.at("graph.zoom") == 1.5f);
+    CHECK(doc.at("layered") == 5);
+
+    // A fresh registry reads it back as the loader does (Runtime::OpenProject's user layer).
+    CVarRegistry fresh;
+    RegisterArchiveRoster(fresh);
+    const CVarApplyReport report = ApplyCVarDirectory(fresh, user, SetBy::User, "user");
+    CHECK(report.unknownKeys.empty());
+    fresh.Publish();
+    const auto get = [&](const char* name) { return *fresh.Get(fresh.Find(name)); };
+    CHECK(get("editor.legend").AsBool() == false);
+    CHECK(get("editor.graph.zoom").AsFloat32() == 1.5f);
+    CHECK(get("editor.layered").AsInt32() == 5);
+    CHECK(get("editor.plain").AsBool() == false);       // not Archive: the default
+    CHECK(get("editor.untouched").AsInt32() == 3);
+    CHECK(get("editor.cheat").AsBool() == false);
+    CHECK(get("editor.dev").AsBool() == false);
+    CHECK(get("editor.cli").AsInt32() == 1);
+    CHECK(get("editor.project").AsInt32() == 1);
+    CHECK(fresh.Explain("editor.untouched")->setBy == SetBy::Default);
+    std::filesystem::remove_all(user);
+}
+
+TEST_CASE("cvar archive T3-D2: a write merges into the file -- foreign keys stay, nested keys update in place, an unchanged file is not rewritten", "[cvar]") {
+    const auto user = std::filesystem::temp_directory_path() / "arcane-cvar-archive-merge";
+    std::filesystem::remove_all(user);
+    WriteText(user / "editor.json", R"({"foreign": 42, "graph": {"zoom": 0.5, "other": "keep"}, "legend": true})");
+
+    CVarRegistry reg;
+    RegisterArchiveRoster(reg);
+    REQUIRE(reg.Set(reg.Find("editor.legend"), CVarValue::Bool(false), SetBy::User) == SetResult::Applied);
+    REQUIRE(reg.Set(reg.Find("editor.graph.zoom"), CVarValue::Float32(2.0f), SetBy::User) == SetResult::Applied);
+    reg.Publish();
+    WriteCVarArchive(reg, user);
+    const auto doc = nlohmann::json::parse(ReadText(user / "editor.json"));
+    INFO(doc.dump());
+    CHECK(doc.at("foreign") == 42);                       // a key this registry does not own
+    CHECK(doc.at("graph").at("other") == "keep");
+    CHECK(doc.at("graph").at("zoom") == 2.0f);            // the nested leaf, not a second flat key
+    CHECK_FALSE(doc.contains("graph.zoom"));
+    CHECK(doc.at("legend") == false);
+
+    const auto older = std::filesystem::last_write_time(user / "editor.json") - std::chrono::hours(1);
+    std::filesystem::last_write_time(user / "editor.json", older);
+    WriteCVarArchive(reg, user);                          // nothing changed: the file is left alone
+    CHECK(std::filesystem::last_write_time(user / "editor.json") == older);
+    std::filesystem::remove_all(user);
+}
+
+TEST_CASE("cvar archive T3-D2: a corrupt or partial user file is skipped at load, and a write keeps it aside as .bad", "[cvar]") {
+    const auto user = std::filesystem::temp_directory_path() / "arcane-cvar-archive-corrupt";
+    std::filesystem::remove_all(user);
+    WriteText(user / "editor.json", R"({"legend": fal)");          // a write cut short
+    WriteText(user / "diagnostics.json", R"({"drawMarkers": true})");
+
+    CVarRegistry reg;
+    RegisterArchiveRoster(reg);
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "diagnostics.drawMarkers", CVarType::Bool, CVarValue::Bool(false), {}, {}, CVarFlags::Archive, "", "test" }).IsStale());
+    const CVarApplyReport report = ApplyCVarDirectory(reg, user, SetBy::User, "user");   // no throw, no crash
+    CHECK(report.unknownKeys.empty());
+    reg.Publish();
+    CHECK(reg.Get(reg.Find("editor.legend"))->AsBool() == true);              // the torn file: defaults
+    CHECK(reg.Explain("editor.legend")->setBy == SetBy::Default);
+    CHECK(reg.Get(reg.Find("diagnostics.drawMarkers"))->AsBool() == true);    // the good file beside it still applies
+
+    REQUIRE(reg.Set(reg.Find("editor.legend"), CVarValue::Bool(false), SetBy::User) == SetResult::Applied);
+    reg.Publish();
+    WriteCVarArchive(reg, user);
+    CHECK(ReadText(user / "editor.json.bad") == R"({"legend": fal)");
+    const auto doc = nlohmann::json::parse(ReadText(user / "editor.json"));
+    CHECK(doc.at("legend") == false);
+    std::filesystem::remove_all(user);
+}
+
+TEST_CASE("cvar RevertLayer drops one rung everywhere and leaves the others", "[cvar]") {
+    CVarRegistry reg;
+    RegisterArchiveRoster(reg);
+    REQUIRE(reg.Set(reg.Find("editor.layered"), CVarValue::Int32(2), SetBy::Project) == SetResult::Applied);
+    REQUIRE(reg.Set(reg.Find("editor.layered"), CVarValue::Int32(5), SetBy::User) == SetResult::Applied);
+    REQUIRE(reg.Set(reg.Find("editor.legend"), CVarValue::Bool(false), SetBy::User) == SetResult::Applied);
+    reg.Publish();
+    reg.RevertLayer(SetBy::User);
+    reg.Publish();
+    CHECK(reg.Get(reg.Find("editor.layered"))->AsInt32() == 2);
+    CHECK(reg.Explain("editor.layered")->setBy == SetBy::Project);
+    CHECK(reg.Get(reg.Find("editor.legend"))->AsBool() == true);
+    CHECK(reg.Explain("editor.legend")->setBy == SetBy::Default);
 }
 
 TEST_CASE("command line set beats user and loses to code", "[cvar]") {

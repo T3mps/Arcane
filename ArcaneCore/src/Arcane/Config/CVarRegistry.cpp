@@ -345,6 +345,19 @@ namespace Arcane
         }
     }
 
+    void CVarRegistry::RevertLayer(SetBy by)
+    {
+        for (Slot& slot : m->slots)
+        {
+            if (!slot.alive) continue;
+            const auto before = slot.history.size();
+            std::erase_if(slot.history, [by](const CVarHistoryRecord& h) { return h.by == by; });
+            if (slot.history.size() != before) slot.dirty = true;
+            if (slot.history.empty())
+                slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
+        }
+    }
+
     void CVarRegistry::Publish()
     {
         if (m->publishing) return;

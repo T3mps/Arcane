@@ -206,6 +206,24 @@ namespace Arcane
         // reach here always just tore something down.
         void CloseProject();
 
+        // --- the user cvar archive (T3-D2) ---
+        // OpenProject reads the project's Saved/Config/ as the cvar User layer.
+        // A project's User layer leaves with it: CloseProject, and OpenProject
+        // replacing an open project (a switch), drop every SetBy::User record
+        // (CVarRegistry::RevertLayer) so the next project starts from its own
+        // file. With archiving ON (off by default) they first WRITE it back
+        // (WriteCVarArchive: Archive cvars the User rung holds, nothing else).
+        // The editor turns it on for a windowed session; ArcaneRuntime and
+        // ArcaneServer leave it off -- neither host sets
+        // the User rung, and a shipped game's settings belong in a per-user
+        // directory, not inside the project tree.
+        void SetUserCVarArchiving(bool enabled) noexcept;
+        // Write the open project's archive NOW (no layer is dropped). The
+        // editor calls it before unloading its game module (whose cvars would
+        // then be gone) and at exit. False when archiving is off or no project
+        // is open.
+        bool SaveUserCVars();
+
         // Register an editor-created asset file with the open project's registry
         // (Project::RegisterAsset). Idempotent. nullopt when no project is open or
         // the file lies outside every content root.

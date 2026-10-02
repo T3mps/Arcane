@@ -117,6 +117,12 @@ namespace Arcane
         // dirty. Config layers remain. Called when `cheats` publishes false.
         void RevertCheats();
 
+        // Drop every history record of rung `by` on every cvar and mark the
+        // touched ones dirty; the next Publish shows what the other rungs
+        // hold. Runtime drops a closing project's User layer this way, so the
+        // next project's archive cannot inherit it (T3-D2).
+        void RevertLayer(SetBy by);
+
         [[nodiscard]] std::optional<CVarExplain> Explain(std::string_view name) const;
         [[nodiscard]] std::vector<CVarListEntry> List() const;   // skips Hidden; skips Dev if compiled out
         [[nodiscard]] ExecResult Execute(std::string_view line, Permission permission,

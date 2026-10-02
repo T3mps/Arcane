@@ -1,4 +1,5 @@
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/Config.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Project/Project.hpp>
@@ -160,6 +161,72 @@ TEST_CASE("Runtime::OpenProject switches projects on re-open", "[project]")
     REQUIRE(rt.CurrentProject()->Manifest().name == "Beta");
 
     std::error_code ec; fs::remove_all(dir, ec);
+}
+
+// T3-D2: the user cvar archive. A project's User layer (Saved/Config/) leaves
+// with it; a host that archives writes it back on the switch and close, so a
+// value set in project A survives A -> B -> A and never leaks into B.
+TEST_CASE("Runtime user cvar archive: a project switch writes the OLD project's file, drops its User layer, and a reopen reads it back",
+          "[project][cvar]")
+{
+    const fs::path dir = MakeTempDir("cvar_archive");
+    REQUIRE(Arcane::Project::Create(dir / "A", "Alpha").has_value());
+    REQUIRE(Arcane::Project::Create(dir / "B", "Beta").has_value());
+
+    Arcane::CVarRegistry& cvars = Arcane::CVarRegistry::Get();
+    struct Unregister
+    {
+        ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("t3d2-runtime-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } unregister;
+    const Arcane::CVarHandle legend = cvars.Register(Arcane::CVarDesc{ "t3d2test.legend", Arcane::CVarType::Bool,
+        Arcane::CVarValue::Bool(true), {}, {}, Arcane::CVarFlags::Archive, "", "t3d2-runtime-test" });
+    const Arcane::CVarHandle plain = cvars.Register(Arcane::CVarDesc{ "t3d2test.plain", Arcane::CVarType::Int32,
+        Arcane::CVarValue::Int32(1), {}, {}, Arcane::CVarFlags::UserSettable, "", "t3d2-runtime-test" });
+    REQUIRE_FALSE(legend.IsStale());
+    REQUIRE_FALSE(plain.IsStale());
+    const fs::path fileA = dir / "A" / "Saved" / "Config" / "t3d2test.json";
+    const fs::path fileB = dir / "B" / "Saved" / "Config" / "t3d2test.json";
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    rt.SetUserCVarArchiving(true);
+    REQUIRE(rt.OpenProject(dir / "A"));
+    REQUIRE(cvars.Set(legend, Arcane::CVarValue::Bool(false), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+    REQUIRE(cvars.Set(plain, Arcane::CVarValue::Int32(7), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+    cvars.Publish();
+
+    REQUIRE(rt.OpenProject(dir / "B"));                       // the switch
+    REQUIRE(fs::exists(fileA));                               // the OLD project's file
+    {
+        std::ifstream in(fileA, std::ios::binary);
+        const auto doc = nlohmann::json::parse(in);
+        INFO(doc.dump());
+        CHECK(doc.size() == 1);                               // Archive only: t3d2test.plain stays out
+        CHECK(doc.at("legend") == false);
+    }
+    CHECK(cvars.Get(legend)->AsBool() == true);               // A's User layer left with A...
+    CHECK(cvars.Get(plain)->AsInt32() == 1);
+    rt.CloseProject();
+    CHECK_FALSE(fs::exists(fileB));                           // ...so B never saw a value to write
+
+    REQUIRE(rt.OpenProject(dir / "A"));                       // reopen: the file is the only source
+    CHECK(cvars.Get(legend)->AsBool() == false);
+    CHECK(cvars.Explain("t3d2test.legend")->setBy == Arcane::SetBy::User);
+
+    // A host that does not archive (ArcaneRuntime / ArcaneServer) reads the
+    // layer but never writes it.
+    rt.CloseProject();
+    std::error_code ec;
+    fs::remove(fileA, ec);
+    Arcane::Runtime reader(Arcane::Test::Process());
+    REQUIRE(reader.OpenProject(dir / "A"));
+    REQUIRE(cvars.Set(legend, Arcane::CVarValue::Bool(false), Arcane::SetBy::User, "editor") == Arcane::SetResult::Applied);
+    cvars.Publish();
+    CHECK_FALSE(reader.SaveUserCVars());
+    reader.CloseProject();
+    CHECK_FALSE(fs::exists(fileA));
+    CHECK(cvars.Get(legend)->AsBool() == true);               // the layer still leaves with the project
+
+    fs::remove_all(dir, ec);
 }
 
 // Task 9 (async-boot-corestages, project-switch overlay): the editor's
