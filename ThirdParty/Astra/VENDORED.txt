@@ -3,9 +3,9 @@ change them in the Astra repo and re-run scripts\sync-astra.ps1, or the next
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Astra
-commit  : 975cdb776361ebbb4b539a8cb3b52f5ef905ed6d
+commit  : 07430771054034cab12bdc74096373acb72051bb
 branch  : dev
-subject : feat(registry): GetInstanceId -- a per-construction id from a static atomic (ParallelCommandBuffer idiom); Load mints a fresh one
-synced  : 2026-10-01 05:13:17
+subject : feat(system): param systems take ordering traits (Before/After/AmbiguousWith via SystemTraits), are keyed by their own functor type (HasSystem/RemoveSystem/Before<Fn> work), and refuse access traits; absent-resource skip pinned to log once per disappearance
+synced  : 2026-10-02 06:38:40
 scope   : include/ only (Arcane compiles nothing else from this tree --
           see Arcane/premake5.lua IncludeDir["Astra"])
