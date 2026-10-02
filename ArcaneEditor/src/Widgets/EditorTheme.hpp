@@ -278,8 +278,9 @@ namespace Arcane::Editor
         c[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
         c[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
 
-        // The first of FOUR metrics this theme changes (FrameBorderSize,
-        // DockingNodeHasCloseButton, TabBarOverlineSize, DisabledAlpha). Default
+        // The first of FIVE metrics this theme changes (FrameBorderSize,
+        // DockingNodeHasCloseButton, TabBarOverlineSize, DisabledAlpha,
+        // TabRounding). Default
         // is 0 (imgui.cpp:1533): with no frame border a near-black well on a dark
         // panel has only its fill to separate it, and small fields lose their
         // edge entirely. One pixel of kBorder (darker than both) is the inset
@@ -309,5 +310,12 @@ namespace Arcane::Editor
         // kTextDim -- raising dim text alone would make the two indistinguishable.
         // At 0.45 disabled kText is #757575 (3.62:1), a step under dim text.
         style.DisabledAlpha = 0.45f;
+
+        // The fifth: TabRounding 5 -> 2 (user, 2026-10-02: "reduce the rounding
+        // on tabs"). ImGui's stock radius (imgui.cpp:1548) rounds a 2 px accent
+        // overline into a pill on short tabs; 2 px keeps a hint of a corner and
+        // reads closer to the near-square frames. ScaleAllSizes DPI-scales it
+        // (imgui.cpp:1631).
+        style.TabRounding = 2.0f;
     }
 }

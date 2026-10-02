@@ -31,6 +31,7 @@ TEST_CASE("EditorTheme: the selected-tab overline is the accent, 2 px, and 45% o
     CHECK(SameColor(s.Colors[ImGuiCol_TabDimmedSelectedOverline], Theme::WithAlpha(Theme::kAccent, 0.45f)));
     CHECK(s.Colors[ImGuiCol_TabDimmedSelectedOverline].w == 0.45f);
     CHECK(s.TabBarOverlineSize == 2.0f);
+    CHECK(s.TabRounding == 2.0f);   // user, 2026-10-02: less rounded tabs (ImGui default 5)
     // kSelection keeps the SELECTED things (s6.1): rows, text selection, docking preview.
     CHECK(SameColor(s.Colors[ImGuiCol_Header], Theme::kSelection));
 }
