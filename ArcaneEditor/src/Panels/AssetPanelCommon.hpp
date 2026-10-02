@@ -37,6 +37,8 @@ namespace Arcane::Editor
     // parameter, not the enumerators, so pulling in the model header for it
     // is not required.
     enum class CookState : std::uint8_t;
+    // Panels/CreateAssetDialog.hpp's create kind, by value only (CreatePrefillFor).
+    enum class CreateAssetKind : std::uint8_t;
     // Documents/DocumentHost.hpp -- forward-declared for OpenAssetRow below,
     // which only needs a reference to the type; the definition it calls into
     // (AssetPanelCommon.cpp) already includes the real header.
@@ -177,25 +179,31 @@ namespace Arcane::Editor
     // pin-drag) can still gate itself the same way without a third copy
     // of this list.
     //
-    // `instanceParent` is the one prefill that flows through here (T3-D4,
-    // Unreal parity): "Material Instance..." raised FROM a material -- a
-    // material row's own Create submenu, or the toolbar's `+ Create` while
-    // a material is the selection -- names that material as the parent
-    // (`createPrefillParent`). Nil from anywhere else (InstanceParentFor),
-    // and then the dialog opens with no parent, as before. Nothing else
-    // prefills: a texture row's "Create -> Sprite..." still opens with an
-    // empty texture field (the row's dedicated "Create Sprite" quick action
-    // covers that case, mint-or-reuse and open included).
+    // `subject` is the asset the menu was raised FROM (Unreal parity): a
+    // row's own Create submenu passes that row, the toolbar's `+ Create` the
+    // selection, empty space null. "Material Instance..." raised from a
+    // material names it as the parent (T3-D4); "Sprite..." raised from a
+    // texture names it as the source texture (T3-D5). Both ride
+    // `createPrefillParent` (CreatePrefillFor); from anything else it is nil
+    // and the dialog opens with an empty picker. No default: every producer
+    // states its subject.
     void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled,
-                               const Arcane::Guid& instanceParent = {});
+                               const AssetPanelEntry* subject);
     // `anchor` = the "+ Create" button (LastItemAnchor right after it): the
     // menu opens under it (node-page phase s4.4).
     void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor,
-                        const Arcane::Guid& instanceParent = {});
+                        const AssetPanelEntry* subject);
     // The material a "Material Instance..." raised from `e` derives from:
     // `e` itself when it is a material (a base or an instance -- an
     // instance's own instance is a valid chain), nil otherwise or for null.
     [[nodiscard]] Arcane::Guid InstanceParentFor(const AssetPanelEntry* e);
+    // The texture a "Sprite..." raised from `e` is cut from: `e` itself when
+    // it is a texture, nil otherwise or for null (T3-D5).
+    [[nodiscard]] Arcane::Guid SpriteTextureFor(const AssetPanelEntry* e);
+    // A create of `kind` raised from `subject`: the one asset-valued prefill
+    // that kind takes (CreateAssetRequest::prefillParent) -- a Material
+    // Instance's parent, a Sprite's texture -- nil for every other kind.
+    [[nodiscard]] Arcane::Guid CreatePrefillFor(CreateAssetKind kind, const AssetPanelEntry* subject);
 
     // Panel-split spec s7.2 (Task 3): today's Reveal sequence (the
     // Unreferenced card's own click handler, pre-split), extracted to a

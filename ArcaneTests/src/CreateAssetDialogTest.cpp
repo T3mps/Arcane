@@ -322,7 +322,7 @@ TEST_CASE("MakeCreateDialogState: an instance request from a material picks the 
 
     SECTION("from a material")
     {
-        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, parent }, model);
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, parent }, model, dir);
         CHECK(st.open);
         CHECK(st.parent == parent);
         CHECK_FALSE(st.pickerOpen);
@@ -331,7 +331,7 @@ TEST_CASE("MakeCreateDialogState: an instance request from a material picks the 
     }
     SECTION("from empty space: no parent, the picker open, no name")
     {
-        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, {} }, model);
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, {} }, model, dir);
         CHECK_FALSE(st.parent.IsValid());
         CHECK(st.pickerOpen);
         CHECK(st.name[0] == '\0');
@@ -339,13 +339,13 @@ TEST_CASE("MakeCreateDialogState: an instance request from a material picks the 
     SECTION("a parent the model does not know is kept but names nothing")
     {
         const Arcane::Guid stale = *Arcane::Guid::FromString("eeee0000-0000-4000-8000-0000000000ff");
-        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, stale }, model);
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, stale }, model, dir);
         CHECK(st.parent == stale);
         CHECK(st.name[0] == '\0');
     }
     SECTION("a sprite's prefill lands in the texture field, never the parent, and names nothing")
     {
-        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::Sprite, texture }, model);
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::Sprite, texture }, model, dir);
         CHECK(st.texture == texture);
         CHECK_FALSE(st.parent.IsValid());
         CHECK_FALSE(st.pickerOpen);
@@ -355,7 +355,52 @@ TEST_CASE("MakeCreateDialogState: an instance request from a material picks the 
     {
         CreateAssetRequest mesh{ CreateAssetKind::Material, {} };
         mesh.prefillSurface = static_cast<int>(Arcane::MaterialSurface::Mesh);
-        CHECK(MakeCreateDialogState(mesh, model).surface == MaterialSurfaceComboIndex(Arcane::MaterialSurface::Mesh));
-        CHECK(MakeCreateDialogState({ CreateAssetKind::Material, {} }, model).surface == kMaterialSurfaceDefaultIndex);
+        CHECK(MakeCreateDialogState(mesh, model, dir).surface == MaterialSurfaceComboIndex(Arcane::MaterialSurface::Mesh));
+        CHECK(MakeCreateDialogState({ CreateAssetKind::Material, {} }, model, dir).surface == kMaterialSurfaceDefaultIndex);
     }
+}
+
+// T3-D5: the default "<parent>_Inst" is free on disk or it is suffixed --
+// "_Inst2", "_Inst3", ... -- in the folder the instance will land in (the
+// parent's own), so the dialog never opens on "already exists".
+TEST_CASE("MakeCreateDialogState: a colliding <parent>_Inst takes the next free _Inst<N> in the parent's folder",
+          "[editor][create]")
+{
+    const fs::path root = FreshDir("make_state_unique");
+    const fs::path folder = root / "Content" / "materials" / "sub";
+    fs::create_directories(folder);
+    std::ofstream(folder / "logo.arcmat", std::ios::binary)
+        << R"({"id":"eeee0000-0000-4000-8000-000000000021","type":"material","kind":"sprite"})";
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(root / "Content", "game") == 1);
+    AssetPanelProviders providers;
+    providers.refsFor = [](const Arcane::Guid&) -> std::optional<std::vector<Arcane::AssetRef>>
+    { return std::vector<Arcane::AssetRef>{}; };
+    providers.cookStateFor = [](const Arcane::Guid&) { return CookState::Cooked; };
+    providers.surfaceFor = [](const Arcane::Guid&) -> std::optional<Arcane::MaterialSurface> { return std::nullopt; };
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    const Arcane::Guid parent = *Arcane::Guid::FromString("eeee0000-0000-4000-8000-000000000021");
+    REQUIRE(model.Find(parent) != nullptr);
+    const CreateAssetRequest request{ CreateAssetKind::MaterialInstance, parent };
+
+    CreateDialogState st = MakeCreateDialogState(request, model, root);
+    CHECK(st.defaultFolder == std::optional<std::string>("materials/sub"));
+    CHECK(std::string(st.name) == "logo_Inst");
+
+    std::ofstream(folder / "logo_Inst.arcmat", std::ios::binary) << "{}";
+    st = MakeCreateDialogState(request, model, root);
+    CHECK(std::string(st.name) == "logo_Inst2");
+    CHECK(ValidateCreateName(st.name, folder, ".arcmat").ok);
+
+    std::ofstream(folder / "logo_Inst2.arcmat", std::ios::binary) << "{}";
+    CHECK(std::string(MakeCreateDialogState(request, model, root).name) == "logo_Inst3");
+
+    // Only the parent's folder counts: the same name elsewhere collides with nothing.
+    fs::create_directories(root / "Content" / "materials");
+    std::ofstream(root / "Content" / "materials" / "logo_Inst3.arcmat", std::ios::binary) << "{}";
+    CHECK(std::string(MakeCreateDialogState(request, model, root).name) == "logo_Inst3");
+    std::error_code error;
+    fs::remove_all(root, error);
 }

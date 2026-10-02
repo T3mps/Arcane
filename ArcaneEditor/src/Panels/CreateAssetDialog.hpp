@@ -412,6 +412,11 @@ namespace Arcane::Editor
         // read as "just opened" and silently re-seed folderIndex over
         // whatever the user had already picked in the Location combo.
         bool seeded = false;
+        // The Location the dialog seeds on open, relative to the kind's root
+        // ("materials", "" = the root itself); nullopt = the kind's default
+        // folder. Set by MakeCreateDialogState for an instance created FROM a
+        // project material: it lands beside its parent (T3-D5, Unreal parity).
+        std::optional<std::string> defaultFolder;
     };
 
     // What a completed dialog hands back. `folder` is relative to the kind's
@@ -450,9 +455,16 @@ namespace Arcane::Editor
     //     an instance's parent, a sprite's texture. Its picker starts
     //     expanded only when there is nothing prefilled to show.
     //   * A MaterialInstance whose parent the model knows is named
-    //     "<parent>_Inst" (Unreal's own default for a new instance, T3-D4).
+    //     "<parent>_Inst" (Unreal's own default for a new instance, T3-D4),
+    //     suffixed "_Inst2", "_Inst3", ... while that file already exists, so
+    //     the dialog never opens on "already exists" (T3-D5). Its Location
+    //     defaults to the parent's own folder when the parent lives under the
+    //     project's Content/; an engine or plugin parent keeps materials/.
+    // `projectRoot` is the open project's root (the dialog's own
+    // `project.Root()`): the name's uniqueness is asked of the files there.
     [[nodiscard]] CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
-                                                          const AssetPanelModel& model);
+                                                          const AssetPanelModel& model,
+                                                          const std::filesystem::path& projectRoot);
 
     // Draw the modal for `st.request.kind`. Returns a completed result the
     // frame Create (or Sprite's "Open existing") was clicked, nullopt

@@ -47,8 +47,10 @@ namespace
     const Guid kBase    = *Guid::FromString("eeee0000-0000-4000-8000-000000000001");
     const Guid kInst    = *Guid::FromString("eeee0000-0000-4000-8000-000000000002");
     const Guid kSprite  = *Guid::FromString("eeee0000-0000-4000-8000-000000000003");
+    const Guid kProp    = *Guid::FromString("eeee0000-0000-4000-8000-000000000004");   // a material outside materials/
 
     constexpr const char* kInstanceItem = ICON_LC_LAYERS " Material Instance...";
+    constexpr const char* kSpriteItem   = ICON_LC_STICKER " Sprite...";
 
     // The window an ImGui popup / menu draws into: BeginPopupEx names a popup
     // "##Popup_%08x" (its id), BeginMenu a child menu "<label>###Menu_%02d" (its
@@ -71,6 +73,7 @@ namespace
         ImGuiContext* prev = nullptr;
         ImGuiContext* ctx = nullptr;
         ImGuiID activate = 0;
+        Guid texture;   // textures/hero.png (its guid is minted by the scan)
 
         explicit CreateHarness(const char* name) : root(fs::temp_directory_path() / name)
         {
@@ -84,6 +87,9 @@ namespace
                       R"({"id":")" + kInst.ToString() + R"(","type":"material","parent":")" + kBase.ToString() + R"("})");
             WriteFile(content / "sprites" / "hero.arcsprite",
                       R"({"id":")" + kSprite.ToString() + R"(","type":"sprite","name":"Hero"})");
+            WriteFile(content / "props" / "crate.arcmat",
+                      R"({"id":")" + kProp.ToString() + R"(","type":"material","kind":"sprite"})");
+            WriteFile(content / "textures" / "hero.png", "not a real png");
             project = Project::Open(root);
             REQUIRE(project.has_value());
             AssetPanelProviders p;
@@ -96,6 +102,11 @@ namespace
             REQUIRE(model.Find(kBase)->kind == AssetKind::Material);
             REQUIRE(model.Find(kInst) != nullptr);
             REQUIRE(model.Find(kSprite) != nullptr);
+            REQUIRE(model.Find(kProp) != nullptr);
+            for (const auto& [guid, entry] : model.Entries())
+                if (entry.kind == AssetKind::Texture)
+                    texture = guid;
+            REQUIRE(texture.IsValid());
 
             services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
             services.browserOpen = services.graphOpen = true;
@@ -131,7 +142,7 @@ namespace
 
         // The asset menu body for `guid`, in a popup that is reopened
         // whenever a click has closed it. Returns what it raised.
-        AssetPanelActions RowMenuCreateInstance(const Guid& guid)
+        AssetPanelActions RowMenuCreateInstance(const Guid& guid, const char* item = kInstanceItem)
         {
             const AssetPanelEntry* e = model.Find(guid);
             REQUIRE(e != nullptr);
@@ -159,13 +170,13 @@ namespace
             for (int i = 0; i < 3; ++i) Frame(menu);
             const ImGuiID submenuId = WindowIdNamed("###Menu_00");
             REQUIRE(submenuId != 0);
-            activate = ImHashStr(kInstanceItem, 0, submenuId);
+            activate = ImHashStr(item, 0, submenuId);
             for (int i = 0; i < 2; ++i) Frame(menu);
             return raised;
         }
 
         // The Asset Browser's toolbar `+ Create` -> "Material Instance...".
-        AssetPanelActions ToolbarCreateInstance()
+        AssetPanelActions ToolbarCreateInstance(const char* item = kInstanceItem)
         {
             AssetPanelActions raised;
             const auto panel = [&]
@@ -185,9 +196,28 @@ namespace
             std::snprintf(popupName, sizeof(popupName), "##Popup_%08x", ImHashStr("##createmenu", 0, browserId));
             const ImGuiID popupId = WindowIdNamed(popupName);
             REQUIRE(popupId != 0);
-            activate = ImHashStr(kInstanceItem, 0, popupId);
+            activate = ImHashStr(item, 0, popupId);
             for (int i = 0; i < 2; ++i) Frame(panel);
             return raised;
+        }
+
+        // The dialog opened for `request` exactly as BeginCreateAsset opens it,
+        // then its Create button pressed: what it hands back.
+        std::optional<CreateAssetResult> CreateFromDialog(const CreateAssetRequest& request)
+        {
+            CreateDialogState st = MakeCreateDialogState(request, model, project->Root());
+            std::optional<CreateAssetResult> result;
+            const auto dialog = [&]
+            {
+                if (auto r = DrawCreateAssetDialog(st, model, *project))
+                    result = std::move(r);
+            };
+            for (int i = 0; i < 3; ++i) Frame(dialog);
+            const ImGuiID dialogId = WindowIdNamed(CreateKindTitle(request.kind));
+            REQUIRE(dialogId != 0);
+            activate = ImHashStr("Create", 0, dialogId);
+            for (int i = 0; i < 2; ++i) Frame(dialog);
+            return result;
         }
     };
 }
@@ -247,4 +277,78 @@ TEST_CASE("InstanceParentFor: a material (base or instance) is its own parent pi
     CHECK(InstanceParentFor(h.model.Find(kInst)) == kInst);
     CHECK_FALSE(InstanceParentFor(h.model.Find(kSprite)).IsValid());
     CHECK_FALSE(InstanceParentFor(nullptr).IsValid());
+}
+
+// T3-D5 (Unreal parity, the T3-D4 follow-ups): a Sprite raised FROM a texture
+// prefills that texture; a Material Instance raised from a material lands in
+// its parent's folder.
+TEST_CASE("Create > Sprite from a texture row's menu, or the toolbar with a texture selected, prefills that texture",
+          "[editor][create]")
+{
+    CreateHarness h("arcane_create_sprite_from_texture_test");
+    SECTION("the texture row's Create submenu")
+    {
+        const AssetPanelActions a = h.RowMenuCreateInstance(h.texture, kSpriteItem);
+        CHECK(a.requestCreateKind == static_cast<int>(CreateAssetKind::Sprite));
+        CHECK(a.createPrefillParent == h.texture);
+    }
+    SECTION("a material row's Sprite... has no texture to prefill")
+    {
+        const AssetPanelActions a = h.RowMenuCreateInstance(kBase, kSpriteItem);
+        CHECK(a.requestCreateKind == static_cast<int>(CreateAssetKind::Sprite));
+        CHECK_FALSE(a.createPrefillParent.IsValid());
+    }
+    SECTION("the toolbar's + Create with the texture selected")
+    {
+        h.model.Select(h.texture);
+        const AssetPanelActions a = h.ToolbarCreateInstance(kSpriteItem);
+        CHECK(a.requestCreateKind == static_cast<int>(CreateAssetKind::Sprite));
+        CHECK(a.createPrefillParent == h.texture);
+    }
+    SECTION("a texture row's Material Instance... stays parentless")
+    {
+        const AssetPanelActions a = h.RowMenuCreateInstance(h.texture);
+        CHECK(a.requestCreateKind == static_cast<int>(CreateAssetKind::MaterialInstance));
+        CHECK_FALSE(a.createPrefillParent.IsValid());
+    }
+}
+
+TEST_CASE("CreatePrefillFor: an instance takes a material, a sprite a texture, every other kind nothing", "[editor][create]")
+{
+    CreateHarness h("arcane_create_prefillfor_test");
+    const AssetPanelEntry* material = h.model.Find(kBase);
+    const AssetPanelEntry* texture = h.model.Find(h.texture);
+    CHECK(SpriteTextureFor(texture) == h.texture);
+    CHECK_FALSE(SpriteTextureFor(material).IsValid());
+    CHECK_FALSE(SpriteTextureFor(nullptr).IsValid());
+    CHECK(CreatePrefillFor(CreateAssetKind::MaterialInstance, material) == kBase);
+    CHECK(CreatePrefillFor(CreateAssetKind::Sprite, texture) == h.texture);
+    CHECK_FALSE(CreatePrefillFor(CreateAssetKind::Sprite, material).IsValid());
+    CHECK_FALSE(CreatePrefillFor(CreateAssetKind::MaterialInstance, texture).IsValid());
+    CHECK_FALSE(CreatePrefillFor(CreateAssetKind::Material, material).IsValid());
+    CHECK_FALSE(CreatePrefillFor(CreateAssetKind::Scene, texture).IsValid());
+}
+
+TEST_CASE("Create Material Instance from a material: the Location defaults to the parent's folder", "[editor][create]")
+{
+    CreateHarness h("arcane_create_instance_location_test");
+    SECTION("a parent under props/ lands in props/, named <parent>_Inst")
+    {
+        const auto r = h.CreateFromDialog({ CreateAssetKind::MaterialInstance, kProp });
+        REQUIRE(r.has_value());
+        CHECK(r->folder == "props");
+        CHECK(r->name == "crate_Inst");
+        CHECK(r->parent == kProp);
+    }
+    SECTION("no parent: the kind's own default folder, as before")
+    {
+        CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, {} }, h.model, h.project->Root());
+        CHECK_FALSE(st.defaultFolder.has_value());
+    }
+    SECTION("a Sprite from a texture opens with the texture and the picker closed")
+    {
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::Sprite, h.texture }, h.model, h.project->Root());
+        CHECK(st.texture == h.texture);
+        CHECK_FALSE(st.pickerOpen);
+    }
 }

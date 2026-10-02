@@ -2697,13 +2697,12 @@ namespace Arcane::Editor
             // rides the SAME request; -1 when the entry carried none.
             request.prefillMeshSource = menuReq.requestMeshSource;
             // The Assets menu acts on the asset selection (Show in Explorer
-            // and Copy Path above do too), so its "Material Instance..."
-            // derives from a selected material exactly as the Asset
-            // Browser's `+ Create` does (T3-D4).
-            if (request.kind == Arcane::Editor::CreateAssetKind::MaterialInstance &&
-                m_assetModel.selected.IsValid())
-                request.prefillParent =
-                    Arcane::Editor::InstanceParentFor(m_assetModel.Find(m_assetModel.selected));
+            // and Copy Path above do too), so its "Material Instance..." and
+            // "Sprite..." prefill from a selected material / texture exactly
+            // as the Asset Browser's `+ Create` does (T3-D4, T3-D5).
+            if (m_assetModel.selected.IsValid())
+                request.prefillParent = Arcane::Editor::CreatePrefillFor(
+                    request.kind, m_assetModel.Find(m_assetModel.selected));
             BeginCreateAsset(request);
         }
         if (menuReq.openMaterial)
@@ -2996,7 +2995,7 @@ namespace Arcane::Editor
         // half-typed name or a stale parent for the next one to inherit),
         // seeded from the request by the dialog's own unit, which is where
         // the prefill rules live and are tested (T3-D4).
-        m_createDialog = Arcane::Editor::MakeCreateDialogState(request, m_assetModel);
+        m_createDialog = Arcane::Editor::MakeCreateDialogState(request, m_assetModel, project->Root());
         // A C++ Class's Location combo defaults to the game module's OWN
         // directory (CppClassDefaultFolder(manifest.sourceDir)), not Source/
         // itself -- the source:// mount stays Source/ (plan ruling S2); only

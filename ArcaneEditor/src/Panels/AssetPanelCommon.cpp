@@ -53,22 +53,36 @@ namespace Arcane::Editor
         return e && e->kind == AssetKind::Material ? e->guid : Arcane::Guid{};
     }
 
-    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled, const Arcane::Guid& instanceParent)
+    Arcane::Guid SpriteTextureFor(const AssetPanelEntry* e)
+    {
+        return e && e->kind == AssetKind::Texture ? e->guid : Arcane::Guid{};
+    }
+
+    Arcane::Guid CreatePrefillFor(CreateAssetKind kind, const AssetPanelEntry* subject)
+    {
+        switch (kind)
+        {
+            case CreateAssetKind::MaterialInstance: return InstanceParentFor(subject);
+            case CreateAssetKind::Sprite:           return SpriteTextureFor(subject);
+            default:                                return {};
+        }
+    }
+
+    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled, const AssetPanelEntry* subject)
     {
         ImGui::BeginDisabled(!enabled);
+        // Every entry is the same request; the kinds that take an asset
+        // prefill it from the menu's subject (see the header).
         const auto entry = [&](const char* label, CreateAssetKind kind)
         {
             if (ImGui::MenuItem(label))
-                actions.requestCreateKind = static_cast<int>(kind);
+            {
+                actions.requestCreateKind   = static_cast<int>(kind);
+                actions.createPrefillParent = CreatePrefillFor(kind, subject);
+            }
         };
-        entry(ICON_LC_PALETTE " Material...",         CreateAssetKind::Material);
-        // The same request as every entry here, plus the parent when the
-        // menu was raised from a material (see the header).
-        if (ImGui::MenuItem(ICON_LC_LAYERS " Material Instance..."))
-        {
-            actions.requestCreateKind   = static_cast<int>(CreateAssetKind::MaterialInstance);
-            actions.createPrefillParent = instanceParent;
-        }
+        entry(ICON_LC_PALETTE " Material...",          CreateAssetKind::Material);
+        entry(ICON_LC_LAYERS  " Material Instance...", CreateAssetKind::MaterialInstance);
         ImGui::Separator();
         // F4 plan 1 Task 11 (spec s8): Mesh is a SUBMENU of the five
         // primitives, each entry the same request with its MeshSource preset
@@ -99,11 +113,11 @@ namespace Arcane::Editor
     }
 
     void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor,
-                        const Arcane::Guid& instanceParent)
+                        const AssetPanelEntry* subject)
     {
         if (!BeginPopupBelow("##createmenu", anchor))
             return;
-        DrawCreateMenuEntries(actions, /*enabled=*/true, instanceParent);
+        DrawCreateMenuEntries(actions, /*enabled=*/true, subject);
         ImGui::EndPopup();
     }
 
@@ -344,9 +358,10 @@ namespace Arcane::Editor
         if (ImGui::BeginMenu("Create"))
         {
             // Live since Task 13 -- see DrawCreateMenuEntries's own
-            // comment on the `enabled` parameter. Raised from a material,
-            // "Material Instance..." names it as the parent (T3-D4).
-            DrawCreateMenuEntries(actions, /*enabled=*/true, InstanceParentFor(&e));
+            // comment on the `enabled` parameter. This row is the menu's
+            // subject: a material prefills "Material Instance..." (T3-D4), a
+            // texture "Sprite..." (T3-D5).
+            DrawCreateMenuEntries(actions, /*enabled=*/true, &e);
             ImGui::EndMenu();
         }
         ImGui::Separator();

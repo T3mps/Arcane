@@ -526,7 +526,8 @@ namespace Arcane::Editor
     }
 
     CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
-                                            const AssetPanelModel& model)
+                                            const AssetPanelModel& model,
+                                            const std::filesystem::path& projectRoot)
     {
         CreateDialogState st{};
         st.request = request;
@@ -556,11 +557,31 @@ namespace Arcane::Editor
                 // without picking one.
                 st.pickerOpen = !request.prefillParent.IsValid();
                 // Created FROM a material: named after it, as Unreal names a
-                // new instance "<Parent>_Inst". The name stays editable and is
-                // validated like any typed one.
+                // new instance "<Parent>_Inst", and placed beside it. The name
+                // stays editable and is validated like any typed one.
                 if (const AssetPanelEntry* parent =
                         request.prefillParent.IsValid() ? model.Find(request.prefillParent) : nullptr)
-                    std::snprintf(st.name, sizeof(st.name), "%s_Inst", parent->name.c_str());
+                {
+                    const char* root = CreateKindRoot(request.kind);
+                    // Only a folder under the project's own Content/ can take
+                    // the file (BuildFolderChoices' one-mount rule); a parent
+                    // elsewhere keeps the kind's default folder.
+                    if (const auto rel = RelativeDirOfFolderKey(parent->folder, root))
+                        st.defaultFolder = MakeFolderChoice(*rel, root).relative;
+                    const std::string folder = st.defaultFolder.value_or(
+                        DefaultRelativeFolder(request.kind, request.cppDefaultFolder));
+                    const std::filesystem::path dir =
+                        folder.empty() ? projectRoot / root : projectRoot / root / folder;
+                    // "_Inst", then "_Inst2", "_Inst3", ... -- the first stem
+                    // with no file yet, the same question ValidateCreateName's
+                    // uniqueness rule asks.
+                    const std::string stem = parent->name + "_Inst";
+                    std::string name = stem;
+                    std::error_code ec;
+                    for (int n = 2; std::filesystem::exists(dir / (name + CreateKindExtension(request.kind)), ec); ++n)
+                        name = stem + std::to_string(n);
+                    std::snprintf(st.name, sizeof(st.name), "%s", name.c_str());
+                }
                 break;
             case CreateAssetKind::Sprite:
                 st.texture = request.prefillParent;
@@ -600,7 +621,8 @@ namespace Arcane::Editor
             ImGui::OpenPopup(title);
         if (!st.seeded)
         {
-            st.folderIndex = IndexOfRelativeFolder(folders, DefaultRelativeFolder(st.request.kind, st.request.cppDefaultFolder));
+            st.folderIndex = IndexOfRelativeFolder(
+                folders, st.defaultFolder.value_or(DefaultRelativeFolder(st.request.kind, st.request.cppDefaultFolder)));
             st.seeded = true;
         }
 
