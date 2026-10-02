@@ -1219,6 +1219,31 @@ namespace Arcane::Editor
             // the same gate on its own side, not a filter downstream of it.
             return Arcane::Editor::CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g, kind));
         };
+        // T5 s7.8: every directory under Content/ with no registered game://
+        // asset beneath it, as an unqualified group key ("materials/rocks/").
+        // Parse-free (a directory walk + mount-path prefixes); the model
+        // calls it only on MarkAllDirty rebuilds.
+        p.emptyFolders = [this]() -> std::vector<std::string>
+        {
+            std::vector<std::string> out, used;
+            const Arcane::Project* pr = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            if (!pr)
+                return out;
+            const std::filesystem::path content = pr->Root() / "Content";
+            for (const auto& [g, mp] : pr->Registry().All())
+                if (mp.rfind("game://", 0) == 0)
+                    used.push_back(mp.substr(7));
+            std::error_code ec;
+            for (auto it = std::filesystem::recursive_directory_iterator(content, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+            {
+                if (!it->is_directory(ec))
+                    continue;
+                const std::string key = std::filesystem::relative(it->path(), content, ec).generic_string() + "/";
+                if (std::none_of(used.begin(), used.end(), [&](const std::string& rel) { return rel.rfind(key, 0) == 0; }))
+                    out.push_back(key);
+            }
+            return out;
+        };
         return p;
     }
 

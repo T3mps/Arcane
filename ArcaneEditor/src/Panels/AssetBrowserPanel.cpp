@@ -429,14 +429,18 @@ namespace Arcane::Editor
             // plainly is not (the very rows under it prove that). Suppressed
             // for groupCount == 0 only -- a real, populated group's count
             // still always shows, including a single-item "1".
+            constexpr float kGroupCountGap = 6.0f;
             if (row.groupCount > 0)
             {
-                constexpr float kGroupCountGap = 6.0f;
                 char countBuf[16];
                 std::snprintf(countBuf, sizeof(countBuf), "%d", row.groupCount);
                 dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY),
                            ImGui::GetColorU32(ImGuiCol_TextDisabled), countBuf);
             }
+            // T5 s7.8: an empty folder (no asset beneath it) has no count; it
+            // says so, dim, in the count's place.
+            if (row.empty)
+                dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), "(empty)");
 
             ImGui::PopID();
         }

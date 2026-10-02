@@ -430,6 +430,7 @@ namespace Arcane::Editor
         std::function<std::optional<Arcane::MaterialSurface>(const Arcane::Guid&)> surfaceFor;
         std::function<std::optional<std::vector<Arcane::AssetRef>>(const Arcane::Guid&)> refsFor;
         std::function<CookState(const Arcane::Guid&)> cookStateFor;
+        std::function<std::vector<std::string>()> emptyFolders;   // T5 s7.8: game keys under Content/ with no registered asset
     };
 
     // One registry entry's panel-facing view: classification, folder grouping,
@@ -505,6 +506,7 @@ namespace Arcane::Editor
                                    // group's depth), so the panel can compute the 20px/
                                    // level indent without re-deriving it from the guid.
         int          groupCount = 0;
+        bool         empty = false;   // Type::Group ONLY (T5 s7.8): an emptyFolders key -- drawn with a dim "(empty)"
         Arcane::Guid guid;        // Asset/Child
     };
 
@@ -701,6 +703,10 @@ namespace Arcane::Editor
         { return m_entries; }
         [[nodiscard]] int  ShownAssetCount() const { return m_shownAssetCount; }  // "X of N shown"
         [[nodiscard]] bool Filtered() const;             // search or kind filter active
+        // T5 s7.8: the providers' emptyFolders answer (game group keys,
+        // "materials/rocks/"), refreshed only on MarkAllDirty rebuilds. Rows
+        // carry them only while unfiltered; Location choices always do.
+        [[nodiscard]] const std::vector<std::string>& EmptyFolders() const { return m_emptyFolders; }
 
         // The live reference topology behind `unused` (Plan 2 Task 4), fed by
         // RebuildIfDirty from the very same refsFor answers each rebuilt entry
@@ -790,6 +796,7 @@ namespace Arcane::Editor
 
         std::vector<AssetPanelRow> m_rows;
         std::vector<RailEntry>     m_rail;
+        std::vector<std::string>   m_emptyFolders;   // T5 s7.8: see EmptyFolders()
         int m_shownAssetCount = 0;
     };
 

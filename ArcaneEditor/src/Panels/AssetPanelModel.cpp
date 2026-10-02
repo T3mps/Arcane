@@ -157,6 +157,7 @@ namespace Arcane::Editor
             m_allDirty = false;
             m_rows.clear();
             m_rail.clear();
+            m_emptyFolders.clear();
             m_shownAssetCount = 0;
             m_rowsDirty = false;
             // Plan 3 Task 3: the entries + index the Graph lens projects from
@@ -300,6 +301,9 @@ namespace Arcane::Editor
 
         if (m_allDirty)
         {
+            // T5 s7.8: the empty-folder walk is parse-free and runs only on
+            // MarkAllDirty rebuilds, never per-guid ones.
+            m_emptyFolders = p.emptyFolders ? p.emptyFolders() : std::vector<std::string>{};
             // A full rebuild re-walks every asset, so the index is rebuilt
             // from scratch rather than incrementally patched -- this is also
             // what drops tombstones for targets nothing points at any more.
@@ -579,6 +583,19 @@ namespace Arcane::Editor
                 parent = GroupParentOf(parent);
             }
         }
+        // T5 s7.8: an empty folder (no registered asset beneath it) gets its
+        // own group row plus its ancestor bridges, so it is a drop target and
+        // a New Folder parent. Unfiltered only: a search or kind filter shows
+        // matches, and an empty folder never matches anything.
+        std::set<std::string> emptyKeys;
+        if (!Filtered())
+            for (const std::string& key : m_emptyFolders)
+            {
+                emptyKeys.insert(key);
+                renderFolders.insert(key);
+                for (std::string up = GroupParentOf(key); !up.empty(); up = GroupParentOf(up))
+                    renderFolders.insert(up);
+            }
 
         // Iterates sorted under GroupKeyLess -- the same valid-preorder-per-
         // mount property byFolder relies on above, PLUS every mount's own
@@ -612,6 +629,7 @@ namespace Arcane::Editor
             group.groupLabel = GroupLabelOf(folder);      // leaf segment only
             group.groupDepth = depth;
             group.groupCount = ownCount;
+            group.empty = emptyKeys.count(folder) > 0;
             m_rows.push_back(std::move(group));
 
             // This folder's OWN closed flag gates its OWN content (its direct
@@ -746,6 +764,7 @@ namespace Arcane::Editor
         m_allDirty = true;
         m_rows.clear();
         m_rail.clear();
+        m_emptyFolders.clear();
         m_shownAssetCount = 0;
         m_rowsDirty = true;
         m_search.clear();

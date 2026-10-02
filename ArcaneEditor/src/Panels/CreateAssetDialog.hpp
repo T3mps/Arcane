@@ -35,8 +35,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Arcane { class Project; }
 
@@ -497,6 +499,114 @@ namespace Arcane::Editor
         Arcane::Guid openExisting;
     };
 
+    // ---- Location-combo folder choices (T5 s7.8: hoisted out of
+    // CreateAssetDialog.cpp's anonymous namespace verbatim, so the Move to...
+    // modal and the tests share them) ----
+
+    // One entry in the Location combo. `display` is what the combo shows
+    // ("Content/materials"); `relative` is what CreateAssetResult carries
+    // ("materials", or "" for Content/ itself), which the dispatcher joins
+    // onto the project's content root.
+    struct FolderChoice
+    {
+        std::string display;
+        std::string relative;
+    };
+
+    // The model's folder strings are mount-path directories with a
+    // trailing slash ("materials/"), and root-level assets fold into the
+    // synthetic bucket "Content/" (MakeBaseEntry's own comment). Both
+    // shapes normalise to the same pair here. `root` is the kind's
+    // CreateKindRoot ("Content" / "Source"): the display is "<root>/rel".
+    inline FolderChoice MakeFolderChoice(const std::string& relDir, const char* root)
+    {
+        std::string rel = relDir;
+        while (!rel.empty() && rel.back() == '/')
+            rel.pop_back();
+        if (rel.empty())
+            return { root, "" };   // the root itself names no subdirectory
+        return { std::string(root) + "/" + rel, rel };
+    }
+
+    // A model folder KEY -> the directory relative to its mount root, or
+    // nullopt when the key belongs to another mount. Two key shapes
+    // (AssetPanelEntry::folder's own doc): the game mount is UNQUALIFIED
+    // ("Content/" is its root, "materials/" nested); every other mount is
+    // QUALIFIED ("source://" is its root, "source://combat/" nested).
+    inline std::optional<std::string> RelativeDirOfFolderKey(const std::string& key, const char* root)
+    {
+        const bool wantSource = std::string_view(root) == "Source";
+        if (const std::size_t sep = key.find("://"); sep != std::string::npos)
+        {
+            if (!wantSource || key.substr(0, sep) != "source")
+                return std::nullopt;
+            return key.substr(sep + 3);   // "" for the root, "combat/" nested
+        }
+        if (wantSource)
+            return std::nullopt;
+        return key == "Content/" ? std::string() : key;
+    }
+
+    // Distinct create-able folders: every directory the project's OWN
+    // files already use under the kind's root, plus the kind's default,
+    // plus the root itself.
+    //
+    // ONE mount only -- "game://" for every asset kind, "source://" for
+    // CppClass. The model groups folders across every mount (an engine://
+    // and a game:// "materials/" share one Browse group), but a created
+    // file can only land -- and only register + resolve by GUID -- under
+    // the project's own root for that kind (Project.cpp mounts "game" at
+    // root/Content and "source" at root/Source). Offering an engine or
+    // plugin folder here would offer a target RegisterCreatedAsset refuses.
+    inline std::vector<FolderChoice> BuildFolderChoices(const AssetPanelModel& model,
+                                                        CreateAssetKind kind,
+                                                        const std::string& cppDefaultFolder)
+    {
+        const char* root = CreateKindRoot(kind);
+        std::set<std::string> folders;                     // relative dirs, "" = root
+        folders.insert("");                                // always offer the root
+        // CppClass's default folder comes from the manifest's sourceDir
+        // (CppClassDefaultFolder, seeded onto the request by BeginCreateAsset);
+        // every other kind keeps its fixed CreateKindDefaultFolder.
+        folders.insert(kind == CreateAssetKind::CppClass
+                           ? cppDefaultFolder
+                           : std::string(CreateKindDefaultFolder(kind)));
+        for (const auto& [guid, e] : model.Entries())
+        {
+            (void)guid;
+            if (const auto rel = RelativeDirOfFolderKey(e.folder, root))
+                folders.insert(*rel);
+        }
+        // T5 s7.8: an empty Content/ folder has no entry, but is still a
+        // place to create into (its key is unqualified "game", so the
+        // "Source" root never matches it).
+        for (const std::string& key : model.EmptyFolders())
+            if (const auto rel = RelativeDirOfFolderKey(key, root))
+                folders.insert(*rel);
+
+        std::vector<FolderChoice> out;
+        out.reserve(folders.size());
+        // Root first (it is the parent of everything else), then the rest
+        // in the set's own alphabetical order -- a stable, predictable
+        // list rather than unordered_map iteration order.
+        out.push_back(MakeFolderChoice("", root));
+        for (const std::string& f : folders)
+            if (!f.empty())
+                out.push_back(MakeFolderChoice(f, root));
+        return out;
+    }
+
+    // The Content/ root, every folder an entry lives in, and every empty
+    // folder -- the Location list of the Move to... modal (s7.8), which is
+    // not tied to a CreateAssetKind's default folder.
+    [[nodiscard]] inline std::vector<FolderChoice> BuildContentFolderChoices(const AssetPanelModel& m)
+    {
+        std::set<std::string> folders;
+        for (const auto& [g, e] : m.Entries()) if (const auto rel = RelativeDirOfFolderKey(e.folder, "Content")) folders.insert(*rel);
+        for (const auto& k : m.EmptyFolders()) if (const auto rel = RelativeDirOfFolderKey(k, "Content")) folders.insert(*rel);
+        std::vector<FolderChoice> out{ MakeFolderChoice("", "Content") }; for (const auto& f : folders) if (!f.empty()) out.push_back(MakeFolderChoice(f, "Content"));
+        return out;
+    }
     // The dialog's starting state for one request -- what
     // EditorApp::BeginCreateAsset opens (it adds only the C++ Class default
     // folder, which needs the project). `open` is set; every other field
