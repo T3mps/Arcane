@@ -43,6 +43,7 @@ namespace
         std::function<std::optional<std::string>(std::string_view)> validate;   // the Name row's rule (empty = none)
         int nameStackDrift = 0;          // |colour + style-var stack change| across the Name row, summed over every frame
         bool errorDrawn = false;         // THIS frame: the Inspector window drew a vertex in Theme::kError
+        float windowWidth = 640.0f;      // the Inspector's width (the degenerate-seed case narrows it)
 
         GridHarness()
         {
@@ -66,7 +67,7 @@ namespace
             ImGui::NewFrame();
             Arcane::Editor::PropertyGrid(state).CommitOrphans();   // once per frame, BEFORE any window that draws this state Begins
             ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(640, 1000), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(windowWidth, 1000), ImGuiCond_Always);
             ImGui::Begin("Inspector");
             Arcane::Editor::PropertyGrid grid(state);
             sectionOpen = grid.Section("Action");
@@ -106,6 +107,26 @@ namespace
         void Key(ImGuiKey k) { ImGui::GetIO().AddKeyEvent(k, true); Frame(); ImGui::GetIO().AddKeyEvent(k, false); Frame(); }
         void Press(ImVec2 at) { ImGuiIO& io = ImGui::GetIO(); io.AddMousePosEvent(at.x, at.y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); }
     };
+}
+
+TEST_CASE("PropertyGrid T3-D6 fix 1: the label split is never seeded from a degenerate first-frame width", "[editor][inspector]")
+{
+    // Measured at 1920x1080 headless (--select-asset uv_marker.png): Inspector
+    // 2's ##page reported avail 4.0 on frame 1, the once-per-session seed
+    // took 0.4 of it, and the Import rows drew every label as "..". A region
+    // under the floor (8 font heights) leaves the split unseeded; the first
+    // frame with a real width seeds it.
+    GridHarness h;
+    h.windowWidth = 8.0f;   // clamped up to WindowMinSize: a few px of content
+    h.Frame();
+    CHECK(h.state.labelColWidth == 0.0f);          // nothing seeded from a sliver
+    h.windowWidth = 640.0f;
+    h.Frame();
+    CHECK(h.state.labelColWidth >= 200.0f);        // 0.4 of the real ~620 px region
+    const float seeded = h.state.labelColWidth;
+    h.windowWidth = 400.0f;
+    h.Frame();
+    CHECK(h.state.labelColWidth == seeded);        // once seeded, the session keeps it (unchanged rule)
 }
 
 TEST_CASE("PropertyGrid: rows draw into one shared grid, TextRow commits once, CheckboxRow toggles", "[editor][inspector]")
