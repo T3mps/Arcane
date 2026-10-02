@@ -160,9 +160,9 @@ namespace Arcane::Editor
         // File's scene/project items (including both Open Recent submenus),
         // Save All, Exit, and Assets' Show in Explorer / Copy Path all land
         // in `requests` now, as do Edit's clipboard and selection items. The
-        // remaining placeholders (Preferences..., Project Settings...) stay
-        // in the file's established style (enabled no-ops) until later tasks
-        // wire them. Edit's Undo/Redo drive the CommandStack.
+        // one remaining placeholder, Edit > Preferences..., is disabled with
+        // a tooltip naming the configuration pass that will build it. Edit's
+        // Undo/Redo drive the CommandStack.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
@@ -312,10 +312,13 @@ namespace Arcane::Editor
                 ImGui::Separator();
                 // UE's placement and order: the Edit menu's closing section is
                 // Editor Preferences... then Project Settings... (vendored
-                // MainMenu.cpp:261-276). Placeholders until the settings
-                // windows exist -- this absorbs the old top-level Preferences
-                // leaf.
-                ImGui::MenuItem("Preferences...");
+                // MainMenu.cpp:261-276). Project Settings is wired. Preferences
+                // is the ONE remaining placeholder: disabled with its reason
+                // until the configuration pass builds the settings window over
+                // the cvar registry here (node page phase s6.8, s10.2).
+                ImGui::MenuItem("Preferences...", nullptr, false, false);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Settings window coming in the configuration pass");
                 if (ImGui::MenuItem("Project Settings..."))
                     requests.showProjectSettings = true;
                 ImGui::EndMenu();
