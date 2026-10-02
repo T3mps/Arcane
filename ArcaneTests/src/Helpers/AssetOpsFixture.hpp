@@ -46,6 +46,7 @@ namespace AssetOpsTest
             auto f = AssetOpsWorld::Facts();
             f.refs = refs; f.openSceneAssets = sceneAssets; f.docs = docs;
             f.openScene = openScene; f.bootScene = bootScene; f.inputActions = inputActions;
+            f.diagSiblings = [](const fs::path& p) { return Arcane::Editor::DiagSiblingFiles(p); };   // the real provider (T5-B12)
             return f;
         }
     };

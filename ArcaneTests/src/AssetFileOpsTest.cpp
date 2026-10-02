@@ -7,7 +7,9 @@
 #include "Helpers/AssetOpsFixture.hpp"
 #include "Project/MeshImportWave.hpp"
 #include "Helpers/TestTypeContext.hpp"
+#include "Panels/AssetReferenceIndex.hpp"
 
+#include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>
@@ -869,4 +871,62 @@ TEST_CASE("Duplicate: a scene copy re-mints every Identity id, leaves the origin
     const std::vector<std::uint64_t> origHis = his(orig);   // ONE vector: begin()/end() of two temporaries is UB
     for (const std::uint64_t hi : his(copy)) CHECK(std::count(origHis.begin(), origHis.end(), hi) == 0);
     Arcane::Runtime rt2{ Arcane::Test::Process() }; Arcane::RegisterSceneComponents(rt2.Registry()); CHECK(Arcane::Scene::LoadJson(rt2.Registry(), copy));
+}
+namespace
+{
+    // png <-DerivesFrom- sprite <-References- main, lv; sliced References the png; inst DerivesFrom base.
+    struct DeleteWorld
+    {
+        AssetOpsTest::Tree t{ "arcane_ops_delete_plan" }; AssetReferenceIndex index; Arcane::Guid tex, sprite, sliced, mainScene, lv, base, inst;
+        DeleteWorld()
+        {
+            t.Write("t/uv_marker.png", "px"); int n = 1;
+            for (const char* r : { "s/uv_marker.arcsprite", "s/sliced.arcsprite", "sc/main.arcscene", "sc/lv.arcscene", "m/base.arcmat", "m/inst.arcmat" })
+                t.Write(r, "{\"id\":\"7e5a8000-0000-4000-8000-00000000000" + std::to_string(n++) + "\"}");
+            t.Scan();
+            tex = t.GuidOf("t/uv_marker.png"); sprite = t.GuidOf("s/uv_marker.arcsprite"); sliced = t.GuidOf("s/sliced.arcsprite");
+            mainScene = t.GuidOf("sc/main.arcscene"); lv = t.GuidOf("sc/lv.arcscene"); base = t.GuidOf("m/base.arcmat"); inst = t.GuidOf("m/inst.arcmat");
+            using K = Arcane::AssetRefKind; const auto e = [&](const Arcane::Guid& g, std::vector<Arcane::AssetRef> r) { index.Update(g, true, r); };
+            e(tex, {}); e(base, {}); e(sprite, { { tex, K::DerivesFrom } }); e(sliced, { { tex, K::References } });
+            e(mainScene, { { sprite, K::References } }); e(lv, { { sprite, K::References } }); e(inst, { { base, K::DerivesFrom } }); t.refs = &index;
+        }
+        static const AssetReferencer* Row(const DeleteAnalysis& a, const Arcane::Guid& g) { for (const auto& r : a.referencers) if (r.referencer == g) return &r; return nullptr; }
+    };
+}
+TEST_CASE("Delete plan: a texture's plain sprite cascades; scenes one hop away; the sliced sprite is a referencer", "[editor][assetops]")
+{
+    DeleteWorld w; const std::vector<Arcane::Guid> req{ w.tex };
+    const DeleteAnalysis on = AnalyzeDelete(req, true, w.t.Facts());
+    CHECK(on.doomed == std::vector<Arcane::Guid>{ w.tex, w.sprite });
+    REQUIRE(on.derived.size() == 1); CHECK((on.derived[0].child == w.sprite && on.derived[0].cascades));
+    CHECK((DeleteWorld::Row(on, w.mainScene) && DeleteWorld::Row(on, w.lv) && DeleteWorld::Row(on, w.sliced) && !DeleteWorld::Row(on, w.sprite)));
+    const DeleteAnalysis off = AnalyzeDelete(req, false, w.t.Facts());
+    CHECK((off.doomed == std::vector<Arcane::Guid>{ w.tex } && DeleteWorld::Row(off, w.sprite) && DeleteWorld::Row(off, w.mainScene)));
+    const AssetOpPlan offPlan = PlanAssetOp({ .kind = AssetOpKind::Delete, .guids = req, .cascadeDerived = false }, w.t.Facts());
+    CHECK((offPlan.moves.size() == 1 && offPlan.derived.size() == 1 && !offPlan.derived[0].cascades));   // unticked: the child stays out of moves
+
+    const std::vector<Arcane::Guid> both{ w.tex, w.sprite };   // the multi-select case: requested AND cascaded
+    const DeleteAnalysis twice = AnalyzeDelete(both, true, w.t.Facts());
+    CHECK(std::count(twice.doomed.begin(), twice.doomed.end(), w.sprite) == 1);
+    const AssetOpPlan bp = PlanAssetOp({ .kind = AssetOpKind::Delete, .guids = both }, w.t.Facts());
+    CHECK((bp.refusals.empty() && bp.moves.size() == 2));
+}
+TEST_CASE("Delete plan: live manifest, dirty documents, project manifest; instances list, never cascade; refusals; diag siblings", "[editor][assetops]")
+{
+    DeleteWorld w; w.t.openScene = w.mainScene; w.t.sceneAssets = { w.base };   // live only, absent from the saved scene
+    w.t.docs = { { w.lv, true, { w.base }, "Level One" }, { w.sliced, false, { w.base }, "Sliced" } }; w.t.inputActions = w.base;
+    const std::vector<Arcane::Guid> req{ w.base }; const DeleteAnalysis a = AnalyzeDelete(req, true, w.t.Facts());
+    CHECK((a.doomed == std::vector<Arcane::Guid>{ w.base } && DeleteWorld::Row(a, w.inst) && !DeleteWorld::Row(a, w.sliced)));   // a CLEAN doc does not count
+    CHECK(ReferencerTags(*DeleteWorld::Row(a, w.mainScene)) == "(open scene, unsaved)");
+    CHECK(ReferencerTags(*DeleteWorld::Row(a, w.lv)) == "(unsaved in Level One)");   // spec s7.5: the document's title
+    CHECK(ReferencerTags(*DeleteWorld::Row(a, Arcane::Guid{})) == "(project: input actions)");
+    w.t.bootScene = w.lv;
+    const std::vector<Arcane::Guid> bootReq{ w.lv }; const DeleteAnalysis boot = AnalyzeDelete(bootReq, true, w.t.Facts());
+    REQUIRE(DeleteWorld::Row(boot, Arcane::Guid{})); CHECK(ReferencerTags(*DeleteWorld::Row(boot, Arcane::Guid{})) == "(project: boot scene)");
+    CHECK_FALSE(PlanAssetOp({ .kind = AssetOpKind::Delete, .guids = { w.mainScene } }, w.t.Facts()).refusals.empty());   // open scene
+    CHECK_FALSE(PlanAssetOp({ .kind = AssetOpKind::Delete, .guids = { w.lv } }, w.t.Facts()).refusals.empty());          // boot scene
+    const auto dd = w.t.root / "Saved" / "Diagnostics"; std::filesystem::create_directories(dd);
+    Arcane::Diag::Envelope env; env.guid = Arcane::Guid::Generate(); env.siblingTxt = "crash-1.txt"; REQUIRE(Arcane::Diag::WriteFile(env, dd / "crash-1.arcdiag"));
+    std::ofstream(dd / "crash-1.txt") << "t"; std::ofstream(dd / "crash-1.symbolized.txt") << "s";
+    CHECK(DiagSiblingFiles(dd / "crash-1.arcdiag").size() == 2);
 }

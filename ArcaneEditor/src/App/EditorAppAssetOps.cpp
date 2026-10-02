@@ -123,12 +123,13 @@ namespace Arcane::Editor
         f.bootScene       = AE::BootSceneGuid(pr);
         if (const auto ia = Arcane::Guid::FromString(pr->Manifest().inputActions)) f.inputActions = *ia;
         s.docs.clear();
-        m_documents.ForEach([&](AE::EditorDocument& d) { s.docs.push_back({ d.AssetGuid(), d.Dirty(), d.Dirty() ? d.LiveReferences() : std::vector<Arcane::Guid>{} }); });   // T5 s7.5: only a dirty doc's unsaved refs count
+        m_documents.ForEach([&](AE::EditorDocument& d)   // T5 s7.5: only a dirty doc's unsaved refs count; its title names the row
+        { s.docs.push_back({ d.AssetGuid(), d.Dirty(), d.Dirty() ? d.LiveReferences() : std::vector<Arcane::Guid>{}, d.Title() }); });
         f.docs = s.docs;
         f.exists       = [](const std::filesystem::path& p) { std::error_code ec; return std::filesystem::exists(p, ec); };
         f.peekId       = [](const std::filesystem::path& p) { return Arcane::AssetRegistry::PeekId(p); };
         f.gltfUris     = [](const std::filesystem::path& p) { return AE::ReadGltfUris(p); };                  // T5-A8's provider
-        f.diagSiblings = [](const std::filesystem::path&) { return std::vector<std::filesystem::path>{}; }; // B12
+        f.diagSiblings = [](const std::filesystem::path& p) { return AE::DiagSiblingFiles(p); };            // s7.5 diag set
         return f;
     }
 

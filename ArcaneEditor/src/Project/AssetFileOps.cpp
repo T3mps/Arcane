@@ -1,8 +1,10 @@
 #include "Project/AssetFileOps.hpp"
 
+#include "Panels/AssetReferenceIndex.hpp" // the delete analysis walks inbound/outbound (s7.5)
 #include "Panels/CreateAssetDialog.hpp"   // ValidateCreateNameSyntax (rules 0-2), ValidateRenameStemSyntax
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 
 #include <Json.hpp>   // the workspace's vendored nlohmann::json header
@@ -741,6 +743,124 @@ namespace Arcane::Editor
         m_applied = !undo;
     }
 
+    // ---- s7.5: delete analysis ----------------------------------------------
+
+    namespace
+    {
+        const std::string* MountOf(const AssetOpFacts& f, const Arcane::Guid& g)
+        {
+            for (const auto& [id, mp] : f.registry) if (id == g) return &mp;
+            return nullptr;
+        }
+        std::string NameOf(const AssetOpFacts& f, const Arcane::Guid& g)
+        {
+            const std::string* mp = MountOf(f, g);
+            return mp ? fs::path(*mp).filename().string() : g.ToString();
+        }
+        bool DerivesFrom(const AssetOpFacts& f, const Arcane::Guid& child, const Arcane::Guid& parent)
+        {
+            const AssetReferenceIndex::Node* n = f.refs ? f.refs->Find(child) : nullptr;
+            return n && std::any_of(n->outbound.begin(), n->outbound.end(), [&](const Arcane::AssetRef& r)
+                                    { return r.target == parent && r.kind == Arcane::AssetRefKind::DerivesFrom; });
+        }
+    }
+
+    DeleteAnalysis AnalyzeDelete(std::span<const Arcane::Guid> requested, bool cascade, const AssetOpFacts& f)
+    {
+        DeleteAnalysis a;
+        const auto doomed = [&](const Arcane::Guid& g) { return std::find(a.doomed.begin(), a.doomed.end(), g) != a.doomed.end(); };
+        for (const Arcane::Guid& g : requested) if (!doomed(g)) a.doomed.push_back(g);
+        // Cascade: a plain sprite <- its Texture, a companion .arcmesh <- its Model. Never
+        // instance materials or sliced sprites (References, not DerivesFrom).
+        const std::size_t requestedCount = a.doomed.size();   // the deduplicated request; children append after it
+        for (std::size_t i = 0; i < requestedCount; ++i)
+        {
+            const Arcane::Guid parent = a.doomed[i];   // by value: the push below may reallocate
+            const std::string* pmp = MountOf(f, parent);
+            const AssetReferenceIndex::Node* pn = f.refs ? f.refs->Find(parent) : nullptr;
+            if (!pmp || !pn) continue;
+            for (const Arcane::Guid& child : pn->inbound)
+            {
+                const std::string* cmp = MountOf(f, child);
+                if (!cmp || !DerivesFrom(f, child, parent)) continue;
+                const AssetKind pk = AssetKindOf(*pmp), ck = AssetKindOf(*cmp);
+                if (!((pk == AssetKind::Texture && ck == AssetKind::Sprite) || (pk == AssetKind::Model && ck == AssetKind::Mesh))) continue;
+                DerivedChild d{ parent, child, cascade, {} };
+                if (const AssetReferenceIndex::Node* cn = f.refs->Find(child)) d.referencers = cn->inbound;
+                a.derived.push_back(std::move(d));
+                if (cascade && !doomed(child)) a.doomed.push_back(child);
+            }
+        }
+        // One row per referencer, with all its tags; doomed referencers drop.
+        const auto add = [&](const Arcane::Guid& target, const Arcane::Guid& who, RefSource src, const std::string& unsavedIn = {})
+        {
+            if (who.IsValid() && doomed(who)) return;
+            auto row = std::find_if(a.referencers.begin(), a.referencers.end(), [&](const AssetReferencer& r) { return r.referencer == who; });
+            if (row == a.referencers.end())
+                row = a.referencers.insert(a.referencers.end(),
+                                           AssetReferencer{ target, who, {}, who.IsValid() ? NameOf(f, who) : std::string("Project"), {} });
+            if (std::find(row->sources.begin(), row->sources.end(), src) == row->sources.end()) row->sources.push_back(src);
+            if (row->unsavedIn.empty()) row->unsavedIn = unsavedIn;
+        };
+        for (const Arcane::Guid& g : a.doomed)
+        {
+            if (const AssetReferenceIndex::Node* n = f.refs ? f.refs->Find(g) : nullptr)
+                for (const Arcane::Guid& r : n->inbound)
+                {
+                    add(g, r, RefSource::AssetOnDisk);
+                    if (DerivesFrom(f, r, g))   // one hop: whoever references a derived child
+                        if (const AssetReferenceIndex::Node* rn = f.refs->Find(r))
+                            for (const Arcane::Guid& hop : rn->inbound) add(r, hop, RefSource::AssetOnDisk);
+                }
+            if (f.openScene.IsValid() && std::find(f.openSceneAssets.begin(), f.openSceneAssets.end(), g) != f.openSceneAssets.end())
+            {
+                // In the live manifest but not in the saved file: an unsaved reference.
+                const AssetReferenceIndex::Node* sn = f.refs ? f.refs->Find(f.openScene) : nullptr;
+                if (!(sn && std::any_of(sn->outbound.begin(), sn->outbound.end(), [&](const Arcane::AssetRef& r) { return r.target == g; })))
+                    add(g, f.openScene, RefSource::OpenScene);
+            }
+            for (const AssetOpFacts::Doc& d : f.docs)
+                if (d.dirty && std::find(d.liveRefs.begin(), d.liveRefs.end(), g) != d.liveRefs.end())
+                    add(g, d.guid, RefSource::UnsavedDocument, d.title);
+            if (g == f.bootScene)    add(g, {}, RefSource::BootScene);
+            if (g == f.inputActions) add(g, {}, RefSource::InputActions);
+        }
+        return a;
+    }
+
+    std::string ReferencerTags(const AssetReferencer& r)
+    {
+        std::string o;
+        const auto tag = [&](const std::string& t) { if (!o.empty()) o += ' '; o += t; };
+        for (const RefSource s : r.sources)
+            switch (s)
+            {
+                case RefSource::AssetOnDisk:     break;
+                case RefSource::OpenScene:       tag("(open scene, unsaved)"); break;
+                case RefSource::UnsavedDocument: tag("(unsaved in " + (r.unsavedIn.empty() ? r.label : r.unsavedIn) + ")"); break;
+                case RefSource::BootScene:       tag("(project: boot scene)"); break;
+                case RefSource::InputActions:    tag("(project: input actions)"); break;
+            }
+        return o;
+    }
+
+    std::vector<fs::path> DiagSiblingFiles(const fs::path& report)
+    {
+        std::vector<fs::path> o;
+        const fs::path dir = report.parent_path();
+        const auto addIf = [&](const fs::path& p)
+        {
+            std::error_code ec;
+            if (fs::exists(p, ec) && std::find(o.begin(), o.end(), p) == o.end()) o.push_back(p);
+        };
+        if (const auto env = Arcane::Diag::ReadFile(report))
+            for (const std::string* s : { &env->siblingTxt, &env->siblingDmp, &env->siblingGpuDump })
+                if (!s->empty()) addIf(fs::path(*s).is_absolute() ? fs::path(*s) : dir / fs::path(*s).filename());
+        addIf(dir / (report.stem().string() + ".log.txt"));
+        addIf(dir / (report.stem().string() + ".symbolized.txt"));
+        return o;
+    }
+
     AssetOpPlan PlanAssetOp(const AssetOpRequest& op, const AssetOpFacts& f)
     {
         AssetOpPlan plan;
@@ -760,7 +880,17 @@ namespace Arcane::Editor
         for (const auto& [g, mount] : f.registry) p.byMount.emplace(mount, g);
         p.moving.insert(op.guids.begin(), op.guids.end());
 
-        for (const Arcane::Guid& g : op.guids)
+        // s7.5: a Delete walks the DOOMED set, so cascaded children pass the same
+        // refusal table and get the same file sets (`done` keeps a requested child single).
+        std::vector<Arcane::Guid> targets = op.guids;
+        if (op.kind == AssetOpKind::Delete)
+        {
+            DeleteAnalysis an = AnalyzeDelete(op.guids, op.cascadeDerived, f);
+            plan.derived     = std::move(an.derived);
+            plan.referencers = std::move(an.referencers);
+            targets          = std::move(an.doomed);
+        }
+        for (const Arcane::Guid& g : targets)
         {
             p.extra.clear();   // a refused .gltf never leaks its dragged images into the next asset's moves
             if (!done.insert(g).second) continue;

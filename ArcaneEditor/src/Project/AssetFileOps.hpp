@@ -52,7 +52,10 @@ namespace Arcane::Editor
         std::vector<FileMove> files;
     };
     enum class RefSource : std::uint8_t { AssetOnDisk, OpenScene, UnsavedDocument, BootScene, InputActions };
-    struct AssetReferencer { Arcane::Guid target, referencer; std::vector<RefSource> sources; std::string label; };
+    // One row per referencer (s7.5): every source it was found through. `label` = the
+    // referencer's file name ("Project" for a manifest row); `unsavedIn` = the dirty
+    // document's title (RefSource::UnsavedDocument).
+    struct AssetReferencer { Arcane::Guid target, referencer; std::vector<RefSource> sources; std::string label; std::string unsavedIn; };
     struct DerivedChild { Arcane::Guid parent, child; bool cascades = true; std::vector<Arcane::Guid> referencers; };
     struct AssetRefusal { Arcane::Guid guid; std::string reason; };
 
@@ -76,7 +79,7 @@ namespace Arcane::Editor
         const AssetReferenceIndex* refs = nullptr; // m_assetModel.RefIndex()
         std::span<const Arcane::Guid> openSceneAssets;                    // s7.5
         Arcane::Guid openScene, bootScene, inputActions;
-        struct Doc { Arcane::Guid guid; bool dirty = false; std::vector<Arcane::Guid> liveRefs; };
+        struct Doc { Arcane::Guid guid; bool dirty = false; std::vector<Arcane::Guid> liveRefs; std::string title; };
         std::span<const Doc> docs;
         std::function<bool(const std::filesystem::path&)> exists;
         std::function<std::optional<Arcane::Guid>(const std::filesystem::path&)> peekId;   // AssetRegistry::PeekId
@@ -107,6 +110,31 @@ namespace Arcane::Editor
     // data: URIs skipped, percent-decoded. Empty for .glb (self-contained) and for an
     // unreadable file. The real AssetOpFacts::gltfUris.
     [[nodiscard]] std::vector<std::string> ReadGltfUris(const std::filesystem::path& gltf);
+
+    // s7.5's delete analysis (PlanAssetOp's Delete walks `doomed`). `doomed` = the
+    // request (deduplicated) + the cascaded children when `cascadeDerived`: a plain
+    // sprite DerivesFrom a doomed Texture, a companion .arcmesh DerivesFrom a doomed
+    // Model; never instance materials or sliced sprites. `derived` lists those children
+    // (cascading or not). `referencers` = the union: index inbound, one hop through
+    // each DerivesFrom child, the live scene manifest (only when the saved file lacks
+    // it), dirty documents' LiveReferences, the project manifest (boot scene, input
+    // actions; referencer = nil guid). Doomed referencers drop; one row each.
+    struct DeleteAnalysis
+    {
+        std::vector<Arcane::Guid>    doomed;
+        std::vector<DerivedChild>    derived;
+        std::vector<AssetReferencer> referencers;
+    };
+    [[nodiscard]] DeleteAnalysis AnalyzeDelete(std::span<const Arcane::Guid> requested, bool cascadeDerived,
+                                               const AssetOpFacts& facts);
+    // The row's in-memory/manifest tags, space-separated ("(open scene, unsaved)",
+    // "(unsaved in <title>)", "(project: boot scene)", "(project: input actions)");
+    // empty for an on-disk-only referencer.
+    [[nodiscard]] std::string ReferencerTags(const AssetReferencer& r);
+    // s7.5's diag set beyond the report: the envelope's existing siblingTxt/Dmp/
+    // GpuDump plus any <stem>.log.txt / <stem>.symbolized.txt beside it. The real
+    // AssetOpFacts::diagSiblings.
+    [[nodiscard]] std::vector<std::filesystem::path> DiagSiblingFiles(const std::filesystem::path& report);
 
     [[nodiscard]] AssetOpPlan PlanAssetOp(const AssetOpRequest& op, const AssetOpFacts& facts);
 
