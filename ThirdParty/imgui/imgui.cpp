@@ -19839,7 +19839,11 @@ static void ImGui::DockNodeCalcTabBarLayout(const ImGuiDockNode* node, ImRect* o
     r.Max.x -= style.WindowBorderSize;
 
     float button_sz = g.FontSize;
-    r.Min.x += style.FramePadding.x;
+    // ARCANE LOCAL FIX (2026-10-02, user desk): the LEFT FramePadding inset only pads a left window-menu
+    // button; with none (Arcane's dockspace sets ImGuiDockNodeFlags_NoWindowMenuButton) the first tab sits
+    // flush with the node's left edge, lining up with the panel below. Upstream always insets.
+    if (node->HasWindowMenuButton && style.WindowMenuButtonPosition == ImGuiDir_Left)
+        r.Min.x += style.FramePadding.x;
     r.Max.x -= style.FramePadding.x;
     ImVec2 window_menu_button_pos = ImVec2(r.Min.x, r.Min.y + style.FramePadding.y);
     if (node->HasCloseButton)
