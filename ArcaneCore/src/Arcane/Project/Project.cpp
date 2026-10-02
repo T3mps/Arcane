@@ -9,6 +9,7 @@
 #include <fstream>
 #include <functional>
 #include <system_error>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -470,11 +471,11 @@ namespace Arcane
         return Open(dir);
     }
 
-    std::optional<Guid> Project::RegisterAsset(const std::filesystem::path& file)
+    std::optional<Project::ContentRootMatch> Project::FindContentRoot(const std::filesystem::path& file) const
     {
         std::error_code ec;
         const auto canon = std::filesystem::weakly_canonical(file, ec);
-        const std::filesystem::path& target = ec ? file : canon;
+        const std::filesystem::path target = ec ? file : canon;
 
         // Candidate content roots, game:// first (mirrors Open's mount order).
         //
@@ -488,50 +489,70 @@ namespace Arcane
         // project's own Saved/ tree. The path math below (weakly_canonical +
         // relative) needs no directory to actually exist, so listing it
         // unconditionally is safe.
-        struct ContentRoot { std::string scheme; std::filesystem::path dir; };
-        std::vector<ContentRoot> roots;
-        roots.push_back({ "game", m_root / "Content" });
-        roots.push_back({ "diag", m_root / "Saved" / "Diagnostics" });
+        std::vector<std::pair<std::string, std::filesystem::path>> roots;
+        roots.emplace_back("game", m_root / "Content");
+        roots.emplace_back("diag", m_root / "Saved" / "Diagnostics");
         // source:// listed unconditionally for the same reason diag:// is: a
         // Source/ created after Open() (a first New C++ Class, one day) must
         // still find its root here rather than warn "outside every content
         // root". Same existence-free path math as above.
-        roots.push_back({ "source", m_root / "Source" });
+        roots.emplace_back("source", m_root / "Source");
         for (const auto& pluginRoot : m_activePluginRoots)
-            roots.push_back({ "plugin/" + pluginRoot.filename().string(),
-                              pluginRoot / "Content" });
+            roots.emplace_back("plugin/" + pluginRoot.filename().string(), pluginRoot / "Content");
 
-        for (const ContentRoot& root : roots)
+        for (const auto& [scheme, dir] : roots)
         {
             std::error_code canonEc, relEc;
-            const auto rootCanon = std::filesystem::weakly_canonical(root.dir, canonEc);
-            const std::filesystem::path& rootDir = canonEc ? root.dir : rootCanon;
+            const auto rootCanon = std::filesystem::weakly_canonical(dir, canonEc);
+            const std::filesystem::path rootDir = canonEc ? dir : rootCanon;
             const auto rel = std::filesystem::relative(target, rootDir, relEc);
             if (relEc || rel.empty() || rel.is_absolute() || *rel.begin() == "..")
                 continue;   // not under this root
-            // Ensure the winning root is mounted before registering, but
-            // ONLY if it is not ALREADY mounted -- and with the ORIGINAL
-            // root.dir (Open()'s own convention, e.g. "game" -> root /
-            // "Content"), never the weakly_canonical'd rootDir used for the
-            // relative-path match just above. "game"/"plugin" roots are
-            // always already mounted by Open() (Content/ exists from
-            // Project::Create's scaffold), so HasMount short-circuits this
-            // for them and their Open()-time mount form is left untouched
-            // -- re-mounting with a canonicalized (possibly short-name,
-            // e.g. 8.3 "ETHANT~1") path previously broke ResolveAsset()
-            // callers comparing against the original long-form path. Only
-            // diag:// and source:// can reach this Mount() call in practice,
-            // the two roots that may not have existed yet at Open() time (see
-            // the roots comment above).
-            if (!m_mounts.HasMount(root.scheme))
-                m_mounts.Mount(root.scheme, root.dir);
-            return m_registry.AddFile(target, rootDir, root.scheme);
+            return ContentRootMatch{ scheme, dir, rootDir, target };
         }
-
-        ARC_WARN("Project::RegisterAsset: '{}' is outside every content root -- it will "
-                 "not appear in the asset registry or resolve by GUID",
-                 file.generic_string());
         return std::nullopt;
+    }
+
+    std::optional<Guid> Project::RegisterAsset(const std::filesystem::path& file)
+    {
+        const auto match = FindContentRoot(file);
+        if (!match)
+        {
+            ARC_WARN("Project::RegisterAsset: '{}' is outside every content root -- it will "
+                     "not appear in the asset registry or resolve by GUID",
+                     file.generic_string());
+            return std::nullopt;
+        }
+        // Ensure the winning root is mounted before registering, but
+        // ONLY if it is not ALREADY mounted -- and with the ORIGINAL
+        // listed dir (Open()'s own convention, e.g. "game" -> root /
+        // "Content"), never the weakly_canonical'd rootDir used for the
+        // relative-path match in FindContentRoot. "game"/"plugin" roots are
+        // always already mounted by Open() (Content/ exists from
+        // Project::Create's scaffold), so HasMount short-circuits this
+        // for them and their Open()-time mount form is left untouched
+        // -- re-mounting with a canonicalized (possibly short-name,
+        // e.g. 8.3 "ETHANT~1") path previously broke ResolveAsset()
+        // callers comparing against the original long-form path. Only
+        // diag:// and source:// can reach this Mount() call in practice,
+        // the two roots that may not have existed yet at Open() time (see
+        // the roots comment in FindContentRoot).
+        if (!m_mounts.HasMount(match->scheme))
+            m_mounts.Mount(match->scheme, match->listedDir);
+        return m_registry.AddFile(match->target, match->rootDir, match->scheme);
+    }
+
+    bool Project::UnregisterAsset(const Guid& id)
+    {
+        return m_registry.Remove(id);
+    }
+
+    RebindResult Project::RebindAsset(const Guid& id, const std::filesystem::path& newFile)
+    {
+        const auto match = FindContentRoot(newFile);
+        if (!match)
+            return RebindResult::OutsideContent;
+        return m_registry.Rebind(id, match->target, match->rootDir, match->scheme);
     }
 
     std::optional<std::filesystem::path> Project::ResolveAsset(const AssetId& id) const

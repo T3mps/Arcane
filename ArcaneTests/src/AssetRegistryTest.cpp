@@ -7,12 +7,15 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/DiagEnvelope.hpp>
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
 #include <Arcane/Project/Project.hpp>
 
 #include <Panels/DiagnosticStore.hpp>
+
+#include "Helpers/TestTypeContext.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -727,4 +730,40 @@ TEST_CASE("AssetRegistry::Remove unmaps the guid and retracts its duplicate-id r
     store.UninstallEngineSink();
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("Project::RebindAsset finds the containing root; UnregisterAsset drops the guid", "[project][assetops]")
+{
+    namespace fs = std::filesystem;
+    const auto dir = TempDir("project_rebind");
+    auto proj = Arcane::Project::Create(dir, "Rebind");
+    REQUIRE(proj.has_value());
+    const auto content = dir / "Content";
+    Arcane::MaterialAssetData m;
+    m.id = Arcane::Guid::Generate(); m.name = "m"; m.snippet = "float4 shade(Varyings v) { return 1; }\n";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "m.arcmat", m));
+    REQUIRE(proj->RegisterAsset(content / "m.arcmat") == m.id);
+
+    fs::create_directories(content / "mats");
+    fs::rename(content / "m.arcmat", content / "mats" / "m.arcmat");
+    CHECK(proj->RebindAsset(m.id, content / "mats" / "m.arcmat") == Arcane::RebindResult::Ok);
+    CHECK(proj->Registry().Resolve(m.id) == "game://mats/m.arcmat");
+    const auto file = proj->ResolveAsset(Arcane::AssetId::FromGuid(m.id));
+    REQUIRE(file.has_value());
+    CHECK(fs::exists(*file));
+    CHECK(proj->RebindAsset(m.id, dir / "Elsewhere" / "m.arcmat") == Arcane::RebindResult::OutsideContent);
+
+    CHECK(proj->UnregisterAsset(m.id));
+    CHECK_FALSE(proj->Registry().Resolve(m.id).has_value());
+    CHECK_FALSE(proj->UnregisterAsset(m.id));
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Runtime file-op seams answer NoProject without a project", "[project][assetops]")
+{
+    Arcane::Runtime runtime{ Arcane::Test::Process() };
+    CHECK(runtime.RebindMovedAsset(Arcane::Guid::Generate(), "x.arcmat") == Arcane::RebindResult::NoProject);
+    CHECK_FALSE(runtime.UnregisterAsset(Arcane::Guid::Generate()));
 }

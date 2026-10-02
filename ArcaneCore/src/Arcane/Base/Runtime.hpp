@@ -232,6 +232,12 @@ namespace Arcane
         // the file lies outside every content root.
         std::optional<Guid> RegisterCreatedAsset(const std::filesystem::path& file);
 
+        // T5 s7.2 (asset file ops), narrow seams beside RegisterCreatedAsset: unmap a
+        // deleted asset / rebind a moved one in the open project's registry. GUID loads
+        // see both at once (the installed resolver reads the live registry).
+        bool UnregisterAsset(const Guid& id);
+        RebindResult RebindMovedAsset(const Guid& id, const std::filesystem::path& newFile);
+
         // Point the open project's boot scene at `id` (Project::SetBootScene),
         // rewriting its .arcproj in place. False when no project is open or the
         // write failed; Project::SetBootScene already logs the specific cause in

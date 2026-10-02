@@ -610,6 +610,26 @@ namespace Arcane
         return m_impl->project->RegisterAsset(file);
     }
 
+    bool Runtime::UnregisterAsset(const Guid& id)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::UnregisterAsset: no project open -- {} not unregistered", id.ToString());
+            return false;
+        }
+        return m_impl->project->UnregisterAsset(id);
+    }
+
+    RebindResult Runtime::RebindMovedAsset(const Guid& id, const std::filesystem::path& newFile)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::RebindMovedAsset: no project open -- '{}' not rebound", newFile.generic_string());
+            return RebindResult::NoProject;
+        }
+        return m_impl->project->RebindAsset(id, newFile);
+    }
+
     bool Runtime::SetProjectBootScene(const Guid& id)
     {
         if (!m_impl->project)
