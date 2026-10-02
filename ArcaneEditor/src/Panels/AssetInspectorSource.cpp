@@ -186,6 +186,12 @@ namespace Arcane::Editor
     void DrawActionRow(std::span<const PageAction> list)
     {
         const ImGuiStyle& style = ImGui::GetStyle();
+        // s5.6 at 1080p (T3 gate): the row's buttons run one pixel less
+        // FramePadding.y than the stock frame (22 -> 20 px at the 16 px font;
+        // the icon ink keeps 2 px clear of the border). Local to this row: the
+        // shared PropertyGrid row metrics and Section bands are untouched.
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                            ImVec2(style.FramePadding.x, std::max(0.0f, style.FramePadding.y - 1.0f)));
         std::vector<float> widths;
         widths.reserve(list.size());
         for (const PageAction& a : list)
@@ -203,10 +209,14 @@ namespace Arcane::Editor
             ImGui::SetItemTooltip("%s", a.tooltip);
         }
         if (shown == list.size())
+        {
+            ImGui::PopStyleVar();
             return;
+        }
         if (shown > 0) ImGui::SameLine();
         if (ImGui::Button(ICON_LC_ELLIPSIS "##asset_more"))
             ImGui::OpenPopup("##asset_more");
+        ImGui::PopStyleVar();   // before the popup: its menu items keep the stock frame
         ImGui::SetItemTooltip("More actions");
         const PopupAnchor anchor = LastItemAnchor();
         if (BeginPopupBelow("##asset_more", anchor))
@@ -338,10 +348,21 @@ namespace Arcane::Editor
         const float spacing = ImGui::GetStyle().ItemSpacing.x;
         const float avail = ImGui::GetContentRegionAvail().x;
         const bool compactHeader = avail >= kPreviewCompactHeaderMinWidth;
-        const float thumbSize = AssetPageThumbSize(compactHeader, avail, spacing, innerHeight,
-                                                   ThumbHeightFraction(), ThumbFloor());
+        float thumbSize = AssetPageThumbSize(compactHeader, avail, spacing, innerHeight,
+                                             ThumbHeightFraction(), ThumbFloor());
         if (compactHeader)
         {
+            // The compact header row is never taller than its text column (T3
+            // gate, s5.6 at 1080p): the thumb is capped at the ##previewMeta
+            // column's measured content height, but never below the cvar
+            // floor. The height is measured inside the column (it does not
+            // depend on the column's width: every line ellipsizes) and kept in
+            // this window's state storage, so the first frame draws the plain
+            // formula and every later frame -- from the second on -- the cap.
+            ImGuiStorage* storage = ImGui::GetStateStorage();
+            const ImGuiID metaHeightKey = ImGui::GetID("##previewMetaHeight");
+            if (const float metaHeight = storage->GetFloat(metaHeightKey, 0.0f); metaHeight > 0.0f)
+                thumbSize = std::min(thumbSize, std::max(ThumbFloor(), metaHeight));
             ImGui::BeginGroup();
             drawThumb(thumbSize);
             ImGui::EndGroup();
@@ -351,11 +372,19 @@ namespace Arcane::Editor
             // Sized by its content, not the thumb (s5.6): a shrunken thumb never
             // clips the cook row.
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            float measured = 0.0f;
             if (ImGui::BeginChild("##previewMeta", ImVec2(std::max(0.0f, avail - thumbSize - spacing), 0.0f),
                                   ImGuiChildFlags_AutoResizeY))
+            {
                 drawMeta();
+                // Zero padding: the cursor starts at y 0 and sits one ItemSpacing
+                // below the last (cook) line.
+                measured = ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y;
+            }
             ImGui::EndChild();
             ImGui::PopStyleVar();
+            if (measured > 0.0f)
+                storage->SetFloat(metaHeightKey, measured);
         }
         else
         {
@@ -377,6 +406,10 @@ namespace Arcane::Editor
             row.push_back({ ICON_LC_FLAG, "Set as Boot Scene", "##asset_bootscene", true, [&] { actions.setBootScene = e->guid; } });
         else if (e->kind == AssetKind::Texture)
             row.push_back({ ICON_LC_STICKER, "Create Sprite", "##asset_createsprite", true, [&] { actions.createSpriteFrom = e->guid; } });
+        // s5.6 at 1080p (T3 gate): half the stock ItemSpacing.y between the
+        // header (thumb + text column, or the stacked meta) and the action row
+        // (4 -> 2 px). Local to this one gap, like the row's FramePadding.
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y * 0.5f);
         DrawActionRow(row);
 
         // Section bands replace the separators (critique Inspector #10).

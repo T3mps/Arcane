@@ -15,6 +15,7 @@
 #include "Panels/AssetPanelCommon.hpp"      // AssetPanelServices/AssetPanelActions
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/TextureMetaPanel.hpp"      // ReadTextureMetaSettingsDisplay
+#include "Widgets/EditorTheme.hpp"          // ApplyEditorTheme (the 1080p fit case)
 #include "Widgets/IconsLucide.h"            // ICON_LC_COPY
 #include "Widgets/PropertyGrid.hpp"
 
@@ -451,6 +452,56 @@ TEST_CASE("DrawAssetPage: a texture with a derived child fits 392x330; every act
         if (width > 300.0f) CHECK(viaMore == 0);                     // all on the row at 392
         else                CHECK(viaMore > 0);                      // what does not fit moved into ##asset_more
     }
+}
+
+// s5.6's outcome on the REAL geometry (T3-GATE fix round 1): the 392x330
+// window above is a proxy the desk never has. At 1080p the Assets-only
+// Inspector's `##page` child (s5.7: no WindowPadding, under the pinned header)
+// is about 376x290 by the spec's estimate (:1576), and MEASURED 376x281 on the
+// T3 desk (desk-t3/02: the scrollbar track spans 281 px; its 268 px grab is
+// 277 x 281/290, i.e. content 290, ScrollMax 9). The editor's font is 16 px,
+// not ProggyClean's 13. The test draws the measured 281 and REQUIREs the
+// ruling's ceiling (<= 376x288) and the font as preconditions, so the geometry
+// cannot drift lenient: a texture with one derived child, Derived and Import
+// open, must not scroll the PAGE CHILD.
+TEST_CASE("DrawAssetPage: a texture with a derived child fits the 1080p ##page child (376x281, 16 px font)", "[editor][inspector]")
+{
+    AssetPageProject p("arcane_asset_page_fit1080_test", "brick.png", /*derived*/ true);
+    AssetPageUi ui;
+    ApplyEditorTheme(ImGui::GetStyle());                             // the editor's metrics (stock paddings + FrameBorderSize 1)
+    ImGui::GetStyle().FontSizeBase = 16.0f;                          // InstallEditorFonts' default size: 16 px lines, 22 px frames
+    AssetPanelServices services;
+    AssetPanelActions actions;
+    const auto frame = [&]
+    {
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(392.0f, 297.0f), ImGuiCond_Always);   // 8 px padding: the desk's 376x281 child
+        ImGui::Begin("t", nullptr, ImGuiWindowFlags_NoTitleBar);
+        (void)ImGui::BeginChild("##page", ImVec2(0.0f, 0.0f), ImGuiChildFlags_NavFlattened);   // InspectorWindows.cpp's flags
+        Arcane::Editor::PropertyGrid g(ui.grid);
+        DrawAssetPage(g, *p.model.Find(p.tex), p.model, &*p.project, services, actions);
+        ImGui::EndChild();
+        ImGui::End();
+        ImGui::Render();
+    };
+    // A window's ScrollMax is computed in Begin from the PREVIOUS frame's
+    // content: after the third frame it describes frame 2, the first frame laid
+    // out with the settled ##previewMeta measurement.
+    frame(); frame(); frame();
+    ImGuiWindow* w = ImGui::FindWindowByName("t");
+    REQUIRE(w != nullptr);
+    ImGuiWindow* page = nullptr;
+    for (ImGuiWindow* c : ImGui::GetCurrentContext()->Windows)
+        if (c->ParentWindow == w && std::string(c->Name).find("##page") != std::string::npos) page = c;
+    REQUIRE(page != nullptr);
+    REQUIRE(ImGui::GetStyle().FontSizeBase == 16.0f);
+    REQUIRE(page->Size.x <= 376.0f);                                 // preconditions: never roomier than the desk
+    REQUIRE(page->Size.y <= 288.0f);
+    REQUIRE(page->WindowPadding.y == 0.0f);
+    INFO("page " << page->Size.x << "x" << page->Size.y << ", content " << page->ContentSize.y);
+    CHECK(page->ScrollMax.y == 0.0f);                                // the s5.6 outcome: no scrollbar at 1080p
 }
 
 TEST_CASE("DrawAssetPage: the name and guid ellipsize in a 110 px text column", "[editor][inspector]")
