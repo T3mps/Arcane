@@ -11,6 +11,8 @@
 #include "Panels/AssetBrowserPanel.hpp"   // AssetBrowserPanelState -- the state this helper writes
 #include "Panels/AssetPanelCommon.hpp"
 #include "Panels/AssetPanelModel.hpp"
+#include "Widgets/EditorTheme.hpp"         // Theme::kAmber / kTextDim -- DigestRefusedStyle's two looks
+#include "Widgets/IconsLucide.h"
 
 #include <Arcane/Project/AssetRegistry.hpp>
 
@@ -19,6 +21,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -153,4 +156,36 @@ TEST_CASE("RevealAssetInBrowser is a no-op for a guid the model no longer knows"
     CHECK(state.railKind == 1);
     CHECK_FALSE(model.selected.IsValid());
     CHECK_FALSE(state.revealPending);
+}
+
+// Node page phase s6.7: the refused count's look, shared by the health
+// digest and the Status panel's refused tile. Pure -- no ImGui context.
+namespace
+{
+    bool SameRgba(const ImVec4& a, const ImVec4& b) { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; }
+}
+
+TEST_CASE("DigestRefusedStyle: zero is quiet, any refusal is the amber alarm", "[editor][assets]")
+{
+    const std::string_view triangle = ICON_LC_TRIANGLE_ALERT;
+    for (int quiet : { 0, -3 })
+    {
+        INFO(quiet);
+        const RefusedStyle s = DigestRefusedStyle(quiet);
+        CHECK_FALSE(s.alarm);
+        CHECK(s.text == "0 refused");
+        CHECK(s.text.find(triangle) == std::string::npos);
+        CHECK(SameRgba(s.color, Theme::kTextDim));
+        CHECK(s.tileVariant == 0);
+    }
+    for (int loud : { 1, 12 })
+    {
+        INFO(loud);
+        const RefusedStyle s = DigestRefusedStyle(loud);
+        CHECK(s.alarm);
+        CHECK(s.text.rfind(triangle, 0) == 0);   // starts with the triangle
+        CHECK(s.text == std::string(triangle) + " " + std::to_string(loud) + " refused");
+        CHECK(SameRgba(s.color, Theme::kAmber));
+        CHECK(s.tileVariant == 1);
+    }
 }

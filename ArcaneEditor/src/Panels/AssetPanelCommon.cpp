@@ -5,7 +5,7 @@
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelEntry/CookState/KindIcon/KindLabel/GroupParentOf
 #include "Panels/CreateAssetDialog.hpp"    // CreateAssetKind
 #include "Widgets/EditorFonts.hpp"         // PillWidth measures in AssetPill's own font
-#include "Widgets/EditorTheme.hpp"         // Theme::kAmber -- the digest chip's refused segment
+#include "Widgets/EditorTheme.hpp"         // Theme::kAmber / kTextDim -- DigestRefusedStyle's two looks
 #include "Widgets/EditorWidgets.hpp"       // AssetPill
 #include "Widgets/IconsLucide.h"
 
@@ -586,30 +586,45 @@ namespace Arcane::Editor
         ImGui::EndChild();
     }
 
+    RefusedStyle DigestRefusedStyle(int refused)
+    {
+        RefusedStyle s;
+        s.alarm = refused > 0;
+        if (s.alarm)
+        {
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "%s %d refused", ICON_LC_TRIANGLE_ALERT, refused);
+            s.text = buf;
+        }
+        else
+            s.text = "0 refused";
+        s.color       = s.alarm ? Theme::kAmber : Theme::kTextDim;
+        s.tileVariant = s.alarm ? 1 : 0;
+        return s;
+    }
+
     void DrawAssetPanelHealthDigest(const AssetPanelBottomBar& bar, const AssetPanelModel& model,
                                     const AssetPanelServices& services, AssetPanelActions& actions)
     {
         const HealthCounts health = model.Health();
 
-        // `refusedPart` + `restPart` concatenated character-for-character is
+        // `refused.text` + `restPart` concatenated character-for-character is
         // what gets DRAWN below (two colored segments, zero SameLine spacing
         // between them), so measuring their concatenation is exactly the
         // width that draw occupies.
-        char refusedPart[48];
-        std::snprintf(refusedPart, sizeof(refusedPart), "%s %d refused",
-                      ICON_LC_TRIANGLE_ALERT, health.refused);
+        const RefusedStyle refused = DigestRefusedStyle(health.refused);
         char restPart[96];
         std::snprintf(restPart, sizeof(restPart),
                       " \xC2\xB7 %d cooking \xC2\xB7 %d unused", health.queued, health.unused);
         char digestFull[160];
-        std::snprintf(digestFull, sizeof(digestFull), "%s%s", refusedPart, restPart);
+        std::snprintf(digestFull, sizeof(digestFull), "%s%s", refused.text.c_str(), restPart);
         const float digestWidth = ImGui::CalcTextSize(digestFull).x;
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), bar.rightEdgeX - digestWidth));
         ImGui::SetCursorPosY(bar.padY);
         const ImVec2 digestScreenPos = ImGui::GetCursorScreenPos();
-        ImGui::TextColored(Theme::kAmber, "%s", refusedPart);
+        ImGui::TextColored(refused.color, "%s", refused.text.c_str());
         ImGui::SameLine(0.0f, 0.0f);
         ImGui::TextDisabled("%s", restPart);
 

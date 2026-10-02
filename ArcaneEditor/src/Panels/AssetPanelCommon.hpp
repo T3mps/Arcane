@@ -6,6 +6,8 @@
 
 #include <Arcane/Guid.hpp>
 
+#include <imgui.h>   // ImVec4 (RefusedStyle)
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -313,8 +315,22 @@ namespace Arcane::Editor
     AssetPanelBottomBar BeginAssetPanelBottomBar(const char* id);
     void EndAssetPanelBottomBar();
 
-    // The health-digest chip, right-aligned inside an open bottom bar: amber
-    // "N refused" + dim "- N cooking - N unused", drawn as two flush
+    // The refused count's look, shared by the health digest and the Status
+    // panel's refused tile (node page phase s6.7): amber + the triangle only
+    // when something actually refused; at zero, dim "0 refused" and a Text-
+    // coloured tile icon. A negative count reads as 0.
+    struct RefusedStyle
+    {
+        bool        alarm = false;   // refused > 0
+        std::string text;            // ICON_LC_TRIANGLE_ALERT " N refused" when alarm, else "0 refused"
+        ImVec4      color{};         // Theme::kAmber when alarm, else Theme::kTextDim
+        int         tileVariant = 0; // StatTile variant: 1 when alarm, else 0
+    };
+    [[nodiscard]] RefusedStyle DigestRefusedStyle(int refused);
+
+    // The health-digest chip, right-aligned inside an open bottom bar:
+    // "N refused" (amber with the triangle only when N > 0, DigestRefusedStyle)
+    // + dim "- N cooking - N unused", drawn as two flush
     // segments, with a single-hit-target click-through that raises
     // `actions.showStatus`. The counts ALWAYS render (spec s7.3: information
     // first, the chip never disappears); only the click goes inert when
