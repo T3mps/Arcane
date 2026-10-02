@@ -661,6 +661,174 @@ TEST_CASE("ShaderEditorDocument T3-D6: an instance of a pass-chain material comp
     compiler.Shutdown();
 }
 
+TEST_CASE("ShaderEditorDocument T3-D6 fix 1: a chain INSTANCE publishes a failing pass 1+ to Problems, named by its base's pass",
+          "[editor][material][shadercompile][diagnostics]")
+{
+    // Review finding (T3-D6 fix round 1): Rebuild/BindIfComplete compile an
+    // instance of a chain base per pass (CompilesAsChain), and ConsumeResult
+    // keeps each pass's diags in its PassJobs, mirroring only pass 0 into
+    // m_diags. ForEachDiagnosticRow still branched on the AUTHORING ChainMode()
+    // (false for every instance), so it walked m_diags alone: a failing 'gain'
+    // pass read "errors" on the toolbar while Problems held nothing for it.
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const fs::path dir = TempDir("chaininstancediag");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "ChainInstanceDiag").has_value());
+    const fs::path content = dir / "Game" / "Content";
+
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate();
+    base.name = "BrokenChainBase";
+    base.snippet = kSnippet;
+    base.passes.push_back({ "swap",
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv).grba; }\n" });
+    base.passes.push_back({ "gain",
+        "float4 shade(Varyings v)\n"
+        "{ return InputTexture.Sample(MaterialSampler, v.uv) * kNoSuchGainSymbol; }\n" });
+    REQUIRE(Arcane::SaveMaterialAsset(content / "broken_chain_base.arcmat", base));
+
+    Arcane::MaterialAssetData inst;
+    inst.id = Arcane::Guid::Generate();
+    inst.parent = base.id;
+    inst.name = "BrokenChainBase_Inst";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "broken_chain_base_inst.arcmat", inst));
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("data/shaders");
+    DocServices services;
+    services.runtime = &rt;
+    services.compiler = &compiler;
+    services.sources = &sources;
+
+    {
+        const auto loaded = Arcane::LoadMaterialAsset(content / "broken_chain_base_inst.arcmat");
+        REQUIRE(loaded.has_value());
+        ShaderEditorDocument doc(services, content / "broken_chain_base_inst.arcmat", *loaded);
+        REQUIRE(doc.IsInstance());
+        REQUIRE(doc.ParseErrors().empty());   // the stitch is fine; the compile is not
+
+        std::vector<Arcane::ShaderCompileResult> results;
+        for (int i = 0; i < 2000 && results.size() < 6; ++i)
+        {
+            compiler.Poll(/*now=*/0.0);
+            auto batch = compiler.Drain();
+            results.insert(results.end(), std::make_move_iterator(batch.begin()),
+                           std::make_move_iterator(batch.end()));
+            if (results.size() < 6)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        REQUIRE(results.size() == 6);
+        for (Arcane::ShaderCompileResult& r : results)
+            CHECK(doc.ConsumeResult(r));
+        CHECK(doc.ComputeStatus().compile == Arcane::Editor::CompileStatus::Errors);
+
+        doc.PublishDiagnostics();
+        const std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+        bool gainRow = false;
+        for (const Arcane::Diagnostic& d : rows)
+        {
+            UNSCOPED_INFO("published: " << d.message);
+            if (d.severity == Arcane::DiagSeverity::Error &&
+                d.message.find("gain: error") != std::string::npos &&
+                d.message.find("kNoSuchGainSymbol") != std::string::npos)
+                gainRow = true;
+        }
+        INFO("rows published: " << rows.size());
+        CHECK(gainRow);   // the cause is surfaced, named by the base's pass
+    }
+    compiler.Shutdown();
+    store.UninstallEngineSink();
+}
+
+TEST_CASE("ShaderEditorDocument T3-D6 fix 1: an instance publishes its BASE's broken vertex stage as a vertex row",
+          "[editor][material][shadercompile][diagnostics]")
+{
+    // Review finding (T3-D6 fix round 1): Rebuild measures m_vsLineOffset
+    // against the COMPILED vertex snippet (the base's, for an instance), but
+    // HasErrors and ForEachDiagnosticRow filtered against m_data.vertexSnippet
+    // -- empty for every instance -- so a broken base vertex stage never
+    // produced its "vertex:" row (nor its vertex-body HasErrors hit).
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+
+    const fs::path dir = TempDir("instancevertexdiag");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "InstanceVertexDiag").has_value());
+    const fs::path content = dir / "Game" / "Content";
+
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate();
+    base.name = "BrokenVertexBase";
+    base.snippet = kSnippet;
+    base.vertexSnippet =
+        "Varyings displace(Varyings v)\n"
+        "{\n"
+        "    v.pos.x += kNoSuchVertexSymbol;\n"
+        "    return v;\n"
+        "}\n";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "broken_vertex_base.arcmat", base));
+
+    Arcane::MaterialAssetData inst;
+    inst.id = Arcane::Guid::Generate();
+    inst.parent = base.id;
+    inst.name = "BrokenVertexBase_Inst";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "broken_vertex_base_inst.arcmat", inst));
+
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    Arcane::ShaderCompiler compiler;
+    REQUIRE(compiler.Initialize(/*debounceSeconds=*/0.0));
+    Arcane::ShaderSourceProvider sources;
+    sources.AddRoot("data/shaders");
+    DocServices services;
+    services.runtime = &rt;
+    services.compiler = &compiler;
+    services.sources = &sources;
+
+    {
+        const auto loaded = Arcane::LoadMaterialAsset(content / "broken_vertex_base_inst.arcmat");
+        REQUIRE(loaded.has_value());
+        ShaderEditorDocument doc(services, content / "broken_vertex_base_inst.arcmat", *loaded);
+        REQUIRE(doc.IsInstance());
+        REQUIRE(doc.ParseErrors().empty());
+
+        std::vector<Arcane::ShaderCompileResult> results;
+        for (int i = 0; i < 2000 && results.size() < 2; ++i)
+        {
+            compiler.Poll(/*now=*/0.0);
+            auto batch = compiler.Drain();
+            results.insert(results.end(), std::make_move_iterator(batch.begin()),
+                           std::make_move_iterator(batch.end()));
+            if (results.size() < 2)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        REQUIRE(results.size() == 2);
+        for (Arcane::ShaderCompileResult& r : results)
+            CHECK(doc.ConsumeResult(r));
+        CHECK(doc.ComputeStatus().compile == Arcane::Editor::CompileStatus::Errors);
+
+        doc.PublishDiagnostics();
+        const std::vector<Arcane::Diagnostic> rows = store.Snapshot();
+        bool vertexRow = false;
+        for (const Arcane::Diagnostic& d : rows)
+        {
+            UNSCOPED_INFO("published: " << d.message);
+            if (d.severity == Arcane::DiagSeverity::Error &&
+                d.message.find("vertex: error(3)") != std::string::npos)
+                vertexRow = true;   // line 3 of the BASE's vertex body
+        }
+        INFO("rows published: " << rows.size());
+        CHECK(vertexRow);
+    }
+    compiler.Shutdown();
+    store.UninstallEngineSink();
+}
+
 TEST_CASE("ReloadFromDisk discards the working copy; DependsOn walks the chain",
           "[editor][material]")
 {

@@ -607,6 +607,11 @@ namespace Arcane::Editor
             return m_surface == 0 && src &&
                    (!src->passes.empty() || !src->baseInputs.empty());
         }
+        // The vertex stage this document compiles (fix round 1): the BASE's
+        // for an instance (an instance carries no snippets), else its own.
+        // m_vsLineOffset is measured against exactly this text, so every
+        // vertex-body filter (HasErrors, ForEachDiagnosticRow) reads it too.
+        const std::string& CompiledVertexSnippet() const;
         void   BindChainIfComplete();
 
         // ---- The preview ----

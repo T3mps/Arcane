@@ -1227,9 +1227,7 @@ namespace Arcane::Editor
         }
 
         // Instances inherit the base's vertex stage (they carry no snippets).
-        const std::string& vertexSnippet =
-            IsInstance() && !m_parentChain.empty() ? m_parentChain.back().vertexSnippet
-                                                   : m_data.vertexSnippet;
+        const std::string& vertexSnippet = CompiledVertexSnippet();
         Arcane::MaterialBuildResult build =
             Arcane::BuildMaterialShaderSource(*templateText, SnippetSource(), m_title,
                                               SurfaceOf(m_surface), vertexSnippet);
@@ -1819,11 +1817,11 @@ namespace Arcane::Editor
                 if (d.severity == Arcane::ShaderDiagSeverity::Error)
                     return true;
         // Vertex-stage errors, filtered to the vertex body (same filter as
-        // ForEachDiagnosticRow's vertex block).
-        if (!m_data.vertexSnippet.empty())
+        // ForEachDiagnosticRow's vertex block). CompiledVertexSnippet: an
+        // instance compiles its BASE's vertex stage (fix round 1).
+        if (const std::string& vs = CompiledVertexSnippet(); !vs.empty())
         {
-            const int vsLines = 1 + static_cast<int>(std::count(
-                m_data.vertexSnippet.begin(), m_data.vertexSnippet.end(), '\n'));
+            const int vsLines = 1 + static_cast<int>(std::count(vs.begin(), vs.end(), '\n'));
             for (const Arcane::ShaderDiag& d : m_vsDiags)
             {
                 const int rel = d.line - m_vsLineOffset;
@@ -2002,6 +2000,13 @@ namespace Arcane::Editor
             m_activePass <= static_cast<int>(m_data.passes.size()))
             return m_data.passes[static_cast<std::size_t>(m_activePass) - 1].snippet;
         return m_snippet;
+    }
+
+    const std::string& ShaderEditorDocument::CompiledVertexSnippet() const
+    {
+        static const std::string kNone;
+        const Arcane::MaterialAssetData* src = CompiledSource();
+        return src ? src->vertexSnippet : kNone;
     }
 
     std::string ShaderEditorDocument::PassLabel(std::size_t pass) const
@@ -4060,11 +4065,11 @@ namespace Arcane::Editor
         // Vertex-stage rows: ONLY diags whose line falls inside the vertex
         // body -- both stages compile the same TU, so pixel-body errors appear
         // in the vs result too and are already carried by the compile rows
-        // below. Same filter as HasErrors.
-        if (!m_data.vertexSnippet.empty())
+        // below. Same filter as HasErrors (the COMPILED vertex stage: an
+        // instance's is its base's).
+        if (const std::string& vs = CompiledVertexSnippet(); !vs.empty())
         {
-            const int vsLines = 1 + static_cast<int>(std::count(
-                m_data.vertexSnippet.begin(), m_data.vertexSnippet.end(), '\n'));
+            const int vsLines = 1 + static_cast<int>(std::count(vs.begin(), vs.end(), '\n'));
             for (const Arcane::ShaderDiag& d : m_vsDiags)
             {
                 const int rel = d.line - m_vsLineOffset;
@@ -4093,10 +4098,13 @@ namespace Arcane::Editor
                           "(" + std::to_string(line) + "): " + d.message;
             fn(row);
         };
-        if (ChainMode())
+        if (CompilesAsChain())
         {
-            // Chain mode owns them per pass; m_diags only MIRRORS pass 0 there
-            // (for the badges), so the single-path loop must not also run.
+            // A chain compile owns them per pass; m_diags only MIRRORS pass 0
+            // there (for the badges), so the single-path loop must not also
+            // run. CompilesAsChain, not the authoring ChainMode: an instance of
+            // a chain base compiles per pass too, and a failing pass 1+ must
+            // still reach the Problems pane (fix round 1).
             for (std::size_t p = 0; p < m_passJobs.size(); ++p)
             {
                 const int offset = p < m_passLineOffsets.size() ? m_passLineOffsets[p] : 0;
@@ -4708,7 +4716,7 @@ namespace Arcane::Editor
             return;
         const std::vector<Arcane::ShaderDiag>* diags = &m_diags;
         int offset = m_snippetLineOffset;
-        if (ChainMode() && pass < m_passJobs.size())
+        if (CompilesAsChain() && pass < m_passJobs.size())   // the compile predicate (per-pass diags)
         {
             diags = &m_passJobs[pass].diags;
             if (pass < m_passLineOffsets.size())
