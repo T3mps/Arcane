@@ -131,6 +131,34 @@ namespace Arcane::Editor
             if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) || ImGui::GetIO().WantTextInput) return false;
             return !state.renameTarget.IsValid();   // safe: DrawActions/DrawMaps sweep a target whose row is not drawn this frame
         }
+
+        // A pending add on this action replaces its + Binding ghost: nothing is
+        // in the draft yet. Simple add: one amber countdown row; composite: a
+        // header ghost, then per role the heard control, the live amber
+        // countdown, or a dim "<role> -- waiting".
+        void DrawPendingGhosts(const PendingAdd& p, float indent, const InputActionsDocumentWidgets::Services& services)
+        {
+            char countdown[64];
+            std::snprintf(countdown, sizeof countdown, "Press a control... Esc cancels · %.0f s",
+                          services.rebindRemaining ? services.rebindRemaining() : 0.0f);
+            auto line = [&](float extra, const ImVec4& color, const std::string& text)
+            {
+                const ImVec2 at = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddText(ImVec2(at.x + indent + extra, at.y + (24.0f - ImGui::GetFontSize()) * 0.5f),
+                                                    ImGui::ColorConvertFloat4ToU32(color), text.c_str());
+                ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, 24.0f));   // the RowWithThumb pitch
+            };
+            if (p.kind == PendingAdd::Kind::Binding) { line(0.0f, Theme::kAmber, countdown); return; }
+            const bool headed = p.kind != PendingAdd::Kind::Part;
+            if (headed) line(0.0f, Theme::kText, p.composite == "1DAxis" ? "1D Axis" : "2D Vector");
+            for (std::size_t i = 0; i < p.roles.size(); ++i)
+            {
+                const float extra = headed ? kIndent : 0.0f;
+                if (i < p.captured.size())       line(extra, Theme::kText, p.roles[i] + ": " + InputActions::DisplayForPath(p.captured[i]).control);
+                else if (i == p.captured.size()) line(extra, Theme::kAmber, p.roles[i] + ": " + countdown);
+                else                             line(extra, Theme::kTextDim, p.roles[i] + " -- waiting");
+            }
+        }
     }
 
     void InputActionsDocumentWidgets::SelectRow(InputActionsEditorModel& model, const InputRow& row)
@@ -175,7 +203,7 @@ namespace Arcane::Editor
         // completing click retargets nothing and no other row's menu opens.
         // Scrolling pauses for the capture's duration (<= 10 s; Escape ends it).
         ImGui::BeginDisabled(swallowed);
-        DrawToolbar(model, state, edit);
+        DrawToolbar(model, state, services, edit);
         ImGui::EndDisabled();
         ImGui::Separator();
         const ImGuiWindowFlags colFlags = swallowed ? ImGuiWindowFlags_NoInputs : 0;
@@ -191,8 +219,11 @@ namespace Arcane::Editor
         if (edit) edit();   // AFTER the draw: the draft must not mutate under the row loop
     }
 
-    void InputActionsDocumentWidgets::DrawToolbar(InputActionsEditorModel& model, InputActionsDocumentState& state, Edit& edit)
+    void InputActionsDocumentWidgets::DrawToolbar(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services, Edit& edit)
     {
+        // A filter that names no scheme any more (EditScheme renamed it,
+        // RemoveScheme removed it) resets to All, so adds never inherit it.
+        if (!state.schemeFilter.empty() && !SchemeGroupExists(model.Draft(), state.schemeFilter)) state.schemeFilter.clear();
         const Guid map = model.SelectedMap(), action = model.SelectedAction();
         if (ImGui::Button(ICON_LC_PLUS " Add " ICON_LC_CHEVRON_DOWN)) ImGui::OpenPopup("##input_add");
         const PopupAnchor addAnchor = LastItemAnchor();
@@ -202,11 +233,13 @@ namespace Arcane::Editor
             // ("Action Map 2", "Action 3" -- Task 6); the new row opens in rename.
             if (ImGui::MenuItem("Action map")) edit = [&model, &state] { if (model.AddMap()) OpenRenameOn(model, state, model.SelectedMap()); };
             if (ImGui::MenuItem("Action", nullptr, false, map.IsValid())) edit = [&model, &state, map] { if (model.AddAction(map)) OpenRenameOn(model, state, model.SelectedAction()); };
-            if (ImGui::MenuItem("Binding", nullptr, false, action.IsValid())) edit = [&model, &state, map, action] { if (model.AddBinding(map, action)) state.scrollRowToSelection = true; };
+            const std::vector<std::string> groups = PrefillGroups(model.Draft(), state.schemeFilter);
+            auto listen = [&](PendingAdd add) { if (services.beginAdd) services.beginAdd(std::move(add)); };
+            if (ImGui::MenuItem("Binding", nullptr, false, action.IsValid())) listen(MakeAddBinding(map, action, groups));
             if (ImGui::BeginMenu("Composite", action.IsValid()))
             {
-                if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "1DAxis")) state.scrollRowToSelection = true; };
-                if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "2DVector")) state.scrollRowToSelection = true; };
+                if (ImGui::MenuItem("1D axis"))   listen(MakeAddComposite(map, action, "1DAxis", groups));
+                if (ImGui::MenuItem("2D vector")) listen(MakeAddComposite(map, action, "2DVector", groups));
                 ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Control scheme")) state.schemePopupPending = true;
@@ -348,11 +381,21 @@ namespace Arcane::Editor
         const Guid map = model.SelectedMap();
         if (row.kind == InputRowKind::AddBinding)
         {
+            if (const PendingAdd* pending = services.pending ? services.pending() : nullptr; pending && pending->action == row.actionId)
+            {
+                DrawPendingGhosts(*pending, indent, services);
+                ImGui::PopID(); ImGui::PopID();
+                return;
+            }
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
             ImGui::PushStyleColor(ImGuiCol_Button, Theme::kNone);
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::kTextDim);
-            if (ImGui::SmallButton(ICON_LC_PLUS " Binding") && !swallowed)
-                edit = [&model, &state, map, action = row.actionId] { if (model.AddBinding(map, action)) state.scrollRowToSelection = true; };
+            const bool add = ImGui::SmallButton(ICON_LC_PLUS " Binding");
+            if (state.probe)   // TEST SEAM
+                (*state.probe)["add:" + row.actionId.ToString()] = ImVec2((ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x) * 0.5f,
+                                                                          (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
+            if (add && !swallowed && services.beginAdd)
+                services.beginAdd(MakeAddBinding(map, row.actionId, PrefillGroups(model.Draft(), state.schemeFilter)));
             ImGui::PopStyleColor(2);
             ImGui::PopID(); ImGui::PopID();
             return;
@@ -397,6 +440,7 @@ namespace Arcane::Editor
                                               row.kind == InputRowKind::Action ? ChevronCell() : indent);
         if (rebinding) ImGui::PopStyleColor();
         const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // RowWithThumb parked the cursor at the next row's start; restored at the end
+        if (state.probe) (*state.probe)[row.id.ToString()] = ImVec2(rowTop.x + 40.0f, (rowTop.y + rowBottom.y) * 0.5f);   // TEST SEAM (the maps column's rule)
         if (r.clicked && !swallowed) SelectRow(model, row);
         if (ScrollsIntoView(model, state, row))
         {
@@ -459,11 +503,12 @@ namespace Arcane::Editor
             {
                 if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, row.id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollRowToSelection = true; };
-                if (ImGui::MenuItem("Add binding")) edit = [&model, &state, map, id = row.id] { if (model.AddBinding(map, id)) state.scrollRowToSelection = true; };
+                const std::vector<std::string> groups = PrefillGroups(model.Draft(), state.schemeFilter);
+                if (ImGui::MenuItem("Add binding") && services.beginAdd) services.beginAdd(MakeAddBinding(map, row.id, groups));
                 if (ImGui::BeginMenu("Add composite"))
                 {
-                    if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "1DAxis")) state.scrollRowToSelection = true; };
-                    if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "2DVector")) state.scrollRowToSelection = true; };
+                    if (ImGui::MenuItem("1D axis") && services.beginAdd)   services.beginAdd(MakeAddComposite(map, row.id, "1DAxis", groups));
+                    if (ImGui::MenuItem("2D vector") && services.beginAdd) services.beginAdd(MakeAddComposite(map, row.id, "2DVector", groups));
                     ImGui::EndMenu();
                 }
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
@@ -475,7 +520,12 @@ namespace Arcane::Editor
                 {
                     const bool axis = row.name == "1D Axis";
                     for (const char* role : axis ? std::vector<const char*>{ "negative", "positive" } : std::vector<const char*>{ "up", "down", "left", "right" })
-                        if (ImGui::MenuItem(role)) edit = [&model, &state, id = row.id, role] { if (model.AddPart(id, role)) state.scrollRowToSelection = true; };
+                        if (ImGui::MenuItem(role) && services.beginAdd)
+                        {
+                            PendingAdd add = MakeAddPart(row.id, role);
+                            add.map = map; add.action = row.actionId;   // its ghost rows draw under this action's + Binding row
+                            services.beginAdd(std::move(add));
+                        }
                     ImGui::EndMenu();
                 }
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };

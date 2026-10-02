@@ -79,17 +79,15 @@ namespace Arcane::Editor
         // an empty path, an empty parts list, an invalid role, a group no
         // scheme's bindingGroup names (ApplyEdit does not validate).
         [[nodiscard]] bool AddBinding(const Guid& map, const Guid& action,
-                                      std::string path = "<Keyboard>/space",   // default deleted in T6-B4
+                                      std::string path,
                                       std::vector<std::string> groups = {});
-        [[nodiscard]] bool AddComposite(const Guid& map, const Guid& action,
-                                        std::string composite);                // deleted in T6-B4
         [[nodiscard]] bool AddComposite(const Guid& map, const Guid& action, std::string composite,
                                         std::vector<std::pair<std::string, std::string>> parts,   // (role, path), capture order
                                         std::vector<std::string> groups = {});
         [[nodiscard]] bool RemoveBinding(const Guid& map, const Guid& action,
                                          const Guid& binding);
         [[nodiscard]] bool AddPart(const Guid& binding, std::string role,
-                                   std::string path = "<Keyboard>/space");
+                                   std::string path);
         [[nodiscard]] bool RemovePart(const Guid& binding, const Guid& part);
         // Re-path several parts of ONE composite in one "Rebind composite" step
         // (a whole-composite double-click rebind). Refuses a part id the

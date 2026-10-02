@@ -296,6 +296,8 @@ namespace Arcane::Editor
             services.rebindRemaining = [this] { return capture_.Remaining(); };
             services.glow            = [this](const Guid& id) { return state_.previewArmed ? preview_.BindingValue(id) : 0.0f; };
             services.inputSwallowed  = [this] { return InputSwallowed(); };
+            services.beginAdd        = [this](PendingAdd add) { BeginPending(std::move(add)); };
+            services.pending         = [this]() -> const PendingAdd* { return Pending(); };
             widgets_.Draw(model_, state_, services);
         }
         ImGui::End();

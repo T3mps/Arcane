@@ -210,11 +210,11 @@ namespace
     // map rows through the state probe seam.
     struct KeysUi : Ui
     {
-        Arcane::Editor::InputActionsEditorModel model{ nlohmann::json::parse(kDoc) };
+        Arcane::Editor::InputActionsEditorModel model;
         Arcane::Editor::InputActionsDocumentState state;
         Arcane::Editor::InputActionsDocumentWidgets widgets;
         Arcane::Editor::InputActionsDocumentWidgets::Services services;
-        KeysUi()
+        explicit KeysUi(const char* json = kDoc) : model(nlohmann::json::parse(json))
         {
             state.probe = &probe;
             services.glow = [this](const Guid& id) {
@@ -420,4 +420,42 @@ TEST_CASE("input document: a pending add whose action vanished commits nothing",
     CHECK_FALSE(ui.doc->InputSwallowed());
     CHECK(ui.doc->Model().FindNode(G(kJumpId)) == nullptr);
     CHECK(std::string(rig.commands.UndoLabel()) == "Remove action");   // the refused commit pushed nothing
+}
+
+TEST_CASE("input document: + Binding listens instead of inserting Space, prefilled with the scheme filter; W commits it", "[editor][input]")
+{
+    UndoRig rig;
+    DocUi ui(kCaptureDoc, &rig.commands);
+    ui.doc->MutableState().schemeFilter = "KeyboardMouse";
+    ui.Frame(); ui.Frame();
+    const nlohmann::json before = ui.doc->Model().Draft();
+    ui.Click(ui.At(std::string("add:") + kJumpId));
+    REQUIRE(ui.doc->Pending());
+    CHECK(ui.doc->Pending()->groups == std::vector<std::string>{ "KeyboardMouse" });
+    ui.Frame();
+    CHECK(ui.doc->InputSwallowed());
+    CHECK(ui.doc->Model().Draft() == before);            // no Space placeholder
+    ui.Press(26);
+    const nlohmann::json bindings = ui.doc->Model().Draft()["actionMaps"][0]["actions"][0]["bindings"];
+    REQUIRE(bindings.size() == 2);
+    CHECK(bindings[1]["path"] == "<Keyboard>/scancode/w");
+    CHECK(bindings[1]["groups"] == nlohmann::json::array({ "KeyboardMouse" }));
+}
+
+TEST_CASE("input document: a filter naming no scheme resets to All, and + Binding then adds ungrouped", "[editor][input]")
+{
+    KeysUi ui(kCaptureDoc);
+    Arcane::Editor::PendingAdd seen;
+    bool began = false;
+    ui.services.beginAdd = [&](Arcane::Editor::PendingAdd p) { seen = std::move(p); began = true; };
+    ui.model.SelectMap(G(kMapId));
+    ui.state.schemeFilter = "Gamepad";                    // an EditScheme/RemoveScheme left it stale
+    ui.Frame();
+    CHECK(ui.state.schemeFilter.empty());                 // DrawToolbar re-validated it (drafting pick 9.28 #40)
+    ui.Frame();
+    ui.Click(ui.At(std::string("add:") + kJumpId));
+    REQUIRE(began);
+    CHECK(seen.kind == Arcane::Editor::PendingAdd::Kind::Binding);
+    CHECK(seen.action == G(kJumpId));
+    CHECK(seen.groups.empty());
 }

@@ -536,28 +536,6 @@ namespace Arcane::Editor
         return true;
     }
 
-    bool InputActionsEditorModel::AddComposite(const Guid& map, const Guid& action,
-                                                std::string composite)
-    {
-        if (composite != "1DAxis" && composite != "2DVector") return false;
-        auto next = draft_;
-        auto* owner = FindChild(next, map, "actions", action);
-        if (!owner || !owner->contains("bindings") || !(*owner)["bindings"].is_array()) return false;
-        const auto id = Guid::Generate();
-        nlohmann::json parts = nlohmann::json::array();
-        const std::vector<std::string> names = composite == "1DAxis"
-            ? std::vector<std::string>{"negative", "positive"}
-            : std::vector<std::string>{"up", "down", "left", "right"};
-        for (const auto& name : names)
-            parts.push_back({{"id", Guid::Generate().ToString()}, {"name", name},
-                             {"path", "<Keyboard>/space"}});
-        (*owner)["bindings"].push_back({{"id", id.ToString()}, {"composite", composite},
-                                         {"parts", std::move(parts)}});
-        if (!ApplyEdit("Add composite binding", draft_, next)) return false;
-        SelectMap(map); SelectAction(action); SelectBinding(id);
-        return true;
-    }
-
     bool InputActionsEditorModel::AddComposite(const Guid& map, const Guid& action, std::string composite,
                                                 std::vector<std::pair<std::string, std::string>> parts,
                                                 std::vector<std::string> groups)

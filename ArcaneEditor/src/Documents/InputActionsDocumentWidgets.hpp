@@ -9,6 +9,7 @@
 
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsRows.hpp"
+#include "Documents/InputPendingAdd.hpp"
 #include <Arcane/Input/InputActions.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <imgui.h>
@@ -88,6 +89,8 @@ namespace Arcane::Editor
             std::function<float()> rebindRemaining;
             std::function<float(const Guid&)> glow;   // 0 = off
             std::function<bool()> inputSwallowed;     // true while a capture is live and on its completing frame: keys and clicks belong to the capture
+            std::function<void(PendingAdd)> beginAdd;               // add-and-listen (spec 2026-09-30 s8.3)
+            std::function<const PendingAdd*()> pending;             // the live pending add, or nullptr
         };
         void Draw(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services);
         // True when `row` is the row the actions column should scroll into view this frame: the one-shot scrollRowToId (a Binding/Part row only) wins, else the selected row while scrollRowToSelection is set. Pure; public for the row tests.
@@ -95,7 +98,7 @@ namespace Arcane::Editor
 
     private:
         using Edit = std::function<void()>;
-        void DrawToolbar(InputActionsEditorModel& model, InputActionsDocumentState& state, Edit& edit);
+        void DrawToolbar(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services, Edit& edit);
         void DrawMaps(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services, Edit& edit);
         void DrawActions(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services, Edit& edit);
         void DrawRow(const InputRow& row, InputActionsEditorModel& model, InputActionsDocumentState& state,
