@@ -81,6 +81,10 @@ namespace Arcane::Editor
         // The row menu's file-op verbs' disabled reasons: ONE dry-run per
         // menu open (computed on the popup's appearing frame), "" = enabled.
         struct MenuRefusal { std::string rename, duplicate, del, moveTo; } menuRefusal;
+        // T5 s7.9: the row a mouse click landed on this frame (DrawTable resets
+        // it before BeginMultiSelect). It becomes the primary when
+        // EndMultiSelect's requests are applied: AssetPanelModel::ApplySelection.
+        Arcane::Guid msClicked;
     };
 
     // T5 s7.6: open the inline rename box on `e` (F2, the row menu's Rename):

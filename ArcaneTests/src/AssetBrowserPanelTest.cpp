@@ -59,7 +59,8 @@ namespace
         { if (m & ImGuiMod_Ctrl) ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, d); if (m & ImGuiMod_Shift) ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, d); }
         void Click(int row, ImGuiMouseButton b, ImGuiKeyChord m = 0)
         {
-            ImGuiIO& io = ImGui::GetIO(); Mods(m, true); const ImVec2 p = RowCenter(row); io.AddMousePosEvent(p.x, p.y); Frame();
+            ImGuiIO& io = ImGui::GetIO(); Mods(m, true); if (m) Frame();   // the mods get their own frame: a key change trickles the mouse move to the press frame, too late to hover an AllowOverlap row
+            const ImVec2 p = RowCenter(row); io.AddMousePosEvent(p.x, p.y); Frame();
             io.AddMouseButtonEvent(b, true); Frame(); io.AddMouseButtonEvent(b, false); Frame(); Mods(m, false); Frame();
         }
         AssetPanelActions Key(ImGuiKey k, ImGuiKeyChord m = 0)
@@ -107,4 +108,27 @@ TEST_CASE("Asset Browser Del requests a delete confirm; with a row menu open Del
     BrowserHarness h("arcane_browser_del_test"); (void)h.Frame(true); h.model.Select(h.model.Rows()[1].guid);
     CHECK(h.Key(ImGuiKey_Delete).requestDelete == std::vector<Arcane::Guid>{ h.model.selected });
     h.Click(1, ImGuiMouseButton_Right); CHECK(h.Key(ImGuiKey_Delete).requestDelete.empty());
+}
+TEST_CASE("Asset Browser multi-select: Ctrl-click then Shift-click over a clipped list; Ctrl+A never selects a group row", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_multiselect_test", 40); (void)h.Frame(true);   // 41 rows in a 300 px window: clipped
+    const auto& rows = h.model.Rows(); REQUIRE(rows[0].type == AssetPanelRow::Type::Group);
+    h.Click(1, ImGuiMouseButton_Left); h.Click(3, ImGuiMouseButton_Left, ImGuiMod_Ctrl);
+    CHECK((h.model.SelectionCount() == 2 && h.model.selected == rows[3].guid));
+    h.Click(5, ImGuiMouseButton_Left, ImGuiMod_Shift);   // range from the Ctrl-click source
+    CHECK((h.model.SelectionCount() == 3 && h.model.InSelection(rows[4].guid) && !h.model.InSelection(rows[1].guid)));
+    (void)h.Key(ImGuiKey_A, ImGuiMod_Ctrl); CHECK(h.model.SelectionCount() == 40);   // the adapter skips the group row
+}
+TEST_CASE("Asset Browser batch keys: Del and Ctrl+D carry the whole selection; F2 needs exactly one", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_batch_keys_test", 3); (void)h.Frame(true);
+    const auto& rows = h.model.Rows();
+    h.Click(1, ImGuiMouseButton_Left); h.Click(2, ImGuiMouseButton_Left, ImGuiMod_Ctrl);
+    const std::vector<Arcane::Guid> sel = h.model.selection; REQUIRE(sel.size() == 2);
+    CHECK(h.Key(ImGuiKey_Delete).requestDelete == sel);
+    const AssetPanelActions d = h.Key(ImGuiKey_D, ImGuiMod_Ctrl);
+    REQUIRE(d.fileOp); CHECK((d.fileOp->kind == AssetOpKind::Duplicate && d.fileOp->guids == sel));
+    (void)h.Key(ImGuiKey_F2); CHECK_FALSE(h.state.renameTarget.IsValid());
+    h.Click(1, ImGuiMouseButton_Right);   // inside the selection: the set stays, the primary moves
+    CHECK((h.model.selection == sel && h.model.selected == rows[1].guid));
 }

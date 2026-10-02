@@ -128,8 +128,15 @@ namespace Arcane::Editor
             // call (a re-selection IS an Inspector selection event, spec
             // 2026-09-29 s3), so a per-frame call would re-fire the Inspector's
             // asset edge for as long as the menu stays open.
+            //
+            // T5 s7.9: a right-click INSIDE the multi-selection keeps the set
+            // and only re-points the primary; outside it, it selects the row
+            // alone. Either way the verbs below act on `model.selection`.
             if (ImGui::IsWindowAppearing())
-                model.Select(e.guid);
+            {
+                if (model.InSelection(e.guid)) model.SetPrimary(e.guid);
+                else                           model.Select(e.guid);
+            }
 
             DrawAssetMenuItems(actions, e, kindSpecific, services);
 
@@ -137,15 +144,16 @@ namespace Arcane::Editor
             // dry-run per menu open (the appearing frame), not per frame.
             ImGui::Separator();
             if (ImGui::IsWindowAppearing())
-                state.menuRefusal.rename = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
+                state.menuRefusal.rename = model.SelectionCount() > 1 ? std::string("Select one asset to rename")
+                                         : services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
             if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) BeginAssetRename(state, e);
             if (ImGui::IsWindowAppearing())   // T5 s7.7
-                state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = { e.guid } }) : "unavailable";
+                state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = model.selection }) : "unavailable";
             if (MenuVerb("Duplicate", "Ctrl+D", state.menuRefusal.duplicate))
-                actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { e.guid } };
+                actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
             if (ImGui::IsWindowAppearing())   // T5 s7.5: the host's confirm modal re-plans with the live scene
-                state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = { e.guid } }) : "unavailable";
-            if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = { e.guid };
+                state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = model.selection }) : "unavailable";
+            if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = model.selection;
 
             ImGui::EndPopup();
         }
@@ -531,10 +539,21 @@ namespace Arcane::Editor
             if (off) st.renameTarget = {};
         }
 
+        // T5 s7.9: tag the row's Selectable (RowWithThumb's, the next item) with
+        // its Rows() INDEX for BeginMultiSelect. Skipped in a SkipItems window:
+        // RowWithThumb returns before its Selectable there, and an armed
+        // selection user data would leak to the next real item drawn this
+        // frame (the Console's crash, EditorPanels.cpp's multi-select gate).
+        void SetRowSelectionUserData(int rowIndex)
+        {
+            if (!ImGui::GetCurrentWindowRead()->SkipItems)
+                ImGui::SetNextItemSelectionUserData(rowIndex);
+        }
+
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
         void DrawAssetRow(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
-                          const AssetPanelEntry& e, const Arcane::Guid& bootGuid, int groupDepth)
+                          const AssetPanelEntry& e, const Arcane::Guid& bootGuid, int groupDepth, int rowIndex)
         {
             ImGui::PushID(e.guid.ToString().c_str());
 
@@ -577,14 +596,15 @@ namespace Arcane::Editor
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
-            const bool selected = (model.selected == e.guid);
+            const bool selected = model.InSelection(e.guid);   // T5 s7.9: the whole multi-selection highlights
 
             if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+            SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
             if (res.clicked)
-                model.Select(e.guid);
+                state.msClicked = e.guid;   // T5 s7.9: the primary once DrawTable applies EndMultiSelect's requests
 
             // Fix round 1 (Critical 1): attach drag/context-menu/tooltip/
             // double-click HERE, immediately -- the row's Selectable is
@@ -697,13 +717,13 @@ namespace Arcane::Editor
         // ---- Task 10: one derived-child row (spec s6/s11.2) ----------------
         void DrawChildRow(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
-                          const AssetPanelEntry& e, int groupDepth)
+                          const AssetPanelEntry& e, int groupDepth, int rowIndex)
         {
             ImGui::PushID(e.guid.ToString().c_str());
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
-            const bool selected = (model.selected == e.guid);
+            const bool selected = model.InSelection(e.guid);   // T5 s7.9
 
             // 2026-09-07 nested folder groups: the fold-child's own +20px
             // indent (kChildIndent, unchanged) stacks ON TOP of its group's
@@ -718,11 +738,12 @@ namespace Arcane::Editor
             const float indent = static_cast<float>(groupDepth + 1) * kGroupIndent + kChildIndent;
             if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
             ImGui::PopStyleColor();
             if (res.clicked)
-                model.Select(e.guid);
+                state.msClicked = e.guid;   // T5 s7.9
 
             // Fix round 1 (Critical 1): attach interactions before drawing
             // the pill -- see DrawAssetRow's own comment on ordering.
@@ -860,10 +881,41 @@ namespace Arcane::Editor
                         : (rowBottom > viewTop && rowTop < viewBottom);
                 }
 
+                // T5 s7.9: the multi-select scope (the Console precedent,
+                // EditorPanels.cpp's DrawConsolePanel). External storage: a
+                // guid is not an ImGuiID. The adapter maps a row INDEX to its
+                // guid and ignores group rows, because ApplyRequests visits
+                // every range/SetAll index (imgui_widgets.cpp:8762-8773).
+                struct MsAdapter { const std::vector<AssetPanelRow>* rows; std::vector<Arcane::Guid> next; bool changed = false; };
+                MsAdapter ad{ &rows, model.selection };
+                ImGuiSelectionExternalStorage storage;
+                storage.UserData = &ad;
+                storage.AdapterSetItemSelected = [](ImGuiSelectionExternalStorage* self, int idx, bool sel)
+                {
+                    auto& a = *static_cast<MsAdapter*>(self->UserData);
+                    // A range anchor is an index from an earlier frame's rows
+                    // (a fold or filter may have shrunk them since): ignore
+                    // anything out of bounds.
+                    if (idx < 0 || static_cast<std::size_t>(idx) >= a.rows->size()) return;
+                    const AssetPanelRow& r = (*a.rows)[static_cast<std::size_t>(idx)];
+                    if (r.type == AssetPanelRow::Type::Group) return;
+                    const auto it = std::find(a.next.begin(), a.next.end(), r.guid);
+                    if (sel && it == a.next.end()) { a.next.push_back(r.guid); a.changed = true; }
+                    else if (!sel && it != a.next.end()) { a.next.erase(it); a.changed = true; }
+                };
+                state.msClicked = {};
+                ImGuiMultiSelectIO* ms = ImGui::BeginMultiSelect(ImGuiMultiSelectFlags_ClearOnEscape | ImGuiMultiSelectFlags_ClearOnClickVoid | ImGuiMultiSelectFlags_BoxSelect1d,
+                                                                 model.SelectionCount(), static_cast<int>(rows.size()));
+                storage.ApplyRequests(ms);
+
                 ImGuiListClipper clipper;
                 clipper.Begin(static_cast<int>(rows.size()), kTableRowHeight);
                 if (scrollTargetIndex >= 0 && !targetAlreadyVisible)
                     clipper.IncludeItemByIndex(scrollTargetIndex);
+                // The Shift-range source must be submitted even when clipped
+                // away, or a range from an off-screen anchor loses its start.
+                if (ms->RangeSrcItem >= 0 && ms->RangeSrcItem < static_cast<ImGuiSelectionUserData>(rows.size()))
+                    clipper.IncludeItemByIndex(static_cast<int>(ms->RangeSrcItem));
 
                 while (clipper.Step())
                 {
@@ -880,11 +932,11 @@ namespace Arcane::Editor
                                 break;
                             case AssetPanelRow::Type::Asset:
                                 if (const AssetPanelEntry* e = model.Find(row.guid))
-                                    DrawAssetRow(state, model, project, docs, services, actions, *e, bootGuid, row.groupDepth);
+                                    DrawAssetRow(state, model, project, docs, services, actions, *e, bootGuid, row.groupDepth, i);
                                 break;
                             case AssetPanelRow::Type::Child:
                                 if (const AssetPanelEntry* e = model.Find(row.guid))
-                                    DrawChildRow(state, model, project, docs, services, actions, *e, row.groupDepth);
+                                    DrawChildRow(state, model, project, docs, services, actions, *e, row.groupDepth, i);
                                 break;
                         }
 
@@ -897,6 +949,14 @@ namespace Arcane::Editor
                         }
                     }
                 }
+                // No trailing Dummy (unlike the Console's plain child): inside a
+                // table the clipper's final seek already closed the last row
+                // (ImGuiListClipper_SeekCursorAndSetupPrevLine sets RowPosY2 =
+                // cursor), and an item submitted outside a row moves the cursor
+                // past RowPosY2 -- EndTable's IM_ASSERT (imgui_tables.cpp:1444).
+                ms = ImGui::EndMultiSelect();
+                storage.ApplyRequests(ms);
+                if (ad.changed || state.msClicked.IsValid()) model.ApplySelection(std::move(ad.next), state.msClicked);
                 ImGui::EndTable();
                 // T5 s7.6 (the Outliner wedge lesson): a rename target whose
                 // row did not draw this frame (scrolled out, filtered away,
@@ -943,12 +1003,13 @@ namespace Arcane::Editor
                     if (const AssetPanelEntry* e = model.Find(model.selected))
                         OpenAssetRow(*e, project, docs, actions);
                 }
-                if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && model.selected.IsValid())   // T5 s7.6
+                // T5 s7.9: F2 renames ONE asset; Ctrl+D and Del act on the whole multi-selection.
+                if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && model.SelectionCount() == 1 && model.selected.IsValid())   // T5 s7.6
                     if (const AssetPanelEntry* e = model.Find(model.selected)) BeginAssetRename(state, *e);
-                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && model.selected.IsValid())   // T5 s7.7
-                    actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { model.selected } };
-                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && model.selected.IsValid())   // T5 s7.5: the confirm modal, never a direct delete
-                    actions.requestDelete = { model.selected };
+                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && model.SelectionCount() > 0)   // T5 s7.7
+                    actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
+                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && model.SelectionCount() > 0)   // T5 s7.5: the confirm modal, never a direct delete
+                    actions.requestDelete = model.selection;
             }
 
             ImGui::EndChild();
@@ -1083,20 +1144,14 @@ namespace Arcane::Editor
         // ---- bottom bar band (spec s9.2) -----------------------------
         // LEFT: this panel's own context line, in the two forms it has
         // always had ("X of N shown" while a rail or search filter is on,
-        // "N assets - M selected" otherwise). RIGHT: the health digest chip.
+        // "N assets - K selected" otherwise, K the live multi-selection
+        // count since T5 s7.9: AssetBrowserContextLine). RIGHT: the health
+        // digest chip.
         {
             const AssetPanelBottomBar bar = BeginAssetPanelBottomBar("##assetbrowserbottombar");
             if (bar.visible)
             {
-                const HealthCounts health = model.Health();
-                char left[64];
-                if (model.Filtered())
-                    std::snprintf(left, sizeof(left), "%d of %d shown",
-                                  model.ShownAssetCount(), health.total);
-                else
-                    std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d selected",
-                                  health.total, model.selected.IsValid() ? 1 : 0);
-                ImGui::TextUnformatted(left);
+                ImGui::TextUnformatted(AssetBrowserContextLine(model).c_str());
 
                 DrawAssetPanelHealthDigest(bar, model, services, actions);
             }
