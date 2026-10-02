@@ -1215,6 +1215,9 @@ project "ArcaneTests"
         -- source-compiles here for InputActionsRowsTest, and the rewritten
         -- InputActionsDocumentWidgets.cpp above links against it.
         "%{wks.location}/ArcaneEditor/src/Documents/InputActionsRows.cpp",
+        -- Node-page phase s8.3: the pure pending add (add-and-listen), compiled for InputPendingAddTest
+        -- and linked by InputActionsDocument/Widgets above.
+        "%{wks.location}/ArcaneEditor/src/Documents/InputPendingAdd.cpp",
         -- Input editor T10: InputActionsInspectorPage is a LINK dependency of
         -- InputActionsDocument.cpp (Page/PageFor construct it); Draw is never
         -- called headlessly, same reason as EditorWidgets.cpp below.
