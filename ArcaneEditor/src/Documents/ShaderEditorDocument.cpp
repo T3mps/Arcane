@@ -672,13 +672,17 @@ namespace Arcane::Editor
         // T3-D2 (user decision 2026-10-02): how much of a pin row's wiring /
         // default text must stay readable AFTER the type word. Below dot + the
         // widest type word + this many characters, the node page shows the dot
-        // alone and the word leads the row's hover tooltip.
+        // alone and the word leads the row's hover tooltip. The WIDEST word any
+        // pin can show (PinTypeText over every declared/resolved pair), not the
+        // row's own: every row of a page makes the same call, so a page never
+        // mixes worded and dot-only rows and its dots stay in one column.
         ARC_CVAR_RANGED("editor.inspector.nodePageMinTextRun", "editor", Int32,
                         ::Arcane::CVarValue::Int32(16), ::Arcane::CVarValue::Int32(0),
                         ::Arcane::CVarValue::Int32(256), ::Arcane::CVarFlags::Archive,
                         "Characters of a node page pin row's wiring or default text that must stay readable "
-                        "after the pin's type word; a narrower value cell shows only the pin's dot and moves "
-                        "the type word into the row's hover tooltip");
+                        "after the widest pin type word (e.g. 'dynamic (unresolved)'); a value cell narrower "
+                        "than dot + that word + this run shows only the pin's dot on every row of the page "
+                        "and moves the type word into the row's hover tooltip");
 
         int NodePageMinTextRun()
         {

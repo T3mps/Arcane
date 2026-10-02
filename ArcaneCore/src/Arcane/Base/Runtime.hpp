@@ -214,9 +214,12 @@ namespace Arcane
         // file. With archiving ON (off by default) they first WRITE it back
         // (WriteCVarArchive: Archive cvars the User rung holds, nothing else).
         // The editor turns it on for a windowed session; ArcaneRuntime and
-        // ArcaneServer leave it off -- neither host sets
-        // the User rung, and a shipped game's settings belong in a per-user
-        // directory, not inside the project tree.
+        // ArcaneServer leave it off -- neither host sets the User rung itself,
+        // and a shipped game's settings belong in a per-user directory, not
+        // inside the project tree. The DROP is unconditional all the same:
+        // every host's OpenProject LOADS the User rung from Saved/Config, so
+        // without it project A's User records would outlive A in any host,
+        // shadow B's weaker rungs and (when archiving) land in B's file.
         void SetUserCVarArchiving(bool enabled) noexcept;
         // Write the open project's archive NOW (no layer is dropped). The
         // editor calls it before unloading its game module (whose cvars would
