@@ -392,8 +392,7 @@
           "jumpCutMultiplier": 0.44999998807907104,
           "jumpSpeed": 6.0,
           "moveSpeed": 4.0,
-          "turnAcceleration": 60.0,
-          "value": 0.0
+          "turnAcceleration": 60.0
         }
       },
       "parent": 0
