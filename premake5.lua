@@ -1716,7 +1716,7 @@ project "ArcaneTests"
     -- `/t:arcbuild,ArcaneTests` build (the fixture is not itself a named
     -- target there).
     dependson { "HotReloadPluginV1", "HotReloadPluginV2", "HotReloadPluginBad",
-                "HotReloadPluginInitFail", "arccook" }
+                "HotReloadPluginInitFail", "ReferenceGameUnderTest", "arccook" }
 
     -- Task 6 (multibackend hardening): the fixture project exists only for a
     -- Windows target (see its own gate below), so only a Windows generation
@@ -1762,6 +1762,7 @@ project "ArcaneTests"
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginV2/HotReloadPluginV2.dll" "%{cfg.buildtarget.directory}/HotReloadPluginV2.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginBad/HotReloadPluginBad.dll" "%{cfg.buildtarget.directory}/HotReloadPluginBad.dll"',
         '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/HotReloadPluginInitFail/HotReloadPluginInitFail.dll" "%{cfg.buildtarget.directory}/HotReloadPluginInitFail.dll"',
+        '{COPYFILE} "%{wks.location}/bin/' .. outputdir .. '/ReferenceGameUnderTest/ReferenceGameUnderTest.dll" "%{cfg.buildtarget.directory}/ReferenceGameUnderTest.dll"',
         -- Test data fixtures: copy ArcaneTests/data's CONTENTS into the test output
         -- dir's data/ so tests find their fixtures by relative path. {COPYDIR}
         -- copies the directory's contents, merging with the data/fonts dir the
@@ -1908,5 +1909,57 @@ test_plugin("HotReloadPluginV1",  { "HOTRELOAD_STEP=1",          "_CRT_SECURE_NO
 test_plugin("HotReloadPluginV2",  { "HOTRELOAD_STEP=10",         "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginBad", { "HOTRELOAD_ABI_OFFSET=999",  "_CRT_SECURE_NO_WARNINGS" })
 test_plugin("HotReloadPluginInitFail", { "HOTRELOAD_INIT_FAIL=1",  "_CRT_SECURE_NO_WARNINGS" })
+
+-- ============================================================================
+-- ReferenceGameUnderTest: ReferenceProject's REAL game-module sources
+-- (ReferenceProject/Source/Game/**), compiled as a test plugin with the
+-- include surface build/arcane.lua gives a game module. The [trajectory]
+-- case (ArcaneTests/src/ReferencePlayerTrajectoryTest.cpp) loads it through a
+-- real PluginHost and replays a scripted input run. Because it compiles the
+-- sources IN PLACE, the same unchanged test proves a rewrite of those
+-- sources kept the gameplay bit-identical (input-seam spec s8 T6).
+-- ============================================================================
+project "ReferenceGameUnderTest"
+    location "ArcaneTests/plugins"
+    kind "SharedLib"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+    targetname "ReferenceGameUnderTest"
+    targetdir ("bin/" .. outputdir .. "/ReferenceGameUnderTest")
+    objdir ("bin-int/" .. outputdir .. "/ReferenceGameUnderTest")
+    files {
+        "%{wks.location}/ReferenceProject/Source/Game/**.cpp",
+        "%{wks.location}/ReferenceProject/Source/Game/**.hpp",
+    }
+    includedirs {
+        "%{wks.location}/ReferenceProject/Source/Game",
+        "%{wks.location}/ArcaneClient/src",
+        "%{IncludeDir.ArcaneCore}",
+        "%{IncludeDir.glm}",
+        "%{IncludeDir.Astra}",
+        "%{IncludeDir.enkiTS}",
+        "%{IncludeDir.Manifold2D}",
+        "%{IncludeDir.imgui}",
+        "%{IncludeDir.spdlog}",
+        "%{IncludeDir.Mosaic}",
+        "%{IncludeDir.nlohmann}",
+    }
+    links { "ArcaneCore", "ArcaneClient" }
+    defines {
+        "IMGUI_API=__declspec(dllimport)",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+    }
+    filter "system:windows"
+        systemversion "latest"
+        -- The flags build/arcane.lua gives a real module (AVX2 included: inline
+        -- header codegen shared across the DLL boundary must agree).
+        buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
+        fatalwarnings { "4715" }
+    filter "configurations:Debug"   defines { "ARCANE_DEBUG" }             runtime "Debug"   symbols "on"
+    filter "configurations:Release" defines { "ARCANE_RELEASE", "NDEBUG" } runtime "Release" optimize "speed" symbols "on"
+    filter "configurations:Dist"    defines { "ARCANE_DIST", "NDEBUG" }    runtime "Release" optimize "speed" symbols "off"
+    filter {}
 
 group ""
