@@ -11104,7 +11104,19 @@ void ImGui::TabItemLabelAndCloseButton(ImDrawList* draw_list, const ImRect& bb, 
         }
     }
     LogSetNextTextDecoration("/", "\\");
+    // ARCANE LOCAL FIX (2026-10-02, user desk -- Visual Studio tab language): an UNSELECTED tab's label draws in
+    // ImGuiCol_TextDisabled (the theme's dim text) and brightens to ImGuiCol_Text while hovered or held; the
+    // selected tab keeps ImGuiCol_Text. Upstream draws every label in ImGuiCol_Text (cf. the '#if 0' alpha idea below).
+    // (is_hovered above also matches close_button_id == 0 against an idle HoveredId/ActiveId of 0, so a tab
+    // without a close button would always read 'hovered'; test the tab's own interaction instead.)
+    const bool arcane_tab_hot = g.HoveredId == tab_id || g.ActiveId == tab_id ||
+        (close_button_id != 0 && (g.HoveredId == close_button_id || g.ActiveId == close_button_id));
+    const bool arcane_dim_label = !is_contents_visible && !arcane_tab_hot;
+    if (arcane_dim_label)
+        PushStyleColor(ImGuiCol_Text, g.Style.Colors[ImGuiCol_TextDisabled]);
     RenderTextEllipsis(draw_list, text_ellipsis_clip_bb.Min, text_ellipsis_clip_bb.Max, ellipsis_max_x, label, label_end, &label_size);
+    if (arcane_dim_label)
+        PopStyleColor();
 
 #if 0
     if (!is_contents_visible)

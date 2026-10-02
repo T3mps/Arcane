@@ -228,13 +228,16 @@ namespace Arcane::Editor
 
         c[ImGuiCol_InputTextCursor]        = Theme::kText;                  // caret, light gray
 
-        // Tabs: selected = the panel tone (the tab and the body under it are
-        // one surface), unselected = chrome, hover = one step of panel.
+        // Tabs, Visual Studio's language (user, 2026-10-02): the SELECTED tab is
+        // a real tab in the panel tone (it and the body under it are one
+        // surface); an UNSELECTED tab draws no fill at all -- only its label,
+        // dimmed (the ImGui local fix in TabItemLabelAndCloseButton draws it in
+        // TextDisabled), sitting on the strip; hover lifts it one step of panel.
         c[ImGuiCol_TabHovered]             = Theme::kPanelRaised;
-        c[ImGuiCol_Tab]                    = Theme::kChrome;
+        c[ImGuiCol_Tab]                    = Theme::kNone;                  // label only
         c[ImGuiCol_TabSelected]            = Theme::kPanel;
         c[ImGuiCol_TabSelectedOverline]    = Theme::kAccent;                // selected == accent (s6.1)
-        c[ImGuiCol_TabDimmed]              = Theme::kChrome;                // == Tab: focus never re-tones a tab
+        c[ImGuiCol_TabDimmed]              = Theme::kNone;                  // == Tab: focus never re-tones a tab
         c[ImGuiCol_TabDimmedSelected]      = Theme::kPanel;                 // == TabSelected: only the overline dims
         // Every dock node marks its active tab; an unfocused one at 45%
         // (composite #374758, 1.85:1 on its #191919 tab: quieter than the

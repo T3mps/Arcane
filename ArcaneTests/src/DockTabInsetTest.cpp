@@ -90,3 +90,75 @@ TEST_CASE("Dock tab bar: a left window-menu button keeps upstream's padding befo
     CHECK(node->TabBar->BarRect.Min.x ==
           node->Pos.x + style.WindowBorderSize + style.FramePadding.x + ImGui::GetFontSize() + style.ItemInnerSpacing.x);
 }
+
+namespace
+{
+    // How many vertices of `col` lie inside `r` in this frame's draw data.
+    int CountVerticesOfColor(const ImRect& r, ImU32 col)
+    {
+        int n = 0;
+        const ImDrawData* dd = ImGui::GetDrawData();
+        for (const ImDrawList* list : dd->CmdLists)
+            for (const ImDrawVert& v : list->VtxBuffer)
+                if (v.col == col && r.Contains(v.pos))
+                    ++n;
+        return n;
+    }
+}
+
+TEST_CASE("Dock tab labels: the unselected tab's label is dim (TextDisabled), the selected tab's is Text", "[editor][docking]")
+{
+    // The ARCANE LOCAL FIX in imgui_widgets.cpp TabItemLabelAndCloseButton
+    // (user desk, 2026-10-02: Visual Studio tab language).
+    DockHarness h;
+    ImGui::GetIO().MousePos = ImVec2(-10000.0f, -10000.0f);   // nothing hovered
+    ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
+    REQUIRE(node != nullptr);
+    REQUIRE(node->TabBar != nullptr);
+    REQUIRE(node->TabBar->Tabs.Size == 2);
+    const ImU32 text = ImGui::GetColorU32(ImGuiCol_Text);
+    const ImU32 dim  = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    REQUIRE(text != dim);
+    const ImRect bar = node->TabBar->BarRect;
+    int checkedSelected = 0, checkedUnselected = 0;
+    for (const ImGuiTabItem& tab : node->TabBar->Tabs)
+    {
+        const ImRect r(ImVec2(bar.Min.x + tab.Offset, bar.Min.y), ImVec2(bar.Min.x + tab.Offset + tab.Width, bar.Max.y));
+        if (tab.ID == node->TabBar->SelectedTabId)
+        {
+            CHECK(CountVerticesOfColor(r, text) > 0);
+            CHECK(CountVerticesOfColor(r, dim) == 0);
+            ++checkedSelected;
+        }
+        else
+        {
+            CHECK(CountVerticesOfColor(r, dim) > 0);
+            CHECK(CountVerticesOfColor(r, text) == 0);
+            ++checkedUnselected;
+        }
+    }
+    CHECK(checkedSelected == 1);
+    CHECK(checkedUnselected == 1);
+}
+
+TEST_CASE("Dock tab labels: hovering an unselected tab brightens its label to Text", "[editor][docking]")
+{
+    DockHarness h;
+    ImGui::GetIO().MousePos = ImVec2(-10000.0f, -10000.0f);
+    ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
+    REQUIRE(node != nullptr);
+    REQUIRE(node->TabBar != nullptr);
+    const ImGuiTabItem* unselected = nullptr;
+    for (const ImGuiTabItem& tab : node->TabBar->Tabs)
+        if (tab.ID != node->TabBar->SelectedTabId)
+            unselected = &tab;
+    REQUIRE(unselected != nullptr);
+    const ImRect bar = node->TabBar->BarRect;
+    const ImRect r(ImVec2(bar.Min.x + unselected->Offset, bar.Min.y),
+                   ImVec2(bar.Min.x + unselected->Offset + unselected->Width, bar.Max.y));
+    ImGui::GetIO().MousePos = r.GetCenter();                // hover it (no click)
+    node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
+    REQUIRE(node != nullptr);
+    CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_Text)) > 0);
+    CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TextDisabled)) == 0);
+}

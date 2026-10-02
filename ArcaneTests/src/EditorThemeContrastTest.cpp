@@ -47,6 +47,17 @@ TEST_CASE("EditorTheme: focus re-tones neither the tab well nor a tab -- only th
     CHECK(SameColor(s.Colors[ImGuiCol_TabDimmedSelected], s.Colors[ImGuiCol_TabSelected]));
 }
 
+TEST_CASE("EditorTheme: Visual Studio tabs -- unselected tabs draw no fill, the selected one is a real tab, hover lifts", "[editor][theme]")
+{
+    // User, 2026-10-02: "the selected tab should look like a tab, and the
+    // others should sit where the tab would be but only show the text".
+    const ImGuiStyle s = ThemedStyle();
+    CHECK(s.Colors[ImGuiCol_Tab].w == 0.0f);
+    CHECK(s.Colors[ImGuiCol_TabDimmed].w == 0.0f);
+    CHECK(s.Colors[ImGuiCol_TabSelected].w == 1.0f);
+    CHECK(s.Colors[ImGuiCol_TabHovered].w > 0.0f);   // kept: hover shows a faint tab (user's pick)
+}
+
 TEST_CASE("EditorTheme: kToggleOn* resolve to the accent trio", "[editor][theme]")
 {
     CHECK(SameColor(Theme::kToggleOn,        Theme::kAccent));
