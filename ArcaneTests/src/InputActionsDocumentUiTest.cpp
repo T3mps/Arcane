@@ -4,6 +4,7 @@
 // Rebind focus (final review I1), keys idle under a context menu (I2), the
 // page's validated Name row (arc-1 debt B), and the pending add-and-listen
 // capture (node-page spec s8.3: nothing enters the draft until it ends).
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include "Documents/InputActionsDocument.hpp"
 #include "Documents/InputActionsDocumentWidgets.hpp"
@@ -15,6 +16,7 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
 #include <imgui.h>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -458,4 +460,19 @@ TEST_CASE("input document: a filter naming no scheme resets to All, and + Bindin
     CHECK(seen.kind == Arcane::Editor::PendingAdd::Kind::Binding);
     CHECK(seen.action == G(kJumpId));
     CHECK(seen.groups.empty());
+}
+
+TEST_CASE("input document: the Rebind column is painted at rest at ONE x, and an unselected row's button arms its capture", "[editor][input]")
+{
+    KeysUi ui(kCaptureDoc);
+    Guid armed;
+    ui.services.beginRebind = [&](const Guid& id) { armed = id; };
+    ui.model.SelectMap(G(kMapId)); ui.model.SelectAction(G(kJumpId));
+    ui.Frame(); ui.Frame();                               // frame 1 measures the widest row, frame 2 aligns to it
+    std::vector<float> xs;
+    for (const auto& [key, at] : ui.probe) if (key.rfind("rebind:", 0) == 0) xs.push_back(at.x);
+    REQUIRE(xs.size() == 6);                              // Jump's binding, Move's four parts, Crouch's binding -- every one, unhovered
+    for (const float x : xs) CHECK(x == Catch::Approx(xs.front()).margin(0.5));
+    ui.Click(ui.At(std::string("rebind:") + kCrouchBinding));   // Crouch is not selected
+    CHECK(armed == G(kCrouchBinding));
 }

@@ -50,7 +50,14 @@ namespace Arcane::Editor
         bool schemePopupPending = false;              // opened at window scope (a popup cannot open from inside another)
         char newSchemeName[64] = "Gamepad";
         char newSchemeGroup[64] = "Gamepad";
-        std::unordered_map<std::string, ImVec2>* probe = nullptr;   // TEST SEAM (InputActionsDocumentUiTest): map rows record their centre under their id. Production: nullptr.
+        std::unordered_map<std::string, ImVec2>* probe = nullptr;   // TEST SEAM (InputActionsDocumentUiTest): rows record their centre under their id, Rebind buttons under "rebind:<id>". Production: nullptr.
+        // The Rebind column (spec 2026-09-30 s8.3, amending 2026-09-28 s2.3's
+        // hover-only rule): x relative to the actions column window's left edge
+        // where every Binding/Part row's button sits. Each drawn row folds its
+        // own trailing end into rebindColumnXNext; DrawActions publishes it after
+        // the row loop, so the column shrinks one frame after the widest row goes.
+        float rebindColumnX = 0.0f;
+        float rebindColumnXNext = 0.0f;
     };
 
     // The document-level preview evaluator (owned by InputActionsDocument;

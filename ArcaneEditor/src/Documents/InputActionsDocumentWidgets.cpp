@@ -361,6 +361,8 @@ namespace Arcane::Editor
         state.dragVerdictPrev = state.dragVerdict;
         state.dragVerdict = InputActionsDocumentState::DragVerdict::Illegal;   // hovering no row reads "Cannot move" (the drag op starts invalid)
         for (const InputRow& row : rows) DrawRow(row, model, state, services, edit, rows);
+        state.rebindColumnX = state.rebindColumnXNext;
+        state.rebindColumnXNext = 0.0f;
         // Empty space under the rows: the MAP is the container (spec A s3.1),
         // clearing action/binding/part SILENTLY (Ruling P18): not a selection
         // event, so it never takes the Inspector from the scene.
@@ -583,24 +585,30 @@ namespace Arcane::Editor
         {
             if (!row.detail.empty()) { ImGui::TextDisabled("%s", row.detail.c_str()); ImGui::SameLine(); }
             for (const auto& g : row.groups) { AssetPill(g.c_str(), SchemeVariant(g)); ImGui::SameLine(); }   // one tinted pill PER scheme
-            if (row.kind != InputRowKind::CompositeHeader && !rebinding && !swallowed)
+            if (row.kind != InputRowKind::CompositeHeader)
             {
-                // The Rebind button: its hit region is SUBMITTED every frame and
-                // only its PAINT is gated on hover/selection. Gating the submission
-                // on r.hovered oscillates on an AllowOverlap row (the Asset Browser
-                // rail's documented bug, AssetBrowserPanel.cpp:304-341): the rule
-                // for any trailing widget on a RowWithThumb row.
-                const ImVec2 sz(ImGui::CalcTextSize("Rebind").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFrameHeight());
-                const bool rbClicked = ImGui::InvisibleButton("##rebind", sz);
-                const bool rbHovered = ImGui::IsItemHovered();
-                if (r.hovered || selected || rbHovered)
+                const float origin = ImGui::GetWindowPos().x;
+                const float ownEnd = ImGui::GetCursorScreenPos().x;
+                const float contentMax = ownEnd + ImGui::GetContentRegionAvail().x;
+                state.rebindColumnXNext = std::max(state.rebindColumnXNext, ownEnd - origin);
+                if (!rebinding && !swallowed)
                 {
+                    // Hit region SUBMITTED every frame (the AllowOverlap rule,
+                    // AssetBrowserPanel.cpp:304-341), and now PAINTED every frame
+                    // too: dim at rest, kText on row hover/selection.
+                    const ImVec2 sz(ImGui::CalcTextSize("Rebind").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFrameHeight());
+                    const float x = std::max(ownEnd, std::min(origin + state.rebindColumnX, contentMax - sz.x));
+                    ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+                    const bool rbClicked = ImGui::InvisibleButton("##rebind", sz);
+                    const bool rbHovered = ImGui::IsItemHovered();
                     const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
                     ImDrawList* dl = ImGui::GetWindowDrawList();
                     dl->AddRectFilled(lo, hi, ImGui::GetColorU32(rbHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button), ImGui::GetStyle().FrameRounding);
-                    dl->AddText(ImVec2(lo.x + ImGui::GetStyle().FramePadding.x, lo.y + ImGui::GetStyle().FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), "Rebind");
+                    const ImVec4& text = (r.hovered || selected || rbHovered) ? Theme::kText : Theme::kTextDim;
+                    dl->AddText(ImVec2(lo.x + ImGui::GetStyle().FramePadding.x, lo.y + ImGui::GetStyle().FramePadding.y), ImGui::ColorConvertFloat4ToU32(text), "Rebind");
+                    if (state.probe) (*state.probe)["rebind:" + row.id.ToString()] = ImVec2((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);   // TEST SEAM
+                    if (rbClicked && services.beginRebind) services.beginRebind(row.id);
                 }
-                if (rbClicked && services.beginRebind) services.beginRebind(row.id);
             }
         }
         ImGui::SetCursorScreenPos(rowBottom);   // every row pitches exactly one RowWithThumb height whatever the trailing item's height was
