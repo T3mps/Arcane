@@ -13,12 +13,14 @@
 #include "Panels/AssetPanelModel.hpp"
 #include "Widgets/EditorTheme.hpp"         // Theme::kAmber / kTextDim -- DigestRefusedStyle's two looks
 #include "Widgets/IconsLucide.h"
+#include "Project/AssetFileOps.hpp"      // PlanAssetOp -- the real planner behind MoveVerbRefusal's test
 
 #include <Arcane/Project/AssetRegistry.hpp>
 
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -188,4 +190,71 @@ TEST_CASE("DigestRefusedStyle: zero is quiet, any refusal is the amber alarm", "
         CHECK(SameRgba(s.color, Theme::kAmber));
         CHECK(s.tileVariant == 1);
     }
+}
+
+// T5 s7.8 (B21 fix round 1): the row menu's Move to... verb carries ONLY the
+// refusals that do not depend on a destination -- each selected asset is
+// dry-run against its OWN folder, so a same-named file at the Content root
+// (which the old empty-destFolder dry-run Claimed against) no longer greys
+// out a move that is valid to every other folder. A source:// asset still
+// refuses by its scheme. The refusal function is the real planner over a
+// real temp tree, as the host's fileOpRefusal is.
+TEST_CASE("MoveVerbRefusal: only destination-independent refusals reach the row menu", "[editor][assetops]")
+{
+    const fs::path root = fs::temp_directory_path() / "arcane_move_verb_refusal_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    const fs::path content = root / "Content";
+    WriteFile(content / "scenes", "test.arcscene",
+             R"({"id":"e5000001-0001-4001-8001-000000000001","version":4,"entities":[]})");
+    WriteFile(content, "test.arcscene",
+             R"({"id":"e5000001-0001-4001-8001-000000000002","version":4,"entities":[]})");
+    WriteFile(root / "Source" / "Game", "Thing.cpp", "// cpp\n");
+
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(content, "game") == 2);
+    REQUIRE(registry.AddContent(root / "Source", "source") == 1);   // beside game://, not a Clear()
+    const auto all = registry.All();
+    const Arcane::Guid nested = GuidForPath(all, "game://scenes/test.arcscene");
+    const Arcane::Guid atRoot = GuidForPath(all, "game://test.arcscene");
+    const Arcane::Guid source = GuidForPath(all, "source://Game/Thing.cpp");
+    REQUIRE(nested.IsValid()); REQUIRE(atRoot.IsValid()); REQUIRE(source.IsValid());
+
+    FakeProviders fake;
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    AssetPanelProviders providers = fake.Make();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    REQUIRE(model.Find(nested));
+    REQUIRE(model.Find(nested)->folder == "scenes/");
+
+    std::vector<AssetOpRequest> asked;
+    const std::function<std::string(const AssetOpRequest&)> refusal = [&](const AssetOpRequest& r)
+    {
+        asked.push_back(r);
+        AssetOpFacts f;
+        f.contentDir = content;
+        f.diagDir    = root / "Saved" / "Diagnostics";
+        f.registry   = all;
+        f.exists     = [](const fs::path& p) { std::error_code e; return fs::exists(p, e); };
+        const AssetOpPlan plan = PlanAssetOp(r, f);
+        return plan.refusals.empty() ? std::string{} : plan.refusals.front().reason;
+    };
+
+    // The defect the helper fixes: an empty-destination dry-run Claims
+    // Content/test.arcscene, which the root scene already holds.
+    CHECK_FALSE(refusal({ .kind = AssetOpKind::Move, .guids = { nested } }).empty());
+
+    asked.clear();
+    CHECK(MoveVerbRefusal({ nested }, model, refusal).empty());
+    REQUIRE(asked.size() == 1);
+    CHECK(asked[0].destFolder == "scenes");          // its own folder, no trailing '/'
+    CHECK(asked[0].guids == std::vector<Arcane::Guid>{ nested });
+
+    CHECK(MoveVerbRefusal({ atRoot, nested }, model, refusal).empty());   // the root scene's own folder is ""
+
+    const std::string why = MoveVerbRefusal({ nested, source }, model, refusal);
+    CHECK(why.find("C++ source") == 0);              // the scheme refusal, despite the enabled first guid
+
+    fs::remove_all(root, ec);
 }

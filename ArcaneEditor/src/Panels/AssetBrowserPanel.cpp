@@ -154,8 +154,8 @@ namespace Arcane::Editor
             if (ImGui::IsWindowAppearing())   // T5 s7.5: the host's confirm modal re-plans with the live scene
                 state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = model.selection }) : "unavailable";
             if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = model.selection;
-            if (ImGui::IsWindowAppearing())   // T5 s7.8: the modal re-checks per destination; this is the selection's own refusal
-                state.menuRefusal.moveTo = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Move, .guids = model.selection }) : "unavailable";
+            if (ImGui::IsWindowAppearing())   // T5 s7.8: destination-independent refusals only (MoveVerbRefusal); the modal checks each destination
+                state.menuRefusal.moveTo = services.fileOpRefusal ? MoveVerbRefusal(model.selection, model, services.fileOpRefusal) : "unavailable";
             if (MenuVerb("Move to...", nullptr, state.menuRefusal.moveTo)) actions.requestMoveTo = model.selection;
 
             ImGui::EndPopup();

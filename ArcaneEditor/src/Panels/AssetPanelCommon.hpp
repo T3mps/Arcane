@@ -255,6 +255,20 @@ namespace Arcane::Editor
     void RevealAssetInBrowser(AssetBrowserPanelState& state, AssetPanelModel& model,
                               const Arcane::Guid& guid);
 
+    // T5 s7.8: the row menu's "Move to..." refusal -- ONLY the refusals that
+    // do not depend on a destination (the Move to... modal re-checks every
+    // destination it is pointed at and carries THAT refusal inline). One Move
+    // dry-run per selected guid, each aimed at the asset's OWN Content-relative
+    // folder, so the planner's "already there" arm skips the clash check while
+    // the source/diag/plugin/engine scheme refusals, missing-on-disk and a
+    // missing .meta still fire. An asset outside the game mount (or with no
+    // model entry) gets "" and still refuses by its scheme. First non-empty
+    // reason wins; "" = the verb is enabled. A .gltf's companion refusals
+    // (a ../ URI, a shared buffer) are left to the modal.
+    [[nodiscard]] std::string MoveVerbRefusal(const std::vector<Arcane::Guid>& selection,
+                                              const AssetPanelModel& model,
+                                              const std::function<std::string(const AssetOpRequest&)>& refusal);
+
     // ---- The cross-panel helper set (Tasks 4-6, homed here in Task 7) -----
     // Eight helpers that more than one asset panel calls. Tasks 4-6 promoted
     // each one's LINKAGE here (out of AssetsPanel.cpp's anonymous namespace,

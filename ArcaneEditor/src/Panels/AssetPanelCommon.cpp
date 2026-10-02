@@ -157,6 +157,22 @@ namespace Arcane::Editor
     // spelling the fold chevron's own toggle uses (the row expander
     // handler: state.childrenOpen + model.SetChildrenOpen, both keyed by
     // the parent's guid).
+    std::string MoveVerbRefusal(const std::vector<Arcane::Guid>& selection, const AssetPanelModel& model,
+                                const std::function<std::string(const AssetOpRequest&)>& refusal)
+    {
+        for (const Arcane::Guid& g : selection)
+        {
+            std::string here;   // the asset's own folder, relative to Content/ ("" = root or another mount)
+            if (const AssetPanelEntry* e = model.Find(g))
+                if (const auto rel = RelativeDirOfFolderKey(e->folder, "Content"))
+                    here = MakeFolderChoice(*rel, "Content").relative;   // no trailing '/', as the drop targets send
+            std::string why = refusal(AssetOpRequest{ .kind = AssetOpKind::Move, .guids = { g }, .destFolder = here });
+            if (!why.empty())
+                return why;
+        }
+        return {};
+    }
+
     void RevealAssetInBrowser(AssetBrowserPanelState& state, AssetPanelModel& model,
                               const Arcane::Guid& guid)
     {
