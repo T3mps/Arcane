@@ -1,7 +1,24 @@
 #include "Scene/SceneSession.hpp"
 
+#include <cctype>
+
 namespace Arcane::Editor
 {
+    namespace
+    {
+        // A comparable spelling for a path that may no longer exist (so no
+        // std::filesystem::equivalent): lexically normal, generic separators,
+        // case-folded on Windows where the filesystem is case-insensitive.
+        std::string PathKey(const std::filesystem::path& p)
+        {
+            std::string s = p.lexically_normal().generic_string();
+#if defined(_WIN32)
+            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+#endif
+            return s;
+        }
+    }
+
     std::string SceneSession::DisplayName() const
     {
         if (m_path.empty()) return "Untitled";
@@ -21,6 +38,12 @@ namespace Arcane::Editor
         m_path.clear();
         m_id = Arcane::Guid{};
         MarkSaved(stack);
+    }
+
+    void SceneSession::NoteMoved(const std::filesystem::path& from, const std::filesystem::path& to)
+    {
+        if (!m_path.empty() && PathKey(m_path) == PathKey(from))
+            m_path = to;
     }
 
     bool SceneSession::Request(SceneIntent intent, std::filesystem::path payload,

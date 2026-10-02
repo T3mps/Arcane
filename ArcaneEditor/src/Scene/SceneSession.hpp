@@ -92,6 +92,12 @@ namespace Arcane::Editor
         // Reset can itself be the performed action for a parked NewScene intent,
         // and the host still needs TakePending() to have returned it first.
         void Reset(const Arcane::CommandStack& stack);
+        // After an asset op moved or renamed a .arcscene (spec s7.11): when
+        // `from` names the session's file, the session follows it to `to`.
+        // m_path ONLY -- the id, the saved baseline (dirty) and m_pending are
+        // untouched. `from` no longer exists on disk, so the match compares
+        // normalised spellings (case-folded on Windows), not equivalent().
+        void NoteMoved(const std::filesystem::path& from, const std::filesystem::path& to);
 
         // ---- confirm flow ------------------------------------------------
         // True  = nothing unsaved, act now.

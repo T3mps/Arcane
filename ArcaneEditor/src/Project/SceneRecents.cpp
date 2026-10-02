@@ -94,6 +94,19 @@ void Push(List& list, const std::filesystem::path& scenePath)
         list.paths.resize(kMaxEntries);
 }
 
+void Replace(List& list, const std::filesystem::path& from, const std::filesystem::path& to)
+{
+    const std::string f = from.lexically_normal().generic_string();
+    const std::string t = to.lexically_normal().generic_string();
+    const auto it = std::find(list.paths.begin(), list.paths.end(), f);
+    if (it == list.paths.end() || t.empty() || t == f)
+        return;
+    if (std::find(list.paths.begin(), list.paths.end(), t) != list.paths.end())
+        list.paths.erase(it);   // `to` is already listed: it keeps its slot
+    else
+        *it = t;
+}
+
 List LoadFile(const std::filesystem::path& file)
 {
     if (file.empty())

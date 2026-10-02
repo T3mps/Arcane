@@ -378,3 +378,13 @@ TEST_CASE("asset file steps never dirty the scene; scene steps still do", "[edit
     h.Edit(1.0f);
     CHECK(s.IsDirty(h.stack));
 }
+
+TEST_CASE("SceneSession::NoteMoved retargets only a matching path; id and dirty untouched", "[editor][scene][assetops]")
+{
+    Harness h; SceneSession s; const Arcane::Guid id = Arcane::Guid::Generate();
+    s.Adopt("C:/p/Content/scenes/main.arcscene", id, h.stack); h.Edit(1.0f);
+    s.NoteMoved("C:/p/Content/scenes/other.arcscene", "C:/p/Content/x.arcscene");
+    CHECK(s.Path() == std::filesystem::path("C:/p/Content/scenes/main.arcscene"));
+    s.NoteMoved("C:/p/Content/scenes/./main.arcscene", "C:/p/Content/levels/main.arcscene");
+    CHECK((s.Path() == std::filesystem::path("C:/p/Content/levels/main.arcscene") && s.Id() == id && s.IsDirty(h.stack)));
+}

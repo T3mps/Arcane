@@ -6,6 +6,7 @@
 // and tolerant reads of a malformed or future-versioned document.
 
 #include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -113,4 +114,14 @@ TEST_CASE("SceneRecents prune on an all-missing list empties it", "[editor]")
     SceneRecents::Prune(list, [](const std::string&) { return false; });
 
     CHECK(list.paths.empty());
+}
+
+TEST_CASE("SceneRecents::Replace keeps position, normalises and dedupes", "[editor][assetops]")
+{
+    List l; for (const char* p : { "D:/p/c.arcscene", "D:/p/b.arcscene", "D:/p/a.arcscene" }) SceneRecents::Push(l, p);
+    SceneRecents::Replace(l, "D:/p/./b.arcscene", "D:/p/lv/b2.arcscene");
+    CHECK(l.paths == std::vector<std::string>{ "D:/p/a.arcscene", "D:/p/lv/b2.arcscene", "D:/p/c.arcscene" });
+    SceneRecents::Replace(l, "D:/p/c.arcscene", "D:/p/a.arcscene");
+    SceneRecents::Replace(l, "D:/p/zzz.arcscene", "D:/p/q.arcscene");
+    CHECK(l.paths == std::vector<std::string>{ "D:/p/a.arcscene", "D:/p/lv/b2.arcscene" });
 }
