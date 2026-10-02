@@ -5,6 +5,16 @@
 // other device-less test exercises: the imgui-node-editor canvas only runs inside
 // a live ImGui frame.
 
+// The R5 record case reads an input pin's bounds through the node editor's
+// internal header (Detail::Pin::m_Bounds), as GraphFitTest.cpp does: the define
+// and that header lead, with C4996 silenced around it alone (its vendored
+// crude_json.h uses std::aligned_storage, deprecated in C++23).
+#define IMGUI_DEFINE_MATH_OPERATORS
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#include <imgui_node_editor_internal.h>
+#pragma warning(pop)
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Material/MaterialAsset.hpp>
@@ -363,5 +373,96 @@ TEST_CASE("Node page s5.1.11 canvas: pass switches and the chain view move no ep
         io.AddMouseButtonEvent(4, true); h.Frame(); io.AddMouseButtonEvent(4, false); h.Frame(2);   // forward: pass 1
         CHECK(h.doc->SelectionKey() == Key(1, 2));              // the mirror survived the overview
         CHECK(h.doc->SelectionEpoch() == e0);
+    }
+}
+
+// ---- R5 (spec s5.1.11 desk list, risk R5): does a click on a node's INLINE
+// widget select the node? The question is recorded, not fixed, in T3. The probe:
+// Sine's unwired `x` input carries the pin-literal DragFloat ("##lit", drawn
+// right of the pin, ShaderEditorDocument.cpp:5555-5582). A drag on that point
+// must change the literal -- that proves the point IS the widget -- and then the
+// page key says whether imgui-node-editor also selected the node. ----
+namespace
+{
+    // Output 1 <- Sin 2 (x unwired, so it shows the literal); Float 3 unwired.
+    MaterialGraph OutputSineFloat()
+    {
+        MaterialGraph g;
+        GraphNode out; out.id = 1; out.type = GraphNodeType::Output; out.posX = 420.0f; out.posY = 80.0f;
+        GraphNode s;   s.id = 2;   s.type = GraphNodeType::Sin;      s.posX = 60.0f;  s.posY = 80.0f;
+        GraphNode f;   f.id = 3;   f.type = GraphNodeType::ConstFloat; f.posX = 60.0f; f.posY = 260.0f;
+        g.nodes = { out, s, f };
+        g.links = { { 2, 0, 1, 0 } };
+        g.nextId = 4;
+        return g;
+    }
+    const GraphPinLiteral* SineLiteral(const ShaderEditorDocument& doc)
+    {
+        const MaterialGraph* g = doc.PassGraph(0);
+        if (!g) return nullptr;
+        for (const GraphNode& n : g->nodes)
+            if (n.id == 2) return n.FindPinLiteral(0);
+        return nullptr;
+    }
+}
+
+// R5 VERDICT (recorded 2026-10-01, T3-GATE fix round 2): NO. A press on an
+// inline widget makes that ImGui item active, and imgui-node-editor's
+// BuildControl returns an empty Control while any non-editor item is active
+// (ThirdParty/imgui-node-editor/imgui_node_editor.cpp:2576-2577), so no node is
+// "clicked" and the canvas selection is untouched: the page stays on its
+// previous key, whether that is the material or another node. This case PINS
+// that behaviour as the record; a later fix (select the owning node on an
+// inline-widget press) flips these CHECKs on purpose.
+TEST_CASE("Node page R5 record: a click on a node's inline widget (the Sine x literal) does NOT select the node",
+          "[editor][graphcanvas][nodepage]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputSineFloat()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));                          // empty canvas: the material page
+    REQUIRE(h.doc->SelectionKey() == "material");
+    REQUIRE(SineLiteral(*h.doc) == nullptr);                   // absent until touched
+
+    // The literal's centre: right of the x pin's bounds (pin, SameLine, a 64 px
+    // drag), on the pin's row, in canvas space -> screen.
+    const ImVec2 lit = h.InCanvas([]
+    {
+        auto* editor = reinterpret_cast<ed::Detail::EditorContext*>(ed::GetCurrentEditor());
+        const ed::Detail::Pin* pin = editor->FindPin(ed::PinId(2 * 1000ull + 1 + 0));   // InPin(2, 0)
+        REQUIRE(pin != nullptr);
+        const ImRect b = pin->m_Bounds;
+        const ImVec2 c(b.Max.x + ImGui::GetStyle().ItemSpacing.x + 32.0f, (b.Min.y + b.Max.y) * 0.5f);
+        return ed::CanvasToScreen(c);
+    });
+    INFO("Sine x literal point " << lit.x << ", " << lit.y);
+    const auto sineSelected = [&] { return h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(2)); }); };
+
+    ImGuiIO& io = ImGui::GetIO();
+    SECTION("press-drag-release on the literal: the value moves, the page stays on the material")
+    {
+        io.AddMousePosEvent(lit.x, lit.y); h.Frame();
+        io.AddMouseButtonEvent(0, true); h.Frame();
+        io.AddMousePosEvent(lit.x + 30.0f, lit.y); h.Frame(2);
+        io.AddMouseButtonEvent(0, false); h.Frame(2);
+        const GraphPinLiteral* l = SineLiteral(*h.doc);
+        REQUIRE(l != nullptr);                                  // the point IS the widget: the drag wrote x
+        CHECK(l->v[0] != 0.0f);
+        CHECK_FALSE(sineSelected());
+        CHECK(h.doc->SelectionKey() == "material");
+    }
+    SECTION("plain click on the literal: the page stays on the material")
+    {
+        h.Click(lit);
+        CHECK_FALSE(sineSelected());
+        CHECK(h.doc->SelectionKey() == "material");
+    }
+    SECTION("plain click on the literal with another node selected: the page stays on that node")
+    {
+        h.Click(h.NodeTitle(3));
+        REQUIRE(h.doc->SelectionKey() == Key(0, 3));
+        h.Click(lit);
+        CHECK_FALSE(sineSelected());
+        CHECK(h.InCanvas([] { return ed::IsNodeSelected(ed::NodeId(3)); }));
+        CHECK(h.doc->SelectionKey() == Key(0, 3));
     }
 }
