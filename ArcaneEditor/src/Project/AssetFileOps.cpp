@@ -340,6 +340,32 @@ namespace Arcane::Editor
         return false;
     }
 
+    std::optional<std::string> AssetFileOpExecutor::CreateFolder(const fs::path& dir)
+    {
+        std::error_code ec;
+        if (fs::exists(dir, ec)) return Display(dir) + " already exists.";
+        if (!fs::create_directory(dir, ec) || ec)
+            return Display(dir) + " could not be created (" + ec.message() + ").";
+        m_host.AssetsChanged({}, {});   // the model lists empty folders (s7.8)
+        return std::nullopt;
+    }
+
+    std::optional<std::string> AssetFileOpExecutor::RemoveEmptyFolder(const fs::path& dir)
+    {
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) return Display(dir) + " no longer exists.";
+        if (!fs::is_empty(dir, ec)) return Display(dir) + " is not empty.";
+        if (!fs::remove(dir, ec) || ec) return Display(dir) + " could not be removed (" + ec.message() + ").";
+        m_host.AssetsChanged({}, {});
+        return std::nullopt;
+    }
+
+    bool AssetFileOpExecutor::FolderLost(const fs::path& dir) const
+    {
+        std::error_code ec;
+        return !fs::is_directory(dir, ec) || !fs::is_empty(dir, ec);
+    }
+
     std::optional<std::string> AssetFileOpExecutor::RollBack(std::span<const FileMove> done)
     {
         for (std::size_t i = done.size(); i-- > 0;)
@@ -431,7 +457,11 @@ namespace Arcane::Editor
                 if (!failure) step = std::make_unique<AssetMoveCommand>(Anchor(), plan.label, plan.moves, std::move(dirs));
                 break;
             }
-            default:   // NewFolder (T5-A11), Delete (T5-A13) and Duplicate (s7.7) replace this arm
+            case AssetOpKind::NewFolder:
+                failure = CreateFolder(plan.moves[0].files[0].to);
+                if (!failure) step = std::make_unique<NewFolderCommand>(Anchor(), plan.label, plan.moves[0].files[0].to);
+                break;
+            default:   // Delete (T5-A13) and Duplicate (s7.7) replace this arm
                 failure = "This asset operation is not available yet.";
                 break;
         }

@@ -557,3 +557,32 @@ TEST_CASE("AssetFileOps: a step outliving its executor is inert", "[editor][asse
     stack.Undo();
     CHECK(fs::exists(w.content / "b.arcmat"));
 }
+
+TEST_CASE("AssetFileOps: New Folder creates, undoes only while empty, and expires once filled", "[editor][assetops]")
+{
+    AssetOpsWorld w("exec_folder");
+    fs::create_directories(w.content / "materials");
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    AssetFileOpExecutor exec(host, stack, w.content);
+    const AssetOpPlan plan = w.Plan(AssetOpKind::NewFolder, {}, "rocks", "materials");
+    REQUIRE(exec.Execute(plan, stack).ok);
+    const fs::path dir = w.content / "materials" / "rocks";
+    CHECK(fs::is_directory(dir));
+    CHECK(std::string(stack.UndoLabel()) == "New Folder materials/rocks/");
+
+    SECTION("undo removes it; redo brings it back")
+    {
+        stack.Undo();
+        CHECK_FALSE(fs::exists(dir));
+        stack.Redo();
+        CHECK(fs::is_directory(dir));
+    }
+    SECTION("a folder with something in it is never removed")
+    {
+        w.WriteRaw("materials/rocks/keep.txt", "x");
+        CHECK_FALSE(stack.CanUndo());
+        stack.Undo();
+        CHECK(fs::exists(dir / "keep.txt"));
+    }
+}

@@ -158,6 +158,9 @@ namespace Arcane::Editor
         // longer holds its guid (deleted, or re-identified outside the editor). One
         // PeekId per asset: a stat plus the .meta/JSON header, never the binary.
         [[nodiscard]] bool MoveSourceLost(std::span<const AssetMove> moves, Side side) const;
+        [[nodiscard]] std::optional<std::string> CreateFolder(const std::filesystem::path& dir);
+        [[nodiscard]] std::optional<std::string> RemoveEmptyFolder(const std::filesystem::path& dir);
+        [[nodiscard]] bool FolderLost(const std::filesystem::path& dir) const;   // gone, or no longer empty
         void ReportRefusal(std::string title, std::string message) { m_host.ReportError(std::move(title), std::move(message)); }
         [[nodiscard]] std::string Display(const std::filesystem::path& p) const;   // "textures/uv.png"
         void SetRenameForTest(RenameFn fn) { m_rename = std::move(fn); }
@@ -226,5 +229,19 @@ namespace Arcane::Editor
     private:
         std::vector<AssetMove> m_moves;
         std::vector<std::filesystem::path> m_dirs;   // the folders the side that ran last created
+    };
+
+    class NewFolderCommand final : public AssetFileCommand
+    {
+    public:
+        NewFolderCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label, std::filesystem::path dir)
+            : AssetFileCommand(std::move(exec), std::move(label)), m_dir(std::move(dir)) {}
+    protected:
+        std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) override
+        { return undo ? exec.RemoveEmptyFolder(m_dir) : exec.CreateFolder(m_dir); }
+        bool SourceLost(const AssetFileOpExecutor& exec, bool undo) const override
+        { return undo && exec.FolderLost(m_dir); }   // redo onto an occupied path: Run refuses, not expiry
+    private:
+        std::filesystem::path m_dir;
     };
 }
