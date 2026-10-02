@@ -502,6 +502,12 @@ TEST_CASE("Pin legend: a click on it folds it to the chip and never reaches the 
     CVarRegistry& reg = CVarRegistry::Get();
     Editor::SetGraphPinLegendShown(true);
     reg.Publish();
+    // The cvar is process-global: restore it even when a REQUIRE below throws,
+    // or ShaderGraphPinTypesTest's default case reads a folded legend.
+    struct LegendRestore
+    {
+        ~LegendRestore() { Editor::SetGraphPinLegendShown(true); CVarRegistry::Get().Publish(); }
+    } legendRestore;
     {
         Editor::ShaderEditorDocument doc(Editor::DocServices{}, std::filesystem::path("legend.arcmat"), std::move(data));
         auto frame = [&]
@@ -547,8 +553,6 @@ TEST_CASE("Pin legend: a click on it folds it to the chip and never reaches the 
         click(legendCentre());                               // the chip, now
         CHECK(Editor::GraphPinLegendShown());
     }
-    Editor::SetGraphPinLegendShown(true);
-    reg.Publish();
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 }
