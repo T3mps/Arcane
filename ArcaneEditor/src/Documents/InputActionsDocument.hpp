@@ -4,6 +4,7 @@
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsDocumentWidgets.hpp"
 #include "Documents/InputActionsInspectorPage.hpp"
+#include "Documents/InputPendingAdd.hpp"
 #include "Scene/UndoGate.hpp"
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Input/InputRebindOperation.hpp>
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -88,6 +90,16 @@ namespace Arcane::Editor
         // EditorApp::HandleUndoRedoAndSceneShortcuts), which run before the
         // document draws and must stand down while a capture is armed.
         [[nodiscard]] bool InputSwallowed() const noexcept { return captureTarget_.IsValid() || captureSwallowFrame_ == ImGui::GetFrameCount(); }
+        // Add-and-listen (spec 2026-09-30 s8.3): arm a capture for `add`'s first
+        // role. Each Completed result appends a path and the next role listens at
+        // once (the operation ignores controls held at Begin); Done, Esc, focus
+        // loss, click-away or the timeout make CommitPending's ONE model call.
+        // Refused while any capture is live.
+        void BeginPending(PendingAdd add);
+        [[nodiscard]] const PendingAdd* Pending() const noexcept { return pending_ ? &*pending_ : nullptr; }
+        // The view state the document owns, writable: the tests' probe seam and
+        // scheme filter (production writes it only through the widgets).
+        [[nodiscard]] InputActionsDocumentState& MutableState() noexcept { return state_; }
 
     private:
         InputActionsDocument(std::filesystem::path path, nlohmann::json draft,
@@ -101,6 +113,9 @@ namespace Arcane::Editor
         // scrolls the CAPTURE row into view (expanding its collapsed action;
         // a pinned page's binding need not be the selection), then arms the capture.
         void BeginRebindFromPage(const Guid& target);
+        void StartPendingCapture();
+        void FinishPending();
+        std::optional<PendingAdd> pending_;
 
         std::filesystem::path path_;
         std::string title_;

@@ -140,7 +140,7 @@ namespace Arcane::Editor
 
     void InputActionsDocument::BeginRebind(const Guid& target)
     {
-        if (!target.IsValid()) return;
+        if (!target.IsValid() || pending_) return;   // one capture at a time: the page's Rebind... waits for the pending add
         captureTarget_ = target;
         capture_.Begin(target, std::nullopt, 10.0f, previewSnapshot_);   // any device; the initiating control is not a capture (existing rule)
     }
@@ -153,6 +153,32 @@ namespace Arcane::Editor
         // A collapsed owner would hide the countdown row: expand it (view state, not a selection event).
         if (const auto* owner = OwnerActionOfBinding(model_.Draft(), target)) state_.collapsedActions.erase(IdOf(*owner).ToString());
         BeginRebind(target);
+    }
+
+    void InputActionsDocument::BeginPending(PendingAdd add)
+    {
+        if (captureTarget_.IsValid() || add.roles.empty()) return;
+        if (add.action.IsValid()) state_.collapsedActions.erase(add.action.ToString());   // the ghost rows draw under the action
+        pending_ = std::move(add);
+        StartPendingCapture();
+    }
+
+    void InputActionsDocument::StartPendingCapture()
+    {
+        // Any non-nil id (InputRebindOperation.cpp:48); never a row's, so no row
+        // shows the rebind countdown. InputSwallowed() covers every step.
+        captureTarget_ = Guid::Generate();
+        capture_.Begin(captureTarget_, std::nullopt, 10.0f, previewSnapshot_);
+    }
+
+    void InputActionsDocument::FinishPending()
+    {
+        PendingAdd done = std::move(*pending_);
+        pending_.reset();
+        captureTarget_ = {};
+        if (done.captured.empty()) return;                 // Esc on the first part: nothing to add
+        if (CommitPending(model_, done)) state_.scrollRowToSelection = true;
+        else ARC_WARN("input: the pending add was refused (its action or composite is gone, or nothing changed); nothing added");
     }
 
     void InputActionsDocument::TickCapture(bool bodyDrawn)
@@ -199,11 +225,23 @@ namespace Arcane::Editor
         const auto& result = capture_.Result();
         if (result.state == InputRebindState::Completed)
         {
-            (void)model_.SetField(captureTarget_, "path", result.replacementPath);   // ONE undoable edit
-            captureTarget_ = {};
+            if (pending_)
+            {
+                pending_->captured.push_back(result.replacementPath);
+                if (pending_->Done()) FinishPending();
+                else StartPendingCapture();                // the next role; the completing control is held at Begin, so it is ignored
+            }
+            else
+            {
+                (void)model_.SetField(captureTarget_, "path", result.replacementPath);   // ONE undoable edit
+                captureTarget_ = {};
+            }
         }
         else if (result.state == InputRebindState::Canceled || result.state == InputRebindState::TimedOut)
-            captureTarget_ = {};
+        {
+            if (pending_) FinishPending();                 // commits the parts heard so far (a partial composite is legal)
+            else captureTarget_ = {};
+        }
         // The capture ended on a frame the body is not drawn: DrawActions (which
         // owns the one-shot's clear) does not run, so drop the page Rebind's
         // scroll-to-row here, or it would scroll a row later with no capture live.
