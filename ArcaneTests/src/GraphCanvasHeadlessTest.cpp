@@ -28,6 +28,7 @@
 #include "Documents/ShaderNodeKey.hpp"   // FormatNodeKey: the s5.1.11 canvas cases
 #include "Panels/InspectorHost.hpp"      // the harness routes the doc's page like the editor
 #include "Panels/InspectorWindows.hpp"
+#include "Widgets/GraphWire.hpp"      // DrawGraphWire: the wire-gradient painter guard (T3-D3)
 #include "Widgets/PropertyGrid.hpp"
 #include "Helpers/NodePageDocs.hpp"   // SpriteNodeDoc / ChainNodeDoc / HeadlessImGui (node page s5.1.11)
 
@@ -35,9 +36,11 @@
 #include <imgui_internal.h>   // OpenPopupStack: the modal-hoist case
 #include <imgui_node_editor.h>   // the s5.1.11 canvas cases ask the canvas what is selected
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -894,4 +897,131 @@ TEST_CASE("Canvas inline drag (T3-D3): Esc while the button is held reverts the 
         CHECK(SineLiteral(*h.doc) == nullptr);
         CHECK_FALSE(h.stack.CanUndo());                          // ... and there was nothing else
     }
+}
+
+// ---- T3-D3 wire-gradient guard (user ruling 2026-10-02): a wire is a
+// gradient from its source pin's colour to its destination pin's, so it is a
+// gradient exactly where the two ends paint differently and one tone where they
+// match. Two halves: the canvas hands the painter BOTH end colours, and the
+// painter strokes both. ----
+TEST_CASE("Canvas wire gradient (T3-D3): a wire whose ends paint differently hands DrawGradientWire two distinct tints -- float into a float4-resolved Mul, float2 into the fixed float4 Output; a float4 -> float4 wire stays one tone",
+          "[editor][graphcanvas]")
+{
+    // Mul 3 (a <- Param 2 'tint' float4, b <- Float 4) resolves to float4;
+    // Output 1 <- Float2 5. Links in this order: 0 = Param -> Mul.a (4 -> 4),
+    // 1 = Float -> Mul.b (1 -> resolved 4), 2 = Float2 -> Output (2 -> fixed 4).
+    MaterialGraph g;
+    GraphNode out;   out.id = 1;   out.type = GraphNodeType::Output;      out.posX = 520.0f; out.posY = 80.0f;
+    GraphNode param; param.id = 2; param.type = GraphNodeType::Param;     param.posX = 40.0f; param.posY = 80.0f;
+    param.paramName = "tint";
+    param.paramType = MatParamType::Float4;
+    param.paramDefault = MatParamValue::MakeFloat4(1.0f, 1.0f, 1.0f, 1.0f);
+    GraphNode mul;   mul.id = 3;   mul.type = GraphNodeType::Mul;         mul.posX = 280.0f; mul.posY = 80.0f;
+    GraphNode f1;    f1.id = 4;    f1.type = GraphNodeType::ConstFloat;   f1.posX = 40.0f;   f1.posY = 260.0f;
+    GraphNode f2;    f2.id = 5;    f2.type = GraphNodeType::ConstFloat2;  f2.posX = 280.0f;  f2.posY = 300.0f;
+    g.nodes = { out, param, mul, f1, f2 };
+    g.links = { { 2, 0, 3, 0 }, { 4, 0, 3, 1 }, { 5, 0, 1, 0 } };
+    g.nextId = 6;
+    CanvasHarness h(TwoNodeGraph("sprite", g));
+    h.Frame(3);
+
+    const auto same = [](const ImVec4& a, const ImVec4& b) { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; };
+
+    // Matched ends: one tone (the painter's equal-colour path).
+    const auto matched = h.doc->CanvasWireTintOf(0);
+    REQUIRE(matched.has_value());
+    CHECK(same(matched->from, PinColorForWidth(4)));
+    CHECK(same(matched->to, PinColorForWidth(4)));
+
+    // float -> a dynamic input resolved to float4: BOTH tints, and they differ.
+    const auto scalarIn = h.doc->CanvasWireTintOf(1);
+    REQUIRE(scalarIn.has_value());
+    CHECK(same(scalarIn->from, PinColorForWidth(1)));
+    CHECK(same(scalarIn->to, PinColorForWidth(4)));
+    CHECK_FALSE(same(scalarIn->from, scalarIn->to));
+    // ... and each end is exactly its pin dot's colour.
+    CHECK(same(scalarIn->from, h.doc->CanvasPinPaint(4, 0, /*input*/ false).color));
+    CHECK(same(scalarIn->to, h.doc->CanvasPinPaint(3, 1, /*input*/ true).color));
+
+    // float2 -> the fixed float4 Output pin: two tints, distinct.
+    const auto vec2In = h.doc->CanvasWireTintOf(2);
+    REQUIRE(vec2In.has_value());
+    CHECK(same(vec2In->from, PinColorForWidth(2)));
+    CHECK(same(vec2In->to, PinColorForWidth(4)));
+    CHECK_FALSE(same(vec2In->from, vec2In->to));
+    CHECK(same(vec2In->from, h.doc->CanvasPinPaint(5, 0, false).color));
+    CHECK(same(vec2In->to, h.doc->CanvasPinPaint(1, 0, true).color));
+
+    CHECK_FALSE(h.doc->CanvasWireTintOf(3).has_value());          // only the links that draw walked
+}
+
+TEST_CASE("Graph wire paint (T3-D3): DrawGraphWire strokes two different end colours as a gradient -- the tail vertices carry the source hue, the head vertices the destination hue; equal ends stay one tone",
+          "[editor][graphcanvas]")
+{
+    // The painter half of the guard, on a canvas of its own: the stroke's
+    // vertices are exactly the ones DrawGraphWire appends to the shared vertex
+    // buffer (channels split index and command lists, never vertices).
+    Arcane::Test::HeadlessImGui imgui;
+    ed::Config cfg;
+    cfg.SettingsFile = nullptr;
+    ed::EditorContext* ctx = ed::CreateEditor(&cfg);
+
+    // The RGB of every vertex the stroke appended (alpha dropped: the AA
+    // fringe repeats each colour at zero alpha), in emission order.
+    const auto stroke = [&](const ImVec4& from, const ImVec4& to)
+    {
+        std::vector<ImU32> rgb;
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowSize(ImVec2(800.0f, 600.0f));
+        (void)ImGui::Begin("WireCanvas");
+        ed::SetCurrentEditor(ctx);
+        ed::Begin("wire");
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        REQUIRE(dl->_Splitter._Count > kGraphLinkChannel);       // else the painter draws nothing
+        const int first = dl->VtxBuffer.Size;
+        (void)DrawGraphWire(ImVec2(100.0f, 100.0f), ImVec2(500.0f, 260.0f), from, to, 2.0f, 1.0f);
+        for (int i = first; i < dl->VtxBuffer.Size; ++i)
+            rgb.push_back(dl->VtxBuffer[i].col & ~IM_COL32_A_MASK);
+        ed::End();
+        ed::SetCurrentEditor(nullptr);
+        ImGui::End();
+        ImGui::Render();
+        return rgb;
+    };
+    const auto rgbOf = [](const ImVec4& c) { return ImGui::GetColorU32(c) & ~IM_COL32_A_MASK; };
+    // Per-channel distance, 0..255.
+    const auto dist = [](ImU32 a, ImU32 b)
+    {
+        int d = 0;
+        for (const int shift : { IM_COL32_R_SHIFT, IM_COL32_G_SHIFT, IM_COL32_B_SHIFT })
+            d = (std::max)(d, std::abs(static_cast<int>((a >> shift) & 0xFF) - static_cast<int>((b >> shift) & 0xFF)));
+        return d;
+    };
+
+    const ImVec4 src = PinColorForWidth(1);
+    const ImVec4 dst = PinColorForWidth(4);
+    const std::vector<ImU32> gradient = stroke(src, dst);
+    REQUIRE(gradient.size() >= 4);
+    // The tail sits on the source hue, the head on the destination hue, each
+    // nearer its own end than the other (sampled at segment midpoints, so not
+    // bit-exact), and the run between them is not one tone.
+    const ImU32 tail = gradient.front();
+    const ImU32 head = gradient.back();
+    INFO("tail " << std::hex << tail << " head " << head << " src " << rgbOf(src) << " dst " << rgbOf(dst));
+    CHECK(dist(tail, rgbOf(src)) < dist(tail, rgbOf(dst)));
+    CHECK(dist(head, rgbOf(dst)) < dist(head, rgbOf(src)));
+    std::vector<ImU32> tones = gradient;
+    std::sort(tones.begin(), tones.end());
+    tones.erase(std::unique(tones.begin(), tones.end()), tones.end());
+    CHECK(tones.size() > 2);
+
+    // Equal ends: every vertex is the one tone.
+    const std::vector<ImU32> flat = stroke(dst, dst);
+    REQUIRE_FALSE(flat.empty());
+    for (const ImU32 c : flat)
+        CHECK(c == rgbOf(dst));
+
+    ed::DestroyEditor(ctx);
 }

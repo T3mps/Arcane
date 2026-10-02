@@ -389,6 +389,19 @@ namespace Arcane::Editor
         // resolved. The dynamic grey with no ring when the node is not in the
         // active graph. Production never calls it.
         [[nodiscard]] GraphPinPaint CanvasPinPaint(std::uint32_t id, std::uint32_t pin, bool input) const;
+        // TEST SEAM ([graphcanvas], T3-D3): the two tints the graph canvas's
+        // LAST draw handed DrawGradientWire for link `linkIndex` (the active
+        // graph's `links` order), before hover/selection emphasis: `from` is
+        // the source pin's colour, `to` the destination pin's. nullopt for an
+        // index that draw did not walk. The wire-gradient regression guard
+        // (user ruling 2026-10-02: a wire is a gradient exactly where its ends
+        // paint differently) reads it. Production never calls it.
+        struct CanvasWireTint
+        {
+            ImVec4 from;
+            ImVec4 to;
+        };
+        [[nodiscard]] std::optional<CanvasWireTint> CanvasWireTintOf(std::size_t linkIndex) const;
 
         // Publish this document's CURRENT diagnostic set under "material:<guid>".
         // No anti-spam gate is needed: publication groups replace, so republishing
@@ -1084,6 +1097,10 @@ namespace Arcane::Editor
         // start from the library's own endpoints instead of re-deriving them.
         // Rebuilt every frame (positions move with the node and the view).
         std::unordered_map<std::uint64_t, ImVec2> m_pinPivots;
+        // THIS FRAME's (source, destination) tint per link, in `links` order:
+        // exactly the pair the link loop handed DrawGradientWire. Rebuilt with
+        // m_pinPivots; read only by the CanvasWireTintOf test seam.
+        std::vector<CanvasWireTint> m_wireTints;
         // THIS FRAME's dynamic-width resolution of the drawn graph
         // (Arcane::ResolveGraphNodeWidths -- codegen's own), taken ONCE before
         // the node loop. Every pin dot, wire end and pin tooltip reads it.

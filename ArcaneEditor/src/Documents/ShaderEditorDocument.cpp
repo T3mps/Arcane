@@ -4561,6 +4561,14 @@ namespace Arcane::Editor
         return GraphPinPaintOn(*n, pin, input);
     }
 
+    std::optional<ShaderEditorDocument::CanvasWireTint>
+    ShaderEditorDocument::CanvasWireTintOf(std::size_t linkIndex) const
+    {
+        if (linkIndex >= m_wireTints.size())
+            return std::nullopt;
+        return m_wireTints[linkIndex];
+    }
+
     std::string ShaderEditorDocument::CanvasPinTooltip(const Arcane::MaterialGraph& graph, const Arcane::GraphNode& node,
                                                        std::uint32_t pin, bool input) const
     {
@@ -4755,6 +4763,7 @@ namespace Arcane::Editor
         // DrawGradientWire's miss path). Cleared here, refilled by the pin
         // rows below, consumed by the link loop after them.
         m_pinPivots.clear();
+        m_wireTints.clear();
 
         // The dynamic-width resolution codegen emits from, ONCE per frame for
         // this graph (T3-D1): every pin dot, wire end and tooltip below reads it.
@@ -4816,6 +4825,7 @@ namespace Arcane::Editor
             // does not flicker bright while it is being dragged past.
             const bool emphasize = ed::IsLinkSelected(linkId) ||
                                    ed::GetHoveredLink() == linkId;
+            m_wireTints.push_back({ srcTint, dstTint });   // index i: the CanvasWireTintOf seam
             DrawGradientWire(fromPin.Get(), toPin.Get(), srcTint, dstTint,
                              emphasize);
         }
