@@ -169,8 +169,8 @@ namespace Arcane
         std::map<std::string, std::vector<std::pair<std::string, nlohmann::json>>> owned;
         for (const CVarListEntry& entry : registry.List())
         {
-            if (!Any(entry.flags, CVarFlags::Archive)) continue;
-            if (Any(entry.flags, CVarFlags::Dev) || Any(entry.flags, CVarFlags::Cheat)) continue;
+            if (!HasFlag(entry.flags, CVarFlags::Archive)) continue;
+            if (HasFlag(entry.flags, CVarFlags::Dev) || HasFlag(entry.flags, CVarFlags::Cheat)) continue;
             const auto dot = entry.name.find('.');
             if (dot == std::string::npos) continue;
             std::string category = entry.name.substr(0, dot);
