@@ -8,8 +8,20 @@
 
 #include <Project/ClassTemplates.hpp>
 
+#include <Arcane/Base/ProcessContext.hpp>
+#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Plugin/SystemFactory.hpp>
+#include <Arcane/Sim/Time.hpp>
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <string_view>
+
+#include "Helpers/ReferenceProjectDir.hpp"
+#include "Helpers/TestTypeContext.hpp"
 
 using namespace Arcane::Editor;
 
@@ -47,11 +59,12 @@ TEST_CASE("ClassTemplates::Render Component: a reflected struct in the header, t
 
     // Header: the shape Components.hpp / HotReloadShared.hpp use.
     CHECK(Has(r.header, "#pragma once"));
-    CHECK(Has(r.header, "#include <Astra/Reflection/Reflection.hpp>"));
+    CHECK(Has(r.header, "#include <Arcane/Reflection.hpp>"));
     CHECK(Has(r.header, "namespace Aphelyon"));
     CHECK(Has(r.header, "struct Health"));
-    CHECK(Has(r.header, "ASTRA_REFLECT_TYPE(Health)"));
-    CHECK(Has(r.header, "ASTRA_END_REFLECT_TYPE()"));
+    CHECK(Has(r.header, "ARCANE_REFLECT_TYPE(Health)"));
+    CHECK(Has(r.header, "ARCANE_END_REFLECT_TYPE()"));
+    CHECK_FALSE(Has(r.header, "ASTRA_"));
 
     // Source: ONE registrar line, in exactly one TU (a header would register
     // once per including TU), qualified with the project namespace.
@@ -77,14 +90,14 @@ TEST_CASE("ClassTemplates::Render System: a registered header/source pair with s
     CHECK(r.sourceName == "Movement.cpp");
 
     CHECK(Has(r.header, "#pragma once"));
-    CHECK(Has(r.header, "#include <Astra/Registry/Registry.hpp>"));
-    CHECK(Has(r.header, "#include <Astra/System/System.hpp>"));
     CHECK(Has(r.header, "namespace Aphelyon"));
     CHECK(Has(r.header, "struct Movement"));
-    CHECK(Has(r.header, "Astra::SystemTraits<"));
-    CHECK(Has(r.header, "void operator()(Astra::Registry& reg)"));
     CHECK(Has(r.header, "#include <Arcane/Scene/TransformSystems.hpp>"));
-    CHECK(Has(r.header, "Astra::Before<Arcane::TransformPropagationSystem>"));
+    CHECK(Has(r.header, "#include <Arcane/Ecs.hpp>"));
+    CHECK(Has(r.header, "Arcane::SystemTraits<Arcane::Before<Arcane::TransformPropagationSystem>>"));
+    CHECK(Has(r.header, "void operator()(Arcane::Res<Arcane::Time> time)"));
+    CHECK_FALSE(Has(r.header, "Astra::"));
+    CHECK_FALSE(Has(r.header, "Registry& reg"));
 
     CHECK(Has(r.source, "#include \"Movement.hpp\""));
     CHECK(Has(r.source, "#include <Arcane/Plugin/GameSystems.hpp>"));
@@ -119,7 +132,7 @@ TEST_CASE("ClassTemplates::Render System maps every phase and role choice", "[ed
         const auto rendered = ClassTemplates::Render(
             ClassTemplates::Kind::System, "Movement", "Aphelyon", options);
         CHECK(Has(rendered.source, c.spelling));
-        CHECK(Has(rendered.header, "Astra::Before<Arcane::TransformPropagationSystem>")
+        CHECK(Has(rendered.header, "Arcane::Before<Arcane::TransformPropagationSystem>")
               == c.transformAnchor);
         CHECK(Has(rendered.header, "#include <Arcane/Scene/TransformSystems.hpp>")
               == c.transformAnchor);
@@ -209,4 +222,55 @@ TEST_CASE("ClassTemplates::KindLabel names every kind", "[editor]")
     CHECK(std::string(ClassTemplates::KindLabel(ClassTemplates::Kind::System)) == "System");
     CHECK(std::string(ClassTemplates::KindLabel(ClassTemplates::Kind::PlainClass)) == "Plain class");
     CHECK(static_cast<int>(ClassTemplates::Kind::Count) == 3);
+}
+
+// ---- the compile proof (input-seam spec s8 T8) --------------------------------
+// This file never compiles generated code, so the renders for (Component
+// SmokeComponent, System SmokeSystem, project TemplateSmoke) are checked in
+// under ArcaneTests/plugins/TemplateSmoke and built as TemplateSmokePlugin.dll
+// (premake5.lua). The first case pins those files to Render(...) byte for
+// byte; the build pins that they compile. A template drift fails one or the
+// other.
+
+namespace
+{
+    std::string Slurp(const std::filesystem::path& p)
+    {
+        std::ifstream in(p, std::ios::binary);
+        std::stringstream ss; ss << in.rdbuf(); return ss.str();
+    }
+    std::filesystem::path SmokeDir()
+    {
+        return Arcane::Test::FindReferenceProjectDir().parent_path() / "ArcaneTests" / "plugins" / "TemplateSmoke";
+    }
+}
+
+TEST_CASE("ClassTemplates renders equal the compiled TemplateSmoke sources byte for byte", "[editor][templates]")
+{
+    const auto component = ClassTemplates::Render(ClassTemplates::Kind::Component, "SmokeComponent", "TemplateSmoke");
+    const auto system    = ClassTemplates::Render(ClassTemplates::Kind::System, "SmokeSystem", "TemplateSmoke");
+    CHECK(Slurp(SmokeDir() / "SmokeComponent.hpp") == component.header);
+    CHECK(Slurp(SmokeDir() / "SmokeComponent.cpp") == component.source);
+    CHECK(Slurp(SmokeDir() / "SmokeSystem.hpp")    == system.header);
+    CHECK(Slurp(SmokeDir() / "SmokeSystem.cpp")    == system.source);
+}
+
+TEST_CASE("the rendered component and parameter-style system load as a module and the system runs", "[editor][templates][hotreload]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    Arcane::PluginHost host(Arcane::Test::Process(), std::filesystem::path("TemplateSmokePlugin.dll"));
+    REQUIRE(host.AttachRuntime(rt));
+    REQUIRE(host.Load());
+    // The rendered system registered through ARCANE_SYSTEM's PARAMETER path...
+    bool registered = false;
+    for (const Arcane::SystemFactoryEntry& e : Arcane::Test::Process().SystemFactories().Entries())
+        if (e.name.find("SmokeSystem") != std::string::npos) registered = true;
+    CHECK(registered);
+    // ...and runs: its only parameter is Res<Time>, which RunLoop publishes, so
+    // a skip would log "param-system skipped" and a crash would end the test.
+    for (int i = 0; i < 3; ++i)
+        rt.Loop().Advance(1.0 / 60.0, [&](double dt) { host.FixedUpdateAll(dt); }, [&](double dt, double a) { host.UpdateAll(dt, a); });
+    CHECK(rt.Registry().GetResource<Arcane::Time>() != nullptr);
+    CHECK(host.IsLoaded());
+    host.Unload();
 }
