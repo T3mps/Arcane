@@ -151,7 +151,10 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //   --project/--plugin/--frames/--backend/--no-vsync -- honoured.
 //   --screenshot        -- honoured. WINDOWED it captures the VIEWPORT panel's
 //                          texture, not the editor window (so the Inspector and
-//                          the asset browser are not in it). Under --headless
+//                          the asset browser are not in it) -- unless
+//                          `--set editor.automation.windowedFrameCapture=true`
+//                          (T3-D6, Dev): then it captures the presented
+//                          backbuffer, the whole composited editor window. Under --headless
 //                          it captures the COMPOSITED EDITOR FRAME instead --
 //                          chrome, docking, panels, and the viewport texture
 //                          inside its panel -- off the offscreen chrome

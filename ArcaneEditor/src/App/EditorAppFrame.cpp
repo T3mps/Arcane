@@ -1587,6 +1587,41 @@ namespace Arcane::Editor
         return !cfg.screenshotPath.empty() || !cfg.reportPath.empty();
     }
 
+    // T3-D6: the WINDOWED composited-frame capture, opt in. A windowed
+    // --screenshot captures the VIEWPORT texture (main.cpp's flag table);
+    // `--set editor.automation.windowedFrameCapture=true` makes it capture the
+    // swapchain backbuffer the editor just presented instead -- chrome,
+    // panels and viewport, the picture --headless captures offscreen -- so an
+    // automated desk pass can judge the WINDOWED editor (works-headless/
+    // broken-windowed is a bug class) without driving the desktop. Dev (never
+    // in Dist) and UserSettable (the command line's door), NOT Archive: an
+    // automation switch must never persist into a user's settings.
+    namespace
+    {
+        constexpr const char* kWindowedFrameCaptureCvar = "editor.automation.windowedFrameCapture";
+        const ::Arcane::CVarHandle kWindowedFrameCaptureHandle = []
+        {
+            ::Arcane::CVarDesc desc;
+            desc.name = kWindowedFrameCaptureCvar;
+            desc.type = ::Arcane::CVarType::Bool;
+            desc.defaultValue = ::Arcane::CVarValue::Bool(false);
+            desc.flags = ::Arcane::CVarFlags::Dev | ::Arcane::CVarFlags::UserSettable;
+            desc.help = "Windowed --screenshot captures the composited editor frame (the presented "
+                        "backbuffer: chrome, panels, viewport) instead of the viewport texture";
+            desc.module = "editor";
+            return ::Arcane::CVarRegistry::Get().Register(desc);
+        }();
+    }
+
+    static bool WindowedFrameCapture(const Arcane::HostConfig& cfg)
+    {
+        if (cfg.headless)
+            return false;   // --headless already captures the composited frame, offscreen
+        const ::Arcane::CVarRegistry& reg = ::Arcane::CVarRegistry::Get();
+        const auto v = reg.Get(reg.Find(kWindowedFrameCaptureCvar));
+        return v && v->type == ::Arcane::CVarType::Bool && v->AsBool();
+    }
+
     void EditorApp::RenderSceneToViewport()
     {
         // ================= THE VIEWPORT FRAME =============================
@@ -1687,10 +1722,14 @@ namespace Arcane::Editor
             // context is a swapchain nothing reads back, so the viewport
             // texture remains the only editor screenshot there is (main.cpp's
             // flag table says so).
+            // ...nor when the windowed composited capture is opted in (T3-D6,
+            // WindowedFrameCapture): then the chrome frame owns the PNG, for
+            // the same one-flag-one-meaning reason.
             const bool isCaptureLastFrame = m_config.maxFrames != 0 &&
                                             (m_frameCount + 1) >= m_config.maxFrames &&
                                             CaptureWanted(m_config) &&
-                                            !m_config.headless;
+                                            !m_config.headless &&
+                                            !WindowedFrameCapture(m_config);
             vp.capture = isCaptureLastFrame;
 
             const Arcane::NriGraphContext::FrameOutcome outcome =
@@ -3795,7 +3834,10 @@ namespace Arcane::Editor
         // runtime's own capture arm: "arm every frame past the base budget"
         // and "arm the one last frame" are one expression, not two.
         const bool offscreenChrome = ChromeGraph()->IsOffscreen();
-        const bool pastBase = offscreenChrome &&
+        // T3-D6: OR the windowed opt-in -- the capture node copies whichever
+        // backbuffer this frame writes, the swapchain's included (the
+        // runtime's windowed --screenshot already reads it the same way).
+        const bool pastBase = (offscreenChrome || WindowedFrameCapture(m_config)) &&
                               CaptureWanted(m_config) &&
                               m_config.maxFrames != 0 &&
                               (m_frameCount + 1) >= m_config.maxFrames;
