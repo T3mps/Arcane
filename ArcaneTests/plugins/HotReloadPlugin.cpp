@@ -116,6 +116,10 @@ namespace Arcane::HotReloadTest
         {
             uint64_t saved = 0; r(saved);
             CacheHandle();
+            // The path discriminator (HotReloadShared.hpp): count this run in a
+            // transient resource no registry snapshot can carry.
+            const LoadStateMarker* marker = Registry().GetResource<LoadStateMarker>();
+            Registry().SetResource<LoadStateMarker>(LoadStateMarker{marker ? marker->loads + 1 : 1});
             return !r.HasError() && static_cast<uint64_t>(pulse) == saved;
         }
     };

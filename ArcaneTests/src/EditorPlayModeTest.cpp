@@ -219,19 +219,17 @@ TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[editor
 // it, so there is no longer a seam a hand-made vtable can be pushed through. The
 // module under test is the same HotReloadPluginV1 the [hotreload] suite uses.
 //
-// WHICH PATH RAN IS MADE DECIDABLE, and that took one extra fixture line
-// (final-review fix wave, minor 9 -- the comment here used to claim a
-// discrimination its assertions did not establish: restoring `ticks` to 0 is what
-// BOTH paths do, so it named nothing). The separator is meant to be SceneRoot,
-// a registry RESOURCE. CAUTION (IN-8): resources ARE in a registry snapshot --
-// Astra's resource block carries every non-transient one and SceneRoot also
-// rides the engine's serializable-resource section -- so Runtime::RestoreRegistry
-// alone brings it back too, and this separator does not decide the path on its
-// own. ARCANE_GAME_MODULE's
-// LoadState re-sets it from an id its SaveState wrote beside the blob
-// (GameModule.hpp). So a SceneRoot that is still there after Stop is a statement
-// that the MODULE's LoadState ran -- exactly the property this case exists for,
-// since a module's own native resources (the physics world) ride that same seam.
+// WHICH PATH RAN IS MADE DECIDABLE by a TRANSIENT marker resource,
+// HotReloadTest::LoadStateMarker, that only the module's OnLoadState sets
+// (HotReloadPlugin.cpp). Registry::Save skips transient resources, so no
+// snapshot carries the marker and Runtime::RestoreRegistry alone can never
+// produce it: a marker present after Stop, counting exactly one load, is a
+// statement that the MODULE's LoadState ran -- exactly the property this case
+// exists for, since a module's own native resources (the physics world) ride
+// that same seam. (The case used SceneRoot as the separator until the input-seam
+// gate; SceneRoot rides the registry snapshot, so a plain RestoreRegistry brought
+// it back too and it decided nothing -- IN-8. SceneRoot is still checked below,
+// as the module re-setting the root it saved, not as the discriminator.)
 // On top of that the module's OnLoadState REFUSES (returns false, which Stop
 // reports) unless the Pulse entity it re-finds is the saved one, so the REQUIRE on
 // Stop's return is a check on the module's extra blob too.
@@ -245,8 +243,10 @@ TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/Lo
     REQUIRE(host.AttachRuntime(runtime));
     REQUIRE(host.Load());                       // OnInit creates the module's Pulse entity
 
-    // The path discriminator (see the comment above): a SceneRoot RESOURCE, which
-    // only the module's LoadState puts back.
+    // The path discriminator (see the comment above) is absent before Play.
+    REQUIRE(runtime.Registry().GetResource<LoadStateMarker>() == nullptr);
+
+    // A scene root for the module's SaveState to record and its LoadState to re-set.
     Arcane::RegisterSceneComponents(runtime.Registry());
     const Astra::Entity root = runtime.Registry().CreateEntityWith(Arcane::Transform{});
     runtime.Registry().SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{root});
@@ -264,8 +264,8 @@ TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/Lo
     CHECK(play.IsPlaying());
     CHECK_FALSE(runtime.Loop().IsPaused());
 
-    // Play-time mutation, exactly as a running game would produce -- plus the
-    // resource DROPPED, the way a restore that swaps the registry drops it.
+    // Play-time mutation, exactly as a running game would produce.
+    CHECK(runtime.Registry().GetResource<LoadStateMarker>() == nullptr);   // Play's SaveState sets nothing
     runtime.Registry().CreateView<Pulse>().ForEach([](Astra::Entity, Pulse& p) { p.ticks = 99; });
     REQUIRE(readPulse() == 99);
 
@@ -275,8 +275,11 @@ TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/Lo
     CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
     CHECK(readPulse() == 0);                    // the play-time mutation is gone
-    // SceneRoot is back (the module's LoadState re-sets it; see the CAUTION in
-    // the comment above: a plain RestoreRegistry would bring it back as well).
+    // THE discriminator: the module's LoadState ran, exactly once.
+    const LoadStateMarker* marker = runtime.Registry().GetResource<LoadStateMarker>();
+    REQUIRE(marker != nullptr);
+    CHECK(marker->loads == 1);
+    // And it re-set the scene root it saved (not a discriminator, see above).
     const Arcane::SceneRoot* sr = runtime.Registry().GetResource<Arcane::SceneRoot>();
     REQUIRE(sr != nullptr);
     CHECK(sr->entity == root);
