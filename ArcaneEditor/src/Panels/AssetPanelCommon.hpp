@@ -140,6 +140,12 @@ namespace Arcane::Editor
         std::optional<AssetOpRequest> fileOp;
         Arcane::Guid requestRename;
         std::vector<Arcane::Guid> requestDelete;
+        // T5 s7.8: `requestMoveTo` (the row menu's Move to...) asks the host
+        // for the Move to... modal over these guids; `requestNewFolder` asks
+        // for the New Folder modal under that parent (relative to Content/,
+        // "" = Content/ itself: the Browser's background menu).
+        std::vector<Arcane::Guid> requestMoveTo;
+        std::optional<std::string> requestNewFolder;
     };
 
     // The Assets panel's read-only host seams. Originally just the

@@ -119,20 +119,7 @@ namespace Arcane::Editor
             // valid to invalid mid-typing.
             ImGui::TextDisabled("%s", check.ok ? "" : check.message.c_str());
 
-            ImGui::TextDisabled("Location");
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::BeginCombo("##createlocation", folder.display.c_str()))
-            {
-                for (int i = 0; i < static_cast<int>(folders.size()); ++i)
-                {
-                    const bool selected = (i == st.folderIndex);
-                    if (ImGui::Selectable(folders[static_cast<std::size_t>(i)].display.c_str(), selected))
-                        st.folderIndex = i;
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
+            (void)DrawLocationCombo(folders, st.folderIndex);
             return check;
         }
 
@@ -509,6 +496,19 @@ namespace Arcane::Editor
                 break;
         }
         return st;
+    }
+
+    bool DrawLocationCombo(const std::vector<FolderChoice>& folders, int& index)   // T5 s7.8: shared with Move to...
+    {
+        bool picked = false; index = std::clamp(index, 0, static_cast<int>(folders.size()) - 1);
+        ImGui::TextDisabled("Location"); ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##createlocation", folders[static_cast<std::size_t>(index)].display.c_str()))
+        {
+            for (int i = 0; i < static_cast<int>(folders.size()); ++i)
+            { if (ImGui::Selectable(folders[static_cast<std::size_t>(i)].display.c_str(), i == index)) { index = i; picked = true; } if (i == index) ImGui::SetItemDefaultFocus(); }
+            ImGui::EndCombo();
+        }
+        return picked;
     }
 
     std::optional<CreateAssetResult> DrawCreateAssetDialog(CreateDialogState& st,

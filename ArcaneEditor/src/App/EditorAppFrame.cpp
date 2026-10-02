@@ -2488,6 +2488,23 @@ namespace Arcane::Editor
             if (const auto plan = RunAssetOp(*req)) AfterAssetOp(*plan);
         // T5 s7.5: the Delete confirm modal (opened by requestDelete above).
         ConsumeDeleteConfirm();
+        // T5 s7.8: Move to... and New Folder. A folder made from INSIDE Move
+        // to... (its nested New Folder) is picked in Move's combo once the
+        // MarkAllDirty rebuild AssetsChanged arms lists it. The top-level New
+        // Folder (folder row, background) draws only while Move is shut, read
+        // BEFORE Move draws, so the two instances never share a frame -- an
+        // ungated top-level BeginPopupModal would close the nested one.
+        if (proj)
+        {
+            const bool moveWasOpen = m_moveTo.open;
+            const Arcane::Editor::MoveToResult moved = Arcane::Editor::DrawMoveToModal(m_moveTo, m_newFolder, m_assetModel, m_assetPanelServices, *proj);
+            if (moved.move) if (const auto plan = RunAssetOp(*moved.move)) AfterAssetOp(*plan);
+            if (moved.newFolder && RunAssetOp(*moved.newFolder) && m_moveTo.open)
+                m_moveTo.selectAfterCreate = moved.newFolder->destFolder.empty() ? moved.newFolder->newStem
+                                                                                  : moved.newFolder->destFolder + "/" + moved.newFolder->newStem;
+            if (!moveWasOpen)
+                if (const auto req = Arcane::Editor::DrawNewFolderModal(m_newFolder, *proj)) (void)RunAssetOp(*req);
+        }
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
@@ -3011,6 +3028,8 @@ namespace Arcane::Editor
         if (const auto* e = m_assetModel.Find(panelActions.requestRename))
         { m_renameModal = { true, e->guid, {}, true }; std::snprintf(m_renameModal.buf, sizeof(m_renameModal.buf), "%s", e->name.c_str()); }
         if (!panelActions.requestDelete.empty()) BeginAssetDelete(panelActions.requestDelete);   // T5 s7.5: Del, row menu, page trash
+        if (!panelActions.requestMoveTo.empty()) m_moveTo = { true, true, panelActions.requestMoveTo, 0, {} };   // T5 s7.8: row menu
+        if (panelActions.requestNewFolder) { m_newFolder = {}; m_newFolder.open = m_newFolder.justOpened = true; m_newFolder.parent = *panelActions.requestNewFolder; }   // folder row, background
 
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
         // Recook, per the plan's Ruling 8: invalidate the artifact, ERASE this

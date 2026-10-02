@@ -62,4 +62,51 @@ namespace Arcane::Editor
         if (ImGui::Button(text.confirm.c_str())) { out = DeleteModalResult::Confirm; st.open = false; ImGui::CloseCurrentPopup(); }
         ImGui::EndDisabled(); ImGui::EndPopup(); return out;
     }
+
+    std::optional<AssetOpRequest> DrawNewFolderModal(NewFolderState& st, const Arcane::Project& project)
+    {
+        if (!st.open) return std::nullopt;
+        if (st.justOpened) ImGui::OpenPopup("New Folder##assetops");
+        std::optional<AssetOpRequest> out;
+        if (ImGui::BeginPopupModal("New Folder##assetops", &st.open, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::TextDisabled("In Content/%s", st.parent.c_str()); if (st.justOpened) { ImGui::SetKeyboardFocusHere(); st.justOpened = false; }
+            const bool enter = ImGui::InputText("##newfolder", st.name, sizeof(st.name), ImGuiInputTextFlags_EnterReturnsTrue);
+            const CreateNameCheck ck = ValidateCreateName(st.name, project.Root() / "Content" / st.parent, "");   // rule 3 catches a file or folder
+            ImGui::TextDisabled("%s", ck.ok ? "" : ck.message.c_str()); ImGui::BeginDisabled(!ck.ok);
+            if (ImGui::Button("Create", ImVec2(92, 0)) || (enter && ck.ok)) { out = AssetOpRequest{ .kind = AssetOpKind::NewFolder, .newStem = st.name, .destFolder = st.parent }; st.open = false; ImGui::CloseCurrentPopup(); }
+            ImGui::EndDisabled(); ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(92, 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+        else if (!ImGui::IsPopupOpen("New Folder##assetops")) st.open = false;   // closed from outside (its parent went): never a stale open flag
+        return out;
+    }
+
+    MoveToResult DrawMoveToModal(MoveToState& st, NewFolderState& nf, const AssetPanelModel& model,
+                                 const AssetPanelServices& sv, const Arcane::Project& project)
+    {
+        MoveToResult result;
+        if (!st.open) return result;
+        if (st.justOpened) { ImGui::OpenPopup("Move Assets##assetops"); st.justOpened = false; }
+        const std::vector<FolderChoice> folders = BuildContentFolderChoices(model);
+        for (int i = 0; i < static_cast<int>(folders.size()) && !st.selectAfterCreate.empty(); ++i)   // a folder just made from here
+            if (folders[static_cast<std::size_t>(i)].relative == st.selectAfterCreate) { st.folderIndex = i; st.selectAfterCreate.clear(); }
+        if (ImGui::BeginPopupModal("Move Assets##assetops", &st.open, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Move %d %s", static_cast<int>(st.guids.size()), st.guids.size() == 1 ? "asset" : "assets");
+            (void)DrawLocationCombo(folders, st.folderIndex);
+            const AssetOpRequest req{ .kind = AssetOpKind::Move, .guids = st.guids, .destFolder = folders[static_cast<std::size_t>(st.folderIndex)].relative };
+            if (ImGui::Button("New Folder...")) { nf = {}; nf.open = nf.justOpened = true; nf.parent = req.destFolder; }
+            const std::string why = sv.fileOpRefusal ? sv.fileOpRefusal(req) : std::string("unavailable");
+            ImGui::TextColored(Theme::kError, "%s", why.c_str()); ImGui::BeginDisabled(!why.empty());   // the first refusal inline
+            if (ImGui::Button("Move", ImVec2(92, 0))) { result.move = req; st.open = false; ImGui::CloseCurrentPopup(); }
+            ImGui::EndDisabled(); ImGui::SameLine(); if (ImGui::Button("Cancel", ImVec2(92, 0))) { st.open = false; ImGui::CloseCurrentPopup(); }
+            // Nested (carry ruling): opened INSIDE Move's popup scope, so its
+            // OpenPopup runs at popup-stack level 1 and keeps Move open behind it.
+            result.newFolder = DrawNewFolderModal(nf, project);
+            ImGui::EndPopup();
+        }
+        else if (!ImGui::IsPopupOpen("Move Assets##assetops")) st.open = false;   // closed from outside: a stale flag would gate the top-level New Folder off
+        return result;
+    }
 }

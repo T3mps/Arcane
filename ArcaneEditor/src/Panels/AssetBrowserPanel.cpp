@@ -154,6 +154,9 @@ namespace Arcane::Editor
             if (ImGui::IsWindowAppearing())   // T5 s7.5: the host's confirm modal re-plans with the live scene
                 state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = model.selection }) : "unavailable";
             if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = model.selection;
+            if (ImGui::IsWindowAppearing())   // T5 s7.8: the modal re-checks per destination; this is the selection's own refusal
+                state.menuRefusal.moveTo = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Move, .guids = model.selection }) : "unavailable";
+            if (MenuVerb("Move to...", nullptr, state.menuRefusal.moveTo)) actions.requestMoveTo = model.selection;
 
             ImGui::EndPopup();
         }
@@ -405,6 +408,10 @@ namespace Arcane::Editor
                 }
                 ImGui::EndDragDropTarget();
             }
+            // T5 s7.8: a game-mount folder row's context menu (the Selectable is
+            // still the last item) -- New Folder... under this folder.
+            if (const auto rel = RelativeDirOfFolderKey(row.groupName, "Content"); rel && ImGui::BeginPopupContextItem("##groupmenu"))
+            { if (ImGui::MenuItem("New Folder...")) actions.requestNewFolder = MakeFolderChoice(*rel, "Content").relative; ImGui::EndPopup(); }
 
             // Nested-groups review fix round 1, Important 2: the MODEL shows this group's content
             // regardless of `open` while search is active (RebuildRows' own
@@ -987,6 +994,14 @@ namespace Arcane::Editor
                 ms = ImGui::EndMultiSelect();
                 storage.ApplyRequests(ms);
                 if (ad.changed || state.msClicked.IsValid()) model.ApplySelection(std::move(ad.next), state.msClicked);
+                // T5 s7.8: the background menu (New Folder... under Content/).
+                // INSIDE the table, so the table's ScrollY inner window -- which
+                // covers the whole body -- is the one hovered; NoOpenOverItems
+                // leaves a row's own menu (assets, ##groupmenu) to win over it.
+                // It submits no item into the table, so EndTable's row-cursor
+                // assert above is untouched.
+                if (ImGui::BeginPopupContextWindow("##assetsbg", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+                { if (ImGui::MenuItem("New Folder...")) actions.requestNewFolder = std::string{}; ImGui::EndPopup(); }
                 ImGui::EndTable();
                 // T5 s7.6 (the Outliner wedge lesson): a rename target whose
                 // row did not draw this frame (scrolled out, filtered away,

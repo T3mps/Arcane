@@ -418,3 +418,11 @@ TEST_CASE("ValidateRenameName: case-only rename accepted, real collision and bad
     CHECK(ValidateRenameName("wall.jpg", d / "a.png").ok);                                       // only the file's OWN extension is refused
     fs::remove_all(d, ec);
 }
+
+TEST_CASE("Folder names: ValidateCreateName with no extension speaks of folders", "[editor][create][assetops]")
+{
+    namespace fs = std::filesystem; const fs::path d = fs::temp_directory_path() / "arcane_folder_name_test"; std::error_code ec; fs::remove_all(d, ec); fs::create_directories(d / "rocks");
+    CHECK(ValidateCreateName("sand", d, "").ok);
+    CHECK(ValidateCreateName("rocks", d, "").message == "a folder named rocks already exists here");
+    CHECK_FALSE(ValidateCreateName("a/b", d, "").ok); fs::remove_all(d, ec);
+}

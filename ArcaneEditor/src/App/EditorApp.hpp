@@ -2293,6 +2293,10 @@ namespace Arcane::Editor
         std::optional<Arcane::Editor::AssetOpFacts> m_deleteFacts;
         void BeginAssetDelete(std::vector<Arcane::Guid>);
         void ConsumeDeleteConfirm();
+        // T5 s7.8: the Move to... modal (requestMoveTo opens it) and the New
+        // Folder modal (requestNewFolder, or nested from Move to...'s button).
+        Arcane::Editor::MoveToState m_moveTo;
+        Arcane::Editor::NewFolderState m_newFolder;
         // RefreshLabels runs once per model rebuild (an entriesStamp edge), so
         // a renamed asset's Inspector history labels and pin names follow.
         std::uint32_t m_labelsAtEntriesStamp = 0, m_fileOpRefusalMemoStamp = 0;

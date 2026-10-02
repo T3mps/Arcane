@@ -172,6 +172,7 @@ namespace Arcane::Editor
     // kind this enum does not carry yet.
     [[nodiscard]] inline const char* CreateNounForExtension(std::string_view extension)
     {
+        if (extension.empty())         return "folder";   // T5 s7.8: New Folder... validates a bare name
         if (extension == ".arcmat")    return "material";
         if (extension == ".arcmesh")   return "mesh";
         if (extension == ".arcsprite") return "sprite";
@@ -627,6 +628,12 @@ namespace Arcane::Editor
     [[nodiscard]] CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
                                                           const AssetPanelModel& model,
                                                           const std::filesystem::path& projectRoot);
+
+    // T5 s7.8: the Location combo (a "Location" label over a full-width combo
+    // of `folders[i].display`), shared by the create dialog and the Move to...
+    // modal. Clamps `index` into range first; returns true the frame a row
+    // is picked. `folders` must not be empty (both builders lead with the root).
+    bool DrawLocationCombo(const std::vector<FolderChoice>& folders, int& index);
 
     // Draw the modal for `st.request.kind`. Returns a completed result the
     // frame Create (or Sprite's "Open existing") was clicked, nullopt
