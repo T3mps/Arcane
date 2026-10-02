@@ -2,6 +2,9 @@
 
 #include "Panels/CreateAssetDialog.hpp"   // ValidateCreateNameSyntax (rules 0-2), ValidateRenameStemSyntax
 
+#include <Arcane/Base/Assert.hpp>
+#include <Arcane/Edit/CommandStack.hpp>
+
 #include <Json.hpp>   // the workspace's vendored nlohmann::json header
 
 #include <algorithm>
@@ -31,6 +34,15 @@ namespace Arcane::Editor
             return k == AssetKind::Texture || k == AssetKind::Audio || k == AssetKind::Font || k == AssetKind::Model;
         }
         fs::path WithMeta(fs::path p) { p += ".meta"; return p; }
+        // NTFS compares names case-insensitively (as fs::exists does), so the batch's own
+        // bookkeeping must too: the same ASCII fold IsCaseOnlyRename uses.
+        std::string FoldKey(const fs::path& p) { return Lower(p.lexically_normal().generic_string()); }
+        // s7.3: an imported binary's guid lives in its .meta, which always travels with
+        // it; without one the step could not keep the id, so it is refused, never planned.
+        std::string MetaMissing(const fs::path& file)
+        {
+            return file.filename().string() + ".meta is missing. Reopen the project to rescan.";
+        }
         bool IsInside(const fs::path& p, const fs::path& root)
         {
             const fs::path rel = p.lexically_normal().lexically_relative(root.lexically_normal());
@@ -65,6 +77,22 @@ namespace Arcane::Editor
             return out;
         }
 
+        std::string_view RebindName(RebindResult r)
+        {
+            switch (r)
+            {
+                case RebindResult::Ok:             return "ok";
+                case RebindResult::UnknownGuid:    return "unknown asset";
+                case RebindResult::NotTrackable:   return "not a trackable asset";
+                case RebindResult::OutsideContent: return "outside Content/";
+                case RebindResult::CrossMount:     return "another mount";
+                case RebindResult::IdMismatch:     return "the file holds another id";
+                case RebindResult::PathTaken:      return "path owned by another asset";
+                case RebindResult::NoProject:      return "no project open";
+            }
+            return "unknown";
+        }
+
         struct Planner
         {
             const AssetOpRequest& op;
@@ -75,7 +103,8 @@ namespace Arcane::Editor
             void Refuse(const Arcane::Guid& g, std::string why) { plan.refusals.push_back({ g, std::move(why) }); }
             bool Taken(const fs::path& p) const
             {
-                return f.exists(p) || std::any_of(claimed.begin(), claimed.end(), [&](const fs::path& c) { return c == p; });
+                const std::string key = FoldKey(p);
+                return f.exists(p) || std::any_of(claimed.begin(), claimed.end(), [&](const fs::path& c) { return FoldKey(c) == key; });
             }
             // Every destination free on disk and in the batch; true = refused.
             bool Claim(const Arcane::Guid& g, const AssetMove& m, bool caseOnlyFree)
@@ -95,7 +124,7 @@ namespace Arcane::Editor
             std::vector<AssetMove> extra;               // registered images a .gltf drags along
             std::unordered_map<std::string, Arcane::Guid> byMount;
             std::optional<std::vector<std::pair<fs::path, fs::path>>> shared;   // companion -> non-moving owner .gltf
-            std::unordered_set<std::string> companions; // unregistered companions already planned (normalized generic `from`)
+            std::unordered_set<std::string> companions; // unregistered companions already planned (FoldKey of `from`)
 
             std::vector<std::string> Uris(const fs::path& gltf) const
             {
@@ -129,21 +158,28 @@ namespace Arcane::Editor
                         return "References " + uri + " outside its folder.";
                     const fs::path from = (gltf.parent_path() / rel).lexically_normal();
                     const fs::path to = (destDir / rel).lexically_normal();
+                    const std::string fromKey = FoldKey(from);
                     for (const auto& [companion, owner] : Shared())
-                        if (companion == from)
+                        if (FoldKey(companion) == fromKey)
                             return "Shares " + from.filename().string() + " with " + owner.filename().string() + ".";
                     const std::string mount = "game://" + from.lexically_relative(f.contentDir.lexically_normal()).generic_string();
                     if (const auto it = byMount.find(mount); it != byMount.end())
                     {
+                        const AssetKind kind = AssetKindOf(mount);
+                        const bool sidecar = IsImportedKind(kind);   // only imported kinds keep their id in a .meta
+                        if (sidecar && !f.exists(WithMeta(from))) return MetaMissing(from);
                         if (moving.insert(it->second).second)
-                            extra.push_back(AssetMove{ it->second, AssetKindOf(mount),
-                                                       { { from, to }, { WithMeta(from), WithMeta(to) } } });
+                        {
+                            AssetMove e{ it->second, kind, { { from, to } } };
+                            if (sidecar) e.files.push_back({ WithMeta(from), WithMeta(to) });
+                            extra.push_back(std::move(e));
+                        }
                         continue;   // a registered image moves as its OWN asset (rebound by guid)
                     }
                     // Co-moving .gltf files sharing a buffer: the first one carries it; the rest
                     // must not plan (and then Claim) the same file again. Distinct source folders
                     // give distinct `from` keys, so a real destination collision still refuses.
-                    if (!companions.insert(from.generic_string()).second) continue;
+                    if (!companions.insert(fromKey).second) continue;
                     m.files.push_back({ from, to });
                 }
                 return std::nullopt;
@@ -233,6 +269,145 @@ namespace Arcane::Editor
         return out;
     }
 
+    std::optional<std::string> AssetOpGateRefusal(const AssetOpGates& g, bool inTransaction)
+    {
+        if (!g.projectOpen) return "No project open";
+        if (!g.editMode)    return "Stop Play to change asset files";
+        if (inTransaction)  return "Finish the current edit first";   // a file step never joins a gesture
+        return std::nullopt;
+    }
+
+    AssetFileOpExecutor::AssetFileOpExecutor(AssetFileOpHost& host, Arcane::CommandStack& stack, fs::path contentDir)
+        : m_host(host), m_stack(stack), m_contentDir(std::move(contentDir)),
+          m_rename([](const fs::path& a, const fs::path& b) { std::error_code ec; fs::rename(a, b, ec); return ec; }),
+          m_anchor(std::make_shared<AssetFileOpExecutor*>(this))
+    {
+    }
+
+    AssetFileOpExecutor::~AssetFileOpExecutor() = default;
+
+    std::string AssetFileOpExecutor::Display(const fs::path& p) const
+    {
+        const fs::path rel = p.lexically_relative(m_contentDir);
+        if (!rel.empty() && *rel.begin() != "..") return rel.generic_string();
+        return p.filename().generic_string();
+    }
+
+    std::optional<std::string> AssetFileOpExecutor::PreflightMove(std::span<const AssetMove> moves, Side side) const
+    {
+        for (const AssetMove& m : moves)
+            for (std::size_t i = 0; i < m.files.size(); ++i)
+            {
+                const fs::path& src = side == Side::Forward ? m.files[i].from : m.files[i].to;
+                const fs::path& dst = side == Side::Forward ? m.files[i].to : m.files[i].from;
+                std::error_code ec;
+                if (i == 0 ? Arcane::AssetRegistry::PeekId(src) != m.guid : !fs::exists(src, ec))
+                    return Display(src) + " is missing or no longer holds this asset.";
+                if (fs::exists(dst, ec) && !IsCaseOnlyRename(src, dst))
+                    return Display(dst) + " is occupied by another file.";
+            }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> AssetFileOpExecutor::RollBack(std::span<const FileMove> done)
+    {
+        for (std::size_t i = done.size(); i-- > 0;)
+            if (m_rename(done[i].to, done[i].from))
+                return Display(done[i].from) + " could not be moved back from " + Display(done[i].to) + "; it is safe there.";
+        return std::nullopt;   // a failed step back STOPS here: nothing is deleted to "clean up"
+    }
+
+    std::optional<std::string> AssetFileOpExecutor::ApplyMove(std::span<const AssetMove> moves, Side side)
+    {
+        if (auto refusal = PreflightMove(moves, side))
+            return refusal;
+        const auto src = [side](const FileMove& f) -> const fs::path& { return side == Side::Forward ? f.from : f.to; };
+        const auto dst = [side](const FileMove& f) -> const fs::path& { return side == Side::Forward ? f.to : f.from; };
+
+        std::vector<FileMove> steps;
+        for (const AssetMove& m : moves)
+            for (const FileMove& f : m.files) steps.push_back({ src(f), dst(f) });
+        for (std::size_t i = 0; i < steps.size(); ++i)
+        {
+            std::error_code ec;
+            fs::create_directories(steps[i].to.parent_path(), ec);
+            if (!ec) ec = m_rename(steps[i].from, steps[i].to);
+            if (ec)
+            {
+                std::string error = Display(steps[i].from) + " could not be moved to " + Display(steps[i].to) +
+                                    " (" + ec.message() + ").";
+                if (auto stuck = RollBack(std::span(steps).first(i))) error += " " + *stuck;
+                return error;
+            }
+        }
+        for (std::size_t i = 0; i < moves.size(); ++i)
+        {
+            const RebindResult r = m_host.Rebind(moves[i].guid, dst(moves[i].files[0]));
+            if (r == RebindResult::Ok) continue;
+            std::string error = "The asset registry refused " + Display(dst(moves[i].files[0])) + " (" +
+                                std::string(RebindName(r)) + ").";
+            if (auto stuck = RollBack(steps)) return error + " " + *stuck;   // files first: Rebind reads the id ON DISK
+            for (std::size_t j = 0; j < i; ++j)
+                (void)m_host.Rebind(moves[j].guid, src(moves[j].files[0]));
+            return error;
+        }
+        std::vector<fs::path> touched;
+        for (const AssetMove& m : moves)
+        {
+            m_host.NoteMoved(m.guid, src(m.files[0]), dst(m.files[0]));
+            for (const FileMove& f : m.files) { touched.push_back(f.from); touched.push_back(f.to); }
+        }
+        m_host.EvictPaths(touched);   // both ends: a reused path must never serve old bytes
+        m_host.AssetsChanged({}, {});
+        return std::nullopt;
+    }
+
+    ExecResult AssetFileOpExecutor::Execute(const AssetOpPlan& plan, Arcane::CommandStack& stack)
+    {
+        ARC_ASSERT(&stack == &m_stack, "AssetFileOpExecutor::Execute: push to the stack the executor was built on");
+        if (!plan.refusals.empty())
+            return { false, plan.refusals.front().reason };
+        if (auto why = AssetOpGateRefusal(m_host.Gates(), stack.InTransaction()))
+            return { false, *why };
+        if (plan.moves.empty())
+            return { true, {} };   // e.g. a drop onto the asset's own folder: nothing pushed
+
+        std::optional<std::string> failure;
+        std::unique_ptr<Arcane::ICommand> step;
+        switch (plan.kind)
+        {
+            case AssetOpKind::Rename:
+            case AssetOpKind::Move:
+                failure = ApplyMove(plan.moves, Side::Forward);
+                if (!failure) step = std::make_unique<AssetMoveCommand>(Anchor(), plan.label, plan.moves);
+                break;
+            default:   // NewFolder (T5-A11), Delete (T5-A13) and Duplicate (s7.7) replace this arm
+                failure = "This asset operation is not available yet.";
+                break;
+        }
+        if (failure)
+        {
+            m_host.ReportError(plan.label + " failed", *failure);   // reported once
+            return { false, *failure };
+        }
+        stack.Push(std::move(step));
+        return { true, {} };
+    }
+
+    void AssetFileCommand::Step(bool undo)
+    {
+        AssetFileOpExecutor* exec = Exec();
+        if (m_blocked || !exec || m_applied != undo)
+            return;   // inert: executor gone, blocked, or the wrong side
+        if (auto failure = Run(*exec, undo))
+        {
+            m_blocked = true;   // reads expired from now on, so the other side is skipped too
+            exec->ReportRefusal((undo ? "Can't undo " : "Can't redo ") + m_label, *failure);
+            return;
+        }
+        m_applied = !undo;
+    }
+
     AssetOpPlan PlanAssetOp(const AssetOpRequest& op, const AssetOpFacts& f)
     {
         AssetOpPlan plan;
@@ -273,13 +448,14 @@ namespace Arcane::Editor
 
             const fs::path file = (base / fs::path(mount.substr(sep + 3))).lexically_normal();
             if (!f.exists(file)) { p.Refuse(g, "Missing on disk. Reopen the project to rescan."); continue; }
+            const AssetKind kind = AssetKindOf(mount);
+            const bool imported = IsImportedKind(kind);
+            if (imported && !f.exists(WithMeta(file))) { p.Refuse(g, MetaMissing(file)); continue; }
             if (op.kind == AssetOpKind::Delete && g == f.openScene)
             { p.Refuse(g, "This scene is open. Open another scene first."); continue; }
             if (op.kind == AssetOpKind::Delete && g == f.bootScene)
             { p.Refuse(g, "This is the project's boot scene. Set another boot scene first."); continue; }
 
-            const AssetKind kind = AssetKindOf(mount);
-            const bool imported = IsImportedKind(kind);
             const std::string ext = file.extension().string();
             AssetMove m{ g, kind, {} };
             const auto add = [&](const fs::path& to)

@@ -3,12 +3,15 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Project/AssetFileOps.hpp"
+#include "Helpers/AssetFileOpsFakes.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace Arcane::Editor;
@@ -300,4 +303,181 @@ TEST_CASE("ReadGltfUris: buffers and images, data: skipped, percent-decoded; .gl
     CHECK(ReadGltfUris(dir / "y.glb").empty());
     CHECK(ReadGltfUris(dir / "missing.gltf").empty());
     fs::remove_all(dir, ec);
+}
+
+TEST_CASE("PlanAssetOp: batch claims fold case as NTFS does", "[editor][assetops]")
+{
+    // fs::exists is case-insensitive on NTFS; the batch's own claims must agree, or
+    // two approved moves collide in the executor (rock.arcmat vs Rock.arcmat).
+    PlanWorld w;
+    const auto rockA = w.Add("game://a/rock.arcmat");
+    const auto rockC = w.Add("game://c/Rock.arcmat");
+    const AssetOpPlan p = Plan(w, AssetOpKind::Move, { rockA, rockC }, {}, "props");
+    REQUIRE(p.refusals.size() == 1);
+    CHECK(p.refusals[0].guid == rockC);
+    CHECK(p.refusals[0].reason == "Rock.arcmat already exists in props/.");
+}
+
+TEST_CASE("PlanAssetOp: an imported asset whose .meta sidecar is gone refuses every verb", "[editor][assetops]")
+{
+    // s7.3: the .meta always moves -- it holds the guid. Moving the binary alone would
+    // fail Rebind's id check (and a rescan would mint a new guid), so the planner
+    // refuses instead of approving a step the executor cannot finish.
+    PlanWorld w;
+    const auto bare = w.Add("game://textures/bare.png");
+    w.files.erase(PlanWorld::Key(w.content / "textures" / "bare.png.meta"));
+    const auto reason = [](const AssetOpPlan& p) { REQUIRE(p.refusals.size() == 1); return p.refusals[0].reason; };
+    using K = AssetOpKind;
+    for (const K k : { K::Rename, K::Duplicate, K::Delete, K::Move })
+        CHECK(reason(Plan(w, k, { bare }, "wall", "materials")) == "bare.png.meta is missing. Reopen the project to rescan.");
+
+    // A native asset never had a sidecar: nothing to check.
+    const auto mat = w.Add("game://materials/m.arcmat");
+    CHECK(Plan(w, K::Move, { mat }, {}, "props").refusals.empty());
+}
+
+TEST_CASE("PlanAssetOp: a .gltf's registered companion brings a .meta only when its kind has one", "[editor][assetops]")
+{
+    PlanWorld w;
+    const auto prop = w.Add("game://models/prop.gltf");
+    const auto tex  = w.Add("game://models/tex.png");
+    const auto look = w.Add("game://models/look.arcmat");
+    w.uris[PlanWorld::Key(w.content / "models" / "prop.gltf")] = { "tex.png", "look.arcmat" };
+
+    SECTION("an imported image moves with its sidecar; a native companion moves alone")
+    {
+        const AssetOpPlan p = Plan(w, AssetOpKind::Move, { prop }, {}, "props");
+        REQUIRE(p.refusals.empty());
+        REQUIRE(p.moves.size() == 3);
+        CHECK(p.moves[1].guid == tex);
+        CHECK(p.moves[1].files.size() == 2);
+        CHECK(p.moves[2].guid == look);
+        REQUIRE(p.moves[2].files.size() == 1);
+        CHECK(p.moves[2].files[0].to == w.content / "props" / "look.arcmat");
+    }
+    SECTION("an imported companion whose sidecar is gone refuses the .gltf")
+    {
+        w.files.erase(PlanWorld::Key(w.content / "models" / "tex.png.meta"));
+        const AssetOpPlan p = Plan(w, AssetOpKind::Move, { prop }, {}, "props");
+        REQUIRE(p.refusals.size() == 1);
+        CHECK(p.refusals[0].guid == prop);
+        CHECK(p.refusals[0].reason == "tex.png.meta is missing. Reopen the project to rescan.");
+    }
+}
+
+// ---- execution (s7.3/s7.4) ---------------------------------------------------
+
+using Arcane::Test::AssetOpsWorld;
+using Arcane::Test::FakeAssetOpHost;
+
+TEST_CASE("AssetOpGateRefusal: the three s7.1 gates, in order", "[editor][assetops]")
+{
+    CHECK(AssetOpGateRefusal({ false, true }, false) == "No project open");
+    CHECK(AssetOpGateRefusal({ true, false }, false) == "Stop Play to change asset files");
+    CHECK(AssetOpGateRefusal({ true, true }, true) == "Finish the current edit first");
+    CHECK_FALSE(AssetOpGateRefusal({ true, true }, false).has_value());
+}
+
+TEST_CASE("AssetFileOps: a Move runs all-or-nothing and pushes exactly one step", "[editor][assetops]")
+{
+    AssetOpsWorld w("exec_move");
+    const auto tex = w.Write("textures/uv.png", "png-bytes");
+    const auto mat = w.Write("a.arcmat", R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })");
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    AssetFileOpExecutor exec(host, stack, w.content);
+    const auto before = w.Snapshot();
+    const auto regBefore = w.registry.All();
+    const AssetOpPlan plan = w.Plan(AssetOpKind::Move, { tex, mat }, {}, "materials");
+    REQUIRE(plan.refusals.empty());
+
+    SECTION("a failure at the k-th file rolls every earlier file back and pushes nothing")
+    {
+        int n = 0;
+        exec.SetRenameForTest([&](const fs::path& from, const fs::path& to)
+        {
+            std::error_code ec;
+            if (++n == 3) return std::make_error_code(std::errc::permission_denied);
+            fs::rename(from, to, ec);
+            return ec;
+        });
+        const ExecResult r = exec.Execute(plan, stack);
+        CHECK_FALSE(r.ok);
+        CHECK(w.Snapshot() == before);
+        CHECK(w.registry.All() == regBefore);
+        CHECK_FALSE(stack.CanUndo());
+        REQUIRE(host.errors.size() == 1);
+        CHECK(host.errors[0].first == "Move 2 assets to materials/ failed");
+    }
+    SECTION("success moves every file, rebinds, and the one step undoes and redoes")
+    {
+        REQUIRE(exec.Execute(plan, stack).ok);
+        CHECK(w.registry.Resolve(tex) == "game://materials/uv.png");
+        CHECK(fs::exists(w.content / "materials" / "uv.png.meta"));
+        CHECK(std::string(stack.UndoLabel()) == "Move 2 assets to materials/");
+        const auto has = [&](const char* c) { return std::count(host.calls.begin(), host.calls.end(), std::string(c)); };
+        CHECK(has("NoteMoved materials/uv.png") == 1);
+        CHECK(has("EvictPaths 6") == 1);
+        CHECK(has("AssetsChanged -0 +0") == 1);
+
+        stack.Undo();
+        CHECK(w.Snapshot() == before);
+        CHECK(w.registry.All() == regBefore);
+        stack.Redo();
+        CHECK(w.registry.Resolve(mat) == "game://materials/a.arcmat");
+        CHECK_FALSE(stack.CanRedo());
+    }
+}
+
+TEST_CASE("AssetFileOps: gates and an empty plan push nothing", "[editor][assetops]")
+{
+    AssetOpsWorld w("exec_gates");
+    const auto mat = w.Write("a.arcmat", R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })");
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    AssetFileOpExecutor exec(host, stack, w.content);
+    host.gates.editMode = false;
+    const ExecResult r = exec.Execute(w.Plan(AssetOpKind::Rename, { mat }, "b"), stack);
+    CHECK_FALSE(r.ok);
+    CHECK(r.error == "Stop Play to change asset files");
+    host.gates.editMode = true;
+    CHECK(exec.Execute(w.Plan(AssetOpKind::Move, { mat }, {}, ""), stack).ok);   // already there
+    CHECK_FALSE(stack.CanUndo());
+    CHECK(fs::exists(w.content / "a.arcmat"));
+}
+
+TEST_CASE("AssetFileOps: undoing onto an occupied path refuses loudly, writes nothing, then expires", "[editor][assetops]")
+{
+    AssetOpsWorld w("exec_occupied");
+    const auto tex = w.Write("textures/uv.png", "png-bytes");
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    AssetFileOpExecutor exec(host, stack, w.content);
+    REQUIRE(exec.Execute(w.Plan(AssetOpKind::Rename, { tex }, "uv2"), stack).ok);
+
+    w.WriteRaw("textures/uv.png", "someone else");
+    stack.Undo();
+    REQUIRE(host.errors.size() == 1);
+    CHECK(host.errors[0].first == "Can't undo Rename uv \xE2\x86\x92 uv2");
+    CHECK(host.errors[0].second == "textures/uv.png is occupied by another file.");
+    CHECK(Arcane::Test::Slurp(w.content / "textures" / "uv.png") == "someone else");
+    CHECK(fs::exists(w.content / "textures" / "uv2.png"));
+    CHECK(w.registry.Resolve(tex) == "game://textures/uv2.png");
+    CHECK_FALSE(stack.CanUndo());   // blocked = expired: T1's stack skips it
+    CHECK_FALSE(stack.CanRedo());
+}
+
+TEST_CASE("AssetFileOps: a step outliving its executor is inert", "[editor][assetops]")
+{
+    AssetOpsWorld w("exec_dead");
+    const auto mat = w.Write("a.arcmat", R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })");
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    {
+        AssetFileOpExecutor exec(host, stack, w.content);
+        REQUIRE(exec.Execute(w.Plan(AssetOpKind::Rename, { mat }, "b"), stack).ok);
+    }
+    CHECK_FALSE(stack.CanUndo());   // dead anchor = expired
+    stack.Undo();
+    CHECK(fs::exists(w.content / "b.arcmat"));
 }

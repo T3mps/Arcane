@@ -6,19 +6,26 @@
 // PURE: it reads only AssetOpFacts (EditorApp builds them; tests fake them) and
 // never touches the disk or the app.
 
+#include "Panels/AssetActivityLog.hpp"    // AssetActivityEntry (the host's Activity feed)
 #include "Panels/AssetPanelModel.hpp"   // AssetKind, AssetKindOf
 
+#include <Arcane/Edit/Command.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Project/AssetRegistry.hpp>   // RebindResult
 
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
+
+namespace Arcane { class CommandStack; }
 
 namespace Arcane::Editor
 {
@@ -92,4 +99,108 @@ namespace Arcane::Editor
     [[nodiscard]] std::vector<std::string> ReadGltfUris(const std::filesystem::path& gltf);
 
     [[nodiscard]] AssetOpPlan PlanAssetOp(const AssetOpRequest& op, const AssetOpFacts& facts);
+
+    // ---- execution (s7.3/s7.4) ---------------------------------------------
+
+    // s7.1's gates. The UI disables items with this text; the executor re-checks.
+    struct AssetOpGates { bool projectOpen = false; bool editMode = false; };
+    [[nodiscard]] std::optional<std::string> AssetOpGateRefusal(const AssetOpGates& gates, bool inTransaction);
+
+    // The executor reaches the app ONLY through this (EditorApp implements it over
+    // Runtime/DocumentHost/the asset model; tests fake it). Recycle: T5-A13.
+    struct AssetFileOpHost
+    {
+        virtual ~AssetFileOpHost() = default;
+        virtual AssetOpGates                Gates() const = 0;
+        virtual Arcane::RebindResult        Rebind(const Arcane::Guid&, const std::filesystem::path&) = 0;  // Runtime::RebindMovedAsset
+        virtual bool                        Unregister(const Arcane::Guid&) = 0;                          // Runtime::UnregisterAsset
+        virtual std::optional<Arcane::Guid> Register(const std::filesystem::path&) = 0;                   // Runtime::RegisterCreatedAsset
+        virtual bool                        CloseDocumentFor(const Arcane::Guid&, bool discardDirty) = 0; // false = a dirty doc blocks
+        virtual void NoteMoved(const Arcane::Guid&, const std::filesystem::path& from,
+                               const std::filesystem::path& to) = 0;                                      // s7.11
+        virtual void AssetsChanged(std::span<const Arcane::Guid> removed,
+                                   std::span<const Arcane::Guid> added) = 0;                              // s7.12
+        virtual void Invalidate(const Arcane::Guid&, AssetKind) = 0;                                      // s7.12
+        virtual void EvictPaths(std::span<const std::filesystem::path>) = 0;                              // Assets::EvictPath
+        virtual void Activity(AssetActivityEntry) = 0;
+        virtual void ReportError(std::string title, std::string message) = 0;                             // ModalErrorQueue + ARC_ERROR
+    };
+
+    struct ExecResult { bool ok = false; std::string error; };   // !ok => nothing pushed
+
+    class AssetFileOpExecutor
+    {
+    public:
+        enum class Side : std::uint8_t { Forward, Backward };   // Forward = from -> to (do/redo)
+        using RenameFn = std::function<std::error_code(const std::filesystem::path&, const std::filesystem::path&)>;
+
+        AssetFileOpExecutor(AssetFileOpHost& host, Arcane::CommandStack& stack, std::filesystem::path contentDir);
+        ~AssetFileOpExecutor();   // every pushed step goes inert (its anchor dies)
+        AssetFileOpExecutor(const AssetFileOpExecutor&) = delete;
+        AssetFileOpExecutor& operator=(const AssetFileOpExecutor&) = delete;
+
+        // (1) refusals + gates, (2) the primitive with rollback, (3) follow-up,
+        // (4) THEN push one step (the forward already happened, Command.hpp).
+        // `stack` must be the constructor's stack.
+        [[nodiscard]] ExecResult Execute(const AssetOpPlan& plan, Arcane::CommandStack& stack);
+        [[nodiscard]] std::weak_ptr<AssetFileOpExecutor*> Anchor() const { return m_anchor; }
+
+        // ---- primitives the commands replay (one code path per disk effect) ----
+        // nullopt = applied; a string = refused (nothing touched) or failed (rolled back).
+        [[nodiscard]] std::optional<std::string> PreflightMove(std::span<const AssetMove> moves, Side side) const;
+        [[nodiscard]] std::optional<std::string> ApplyMove(std::span<const AssetMove> moves, Side side);
+        void ReportRefusal(std::string title, std::string message) { m_host.ReportError(std::move(title), std::move(message)); }
+        [[nodiscard]] std::string Display(const std::filesystem::path& p) const;   // "textures/uv.png"
+        void SetRenameForTest(RenameFn fn) { m_rename = std::move(fn); }
+
+    private:
+        [[nodiscard]] std::optional<std::string> RollBack(std::span<const FileMove> done);
+
+        AssetFileOpHost&                     m_host;
+        Arcane::CommandStack&                m_stack;
+        std::filesystem::path                m_contentDir;
+        RenameFn                             m_rename;
+        std::shared_ptr<AssetFileOpExecutor*> m_anchor;
+    };
+
+    // s7.4: one batch = one command = one step. Inert when the executor dies;
+    // a refused side BLOCKS the step (it then reads expired and both sides skip).
+    class AssetFileCommand : public Arcane::ICommand
+    {
+    public:
+        void Undo() final { Step(true); }
+        void Redo() final { Step(false); }
+        const char* Label() const final { return m_label.c_str(); }
+        bool AffectsScene() const final { return false; }   // s3.3: file steps never dirty the scene
+        bool IsExpired() const override { return m_blocked || !Exec(); }
+
+    protected:
+        AssetFileCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label)
+            : m_exec(std::move(exec)), m_label(std::move(label)) {}
+        // Run the side about to happen (pre-check, primitive with rollback, follow-up).
+        virtual std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) = 0;
+        [[nodiscard]] AssetFileOpExecutor* Exec() const { const auto p = m_exec.lock(); return p ? *p : nullptr; }
+
+        std::weak_ptr<AssetFileOpExecutor*> m_exec;
+        std::string m_label;
+        bool m_applied = true;    // the forward op ran before the push
+        bool m_blocked = false;
+
+    private:
+        void Step(bool undo);
+    };
+
+    class AssetMoveCommand final : public AssetFileCommand   // Rename, Move
+    {
+    public:
+        AssetMoveCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label, std::vector<AssetMove> moves)
+            : AssetFileCommand(std::move(exec), std::move(label)), m_moves(std::move(moves)) {}
+    protected:
+        std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) override
+        {
+            return exec.ApplyMove(m_moves, undo ? AssetFileOpExecutor::Side::Backward : AssetFileOpExecutor::Side::Forward);
+        }
+    private:
+        std::vector<AssetMove> m_moves;
+    };
 }
