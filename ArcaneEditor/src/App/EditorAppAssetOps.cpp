@@ -123,7 +123,7 @@ namespace Arcane::Editor
         f.bootScene       = AE::BootSceneGuid(pr);
         if (const auto ia = Arcane::Guid::FromString(pr->Manifest().inputActions)) f.inputActions = *ia;
         s.docs.clear();
-        m_documents.ForEach([&](AE::EditorDocument& d) { s.docs.push_back({ d.AssetGuid(), d.Dirty(), {} }); });   // liveRefs: B11
+        m_documents.ForEach([&](AE::EditorDocument& d) { s.docs.push_back({ d.AssetGuid(), d.Dirty(), d.Dirty() ? d.LiveReferences() : std::vector<Arcane::Guid>{} }); });   // T5 s7.5: only a dirty doc's unsaved refs count
         f.docs = s.docs;
         f.exists       = [](const std::filesystem::path& p) { std::error_code ec; return std::filesystem::exists(p, ec); };
         f.peekId       = [](const std::filesystem::path& p) { return Arcane::AssetRegistry::PeekId(p); };

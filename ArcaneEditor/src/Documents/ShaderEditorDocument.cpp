@@ -1049,6 +1049,31 @@ namespace Arcane::Editor
         PublishDiagnostics();   // the File locators carry m_path
     }
 
+    // T5 s7.5: what Save would write (Save below) -- the parent plus every texture param. A bound instance's
+    // overrides are the truth Save harvests (only those the bound template declares); before the first bind
+    // the loaded m_data.params are kept, so they are the answer.
+    std::vector<Arcane::Guid> ShaderEditorDocument::LiveReferences() const
+    {
+        std::vector<Arcane::Guid> o;
+        if (m_data.parent.IsValid())
+            o.push_back(m_data.parent);
+        const auto tex = [&](const Arcane::MatParamValue& v)
+        {
+            if (v.type == Arcane::MatParamType::Texture && v.tex.IsValid())
+                o.push_back(v.tex);
+        };
+        if (m_instance && m_boundTemplate)
+        {
+            for (const auto& [h, v] : m_instance->Overrides())
+                if (m_boundTemplate->Find(h))
+                    tex(v);
+        }
+        else
+            for (const auto& [n, v] : m_data.params)
+                tex(v);
+        return o;
+    }
+
     void ShaderEditorDocument::FlushGesture()
     {
         if (Arcane::CommandStack* s = UndoStack())

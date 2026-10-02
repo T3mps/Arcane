@@ -120,6 +120,12 @@ namespace Arcane::Editor
     void SpriteDocument::NoteMoved(const std::filesystem::path& p)
     { m_path = p; m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name; m_windowLabel = m_title + " (Sprite)###spritedoc_" + m_data.id.ToString(); }
 
+    // T5 s7.5: what Save would write -- the one texture edge (ListAssetReferences' .arcsprite branch).
+    std::vector<Arcane::Guid> SpriteDocument::LiveReferences() const
+    {
+        return m_data.texture.IsValid() ? std::vector<Arcane::Guid>{ m_data.texture } : std::vector<Arcane::Guid>{};
+    }
+
     void SpriteDocument::FlushGesture()
     {
         if (Arcane::CommandStack* s = UndoStack())

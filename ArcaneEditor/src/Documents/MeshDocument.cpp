@@ -138,6 +138,18 @@ namespace Arcane::Editor
     void MeshDocument::NoteMoved(const std::filesystem::path& p)
     { m_path = p; m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name; m_windowLabel = m_title + " (Mesh)###meshdoc_" + m_data.id.ToString(); }
 
+    // T5 s7.5: what Save would write -- importedSource + every slot's material (the .arcmesh branch).
+    std::vector<Arcane::Guid> MeshDocument::LiveReferences() const
+    {
+        std::vector<Arcane::Guid> o;
+        if (m_data.importedSource.IsValid())
+            o.push_back(m_data.importedSource);
+        for (const auto& s : m_data.slots)
+            if (s.material.IsValid())
+                o.push_back(s.material);
+        return o;
+    }
+
     void MeshDocument::FlushGesture()
     {
         if (Arcane::CommandStack* s = UndoStack())

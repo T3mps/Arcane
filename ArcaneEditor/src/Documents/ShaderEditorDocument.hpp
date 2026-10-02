@@ -228,6 +228,7 @@ namespace Arcane::Editor
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
         void NoteReopened() override { m_pageSel.NoteReopened(); }
         void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
+        std::vector<Arcane::Guid> LiveReferences() const override;   // T5 s7.5
         // The chain OVERVIEW is what the canvas area shows. m_inChainView is
         // seeded true for every document and Draw clears it only once a
         // non-chain surface draws, so the raw flag would report an overview
