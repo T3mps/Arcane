@@ -82,6 +82,10 @@ namespace Arcane
         // Before the ComponentModule handle closes and before the image unmaps;
         // Context()/Registry()/Components() are still valid here.
         virtual void OnShutdown() {}
+        // Runs each fixed step before the fixedUpdate scheduler. Gameplay belongs
+        // in SYSTEMS, which read time and input as resources (Arcane::Res<Arcane::
+        // Time>, Arcane::Res<Arcane::GameInput>) -- never copy values into
+        // components from here (input-seam spec 2026-10-02).
         virtual void OnFixedUpdate(double dt) { (void)dt; }
         virtual void OnUpdate(double dt, double alpha) { (void)dt; (void)alpha; }
         // Between the host's ImGui BeginFrame and Render. Not called in a headless
