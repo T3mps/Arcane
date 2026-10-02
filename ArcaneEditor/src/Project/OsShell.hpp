@@ -11,8 +11,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Arcane::Editor::OsShell
 {
@@ -26,4 +28,17 @@ namespace Arcane::Editor::OsShell
     [[nodiscard]] std::wstring ExplorerSelectArgs(const std::filesystem::path& path);   // /select,"<native path>"
     [[nodiscard]] ShellResult  ClassifyShellExecute(std::intptr_t code);                 // >32 Ok; 2,3 NotFound; 31 NoHandler; else Failed
     [[nodiscard]] std::string_view Describe(ShellResult r);                              // WARN / tooltip wording
+
+    // T5 s7.4: the Recycle Bin safety net under asset Delete (undo does NOT depend on
+    // it -- undo writes the payload bytes back). All files or none: a missing input
+    // refuses the batch. `permanentlyDeleted` = items the shell deleted WITHOUT a bin
+    // item (the nuke prompt's "accept": no bin on the volume, over quota).
+    struct RecycleResult
+    {
+        bool ok = false;
+        std::vector<std::filesystem::path> notRecycled, permanentlyDeleted;
+        std::string message;
+    };
+    [[nodiscard]] RecycleResult ShellRecycle(std::span<const std::filesystem::path> files,
+                                             void* ownerHwnd);   // Window::NativeHandle()
 }

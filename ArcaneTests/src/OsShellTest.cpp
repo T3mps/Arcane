@@ -7,7 +7,10 @@
 
 #include <Project/OsShell.hpp>
 
+#include <array>
 #include <filesystem>
+#include <fstream>
+#include <span>
 
 using namespace Arcane::Editor;
 using OsShell::ShellResult;
@@ -52,4 +55,38 @@ TEST_CASE("OsShell::Describe words every result", "[editor]")
                                  ShellResult::Failed, ShellResult::Unsupported })
         CHECK_FALSE(OsShell::Describe(r).empty());
     CHECK(OsShell::Describe(ShellResult::NotFound) == "File not found on this machine");
+}
+
+TEST_CASE("OsShell::ShellRecycle refuses a batch with a missing file and recycles nothing", "[editor]")
+{
+    namespace fs = std::filesystem;
+    const fs::path present = fs::temp_directory_path() / "arcane_osshell_recycle_present.txt";
+    const fs::path missing = fs::temp_directory_path() / "arcane_osshell_recycle_missing.txt";
+    std::error_code ec;
+    fs::remove(missing, ec);
+    std::ofstream(present, std::ios::binary) << "x";
+    const std::array<fs::path, 2> files{ present, missing };
+    const auto r = Arcane::Editor::OsShell::ShellRecycle(files, nullptr);
+    CHECK_FALSE(r.ok);
+    CHECK(fs::exists(present));
+    CHECK(r.notRecycled.size() == 2);
+    CHECK(r.message.find("arcane_osshell_recycle_missing.txt") != std::string::npos);
+    fs::remove(present, ec);
+}
+
+// Touches the real Recycle Bin: opt-in, excluded from default runs ("~[shell]").
+TEST_CASE("OsShell::ShellRecycle moves a file to the Recycle Bin", "[editor][shell]")
+{
+#ifdef _WIN32
+    namespace fs = std::filesystem;
+    const fs::path file = fs::temp_directory_path() / "arcane_osshell_recycle_me.txt";
+    std::ofstream(file, std::ios::binary) << "recycle me";
+    const auto r = Arcane::Editor::OsShell::ShellRecycle(std::span<const fs::path>(&file, 1), nullptr);
+    CHECK(r.ok);
+    CHECK(r.notRecycled.empty());
+    CHECK(r.permanentlyDeleted.empty());   // %TEMP%'s volume has a bin
+    CHECK_FALSE(fs::exists(file));
+#else
+    SKIP("the Recycle Bin is Windows-only");
+#endif
 }
