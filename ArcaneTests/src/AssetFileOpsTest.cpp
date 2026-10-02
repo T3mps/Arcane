@@ -4,8 +4,10 @@
 
 #include "Project/AssetFileOps.hpp"
 #include "Helpers/AssetFileOpsFakes.hpp"
+#include "Helpers/AssetOpsFixture.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -765,4 +767,43 @@ TEST_CASE("AssetFileOps: a restore whose modified time cannot be set fails and k
     }
     CHECK_FALSE(r.w.registry.Resolve(r.tex).has_value());
     CHECK(r.host.errors.empty());   // the primitive reports; the step that called it words the error
+}
+
+// ---- T5-B6 (s7.6): rename end to end, the case-only primitive ---------------
+
+namespace
+{
+    std::string OnDiskName(const std::filesystem::path& p)   // the entry's real case
+    {
+        const auto low = [](std::string s) { for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
+        for (const auto& e : std::filesystem::directory_iterator(p.parent_path())) if (low(e.path().filename().string()) == low(p.filename().string())) return e.path().filename().string();
+        return {};
+    }
+    AssetOpRequest Rename(const Arcane::Guid& g, std::string s) { return { .kind = AssetOpKind::Rename, .guids = { g }, .newStem = std::move(s) }; }
+}
+TEST_CASE("Rename: a .png moves its .meta, keeps its guid, and a case-only rename round-trips undo/redo", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_rename"); t.Write("t/brick.png", "px"); t.Write("a.png", "px"); t.Scan();
+    const Arcane::Guid g = t.GuidOf("t/brick.png"), a = t.GuidOf("a.png");
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    REQUIRE(exec.Execute(PlanAssetOp(Rename(g, "wall"), t.Facts()), t.stack).ok);
+    CHECK((std::filesystem::exists(t.content / "t/wall.png.meta") && !std::filesystem::exists(t.content / "t/brick.png.meta")));
+    CHECK(t.registry.Resolve(g) == std::optional<std::string>("game://t/wall.png"));
+    const AssetOpPlan cs = PlanAssetOp(Rename(a, "A"), t.Facts());
+    REQUIRE(cs.refusals.empty());                                   // the equivalent destination is free
+    REQUIRE(exec.Execute(cs, t.stack).ok); CHECK(OnDiskName(t.content / "A.png") == "A.png");
+    t.stack.Undo(); CHECK(OnDiskName(t.content / "a.png") == "a.png");
+    t.stack.Redo(); CHECK((OnDiskName(t.content / "A.png") == "A.png" && Arcane::AssetRegistry::PeekId(t.content / "A.png") == a));
+}
+TEST_CASE("Rename: a .gltf keeps its .bin; same stem is a no-op; a bad name refuses with the rule's message", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_rename_gltf"); t.Write("m/ship.gltf", R"({"buffers":[{"uri":"ship.bin"}]})"); t.Write("m/ship.bin", "b"); t.Scan();
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    REQUIRE(exec.Execute(PlanAssetOp(Rename(t.GuidOf("m/ship.gltf"), "hull"), t.Facts()), t.stack).ok);
+    CHECK((std::filesystem::exists(t.content / "m/hull.gltf") && std::filesystem::exists(t.content / "m/ship.bin")));
+    const Arcane::Guid hull = *Arcane::AssetRegistry::PeekId(t.content / "m/hull.gltf");
+    const AssetOpPlan same = PlanAssetOp(Rename(hull, "hull"), t.Facts()), bad = PlanAssetOp(Rename(hull, "a|b"), t.Facts());
+    CHECK((same.refusals.empty() && same.moves.empty() && bad.refusals.size() == 1 && bad.refusals[0].reason.find("cannot contain") != std::string::npos));
+    t.Write("c.png", "px");                                          // the case-only primitive itself (fails first: undeclared)
+    CHECK((OsShell::RenameCaseOnly(t.content / "c.png", t.content / "C.png") && OnDiskName(t.content / "C.png") == "C.png"));
 }

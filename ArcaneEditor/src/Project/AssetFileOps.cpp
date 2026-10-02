@@ -302,7 +302,12 @@ namespace Arcane::Editor
 
     AssetFileOpExecutor::AssetFileOpExecutor(AssetFileOpHost& host, Arcane::CommandStack& stack, fs::path contentDir)
         : m_host(host), m_stack(stack), m_contentDir(std::move(contentDir)),
-          m_rename([](const fs::path& a, const fs::path& b) { std::error_code ec; fs::rename(a, b, ec); return ec; }),
+          m_rename([](const fs::path& a, const fs::path& b)
+                   {
+                       if (IsCaseOnlyRename(a, b))   // one file on NTFS: route through MoveFileExW
+                           return OsShell::RenameCaseOnly(a, b) ? std::error_code{} : std::make_error_code(std::errc::io_error);
+                       std::error_code ec; fs::rename(a, b, ec); return ec;
+                   }),
           m_capture([this](const fs::path& p) { return m_stack.MakePayloadFromFile(p); }),
           m_anchor(std::make_shared<AssetFileOpExecutor*>(this))
     {

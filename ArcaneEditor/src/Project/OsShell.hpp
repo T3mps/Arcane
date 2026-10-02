@@ -41,4 +41,9 @@ namespace Arcane::Editor::OsShell
     };
     [[nodiscard]] RecycleResult ShellRecycle(std::span<const std::filesystem::path> files,
                                              void* ownerHwnd);   // Window::NativeHandle()
+
+    // T5 s7.6: a rename that changes only letter case (a.png -> A.png). On NTFS both
+    // names are ONE file, so this goes straight to MoveFileExW; elsewhere it is a plain
+    // std::filesystem::rename. True on success.
+    [[nodiscard]] bool RenameCaseOnly(const std::filesystem::path& from, const std::filesystem::path& to);
 }

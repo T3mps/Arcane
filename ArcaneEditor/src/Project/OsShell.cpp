@@ -222,11 +222,23 @@ namespace Arcane::Editor::OsShell
         if (!r.ok) r.message = aborted ? "The delete was cancelled." : "Some files could not be moved to the Recycle Bin.";
         return r;
     }
+
+    bool RenameCaseOnly(const std::filesystem::path& from, const std::filesystem::path& to)
+    {
+        return ::MoveFileExW(from.c_str(), to.c_str(), 0) != 0;
+    }
 #else
     RecycleResult ShellRecycle(std::span<const std::filesystem::path> files, void*)
     {
         if (auto missing = MissingForRecycle(files)) return *missing;
         return RecycleResult{ false, { files.begin(), files.end() }, {}, "Recycle Bin not supported on this platform" };
+    }
+
+    bool RenameCaseOnly(const std::filesystem::path& from, const std::filesystem::path& to)
+    {
+        std::error_code ec;
+        std::filesystem::rename(from, to, ec);
+        return !ec;
     }
 #endif
 }
