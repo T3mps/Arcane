@@ -161,6 +161,12 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //                          inside its panel -- off the offscreen chrome
 //                          context's colour target (EditorAppFrame.cpp's
 //                          PresentChromeFrame).
+//   --window-size WxH   -- honoured (T3-D6 fix round 1; automation only, it
+//                          requires --frames N): the host window's pixel
+//                          extent, which the headless chrome frame and the
+//                          default dock layout both follow -- a capture at the
+//                          desk's 1920x1080 geometry. Unset = 1280x720, the
+//                          size every golden reference is captured at.
 //   --headless          -- honoured. No window is ever mapped and no swapchain
 //                          is built anywhere: the chrome context becomes an
 //                          OffscreenVehicle (EditorApp::CreateGraphVehicles),

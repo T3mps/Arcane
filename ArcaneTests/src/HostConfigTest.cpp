@@ -1094,3 +1094,54 @@ TEST_CASE("SanitizeRelaunchLine handles --flag=value, dependants and spaces", "[
     const std::vector<std::string> spaced = { "ArcaneEditor.exe", "--project", "C:/My Games/P" };
     CHECK(Arcane::SanitizeRelaunchLine(spaced) == "ArcaneEditor.exe --project \"C:/My Games/P\"");
 }
+
+// --window-size WxH (T3-D6 fix round 1): the automation-only host extent a
+// desk-geometry capture needs (1920x1080). Unset keeps the 1280x720 default
+// every golden reference is captured at.
+TEST_CASE("host config: --window-size parses WxH, is automation only, and refuses a malformed extent", "[host]") {
+    const auto plain = Run({"--project", "P", "--headless", "--frames", "1"});
+    REQUIRE(plain.config.has_value());
+    CHECK(plain.config->windowWidth == 0u);   // unset: GpuContext's 1280x720 default
+    CHECK(plain.config->windowHeight == 0u);
+
+    const auto sized = Run({"--project", "P", "--headless", "--frames", "1",
+                            "--window-size", "1920x1080"});
+    REQUIRE(sized.config.has_value());
+    CHECK(sized.config->windowWidth == 1920u);
+    CHECK(sized.config->windowHeight == 1080u);
+
+    const auto inlineForm = Run({"--project", "P", "--frames", "1", "--window-size=2560X1440"});
+    REQUIRE(inlineForm.config.has_value());
+    CHECK(inlineForm.config->windowWidth == 2560u);
+    CHECK(inlineForm.config->windowHeight == 1440u);
+
+    // Automation only: no --frames, no extent.
+    const auto interactive = Run({"--project", "P", "--window-size", "1920x1080"});
+    CHECK_FALSE(interactive.config.has_value());
+    CHECK(interactive.exitCode == 2);
+
+    for (const char* bad : { "1920", "1920x", "x1080", "1920x1080x2", "-1920x1080", "1920 x1080",
+                             "63x1080", "1920x9000", "abcxdef", "" })
+    {
+        INFO("--window-size '" << bad << "'");
+        const auto refused = Run({"--project", "P", "--frames", "1", "--window-size", bad});
+        CHECK_FALSE(refused.config.has_value());
+        CHECK(refused.exitCode == 2);
+    }
+}
+
+TEST_CASE("SanitizeRelaunchLine strips --window-size (an automation extent, not the session)", "[host]")
+{
+    const std::vector<std::string> argv = {
+        "ArcaneEditor.exe", "--project", "P", "--frames", "60", "--window-size", "1920x1080",
+    };
+    const std::string line = Arcane::SanitizeRelaunchLine(argv);
+    CHECK(line.find("--project P") != std::string::npos);
+    CHECK(line.find("--window-size") == std::string::npos);
+    CHECK(line.find("1920x1080") == std::string::npos);
+
+    const std::vector<std::string> inlineForm = {
+        "ArcaneEditor.exe", "--project=P", "--frames=60", "--window-size=1920x1080",
+    };
+    CHECK(Arcane::SanitizeRelaunchLine(inlineForm).find("window-size") == std::string::npos);
+}

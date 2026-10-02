@@ -291,6 +291,20 @@ namespace Arcane
         // --select-name. ArcaneRuntime refuses the flag.
         std::string     selectInDocument = "";
 
+        // --window-size WxH (T3-D6 fix round 1): the host window's pixel
+        // extent -- and so, under --headless, the offscreen chrome frame's and
+        // the default dock layout's, which both follow the window -- for
+        // automation that must judge the editor at a real desk geometry
+        // (`--window-size 1920x1080`). AUTOMATION ONLY: refused without
+        // --frames N, and stripped from a relaunch line (SanitizeRelaunchLine).
+        // 0 x 0 = unset = GpuContext's 1280x720 default, which every golden
+        // reference is captured at and therefore stays load-bearing. Each side
+        // is refused outside [kMinWindowSide, kMaxWindowSide].
+        static constexpr std::uint32_t kMinWindowSide = 64;
+        static constexpr std::uint32_t kMaxWindowSide = 8192;
+        std::uint32_t   windowWidth  = 0;
+        std::uint32_t   windowHeight = 0;
+
 #if !defined(ARCANE_DIST)
         // DEV ONLY: fire the deliberate GPU fault (Render/GpuFaultInjector.hpp)
         // ONCE, on the first frame recorded after this many frames have
