@@ -23,6 +23,7 @@
 #include <Arcane/Plugin/SystemFactory.hpp>
 
 #include <Astra/Core/TypeID.hpp>
+#include <Astra/System/System.hpp>
 #include <Astra/System/SystemScheduler.hpp>
 
 #include <cstddef>
@@ -60,7 +61,16 @@ namespace Arcane::Game
                 std::string(Astra::TypeID<System>::Name()), mask, phase,
                 [args...](Astra::SystemScheduler& scheduler)
                 {
-                    std::ignore = scheduler.AddSystem<System>(args...);
+                    // Two system shapes (input-seam spec s5.2): a PARAMETER
+                    // system (operator() over View&/Res/ResMut/Commands --
+                    // the game-facing style) goes through Astra's param path,
+                    // keyed by its own type and ordered by its SystemTraits;
+                    // a registry-style system (operator()(Registry&) + traits)
+                    // through the typed path, as before.
+                    if constexpr (Astra::ParamFunctor<System>)
+                        std::ignore = scheduler.AddSystem(System{args...});
+                    else
+                        std::ignore = scheduler.AddSystem<System>(args...);
                 },
                 nullptr });
         }
