@@ -774,6 +774,17 @@ namespace Arcane::Editor
         [[nodiscard]] std::function<void()> GraphEditBuilder(const char* label, std::size_t pass);
         // m_dirty always; RegenerateFromGraph only when m_live (was `valueEdited`).
         void NoteGraphValueEdited();
+        // Esc mid-drag on a canvas INLINE value drag (T3-D3), the node page's
+        // NumericRow rule (PropertyGrid.cpp): call right after the drag widget
+        // with `pre`, the values (and whether a pin literal existed) captured
+        // BEFORE the widget ran. On the widget's activation it latches them;
+        // while it is active with the left button held, an Esc writes them back
+        // into `values` (and `*existed`), clears the slot, calls ClearActiveID
+        // and returns true -- the caller re-applies them and closes the gesture
+        // through EditGesture::EndAfterRow(cancelled), whose builder sees the
+        // graph equal to `before` and pushes NO step.
+        bool CanvasDragEscape(const float (&pre)[4], bool preExisted, float* values, int lanes,
+                              bool* existed = nullptr);
         // One DISCRETE edit as one step: re-resolve, capture before, mutate, then
         // NoteGraphValueEdited (or m_dirty only when !recompile -- Comment text)
         // and PushGraphUndo(label, before, pass). Nothing when the node is gone or
@@ -1015,6 +1026,15 @@ namespace Arcane::Editor
         // same-frame keyboard-nav active-ID transfer between documents could
         // cross shared statics.
         EditGesture::GestureState m_gesture;
+        // CanvasDragEscape's seed: the activating item (0 = none) and its values
+        // at activation. One slot: one ImGui item is active at a time.
+        struct CanvasDragSeed
+        {
+            std::uint32_t item = 0;
+            float v[4] = {};
+            bool existed = true;
+        };
+        CanvasDragSeed m_canvasDragSeed;
 
         // Latched on the frame the ConstColor node's swatch opens its popup:
         // the Old half of ColorPopupBody's Old/New pair. (The material page's

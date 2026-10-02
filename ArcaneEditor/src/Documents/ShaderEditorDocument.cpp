@@ -4228,6 +4228,38 @@ namespace Arcane::Editor
         };
     }
 
+    bool ShaderEditorDocument::CanvasDragEscape(const float (&pre)[4], bool preExisted, float* values,
+                                                int lanes, bool* existed)
+    {
+        // LastItemData.ID: the scalar drag's own id, or -- for DragFloat2/4,
+        // which close a group -- the live component's (EndGroup forwards the
+        // ActiveId), the same id on every frame of one drag.
+        const std::uint32_t item = ImGui::GetItemID();
+        if (ImGui::IsItemActivated())
+        {
+            m_canvasDragSeed.item = item;
+            std::memcpy(m_canvasDragSeed.v, pre, sizeof(pre));
+            m_canvasDragSeed.existed = preExisted;
+        }
+        if (m_canvasDragSeed.item == 0 || m_canvasDragSeed.item != item)
+            return false;
+        if (!ImGui::IsItemActive())
+        {
+            m_canvasDragSeed = {};   // the gesture ended its own way
+            return false;
+        }
+        // Mid-DRAG only: the text-entry mode (Ctrl+click / double-click) has no
+        // button down, and its InputText reverts on Esc by itself.
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            return false;
+        std::memcpy(values, m_canvasDragSeed.v, sizeof(float) * static_cast<std::size_t>(lanes));
+        if (existed)
+            *existed = m_canvasDragSeed.existed;
+        m_canvasDragSeed = {};
+        ImGui::ClearActiveID();
+        return true;
+    }
+
     void ShaderEditorDocument::NoteGraphValueEdited()
     {
         m_dirty = true;
@@ -5560,7 +5592,8 @@ namespace Arcane::Editor
                 [&] { return std::string(label); },
                 [&] { return buildGraphEdit(label); });
         };
-        auto gestureEnd = [&] { EditGesture::EndOnDeactivate(UndoStack(), m_gesture); };
+        // The close is EditGesture::EndAfterRow at each drag site (not a lambda):
+        // an Esc revert (CanvasDragEscape) closes as cancelled, at the row.
         // The popup pair, keyed on a popup id instead of the last submitted
         // item -- a hand-rolled popup's edits come from FOREIGN widgets, so
         // IsItemActivated() never fires for it (EditGesture.hpp:121-133).
@@ -5750,15 +5783,30 @@ namespace Arcane::Editor
                         fmt = nd.hlsl;
                 }
                 ImGui::SetNextItemWidth(lanes == 1 ? 64.0f : lanes == 2 ? 106.0f : 190.0f);
+                float pre[4];
+                std::memcpy(pre, buf, sizeof(pre));
+                const bool litExisted = lit != nullptr;   // `lit` may dangle once SetPinLiteral runs
                 const bool changed =
                     lanes == 1 ? ImGui::DragFloat("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
                     : lanes == 2 ? ImGui::DragFloat2("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
                                  : ImGui::DragFloat4("##lit", buf, 0.01f, 0.0f, 0.0f, fmt);
+                bool existed = true;
+                const bool escaped = CanvasDragEscape(pre, litExisted, buf, lanes, &existed);
                 // Same bracketing as the Const payload drags below, and STRICTLY
                 // safer: the drag wrote `buf`, not the graph, so the snapshot
                 // this takes on the activation frame is always pre-edit.
                 gestureBegin("Pin Value");
-                if (changed)
+                if (escaped)
+                {
+                    // Back to the drag's start: an absent-until-touched literal
+                    // is absent again, so the graph equals the gesture's before.
+                    if (existed)
+                        SetPinLiteral(n, pin, lanes, buf);
+                    else
+                        ErasePinLiteral(n, pin);
+                    valueEdited();
+                }
+                else if (changed)
                 {
                     // Absent-until-touched: a pin's first edit CREATES its entry
                     // from what the field was already showing (`buf` was seeded
@@ -5767,7 +5815,7 @@ namespace Arcane::Editor
                     SetPinLiteral(n, pin, lanes, buf);
                     valueEdited();
                 }
-                gestureEnd();
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 ImGui::PopID();
             }
         }
@@ -5791,29 +5839,38 @@ namespace Arcane::Editor
             case Arcane::GraphNodeType::ConstFloat:
             {
                 ImGui::SetNextItemWidth(90.0f);
+                float pre[4];
+                std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat("##v", &n.value[0], 0.01f);
+                const bool escaped = CanvasDragEscape(pre, true, n.value, 1);
                 gestureBegin("Edit Value");
-                if (changed) valueEdited();
-                gestureEnd();
+                if (changed || escaped) valueEdited();
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 break;
             }
             case Arcane::GraphNodeType::ConstFloat2:
             {
                 ImGui::SetNextItemWidth(140.0f);
+                float pre[4];
+                std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat2("##v", n.value, 0.01f);
+                const bool escaped = CanvasDragEscape(pre, true, n.value, 2);
                 gestureBegin("Edit Value");
-                if (changed) valueEdited();
-                gestureEnd();
+                if (changed || escaped) valueEdited();
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 break;
             }
             case Arcane::GraphNodeType::ConstFloat4:
             case Arcane::GraphNodeType::ConstColor:
             {
                 ImGui::SetNextItemWidth(220.0f);
+                float pre[4];
+                std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat4("##v", n.value, 0.01f);
+                const bool escaped = CanvasDragEscape(pre, true, n.value, 4);
                 gestureBegin("Edit Value");
-                if (changed) valueEdited();
-                gestureEnd();
+                if (changed || escaped) valueEdited();
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 if (n.type == Arcane::GraphNodeType::ConstColor)
                 {
                     ImGui::SameLine();
@@ -5913,15 +5970,18 @@ namespace Arcane::Editor
                         static_cast<int>(Arcane::ComponentCount(n.paramType));
                     ImGui::SetNextItemWidth(lanes == 1 ? 90.0f : lanes == 2 ? 140.0f : 220.0f);
                     bool changed = false;
+                    float pre[4];
+                    std::memcpy(pre, n.paramDefault.f, sizeof(pre));
                     if (lanes == 1)
                         changed = ImGui::DragFloat("##pdef", &n.paramDefault.f[0], 0.01f);
                     else if (lanes == 2)
                         changed = ImGui::DragFloat2("##pdef", n.paramDefault.f, 0.01f);
                     else
                         changed = ImGui::DragFloat4("##pdef", n.paramDefault.f, 0.01f);
+                    const bool escaped = CanvasDragEscape(pre, true, n.paramDefault.f, lanes);
                     gestureBegin("Param Default");
-                    if (changed) valueEdited();
-                    gestureEnd();
+                    if (changed || escaped) valueEdited();
+                    EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
 
                     bool ranged = n.hasRange;
                     if (ImGui::Checkbox("range", &ranged))
@@ -5936,15 +5996,17 @@ namespace Arcane::Editor
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(120.0f);
                         float mm[2] = { n.rangeMin, n.rangeMax };
+                        const float pre[4] = { mm[0], mm[1], 0.0f, 0.0f };
                         const bool rchanged = ImGui::DragFloat2("##prange", mm, 0.05f);
+                        const bool escaped = CanvasDragEscape(pre, true, mm, 2);
                         gestureBegin("Param Range");
-                        if (rchanged)
+                        if (rchanged || escaped)
                         {
                             n.rangeMin = mm[0];
                             n.rangeMax = mm[1];
                             valueEdited();
                         }
-                        gestureEnd();
+                        EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                     }
                 }
                 break;
@@ -5972,7 +6034,7 @@ namespace Arcane::Editor
                 // change -- so it takes this file's discrete-edit shape
                 // (snapshot inline, mutate, push immediately), copied from the
                 // "range" checkbox in the Param case above, which is the same
-                // widget doing the same job. The gestureBegin/gestureEnd
+                // widget doing the same job. The gestureBegin/EndAfterRow
                 // bracket beside it exists to coalesce a MULTI-FRAME drag into
                 // one undo step; a click has nothing to coalesce, and routing
                 // it through the bracket would push the step a frame late for

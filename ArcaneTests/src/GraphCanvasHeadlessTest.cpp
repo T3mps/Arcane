@@ -841,3 +841,57 @@ TEST_CASE("Canvas view (T3-D3): undo and redo of a graph edit keep the user's zo
     CHECK(SineLiteral(*h.doc) != nullptr);
     CHECK(SameView(user, ViewOf(h)));
 }
+
+// The node page's numeric rows restore their seed on Esc mid-drag
+// (PropertyGrid.cpp NumericRow); a canvas inline drag does the same: the value
+// from the drag's start, the gesture ended, NO undo step, ClearActiveID.
+TEST_CASE("Canvas inline drag (T3-D3): Esc while the button is held reverts the Sine x literal and leaves the undo stack alone",
+          "[editor][graphcanvas][nodepage]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputSineFloat()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));
+    ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 lit = SineLiteralPoint(h);
+    INFO("Sine x literal point " << lit.x << ", " << lit.y);
+    auto dragThenEsc = [&](float dx)
+    {
+        io.AddMousePosEvent(lit.x, lit.y); h.Frame();
+        io.AddMouseButtonEvent(0, true); h.Frame();
+        io.AddMousePosEvent(lit.x + dx, lit.y); h.Frame(2);
+        REQUIRE(ImGui::GetActiveID() != 0);                      // mid-drag
+        io.AddKeyEvent(ImGuiKey_Escape, true); h.Frame();
+        CHECK(ImGui::GetActiveID() == 0);                        // the gesture ended at the Esc
+        io.AddKeyEvent(ImGuiKey_Escape, false); h.Frame();
+        io.AddMouseButtonEvent(0, false); h.Frame(2);
+    };
+
+    SECTION("an untouched literal: it is absent again, and no step was pushed")
+    {
+        REQUIRE(SineLiteral(*h.doc) == nullptr);
+        dragThenEsc(30.0f);
+        CHECK(SineLiteral(*h.doc) == nullptr);
+        CHECK_FALSE(h.stack.CanUndo());
+    }
+    SECTION("an existing literal: back to its value at the drag's start, and the stack still holds only the first edit")
+    {
+        io.AddMousePosEvent(lit.x, lit.y); h.Frame();
+        io.AddMouseButtonEvent(0, true); h.Frame();
+        io.AddMousePosEvent(lit.x + 20.0f, lit.y); h.Frame(2);
+        io.AddMouseButtonEvent(0, false); h.Frame(2);
+        const GraphPinLiteral* first = SineLiteral(*h.doc);
+        REQUIRE(first != nullptr);
+        const float start = first->v[0];
+        REQUIRE(start != 0.0f);
+        REQUIRE(h.stack.CanUndo());
+
+        dragThenEsc(40.0f);
+        const GraphPinLiteral* after = SineLiteral(*h.doc);
+        REQUIRE(after != nullptr);
+        CHECK(after->v[0] == start);
+        h.stack.Undo();                                          // undoes the FIRST drag ...
+        h.Frame(2);
+        CHECK(SineLiteral(*h.doc) == nullptr);
+        CHECK_FALSE(h.stack.CanUndo());                          // ... and there was nothing else
+    }
+}
