@@ -2227,6 +2227,9 @@ namespace Arcane::Editor
         // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
         // + the Viewport panel showing the scene texture just rendered above.
         UpdateWindowTitle();   // project + scene name + unsaved marker
+        // Sampled ONCE before the toolbar (s6.4): a change consumed later this
+        // frame shows next frame, as the OS title already does.
+        const Arcane::Editor::TitleParts titleParts = CurrentTitleParts();
         m_gpu->Imgui().BeginFrame();
         Arcane::Editor::MenuRequests menuReq;
         // Build -> Rebuild Game Module gating inputs: the menu greys the item
@@ -2256,11 +2259,16 @@ namespace Arcane::Editor
         // business owning a process handle -- so the flip is OBSERVED here
         // (panel reports, app performs, same split as the two requests below).
         const bool wasPlaying = InPlayMode();
-        bool launchServerRequested = false;
-        if (Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
+        Arcane::Editor::ToolbarStatus stripStatus;
+        stripStatus.title     = titleParts;
+        stripStatus.scenePath = m_scene.Path().string();   // empty = never saved
+        // stripStatus.problems stays nullopt in T4; s8.2 (T6) fills it.
+        const Arcane::Editor::ToolbarResult toolbar =
+            Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
                                                m_plugin ? &*m_plugin : nullptr, m_playMode,
-                                               launchServerRequested,
-                                               ToolbarLogoTextureId(), [this]() { m_documents.FlushGestures(); }))
+                                               ToolbarLogoTextureId(), stripStatus,
+                                               [this]() { m_documents.FlushGestures(); });   // T1-B14's beforePlay (s3.3b)
+        if (toolbar.launchStandalone)
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
             // comment): clean+saved acts next frame top; dirty/never-saved parks
@@ -2272,7 +2280,7 @@ namespace Arcane::Editor
         // gate: ArcaneServer boots the project MANIFEST's bootScene, so there
         // is no unsaved live document for it to get wrong (DoLaunchServer's
         // own declaration states the split).
-        if (launchServerRequested)
+        if (toolbar.launchServer)
             DoLaunchServer();
         // Stop is the end of the whole session, including the child process.
         // A no-op on every topology that never spawned one.
@@ -3448,7 +3456,8 @@ namespace Arcane::Editor
                                             ViewportWidth(), ViewportHeight(),
                                             tools,
                                             Arcane::Editor::ViewportChrome{ /*showToolOverlay=*/!InPlayMode(),
-                                                                            /*playing=*/InPlayMode() },
+                                                                            /*playing=*/InPlayMode(),
+                                                                            /*sceneDirty=*/CurrentTitleParts().sceneDirty },
                                             gizmoOverlay);
         m_viewportDockId = fs.vp.dockId;
         m_viewportTargets.pendingW = fs.vp.desiredW;

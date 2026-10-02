@@ -1,5 +1,6 @@
 #pragma once
 
+#include "App/EditorTitle.hpp"   // TitleParts (ToolbarStatus)
 #include "Scene/EditGesture.hpp"   // EditGesture::GestureState (InspectorState parks one)
 #include "Panels/EntityList.hpp"
 #include "Panels/InspectorFields.hpp"   // Arcane::Editor::QuatEulerView (InspectorState::quatEulerViews)
@@ -19,6 +20,7 @@
 #include <functional>
 #include <glm/vec2.hpp>   // InspectorState::vectorProbe
 #include <glm/vec4.hpp>   // InspectorState::colorPopupOriginal
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -201,32 +203,53 @@ namespace Arcane::Editor
     // here: the chevron button after Step opens a popup whose
     // rows set it directly. In Viewport mode the Play button behaves exactly as
     // before (play.Play/Stop). In SeparateWindow mode, clicking Play does NOT touch
-    // `play` at all (fire-and-forget: nothing to Stop) -- instead this returns true
-    // for that one frame, and the caller performs the actual ArcaneRuntime spawn
-    // via EditorApp::DoLaunchStandalone, the same "panel reports, app performs"
-    // split ViewportPanelResult's clicks already use. The project/dirty-scene
-    // checks are NOT owned by that spawn step -- they live in the SceneSession
-    // intent machine (SceneSession::Request, run by RunSceneAction before this
-    // ever returns true); DoLaunchStandalone keeps only a defensive backstop.
+    // `play` at all (fire-and-forget: nothing to Stop) -- instead it sets
+    // `result.launchStandalone` for that one frame, and the caller performs the
+    // actual ArcaneRuntime spawn via EditorApp::DoLaunchStandalone, the same
+    // "panel reports, app performs" split ViewportPanelResult's clicks already
+    // use. The project/dirty-scene checks are NOT owned by that spawn step --
+    // they live in the SceneSession intent machine (SceneSession::Request, which
+    // the caller runs on `result.launchStandalone` before any spawn);
+    // DoLaunchStandalone keeps only a defensive backstop.
     //
     // ListenServer/EmbeddedServer enter Play right here, like Viewport, differing
     // only in the PlayTopology handed to play.Play. SeparateServerProcess does
     // BOTH halves: it enters Play as a CLIENT world here AND sets
-    // `launchServerRequested` for that one frame, which the caller turns into an
+    // `result.launchServer` for that one frame, which the caller turns into an
     // ArcaneServer.exe spawn (EditorApp::DoLaunchServer) -- the same "panel
-    // reports, app performs" split as the return value above, in its own out
-    // parameter because the two requests are independent and can never both be
-    // true. It is always written (true or false) before this returns.
+    // reports, app performs" split as `result.launchStandalone`, in its own
+    // field because the two requests are independent and can never both be
+    // true in one frame.
     //
     // `beforePlay` runs immediately before every play.Play this strip makes,
     // while the editor is still in Edit: the host flushes open document
     // gestures there (DocumentHost::FlushGestures, spec s3.3(b)), so a drag
     // still held when Play is pressed lands as one Edit-mode undo step.
-    [[nodiscard]] bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                                          Arcane::PluginHost* host,
-                                          PlayLaunchMode& mode, bool& launchServerRequested,
-                                          uint64_t logoTex = 0,
-                                          const std::function<void()>& beforePlay = {});
+    //
+    // The strip's right cluster (node page phase s6.4/s6.5). One layout owns
+    // both occupants, so two right-aligners never fight over the edge.
+    struct StripChip
+    {
+        std::string label;      // drawn text; the chip's ImGui id is "##strip_problems"
+        ImVec4      color;      // s8.2 picks it from the worst severity
+        std::string tooltip;
+    };
+    struct ToolbarStatus
+    {
+        TitleParts               title;      // 6.4: EditorApp::CurrentTitleParts()
+        std::string              scenePath;  // tooltip only; empty = never saved
+        std::optional<StripChip> problems;   // s8.2 (T6); nullopt = nothing drawn, no space reserved
+    };
+    struct ToolbarResult
+    {
+        bool launchStandalone    = false;    // SeparateWindow Play, this frame
+        bool launchServer        = false;    // SeparateServerProcess Play, this frame
+        bool problemsChipClicked = false;    // s8.2 routes it
+    };
+    [[nodiscard]] ToolbarResult DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                                                   Arcane::PluginHost* host, PlayLaunchMode& mode,
+                                                   uint64_t logoTex, const ToolbarStatus& status,
+                                                   const std::function<void()>& beforePlay = {});   // T1-B14 (s3.3b)
 
     // (The three asset panels are the REAL browser now --
     // AssetBrowserPanel/AssetGraphPanel/AssetStatusPanel, panel-split Task 7;

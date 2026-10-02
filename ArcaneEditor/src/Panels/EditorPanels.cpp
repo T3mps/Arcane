@@ -65,6 +65,68 @@ namespace Arcane::Editor
             if (rootOnly && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
                 ImGui::SetTooltip("%s", SceneRootRefusal(verb));
         }
+
+        // The strip status (node page phase s6.4): project (TextDisabled), the
+        // Inspector breadcrumb's chevron (TextDisabled), scene (Text), " *" when
+        // dirty; "No project" alone otherwise. Read-only, not clickable.
+        struct StripStatusMetrics { float naturalW; float minW; };
+
+        StripStatusMetrics MeasureStripStatus(const TitleParts& t)
+        {
+            if (t.project.empty())
+            {
+                const float w = ImGui::CalcTextSize("No project").x;
+                return { w, w };   // never elided: it is drawn whole or not at all
+            }
+            const float sp    = ImGui::GetStyle().ItemInnerSpacing.x;
+            const float chev  = ImGui::CalcTextSize(ICON_LC_CHEVRON_RIGHT).x;
+            const float star  = t.sceneDirty ? ImGui::CalcTextSize(" *").x : 0.0f;
+            const float dots  = ImGui::CalcTextSize("...").x;
+            const float fixed = 2.0f * sp + chev + star;
+            return { fixed + ImGui::CalcTextSize(t.project.c_str()).x + ImGui::CalcTextSize(t.scene.c_str()).x,
+                     fixed + 2.0f * dots };
+        }
+
+        // Draws at window-local `at` within `budget` px: elides the project
+        // first, then the scene (EllipsisToWidth), keeping the chevron and " *".
+        // The three-line tooltip always carries the full text.
+        void DrawStripStatus(const ToolbarStatus& status, ImVec2 at, float budget)
+        {
+            const TitleParts& t = status.title;
+            ImGui::SetCursorPos(at);
+            ImGui::BeginGroup();
+            if (t.project.empty())
+                ImGui::TextDisabled("No project");
+            else
+            {
+                const float sp    = ImGui::GetStyle().ItemInnerSpacing.x;
+                const float fixed = 2.0f * sp + ImGui::CalcTextSize(ICON_LC_CHEVRON_RIGHT).x
+                                  + (t.sceneDirty ? ImGui::CalcTextSize(" *").x : 0.0f);
+                const float dots  = ImGui::CalcTextSize("...").x;
+                float projW  = ImGui::CalcTextSize(t.project.c_str()).x;
+                float sceneW = ImGui::CalcTextSize(t.scene.c_str()).x;
+                if (fixed + projW + sceneW > budget) projW  = std::max(dots, budget - fixed - sceneW);
+                if (fixed + projW + sceneW > budget) sceneW = std::max(dots, budget - fixed - projW);
+                const std::string project = EllipsisToWidth(t.project, projW);
+                const std::string scene   = EllipsisToWidth(t.scene, sceneW);
+                ImGui::TextDisabled("%s", project.c_str());
+                ImGui::SameLine(0.0f, sp);
+                ImGui::TextDisabled(ICON_LC_CHEVRON_RIGHT);
+                ImGui::SameLine(0.0f, sp);
+                ImGui::TextUnformatted(scene.c_str());
+                if (t.sceneDirty) { ImGui::SameLine(0.0f, 0.0f); ImGui::TextUnformatted(" *"); }
+            }
+            ImGui::EndGroup();
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(FormatStripStatus(t).c_str());
+                if (status.scenePath.empty()) ImGui::TextUnformatted("Scene not saved yet");
+                else                          ImGui::Text("Scene file: %s", status.scenePath.c_str());
+                if (t.sceneDirty) ImGui::TextUnformatted("Unsaved changes");
+                ImGui::EndTooltip();
+            }
+        }
     }
 
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
@@ -672,13 +734,12 @@ namespace Arcane::Editor
         return result;
     }
 
-    bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            Arcane::PluginHost* host,
-                            PlayLaunchMode& mode, bool& launchServerRequested,
-                            uint64_t logoTex,
-                            const std::function<void()>& beforePlay)
+    ToolbarResult DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                                     Arcane::PluginHost* host, PlayLaunchMode& mode,
+                                     uint64_t logoTex, const ToolbarStatus& status,
+                                     const std::function<void()>& beforePlay)
     {
-        launchServerRequested = false;   // always written before this returns
+        ToolbarResult result;
 
         // Icon button with a hover tooltip (icons need discoverable labels).
         // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
@@ -762,7 +823,8 @@ namespace Arcane::Editor
         const float transportW = splitW + btnW(ICON_LC_PAUSE) + btnW(ICON_LC_STEP_FORWARD)
                                + kTransportGap * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
-        ImGui::SetCursorPos(ImVec2(std::max(centerStart, leftX + 12.0f), rowY));
+        const float transportX = std::max(centerStart, leftX + 12.0f);
+        ImGui::SetCursorPos(ImVec2(transportX, rowY));
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kTransportGap, st.ItemSpacing.y));
 
@@ -773,7 +835,6 @@ namespace Arcane::Editor
         // (the editor takes no lock on the child and does not track it), so it
         // never lights this button -- Stop would have nothing of its own to
         // restore for a launch it never tracked.
-        bool launchStandaloneRequested = false;
         const bool playing = play.IsPlaying();
         // IconToggle (s4.9/s6.2): lit = the accent trio, so a playing Stop square
         // reads as ON under the cursor too. Its tooltip stays this site's own.
@@ -827,7 +888,7 @@ namespace Arcane::Editor
                         tryPlay(PlayTopology::Standalone, "in viewport");
                         break;
                     case PlayLaunchMode::SeparateWindow:
-                        launchStandaloneRequested = true;   // caller resolves + spawns; play/plugin untouched
+                        result.launchStandalone = true;   // caller resolves + spawns; play/plugin untouched
                         break;
                     case PlayLaunchMode::ListenServer:
                         tryPlay(PlayTopology::ListenServer, "listen server");
@@ -849,7 +910,7 @@ namespace Arcane::Editor
                         // holding -- the row below exists for a future refusal, not an
                         // observed one.
                         tryPlay(PlayTopology::ClientOnly, "client + separate server");
-                        launchServerRequested = true;
+                        result.launchServer = true;
                         break;
                 }
             }
@@ -945,9 +1006,43 @@ namespace Arcane::Editor
 
         ImGui::PopStyleVar();   // kTransportGap: the rest of the row keeps the global spacing
 
+        // -- RIGHT cluster (node page phase s6.4/s6.5): [chip] [status], laid out
+        // right to left by LayoutStripCluster, absolute SetCursorPos like the left
+        // cluster. The cursor is restored afterwards so the closing Dummy -- and
+        // with it the strip height -- is exactly where the transport left it.
+        {
+            const ImVec2 afterTransport = ImGui::GetCursorPos();
+            const float  rightEdge = lineStartX + fullContentW - leftPad;          // mirrors leftPad
+            const float  minX      = transportX + transportW + 12.0f;             // mirrors the left clamp
+            const float  gap       = st.ItemSpacing.x * 2.0f;
+            const float  lineH     = ImGui::GetTextLineHeight();
+            const StripStatusMetrics m = MeasureStripStatus(status.title);
+            const float  chipW = status.problems
+                ? ImGui::CalcTextSize(status.problems->label.c_str()).x + st.FramePadding.x * 2.0f : 0.0f;
+            const StripClusterLayout lay = LayoutStripCluster(minX, rightEdge, chipW, m.naturalW, m.minW, gap);
+            if (status.problems)
+            {
+                const StripChip& chip = *status.problems;
+                ImGui::SetCursorPos(ImVec2(lay.chipX, rowY));
+                result.problemsChipClicked = ImGui::InvisibleButton("##strip_problems", ImVec2(chipW, btnH));
+                const ImVec2 cmin = ImGui::GetItemRectMin(), cmax = ImGui::GetItemRectMax();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddRectFilled(cmin, cmax, ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered
+                                                                                          : ImGuiCol_Button));
+                dl->AddRect(cmin, cmax, ImGui::GetColorU32(ImGuiCol_Border));
+                dl->AddText(ImVec2(cmin.x + st.FramePadding.x, cmin.y + (btnH - lineH) * 0.5f),
+                            ImGui::GetColorU32(chip.color), chip.label.c_str());
+                if (!chip.tooltip.empty() && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", chip.tooltip.c_str());
+            }
+            if (lay.drawStatus)
+                DrawStripStatus(status, ImVec2(lay.statusX, rowY + (btnH - lineH) * 0.5f), lay.statusBudget);
+            ImGui::SetCursorPos(afterTransport);
+        }
+
         ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));   // clear the logo's lower overhang too
         ImGui::Separator();
-        return launchStandaloneRequested;
+        return result;
     }
 
     void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool* open)
@@ -1278,7 +1373,12 @@ namespace Arcane::Editor
         };
 
         ViewportPanelResult r;
-        ImGui::Begin("Viewport");
+        // The scene's unsaved dot on the Viewport tab (s6.4), beside the
+        // documents' own (every document raises UnsavedDocument when dirty).
+        // ImGui widens a marked tab by one glyph (imgui_widgets.cpp:10052-10053),
+        // so tabs to its right shift while the scene is dirty.
+        ImGui::Begin("Viewport", nullptr,
+                     chrome.sceneDirty ? ImGuiWindowFlags_UnsavedDocument : ImGuiWindowFlags_None);
         r.dockId = static_cast<unsigned int>(ImGui::GetWindowDockID());
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         r.desiredW = avail.x > 0 ? static_cast<uint32_t>(avail.x) : 1;
