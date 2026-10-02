@@ -999,3 +999,44 @@ TEST_CASE("DescribeDeleteModal titles the REQUESTED assets; cascaded children on
     const AssetOpPlan empty;
     CHECK(DescribeDeleteModal(empty, missing, {}).title == "Delete " + missing[0].ToString() + "?");
 }
+TEST_CASE("Move: a .gltf takes its .bin and its registered image (own guid, .meta); undo returns all", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_move_gltf");
+    t.Write("m/ship.gltf", R"({"buffers":[{"uri":"ship%20a.bin"}],"images":[{"uri":"tex.png"},{"uri":"data:image/png;base64,AA=="}]})");
+    t.Write("m/ship a.bin", "b"); t.Write("m/tex.png", "px"); t.Scan(); const Arcane::Guid tex = t.GuidOf("m/tex.png");
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    const AssetOpPlan plan = PlanAssetOp({ .kind = AssetOpKind::Move, .guids = { t.GuidOf("m/ship.gltf") }, .destFolder = "hulls" }, t.Facts());
+    REQUIRE(plan.refusals.empty()); REQUIRE(exec.Execute(plan, t.stack).ok);
+    CHECK((std::filesystem::exists(t.content / "hulls/ship a.bin") && std::filesystem::exists(t.content / "hulls/tex.png.meta")));
+    CHECK(t.registry.Resolve(tex) == std::optional<std::string>("game://hulls/tex.png"));
+    t.stack.Undo(); CHECK((std::filesystem::exists(t.content / "m/ship a.bin") && t.registry.Resolve(tex) == std::optional<std::string>("game://m/tex.png")));
+}
+TEST_CASE("Move refusals: a ../ URI, a buffer shared with an unmoved .gltf, a destination taken only by a .meta", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_move_refuse");
+    t.Write("a/out.gltf", R"({"buffers":[{"uri":"../shared.bin"}]})");
+    t.Write("b/one.gltf", R"({"buffers":[{"uri":"s.bin"}]})"); t.Write("b/two.gltf", R"({"buffers":[{"uri":"s.bin"}]})"); t.Write("b/s.bin", "b");
+    t.Write("c/x.png", "px"); t.Write("d/x.png.meta", R"({"guid":"7e5a9999-0001-4001-8001-000000000001","version":1})"); t.Scan();
+    const auto ref = [&](const char* rel, const char* dest) { return PlanAssetOp({ .kind = AssetOpKind::Move, .guids = { t.GuidOf(rel) }, .destFolder = dest }, t.Facts()).refusals; };
+    const auto r1 = ref("a/out.gltf", "z"); REQUIRE(r1.size() == 1); CHECK(r1[0].reason == "References ../shared.bin outside its folder.");
+    const auto r2 = ref("b/one.gltf", "z"); REQUIRE(r2.size() == 1); CHECK(r2[0].reason == "Shares s.bin with two.gltf.");
+    CHECK_FALSE(ref("c/x.png", "d").empty());   // s7.1's "already exists" row (.meta only)
+}
+TEST_CASE("Move: two co-moving .gltf files sharing a buffer carry it once; undo returns it once", "[editor][assetops]")
+{
+    // T5-A8's batch de-dup (carry ruling): s7.1 refuses only a buffer shared with a NON-moving .gltf.
+    AssetOpsTest::Tree t("arcane_ops_move_gltf_shared");
+    t.Write("b/one.gltf", R"({"buffers":[{"uri":"s.bin"}]})"); t.Write("b/two.gltf", R"({"buffers":[{"uri":"s.bin"}]})"); t.Write("b/s.bin", "b"); t.Scan();
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    const AssetOpPlan plan = PlanAssetOp({ .kind = AssetOpKind::Move, .guids = { t.GuidOf("b/one.gltf"), t.GuidOf("b/two.gltf") }, .destFolder = "z" }, t.Facts());
+    REQUIRE(plan.refusals.empty());
+    std::size_t binMoves = 0;
+    for (const auto& m : plan.moves) for (const auto& f : m.files) if (f.from.filename() == "s.bin") ++binMoves;
+    CHECK(binMoves == 1);
+    REQUIRE(exec.Execute(plan, t.stack).ok);
+    CHECK((std::filesystem::exists(t.content / "z/one.gltf") && std::filesystem::exists(t.content / "z/two.gltf") && std::filesystem::exists(t.content / "z/s.bin")));
+    CHECK_FALSE(std::filesystem::exists(t.content / "b/s.bin"));
+    t.stack.Undo();
+    CHECK((std::filesystem::exists(t.content / "b/one.gltf") && std::filesystem::exists(t.content / "b/two.gltf") && std::filesystem::exists(t.content / "b/s.bin")));
+    CHECK_FALSE(std::filesystem::exists(t.content / "z/s.bin"));
+}
