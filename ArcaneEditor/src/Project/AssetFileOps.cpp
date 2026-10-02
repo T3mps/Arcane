@@ -272,6 +272,67 @@ namespace Arcane::Editor
         return {};
     }
 
+    namespace
+    {
+        bool ReadJsonFile(const fs::path& p, nlohmann::json& out)
+        {
+            std::ifstream in(p, std::ios::binary);
+            if (!in) return false;
+            out = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
+            return !out.is_discarded() && out.is_object();
+        }
+        bool WriteJsonAtomic(const fs::path& to, const nlohmann::json& j)   // <to>.arctmp then rename (Project::SetBootScene precedent)
+        {
+            const fs::path tmp = fs::path(to).concat(".arctmp");
+            {
+                std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+                if (!o) return false;
+                o << j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
+                if (!o) return false;
+            }
+            std::error_code ec;
+            fs::rename(tmp, to, ec);
+            if (ec) fs::remove(tmp, ec);
+            return !ec;
+        }
+    }
+
+    bool WriteAssetCopy(const FileMove& m, AssetKind k, const Arcane::Guid& newId, std::string* error)   // new id lands BEFORE Register: AddFile never mints
+    {
+        const auto fail = [&](std::string w) { if (error) *error = std::move(w); return false; };
+        std::error_code ec;
+        fs::create_directories(m.to.parent_path(), ec);
+        using K = AssetKind;
+        if (k == K::Material || k == K::Sprite || k == K::Mesh || k == K::Scene || k == K::InputActions || k == K::Data)
+        {
+            nlohmann::json j;
+            if (!ReadJsonFile(m.from, j)) return fail("could not read " + m.from.filename().string());
+            j["id"] = newId.ToString();
+            if (k == K::Material || k == K::Sprite || k == K::Mesh) j["name"] = m.to.stem().string();
+            if (k == K::Mesh && j.contains("importedSource")) j["importedSource"] = Arcane::Guid::Nil().ToString();   // companion strip
+            if (k == K::Scene && j.contains("entities") && j["entities"].is_array())
+                for (nlohmann::json& e : j["entities"])        // positional parent/link indices stay
+                    if (e.is_object() && e.contains("components") && e["components"].is_object() &&
+                        e["components"].contains("Arcane::Identity"))
+                    {
+                        const Arcane::Guid g = Arcane::Guid::Generate();
+                        e["components"]["Arcane::Identity"]["id"] = { { "hi", g.hi }, { "lo", g.lo } };
+                    }
+            return WriteJsonAtomic(m.to, j) || fail("could not write " + m.to.filename().string());
+        }
+        if (k == K::Texture || k == K::Audio || k == K::Font || k == K::Model)   // copy_file + fresh .meta: every source field, new guid
+        {
+            nlohmann::json meta;
+            if (!ReadJsonFile(WithMeta(m.from), meta)) return fail("could not read the .meta");
+            meta["guid"] = newId.ToString();
+            if (!WriteJsonAtomic(WithMeta(m.to), meta)) return fail("could not write the copy's .meta");
+            if (fs::copy_file(m.from, m.to, fs::copy_options::none, ec)) return true;
+            fs::remove(WithMeta(m.to), ec);
+            return fail("could not copy " + m.from.filename().string());
+        }
+        return fail("this kind cannot be duplicated");   // .arcdiag / source:// are refused by s7.1
+    }
+
     std::vector<std::string> ReadGltfUris(const fs::path& gltf)
     {
         std::vector<std::string> out;
@@ -577,6 +638,38 @@ namespace Arcane::Editor
         return std::nullopt;
     }
 
+    // s7.7: each copy is written with its new id BEFORE Register (AddFile never mints); a failure removes
+    // only files this op created (none pre-existed: the planner proved every destination free).
+    std::optional<std::string> AssetFileOpExecutor::CopyForward(const AssetOpPlan& plan, std::vector<AssetFiles>& copies)
+    {
+        ARC_ASSERT(plan.newGuids.size() == plan.moves.size(), "CopyForward: a Duplicate plan mints one guid per copy");
+        std::vector<fs::path> created;
+        std::vector<Arcane::Guid> registered;
+        const auto rollBack = [&]
+        {
+            for (const Arcane::Guid& g : registered) (void)m_host.Unregister(g);
+            for (const fs::path& p : created) { std::error_code ec; fs::remove(p, ec); }
+            copies.clear();
+        };
+        for (std::size_t i = 0; i < plan.moves.size(); ++i)
+        {
+            const AssetMove& m = plan.moves[i];
+            std::string why;
+            // WriteAssetCopy leaves nothing behind on failure, so only a SUCCESSFUL write's
+            // files join `created`: a destination that appeared since planning is never removed.
+            if (!WriteAssetCopy(m.files[0], m.kind, plan.newGuids[i], &why)) { rollBack(); return why; }
+            for (const FileMove& f : m.files) created.push_back(f.to);
+            const std::optional<Arcane::Guid> got = m_host.Register(m.files[0].to);
+            if (got) registered.push_back(*got);
+            if (got != plan.newGuids[i]) { rollBack(); return Display(m.files[0].to) + " registered under another id."; }
+            AssetFiles& a = copies.emplace_back(AssetFiles{ plan.newGuids[i], {} });
+            for (const FileMove& f : m.files) a.files.push_back(f.to);
+        }
+        m_host.EvictPaths(created);                  // B13 folds these two calls into RunAssetOpFollowUp(m_host, plan, AssetOpSide::Forward, m_contentDir)
+        m_host.AssetsChanged({}, plan.newGuids);
+        return std::nullopt;
+    }
+
     ExecResult AssetFileOpExecutor::Execute(const AssetOpPlan& plan, Arcane::CommandStack& stack)
     {
         ARC_ASSERT(&stack == &m_stack, "AssetFileOpExecutor::Execute: push to the stack the executor was built on");
@@ -617,9 +710,13 @@ namespace Arcane::Editor
                     step = std::make_unique<AssetDeleteCommand>(Anchor(), plan.label, std::move(doomed), std::move(payloads));
                 break;
             }
-            default:   // Duplicate (s7.7) replaces this arm
-                failure = "This asset operation is not available yet.";
+            case AssetOpKind::Duplicate:
+            {
+                std::vector<AssetFiles> copies;
+                failure = CopyForward(plan, copies);
+                if (!failure) step = std::make_unique<AssetDuplicateCommand>(Anchor(), plan.label, std::move(copies));
                 break;
+            }
         }
         if (failure)
         {

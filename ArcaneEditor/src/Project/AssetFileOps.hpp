@@ -95,6 +95,14 @@ namespace Arcane::Editor
                                            std::string_view ext,
                                            const std::function<bool(const std::filesystem::path&)>& taken);
 
+    // s7.7: write `m.to` as a copy of `m.from` carrying `newId`, BEFORE Register
+    // (AddFile never mints). Native JSON: a new "id"; material/sprite/mesh "name" =
+    // the copy's stem; a mesh's importedSource is stripped (one companion per model);
+    // a scene re-mints every Identity id. Imported binaries: copy_file plus a .meta
+    // with every source field and the new guid. False (and `error`) on failure, with
+    // nothing of the copy left behind.
+    [[nodiscard]] bool WriteAssetCopy(const FileMove& m, AssetKind kind, const Arcane::Guid& newId, std::string* error);
+
     // s7.8: the relative files a .gltf names -- buffers[].uri then images[].uri,
     // data: URIs skipped, percent-decoded. Empty for .glb (self-contained) and for an
     // unreadable file. The real AssetOpFacts::gltfUris.
@@ -158,6 +166,10 @@ namespace Arcane::Editor
         // `stack` must be the constructor's stack.
         [[nodiscard]] ExecResult Execute(const AssetOpPlan& plan, Arcane::CommandStack& stack);
         [[nodiscard]] std::weak_ptr<AssetFileOpExecutor*> Anchor() const { return m_anchor; }
+        // s7.7 Duplicate's forward: write every copy with its plan.newGuids id, Register
+        // it, then evict + announce. On failure everything this call made is undone and
+        // `copies` is cleared. `copies` (out) is what AssetDuplicateCommand replays.
+        [[nodiscard]] std::optional<std::string> CopyForward(const AssetOpPlan& plan, std::vector<AssetFiles>& copies);
 
         // ---- primitives the commands replay (one code path per disk effect) ----
         // nullopt = applied; a string = refused (nothing touched) or failed (rolled back).

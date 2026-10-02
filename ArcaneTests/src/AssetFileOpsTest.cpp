@@ -5,6 +5,15 @@
 #include "Project/AssetFileOps.hpp"
 #include "Helpers/AssetFileOpsFakes.hpp"
 #include "Helpers/AssetOpsFixture.hpp"
+#include "Project/MeshImportWave.hpp"
+#include "Helpers/TestTypeContext.hpp"
+
+#include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Material/MaterialAsset.hpp>
+#include <Arcane/Mesh/MeshAsset.hpp>
+#include <Arcane/Sprite/SpriteAsset.hpp>
+#include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Serialization/SceneSerializer.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -806,4 +815,58 @@ TEST_CASE("Rename: a .gltf keeps its .bin; same stem is a no-op; a bad name refu
     CHECK((same.refusals.empty() && same.moves.empty() && bad.refusals.size() == 1 && bad.refusals[0].reason.find("cannot contain") != std::string::npos));
     t.Write("c.png", "px");                                          // the case-only primitive itself (fails first: undeclared)
     CHECK((OsShell::RenameCaseOnly(t.content / "c.png", t.content / "C.png") && OnDiskName(t.content / "C.png") == "C.png"));
+}
+TEST_CASE("NextCopyName: rock -> rock 1 -> rock 2; rock 1 -> rock 2; reservations and orphan sidecars count", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_copyname"); const auto c = t.content;   // T5-A6's predicate form over a real disk (coverage)
+    const auto disk = [](const std::filesystem::path& p) { std::error_code e; return std::filesystem::exists(p, e); };
+    t.Write("rock.arcmat", "{}"); CHECK(NextCopyName("rock", c, ".arcmat", disk) == "rock 1");
+    t.Write("rock 1.arcmat", "{}"); CHECK((NextCopyName("rock", c, ".arcmat", disk) == "rock 2" && NextCopyName("rock 1", c, ".arcmat", disk) == "rock 2"));
+    CHECK(NextCopyName("rock", c, ".arcmat", [&](const std::filesystem::path& p) { return disk(p) || p == c / "rock 2.arcmat"; }) == "rock 3");
+    t.Write("img 1.png.meta", "{}"); CHECK(NextCopyName("img", c, ".png", disk) == "img 2");
+}
+TEST_CASE("Duplicate: every kind's copy carries a fresh on-disk id; the registry holds both; undo/redo", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_dup_kinds");
+    for (const char* d : { "m", "s", "x" }) std::filesystem::create_directories(t.content / d);   // Save*Asset leave parent dirs to the caller
+    Arcane::MaterialAssetData mat; mat.id = Arcane::Guid::Generate(); mat.name = "Gold"; REQUIRE(Arcane::SaveMaterialAsset(t.content / "m/gold.arcmat", mat));
+    Arcane::SpriteAssetData spr; spr.id = Arcane::Guid::Generate(); spr.texture = Arcane::Guid::Generate(); REQUIRE(Arcane::SaveSpriteAsset(t.content / "s/ui.arcsprite", spr));
+    const Arcane::Guid model = Arcane::Guid::Generate();
+    Arcane::MeshAssetData mesh; mesh.id = Arcane::Guid::Generate(); mesh.source = Arcane::MeshSource::Imported; mesh.importedSource = model;
+    REQUIRE(Arcane::SaveMeshAsset(t.content / "x/prop.arcmesh", mesh));
+    t.Write("in/p.arcinput", R"({"id":"7e5a7777-0001-4001-8001-000000000001","maps":[]})");
+    t.Write("tex/a.png", "px"); t.Write("tex/a.png.meta", R"({"guid":"7e5a7777-0002-4002-8002-000000000002","version":1,"srgb":false})"); t.Scan();
+    const std::vector<Arcane::Guid> src = { t.GuidOf("m/gold.arcmat"), t.GuidOf("s/ui.arcsprite"), t.GuidOf("x/prop.arcmesh"), t.GuidOf("in/p.arcinput"), t.GuidOf("tex/a.png") };
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    const AssetOpPlan plan = PlanAssetOp({ .kind = AssetOpKind::Duplicate, .guids = src }, t.Facts());
+    REQUIRE(exec.Execute(plan, t.stack).ok); REQUIRE(plan.newGuids.size() == src.size());
+    for (std::size_t i = 0; i < src.size(); ++i) CHECK((plan.newGuids[i] != src[i] && t.registry.Resolve(src[i]) && t.registry.Resolve(plan.newGuids[i])));
+    CHECK(Arcane::LoadMaterialAsset(t.content / "m/gold 1.arcmat")->name == "gold 1");
+    CHECK(Arcane::LoadSpriteAsset(t.content / "s/ui 1.arcsprite")->texture == spr.texture);
+    const auto prop1 = Arcane::LoadMeshAsset(t.content / "x/prop 1.arcmesh"); REQUIRE(prop1);
+    CHECK_FALSE(prop1->importedSource.IsValid());              // companion strip (drafting pick 9.28)
+    const std::vector<std::pair<Arcane::Guid, Arcane::Guid>> pairs = { { mesh.id, model }, { prop1->id, prop1->importedSource } };
+    CHECK(UniqueImportedCompanion(model, pairs) == mesh.id);
+    const auto meta = nlohmann::json::parse(std::ifstream(t.content / "tex/a 1.png.meta"));
+    CHECK((meta["srgb"] == false && meta["guid"] == plan.newGuids[4].ToString()));
+    t.stack.Undo(); CHECK_FALSE(std::filesystem::exists(t.content / "m/gold 1.arcmat"));
+    t.stack.Redo(); CHECK(Arcane::AssetRegistry::PeekId(t.content / "m/gold 1.arcmat") == plan.newGuids[0]);
+}
+TEST_CASE("Duplicate: a scene copy re-mints every Identity id, leaves the original alone, and loads", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_dup_scene"); Arcane::Runtime rt{ Arcane::Test::Process() }; Arcane::RegisterSceneComponents(rt.Registry());
+    Astra::Registry& reg = rt.Registry(); const Astra::Entity root = reg.CreateEntity();
+    reg.SetResource<Arcane::SceneRoot>(Arcane::SceneRoot{ root });   // SaveJson walks only the SceneRoot subtree (SceneJsonTest.cpp's pattern)
+    for (const char* n : { "A", "B" })
+    { const Astra::Entity e = reg.CreateEntity(); reg.AddComponent<Arcane::Identity>(e, Arcane::Identity{ Arcane::Guid::Generate(), n }); reg.SetParent(e, root); }
+    nlohmann::json doc = Arcane::Scene::SaveJson(rt.Registry()); doc["id"] = Arcane::Guid::Generate().ToString(); t.Write("sc/lv.arcscene", doc.dump(2)); t.Scan();
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    REQUIRE(exec.Execute(PlanAssetOp({ .kind = AssetOpKind::Duplicate, .guids = { t.GuidOf("sc/lv.arcscene") } }, t.Facts()), t.stack).ok);
+    const auto his = [](const nlohmann::json& j) { std::vector<std::uint64_t> o; for (const auto& e : j["entities"])
+        if (e["components"].contains("Arcane::Identity")) o.push_back(e["components"]["Arcane::Identity"]["id"]["hi"]); return o; };
+    const auto orig = nlohmann::json::parse(std::ifstream(t.content / "sc/lv.arcscene")), copy = nlohmann::json::parse(std::ifstream(t.content / "sc/lv 1.arcscene"));
+    CHECK(orig == doc); REQUIRE(his(copy).size() == 2);
+    const std::vector<std::uint64_t> origHis = his(orig);   // ONE vector: begin()/end() of two temporaries is UB
+    for (const std::uint64_t hi : his(copy)) CHECK(std::count(origHis.begin(), origHis.end(), hi) == 0);
+    Arcane::Runtime rt2{ Arcane::Test::Process() }; Arcane::RegisterSceneComponents(rt2.Registry()); CHECK(Arcane::Scene::LoadJson(rt2.Registry(), copy));
 }
