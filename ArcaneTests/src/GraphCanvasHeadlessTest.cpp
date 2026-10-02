@@ -1025,3 +1025,84 @@ TEST_CASE("Graph wire paint (T3-D3): DrawGraphWire strokes two different end col
 
     ed::DestroyEditor(ctx);
 }
+
+namespace
+{
+    // The midpoint of a wire's curve, in screen space: a press here lands ON
+    // the wire (FindLinkAt's hit radius is the wire's thickness plus
+    // c_LinkSelectThickness, imgui_node_editor.cpp:984-998, 2240-2246).
+    ImVec2 WireMidpoint(CanvasHarness& h, std::uint32_t linkIndex)
+    {
+        return h.InCanvas([linkIndex]
+        {
+            auto* editor = reinterpret_cast<ed::Detail::EditorContext*>(ed::GetCurrentEditor());
+            const ed::Detail::Link* link = editor->FindLink(ed::LinkId(linkIndex + 1));   // ed::LinkId(i + 1)
+            REQUIRE(link != nullptr);
+            const ImCubicBezierPoints c = link->GetCurve();
+            const ImVec2 mid = ImCubicBezier(c.P0, c.P1, c.P2, c.P3, 0.5f);
+            REQUIRE(editor->FindLinkAt(mid) == link);                // the press really is on the wire
+            return ed::CanvasToScreen(mid);
+        });
+    }
+    // A real mouse: the press, then 1 px a frame along the drag for 12 px --
+    // so the 1 px drag-lock threshold (SelectAction::Accept's
+    // IsMouseDragging(.., 1)) is crossed right beside the press point, not
+    // at a far-away first sample the way Marquee's two-step drag crosses it.
+    void SlowMarquee(CanvasHarness& h, ImVec2 from, ImVec2 to)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddMousePosEvent(from.x, from.y); h.Frame();
+        io.AddMouseButtonEvent(0, true); h.Frame();
+        const ImVec2 d(to.x - from.x, to.y - from.y);
+        const float len = std::sqrt(d.x * d.x + d.y * d.y);
+        for (int px = 1; px <= 12; ++px)
+        {
+            io.AddMousePosEvent(from.x + d.x / len * float(px), from.y + d.y / len * float(px));
+            h.Frame();
+        }
+        io.AddMousePosEvent((from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f); h.Frame();
+        io.AddMousePosEvent(to.x, to.y); h.Frame(2);
+        io.AddMouseButtonEvent(0, false); h.Frame(2);
+    }
+}
+
+// UE parity (SGraphPanel.cpp:1034-1123): a plain left press on a hovered wire
+// falls through to SNodePanel::OnMouseButtonDown -- the marquee -- unless the
+// schema allows relinking. A dense graph (the desk's logo_showcase) is crossed
+// by wires everywhere, so "empty" canvas is often within a wire's hit radius.
+TEST_CASE("Canvas marquee (T3-D3): a left-drag that starts ON a wire still draws the box and selects the nodes inside it",
+          "[editor][graphcanvas][nodepage]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));
+    const ImVec2 wire = WireMidpoint(h, 0);                      // Float 2 -> Output 1
+    const ImRect box = FloatsBox(h);
+    INFO("wire point " << wire.x << ", " << wire.y << "; box " << box.Min.x << ", " << box.Min.y << " -> " << box.Max.x << ", " << box.Max.y);
+    REQUIRE(wire.x > box.Max.x);                                 // right of both Floats, left of the Output
+    const ImVec2 to(box.Min.x, box.Max.y);
+    const bool slow = GENERATE(false, true);
+    INFO("slow (a real mouse: 1 px a frame off the press point first): " << slow);
+    if (slow)
+        SlowMarquee(h, wire, to);
+    else
+        Marquee(h, wire, to);
+    CHECK(Selected(h, 2));
+    CHECK(Selected(h, 3));
+    CHECK_FALSE(Selected(h, 1));
+    CHECK(h.doc->SelectionKey() == "material");
+}
+
+TEST_CASE("Canvas marquee (T3-D3): a SLOW left-drag from empty canvas (1 px a frame, as a real mouse) selects the nodes inside the box",
+          "[editor][graphcanvas][nodepage]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));
+    const ImRect box = FloatsBox(h);
+    SlowMarquee(h, box.Min, box.Max);
+    CHECK(Selected(h, 2));
+    CHECK(Selected(h, 3));
+    CHECK_FALSE(Selected(h, 1));
+    CHECK(h.doc->SelectionKey() == "material");
+}
