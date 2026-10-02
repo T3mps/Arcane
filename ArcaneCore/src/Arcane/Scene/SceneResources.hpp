@@ -80,11 +80,15 @@ namespace Arcane
     // Per-body previous-pose buffer, indexed by PhysicsWorld body SLOT index (the
     // same space DrawPhysicsDebug iterates). Populated by PhysicsSystem before each
     // world.Step(); read by DrawPhysicsDebug and RenderSubmissionSystem. Transient
-    // runtime state (Registry::Save excludes resources; the no-op Serialize satisfies
-    // Astra's HasSerializeMethod so the vector member does not hit the
-    // trivially-copyable path).
+    // runtime state: AstraTransientResource, so Registry::Save skips it and a
+    // restore never revives a stale history (IN-8; it replaced Runtime::
+    // RestoreRegistry's hand-strip). The no-op Serialize still satisfies Astra's
+    // HasSerializeMethod so the vector member does not hit the
+    // trivially-copyable path when the descriptor is built.
     struct PhysicsInterpBuffer
     {
+        static constexpr bool AstraTransientResource = true;
+
         std::vector<InterpPose> prev;
         // entity -> its slot at capture. Rebuilt by PhysicsSystem PASS 2.5 from
         // PhysicsResource::entityToBody in the same pass that fills `prev`, so the

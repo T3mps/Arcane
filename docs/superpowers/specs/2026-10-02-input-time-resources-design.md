@@ -124,6 +124,8 @@ namespace Arcane
 - **Server worlds have no `GameInput`.** Client-role systems never run there.
 - **Fixed-step edge semantics are unchanged.** `BeginFixedStep` resets the window. When one frame runs several fixed steps, a press is visible in the first of them only, exactly as today.
 
+Amendment (2026-10-02, IN-8 ruling): Time and GameInput are transient resources (Astra AstraTransientResource): never serialized, so a snapshot-seeded server world has no GameInput and a restore never revives stale values; Rebind republishes Time at once.
+
 ## 5. One system style: parameter systems with ordering
 
 ### 5.1 Astra (committed in the Astra repo FIRST, then `sync-astra.ps1`)

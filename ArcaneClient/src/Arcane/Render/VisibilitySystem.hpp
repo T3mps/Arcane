@@ -80,8 +80,8 @@ namespace Arcane
     {
         std::vector<VisibleSet> views;   // index 0 = the main view; shadow views / previews append (later arcs)
 
-        // Transient, never serialized (Registry::Save excludes resources
-        // entirely regardless); the no-op Serialize keeps this off Astra's
+        // Transient: Registry::Save writes it through the no-op Serialize, so a
+        // restore brings back an EMPTY set; the no-op Serialize keeps this off Astra's
         // reflected/trivially-copyable auto-serialization path, the same
         // reason BoundsSystemState (BoundsSystem.hpp) carries one.
         template<typename Archive> void Serialize(Archive& /*ar*/) {}

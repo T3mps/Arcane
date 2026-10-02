@@ -325,9 +325,9 @@ namespace Arcane
         // reconciled is authoring state (the paused reconcile zeroes a body's
         // velocity on every author move, by design), and Play must start the
         // way ArcaneRuntime boots -- bodies at their authored poses WITH their
-        // authored RigidBody2D::velocity, applied by PASS 2's mint. The same
-        // strip RestoreRegistry performs on Stop, so Play and Stop are
-        // symmetric. Lives here rather than in the editor because destroying
+        // authored RigidBody2D::velocity, applied by PASS 2's mint. A restore
+        // on Stop never carries the pair either (both are transient resources),
+        // so Play and Stop are symmetric. Lives here rather than in the editor because destroying
         // PhysicsResource destroys the PhysicsWorld, and ArcaneEditor.exe does
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();

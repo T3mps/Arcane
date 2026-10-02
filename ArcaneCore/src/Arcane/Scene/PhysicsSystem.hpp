@@ -101,7 +101,8 @@ namespace Arcane
     // -------------------------------------------------------------------------
     // Transient Registry resource: owns the PhysicsWorld and the entity<->handle
     // map maintained by PhysicsSystem. Not reflected; not serialized
-    // (Registry::Save excludes resources -- transient runtime state only).
+    // (AstraTransientResource: Registry::Save skips it, so no snapshot or
+    // restore ever carries a world-less copy -- transient runtime state only).
     //
     // WHY unique_ptr<PhysicsWorld>: PhysicsWorld has a deleted copy ctor and no
     // move ctor. Wrapping it in unique_ptr makes PhysicsResource
@@ -129,16 +130,21 @@ namespace Arcane
         // says so.
         std::uint32_t reconciled = 0;
 
-        // No-op serialization: PhysicsResource is a transient runtime resource.
-        // Astra's ResourceStorage auto-calls RegisterComponent<T>, which
-        // instantiates Serialize/Deserialize function pointers; these template
-        // methods satisfy HasSerializeMethod so the compiler picks the custom
-        // path instead of the trivially-copyable memcpy path (which would fail
-        // to compile here). Registry::Save excludes all resources entirely, so
-        // this code never executes at runtime. The no-op is the correct contract:
-        // body handles are re-established by PhysicsSystem on the first
-        // fixedUpdate after scene load, just as WorldTransform is re-derived by
+        // Transient: Registry::Save never writes it, so a restored registry
+        // has no PhysicsResource and the next EnsurePhysics mints a fresh one
+        // (this replaced Runtime::RestoreRegistry's hand-strip, IN-8). Body
+        // handles are re-established by PhysicsSystem on the first fixedUpdate
+        // after scene load, just as WorldTransform is re-derived by
         // TransformPropagationSystem.
+        static constexpr bool AstraTransientResource = true;
+
+        // No-op serialization, still required: Astra's ResourceStorage
+        // auto-calls RegisterComponent<T>, which instantiates the descriptor's
+        // Serialize/Deserialize function pointers whether or not they ever
+        // run; this template method satisfies HasSerializeMethod so the
+        // compiler picks the custom path instead of the trivially-copyable
+        // memcpy path (which would fail to compile here). Being transient, it
+        // never executes.
         template<typename Archive>
         void Serialize(Archive& /*ar*/) {}
     };

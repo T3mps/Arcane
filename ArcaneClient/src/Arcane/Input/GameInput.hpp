@@ -52,6 +52,13 @@ namespace Arcane
     class GameInput
     {
     public:
+        // TRANSIENT (IN-8 ruling, spec s4 amendment): never written into a
+        // registry snapshot. It holds a pointer to THIS process's client-side
+        // LocalInputUser, so a world seeded from a client snapshot (the
+        // EmbeddedServer) must not inherit it, and a restore must not revive a
+        // stale copy; ClientRuntime republishes it every frame and fixed step.
+        static constexpr bool AstraTransientResource = true;
+
         GameInput() = default;
         explicit GameInput(const LocalInputUser* user) noexcept : m_user(user) {}
 

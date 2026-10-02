@@ -161,8 +161,9 @@ namespace Arcane
         std::uint32_t runs = 0;
         std::uint32_t composed = 0;
 
-        // Transient derived state; Registry::Save excludes resources entirely.
-        // The no-op Serialize satisfies Astra's HasSerializeMethod so the
+        // Transient derived state. Registry::Save writes it through the no-op
+        // Serialize below, so a restore brings back an EMPTY cache -- the same
+        // as a fresh one. The no-op Serialize satisfies Astra's HasSerializeMethod so the
         // vector members never reach the trivially-copyable path (same reason
         // PhysicsInterpBuffer carries one).
         template<typename Archive> void Serialize(Archive& /*ar*/) {}

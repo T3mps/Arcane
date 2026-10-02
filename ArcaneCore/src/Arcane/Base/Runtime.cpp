@@ -325,8 +325,10 @@ namespace Arcane
             return save;
         }
 
-        // Astra's Save drops all resources; frame the serializable-resource
-        // section (SceneRoot + any host/test-registered types) alongside the blob.
+        // Astra's Save carries resources only as their binary Serialize (and
+        // skips the transient ones -- Time, GameInput, the physics pair); frame
+        // the engine's serializable-resource section (SceneRoot + any
+        // host/test-registered types) alongside the blob.
         std::vector<std::byte> section =
             Serialization::WriteResourceSection(*m_impl->registry, Serialization::SerializableResources());
         return Serialization::SnapshotResult::Ok(
@@ -355,18 +357,11 @@ namespace Arcane
         if (resources.IsErr())
             return false;
 
-        // PhysicsResource/PhysicsInterpBuffer are transient, host-owned resources
-        // that must never survive a save/load -- re-established fresh by the next
-        // EnsurePhysics, same as WorldTransform is re-derived by propagation. Astra's
-        // Registry::Load (format v2) now serializes EVERY resource whose type offers
-        // a Serialize(Archive&) method -- both types provide a no-op one only to
-        // satisfy that concept (their own doc comments explain why) -- so the loaded
-        // registry carries a DEFAULT-CONSTRUCTED, world-less zombie of each unless
-        // stripped here. EnsurePhysics's own `res && res->world` guard already treats
-        // that zombie as absent, so this is belt-and-suspenders for any OTHER caller
-        // that queries HasResource<PhysicsResource>() directly.
-        loaded->RemoveResource<PhysicsResource>();
-        loaded->RemoveResource<PhysicsInterpBuffer>();
+        // No strip needed: PhysicsResource/PhysicsInterpBuffer (like Time and
+        // GameInput) are AstraTransientResource, so the blob never carried them
+        // and the loaded registry has none -- the next EnsurePhysics mints both
+        // fresh, the way propagation re-derives WorldTransform. (They used to be
+        // stripped by hand here, IN-8.)
 
         m_impl->registry = std::move(loaded);
         // Rebind the EXISTING loop to the swapped registry rather than recreating it:
@@ -469,8 +464,8 @@ namespace Arcane
 
     void Runtime::ResetPhysics()
     {
-        // The two-resource strip RestoreRegistry performs, on the LIVE registry:
-        // the next EnsurePhysics sees neither and mints both. PASS 2 then
+        // Drop the transient physics pair on the LIVE registry (a restore never
+        // carries it either): the next EnsurePhysics sees neither and mints both. PASS 2 then
         // re-mints every body from its components -- and PASS 1/2 clear any
         // PhysicsBodyRef the fresh world does not track, so nothing here can
         // leave a handle behind for the fresh world to reissue to someone else.

@@ -222,9 +222,12 @@ TEST_CASE("PlaySession Play/Stop are idempotent across repeated calls", "[editor
 // WHICH PATH RAN IS MADE DECIDABLE, and that took one extra fixture line
 // (final-review fix wave, minor 9 -- the comment here used to claim a
 // discrimination its assertions did not establish: restoring `ticks` to 0 is what
-// BOTH paths do, so it named nothing). The separator is SceneRoot: it is a
-// registry RESOURCE, and resources are not in a registry snapshot, so
-// Runtime::RestoreRegistry alone comes back with it GONE. ARCANE_GAME_MODULE's
+// BOTH paths do, so it named nothing). The separator is meant to be SceneRoot,
+// a registry RESOURCE. CAUTION (IN-8): resources ARE in a registry snapshot --
+// Astra's resource block carries every non-transient one and SceneRoot also
+// rides the engine's serializable-resource section -- so Runtime::RestoreRegistry
+// alone brings it back too, and this separator does not decide the path on its
+// own. ARCANE_GAME_MODULE's
 // LoadState re-sets it from an id its SaveState wrote beside the blob
 // (GameModule.hpp). So a SceneRoot that is still there after Stop is a statement
 // that the MODULE's LoadState ran -- exactly the property this case exists for,
@@ -272,8 +275,8 @@ TEST_CASE("PlaySession routes Play/Stop through the hosted module's SaveState/Lo
     CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(runtime.Loop().IsPaused());
     CHECK(readPulse() == 0);                    // the play-time mutation is gone
-    // THE PATH: SceneRoot is back, so it was the MODULE's LoadState that restored,
-    // not Runtime::RestoreRegistry (whose blob carries no resources at all).
+    // SceneRoot is back (the module's LoadState re-sets it; see the CAUTION in
+    // the comment above: a plain RestoreRegistry would bring it back as well).
     const Arcane::SceneRoot* sr = runtime.Registry().GetResource<Arcane::SceneRoot>();
     REQUIRE(sr != nullptr);
     CHECK(sr->entity == root);

@@ -149,7 +149,7 @@ namespace Arcane
         // pressed and never came back (Play snapshotted the fallen poses). Pinned
         // by RuntimeTest ("keeps the RunLoop object stable") and
         // EditorPlayModeTest ("opening a scene in Edit mode does not simulate it").
-        void Rebind(Astra::Registry& registry) noexcept
+        void Rebind(Astra::Registry& registry)
         {
             m_registry    = &registry;
             m_accumulator = 0.0;
@@ -157,13 +157,17 @@ namespace Arcane
             m_timeScale   = 1.0;
             m_singleStep  = false;
             // The sim clock belongs to the registry's run too (input-seam spec s3):
-            // Play starts at step 0. The next Advance republishes Time into the
-            // new registry.
+            // Play starts at step 0.
             m_fixedStep       = 0;
             m_elapsed         = 0.0;
             m_elapsedBase     = 0.0;
             m_elapsedBaseStep = 0;
             m_elapsedDt       = 0.0;
+            // Republish at once (IN-8 ruling): Time is transient, so the swapped-in
+            // registry has none, and nothing between the swap and the next
+            // Advance may see it absent or stale. Step 0, elapsed 0, dt 0,
+            // `paused` as kept above.
+            PublishTime(/*realDt*/ 0.0, /*inFixedStep*/ false);
         }
 
     private:

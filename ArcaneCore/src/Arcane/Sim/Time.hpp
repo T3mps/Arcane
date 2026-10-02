@@ -10,6 +10,10 @@
 //
 // Code outside a system reads Registry().GetResource<Arcane::Time>().
 //
+// TRANSIENT (IN-8 ruling, spec s4 amendment): never written into a registry
+// snapshot, so a restore never revives a stale clock. RunLoop::Rebind
+// republishes it (step 0) the moment a registry is swapped in.
+//
 // Plain data with no Core includes: RunLoop.hpp sits on the plugin-facing
 // include chain, which stays Core-free (RunLoop.hpp's own note).
 
@@ -19,6 +23,8 @@ namespace Arcane
 {
     struct Time
     {
+        static constexpr bool AstraTransientResource = true;
+
         double        realDt      = 0.0;   // this frame's wall-clock dt, unscaled
         double        dt          = 0.0;   // realDt * timeScale; 0 while paused
         double        fixedDt     = 0.0;   // 1 / fixedHz, the canonical fixed step
