@@ -148,7 +148,12 @@ namespace Arcane::Editor
         // ---- primitives the commands replay (one code path per disk effect) ----
         // nullopt = applied; a string = refused (nothing touched) or failed (rolled back).
         [[nodiscard]] std::optional<std::string> PreflightMove(std::span<const AssetMove> moves, Side side) const;
-        [[nodiscard]] std::optional<std::string> ApplyMove(std::span<const AssetMove> moves, Side side);
+        // `dirs` (in/out, optional): on entry the folders the OTHER side created. A
+        // success removes those still empty (deepest first) and hands back the folders
+        // THIS apply created; a failure removes its own and leaves `dirs` untouched.
+        // A folder that existed before, or that gained anything since, is never removed.
+        [[nodiscard]] std::optional<std::string> ApplyMove(std::span<const AssetMove> moves, Side side,
+                                                           std::vector<std::filesystem::path>* dirs = nullptr);
         // s7.4 expiry: true when an asset's id-bearing file on `side`'s source end no
         // longer holds its guid (deleted, or re-identified outside the editor). One
         // PeekId per asset: a stat plus the .meta/JSON header, never the binary.
@@ -204,12 +209,15 @@ namespace Arcane::Editor
     class AssetMoveCommand final : public AssetFileCommand   // Rename, Move
     {
     public:
-        AssetMoveCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label, std::vector<AssetMove> moves)
-            : AssetFileCommand(std::move(exec), std::move(label)), m_moves(std::move(moves)) {}
+        // `createdDirs`: the folders the forward apply created (the undo removes them).
+        AssetMoveCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label, std::vector<AssetMove> moves,
+                         std::vector<std::filesystem::path> createdDirs = {})
+            : AssetFileCommand(std::move(exec), std::move(label)), m_moves(std::move(moves)), m_dirs(std::move(createdDirs)) {}
     protected:
         std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) override
         {
-            return exec.ApplyMove(m_moves, undo ? AssetFileOpExecutor::Side::Backward : AssetFileOpExecutor::Side::Forward);
+            return exec.ApplyMove(m_moves, undo ? AssetFileOpExecutor::Side::Backward : AssetFileOpExecutor::Side::Forward,
+                                  &m_dirs);
         }
         bool SourceLost(const AssetFileOpExecutor& exec, bool undo) const override
         {
@@ -217,5 +225,6 @@ namespace Arcane::Editor
         }
     private:
         std::vector<AssetMove> m_moves;
+        std::vector<std::filesystem::path> m_dirs;   // the folders the side that ran last created
     };
 }

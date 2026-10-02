@@ -490,6 +490,59 @@ TEST_CASE("AssetFileOps: a moved file deleted or re-identified outside the edito
     CHECK(host.errors.empty());   // expiry is silent; only a refused side reports
 }
 
+TEST_CASE("AssetFileOps: a Move removes only the folders it created, on rollback and on undo", "[editor][assetops]")
+{
+    AssetOpsWorld w("exec_dirs");
+    const auto tex = w.Write("textures/uv.png", "png-bytes");
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    AssetFileOpExecutor exec(host, stack, w.content);
+    const fs::path made = w.content / "new" / "deep";   // Snapshot() lists files only: assert folders directly
+
+    SECTION("a move into a new folder, then undo, leaves no folder; redo makes it again")
+    {
+        REQUIRE(exec.Execute(w.Plan(AssetOpKind::Move, { tex }, {}, "new/deep"), stack).ok);
+        CHECK(fs::exists(made / "uv.png"));
+        stack.Undo();
+        CHECK(fs::exists(w.content / "textures" / "uv.png"));
+        CHECK_FALSE(fs::exists(w.content / "new"));   // both levels it created, deepest first
+        stack.Redo();
+        CHECK(fs::exists(made / "uv.png.meta"));
+        stack.Undo();
+        CHECK_FALSE(fs::exists(w.content / "new"));
+        CHECK(fs::is_directory(w.content / "textures"));   // the source folder existed before: kept throughout
+    }
+    SECTION("a failed move rolls the folder back with the files")
+    {
+        int n = 0;
+        exec.SetRenameForTest([&](const fs::path& from, const fs::path& to)
+        {
+            std::error_code ec;
+            if (++n == 2) return std::make_error_code(std::errc::permission_denied);   // the .meta
+            fs::rename(from, to, ec);
+            return ec;
+        });
+        CHECK_FALSE(exec.Execute(w.Plan(AssetOpKind::Move, { tex }, {}, "new/deep"), stack).ok);
+        CHECK(fs::exists(w.content / "textures" / "uv.png"));
+        CHECK_FALSE(fs::exists(w.content / "new"));
+    }
+    SECTION("a created folder that gained another file between apply and undo is kept")
+    {
+        REQUIRE(exec.Execute(w.Plan(AssetOpKind::Move, { tex }, {}, "new/deep"), stack).ok);
+        w.WriteRaw("new/deep/notes.txt", "mine");
+        stack.Undo();
+        CHECK(fs::exists(w.content / "textures" / "uv.png"));
+        CHECK(Arcane::Test::Slurp(made / "notes.txt") == "mine");
+    }
+    SECTION("a folder that existed before the move is never removed")
+    {
+        fs::create_directories(made);
+        REQUIRE(exec.Execute(w.Plan(AssetOpKind::Move, { tex }, {}, "new/deep"), stack).ok);
+        stack.Undo();
+        CHECK(fs::is_directory(made));
+    }
+}
+
 TEST_CASE("AssetFileOps: a step outliving its executor is inert", "[editor][assetops]")
 {
     AssetOpsWorld w("exec_dead");

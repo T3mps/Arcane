@@ -34,6 +34,29 @@ namespace Arcane::Editor
             return k == AssetKind::Texture || k == AssetKind::Audio || k == AssetKind::Font || k == AssetKind::Model;
         }
         fs::path WithMeta(fs::path p) { p += ".meta"; return p; }
+        // The ancestors of `dir` that do not exist yet, shallowest first.
+        std::vector<fs::path> MissingDirs(const fs::path& dir)
+        {
+            std::vector<fs::path> missing;
+            for (fs::path d = dir; d.has_relative_path(); d = d.parent_path())
+            {
+                std::error_code ec;
+                if (fs::exists(d, ec) || ec) break;   // a folder that cannot be stat'ed is never claimed
+                missing.push_back(d);
+            }
+            std::reverse(missing.begin(), missing.end());
+            return missing;
+        }
+        // Remove folders a move created, deepest first; one that gained anything stays.
+        void PruneCreatedDirs(std::span<const fs::path> created)
+        {
+            for (std::size_t i = created.size(); i-- > 0;)
+            {
+                std::error_code ec;
+                if (fs::is_directory(created[i], ec) && fs::is_empty(created[i], ec) && !ec)
+                    fs::remove(created[i], ec);
+            }
+        }
         // NTFS compares names case-insensitively (as fs::exists does), so the batch's own
         // bookkeeping must too: the same ASCII fold IsCaseOnlyRename uses.
         std::string FoldKey(const fs::path& p) { return Lower(p.lexically_normal().generic_string()); }
@@ -325,7 +348,8 @@ namespace Arcane::Editor
         return std::nullopt;   // a failed step back STOPS here: nothing is deleted to "clean up"
     }
 
-    std::optional<std::string> AssetFileOpExecutor::ApplyMove(std::span<const AssetMove> moves, Side side)
+    std::optional<std::string> AssetFileOpExecutor::ApplyMove(std::span<const AssetMove> moves, Side side,
+                                                              std::vector<fs::path>* dirs)
     {
         if (auto refusal = PreflightMove(moves, side))
             return refusal;
@@ -335,16 +359,21 @@ namespace Arcane::Editor
         std::vector<FileMove> steps;
         for (const AssetMove& m : moves)
             for (const FileMove& f : m.files) steps.push_back({ src(f), dst(f) });
+        std::vector<fs::path> created;   // the folders this apply made, shallow before deep
         for (std::size_t i = 0; i < steps.size(); ++i)
         {
             std::error_code ec;
+            const std::vector<fs::path> missing = MissingDirs(steps[i].to.parent_path());
             fs::create_directories(steps[i].to.parent_path(), ec);
+            for (const fs::path& d : missing)   // a partial failure still claims what it made
+                if (std::error_code e; fs::is_directory(d, e)) created.push_back(d);
             if (!ec) ec = m_rename(steps[i].from, steps[i].to);
             if (ec)
             {
                 std::string error = Display(steps[i].from) + " could not be moved to " + Display(steps[i].to) +
                                     " (" + ec.message() + ").";
                 if (auto stuck = RollBack(std::span(steps).first(i))) error += " " + *stuck;
+                PruneCreatedDirs(created);
                 return error;
             }
         }
@@ -354,10 +383,20 @@ namespace Arcane::Editor
             if (r == RebindResult::Ok) continue;
             std::string error = "The asset registry refused " + Display(dst(moves[i].files[0])) + " (" +
                                 std::string(RebindName(r)) + ").";
-            if (auto stuck = RollBack(steps)) return error + " " + *stuck;   // files first: Rebind reads the id ON DISK
+            if (auto stuck = RollBack(steps))   // files first: Rebind reads the id ON DISK
+            {
+                PruneCreatedDirs(created);
+                return error + " " + *stuck;
+            }
             for (std::size_t j = 0; j < i; ++j)
                 (void)m_host.Rebind(moves[j].guid, src(moves[j].files[0]));
+            PruneCreatedDirs(created);
             return error;
+        }
+        if (dirs)
+        {
+            PruneCreatedDirs(*dirs);   // the other side's folders: their files just left
+            *dirs = std::move(created);
         }
         std::vector<fs::path> touched;
         for (const AssetMove& m : moves)
@@ -386,9 +425,12 @@ namespace Arcane::Editor
         {
             case AssetOpKind::Rename:
             case AssetOpKind::Move:
-                failure = ApplyMove(plan.moves, Side::Forward);
-                if (!failure) step = std::make_unique<AssetMoveCommand>(Anchor(), plan.label, plan.moves);
+            {
+                std::vector<fs::path> dirs;
+                failure = ApplyMove(plan.moves, Side::Forward, &dirs);
+                if (!failure) step = std::make_unique<AssetMoveCommand>(Anchor(), plan.label, plan.moves, std::move(dirs));
                 break;
+            }
             default:   // NewFolder (T5-A11), Delete (T5-A13) and Duplicate (s7.7) replace this arm
                 failure = "This asset operation is not available yet.";
                 break;
