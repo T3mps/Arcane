@@ -211,6 +211,7 @@ namespace Arcane::Editor
                     ImGui::SetTooltip("Stop play mode to save the scene");
                 ImGui::Separator();
                 if (ImGui::MenuItem("Open Project")) requests.openProject = true;
+                if (ImGui::MenuItem("Open Folder...")) requests.openProjectFolder = true;
                 // Open Recent Project: the Hub's shared list, already filtered
                 // to what THIS editor's ABI can open (RecentProjects.hpp).
                 // Greyed when there is nothing at all to show. The picked path

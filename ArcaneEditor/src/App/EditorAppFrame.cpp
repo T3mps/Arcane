@@ -14,6 +14,7 @@
 #include "App/EditorApp.hpp"
 #include "Panels/EditorPanels.hpp"
 #include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
+#include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
@@ -49,8 +50,11 @@
 
 #include <glm/glm.hpp>
 
+#include "Widgets/EditorTheme.hpp"   // Theme::kTextDim (the start page's dim path / time)
+#include "Widgets/IconsLucide.h"   // the start page's Open Project... / Open Folder... icons
 #include <imgui.h>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>       // std::isfinite (the camera-rect overlay's projected corners)
@@ -2580,6 +2584,13 @@ namespace Arcane::Editor
             if (const auto guid = Arcane::Guid::FromString(m_config.openAsset))
                 (void)OpenAssetDocument(*guid);
         }
+        // Start page (spec 2026-09-30 s8.4): drawn after this frame's menu
+        // requests were consumed, so its own requests take the one launch site.
+        {
+            Arcane::Editor::MenuRequests startReq;
+            DrawStartPage(startReq);
+            LaunchProjectOpenRequests(startReq);
+        }
         // New documents tab into the Viewport's node (captured last frame).
         m_documents.DrawAll(m_viewportDockId);
         // Input-editor spec s2.6: a saved input document pushed a republish
@@ -2633,26 +2644,7 @@ namespace Arcane::Editor
             if (primary && !*primary) *primary = true;       // hidden follower: bring it back, no new instance
             else (void)m_inspectorHost.AddInstance();        // visible: another instance with its own pin (-1 = pool full, no-op)
         }
-        // Bare interactive launch: raise the picker as if the user had clicked
-        // File -> Open Project, once. Routed through menuReq (rather than
-        // calling the dialog directly) so there is exactly ONE launch site and
-        // the cold-start path cannot drift from the menu path.
-        if (m_raiseOpenProjectOnStart)
-        {
-            m_raiseOpenProjectOnStart = false;
-            menuReq.openProject       = true;
-        }
-        if (menuReq.openProject)
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
-                new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() },
-                "Arcane Project", "arcproj");
-        // Open Recent lands in the SAME slot the file dialog's callback fills,
-        // so it flows through ConsumeProjectDialogResult and inherits every
-        // guard the menu path already has -- the unsaved-scene confirm, the
-        // rival-editor lock, the ABI gate, the failure modal. A second open
-        // path would have to re-earn all of them.
-        if (!menuReq.openRecentPath.empty())
-            m_dialogs.projectOpen.Stash(m_dialogs.projectOpen.Arm(), menuReq.openRecentPath);
+        LaunchProjectOpenRequests(menuReq);
         // A picked recent scene lands in the SAME slot the Open Scene dialog's
         // callback fills, so it flows through ConsumeSceneDialogResults and
         // inherits the unsaved-scene guard -- a second open path would have to
@@ -2862,6 +2854,91 @@ namespace Arcane::Editor
             DoSaveScene(m_scene.Path());
         if (menuReq.saveSceneAs || (menuReq.saveScene && m_scene.Path().empty()))
             ShowSceneSaveDialog();
+    }
+
+    void EditorApp::LaunchProjectOpenRequests(const Arcane::Editor::MenuRequests& req)
+    {
+        if (req.openProject)
+        {
+            // Start beside the most recent project; null = the OS default.
+            const std::string start = Arcane::Editor::DialogStartDir(m_recents.projects);
+            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() },
+                "Arcane Project", "arcproj", start.empty() ? nullptr : start.c_str());
+        }
+        // Same slot, same thunk: FolderPickedCallback and FilePickedCallback share
+        // a signature (Window.hpp:93, 103).
+        if (req.openProjectFolder)
+            m_gpu->Win().ShowOpenFolderDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() });
+        // Open Recent lands in the SAME slot the dialogs' callback fills, so it
+        // flows through ConsumeProjectDialogResult and inherits every guard (the
+        // unsaved-scene confirm, the rival-editor lock, the ABI gate, the failure modal).
+        if (!req.openRecentPath.empty())
+            m_dialogs.projectOpen.Stash(m_dialogs.projectOpen.Arm(), req.openRecentPath);
+    }
+
+    void EditorApp::DrawStartPage(Arcane::Editor::MenuRequests& req)
+    {
+        // Derived every frame, never latched: a switch that fails after
+        // teardown brings the page back; a successful one hides it.
+        const bool visible = m_runtime->CurrentProject() == nullptr;
+        const bool appearing = visible && !m_startPageWasVisible;
+        m_startPageWasVisible = visible;
+        if (!visible) return;
+        if (appearing)
+        {
+            m_recents.RefreshAll(nullptr);   // read-only: the page never writes the shared recents
+            ImGui::SetNextWindowFocus();
+        }
+        if (m_viewportDockId != 0)
+            ImGui::SetNextWindowDockID(static_cast<ImGuiID>(m_viewportDockId), ImGuiCond_Always);
+        if (ImGui::Begin("Start###startpage", nullptr, ImGuiWindowFlags_NoSavedSettings))   // no Close X (9.27 #14)
+        {
+            const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+            const Arcane::Editor::StartPageModel page = Arcane::Editor::BuildStartPage(m_recents.projects, now);
+            const float avail = ImGui::GetContentRegionAvail().x;
+            const float width = std::min(640.0f, avail);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - width) * 0.5f));
+            ImGui::BeginChild("##startcol", ImVec2(width, 0.0f));
+            // ---- section 1: heading + actions ---------------------------------
+            ImGui::Dummy(ImVec2(0.0f, 24.0f));
+            ImGui::TextUnformatted("No project open");
+            ImGui::Spacing();
+            if (ImGui::Button(ICON_LC_FOLDER_OPEN " Open Project...")) req.openProject = true;
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_LC_FOLDER " Open Folder...")) req.openProjectFolder = true;
+            ImGui::Dummy(ImVec2(0.0f, 16.0f));
+            // ---- (crash-window plan 3's "Recover" section slots in HERE) ------
+            // ---- section 2: recent projects -------------------------------------
+            ImGui::TextDisabled("Recent projects");
+            ImGui::Separator();
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float lineH = ImGui::GetTextLineHeight();
+            const float rowH = lineH * 2.0f + style.FramePadding.y * 3.0f;
+            for (std::size_t i = 0; i < page.rows.size(); ++i)
+            {
+                const Arcane::Editor::StartPageRow& row = page.rows[i];
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Selectable("##recent", false, ImGuiSelectableFlags_None, ImVec2(0.0f, rowH)))
+                    req.openRecentPath = row.path;   // the Open Recent slot
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) ImGui::SetTooltip("%s", row.path.c_str());
+                const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImU32 dim = ImGui::ColorConvertFloat4ToU32(Theme::kTextDim);
+                dl->AddText(ImVec2(lo.x + style.FramePadding.x, lo.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), row.name.c_str());
+                dl->AddText(ImVec2(hi.x - style.FramePadding.x - ImGui::CalcTextSize(row.opened.c_str()).x, lo.y + style.FramePadding.y), dim, row.opened.c_str());
+                dl->PushClipRect(lo, hi, true);
+                dl->AddText(ImVec2(lo.x + style.FramePadding.x, lo.y + style.FramePadding.y * 2.0f + lineH), dim, row.path.c_str());
+                dl->PopClipRect();
+                ImGui::PopID();
+            }
+            if (!page.hiddenLine.empty()) ImGui::TextDisabled("%s", page.hiddenLine.c_str());
+            else if (page.rows.empty())   ImGui::TextDisabled("No recent projects");
+            ImGui::EndChild();
+        }
+        ImGui::End();
     }
 
     void EditorApp::ConsumeAssetPanelActions(const Arcane::Editor::AssetPanelActions& panelActions,

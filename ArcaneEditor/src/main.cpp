@@ -546,13 +546,12 @@ int main(int argc, char** argv)
     // "data/-next-to-exe" session with no asset registry, no mounts and no
     // identity -- a half-configured editor nothing downstream expects.
     //
-    // An INTERACTIVE bare launch does NOT refuse. It boots and immediately raises
-    // the shipped File -> Open Project dialog (EditorApp::m_raiseOpenProjectOnStart).
-    // Exiting here removed the only cold-start path into that dialog, even though
-    // the project-less state is explicitly supported everywhere else -- see
-    // SwitchProject's failure path: "editor left with no plugin; user can Open
-    // another project". The Arcane Hub is the normal entry point and always passes
-    // --project; this is the fallback for anyone who runs the exe directly.
+    // An INTERACTIVE bare launch does NOT refuse. It boots project-less and the
+    // editor's start page (EditorApp::DrawStartPage, spec 2026-09-30 s8.4) offers
+    // the recent projects, Open Project... and Open Folder... -- derived from
+    // project state every frame, so a failed open brings it back. The editor
+    // never launches or mentions the Hub; this is the path for anyone who runs
+    // the exe directly.
     //
     // Both flags remain bypasses ON PURPOSE: CI and the scripted
     // `--project <p> --frames N` harness depend on --project, and --plugin is the
@@ -644,8 +643,6 @@ int main(int argc, char** argv)
     int rc = 0;
     {
         Arcane::Editor::EditorApp app(*parsed.config, splash ? &*splash : nullptr);
-        if (noProject)
-            app.RaiseOpenProjectOnStart();
         rc = app.Run();
         Arcane::Diagnostics::SetPhase("editor teardown");
         Arcane::Diagnostics::Heartbeat();

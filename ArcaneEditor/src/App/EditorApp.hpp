@@ -116,11 +116,6 @@ namespace Arcane::Editor
         explicit EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash = nullptr);
         int Run();   // BootSequence -> MainLoop() -> Shutdown(); process exit code
 
-        // Raise File -> Open Project on the FIRST frame. Set by main() for a bare
-        // interactive launch (no --project, no --plugin): the editor supports the
-        // project-less state, and this is its cold-start path into the picker.
-        void RaiseOpenProjectOnStart() noexcept { m_raiseOpenProjectOnStart = true; }
-
         // ---- The clean-exit hook (crash window plan 1, task 9; spec S5.7) ---
         // "Begin your ordinary exit now", for the paths the OS gives seconds
         // rather than a frame: Ctrl-C, the console close box, logoff and
@@ -269,8 +264,8 @@ namespace Arcane::Editor
             // so the click-pick further down this same frame can also honor it.
             bool gameUiClaims = false;
             // File-menu scene shortcuts, raised in the input phase and folded
-            // into this frame's MenuRequests at the menu-request site (the same shape
-            // m_raiseOpenProjectOnStart uses) so the keybind and the menu item cannot
+            // into this frame's MenuRequests at the menu-request site (one launch
+            // site per verb) so the keybind and the menu item cannot
             // drift apart. Same shape for the Edit-menu clipboard shortcuts
             // (Ctrl+X/C/V/D) below.
             bool scNewScene = false, scOpenScene = false, scSaveScene = false;
@@ -332,6 +327,12 @@ namespace Arcane::Editor
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
                                  const FrameState& fs, LoopState& ls);
+        // Start page (spec 2026-09-30 s8.4): drawn every frame no project is
+        // open, tabbed into the Viewport's node. Its buttons and rows fill `req`.
+        void DrawStartPage(Arcane::Editor::MenuRequests& req);
+        // THE launch site for Open Project / Open Folder / Open Recent, shared by
+        // the File menu (ConsumeMenuRequests) and the start page (drawn after it).
+        void LaunchProjectOpenRequests(const Arcane::Editor::MenuRequests& req);
         // Asset-manager redesign, Plan 1 Task 9: takes AssetPanelActions
         // (the panels' own action-report contract); the old AssetBrowserActions
         // overload (superseded when AssetBrowser.* was retired, Task 15) is
@@ -2307,10 +2308,9 @@ namespace Arcane::Editor
         // distinct request, not once per frame.
         std::unordered_map<std::string, std::string> m_fileOpRefusalMemo; std::string m_fileOpRefusalMemoGate;   // dry-run memo
 
-        // One-shot latch for RaiseOpenProjectOnStart: consumed on the first frame
-        // that draws the menu bar, so the picker appears over a live editor window
-        // rather than before one exists.
-        bool m_raiseOpenProjectOnStart = false;
+        // DrawStartPage's rising edge (visible = no project, derived every frame,
+        // never latched): refresh recents and focus the page once per appearance.
+        bool m_startPageWasVisible = false;
 
         // Set by SwitchProject when its BootSequence reports the window closed
         // mid-switch (BootResult::quitRequested), instead of treating that

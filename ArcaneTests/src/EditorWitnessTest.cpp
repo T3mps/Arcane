@@ -635,3 +635,23 @@ TEST_CASE("E8: a mesh opened by --open-asset during boot reaches a ready preview
     CHECK(docs[0].at("compile") == "ok");
     CHECK(docs[0].at("preview") == "ready");
 }
+
+// E10 (node-page phase s8.4, R10): a SCRIPTED bare launch still refuses before any
+// window. The start page derives from project state, never CLI state, so this
+// refusal must stay ahead of EditorApp construction (main.cpp:559-566) or a
+// scripted run would open a window and hang CI. Not [gpu]: it returns before any
+// device exists, so `~[gpu]` runs it.
+TEST_CASE("E10: a scripted launch with no project exits 2 and names the reason on stderr", "[witness][editor]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e10-no-project");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.args = { "--headless", "--frames", "1" };
+    inv.hardCapMs = 30000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(run.timedOut);
+    CHECK(run.exitCode == 2);
+    CHECK_FALSE(run.reportFound);
+    CHECK(ReadAllBytes(run.stderrPath).find("no project selected") != std::string::npos);
+}
