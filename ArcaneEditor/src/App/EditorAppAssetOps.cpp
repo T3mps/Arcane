@@ -162,6 +162,13 @@ namespace Arcane::Editor
             if (m_viewportTargets.graph) { m_viewportTargets.graph->InvalidateContentTexture(g); m_viewportTargets.graph->InvalidateMeshAlbedoSlot(g); }
             if (Arcane::NriGraphContext* chrome = ChromeGraph()) chrome->InvalidateContentTexture(g);
         }
+        // s7.12 "sprites deriving from a removed texture": the replayed steps carry no
+        // plan.derived, so the texture's inbound sprites drop here (forward, redo and
+        // undo alike). The index still holds the edges: its rebuild runs next frame.
+        if (k == K::Texture && m_resolver)
+            if (const auto* n = m_assetModel.RefIndex().Find(g))
+                for (const Arcane::Guid& r : n->inbound)
+                    if (const auto* e = m_assetModel.Find(r); e && e->kind == K::Sprite) m_resolver->InvalidateSprite(r);
         if (k == K::Model)                               // the companion .arcmesh(es) importing it
             if (const auto* n = m_assetModel.RefIndex().Find(g))
                 for (const Arcane::Guid& r : n->inbound)

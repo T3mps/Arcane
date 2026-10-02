@@ -165,6 +165,23 @@ namespace Arcane::Editor
         virtual void ReportError(std::string title, std::string message) = 0;                             // ModalErrorQueue + ARC_ERROR
     };
 
+    // s7.12's per-operation follow-up: the guid invalidation, EvictPath, model/diagnostic
+    // refresh and activity row that close every Rename/Move/Delete/Duplicate side. The
+    // executor's primitives call it as their last step, so it is the only caller of
+    // NoteMoved/Invalidate/EvictPaths/AssetsChanged/Activity for those four verbs. New
+    // Folder has no follow-up (s7.12): its two primitives call AssetsChanged({}, {})
+    // themselves so the model re-walks its empty folders.
+    //  - Rename/Move (both sides): NoteMoved, evict every from AND to, a Moved row.
+    //  - Delete forward/redo, Duplicate undo: invalidate the removed guids (plus each
+    //    non-cascaded derived sprite in plan.derived), evict, AssetsChanged(removed),
+    //    a Deleted row ("permanently; ..." when `recycled` lists a file as nuked).
+    //  - Delete undo (RestoreAssets, so also a duplicate's redo): invalidate + evict the
+    //    restored files, AssetsChanged(added), a Created row.
+    //  - Duplicate forward: evict the copies, AssetsChanged(newGuids), a Created row.
+    enum class AssetOpSide : std::uint8_t { Forward, Undo, Redo };
+    void RunAssetOpFollowUp(AssetFileOpHost& host, const AssetOpPlan& plan, AssetOpSide side,
+                            const std::filesystem::path& contentDir, const OsShell::RecycleResult* recycled = nullptr);
+
     struct ExecResult { bool ok = false; std::string error; };   // !ok => nothing pushed
 
     struct FilePayload

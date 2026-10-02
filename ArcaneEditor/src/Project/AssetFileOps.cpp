@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -363,6 +364,85 @@ namespace Arcane::Editor
         return std::nullopt;
     }
 
+    void RunAssetOpFollowUp(AssetFileOpHost& host, const AssetOpPlan& plan, AssetOpSide side, const fs::path& contentDir,
+                            const OsShell::RecycleResult* recycled)
+    {
+        if (plan.kind == AssetOpKind::NewFolder) return;   // s7.12: no follow-up (the folder primitives refresh the model)
+        const auto now = std::chrono::steady_clock::now(); const bool fwd = side != AssetOpSide::Undo;
+        std::vector<Arcane::Guid> guids; std::vector<fs::path> paths;
+        if (plan.kind == AssetOpKind::Rename || plan.kind == AssetOpKind::Move)   // bytes identical: no guid invalidation
+        {
+            for (const AssetMove& m : plan.moves)
+            {
+                const FileMove& id = m.files.front(); host.NoteMoved(m.guid, fwd ? id.from : id.to, fwd ? id.to : id.from);
+                for (const FileMove& f : m.files) { paths.push_back(f.from); paths.push_back(f.to); }
+            }
+            host.EvictPaths(paths); host.AssetsChanged({}, {});
+            for (const AssetMove& m : plan.moves)
+            {
+                const fs::path& was = fwd ? m.files.front().from : m.files.front().to;
+                const fs::path& is  = fwd ? m.files.front().to : m.files.front().from;
+                std::error_code ec; const fs::path rel = fs::relative(was, contentDir, ec);
+                host.Activity({ now, m.guid, is.filename().string(), AssetActivityKind::Moved,
+                                "from " + (ec ? was.generic_string() : "game://" + rel.generic_string()) });
+            }
+            return;
+        }
+        // Delete fwd/redo and Duplicate undo REMOVE; Delete undo RESTORES; Duplicate fwd COPIES (fresh guids);
+        // Duplicate redo restores the copy (the executor replays it as a Delete-shaped undo).
+        const bool dup = plan.kind == AssetOpKind::Duplicate, removes = dup ? !fwd : fwd, copies = dup && side == AssetOpSide::Forward;
+        for (std::size_t i = 0; i < plan.moves.size(); ++i)
+        {
+            guids.push_back(dup ? plan.newGuids[i] : plan.moves[i].guid);
+            for (const FileMove& f : plan.moves[i].files) paths.push_back(dup ? f.to : f.from);
+        }
+        if (!copies)
+        {
+            for (std::size_t i = 0; i < plan.moves.size(); ++i) host.Invalidate(guids[i], plan.moves[i].kind);
+            if (removes)
+                for (const DerivedChild& d : plan.derived)
+                    if (!d.cascades) host.Invalidate(d.child, AssetKind::Sprite);   // still drawing a removed texture
+        }
+        host.EvictPaths(paths);
+        if (removes) host.AssetsChanged(guids, {}); else host.AssetsChanged({}, guids);
+        for (std::size_t i = 0; i < plan.moves.size(); ++i)
+        {
+            const AssetMove& m = plan.moves[i];
+            const std::string name = (dup ? m.files.front().to : m.files.front().from).filename().string();
+            if (!removes)
+            {
+                host.Activity({ now, guids[i], name, AssetActivityKind::Created,
+                                dup ? "duplicate of " + m.files.front().from.filename().string() : "restored (undo)" });
+                continue;
+            }
+            bool nuked = false;
+            if (recycled)
+                for (const FileMove& f : m.files)
+                    nuked |= std::count(recycled->permanentlyDeleted.begin(), recycled->permanentlyDeleted.end(), dup ? f.to : f.from) > 0;
+            host.Activity({ now, guids[i], name, AssetActivityKind::Deleted,
+                            nuked ? "permanently; not in the Recycle Bin" : "restore from Recycle Bin" });
+        }
+    }
+
+    namespace
+    {
+        // The primitives replay spans, never a plan: these rebuild the plan shape
+        // RunAssetOpFollowUp reads (no derived, no newGuids -- the Texture arm of
+        // EditorApp::InvalidateAssetCaches covers a removed texture's sprites).
+        AssetOpPlan FollowUpPlan(AssetOpKind k, std::span<const AssetMove> moves)
+        { AssetOpPlan p; p.kind = k; p.moves.assign(moves.begin(), moves.end()); return p; }
+        AssetOpPlan FollowUpPlan(std::span<const AssetFiles> assets)   // Delete-shaped: `from` = the files, `to` empty
+        {
+            AssetOpPlan p; p.kind = AssetOpKind::Delete;
+            for (const AssetFiles& a : assets)
+            {
+                AssetMove& m = p.moves.emplace_back(AssetMove{ a.guid, AssetKindOf(a.files[0].generic_string()), {} });
+                for (const fs::path& f : a.files) m.files.push_back({ f, {} });
+            }
+            return p;
+        }
+    }
+
     AssetFileOpExecutor::AssetFileOpExecutor(AssetFileOpHost& host, Arcane::CommandStack& stack, fs::path contentDir)
         : m_host(host), m_stack(stack), m_contentDir(std::move(contentDir)),
           m_rename([](const fs::path& a, const fs::path& b)
@@ -493,14 +573,9 @@ namespace Arcane::Editor
             PruneCreatedDirs(*dirs);   // the other side's folders: their files just left
             *dirs = std::move(created);
         }
-        std::vector<fs::path> touched;
-        for (const AssetMove& m : moves)
-        {
-            m_host.NoteMoved(m.guid, src(m.files[0]), dst(m.files[0]));
-            for (const FileMove& f : m.files) { touched.push_back(f.from); touched.push_back(f.to); }
-        }
-        m_host.EvictPaths(touched);   // both ends: a reused path must never serve old bytes
-        m_host.AssetsChanged({}, {});
+        // s7.12: NoteMoved, then evict both ends (a reused path must never serve old bytes), a Moved row.
+        RunAssetOpFollowUp(m_host, FollowUpPlan(AssetOpKind::Move, moves),
+                           side == Side::Forward ? AssetOpSide::Forward : AssetOpSide::Undo, m_contentDir);
         return std::nullopt;
     }
 
@@ -588,10 +663,9 @@ namespace Arcane::Editor
             out.clear();
             return error;
         }
-        std::vector<Arcane::Guid> removed;     // (4) registry + follow-up
-        for (const AssetFiles& a : doomed) { m_host.Unregister(a.guid); removed.push_back(a.guid); }
-        m_host.AssetsChanged(removed, {});
-        m_host.EvictPaths(all);
+        // (4) registry + follow-up
+        for (const AssetFiles& a : doomed) m_host.Unregister(a.guid);
+        RunAssetOpFollowUp(m_host, FollowUpPlan(doomed), AssetOpSide::Forward, m_contentDir, &m_lastRecycle);
         return std::nullopt;
     }
 
@@ -635,8 +709,13 @@ namespace Arcane::Editor
             }
             restored.push_back(a.guid);
         }
-        m_host.AssetsChanged({}, restored);       // (4) the host's AssetsChanged runs ForgetUnresolved for `added`
-        m_host.EvictPaths(written);
+        std::vector<AssetFiles> files;            // (4) the host's AssetsChanged runs ForgetUnresolved for `added`
+        for (const AssetPayloads& a : payloads)
+        {
+            AssetFiles& f = files.emplace_back(AssetFiles{ a.guid, {} });
+            for (const FilePayload& p : a.files) f.files.push_back(p.path);
+        }
+        RunAssetOpFollowUp(m_host, FollowUpPlan(files), AssetOpSide::Undo, m_contentDir);
         return std::nullopt;
     }
 
@@ -667,8 +746,7 @@ namespace Arcane::Editor
             AssetFiles& a = copies.emplace_back(AssetFiles{ plan.newGuids[i], {} });
             for (const FileMove& f : m.files) a.files.push_back(f.to);
         }
-        m_host.EvictPaths(created);                  // B13 folds these two calls into RunAssetOpFollowUp(m_host, plan, AssetOpSide::Forward, m_contentDir)
-        m_host.AssetsChanged({}, plan.newGuids);
+        RunAssetOpFollowUp(m_host, plan, AssetOpSide::Forward, m_contentDir);   // s7.12: evict the copies, announce, a Created row
         return std::nullopt;
     }
 

@@ -23,6 +23,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <system_error>
@@ -929,4 +930,43 @@ TEST_CASE("Delete plan: live manifest, dirty documents, project manifest; instan
     Arcane::Diag::Envelope env; env.guid = Arcane::Guid::Generate(); env.siblingTxt = "crash-1.txt"; REQUIRE(Arcane::Diag::WriteFile(env, dd / "crash-1.arcdiag"));
     std::ofstream(dd / "crash-1.txt") << "t"; std::ofstream(dd / "crash-1.symbolized.txt") << "s";
     CHECK(DiagSiblingFiles(dd / "crash-1.arcdiag").size() == 2);
+}
+// ---- T5-B13: the s7.12 follow-up table and tombstone names ----------------
+namespace
+{
+    AssetOpPlan One(AssetOpKind k, AssetKind kind, std::filesystem::path from, std::filesystem::path to = {})
+    { AssetOpPlan p; p.kind = k; p.moves.push_back({ Arcane::Guid::Generate(), kind, { { std::move(from), std::move(to) } } }); return p; }
+    using Calls = std::vector<std::string>;
+}
+TEST_CASE("Follow-up: the s7.12 per-operation table as exact host call sets", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_followup"); AssetOpsTest::Host h(t); const auto c = t.content;
+    AssetOpPlan del = One(AssetOpKind::Delete, AssetKind::Texture, c / "a.png");
+    del.moves[0].files.push_back({ c / "a.png.meta", {} }); del.derived.push_back({ del.moves[0].guid, Arcane::Guid::Generate(), false, {} });
+    RunAssetOpFollowUp(h, del, AssetOpSide::Forward, c);
+    CHECK(h.calls == Calls{ "Invalidate 1", "Invalidate 6", "Evict 2", "AssetsChanged -1 +0", "Activity 4 restore from Recycle Bin" });
+    h.calls.clear(); RunAssetOpFollowUp(h, One(AssetOpKind::Delete, AssetKind::Material, c / "m.arcmat"), AssetOpSide::Undo, c);
+    CHECK(h.calls == Calls{ "Invalidate 0", "Evict 1", "AssetsChanged -0 +1", "Activity 3 restored (undo)" });
+    h.calls.clear(); RunAssetOpFollowUp(h, One(AssetOpKind::Move, AssetKind::Material, c / "a.arcmat", c / "m/a.arcmat"), AssetOpSide::Forward, c);
+    CHECK(h.calls == Calls{ "NoteMoved a.arcmat->a.arcmat", "Evict 2", "AssetsChanged -0 +0", "Activity 5 from game://a.arcmat" });
+    h.calls.clear(); RunAssetOpFollowUp(h, One(AssetOpKind::Rename, AssetKind::Material, c / "a.arcmat", c / "b.arcmat"), AssetOpSide::Undo, c);
+    CHECK(h.calls.front() == "NoteMoved b.arcmat->a.arcmat");   // undo runs to -> from
+    AssetOpPlan dup = One(AssetOpKind::Duplicate, AssetKind::Sprite, c / "s.arcsprite", c / "s 1.arcsprite"); dup.newGuids = { Arcane::Guid::Generate() };
+    h.calls.clear(); RunAssetOpFollowUp(h, dup, AssetOpSide::Forward, c);
+    CHECK(h.calls == Calls{ "Evict 1", "AssetsChanged -0 +1", "Activity 3 duplicate of s.arcsprite" });
+    h.calls.clear(); RunAssetOpFollowUp(h, dup, AssetOpSide::Undo, c);
+    CHECK(h.calls == Calls{ "Invalidate 6", "Evict 1", "AssetsChanged -1 +0", "Activity 4 restore from Recycle Bin" });
+    const OsShell::RecycleResult nuked{ true, {}, { c / "b.png" }, {} };
+    h.calls.clear(); RunAssetOpFollowUp(h, One(AssetOpKind::Delete, AssetKind::Texture, c / "b.png"), AssetOpSide::Forward, c, &nuked);
+    CHECK(h.calls.back() == "Activity 4 permanently; not in the Recycle Bin");
+    AssetOpPlan nf; nf.kind = AssetOpKind::NewFolder; h.calls.clear(); RunAssetOpFollowUp(h, nf, AssetOpSide::Forward, c); CHECK(h.calls.empty());
+}
+TEST_CASE("TombstoneName: the snapshot after a delete, nullopt after its undo", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_tombstone"); AssetOpsTest::Host h(t); AssetActivityLog log;
+    const AssetOpPlan p = One(AssetOpKind::Delete, AssetKind::Texture, t.content / "uv_marker.png");
+    RunAssetOpFollowUp(h, p, AssetOpSide::Forward, t.content); for (const auto& e : h.activity) log.Push(e);
+    CHECK(TombstoneName(log, p.moves[0].guid) == std::optional<std::string>("uv_marker.png"));
+    h.activity.clear(); RunAssetOpFollowUp(h, p, AssetOpSide::Undo, t.content); for (const auto& e : h.activity) log.Push(e);
+    CHECK_FALSE(TombstoneName(log, p.moves[0].guid));
 }

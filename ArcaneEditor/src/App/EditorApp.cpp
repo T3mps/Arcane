@@ -948,7 +948,8 @@ namespace Arcane::Editor
         // a document opened during a boot stage). reveal/open only QUEUE into
         // m_assetPageActions: ConsumeAssetPanelActions performs them next
         // frame, because opening mid-draw would mutate DocumentHost's list
-        // while a page from that list is being drawn. tombstoneName: T5.
+        // while a page from that list is being drawn. tombstoneName (T5
+        // s7.12): a deleted asset's last name, from the session activity log.
         m_assetRefServices.model = &m_assetModel;
         m_assetRefServices.project = [this]() -> const Arcane::Project*
         { return m_runtime ? m_runtime->CurrentProject() : nullptr; };
@@ -960,6 +961,7 @@ namespace Arcane::Editor
         m_assetRefServices.open = [this](const Arcane::Guid& g) { m_assetPageActions.openAsset = g; };
         m_assetRefServices.mintSpriteForTexture =
             [this](const Arcane::Guid& textureGuid) { return MintOrReuseSpriteForTexture(textureGuid); };
+        m_assetRefServices.tombstoneName = [this](const Arcane::Guid& g) { return Arcane::Editor::TombstoneName(m_assetActivity, g); };
         m_inspectorServices.assetRefs = &m_assetRefServices;
 
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail

@@ -53,4 +53,17 @@ namespace Arcane::Editor
         m_ring.clear();
         m_next = 0;
     }
+
+    std::optional<std::string> TombstoneName(const AssetActivityLog& log, const Arcane::Guid& guid)
+    {
+        std::optional<std::string> o;
+        bool done = false;
+        log.ForEachNewestFirst([&](const AssetActivityEntry& e)
+        {
+            if (done || e.guid != guid) return;
+            if (e.kind == AssetActivityKind::Deleted) { o = e.name; done = true; }
+            else if (e.kind == AssetActivityKind::Created) done = true;
+        });
+        return o;
+    }
 }
