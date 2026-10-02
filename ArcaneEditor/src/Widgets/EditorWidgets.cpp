@@ -580,6 +580,26 @@ namespace Arcane::Editor
         return out;
     }
 
+    StripClusterLayout LayoutStripCluster(float minX, float rightEdge, float chipW,
+                                          float statusNaturalW, float statusMinW, float gap)
+    {
+        StripClusterLayout out{};
+        const float chipSpan = chipW > 0.0f ? chipW + gap : 0.0f;
+        const float room     = (std::max)(0.0f, rightEdge - minX - chipSpan);
+        // A status already narrower than its elision floor ("A > b" is under
+        // "..." + chevron + "...") is drawn whole whenever it fits: the floor
+        // never exceeds the natural width.
+        const float floorW = (std::min)(statusMinW, statusNaturalW);
+        out.statusBudget = (std::min)(statusNaturalW, room);
+        out.drawStatus   = statusNaturalW > 0.0f && out.statusBudget >= floorW;
+        if (!out.drawStatus)
+            out.statusBudget = 0.0f;
+        out.statusX = (std::max)(minX, rightEdge - out.statusBudget);
+        const float chipRight = out.drawStatus ? out.statusX - gap : rightEdge;
+        out.chipX = chipW > 0.0f ? (std::max)(minX, chipRight - chipW) : out.statusX;
+        return out;
+    }
+
     void CenteredTextDisabled(std::string_view text)
     {
         const ImVec2 avail = ImGui::GetContentRegionAvail();

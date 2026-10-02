@@ -109,6 +109,17 @@ namespace Arcane::Editor
     [[nodiscard]] std::string EllipsisToWidth(std::string_view text, float maxWidth,
                                               std::string_view ellipsis = "...");
 
+    // The toolbar strip's right cluster (node page phase s6.5), window-local x:
+    // the scene status RIGHTMOST, ending at `rightEdge`; the Problems chip
+    // (s8.2) left of it, `gap` between them. chipW == 0 = no chip, no gap. The
+    // chip never shrinks (it is a count); the status gets what is left, down to
+    // statusMinW ("..." + chevron + "..."), below which drawStatus is false and
+    // the chip takes the edge. No x is ever below minX (the transport's right
+    // edge + 12, mirroring the left cluster's clamp).
+    struct StripClusterLayout { float chipX; float statusX; float statusBudget; bool drawStatus; };
+    [[nodiscard]] StripClusterLayout LayoutStripCluster(float minX, float rightEdge, float chipW,
+                                                        float statusNaturalW, float statusMinW, float gap);
+
     // The no-image line of a preview box (s5.2): dim, wrapped to the current
     // content region's width and centred in it on both axes.
     void CenteredTextDisabled(std::string_view text);
