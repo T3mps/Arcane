@@ -4096,7 +4096,10 @@ ed::EditorAction::AcceptResult ed::SelectAction::Accept(const Control& control)
         return False;
 
     auto& io = ImGui::GetIO();
-    m_SelectGroups   = io.KeyShift;
+    // ARCANE LOCAL FIX (vendored imgui-node-editor): Config::ShiftAddsToSelection
+    // makes Shift additive (Unreal's graph editor) instead of "groups only".
+    const bool shiftAdds = io.KeyShift && Editor->GetConfig().ShiftAddsToSelection;
+    m_SelectGroups   = io.KeyShift && !shiftAdds;
     m_SelectLinkMode = io.KeyAlt;
 
     m_SelectedObjectsAtStart.clear();
@@ -4114,7 +4117,7 @@ ed::EditorAction::AcceptResult ed::SelectAction::Accept(const Control& control)
             Editor->ClearSelection();
         }
 
-        if (io.KeyCtrl)
+        if (io.KeyCtrl || shiftAdds)
             m_SelectedObjectsAtStart = Editor->GetSelectedObjects();
     }
     else if (control.BackgroundClickButtonIndex == Editor->GetConfig().SelectButtonIndex)
@@ -4136,6 +4139,11 @@ ed::EditorAction::AcceptResult ed::SelectAction::Accept(const Control& control)
 
             if (io.KeyCtrl)
                 Editor->ToggleObjectSelection(clickedObject);
+            else if (shiftAdds)
+            {
+                if (!Editor->IsSelected(clickedObject))   // SelectObject appends unconditionally
+                    Editor->SelectObject(clickedObject);
+            }
             else
                 Editor->SetSelectedObject(clickedObject);
         }

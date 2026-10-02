@@ -3248,6 +3248,7 @@ namespace Arcane::Editor
             // feel and belongs on every canvas in the editor. (The LOD tiers
             // built on top of it are not -- see DrawPassCanvas's note below.)
             ApplyZoomLevels(cfg);
+            cfg.ShiftAddsToSelection = true;   // UE's modifiers, as on the graph canvas
             m_passCanvasCtx = ed::CreateEditor(&cfg);
             // Same node/canvas styling as the material graph, including the
             // switch that kills the vendored grid so the shader backdrop below
@@ -4645,6 +4646,10 @@ namespace Arcane::Editor
             ed::Config cfg;
             cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
             ApplyZoomLevels(cfg);         // UE's 20 stops (see kZoomLevels)
+            // UE's selection modifiers (SNodePanel.cpp:194-212, MarqueeOperation.h:
+            // 50-68): Shift+click and Shift+drag ADD. Upstream's Shift+drag selects
+            // only groups (Comments), which read on the desk as a broken marquee.
+            cfg.ShiftAddsToSelection = true;
             m_graphCtx = ed::CreateEditor(&cfg);
             // The style is per-context state, so a rebuilt context re-applies
             // it -- including the switch that kills the vendored grid.

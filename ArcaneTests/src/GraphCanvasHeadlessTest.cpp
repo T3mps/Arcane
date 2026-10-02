@@ -35,6 +35,7 @@
 #include <imgui_internal.h>   // OpenPopupStack: the modal-hoist case
 #include <imgui_node_editor.h>   // the s5.1.11 canvas cases ask the canvas what is selected
 
+#include <cfloat>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -650,4 +651,118 @@ TEST_CASE("Canvas pin paint: a Mul fed by a float4 Param resolves to 4 -- its pi
     const GraphPinPaint after = h.doc->CanvasPinPaint(3, 0, true);
     CHECK(same(after.color, kPinDynamicColor));
     CHECK_FALSE(after.adapts);
+}
+
+// ---- T3-D3 desk findings (2026-10-02): the marquee and its modifiers, undo
+// keeping the view, Esc reverting an inline canvas drag. ----
+namespace
+{
+    // The screen rect just covering nodes 2 and 3 of OutputAndFloats (the two
+    // Floats in the left column), padded so the press lands on empty canvas.
+    ImRect FloatsBox(CanvasHarness& h)
+    {
+        return h.InCanvas([]
+        {
+            ImRect r(ImVec2(FLT_MAX, FLT_MAX), ImVec2(-FLT_MAX, -FLT_MAX));
+            for (const std::uint32_t id : { 2u, 3u })
+            {
+                const ImVec2 p = ed::GetNodePosition(ed::NodeId(id));
+                const ImVec2 s = ed::GetNodeSize(ed::NodeId(id));
+                r.Add(ed::CanvasToScreen(p));
+                r.Add(ed::CanvasToScreen(ImVec2(p.x + s.x, p.y + s.y)));
+            }
+            r.Expand(12.0f);
+            return r;
+        });
+    }
+    // Press on `from`, drag through the midpoint to `to`, release -- with
+    // `mod` (ImGuiMod_Shift / ImGuiMod_Ctrl) held throughout when given.
+    void Marquee(CanvasHarness& h, ImVec2 from, ImVec2 to, ImGuiKey mod = ImGuiKey_None)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (mod != ImGuiKey_None) io.AddKeyEvent(mod, true);
+        io.AddMousePosEvent(from.x, from.y); h.Frame();
+        io.AddMouseButtonEvent(0, true); h.Frame();
+        // The press is the canvas's: a point off the canvas (the toolbar, the
+        // window padding) grabs the WINDOW instead and no marquee can start.
+        REQUIRE(ImGui::GetCurrentContext()->MovingWindow == nullptr);
+        io.AddMousePosEvent((from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f); h.Frame();
+        io.AddMousePosEvent(to.x, to.y); h.Frame(2);
+        io.AddMouseButtonEvent(0, false); h.Frame(2);
+        if (mod != ImGuiKey_None) { io.AddKeyEvent(mod, false); h.Frame(); }
+    }
+    void ClickWith(CanvasHarness& h, ImVec2 at, ImGuiKey mod)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddKeyEvent(mod, true);
+        h.Click(at);
+        io.AddKeyEvent(mod, false); h.Frame();
+    }
+    bool Selected(CanvasHarness& h, std::uint32_t id)
+    {
+        return h.InCanvas([id] { return ed::IsNodeSelected(ed::NodeId(id)); });
+    }
+}
+
+TEST_CASE("Canvas marquee (T3-D3): a left-drag from empty canvas selects the nodes inside the box -- 2+ selected is the material page",
+          "[editor][graphcanvas][nodepage]")
+{
+    const int mode = GENERATE(0, 1, 2);
+    const bool cull = GENERATE(false, true);
+    INFO("page mode (0 none, 1 plain window, 2 real InspectorHost): " << mode << "; node 1 culled off-screen: " << cull);
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    if (mode == 1) h.pageMode = CanvasHarness::PageMode::Plain;
+    if (mode == 2) h.UseHost();
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));                          // settles the open fit: the box reads the landed view
+    if (cull)
+    {
+        h.InCanvas([] { ed::SetNodePosition(ed::NodeId(1), ImVec2(40000.0f, 40000.0f)); return 0; });
+        h.Frame(3);
+    }
+    const ImRect box = FloatsBox(h);
+    INFO("box " << box.Min.x << ", " << box.Min.y << " -> " << box.Max.x << ", " << box.Max.y);
+    Marquee(h, box.Min, box.Max);
+    CHECK(Selected(h, 2));
+    CHECK(Selected(h, 3));
+    CHECK_FALSE(Selected(h, 1));                                // the Output lies outside the box
+    CHECK(h.doc->SelectionKey() == "material");                 // s5.1.9: 2+ selected is the material page
+}
+
+// UE's Material Editor: Shift ADDS (Shift+drag = FMarqueeOperation::Add,
+// Shift+click = "Shift always adds to selection", SNodePanel.cpp:194-212 /
+// MarqueeOperation.h:50-68). Ctrl+drag keeps the selection too (the library's
+// own rule; UE inverts, which differs only on boxed nodes already selected).
+TEST_CASE("Canvas marquee (T3-D3): Shift or Ctrl held, the box ADDS to the selection; Shift+click adds a node",
+          "[editor][graphcanvas][nodepage]")
+{
+    const ImGuiKey mod = GENERATE(ImGuiMod_Shift, ImGuiMod_Ctrl);
+    INFO("modifier: " << (mod == ImGuiMod_Shift ? "Shift" : "Ctrl"));
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));
+    h.Click(h.NodeTitle(1));
+    REQUIRE(h.doc->SelectionKey() == Key(0, 1));
+    const ImRect box = FloatsBox(h);
+    Marquee(h, box.Min, box.Max, mod);
+    CHECK(Selected(h, 1));                                      // kept
+    CHECK(Selected(h, 2));
+    CHECK(Selected(h, 3));
+    CHECK(h.doc->SelectionKey() == "material");
+}
+
+TEST_CASE("Canvas click (T3-D3): Shift+click on a node adds it to the selection, as in UE",
+          "[editor][graphcanvas][nodepage]")
+{
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));
+    h.Click(h.NodeTitle(2));
+    REQUIRE(h.doc->SelectionKey() == Key(0, 2));
+    ClickWith(h, h.NodeTitle(3), ImGuiMod_Shift);
+    CHECK(Selected(h, 2));
+    CHECK(Selected(h, 3));
+    CHECK(h.doc->SelectionKey() == "material");
+    ClickWith(h, h.NodeTitle(3), ImGuiMod_Shift);               // adds, never toggles (Ctrl toggles)
+    CHECK(Selected(h, 3));
 }
