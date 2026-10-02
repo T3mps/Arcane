@@ -510,6 +510,43 @@ namespace Arcane
         return std::nullopt;
     }
 
+    bool AssetRegistry::Remove(const Guid& id)
+    {
+        if (m_byGuid.erase(id) == 0)
+            return false;
+        // KEY OWNERSHIP: "assets" -- the same whole-set publish ScanContent makes.
+        std::erase_if(m_scanDiagnostics, [&](const Diagnostic& d)
+        { return d.locator.kind == DiagLocator::Kind::Asset && d.locator.asset == id; });
+        Diagnostics::Publish("assets", m_scanDiagnostics);
+        return true;
+    }
+
+    RebindResult AssetRegistry::Rebind(const Guid& id, const std::filesystem::path& newFile,
+                                       const std::filesystem::path& contentDir, std::string_view scheme)
+    {
+        const auto it = m_byGuid.find(id);
+        if (it == m_byGuid.end())
+            return RebindResult::UnknownGuid;
+        if (scheme == "source" || IsSourceFile(LowerExt(newFile)))
+            return RebindResult::NotTrackable;
+        std::error_code ec;
+        const auto rel = std::filesystem::relative(newFile, contentDir, ec);
+        if (ec || rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+            return RebindResult::OutsideContent;
+        const std::string_view current = it->second;
+        const std::size_t sep = current.find("://");
+        if (sep == std::string_view::npos || current.substr(0, sep) != scheme)
+            return RebindResult::CrossMount;
+        if (PeekId(newFile) != id)
+            return RebindResult::IdMismatch;
+        const std::string mountPath = std::string(scheme) + "://" + rel.generic_string();
+        for (const auto& [other, path] : m_byGuid)   // linear: once per op (s7.2)
+            if (other != id && path == mountPath)
+                return RebindResult::PathTaken;
+        it->second = mountPath;
+        return RebindResult::Ok;
+    }
+
     std::vector<std::pair<Guid, std::string>> AssetRegistry::All() const
     {
         std::vector<std::pair<Guid, std::string>> out;
