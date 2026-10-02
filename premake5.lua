@@ -1844,6 +1844,14 @@ project "ArcaneTests"
         defines { "ARCANE_DEBUG" }
         runtime "Debug"
         symbols "on"
+        -- /Zi, not /ZI (input-seam gate): under Edit and Continue MSVC spells
+        -- __LINE__ as a per-function `__LINE__Var` + offset, and the linker folds
+        -- that symbol across TUs for SAME-NAMED internal-linkage functions --
+        -- which every Catch2 TEST_CASE is (CATCH2_INTERNAL_TEST_<__COUNTER__>,
+        -- restarting at 0 in each TU). A failing assertion then reported another
+        -- file's function base plus its own offset: lines that do not exist in the
+        -- file. Nothing edits-and-continues a test exe, so the cost is nil.
+        editandcontinue "Off"
 
     filter "configurations:Release"
         defines { "ARCANE_RELEASE", "NDEBUG" }
