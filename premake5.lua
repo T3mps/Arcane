@@ -1380,6 +1380,9 @@ project "ArcaneTests"
         -- EditorCamera above. This file writes to a file the HUB owns, so the
         -- refuse-to-clobber rules are the ones most worth pinning.
         "%{wks.location}/ArcaneEditor/src/Project/RecentProjects.cpp",
+        -- Node-page phase s8.4: the start page's pure model (relative times, rows, the
+        -- dialog start dir), driven by StartPageModelTest. No ImGui in it.
+        "%{wks.location}/ArcaneEditor/src/Project/StartPageModel.cpp",
         -- File -> Open Recent Scene: SceneRecents' pure list ops (Parse/
         -- Serialize/Push, and the file I/O around them) source-compile into
         -- the test exe so the [editor] units drive them directly. Unlike
