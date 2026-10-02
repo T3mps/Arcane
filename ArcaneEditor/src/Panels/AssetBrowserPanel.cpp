@@ -139,6 +139,10 @@ namespace Arcane::Editor
             if (ImGui::IsWindowAppearing())
                 state.menuRefusal.rename = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
             if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) BeginAssetRename(state, e);
+            if (ImGui::IsWindowAppearing())   // T5 s7.7
+                state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = { e.guid } }) : "unavailable";
+            if (MenuVerb("Duplicate", "Ctrl+D", state.menuRefusal.duplicate))
+                actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { e.guid } };
 
             ImGui::EndPopup();
         }
@@ -938,6 +942,8 @@ namespace Arcane::Editor
                 }
                 if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && model.selected.IsValid())   // T5 s7.6
                     if (const AssetPanelEntry* e = model.Find(model.selected)) BeginAssetRename(state, *e);
+                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && model.selected.IsValid())   // T5 s7.7
+                    actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { model.selected } };
             }
 
             ImGui::EndChild();

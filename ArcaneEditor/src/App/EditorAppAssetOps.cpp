@@ -142,6 +142,10 @@ namespace Arcane::Editor
         return plan;
     }
 
+    // T5: post-op selection. Duplicate selects the copies (primary = last); the stamp bump scrolls to it after the rebuild AssetsChanged armed.
+    void EditorApp::AfterAssetOp(const AE::AssetOpPlan& plan)
+    { if (plan.kind == AE::AssetOpKind::Duplicate && !plan.newGuids.empty()) m_assetModel.Select(plan.newGuids.back()); }
+
     // ---- s7.12: what a moved/removed/restored asset invalidates ------------
 
     void EditorApp::InvalidateAssetCaches(const Arcane::Guid& g, AE::AssetKind k)

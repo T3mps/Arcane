@@ -2480,7 +2480,8 @@ namespace Arcane::Editor
         m_assetSource.Bind({ &m_assetModel, proj, &m_assetPanelServices, &m_assetPageActions });
         // T5 s7.6: the asset page's Rename modal (opened by requestRename in
         // ConsumeAssetPanelActions just above); a commit runs at once.
-        if (const auto req = Arcane::Editor::DrawRenameAssetModal(m_renameModal, m_assetPanelServices)) (void)RunAssetOp(*req);
+        if (const auto req = Arcane::Editor::DrawRenameAssetModal(m_renameModal, m_assetPanelServices))
+            if (const auto plan = RunAssetOp(*req)) AfterAssetOp(*plan);
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
@@ -2996,9 +2997,11 @@ namespace Arcane::Editor
                 Arcane::Editor::OpenAssetRow(*e, m_runtime->CurrentProject(), m_documents, follow);
                 ConsumeAssetPanelActions(follow, ls);
             }
-        // T5 s7.6: a committed inline rename (Browser) runs through the ONE
-        // front door; the asset page's pencil opens the Rename modal instead.
-        if (panelActions.fileOp) (void)RunAssetOp(*panelActions.fileOp);
+        // T5 s7.6/s7.7: a committed inline rename or a Duplicate (Browser key,
+        // row menu, asset page) runs through the ONE front door, then the
+        // post-op selection step; the page's pencil opens the Rename modal.
+        if (panelActions.fileOp)
+            if (const auto plan = RunAssetOp(*panelActions.fileOp)) AfterAssetOp(*plan);
         if (const auto* e = m_assetModel.Find(panelActions.requestRename))
         { m_renameModal = { true, e->guid, {}, true }; std::snprintf(m_renameModal.buf, sizeof(m_renameModal.buf), "%s", e->name.c_str()); }
 

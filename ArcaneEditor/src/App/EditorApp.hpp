@@ -2279,6 +2279,8 @@ namespace Arcane::Editor
         [[nodiscard]] std::string AssetOpGateReason();
         [[nodiscard]] Arcane::Editor::AssetOpFacts GatherAssetOpFacts(AssetOpFactsStore&, bool withLiveScene);
         std::optional<Arcane::Editor::AssetOpPlan> RunAssetOp(const Arcane::Editor::AssetOpRequest&);
+        // T5 s7.7: the post-op selection step every RunAssetOp caller runs on a returned plan (B17 and B20 extend it).
+        void AfterAssetOp(const Arcane::Editor::AssetOpPlan&);
         void InvalidateAssetCaches(const Arcane::Guid&, Arcane::Editor::AssetKind);
         // T5 s7.6: the asset page's Rename modal (requestRename opens it).
         Arcane::Editor::RenameModalState m_renameModal;

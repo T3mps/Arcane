@@ -413,6 +413,10 @@ namespace Arcane::Editor
         row.push_back({ ICON_LC_PENCIL, "Rename", "##asset_rename",
                         services.fileOpRefusal && services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e->guid }, .newStem = e->name }).empty(),
                         [&actions, g = e->guid] { actions.requestRename = g; } });
+        // T5 s7.7: Duplicate (ICON_LC_COPY stays Copy Path), enabled by a dry-run.
+        row.push_back({ ICON_LC_COPY_PLUS, "Duplicate", "##asset_duplicate",
+                        services.fileOpRefusal && services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = { e->guid } }).empty(),
+                        [&actions, g = e->guid] { actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { g } }; } });
         // s5.6 at 1080p (T3 gate): half the stock ItemSpacing.y between the
         // header (thumb + text column, or the stacked meta) and the action row
         // (4 -> 2 px). Local to this one gap, like the row's FramePadding.
