@@ -131,6 +131,21 @@ namespace
         void Type(const char* s) { ImGui::GetIO().AddInputCharactersUTF8(s); Frame(); }
         void Click(ImVec2 p) { Move(p); Button(0, true); Button(0, false); }
         void DoubleClick(ImVec2 p) { Move(p); Button(0, true); Button(0, false); Button(0, true); Button(0, false); }
+        // A double-click whose button state is ALSO mirrored into the capture's
+        // snapshot (the app feeds SDL's state alongside ImGui's events): every
+        // press frame sees LMB down, every release frame sees it up, and the
+        // second press is held for `extraHeldFrames` more frames before release
+        // -- a real double-click's second press lasts several frames.
+        void DoubleClickMirrored(ImVec2 p, int extraHeldFrames = 1)
+        {
+            Arcane::InputSnapshot held; held.mouseButtons = 0x1;   // LMB = bit0
+            Move(p);
+            doc->SetPreviewSnapshot(held); Button(0, true);
+            doc->SetPreviewSnapshot(Arcane::InputSnapshot{}); Button(0, false);
+            doc->SetPreviewSnapshot(held); Button(0, true);
+            for (int i = 0; i < extraHeldFrames; ++i) Frame();
+            doc->SetPreviewSnapshot(Arcane::InputSnapshot{}); Button(0, false);
+        }
         // The capture's snapshot (SDL's, fed by the app): down for one frame, then up.
         void Press(std::uint32_t scancode)
         {
@@ -481,9 +496,10 @@ TEST_CASE("input document: double-click on a binding arms its rebind", "[editor]
 {
     DocUi ui(kCaptureDoc);
     ui.Frame(); ui.Frame();
-    ui.DoubleClick(ui.At(kJumpBinding));
-    CHECK(ui.doc->InputSwallowed());
+    ui.DoubleClickMirrored(ui.At(kJumpBinding));          // the capture's snapshot sees LMB down on both presses and through the held frame
+    CHECK(ui.doc->InputSwallowed());                      // still waiting after the release frame: the held second press did not complete it
     CHECK_FALSE(ui.doc->Pending());                       // a rebind, not an add
+    CHECK((*ui.doc->Model().FindNode(G(kJumpBinding)))["path"] == "<Keyboard>/space");   // not <Mouse>/leftButton
     ui.Press(26);
     CHECK((*ui.doc->Model().FindNode(G(kJumpBinding)))["path"] == "<Keyboard>/scancode/w");
 }
