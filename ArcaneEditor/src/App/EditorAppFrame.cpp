@@ -3446,7 +3446,9 @@ namespace Arcane::Editor
             };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
-                                            tools, /*showToolOverlay=*/!InPlayMode(),
+                                            tools,
+                                            Arcane::Editor::ViewportChrome{ /*showToolOverlay=*/!InPlayMode(),
+                                                                            /*playing=*/InPlayMode() },
                                             gizmoOverlay);
         m_viewportDockId = fs.vp.dockId;
         m_viewportTargets.pendingW = fs.vp.desiredW;

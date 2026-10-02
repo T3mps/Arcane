@@ -9,6 +9,7 @@
 #include "Panels/DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorWidgets.hpp"
+#include "Widgets/EditorTheme.hpp"
 #include "Scene/EntityClipboard.hpp"
 #include "Panels/EntityList.hpp"
 #include "Widgets/IconsLucide.h"
@@ -1249,7 +1250,7 @@ namespace Arcane::Editor
     }
 
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          ViewportToolState& tools, bool showToolOverlay,
+                                          ViewportToolState& tools, const ViewportChrome& chrome,
                                           const ViewportImageOverlayFn& imageOverlay)
     {
         // The style alpha OUTSIDE any BeginDisabled scope, captured up front:
@@ -1296,6 +1297,24 @@ namespace Arcane::Editor
             imageOverlay(*dl, origin);
             dl->PopClipRect();
         }
+        // Play presence (s6.3): four 2 px kAccent bands INSIDE the image rect --
+        // inside, so there is no half-pixel stroke arithmetic and no bleed into the
+        // window padding. After the gizmo overlay, before the tool overlay (hidden
+        // in Play anyway). Draw only: r.hovered, the click capture below and game
+        // input are untouched. `playing` is PlaySession::IsPlaying(), so every
+        // in-editor topology frames and a Separate-window launch never does.
+        if (chrome.playing && textureId != 0 && texW > 0 && texH > 0)
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImU32  col = ImGui::GetColorU32(Theme::kAccent);
+            constexpr float t = 2.0f;
+            const ImVec2 a = origin;
+            const ImVec2 b(origin.x + (float)texW, origin.y + (float)texH);
+            dl->AddRectFilled(a, ImVec2(b.x, a.y + t), col);                          // top
+            dl->AddRectFilled(ImVec2(a.x, b.y - t), b, col);                          // bottom
+            dl->AddRectFilled(ImVec2(a.x, a.y + t), ImVec2(a.x + t, b.y - t), col);   // left
+            dl->AddRectFilled(ImVec2(b.x - t, a.y + t), ImVec2(b.x, b.y - t), col);   // right
+        }
         r.hovered = ImGui::IsWindowHovered();
         r.focused = ImGui::IsWindowFocused();
 
@@ -1307,12 +1326,12 @@ namespace Arcane::Editor
         // gear opening the view-settings popup (grid, grid plane, fov, camera
         // speed, gizmo size). The transform tools on the right as before.
         // Drawn over the image; a click on it changes the tool/view and must
-        // NOT also pick an entity. Hidden in Play mode (showToolOverlay=false):
+        // NOT also pick an entity. Hidden in Play mode (chrome.showToolOverlay=false):
         // the game owns the viewport there, and with the overlay gone
         // overlayHovered stays false, so clicks in that corner fall through to
         // the game like anywhere else.
         bool overlayHovered = false;
-        if (showToolOverlay)
+        if (chrome.showToolOverlay)
         {
             using Arcane::Editor::ViewMode;
             using Arcane::Editor::GridPlane;

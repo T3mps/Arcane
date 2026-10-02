@@ -319,12 +319,24 @@ namespace Arcane::Editor
         float&                             speedScalar;
     };
 
+    // What the viewport window shows around the image (node page phase s6.3/s6.4):
+    // the edit tool overlay, Play presence, and the scene's unsaved dot on the
+    // Viewport tab. Built by the one caller from EditorApp state each frame.
+    struct ViewportChrome
+    {
+        bool showToolOverlay = true;
+        bool playing         = false;   // 6.3: the 2 px accent frame inside the image
+        bool sceneDirty      = false;   // 6.4: the Viewport tab's unsaved dot
+    };
+
     // Draw the scene texture into a dockable Viewport window; report its rect,
     // hover/focus, and the content-region size the offscreen canvas should match.
-    // showToolOverlay gates the top-right tool overlay (the 2D | Persp view
+    // chrome.showToolOverlay gates the top-right tool overlay (the 2D | Persp view
     // control, the view-settings gear, and the transform-tool buttons): the
     // host passes false in Play mode, where the game owns the viewport and
     // the edit tools (like the gizmo they drive) have no business on screen.
+    // chrome.playing draws a 2 px kAccent frame INSIDE the image rect (draw
+    // only: hover, click capture and game input are unchanged).
     // imageOverlay, when set, is called right after the image is drawn with
     // the Viewport window's draw list (clipped to the image) and the image's
     // screen origin -- the editor's FOREGROUND: the transform gizmo paints
@@ -332,7 +344,7 @@ namespace Arcane::Editor
     // (Viewport/GizmoOverlay.hpp). Skipped when there is no image.
     using ViewportImageOverlayFn = std::function<void(ImDrawList& list, ImVec2 origin)>;
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          ViewportToolState& tools, bool showToolOverlay,
+                                          ViewportToolState& tools, const ViewportChrome& chrome,
                                           const ViewportImageOverlayFn& imageOverlay = {});
 
     // The Outliner (replaces the flat Hierarchy panel). Pure row data comes
