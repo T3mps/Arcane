@@ -34,10 +34,20 @@ namespace Arcane::Editor
     // different tones by a recorded ruling. The segment count and the ring
     // weight are not parameters: those were identical literals on both sides and
     // now have one definition (GraphCanvasStyle.hpp).
+    //
+    // `outerRing` (optional, null = none): a thin second ring just outside the
+    // dot, in that colour (kGraphPinOuterRingGap / kGraphPinOuterRingWidth).
+    // The shader canvas marks a resolved dynamic pin with it ("adapts to its
+    // input", ShaderGraphPinTypes.hpp); the node page and the canvas legend
+    // paint their swatches through this same call so the three agree.
     inline void DrawGraphPinDot(ImDrawList* dl, const ImVec2& centre,
                                 const ImVec4& color, const ImVec4& bodyColor,
-                                float radius, bool connected)
+                                float radius, bool connected,
+                                const ImVec4* outerRing = nullptr)
     {
+        if (outerRing)
+            dl->AddCircle(centre, radius + kGraphPinOuterRingGap, ImGui::GetColorU32(*outerRing),
+                          kGraphPinSegments, kGraphPinOuterRingWidth);
         const ImU32 col = ImGui::GetColorU32(color);
         if (connected)
         {

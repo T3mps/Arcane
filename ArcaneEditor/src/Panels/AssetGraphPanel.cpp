@@ -10,6 +10,7 @@
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasBackdrop.hpp" // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"    // node chrome metrics + grid palette + accents -- one definition, both canvases
+#include "Widgets/GraphLegend.hpp"         // the legend box chrome -- shared with the shader graph's pin legend
 #include "Widgets/GraphNodeLod.hpp"        // NodeLOD / NodeLODForScale -- the zoom table's third column
 #include "Widgets/GraphPinDot.hpp"         // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"           // bezier/lerp/brighten/view-scale + the links channel
@@ -524,7 +525,7 @@ namespace Arcane::Editor
         // the header.
 
         // Spec §11.3's kind-color table, VERBATIM, as a panel-local function
-        // in PinColorForWidth's shape (ShaderEditorDocument.cpp:491) --
+        // in PinColorForWidth's shape (Documents/ShaderGraphPinTypes.hpp) --
         // ruling 5: EditorTheme.hpp:27-32 rules domain colour-coding out of
         // the theme, and the kPillAmberBorder precedent (EditorWidgets.cpp:305)
         // covers a spec-pinned hex with no token.
@@ -1156,15 +1157,12 @@ namespace Arcane::Editor
         // them would be designing rather than transcribing.
         //
         // Chrome, NOT a node: drawn after ed::End in SCREEN space, so it does
-        // not pan, zoom or sort against the graph.
-        constexpr float kGraphLegendInset      = 12.0f;
-        constexpr float kGraphLegendPadX       = 10.0f;
-        constexpr float kGraphLegendPadY       = 5.0f;
-        constexpr float kGraphLegendEntryGap   = 14.0f;
-        constexpr float kGraphLegendSwatchGap  = 6.0f;
+        // not pan, zoom or sort against the graph. The BOX -- inset, padding,
+        // gaps, font size and the kChrome/kBorder/kTextDim tones -- moved to
+        // Widgets/GraphLegend.hpp (T3-D1) when the shader graph grew a pin
+        // legend in the same chrome; the swatches below stay this lens's own.
         constexpr float kGraphLegendSwatchW    = 18.0f;
         constexpr float kGraphLegendSwatchH    = 2.0f;
-        constexpr float kGraphLegendFontPx     = 13.0f;
         constexpr ImVec4 kGraphLegendEdgeColor   = ImVec4(0.361f, 0.361f, 0.361f, 1.0f); // #5c5c5c
         constexpr ImVec4 kGraphLegendUsedByColor = ImVec4(0.290f, 0.290f, 0.290f, 1.0f); // #4a4a4a
 
@@ -1189,20 +1187,16 @@ namespace Arcane::Editor
                             ImGui::CalcTextSize(entries[i].text).x;
             }
 
-            // SNAPPED TO WHOLE PIXELS. A 2px rule and a 1px border are the two
-            // things here a half-pixel origin visibly softens (ImGui gives a
-            // fractional rect fractional coverage), and the board's are crisp.
-            // Safe to snap, unlike anything inside the canvas: the legend is
-            // chrome in SCREEN space, with no zoom to make the rounding lie.
+            // SNAPPED TO WHOLE PIXELS (GraphLegendBoxMin says why). A 2px rule
+            // and a 1px border are the two things here a half-pixel origin
+            // visibly softens, and the board's are crisp.
             const float boxW = std::floor(contentW) + kGraphLegendPadX * 2.0f;
             const float boxH = std::floor(lineH) + kGraphLegendPadY * 2.0f;
-            const ImVec2 boxMin(std::floor(canvasMin.x + kGraphLegendInset),
-                                std::floor(canvasMin.y + canvasSize.y - kGraphLegendInset - boxH));
+            const ImVec2 boxMin = GraphLegendBoxMin(canvasMin, canvasSize, boxH);
             const ImVec2 boxMax(boxMin.x + boxW, boxMin.y + boxH);
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(boxMin, boxMax, ImGui::GetColorU32(Theme::kChrome));
-            dl->AddRect(boxMin, boxMax, ImGui::GetColorU32(Theme::kBorder));
+            DrawGraphLegendBox(dl, boxMin, boxMax);
 
             const ImU32 textCol = ImGui::GetColorU32(Theme::kTextDim);
             const float midY = boxMin.y + boxH * 0.5f;

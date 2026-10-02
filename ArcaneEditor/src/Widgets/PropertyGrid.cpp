@@ -6,6 +6,7 @@
 
 #include <cfloat>
 #include <string>
+#include <utility>
 
 namespace Arcane::Editor
 {
@@ -198,8 +199,9 @@ namespace Arcane::Editor
     void PropertyGrid::BeginValueCell(const char* label, bool dimmed)
     {
         m_events = {};
-        const RowDecor decor = m_hasDecor ? m_decor : RowDecor{};
-        m_hasDecor = false;   // one-shot
+        const RowDecor decor = m_hasDecor ? std::move(m_decor) : RowDecor{};
+        m_decor = RowDecor{};   // one-shot: a lead's captures die with its row
+        m_hasDecor = false;
         IM_ASSERT(!(decor.overridden && decor.reset) && "RowDecor: override and reset are mutually exclusive");
         if (decor.overridden)
         {
@@ -224,6 +226,16 @@ namespace Arcane::Editor
         else
             (void)FieldLabelCell(label, dimmed);
         ImGui::PushID(label);
+        if (decor.lead)
+        {
+            // FIRST in the cell. Its items consume the -FLT_MIN the label cell
+            // set (ItemAdd clears NextItemData), so the value's width is
+            // re-stated after it unless the reset slot below states its own.
+            decor.lead();
+            ImGui::SameLine();
+            if (!decor.reset)
+                ImGui::SetNextItemWidth(-FLT_MIN);
+        }
         if (decor.reset)
         {
             // BEFORE the value (R3): place reset at the cell's right edge, then
@@ -429,9 +441,23 @@ namespace Arcane::Editor
 
     void PropertyGrid::ReadOnlyRow(const char* label, std::string_view text)
     {
+        // RowDecor::lead is the one decoration a read-only row takes.
+        std::function<void()> lead;
+        if (m_hasDecor)
+        {
+            IM_ASSERT(!m_decor.overridden && !m_decor.reset && "ReadOnlyRow: only RowDecor::lead applies");
+            lead = std::move(m_decor.lead);
+            m_decor = RowDecor{};
+            m_hasDecor = false;
+        }
         BeginPlainRow();
         (void)FieldLabelCell(label, true);
         ImGui::PushID(label);
+        if (lead)
+        {
+            lead();
+            ImGui::SameLine();
+        }
         // Cut to the cell (node-page s4.1(e)); the full text is one hover away.
         const std::string shown = EllipsisToWidth(text, ImGui::GetContentRegionAvail().x);
         ImGui::TextDisabled("%s", shown.c_str());

@@ -132,12 +132,20 @@ namespace Arcane::Editor
     // -(resetW + ItemSpacing.x) -- so the VALUE widget is always LastItemData
     // when the row returns. Tab visiting reset before the value is accepted.
     // Honoured by Checkbox/Int/Float/Slider/Vec/Color/Combo rows; Text,
-    // ReadOnly, Button and Meter rows take none (IM_ASSERT).
+    // Button and Meter rows take none (IM_ASSERT). ReadOnly rows take `lead`
+    // and nothing else (IM_ASSERT).
+    //  - lead: a caller painter submitted FIRST in the value cell, on the
+    //    value's line (then SameLine) -- a row's type chip: the node page's
+    //    pin dot + type word (T3-D1). The reset slot and the value take the
+    //    width left after it; the value is still LastItemData. (The value
+    //    cell, not the label's: the label column is the narrower one at the
+    //    1080p Inspector, and a chip there would cut the very word it shows.)
     struct RowDecor
     {
         bool* overridden = nullptr;   // instance override cell (UE shape)
         bool  reset = false;          // base/default reset slot
         bool  resetActive = false;    // value differs from its default: button drawn; else the slot is empty
+        std::function<void()> lead;   // value-cell lead painter (see above); empty = none
     };
 
     class PropertyGrid

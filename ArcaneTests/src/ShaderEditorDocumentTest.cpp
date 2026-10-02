@@ -2281,6 +2281,7 @@ namespace
         std::unique_ptr<ShaderEditorDocument> doc;
         std::string key, log;
         bool pageDrawn = false, errorDrawn = false;
+        float width = 392.0f;   // the 1080p Inspector width; a content-only case may widen it
 
         explicit NodePageHarness(Arcane::MaterialAssetData data)
         {
@@ -2301,7 +2302,7 @@ namespace
             ImGui::NewFrame();
             Arcane::Editor::PropertyGrid(state).CommitOrphans();
             ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(392, 1000), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(width, 1000), ImGuiCond_Always);
             ImGui::Begin("Inspector");
             ImGui::LogToBuffer();
             pageDrawn = false;
@@ -2342,7 +2343,7 @@ TEST_CASE("Node page: the header shows category, type and description; Outputs l
     CHECK(h.log.find("Multiply") != std::string::npos);        // the type display
     CHECK(h.log.find(mul.description) != std::string::npos);   // wrapped, dim
     CHECK(HasSection(h.log, "Outputs"));
-    CHECK(h.log.find("dynamic -> Output.color") != std::string::npos);
+    CHECK(h.log.find("| out | dynamic (now float4) -> ") != std::string::npos);   // T3-D1: the resolved type (the target may be cut at 392 px)
     CHECK_FALSE(HasSection(h.log, "Errors"));
     for (ImGuiWindow* w : h.ctx->Windows)                       // s5.1.9: no per-node preview, no copy of the material's
         CHECK(std::string(w->Name).find("##preview") == std::string::npos);
@@ -2352,6 +2353,47 @@ TEST_CASE("Node page: the header shows category, type and description; Outputs l
     CHECK(h.log.find("float (unused)") != std::string::npos);
     h.key = NodeKeyOf(0, 1); h.Frame();                         // Output has no Outputs section
     CHECK_FALSE(HasSection(h.log, "Outputs"));
+}
+
+TEST_CASE("Node page T3-D1: Inputs and Outputs rows carry the pin's type word -- dynamic pins say what they resolved to",
+          "[editor][material][nodepage]")
+{
+    // At the 1080p Inspector width (392 px). The type chip (dot + word) leads
+    // the value cell and is never what gets cut; the wiring / default text
+    // after a long "dynamic (...)" may be (its whole text is the hover
+    // tooltip, s4.1(e)), so those rows are read up to the arrow.
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    const auto at = [&](std::uint32_t id) { h.key = NodeKeyOf(0, id); h.Frame(); h.Frame(); return h.log; };
+    {
+        const std::string log = at(4);                          // Multiply: a <- Sprite Texture.rgba (float4), b <- Param 'tint' (color)
+        INFO(log);
+        CHECK(log.find("| a | dynamic (now float4) <- ") != std::string::npos);
+        CHECK(log.find("| b | dynamic (now float4) <- ") != std::string::npos);
+        CHECK(log.find("| out | dynamic (now float4) -> ") != std::string::npos);
+    }
+    {
+        const std::string log = at(2);                          // Sprite Texture: fixed pins keep their plain words
+        INFO(log);
+        CHECK(log.find("| uv | float2 default: v.uv") != std::string::npos);
+        CHECK(log.find("| rgba | float4 -> Multiply.a") != std::string::npos);
+        CHECK(log.find("| a | float (unused)") != std::string::npos);
+    }
+    {
+        const std::string log = at(5);                          // Power: nothing wired -- unresolved on both sides
+        INFO(log);
+        CHECK(log.find("| a | dynamic (unresolved) ") != std::string::npos);
+        CHECK(log.find("| out | dynamic (unresolved) ") != std::string::npos);
+    }
+    {
+        const std::string log = at(6);                          // Swizzle "xy": its output is the mask's width
+        INFO(log);
+        CHECK(log.find("| out | dynamic (now float2) ") != std::string::npos);
+    }
+    {
+        const std::string log = at(1);                          // Output.color is a FIXED float4
+        INFO(log);
+        CHECK(log.find("| color | float4 <- Multiply.out") != std::string::npos);
+    }
 }
 
 TEST_CASE("Node page: Errors (N) carries this node's codegen errors only, in kError", "[editor][material][nodepage]")
@@ -2390,6 +2432,11 @@ TEST_CASE("Node page Inputs: wired, literal, expression-neutral and refusing pin
     AddNode(g, 11, T::VertexOutput);   // passthrough pins
     g.nextId = 12;
     NodePageHarness h(GraphDoc(std::move(g)));
+    // CONTENT, not fit: wide enough that no row's text is cut. Since T3-D1 a
+    // type chip leads each value cell, so at 392 px the wiring / default text
+    // after a long "dynamic (...)" word ellipsizes (whole text on hover); the
+    // T3-D1 case reads the rows at 392.
+    h.width = 640.0f;
     const auto at = [&](std::uint32_t id) { h.key = NodeKeyOf(0, id); h.Frame(); h.Frame(); return h.log; };
     std::string log = at(4);
     CHECK(log.find("<- Sprite Texture.rgba") != std::string::npos);

@@ -831,6 +831,56 @@ TEST_CASE("PropertyGrid: after a decorated row the VALUE widget is LastItemData,
         }
 }
 
+TEST_CASE("PropertyGrid: a RowDecor lead draws first in the value cell; the value keeps LastItemData and the rest of the cell; ReadOnlyRow takes a lead too",
+          "[editor][inspector]")
+{
+    RowHarness h;
+    h.width = 392.0f;
+    float a = 0.5f, b = 0.5f, c = 0.5f;
+    float plainW = 0.0f, leadW = 0.0f, leadResetW = 0.0f, leadRight = 0.0f, valueLeft = 0.0f;
+    bool activated = false;
+    std::string log;
+    h.body = [&](PropertyGrid& g)
+    {
+        ImGui::LogToBuffer();
+        (void)g.FloatRow("Plain", a);
+        plainW = ImGui::GetItemRectSize().x;
+        RowDecor lead;
+        lead.lead = [&] { ImGui::TextUnformatted("float2"); leadRight = ImGui::GetItemRectMax().x; };
+        g.SetNextRowDecor(lead);
+        (void)g.FloatRow("Lead", b);
+        leadW = ImGui::GetItemRectSize().x;
+        valueLeft = ImGui::GetItemRectMin().x;
+        if (ImGui::IsItemActivated())
+            activated = true;
+        RowDecor leadReset;
+        leadReset.lead = [] { ImGui::TextUnformatted("float2"); };
+        leadReset.reset = true;
+        leadReset.resetActive = true;
+        g.SetNextRowDecor(leadReset);
+        (void)g.FloatRow("LeadReset", c);
+        leadResetW = ImGui::GetItemRectSize().x;
+        RowDecor readOnly;
+        readOnly.lead = [] { ImGui::TextUnformatted("float4"); };
+        g.SetNextRowDecor(readOnly);
+        g.ReadOnlyRow("Out", "-> Output.color");
+        log = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+    };
+    h.Frame();
+    CHECK(valueLeft > leadRight);                      // the lead first, then the value
+    CHECK(leadW > 0.0f);
+    CHECK(leadW < plainW);                             // the value takes the cell left after the lead
+    CHECK(leadResetW < leadW);                         // ...and the reset slot still reserves its own
+    CHECK(h.probe.count("LeadReset#reset") == 1);
+    INFO(log);
+    CHECK(log.find("| Lead | float2 { 0.50 }") != std::string::npos);
+    CHECK(log.find("| Out | float4 -> Output.color") != std::string::npos);   // lead, then the value, in one cell
+    h.Press(h.Centre("Lead"));                         // the probe is the VALUE: LastItemData survived the lead
+    CHECK(activated);
+    h.Release();
+}
+
 TEST_CASE("PropertyGrid: a decorated scalar row's GetItemID() is its own ##value id", "[editor][inspector]")
 {
     RowHarness h;

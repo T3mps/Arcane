@@ -1316,6 +1316,10 @@ project "ArcaneTests"
         -- maths + cvar are [graphfit]-tested, and ShaderEditorDocument.cpp
         -- (compiled above) calls GraphFitToContent, so it is a link dependency too.
         "%{wks.location}/ArcaneEditor/src/Widgets/GraphFit.cpp",
+        -- T3-D1: the shader graph's pin legend + its editor.graph.showPinLegend
+        -- cvar. ShaderEditorDocument.cpp (compiled above) calls it, so it is a
+        -- link dependency, and the cvar's default + toggle are unit-tested.
+        "%{wks.location}/ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp",
         -- Widget layer Task 7: SpriteDocument source-compiles into the test exe
         -- so the [editor] units drive its UNDO half directly (ApplySpriteData,
         -- the before/after step builder, and the doc-identity anchor after the

@@ -1,6 +1,8 @@
 #include "Documents/ShaderEditorDocument.hpp"
 
 #include "Documents/ShaderGraphCategoryColors.hpp"   // GraphCategoryHeaderColor: the node title band fill (s5.1.4)
+#include "Documents/ShaderGraphPinLegend.hpp"   // the canvas's pin colour legend (T3-D1)
+#include "Documents/ShaderGraphPinTypes.hpp"    // pin palette + paint rule + type/tooltip words (T3-D1)
 #include "Panels/AssetPanelModel.hpp"
 #include "Panels/AssetReferenceField.hpp"   // AssetRefRow: the texture param row (s5.3)
 #include "Widgets/CanvasEditScope.hpp"   // CanvasCreateScope/CanvasDeleteScope: the unconditional-End rule
@@ -345,22 +347,17 @@ namespace Arcane::Editor
         constexpr ImVec4 kGroupBgColor     = ImVec4(0.220f, 0.220f, 0.235f, 0.25f);
         constexpr ImVec4 kGroupBorderColor = ImVec4(0.290f, 0.290f, 0.310f, 0.60f);
 
-        // Pin/wire colors by PIN WIDTH. Unity's convention mapped onto Arcane's
-        // pin domain, which is 1 / 2 / 4 / 0-means-dynamic
-        // (GraphPinDesc::width, MaterialGraph.hpp:150-154). Unity's vec3-yellow
-        // has no counterpart here -- Arcane has no 3-lane pin -- so that row of
-        // the reference table is deliberately absent rather than mapped onto
-        // something it does not mean.
+        // Pin/wire colors by PIN WIDTH (kPinScalarColor / kPinVec2Color /
+        // kPinVec4Color / kPinDynamicColor, PinColorForWidth, and the paint
+        // rule for a resolved dynamic pin) live in
+        // Documents/ShaderGraphPinTypes.hpp (T3-D1), which the canvas, the
+        // node page and the canvas legend all read.
         //
-        // Its texture-red-orange row DOES have one, just not on this canvas: a
-        // material graph samples textures through params, but every pin on the
-        // PASS canvas is a full-frame RGBA render target. So kPinTextureColor
-        // below is that reserved row, finally spent where a texture pin
-        // actually exists.
-        constexpr ImVec4 kPinScalarColor  = ImVec4(0.502f, 0.808f, 1.0f,   1.0f); // pale azure
-        constexpr ImVec4 kPinVec2Color    = ImVec4(0.549f, 0.863f, 0.549f, 1.0f); // green
-        constexpr ImVec4 kPinVec4Color    = ImVec4(0.941f, 0.549f, 0.863f, 1.0f); // magenta
-        constexpr ImVec4 kPinDynamicColor = ImVec4(0.745f, 0.745f, 0.765f, 1.0f); // gray
+        // Unity's texture-red-orange row has a counterpart, just not on the
+        // graph canvas: a material graph samples textures through params, but
+        // every pin on the PASS canvas is a full-frame RGBA render target. So
+        // kPinTextureColor below is that reserved row, spent where a texture
+        // pin actually exists.
         // Every pass-canvas pin carries the same thing -- an RGBA render target
         // -- so the pass canvas uses ONE colour throughout rather than a type
         // scale it has no types to fill. Distinct from the 4-lane magenta on
@@ -438,23 +435,13 @@ namespace Arcane::Editor
         // Widgets/GraphCanvasBackdrop.hpp -- where it is the same four
         // assignments the Graph lens had written as an inline lambda.
 
-        ImVec4 PinColorForWidth(int width) noexcept
-        {
-            switch (width)
-            {
-                case 1:  return kPinScalarColor;
-                case 2:  return kPinVec2Color;
-                case 4:  return kPinVec4Color;
-                default: return kPinDynamicColor;   // 0 = adapts to what feeds it
-            }
-        }
-
         // One port dot: FILLED when a wire is attached, a hollow ring when not
         // (the Shader Graph reading -- "this port carries something" is visible
-        // without tracing the wire). Advances the cursor by exactly the dot, so
-        // the caller follows with SameLine + the label. Returns the dot's CENTRE
-        // in canvas space -- the pin rows anchor their wire pivot off it.
-        ImVec2 DrawPinDot(const ImVec4& color, bool connected)
+        // without tracing the wire), plus the grey "adapts" ring on a resolved
+        // dynamic pin (GraphPinPaint). Advances the cursor by exactly the dot,
+        // so the caller follows with SameLine + the label. Returns the dot's
+        // CENTRE in canvas space -- the pin rows anchor their wire pivot off it.
+        ImVec2 DrawPinDot(const GraphPinPaint& paint, bool connected)
         {
             const float lineH = ImGui::GetTextLineHeight();
             const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -464,9 +451,15 @@ namespace Arcane::Editor
             // what stays here is the LAYOUT -- the cursor advance and the centre
             // this function exists to hand back. The Graph lens shares the
             // paint and none of that.
-            DrawGraphPinDot(ImGui::GetWindowDrawList(), c, color,
-                            kNodeBodyColor, kPinDotRadius, connected);
+            DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
+                            kNodeBodyColor, kPinDotRadius, connected,
+                            paint.adapts ? &kPinDynamicColor : nullptr);
             return c;
+        }
+        // The pass canvas's dots: one colour, no type to resolve.
+        ImVec2 DrawPinDot(const ImVec4& color, bool connected)
+        {
+            return DrawPinDot(GraphPinPaint{ color, false }, connected);
         }
 
         // Horizontal spacer that right-aligns a row of `rowWidth` inside a
@@ -676,10 +669,36 @@ namespace Arcane::Editor
             NodePageIdScope& operator=(const NodePageIdScope&) = delete;
         };
 
-        // An Outputs row's width word: GraphPinDesc::width 1/2/4, 0 = dynamic.
-        const char* PinWidthName(int width)
+        // A node page pin row's type chip (T3-D1): the pin's dot -- painted by
+        // the canvas's own rule and painter, ring included -- then its type
+        // word, dim. Submitted as a RowDecor::lead, so it leads the value cell
+        // and the word is never the part a narrow Inspector cuts (the wiring
+        // text after it is, with its whole text one hover away, s4.1(e)).
+        // Centred on the row's FRAME line (a framed value widget's text sits
+        // FramePadding.y down; a read-only row's text takes the same baseline),
+        // with a text-height dummy so a read-only row keeps its height.
+        void PinTypeChip(const GraphPinPaint& paint, bool wired, const std::string& type)
         {
-            return width == 1 ? "float" : width == 2 ? "float2" : width == 4 ? "float4" : "dynamic";
+            // The slot fits a dot WITH its outer ring, ringed or not, so the
+            // type words of a section line up.
+            const float slot = 2.0f * (kPinDotRadius + kGraphPinOuterRingGap + kGraphPinOuterRingWidth);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::Dummy(ImVec2(slot, ImGui::GetTextLineHeight()));
+            const ImVec2 c(p.x + slot * 0.5f, p.y + ImGui::GetFrameHeight() * 0.5f);
+            DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
+                            ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), kPinDotRadius, wired,
+                            paint.adapts ? &kPinDynamicColor : nullptr);
+            ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);   // the dot belongs to its word
+            ImGui::TextDisabled("%s", type.c_str());
+        }
+
+        // The resolved widths of node `id`, or { 0, 0 } (unresolved) when the
+        // map has no entry.
+        Arcane::GraphNodeWidths WidthsOf(const std::unordered_map<std::uint32_t, Arcane::GraphNodeWidths>& widths,
+                                         std::uint32_t id)
+        {
+            const auto it = widths.find(id);
+            return it != widths.end() ? it->second : Arcane::GraphNodeWidths{};
         }
 
         // "<display>[ '<param>'].<pin>" for a wired input's source (s5.1.4 pin table).
@@ -2448,17 +2467,19 @@ namespace Arcane::Editor
         PropertyGrid::Rows rows(grid, "##inputs");
         if (!rows)
             return;
+        // Once for the section's rows (T3-D1): the type chips' resolution.
+        const int resolved = WidthsOf(Arcane::ResolveGraphNodeWidths(*GraphOptAt(pass)), id).inputs;
         const std::uint32_t count = Arcane::GraphNodeInputCount(*n);   // pin edits are queued: stable here
         for (std::uint32_t pin = 0; pin < count; ++pin)
         {
             ImGui::PushID(static_cast<int>(pin));
-            DrawNodePageInputRow(grid, pass, id, pin);
+            DrawNodePageInputRow(grid, pass, id, pin, resolved);
             ImGui::PopID();
         }
     }
 
     void ShaderEditorDocument::DrawNodePageInputRow(PropertyGrid& grid, std::size_t pass, std::uint32_t id,
-                                                    std::uint32_t pin)
+                                                    std::uint32_t pin, int resolvedInputs)
     {
         const Arcane::GraphNode* n = FindGraphNode(pass, id);
         if (!n)
@@ -2466,15 +2487,25 @@ namespace Arcane::Editor
         const Arcane::MaterialGraph& g = *GraphOptAt(pass);   // FindGraphNode range-checked `pass`
         const Arcane::GraphPinDesc desc = Arcane::GraphNodeInputPin(*n, pin);
         const std::string label = desc.name;   // a Custom pin's name points into the node: copy
+        // The row's type chip (T3-D1): the pin's dot + type word, resolved
+        // exactly as the canvas paints it.
+        const Arcane::GraphLink* wire = nullptr;
         for (const Arcane::GraphLink& l : g.links)
             if (l.toNode == id && l.toPin == pin)
-            {
-                grid.ReadOnlyRow(label.c_str(), "<- " + WireSourceText(g, l));
-                return;
-            }
+                wire = &l;   // last wins, as codegen reads it
+        RowDecor typeChip;
+        typeChip.lead = [paint = PinPaintFor(desc.width, resolvedInputs), wired = wire != nullptr,
+                         type = PinTypeText(desc.width, resolvedInputs)] { PinTypeChip(paint, wired, type); };
+        if (wire)
+        {
+            grid.SetNextRowDecor(typeChip);
+            grid.ReadOnlyRow(label.c_str(), "<- " + WireSourceText(g, *wire));
+            return;
+        }
         const Arcane::GraphPinNeutral neutral = Arcane::GraphPinNeutralDefault(*n, pin);
         if (!Arcane::GraphPinAcceptsLiteral(*n, pin))
         {
+            grid.SetNextRowDecor(typeChip);
             grid.ReadOnlyRow(label.c_str(), "default: " + FormatPinNeutral(neutral));
             return;
         }
@@ -2495,7 +2526,7 @@ namespace Arcane::Editor
         const char* format = (!lit && neutral.kind == Arcane::GraphPinNeutralKind::Expression) ? neutral.hlsl : "%.3f";
         float local[4];
         std::memcpy(local, shown, sizeof(local));
-        RowDecor decor;
+        RowDecor decor = std::move(typeChip);
         decor.reset = true;                  // the slot is always reserved: values stay aligned
         decor.resetActive = lit != nullptr;  // drawn only while a literal exists
         grid.SetNextRowDecor(decor);
@@ -2829,6 +2860,7 @@ namespace Arcane::Editor
         if (!rows)
             return;
         const Arcane::MaterialGraph& g = *GraphOptAt(pass);   // FindGraphNode range-checked `pass`
+        const int resolved = WidthsOf(Arcane::ResolveGraphNodeWidths(g), id).outputs;
         for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(*n); ++pin)
         {
             const Arcane::GraphPinDesc desc = Arcane::GraphNodeOutputPin(*n, pin);   // Custom: customOutWidth
@@ -2845,10 +2877,14 @@ namespace Arcane::Editor
                 targets += std::string(Arcane::GraphNodeInfo(dst->type).display) + "." +
                            Arcane::GraphNodeInputPin(*dst, l.toPin).name;
             }
-            const std::string text = std::string(PinWidthName(desc.width)) +
-                                     (targets.empty() ? std::string(" (unused)") : " -> " + targets);
+            // The type word rides the row's type chip (the dot, then the word),
+            // so the value text after it carries only the wiring.
+            RowDecor typeChip;
+            typeChip.lead = [paint = PinPaintFor(desc.width, resolved), wired = !targets.empty(),
+                             type = PinTypeText(desc.width, resolved)] { PinTypeChip(paint, wired, type); };
+            grid.SetNextRowDecor(typeChip);
             ImGui::PushID(static_cast<int>(pin));
-            grid.ReadOnlyRow(desc.name, text);
+            grid.ReadOnlyRow(desc.name, targets.empty() ? std::string("(unused)") : "-> " + targets);
             ImGui::PopID();
         }
     }
@@ -4417,6 +4453,42 @@ namespace Arcane::Editor
                 m_anchor, label, std::move(before), CapturePassListState()));
     }
 
+    GraphPinPaint ShaderEditorDocument::GraphPinPaintOn(const Arcane::GraphNode& node, std::uint32_t pin,
+                                                        bool input) const
+    {
+        const Arcane::GraphPinDesc desc = input ? Arcane::GraphNodeInputPin(node, pin)
+                                                : Arcane::GraphNodeOutputPin(node, pin);
+        const Arcane::GraphNodeWidths w = WidthsOf(m_canvasWidths, node.id);
+        return PinPaintFor(desc.width, input ? w.inputs : w.outputs);
+    }
+
+    GraphPinPaint ShaderEditorDocument::CanvasPinPaint(std::uint32_t id, std::uint32_t pin, bool input) const
+    {
+        const Arcane::MaterialGraph* g = PassGraph(static_cast<std::size_t>(std::max(0, m_activePass)));
+        const Arcane::GraphNode* n = g ? g->FindNode(id) : nullptr;
+        if (!n || pin >= (input ? Arcane::GraphNodeInputCount(*n) : Arcane::GraphNodeOutputCount(*n)))
+            return {};
+        return GraphPinPaintOn(*n, pin, input);
+    }
+
+    std::string ShaderEditorDocument::CanvasPinTooltip(const Arcane::MaterialGraph& graph, const Arcane::GraphNode& node,
+                                                       std::uint32_t pin, bool input) const
+    {
+        const Arcane::GraphPinDesc desc = input ? Arcane::GraphNodeInputPin(node, pin)
+                                                : Arcane::GraphNodeOutputPin(node, pin);
+        const Arcane::GraphNodeWidths w = WidthsOf(m_canvasWidths, node.id);
+        std::string source;
+        int fanout = 0;
+        for (const Arcane::GraphLink& l : graph.links)
+        {
+            if (input && l.toNode == node.id && l.toPin == pin)
+                source = WireSourceText(graph, l);   // last wins, as codegen reads it
+            if (!input && l.fromNode == node.id && l.fromPin == pin)
+                ++fanout;
+        }
+        return PinTooltipText(desc.name, desc.width, input ? w.inputs : w.outputs, input, source, fanout);
+    }
+
     bool ShaderEditorDocument::NodeBadged(std::uint32_t nodeId) const
     {
         const std::size_t c = static_cast<std::size_t>(std::max(0, m_activePass));
@@ -4543,6 +4615,9 @@ namespace Arcane::Editor
 
         ed::SetCurrentEditor(m_graphCtx);
         DrawCanvasBackdrop(m_gridPhase);
+        // The canvas's SCREEN rect, for the pin legend (screen space, T3-D1).
+        const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
+        const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
         // Nothing is drawn above the canvas inside this function, so the
         // remaining region IS the canvas's height.
         ed::Begin("##graphcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
@@ -4581,6 +4656,19 @@ namespace Arcane::Editor
         // rows below, consumed by the link loop after them.
         m_pinPivots.clear();
 
+        // The dynamic-width resolution codegen emits from, ONCE per frame for
+        // this graph (T3-D1): every pin dot, wire end and tooltip below reads it.
+        m_canvasWidths = Arcane::ResolveGraphNodeWidths(g);
+        m_pinTip = {};
+        // The pin legend's click target, BEFORE any node: ImGui hands hover to
+        // the first item submitted over a point, and the canvas's own hit areas
+        // come later, in ed::End -- so a click on the legend folds it instead
+        // of reaching the graph (ShaderGraphPinLegend.hpp). Screen space.
+        {
+            const CanvasPopupScope screenSpace;
+            m_pinLegendHovered = GraphPinLegendInteract(canvasMin, canvasSize);
+        }
+
         for (Arcane::GraphNode& n : g.nodes)
             DrawGraphNode(n, lod);
 
@@ -4596,20 +4684,21 @@ namespace Arcane::Editor
             // of its ends. A dangling endpoint (should not survive an edit, but
             // the draw must not depend on that) falls back to the neutral
             // dynamic colour.
+            //
+            // Each end takes its PIN's paint colour (T3-D1): a resolved dynamic
+            // pin is the width it resolved to, the same colour as its dot.
             const Arcane::GraphNode* src = g.FindNode(l.fromNode);
             const bool srcPinValid =
                 src && l.fromPin < Arcane::GraphNodeOutputCount(*src);
             const ImVec4 srcTint =
-                srcPinValid ? PinColorForWidth(
-                                  Arcane::GraphNodeOutputPin(*src, l.fromPin).width)
+                srcPinValid ? GraphPinPaintOn(*src, l.fromPin, /*input*/ false).color
                             : kPinDynamicColor;
 
             const Arcane::GraphNode* dst = g.FindNode(l.toNode);
             const bool dstPinValid =
                 dst && l.toPin < Arcane::GraphNodeInputCount(*dst);
             const ImVec4 dstTint =
-                dstPinValid ? PinColorForWidth(
-                                  Arcane::GraphNodeInputPin(*dst, l.toPin).width)
+                dstPinValid ? GraphPinPaintOn(*dst, l.toPin, /*input*/ true).color
                             : kPinDynamicColor;
 
             const ed::LinkId linkId(i + 1);
@@ -4630,6 +4719,17 @@ namespace Arcane::Editor
             DrawGradientWire(fromPin.Get(), toPin.Get(), srcTint, dstTint,
                              emphasize);
         }
+
+        // The hovered pin's tooltip (T3-D1): name, type word, wiring. The pin
+        // rows recorded the hover; the tooltip opens here, once, in screen
+        // space (CanvasPopupScope).
+        if (m_pinTip.valid)
+            if (const Arcane::GraphNode* tipNode = g.FindNode(m_pinTip.node))
+            {
+                const std::string tip = CanvasPinTooltip(g, *tipNode, m_pinTip.pin, m_pinTip.isInput);
+                const CanvasPopupScope screenSpace;
+                ImGui::SetTooltip("%s", tip.c_str());
+            }
 
         HandleGraphEdits();
 
@@ -5036,6 +5136,9 @@ namespace Arcane::Editor
             m_nodeSelApplying = false;
         }
         ed::SetCurrentEditor(nullptr);
+
+        // The pin legend's PAINT, after ed::End: screen space, above every node.
+        DrawGraphPinLegend(canvasMin, canvasSize, m_pinLegendHovered);
     }
 
     void ShaderEditorDocument::DrawGraphModals()
@@ -5500,7 +5603,7 @@ namespace Arcane::Editor
             // (SGraphPin.cpp:354-364). The dot advances the cursor by a full
             // text line either way (DrawPinDot), so the row keeps its height
             // and the node keeps its shape across the transition.
-            const ImVec2 inDot = DrawPinDot(PinColorForWidth(inDesc.width), pinWired(pin));
+            const ImVec2 inDot = DrawPinDot(GraphPinPaintOn(n, pin, /*input*/ true), pinWired(pin));
             // One radius OUTBOARD of the dot's centre -- the row's left edge,
             // which is exactly where the (0, 0.5) alignment used to put the
             // pivot: the dot is the row's first item, so pinRect.Min.x is its
@@ -5515,6 +5618,9 @@ namespace Arcane::Editor
                 ImGui::TextUnformatted(inDesc.name);
             }
             ed::EndPin();
+            // EndPin closes the pin's group: the item is the dot + its label.
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                m_pinTip = { n.id, pin, true, true };
             // Custom pins are user-authored: width cycle + remove beside each.
             // Small per-pin controls, so they go with the labels -- UE collapses
             // its "+ Add pin" button at the same threshold
@@ -5899,12 +6005,14 @@ namespace Arcane::Editor
                 ImGui::TextUnformatted(outDesc.name);
                 ImGui::SameLine();
             }
-            const ImVec2 outDot = DrawPinDot(PinColorForWidth(outDesc.width), pinFanout(pin));
+            const ImVec2 outDot = DrawPinDot(GraphPinPaintOn(n, pin, /*input*/ false), pinFanout(pin));
             // Mirror of the input row: the dot is the row's LAST item, so the
             // (1, 0.5) alignment's pinRect.Max.x was the dot's right edge.
             SetPinPivot(OutPin(n.id, pin).Get(),
                         ImVec2(outDot.x + kPinDotRadius, outDot.y));
             ed::EndPin();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                m_pinTip = { n.id, pin, false, true };
         }
 
         // Unconditional: a node that got here is on screen, and on-screen

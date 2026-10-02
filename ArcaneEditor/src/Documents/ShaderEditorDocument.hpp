@@ -25,6 +25,7 @@
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
 #include "Documents/ShaderNodeKey.hpp"   // NodeKey: the node page's "node:<pass>:<id>" key
+#include "Documents/ShaderGraphPinTypes.hpp"   // GraphPinPaint: the canvas pin paint seam (T3-D1)
 #include "Documents/PreviewStatus.hpp"
 #include "Widgets/EditorWidgets.hpp"   // TextCommitState / StableTextEdit
 // The grid's PURE half, and its ONLY half: the two phase members below are
@@ -382,6 +383,12 @@ namespace Arcane::Editor
         // chain overview's twin of GraphCanvasContext. Null until the first
         // DrawPassCanvas. Production never calls it.
         [[nodiscard]] ax::NodeEditor::EditorContext* PassCanvasContext() const noexcept { return m_passCanvasCtx; }
+        // TEST SEAM ([graphcanvas], T3-D1): how the graph canvas painted pin
+        // `pin` (an input when `input`) of node `id` on its LAST draw -- the
+        // same call the dot and the wire end make, over the widths that draw
+        // resolved. The dynamic grey with no ring when the node is not in the
+        // active graph. Production never calls it.
+        [[nodiscard]] GraphPinPaint CanvasPinPaint(std::uint32_t id, std::uint32_t pin, bool input) const;
 
         // Publish this document's CURRENT diagnostic set under "material:<guid>".
         // No anti-spam gate is needed: publication groups replace, so republishing
@@ -498,8 +505,11 @@ namespace Arcane::Editor
         void DrawNodePageHeader(const Arcane::GraphNode& n);   // chip + type + description; not a Section
         void DrawNodePageInputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
         // One input pin (s5.1.4/5.1.5): wired = "<- source", refusing = its
-        // neutral read-only, else a live literal row with Reset.
-        void DrawNodePageInputRow(PropertyGrid& grid, std::size_t pass, std::uint32_t id, std::uint32_t pin);
+        // neutral read-only, else a live literal row with Reset -- each led by
+        // the pin's type chip (T3-D1). `resolvedInputs` = the node's resolved
+        // dynamic-input width (ResolveGraphNodeWidths, taken once per section).
+        void DrawNodePageInputRow(PropertyGrid& grid, std::size_t pass, std::uint32_t id, std::uint32_t pin,
+                                  int resolvedInputs);
         void DrawNodePageSettings(PropertyGrid& grid, std::size_t pass, std::uint32_t id);
         // One live numeric/vector row (s5.1.5): read into a local, draw, open the
         // gesture with GraphEditBuilder(undoLabel, pass), write through to the
@@ -712,6 +722,13 @@ namespace Arcane::Editor
         // inside. Passed rather than stored so there is exactly one read of the
         // zoom per frame and no way for two nodes to disagree.
         void DrawGraphNode(Arcane::GraphNode& node, NodeLOD lod);
+        // A canvas pin's paint (T3-D1): PinPaintFor over this frame's
+        // m_canvasWidths. The dots, the wire ends and CanvasPinPaint all ask it.
+        [[nodiscard]] GraphPinPaint GraphPinPaintOn(const Arcane::GraphNode& node, std::uint32_t pin, bool input) const;
+        // The canvas pin tooltip's text (PinTooltipText over this frame's
+        // widths and `graph`'s wiring).
+        [[nodiscard]] std::string CanvasPinTooltip(const Arcane::MaterialGraph& graph, const Arcane::GraphNode& node,
+                                                   std::uint32_t pin, bool input) const;
         // Anchor the CURRENT pin's wire endpoint at `p` (canvas space) and
         // remember it for the frame's gradient wires. Must be called between
         // ed::BeginPin and ed::EndPin. Takes ImVec2 by value; the id is the
@@ -1046,6 +1063,18 @@ namespace Arcane::Editor
         // start from the library's own endpoints instead of re-deriving them.
         // Rebuilt every frame (positions move with the node and the view).
         std::unordered_map<std::uint64_t, ImVec2> m_pinPivots;
+        // THIS FRAME's dynamic-width resolution of the drawn graph
+        // (Arcane::ResolveGraphNodeWidths -- codegen's own), taken ONCE before
+        // the node loop. Every pin dot, wire end and pin tooltip reads it.
+        std::unordered_map<std::uint32_t, Arcane::GraphNodeWidths> m_canvasWidths;
+        // The pin a canvas pin row reported hovered (for a tooltip) this frame.
+        struct PinTipTarget
+        {
+            std::uint32_t node = 0, pin = 0;
+            bool isInput = false, valid = false;
+        };
+        PinTipTarget m_pinTip;
+        bool m_pinLegendHovered = false;   // GraphPinLegendInteract's answer, for the paint after ed::End
         // Per-pass codegen state, indexed by CHAIN index (0 = base). Sized by
         // RegenerateFromGraph; empty entries = text-owned or clean.
         std::vector<std::vector<Arcane::GraphError>> m_passGraphErrors;

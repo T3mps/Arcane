@@ -603,3 +603,51 @@ TEST_CASE("Node page s5.1.11 canvas: a click on a visible node lands while anoth
     CHECK(h.doc->SelectionKey() == Key(0, 3));
     CHECK(h.doc->SelectionEpoch() > e1);
 }
+
+TEST_CASE("Canvas pin paint: a Mul fed by a float4 Param resolves to 4 -- its pins paint PinColorForWidth(4) with the adapts ring; fixed and unresolved pins do not",
+          "[editor][graphcanvas]")
+{
+    // Output 1 <- Mul 3 (a <- Param 2 'tint', float4); Add 4 unwired.
+    MaterialGraph g;
+    GraphNode out; out.id = 1; out.type = GraphNodeType::Output; out.posX = 520.0f; out.posY = 80.0f;
+    GraphNode param; param.id = 2; param.type = GraphNodeType::Param; param.posX = 40.0f; param.posY = 80.0f;
+    param.paramName = "tint";
+    param.paramType = MatParamType::Float4;
+    param.paramDefault = MatParamValue::MakeFloat4(1.0f, 1.0f, 1.0f, 1.0f);
+    GraphNode mul; mul.id = 3; mul.type = GraphNodeType::Mul; mul.posX = 280.0f; mul.posY = 80.0f;
+    GraphNode add; add.id = 4; add.type = GraphNodeType::Add; add.posX = 280.0f; add.posY = 260.0f;
+    g.nodes = { out, param, mul, add };
+    g.links = { { 2, 0, 3, 0 }, { 3, 0, 1, 0 } };
+    g.nextId = 5;
+    CanvasHarness h(TwoNodeGraph("sprite", g));
+    h.Frame(3);
+
+    const auto same = [](const ImVec4& a, const ImVec4& b) { return a.x == b.x && a.y == b.y && a.z == b.z && a.w == b.w; };
+    const GraphPinPaint mulA = h.doc->CanvasPinPaint(3, 0, /*input*/ true);
+    CHECK(same(mulA.color, PinColorForWidth(4)));
+    CHECK(mulA.adapts);
+    const GraphPinPaint mulB = h.doc->CanvasPinPaint(3, 1, true);    // unwired, but its node resolved
+    CHECK(same(mulB.color, PinColorForWidth(4)));
+    CHECK(mulB.adapts);
+    const GraphPinPaint mulOut = h.doc->CanvasPinPaint(3, 0, false);
+    CHECK(same(mulOut.color, PinColorForWidth(4)));
+    CHECK(mulOut.adapts);
+    const GraphPinPaint paramOut = h.doc->CanvasPinPaint(2, 0, false);   // Param's dynamic out: its type's lanes
+    CHECK(same(paramOut.color, PinColorForWidth(4)));
+    CHECK(paramOut.adapts);
+    const GraphPinPaint outColor = h.doc->CanvasPinPaint(1, 0, true);    // a FIXED float4 pin: no ring
+    CHECK(same(outColor.color, PinColorForWidth(4)));
+    CHECK_FALSE(outColor.adapts);
+    const GraphPinPaint addA = h.doc->CanvasPinPaint(4, 0, true);         // unresolved: plain grey
+    CHECK(same(addA.color, kPinDynamicColor));
+    CHECK_FALSE(addA.adapts);
+
+    // The resolution is re-taken every frame: unwire the Param and the Mul goes grey.
+    MaterialGraph unwired = *h.doc->PassGraph(0);
+    unwired.links = { { 3, 0, 1, 0 } };
+    h.doc->ApplyGraphState(0, unwired);
+    h.Frame(2);
+    const GraphPinPaint after = h.doc->CanvasPinPaint(3, 0, true);
+    CHECK(same(after.color, kPinDynamicColor));
+    CHECK_FALSE(after.adapts);
+}

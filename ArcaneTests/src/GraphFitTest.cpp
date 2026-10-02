@@ -28,6 +28,8 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Documents/ShaderEditorDocument.hpp"
+#include "Documents/ShaderGraphPinLegend.hpp"   // T3-D1: the legend click case (it needs the canvas rect, i.e. the internal header above)
+#include "Widgets/GraphLegend.hpp"
 
 #include <filesystem>
 #include <initializer_list>
@@ -464,6 +466,89 @@ TEST_CASE("Pass canvas: a culled chain node keeps its measured size, so a later 
         }
         ne::SetCurrentEditor(nullptr);
     }
+    ImGui::DestroyContext(ctx);
+    ImGui::SetCurrentContext(prev);
+}
+
+TEST_CASE("Pin legend: a click on it folds it to the chip and never reaches the canvas; a click on the chip opens it again",
+          "[editor][graphcanvas]")
+{
+    // T3-D1. The legend claims its rect BEFORE any node is submitted, so ImGui
+    // hands it the hover and the canvas's background hit area (submitted in
+    // ed::End) never sees the press -- the selection below survives the click.
+    using namespace Arcane;
+    namespace ne = ax::NodeEditor;
+    MaterialGraph g;
+    GraphNode out;   out.id = 1;   out.type = GraphNodeType::Output;     out.posX = 600.0f; out.posY = 100.0f;
+    GraphNode color; color.id = 2; color.type = GraphNodeType::ConstColor; color.posX = 200.0f; color.posY = 100.0f;
+    g.nodes = { out, color };
+    GraphLink l; l.fromNode = 2; l.toNode = 1; g.links.push_back(l);
+    g.nextId = 3;
+    MaterialAssetData data;
+    data.id = Guid::FromString("dddd7777-7777-4777-8777-777777777777").value();
+    data.name = "legend";
+    data.kind = "sprite";   // no chain overview: the graph canvas draws on frame 1
+    data.graph = std::move(g);
+
+    IMGUI_CHECKVERSION();
+    ImGuiContext* prev = ImGui::GetCurrentContext();
+    ImGuiContext* ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(ctx);
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.IniFilename = nullptr;
+    unsigned char* pixels = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    CVarRegistry& reg = CVarRegistry::Get();
+    Editor::SetGraphPinLegendShown(true);
+    reg.Publish();
+    {
+        Editor::ShaderEditorDocument doc(Editor::DocServices{}, std::filesystem::path("legend.arcmat"), std::move(data));
+        auto frame = [&]
+        {
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            bool requestClose = false;
+            doc.Draw(requestClose);
+            ImGui::Render();
+            reg.Publish();   // the editor frame's publish (EditorAppFrame.cpp)
+        };
+        // The legend's centre in screen space: the box the canvas drew it in.
+        auto legendCentre = [&]
+        {
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            const ImVec2 size = Editor::GraphPinLegendBoxSize(Editor::GraphPinLegendShown());
+            ImGui::EndFrame();
+            const ImRect rect = reinterpret_cast<ne::Detail::EditorContext*>(doc.GraphCanvasContext())->GetRect();
+            const ImVec2 min = Editor::GraphLegendBoxMin(rect.Min, rect.GetSize(), size.y);
+            return ImVec2(min.x + size.x * 0.5f, min.y + size.y * 0.5f);
+        };
+        auto click = [&](ImVec2 at)
+        {
+            io.AddMousePosEvent(at.x, at.y); frame();
+            io.AddMouseButtonEvent(0, true); frame();
+            io.AddMouseButtonEvent(0, false); frame(); frame();
+        };
+        for (int i = 0; i < 3; ++i)
+            frame();
+        REQUIRE(doc.GraphCanvasContext() != nullptr);
+        ne::SetCurrentEditor(doc.GraphCanvasContext());
+        ne::SelectNode(ne::NodeId(2));
+        ne::SetCurrentEditor(nullptr);
+        frame();
+
+        click(legendCentre());
+        CHECK_FALSE(Editor::GraphPinLegendShown());          // folded to the chip
+        ne::SetCurrentEditor(doc.GraphCanvasContext());
+        CHECK(ne::IsNodeSelected(ne::NodeId(2)));            // the canvas never saw the press
+        ne::SetCurrentEditor(nullptr);
+
+        click(legendCentre());                               // the chip, now
+        CHECK(Editor::GraphPinLegendShown());
+    }
+    Editor::SetGraphPinLegendShown(true);
+    reg.Publish();
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
 }
