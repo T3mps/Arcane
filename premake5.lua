@@ -1399,6 +1399,10 @@ project "ArcaneTests"
         -- ARCANE_IDE_DESK is set) -- same desk-verify rule as ModuleBuild's
         -- Runner and RuntimeLaunch's SpawnDetached above.
         "%{wks.location}/ArcaneEditor/src/Project/IdeLaunch.cpp",
+        -- T5 asset file ops (spec 2026-09-30 s7.3/s7.4): the pure planner, the
+        -- executor and the undoable commands; AssetFileOpsTest.cpp drives them
+        -- over fake facts and a real TempDir (Recycle faked, never the shell).
+        "%{wks.location}/ArcaneEditor/src/Project/AssetFileOps.cpp",
         -- Node-page phase T2 (s4.6): OsShell -- the one "open / show / open as
         -- text" path helper. Pure halves [editor]-tested; the ShellExecuteW half is
         -- compiled (CrashReportDocument.cpp above links it) but desk-verified.

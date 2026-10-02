@@ -30,6 +30,7 @@
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (the Material kind combo)
 #include <Arcane/Mesh/MeshAsset.hpp>            // MeshSource (the Create > Mesh > preset, F4 plan 1 T11)
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -327,9 +328,11 @@ namespace Arcane::Editor
     // to sit exactly on it.
     inline constexpr std::size_t kCreateNameMaxPathChars = 240;
 
-    [[nodiscard]] inline CreateNameCheck ValidateCreateName(std::string_view name,
-                                                            const std::filesystem::path& targetDir,
-                                                            std::string_view extension)
+    // Rules 0-2 only (syntax + length) -- no filesystem. The asset file-op planner
+    // (Project/AssetFileOps) answers uniqueness from its own facts.
+    [[nodiscard]] inline CreateNameCheck ValidateCreateNameSyntax(std::string_view name,
+                                                                  const std::filesystem::path& targetDir,
+                                                                  std::string_view extension)
     {
         // ---- Rule 0/1: syntax. A pure string scan, first because it is the
         // cheapest and because a name that cannot be a file name at all makes
@@ -366,6 +369,42 @@ namespace Arcane::Editor
             return { false, "that name makes the full path too long ("
                             + std::to_string(total) + " of "
                             + std::to_string(kCreateNameMaxPathChars) + " characters)" };
+
+        return { true, {} };
+    }
+
+    // Rename-only (spec s7.6: "the extension is fixed (it is the kind)"): a stem
+    // that ends in the asset's own extension, in any letter case, is refused, so
+    // typing "wall.png" for a .png never plans a silent wall.png.png. Only the
+    // file's OWN extension is refused -- "ship.v2", or "wall.jpg" for a .png
+    // (wall.jpg.png), stays legal. Create and Duplicate never call this.
+    [[nodiscard]] inline CreateNameCheck RefuseTypedExtension(std::string_view stem, std::string_view ext)
+    {
+        const auto fold = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
+        if (!ext.empty() && stem.size() >= ext.size()
+            && std::equal(ext.begin(), ext.end(), stem.end() - static_cast<std::ptrdiff_t>(ext.size()),
+                          [&](char a, char b) { return fold(a) == fold(b); }))
+            return { false, "the extension is fixed; type the name without " + std::string(ext) };
+        return { true, {} };
+    }
+
+    // A rename stem's pure rules: rules 0-2 first (their messages and order kept),
+    // then the fixed-extension rule. No filesystem.
+    [[nodiscard]] inline CreateNameCheck ValidateRenameStemSyntax(std::string_view stem,
+                                                                  const std::filesystem::path& dir,
+                                                                  std::string_view ext)
+    {
+        if (CreateNameCheck syntax = ValidateCreateNameSyntax(stem, dir, ext); !syntax.ok)
+            return syntax;
+        return RefuseTypedExtension(stem, ext);
+    }
+
+    [[nodiscard]] inline CreateNameCheck ValidateCreateName(std::string_view name,
+                                                            const std::filesystem::path& targetDir,
+                                                            std::string_view extension)
+    {
+        if (CreateNameCheck syntax = ValidateCreateNameSyntax(name, targetDir, extension); !syntax.ok)
+            return syntax;
 
         // ---- Rule 3: uniqueness. LAST -- the only rule that touches the
         // filesystem. Its message is deliberately UNLIKE the two above: it
