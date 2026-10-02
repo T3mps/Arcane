@@ -74,8 +74,12 @@ TEST_CASE("OsShell::ShellRecycle refuses a batch with a missing file and recycle
     fs::remove(present, ec);
 }
 
-// Touches the real Recycle Bin: opt-in, excluded from default runs ("~[shell]").
-TEST_CASE("OsShell::ShellRecycle moves a file to the Recycle Bin", "[editor][shell]")
+// Touches the real Recycle Bin, so it is hidden ("[.]") and carries no [editor]
+// tag: Catch2 still selects a hidden case when a positive filter names one of
+// its tags, and "[editor]" is a routine run. No unfiltered, "[editor]" or
+// "~[gpu]" run selects it; it runs on an explicit "[shell]" (the one-time desk
+// run) or a name pattern that matches this case's own name.
+TEST_CASE("OsShell::ShellRecycle moves a file to the Recycle Bin", "[shell][.]")
 {
 #ifdef _WIN32
     namespace fs = std::filesystem;
