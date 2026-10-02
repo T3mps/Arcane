@@ -95,6 +95,7 @@ namespace Arcane::Editor
             std::vector<AssetMove> extra;               // registered images a .gltf drags along
             std::unordered_map<std::string, Arcane::Guid> byMount;
             std::optional<std::vector<std::pair<fs::path, fs::path>>> shared;   // companion -> non-moving owner .gltf
+            std::unordered_set<std::string> companions; // unregistered companions already planned (normalized generic `from`)
 
             std::vector<std::string> Uris(const fs::path& gltf) const
             {
@@ -139,6 +140,10 @@ namespace Arcane::Editor
                                                        { { from, to }, { WithMeta(from), WithMeta(to) } } });
                         continue;   // a registered image moves as its OWN asset (rebound by guid)
                     }
+                    // Co-moving .gltf files sharing a buffer: the first one carries it; the rest
+                    // must not plan (and then Claim) the same file again. Distinct source folders
+                    // give distinct `from` keys, so a real destination collision still refuses.
+                    if (!companions.insert(from.generic_string()).second) continue;
                     m.files.push_back({ from, to });
                 }
                 return std::nullopt;

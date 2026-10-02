@@ -259,6 +259,26 @@ TEST_CASE("PlanAssetOp: a .gltf moves its buffers and registered images; outside
         w.uris[PlanWorld::Key(w.content / "models" / "other.gltf")] = { "a.bin" };
         CHECK(reason(Plan(w, AssetOpKind::Move, { prop }, {}, "props")) == "Shares a.bin with other.gltf.");
     }
+    SECTION("two moving .gltf files sharing a buffer: no refusal, the buffer moves once")
+    {
+        const auto prop2 = w.Add("game://models/prop2.gltf");
+        w.uris[PlanWorld::Key(w.content / "models" / "prop2.gltf")] = { "a.bin" };
+        const AssetOpPlan p = Plan(w, AssetOpKind::Move, { prop, prop2 }, {}, "props");
+        REQUIRE(p.refusals.empty());
+        int bins = 0;
+        for (const AssetMove& m : p.moves)
+            for (const FileMove& fm : m.files)
+                if (fm.from == (w.content / "models" / "a.bin").lexically_normal())
+                {
+                    ++bins;
+                    CHECK(fm.to == (w.content / "props" / "a.bin").lexically_normal());
+                }
+        CHECK(bins == 1);
+        REQUIRE(p.moves.size() == 3);   // prop (+a.bin), tex (dragged), prop2
+        CHECK(p.moves[0].guid == prop);
+        CHECK(p.moves[2].guid == prop2);
+        CHECK(p.moves[2].files.size() == 2);   // prop2.gltf + .meta only
+    }
     SECTION("a destination occupied only by a companion refuses")
     {
         w.Touch(w.content / "props" / "a.bin");
