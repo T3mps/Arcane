@@ -669,27 +669,71 @@ namespace Arcane::Editor
             NodePageIdScope& operator=(const NodePageIdScope&) = delete;
         };
 
+        // T3-D2 (user decision 2026-10-02): how much of a pin row's wiring /
+        // default text must stay readable AFTER the type word. Below dot + the
+        // widest type word + this many characters, the node page shows the dot
+        // alone and the word leads the row's hover tooltip.
+        ARC_CVAR_RANGED("editor.inspector.nodePageMinTextRun", "editor", Int32,
+                        ::Arcane::CVarValue::Int32(16), ::Arcane::CVarValue::Int32(0),
+                        ::Arcane::CVarValue::Int32(256), ::Arcane::CVarFlags::Archive,
+                        "Characters of a node page pin row's wiring or default text that must stay readable "
+                        "after the pin's type word; a narrower value cell shows only the pin's dot and moves "
+                        "the type word into the row's hover tooltip");
+
+        int NodePageMinTextRun()
+        {
+            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            const auto v = reg.Get(reg.Find("editor.inspector.nodePageMinTextRun"));
+            return (v && v->type == Arcane::CVarType::Int32) ? v->AsInt32() : 16;
+        }
+
+        // The chip's dot slot: it fits a dot WITH its outer ring, ringed or
+        // not, so the type words of a section line up.
+        constexpr float kPinChipSlot = 2.0f * (kPinDotRadius + kGraphPinOuterRingGap + kGraphPinOuterRingWidth);
+
+        // The value-cell width the chip needs to show its word (T3-D2), from
+        // the CURRENT font: the dot slot, the widest word ANY pin shows (so
+        // every row of a page makes the same call and the dots line up), the
+        // gaps, and the cvar's run of 'x'-wide characters after it.
+        float NodePageTypeWordCellWidth()
+        {
+            float widest = 0.0f;
+            for (int declared = 0; declared <= 4; ++declared)
+                for (int resolved = 0; resolved <= 4; ++resolved)
+                    widest = std::max(widest, ImGui::CalcTextSize(PinTypeText(declared, resolved).c_str()).x);
+            const ImGuiStyle& style = ImGui::GetStyle();
+            return kPinChipSlot + style.ItemInnerSpacing.x + widest + style.ItemSpacing.x +
+                   ImGui::CalcTextSize("x").x * static_cast<float>(NodePageMinTextRun());
+        }
+
         // A node page pin row's type chip (T3-D1): the pin's dot -- painted by
         // the canvas's own rule and painter, ring included -- then its type
         // word, dim. Submitted as a RowDecor::lead, so it leads the value cell
         // and the word is never the part a narrow Inspector cuts (the wiring
         // text after it is, with its whole text one hover away, s4.1(e)).
+        // Narrower than NodePageTypeWordCellWidth (T3-D2) it draws the dot
+        // alone and RETURNS the word: the row's hover tooltip leads with it
+        // (and the dot tooltips it), so the cell keeps its room for the text.
         // Centred on the row's FRAME line (a framed value widget's text sits
         // FramePadding.y down; a read-only row's text takes the same baseline),
         // with a text-height dummy so a read-only row keeps its height.
-        void PinTypeChip(const GraphPinPaint& paint, bool wired, const std::string& type)
+        std::string PinTypeChip(const GraphPinPaint& paint, bool wired, const std::string& type)
         {
-            // The slot fits a dot WITH its outer ring, ringed or not, so the
-            // type words of a section line up.
-            const float slot = 2.0f * (kPinDotRadius + kGraphPinOuterRingGap + kGraphPinOuterRingWidth);
+            const bool showWord = ImGui::GetContentRegionAvail().x >= NodePageTypeWordCellWidth();
             const ImVec2 p = ImGui::GetCursorScreenPos();
-            ImGui::Dummy(ImVec2(slot, ImGui::GetTextLineHeight()));
-            const ImVec2 c(p.x + slot * 0.5f, p.y + ImGui::GetFrameHeight() * 0.5f);
+            ImGui::Dummy(ImVec2(kPinChipSlot, ImGui::GetTextLineHeight()));
+            const ImVec2 c(p.x + kPinChipSlot * 0.5f, p.y + ImGui::GetFrameHeight() * 0.5f);
             DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
                             ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), kPinDotRadius, wired,
                             paint.adapts ? &kPinDynamicColor : nullptr);
+            if (!showWord)
+            {
+                ImGui::SetItemTooltip("%s", type.c_str());
+                return type;
+            }
             ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);   // the dot belongs to its word
             ImGui::TextDisabled("%s", type.c_str());
+            return {};
         }
 
         // The resolved widths of node `id`, or { 0, 0 } (unresolved) when the
@@ -2495,7 +2539,7 @@ namespace Arcane::Editor
                 wire = &l;   // last wins, as codegen reads it
         RowDecor typeChip;
         typeChip.lead = [paint = PinPaintFor(desc.width, resolvedInputs), wired = wire != nullptr,
-                         type = PinTypeText(desc.width, resolvedInputs)] { PinTypeChip(paint, wired, type); };
+                         type = PinTypeText(desc.width, resolvedInputs)] { return PinTypeChip(paint, wired, type); };
         if (wire)
         {
             grid.SetNextRowDecor(typeChip);
@@ -2881,7 +2925,7 @@ namespace Arcane::Editor
             // so the value text after it carries only the wiring.
             RowDecor typeChip;
             typeChip.lead = [paint = PinPaintFor(desc.width, resolved), wired = !targets.empty(),
-                             type = PinTypeText(desc.width, resolved)] { PinTypeChip(paint, wired, type); };
+                             type = PinTypeText(desc.width, resolved)] { return PinTypeChip(paint, wired, type); };
             grid.SetNextRowDecor(typeChip);
             ImGui::PushID(static_cast<int>(pin));
             grid.ReadOnlyRow(desc.name, targets.empty() ? std::string("(unused)") : "-> " + targets);

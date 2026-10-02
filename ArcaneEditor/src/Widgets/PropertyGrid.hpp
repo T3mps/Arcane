@@ -140,12 +140,17 @@ namespace Arcane::Editor
     //    width left after it; the value is still LastItemData. (The value
     //    cell, not the label's: the label column is the narrower one at the
     //    1080p Inspector, and a chip there would cut the very word it shows.)
+    //    It RETURNS the text it folded away (T3-D2: a narrow cell shows the
+    //    node page's dot alone): non-empty, the cell's hover tooltip leads
+    //    with it -- a ReadOnlyRow's tooltip is then "<folded>\n<whole text>"
+    //    whether or not the text was cut; a value row tooltips it on the value
+    //    widget. Empty = it drew everything.
     struct RowDecor
     {
         bool* overridden = nullptr;   // instance override cell (UE shape)
         bool  reset = false;          // base/default reset slot
         bool  resetActive = false;    // value differs from its default: button drawn; else the slot is empty
-        std::function<void()> lead;   // value-cell lead painter (see above); empty = none
+        std::function<std::string()> lead;   // value-cell lead painter -> its folded text (see above); empty = none
     };
 
     class PropertyGrid
@@ -253,5 +258,6 @@ namespace Arcane::Editor
         RowDecor m_decor{};
         bool m_hasDecor = false;
         bool m_valueDisabled = false;   // BeginValueCell opened a BeginDisabled for an inherited row
+        std::string m_leadFolded;       // BeginValueCell's lead folded this away: EndValueCell tooltips it
     };
 }

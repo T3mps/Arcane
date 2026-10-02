@@ -2319,6 +2319,9 @@ namespace
         ImVec2 Centre(const std::string& label) { INFO(label); REQUIRE(probe.count(label) == 1); return probe.at(label); }
         void Press(ImVec2 at) { ImGuiIO& io = ImGui::GetIO(); io.AddMousePosEvent(at.x, at.y); Frame(); io.AddMouseButtonEvent(0, true); Frame(); }
         void Click(ImVec2 at) { Press(at); ImGui::GetIO().AddMouseButtonEvent(0, false); Frame(); }
+        // ForTooltip = Stationary + DelayShort (style.HoverFlagsForTooltipMouse): ~0.3 s still.
+        void Hover(ImVec2 at, int frames = 40) { ImGui::GetIO().AddMousePosEvent(at.x, at.y); for (int i = 0; i < frames; ++i) Frame(); }
+        static bool TooltipShown() { ImGuiWindow* w = ImGui::FindWindowByName("##Tooltip_00"); return w && w->Active; }
         void Type(const char* s) { ImGui::GetIO().AddInputCharactersUTF8(s); Frame(); }
         void Key(ImGuiKey k) { ImGui::GetIO().AddKeyEvent(k, true); Frame(); ImGui::GetIO().AddKeyEvent(k, false); Frame(); }
         const Arcane::GraphNode* Node(std::size_t pass, std::uint32_t id) const
@@ -2343,14 +2346,14 @@ TEST_CASE("Node page: the header shows category, type and description; Outputs l
     CHECK(h.log.find("Multiply") != std::string::npos);        // the type display
     CHECK(h.log.find(mul.description) != std::string::npos);   // wrapped, dim
     CHECK(HasSection(h.log, "Outputs"));
-    CHECK(h.log.find("| out | dynamic (now float4) -> ") != std::string::npos);   // T3-D1: the resolved type (the target may be cut at 392 px)
+    CHECK(h.log.find("| out | -> Output.color") != std::string::npos);   // T3-D2: at 392 px the type word is the dot's tooltip
     CHECK_FALSE(HasSection(h.log, "Errors"));
     for (ImGuiWindow* w : h.ctx->Windows)                       // s5.1.9: no per-node preview, no copy of the material's
         CHECK(std::string(w->Name).find("##preview") == std::string::npos);
 
     h.key = NodeKeyOf(0, 2); h.Frame();                         // Sprite Texture: one wired output, one not
-    CHECK(h.log.find("float4 -> Multiply.a") != std::string::npos);
-    CHECK(h.log.find("float (unused)") != std::string::npos);
+    CHECK(h.log.find("| rgba | -> Multiply.a") != std::string::npos);
+    CHECK(h.log.find("| a | (unused)") != std::string::npos);
     h.key = NodeKeyOf(0, 1); h.Frame();                         // Output has no Outputs section
     CHECK_FALSE(HasSection(h.log, "Outputs"));
 }
@@ -2358,11 +2361,13 @@ TEST_CASE("Node page: the header shows category, type and description; Outputs l
 TEST_CASE("Node page T3-D1: Inputs and Outputs rows carry the pin's type word -- dynamic pins say what they resolved to",
           "[editor][material][nodepage]")
 {
-    // At the 1080p Inspector width (392 px). The type chip (dot + word) leads
-    // the value cell and is never what gets cut; the wiring / default text
-    // after a long "dynamic (...)" may be (its whole text is the hover
-    // tooltip, s4.1(e)), so those rows are read up to the arrow.
+    // A WIDE Inspector (640 px): the value cell fits the dot, the widest type
+    // word and editor.inspector.nodePageMinTextRun characters after it, so the
+    // chip shows its word (T3-D2; at 392 px the word folds into the tooltip --
+    // the next case). The wiring / default text after a long "dynamic (...)"
+    // may still be cut (whole text on hover, s4.1(e)): read up to the arrow.
     NodePageHarness h(GraphDoc(NodePageGraph()));
+    h.width = 640.0f;
     const auto at = [&](std::uint32_t id) { h.key = NodeKeyOf(0, id); h.Frame(); h.Frame(); return h.log; };
     {
         const std::string log = at(4);                          // Multiply: a <- Sprite Texture.rgba (float4), b <- Param 'tint' (color)
@@ -2393,6 +2398,76 @@ TEST_CASE("Node page T3-D1: Inputs and Outputs rows carry the pin's type word --
         const std::string log = at(1);                          // Output.color is a FIXED float4
         INFO(log);
         CHECK(log.find("| color | float4 <- Multiply.out") != std::string::npos);
+    }
+}
+
+TEST_CASE("Node page T3-D2: at the 392 px Inspector a pin row shows only its dot -- the type word leads the row's hover tooltip",
+          "[editor][material][nodepage]")
+{
+    // The 1080p Inspector's value cell is narrower than the dot + the widest
+    // type word + editor.inspector.nodePageMinTextRun characters, so EVERY row
+    // folds its word (the rule reads the widest word, so a page's rows agree).
+    NodePageHarness h(GraphDoc(NodePageGraph()));
+    const auto at = [&](std::uint32_t id) { h.key = NodeKeyOf(0, id); h.Frame(); h.Frame(); return h.log; };
+    // `head`, then only whitespace, then `tail`: the two-line tooltip as the log
+    // records it (the tooltip's text is logged too; its lines split on '\n').
+    const auto leads = [](const std::string& log, const std::string& head, const std::string& tail)
+    {
+        const std::size_t pos = log.find(head);
+        if (pos == std::string::npos) return false;
+        const std::size_t next = log.find_first_not_of(" \r\n", pos + head.size());
+        return next != std::string::npos && log.compare(next, tail.size(), tail) == 0;
+    };
+    {
+        const std::string log = at(4);                          // Multiply
+        INFO(log);
+        CHECK(log.find("| a | <- Sprite Texture.rgba") != std::string::npos);   // the whole wiring, no word ahead of it
+        CHECK(log.find("| b | <- Param 'tint'.out") != std::string::npos);
+        CHECK(log.find("| out | -> Output.color") != std::string::npos);
+        CHECK(log.find("dynamic (") == std::string::npos);
+    }
+    h.Hover(h.Centre("a"));                                     // the wired row's text
+    CHECK(NodePageHarness::TooltipShown());
+    {
+        INFO(h.log);
+        CHECK(leads(h.log, "dynamic (now float4)", "<- Sprite Texture.rgba"));   // the type first, then the full row text
+    }
+    h.Hover(ImVec2(0.0f, 0.0f), 1);                             // off the rows: the next page reads tooltip-free
+    {
+        const std::string log = at(2);                          // Sprite Texture: fixed words fold too
+        INFO(log);
+        CHECK(log.find("| uv | default: v.uv") != std::string::npos);
+        CHECK(log.find("| rgba | -> Multiply.a") != std::string::npos);
+        CHECK(log.find("float4") == std::string::npos);
+    }
+    {
+        const std::string log = at(5);                          // Power: live literal rows (a neutral, b = 2)
+        INFO(log);
+        CHECK(log.find("2.000") != std::string::npos);
+        CHECK(log.find("dynamic (") == std::string::npos);
+    }
+    h.Hover(h.Centre("b"));                                     // the literal's value widget
+    CHECK(NodePageHarness::TooltipShown());
+    {
+        INFO(h.log);
+        CHECK(h.log.find("dynamic (unresolved)") != std::string::npos);
+    }
+
+    // The threshold is the cvar's run, not a pixel literal: with no run to keep
+    // readable, the dot + widest word fit 392 px and the word comes back.
+    struct RunRestore
+    {
+        ~RunRestore() { Arcane::CVarRegistry::Get().UnregisterModule("nodepage-test"); Arcane::CVarRegistry::Get().Publish(); }
+    } runRestore;
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    REQUIRE(reg.Set(reg.Find("editor.inspector.nodePageMinTextRun"), Arcane::CVarValue::Int32(0),
+                    Arcane::SetBy::Code, "nodepage-test") == Arcane::SetResult::Applied);
+    reg.Publish();
+    h.Hover(ImVec2(0.0f, 0.0f), 1);
+    {
+        const std::string log = at(4);
+        INFO(log);
+        CHECK(log.find("| a | dynamic (now float4) <- ") != std::string::npos);
     }
 }
 
@@ -2432,10 +2507,9 @@ TEST_CASE("Node page Inputs: wired, literal, expression-neutral and refusing pin
     AddNode(g, 11, T::VertexOutput);   // passthrough pins
     g.nextId = 12;
     NodePageHarness h(GraphDoc(std::move(g)));
-    // CONTENT, not fit: wide enough that no row's text is cut. Since T3-D1 a
-    // type chip leads each value cell, so at 392 px the wiring / default text
-    // after a long "dynamic (...)" word ellipsizes (whole text on hover); the
-    // T3-D1 case reads the rows at 392.
+    // CONTENT, not fit: wide enough that no row's text is cut. A type chip
+    // leads each value cell (T3-D1): at 640 px it shows its word, at 392 px
+    // only its dot (T3-D2) -- the two T3-D1/T3-D2 cases read those layouts.
     h.width = 640.0f;
     const auto at = [&](std::uint32_t id) { h.key = NodeKeyOf(0, id); h.Frame(); h.Frame(); return h.log; };
     std::string log = at(4);

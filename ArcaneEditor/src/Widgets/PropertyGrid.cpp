@@ -199,6 +199,7 @@ namespace Arcane::Editor
     void PropertyGrid::BeginValueCell(const char* label, bool dimmed)
     {
         m_events = {};
+        m_leadFolded.clear();
         const RowDecor decor = m_hasDecor ? std::move(m_decor) : RowDecor{};
         m_decor = RowDecor{};   // one-shot: a lead's captures die with its row
         m_hasDecor = false;
@@ -231,7 +232,7 @@ namespace Arcane::Editor
             // FIRST in the cell. Its items consume the -FLT_MIN the label cell
             // set (ItemAdd clears NextItemData), so the value's width is
             // re-stated after it unless the reset slot below states its own.
-            decor.lead();
+            m_leadFolded = decor.lead();
             ImGui::SameLine();
             if (!decor.reset)
                 ImGui::SetNextItemWidth(-FLT_MIN);
@@ -265,6 +266,14 @@ namespace Arcane::Editor
         {
             ImGui::EndDisabled();
             m_valueDisabled = false;
+        }
+        // What the lead folded away rides the value widget's tooltip (T3-D2).
+        // A tooltip's Begin/End restores LastItemData, so the probe below and
+        // the caller's IsItemActivated() still read the value widget.
+        if (!m_leadFolded.empty())
+        {
+            ImGui::SetItemTooltip("%s", m_leadFolded.c_str());
+            m_leadFolded.clear();
         }
         ProbeItem(label);   // the value widget is still LastItemData
         ImGui::PopID();
@@ -442,7 +451,7 @@ namespace Arcane::Editor
     void PropertyGrid::ReadOnlyRow(const char* label, std::string_view text)
     {
         // RowDecor::lead is the one decoration a read-only row takes.
-        std::function<void()> lead;
+        std::function<std::string()> lead;
         if (m_hasDecor)
         {
             IM_ASSERT(!m_decor.overridden && !m_decor.reset && "ReadOnlyRow: only RowDecor::lead applies");
@@ -453,15 +462,20 @@ namespace Arcane::Editor
         BeginPlainRow();
         (void)FieldLabelCell(label, true);
         ImGui::PushID(label);
+        std::string folded;
         if (lead)
         {
-            lead();
+            folded = lead();
             ImGui::SameLine();
         }
         // Cut to the cell (node-page s4.1(e)); the full text is one hover away.
+        // A lead's folded text (T3-D2) leads that tooltip, cut or not: the
+        // row's meaning is never more than one hover away.
         const std::string shown = EllipsisToWidth(text, ImGui::GetContentRegionAvail().x);
         ImGui::TextDisabled("%s", shown.c_str());
-        if (shown != text)
+        if (!folded.empty())
+            ImGui::SetItemTooltip("%s\n%.*s", folded.c_str(), static_cast<int>(text.size()), text.data());
+        else if (shown != text)
             ImGui::SetItemTooltip("%.*s", static_cast<int>(text.size()), text.data());
         ProbeItem(label);
         ImGui::PopID();

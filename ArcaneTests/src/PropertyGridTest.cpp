@@ -846,7 +846,7 @@ TEST_CASE("PropertyGrid: a RowDecor lead draws first in the value cell; the valu
         (void)g.FloatRow("Plain", a);
         plainW = ImGui::GetItemRectSize().x;
         RowDecor lead;
-        lead.lead = [&] { ImGui::TextUnformatted("float2"); leadRight = ImGui::GetItemRectMax().x; };
+        lead.lead = [&] { ImGui::TextUnformatted("float2"); leadRight = ImGui::GetItemRectMax().x; return std::string(); };
         g.SetNextRowDecor(lead);
         (void)g.FloatRow("Lead", b);
         leadW = ImGui::GetItemRectSize().x;
@@ -854,14 +854,14 @@ TEST_CASE("PropertyGrid: a RowDecor lead draws first in the value cell; the valu
         if (ImGui::IsItemActivated())
             activated = true;
         RowDecor leadReset;
-        leadReset.lead = [] { ImGui::TextUnformatted("float2"); };
+        leadReset.lead = [] { ImGui::TextUnformatted("float2"); return std::string(); };
         leadReset.reset = true;
         leadReset.resetActive = true;
         g.SetNextRowDecor(leadReset);
         (void)g.FloatRow("LeadReset", c);
         leadResetW = ImGui::GetItemRectSize().x;
         RowDecor readOnly;
-        readOnly.lead = [] { ImGui::TextUnformatted("float4"); };
+        readOnly.lead = [] { ImGui::TextUnformatted("float4"); return std::string(); };
         g.SetNextRowDecor(readOnly);
         g.ReadOnlyRow("Out", "-> Output.color");
         log = ImGui::GetCurrentContext()->LogBuffer.c_str();
@@ -879,6 +879,69 @@ TEST_CASE("PropertyGrid: a RowDecor lead draws first in the value cell; the valu
     h.Press(h.Centre("Lead"));                         // the probe is the VALUE: LastItemData survived the lead
     CHECK(activated);
     h.Release();
+}
+
+namespace
+{
+    // `head`, then only whitespace, then `tail`: a two-line tooltip as the log
+    // records it (a tooltip's text is logged too; its lines split on '\n').
+    bool LeadsWith(const std::string& log, const std::string& head, const std::string& tail)
+    {
+        const std::size_t at = log.find(head);
+        if (at == std::string::npos) return false;
+        const std::size_t next = log.find_first_not_of(" \r\n", at + head.size());
+        return next != std::string::npos && log.compare(next, tail.size(), tail) == 0;
+    }
+}
+
+TEST_CASE("PropertyGrid: a lead that folds its text away hands it to the cell's hover tooltip -- a ReadOnlyRow's tooltip leads with it even when uncut, a value row tooltips it",
+          "[editor][inspector]")
+{
+    // T3-D2: the node page's narrow-cell type dot. The lead returns what it did
+    // NOT draw; the cell's hover tooltip carries it (first line), so nothing
+    // the row means is lost.
+    RowHarness h;
+    float v = 0.5f;
+    std::string log;
+    h.body = [&](PropertyGrid& g)
+    {
+        ImGui::LogToBuffer();
+        RowDecor folded;
+        folded.lead = [] { ImGui::Dummy(ImVec2(8.0f, 8.0f)); return std::string("float4"); };
+        g.SetNextRowDecor(folded);
+        g.ReadOnlyRow("Out", "-> Output.color");   // short: never cut at 640 px
+        RowDecor value;
+        value.lead = [] { ImGui::Dummy(ImVec2(8.0f, 8.0f)); return std::string("float2"); };
+        g.SetNextRowDecor(value);
+        (void)g.FloatRow("In", v);
+        RowDecor shown;
+        shown.lead = [] { ImGui::TextUnformatted("float"); return std::string(); };
+        g.SetNextRowDecor(shown);
+        g.ReadOnlyRow("Whole", "-> Add.a");        // folded nothing, cut nothing: no tooltip
+        log = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+    };
+    h.Frame();
+    {
+        INFO(log);
+        CHECK(log.find("| Out | -> Output.color") != std::string::npos);   // the folded word is not in the row
+        CHECK(log.find("float4") == std::string::npos);
+        CHECK(log.find("float2") == std::string::npos);
+    }
+    h.Hover(h.Centre("Out"));
+    CHECK(RowHarness::TooltipShown());
+    {
+        INFO(log);
+        CHECK(LeadsWith(log, "float4", "-> Output.color"));   // the type first, then the whole row text
+    }
+    h.Hover(h.Centre("In"));
+    CHECK(RowHarness::TooltipShown());
+    {
+        INFO(log);
+        CHECK(log.find("float2") != std::string::npos);
+    }
+    h.Hover(h.Centre("Whole"));
+    CHECK_FALSE(RowHarness::TooltipShown());
 }
 
 TEST_CASE("PropertyGrid: a decorated scalar row's GetItemID() is its own ##value id", "[editor][inspector]")
