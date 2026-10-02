@@ -3,6 +3,7 @@
 #include <Arcane/Project/AssetRegistry.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <optional>
 #include <set>
@@ -364,6 +365,10 @@ namespace Arcane::Editor
             // pass that only rebuilt ROWS (a search keystroke) deliberately
             // does NOT bump it: the graph does not read Rows().
             ++entriesStamp;
+            // T5 s7.9: a removed asset leaves the selection here. A
+            // pre-rebuild Select (--select-asset) survives: its guid is in
+            // the rebuilt entries.
+            PruneSelection();
         }
 
         if (m_rowsDirty)
@@ -748,11 +753,65 @@ namespace Arcane::Editor
         m_groupOpen.clear();
         m_childrenOpen.clear();
         selected = Arcane::Guid{};
+        selection.clear();
         selectionStamp = 0;
         // entriesStamp and selectionGesture are deliberately NOT reset here --
         // see their declarations: a monotonic counter can never compare equal
         // to a stale "built at" value a consumer is still holding from the
         // outgoing project.
         ++entriesStamp;
+    }
+
+    void AssetPanelModel::ApplySelection(std::vector<Arcane::Guid> sel, const Arcane::Guid& clicked)
+    {
+        selection = std::move(sel);
+        const bool kept = clicked.IsValid() && InSelection(clicked);
+        const Arcane::Guid primary = kept ? clicked : (selection.empty() ? Arcane::Guid{} : selection.back());
+        if (kept)
+            ++selectionGesture;
+        if (primary != selected)
+        {
+            selected = primary;
+            ++selectionStamp;
+        }
+    }
+
+    // A right-click gesture, as Select was.
+    void AssetPanelModel::SetPrimary(const Arcane::Guid& g)
+    {
+        if (!InSelection(g))
+            return;
+        ++selectionGesture;
+        if (g != selected)
+        {
+            selected = g;
+            ++selectionStamp;
+        }
+    }
+
+    void AssetPanelModel::PruneSelection()
+    {
+        const auto gone = [this](const Arcane::Guid& g) { return m_entries.find(g) == m_entries.end(); };
+        const std::size_t n = selection.size();
+        std::erase_if(selection, gone);
+        bool changed = selection.size() != n;
+        if (selected.IsValid() && gone(selected))
+        {
+            selected = selection.empty() ? Arcane::Guid{} : selection.back();
+            changed = true;
+        }
+        if (changed)
+            ++selectionStamp;
+    }
+
+    std::string AssetBrowserContextLine(const AssetPanelModel& m)
+    {
+        char b[64];
+        const HealthCounts h = m.Health();
+        if (m.Filtered())
+            std::snprintf(b, sizeof(b), "%d of %d shown", m.ShownAssetCount(), h.total);
+        else
+            std::snprintf(b, sizeof(b), "%d assets \xC2\xB7 %d selected", h.total, m.SelectionCount());
+        return b;
     }
 }

@@ -741,8 +741,29 @@ namespace Arcane::Editor
         // MONOTONIC: ResetForProjectSwitch deliberately leaves it alone, like
         // entriesStamp, so no consumer can hold a stale equal value.
         std::uint64_t  selectionGesture = 0;
-        void Select(const Arcane::Guid& g) { ++selectionGesture; if (g != selected) { selected = g; ++selectionStamp; } }
-        void ResetForProjectSwitch();                     // clears everything incl. selected
+
+        // T5 s7.9: the multi-selection. `selected` above stays THE primary
+        // (the Inspector, Graph and Status lenses read it), mirroring
+        // SelectionContext (Scene/SelectionContext.hpp): `selection` is the
+        // full set, `selected` the one guid inside it that pages show.
+        std::vector<Arcane::Guid> selection;
+        // Single-select: selection = {g}; signature and bumps unchanged.
+        void Select(const Arcane::Guid& g) { ++selectionGesture; selection.clear(); if (g.IsValid()) selection.push_back(g); if (g != selected) { selected = g; ++selectionStamp; } }
+        // Replaces the set (a Ctrl-toggle, Shift-range or Ctrl+A result).
+        // `clicked` becomes the primary if it is still in `sel`, else the
+        // last entry (nil when empty); selectionGesture bumps only then.
+        void ApplySelection(std::vector<Arcane::Guid> sel, const Arcane::Guid& clicked);
+        // A right-click inside the selection: re-points the primary, keeps
+        // the set. A guid outside the selection is ignored.
+        void SetPrimary(const Arcane::Guid& g);
+        [[nodiscard]] bool InSelection(const Arcane::Guid& g) const { return std::find(selection.begin(), selection.end(), g) != selection.end(); }
+        [[nodiscard]] int SelectionCount() const noexcept { return static_cast<int>(selection.size()); }
+        // Drops guids with no entry (RebuildIfDirty calls it when entries
+        // changed) and moves/clears `selected`. Bumps selectionStamp, NEVER
+        // selectionGesture: a removal is not a user gesture (the
+        // SelectionContext::Epoch rule).
+        void PruneSelection();
+        void ResetForProjectSwitch();                     // clears everything incl. selected + selection
 
     private:
         void RebuildRows();
@@ -771,4 +792,8 @@ namespace Arcane::Editor
         std::vector<RailEntry>     m_rail;
         int m_shownAssetCount = 0;
     };
+
+    // T5 s7.9: the Browser's bottom-bar context line -- "X of N shown" while
+    // a search or kind filter is active, else "N assets <U+00B7> M selected".
+    [[nodiscard]] std::string AssetBrowserContextLine(const AssetPanelModel& m);
 }
