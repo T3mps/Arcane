@@ -64,6 +64,7 @@ namespace Arcane
             }
             if (mapStack_.empty() && asset.defaultMap) (void)SetBaseMap(*asset.defaultMap);
             rebind_ = {};   // a capture armed against the old evaluator is void
+            ++generation_;
             return true;
         }
         Clear();
@@ -84,6 +85,7 @@ namespace Arcane
         const auto loaded = LoadProfile("Default");
         if (loaded.status == ProfileLoadStatus::Invalid)
             ARC_WARN("input: invalid Default binding profile for project {}", projectId.ToString());
+        ++generation_;
         return true;
     }
 
@@ -100,6 +102,7 @@ namespace Arcane
         reportedQueries_.clear();
         mapStack_.clear();
         scheme_.clear();
+        ++generation_;   // never reset: a Clear is itself a move
     }
 
     void LocalInputUser::Update(double dt, const InputSnapshot& snapshot)
