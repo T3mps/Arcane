@@ -454,18 +454,23 @@ namespace Arcane::Editor
         return false;   // in-memory payloads cannot vanish
     }
 
-    std::optional<std::string> AssetFileOpExecutor::WritePayload(const FilePayload& p) const
+    std::optional<std::string> AssetFileOpExecutor::WritePayload(const FilePayload& p, std::vector<fs::path>* created) const
     {
         const std::optional<std::vector<std::byte>> bytes = p.bytes.Load();
         if (!bytes) return "The undo copy of " + Display(p.path) + " could not be read.";
         std::error_code ec;
+        const std::vector<fs::path> missing = MissingDirs(p.path.parent_path());
         fs::create_directories(p.path.parent_path(), ec);
+        if (created)
+            for (const fs::path& d : missing)   // a partial failure still claims what it made
+                if (std::error_code e; fs::is_directory(d, e)) created->push_back(d);
         {
             std::ofstream out(p.path, std::ios::binary | std::ios::trunc);
             if (out) out.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
             if (!out) return Display(p.path) + " could not be written.";
         }
         fs::last_write_time(p.path, p.mtime, ec);   // the watcher sees no change (s7.4)
+        if (ec) return Display(p.path) + " could not keep its modified time (" + ec.message() + ").";
         return std::nullopt;
     }
 
@@ -538,12 +543,17 @@ namespace Arcane::Editor
         for (const AssetPayloads& a : payloads)
             for (std::size_t i = 1; i < a.files.size(); ++i) if (!isMeta(a.files[i])) order.push_back(&a.files[i]);
 
-        std::vector<fs::path> written;
-        const auto undoWrites = [&] { for (const fs::path& p : written) { std::error_code ec; fs::remove(p, ec); } };
+        std::vector<fs::path> written, created;   // created: the folders the writes made (T5-A10's rule)
+        const auto undoWrites = [&]
+        {
+            for (const fs::path& p : written) { std::error_code ec; fs::remove(p, ec); }
+            PruneCreatedDirs(created);
+        };
         for (const FilePayload* f : order)
         {
-            if (auto e = WritePayload(*f)) { undoWrites(); return e; }
-            written.push_back(f->path);
+            const std::optional<std::string> e = WritePayload(*f, &created);
+            written.push_back(f->path);   // even on failure: (1) proved the path was free, so a partial file is ours
+            if (e) { undoWrites(); return e; }
         }
         std::vector<Arcane::Guid> restored;       // (3) the recorded guid must come back
         for (const AssetPayloads& a : payloads)

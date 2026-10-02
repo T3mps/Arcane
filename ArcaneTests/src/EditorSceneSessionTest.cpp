@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Scene/SceneSession.hpp"
+#include "Helpers/AssetFileOpsFakes.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
@@ -357,4 +358,23 @@ TEST_CASE("a module-reload clear names its cause and keeps dirty/clean as it was
         h.Edit(2.0f);
         CHECK(s.IsDirty(h.stack));
     }
+}
+
+TEST_CASE("asset file steps never dirty the scene; scene steps still do", "[editor][scene][assetops]")
+{
+    using namespace Arcane::Editor;
+    Harness h;
+    SceneSession s;
+    s.MarkSaved(h.stack);
+    Arcane::Test::AssetOpsWorld w("scene_clean");
+    const Arcane::Guid tex = w.Write("uv_marker.png", "png");
+    Arcane::Test::FakeAssetOpHost host(w);
+    AssetFileOpExecutor exec(host, h.stack, w.content);
+
+    REQUIRE(exec.Execute(w.Plan(AssetOpKind::Delete, { tex }), h.stack).ok);
+    CHECK_FALSE(s.IsDirty(h.stack));
+    h.stack.Undo();
+    CHECK_FALSE(s.IsDirty(h.stack));
+    h.Edit(1.0f);
+    CHECK(s.IsDirty(h.stack));
 }

@@ -183,7 +183,8 @@ namespace Arcane::Editor
         [[nodiscard]] std::optional<std::string> RemoveAssets(std::span<const AssetFiles> doomed,
                                                               std::vector<AssetPayloads>& out, bool discardDirty);
         // Restore: occupancy pre-check, write .meta -> primaries -> companions with
-        // their mtimes, Register must return the recorded guid.
+        // their mtimes, Register must return the recorded guid. Any failure (a write,
+        // an mtime, the guid) removes the files AND the folders this restore made.
         [[nodiscard]] std::optional<std::string> RestoreAssets(std::span<const AssetPayloads> payloads);
         [[nodiscard]] bool FilesLost(std::span<const AssetFiles> assets) const;
         [[nodiscard]] bool PayloadsLost(std::span<const AssetPayloads> payloads) const;   // a spilled undo copy is gone
@@ -192,7 +193,9 @@ namespace Arcane::Editor
 
     private:
         [[nodiscard]] std::optional<std::string> RollBack(std::span<const FileMove> done);
-        [[nodiscard]] std::optional<std::string> WritePayload(const FilePayload& p) const;
+        // `created` (optional, appended): the folders this write made, shallow before deep.
+        [[nodiscard]] std::optional<std::string> WritePayload(const FilePayload& p,
+                                                              std::vector<std::filesystem::path>* created = nullptr) const;
 
         AssetFileOpHost&                     m_host;
         Arcane::CommandStack&                m_stack;
@@ -297,5 +300,22 @@ namespace Arcane::Editor
     private:
         std::vector<AssetFiles>    m_assets;
         std::vector<AssetPayloads> m_payloads;
+    };
+
+    // s7.7's step: constructed APPLIED (the copies exist, registered under the plan's
+    // newGuids). Undo = Remove on the copies; Redo = Restore (the same new guid).
+    class AssetDuplicateCommand final : public AssetFileCommand
+    {
+    public:
+        AssetDuplicateCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label, std::vector<AssetFiles> copies)
+            : AssetFileCommand(std::move(exec), std::move(label)), m_copies(std::move(copies)) {}
+        std::size_t PayloadBytes() const override { return PayloadByteCount(m_payloads); }
+    protected:
+        std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) override
+        { return undo ? exec.RemoveAssets(m_copies, m_payloads, /*discardDirty*/ false) : exec.RestoreAssets(m_payloads); }
+        bool SourceLost(const AssetFileOpExecutor& exec, bool undo) const override { return undo ? exec.FilesLost(m_copies) : exec.PayloadsLost(m_payloads); }   // s7.4: Duplicate mirrors Delete
+    private:
+        std::vector<AssetFiles>    m_copies;
+        std::vector<AssetPayloads> m_payloads;   // captured by each undo
     };
 }

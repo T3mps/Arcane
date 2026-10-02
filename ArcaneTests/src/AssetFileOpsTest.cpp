@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <system_error>
@@ -700,4 +701,68 @@ TEST_CASE("AssetFileOps: a delete whose spilled undo copy is gone expires silent
     CHECK(r.host.errors.empty());                                   // expiry is silent
     CHECK_FALSE(fs::exists(r.w.content / "textures" / "uv_marker.png"));
     CHECK_FALSE(fs::exists(r.w.content / "textures" / "uv_marker.png.meta"));
+}
+
+TEST_CASE("AssetFileOps: a duplicate's step recycles the copy on undo and restores it with its guid on redo", "[editor][assetops]")
+{
+    AssetOpsWorld w("dup_cmd");
+    const auto rock = w.Write("props/rock.arcmat", R"({ "id": "aaaa1111-1111-4111-8111-111111111111", "name": "rock" })");
+    const auto copy = w.Write("props/rock 1.arcmat", R"({ "id": "bbbb2222-2222-4222-8222-222222222222", "name": "rock 1" })");   // what s7.7 writes
+    FakeAssetOpHost host(w);
+    Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+    AssetFileOpExecutor exec(host, stack, w.content);
+    stack.Push(std::make_unique<AssetDuplicateCommand>(exec.Anchor(), "Duplicate rock",
+        std::vector<AssetFiles>{ { copy, { w.content / "props" / "rock 1.arcmat" } } }));
+    const auto withCopy = w.Snapshot();
+
+    stack.Undo();
+    CHECK_FALSE(fs::exists(w.content / "props" / "rock 1.arcmat"));
+    CHECK_FALSE(w.registry.Resolve(copy).has_value());
+    CHECK(w.registry.Resolve(rock).has_value());
+    stack.Redo();
+    CHECK(w.Snapshot() == withCopy);
+    CHECK(w.registry.Resolve(copy) == "game://props/rock 1.arcmat");
+}
+
+TEST_CASE("AssetFileOps: no file step affects the scene; a dead anchor reads expired", "[editor][assetops]")
+{
+    const std::weak_ptr<AssetFileOpExecutor*> dead;
+    CHECK_FALSE(AssetMoveCommand(dead, "m", {}).AffectsScene());
+    CHECK_FALSE(NewFolderCommand(dead, "n", {}).AffectsScene());
+    CHECK_FALSE(AssetDeleteCommand(dead, "d", {}, {}).AffectsScene());
+    CHECK_FALSE(AssetDuplicateCommand(dead, "u", {}).AffectsScene());
+    CHECK(AssetDuplicateCommand(dead, "u", {}).IsExpired());
+}
+
+// Carry ruling (T5-A13 minors fixed in T5-A14): a failed mtime restore is a failure
+// (s7.4: the watcher must see no change), never a silent pass; and a restore that fails
+// part-way removes what it wrote AND the folders it created (T5-A10's rule).
+TEST_CASE("AssetFileOps: a restore whose modified time cannot be set fails and keeps nothing it made", "[editor][assetops]")
+{
+    DeleteRig r("restore_mtime_fail");
+    const fs::path dir = r.w.content / "textures";
+    const fs::path png = dir / "uv_marker.png";
+    std::vector<AssetPayloads> payloads;
+    REQUIRE_FALSE(r.exec.RemoveAssets(std::vector<AssetFiles>{ { r.tex, { png, fs::path(png) += ".meta" } } },
+                                      payloads, /*discardDirty*/ false));
+    REQUIRE(payloads.size() == 1);
+    REQUIRE(payloads[0].files.size() == 2);
+    payloads[0].files[0].mtime = fs::file_time_type::min();   // the primary, written after its .meta; no filesystem records it
+
+    SECTION("into its folder: the .meta and the primary go; the folder, there before, stays")
+    {
+        const auto failure = r.exec.RestoreAssets(payloads);
+        REQUIRE(failure.has_value());
+        CHECK(failure->starts_with("textures/uv_marker.png could not keep its modified time ("));
+        CHECK(fs::is_directory(dir));
+        CHECK(fs::is_empty(dir));
+    }
+    SECTION("into a folder deleted since: the folder the restore created goes too")
+    {
+        REQUIRE(fs::remove(dir));   // emptied by the recycle
+        REQUIRE(r.exec.RestoreAssets(payloads).has_value());
+        CHECK_FALSE(fs::exists(dir));
+    }
+    CHECK_FALSE(r.w.registry.Resolve(r.tex).has_value());
+    CHECK(r.host.errors.empty());   // the primitive reports; the step that called it words the error
 }
