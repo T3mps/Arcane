@@ -312,6 +312,9 @@ namespace
         const Arcane::LoadedClientMesh* MeshArtifactFor(const Arcane::Guid&) override { return nullptr; }
         void InvalidateMeshArtifact(const Arcane::Guid&) override {}
         bool CookPending(const Arcane::Guid&) const override { return false; }
+        // T5 s7.2 (interface-completeness only): the page never evicts or retracts.
+        void EvictPath(const std::filesystem::path&) override {}
+        void ForgetUnresolved(const Arcane::Guid&) override {}
     private:
         Arcane::TextureInfo m_info;
     };

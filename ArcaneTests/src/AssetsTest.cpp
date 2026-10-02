@@ -47,6 +47,10 @@
 // catch this class of defect.
 #include <Arcane/AssetPipeline/CookSession.hpp>
 
+// T5 s7.2: ForgetUnresolved retracts an "assets.unresolved" row, observed through
+// the editor's Problems store (the AssetRegistryTest.cpp idiom).
+#include <Panels/DiagnosticStore.hpp>
+
 #include <Json.hpp>
 
 namespace
@@ -908,4 +912,58 @@ TEST_CASE("assets: MeshArtifactFor resolves a .glb whose second buffer reference
     CHECK(mesh->sections[0].name == "ExternalBinMat");
 
     fs::remove_all(project, ec);
+}
+
+// T5 s7.2 hazard #12: path-keyed memos remember contents AND failures; a rename
+// A->B then a new A would be served A's old bytes without EvictPath.
+TEST_CASE("assets: EvictPath serves an in-place replace fresh and retries a remembered failure", "[assets][assetops]")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "arcane_assets_evict";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const fs::path a = dir / "a.json", b = dir / "b.json";
+    std::ofstream(a, std::ios::binary) << R"({ "v": 1 })";
+
+    auto assets = Arcane::Assets::Create();
+    REQUIRE(assets->GetJson(a) != nullptr);
+    CHECK(assets->GetJson(a)->at("v") == 1);
+    std::ofstream(a, std::ios::binary | std::ios::trunc) << R"({ "v": 2 })";
+    CHECK(assets->GetJson(a)->at("v") == 1);   // memoized: stale
+    assets->EvictPath(a);
+    CHECK(assets->GetJson(a)->at("v") == 2);
+
+    CHECK(assets->GetJson(b) == nullptr);      // a remembered failure...
+    std::ofstream(b, std::ios::binary) << R"({ "v": 3 })";
+    CHECK(assets->GetJson(b) == nullptr);      // ...sticks
+    assets->EvictPath(b);
+    REQUIRE(assets->GetJson(b) != nullptr);
+    CHECK(assets->GetJson(b)->at("v") == 3);
+
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("assets: ForgetUnresolved retracts exactly one assets.unresolved row", "[assets][assetops][diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+    auto assets = Arcane::Assets::Create();
+    assets->SetAssetResolver([](const Arcane::AssetId&) { return std::optional<std::filesystem::path>{}; });
+    const Arcane::Guid a = Arcane::Guid::Generate(), b = Arcane::Guid::Generate();
+    CHECK(assets->GetJson(Arcane::AssetId::FromGuid(a)) == nullptr);
+    CHECK(assets->GetJson(Arcane::AssetId::FromGuid(b)) == nullptr);
+    const auto unresolved = [&]
+    {
+        std::vector<Arcane::Guid> ids;
+        for (const auto& d : store.Snapshot())
+            if (d.code == "assets.unresolved") ids.push_back(d.locator.asset);
+        return ids;
+    };
+    REQUIRE(unresolved().size() == 2);
+
+    assets->ForgetUnresolved(a);
+    CHECK(unresolved() == std::vector<Arcane::Guid>{ b });
+
+    store.UninstallEngineSink();
 }
