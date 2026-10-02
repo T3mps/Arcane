@@ -117,6 +117,9 @@ namespace Arcane::Editor
             EditGesture::ClosePending(*UndoStack(), m_gesture);
     }
 
+    void SpriteDocument::NoteMoved(const std::filesystem::path& p)
+    { m_path = p; m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name; m_windowLabel = m_title + " (Sprite)###spritedoc_" + m_data.id.ToString(); }
+
     void SpriteDocument::FlushGesture()
     {
         if (Arcane::CommandStack* s = UndoStack())

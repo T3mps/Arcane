@@ -63,6 +63,14 @@ namespace Arcane::Editor
         SelectFirstMapAndAction();
     }
 
+    void InputActionsDocument::NoteMoved(const std::filesystem::path& p)
+    {
+        path_ = p;
+        title_ = path_.stem().string();
+        windowLabel_ = title_ + " (Input Actions)###inputdoc_" + guid_.ToString();
+        page_.SetAssetLocation(path_.filename().string(), path_.generic_string());
+    }
+
     InspectorPage* InputActionsDocument::PageFor(std::string_view key)
     {
         InputSelection sel;

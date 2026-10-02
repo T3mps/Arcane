@@ -76,6 +76,7 @@ namespace Arcane::Editor
         bool Save() override { return true; }
         bool WindowFocused() const override { return m_windowFocused; }
         void Draw(bool& requestClose) override;
+        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
 
         // ---- headless-testable model half (no ImGui below this line) -----
 

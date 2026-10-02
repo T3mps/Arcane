@@ -11,6 +11,7 @@
 #include <Arcane/Guid.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -85,6 +86,9 @@ namespace Arcane::Editor
         // a document selects its default page"; final fix R). A plain tab
         // click never calls this. Default: nothing to re-select.
         virtual void NoteReopened() {}
+        // T5 s7.11: the file moved. Assign the path, recompute the stem-fallback title, rebuild the label keeping
+        // "###<kind>doc_<guid>" (the dock slot holds). PURE, so no new kind can keep the save-writes-the-old-path bug.
+        virtual void NoteMoved(const std::filesystem::path& newPath) = 0;
 
         // Commit-close any parked edit gesture NOW. Play entry calls it on
         // every document (spec s3.3(b), drafting pick 9.28.5), so a drag open

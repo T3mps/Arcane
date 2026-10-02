@@ -64,6 +64,7 @@ namespace Arcane::Editor
         bool Resolves(std::string_view key) const override { return model_.Resolves(key); }   // PURE: the host's PruneStale runs it once per frame per history entry
         std::uint64_t SelectionEpoch() const override { return model_.SelectionEpoch(); }
         void NoteReopened() override { model_.ReassertSelection(); }
+        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
         bool SelectByPath(std::string_view path) override { return model_.SelectByPath(path); }
 
         // The snapshot a rebind capture observes: the document is the sole

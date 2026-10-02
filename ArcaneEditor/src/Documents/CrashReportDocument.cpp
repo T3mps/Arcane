@@ -89,6 +89,13 @@ namespace Arcane::Editor
         return out;
     }
 
+    void CrashReportDocument::NoteMoved(const std::filesystem::path& p)
+    {
+        m_path = p;
+        m_title = m_path.stem().string();
+        m_windowLabel = m_title + " (Crash Report)###crashdoc_" + m_envelope.guid.ToString();
+    }
+
     void CrashReportDocument::Draw(bool& requestClose)
     {
         bool open = true;

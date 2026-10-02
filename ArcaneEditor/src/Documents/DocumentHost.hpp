@@ -56,6 +56,12 @@ namespace Arcane::Editor
         // ---- list --------------------------------------------------------
         EditorDocument* Add(std::unique_ptr<EditorDocument> doc);
         EditorDocument* FindByGuid(const Arcane::Guid& guid);
+        // T5 s7.11: the asset `guid` moved to `newPath`; the open document showing it (if any) retargets
+        // through NoteMoved, so its next save writes the new path. No document open = nothing to do.
+        void NoteAssetMoved(const Arcane::Guid& guid, const std::filesystem::path& newPath);
+        // T5 s7.5: the asset under `doc` is being deleted. Close it UNSAVED with no confirm (a pending confirm on
+        // it is dropped); a parked edit gesture commits in the document's destructor. Null = nothing to do.
+        void CloseForAssetRemoval(EditorDocument* doc);
         std::size_t Count() const { return m_docs.size(); }
         bool AnyDirty() const;
         // Save every dirty document in place. Every document has a real path

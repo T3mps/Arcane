@@ -135,6 +135,9 @@ namespace Arcane::Editor
         DestroyPreviewContext();
     }
 
+    void MeshDocument::NoteMoved(const std::filesystem::path& p)
+    { m_path = p; m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name; m_windowLabel = m_title + " (Mesh)###meshdoc_" + m_data.id.ToString(); }
+
     void MeshDocument::FlushGesture()
     {
         if (Arcane::CommandStack* s = UndoStack())

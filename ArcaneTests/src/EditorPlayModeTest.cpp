@@ -743,6 +743,7 @@ namespace
         bool Dirty() const override { return false; }
         bool Save() override { return true; }
         void Draw(bool&) override {}
+        void NoteMoved(const std::filesystem::path&) override {}
         void FlushGesture() override   // the documents' real override, verbatim
         {
             if (Arcane::CommandStack* s = undo ? undo() : nullptr)

@@ -37,6 +37,8 @@ namespace Arcane::Editor
         InputActionsInspectorPage(InputActionsEditorModel& model, std::string assetName,
                                   std::string assetPath, Services services);
         void SetSelection(const InputSelection& sel) { sel_ = sel; }
+        // T5 s7.11: the asset moved -- the asset page's name/path lines follow it.
+        void SetAssetLocation(std::string n, std::string p) { assetName_ = std::move(n); assetPath_ = std::move(p); }
 
         // Every crumb carries a `key` in the model's 4-segment format (three
         // slashes always): asset root "", map "<map>///", action

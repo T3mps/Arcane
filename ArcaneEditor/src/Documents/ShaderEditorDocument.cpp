@@ -1041,6 +1041,14 @@ namespace Arcane::Editor
         DestroyGraphPreview();
     }
 
+    void ShaderEditorDocument::NoteMoved(const std::filesystem::path& p)
+    {
+        m_path = p;
+        m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name;
+        m_windowLabel = m_title + (m_data.IsInstance() ? " (Instance)###matdoc_" : " (Material)###matdoc_") + m_data.id.ToString();
+        PublishDiagnostics();   // the File locators carry m_path
+    }
+
     void ShaderEditorDocument::FlushGesture()
     {
         if (Arcane::CommandStack* s = UndoStack())

@@ -202,6 +202,7 @@ namespace Arcane::Editor
         bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
         void NoteReopened() override { m_pageSel.NoteReopened(); }
+        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
         void FlushGesture() override;
 
         // Undo plumbing (doc-identity commands, the same shape as
