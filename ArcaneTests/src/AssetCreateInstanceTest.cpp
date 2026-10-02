@@ -10,6 +10,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Helpers/SoftRaster.hpp"   // CaptureFrameIfRequested: opt-in desk-pass evidence (T3-D6 fix round 1)
+
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetBrowserPanel.hpp"
 #include "Panels/AssetPanelCommon.hpp"
@@ -203,7 +205,10 @@ namespace
 
         // The dialog opened for `request` exactly as BeginCreateAsset opens it,
         // then its Create button pressed: what it hands back.
-        std::optional<CreateAssetResult> CreateFromDialog(const CreateAssetRequest& request)
+        // `capture` (opt-in evidence, SoftRaster.hpp): the frame the dialog
+        // is up with its prefill, before Create is pressed.
+        std::optional<CreateAssetResult> CreateFromDialog(const CreateAssetRequest& request,
+                                                          const char* capture = nullptr)
         {
             CreateDialogState st = MakeCreateDialogState(request, model, project->Root());
             std::optional<CreateAssetResult> result;
@@ -213,6 +218,7 @@ namespace
                     result = std::move(r);
             };
             for (int i = 0; i < 3; ++i) Frame(dialog);
+            if (capture) Arcane::Test::CaptureFrameIfRequested(capture);
             const ImGuiID dialogId = WindowIdNamed(CreateKindTitle(request.kind));
             REQUIRE(dialogId != 0);
             activate = ImHashStr("Create", 0, dialogId);
@@ -334,7 +340,8 @@ TEST_CASE("Create Material Instance from a material: the Location defaults to th
     CreateHarness h("arcane_create_instance_location_test");
     SECTION("a parent under props/ lands in props/, named <parent>_Inst")
     {
-        const auto r = h.CreateFromDialog({ CreateAssetKind::MaterialInstance, kProp });
+        const auto r = h.CreateFromDialog({ CreateAssetKind::MaterialInstance, kProp },
+                                          "T3-D6-B-22-instance-dialog");
         REQUIRE(r.has_value());
         CHECK(r->folder == "props");
         CHECK(r->name == "crate_Inst");
@@ -350,5 +357,9 @@ TEST_CASE("Create Material Instance from a material: the Location defaults to th
         const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::Sprite, h.texture }, h.model, h.project->Root());
         CHECK(st.texture == h.texture);
         CHECK_FALSE(st.pickerOpen);
+        // Drawn too (T3-D6 fix round 1): the dialog really opens on it --
+        // the capture is the evidence; the Create press may be refused (a
+        // sprite from a texture opens unnamed), which is not this case's claim.
+        (void)h.CreateFromDialog({ CreateAssetKind::Sprite, h.texture }, "T3-D6-B-22-sprite-dialog");
     }
 }

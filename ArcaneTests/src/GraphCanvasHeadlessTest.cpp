@@ -31,6 +31,7 @@
 #include "Widgets/GraphWire.hpp"      // DrawGraphWire: the wire-gradient painter guard (T3-D3)
 #include "Widgets/PropertyGrid.hpp"
 #include "Helpers/NodePageDocs.hpp"   // SpriteNodeDoc / ChainNodeDoc / HeadlessImGui (node page s5.1.11)
+#include "Helpers/SoftRaster.hpp"     // CaptureFrameIfRequested: opt-in desk-pass evidence (T3-D6 fix round 1)
 
 #include <imgui.h>
 #include <imgui_internal.h>   // OpenPopupStack: the modal-hoist case
@@ -705,7 +706,10 @@ TEST_CASE("Canvas pin tooltip (T3-D6 desk item 18): HOVERING a Mul input fed by 
                 if ((w->Flags & ImGuiWindowFlags_Tooltip) && w->Active)
                     tooltipShown = true;
             if (tooltipShown && logged.find("dynamic (now") != std::string::npos)
+            {
                 tip = logged;
+                Arcane::Test::CaptureFrameIfRequested("T3-D6-B-18-pin-tooltip");   // the frame that drew it
+            }
         }
     INFO("tooltip log: " << tip);
     REQUIRE_FALSE(tip.empty());
@@ -739,7 +743,11 @@ namespace
     }
     // Press on `from`, drag through the midpoint to `to`, release -- with
     // `mod` (ImGuiMod_Shift / ImGuiMod_Ctrl) held throughout when given.
-    void Marquee(CanvasHarness& h, ImVec2 from, ImVec2 to, ImGuiKey mod = ImGuiKey_None)
+    // `capture` (opt-in evidence, SoftRaster.hpp): the frame with the box
+    // drawn mid-drag, and the frame after the release, as <capture>-drag /
+    // <capture>-released.
+    void Marquee(CanvasHarness& h, ImVec2 from, ImVec2 to, ImGuiKey mod = ImGuiKey_None,
+                 const char* capture = nullptr)
     {
         ImGuiIO& io = ImGui::GetIO();
         if (mod != ImGuiKey_None) io.AddKeyEvent(mod, true);
@@ -750,8 +758,10 @@ namespace
         REQUIRE(ImGui::GetCurrentContext()->MovingWindow == nullptr);
         io.AddMousePosEvent((from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f); h.Frame();
         io.AddMousePosEvent(to.x, to.y); h.Frame(2);
+        if (capture) Arcane::Test::CaptureFrameIfRequested((std::string(capture) + "-drag").c_str());
         io.AddMouseButtonEvent(0, false); h.Frame(2);
         if (mod != ImGuiKey_None) { io.AddKeyEvent(mod, false); h.Frame(); }
+        if (capture) Arcane::Test::CaptureFrameIfRequested((std::string(capture) + "-released").c_str());
     }
     void ClickWith(CanvasHarness& h, ImVec2 at, ImGuiKey mod)
     {
@@ -806,7 +816,7 @@ TEST_CASE("Canvas marquee (T3-D3): Shift or Ctrl held, the box ADDS to the selec
     h.Click(h.NodeTitle(1));
     REQUIRE(h.doc->SelectionKey() == Key(0, 1));
     const ImRect box = FloatsBox(h);
-    Marquee(h, box.Min, box.Max, mod);
+    Marquee(h, box.Min, box.Max, mod, mod == ImGuiMod_Shift ? "T3-D6-B-21-shift-marquee" : nullptr);
     CHECK(Selected(h, 1));                                      // kept
     CHECK(Selected(h, 2));
     CHECK(Selected(h, 3));
