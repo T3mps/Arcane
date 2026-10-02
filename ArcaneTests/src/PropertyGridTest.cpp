@@ -635,6 +635,55 @@ TEST_CASE("PropertyGrid: an hdr ColorRow's box drag keeps a component above 1; a
     }
 }
 
+TEST_CASE("PropertyGrid: a ColorRow too narrow for \"0.000\" shows its boxes at two decimals -- same ids, full precision, one commit", "[editor][inspector]")
+{
+    // T3 gate (finding 3): ColorEdit4 prints "%0.3f" whatever the box width, so
+    // the 1080p material page clipped "0.350" to "0.35C". A row whose boxes
+    // cannot hold "0.000" draws the same boxes at the decimals that fit.
+    struct Seen { std::string text; ImGuiID pressedId = 0; int commits = 0; float tint[4]{}; };
+    const auto run = [](float width)
+    {
+        Seen s;
+        float tint[4]{ 0.3456f, 0.25f, 0.6544f, 1.0f };
+        RowHarness h;
+        h.width = width;
+        h.body = [&](PropertyGrid& g)
+        {
+            ImGui::LogToBuffer();
+            if (g.ColorRow("Tint", tint)) ++s.commits;
+            s.text = ImGui::GetCurrentContext()->LogBuffer.c_str();
+            ImGui::LogFinish();
+        };
+        h.Frame(); h.Frame();
+        const std::string shown = s.text;
+        const ImVec2 boxes = h.Centre("Tint");
+        h.Press(ImVec2(boxes.x - 6.0f, boxes.y));             // box 1 (G): 6 px left of the 1|2 gap
+        s.pressedId = ImGui::GetCurrentContext()->ActiveId;
+        for (int i = 1; i <= 3; ++i) h.MoveTo(ImVec2(boxes.x - 6.0f + 15.0f * i, boxes.y));
+        h.Release();
+        s.text = shown;
+        for (int i = 0; i < 4; ++i) s.tint[i] = tint[i];
+        return s;
+    };
+    const Seen wide = run(640.0f);
+    const Seen narrow = run(350.0f);                       // boxes fit "0.00", not "0.000" (ProggyClean 13 px)
+    INFO("wide: " << wide.text << " | narrow: " << narrow.text);
+    CHECK(wide.text.find("0.346") != std::string::npos);      // the stock ColorEdit4: three decimals
+    CHECK(narrow.text.find("0.35") != std::string::npos);     // narrow: two...
+    CHECK(narrow.text.find("0.346") == std::string::npos);    // ...never the clipped three
+    CHECK(narrow.text.find("0.65") != std::string::npos);
+    REQUIRE(wide.pressedId != 0);
+    CHECK(narrow.pressedId == wide.pressedId);                // the same box id as ColorEdit4's "##Y"
+    for (const Seen* s : { &wide, &narrow })
+    {
+        CHECK(s->commits == 1);                               // one gesture, one commit
+        CHECK(s->tint[1] > 0.25f + 0.1f);                     // 1/255 per px, as ColorEdit4
+        CHECK(s->tint[0] == 0.3456f);                         // display-only rounding: storage untouched
+        CHECK(s->tint[2] == 0.6544f);
+        CHECK(s->tint[3] == 1.0f);
+    }
+}
+
 using Arcane::Editor::RowDecor;
 
 namespace

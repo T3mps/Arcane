@@ -70,7 +70,10 @@ namespace Arcane::Editor
     //      DisplayRGB|InputRGB, +HDR when hdr so a component above 1 is not
     //      clamped by a box drag), filling the rest of the cell -- the width is
     //      CalcItemWidth() at entry, so a caller's pending SetNextItemWidth (a
-    //      reserved reset strip) is honoured.
+    //      reserved reset strip) is honoured. A row whose boxes cannot hold
+    //      "0.000" (ColorEdit4's fixed format) draws the same boxes -- same group,
+    //      ids, split, clamp, markers and drop target -- at the 2 (else 1)
+    //      decimals that fit, display only (T3 gate: the 1080p material page).
     // The boxes are therefore g.LastItemData on return: the popup's End()
     // restores the parent's LastItemData (ShaderEditorDocument.cpp:5856-5866).
     // Bracket the boxes with the activation pair right after the call, and the
