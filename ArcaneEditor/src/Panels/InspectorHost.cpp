@@ -63,6 +63,14 @@ namespace Arcane::Editor
         EraseHistoryIf([](const HistoryEntry& e) { return !e.source->Resolves(e.key); });
     }
 
+    void InspectorHost::RefreshLabels()
+    {
+        for (HistoryEntry& e : m_history)
+            if (e.source && Registered(e.source) && e.source->Resolves(e.key)) e.label = InspectorCrumbText(*e.source, e.source->PageFor(e.key));
+        for (Instance& i : m_instances)
+            if (i.pinned && i.pinnedSource && Registered(i.pinnedSource) && i.pinnedSource->Resolves(i.pinnedKey)) i.pinnedName = i.pinnedSource->SourceName();
+    }
+
     void InspectorHost::Push(InspectorSource& source, std::string key)
     {
         if (!m_history.empty())

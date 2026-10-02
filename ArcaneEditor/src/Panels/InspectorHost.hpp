@@ -157,6 +157,12 @@ namespace Arcane::Editor
         // keeps pointing at the same surviving entry (index arithmetic, never a
         // key search). Once per frame from the draw: <= kHistoryDepth pure lookups.
         void PruneStale();
+        // An asset rename keeps every guid key, so only the cached text goes
+        // stale: recompute each history label and pinnedName whose source is
+        // registered and still Resolves(key) (spec s7.6). The app calls it
+        // whenever the asset model's entriesStamp moves. PageFor re-points a
+        // source's view, so the next draw re-resolves its page as usual.
+        void RefreshLabels();
 
         // Project switch: every source but the fallback and the permanent
         // ones is dropped, the stamps and the history cleared, every instance

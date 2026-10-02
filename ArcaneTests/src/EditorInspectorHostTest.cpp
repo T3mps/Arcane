@@ -1359,3 +1359,14 @@ TEST_CASE("DrawInspectorWindows: the page scrolls in ##page under a pinned heade
         CHECK(r.focusedSource == &scene);
     }
 }
+
+TEST_CASE("InspectorHost::RefreshLabels updates history labels and pin names after a rename", "[editor][inspector][assetops]")
+{
+    World w;
+    w.other.page.crumbs = { InspectorCrumb{ "Assets", [] {}, std::nullopt }, InspectorCrumb{ "old.png", [] {}, std::string{ "k" } } };
+    w.Select(w.other, "k"); const int pin = w.host.AddInstance(); w.host.SetPinned(pin, true);
+    REQUIRE(w.host.History().back().label == "Assets > old.png");
+    w.other.page.crumbs[1].label = "new.png"; w.other.name = "Assets (renamed)";
+    w.host.RefreshLabels();
+    CHECK((w.host.History().back().label == "Assets > new.png" && w.host.Find(pin)->pinnedName == "Assets (renamed)" && w.host.SourceFor(pin) == &w.other));
+}
