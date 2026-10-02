@@ -2095,9 +2095,9 @@ namespace Arcane::Editor
             // INSTANCE mode: an instance authors no source -- that belongs to
             // its base -- and its params now live in the Inspector's material
             // page, which would leave this tab empty. So the preview takes the
-            // whole tab: an instance IS its values, and the large preview is the
-            // one thing this window can still say about them that the page
-            // cannot (the page's preview is Inspector-column narrow). The toolbar
+            // whole tab: an instance IS its values, and this tab OWNS its
+            // preview (s5.3 amendment, user decision A): the page draws none
+            // for an instance, so there is one preview, not two. The toolbar
             // above keeps the parent-chain affordances reachable; saving is
             // Ctrl+S, which needs no toolbar room at all.
             DrawPreviewPanel(ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
@@ -2135,9 +2135,13 @@ namespace Arcane::Editor
         // No title line (spec 2026-09-30 s4.3): the Inspector header's crumb
         // names this material ("<title> (Instance)" for an instance); the
         // body opens on the Preview section.
+        // An INSTANCE's page has no Preview section (s5.3 amendment,
+        // 2026-10-02, user decision A -- UE's Material Instance editor): its
+        // document tab IS the preview, full-tab (Draw's INSTANCE mode), so
+        // the page opens on the parameters instead of showing a second one.
         // The page child's height (s5.7), read before anything is laid out.
         const float pageHeight = ImGui::GetWindowHeight();
-        if (grid.Section("Preview"))
+        if (!IsInstance() && grid.Section("Preview"))
         {
             if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
             {

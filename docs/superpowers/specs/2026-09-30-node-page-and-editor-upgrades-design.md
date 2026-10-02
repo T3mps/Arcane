@@ -1450,6 +1450,7 @@ Critique Inspector #1, #3, #4, #5, #6, #8, #9, #10; Shader #3, #4, #8.
   - Every other surface shows a centred **square** of side `min(availX, f × pageHeight)`. `pageHeight` is the height of the page child (5.7) at the page's start.
   - `f` is the Archive cvar `editor.inspector.materialPreviewFraction` (drafting pick, 9.28): Float, default 0.45, range 0.2..0.8, help "Largest share of the Inspector's height the material page's preview square may take". It is registered with T1's `ARC_CVAR_RANGED` (s2.4), module `"editor"`.
   - The square shows the image scaled to fit, or `PreviewBoxText`.
+  - Amendment (2026-10-02, user decision A): for a material instance the document tab owns the preview; the page omits Section("Preview").
 - **The split is retired.** These are removed:
   - `LayoutPrefs`, `kPreviewSplitDefault`, the `ClampSplit`/`SanitizeSplit` users and the `PaneSplitter` call (hpp `:201-230`, cpp `:2096-2104`);
   - the "MaterialPanel" settings handler and its registration (cpp `:731-772`, `:1876-1906`).

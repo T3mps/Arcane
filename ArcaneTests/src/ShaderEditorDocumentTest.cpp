@@ -1606,6 +1606,62 @@ TEST_CASE("material page: the body opens on Preview; the box is a square of min(
     CHECK(f->AsFloat32() == 0.45f);
 }
 
+TEST_CASE("material page T3-D5: an instance's page draws no Preview section -- the document tab owns it; it opens on Parameters",
+          "[editor][material][inspector]")
+{
+    // User decision A (2026-10-02, spec s5.3 amendment): UE's Material
+    // Instance editor shape. The instance's document tab is its full-tab
+    // preview, so the page omits Section("Preview") rather than show a second one.
+    const fs::path dir = TempDir("page_instance_nopreview");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "PageInstanceNoPreview").has_value());
+    const fs::path content = dir / "Game" / "Content";
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate(); base.name = "Base"; base.kind = "sprite"; base.snippet = kSnippet;
+    REQUIRE(Arcane::SaveMaterialAsset(content / "base.arcmat", base));
+    Arcane::MaterialAssetData child;
+    child.id = Arcane::Guid::Generate(); child.parent = base.id; child.name = "Child"; child.kind = "sprite";
+    const fs::path file = content / "child.arcmat";
+    REQUIRE(Arcane::SaveMaterialAsset(file, child));
+    // A mesh instance too: its page carries authored rows with no compiler
+    // (the base's baseColor), so "the parameter rows still draw" is observable.
+    Arcane::MaterialAssetData meshBase;
+    meshBase.id = Arcane::Guid::Generate(); meshBase.name = "MeshBase"; meshBase.kind = "mesh";
+    meshBase.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(0.2f, 0.4f, 0.6f, 1.0f));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "mesh_base.arcmat", meshBase));
+    Arcane::MaterialAssetData meshChild;
+    meshChild.id = Arcane::Guid::Generate(); meshChild.parent = meshBase.id; meshChild.name = "MeshChild"; meshChild.kind = "mesh";
+    const fs::path meshFile = content / "mesh_child.arcmat";
+    REQUIRE(Arcane::SaveMaterialAsset(meshFile, meshChild));
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    DocServices services;
+    services.runtime = &rt;
+    ShaderEditorDocument doc(services, file, *Arcane::LoadMaterialAsset(file));
+    REQUIRE(doc.IsInstance());
+    REQUIRE(doc.ParseErrors().empty());
+    PageUi h;
+    h.Frame(doc); h.Frame(doc, true);
+    INFO(h.logged);
+    CHECK(h.logged.find("Preview") == std::string::npos);            // no section header, no box text
+    CHECK(LogStartsWithHeader(h.logged, "Parameters"));              // the body opens on the params
+    CHECK(h.logged.find("Only overridden") != std::string::npos);
+    for (ImGuiWindow* win : h.ctx->Windows)
+        CHECK(std::string(win->Name).find("##preview") == std::string::npos);
+
+    ShaderEditorDocument meshDoc(services, meshFile, *Arcane::LoadMaterialAsset(meshFile));
+    REQUIRE(meshDoc.IsInstance());
+    PageUi m;
+    m.Frame(meshDoc); m.Frame(meshDoc, true);
+    INFO(m.logged);
+    CHECK(m.logged.find("Preview") == std::string::npos);
+    CHECK(m.logged.find("not compiled here") == std::string::npos);  // the base's dim Preview line is gone too
+    CHECK(LogStartsWithHeader(m.logged, "Rendering"));               // a mesh page opens on Rendering
+    CHECK(m.logged.find("Parameters") != std::string::npos);
+    CHECK(m.probe.count("baseColor") == 1);                           // the inherited row still draws
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 TEST_CASE("material toolbar: the surface combo carries a Surface label; a re-kind pushes no undo step", "[editor][material]")
 {
     const fs::path dir = TempDir("surface_label");
