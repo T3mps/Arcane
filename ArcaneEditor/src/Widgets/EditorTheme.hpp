@@ -20,9 +20,11 @@
 //           needs a third tone at all; ImGui's stock style has no such layer
 //           (its FrameBg is a translucent blue tint of the window behind it).
 //
-// The one non-gray hue is kSelection, a muted desaturated blue-gray used ONLY
-// where something is SELECTED (selected rows/items, selected text, the docking
-// preview, the selected tab's overline). Everything else is neutral gray.
+// TWO non-gray hues. kSelection, a muted desaturated blue-gray, marks what is
+// SELECTED (selected rows/items, selected text, the docking preview). kAccent,
+// a brighter steel blue, marks what is ON / ACTIVE / PLAYING (toggle-on fills,
+// the selected tab's overline, Play presence -- node page phase s6.1).
+// Everything else is neutral gray.
 //
 // Domain color-coding is deliberately NOT monochrome and does not live here:
 // the inspector's X/Y/Z axis bars (EditorWidgets.cpp), the shader graph's
@@ -93,21 +95,29 @@ namespace Arcane::Editor
         inline constexpr ImVec4 kButtonHovered = ImVec4(0.239f, 0.239f, 0.239f, 1.00f); // #3d3d3d
         inline constexpr ImVec4 kButtonActive  = ImVec4(0.294f, 0.294f, 0.294f, 1.00f); // #4b4b4b
 
-        // -- TOGGLE "ON" (node-page phase s4.9, drafting pick 9.28 #18) ----
-        // A lit icon toggle pushes ALL THREE button colours (PushToggleOnColors,
-        // EditorWidgets.hpp): pushing only Button let hover paint kButtonHovered
-        // #3d3d3d, DARKER than the lit #4b4b4b, so "on" vanished under the
-        // cursor, and an unlit press looked like "on". T2 aliases kButtonActive
-        // (the one pixel change: a lit toggle no longer darkens on hover); T4
-        // (s6.1) re-points them at kAccent / kAccentHovered / kAccentActive.
-        inline constexpr ImVec4 kToggleOn        = kButtonActive;
-        inline constexpr ImVec4 kToggleOnHovered = kButtonActive;
-        inline constexpr ImVec4 kToggleOnActive  = kButtonActive;
-
         // -- SELECTION ----------------------------------------------------
-        // The ONE hue in the theme: UE's selected-row blue-gray, desaturated
+        // The selection hue: UE's selected-row blue-gray, desaturated
         // far enough that it reads as "a gray with a cast" beside the ramp.
         inline constexpr ImVec4 kSelection    = ImVec4(0.180f, 0.251f, 0.325f, 1.00f); // #2e4053
+
+        // -- ACCENT -------------------------------------------------------
+        // "On / active / playing" (node page phase s6.1): the toggle-on
+        // fills (kToggleOn* below, IconToggle), the selected tab's overline,
+        // and Play presence (the viewport's 2 px frame). kSelection keeps
+        // Header, TextSelectedBg and DockingPreview and gives up the overline.
+        // Nothing else adopts kAccent in this phase. Bars pinned by
+        // EditorThemeContrastTest.cpp: 3.21:1 against kButton, 4.21:1 on
+        // kChrome, kText on it 3.16:1.
+        inline constexpr ImVec4 kAccent        = ImVec4(0.357f, 0.498f, 0.651f, 1.00f); // #5b7fa6
+        inline constexpr ImVec4 kAccentHovered = ImVec4(0.388f, 0.525f, 0.678f, 1.00f); // #6386ad
+        inline constexpr ImVec4 kAccentActive  = ImVec4(0.322f, 0.463f, 0.612f, 1.00f); // #52769c
+
+        // The lit state of an IconToggle (Widgets/EditorWidgets.hpp, s4.9):
+        // Button / ButtonHovered / ButtonActive while `on`. Hover LIGHTENS and
+        // holding darkens, so "on" never vanishes under the cursor (s6.2).
+        inline constexpr ImVec4 kToggleOn        = kAccent;
+        inline constexpr ImVec4 kToggleOnHovered = kAccentHovered;
+        inline constexpr ImVec4 kToggleOnActive  = kAccentActive;
 
         // -- TEXT AND LINES -----------------------------------------------
         // Text is off-white, not white: pure white on a near-black well
@@ -197,10 +207,11 @@ namespace Arcane::Editor
 
         // Header* is BOTH the selected state of Selectable/TreeNode (an
         // outliner row, an asset tile) and the background of a bare
-        // CollapsingHeader (imgui.h:1848). Selected takes the accent; hover
-        // and held stay gray, so hovering an unselected row never flashes a
-        // second hue. The inspector's category bands push their own trio over
-        // this one (EditorWidgets.cpp, PushHeaderBandColors).
+        // CollapsingHeader (imgui.h:1848). Selected takes kSelection (not
+        // kAccent: selected is not "on", s6.1); hover and held stay gray, so
+        // hovering an unselected row never flashes a second hue. The
+        // inspector's category bands push their own trio over this one
+        // (EditorWidgets.cpp, PushHeaderBandColors).
         c[ImGuiCol_Header]                 = Theme::kSelection;
         c[ImGuiCol_HeaderHovered]          = Theme::kPanelRaised;
         c[ImGuiCol_HeaderActive]           = Theme::kButton;
@@ -222,10 +233,13 @@ namespace Arcane::Editor
         c[ImGuiCol_TabHovered]             = Theme::kPanelRaised;
         c[ImGuiCol_Tab]                    = Theme::kChrome;
         c[ImGuiCol_TabSelected]            = Theme::kPanel;
-        c[ImGuiCol_TabSelectedOverline]    = Theme::kSelection;             // selected == accent
+        c[ImGuiCol_TabSelectedOverline]    = Theme::kAccent;                // selected == accent (s6.1)
         c[ImGuiCol_TabDimmed]              = Theme::kChromeDeep;            // unfocused tab bar sinks
         c[ImGuiCol_TabDimmedSelected]      = Theme::kChrome;
-        c[ImGuiCol_TabDimmedSelectedOverline] = Theme::kNone;
+        // Every dock node marks its active tab; an unfocused one at 45%
+        // (composite #374758, 1.85:1 on its #191919 tab: quieter than the
+        // focused overline, still brighter than the pre-s6.1 focused one).
+        c[ImGuiCol_TabDimmedSelectedOverline] = Theme::WithAlpha(Theme::kAccent, 0.45f);
 
         c[ImGuiCol_DockingPreview]         = Theme::WithAlpha(Theme::kSelection, 0.70f);
         c[ImGuiCol_DockingEmptyBg]         = Theme::kWell;                  // an empty node reads as a void
@@ -264,7 +278,8 @@ namespace Arcane::Editor
         c[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
         c[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
 
-        // The first of TWO metrics this theme changes. Default is 0
+        // The first of THREE metrics this theme changes (FrameBorderSize,
+        // DockingNodeHasCloseButton, TabBarOverlineSize). Default is 0
         // (imgui.cpp:1533): with no frame border a near-black well on a dark
         // panel has only its fill to separate it, and small fields lose their
         // edge entirely. One pixel of kBorder (darker than both) is the inset
@@ -280,5 +295,13 @@ namespace Arcane::Editor
         // panel read as clutter, and the corner one closes whichever tab
         // happens to be selected, which is never what the user aimed at.
         style.DockingNodeHasCloseButton = false;
+
+        // The third: a 2 px tab overline (ImGui's default is 1, imgui.cpp:1555).
+        // The overline is drawn over the tab fill (imgui_widgets.cpp:10883-10898),
+        // and the fill ramp itself (TabSelected kPanel vs Tab kChrome) is
+        // unchanged, so this line carries focus. ScaleAllSizes DPI-scales it
+        // (imgui.cpp:1638) -- the crash reporter, which applies this theme
+        // (ReporterWindow.cpp:535-536), gets the same line.
+        style.TabBarOverlineSize = 2.0f;
     }
 }
