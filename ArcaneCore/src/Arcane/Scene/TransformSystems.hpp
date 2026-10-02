@@ -47,15 +47,12 @@
 // The ordering and dirty policy live HERE, in Arcane. Astra supplied the
 // version and nothing more; "spatial" is not a concept the ECS needs.
 
+#include <Arcane/Ecs.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
-#include <Astra/Container/FlatMap.hpp>
-#include <Astra/Container/FlatSet.hpp>
-#include <Astra/Core/Tick.hpp>
-#include <Astra/Entity/Entity.hpp>
-#include <Astra/Registry/Registry.hpp>
-#include <Astra/System/System.hpp>
+#include <Astra/Container/FlatMap.hpp>   // TransformOrder::rowOf (fenced below)
+#include <Astra/Container/FlatSet.hpp>   // TransformOrder::visited (fenced below)
 
 #include <glm/glm.hpp>
 
@@ -82,13 +79,15 @@ namespace Arcane
         static constexpr std::uint32_t kNoParent = 0xFFFFFFFFu;
 
         // ---- structure: rebuilt only when StructureVersion()/root moves ----
-        std::vector<Astra::Entity> order;        // BFS from the scene root; order[0] IS the root
+        std::vector<Arcane::Entity> order;       // BFS from the scene root; order[0] IS the root
         std::vector<std::uint32_t> parentIndex;  // index INTO order, always strictly < own index
         // entity -> row in `order`, filled by Rebuild (which already walks every
         // entity). THE bridge between Astra's entity-keyed Changed<Transform>
         // yield and this cache's row-indexed arrays. An entity absent here is
         // outside the scene root's subtree and is never written by the pass.
-        Astra::FlatMap<Astra::Entity, std::uint32_t> rowOf;
+        // ARCANE_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side propagation cache)
+        Astra::FlatMap<Arcane::Entity, std::uint32_t> rowOf;
+        // ARCANE_INTERNAL_END
 
         // ---- per-row value state, parallel to `order` ----
         // `moved` is the change detector (Astra adoption 2026-09-11, spec s6.3):
@@ -124,11 +123,13 @@ namespace Arcane
         std::vector<glm::mat4>    world;
 
         // Scratch, kept here so a steady frame allocates nothing at all.
-        std::vector<Astra::Entity>    needsWorld;
-        Astra::FlatSet<Astra::Entity> visited;   // Rebuild's cycle guard
+        std::vector<Arcane::Entity>    needsWorld;
+        // ARCANE_INTERNAL_BEGIN: Astra's FlatSet container has no facade alias (engine-side propagation cache)
+        Astra::FlatSet<Arcane::Entity> visited;   // Rebuild's cycle guard
+        // ARCANE_INTERNAL_END
 
         // ---- invalidation keys ----
-        Astra::Entity root{};
+        Arcane::Entity root{};
         // 0 == never built. This works ONLY because a fresh RelationshipGraph
         // starts at 1 (RelationshipGraph.hpp:848, and its move ctor resets the
         // moved-from counter to 1 rather than 0 at :91) -- the same reason
@@ -148,7 +149,7 @@ namespace Arcane
         // scheduler drive this same cache, and a swapped registry
         // (RestoreRegistry, ResetRegistry, scene load) restarts its ticks at 1 --
         // a since-tick stored anywhere else would be stale against it.
-        Astra::Tick lastRun = 0;
+        Arcane::Tick lastRun = 0;
 
         // How many times the order has been rebuilt. Instrumentation, and the
         // only way a test can state the headline property as an assertion
@@ -170,7 +171,7 @@ namespace Arcane
     };
 
     struct TransformPropagationSystem
-        : Astra::SystemTraits<Astra::Reads<Transform>, Astra::Writes<WorldTransform>>
+        : Arcane::SystemTraits<Arcane::Reads<Transform>, Arcane::Writes<WorldTransform>>
     {
         // EXCLUSIVE, because of the end-of-pass AdvanceTick below. Astra's tick
         // contract (ArchetypeManager.hpp: CurrentTick "NEVER advanced concurrently
@@ -194,6 +195,7 @@ namespace Arcane
         // between two bare calls). Under a scheduler that advance is one extra
         // tick per pass, taken in an exclusive group (above): ticks are cheap and
         // only ever compared, and no other system can be mid-stamp when it moves.
+        // ARCANE_INTERNAL_BEGIN: the system body drives Astra's registry, relationship graph and tick API directly
         void operator()(Astra::Registry& reg)
         {
             const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
@@ -397,5 +399,6 @@ namespace Arcane
                 ++c.composed;
             }
         }
+        // ARCANE_INTERNAL_END
     };
 }

@@ -4,14 +4,14 @@
 // SpriteTable and SpriteMaterialTable are set by the host each frame; SceneRoot
 // marks the subtree that IS the scene.
 
+#include <Arcane/Ecs.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Material/MaterialBlendMode.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>        // MeshSlot -- MeshEntry::slots' element type
 #include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData / MeshBounds -- MeshEntry's fields
 #include <Arcane/Scene/ViewTransform.hpp>   // RenderContext2D::view (F4 plan 1 T3)
 
-#include <Astra/Container/FlatMap.hpp>
-#include <Astra/Entity/Entity.hpp>
+#include <Astra/Container/FlatMap.hpp>    // PhysicsInterpBuffer::slotOf (fenced below)
 
 #include <glm/glm.hpp>
 
@@ -28,7 +28,7 @@
 
 namespace Arcane
 {
-    struct SceneRoot { Astra::Entity entity; };
+    struct SceneRoot { Arcane::Entity entity; };
 
     // ---- render interpolation (Epic 04.2) -----------------------------------
     // Blend a previous fixed-step pose toward the current one by RunLoop alpha so
@@ -94,7 +94,9 @@ namespace Arcane
         // PhysicsResource::entityToBody in the same pass that fills `prev`, so the
         // two are exactly as fresh as each other. Read by RenderSubmissionSystem:
         // a miss (no entry, slot past `prev`, generation mismatch) snaps.
-        Astra::FlatMap<Astra::Entity, InterpSlot> slotOf;
+        // ARCANE_INTERNAL_BEGIN: Astra's FlatMap container has no facade alias (engine-side interp bookkeeping)
+        Astra::FlatMap<Arcane::Entity, InterpSlot> slotOf;
+        // ARCANE_INTERNAL_END
         bool                    captured = false;   // false until the first capture
 
         template<typename Archive>

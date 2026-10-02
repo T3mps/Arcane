@@ -28,7 +28,7 @@
 //   Collider2D itself is no longer trivially copyable (it now contains a
 //   std::vector), so it provides a Serialize(Archive&) method (the Astra contract
 //   for non-trivial components) that calls ar(fixtures) to delegate to the
-//   archive's vector overload. ASTRA_REFLECT_FIELD reflects the vector field for
+//   archive's vector overload. ARCANE_REFLECT_FIELD reflects the vector field for
 //   the visitFields / editor / JSON-schema path.
 //   CONCLUSION: std::vector<Fixture> is used. No fixed-array fallback needed.
 //
@@ -38,9 +38,8 @@
 #include <Manifold2D/Physics/PhysicsTypes.hpp>
 #include <Manifold2D/Physics/Shapes.hpp>
 
-#include <Astra/Component/ComponentRegistry.hpp>
-#include <Astra/Reflection/Reflection.hpp>
-#include <Astra/Registry/Registry.hpp>
+#include <Arcane/Ecs.hpp>
+#include <Arcane/Reflection.hpp>
 
 #include <glm/vec2.hpp>
 
@@ -51,8 +50,11 @@ namespace Arcane
 {
     // Physics types were lifted to the standalone Manifold2D library (Phase 2).
     // Alias so the authored-component code below reads Phys:: for the engine's
-    // Manifold2D::Physics types.
+    // Manifold2D::Physics types. This alias IS the facade for Manifold2D:
+    // games spell Arcane::Phys::BodyType.
+    // ARCANE_INTERNAL_BEGIN: the Manifold2D facade alias names the library once, here
     namespace Phys = Manifold2D::Physics;
+    // ARCANE_INTERNAL_END
 
     // -------------------------------------------------------------------------
     // RigidBody2D
@@ -66,7 +68,7 @@ namespace Arcane
         // paused PhysicsSystem pass re-mints a body whose RigidBody2D or
         // Collider2D changed since the last reconcile, so an Inspector edit
         // (or its undo) reaches the world without an exact compare per body.
-        static constexpr bool AstraChangeTracked = true;
+        ARCANE_CHANGE_TRACKED
 
         Phys::BodyType type          = Phys::BodyType::Kinematic;
         glm::vec2         velocity      {0.0f, 0.0f};
@@ -136,7 +138,7 @@ namespace Arcane
         // paused PhysicsSystem pass re-mints a body whose RigidBody2D or
         // Collider2D changed since the last reconcile, so an Inspector edit
         // (or its undo) reaches the world without an exact compare per body.
-        static constexpr bool AstraChangeTracked = true;
+        ARCANE_CHANGE_TRACKED
 
         std::vector<Fixture> fixtures;
 
@@ -176,13 +178,15 @@ namespace Arcane
 // BodyType and ShapeKind are reflected here (in the Arcane.dll module that
 // owns physics components) so the visitFields seam can serialize them by name
 // on the JSON path and the MetaRegistry knows their string->value mappings.
+// ARCANE_INTERNAL_BEGIN: the enum reflection must sit in the enums' own (Manifold2D) namespace
 namespace Manifold2D::Physics
 {
-    ASTRA_REFLECT_ENUM(BodyType)
-        ASTRA_REFLECT_ENUM_VALUE(BodyType, Static)
-        ASTRA_REFLECT_ENUM_VALUE(BodyType, Kinematic)
-        ASTRA_REFLECT_ENUM_VALUE(BodyType, Dynamic)
-    ASTRA_END_REFLECT_ENUM()
+// ARCANE_INTERNAL_END
+    ARCANE_REFLECT_ENUM(BodyType)
+        ARCANE_REFLECT_ENUM_VALUE(BodyType, Static)
+        ARCANE_REFLECT_ENUM_VALUE(BodyType, Kinematic)
+        ARCANE_REFLECT_ENUM_VALUE(BodyType, Dynamic)
+    ARCANE_END_REFLECT_ENUM()
 
     // The reflected set is EXACTLY the buildable set. Polygon is part of the
     // Core type but Fixture carries no authored vertex array, so
@@ -199,44 +203,44 @@ namespace Manifold2D::Physics
     // (Circle) -- the JSON reader's existing unknown-enum-name rule
     // (ReflectionJson.hpp, EnumFromString -> nullopt -> no write) -- instead
     // of asserting at mint.
-    ASTRA_REFLECT_ENUM(ShapeKind)
-        ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Circle)
-        ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Capsule)
-        ASTRA_REFLECT_ENUM_VALUE(ShapeKind, Aabb)
-    ASTRA_END_REFLECT_ENUM()
+    ARCANE_REFLECT_ENUM(ShapeKind)
+        ARCANE_REFLECT_ENUM_VALUE(ShapeKind, Circle)
+        ARCANE_REFLECT_ENUM_VALUE(ShapeKind, Capsule)
+        ARCANE_REFLECT_ENUM_VALUE(ShapeKind, Aabb)
+    ARCANE_END_REFLECT_ENUM()
 } // namespace Manifold2D::Physics
 
 // Component type reflection blocks -- at namespace scope (design rule: every
-// engine component is ASTRA_REFLECT-annotated from day one).
+// engine component is ARCANE_REFLECT-annotated from day one).
 namespace Arcane
 {
-    ASTRA_REFLECT_TYPE(RigidBody2D)
-        ASTRA_REFLECT_FIELD(RigidBody2D, type)
-        ASTRA_REFLECT_FIELD(RigidBody2D, velocity)
-        ASTRA_REFLECT_FIELD(RigidBody2D, mass)
-        ASTRA_REFLECT_FIELD(RigidBody2D, linearDamping)
-        ASTRA_REFLECT_FIELD(RigidBody2D, fixedRotation)
-        ASTRA_REFLECT_FIELD(RigidBody2D, bullet)
-    ASTRA_END_REFLECT_TYPE()
+    ARCANE_REFLECT_TYPE(RigidBody2D)
+        ARCANE_REFLECT_FIELD(RigidBody2D, type)
+        ARCANE_REFLECT_FIELD(RigidBody2D, velocity)
+        ARCANE_REFLECT_FIELD(RigidBody2D, mass)
+        ARCANE_REFLECT_FIELD(RigidBody2D, linearDamping)
+        ARCANE_REFLECT_FIELD(RigidBody2D, fixedRotation)
+        ARCANE_REFLECT_FIELD(RigidBody2D, bullet)
+    ARCANE_END_REFLECT_TYPE()
 
     // Fixture: reflected so editors / JSON schema can walk per-fixture fields.
     // Each Fixture is a standalone reflected struct (no enclosing component);
     // the visitFields consumer descends into the vector elements by hand.
-    ASTRA_REFLECT_TYPE(Fixture)
-        ASTRA_REFLECT_FIELD(Fixture, kind)
-        ASTRA_REFLECT_FIELD(Fixture, radius)
-        ASTRA_REFLECT_FIELD(Fixture, halfLen)
-        ASTRA_REFLECT_FIELD(Fixture, halfW)
-        ASTRA_REFLECT_FIELD(Fixture, halfH)
-        ASTRA_REFLECT_FIELD(Fixture, localPos)
-        ASTRA_REFLECT_FIELD(Fixture, localAngle)
-        ASTRA_REFLECT_FIELD(Fixture, density)
-        ASTRA_REFLECT_FIELD(Fixture, friction)
-        ASTRA_REFLECT_FIELD(Fixture, restitution)
-        ASTRA_REFLECT_FIELD(Fixture, categoryBits)
-        ASTRA_REFLECT_FIELD(Fixture, maskBits)
-        ASTRA_REFLECT_FIELD(Fixture, isSensor)
-    ASTRA_END_REFLECT_TYPE()
+    ARCANE_REFLECT_TYPE(Fixture)
+        ARCANE_REFLECT_FIELD(Fixture, kind)
+        ARCANE_REFLECT_FIELD(Fixture, radius)
+        ARCANE_REFLECT_FIELD(Fixture, halfLen)
+        ARCANE_REFLECT_FIELD(Fixture, halfW)
+        ARCANE_REFLECT_FIELD(Fixture, halfH)
+        ARCANE_REFLECT_FIELD(Fixture, localPos)
+        ARCANE_REFLECT_FIELD(Fixture, localAngle)
+        ARCANE_REFLECT_FIELD(Fixture, density)
+        ARCANE_REFLECT_FIELD(Fixture, friction)
+        ARCANE_REFLECT_FIELD(Fixture, restitution)
+        ARCANE_REFLECT_FIELD(Fixture, categoryBits)
+        ARCANE_REFLECT_FIELD(Fixture, maskBits)
+        ARCANE_REFLECT_FIELD(Fixture, isSensor)
+    ARCANE_END_REFLECT_TYPE()
 
     // Collider2D: reflects the fixture list. Serializable on BOTH paths since
     // 2026-09-11 (2D physics wiring): the reflection->JSON bridge grew a
@@ -247,38 +251,38 @@ namespace Arcane
     // neither write nor read a container and a saved Collider2D could never be
     // opened again (SceneJsonTest pins the fix). The BINARY path was always
     // fine: Collider2D::Serialize(Archive&) carries the vector directly.
-    ASTRA_REFLECT_TYPE(Collider2D)
-        ASTRA_REFLECT_FIELD(Collider2D, fixtures)
-    ASTRA_END_REFLECT_TYPE()
+    ARCANE_REFLECT_TYPE(Collider2D)
+        ARCANE_REFLECT_FIELD(Collider2D, fixtures)
+    ARCANE_END_REFLECT_TYPE()
 
     // Hidden as well as Serializable(false): runtime plumbing nobody authors
     // (the handle is re-established by PhysicsSystem on load), which used to
     // render as "unsupported" rows in the Inspector.
-    ASTRA_REFLECT_TYPE(PhysicsBodyRef)
-        ASTRA_REFLECT_FIELD(PhysicsBodyRef, handle)
-            ASTRA_REFLECT_ATTR(Serializable, false)
-            ASTRA_REFLECT_ATTR(Hidden)
-        ASTRA_REFLECT_FIELD(PhysicsBodyRef, appliedScale)
-            ASTRA_REFLECT_ATTR(Serializable, false)
-            ASTRA_REFLECT_ATTR(Hidden)
-    ASTRA_END_REFLECT_TYPE()
+    ARCANE_REFLECT_TYPE(PhysicsBodyRef)
+        ARCANE_REFLECT_FIELD(PhysicsBodyRef, handle)
+            ARCANE_REFLECT_ATTR(Serializable, false)
+            ARCANE_REFLECT_ATTR(Hidden)
+        ARCANE_REFLECT_FIELD(PhysicsBodyRef, appliedScale)
+            ARCANE_REFLECT_ATTR(Serializable, false)
+            ARCANE_REFLECT_ATTR(Hidden)
+    ARCANE_END_REFLECT_TYPE()
 } // namespace Arcane
 
 // Registration functions -- header-only, mirroring SceneModule.hpp.
 namespace Arcane
 {
-    inline void RegisterPhysicsComponents(Astra::ComponentRegistry& creg)
+    inline void RegisterPhysicsComponents(Arcane::ComponentRegistry& creg)
     {
         creg.RegisterComponent<RigidBody2D>();
         creg.RegisterComponent<Collider2D>();
         creg.RegisterComponent<PhysicsBodyRef>();
         // NOTE: Fixture is a data descriptor embedded inside Collider2D::fixtures,
-        // not a standalone ECS component. It is reflected via ASTRA_REFLECT_TYPE
+        // not a standalone ECS component. It is reflected via ARCANE_REFLECT_TYPE
         // (static-init path) so editors/JSON-schema can walk per-fixture fields,
         // but it is NOT registered with ComponentRegistry (no entity slot needed).
     }
 
-    inline void RegisterPhysicsComponents(Astra::Registry& reg)
+    inline void RegisterPhysicsComponents(Arcane::Registry& reg)
     {
         RegisterPhysicsComponents(*reg.GetComponentRegistry());
     }
