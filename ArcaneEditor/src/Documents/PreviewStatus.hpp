@@ -44,8 +44,8 @@ namespace Arcane::Editor
     // the compile is fine (or failed) but nothing shows.
     [[nodiscard]] std::string ToolbarStatusText(const PreviewStatus& s);
     // What a preview box draws when !s.image. NotCompiledHere reads as the
-    // imported mesh: a mesh-surface MATERIAL draws no box (s5.3), so the
-    // imported-mesh document is the one box that shows it.
+    // imported mesh: a mesh-surface MATERIAL's box (T3-D6, its lit sphere)
+    // words its own missing image instead (ShaderEditorDocument::DrawPreviewPanel).
     [[nodiscard]] std::string PreviewBoxText(const PreviewStatus& s);
 
     // Where a preview box draws its square image (T3-D6): scaled to the box's

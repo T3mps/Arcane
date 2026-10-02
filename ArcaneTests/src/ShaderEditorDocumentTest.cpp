@@ -5,6 +5,7 @@
 // ConsumeResult must route ONLY this document's in-flight job ids. Device-less:
 // the ctor skips preview resources cleanly, BindIfComplete never runs.
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "Panels/AssetReferenceField.hpp"   // AssetRefEdit: the texture row's write (T3-C6)
@@ -29,6 +30,7 @@
 #include <Arcane/Material/MaterialGraph.hpp>
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Render/Nri/NriGraphContext.hpp>
+#include <Arcane/Render/RenderErrorLatch.hpp>   // RenderErrorCount: the mesh preview frame (T3-D6)
 #include <Arcane/Render/ShaderCompiler.hpp>
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 
@@ -1323,12 +1325,14 @@ TEST_CASE("ShaderEditorDocument: the Inspector's Ctrl+S keeps the save-with-erro
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("ShaderEditorDocument: a mesh material's page has no preview box -- a one-line note, the params take the page",
+TEST_CASE("material page T3-D6: a mesh BASE material's page keeps its preview square -- the lit-sphere box, the not-compiled-here note as its caption",
           "[editor][material][mesh][inspector]")
 {
-    // Final fix P: mesh materials never compile here (Rebuild()'s guard), so a
-    // preview box would read "compiling..." forever (the toolbar already says
-    // "not compiled here").
+    // T3-D6 (spec s5.3 amendment, 2026-10-02): a mesh surface is never
+    // compiled here, but it IS previewed -- the thumbnail's lit sphere in the
+    // material's CURRENT params. The page keeps the square every base gets;
+    // the old one-line note becomes the caption under it. Device-less here,
+    // so the box names why it has no image instead of reading "compiling...".
     const fs::path dir = TempDir("mesh_page");
     const fs::path file = dir / "hero.arcmat";
     Arcane::MaterialAssetData data;
@@ -1341,38 +1345,136 @@ TEST_CASE("ShaderEditorDocument: a mesh material's page has no preview box -- a 
     REQUIRE(loaded.has_value());
     ShaderEditorDocument doc(DocServices{}, file, *loaded);
 
+    PageUi h;
+    h.Frame(doc); h.Frame(doc, true);
+    INFO(h.logged);
+    CHECK(LogStartsWithHeader(h.logged, "Preview"));                       // the body opens on the square
+    CHECK(h.logged.find("compiling...") == std::string::npos);
+    CHECK(h.logged.find("No preview -- no GPU device") != std::string::npos);   // the box's honest reason
+    CHECK(h.logged.find("Mesh material: not compiled here") != std::string::npos);   // the caption
+    ImGuiWindow* box = nullptr;
+    for (ImGuiWindow* win : h.ctx->Windows)
+        if (std::string(win->Name).find("##preview") != std::string::npos) box = win;
+    REQUIRE(box != nullptr);
+    CHECK(box->Size.x == Catch::Approx(box->Size.y));                     // the square, like every base
+    CHECK(box->Size.x > 100.0f);
+}
+
+TEST_CASE("material document T3-D6: a mesh INSTANCE's tab is its preview -- a full-tab box with the caption under it",
+          "[editor][material][mesh]")
+{
+    // The user's desk finding (2026-10-02): meshes/Metal showed a dim line in
+    // the tab and nothing in the Inspector -- no visual preview anywhere. The
+    // instance tab owns the preview (T3-D5, user decision A), so a mesh
+    // instance's tab now draws the box, filling the tab above its caption.
+    const fs::path dir = TempDir("mesh_instance_tab");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "MeshInstanceTab").has_value());
+    const fs::path content = dir / "Game" / "Content";
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate(); base.name = "MeshBase"; base.kind = "mesh";
+    base.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(0.2f, 0.4f, 0.6f, 1.0f));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "mesh_base.arcmat", base));
+    Arcane::MaterialAssetData child;
+    child.id = Arcane::Guid::Generate(); child.parent = base.id; child.name = "Metal";
+    child.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(0.1f, 0.45f, 0.95f, 1.0f));
+    const fs::path file = content / "metal.arcmat";
+    REQUIRE(Arcane::SaveMaterialAsset(file, child));
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    DocServices services;
+    services.runtime = &rt;
+    ShaderEditorDocument doc(services, file, *Arcane::LoadMaterialAsset(file));
+    REQUIRE(doc.IsInstance());
+
     ImGuiContext* prev = ImGui::GetCurrentContext();
     ImGuiContext* ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(ctx);
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(1280.0f, 720.0f);
     io.IniFilename = nullptr;
-    unsigned char* pixels = nullptr; int w = 0, h = 0;
-    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
-    Arcane::Editor::PropertyGridState grid;
+    unsigned char* px = nullptr; int w = 0, h = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     std::string logged;
-    for (int frame = 0; frame < 2; ++frame)
+    for (int f = 0; f < 2; ++f)
     {
         io.DeltaTime = 1.0f / 60.0f;
         ImGui::NewFrame();
-        ImGui::SetNextWindowSize(ImVec2(400.0f, 600.0f));
-        ImGui::Begin("Inspector");
-        if (frame == 1) ImGui::LogToBuffer();
-        Arcane::Editor::PropertyGrid pg(grid);
-        doc.Page()->Draw(pg);
-        if (frame == 1) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
-        ImGui::End();
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(900, 600), ImGuiCond_Always);
+        if (f == 1) ImGui::LogToBuffer();
+        bool close = false;
+        doc.Draw(close);
+        if (f == 1) { logged = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
         ImGui::Render();
     }
     INFO(logged);
-    CHECK(logged.find("compiling...") == std::string::npos);
-    CHECK(logged.find("not compiled here") != std::string::npos);
-    bool previewChild = false;
+    ImGuiWindow* docWin = nullptr;
+    ImGuiWindow* box = nullptr;
     for (ImGuiWindow* win : ctx->Windows)
-        if (std::string(win->Name).find("##preview") != std::string::npos) previewChild = true;
-    CHECK_FALSE(previewChild);
+    {
+        const std::string name = win->Name;
+        if (name.find("###matdoc_") != std::string::npos && !(win->Flags & ImGuiWindowFlags_ChildWindow)) docWin = win;
+        if (name.find("##preview") != std::string::npos) box = win;
+    }
+    REQUIRE(docWin != nullptr);
+    REQUIRE(box != nullptr);                                              // the box, not a dim line
+    CHECK(box->Size.x > 0.9f * docWin->Size.x - 2.0f * ImGui::GetStyle().WindowPadding.x);   // full width
+    CHECK(box->Size.y > 0.7f * docWin->Size.y);                         // most of the tab's height
+    CHECK(box->Pos.y + box->Size.y <= docWin->Pos.y + docWin->Size.y);  // the caption fits under it
+    CHECK(logged.find("Mesh material: not compiled here") != std::string::npos);
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("material document T3-D6: the mesh preview draws the LIVE params -- an inherited value, an override, an unsaved edit",
+          "[editor][material][mesh]")
+{
+    // "It must reflect the CURRENT parameter values": the sphere reads the
+    // bound instance (parent chain under this document's overrides), so an
+    // edit shows before any save -- unlike the 64px thumbnail, which is
+    // harvested from the saved file.
+    const fs::path dir = TempDir("mesh_preview_live");
+    REQUIRE(Arcane::Project::Create(dir / "Game", "MeshPreviewLive").has_value());
+    const fs::path content = dir / "Game" / "Content";
+    const Arcane::Guid albedo = Arcane::Guid::Generate();
+    Arcane::MaterialAssetData base;
+    base.id = Arcane::Guid::Generate(); base.name = "MeshBase"; base.kind = "mesh";
+    base.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(0.2f, 0.4f, 0.6f, 1.0f));
+    base.params.emplace_back("albedo", Arcane::MatParamValue::MakeTexture(albedo));
+    REQUIRE(Arcane::SaveMaterialAsset(content / "mesh_base.arcmat", base));
+    Arcane::MaterialAssetData child;
+    child.id = Arcane::Guid::Generate(); child.parent = base.id; child.name = "Paint";
+    const fs::path file = content / "paint.arcmat";
+    REQUIRE(Arcane::SaveMaterialAsset(file, child));
+    Arcane::Runtime rt(Arcane::Test::Process());
+    REQUIRE(rt.OpenProject(dir / "Game"));
+    DocServices services;
+    services.runtime = &rt;
+    ShaderEditorDocument doc(services, file, *Arcane::LoadMaterialAsset(file));
+    REQUIRE(doc.IsInstance());
+
+    // Inherited: no override of its own, the base's saved values.
+    auto in = doc.MeshPreviewInputs();
+    CHECK(in.baseColor[0] == Catch::Approx(0.2f));
+    CHECK(in.baseColor[2] == Catch::Approx(0.6f));
+    CHECK(in.albedo == albedo);
+
+    // An unsaved override edit shows at once.
+    doc.ApplyParamEdit(Arcane::HashParamName("baseColor"), /*hasValue=*/true,
+                       Arcane::MatParamValue::MakeColor(0.95f, 0.15f, 0.1f, 1.0f));
+    REQUIRE(doc.Dirty());
+    in = doc.MeshPreviewInputs();
+    CHECK(in.baseColor[0] == Catch::Approx(0.95f));
+    CHECK(in.baseColor[1] == Catch::Approx(0.15f));
+    CHECK(in.albedo == albedo);   // still inherited
+
+    // Clearing the override falls back to the parent again.
+    doc.ApplyParamEdit(Arcane::HashParamName("baseColor"), /*hasValue=*/false, Arcane::MatParamValue{});
+    CHECK(doc.MeshPreviewInputs().baseColor[0] == Catch::Approx(0.2f));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
 }
 
 // ---- Node page + editor upgrades s3.2: the late-bound seam + PreviewStatus ----
@@ -1517,6 +1619,37 @@ TEST_CASE("ShaderEditorDocument: the first non-null chromeGraph makes Tick build
     CHECK(doc.GraphPreviewTextureId() != 0);
 }
 
+TEST_CASE("ShaderEditorDocument T3-D6: a MESH-surface material builds its preview vehicle and presents its sphere", "[editor][material][mesh][preview][gpu]")
+{
+    // Before T3-D6 Tick refused a vehicle to every mesh surface ("an image
+    // nothing ever draws"); now the tab/page draws it, so the vehicle is built
+    // once and the status reports a bound image.
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    using Arcane::Editor::PreviewAvailability;
+    Arcane::HostConfig cfg;
+    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.headless = true;
+    auto chrome = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
+    REQUIRE(chrome != nullptr);
+
+    const fs::path dir = TempDir("mesh_preview_gpu");
+    const auto loaded = WriteAndLoad(dir / "metal.arcmat", "mesh");
+    REQUIRE(loaded.has_value());
+    DocServices services;
+    services.hostConfig  = &cfg;
+    services.chromeGraph = [&] { return &chrome->Graph(); };
+    ShaderEditorDocument doc(services, dir / "metal.arcmat", *loaded);
+    const std::uint64_t errorsBefore = Arcane::RenderErrorCount();
+    for (int i = 0; i < 4; ++i) doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 1);
+    const auto status = doc.ComputeStatus();
+    CHECK(status.compile == Arcane::Editor::CompileStatus::NotCompiledHere);   // the toolbar still says so
+    CHECK(status.preview == PreviewAvailability::Ready);
+    CHECK(status.image);
+    CHECK(doc.GraphPreviewTextureId() != 0);
+    CHECK(Arcane::RenderErrorCount() == errorsBefore);
+}
+
 TEST_CASE("ShaderEditorDocument: the material page body never repeats the title the header crumb carries", "[editor][material][inspector]")
 {
     const fs::path dir = TempDir("page_no_title");
@@ -1524,7 +1657,7 @@ TEST_CASE("ShaderEditorDocument: the material page body never repeats the title 
     Arcane::MaterialAssetData data;
     data.id = Arcane::Guid::Generate();
     data.name = "TitleProbe";
-    data.kind = "mesh";                                   // no preview box: the body is the note + params
+    data.kind = "mesh";                                   // no compiler needed: the body is the square + caption + params
     data.params.emplace_back("baseColor", Arcane::MatParamValue::MakeColor(1.0f, 1.0f, 1.0f, 1.0f));
     REQUIRE(Arcane::SaveMaterialAsset(file, data));
     const auto loaded = Arcane::LoadMaterialAsset(file);

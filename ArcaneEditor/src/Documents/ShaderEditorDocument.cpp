@@ -1,5 +1,6 @@
 #include "Documents/ShaderEditorDocument.hpp"
 
+#include "Documents/MaterialSpherePreview.hpp"   // the mesh-surface preview sphere, shared with the thumbnails (T3-D6)
 #include "Documents/ShaderGraphCategoryColors.hpp"   // GraphCategoryHeaderColor: the node title band fill (s5.1.4)
 #include "Documents/ShaderGraphPinLegend.hpp"   // the canvas's pin colour legend (T3-D1)
 #include "Documents/ShaderGraphPinTypes.hpp"    // pin palette + paint rule + type/tooltip words (T3-D1)
@@ -73,6 +74,18 @@ namespace Arcane::Editor
                         ::Arcane::CVarValue::Float32(0.45f), ::Arcane::CVarValue::Float32(0.2f),
                         ::Arcane::CVarValue::Float32(0.8f), ::Arcane::CVarFlags::Archive,
                         "Largest share of the Inspector's height the material page's preview square may take");
+
+        // The mesh-surface preview box's caption (T3-D6): the line that used
+        // to BE the whole preview, kept as the honest note under the sphere.
+        constexpr const char* kMeshPreviewCaption =
+            "Mesh material: not compiled here -- preview it on a mesh in the viewport";
+
+        // The caption's height wrapped at `width`, plus the item spacing above it.
+        float MeshPreviewCaptionHeight(float width)
+        {
+            return ImGui::CalcTextSize(kMeshPreviewCaption, nullptr, false, (std::max)(1.0f, width)).y
+                 + ImGui::GetStyle().ItemSpacing.y;
+        }
 
         float MaterialPreviewFraction()
         {
@@ -1522,6 +1535,20 @@ namespace Arcane::Editor
                 });
         }
 
+        // The mesh-surface preview's ONE mesh (T3-D6): the sphere, served by
+        // value-captured shared ownership so a retired vehicle never reaches
+        // back into a destroyed document.
+        if (!m_previewSphere)
+            m_previewSphere = std::make_shared<const Arcane::MeshData>(BuildMaterialPreviewSphere());
+        m_graphPreview->SetMeshSupply(
+            [sphere = m_previewSphere](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+            {
+                if (id == kMaterialPreviewSphereId && sphere && !sphere->vertices.empty())
+                    return { sphere.get(), Arcane::MeshResolveState::Ready };
+                return { nullptr, Arcane::MeshResolveState::Failed };
+            });
+        m_meshPreviewPresented = false;
+
         // The document's OWN recorder -- owned rather than borrowed from the
         // editor: this frame is declared from Tick (phase 13), long after
         // phase 10 drained the editor's scene batcher, and two owners of one
@@ -1593,16 +1620,20 @@ namespace Arcane::Editor
             return;
 
         const bool sprite = m_surface == 1;
+        const bool mesh = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh;
         const bool haveSprite =
             sprite && m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId;
-        const bool haveFullscreen =
-            !sprite && m_graphPost.templ && m_graphPost.instance && !m_graphPost.passes.empty();
+        const bool haveFullscreen = !sprite && !mesh &&
+            m_graphPost.templ && m_graphPost.instance && !m_graphPost.passes.empty();
+        // A mesh surface compiles nothing: it is ready the moment its params
+        // are bound (Rebuild's synchronous MeshParamTemplate promote).
+        const bool haveMesh = mesh && m_instance && m_previewSphere;
         // NOTHING COMPILED YET IS NOT A FRAME. Declaring one would clear the
         // output to the checkerboard and then show it as "the preview", which
         // is the blank-but-labeled failure this phase refuses; the panel draws
         // no image instead (DrawPreviewPanel gates on the same predicate,
         // PreviewReady()).
-        if (!haveSprite && !haveFullscreen)
+        if (!haveSprite && !haveFullscreen && !haveMesh)
             return;
 
         Arcane::GlobalParams globals;
@@ -1642,6 +1673,24 @@ namespace Arcane::Editor
         Arcane::NriGraphContext::FrameDesc vp;
         vp.batch   = &b;
         vp.globals = &globals;
+
+        // THE MESH SURFACE (T3-D6): the thumbnail's lit sphere, coloured from
+        // the bound instance's CURRENT values -- an edit (or an instance
+        // override) shows on the next frame, before any save. The albedo
+        // resolves to a slot in THIS vehicle's bindless table.
+        Arcane::MeshInstance sphereInstance;
+        Arcane::MeshSceneDesc meshScene;
+        if (haveMesh)
+        {
+            const MeshPreviewParams in = MeshPreviewInputs();
+            std::uint32_t slot = 0xFFFFFFFFu;   // BindlessTable::kInvalidSlot: the flat baseColor path
+            if (in.albedo.IsValid())
+                slot = m_graphPreview->ResolveMeshAlbedoSlot(in.albedo);
+            sphereInstance = MaterialPreviewSphereInstance(
+                glm::vec4(in.baseColor[0], in.baseColor[1], in.baseColor[2], in.baseColor[3]), slot);
+            meshScene = MaterialPreviewSphereScene(std::span<const Arcane::MeshInstance>(&sphereInstance, 1));
+            vp.mesh = &meshScene;
+        }
 
         // VIEW-ANY-INTERMEDIATE: the chain is TRUNCATED at the viewed pass,
         // so the last declared pass writes the output. The copy
@@ -1687,7 +1736,26 @@ namespace Arcane::Editor
         else if (outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
         {
             m_previewFrameFailed = false;  // the next good frame clears the latch
+            m_meshPreviewPresented = haveMesh;
         }
+    }
+
+    ShaderEditorDocument::MeshPreviewParams ShaderEditorDocument::MeshPreviewInputs() const
+    {
+        // The same two names MeshMaterialCache resolves off disk (and the
+        // thumbnail harvester through it), read off the LIVE instance -- which
+        // already layers the parent chain under this document's overrides
+        // (PromotePendingInstance), so an instance inherits exactly what the
+        // saved resolve would give it.
+        MeshPreviewParams out;
+        if (!m_instance)
+            return out;
+        Arcane::MatParamValue v;
+        if (m_instance->GetParam("baseColor", v) && v.type == Arcane::MatParamType::Color)
+            out.baseColor = { v.f[0], v.f[1], v.f[2], v.f[3] };
+        if (m_instance->GetParam("albedo", v) && v.type == Arcane::MatParamType::Texture)
+            out.albedo = v.tex;
+        return out;
     }
 
     void ShaderEditorDocument::DestroyGraphPreview()
@@ -1700,6 +1768,7 @@ namespace Arcane::Editor
         // document has ever seen it.
         m_graphSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
         m_graphSpriteStamp = nullptr;
+        m_meshPreviewPresented = false;
         m_graphBatch.reset();
         Arcane::ImGuiNriNode* hud = std::exchange(m_previewHud, nullptr);
 
@@ -1902,6 +1971,8 @@ namespace Arcane::Editor
         // to create) there is nothing to be ready.
         if (!m_graphPreview)
             return false;
+        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+            return m_meshPreviewPresented;   // the sphere frame landed (T3-D6)
         return m_surface == 1
                    ? m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId
                    : (m_graphPost.templ && m_graphPost.instance &&
@@ -1964,14 +2035,11 @@ namespace Arcane::Editor
         // re-registers the sprite binding the bind could not make. Not after a
         // creation refusal, and not after a frame failure (that rebuilds on
         // the next bind -- today's drop-and-rebuild-on-bind).
-        // A MESH-surface material never builds a preview here (Rebuild()'s
-        // guard, DrawPreviewPanel's one-line note): before this seam it never
-        // reached a bind site, so it never had a vehicle. Without the surface
-        // gate the retry would give every open mesh material its own 512x512
-        // offscreen context and record a frame for it every editor frame,
-        // for an image nothing ever draws.
-        if (!m_graphPreview && !m_previewVehicleFailed && !m_previewFrameFailed
-            && SurfaceOf(m_surface) != Arcane::MaterialSurface::Mesh)
+        // A MESH-surface material builds its vehicle here too (T3-D6): it has
+        // no bind site (nothing compiles), and its preview -- the lit sphere,
+        // drawn by the document tab (instance) or the page square (base) --
+        // is a frame like any other surface's.
+        if (!m_graphPreview && !m_previewVehicleFailed && !m_previewFrameFailed)
             PublishGraphPreview();
         if (m_graphPreview)
             RenderGraphPreview(dt);
@@ -2105,7 +2173,10 @@ namespace Arcane::Editor
             // for an instance, so there is one preview, not two. The toolbar
             // above keeps the parent-chain affordances reachable; saving is
             // Ctrl+S, which needs no toolbar room at all.
-            DrawPreviewPanel(ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
+            // A mesh surface's caption sits under the box (T3-D6).
+            const float caption = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh
+                                      ? MeshPreviewCaptionHeight(ImGui::GetContentRegionAvail().x) : 0.0f;
+            DrawPreviewPanel(ImVec2(0.0f, (std::max)(1.0f, ImGui::GetContentRegionAvail().y - caption)));
         }
 
         // Opened = selected; a click anywhere in the content (canvas
@@ -2148,20 +2219,14 @@ namespace Arcane::Editor
         const float pageHeight = ImGui::GetWindowHeight();
         if (!IsInstance() && grid.Section("Preview"))
         {
-            if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
-            {
-                // Never compiled here (Rebuild()'s guard): one dim line, no box (s5.3).
-                ImGui::TextDisabled("%s", ToolbarStatusText(ComputeStatus()).c_str());
-            }
-            else
-            {
-                // A square: the column's width, capped at a share of the page
-                // (editor.inspector.materialPreviewFraction), centred.
-                const float availX = ImGui::GetContentRegionAvail().x;
-                const float side = (std::max)(1.0f, (std::min)(availX, MaterialPreviewFraction() * pageHeight));
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (std::max)(0.0f, (availX - side) * 0.5f));
-                DrawPreviewPanel(ImVec2(side, side));
-            }
+            // A square: the column's width, capped at a share of the page
+            // (editor.inspector.materialPreviewFraction), centred. A mesh
+            // surface gets the same square (T3-D6, the s5.3 amendment): its
+            // lit-sphere preview, with the "not compiled here" caption below.
+            const float availX = ImGui::GetContentRegionAvail().x;
+            const float side = (std::max)(1.0f, (std::min)(availX, MaterialPreviewFraction() * pageHeight));
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (std::max)(0.0f, (availX - side) * 0.5f));
+            DrawPreviewPanel(ImVec2(side, side));
         }
         DrawRenderingSection(grid, UndoStack());
         DrawParamsSection(grid, UndoStack());
@@ -4096,13 +4161,11 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::DrawPreviewPanel(ImVec2 size)
     {
-        // Mirrors the toolbar's guard: a mesh surface is previewed in the
-        // viewport on its meshes, never compiled here -- a one-line note, no box.
-        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
-        {
-            ImGui::TextDisabled("Mesh material: not compiled here -- preview it on a mesh in the viewport");
-            return;
-        }
+        // A mesh surface is never compiled here, but it IS previewed (T3-D6,
+        // the s5.3 amendment): the thumbnail's lit sphere in the CURRENT
+        // params, in the same box, with the old one-line note as its caption
+        // (the caller leaves room for it: kMeshPreviewCaption).
+        const bool mesh = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh;
         ImGui::BeginChild("##preview", size, ImGuiChildFlags_Borders);
         const PreviewImage image = PreviewImageOf();
         if (image.id != 0)
@@ -4113,11 +4176,28 @@ namespace Arcane::Editor
             ImGui::SetCursorPos(ImVec2(at.x + fit.x, at.y + fit.y));
             ImGui::Image(image.id, ImVec2(fit.side, fit.side));
         }
+        else if (mesh)
+        {
+            // PreviewBoxText's NotCompiledHere line names the IMPORTED mesh;
+            // a mesh material's box names why its sphere is missing instead.
+            const PreviewStatus st = ComputeStatus();
+            CenteredTextDisabled(st.preview != PreviewAvailability::Ready
+                                     ? "No preview -- " + NoPreviewReason(st)
+                                     : std::string("Preview pending -- nothing rendered yet"));
+        }
         else
         {
             CenteredTextDisabled(PreviewBoxText(ComputeStatus()));
         }
         ImGui::EndChild();
+        if (mesh)
+        {
+            // Wrapped: the page column is narrow (MeshPreviewCaptionHeight
+            // measures the same wrap for the full-tab reservation).
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", kMeshPreviewCaption);
+            ImGui::PopTextWrapPos();
+        }
     }
 
     // ------------------------------------------------------------ graph mode

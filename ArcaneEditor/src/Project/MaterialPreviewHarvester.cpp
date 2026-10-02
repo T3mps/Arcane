@@ -1,4 +1,5 @@
 #include "Project/MaterialPreviewHarvester.hpp"
+#include "Documents/MaterialSpherePreview.hpp"   // the sphere scene, shared with the document's live preview (T3-D6)
 
 #include <Arcane/Assets/Assets.hpp>          // LoadDisplayPixels / WriteThumbnailPngRgba
 #include <Arcane/Assets/ImageIo.hpp>         // PixelData
@@ -1096,9 +1097,7 @@ namespace Arcane::Editor
         ctx->SetMeshSupply(
             [this](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
             {
-                static const Arcane::Guid kSphere =
-                    Arcane::Guid{ 0x53504852ull, 1ull };   // 'SPHR'
-                if (id == kSphere && !sphere.vertices.empty())
+                if (id == kMaterialPreviewSphereId && !sphere.vertices.empty())
                     return { &sphere, Arcane::MeshResolveState::Ready };
                 // F2c Plan 2 Task 9: the mesh-ASSET harvest's own geometry, resolved by
                 // StartOneMesh and stashed on `this` (Harvest, immediately before
@@ -1121,7 +1120,7 @@ namespace Arcane::Editor
 
         // The mesh half: one sphere for the session (the mocks' sphere), and
         // the params-only material cache that colours it.
-        sphere = Arcane::BuildUvSphere(0.5f, 24, 32);
+        sphere = BuildMaterialPreviewSphere();
         Arcane::MeshMaterialCache::Services ms;
         ms.resolveAsset = services.resolveAsset;
         ms.resolveAlbedoSlot = [this](const Arcane::Guid& g) -> std::uint32_t
@@ -1206,23 +1205,10 @@ namespace Arcane::Editor
         else if (r.subject == Subject::Material && r.surface == Arcane::MaterialSurface::Mesh &&
                  !sphere.vertices.empty())
         {
-            Arcane::MeshInstance mi;
-            mi.mesh = Arcane::Guid{ 0x53504852ull, 1ull };   // must match SetMeshSupply above
-            mi.model = glm::mat4(1.0f);
-            mi.baseColor = r.meshColor;
-            mi.materialSlot = r.meshSlot;
-            instances.push_back(mi);
-
-            meshScene.instances = instances;
-            // Right-handed, [0,1] depth -- SceneCamera's own convention, and
-            // the only one MeshNode's shaders are built for. 2.0m back from a
-            // 0.5m-radius sphere at 35 degrees fills ~78% of the tile.
-            meshScene.view = glm::lookAtRH(glm::vec3(0.0f, 0.0f, 2.0f),
-                                           glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-            meshScene.projection = Arcane::PerspectiveProjection(35.0f, 1.0f, 0.05f, 10.0f);
-            meshScene.lightDirection = glm::vec3(0.45f, 0.7f, 0.8f);   // TOWARD the light
-            meshScene.lightColor = glm::vec3(1.0f);
-            meshScene.ambient = glm::vec3(0.12f);
+            // The shared sphere scene (Documents/MaterialSpherePreview.hpp): the
+            // document's live preview draws the same picture from live params.
+            instances.push_back(MaterialPreviewSphereInstance(r.meshColor, r.meshSlot));
+            meshScene = MaterialPreviewSphereScene(instances);
             vp.mesh = &meshScene;
         }
         // ===== F2c Plan 2 Task 9: A MESH ASSET, FRAMED BY ITS OWN AABB =====

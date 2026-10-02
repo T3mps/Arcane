@@ -39,6 +39,7 @@
 #include "Widgets/GraphNodeLod.hpp"
 
 #include <Arcane/Material/MaterialAsset.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>   // MeshData: the mesh-surface preview sphere (T3-D6)
 #include <Arcane/Material/MaterialInstance.hpp>
 #include <Arcane/Material/MaterialTemplate.hpp>
 #include <Arcane/Render/GraphicsBackend.hpp>
@@ -51,6 +52,7 @@
 #include <Arcane/Render/ShaderSourceProvider.hpp>
 #include <Arcane/Util/FunctionRef.hpp>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -449,6 +451,17 @@ namespace Arcane::Editor
         [[nodiscard]] PreviewStatus ComputeStatus() const;
         // CreateOffscreen calls this document has made (the [gpu] test's instrument).
         [[nodiscard]] std::uint32_t PreviewVehicleAttempts() const noexcept { return m_previewVehicleAttempts; }
+        // T3-D6: what a MESH-surface preview frame draws from -- the bound
+        // instance's CURRENT baseColor and albedo (an unsaved edit or an
+        // instance override included), never the saved file. White and no
+        // albedo before anything is bound. Public for the same reason
+        // GraphPreviewDesc is: the frame itself is device work.
+        struct MeshPreviewParams
+        {
+            std::array<float, 4> baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
+            Arcane::Guid         albedo{};
+        };
+        [[nodiscard]] MeshPreviewParams MeshPreviewInputs() const;
         // A save gesture parked behind the save-with-errors confirm (the modal
         // opens at the next draw of the document window or its page).
         [[nodiscard]] bool SaveWithErrorsPending() const noexcept { return m_confirmSaveWithErrors; }
@@ -995,6 +1008,13 @@ namespace Arcane::Editor
         bool          m_previewVehicleFailed = false;     // CreateOffscreen returned null: Tick stops retrying
         bool          m_previewFrameFailed   = false;     // a frame failed (vehicle dropped); the next Presented frame clears it
         std::uint32_t m_previewVehicleAttempts = 0;
+        // T3-D6: a MESH-surface material previews as the thumbnail's lit
+        // sphere (MaterialSpherePreview.hpp), rendered live in this vehicle
+        // from the bound instance's CURRENT baseColor/albedo. Shared, not a
+        // member value: the vehicle's mesh supply holds it, and a retired
+        // vehicle can outlive this document by a frame (retireGraphPreview).
+        std::shared_ptr<const Arcane::MeshData> m_previewSphere;
+        bool          m_meshPreviewPresented = false;     // a sphere frame landed on this vehicle
         std::uint32_t m_jobsInFlight = 0;                 // non-zero Submits not yet answered by ConsumeResult
         bool          m_submitRefused = false;            // a Submit since the last invalidation returned 0
         // The document's OWN device-less batcher -- the sprite surface's
