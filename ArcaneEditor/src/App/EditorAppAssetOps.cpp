@@ -189,9 +189,12 @@ namespace Arcane::Editor
         if (r == AE::DeleteModalResult::Confirm || r == AE::DeleteModalResult::Cancel) m_deleteFacts.reset();
     }
 
-    // T5: post-op selection. Duplicate selects the copies (primary = last); the stamp bump scrolls to it after the rebuild AssetsChanged armed.
+    // T5: post-op selection. Duplicate selects the copies (primary = last); Move keeps the selection (s7.8). Either stamp bump scrolls to the primary after the rebuild AssetsChanged armed.
     void EditorApp::AfterAssetOp(const AE::AssetOpPlan& plan)
-    { if (plan.kind == AE::AssetOpKind::Duplicate && !plan.newGuids.empty()) m_assetModel.ApplySelection(plan.newGuids, plan.newGuids.back()); }
+    {
+        if (plan.kind == AE::AssetOpKind::Duplicate && !plan.newGuids.empty()) m_assetModel.ApplySelection(plan.newGuids, plan.newGuids.back());
+        if (plan.kind == AE::AssetOpKind::Move) ++m_assetModel.selectionStamp;   // selection kept; scroll to the primary
+    }
 
     // ---- s7.12: what a moved/removed/restored asset invalidates ------------
 

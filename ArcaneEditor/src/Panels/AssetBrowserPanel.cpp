@@ -356,7 +356,8 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: one folder-group chrome row (spec s6/s11.2) ----------
-        void DrawGroupRow(AssetBrowserPanelState& state, AssetPanelModel& model, const AssetPanelRow& row)
+        void DrawGroupRow(AssetBrowserPanelState& state, AssetPanelModel& model, const AssetPanelRow& row,
+                          const AssetPanelServices& services, AssetPanelActions& actions)
         {
             ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(Theme::kChrome));
 
@@ -379,6 +380,30 @@ namespace Arcane::Editor
                 const bool newOpen = !open;
                 state.groupOpen[row.groupName] = newOpen;
                 model.SetGroupOpen(row.groupName, newOpen);
+            }
+
+            // T5 s7.8: a game-mount folder row is a Move drop target (the Selectable
+            // above is still the last item). Refused: the reason as a tooltip, no
+            // highlight. Accepted: the drop rect; delivery hands the request to the
+            // app, which runs it undoably with no modal (same folder = empty plan).
+            if (const auto rel = RelativeDirOfFolderKey(row.groupName, "Content"); rel && ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload(kAssetDragType, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
+                {
+                    const AssetDragPayload& drag = *static_cast<const AssetDragPayload*>(pl->Data);
+                    const AssetOpRequest req{ .kind = AssetOpKind::Move,   // the selection moves when it holds the dragged guid
+                        .guids = model.InSelection(drag.guid) ? model.selection : std::vector<Arcane::Guid>{ drag.guid }, .destFolder = MakeFolderChoice(*rel, "Content").relative };
+                    if (const std::string key = row.groupName + "|" + drag.guid.ToString(); state.dropDryRunKey != key)
+                    { state.dropDryRunKey = key; state.dropRefusal = services.fileOpRefusal ? services.fileOpRefusal(req) : std::string("unavailable"); }
+                    if (!state.dropRefusal.empty()) ImGui::SetTooltip("%s", state.dropRefusal.c_str());   // refused: tooltip, no highlight
+                    else
+                    {
+                        ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::GetColorU32(ImGuiCol_DragDropTarget));
+                        if (req.guids.size() > 1) ImGui::SetTooltip("%d assets", static_cast<int>(req.guids.size()));
+                        if (pl->IsDelivery()) actions.fileOp = req;   // undoable: no modal; same folder = empty plan
+                    }
+                }
+                ImGui::EndDragDropTarget();
             }
 
             // Nested-groups review fix round 1, Important 2: the MODEL shows this group's content
@@ -769,6 +794,7 @@ namespace Arcane::Editor
                        const Arcane::Guid& bootGuid, float width)
         {
             state.renameDrawn = false;   // T5 s7.6: set again by DrawRenameBox if the target's row draws
+            if (!ImGui::GetDragDropPayload()) state.dropDryRunKey.clear();   // T5 s7.8: each drag re-asks the dry-run
             if (!ImGui::BeginChild("##assetscenter", ImVec2(width, 0.0f)))
             {
                 ImGui::EndChild();
@@ -932,7 +958,7 @@ namespace Arcane::Editor
                         switch (row.type)
                         {
                             case AssetPanelRow::Type::Group:
-                                DrawGroupRow(state, model, row);
+                                DrawGroupRow(state, model, row, services, actions);
                                 break;
                             case AssetPanelRow::Type::Asset:
                                 if (const AssetPanelEntry* e = model.Find(row.guid))

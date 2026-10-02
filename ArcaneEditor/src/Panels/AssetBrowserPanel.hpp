@@ -85,6 +85,10 @@ namespace Arcane::Editor
         // it before BeginMultiSelect). It becomes the primary when
         // EndMultiSelect's requests are applied: AssetPanelModel::ApplySelection.
         Arcane::Guid msClicked;
+        // T5 s7.8: a folder group row is a Move drop target. ONE dry-run per
+        // (group, dragged guid) while a drag hovers it; DrawTable clears the
+        // key whenever no drag is active, so the next drag re-asks. "" = drops.
+        std::string dropDryRunKey, dropRefusal;
     };
 
     // T5 s7.6: open the inline rename box on `e` (F2, the row menu's Rename):
