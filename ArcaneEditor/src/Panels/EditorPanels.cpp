@@ -1351,9 +1351,9 @@ namespace Arcane::Editor
         // The style alpha OUTSIDE any BeginDisabled scope, captured up front:
         // BeginDisabled multiplies g.Style.Alpha (imgui.cpp:8899-8900) and a
         // tooltip Begin()s under whatever alpha is current, so a greyed
-        // button's tooltip would itself come out at 60%. The helpers push
-        // this value back around SetTooltip so the explanation of WHY a tool
-        // is greyed is drawn at full strength.
+        // button's tooltip would itself come out at the disabled alpha. The
+        // helpers push this value back around SetTooltip so the explanation
+        // of WHY a tool is greyed is drawn at full strength.
         const float tooltipAlpha = ImGui::GetStyle().Alpha;
         auto tooltip = [tooltipAlpha](const char* tip)
         {

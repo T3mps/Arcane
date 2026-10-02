@@ -124,7 +124,7 @@ namespace Arcane::Editor
         // glares. kBorder is DARKER than every surface it outlines, which is
         // what draws the 1px inset edge around a field well.
         inline constexpr ImVec4 kText          = ImVec4(0.878f, 0.878f, 0.878f, 1.00f); // #e0e0e0
-        inline constexpr ImVec4 kTextDim       = ImVec4(0.451f, 0.451f, 0.451f, 1.00f); // #737373
+        inline constexpr ImVec4 kTextDim       = ImVec4(0.557f, 0.557f, 0.557f, 1.00f); // #8e8e8e (s6.6: 5.09:1 on kPanel)
         inline constexpr ImVec4 kBorder        = ImVec4(0.051f, 0.051f, 0.051f, 1.00f); // #0d0d0d
         inline constexpr ImVec4 kSeparator     = ImVec4(0.200f, 0.200f, 0.200f, 1.00f); // #333333
         inline constexpr ImVec4 kSeparatorHot  = ImVec4(0.290f, 0.290f, 0.290f, 1.00f); // #4a4a4a
@@ -278,9 +278,9 @@ namespace Arcane::Editor
         c[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
         c[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.02f, 0.02f, 0.02f, 0.55f);
 
-        // The first of THREE metrics this theme changes (FrameBorderSize,
-        // DockingNodeHasCloseButton, TabBarOverlineSize). Default is 0
-        // (imgui.cpp:1533): with no frame border a near-black well on a dark
+        // The first of FOUR metrics this theme changes (FrameBorderSize,
+        // DockingNodeHasCloseButton, TabBarOverlineSize, DisabledAlpha). Default
+        // is 0 (imgui.cpp:1533): with no frame border a near-black well on a dark
         // panel has only its fill to separate it, and small fields lose their
         // edge entirely. One pixel of kBorder (darker than both) is the inset
         // line the reference shows around every field. Everything else --
@@ -303,5 +303,11 @@ namespace Arcane::Editor
         // (imgui.cpp:1638) -- the crash reporter, which applies this theme
         // (ReporterWindow.cpp:535-536), gets the same line.
         style.TabBarOverlineSize = 2.0f;
+
+        // The fourth: DisabledAlpha 0.6 -> 0.45 (s6.6). At ImGui's stock 0.6
+        // (imgui.cpp:1519) disabled kText composites to #929292, BRIGHTER than
+        // kTextDim -- raising dim text alone would make the two indistinguishable.
+        // At 0.45 disabled kText is #757575 (3.62:1), a step under dim text.
+        style.DisabledAlpha = 0.45f;
     }
 }
