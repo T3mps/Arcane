@@ -3499,6 +3499,125 @@ TEST_CASE("imgui-nri: both invalidation variants evict the pointer-keyed entry a
     CHECK(Arcane::RenderErrorCount() == before);
 }
 
+TEST_CASE("imgui-nri: the pool chain's link capacities start at kFirstPoolSets, double, and clamp "
+          "at kMaxPoolSets", "[nri]")
+{
+    // THE GROWTH POLICY, pinned without a device. The old backend had ONE
+    // 32-set pool and refused the 33rd concurrent texture; the chain replaces
+    // that cap, and these are the numbers it grows by.
+    using Arcane::ImGuiNri;
+    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(0) == ImGuiNri::kFirstPoolSets);
+    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(1) == ImGuiNri::kFirstPoolSets * 2u);
+    STATIC_REQUIRE(ImGuiNri::PoolCapacityFor(2) == ImGuiNri::kFirstPoolSets * 4u);
+
+    // Monotone, never above the clamp, and AT the clamp from some link on --
+    // forever after, including for an absurd index (no overflow on the way).
+    std::uint32_t previous = 0;
+    for (std::size_t i = 0; i < 64; ++i)
+    {
+        const std::uint32_t capacity = ImGuiNri::PoolCapacityFor(i);
+        CHECK(capacity >= previous);
+        CHECK(capacity <= ImGuiNri::kMaxPoolSets);
+        previous = capacity;
+    }
+    CHECK(previous == ImGuiNri::kMaxPoolSets);
+    CHECK(ImGuiNri::PoolCapacityFor(std::size_t{ 1 } << 40) == ImGuiNri::kMaxPoolSets);
+
+    // The D3D12 shader-visible SAMPLER heap tops out at 2048 descriptors and
+    // every set here takes one, so a link must stay inside it (header).
+    STATIC_REQUIRE(ImGuiNri::kMaxPoolSets <= 2048u);
+    // Comfortably past the editor's first-boot count (~29 thumbnails + the
+    // atlas + previews) in the first link alone.
+    STATIC_REQUIRE(ImGuiNri::kFirstPoolSets > 32u);
+}
+
+TEST_CASE("imgui-nri: more concurrent textures than one pool holds GROW the chain instead of "
+          "refusing -- 200 user textures, every one bound, no error latched", "[nri]")
+{
+    // THE DESK CRASH, device-lessly. The editor drew more than 32 distinct
+    // textures (Content Browser + Inspector thumbnails, previews, the atlas);
+    // the old single 32-set pool refused the rest, and a font atlas re-created
+    // after that could not register, kept an Invalid TexID, and asserted in
+    // ImDrawCmd::GetTexID. With the chain, every EnsureUserTexture succeeds and
+    // nothing is latched.
+    //
+    // NONE hands back a dummy handle for every Create* and never refuses an
+    // allocation (ImplNONE.cpp), so this pins the BOOKKEEPING -- links appended
+    // exactly when the newest is full, entries kept, every link released --
+    // and not real descriptor heaps. The [gpu][pixel] twin in
+    // NriGraphPixelTest.cpp is what draws through several links on a device.
+    const std::uint64_t before = Arcane::RenderErrorCount();
+
+    auto device = Arcane::NriDevice::CreateNoneForTests();
+    REQUIRE(device != nullptr);
+
+    ImGuiContext* const previous = ImGui::GetCurrentContext();
+    ImGuiContext* const context  = ImGui::CreateContext();
+    REQUIRE(context != nullptr);
+
+    Arcane::Graveyard lane;
+    {
+        Arcane::NriPipelineCache pipelines;
+        pipelines.Bind(*device);
+        const std::uint8_t vsBytes[4] = { 1, 2, 3, 4 };
+        const std::uint8_t psBytes[4] = { 5, 6, 7, 8 };
+
+        Arcane::ImGuiNri backend;
+        REQUIRE(backend.Init(*device, pipelines, vsBytes, psBytes));
+        CHECK(backend.PoolCount() == 1);   // Init builds the first link, and only it
+
+        // 200 > kFirstPoolSets + 2*kFirstPoolSets (192): exactly three links.
+        constexpr std::uintptr_t kTextures = 200;
+        static_assert(kTextures > Arcane::ImGuiNri::PoolCapacityFor(0)
+                                  + Arcane::ImGuiNri::PoolCapacityFor(1));
+        static_assert(kTextures <= Arcane::ImGuiNri::PoolCapacityFor(0)
+                                   + Arcane::ImGuiNri::PoolCapacityFor(1)
+                                   + Arcane::ImGuiNri::PoolCapacityFor(2));
+
+        // Distinct stand-in addresses -- the cache is keyed by pointer, and on
+        // NONE nothing dereferences them (the invalidation case's reasoning).
+        const auto standIn = [](std::uintptr_t i)
+        { return reinterpret_cast<nri::Texture*>(0x10000u + i * 0x100u); };
+
+        std::uintptr_t registered = 0;
+        for (std::uintptr_t i = 0; i < kTextures; ++i)
+            registered += backend.EnsureUserTexture(standIn(i)) ? 1u : 0u;
+
+        // THE ASSERTIONS THE FIX EXISTS FOR: none refused, all still live, the
+        // chain grew (exactly as far as needed), and nothing latched -- the
+        // old "more than 32 concurrent ImGui textures" refusal is gone.
+        CHECK(registered == kTextures);
+        CHECK(backend.LiveTextureCount() == kTextures);
+        CHECK(backend.PoolCount() == 3);
+        for (std::uintptr_t i = 0; i < kTextures; ++i)
+            CHECK(backend.HasEntryFor(standIn(i)));
+        CHECK(Arcane::RenderErrorCount() == before);
+
+        // A second sight of a registered texture is a cache HIT, not another
+        // allocation -- the chain does not grow on redraws.
+        REQUIRE(backend.EnsureUserTexture(standIn(0)));
+        CHECK(backend.LiveTextureCount() == kTextures);
+        CHECK(backend.PoolCount() == 3);
+
+        // Release buries EVERY link (plus the views and the sampler) in the
+        // lane and empties the chain.
+        backend.Release(lane, 1);
+        CHECK(backend.LiveTextureCount() == 0);
+        CHECK(backend.PoolCount() == 0);
+        CHECK(lane.Pending() >= kTextures + 3u);   // >= views + three pools
+        lane.Drain();
+
+        pipelines.Clear(lane, 1);
+        lane.Drain();
+    }
+    CHECK(lane.Pending() == 0);
+
+    ImGui::DestroyContext(context);
+    ImGui::SetCurrentContext(previous);
+
+    CHECK(Arcane::RenderErrorCount() == before);
+}
+
 TEST_CASE("imgui-nri: Release stamps the ADOPTED context's atlas, never whichever one is current",
           "[nri]")
 {

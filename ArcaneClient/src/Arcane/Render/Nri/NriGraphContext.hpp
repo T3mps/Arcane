@@ -849,8 +849,9 @@ namespace Arcane
         //   * RenderErrorCount growing across the storm at all, which is this
         //     vehicle's whole exit-code contract;
         //   * ImGuiNri::LiveTextureCount climbing with the drag -- entries
-        //     accumulating means eviction is missing its match, and
-        //     kMaxTextures (32) is what it would eventually hit;
+        //     accumulating means eviction is missing its match, and the
+        //     descriptor-pool chain (ImGuiNri::PoolCount) growing with it is
+        //     the leak made visible;
         //   * FRAME TIME / HITCHING, which is the one cost this ordering NEWLY
         //     introduces and the storm is the worst case for it: a size change
         //     per frame means InvalidateUserTextureNow's DeviceWaitIdle plus
