@@ -235,14 +235,6 @@ namespace Arcane::Editor
     // with SameLine.
     void AssetPill(const char* text, int variant = 0);
 
-    // Right-most segmented switch (spec §11.1/§11.2, e.g. the Browse/Graph/
-    // Status lens strip). `items` are labels; `enabledMask` bit i gates item
-    // i (a cleared bit -> BeginDisabled); returns the clicked index or -1.
-    // Drawn with collapsed shared 1px borders and square corners, active =
-    // Theme::kButtonActive.
-    [[nodiscard]] int SegmentedStrip(const char* id, const char* const* items,
-                                     int count, int active, unsigned enabledMask);
-
     // Row thumb cell size (spec §11.2: "row thumb ... 18px"). Exposed
     // (rather than kept file-local to EditorWidgets.cpp) so a caller that
     // needs to compute a position against RowWithThumb's own thumb rect --

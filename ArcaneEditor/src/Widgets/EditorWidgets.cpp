@@ -281,7 +281,7 @@ namespace Arcane::Editor
 
         // ---------------------------------------------------------------------
         // Asset panel vocabulary (asset-manager-redesign-design.md §11.1/§11.2):
-        // AssetPill, SegmentedStrip, RowWithThumb. Model-free -- the tooltip
+        // AssetPill, RowWithThumb. Model-free -- the tooltip
         // that additionally needs a thumbnail resolver lives with the panel
         // (Task 9), not here.
         // ---------------------------------------------------------------------
@@ -731,53 +731,6 @@ namespace Arcane::Editor
         ImGui::Dummy(size);
 
         ImGui::PopFont();
-    }
-
-    // N ImGui::Buttons with zero ItemSpacing, so each button's own
-    // FrameBorderSize edge (the theme's global style.FrameBorderSize = 1,
-    // EditorTheme.hpp) sits flush against its neighbour's rather than
-    // doubling up -- "collapsed shared borders" falls out of that geometry,
-    // not extra drawing. FrameRounding is pinned to 0 for the "square
-    // corners" requirement, even though that already IS the theme's default
-    // (EditorTheme.hpp never touches FrameRounding, so it stays ImGui's
-    // stock 0) -- pinned explicitly because this widget's contract depends
-    // on the value, not on the theme happening to agree with it today.
-    int SegmentedStrip(const char* id, const char* const* items, int count,
-                       int active, unsigned enabledMask)
-    {
-        int clicked = -1;
-
-        ImGui::PushID(id);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-
-        for (int i = 0; i < count; ++i)
-        {
-            if (i > 0)
-                ImGui::SameLine();
-
-            const bool isActive  = (i == active);
-            const bool isEnabled = (enabledMask & (1u << i)) != 0;
-
-            if (isActive)
-                ImGui::PushStyleColor(ImGuiCol_Button, Theme::kButtonActive);
-            if (!isEnabled)
-                ImGui::BeginDisabled();
-
-            ImGui::PushID(i);
-            if (ImGui::Button(items[i]))
-                clicked = i;
-            ImGui::PopID();
-
-            if (!isEnabled)
-                ImGui::EndDisabled();
-            if (isActive)
-                ImGui::PopStyleColor();
-        }
-
-        ImGui::PopStyleVar(2);
-        ImGui::PopID();
-        return clicked;
     }
 
     // Selectable reserves the FULL row -- SpanAllColumns so the click/hover

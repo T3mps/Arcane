@@ -232,9 +232,13 @@ namespace Arcane::Editor
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        if (state.previewArmed) ImGui::PushStyleColor(ImGuiCol_Button, Theme::WithAlpha(Theme::kAmber, 0.35f));
+        // The one "on" language (s6.2): the accent trio while armed. `armed` is
+        // read ONCE -- the click below flips previewArmed, and re-reading it for
+        // the pop unbalanced the colour stack on the arming/disarming frame.
+        const bool armed = state.previewArmed;
+        if (armed) PushToggleOnColors();
         if (ImGui::Button(ICON_LC_PLAY " Preview")) state.previewArmed = !state.previewArmed;
-        if (state.previewArmed) ImGui::PopStyleColor();
+        if (armed) PopToggleOnColors();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
             ImGui::SetTooltip("Live preview: bindings glow as they fire; the Inspector's Live preview block reads live values");
     }

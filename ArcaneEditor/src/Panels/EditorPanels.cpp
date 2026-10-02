@@ -693,17 +693,6 @@ namespace Arcane::Editor
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             return clicked;
         };
-        // Toggle-style icon button: tinted background when active (gizmo T/R/S).
-        auto iconToggle = [](const char* icon, const char* id, bool active, const char* tip) -> bool
-        {
-            if (active) ImGui::PushStyleColor(ImGuiCol_Button,
-                                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            const std::string label = std::string(icon) + id;
-            const bool clicked = ImGui::Button(label.c_str());
-            if (active) ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-            return clicked;
-        };
 
         // Fixed transport strip drawn into the CURRENT window (the dockspace host -- call
         // between BeginDockSpace and EndDockSpace). Not its own window: no tab, cannot be
@@ -785,8 +774,12 @@ namespace Arcane::Editor
         // restore for a launch it never tracked.
         bool launchStandaloneRequested = false;
         const bool playing = play.IsPlaying();
-        if (iconToggle(playing ? ICON_LC_SQUARE : ICON_LC_PLAY, "##sim_play",
-                       playing, playing ? "Stop" : "Play"))
+        // IconToggle (s4.9/s6.2): lit = the accent trio, so a playing Stop square
+        // reads as ON under the cursor too. Its tooltip stays this site's own.
+        const bool playClicked =
+            IconToggle(playing ? ICON_LC_SQUARE "##sim_play" : ICON_LC_PLAY "##sim_play", playing);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", playing ? "Stop" : "Play");
+        if (playClicked)
         {
             if (playing)
             {
@@ -869,13 +862,12 @@ namespace Arcane::Editor
         ImGui::SameLine(0.0f, 0.0f);
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - st.FrameBorderSize);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kCaretPadX, st.FramePadding.y));
-        if (playing) ImGui::PushStyleColor(ImGuiCol_Button,
-                                           ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        const bool caretClicked = iconBtn(ICON_LC_CHEVRON_DOWN, "##sim_playmode", "Play mode");
-        const PopupAnchor caretAnchor = LastItemAnchor();   // the dropdown opens under the caret (s4.4)
+        // Lit with Play (an unlit caret welded to a lit Play reads as a separate button).
+        const bool caretClicked = IconToggle(ICON_LC_CHEVRON_DOWN "##sim_playmode", playing);
+        const PopupAnchor caretAnchor = LastItemAnchor();   // T2-C2's BeginPopupBelow("##play_mode", caretAnchor) reads it
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Play mode");
         if (caretClicked)
             ImGui::OpenPopup("##play_mode");
-        if (playing) ImGui::PopStyleColor();
         ImGui::PopStyleVar();
 
         // Play-mode dropdown (Task 6, runtime-host-fold arc): choose whether the Play
@@ -938,8 +930,9 @@ namespace Arcane::Editor
         // run the sim with no active Play session and no way to Stop. Pause only within
         // Play; tint only while actually playing so it never looks "armed" in Edit.
         ImGui::BeginDisabled(!play.IsPlaying());
-        if (iconToggle(ICON_LC_PAUSE, "##sim_pause", play.IsPlaying() && loop.IsPaused(),
-                       loop.IsPaused() ? "Resume" : "Pause"))
+        const bool pauseClicked = IconToggle(ICON_LC_PAUSE "##sim_pause", play.IsPlaying() && loop.IsPaused());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", loop.IsPaused() ? "Resume" : "Pause");
+        if (pauseClicked)
             loop.SetPaused(!loop.IsPaused());
         ImGui::EndDisabled();
         ImGui::SameLine();
@@ -1275,19 +1268,10 @@ namespace Arcane::Editor
             ImGui::SetTooltip("%s", tip);
             ImGui::PopStyleVar();
         };
-        // Stateless icon-button helpers (mirrors the toolbar's).
+        // Stateless icon-button helper (mirrors the toolbar's).
         auto iconBtn = [&tooltip](const char* icon, const char* id, const char* tip) -> bool
         {
             const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
-            tooltip(tip);
-            return clicked;
-        };
-        auto iconToggle = [&tooltip](const char* icon, const char* id, bool active, const char* tip) -> bool
-        {
-            if (active) ImGui::PushStyleColor(ImGuiCol_Button,
-                                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
-            if (active) ImGui::PopStyleColor();
             tooltip(tip);
             return clicked;
         };
@@ -1355,11 +1339,13 @@ namespace Arcane::Editor
             // shader editor's preferences do (:716): the [EditorViewport]
             // handler only WRITES when ImGui next saves, and a camera or
             // settings change on its own dirties nothing.
-            if (iconToggle(ICON_LC_SQUARE, "##view_2d", tools.viewMode == ViewMode::TwoD, "2D view (Alt+J)"))
-            { tools.viewMode = ViewMode::TwoD; ImGui::MarkIniSettingsDirty(); }
+            const bool view2d = IconToggle(ICON_LC_SQUARE "##view_2d", tools.viewMode == ViewMode::TwoD);
+            tooltip("2D view (Alt+J)");
+            if (view2d) { tools.viewMode = ViewMode::TwoD; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_BOX, "##view_persp", tools.viewMode == ViewMode::Perspective, "Perspective view (Alt+G)"))
-            { tools.viewMode = ViewMode::Perspective; ImGui::MarkIniSettingsDirty(); }
+            const bool viewPersp = IconToggle(ICON_LC_BOX "##view_persp", tools.viewMode == ViewMode::Perspective);
+            tooltip("Perspective view (Alt+G)");
+            if (viewPersp) { tools.viewMode = ViewMode::Perspective; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
             if (iconBtn(ICON_LC_SETTINGS_2, "##view_settings", "View settings"))
                 ImGui::OpenPopup("##viewsettings");
@@ -1406,17 +1392,21 @@ namespace Arcane::Editor
             ImGui::SameLine(0.0f, groupGap);
 
             // --- Transform tools ---------------------------------------------
-            if (iconToggle(ICON_LC_MOUSE_POINTER_2, "##tool_sel", !gizmoEnabled, "Select (Q)"))
-                gizmoEnabled = false;
+            const bool toolSel = IconToggle(ICON_LC_MOUSE_POINTER_2 "##tool_sel", !gizmoEnabled);
+            tooltip("Select (Q)");
+            if (toolSel) gizmoEnabled = false;
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_MOVE_3D, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, "Move (W)"))
-            { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
+            const bool toolT = IconToggle(ICON_LC_MOVE_3D "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate);
+            tooltip("Move (W)");
+            if (toolT) { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
-            { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
+            const bool toolR = IconToggle(ICON_LC_ROTATE_3D "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate);
+            tooltip("Rotate (E)");
+            if (toolR) { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_SCALE_3D, "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale, "Scale (R)"))
-            { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
+            const bool toolS = IconToggle(ICON_LC_SCALE_3D "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale);
+            tooltip("Scale (R)");
+            if (toolS) { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
             ImGui::SameLine();
             {
                 const bool local = (space == Arcane::GizmoSpace::Local);

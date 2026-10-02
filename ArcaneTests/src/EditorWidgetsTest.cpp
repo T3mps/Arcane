@@ -385,3 +385,49 @@ TEST_CASE("IconToggle leaves the colour and style-var stacks balanced, lit or no
     CHECK(drift == 0);
     CHECK(clicks == 1);
 }
+
+// Node page phase s6.2: the toggle hover-bug pin on the EDITOR THEME. T2's
+// cases above run on ImGui's default style; these apply ApplyEditorTheme so
+// the re-pointed accent trio (T4-A1) and the theme's kButtonHovered are what
+// the draw list is scanned for -- the contrast every lit call site adopts.
+TEST_CASE("IconToggle (s6.2): inside PushToggleOnColors the three Button colours are the accent trio", "[editor][widgets]")
+{
+    WidgetHarness h;
+    ApplyEditorTheme(ImGui::GetStyle());
+    bool accent = false;
+    h.body = [&]
+    {
+        PushToggleOnColors();
+        accent = SameColour(ImGui::GetStyleColorVec4(ImGuiCol_Button), Theme::kAccent) &&
+                 SameColour(ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered), Theme::kAccentHovered) &&
+                 SameColour(ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive), Theme::kAccentActive);
+        PopToggleOnColors();
+    };
+    h.Frame();
+    CHECK(accent);
+}
+
+TEST_CASE("IconToggle (s6.2): a hovered lit toggle keeps the accent and never paints ButtonHovered", "[editor][widgets]")
+{
+    WidgetHarness h;
+    ApplyEditorTheme(ImGui::GetStyle());
+    bool on = true;
+    PopupAnchor rect{};
+    h.body = [&] { ImGui::SetCursorScreenPos(ImVec2(40.0f, 40.0f));
+                   (void)IconToggle("T##s62_toggle", on); rect = LastItemAnchor(); };
+    const ImU32 accent        = ImGui::ColorConvertFloat4ToU32(Theme::kAccent);
+    const ImU32 accentHovered = ImGui::ColorConvertFloat4ToU32(Theme::kAccentHovered);
+    const ImU32 buttonHovered = ImGui::ColorConvertFloat4ToU32(Theme::kButtonHovered);
+
+    h.Frame();                                    // layout; nothing hovered
+    CHECK(h.HostDrew(accent));                    // resting lit
+    CHECK_FALSE(h.HostDrew(accentHovered));
+    h.MoveTo(Centre(rect));                       // hovered this frame
+    CHECK(h.HostDrew(accentHovered));             // hover LIGHTENS (3.53:1 vs kButton)
+    CHECK_FALSE(h.HostDrew(buttonHovered));       // the bug: #3d3d3d was darker than "on"
+
+    on = false;
+    h.Frame();                                    // still hovered, now unlit
+    CHECK(h.HostDrew(buttonHovered));             // an unlit toggle hovers grey, as before
+    CHECK_FALSE(h.HostDrew(accentHovered));
+}
