@@ -47,6 +47,7 @@
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
 #include "Panels/AssetInspectorSource.hpp"   // m_assetSource
+#include "Panels/AssetFileOpDialogs.hpp"     // m_renameModal (T5 s7.6)
 #include "Panels/SceneInspectorSource.hpp"   // m_sceneSource
 #include "Project/AssetFileOps.hpp"      // AssetFileOpHost/AssetFileOpExecutor (m_assetOpHost, m_assetFileOps)
 #include "Project/CookQueue.hpp"
@@ -2279,6 +2280,16 @@ namespace Arcane::Editor
         [[nodiscard]] Arcane::Editor::AssetOpFacts GatherAssetOpFacts(AssetOpFactsStore&, bool withLiveScene);
         std::optional<Arcane::Editor::AssetOpPlan> RunAssetOp(const Arcane::Editor::AssetOpRequest&);
         void InvalidateAssetCaches(const Arcane::Guid&, Arcane::Editor::AssetKind);
+        // T5 s7.6: the asset page's Rename modal (requestRename opens it).
+        Arcane::Editor::RenameModalState m_renameModal;
+        // RefreshLabels runs once per model rebuild (an entriesStamp edge), so
+        // a renamed asset's Inspector history labels and pin names follow.
+        std::uint32_t m_labelsAtEntriesStamp = 0, m_fileOpRefusalMemoStamp = 0;
+        // AssetPanelServices::fileOpRefusal's dry-run memo: request key ->
+        // first refusal ("" = runs). Cleared when the model rebuilds or the
+        // gate reason changes, so a per-frame caller (the rename box, the page
+        // pencil) plans once per distinct request, not once per frame.
+        std::unordered_map<std::string, std::string> m_fileOpRefusalMemo; std::string m_fileOpRefusalMemoGate;   // dry-run memo
 
         // One-shot latch for RaiseOpenProjectOnStart: consumed on the first frame
         // that draws the menu bar, so the picker appears over a live editor window

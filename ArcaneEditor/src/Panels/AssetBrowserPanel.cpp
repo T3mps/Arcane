@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -104,7 +105,16 @@ namespace Arcane::Editor
 
         // ---- Task 10: shared row context menu (spec s6) --------------------
         // The Browse-side bracket around DrawAssetMenuItems above.
-        void DrawRowContextMenu(AssetPanelModel& model, AssetPanelActions& actions,
+        // T5 s7.6: a row-menu file-op verb, disabled with its dry-run refusal
+        // as the hover tooltip ("" = enabled).
+        bool MenuVerb(const char* label, const char* shortcut, const std::string& refusal)
+        {
+            ImGui::BeginDisabled(!refusal.empty()); const bool hit = ImGui::MenuItem(label, shortcut); ImGui::EndDisabled();
+            if (!refusal.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", refusal.c_str());
+            return hit;
+        }
+
+        void DrawRowContextMenu(AssetBrowserPanelState& state, AssetPanelModel& model, AssetPanelActions& actions,
                                 const AssetPanelServices& services, const AssetPanelEntry& e,
                                 bool kindSpecific)
         {
@@ -123,6 +133,13 @@ namespace Arcane::Editor
 
             DrawAssetMenuItems(actions, e, kindSpecific, services);
 
+            // T5 s7.6: the file-op verbs, each disabled with its reason. ONE
+            // dry-run per menu open (the appearing frame), not per frame.
+            ImGui::Separator();
+            if (ImGui::IsWindowAppearing())
+                state.menuRefusal.rename = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
+            if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) BeginAssetRename(state, e);
+
             ImGui::EndPopup();
         }
 
@@ -139,7 +156,7 @@ namespace Arcane::Editor
         // a same-size overlay submitted every frame starved the row's real
         // Selectable of that permanently, so `model.Select()` never fired
         // from a left-click).
-        void AttachRowInteractions(AssetPanelModel& model, const Arcane::Project* project,
+        void AttachRowInteractions(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                                    DocumentHost& docs, const AssetPanelServices& services,
                                    AssetPanelActions& actions, const AssetPanelEntry& e,
                                    bool kindSpecificMenu)
@@ -157,7 +174,7 @@ namespace Arcane::Editor
                 ImGui::EndDragDropSource();
             }
 
-            DrawRowContextMenu(model, actions, services, e, kindSpecificMenu);
+            DrawRowContextMenu(state, model, actions, services, e, kindSpecificMenu);
         }
 
         // ---- Task 10: the rail (spec s6/s11.2) -----------------------------
@@ -457,6 +474,37 @@ namespace Arcane::Editor
                        ImGui::GetColorU32(Theme::kSeparator));
         }
 
+        // ---- T5 s7.6: the inline rename box (a row's stand-in) -------------
+        // Stem-only box + the dim, fixed extension; no drag source or menu
+        // while it stands in for the row. A valid Enter, or an edit followed
+        // by a click away, commits (fileOp); an invalid Enter keeps the box
+        // and its refusal tooltip; Esc, or a click away without an edit,
+        // cancels. The dry-run runs per frame through the host's memo.
+        void DrawRenameBox(AssetBrowserPanelState& st, const AssetPanelEntry& e, float indent, const AssetPanelServices& sv, AssetPanelActions& actions)
+        {
+            st.renameDrawn = true; const ImVec2 at = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(ImVec2(at.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemSpacing.x, at.y + 2.0f));
+            const std::string ext = std::filesystem::path(e.fileName).extension().string();
+            ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ext.c_str()).x - 8.0f));
+            if (st.renameFocusPending) { ImGui::SetKeyboardFocusHere(); st.renameFocusPending = false; }
+            const bool enter = ImGui::InputText("##assetrename", st.renameBuf, sizeof(st.renameBuf), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            const bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false), off = ImGui::IsItemDeactivated(), active = ImGui::IsItemActive();
+            const bool commit = enter || (ImGui::IsItemDeactivatedAfterEdit() && !esc);
+            const AssetOpRequest req{ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = st.renameBuf };
+            const std::string why = sv.fileOpRefusal ? sv.fileOpRefusal(req) : std::string{};
+            if (!why.empty() && active) ImGui::SetTooltip("%s", why.c_str());
+            ImGui::SameLine(0.0f, 2.0f); ImGui::TextDisabled("%s", ext.c_str());
+            // Esc cancels when it deactivated the box, OR when it lands on the
+            // box's activation frame: InputText skips key handling while
+            // ActiveIdIsJustActivated (imgui_widgets.cpp:5113), and the
+            // SetKeyboardFocusHere above activates two frames after F2, so an
+            // early Esc would otherwise be swallowed and the box stay open.
+            if (esc && (off || active)) { st.renameTarget = {}; return; }
+            if (commit && why.empty()) { actions.fileOp = req; st.renameTarget = {}; return; }
+            if (enter) { st.renameFocusPending = true; return; }
+            if (off) st.renameTarget = {};
+        }
+
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
         void DrawAssetRow(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
@@ -505,6 +553,7 @@ namespace Arcane::Editor
             const char* icon = KindIcon(e.kind);
             const bool selected = (model.selected == e.guid);
 
+            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, services, actions); ImGui::PopID(); return; }
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
@@ -519,7 +568,7 @@ namespace Arcane::Editor
             // AFTER this call, not before -- each is either pure drawlist
             // (doesn't touch "last item") or a real item that would
             // otherwise steal that title away from the Selectable.
-            AttachRowInteractions(model, project, docs, services, actions, e, /*kindSpecificMenu=*/true);
+            AttachRowInteractions(state, model, project, docs, services, actions, e, /*kindSpecificMenu=*/true);
 
             // Expander: a REAL item submitted AFTER the row's Selectable
             // (which RowWithThumb flags AllowOverlap for exactly this), so
@@ -620,7 +669,7 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: one derived-child row (spec s6/s11.2) ----------------
-        void DrawChildRow(AssetBrowserPanelState& /*state*/, AssetPanelModel& model, const Arcane::Project* project,
+        void DrawChildRow(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                           const AssetPanelEntry& e, int groupDepth)
         {
@@ -641,6 +690,7 @@ namespace Arcane::Editor
             // fold child under a band at indent X now sits at X+40 (X+20 for
             // the level shift, +20 more for its own existing fold indent).
             const float indent = static_cast<float>(groupDepth + 1) * kGroupIndent + kChildIndent;
+            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, services, actions); ImGui::PopID(); return; }
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
@@ -650,7 +700,7 @@ namespace Arcane::Editor
 
             // Fix round 1 (Critical 1): attach interactions before drawing
             // the pill -- see DrawAssetRow's own comment on ordering.
-            AttachRowInteractions(model, project, docs, services, actions, e, /*kindSpecificMenu=*/false);
+            AttachRowInteractions(state, model, project, docs, services, actions, e, /*kindSpecificMenu=*/false);
 
             ImGui::SetCursorScreenPos(res.trailingPos);
             AssetPill("derived");
@@ -667,6 +717,7 @@ namespace Arcane::Editor
                        DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                        const Arcane::Guid& bootGuid, float width)
         {
+            state.renameDrawn = false;   // T5 s7.6: set again by DrawRenameBox if the target's row draws
             if (!ImGui::BeginChild("##assetscenter", ImVec2(width, 0.0f)))
             {
                 ImGui::EndChild();
@@ -821,6 +872,11 @@ namespace Arcane::Editor
                     }
                 }
                 ImGui::EndTable();
+                // T5 s7.6 (the Outliner wedge lesson): a rename target whose
+                // row did not draw this frame (scrolled out, filtered away,
+                // folded, deleted) cancels, so the box can never hold the
+                // keys from off screen.
+                if (state.renameTarget.IsValid() && !state.renameDrawn) state.renameTarget = {};
             }
             ImGui::PopStyleVar();
 
@@ -861,6 +917,8 @@ namespace Arcane::Editor
                     if (const AssetPanelEntry* e = model.Find(model.selected))
                         OpenAssetRow(*e, project, docs, actions);
                 }
+                if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && model.selected.IsValid())   // T5 s7.6
+                    if (const AssetPanelEntry* e = model.Find(model.selected)) BeginAssetRename(state, *e);
             }
 
             ImGui::EndChild();
@@ -872,6 +930,9 @@ namespace Arcane::Editor
         // implicit using-directive), so the body below still reaches every
         // helper and constant unqualified. Same technique AssetGraphPanel.cpp/
         // AssetStatusPanel.cpp use for their own exported bodies.
+
+    void BeginAssetRename(AssetBrowserPanelState& st, const AssetPanelEntry& e)
+    { st.renameTarget = e.guid; std::snprintf(st.renameBuf, sizeof(st.renameBuf), "%s", e.name.c_str()); st.renameFocusPending = true; }
 
     // ---- Task 10: the Browse lens body (rail + table) ------------------
     void DrawAssetBrowserBody(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
@@ -972,9 +1033,12 @@ namespace Arcane::Editor
         // the current window is the TOP "Asset Browser" window, so focus on
         // its toolbar, tab or table all count (ChildWindows); a popup over it
         // (a row's context menu) does not (NoPopupHierarchy), nor does an
-        // active text field (the search box). DrawTable's key block and the
-        // app's entity-clipboard fold both read this one value.
-        actions.ownsEditKeys = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) && !ImGui::GetIO().WantTextInput;
+        // active text field (the search box), nor an open inline rename box
+        // (T5 s7.6; also on its first frames, before it is active).
+        // DrawTable's key block and the app's entity-clipboard fold both read
+        // this one value.
+        actions.ownsEditKeys = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) && !ImGui::GetIO().WantTextInput
+                            && !state.renameTarget.IsValid();   // T5 s7.6: an open rename box owns the keys
 
         // ---- body band -----------------------------------------------
         if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))

@@ -406,6 +406,13 @@ namespace Arcane::Editor
             row.push_back({ ICON_LC_FLAG, "Set as Boot Scene", "##asset_bootscene", true, [&] { actions.setBootScene = e->guid; } });
         else if (e->kind == AssetKind::Texture)
             row.push_back({ ICON_LC_STICKER, "Create Sprite", "##asset_createsprite", true, [&] { actions.createSpriteFrom = e->guid; } });
+        // T5 s7.6: the pencil opens the host's Rename modal (a page has no row
+        // for an inline box, and the asset may be filtered out of the
+        // Browser). Enabled by the gates + a dry-run of the byte-identical
+        // stem (a no-op plan, so only a refusal disables it).
+        row.push_back({ ICON_LC_PENCIL, "Rename", "##asset_rename",
+                        services.fileOpRefusal && services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e->guid }, .newStem = e->name }).empty(),
+                        [&actions, g = e->guid] { actions.requestRename = g; } });
         // s5.6 at 1080p (T3 gate): half the stock ItemSpacing.y between the
         // header (thumb + text column, or the stacked meta) and the action row
         // (4 -> 2 px). Local to this one gap, like the row's FramePadding.

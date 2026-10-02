@@ -55,6 +55,7 @@
 #include <chrono>
 #include <cmath>       // std::isfinite (the camera-rect overlay's projected corners)
 #include <cstdint>
+#include <cstdio>      // std::snprintf (the Rename modal's prefill)
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -2379,6 +2380,9 @@ namespace Arcane::Editor
         // instead of three lenses of one.
         const Arcane::Project* proj = m_runtime->CurrentProject();
         m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);
+        // T5 s7.6: a rebuild (a rename/move landed, among others) refreshes the
+        // Inspector's history labels and pin names -- once per rebuild.
+        if (m_assetModel.entriesStamp != m_labelsAtEntriesStamp) { m_labelsAtEntriesStamp = m_assetModel.entriesStamp; m_inspectorHost.RefreshLabels(); }
 
         // Plan 1 Task 7's AssetServices seam, re-shaped into Task 9's
         // AssetPanelServices -- two distinct struct types (different
@@ -2420,6 +2424,21 @@ namespace Arcane::Editor
         assetPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph);
         assetPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus);
         assetPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
+        // T5 s7.1/s7.6: the file-op verbs' disabled reasons -- the gates, then
+        // a dry-run PlanAssetOp, memoized per request until the model rebuilds
+        // or the gate reason changes. RunAssetOp re-plans from fresh facts.
+        assetPanelServices.fileOpRefusal = [this](const Arcane::Editor::AssetOpRequest& r) -> std::string
+        {
+            const std::string gate = AssetOpGateReason();
+            if (m_fileOpRefusalMemoStamp != m_assetModel.entriesStamp || m_fileOpRefusalMemoGate != gate)
+            { m_fileOpRefusalMemo.clear(); m_fileOpRefusalMemoStamp = m_assetModel.entriesStamp; m_fileOpRefusalMemoGate = gate; }
+            if (!gate.empty()) return gate;
+            std::string key = std::to_string(static_cast<int>(r.kind)) + "|" + r.newStem + "|" + r.destFolder + (r.cascadeDerived ? "|1" : "|0");
+            for (const Arcane::Guid& g : r.guids) key += "|" + g.ToString();
+            if (const auto it = m_fileOpRefusalMemo.find(key); it != m_fileOpRefusalMemo.end()) return it->second;
+            const auto plan = Arcane::Editor::PlanAssetOp(r, GatherAssetOpFacts(m_assetOpFacts, false));
+            return m_fileOpRefusalMemo[key] = plan.refusals.empty() ? std::string{} : plan.refusals.front().reason;
+        };
         // Inspector filters s6: the asset Inspector page draws in
         // DrawSelectionPanels, AFTER this function has returned, so it binds
         // a MEMBER copy -- a pointer to the local above would dangle. The
@@ -2459,6 +2478,9 @@ namespace Arcane::Editor
         ConsumeAssetPanelActions(m_assetPageActions, ls);
         m_assetPageActions = {};
         m_assetSource.Bind({ &m_assetModel, proj, &m_assetPanelServices, &m_assetPageActions });
+        // T5 s7.6: the asset page's Rename modal (opened by requestRename in
+        // ConsumeAssetPanelActions just above); a commit runs at once.
+        if (const auto req = Arcane::Editor::DrawRenameAssetModal(m_renameModal, m_assetPanelServices)) (void)RunAssetOp(*req);
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
@@ -2974,6 +2996,11 @@ namespace Arcane::Editor
                 Arcane::Editor::OpenAssetRow(*e, m_runtime->CurrentProject(), m_documents, follow);
                 ConsumeAssetPanelActions(follow, ls);
             }
+        // T5 s7.6: a committed inline rename (Browser) runs through the ONE
+        // front door; the asset page's pencil opens the Rename modal instead.
+        if (panelActions.fileOp) (void)RunAssetOp(*panelActions.fileOp);
+        if (const auto* e = m_assetModel.Find(panelActions.requestRename))
+        { m_renameModal = { true, e->guid, {}, true }; std::snprintf(m_renameModal.buf, sizeof(m_renameModal.buf), "%s", e->name.c_str()); }
 
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
         // Recook, per the plan's Ruling 8: invalidate the artifact, ERASE this

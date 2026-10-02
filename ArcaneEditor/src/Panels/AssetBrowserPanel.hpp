@@ -69,7 +69,23 @@ namespace Arcane::Editor
         // seam still resets only the Graph panel's canvas state.
         std::unordered_map<std::string, bool>  groupOpen;
         std::unordered_map<Arcane::Guid, bool> childrenOpen;
+
+        // T5 s7.6: the inline rename box (Outliner precedent, EditorPanels.cpp's
+        // entity rename). `renameTarget` invalid = no box; `renameBuf` holds the
+        // STEM only (the extension is fixed, drawn dim beside the box);
+        // `renameFocusPending` focuses the box on its first frame (and again
+        // after a refused Enter); `renameDrawn` is reset by DrawTable each
+        // frame so a target that scrolled out or was filtered away cancels
+        // instead of wedging the keys (the Outliner wedge lesson).
+        Arcane::Guid renameTarget; char renameBuf[128] = {}; bool renameFocusPending = false, renameDrawn = false;
+        // The row menu's file-op verbs' disabled reasons: ONE dry-run per
+        // menu open (computed on the popup's appearing frame), "" = enabled.
+        struct MenuRefusal { std::string rename, duplicate, del, moveTo; } menuRefusal;
     };
+
+    // T5 s7.6: open the inline rename box on `e` (F2, the row menu's Rename):
+    // the box shows `e.name` (the stem) and takes keyboard focus next draw.
+    void BeginAssetRename(AssetBrowserPanelState& state, const AssetPanelEntry& e);
 
     // Draw the Browse lens body: the rail (all/per-kind counts + hover
     // create affordance, spec s6) + the grouped/folded asset table, which

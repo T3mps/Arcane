@@ -4,6 +4,8 @@
 // s5). One actions type, one services type, one create menu -- every panel
 // returns/consumes the same shapes so the host consumes them identically.
 
+#include "Project/AssetFileOps.hpp"   // AssetOpRequest (AssetPanelActions::fileOp, AssetPanelServices::fileOpRefusal)
+
 #include <Arcane/Guid.hpp>
 
 #include <imgui.h>   // ImVec4 (RefusedStyle)
@@ -121,13 +123,20 @@ namespace Arcane::Editor
         // QUEUED so the open never mutates DocumentHost's list mid-draw; the
         // host routes it through OpenAssetRow next frame.
         Arcane::Guid openAsset;
-        // T5 s7.10: Browser focused, no popup over it, no text field (the
-        // inline-rename term joins with T5-B8's rename). Written once per
-        // frame by DrawAssetBrowserPanel on
+        // T5 s7.10: Browser focused, no popup over it, no text field, and no
+        // inline rename box open (T5 s7.6: the box owns the keys). Written
+        // once per frame by DrawAssetBrowserPanel on
         // the TOP window (so a focused toolbar or tab counts, not only the
         // table); its key block and the app's entity-clipboard fold
         // (FoldEntityClipboardShortcuts) both read this one value.
         bool ownsEditKeys = false;
+        // T5 s7.6: a file operation the user committed this frame (the
+        // inline rename box's Enter, later Duplicate/Delete/Move); the host
+        // runs it through EditorApp::RunAssetOp, which re-plans from fresh
+        // facts. `requestRename` asks the host for the Rename modal (the
+        // asset page's pencil: a page has no row to put a box on).
+        std::optional<AssetOpRequest> fileOp;
+        Arcane::Guid requestRename;
     };
 
     // The Assets panel's read-only host seams. Originally just the
@@ -173,6 +182,14 @@ namespace Arcane::Editor
         // identically; now any of them can be closed while the others are
         // open, which is exactly what makes these gates load-bearing.
         bool browserOpen = false, graphOpen = false, statusOpen = false, problemsOpen = false;
+
+        // T5 s7.1/s7.6: the gates + a dry-run PlanAssetOp for one request,
+        // answered by the host. "" = the request would run; otherwise the
+        // first refusal's reason (the disabled verb's tooltip, the rename
+        // box's hint). Unset (no host): the row-menu verbs, the page pencil
+        // and the Rename modal read it as "unavailable"; the inline box still
+        // commits, because RunAssetOp re-plans and refuses on its own.
+        std::function<std::string(const AssetOpRequest&)> fileOpRefusal;   // T5: s7.1 gates + dry-run; "" = runs
     };
 
     // The unified Create menu's entries (spec s7), spelled ONCE and shared

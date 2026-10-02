@@ -82,3 +82,17 @@ TEST_CASE("Asset Browser owns the edit keys only when focused, with no popup and
     SECTION("search box")
     { (void)h.Frame(false, ImGui::FindWindowByName("Asset Browser")->GetID("##assetssearch")); (void)h.Frame(); CHECK_FALSE(h.Frame().ownsEditKeys); }
 }
+TEST_CASE("Asset Browser F2 opens the inline rename; Enter commits a Rename; Esc reverts", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_rename_test"); (void)h.Frame(true);
+    const Arcane::Guid g = h.model.Rows()[1].guid; h.model.Select(g); (void)h.Key(ImGuiKey_F2);
+    REQUIRE(h.state.renameTarget == g);
+    CHECK((std::string(h.state.renameBuf) == "a00" && !h.Frame().ownsEditKeys));   // stem only; the box owns the keys
+    SECTION("Enter commits")
+    {
+        ImGui::GetIO().AddInputCharactersUTF8("wall"); (void)h.Frame();   // typed into the active box (AutoSelectAll replaces "a00")
+        const AssetPanelActions a = h.Key(ImGuiKey_Enter);
+        REQUIRE(a.fileOp); CHECK((a.fileOp->kind == AssetOpKind::Rename && a.fileOp->newStem == "wall" && !h.state.renameTarget.IsValid()));
+    }
+    SECTION("Esc reverts") { CHECK_FALSE(h.Key(ImGuiKey_Escape).fileOp); CHECK_FALSE(h.state.renameTarget.IsValid()); }
+}
