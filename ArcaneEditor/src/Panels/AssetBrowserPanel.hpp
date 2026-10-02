@@ -42,6 +42,14 @@ namespace Arcane::Editor
         char search[128] = {};
         int  railKind = -1;                 // -1 = All
         std::uint32_t seenSelectionStamp = 0; // scroll-to-selection once
+        // Set by RevealAssetInBrowser, cleared by the body once it has
+        // scrolled the selected row FULLY into view. Revealing cannot ride on
+        // selectionStamp alone: AssetPanelModel::Select bumps it only when
+        // the guid changes, and every context-menu Reveal follows a
+        // right-click that already selected the row. The body may even have
+        // spent that stamp while the row was still hidden by the search or a
+        // closed folder that the reveal then clears.
+        bool revealPending = false;
 
         // Task 10: session-only fold/group open state, MIRRORING
         // AssetPanelModel's own private m_groupOpen/m_childrenOpen (same

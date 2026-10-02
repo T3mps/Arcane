@@ -156,6 +156,11 @@ namespace Arcane::Editor
         }
 
         model.Select(guid);
+        // Select() leaves the stamp alone when the guid is already the
+        // selection, which it always is after a context menu's opening
+        // right-click. The Browser scrolls on THIS flag as well (see
+        // AssetBrowserPanelState::revealPending).
+        state.revealPending = true;
     }
 
     // =====================================================================

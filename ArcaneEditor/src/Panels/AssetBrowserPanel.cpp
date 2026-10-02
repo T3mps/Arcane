@@ -680,7 +680,10 @@ namespace Arcane::Editor
             // clipper can be told to include it even when it lies outside
             // the naturally visible range (ImGuiListClipper::IncludeItemByIndex
             // -- must be called before the first Step()).
-            const bool wantsScroll = (state.seenSelectionStamp != model.selectionStamp);
+            // A pending Reveal (RevealAssetInBrowser) asks for the same
+            // scroll even when the stamp has nothing new to say.
+            const bool wantsScroll = state.revealPending ||
+                                     (state.seenSelectionStamp != model.selectionStamp);
             int scrollTargetIndex = -1;
             if (wantsScroll && model.selected.IsValid())
             {
@@ -694,7 +697,10 @@ namespace Arcane::Editor
             // Nothing to scroll to (filtered out, or selection cleared) --
             // stop retrying every frame.
             if (wantsScroll && scrollTargetIndex < 0)
+            {
                 state.seenSelectionStamp = model.selectionStamp;
+                state.revealPending = false;
+            }
 
             // Fix round 1 (Important 2): TableNextRow(_, 24) actually grows
             // to 24 + CellPadding.y*2 (imgui_tables.cpp:1936-1937) -- the
@@ -752,14 +758,29 @@ namespace Arcane::Editor
                 // visible already), and checking it directly cannot drift
                 // out of sync the way remembering to tag every call site
                 // could.
+                //
+                // T3-D4: the test is in content space, and it counts the
+                // frozen Name header. Data row i spans [h*(i+1), h*(i+2)),
+                // because the header takes the first row height. The visible
+                // band is [scrollY + h, scrollY + inner height), because the
+                // frozen header covers the top of the view. The old
+                // row-index test left the header out, so it called a row
+                // visible while the row sat one or two rows below the bottom
+                // edge.
+                // An ordinary selection needs only part of the row visible:
+                // a row the mouse clicked always is, so it never re-centres.
+                // A Reveal needs the WHOLE row visible.
                 bool targetAlreadyVisible = false;
                 if (scrollTargetIndex >= 0)
                 {
                     const float scrollY = ImGui::GetScrollY();
-                    const float viewH = ImGui::GetWindowHeight();
-                    const int firstVisible = static_cast<int>(scrollY / kTableRowHeight);
-                    const int lastVisible = static_cast<int>((scrollY + viewH) / kTableRowHeight);
-                    targetAlreadyVisible = (scrollTargetIndex >= firstVisible && scrollTargetIndex <= lastVisible);
+                    const float viewTop = scrollY + kTableRowHeight;
+                    const float viewBottom = scrollY + ImGui::GetCurrentWindow()->InnerRect.GetHeight();
+                    const float rowTop = kTableRowHeight * static_cast<float>(scrollTargetIndex + 1);
+                    const float rowBottom = rowTop + kTableRowHeight;
+                    targetAlreadyVisible = state.revealPending
+                        ? (rowTop >= viewTop && rowBottom <= viewBottom)
+                        : (rowBottom > viewTop && rowTop < viewBottom);
                 }
 
                 ImGuiListClipper clipper;
@@ -795,6 +816,7 @@ namespace Arcane::Editor
                             if (!targetAlreadyVisible)
                                 ImGui::SetScrollHereY();
                             state.seenSelectionStamp = model.selectionStamp;
+                            state.revealPending = false;
                         }
                     }
                 }

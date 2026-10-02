@@ -128,6 +128,7 @@ TEST_CASE("RevealAssetInBrowser clears filters, opens ancestry, selects", "[edit
     CHECK(state.groupOpen.at("props/crates/"));
     CHECK(state.childrenOpen.at(textureGuid));
     CHECK(model.selected == targetGuid);
+    CHECK(state.revealPending);   // the Browser scrolls even when the guid was already selected (T3-D4)
 
     fs::remove_all(dir, ec);
 }
@@ -151,4 +152,5 @@ TEST_CASE("RevealAssetInBrowser is a no-op for a guid the model no longer knows"
     CHECK(std::string(state.search) == "keep-me");
     CHECK(state.railKind == 1);
     CHECK_FALSE(model.selected.IsValid());
+    CHECK_FALSE(state.revealPending);
 }
