@@ -2427,11 +2427,15 @@ namespace Arcane::Editor
         // T5 s7.1/s7.6: the file-op verbs' disabled reasons -- the gates, then
         // a dry-run PlanAssetOp, memoized per request until the model rebuilds
         // or the gate reason changes. RunAssetOp re-plans from fresh facts.
+        // T5 s7.5: Delete's open-scene and boot-scene refusals change with no
+        // model rebuild, so those two guids join the memo's invalidation key.
         assetPanelServices.fileOpRefusal = [this](const Arcane::Editor::AssetOpRequest& r) -> std::string
         {
             const std::string gate = AssetOpGateReason();
-            if (m_fileOpRefusalMemoStamp != m_assetModel.entriesStamp || m_fileOpRefusalMemoGate != gate)
-            { m_fileOpRefusalMemo.clear(); m_fileOpRefusalMemoStamp = m_assetModel.entriesStamp; m_fileOpRefusalMemoGate = gate; }
+            const std::string memoGate = gate + "|" + m_scene.Id().ToString() + "|"
+                + Arcane::Editor::BootSceneGuid(m_runtime ? m_runtime->CurrentProject() : nullptr).ToString();
+            if (m_fileOpRefusalMemoStamp != m_assetModel.entriesStamp || m_fileOpRefusalMemoGate != memoGate)
+            { m_fileOpRefusalMemo.clear(); m_fileOpRefusalMemoStamp = m_assetModel.entriesStamp; m_fileOpRefusalMemoGate = memoGate; }
             if (!gate.empty()) return gate;
             std::string key = std::to_string(static_cast<int>(r.kind)) + "|" + r.newStem + "|" + r.destFolder + (r.cascadeDerived ? "|1" : "|0");
             for (const Arcane::Guid& g : r.guids) key += "|" + g.ToString();
@@ -2482,6 +2486,8 @@ namespace Arcane::Editor
         // ConsumeAssetPanelActions just above); a commit runs at once.
         if (const auto req = Arcane::Editor::DrawRenameAssetModal(m_renameModal, m_assetPanelServices))
             if (const auto plan = RunAssetOp(*req)) AfterAssetOp(*plan);
+        // T5 s7.5: the Delete confirm modal (opened by requestDelete above).
+        ConsumeDeleteConfirm();
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
@@ -3004,6 +3010,7 @@ namespace Arcane::Editor
             if (const auto plan = RunAssetOp(*panelActions.fileOp)) AfterAssetOp(*plan);
         if (const auto* e = m_assetModel.Find(panelActions.requestRename))
         { m_renameModal = { true, e->guid, {}, true }; std::snprintf(m_renameModal.buf, sizeof(m_renameModal.buf), "%s", e->name.c_str()); }
+        if (!panelActions.requestDelete.empty()) BeginAssetDelete(panelActions.requestDelete);   // T5 s7.5: Del, row menu, page trash
 
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
         // Recook, per the plan's Ruling 8: invalidate the artifact, ERASE this

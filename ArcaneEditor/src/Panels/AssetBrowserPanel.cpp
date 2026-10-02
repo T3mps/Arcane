@@ -143,6 +143,9 @@ namespace Arcane::Editor
                 state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = { e.guid } }) : "unavailable";
             if (MenuVerb("Duplicate", "Ctrl+D", state.menuRefusal.duplicate))
                 actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { e.guid } };
+            if (ImGui::IsWindowAppearing())   // T5 s7.5: the host's confirm modal re-plans with the live scene
+                state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = { e.guid } }) : "unavailable";
+            if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = { e.guid };
 
             ImGui::EndPopup();
         }
@@ -944,6 +947,8 @@ namespace Arcane::Editor
                     if (const AssetPanelEntry* e = model.Find(model.selected)) BeginAssetRename(state, *e);
                 if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && model.selected.IsValid())   // T5 s7.7
                     actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { model.selected } };
+                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && model.selected.IsValid())   // T5 s7.5: the confirm modal, never a direct delete
+                    actions.requestDelete = { model.selected };
             }
 
             ImGui::EndChild();

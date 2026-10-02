@@ -143,6 +143,52 @@ namespace Arcane::Editor
         return plan;
     }
 
+    // ---- s7.5: the Delete confirm modal ------------------------------------
+
+    namespace
+    {
+        // The titles of the dirty documents `plan` would discard. Re-filled on
+        // every (re)plan: unticking the cascade drops a dirty cascaded child.
+        std::vector<std::string> DirtyTitles(const AE::AssetOpPlan& plan, AE::DocumentHost& docs)
+        {
+            std::vector<std::string> out;
+            for (const Arcane::Guid& g : plan.dirtyDocs)
+                if (const AE::EditorDocument* d = docs.FindByGuid(g)) out.push_back(d->Title());
+            return out;
+        }
+    }
+
+    void EditorApp::BeginAssetDelete(std::vector<Arcane::Guid> guids)
+    {
+        if (const std::string why = AssetOpGateReason(); !why.empty()) { m_assetOpHost.ReportError("Can't delete", why); return; }
+        m_deleteFacts = GatherAssetOpFacts(m_deleteFactsStore, true);   // gathered ONCE; the cascade box re-plans against them
+        m_deleteConfirm = {};
+        m_deleteConfirm.request = { .kind = AE::AssetOpKind::Delete, .guids = std::move(guids), .cascadeDerived = true };
+        m_deleteConfirm.plan = AE::PlanAssetOp(m_deleteConfirm.request, *m_deleteFacts);
+        m_deleteConfirm.dirtyTitles = DirtyTitles(m_deleteConfirm.plan, m_documents);
+        m_deleteConfirm.open = m_deleteConfirm.justOpened = true;
+    }
+
+    void EditorApp::ConsumeDeleteConfirm()
+    {
+        const AE::DeleteModalResult r = AE::DrawDeleteConfirmModal(m_deleteConfirm, m_assetPanelServices);
+        if (r == AE::DeleteModalResult::Replan && m_deleteFacts)
+        {
+            m_deleteConfirm.plan = AE::PlanAssetOp(m_deleteConfirm.request, *m_deleteFacts);
+            m_deleteConfirm.dirtyTitles = DirtyTitles(m_deleteConfirm.plan, m_documents);
+        }
+        if (r == AE::DeleteModalResult::Confirm)
+        {
+            if (const std::string why = AssetOpGateReason(); !why.empty()) m_assetOpHost.ReportError("Can't delete", why);
+            else
+            {
+                for (const Arcane::Guid& g : m_deleteConfirm.plan.openDocs) (void)m_assetOpHost.CloseDocumentFor(g, true);   // (1) documents close FIRST, unsaved
+                (void)m_assetFileOps->Execute(m_deleteConfirm.plan, *m_undo);                                                // (2)+(3) one step, then the follow-up
+            }
+        }
+        if (r == AE::DeleteModalResult::Confirm || r == AE::DeleteModalResult::Cancel) m_deleteFacts.reset();
+    }
+
     // T5: post-op selection. Duplicate selects the copies (primary = last); the stamp bump scrolls to it after the rebuild AssetsChanged armed.
     void EditorApp::AfterAssetOp(const AE::AssetOpPlan& plan)
     { if (plan.kind == AE::AssetOpKind::Duplicate && !plan.newGuids.empty()) m_assetModel.Select(plan.newGuids.back()); }

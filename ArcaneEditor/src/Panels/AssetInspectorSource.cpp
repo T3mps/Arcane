@@ -417,6 +417,10 @@ namespace Arcane::Editor
         row.push_back({ ICON_LC_COPY_PLUS, "Duplicate", "##asset_duplicate",
                         services.fileOpRefusal && services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = { e->guid } }).empty(),
                         [&actions, g = e->guid] { actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = { g } }; } });
+        // T5 s7.5: Delete asks the host for the confirm modal, enabled by a dry-run.
+        row.push_back({ ICON_LC_TRASH_2, "Delete", "##asset_delete",
+                        services.fileOpRefusal && services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = { e->guid } }).empty(),
+                        [&actions, g = e->guid] { actions.requestDelete = { g }; } });
         // s5.6 at 1080p (T3 gate): half the stock ItemSpacing.y between the
         // header (thumb + text column, or the stacked meta) and the action row
         // (4 -> 2 px). Local to this one gap, like the row's FramePadding.

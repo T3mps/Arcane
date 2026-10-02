@@ -102,3 +102,9 @@ TEST_CASE("Asset Browser Ctrl+D raises a Duplicate and keeps the keys from the e
     const AssetPanelActions a = h.Key(ImGuiKey_D, ImGuiMod_Ctrl);
     REQUIRE(a.fileOp); CHECK((a.fileOp->kind == AssetOpKind::Duplicate && a.fileOp->guids == std::vector<Arcane::Guid>{ h.model.selected } && a.ownsEditKeys));
 }
+TEST_CASE("Asset Browser Del requests a delete confirm; with a row menu open Del requests nothing", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_del_test"); (void)h.Frame(true); h.model.Select(h.model.Rows()[1].guid);
+    CHECK(h.Key(ImGuiKey_Delete).requestDelete == std::vector<Arcane::Guid>{ h.model.selected });
+    h.Click(1, ImGuiMouseButton_Right); CHECK(h.Key(ImGuiKey_Delete).requestDelete.empty());
+}

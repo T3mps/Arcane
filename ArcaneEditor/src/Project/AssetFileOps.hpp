@@ -136,6 +136,16 @@ namespace Arcane::Editor
     // AssetOpFacts::diagSiblings.
     [[nodiscard]] std::vector<std::filesystem::path> DiagSiblingFiles(const std::filesystem::path& report);
 
+    // s7.5's delete-confirm wording, PURE (the modal draws it; tests read it).
+    // The title counts the REQUESTED assets (cascaded children only add doomed
+    // rows): one -> "Delete <file name>?" (its move, else the first doomed file,
+    // else the guid), several -> "Delete N assets?". The confirm escalates
+    // "Delete" -> "Delete anyway" (referencers) -> "Discard changes and delete"
+    // (dirty documents, named in `unsaved`).
+    struct DeleteModalText { std::string title, confirm, unsaved, footer; };
+    [[nodiscard]] DeleteModalText DescribeDeleteModal(const AssetOpPlan& plan, std::span<const Arcane::Guid> requested,
+                                                      std::span<const std::string> dirtyTitles);
+
     [[nodiscard]] AssetOpPlan PlanAssetOp(const AssetOpRequest& op, const AssetOpFacts& facts);
 
     // ---- execution (s7.3/s7.4) ---------------------------------------------

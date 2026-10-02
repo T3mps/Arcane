@@ -135,8 +135,11 @@ namespace Arcane::Editor
         // runs it through EditorApp::RunAssetOp, which re-plans from fresh
         // facts. `requestRename` asks the host for the Rename modal (the
         // asset page's pencil: a page has no row to put a box on).
+        // `requestDelete` (s7.5: Del, the row menu, the page's trash) asks the
+        // host for the ONE delete-confirm modal; nothing deletes unconfirmed.
         std::optional<AssetOpRequest> fileOp;
         Arcane::Guid requestRename;
+        std::vector<Arcane::Guid> requestDelete;
     };
 
     // The Assets panel's read-only host seams. Originally just the

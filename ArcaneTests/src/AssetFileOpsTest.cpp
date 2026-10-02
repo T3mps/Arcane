@@ -970,3 +970,32 @@ TEST_CASE("TombstoneName: the snapshot after a delete, nullopt after its undo", 
     h.activity.clear(); RunAssetOpFollowUp(h, p, AssetOpSide::Undo, t.content); for (const auto& e : h.activity) log.Push(e);
     CHECK_FALSE(TombstoneName(log, p.moves[0].guid));
 }
+TEST_CASE("DescribeDeleteModal: title, confirm wording and the unsaved line follow the plan", "[editor][assetops]")
+{
+    AssetOpPlan p; p.kind = AssetOpKind::Delete; p.moves.push_back({ Arcane::Guid::Generate(), AssetKind::Texture, { { "C:/p/Content/t/uv_marker.png", {} } } });
+    const std::vector<Arcane::Guid> one{ p.moves[0].guid };
+    DeleteModalText t = DescribeDeleteModal(p, one, {});
+    CHECK((t.title == "Delete uv_marker.png?" && t.confirm == "Delete" && t.unsaved.empty()));
+    CHECK(t.footer == "Files go to the Recycle Bin. Ctrl+Z restores them while this session's undo history lasts.");
+    p.referencers.push_back({ p.moves[0].guid, Arcane::Guid::Generate(), { RefSource::AssetOnDisk }, "main.arcscene" });
+    CHECK(DescribeDeleteModal(p, one, {}).confirm == "Delete anyway");
+    const std::vector<std::string> dirty{ "UvMarkerSprite" }; t = DescribeDeleteModal(p, one, dirty);
+    CHECK((t.confirm == "Discard changes and delete" && t.unsaved == "Unsaved changes in UvMarkerSprite will be discarded."));
+    p.moves.resize(3, p.moves[0]);
+    const std::vector<Arcane::Guid> three{ one[0], Arcane::Guid::Generate(), Arcane::Guid::Generate() };
+    CHECK(DescribeDeleteModal(p, three, {}).title == "Delete 3 assets?");
+}
+TEST_CASE("DescribeDeleteModal titles the REQUESTED assets; cascaded children only add doomed rows", "[editor][assetops]")
+{
+    const Arcane::Guid tex = Arcane::Guid::Generate(), sprite = Arcane::Guid::Generate();
+    AssetOpPlan p; p.kind = AssetOpKind::Delete;
+    p.moves.push_back({ tex, AssetKind::Texture, { { "C:/p/Content/t/uv_marker.png", {} } } });
+    p.moves.push_back({ sprite, AssetKind::Sprite, { { "C:/p/Content/t/uv_marker.arcsprite", {} } } });
+    p.derived = { { tex, sprite, true, {} } };
+    const std::vector<Arcane::Guid> texOnly{ tex }, both{ tex, sprite }, missing{ Arcane::Guid::Generate() };
+    CHECK(DescribeDeleteModal(p, texOnly, {}).title == "Delete uv_marker.png?");
+    CHECK(DescribeDeleteModal(p, both, {}).title == "Delete 2 assets?");
+    CHECK(DescribeDeleteModal(p, missing, {}).title == "Delete uv_marker.png?");   // a refused/absent guid falls back to the first doomed file
+    const AssetOpPlan empty;
+    CHECK(DescribeDeleteModal(empty, missing, {}).title == "Delete " + missing[0].ToString() + "?");
+}

@@ -922,6 +922,29 @@ namespace Arcane::Editor
         return o;
     }
 
+    DeleteModalText DescribeDeleteModal(const AssetOpPlan& p, std::span<const Arcane::Guid> requested,
+                                        std::span<const std::string> dirty)
+    {
+        DeleteModalText t;
+        if (requested.size() == 1)
+        {
+            const auto it = std::find_if(p.moves.begin(), p.moves.end(), [&](const AssetMove& m) { return m.guid == requested[0]; });
+            const AssetMove* m = it != p.moves.end() ? &*it : p.moves.empty() ? nullptr : &p.moves.front();
+            t.title = "Delete " + (m && !m->files.empty() ? m->files.front().from.filename().string() : requested[0].ToString()) + "?";
+        }
+        else
+            t.title = "Delete " + std::to_string(requested.size()) + " assets?";
+        t.confirm = !dirty.empty() ? "Discard changes and delete" : !p.referencers.empty() ? "Delete anyway" : "Delete";
+        if (!dirty.empty())
+        {
+            std::string n;
+            for (const std::string& s : dirty) { if (!n.empty()) n += ", "; n += s; }
+            t.unsaved = "Unsaved changes in " + n + " will be discarded.";
+        }
+        t.footer = "Files go to the Recycle Bin. Ctrl+Z restores them while this session's undo history lasts.";
+        return t;
+    }
+
     std::vector<fs::path> DiagSiblingFiles(const fs::path& report)
     {
         std::vector<fs::path> o;
