@@ -42,14 +42,13 @@ namespace ReferenceProject
                         Arcane::Res<Arcane::GameInput> input,
                         Arcane::ResMut<Arcane::Physics2D> physics)
         {
-            const float fixedDt  = static_cast<float>(time->fixedDt);
+            const float dt       = std::clamp(static_cast<float>(time->fixedDt), 0.0f, 0.05f);
             const float axis     = input->Value(move).scalar;
             const bool  jumped   = input->PressedThisFixedStep(jump);
             const bool  jumpHeld = input->Down(jump);
 
             view.ForEach([&](Arcane::Entity entity, PlayerController2D& controller, Arcane::RigidBody2D& body)
             {
-                const float dt = std::clamp(fixedDt, 0.0f, 0.05f);
                 const Arcane::BodyMotion2D motion = physics->Motion(entity, body);
                 if (motion.supported)
                 {
