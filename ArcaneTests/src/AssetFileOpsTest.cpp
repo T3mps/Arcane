@@ -586,3 +586,118 @@ TEST_CASE("AssetFileOps: New Folder creates, undoes only while empty, and expire
         CHECK(fs::exists(dir / "keep.txt"));
     }
 }
+
+namespace
+{
+    struct DeleteRig
+    {
+        AssetOpsWorld w;
+        FakeAssetOpHost host{ w };
+        Arcane::CommandStack stack{ &Arcane::Test::NoSceneRegistry };
+        AssetFileOpExecutor exec{ host, stack, w.content };
+        Arcane::Guid tex;
+        explicit DeleteRig(const char* leaf) : w(leaf) { tex = w.Write("textures/uv_marker.png", "png-bytes"); }
+    };
+}
+
+TEST_CASE("AssetFileOps: delete -> undo -> redo round-trips bytes, mtime and registry", "[editor][assetops]")
+{
+    DeleteRig r("delete_roundtrip");
+    const auto before = r.w.Snapshot();
+    const auto regBefore = r.w.registry.All();
+    const auto mtime = fs::last_write_time(r.w.content / "textures" / "uv_marker.png");
+
+    REQUIRE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+    CHECK(r.host.recycleCalls == 1);                          // one call for the whole batch
+    CHECK_FALSE(fs::exists(r.w.content / "textures" / "uv_marker.png.meta"));
+    CHECK_FALSE(r.w.registry.Resolve(r.tex).has_value());
+    CHECK(std::string(r.stack.UndoLabel()) == "Delete uv_marker.png");
+
+    r.stack.Undo();
+    CHECK(r.w.Snapshot() == before);
+    CHECK(r.w.registry.All() == regBefore);                   // the same guid comes back
+    CHECK(fs::last_write_time(r.w.content / "textures" / "uv_marker.png") == mtime);
+
+    r.w.WriteRaw("textures/uv_marker.png", "edited after undo");
+    r.stack.Redo();                                           // re-captures the edited bytes
+    r.stack.Undo();
+    CHECK(Arcane::Test::Slurp(r.w.content / "textures" / "uv_marker.png") == "edited after undo");
+}
+
+TEST_CASE("AssetFileOps: undoing a delete onto an occupied path blocks with the bin note", "[editor][assetops]")
+{
+    DeleteRig r("delete_occupied");
+    REQUIRE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+    r.w.WriteRaw("textures/uv_marker.png", "a new file");
+    r.stack.Undo();
+    REQUIRE(r.host.errors.size() == 1);
+    CHECK(r.host.errors[0].first == "Can't undo Delete uv_marker.png");
+    CHECK(r.host.errors[0].second ==
+          "textures/uv_marker.png is occupied by another file. Your deleted file is in the Recycle Bin.");
+    CHECK(Arcane::Test::Slurp(r.w.content / "textures" / "uv_marker.png") == "a new file");
+    CHECK_FALSE(fs::exists(r.w.content / "textures" / "uv_marker.png.meta"));   // nothing written
+    CHECK_FALSE(r.stack.CanUndo());
+}
+
+TEST_CASE("AssetFileOps: a failed capture or a recycle survivor deletes nothing", "[editor][assetops]")
+{
+    DeleteRig r("delete_failures");
+    const auto before = r.w.Snapshot();
+    SECTION("capture failure: aborts before anything is recycled")
+    {
+        int n = 0;
+        r.exec.SetCaptureForTest([&](const fs::path& p) -> std::optional<Arcane::UndoPayload>
+        {
+            if (++n == 2) return std::nullopt;   // e.g. a full disk
+            return r.stack.MakePayloadFromFile(p);
+        });
+        CHECK_FALSE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+        CHECK(r.host.recycleCalls == 0);
+    }
+    SECTION("survivor: already-removed files are rewritten from their payloads")
+    {
+        r.host.survivor = r.w.content / "textures" / "uv_marker.png.meta";
+        CHECK_FALSE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+        CHECK(r.host.recycleCalls == 1);
+    }
+    CHECK(r.w.Snapshot() == before);
+    CHECK(r.w.registry.Resolve(r.tex).has_value());
+    CHECK_FALSE(r.stack.CanUndo());
+}
+
+TEST_CASE("AssetFileOps: spill, nuked items and a dirty document on redo", "[editor][assetops]")
+{
+    DeleteRig r("delete_spill");
+    const fs::path spill = r.w.root / "Saved" / "UndoCache";
+    r.stack.SetSpillDirectory(spill);
+    r.stack.SetLimits(Arcane::UndoLimits{ 100, 1ull << 30, 4 });   // 4-byte threshold: everything spills
+    r.host.permanently = true;
+    REQUIRE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+    CHECK(r.exec.LastRecycle().permanentlyDeleted.size() == 2);   // s7.12 words the activity row
+    CHECK_FALSE(fs::is_empty(spill));
+    r.stack.Undo();
+    CHECK(Arcane::Test::Slurp(r.w.content / "textures" / "uv_marker.png") == "png-bytes");
+
+    r.host.dirtyDocs.insert(r.tex);   // reopened and edited since
+    r.stack.Redo();
+    REQUIRE(r.host.errors.size() == 1);
+    CHECK(r.host.errors[0].second == "Close or save textures/uv_marker.png first.");
+    CHECK(fs::exists(r.w.content / "textures" / "uv_marker.png"));
+}
+
+TEST_CASE("AssetFileOps: a delete whose spilled undo copy is gone expires silently", "[editor][assetops]")
+{
+    DeleteRig r("delete_spill_lost");
+    const fs::path spill = r.w.root / "Saved" / "UndoCache";
+    r.stack.SetSpillDirectory(spill);
+    r.stack.SetLimits(Arcane::UndoLimits{ 100, 1ull << 30, 4 });   // 4-byte threshold: everything spills
+    REQUIRE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+    std::error_code ec;
+    fs::remove_all(spill, ec);                                      // e.g. a cleaner wiped Saved/
+    REQUIRE_FALSE(ec);
+    CHECK_FALSE(r.stack.CanUndo());                                 // s7.4: payload unreadable = expired
+    r.stack.Undo();
+    CHECK(r.host.errors.empty());                                   // expiry is silent
+    CHECK_FALSE(fs::exists(r.w.content / "textures" / "uv_marker.png"));
+    CHECK_FALSE(fs::exists(r.w.content / "textures" / "uv_marker.png.meta"));
+}

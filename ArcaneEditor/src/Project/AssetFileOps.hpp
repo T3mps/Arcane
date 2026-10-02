@@ -8,8 +8,10 @@
 
 #include "Panels/AssetActivityLog.hpp"    // AssetActivityEntry (the host's Activity feed)
 #include "Panels/AssetPanelModel.hpp"   // AssetKind, AssetKindOf
+#include "Project/OsShell.hpp"         // RecycleResult
 
 #include <Arcane/Edit/Command.hpp>
+#include <Arcane/Edit/UndoPayload.hpp>
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>   // RebindResult
 
@@ -107,7 +109,7 @@ namespace Arcane::Editor
     [[nodiscard]] std::optional<std::string> AssetOpGateRefusal(const AssetOpGates& gates, bool inTransaction);
 
     // The executor reaches the app ONLY through this (EditorApp implements it over
-    // Runtime/DocumentHost/the asset model; tests fake it). Recycle: T5-A13.
+    // Runtime/DocumentHost/the asset model; tests fake it).
     struct AssetFileOpHost
     {
         virtual ~AssetFileOpHost() = default;
@@ -115,6 +117,7 @@ namespace Arcane::Editor
         virtual Arcane::RebindResult        Rebind(const Arcane::Guid&, const std::filesystem::path&) = 0;  // Runtime::RebindMovedAsset
         virtual bool                        Unregister(const Arcane::Guid&) = 0;                          // Runtime::UnregisterAsset
         virtual std::optional<Arcane::Guid> Register(const std::filesystem::path&) = 0;                   // Runtime::RegisterCreatedAsset
+        virtual OsShell::RecycleResult      Recycle(std::span<const std::filesystem::path>) = 0;          // OsShell::ShellRecycle
         virtual bool                        CloseDocumentFor(const Arcane::Guid&, bool discardDirty) = 0; // false = a dirty doc blocks
         virtual void NoteMoved(const Arcane::Guid&, const std::filesystem::path& from,
                                const std::filesystem::path& to) = 0;                                      // s7.11
@@ -128,11 +131,22 @@ namespace Arcane::Editor
 
     struct ExecResult { bool ok = false; std::string error; };   // !ok => nothing pushed
 
+    struct FilePayload
+    {
+        std::filesystem::path            path;
+        std::uint64_t                    size = 0;
+        std::filesystem::file_time_type  mtime{};
+        Arcane::UndoPayload              bytes;     // T1's store: spills above editor.undo.spillThresholdKB
+    };
+    struct AssetFiles    { Arcane::Guid guid; std::vector<std::filesystem::path> files; };   // files[0] = id-bearing
+    struct AssetPayloads { Arcane::Guid guid; std::vector<FilePayload> files; };             // parallel to AssetFiles
+
     class AssetFileOpExecutor
     {
     public:
         enum class Side : std::uint8_t { Forward, Backward };   // Forward = from -> to (do/redo)
         using RenameFn = std::function<std::error_code(const std::filesystem::path&, const std::filesystem::path&)>;
+        using CaptureFn = std::function<std::optional<Arcane::UndoPayload>(const std::filesystem::path&)>;
 
         AssetFileOpExecutor(AssetFileOpHost& host, Arcane::CommandStack& stack, std::filesystem::path contentDir);
         ~AssetFileOpExecutor();   // every pushed step goes inert (its anchor dies)
@@ -164,14 +178,28 @@ namespace Arcane::Editor
         void ReportRefusal(std::string title, std::string message) { m_host.ReportError(std::move(title), std::move(message)); }
         [[nodiscard]] std::string Display(const std::filesystem::path& p) const;   // "textures/uv.png"
         void SetRenameForTest(RenameFn fn) { m_rename = std::move(fn); }
+        // Remove: docs close (a dirty one blocks unless discardDirty), capture EVERY
+        // file, ONE Recycle call, verify gone (a survivor fails + rewrites), Unregister.
+        [[nodiscard]] std::optional<std::string> RemoveAssets(std::span<const AssetFiles> doomed,
+                                                              std::vector<AssetPayloads>& out, bool discardDirty);
+        // Restore: occupancy pre-check, write .meta -> primaries -> companions with
+        // their mtimes, Register must return the recorded guid.
+        [[nodiscard]] std::optional<std::string> RestoreAssets(std::span<const AssetPayloads> payloads);
+        [[nodiscard]] bool FilesLost(std::span<const AssetFiles> assets) const;
+        [[nodiscard]] bool PayloadsLost(std::span<const AssetPayloads> payloads) const;   // a spilled undo copy is gone
+        [[nodiscard]] const OsShell::RecycleResult& LastRecycle() const { return m_lastRecycle; }
+        void SetCaptureForTest(CaptureFn fn) { m_capture = std::move(fn); }
 
     private:
         [[nodiscard]] std::optional<std::string> RollBack(std::span<const FileMove> done);
+        [[nodiscard]] std::optional<std::string> WritePayload(const FilePayload& p) const;
 
         AssetFileOpHost&                     m_host;
         Arcane::CommandStack&                m_stack;
         std::filesystem::path                m_contentDir;
         RenameFn                             m_rename;
+        CaptureFn                            m_capture;
+        OsShell::RecycleResult               m_lastRecycle{};
         std::shared_ptr<AssetFileOpExecutor*> m_anchor;
     };
 
@@ -243,5 +271,31 @@ namespace Arcane::Editor
         { return undo && exec.FolderLost(m_dir); }   // redo onto an occupied path: Run refuses, not expiry
     private:
         std::filesystem::path m_dir;
+    };
+
+    inline std::size_t PayloadByteCount(std::span<const AssetPayloads> payloads)
+    {
+        std::size_t n = 0;
+        for (const AssetPayloads& a : payloads) for (const FilePayload& f : a.files) n += static_cast<std::size_t>(f.size);
+        return n;
+    }
+
+    class AssetDeleteCommand final : public AssetFileCommand
+    {
+    public:
+        AssetDeleteCommand(std::weak_ptr<AssetFileOpExecutor*> exec, std::string label,
+                           std::vector<AssetFiles> assets, std::vector<AssetPayloads> payloads)
+            : AssetFileCommand(std::move(exec), std::move(label)), m_assets(std::move(assets)), m_payloads(std::move(payloads)) {}
+        std::size_t PayloadBytes() const override { return PayloadByteCount(m_payloads); }
+    protected:
+        std::optional<std::string> Run(AssetFileOpExecutor& exec, bool undo) override
+        { return undo ? exec.RestoreAssets(m_payloads) : exec.RemoveAssets(m_assets, m_payloads, /*discardDirty*/ false); }
+        // s7.4 expiry: applied (undo next) -- a spilled undo copy is gone (one stat via
+        // UndoPayload::SpillPath, never a read); unapplied (redo next) -- restored files gone or re-identified.
+        bool SourceLost(const AssetFileOpExecutor& exec, bool undo) const override
+        { return undo ? exec.PayloadsLost(m_payloads) : exec.FilesLost(m_assets); }
+    private:
+        std::vector<AssetFiles>    m_assets;
+        std::vector<AssetPayloads> m_payloads;
     };
 }

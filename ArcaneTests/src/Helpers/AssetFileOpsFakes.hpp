@@ -13,7 +13,9 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -115,5 +117,20 @@ namespace Arcane::Test
         { calls.push_back("EvictPaths " + std::to_string(paths.size())); }
         void Activity(Arcane::Editor::AssetActivityEntry) override {}
         void ReportError(std::string title, std::string message) override { errors.emplace_back(std::move(title), std::move(message)); }
+        std::optional<std::filesystem::path> survivor;   // Recycle leaves this one in place
+        bool permanently = false;                        // report every item as nuked
+        int recycleCalls = 0;
+        Arcane::Editor::OsShell::RecycleResult Recycle(std::span<const std::filesystem::path> files) override
+        {
+            ++recycleCalls;
+            Arcane::Editor::OsShell::RecycleResult r{ true, {}, {}, {} };
+            for (const auto& f : files)
+            {
+                if (survivor && *survivor == f) { r.ok = false; r.notRecycled.push_back(f); continue; }
+                std::filesystem::remove(f);
+                if (permanently) r.permanentlyDeleted.push_back(f);
+            }
+            return r;
+        }
     };
 }

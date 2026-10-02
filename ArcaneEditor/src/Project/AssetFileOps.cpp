@@ -303,6 +303,7 @@ namespace Arcane::Editor
     AssetFileOpExecutor::AssetFileOpExecutor(AssetFileOpHost& host, Arcane::CommandStack& stack, fs::path contentDir)
         : m_host(host), m_stack(stack), m_contentDir(std::move(contentDir)),
           m_rename([](const fs::path& a, const fs::path& b) { std::error_code ec; fs::rename(a, b, ec); return ec; }),
+          m_capture([this](const fs::path& p) { return m_stack.MakePayloadFromFile(p); }),
           m_anchor(std::make_shared<AssetFileOpExecutor*>(this))
     {
     }
@@ -435,6 +436,132 @@ namespace Arcane::Editor
         return std::nullopt;
     }
 
+    bool AssetFileOpExecutor::FilesLost(std::span<const AssetFiles> assets) const
+    {
+        for (const AssetFiles& a : assets)
+            if (Arcane::AssetRegistry::PeekId(a.files[0]) != a.guid) return true;
+        return false;
+    }
+
+    bool AssetFileOpExecutor::PayloadsLost(std::span<const AssetPayloads> payloads) const
+    {
+        for (const AssetPayloads& a : payloads)
+            for (const FilePayload& f : a.files)
+            {
+                std::error_code ec;
+                if (f.bytes.Spilled() && !fs::exists(f.bytes.SpillPath(), ec)) return true;   // one stat, never a read
+            }
+        return false;   // in-memory payloads cannot vanish
+    }
+
+    std::optional<std::string> AssetFileOpExecutor::WritePayload(const FilePayload& p) const
+    {
+        const std::optional<std::vector<std::byte>> bytes = p.bytes.Load();
+        if (!bytes) return "The undo copy of " + Display(p.path) + " could not be read.";
+        std::error_code ec;
+        fs::create_directories(p.path.parent_path(), ec);
+        {
+            std::ofstream out(p.path, std::ios::binary | std::ios::trunc);
+            if (out) out.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+            if (!out) return Display(p.path) + " could not be written.";
+        }
+        fs::last_write_time(p.path, p.mtime, ec);   // the watcher sees no change (s7.4)
+        return std::nullopt;
+    }
+
+    std::optional<std::string> AssetFileOpExecutor::RemoveAssets(std::span<const AssetFiles> doomed,
+                                                                 std::vector<AssetPayloads>& out, bool discardDirty)
+    {
+        out.clear();
+        if (FilesLost(doomed))
+            return "An asset is missing or no longer holds its id.";
+        for (const AssetFiles& a : doomed)   // documents close FIRST (s7.5)
+            if (!m_host.CloseDocumentFor(a.guid, discardDirty))
+                return "Close or save " + Display(a.files[0]) + " first.";
+
+        std::vector<fs::path> all;
+        for (const AssetFiles& a : doomed)   // (1) capture everything before anything is recycled
+        {
+            AssetPayloads& p = out.emplace_back(AssetPayloads{ a.guid, {} });
+            for (const fs::path& file : a.files)
+            {
+                std::error_code ec;
+                const std::uint64_t size = fs::file_size(file, ec);
+                const fs::file_time_type mtime = ec ? fs::file_time_type{} : fs::last_write_time(file, ec);
+                std::optional<Arcane::UndoPayload> bytes = ec ? std::nullopt : m_capture(file);
+                if (!bytes)
+                {
+                    out.clear();
+                    return "Could not keep a copy of " + Display(file) + " for undo; nothing was deleted.";
+                }
+                p.files.push_back(FilePayload{ file, size, mtime, std::move(*bytes) });
+                all.push_back(file);
+            }
+        }
+        m_lastRecycle = m_host.Recycle(all);   // (2) ONE call
+        bool survived = false;                 // (3) verify
+        for (const fs::path& f : all) { std::error_code ec; survived = survived || fs::exists(f, ec); }
+        if (survived)
+        {
+            std::string error = m_lastRecycle.message.empty() ? "Some files could not be moved to the Recycle Bin."
+                                                              : m_lastRecycle.message;
+            for (const AssetPayloads& a : out)
+                for (const FilePayload& f : a.files)
+                {
+                    std::error_code ec;
+                    if (!fs::exists(f.path, ec))
+                        if (auto e = WritePayload(f)) error += " " + *e;
+                }
+            out.clear();
+            return error;
+        }
+        std::vector<Arcane::Guid> removed;     // (4) registry + follow-up
+        for (const AssetFiles& a : doomed) { m_host.Unregister(a.guid); removed.push_back(a.guid); }
+        m_host.AssetsChanged(removed, {});
+        m_host.EvictPaths(all);
+        return std::nullopt;
+    }
+
+    std::optional<std::string> AssetFileOpExecutor::RestoreAssets(std::span<const AssetPayloads> payloads)
+    {
+        for (const AssetPayloads& a : payloads)   // (1) occupancy
+            for (const FilePayload& f : a.files)
+            {
+                std::error_code ec;
+                if (fs::exists(f.path, ec))
+                    return Display(f.path) + " is occupied by another file. Your deleted file is in the Recycle Bin.";
+            }
+        std::vector<const FilePayload*> order;    // (2) .meta, then primaries, then companions
+        const auto isMeta = [](const FilePayload& f) { return Lower(f.path.extension().string()) == ".meta"; };
+        for (const AssetPayloads& a : payloads) for (const FilePayload& f : a.files) if (isMeta(f)) order.push_back(&f);
+        for (const AssetPayloads& a : payloads) order.push_back(&a.files[0]);
+        for (const AssetPayloads& a : payloads)
+            for (std::size_t i = 1; i < a.files.size(); ++i) if (!isMeta(a.files[i])) order.push_back(&a.files[i]);
+
+        std::vector<fs::path> written;
+        const auto undoWrites = [&] { for (const fs::path& p : written) { std::error_code ec; fs::remove(p, ec); } };
+        for (const FilePayload* f : order)
+        {
+            if (auto e = WritePayload(*f)) { undoWrites(); return e; }
+            written.push_back(f->path);
+        }
+        std::vector<Arcane::Guid> restored;       // (3) the recorded guid must come back
+        for (const AssetPayloads& a : payloads)
+        {
+            if (m_host.Register(a.files[0].path) != a.guid)
+            {
+                for (const Arcane::Guid& g : restored) m_host.Unregister(g);
+                m_host.Unregister(a.guid);
+                undoWrites();
+                return Display(a.files[0].path) + " came back with a different id.";
+            }
+            restored.push_back(a.guid);
+        }
+        m_host.AssetsChanged({}, restored);       // (4) the host's AssetsChanged runs ForgetUnresolved for `added`
+        m_host.EvictPaths(written);
+        return std::nullopt;
+    }
+
     ExecResult AssetFileOpExecutor::Execute(const AssetOpPlan& plan, Arcane::CommandStack& stack)
     {
         ARC_ASSERT(&stack == &m_stack, "AssetFileOpExecutor::Execute: push to the stack the executor was built on");
@@ -461,7 +588,21 @@ namespace Arcane::Editor
                 failure = CreateFolder(plan.moves[0].files[0].to);
                 if (!failure) step = std::make_unique<NewFolderCommand>(Anchor(), plan.label, plan.moves[0].files[0].to);
                 break;
-            default:   // Delete (T5-A13) and Duplicate (s7.7) replace this arm
+            case AssetOpKind::Delete:
+            {
+                std::vector<AssetFiles> doomed;
+                for (const AssetMove& m : plan.moves)
+                {
+                    AssetFiles& a = doomed.emplace_back(AssetFiles{ m.guid, {} });
+                    for (const FileMove& f : m.files) a.files.push_back(f.from);
+                }
+                std::vector<AssetPayloads> payloads;
+                failure = RemoveAssets(doomed, payloads, /*discardDirty*/ true);   // the s7.5 modal confirmed
+                if (!failure)
+                    step = std::make_unique<AssetDeleteCommand>(Anchor(), plan.label, std::move(doomed), std::move(payloads));
+                break;
+            }
+            default:   // Duplicate (s7.7) replaces this arm
                 failure = "This asset operation is not available yet.";
                 break;
         }
