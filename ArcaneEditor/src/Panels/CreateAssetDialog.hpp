@@ -421,6 +421,19 @@ namespace Arcane::Editor
         return { true, {} };
     }
 
+    // T5 s7.6: the Rename validator -- rules 0-3 plus the fixed-extension rule
+    // (ValidateRenameStemSyntax), except a target equivalent to `currentFile`
+    // (case-only on NTFS) is free; a byte-identical stem is a no-op.
+    [[nodiscard]] inline CreateNameCheck ValidateRenameName(std::string_view stem, const std::filesystem::path& currentFile)
+    {
+        if (stem == currentFile.stem().string()) return { true, {} };
+        const std::filesystem::path dir = currentFile.parent_path(); const std::string ext = currentFile.extension().string();
+        if (CreateNameCheck c = ValidateRenameStemSyntax(stem, dir, ext); !c.ok) return c;
+        std::error_code ec; const std::filesystem::path target = dir / (std::string(stem) + ext);
+        if (std::filesystem::exists(target, ec) && std::filesystem::equivalent(target, currentFile, ec)) return { true, {} };
+        return ValidateCreateName(stem, dir, ext);
+    }
+
     // ---- the modal --------------------------------------------------------
 
     // Modal state, owned by EditorApp between frames (a modal spans frames;

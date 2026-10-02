@@ -404,3 +404,17 @@ TEST_CASE("MakeCreateDialogState: a colliding <parent>_Inst takes the next free 
     std::error_code error;
     fs::remove_all(root, error);
 }
+
+TEST_CASE("ValidateRenameName: case-only rename accepted, real collision and bad characters refused", "[editor][create][assetops]")
+{
+    namespace fs = std::filesystem; const fs::path d = fs::temp_directory_path() / "arcane_rename_name_test";
+    std::error_code ec; fs::remove_all(d, ec); fs::create_directories(d); std::ofstream(d / "a.png") << "x"; std::ofstream(d / "b.png") << "x";
+    CHECK((ValidateRenameName("a", d / "a.png").ok && ValidateRenameName("A", d / "a.png").ok));   // no-op; case-only
+    CHECK(ValidateRenameName("b", d / "a.png").message.find("already exists") != std::string::npos);
+    CHECK(ValidateRenameName("a:b", d / "a.png").message.find("cannot contain") != std::string::npos);
+    CHECK_FALSE(ValidateRenameName("a ", d / "a.png").ok);                                       // rule 1 fires before rule 3
+    CHECK(ValidateRenameName("wall.png", d / "a.png").message.find("extension is fixed") != std::string::npos);   // s7.6: the extension is fixed; typing it must not yield wall.png.png
+    CHECK(ValidateRenameName("wall.PNG", d / "a.png").message.find("extension is fixed") != std::string::npos);
+    CHECK(ValidateRenameName("wall.jpg", d / "a.png").ok);                                       // only the file's OWN extension is refused
+    fs::remove_all(d, ec);
+}
