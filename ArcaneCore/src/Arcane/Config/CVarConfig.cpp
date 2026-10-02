@@ -200,7 +200,16 @@ namespace Arcane
                 {
                     std::filesystem::path bad = file;
                     bad += ".bad";
-                    std::filesystem::copy_file(file, bad, std::filesystem::copy_options::overwrite_existing, ec);
+                    std::error_code copied;
+                    std::filesystem::copy_file(file, bad, std::filesystem::copy_options::overwrite_existing, copied);
+                    if (copied)
+                    {
+                        // No backup, no overwrite: the unparsable file may be the
+                        // user's only copy of a hand edit.
+                        ARC_WARN("cvar: '{}' is not a JSON object and could not be kept as '{}' ({}) -- left untouched, not saved",
+                                 file.generic_string(), bad.generic_string(), copied.message());
+                        continue;
+                    }
                     ARC_WARN("cvar: '{}' is not a JSON object -- kept as '{}', replaced",
                              file.generic_string(), bad.generic_string());
                 }

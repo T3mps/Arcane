@@ -319,6 +319,21 @@ TEST_CASE("cvar archive T3-D2: a corrupt or partial user file is skipped at load
     std::filesystem::remove_all(user);
 }
 
+TEST_CASE("cvar archive: a corrupt user file that cannot be kept aside as .bad is left untouched, never overwritten", "[cvar]") {
+    const auto user = std::filesystem::temp_directory_path() / "arcane-cvar-archive-nobackup";
+    std::filesystem::remove_all(user);
+    WriteText(user / "editor.json", R"({"legend": fal)");          // possibly the user's only hand edit
+    std::filesystem::create_directories(user / "editor.json.bad");  // a DIRECTORY: copy_file cannot write there
+
+    CVarRegistry reg;
+    RegisterArchiveRoster(reg);
+    REQUIRE(reg.Set(reg.Find("editor.legend"), CVarValue::Bool(false), SetBy::User) == SetResult::Applied);
+    reg.Publish();
+    WriteCVarArchive(reg, user);
+    CHECK(ReadText(user / "editor.json") == R"({"legend": fal)");   // no backup, so no overwrite
+    std::filesystem::remove_all(user);
+}
+
 TEST_CASE("cvar RevertLayer drops one rung everywhere and leaves the others", "[cvar]") {
     CVarRegistry reg;
     RegisterArchiveRoster(reg);
