@@ -15,9 +15,11 @@
 
 namespace Arcane::Assert
 {
+    // ARCANE_INTERNAL_BEGIN: the Mosaic assert-handler seam is the library's own install point
     ARCANE_CORE_API Mosaic::AssertHandler MosaicHandler() noexcept;
 
     inline void InstallMosaicHandler() noexcept { Mosaic::SetAssertHandler(MosaicHandler(), nullptr); }
+    // ARCANE_INTERNAL_END
 
     // THE ENSURE/ASSERT DISCRIMINATOR. Mosaic hands a failing guard to the
     // handler through one AssertContext with no fatal/recoverable flag in it
