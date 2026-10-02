@@ -53,6 +53,7 @@
 #include "Project/ModuleBuild.hpp"
 #include "Project/ServerLaunch.hpp"   // ServerProcess is a BY-VALUE member (m_serverProcess)
 #include "App/PlayMode.hpp"
+#include "App/EditorTitle.hpp"         // TitleParts (CurrentTitleParts)
 #include "Panels/ProblemsPanel.hpp"
 #include "Project/EditorRecents.hpp"
 #include "Scene/EditModeSchedule.hpp"
@@ -2197,6 +2198,11 @@ namespace Arcane::Editor
         // and the string is identical on the overwhelming majority of frames).
         std::string m_windowTitle;
         void        UpdateWindowTitle();
+        // The ONLY assembly of the title parts (s6.4): the project name, the
+        // scene's display name, and SceneSession::IsDirty (scene-affecting steps
+        // only, after T1 s3.3). The OS title, the toolbar strip and the
+        // Viewport tab's dot (ViewportChrome) all read it.
+        [[nodiscard]] Arcane::Editor::TitleParts CurrentTitleParts() const;
 
         // ---- File -> Open Recent / Open Recent Scene ------------------------
         // Both recents lists live behind one facade (EditorRecents.hpp,

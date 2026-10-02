@@ -46,6 +46,7 @@
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
+#include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
 #include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
@@ -88,53 +89,6 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Window title: the project name when a project is open, else the bare
-        // editor name. Since the no-project gate landed (main.cpp), a
-        // project-less session is reachable ONLY via an explicit --plugin (the
-        // engine-dev path) or a --project that failed to open -- never from a
-        // bare launch. `scene` is SceneSession::DisplayName ("Untitled" until the
-        // scene has been saved somewhere); the trailing * is the unsaved marker,
-        // matching the one on File -> Save Scene.
-        std::string EditorTitle(const Arcane::Project* project, const std::string& scene, bool sceneDirty, const char* backend)
-        {
-            std::string title;
-            if (project)
-            {
-                title += project->Manifest().name;
-            }
-
-            if (!scene.empty())
-            {
-                if (!title.empty())
-                {
-                    title += " - ";
-                }
-                title += scene;
-
-                if (sceneDirty)
-                {
-                    title += "*";
-                }
-            }
-
-            if (!title.empty())
-            {
-                title += " - ";
-            }
-
-            // BuildInfo is the DLL's own "<version> [Debug|Release|Dist]" --
-            // compiled into Arcane.dll (Engine.cpp), so the title reports the
-            // engine actually loaded, never this exe's header copy.
-            title += Arcane::BuildInfo();
-            if (backend && *backend)
-            {
-                title += " <";
-                title += backend;
-                title += ">";
-            }
-            return title;
-        }
-
         // Persistence for EditorApp::m_playMode: an ImGuiSettingsHandler section
         // "[EditorPlayMode][State]", one "Mode=%d" line, registered in Init,
         // right after ImGui's context exists and before the first NewFrame
@@ -1799,18 +1753,27 @@ namespace Arcane::Editor
         return true;
     }
 
+    Arcane::Editor::TitleParts EditorApp::CurrentTitleParts() const
+    {
+        Arcane::Editor::TitleParts parts;
+        if (const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr)
+            parts.project = project->Manifest().name;
+        parts.scene = m_scene.DisplayName();
+        // m_undo is built later in Init than the first title push; a session with
+        // no command stack yet has nothing authored, so it reads as clean.
+        parts.sceneDirty = m_undo && m_scene.IsDirty(*m_undo);
+        return parts;
+    }
+
     void EditorApp::UpdateWindowTitle()
     {
-        // m_undo is built later in Init than the first title push; a session with no
-        // command stack yet has nothing authored, so it reads as clean.
-        const bool dirty = m_undo && m_scene.IsDirty(*m_undo);
         // THE BACKEND NAME: there is no RenderDevice to ask -- GpuContext
         // builds none -- so this reads the config, the same substitution
         // RuntimeApp::StageSpriteTables makes for the resolver's shader
         // flavor.
-        std::string title = EditorTitle(m_runtime ? m_runtime->CurrentProject() : nullptr,
-                                        m_scene.DisplayName(), dirty,
-                                        !m_gpu ? "" : Arcane::ToString(m_config.backend));
+        std::string title = Arcane::Editor::FormatOsTitle(
+            CurrentTitleParts(), Arcane::BuildInfo(),
+            !m_gpu ? "" : Arcane::ToString(m_config.backend));
         if (title == m_windowTitle)
             return;
         m_windowTitle = std::move(title);
