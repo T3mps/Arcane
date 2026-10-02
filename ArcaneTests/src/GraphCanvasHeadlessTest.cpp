@@ -657,6 +657,64 @@ TEST_CASE("Canvas pin paint: a Mul fed by a float4 Param resolves to 4 -- its pi
     CHECK_FALSE(after.adapts);
 }
 
+TEST_CASE("Canvas pin tooltip (T3-D6 desk item 18): HOVERING a Mul input fed by a float4 Param shows the pin's name, 'dynamic (now float4)' and what it is wired from",
+          "[editor][graphcanvas]")
+{
+    // The pure PinTooltipText case pins the wording; this drives the REAL
+    // canvas with a stationary mouse over the pin, the way the desk does, and
+    // reads the tooltip the frame actually drew.
+    MaterialGraph g;
+    GraphNode out; out.id = 1; out.type = GraphNodeType::Output; out.posX = 520.0f; out.posY = 80.0f;
+    GraphNode param; param.id = 2; param.type = GraphNodeType::Param; param.posX = 40.0f; param.posY = 80.0f;
+    param.paramName = "tint";
+    param.paramType = MatParamType::Float4;
+    param.paramDefault = MatParamValue::MakeFloat4(1.0f, 1.0f, 1.0f, 1.0f);
+    GraphNode mul; mul.id = 3; mul.type = GraphNodeType::Mul; mul.posX = 280.0f; mul.posY = 80.0f;
+    g.nodes = { out, param, mul };
+    g.links = { { 2, 0, 3, 0 }, { 3, 0, 1, 0 } };
+    g.nextId = 4;
+    CanvasHarness h(TwoNodeGraph("sprite", g));
+    h.Frame(90);   // past the fit-on-open's animated settle: the view no longer moves under the scan
+    const ImRect node = h.InCanvas([]
+    {
+        const ImVec2 p = ed::CanvasToScreen(ed::GetNodePosition(ed::NodeId(3)));
+        const ImVec2 sz = ed::GetNodeSize(ed::NodeId(3));
+        return ImRect(p, ImVec2(p.x + sz.x, p.y + sz.y));
+    });
+    REQUIRE(node.GetWidth() > 0.0f);
+
+    // Walk the node's left (input) edge top-down; at each point hold the mouse
+    // still past the tooltip delay, logging the last frame's text.
+    ImGuiIO& io = ImGui::GetIO();
+    std::string tip;
+    for (float y = node.Min.y + 2.0f; y < node.Max.y && tip.empty(); y += 3.0f)
+        for (float x = node.Min.x + 2.0f; x < node.Min.x + 26.0f && tip.empty(); x += 4.0f)
+        {
+            io.AddMousePosEvent(x, y);
+            h.Frame(24);   // 0.4 s stationary: past HoverDelayShort/HoverStationaryDelay
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            ImGui::LogToBuffer();
+            bool requestClose = false;
+            h.doc->Draw(requestClose);
+            const std::string logged = ImGui::GetCurrentContext()->LogBuffer.c_str();
+            ImGui::LogFinish();
+            ImGui::Render();
+            bool tooltipShown = false;
+            for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+                if ((w->Flags & ImGuiWindowFlags_Tooltip) && w->Active)
+                    tooltipShown = true;
+            if (tooltipShown && logged.find("dynamic (now") != std::string::npos)
+                tip = logged;
+        }
+    INFO("tooltip log: " << tip);
+    REQUIRE_FALSE(tip.empty());
+    CHECK(tip.find("dynamic (now float4)") != std::string::npos);   // the type word, resolved
+    const std::size_t from = tip.find("wired from");                 // what it is wired to...
+    REQUIRE(from != std::string::npos);
+    CHECK(tip.substr(from, 48).find("tint") != std::string::npos);  // ...named by its source
+}
+
 // ---- T3-D3 desk findings (2026-10-02): the marquee and its modifiers, undo
 // keeping the view, Esc reverting an inline canvas drag. ----
 namespace
