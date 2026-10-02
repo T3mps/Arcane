@@ -121,6 +121,13 @@ namespace Arcane::Editor
         // QUEUED so the open never mutates DocumentHost's list mid-draw; the
         // host routes it through OpenAssetRow next frame.
         Arcane::Guid openAsset;
+        // T5 s7.10: Browser focused, no popup over it, no text field (the
+        // inline-rename term joins with T5-B8's rename). Written once per
+        // frame by DrawAssetBrowserPanel on
+        // the TOP window (so a focused toolbar or tab counts, not only the
+        // table); its key block and the app's entity-clipboard fold
+        // (FoldEntityClipboardShortcuts) both read this one value.
+        bool ownsEditKeys = false;
     };
 
     // The Assets panel's read-only host seams. Originally just the

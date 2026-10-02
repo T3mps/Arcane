@@ -826,10 +826,15 @@ namespace Arcane::Editor
 
             // Step 3 tail: keyboard, minimal v1 (spec s8). Up/Down move
             // Select through the VISIBLE rows (group rows are not navigable
-            // targets); Enter opens. ChildWindows so focus anywhere inside
-            // the table's own implicit scroll region (BeginTable's ScrollY
-            // wraps itself in one) counts as "the table is focused".
-            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
+            // targets); Enter opens. T5 s7.10: the guard is the Outliner's
+            // (focused incl. child windows, no popup over it, no text
+            // field), computed ONCE on the top "Asset Browser" window by
+            // DrawAssetBrowserPanel -- re-asking IsWindowFocused here, inside
+            // the body child, would miss a focused toolbar or tab. Ctrl+X/C/V
+            // are consumed with no action (v1 has no asset clipboard): owning
+            // the keys is what keeps them off the entity clipboard.
+            const bool keysLive = actions.ownsEditKeys;
+            if (keysLive)
             {
                 std::vector<Arcane::Guid> nav;
                 nav.reserve(rows.size());
@@ -962,6 +967,14 @@ namespace Arcane::Editor
                             ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
         ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
         ImGui::PopStyleVar();
+
+        // T5 s7.10: the Browser's key guard, computed ONCE per frame while
+        // the current window is the TOP "Asset Browser" window, so focus on
+        // its toolbar, tab or table all count (ChildWindows); a popup over it
+        // (a row's context menu) does not (NoPopupHierarchy), nor does an
+        // active text field (the search box). DrawTable's key block and the
+        // app's entity-clipboard fold both read this one value.
+        actions.ownsEditKeys = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) && !ImGui::GetIO().WantTextInput;
 
         // ---- body band -----------------------------------------------
         if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))

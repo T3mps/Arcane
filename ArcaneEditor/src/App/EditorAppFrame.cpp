@@ -2446,6 +2446,10 @@ namespace Arcane::Editor
             statusActions = Arcane::Editor::DrawAssetStatusPanel(
                 m_assetModel, proj, m_documents, assetPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetStatus));
+        // T5 s7.10: read by NEXT frame's clipboard fold in ConsumeMenuRequests,
+        // which runs before this draw (the DocumentHost::FocusedDoc one-frame
+        // tolerance). A hidden Browser leaves the default false.
+        m_browserOwnsEditKeys = browserActions.ownsEditKeys;
         ConsumeAssetPanelActions(browserActions, ls);
         ConsumeAssetPanelActions(graphActions, ls);
         ConsumeAssetPanelActions(statusActions, ls);
@@ -2681,11 +2685,11 @@ namespace Arcane::Editor
         // above). Folded in HERE, before the clipboard consume block below reads
         // menuReq -- same fold-in shape as the Ctrl+N/O/S scene shortcuts fold
         // further down, just earlier in the frame so the request this edge
-        // raises cannot lag a frame behind its own keypress.
-        menuReq.cutSelection       |= fs.scCut;
-        menuReq.copySelection      |= fs.scCopy;
-        menuReq.paste              |= fs.scPaste;
-        menuReq.duplicateSelection |= fs.scDuplicate;
+        // raises cannot lag a frame behind its own keypress. T5 s7.10: folded
+        // only while the Asset Browser does NOT own the keys (last frame's
+        // answer -- the Browser draws after this), so Ctrl+D in the Browser
+        // no longer duplicates the selected entity.
+        Arcane::Editor::FoldEntityClipboardShortcuts(menuReq, { fs.scCut, fs.scCopy, fs.scPaste, fs.scDuplicate }, m_browserOwnsEditKeys);
         // Edit -> clipboard (spec II.B), delegated to the shared functions
         // promoted in EditorPanels.cpp/.hpp -- the menu-bar consume, the
         // keybinds (folded in above), and the Outliner's context menus all

@@ -1441,6 +1441,7 @@ namespace Arcane::Editor
         // derived from the model and services, and by Task 3 its only state
         // writes had already become actions.
         Arcane::Editor::AssetBrowserPanelState  m_assetBrowserUi;   // search / rail / folds / preview width
+        bool m_browserOwnsEditKeys = false;   // T5 s7.10: last frame's Browser answer
         Arcane::Editor::AssetGraphPanelState    m_assetGraphUi;     // canvas + projection + focus + gesture stash
         // Asset-manager redesign, Plan 1 Task 12: the unified create dialog's
         // cross-frame state (a modal outlives the draw that opened it). Set up

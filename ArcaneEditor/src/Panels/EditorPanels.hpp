@@ -108,6 +108,12 @@ namespace Arcane::Editor
 #endif
     };
 
+    struct ClipboardShortcutEdges { bool cut = false, copy = false, paste = false, duplicate = false; };
+    // T5 s7.10: Ctrl+X/C/V/D reach the ENTITY clipboard only while the Asset Browser does not own the keys.
+    // Header-inline so ArcaneTests reaches it without EditorPanels.cpp.
+    inline void FoldEntityClipboardShortcuts(MenuRequests& r, const ClipboardShortcutEdges& s, bool browserOwnsEditKeys)
+    { if (browserOwnsEditKeys) return; r.cutSelection |= s.cut; r.copySelection |= s.copy; r.paste |= s.paste; r.duplicateSelection |= s.duplicate; }
+
     struct ProjectSettingsRequests
     {
         Guid selection;
