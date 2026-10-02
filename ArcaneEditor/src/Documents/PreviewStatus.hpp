@@ -47,4 +47,12 @@ namespace Arcane::Editor
     // imported mesh: a mesh-surface MATERIAL draws no box (s5.3), so the
     // imported-mesh document is the one box that shows it.
     [[nodiscard]] std::string PreviewBoxText(const PreviewStatus& s);
+
+    // Where a preview box draws its square image (T3-D6): scaled to the box's
+    // SMALLER side and centred on both axes, so a full-tab instance preview
+    // fills the tab's region rather than hugging its top-left corner. Offsets
+    // are relative to the box's content origin; a non-positive axis falls back
+    // to the image's own extent.
+    struct PreviewFit { float x; float y; float side; };
+    [[nodiscard]] PreviewFit FitPreviewImage(float availW, float availH, float extent) noexcept;
 }

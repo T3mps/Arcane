@@ -546,10 +546,12 @@ namespace Arcane::Editor
             // (RebuildPreviewMesh never builds one) -- whatever the vehicle
             // presented for it is a cleared frame, so it reads as its reason
             // below instead (s3.2's image bit does not consult the compile).
+            // The one placement rule every preview box shares (T3-D6): fitted and centred.
             const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const float fit = (std::min)(avail.x, avail.y) / static_cast<float>(kPreviewSize);
-            const float side = static_cast<float>(kPreviewSize) * (fit > 0.0f ? fit : 1.0f);
-            ImGui::Image(static_cast<ImTextureID>(PreviewTextureId()), ImVec2(side, side));
+            const PreviewFit fit = FitPreviewImage(avail.x, avail.y, static_cast<float>(kPreviewSize));
+            const ImVec2 at = ImGui::GetCursorPos();
+            ImGui::SetCursorPos(ImVec2(at.x + fit.x, at.y + fit.y));
+            ImGui::Image(static_cast<ImTextureID>(PreviewTextureId()), ImVec2(fit.side, fit.side));
         }
         else
         {

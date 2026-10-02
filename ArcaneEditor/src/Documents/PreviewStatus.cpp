@@ -90,4 +90,18 @@ namespace Arcane::Editor
         if (s.compile == CompileStatus::Errors)              return "Errors -- no successful compile yet";
         return "Preview pending -- nothing rendered yet";
     }
+
+    PreviewFit FitPreviewImage(float availW, float availH, float extent) noexcept
+    {
+        // Each axis's fit; a collapsed axis does not constrain (it falls back
+        // to 1:1), so a zero-sized box still reports the image's own extent.
+        const float sx = availW > 0.0f ? availW / extent : 1.0f;
+        const float sy = availH > 0.0f ? availH / extent : 1.0f;
+        const float scale = sx < sy ? sx : sy;
+        const float side = extent * (scale > 0.0f ? scale : 1.0f);
+        // Centred in what is left on each axis (never a negative offset).
+        const float x = availW > side ? (availW - side) * 0.5f : 0.0f;
+        const float y = availH > side ? (availH - side) * 0.5f : 0.0f;
+        return { x, y, side };
+    }
 }

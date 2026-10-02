@@ -4108,12 +4108,10 @@ namespace Arcane::Editor
         if (image.id != 0)
         {
             const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const float texW = image.extent;
-            const float texH = image.extent;
-            const float scale = (std::min)(avail.x > 0 ? avail.x / texW : 1.0f,
-                                           avail.y > 0 ? avail.y / texH : 1.0f);
-            const float s = scale > 0.0f ? scale : 1.0f;
-            ImGui::Image(image.id, ImVec2(texW * s, texH * s));
+            const PreviewFit fit = FitPreviewImage(avail.x, avail.y, image.extent);
+            const ImVec2 at = ImGui::GetCursorPos();
+            ImGui::SetCursorPos(ImVec2(at.x + fit.x, at.y + fit.y));
+            ImGui::Image(image.id, ImVec2(fit.side, fit.side));
         }
         else
         {

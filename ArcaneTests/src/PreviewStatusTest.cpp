@@ -1,5 +1,6 @@
 // Node page + editor upgrades s3.2: the PreviewStatus model -- the compile and
 // preview precedence tables and their report ids. Pure, no ImGui, no device.
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <Documents/PreviewStatus.hpp>
 
@@ -130,4 +131,28 @@ TEST_CASE("PreviewStatus text: the box line for each no-image state", "[editor][
     CHECK(PreviewBoxText({ C::Errors, P::Ready, false }) == "Errors -- no successful compile yet");
     CHECK(PreviewBoxText({ C::Ok, P::Ready, false }) == "Preview pending -- nothing rendered yet");
     CHECK(Arcane::Editor::NoPreviewReason({ C::Ok, P::Ready, true }).empty());
+}
+
+TEST_CASE("PreviewStatus T3-D6: the preview image fills its box's smaller side and is centred on both axes", "[editor][preview]")
+{
+    using Arcane::Editor::FitPreviewImage;
+    // The full-tab instance preview (T3-D5 concern 5): a wide, short tab region.
+    const auto wide = FitPreviewImage(600.0f, 210.0f, 512.0f);
+    CHECK(wide.side == Catch::Approx(210.0f));
+    CHECK(wide.x == Catch::Approx(195.0f));   // (600 - 210) / 2: centred, not top-left
+    CHECK(wide.y == Catch::Approx(0.0f));
+    // A tall, narrow region centres vertically.
+    const auto tall = FitPreviewImage(300.0f, 900.0f, 512.0f);
+    CHECK(tall.side == Catch::Approx(300.0f));
+    CHECK(tall.x == Catch::Approx(0.0f));
+    CHECK(tall.y == Catch::Approx(300.0f));
+    // A region bigger than the image scales it UP to fill.
+    const auto big = FitPreviewImage(1200.0f, 1000.0f, 512.0f);
+    CHECK(big.side == Catch::Approx(1000.0f));
+    CHECK(big.x == Catch::Approx(100.0f));
+    // A collapsed region keeps the image's own extent rather than vanishing.
+    const auto none = FitPreviewImage(0.0f, 0.0f, 512.0f);
+    CHECK(none.side == Catch::Approx(512.0f));
+    CHECK(none.x == Catch::Approx(0.0f));
+    CHECK(none.y == Catch::Approx(0.0f));
 }
