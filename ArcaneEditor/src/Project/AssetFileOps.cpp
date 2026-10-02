@@ -2,8 +2,11 @@
 
 #include "Panels/CreateAssetDialog.hpp"   // ValidateCreateNameSyntax (rules 0-2), ValidateRenameStemSyntax
 
+#include <Json.hpp>   // the workspace's vendored nlohmann::json header
+
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -44,6 +47,23 @@ namespace Arcane::Editor
         {
             return p.filename().string() + " already exists in " + FolderLabel(p.parent_path(), contentDir) + ".";
         }
+        std::string PercentDecode(std::string_view s)
+        {
+            std::string out;
+            out.reserve(s.size());
+            for (std::size_t i = 0; i < s.size(); ++i)
+            {
+                if (s[i] == '%' && i + 2 < s.size() &&
+                    std::isxdigit(static_cast<unsigned char>(s[i + 1])) && std::isxdigit(static_cast<unsigned char>(s[i + 2])))
+                {
+                    out.push_back(static_cast<char>(std::stoi(std::string(s.substr(i + 1, 2)), nullptr, 16)));
+                    i += 2;
+                }
+                else
+                    out.push_back(s[i]);
+            }
+            return out;
+        }
 
         struct Planner
         {
@@ -68,6 +88,60 @@ namespace Arcane::Editor
                     }
                 for (const FileMove& fm : m.files) claimed.push_back(fm.to);
                 return false;
+            }
+
+            // s7.8: .gltf companions.
+            std::unordered_set<Arcane::Guid> moving;    // every guid this plan moves (request + dragged images)
+            std::vector<AssetMove> extra;               // registered images a .gltf drags along
+            std::unordered_map<std::string, Arcane::Guid> byMount;
+            std::optional<std::vector<std::pair<fs::path, fs::path>>> shared;   // companion -> non-moving owner .gltf
+
+            std::vector<std::string> Uris(const fs::path& gltf) const
+            {
+                return f.gltfUris ? f.gltfUris(gltf) : std::vector<std::string>{};
+            }
+
+            const std::vector<std::pair<fs::path, fs::path>>& Shared()
+            {
+                if (!shared)
+                {
+                    shared.emplace();
+                    for (const auto& [g, mount] : f.registry)
+                        if (!moving.count(g) && mount.rfind("game://", 0) == 0 &&
+                            Lower(fs::path(mount).extension().string()) == ".gltf")
+                        {
+                            const fs::path other = (f.contentDir / fs::path(mount.substr(7))).lexically_normal();
+                            for (const std::string& uri : Uris(other))
+                                shared->emplace_back((other.parent_path() / fs::path(uri)).lexically_normal(), other);
+                        }
+                }
+                return *shared;
+            }
+
+            std::optional<std::string> AddGltfCompanions(const fs::path& gltf, const fs::path& destDir, AssetMove& m)
+            {
+                for (const std::string& uri : Uris(gltf))
+                {
+                    const fs::path rel = fs::path(uri).lexically_normal();
+                    if (rel.is_absolute() || rel.has_root_name() || rel.has_root_directory() ||
+                        std::any_of(rel.begin(), rel.end(), [](const fs::path& e) { return e == ".."; }))
+                        return "References " + uri + " outside its folder.";
+                    const fs::path from = (gltf.parent_path() / rel).lexically_normal();
+                    const fs::path to = (destDir / rel).lexically_normal();
+                    for (const auto& [companion, owner] : Shared())
+                        if (companion == from)
+                            return "Shares " + from.filename().string() + " with " + owner.filename().string() + ".";
+                    const std::string mount = "game://" + from.lexically_relative(f.contentDir.lexically_normal()).generic_string();
+                    if (const auto it = byMount.find(mount); it != byMount.end())
+                    {
+                        if (moving.insert(it->second).second)
+                            extra.push_back(AssetMove{ it->second, AssetKindOf(mount),
+                                                       { { from, to }, { WithMeta(from), WithMeta(to) } } });
+                        continue;   // a registered image moves as its OWN asset (rebound by guid)
+                    }
+                    m.files.push_back({ from, to });
+                }
+                return std::nullopt;
             }
         };
 
@@ -134,6 +208,26 @@ namespace Arcane::Editor
         return {};
     }
 
+    std::vector<std::string> ReadGltfUris(const fs::path& gltf)
+    {
+        std::vector<std::string> out;
+        if (Lower(gltf.extension().string()) != ".gltf")
+            return out;   // .glb is self-contained (s7.8)
+        std::ifstream in(gltf, std::ios::binary);
+        if (!in) return out;
+        const auto doc = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
+        if (!doc.is_object()) return out;
+        for (const char* key : { "buffers", "images" })
+            if (const auto list = doc.find(key); list != doc.end() && list->is_array())
+                for (const auto& e : *list)
+                    if (const auto uri = e.find("uri"); uri != e.end() && uri->is_string())
+                    {
+                        const std::string s = uri->get<std::string>();
+                        if (s.rfind("data:", 0) != 0) out.push_back(PercentDecode(s));
+                    }
+        return out;
+    }
+
     AssetOpPlan PlanAssetOp(const AssetOpRequest& op, const AssetOpFacts& f)
     {
         AssetOpPlan plan;
@@ -150,9 +244,12 @@ namespace Arcane::Editor
         for (const auto& [g, mount] : f.registry) mountOf.emplace(g, mount);
         const fs::path destDir = (op.destFolder.empty() ? f.contentDir : f.contentDir / fs::path(op.destFolder)).lexically_normal();
         std::unordered_set<Arcane::Guid> done;
+        for (const auto& [g, mount] : f.registry) p.byMount.emplace(mount, g);
+        p.moving.insert(op.guids.begin(), op.guids.end());
 
         for (const Arcane::Guid& g : op.guids)
         {
+            p.extra.clear();   // a refused .gltf never leaks its dragged images into the next asset's moves
             if (!done.insert(g).second) continue;
             const auto it = mountOf.find(g);
             if (it == mountOf.end()) { p.Refuse(g, "No longer exists."); continue; }
@@ -205,7 +302,8 @@ namespace Arcane::Editor
                     if (scheme != "game" || !IsInside(destDir, f.contentDir)) { p.Refuse(g, std::string(kCrossMount)); continue; }
                     if (file.parent_path() == destDir) continue;   // already there: nothing to do
                     add(destDir / file.filename());
-                    // T5-A8: .gltf companions join here.
+                    if (Lower(ext) == ".gltf")
+                        if (auto why = p.AddGltfCompanions(file, destDir, m)) { p.Refuse(g, *why); continue; }
                     if (p.Claim(g, m, false)) continue;
                     break;
                 case AssetOpKind::Duplicate:
@@ -223,6 +321,8 @@ namespace Arcane::Editor
                     break;   // planned above
             }
             plan.moves.push_back(std::move(m));
+            for (AssetMove& e : p.extra)
+                if (!p.Claim(e.guid, e, false)) plan.moves.push_back(std::move(e));
         }
 
         for (const AssetMove& m : plan.moves)

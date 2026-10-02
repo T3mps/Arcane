@@ -5,6 +5,7 @@
 #include "Project/AssetFileOps.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <set>
 #include <string>
@@ -224,4 +225,59 @@ TEST_CASE("PlanAssetOp: one refusal per s7.1 row, and any refusal blocks the bat
     const auto rockA = w.Add("game://a/rock.arcmat");
     const auto rockB = w.Add("game://b/rock.arcmat");
     CHECK(reason(Plan(w, K::Move, { rockA, rockB }, {}, "props")) == "rock.arcmat already exists in props/.");
+}
+
+TEST_CASE("PlanAssetOp: a .gltf moves its buffers and registered images; outside or shared files refuse", "[editor][assetops]")
+{
+    PlanWorld w;
+    const auto prop = w.Add("game://models/prop.gltf");
+    const auto tex  = w.Add("game://models/tex.png");
+    w.Touch(w.content / "models" / "a.bin");
+    w.uris[PlanWorld::Key(w.content / "models" / "prop.gltf")] = { "a.bin", "tex.png" };
+    const auto reason = [](const AssetOpPlan& p) { REQUIRE(p.refusals.size() == 1); return p.refusals[0].reason; };
+
+    SECTION("all three travel; the image keeps its own guid and .meta")
+    {
+        const AssetOpPlan p = Plan(w, AssetOpKind::Move, { prop }, {}, "props");
+        REQUIRE(p.refusals.empty());
+        REQUIRE(p.moves.size() == 2);
+        CHECK(p.moves[0].guid == prop);
+        REQUIRE(p.moves[0].files.size() == 3);   // prop.gltf, prop.gltf.meta, a.bin
+        CHECK(p.moves[0].files[2].to == w.content / "props" / "a.bin");
+        CHECK(p.moves[1].guid == tex);
+        CHECK(p.moves[1].files[1].to == w.content / "props" / "tex.png.meta");
+        CHECK(p.label == "Move 2 assets to props/");
+    }
+    SECTION("a ../ uri refuses")
+    {
+        w.uris[PlanWorld::Key(w.content / "models" / "prop.gltf")] = { "../shared/a.bin" };
+        CHECK(reason(Plan(w, AssetOpKind::Move, { prop }, {}, "props")) == "References ../shared/a.bin outside its folder.");
+    }
+    SECTION("a buffer shared with a .gltf that is not moving refuses")
+    {
+        w.Add("game://models/other.gltf");
+        w.uris[PlanWorld::Key(w.content / "models" / "other.gltf")] = { "a.bin" };
+        CHECK(reason(Plan(w, AssetOpKind::Move, { prop }, {}, "props")) == "Shares a.bin with other.gltf.");
+    }
+    SECTION("a destination occupied only by a companion refuses")
+    {
+        w.Touch(w.content / "props" / "a.bin");
+        CHECK(reason(Plan(w, AssetOpKind::Move, { prop }, {}, "props")) == "a.bin already exists in props/.");
+    }
+}
+
+TEST_CASE("ReadGltfUris: buffers and images, data: skipped, percent-decoded; .glb is self-contained", "[editor][assetops]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_gltf_uris";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    std::ofstream(dir / "x.gltf", std::ios::binary) << R"({
+        "buffers": [ { "uri": "my%20mesh.bin" }, { "uri": "data:application/octet-stream;base64,AAAA" } ],
+        "images":  [ { "uri": "tex.png" }, { "bufferView": 0 } ] })";
+    std::ofstream(dir / "y.glb", std::ios::binary) << "glTF";
+    CHECK(ReadGltfUris(dir / "x.gltf") == std::vector<std::string>{ "my mesh.bin", "tex.png" });
+    CHECK(ReadGltfUris(dir / "y.glb").empty());
+    CHECK(ReadGltfUris(dir / "missing.gltf").empty());
+    fs::remove_all(dir, ec);
 }

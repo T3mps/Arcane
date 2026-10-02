@@ -86,5 +86,10 @@ namespace Arcane::Editor
                                            std::string_view ext,
                                            const std::function<bool(const std::filesystem::path&)>& taken);
 
+    // s7.8: the relative files a .gltf names -- buffers[].uri then images[].uri,
+    // data: URIs skipped, percent-decoded. Empty for .glb (self-contained) and for an
+    // unreadable file. The real AssetOpFacts::gltfUris.
+    [[nodiscard]] std::vector<std::string> ReadGltfUris(const std::filesystem::path& gltf);
+
     [[nodiscard]] AssetOpPlan PlanAssetOp(const AssetOpRequest& op, const AssetOpFacts& facts);
 }
