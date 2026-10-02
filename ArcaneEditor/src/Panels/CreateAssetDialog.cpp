@@ -525,6 +525,58 @@ namespace Arcane::Editor
         }
     }
 
+    CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
+                                            const AssetPanelModel& model)
+    {
+        CreateDialogState st{};
+        st.request = request;
+        st.open    = true;
+
+        // The Material surface combo's starting index. `prefillSurface` is a
+        // MaterialSurface VALUE (-1 = none), and the combo's own order is a
+        // different one -- converted through the single mapping above rather
+        // than cast.
+        st.surface =
+            (request.prefillSurface >= 0 &&
+             request.prefillSurface <= static_cast<int>(Arcane::MaterialSurface::Mesh))
+                ? MaterialSurfaceComboIndex(static_cast<Arcane::MaterialSurface>(request.prefillSurface))
+                : kMaterialSurfaceDefaultIndex;
+
+        // `prefillParent` is the kind's ONE asset-valued field (the field's own
+        // doc comment): an instance's parent, or -- Task 13 -- a sprite's
+        // source texture. Routed to whichever the requested kind actually has,
+        // so a prefill can never land in a field the dialog will not show.
+        switch (request.kind)
+        {
+            case CreateAssetKind::MaterialInstance:
+                st.parent = request.prefillParent;
+                // The picker starts EXPANDED when there is nothing to show for
+                // it yet -- the CreateFlow mock's own state, and the useful
+                // one: a request with no prefilled parent cannot be completed
+                // without picking one.
+                st.pickerOpen = !request.prefillParent.IsValid();
+                // Created FROM a material: named after it, as Unreal names a
+                // new instance "<Parent>_Inst". The name stays editable and is
+                // validated like any typed one.
+                if (const AssetPanelEntry* parent =
+                        request.prefillParent.IsValid() ? model.Find(request.prefillParent) : nullptr)
+                    std::snprintf(st.name, sizeof(st.name), "%s_Inst", parent->name.c_str());
+                break;
+            case CreateAssetKind::Sprite:
+                st.texture = request.prefillParent;
+                // Same "start expanded when there is nothing to show yet"
+                // rule as MaterialInstance's parent picker above -- a Sprite
+                // request with no prefilled texture (the rail `+`, the
+                // toolbar/Assets-menu "Sprite...", a row's Create submenu)
+                // cannot be completed without picking one either.
+                st.pickerOpen = !request.prefillParent.IsValid();
+                break;
+            default:
+                break;
+        }
+        return st;
+    }
+
     std::optional<CreateAssetResult> DrawCreateAssetDialog(CreateDialogState& st,
                                                            const AssetPanelModel& model,
                                                            const Arcane::Project& project)

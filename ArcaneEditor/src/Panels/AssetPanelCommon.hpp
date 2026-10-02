@@ -175,16 +175,27 @@ namespace Arcane::Editor
     // disabled. Both are live as of Task 13 -- kept as a parameter rather
     // than collapsed to a bare call so a future producer (Plan 3's graph
     // pin-drag) can still gate itself the same way without a third copy
-    // of this list. No per-row prefill flows through here: a row's own
-    // "Create -> Sprite..." does not pre-pick THIS row's texture (the
-    // dedicated "Create Sprite" quick action above it already covers
-    // that exact case, mint-or-reuse and open included) -- the generic
-    // submenu opens the SAME dialog the toolbar's `+ Create` does, empty
-    // texture field and all.
-    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled);
+    // of this list.
+    //
+    // `instanceParent` is the one prefill that flows through here (T3-D4,
+    // Unreal parity): "Material Instance..." raised FROM a material -- a
+    // material row's own Create submenu, or the toolbar's `+ Create` while
+    // a material is the selection -- names that material as the parent
+    // (`createPrefillParent`). Nil from anywhere else (InstanceParentFor),
+    // and then the dialog opens with no parent, as before. Nothing else
+    // prefills: a texture row's "Create -> Sprite..." still opens with an
+    // empty texture field (the row's dedicated "Create Sprite" quick action
+    // covers that case, mint-or-reuse and open included).
+    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled,
+                               const Arcane::Guid& instanceParent = {});
     // `anchor` = the "+ Create" button (LastItemAnchor right after it): the
     // menu opens under it (node-page phase s4.4).
-    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor);
+    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor,
+                        const Arcane::Guid& instanceParent = {});
+    // The material a "Material Instance..." raised from `e` derives from:
+    // `e` itself when it is a material (a base or an instance -- an
+    // instance's own instance is a valid chain), nil otherwise or for null.
+    [[nodiscard]] Arcane::Guid InstanceParentFor(const AssetPanelEntry* e);
 
     // Panel-split spec s7.2 (Task 3): today's Reveal sequence (the
     // Unreferenced card's own click handler, pre-split), extracted to a

@@ -1,8 +1,8 @@
 // Asset-manager arc (Plan 1 Task 12): ValidateCreateName -- the PURE half of
-// the unified create dialog. This is the ONLY thing this file tests: the
-// dialog's other half is ImGui, and the test exe compiles no ImGui TU (see
-// CreateAssetDialog.hpp's own header comment on the split, and premake5.lua's
-// ArcaneTests file list, which source-compiles only the pure editor units).
+// the unified create dialog. The dialog's draw half is ImGui and is not
+// driven here. Since T3-D4 the dialog's unit is compiled into the test exe
+// (premake5.lua's ArcaneTests list) for one more pure function,
+// MakeCreateDialogState, pinned at the bottom of this file.
 //
 // Fixture shape follows AssetPanelModelTest.cpp / AssetBrowserTest.cpp: a REAL
 // temp directory with REAL files, so the uniqueness rule is exercised against
@@ -10,12 +10,18 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Panels/AssetPanelModel.hpp"
 #include "Panels/CreateAssetDialog.hpp"
 #include "Project/ClassTemplates.hpp"
 
+#include <Arcane/Project/AssetRegistry.hpp>
+
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
+#include <vector>
 
 using namespace Arcane::Editor;
 namespace fs = std::filesystem;
@@ -283,4 +289,73 @@ TEST_CASE("Input Actions creation uses a native asset path and rejects name coll
     CHECK_FALSE(ValidateCreateName("Player", dir, ".arcinput").ok);
     std::error_code error;
     fs::remove_all(dir, error);
+}
+
+// T3-D4: MakeCreateDialogState -- the request -> the dialog's starting state,
+// the whole of what EditorApp::BeginCreateAsset opens with (it adds only the
+// C++ Class default folder). A Material Instance created FROM a material
+// starts with that parent picked and Unreal's "<Parent>_Inst" name.
+TEST_CASE("MakeCreateDialogState: an instance request from a material picks the parent and names it <parent>_Inst",
+          "[editor][create]")
+{
+    const fs::path dir = FreshDir("make_state");
+    std::ofstream(dir / "logo_showcase.arcmat", std::ios::binary)
+        << R"({"id":"eeee0000-0000-4000-8000-000000000011","type":"material","kind":"sprite"})";
+    std::ofstream(dir / "hero.png", std::ios::binary) << "not a real png";
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    AssetPanelProviders providers;
+    providers.refsFor = [](const Arcane::Guid&) -> std::optional<std::vector<Arcane::AssetRef>>
+    { return std::vector<Arcane::AssetRef>{}; };
+    providers.cookStateFor = [](const Arcane::Guid&) { return CookState::Cooked; };
+    providers.surfaceFor = [](const Arcane::Guid&) -> std::optional<Arcane::MaterialSurface> { return std::nullopt; };
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    const Arcane::Guid parent = *Arcane::Guid::FromString("eeee0000-0000-4000-8000-000000000011");
+    REQUIRE(model.Find(parent) != nullptr);
+    Arcane::Guid texture;
+    for (const auto& [guid, entry] : model.Entries())
+        if (entry.kind == AssetKind::Texture)
+            texture = guid;
+    REQUIRE(texture.IsValid());
+
+    SECTION("from a material")
+    {
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, parent }, model);
+        CHECK(st.open);
+        CHECK(st.parent == parent);
+        CHECK_FALSE(st.pickerOpen);
+        CHECK(std::string(st.name) == "logo_showcase_Inst");
+        CHECK(st.request.prefillParent == parent);
+    }
+    SECTION("from empty space: no parent, the picker open, no name")
+    {
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, {} }, model);
+        CHECK_FALSE(st.parent.IsValid());
+        CHECK(st.pickerOpen);
+        CHECK(st.name[0] == '\0');
+    }
+    SECTION("a parent the model does not know is kept but names nothing")
+    {
+        const Arcane::Guid stale = *Arcane::Guid::FromString("eeee0000-0000-4000-8000-0000000000ff");
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, stale }, model);
+        CHECK(st.parent == stale);
+        CHECK(st.name[0] == '\0');
+    }
+    SECTION("a sprite's prefill lands in the texture field, never the parent, and names nothing")
+    {
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::Sprite, texture }, model);
+        CHECK(st.texture == texture);
+        CHECK_FALSE(st.parent.IsValid());
+        CHECK_FALSE(st.pickerOpen);
+        CHECK(st.name[0] == '\0');
+    }
+    SECTION("the surface prefill maps through the combo order; none is the default index")
+    {
+        CreateAssetRequest mesh{ CreateAssetKind::Material, {} };
+        mesh.prefillSurface = static_cast<int>(Arcane::MaterialSurface::Mesh);
+        CHECK(MakeCreateDialogState(mesh, model).surface == MaterialSurfaceComboIndex(Arcane::MaterialSurface::Mesh));
+        CHECK(MakeCreateDialogState({ CreateAssetKind::Material, {} }, model).surface == kMaterialSurfaceDefaultIndex);
+    }
 }

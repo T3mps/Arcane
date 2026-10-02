@@ -923,7 +923,10 @@ namespace Arcane::Editor
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
                 ImGui::OpenPopup("##createmenu");
             const PopupAnchor createAnchor = LastItemAnchor();
-            DrawCreateMenu(actions, createAnchor);
+            // A selected material is what "Material Instance..." derives
+            // from (T3-D4); with none selected the dialog opens parentless.
+            DrawCreateMenu(actions, createAnchor,
+                           InstanceParentFor(model.selected.IsValid() ? model.Find(model.selected) : nullptr));
 
             ImGui::SameLine();
             ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x));

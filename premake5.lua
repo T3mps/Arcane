@@ -1574,6 +1574,12 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
+        -- T3-D4: the create dialog's unit, for MakeCreateDialogState (the
+        -- request -> the dialog's starting state, BeginCreateAsset's whole
+        -- seeding), which CreateAssetDialogTest.cpp pins. Its other
+        -- dependencies (AssetPanelModel, EditorWidgets, ClassTemplates) are
+        -- already compiled here.
+        "%{wks.location}/ArcaneEditor/src/Panels/CreateAssetDialog.cpp",
         -- Inspector filters Task 5: the asset source + its page (the old
         -- preview pane's content) and the texture import settings block it
         -- draws. AssetInspectorSourceTest.cpp drives DrawAssetPage through

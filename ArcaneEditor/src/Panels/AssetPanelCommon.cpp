@@ -48,7 +48,12 @@
 //   * AssetsGraphProjectionIsCurrent -- DELETED, not moved (spec s7.4).
 namespace Arcane::Editor
 {
-    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled)
+    Arcane::Guid InstanceParentFor(const AssetPanelEntry* e)
+    {
+        return e && e->kind == AssetKind::Material ? e->guid : Arcane::Guid{};
+    }
+
+    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled, const Arcane::Guid& instanceParent)
     {
         ImGui::BeginDisabled(!enabled);
         const auto entry = [&](const char* label, CreateAssetKind kind)
@@ -57,7 +62,13 @@ namespace Arcane::Editor
                 actions.requestCreateKind = static_cast<int>(kind);
         };
         entry(ICON_LC_PALETTE " Material...",         CreateAssetKind::Material);
-        entry(ICON_LC_LAYERS  " Material Instance...", CreateAssetKind::MaterialInstance);
+        // The same request as every entry here, plus the parent when the
+        // menu was raised from a material (see the header).
+        if (ImGui::MenuItem(ICON_LC_LAYERS " Material Instance..."))
+        {
+            actions.requestCreateKind   = static_cast<int>(CreateAssetKind::MaterialInstance);
+            actions.createPrefillParent = instanceParent;
+        }
         ImGui::Separator();
         // F4 plan 1 Task 11 (spec s8): Mesh is a SUBMENU of the five
         // primitives, each entry the same request with its MeshSource preset
@@ -87,11 +98,12 @@ namespace Arcane::Editor
         ImGui::EndDisabled();
     }
 
-    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor)
+    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor,
+                        const Arcane::Guid& instanceParent)
     {
         if (!BeginPopupBelow("##createmenu", anchor))
             return;
-        DrawCreateMenuEntries(actions, /*enabled=*/true);
+        DrawCreateMenuEntries(actions, /*enabled=*/true, instanceParent);
         ImGui::EndPopup();
     }
 
@@ -332,8 +344,9 @@ namespace Arcane::Editor
         if (ImGui::BeginMenu("Create"))
         {
             // Live since Task 13 -- see DrawCreateMenuEntries's own
-            // comment on the `enabled` parameter.
-            DrawCreateMenuEntries(actions, /*enabled=*/true);
+            // comment on the `enabled` parameter. Raised from a material,
+            // "Material Instance..." names it as the parent (T3-D4).
+            DrawCreateMenuEntries(actions, /*enabled=*/true, InstanceParentFor(&e));
             ImGui::EndMenu();
         }
         ImGui::Separator();

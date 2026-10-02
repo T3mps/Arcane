@@ -2696,6 +2696,14 @@ namespace Arcane::Editor
             // Create -> Mesh -> <primitive> (F4 plan 1 Task 11): the preset
             // rides the SAME request; -1 when the entry carried none.
             request.prefillMeshSource = menuReq.requestMeshSource;
+            // The Assets menu acts on the asset selection (Show in Explorer
+            // and Copy Path above do too), so its "Material Instance..."
+            // derives from a selected material exactly as the Asset
+            // Browser's `+ Create` does (T3-D4).
+            if (request.kind == Arcane::Editor::CreateAssetKind::MaterialInstance &&
+                m_assetModel.selected.IsValid())
+                request.prefillParent =
+                    Arcane::Editor::InstanceParentFor(m_assetModel.Find(m_assetModel.selected));
             BeginCreateAsset(request);
         }
         if (menuReq.openMaterial)
@@ -2984,10 +2992,11 @@ namespace Arcane::Editor
             return;
         }
 
-        // Fresh state per request: a cancelled dialog must not leave a
-        // half-typed name or a stale parent for the next one to inherit.
-        m_createDialog = Arcane::Editor::CreateDialogState{};
-        m_createDialog.request = request;
+        // Fresh state per request (a cancelled dialog must not leave a
+        // half-typed name or a stale parent for the next one to inherit),
+        // seeded from the request by the dialog's own unit, which is where
+        // the prefill rules live and are tested (T3-D4).
+        m_createDialog = Arcane::Editor::MakeCreateDialogState(request, m_assetModel);
         // A C++ Class's Location combo defaults to the game module's OWN
         // directory (CppClassDefaultFolder(manifest.sourceDir)), not Source/
         // itself -- the source:// mount stays Source/ (plan ruling S2); only
@@ -2995,45 +3004,6 @@ namespace Arcane::Editor
         if (request.kind == Arcane::Editor::CreateAssetKind::CppClass)
             m_createDialog.request.cppDefaultFolder =
                 Arcane::Editor::CppClassDefaultFolder(project->Manifest().sourceDir);
-        m_createDialog.open    = true;
-
-        // The Material surface combo's starting index. `prefillSurface` is a
-        // MaterialSurface VALUE (-1 = none), and the combo's own order is a
-        // different one -- converted through the single mapping in
-        // CreateAssetDialog.hpp rather than cast.
-        m_createDialog.surface =
-            (request.prefillSurface >= 0 &&
-             request.prefillSurface <= static_cast<int>(Arcane::MaterialSurface::Mesh))
-                ? Arcane::Editor::MaterialSurfaceComboIndex(
-                      static_cast<Arcane::MaterialSurface>(request.prefillSurface))
-                : Arcane::Editor::kMaterialSurfaceDefaultIndex;
-
-        // `prefillParent` is the kind's ONE asset-valued field (the field's own
-        // doc comment): an instance's parent, or -- Task 13 -- a sprite's
-        // source texture. Routed to whichever the requested kind actually has,
-        // so a prefill can never land in a field the dialog will not show.
-        switch (request.kind)
-        {
-            case Arcane::Editor::CreateAssetKind::MaterialInstance:
-                m_createDialog.parent = request.prefillParent;
-                // The picker starts EXPANDED when there is nothing to show for
-                // it yet -- the CreateFlow mock's own state, and the useful
-                // one: a request with no prefilled parent cannot be completed
-                // without picking one.
-                m_createDialog.pickerOpen = !request.prefillParent.IsValid();
-                break;
-            case Arcane::Editor::CreateAssetKind::Sprite:
-                m_createDialog.texture = request.prefillParent;
-                // Same "start expanded when there is nothing to show yet"
-                // rule as MaterialInstance's parent picker above -- a Sprite
-                // request with no prefilled texture (the rail `+`, the
-                // toolbar/Assets-menu "Sprite...", a row's Create submenu)
-                // cannot be completed without picking one either.
-                m_createDialog.pickerOpen = !request.prefillParent.IsValid();
-                break;
-            default:
-                break;
-        }
     }
 
     // THE ONE DISPATCHER. A completed dialog result -> the matching mint.

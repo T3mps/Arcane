@@ -440,6 +440,20 @@ namespace Arcane::Editor
         Arcane::Guid openExisting;
     };
 
+    // The dialog's starting state for one request -- what
+    // EditorApp::BeginCreateAsset opens (it adds only the C++ Class default
+    // folder, which needs the project). `open` is set; every other field
+    // starts fresh, so a cancelled dialog leaves nothing behind for the next.
+    //   * `prefillSurface` (a MaterialSurface VALUE, -1 = none) becomes the
+    //     surface combo's index through MaterialSurfaceComboIndex.
+    //   * `prefillParent` lands in the one asset-valued field the kind has:
+    //     an instance's parent, a sprite's texture. Its picker starts
+    //     expanded only when there is nothing prefilled to show.
+    //   * A MaterialInstance whose parent the model knows is named
+    //     "<parent>_Inst" (Unreal's own default for a new instance, T3-D4).
+    [[nodiscard]] CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
+                                                          const AssetPanelModel& model);
+
     // Draw the modal for `st.request.kind`. Returns a completed result the
     // frame Create (or Sprite's "Open existing") was clicked, nullopt
     // otherwise (including every frame the dialog is merely up). Cancel /
