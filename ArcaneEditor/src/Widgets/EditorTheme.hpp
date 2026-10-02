@@ -185,7 +185,7 @@ namespace Arcane::Editor
         c[ImGuiCol_FrameBgActive]          = Theme::kWellActive;
 
         c[ImGuiCol_TitleBg]                = Theme::kChromeDeep;
-        c[ImGuiCol_TitleBgActive]          = Theme::kChrome;                // focused: one step up, still chrome
+        c[ImGuiCol_TitleBgActive]          = Theme::kChromeDeep;            // focus never re-tones the well: the overline alone marks it (user, 2026-10-02)
         c[ImGuiCol_TitleBgCollapsed]       = Theme::WithAlpha(Theme::kChromeDeep, 0.75f);
         c[ImGuiCol_MenuBarBg]              = Theme::kChrome;
 
@@ -234,8 +234,8 @@ namespace Arcane::Editor
         c[ImGuiCol_Tab]                    = Theme::kChrome;
         c[ImGuiCol_TabSelected]            = Theme::kPanel;
         c[ImGuiCol_TabSelectedOverline]    = Theme::kAccent;                // selected == accent (s6.1)
-        c[ImGuiCol_TabDimmed]              = Theme::kChromeDeep;            // unfocused tab bar sinks
-        c[ImGuiCol_TabDimmedSelected]      = Theme::kChrome;
+        c[ImGuiCol_TabDimmed]              = Theme::kChrome;                // == Tab: focus never re-tones a tab
+        c[ImGuiCol_TabDimmedSelected]      = Theme::kPanel;                 // == TabSelected: only the overline dims
         // Every dock node marks its active tab; an unfocused one at 45%
         // (composite #374758, 1.85:1 on its #191919 tab: quieter than the
         // focused overline, still brighter than the pre-s6.1 focused one).

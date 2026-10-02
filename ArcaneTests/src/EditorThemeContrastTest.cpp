@@ -35,6 +35,17 @@ TEST_CASE("EditorTheme: the selected-tab overline is the accent, 2 px, and 45% o
     CHECK(SameColor(s.Colors[ImGuiCol_Header], Theme::kSelection));
 }
 
+TEST_CASE("EditorTheme: focus re-tones neither the tab well nor a tab -- only the overline marks it", "[editor][theme]")
+{
+    // User, 2026-10-02: "I just want the accent to show the selection". A
+    // focused dock node's tab-bar well and tabs keep the unfocused tones; the
+    // full-vs-45% accent overline is the one focus cue.
+    const ImGuiStyle s = ThemedStyle();
+    CHECK(SameColor(s.Colors[ImGuiCol_TitleBgActive], s.Colors[ImGuiCol_TitleBg]));
+    CHECK(SameColor(s.Colors[ImGuiCol_TabDimmed], s.Colors[ImGuiCol_Tab]));
+    CHECK(SameColor(s.Colors[ImGuiCol_TabDimmedSelected], s.Colors[ImGuiCol_TabSelected]));
+}
+
 TEST_CASE("EditorTheme: kToggleOn* resolve to the accent trio", "[editor][theme]")
 {
     CHECK(SameColor(Theme::kToggleOn,        Theme::kAccent));
