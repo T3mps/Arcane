@@ -26,6 +26,10 @@ namespace Arcane
                 return true;
 
             // A sleeping body's contacts need not appear in the active solver.
+            // A resting body sits up to the linear slop INSIDE its support, and
+            // a cast that starts overlapped answers t=0 with a zero normal
+            // (Box2D-v3 parity), so the cast starts one slop higher and travels
+            // one slop further: the reach below the feet stays 0.05 m.
             Phys::ShapeCastOpts opts;
             opts.movers = true;
             opts.exclude = handle;
@@ -34,9 +38,10 @@ namespace Arcane
                 const auto fixture = world.GetBodyFixture(handle, i);
                 if (!world.IsValid(fixture))
                     continue;
+                const Phys::Vec2 origin = world.GetFixtureWorldPos(fixture);
                 const auto hit = world.ShapeCast(world.GetFixtureShape(fixture),
-                                                 world.GetFixtureWorldPos(fixture),
-                                                 Phys::Vec2(0, Phys::Real(-0.05)), opts,
+                                                 Phys::Vec2(origin.x, origin.y + Phys::kLinearSlop),
+                                                 Phys::Vec2(0, -(Phys::Real(0.05) + Phys::kLinearSlop)), opts,
                                                  world.GetFixtureWorldAngle(fixture));
                 if (hit && hit->normal.y > Phys::Real(0.5))
                     return true;

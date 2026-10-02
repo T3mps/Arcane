@@ -88,9 +88,8 @@ TEST_CASE("Physics2D::SetVelocity drives the live body; a resting body reads as 
 {
     World w;
     // Landed and still AWAKE: support comes from the last step's contacts. (A
-    // body that has gone to sleep has no active contacts, and HasFloorSupport's
-    // shape-cast fallback starts inside the solver's slop overlap, so it reads
-    // unsupported -- pre-existing behaviour, moved verbatim; see the IN-9 report.)
+    // SLEEPING body has no active contacts and reads support through the
+    // shape-cast fallback -- the asleep cases below.)
     w.Step(10);
     REQUIRE(w.Physics() != nullptr);
     const auto it = w.Physics()->entityToBody.find(w.box);
@@ -124,4 +123,71 @@ TEST_CASE("Physics2D ignores non-finite input and non-dynamic bodies", "[physics
     const Arcane::BodyMotion2D gm = w.Physics()->Motion(w.ground, sb);
     CHECK_FALSE(gm.bodyReady);
     CHECK_FALSE(gm.supported);
+}
+
+// ---- floor support for a SLEEPING body (IN-12 ruling, from IN-9's concern) ----
+// A sleeping body has no active contacts, so Motion() falls back to a short
+// downward shape cast. The cast must not start inside the solver's resting slop
+// overlap (an initial overlap answers t=0 with a ZERO normal, Box2D-v3 parity).
+namespace
+{
+    bool IsAsleep(World& w, Astra::Entity entity)
+    {
+        const Arcane::Physics2D* physics = w.Physics();
+        if (!physics || !physics->world) return false;
+        const auto it = physics->entityToBody.find(entity);
+        return it != physics->entityToBody.end() && !physics->world->IsAwake(it->second);
+    }
+
+    // Steps until `entity`'s body sleeps (false if still awake after 10 s), then
+    // a few more steps: the step that puts a body to sleep still lists its
+    // contacts, and the defect only shows once the active solver has none.
+    bool StepUntilAsleep(World& w, Astra::Entity entity)
+    {
+        for (int i = 0; i < 600 && !IsAsleep(w, entity); ++i)
+            w.Step(1);
+        if (!IsAsleep(w, entity))
+            return false;
+        w.Step(5);
+        return IsAsleep(w, entity);
+    }
+}
+
+TEST_CASE("Physics2D::Motion: a box asleep on static ground reads as supported", "[physics][physics2d]")
+{
+    World w;
+    REQUIRE(StepUntilAsleep(w, w.box));
+    const Arcane::BodyMotion2D m = w.Physics()->Motion(w.box, w.Body(w.box));
+    CHECK(m.bodyReady);
+    CHECK(m.supported);
+}
+
+TEST_CASE("Physics2D::Motion: a box 0.2 m above the ground reads as unsupported", "[physics][physics2d]")
+{
+    World w;
+    w.rt.Registry().GetComponent<Arcane::Transform>(w.box)->position.y = 0.7f; // feet at y = 0.2
+    w.Step(1);
+    const Arcane::BodyMotion2D m = w.Physics()->Motion(w.box, w.Body(w.box));
+    REQUIRE(m.bodyReady);
+    REQUIRE(m.velocityY <= 0.0f);                                              // the support check runs
+    CHECK_FALSE(m.supported);
+}
+
+TEST_CASE("Physics2D::Motion: a box asleep on a sleeping dynamic crate reads as supported", "[physics][physics2d]")
+{
+    World w;
+    auto& reg = w.rt.Registry();
+    const Astra::Entity crate = reg.CreateEntity();
+    reg.AddComponent<Arcane::Transform>(crate, Arcane::Transform{ .position = {0.0f, 0.5f, 0.0f} });
+    Arcane::RigidBody2D cb; cb.type = Arcane::Phys::BodyType::Dynamic;
+    cb.fixedRotation = true;
+    reg.AddComponent<Arcane::RigidBody2D>(crate, cb);
+    reg.AddComponent<Arcane::Collider2D>(crate, BoxCollider(0.5f, 0.5f));
+    reg.GetComponent<Arcane::Transform>(w.box)->position.y = 1.5f;             // stacked on the crate
+
+    REQUIRE(StepUntilAsleep(w, w.box));
+    REQUIRE(IsAsleep(w, crate));
+    const Arcane::BodyMotion2D m = w.Physics()->Motion(w.box, w.Body(w.box));
+    CHECK(m.bodyReady);
+    CHECK(m.supported);
 }
