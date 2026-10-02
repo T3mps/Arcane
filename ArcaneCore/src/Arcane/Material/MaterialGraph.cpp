@@ -159,8 +159,8 @@ namespace Arcane
               Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math,
               "The larger of A and B, per component (max)." },
             // Swizzle's OUTPUT width is per-node data (the mask length) -- the
-            // dynamic 0 here resolves through widthOf, which the emission case
-            // pins to the mask (the Param pattern).
+            // dynamic 0 here resolves through ResolveGraphNodeWidths, which
+            // pins it to the mask (the Param pattern).
             { GraphNodeType::Swizzle,       "swizzle",        "Swizzle",
               Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Vector,
               "X's lanes reordered or repeated by the Mask (xy, wzyx, ...); a lane the input lacks reads 0." },
@@ -399,6 +399,16 @@ namespace Arcane
         int SwizzleLane(char c)
         {
             return c == 'x' ? 0 : c == 'y' ? 1 : c == 'z' ? 2 : c == 'w' ? 3 : -1;
+        }
+
+        // 1/2/4 lanes from xyzw (no float3 in the value set). Codegen's mask
+        // check and ResolveGraphNodeWidths's Swizzle width both ask this.
+        bool ValidSwizzleMask(const std::string& m)
+        {
+            bool ok = m.size() == 1 || m.size() == 2 || m.size() == 4;
+            for (char c : m)
+                ok = ok && SwizzleLane(c) >= 0;
+            return ok;
         }
 
         struct DeclInfo
@@ -641,10 +651,7 @@ namespace Arcane
             if (n->type != GraphNodeType::Swizzle)
                 continue;
             const std::string& m = n->swizzleMask;
-            bool ok = m.size() == 1 || m.size() == 2 || m.size() == 4;
-            for (char c : m)
-                ok = ok && SwizzleLane(c) >= 0;
-            if (!ok)
+            if (!ValidSwizzleMask(m))
                 fail(n->id, "Swizzle mask '" + m + "' must be 1, 2, or 4 chars from xyzw");
         }
 
@@ -660,9 +667,17 @@ namespace Arcane
         auto pinConsumed = [&](std::uint32_t node, std::uint32_t pin)
         { return consumed.count((std::uint64_t(node) << 32) | pin) != 0; };
 
-        // --- DFS from Output: resolve widths, emit SSA statements post-order
+        // --- DFS from Output: emit SSA statements post-order. Dynamic widths
+        // come from ResolveGraphNodeWidths -- the ONE resolution, which the
+        // editor's pin paint and type text read too. Codegen emits an
+        // unresolved (0) width as 1: nothing wired pins it, so it is a scalar.
+        const std::unordered_map<std::uint32_t, GraphNodeWidths> widths = ResolveGraphNodeWidths(graph);
+        auto widthsOf = [&widths](const GraphNode* n) -> GraphNodeWidths
+        {
+            const auto it = widths.find(n->id);
+            return it != widths.end() ? it->second : GraphNodeWidths{};
+        };
         std::unordered_map<std::uint32_t, int> state;    // 0 fresh / 1 on-stack / 2 done
-        std::unordered_map<std::uint32_t, int> widthOf;  // resolved primary width
         std::vector<std::pair<std::string, std::uint32_t>> body;   // statement, nodeId
         // Custom-node functions, emitted above shade() (line-mapped to their
         // node so compile errors INSIDE a body badge the Custom node).
@@ -686,7 +701,7 @@ namespace Arcane
         auto pinExpr = [&](const GraphNode* n, std::uint32_t pin, int& outWidth) -> std::string
         {
             const GraphPinDesc desc = GraphNodeOutputPin(*n, pin);
-            outWidth = desc.width == 0 ? widthOf[n->id] : desc.width;
+            outWidth = desc.width == 0 ? std::max(1, widthsOf(n).outputs) : desc.width;
             if (GraphNodeOutputCount(*n) == 1)
                 return "_n" + std::to_string(n->id);
             return "_n" + std::to_string(n->id) + "_" + desc.name;
@@ -735,22 +750,14 @@ namespace Arcane
                 in[pin].expr = pinExpr(src, it->second->fromPin, in[pin].width);
             }
 
-            // Resolved width: SG rule -- minimum connected non-scalar dynamic
-            // input, else 1 (scalars splat, never pinning the width).
+            // Resolved width of the dynamic inputs (ResolveGraphNodeWidths:
+            // SG rule -- minimum connected non-scalar dynamic input, else 1;
+            // scalars splat, never pinning the width). 0 on a node with no
+            // dynamic input, which never reads it.
             bool dynamic = false;
             for (std::uint32_t pin = 0; pin < inputCount; ++pin)
                 dynamic = dynamic || GraphNodeInputPin(*n, pin).width == 0;
-            int w = 0;
-            if (dynamic)
-            {
-                for (std::uint32_t pin = 0; pin < inputCount; ++pin)
-                    if (GraphNodeInputPin(*n, pin).width == 0 && in[pin].connected &&
-                        in[pin].width > 1)
-                        w = w == 0 ? in[pin].width : std::min(w, in[pin].width);
-                if (w == 0)
-                    w = 1;
-            }
-            widthOf[n->id] = w;
+            const int w = dynamic ? std::max(1, widthsOf(n).inputs) : 0;
 
             // Adapted expression for input `pin` at target width `t` (0 = the
             // node's resolved dynamic width). Precedence is WIRE > user
@@ -826,8 +833,7 @@ namespace Arcane
                     break;
                 case GraphNodeType::Param:
                 {
-                    const int pw = static_cast<int>(ComponentCount(n->paramType));
-                    widthOf[n->id] = pw;
+                    const int pw = static_cast<int>(ComponentCount(n->paramType));   // == its resolved output width
                     local(pw, n->paramName);
                     break;
                 }
@@ -1010,8 +1016,7 @@ namespace Arcane
                     const int sw = in[0].connected ? in[0].width : 1;
                     const std::string src = in[0].connected ? in[0].expr : neutralText(0);
                     const std::string& mask = n->swizzleMask;
-                    const int mlen = static_cast<int>(mask.size());
-                    widthOf[n->id] = mlen;   // the output pin's dynamic width
+                    const int mlen = static_cast<int>(mask.size());   // == its resolved output width
                     bool allPresent = true;
                     for (char c : mask)
                         allPresent = allPresent && SwizzleLane(c) < sw;
@@ -1192,7 +1197,6 @@ namespace Arcane
         if (vertexOut)
         {
             state.clear();
-            widthOf.clear();
             vertexWalk = true;
             if (!visit(vertexOut) || !res.errors.empty())
             {
@@ -1339,11 +1343,82 @@ namespace Arcane
     int GraphPinLiteralLanes(int declaredWidth) noexcept
     {
         // Fixed 2/4 keep their lanes; everything else -- INCLUDING dynamic
-        // (width-0) pins -- is a scalar. Width resolution (:661-664) reads
+        // (width-0) pins -- is a scalar. Width resolution (ResolveGraphNodeWidths) reads
         // only CONNECTED inputs, so a literal never pins a node's width
         // regardless of lane count; the scalar choice instead splats it to
         // whatever width the node resolves to.
         return declaredWidth == 2 ? 2 : declaredWidth == 4 ? 4 : 1;
+    }
+
+    std::unordered_map<std::uint32_t, GraphNodeWidths> ResolveGraphNodeWidths(const MaterialGraph& graph)
+    {
+        // Codegen's indexing, minus its refusals: the first of a duplicate id
+        // wins, a link to a missing node or pin is skipped, and the last link
+        // into an input wins (the canvas's silent-replace).
+        std::unordered_map<std::uint32_t, const GraphNode*> byId;
+        byId.reserve(graph.nodes.size());
+        for (const GraphNode& n : graph.nodes)
+            if (n.id != 0)
+                byId.emplace(n.id, &n);
+        std::map<std::pair<std::uint32_t, std::uint32_t>, const GraphLink*> inputLink;
+        for (const GraphLink& l : graph.links)
+        {
+            const auto fromIt = byId.find(l.fromNode);
+            const auto toIt = byId.find(l.toNode);
+            if (fromIt == byId.end() || toIt == byId.end() ||
+                l.fromPin >= GraphNodeOutputCount(*fromIt->second) ||
+                l.toPin >= GraphNodeInputCount(*toIt->second))
+                continue;
+            inputLink[{ l.toNode, l.toPin }] = &l;
+        }
+
+        std::unordered_map<std::uint32_t, GraphNodeWidths> out;
+        out.reserve(byId.size());
+        std::unordered_set<std::uint32_t> onStack;
+        // Memoized post-order walk up the wires: a node's dynamic inputs need
+        // the widths their sources CARRY, which for a dynamic source is that
+        // source's own resolution.
+        std::function<GraphNodeWidths(const GraphNode&)> resolve = [&](const GraphNode& n) -> GraphNodeWidths
+        {
+            if (const auto done = out.find(n.id); done != out.end())
+                return done->second;
+            onStack.insert(n.id);
+            GraphNodeWidths w;
+            const std::uint32_t inputCount = GraphNodeInputCount(n);
+            bool dynamicIn = false, wired = false;
+            int minWide = 0;
+            for (std::uint32_t pin = 0; pin < inputCount; ++pin)
+            {
+                if (GraphNodeInputPin(n, pin).width != 0)
+                    continue;
+                dynamicIn = true;
+                const auto it = inputLink.find({ n.id, pin });
+                if (it == inputLink.end())
+                    continue;
+                const GraphNode& src = *byId.at(it->second->fromNode);
+                if (onStack.count(src.id))
+                    continue;   // the edge closing a cycle: codegen refuses the graph
+                wired = true;
+                const int carried = resolve(src).ForPin(GraphNodeOutputPin(src, it->second->fromPin).width,
+                                                        /*input*/ false);
+                if (carried > 1)
+                    minWide = minWide == 0 ? carried : std::min(minWide, carried);
+            }
+            if (dynamicIn)
+                w.inputs = minWide != 0 ? minWide : (wired ? 1 : 0);
+            if (n.type == GraphNodeType::Param)
+                w.outputs = static_cast<int>(ComponentCount(n.paramType));
+            else if (n.type == GraphNodeType::Swizzle)
+                w.outputs = ValidSwizzleMask(n.swizzleMask) ? static_cast<int>(n.swizzleMask.size()) : 0;
+            else
+                w.outputs = w.inputs;
+            onStack.erase(n.id);
+            out.emplace(n.id, w);
+            return w;
+        };
+        for (const auto& [id, n] : byId)
+            (void)resolve(*n);
+        return out;
     }
 
     bool GraphPinAcceptsLiteral(const GraphNode& n, std::uint32_t pin) noexcept

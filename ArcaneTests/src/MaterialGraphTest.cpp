@@ -2362,3 +2362,72 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
 
     sc.Shutdown();
 }
+
+TEST_CASE("ResolveGraphNodeWidths: the one width rule codegen and the canvas share", "[material][graph]")
+{
+    // Output 1 <- Mul 4 (a <- Float4 2); Mul 5 (a <- Float 3, b <- Float2 6);
+    // Add 7 unwired; Mul 8 (a <- Float 3 only); Param 9 (float2); Swizzle 10
+    // ("x", a <- Float4 2); Length 11 (x <- Mul 4: dynamic in, fixed out).
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    g.nodes.push_back(Node(2, GraphNodeType::ConstFloat4));
+    g.nodes.push_back(Node(3, GraphNodeType::ConstFloat));
+    g.nodes.push_back(Node(4, GraphNodeType::Mul));
+    g.nodes.push_back(Node(5, GraphNodeType::Mul));
+    g.nodes.push_back(Node(6, GraphNodeType::ConstFloat2));
+    g.nodes.push_back(Node(7, GraphNodeType::Add));
+    g.nodes.push_back(Node(8, GraphNodeType::Mul));
+    g.nodes.push_back(ParamNode(9, "Offset", MatParamType::Float2, MatParamValue::MakeFloat2(0.0f, 0.0f)));
+    GraphNode swz = Node(10, GraphNodeType::Swizzle);
+    swz.swizzleMask = "x";
+    g.nodes.push_back(swz);
+    g.nodes.push_back(Node(11, GraphNodeType::Length));
+    g.links = { Link(2, 0, 4, 0), Link(4, 0, 1, 0),
+                Link(3, 0, 5, 0), Link(6, 0, 5, 1),
+                Link(3, 0, 8, 0),
+                Link(2, 0, 10, 0),
+                Link(4, 0, 11, 0) };
+    g.nextId = 12;
+
+    const auto widths = ResolveGraphNodeWidths(g);
+    const auto at = [&](std::uint32_t id) { INFO("node " << id); REQUIRE(widths.count(id) == 1); return widths.at(id); };
+    CHECK(at(4).inputs == 4);    // a Mul fed by a float4
+    CHECK(at(4).outputs == 4);
+    CHECK(at(5).inputs == 2);    // float * float2: scalars never pin a width
+    CHECK(at(5).outputs == 2);
+    CHECK(at(7).inputs == 0);    // an unwired Add is unresolved
+    CHECK(at(7).outputs == 0);
+    CHECK(at(8).inputs == 1);    // only a scalar wired: resolved to float
+    CHECK(at(9).outputs == 2);   // Param: its type's lanes
+    CHECK(at(10).inputs == 4);   // Swizzle reads its source at native width...
+    CHECK(at(10).outputs == 1);  // ...and emits its mask's length
+    CHECK(at(11).inputs == 4);   // dynamic in from a resolved dynamic source
+    CHECK(at(2).inputs == 0);    // no dynamic pins at all
+    CHECK(at(2).outputs == 0);
+
+    // ForPin: fixed pins keep their declared width; dynamic pins take the resolution.
+    CHECK(at(4).ForPin(0, true) == 4);
+    CHECK(at(10).ForPin(0, false) == 1);
+    CHECK(at(11).ForPin(1, false) == 1);
+    CHECK(at(7).ForPin(0, true) == 0);
+
+    // Codegen agrees with the resolution it reads.
+    const GraphCodegenResult r = GenerateGraphSnippet(g);
+    REQUIRE(r.Ok());
+    CHECK(r.snippet.find("float4 _n4 = ") != std::string::npos);
+}
+
+TEST_CASE("ResolveGraphNodeWidths: a cycle and a dangling link resolve nothing through them", "[material][graph]")
+{
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Add));
+    g.nodes.push_back(Node(2, GraphNodeType::Add));
+    g.nodes.push_back(Node(3, GraphNodeType::ConstFloat2));
+    g.links = { Link(1, 0, 2, 0), Link(2, 0, 1, 0),   // 1 <-> 2
+                Link(3, 0, 2, 1),                     // 2.b <- float2
+                Link(99, 0, 1, 1) };                  // a missing source
+    const auto widths = ResolveGraphNodeWidths(g);
+    REQUIRE(widths.size() == 3);
+    CHECK(widths.at(2).inputs == 2);   // the float2 still pins node 2
+    CHECK(widths.at(1).inputs >= 0);   // terminates; the cycle is codegen's error to report
+}
