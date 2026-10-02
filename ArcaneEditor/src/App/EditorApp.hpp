@@ -48,7 +48,9 @@
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
 #include "Panels/AssetInspectorSource.hpp"   // m_assetSource
 #include "Panels/SceneInspectorSource.hpp"   // m_sceneSource
+#include "Project/AssetFileOps.hpp"      // AssetFileOpHost/AssetFileOpExecutor (m_assetOpHost, m_assetFileOps)
 #include "Project/CookQueue.hpp"
+#include "Project/OsShell.hpp"           // OsShell::RecycleResult (AssetOpHost::Recycle)
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
 #include "Project/ModuleBuild.hpp"
 #include "Project/ServerLaunch.hpp"   // ServerProcess is a BY-VALUE member (m_serverProcess)
@@ -2240,6 +2242,43 @@ namespace Arcane::Editor
         // lock needed). Errors display one at a time, FIFO, instead of racing
         // for the popup stack.
         Arcane::Editor::ModalErrorQueue m_modalErrors;
+
+        // ---- Asset file operations (T5 s7.3, s7.12) -------------------------
+        // Declared AFTER m_undo so the executor (which holds *m_undo) destructs
+        // BEFORE the stack it pushes to; Shutdown's RetargetUndoCache(nullptr)
+        // resets it earlier still.
+        class AssetOpHost final : public Arcane::Editor::AssetFileOpHost   // T5 s7.3: the executor's only door into the app
+        {
+        public:
+            explicit AssetOpHost(EditorApp& a) : m_app(a) {}
+            Arcane::Editor::AssetOpGates Gates() const override;   // T5-A9: AssetFileOpHost's first pure virtual
+            Arcane::RebindResult Rebind(const Arcane::Guid&, const std::filesystem::path&) override;
+            bool Unregister(const Arcane::Guid&) override;
+            std::optional<Arcane::Guid> Register(const std::filesystem::path&) override;
+            Arcane::Editor::OsShell::RecycleResult Recycle(std::span<const std::filesystem::path>) override;
+            bool CloseDocumentFor(const Arcane::Guid&, bool discardDirty) override;
+            void NoteMoved(const Arcane::Guid&, const std::filesystem::path&, const std::filesystem::path&) override;
+            void AssetsChanged(std::span<const Arcane::Guid>, std::span<const Arcane::Guid>) override;
+            void Invalidate(const Arcane::Guid&, Arcane::Editor::AssetKind) override;
+            void EvictPaths(std::span<const std::filesystem::path>) override;
+            void Activity(Arcane::Editor::AssetActivityEntry) override;
+            void ReportError(std::string title, std::string message) override;
+        private:
+            EditorApp& m_app;
+        };
+        struct AssetOpFactsStore   // AssetOpFacts' spans point in here; the delete modal keeps its own
+        { std::vector<std::pair<Arcane::Guid, std::string>> registry; std::vector<Arcane::Guid> sceneAssets; std::vector<Arcane::Editor::AssetOpFacts::Doc> docs; };
+        AssetOpHost m_assetOpHost{ *this };
+        // Per project: T5-A9's constructor takes (host, stack, contentDir), m_undo is emplaced in the ctor body and the
+        // content dir is the project's, so no member initializer can build it. RetargetUndoCache(project) (T1-B10,
+        // EditorAppProject.cpp), after SetSpillDirectory:
+        //   m_assetFileOps = project ? std::make_unique<Arcane::Editor::AssetFileOpExecutor>(m_assetOpHost, *m_undo, project->Root() / "Content") : nullptr;
+        std::unique_ptr<Arcane::Editor::AssetFileOpExecutor> m_assetFileOps;
+        AssetOpFactsStore m_assetOpFacts;
+        [[nodiscard]] std::string AssetOpGateReason();
+        [[nodiscard]] Arcane::Editor::AssetOpFacts GatherAssetOpFacts(AssetOpFactsStore&, bool withLiveScene);
+        std::optional<Arcane::Editor::AssetOpPlan> RunAssetOp(const Arcane::Editor::AssetOpRequest&);
+        void InvalidateAssetCaches(const Arcane::Guid&, Arcane::Editor::AssetKind);
 
         // One-shot latch for RaiseOpenProjectOnStart: consumed on the first frame
         // that draws the menu bar, so the picker appears over a live editor window

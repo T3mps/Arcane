@@ -106,3 +106,10 @@ TEST_CASE("AssetActivityLog Clear empties the ring", "[editor]")
     log.Push(MakeEntry(3));
     CHECK(log.Size() == 1);
 }
+
+TEST_CASE("AssetActivityLog: a Moved entry round-trips with its from-path detail", "[editor][assetops]")
+{
+    AssetActivityLog log; AssetActivityEntry e = MakeEntry(1, AssetActivityKind::Moved); e.detail = "from game://t/brick.png"; log.Push(e);
+    int n = 0; log.ForEachNewestFirst([&](const AssetActivityEntry& g) { ++n; CHECK((g.kind == AssetActivityKind::Moved && g.detail == e.detail)); });
+    CHECK(n == 1);
+}

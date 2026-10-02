@@ -41,6 +41,7 @@ namespace Arcane::Editor
         CookRefused,     // a cook failure OR an artifact refusal (Problems-pane twin)
         Created,         // drop discovery, the create dialog, a new-file scene save, a crash report
         Deleted,         // no producer today -- see above
+        Moved,           // T5 s7.12: rename/move; detail "from <old mount path>"
     };
 
     // One row. `name` is a snapshot taken at push time -- the asset it

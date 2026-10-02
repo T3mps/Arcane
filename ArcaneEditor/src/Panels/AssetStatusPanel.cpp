@@ -391,6 +391,7 @@ namespace Arcane::Editor
                 case AssetActivityKind::CookRefused: return "cook refused";
                 case AssetActivityKind::Created:     return "created";
                 case AssetActivityKind::Deleted:     return "deleted";
+                case AssetActivityKind::Moved:       return "moved";
                 case AssetActivityKind::SourceChanged:
                 {
                     const AssetPanelEntry* e = model.Find(entry.guid);

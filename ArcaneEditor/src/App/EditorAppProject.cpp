@@ -2249,6 +2249,9 @@ namespace Arcane::Editor
         if (!dir.empty())
             std::filesystem::remove_all(dir, ec);   // safe: the stack is empty at open, editor.lock keeps one editor per project
         m_undo->SetSpillDirectory(dir);
+        // T5 s7.3: the asset file-op executor is per project (its content dir is the
+        // project's); a reset makes the outgoing project's file-op steps inert.
+        m_assetFileOps = project ? std::make_unique<Arcane::Editor::AssetFileOpExecutor>(m_assetOpHost, *m_undo, project->Root() / "Content") : nullptr;
     }
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)
