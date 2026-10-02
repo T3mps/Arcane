@@ -182,8 +182,7 @@ namespace Arcane::Editor
         // confirms it. A resize after that does not refit; F keeps the
         // library's own frame.
         CanvasNavLatch graphFitPending;
-        std::uint32_t  graphFitCount = 0;   // test seam: fits performed, one per arming
-        bool           graphFitCounted = false;   // this arming's fit already counted (a re-issue is not a new fit)
+        std::uint32_t  graphFitCount = 0;   // test seam: fits performed, one per arming (a latch re-issue is not a new fit)
         // Test seam (s6.9): the last drawn canvas frame's canvas rect and legend
         // box, screen space. Written every drawn frame; read by nothing in the editor.
         ImVec2 graphCanvasMin{}, graphCanvasMax{};

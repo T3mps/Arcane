@@ -1298,7 +1298,6 @@ namespace Arcane::Editor
                 state.graphBuiltKindFilter != state.graphKindFilter)
             {
                 state.graphFitPending.Arm();
-                state.graphFitCounted = false;
             }
             GraphBuildInput in;
             in.entries    = &model.Entries();
@@ -1342,7 +1341,6 @@ namespace Arcane::Editor
             ed::SetCurrentEditor(nullptr);
             state.graphLayoutDirty = true;
             state.graphFitPending.Arm();   // s6.9: a fresh context frames itself
-            state.graphFitCounted = false;
         }
         ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
 
@@ -2318,9 +2316,8 @@ namespace Arcane::Editor
             if (!nodes.empty() && GraphFitToContent(GraphFitMaxZoom(), 0.0f))
             {
                 // The seam counts each ARMING's fit once, not its re-issues.
-                if (!state.graphFitCounted)
+                if (state.graphFitPending.Issues() == 1u)
                     ++state.graphFitCount;
-                state.graphFitCounted = true;
             }
             else
                 state.graphFitPending.Disarm();

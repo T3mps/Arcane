@@ -173,6 +173,28 @@ TEST_CASE("CanvasNavLatch: a size change after the issue re-issues (A,A,B and A,
     }
 }
 
+TEST_CASE("CanvasNavLatch: Issues counts the issues since the last Arm, re-issues included", "[editor][graphfit]")
+{
+    // The Asset Graph's s6.9 seam counts one fit per ARMING through Issues() == 1.
+    Arcane::Editor::CanvasNavLatch latch;
+    const ImVec2 a(964.0f, 577.0f), b(950.0f, 577.0f);
+    CHECK(latch.Issues() == 0u);
+    latch.Arm();
+    CHECK_FALSE(latch.Update(a, 0.0, 0.0f, /*canIssue*/ false));   // a draw that cannot issue is no issue
+    CHECK(latch.Issues() == 0u);
+    CHECK(latch.Update(a, 0.1, 0.0f));
+    CHECK(latch.Issues() == 1u);                                    // the first issue
+    CHECK(latch.Update(b, 0.2, 0.0f));
+    CHECK(latch.Issues() == 2u);                                    // a re-issue after the discarding resize
+    CHECK_FALSE(latch.Update(b, 0.3, 0.0f));                        // landed: confirming is no issue
+    CHECK_FALSE(latch.Pending());
+    CHECK(latch.Issues() == 2u);                                    // Disarm keeps the count
+    latch.Arm();
+    CHECK(latch.Issues() == 0u);                                    // a new arming starts over
+    CHECK(latch.Update(a, 0.4, 0.0f));
+    CHECK(latch.Issues() == 1u);
+}
+
 TEST_CASE("CanvasNavLatch: an animated navigation lands only after its settle time", "[editor][graphfit]")
 {
     Arcane::Editor::CanvasNavLatch latch; latch.Arm();

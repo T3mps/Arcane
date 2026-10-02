@@ -13,6 +13,8 @@
 
 #include <imgui.h>
 
+#include <cstdint>
+
 namespace Arcane::Editor
 {
     struct GraphRect { ImVec2 min, max; };
@@ -47,9 +49,13 @@ namespace Arcane::Editor
     class CanvasNavLatch
     {
     public:
-        void Arm() noexcept { m_pending = true; m_issued = false; }
+        void Arm() noexcept { m_pending = true; m_issued = false; m_issues = 0; }
         void Disarm() noexcept { m_pending = false; m_issued = false; }
         [[nodiscard]] bool Pending() const noexcept { return m_pending; }
+        // Issues since the last Arm (1 = the first, >1 = re-issues after a
+        // discarding resize). Disarm keeps it, so a caller can tell one ARMING's
+        // navigation from its re-issues without a flag of its own.
+        [[nodiscard]] std::uint32_t Issues() const noexcept { return m_issues; }
 
         // true = (re-)issue the navigation NOW. A navigation issued earlier is
         // confirmed (the latch disarms) on a draw whose size equals the size it
@@ -72,6 +78,7 @@ namespace Arcane::Editor
             if (!canIssue)
                 return false;
             m_issued = true;
+            ++m_issues;
             m_issuedAt = canvasSize;
             m_issuedTime = now;
             return true;
@@ -80,6 +87,7 @@ namespace Arcane::Editor
     private:
         ImVec2 m_issuedAt{};
         double m_issuedTime = 0.0;
+        std::uint32_t m_issues = 0;
         bool   m_pending = false;
         bool   m_issued = false;
     };
