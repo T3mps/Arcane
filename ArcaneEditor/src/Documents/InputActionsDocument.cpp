@@ -181,6 +181,13 @@ namespace Arcane::Editor
         else ARC_WARN("input: the pending add was refused (its action or composite is gone, or nothing changed); nothing added");
     }
 
+    void InputActionsDocument::FlushGesture()
+    {
+        if (!pending_) return;
+        capture_.Cancel();                                 // inert: FinishPending clears captureTarget_, so the next TickCapture early-outs
+        FinishPending();
+    }
+
     void InputActionsDocument::TickCapture(bool bodyDrawn)
     {
         if (!captureTarget_.IsValid()) return;

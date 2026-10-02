@@ -97,6 +97,10 @@ namespace Arcane::Editor
         // Refused while any capture is live.
         void BeginPending(PendingAdd add);
         [[nodiscard]] const PendingAdd* Pending() const noexcept { return pending_ ? &*pending_ : nullptr; }
+        // Play entry (DocumentHost::FlushGestures): a live pending add commits
+        // the parts heard so far as ONE undoable step while the resolver still
+        // returns the stack -- commit, not cancel, as Esc/click-away do.
+        void FlushGesture() override;
         // The view state the document owns, writable: the tests' probe seam and
         // scheme filter (production writes it only through the widgets).
         [[nodiscard]] InputActionsDocumentState& MutableState() noexcept { return state_; }

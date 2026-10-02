@@ -378,6 +378,33 @@ TEST_CASE("input document: a click outside the document mid-composite commits th
     CHECK_FALSE(rig.commands.CanUndo());                 // exactly one step
 }
 
+TEST_CASE("input document: FlushGesture (Play entry) commits a pending composite's heard parts as ONE undoable step", "[editor][input]")
+{
+    UndoRig rig;
+    DocUi ui(kCaptureDoc, &rig.commands);
+    ui.Frame(); ui.Frame();
+    ui.FocusDoc();
+    ui.doc->BeginPending(Arcane::Editor::MakeAddComposite(G(kMapId), G(kJumpId), "2DVector", {}));
+    ui.Frame();
+    ui.Press(26);                                         // W -> up; "down" listens
+    REQUIRE(ui.doc->Pending());
+    ui.doc->FlushGesture();                               // DocumentHost::FlushGestures on Play entry
+    CHECK_FALSE(ui.doc->Pending());
+    REQUIRE(ui.doc->Model().Draft()["actionMaps"][0]["actions"][0]["bindings"].size() == 2);   // a guard: indexing a missing [1] asserts in Debug
+    const nlohmann::json composite = ui.doc->Model().Draft()["actionMaps"][0]["actions"][0]["bindings"][1];
+    REQUIRE(composite["parts"].size() == 1);
+    CHECK(composite["parts"][0]["name"] == "up");
+    CHECK(composite["parts"][0]["path"] == "<Keyboard>/scancode/w");
+    CHECK(std::string(rig.commands.UndoLabel()) == "Add composite binding");
+    ui.Frame();                                           // the cancelled capture is inert: nothing more lands
+    CHECK_FALSE(ui.doc->InputSwallowed());                // the flush frame's stamp (the heard W) has passed
+    CHECK(ui.doc->Model().Draft()["actionMaps"][0]["actions"][0]["bindings"].size() == 2);
+    ui.doc->FlushGesture();                               // nothing pending: a no-op
+    CHECK(std::string(rig.commands.UndoLabel()) == "Add composite binding");
+    REQUIRE(ui.doc->Model().Undo());
+    CHECK_FALSE(rig.commands.CanUndo());                 // exactly one step
+}
+
 TEST_CASE("input document: a pending add whose action vanished commits nothing", "[editor][input]")
 {
     UndoRig rig;
