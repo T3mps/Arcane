@@ -226,8 +226,10 @@ TEST_CASE("ClassTemplates::KindLabel names every kind", "[editor]")
 
 // ---- the compile proof (input-seam spec s8 T8) --------------------------------
 // This file never compiles generated code, so the renders for (Component
-// SmokeComponent, System SmokeSystem, project TemplateSmoke) are checked in
-// under ArcaneTests/plugins/TemplateSmoke and built as TemplateSmokePlugin.dll
+// SmokeComponent, System SmokeSystem [FixedUpdate header], System
+// SmokeUpdateSystem [Update -- the unanchored Update/Render header], project
+// TemplateSmoke) are checked in under ArcaneTests/plugins/TemplateSmoke and
+// built as TemplateSmokePlugin.dll
 // (premake5.lua). The first case pins those files to Render(...) byte for
 // byte; the build pins that they compile. A template drift fails one or the
 // other.
@@ -253,6 +255,15 @@ TEST_CASE("ClassTemplates renders equal the compiled TemplateSmoke sources byte 
     CHECK(Slurp(SmokeDir() / "SmokeComponent.cpp") == component.source);
     CHECK(Slurp(SmokeDir() / "SmokeSystem.hpp")    == system.header);
     CHECK(Slurp(SmokeDir() / "SmokeSystem.cpp")    == system.source);
+
+    ClassTemplates::SystemOptions update;
+    update.phase = Arcane::SystemPhase::Update;
+    const auto updateSystem = ClassTemplates::Render(ClassTemplates::Kind::System, "SmokeUpdateSystem", "TemplateSmoke", update);
+    CHECK(Slurp(SmokeDir() / "SmokeUpdateSystem.hpp") == updateSystem.header);
+    CHECK(Slurp(SmokeDir() / "SmokeUpdateSystem.cpp") == updateSystem.source);
+    // The two system renders really are the two different header templates.
+    CHECK(updateSystem.header.find("TransformPropagationSystem") == std::string::npos);
+    CHECK(system.header.find("TransformPropagationSystem") != std::string::npos);
 }
 
 TEST_CASE("the rendered component and parameter-style system load as a module and the system runs", "[editor][templates][hotreload]")
@@ -262,10 +273,14 @@ TEST_CASE("the rendered component and parameter-style system load as a module an
     REQUIRE(host.AttachRuntime(rt));
     REQUIRE(host.Load());
     // The rendered system registered through ARCANE_SYSTEM's PARAMETER path...
-    bool registered = false;
+    bool registered = false, updateRegistered = false;
     for (const Arcane::SystemFactoryEntry& e : Arcane::Test::Process().SystemFactories().Entries())
+    {
         if (e.name.find("SmokeSystem") != std::string::npos) registered = true;
+        if (e.name.find("SmokeUpdateSystem") != std::string::npos && e.phase == Arcane::SystemPhase::Update) updateRegistered = true;
+    }
     CHECK(registered);
+    CHECK(updateRegistered);
     // ...and runs: its only parameter is Res<Time>, which RunLoop publishes, so
     // a skip would log "param-system skipped" and a crash would end the test.
     for (int i = 0; i < 3; ++i)
