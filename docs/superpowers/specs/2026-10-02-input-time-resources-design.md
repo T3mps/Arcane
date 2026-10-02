@@ -217,6 +217,9 @@ These are aliases, so the types are identical. No ABI or serialization changes; 
 - **Attributes:** `ARCANE_REFLECT_ATTR(AttrType, ...)` expands to `.Attr<::Arcane::AttrType>(__VA_ARGS__)`. `ASTRA_REFLECT_ATTR` hard-prefixes `::Astra::` (`Astra/Reflection/Macros.hpp:91`), so every attribute gets an `Arcane::` alias:
   - `Serializable`, `Hidden`, `Tooltip`, `Category`, `Range`, `ReadOnly`, `AngleFormat` (with `AngleFormat::Unit`);
   - `DisplayName`, `ColorFormat` (with `::Format`), `Multiline`, `FilePath`, `DragSpeed`, `Deprecated`, `AliasName`, `Precision`.
+
+  Amendment (2026-10-02, IN-11 / plan spec-error #2): the attribute aliases live in `Arcane::Attr`, not `Arcane::`, because `Arcane::Hidden` is the serialized Outliner tag component (Scene/Components.hpp:302). `ARCANE_REFLECT_ATTR(AttrType, ...)` expands to `.Attr<::Arcane::Attr::AttrType>(__VA_ARGS__)`, and an AngleFormat argument is spelled `Arcane::Attr::AngleFormat::Unit::Degrees`.
+
 - **Change tracking:** `ARCANE_CHANGE_TRACKED` expands to Astra's `static constexpr bool AstraChangeTracked = true;` member convention.
 
 **Manifold2D** reaches game code only through component field types (`RigidBody2D::type`, `Fixture::kind`). Those stay spelled through the existing `Arcane::Phys::` namespace alias (`PhysicsComponents.hpp:55`). `PhysicsBodyRef` is engine-internal and not part of the facade.
