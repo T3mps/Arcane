@@ -21,10 +21,13 @@
 // time model.
 
 #include <Arcane/Sim/SystemSchedulers.hpp>
+#include <Arcane/Sim/Time.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
+#include <cstdint>
 #include <functional>
+#include <utility>
 
 namespace Arcane
 {
@@ -93,6 +96,7 @@ namespace Arcane
         double Advance(double realDt)
         {
             StepFixed(realDt, nullptr);
+            PublishTime(realDt, /*inFixedStep*/ false);
             m_schedulers->update.Execute(*m_registry, &m_schedulers->executor);
             return m_alpha;
         }
@@ -111,6 +115,7 @@ namespace Arcane
                        const std::function<void(double, double)>& pluginUpdate)
         {
             StepFixed(realDt, &pluginFixed);
+            PublishTime(realDt, /*inFixedStep*/ false);
             m_schedulers->update.Execute(*m_registry, &m_schedulers->executor);
             if (pluginUpdate) pluginUpdate(realDt, m_alpha);
             return m_alpha;
@@ -151,9 +156,50 @@ namespace Arcane
             m_alpha       = 0.0;
             m_timeScale   = 1.0;
             m_singleStep  = false;
+            // The sim clock belongs to the registry's run too (input-seam spec s3):
+            // Play starts at step 0. The next Advance republishes Time into the
+            // new registry.
+            m_fixedStep       = 0;
+            m_elapsed         = 0.0;
+            m_elapsedBase     = 0.0;
+            m_elapsedBaseStep = 0;
+            m_elapsedDt       = 0.0;
         }
 
     private:
+        // Republish Arcane::Time (input-seam spec s3). Called before every fixed
+        // step and before Update, so a registry swapped in between frames gets
+        // it on the very next pass and no system ever runs without it.
+        void PublishTime(double realDt, bool inFixedStep)
+        {
+            Time t;
+            t.realDt      = realDt;
+            t.paused      = m_paused;
+            t.timeScale   = m_timeScale;
+            t.dt          = m_paused ? 0.0 : realDt * m_timeScale;
+            t.fixedDt     = 1.0 / m_cfg.fixedHz;
+            t.alpha       = m_alpha;
+            t.elapsed     = m_elapsed;
+            t.fixedStep   = m_fixedStep;
+            t.inFixedStep = inFixedStep;
+            m_registry->SetResource<Time>(std::move(t));
+        }
+
+        // Time::elapsed after step m_fixedStep: fixedStep * fixedDt EXACTLY (spec s3)
+        // while the rate is constant -- a running `+= fixedDt` drifts from that
+        // product within a few dozen steps -- and rebased at a SetFixedHz change so
+        // it stays monotonic: the steps before the change keep the time they took.
+        void AdvanceElapsed(double fixedDt) noexcept
+        {
+            if (fixedDt != m_elapsedDt)
+            {
+                m_elapsedBase     = m_elapsed;
+                m_elapsedBaseStep = m_fixedStep - 1;
+                m_elapsedDt       = fixedDt;
+            }
+            m_elapsed = m_elapsedBase + static_cast<double>(m_fixedStep - m_elapsedBaseStep) * fixedDt;
+        }
+
         // The fixed phase for one real frame, under sim-time control. pluginFixed may
         // be null (the no-callback Advance) or point at the host's std::function.
         void StepFixed(double realDt, const std::function<void(double)>* pluginFixed)
@@ -161,6 +207,9 @@ namespace Arcane
             const double fixedDt = 1.0 / m_cfg.fixedHz;
             const auto runFixed = [&]
             {
+                ++m_fixedStep;
+                AdvanceElapsed(fixedDt);
+                PublishTime(realDt, /*inFixedStep*/ true);
                 if (pluginFixed && *pluginFixed) (*pluginFixed)(fixedDt);
                 m_schedulers->fixedUpdate.Execute(*m_registry, &m_schedulers->executor);
             };
@@ -201,5 +250,13 @@ namespace Arcane
         bool   m_paused    = false;
         double m_timeScale = 1.0;
         bool   m_singleStep = false;
+
+        // The sim clock published as Arcane::Time; reset by Rebind. elapsed is
+        // derived from the step count since the last rate change (AdvanceElapsed).
+        std::uint64_t m_fixedStep       = 0;
+        double        m_elapsed         = 0.0;
+        double        m_elapsedBase     = 0.0;   // elapsed when the current rate took effect
+        std::uint64_t m_elapsedBaseStep = 0;     // steps already run when the current rate took effect
+        double        m_elapsedDt       = 0.0;   // the rate in effect (0 = none yet)
     };
 }
