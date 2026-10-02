@@ -480,9 +480,28 @@ namespace Arcane::Editor
         // by a click away, commits (fileOp); an invalid Enter keeps the box
         // and its refusal tooltip; Esc, or a click away without an edit,
         // cancels. The dry-run runs per frame through the host's memo.
-        void DrawRenameBox(AssetBrowserPanelState& st, const AssetPanelEntry& e, float indent, const AssetPanelServices& sv, AssetPanelActions& actions)
+        // The row's thumb cell is painted first as drawlist overdraw (no
+        // ImGui item, so the 24px row pitch is unchanged), the same way
+        // RowWithThumb paints it: the thumb when resolved, else the kind's
+        // Lucide glyph centred in the cell (spec s7.6: "thumb + InputText").
+        void DrawRenameBox(AssetBrowserPanelState& st, const AssetPanelEntry& e, float indent, std::uint64_t thumbId, const char* icon,
+                           const AssetPanelServices& sv, AssetPanelActions& actions)
         {
             st.renameDrawn = true; const ImVec2 at = ImGui::GetCursorScreenPos();
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const float thumbY = at.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
+                if (thumbId != 0)
+                    dl->AddImage(static_cast<ImTextureID>(thumbId), ImVec2(at.x + indent, thumbY),
+                                 ImVec2(at.x + indent + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                else
+                {
+                    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+                    dl->AddText(ImVec2(at.x + indent + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+                                       at.y + (kTableRowHeight - iconSize.y) * 0.5f),
+                                ImGui::GetColorU32(ImGuiCol_Text), icon);
+                }
+            }
             ImGui::SetCursorScreenPos(ImVec2(at.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemSpacing.x, at.y + 2.0f));
             const std::string ext = std::filesystem::path(e.fileName).extension().string();
             ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ext.c_str()).x - 8.0f));
@@ -553,7 +572,7 @@ namespace Arcane::Editor
             const char* icon = KindIcon(e.kind);
             const bool selected = (model.selected == e.guid);
 
-            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, services, actions); ImGui::PopID(); return; }
+            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
@@ -690,7 +709,7 @@ namespace Arcane::Editor
             // fold child under a band at indent X now sits at X+40 (X+20 for
             // the level shift, +20 more for its own existing fold indent).
             const float indent = static_cast<float>(groupDepth + 1) * kGroupIndent + kChildIndent;
-            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, services, actions); ImGui::PopID(); return; }
+            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
