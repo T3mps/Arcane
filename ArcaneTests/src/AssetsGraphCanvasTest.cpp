@@ -53,6 +53,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -692,6 +693,88 @@ namespace
             REQUIRE(project.has_value());
         }
     };
+}
+
+// ---------------------------------------------------------------------------
+// s6.9 -- the canvas ends where the 48 px selection strip starts. The strip
+// used to OVERLAY the canvas's bottom edge, so the legend (canvas bottom - 12
+// - boxH) and the bottom layout row drew under it, and the strip stole canvas
+// hover. The canvas is now shrunk by kAssetGraphSelectionStripH.
+
+namespace
+{
+    // The strip child ("##graphsel", a child of the Graph body) by name:
+    // ImGui names a child "<parent>/##graphsel_<id>" (imgui_internal.h).
+    ImGuiWindow* FindWindowContaining(const char* needle)
+    {
+        for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+            if (std::strstr(w->Name, needle)) return w;
+        return nullptr;
+    }
+
+    // s6.9 fixture: a hub referenced by four materials = five nodes, the
+    // referencer column four layout rows deep (3 x 90 + 54 = 324 px of nodes).
+    struct StripCanvasRig
+    {
+        MaterialHubFixture fx;
+        AssetPanelModel model;
+        AssetGraphPanelState state;
+        DocumentHost docs;
+        GraphMouseHarness hw;
+        ImGuiContext* prev = nullptr;
+        ImGuiContext* ctx = nullptr;
+
+        explicit StripCanvasRig(const char* name)
+        {
+            fx.Build(name, /*referencerCount=*/4);
+            model.MarkAllDirty();
+            REQUIRE(model.RebuildIfDirty(&fx.project->Registry(), fx.fake.Make()));
+            IMGUI_CHECKVERSION();
+            prev = ImGui::GetCurrentContext();
+            ctx = ImGui::CreateContext();
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1600.0f, 900.0f);
+            io.IniFilename = nullptr;
+            unsigned char* pixels = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+            state.graphFocusSeeded = true;            // nil focus == everything-mode
+            hw.size    = ImVec2(1200.0f, 330.0f);     // ~200 px of canvas: less than the 324 px the rows need
+            hw.state   = &state;
+            hw.model   = &model;
+            hw.project = &*fx.project;
+            hw.docs    = &docs;
+            hw.services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
+        }
+        ~StripCanvasRig()
+        {
+            DestroyAssetGraphPanelCanvas(state);
+            ImGui::DestroyContext(ctx);
+            ImGui::SetCurrentContext(prev);
+            std::error_code ec;
+            fs::remove_all(fx.root, ec);
+        }
+    };
+}
+
+TEST_CASE("Asset Graph (s6.9): the canvas ends where the selection strip starts, and the legend sits inside it",
+          "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_strip_test");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+
+    ImGuiWindow* strip = FindWindowContaining("##graphsel");
+    REQUIRE(strip != nullptr);
+    CHECK(strip->Size.y == kAssetGraphSelectionStripH);
+    // The strip covers no canvas: canvas bottom == strip top == body bottom - 48.
+    CHECK(rig.state.graphCanvasMax.y == strip->Pos.y);
+    CHECK(rig.state.graphCanvasMin.y < rig.state.graphCanvasMax.y);
+    // The legend box (DrawGraphLegend's own rect) lies inside the canvas.
+    CHECK(rig.state.graphLegendMin.x >= rig.state.graphCanvasMin.x);
+    CHECK(rig.state.graphLegendMin.y >= rig.state.graphCanvasMin.y);
+    CHECK(rig.state.graphLegendMax.x <= rig.state.graphCanvasMax.x);
+    CHECK(rig.state.graphLegendMax.y <= rig.state.graphCanvasMax.y);
 }
 
 // ---------------------------------------------------------------------------

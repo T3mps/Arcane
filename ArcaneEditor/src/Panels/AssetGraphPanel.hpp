@@ -26,6 +26,8 @@
 
 #include <Arcane/Guid.hpp>
 
+#include <imgui.h>   // ImVec2 (the s6.9 test seam)
+
 #include <cstdint>
 #include <optional>
 
@@ -35,6 +37,10 @@ namespace Arcane::Editor
 {
     class AssetPanelModel;
     class DocumentHost;
+
+    // The Graph window's selection strip height (node page phase s6.9): the
+    // strip draws it and the canvas is shrunk by it, so neither covers the other.
+    inline constexpr float kAssetGraphSelectionStripH = 48.0f;
 
     // The Asset Graph window's session-only UI state (spec s6). Panel-split
     // Task 7: the other of the two structs AssetsPanelState dissolved into,
@@ -165,6 +171,10 @@ namespace Arcane::Editor
         // contract that a reposition is TRANSIENT (the next rebuild snaps it
         // back). That is intended behavior, not a bug.
         bool          graphLayoutDirty = false;
+        // Test seam (s6.9): the last drawn canvas frame's canvas rect and legend
+        // box, screen space. Written every drawn frame; read by nothing in the editor.
+        ImVec2 graphCanvasMin{}, graphCanvasMax{};
+        ImVec2 graphLegendMin{}, graphLegendMax{};
     };
 
     // Seed `graphFocus` to the project's boot scene, once per project,

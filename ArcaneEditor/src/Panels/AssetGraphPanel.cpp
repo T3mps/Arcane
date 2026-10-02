@@ -35,6 +35,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // AssetGraphPanel (panel-split arc): the "Asset Graph" window. Task 5 moved
@@ -1166,7 +1167,7 @@ namespace Arcane::Editor
         constexpr ImVec4 kGraphLegendEdgeColor   = ImVec4(0.361f, 0.361f, 0.361f, 1.0f); // #5c5c5c
         constexpr ImVec4 kGraphLegendUsedByColor = ImVec4(0.290f, 0.290f, 0.290f, 1.0f); // #4a4a4a
 
-        void DrawGraphLegend(const ImVec2& canvasMin, const ImVec2& canvasSize)
+        std::pair<ImVec2, ImVec2> DrawGraphLegend(const ImVec2& canvasMin, const ImVec2& canvasSize)
         {
             struct Entry { const char* text; ImVec4 color; bool dashed; };
             const Entry entries[] = {
@@ -1237,6 +1238,7 @@ namespace Arcane::Editor
                 x += ImGui::CalcTextSize(entries[i].text).x;
             }
             ImGui::PopFont();
+            return { boxMin, boxMax };
         }
     }   // end anonymous namespace: DrawAssetGraphBody below is the one
         // exported entry point (Task 5, panel-split) -- everything above it
@@ -1340,13 +1342,19 @@ namespace Arcane::Editor
         // under every channel the editor merges in. Both arguments, and the
         // disclosed one-frame view lag they buy, are written out once at
         // DrawGraphCanvasBackdrop (Widgets/GraphCanvasBackdrop.hpp).
-        const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
-        const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+        const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
+        // Shrunk by the selection strip (s6.9): the strip draws BELOW the canvas
+        // inside the body, so nodes, the legend and the hover surface all end
+        // above it. Clamped before the early-out.
+        const ImVec2 bodyAvail = ImGui::GetContentRegionAvail();
+        const ImVec2 canvasSize(bodyAvail.x, std::max(0.0f, bodyAvail.y - kAssetGraphSelectionStripH));
         if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
         {
             ed::SetCurrentEditor(nullptr);
             return;
         }
+        state.graphCanvasMin = canvasMin;
+        state.graphCanvasMax = ImVec2(canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y);
 
         DrawGraphCanvasBackdrop(canvasMin, canvasSize,
                                 kGraphCanvasColor, kGraphGridMinorColor, kGraphGridMajorColor,
@@ -2292,7 +2300,9 @@ namespace Arcane::Editor
         // AFTER ed::End, so it is chrome in SCREEN space: it does not pan,
         // zoom, or sort against the nodes. See DrawGraphLegend for the
         // board transcription and the two flagged mismatches.
-        DrawGraphLegend(canvasMin, canvasSize);
+        const auto [legendMin, legendMax] = DrawGraphLegend(canvasMin, canvasSize);
+        state.graphLegendMin = legendMin;
+        state.graphLegendMax = legendMax;
 
         // ---- 9. The peek tooltip (Task 4, plan ruling 14) -------------
         // WHERE it landed, and why HERE:
@@ -2526,10 +2536,10 @@ namespace Arcane::Editor
 
         // ---- body band -----------------------------------------------
         // Bottom bar reservation is UNCHANGED (24px). The selection strip
-        // overlays the canvas child's bottom so it cannot push the digest
-        // off the window -- a sibling child of 48px plus ItemSpacing was
-        // clipping the bar (and missing the digest-chip click test).
-        constexpr float kSelectionStripH = 48.0f;
+        // sits in the body's bottom `kAssetGraphSelectionStripH`, which
+        // DrawAssetGraphBody leaves free by shrinking the canvas (node page
+        // phase s6.9), so it neither pushes the digest off the window nor
+        // covers canvas.
         if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
             if (!project)
@@ -2539,8 +2549,8 @@ namespace Arcane::Editor
 
             const ImVec2 bodyPos  = ImGui::GetWindowPos();
             const ImVec2 bodySize = ImGui::GetWindowSize();
-            ImGui::SetCursorScreenPos(ImVec2(bodyPos.x, bodyPos.y + bodySize.y - kSelectionStripH));
-            if (ImGui::BeginChild("##graphsel", ImVec2(bodySize.x, kSelectionStripH),
+            ImGui::SetCursorScreenPos(ImVec2(bodyPos.x, bodyPos.y + bodySize.y - kAssetGraphSelectionStripH));
+            if (ImGui::BeginChild("##graphsel", ImVec2(bodySize.x, kAssetGraphSelectionStripH),
                                  ImGuiChildFlags_None,
                                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
             {
