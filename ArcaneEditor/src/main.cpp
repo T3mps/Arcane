@@ -12,6 +12,7 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "App/EditorApp.hpp"
+#include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 
 #include <cstdio>
 #include <filesystem>
@@ -614,8 +615,13 @@ int main(int argc, char** argv)
     // call then degrades to do nothing"; EditorApp guards with `if
     // (m_splash)`). Destruction order is unchanged -- `app` still lives in the
     // nested scope below and is destroyed before this object.
+    //
+    // ...AND UNLESS this is an AUTOMATION run (--frames N, or the windowed
+    // self-capture cvar; T3-D6 fix round 1, App/HostPresentation.hpp): the
+    // splash is a TOPMOST popup that activates on show, and a scripted
+    // windowed capture runs while a person may be working at the desk.
     std::optional<Arcane::BootSplashWindow> splash;
-    if (!parsed.config->headless)
+    if (Arcane::Editor::HostPresentationFor(*parsed.config).bootSplash)
         splash.emplace("data/images/arcane_logo.png");
 
     // Scoped so ~EditorApp -- the load-bearing teardown sequence -- runs while

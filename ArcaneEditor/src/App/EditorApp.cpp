@@ -22,6 +22,7 @@
 //   EditorAppProject.cpp  Open Project, material/instance creation, the watcher.
 
 #include "App/EditorApp.hpp"
+#include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
@@ -2174,8 +2175,12 @@ namespace Arcane::Editor
         // backend-specific corner a desk-only machine cannot pre-clear. The
         // offscreen vehicle below builds no surface at all, which sidesteps
         // the corner instead of walking into it.
-        if (!m_config.headless)
-            m_gpu->Win().Show();
+        //
+        // An AUTOMATION run (--frames N, or the windowed self-capture cvar)
+        // maps the window without activating or raising it (T3-D6 fix round
+        // 1, HostPresentation.hpp): a person may be at the desk.
+        if (const HostPresentation pres = HostPresentationFor(m_config); pres.showWindow)
+            m_gpu->Win().Show(pres.activateOnShow);
 
         // THE LATCH BASELINE, taken HERE rather than at
         // process start for the reason RuntimeApp::MainLoop states for its own:
