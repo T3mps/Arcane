@@ -3,8 +3,13 @@
 // A small game-module-safe command seam for controller-driven 2D motion.
 // PhysicsWorld is linked inside ArcaneCore, so an external module must call
 // an exported function rather than link Manifold2D's methods itself.
+//
+// TEMPORARY (input-seam plan Task 9 -> deleted by Task 12): these forward to
+// Arcane::Physics2D's members (PhysicsSystem.hpp), which also owns
+// BodyMotion2D now.
 
 #include <Arcane/Core/Api.hpp>
+#include <Arcane/Scene/PhysicsSystem.hpp>
 
 #include <Astra/Entity/Entity.hpp>
 
@@ -12,14 +17,6 @@ namespace Astra { class Registry; }
 
 namespace Arcane
 {
-    struct BodyMotion2D
-    {
-        float velocityX = 0.0f;
-        float velocityY = 0.0f;
-        bool bodyReady = false;
-        bool supported = false;
-    };
-
     // Read the live dynamic body's velocity and floor support. Before minting,
     // velocity comes from RigidBody2D and bodyReady is false.
     ARCANE_CORE_API BodyMotion2D GetBodyMotion2D(Astra::Registry& registry, Astra::Entity entity);

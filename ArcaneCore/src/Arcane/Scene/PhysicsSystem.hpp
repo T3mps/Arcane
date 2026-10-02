@@ -71,6 +71,7 @@
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
 #include <Manifold2D/Physics/Shapes.hpp>
 
+#include <Arcane/Core/Api.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
@@ -95,6 +96,17 @@ namespace Arcane
     // Physics types were lifted to the standalone Manifold2D library (Phase 2).
     // Alias so the system code below reads Phys:: for the Manifold2D::Physics types.
     namespace Phys = Manifold2D::Physics;
+
+    // What a controller reads back from its body (input-seam spec s5.3).
+    // Before the body is minted, velocity comes from RigidBody2D and
+    // bodyReady is false.
+    struct BodyMotion2D
+    {
+        float velocityX = 0.0f;
+        float velocityY = 0.0f;
+        bool bodyReady = false;
+        bool supported = false;
+    };
 
     // -------------------------------------------------------------------------
     // PhysicsResource (M6 P3.3)
@@ -130,6 +142,17 @@ namespace Arcane
         // says so.
         std::uint32_t reconciled = 0;
 
+        // ---- The game-facing commands (input-seam spec s5.3) -----------------
+        // Exported: PhysicsWorld is linked inside ArcaneCore, so a game module
+        // must call these rather than link Manifold2D itself. The body handle
+        // comes from entityToBody (never PhysicsBodyRef: a game's view need not
+        // name it, and before the first fixed step it does not exist yet).
+        // Read the live dynamic body's velocity and floor support.
+        ARCANE_CORE_API BodyMotion2D Motion(Astra::Entity entity, const RigidBody2D& body) const;
+        // Set both axes on the live body, or the authored mint velocity before it
+        // exists. Non-finite input and non-dynamic bodies are ignored.
+        ARCANE_CORE_API void SetVelocity(Astra::Entity entity, RigidBody2D& body, float velocityX, float velocityY);
+
         // Transient: Registry::Save never writes it, so a restored registry
         // has no PhysicsResource and the next EnsurePhysics mints a fresh one
         // (this replaced Runtime::RestoreRegistry's hand-strip, IN-8). Body
@@ -148,6 +171,10 @@ namespace Arcane
         template<typename Archive>
         void Serialize(Archive& /*ar*/) {}
     };
+
+    // The game-facing name (input-seam spec s5.3). The SAME type, so a system
+    // taking ResMut<Physics2D> conflicts with PhysicsSystem in the scheduler.
+    using Physics2D = PhysicsResource;
 
     // -------------------------------------------------------------------------
     // MakeScaledShape: build a Manifold2D Shape from a Fixture descriptor scaled

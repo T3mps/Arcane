@@ -7,79 +7,36 @@
 
 #include <cmath>
 
+// TEMPORARY forwarders (input-seam plan Task 9 -> deleted by Task 12): the
+// ReferenceProject sources keep compiling until the controller moves to
+// Arcane::Physics2D.
 namespace Arcane
 {
-    namespace
-    {
-        bool HasFloorSupport(Phys::PhysicsWorld& world, Phys::BodyHandle handle)
-        {
-            bool supported = false;
-            world.ForEachContactConstraint([&](const Phys::ContactConstraint& contact)
-            {
-                if (contact.bodyA == handle.index && contact.normal.y > Phys::Real(0.5))
-                    supported = true;
-                if (contact.bodyBIsBody && contact.bodyB == handle.index &&
-                    contact.normal.y < Phys::Real(-0.5))
-                    supported = true;
-            });
-            if (supported)
-                return true;
-
-            // A sleeping body's contacts need not appear in the active solver.
-            Phys::ShapeCastOpts opts;
-            opts.movers = true;
-            opts.exclude = handle;
-            for (std::uint32_t i = 0; i < world.FixtureCount(handle); ++i)
-            {
-                const auto fixture = world.GetBodyFixture(handle, i);
-                if (!world.IsValid(fixture))
-                    continue;
-                const auto hit = world.ShapeCast(world.GetFixtureShape(fixture),
-                                                 world.GetFixtureWorldPos(fixture),
-                                                 Phys::Vec2(0, Phys::Real(-0.05)), opts,
-                                                 world.GetFixtureWorldAngle(fixture));
-                if (hit && hit->normal.y > Phys::Real(0.5))
-                    return true;
-            }
-            return false;
-        }
-    }
-
     BodyMotion2D GetBodyMotion2D(Astra::Registry& registry, Astra::Entity entity)
     {
+        const RigidBody2D* body = registry.GetComponent<RigidBody2D>(entity);
+        if (!body) return {};
+        if (const PhysicsResource* physics = registry.GetResource<PhysicsResource>())
+            return physics->Motion(entity, *body);
         BodyMotion2D motion;
-        const RigidBody2D* rigidBody = registry.GetComponent<RigidBody2D>(entity);
-        if (!rigidBody || rigidBody->type != Phys::BodyType::Dynamic)
-            return motion;
-        motion.velocityX = rigidBody->velocity.x;
-        motion.velocityY = rigidBody->velocity.y;
-
-        PhysicsResource* physics = registry.GetResource<PhysicsResource>();
-        const PhysicsBodyRef* body = registry.GetComponent<PhysicsBodyRef>(entity);
-        if (!physics || !physics->world || !body || !physics->world->IsValid(body->handle))
-            return motion;
-        const Phys::Vec2 velocity = physics->world->Velocity(body->handle);
-        motion.velocityX = static_cast<float>(velocity.x);
-        motion.velocityY = static_cast<float>(velocity.y);
-        motion.bodyReady = true;
-        if (velocity.y <= Phys::Real(0))
-            motion.supported = HasFloorSupport(*physics->world, body->handle);
+        if (body->type == Phys::BodyType::Dynamic)
+        {
+            motion.velocityX = body->velocity.x;
+            motion.velocityY = body->velocity.y;
+        }
         return motion;
     }
 
-    void SetBodyVelocity2D(Astra::Registry& registry, Astra::Entity entity,
-                           float velocityX, float velocityY)
+    void SetBodyVelocity2D(Astra::Registry& registry, Astra::Entity entity, float velocityX, float velocityY)
     {
-        if (!std::isfinite(velocityX) || !std::isfinite(velocityY))
+        RigidBody2D* body = registry.GetComponent<RigidBody2D>(entity);
+        if (!body) return;
+        if (PhysicsResource* physics = registry.GetResource<PhysicsResource>())
+        {
+            physics->SetVelocity(entity, *body, velocityX, velocityY);
             return;
-        RigidBody2D* rigidBody = registry.GetComponent<RigidBody2D>(entity);
-        if (!rigidBody || rigidBody->type != Phys::BodyType::Dynamic)
-            return;
-        rigidBody->velocity = glm::vec2(velocityX, velocityY);
-
-        PhysicsResource* physics = registry.GetResource<PhysicsResource>();
-        const PhysicsBodyRef* body = registry.GetComponent<PhysicsBodyRef>(entity);
-        if (physics && physics->world && body && physics->world->IsValid(body->handle))
-            physics->world->SetVelocity(body->handle, Phys::Vec2(velocityX, velocityY));
+        }
+        if (std::isfinite(velocityX) && std::isfinite(velocityY) && body->type == Phys::BodyType::Dynamic)
+            body->velocity = glm::vec2(velocityX, velocityY);
     }
 }
