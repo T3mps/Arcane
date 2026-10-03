@@ -19651,6 +19651,11 @@ static void ImGui::DockNodeUpdateTabBar(ImGuiDockNode* node, ImGuiWindow* host_w
             tab_item_flags |= ImGuiTabItemFlags_UnsavedDocument;
         if (tab_bar->Flags & ImGuiTabBarFlags_NoCloseWithMiddleMouseButton)
             tab_item_flags |= ImGuiTabItemFlags_NoCloseWithMiddleMouseButton;
+        // ARCANE LOCAL FIX (2026-10-03, node-page phase s8.2): a window whose stored label colour differs from the
+        // tab bar's own ImGuiCol_Text tinted its tab on purpose (the Problems/Console alert tint), so the unselected-
+        // label dim in TabItemLabelAndCloseButton must leave it alone.
+        if (window->DockStyle.Colors[ImGuiWindowDockStyleCol_Text] != ColorConvertFloat4ToU32(backup_style_cols[ImGuiWindowDockStyleCol_Text]))
+            tab_item_flags |= ImGuiTabItemFlags_ArcaneOwnLabelColor;
 
         // Apply stored style overrides for the window
         for (int color_n = 0; color_n < ImGuiWindowDockStyleCol_COUNT; color_n++)

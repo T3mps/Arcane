@@ -11123,7 +11123,9 @@ void ImGui::TabItemLabelAndCloseButton(ImDrawList* draw_list, const ImRect& bb, 
     // without a close button would always read 'hovered'; test the tab's own interaction instead.)
     const bool arcane_tab_hot = g.HoveredId == tab_id || g.ActiveId == tab_id ||
         (close_button_id != 0 && (g.HoveredId == close_button_id || g.ActiveId == close_button_id));
-    const bool arcane_dim_label = !is_contents_visible && !arcane_tab_hot;
+    // ARCANE LOCAL FIX (2026-10-03, node-page phase s8.2): ...except a label its window tinted on purpose
+    // (ImGuiTabItemFlags_ArcaneOwnLabelColor, set by DockNodeUpdateTabBar), which keeps its tint.
+    const bool arcane_dim_label = !is_contents_visible && !arcane_tab_hot && !(flags & ImGuiTabItemFlags_ArcaneOwnLabelColor);
     if (arcane_dim_label)
         PushStyleColor(ImGuiCol_Text, g.Style.Colors[ImGuiCol_TextDisabled]);
     RenderTextEllipsis(draw_list, text_ellipsis_clip_bb.Min, text_ellipsis_clip_bb.Max, ellipsis_max_x, label, label_end, &label_size);

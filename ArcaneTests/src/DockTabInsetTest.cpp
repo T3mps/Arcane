@@ -40,6 +40,9 @@ namespace
 
         // Two tabs in one dockspace node; returns that node after `frames` frames.
         bool openA = true, openB = true;
+        // When set, both windows push this ImGuiCol_Text around their Begin --
+        // the Problems/Console alert tint (node-page phase s8.2).
+        const ImVec4* labelTint = nullptr;
 
         // closable: the two tabs carry close buttons (Begin with p_open).
         ImGuiDockNode* Run(ImGuiDockNodeFlags spaceFlags, int frames = 3, bool closable = false)
@@ -63,8 +66,14 @@ namespace
                 ImGui::Begin("##insethost", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
                 ImGui::DockSpace(dockId, ImVec2(0.0f, 0.0f), spaceFlags);
                 ImGui::End();
-                ImGui::Begin("Inset A", closable ? &openA : nullptr); ImGui::TextUnformatted("a"); ImGui::End();
-                ImGui::Begin("Inset B", closable ? &openB : nullptr); ImGui::TextUnformatted("b"); ImGui::End();
+                const auto begin = [&](const char* name, bool* open)
+                {
+                    if (labelTint) ImGui::PushStyleColor(ImGuiCol_Text, *labelTint);
+                    ImGui::Begin(name, open);
+                    if (labelTint) ImGui::PopStyleColor();
+                };
+                begin("Inset A", closable ? &openA : nullptr); ImGui::TextUnformatted("a"); ImGui::End();
+                begin("Inset B", closable ? &openB : nullptr); ImGui::TextUnformatted("b"); ImGui::End();
                 ImGui::Render();
             }
             return ImGui::DockBuilderGetNode(dockId);
@@ -241,4 +250,32 @@ TEST_CASE("Dock tab hover: the mouse on an unselected tab's close button keeps t
     REQUIRE(GImGui->HoveredId != tabId);
     // ... and the tab is still painted in its hover fill.
     CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TabHovered)) > 0);
+}
+
+TEST_CASE("Dock tab labels: a window that tints its own label keeps the tint on an unselected tab", "[editor][docking]")
+{
+    // ARCANE LOCAL FIX in imgui.cpp DockNodeUpdateTabBar + imgui_widgets.cpp
+    // TabItemLabelAndCloseButton (node-page phase s8.2): the unselected-label dim
+    // is for the theme's own label colour only; a window that pushed ImGuiCol_Text
+    // around its Begin (the Problems/Console alert tint) keeps it.
+    DockHarness h;
+    const ImVec4 amber(0.950f, 0.770f, 0.300f, 1.00f);
+    h.labelTint = &amber;
+    ImGui::GetIO().MousePos = ImVec2(-10000.0f, -10000.0f);   // nothing hovered
+    ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
+    REQUIRE(node != nullptr);
+    REQUIRE(node->TabBar != nullptr);
+    const ImGuiTabItem* unselected = nullptr;
+    for (const ImGuiTabItem& tab : node->TabBar->Tabs)
+        if (tab.ID != node->TabBar->SelectedTabId)
+            unselected = &tab;
+    REQUIRE(unselected != nullptr);
+    const ImU32 tint = ImGui::ColorConvertFloat4ToU32(amber);
+    const ImU32 dim  = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    REQUIRE(tint != dim);
+    const ImRect bar = node->TabBar->BarRect;
+    const ImRect r(ImVec2(bar.Min.x + unselected->Offset, bar.Min.y),
+                   ImVec2(bar.Min.x + unselected->Offset + unselected->Width, bar.Max.y));
+    CHECK(CountVerticesOfColor(r, tint) > 0);
+    CHECK(CountVerticesOfColor(r, dim) == 0);
 }

@@ -3043,6 +3043,9 @@ enum ImGuiTabItemFlagsPrivate_
     ImGuiTabItemFlags_Button                    = 1 << 21,  // Used by TabItemButton, change the tab item behavior to mimic a button
     ImGuiTabItemFlags_Invisible                 = 1 << 22,  // To reserve space e.g. with ImGuiTabItemFlags_Leading
     ImGuiTabItemFlags_Unsorted                  = 1 << 23,  // [Docking] Trailing tabs with the _Unsorted flag will be sorted based on the DockOrder of their Window.
+    // ARCANE LOCAL FIX (2026-10-03, node-page phase s8.2): the docked window pushed its own ImGuiCol_Text around Begin
+    // (an alert tint); TabItemLabelAndCloseButton then keeps that colour instead of dimming an unselected label.
+    ImGuiTabItemFlags_ArcaneOwnLabelColor       = 1 << 24,
 };
 
 // Storage for one active tab item (sizeof() 48 bytes)
