@@ -287,9 +287,13 @@ namespace Arcane::Reporter
             break;
         }
         case ReporterWindow::kBtnCopy:
+        {
             // Fix round 1 (R91 minor 3): log a failed copy instead of ignoring it.
-            if (!CopyToClipboard(hwnd, ui.CurrentDetails())) ARC_WARN("reporter: could not copy details to the clipboard");
+            const bool ok = CopyToClipboard(hwnd, ui.CurrentDetails());
+            if (!ok) ARC_WARN("reporter: could not copy details to the clipboard");
+            ui.NoteCopy(ok);   // node-page phase s8.1: visible feedback either way
             break;
+        }
         case ReporterWindow::kBtnRelaunch:
         {
             // Fix round 1 (R90): a failed relaunch must not be swallowed and
