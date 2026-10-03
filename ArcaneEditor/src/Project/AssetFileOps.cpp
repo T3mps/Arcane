@@ -284,20 +284,30 @@ namespace Arcane::Editor
             out = nlohmann::json::parse(in, nullptr, /*allow_exceptions*/ false);
             return !out.is_discarded() && out.is_object();
         }
-        bool WriteJsonAtomic(const fs::path& to, const nlohmann::json& j)   // <to>.arctmp then rename (Project::SetBootScene precedent)
+        bool WriteJsonAtomic(const fs::path& to, const nlohmann::json& j)
+        { return WriteTextFileAtomic(to, j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) + '\n'); }
+    }
+
+    bool WriteTextFileAtomic(const fs::path& to, const std::string& text,
+                             const std::function<bool(std::ostream&, const std::string&)>& write)
+    {
+        const fs::path tmp = fs::path(to).concat(".arctmp");   // then rename (Project::SetBootScene precedent)
+        bool ok = false;
         {
-            const fs::path tmp = fs::path(to).concat(".arctmp");
-            {
-                std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
-                if (!o) return false;
-                o << j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
-                if (!o) return false;
-            }
-            std::error_code ec;
-            fs::rename(tmp, to, ec);
-            if (ec) fs::remove(tmp, ec);
-            return !ec;
+            std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+            if (!o) return false;                                // nothing was created
+            ok = write ? write(o, text) : static_cast<bool>(o.write(text.data(), static_cast<std::streamsize>(text.size())));
+            o.close();                                           // the flush can fail too (a full disk)
+            ok = ok && !o.fail();
         }
+        std::error_code ec;
+        if (ok)
+        {
+            fs::rename(tmp, to, ec);
+            ok = !ec;
+        }
+        if (!ok) fs::remove(tmp, ec);                            // every failure after the open: no stray temp
+        return ok;
     }
 
     bool WriteAssetCopy(const FileMove& m, AssetKind k, const Arcane::Guid& newId, std::string* error)   // new id lands BEFORE Register: AddFile never mints

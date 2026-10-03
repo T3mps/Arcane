@@ -879,6 +879,106 @@ TEST_CASE("Duplicate: every kind's copy carries a fresh on-disk id; the registry
     t.stack.Undo(); CHECK_FALSE(std::filesystem::exists(t.content / "m/gold 1.arcmat"));
     t.stack.Redo(); CHECK(Arcane::AssetRegistry::PeekId(t.content / "m/gold 1.arcmat") == plan.newGuids[0]);
 }
+// T5-B9 review (owed at T5-GATE): the atomic write behind every duplicate leaves no
+// "<to>.arctmp" behind on ANY failure after the temp opens -- a failed write, a failed
+// rename -- and never a half-written target.
+TEST_CASE("WriteTextFileAtomic: a failed write or rename leaves no temp and no target", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_atomic_write");
+    const fs::path to = t.content / "m" / "gold 1.arcmat";
+    const fs::path tmp = fs::path(to).concat(".arctmp");
+    fs::create_directories(to.parent_path());
+    SECTION("the stream write fails part-way")
+    {
+        const auto failing = [](std::ostream& o, const std::string& text) { o.write(text.data(), 3); return false; };
+        CHECK_FALSE(WriteTextFileAtomic(to, R"({ "id": "x" })", failing));
+        CHECK_FALSE(fs::exists(tmp));
+        CHECK_FALSE(fs::exists(to));
+    }
+    SECTION("the rename over the target fails")
+    {
+        fs::create_directories(to);   // a folder squats on the copy's name
+        CHECK_FALSE(WriteTextFileAtomic(to, R"({ "id": "x" })"));
+        CHECK_FALSE(fs::exists(tmp));
+        CHECK(fs::is_directory(to));
+    }
+    SECTION("success: the target holds every byte, no temp")
+    {
+        REQUIRE(WriteTextFileAtomic(to, R"({ "id": "x" })"));
+        CHECK(Arcane::Test::Slurp(to) == R"({ "id": "x" })");
+        CHECK_FALSE(fs::exists(tmp));
+    }
+}
+
+// T5-B9 review (owed at T5-GATE): the kinds the first every-kind case leaves out.
+TEST_CASE("Duplicate: Data, Audio, Font and Model copies carry fresh ids and undo away", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_dup_more_kinds");
+    t.Write("d/cfg.json", R"({"id":"7e5a8888-0001-4001-8001-000000000001","rate":3})");
+    t.Write("a/hit.wav", "RIFF"); t.Write("a/hit.wav.meta", R"({"guid":"7e5a8888-0002-4002-8002-000000000002","version":1})");
+    t.Write("f/ui.ttf", "ttf");   t.Write("f/ui.ttf.meta", R"({"guid":"7e5a8888-0003-4003-8003-000000000003","version":1})");
+    t.Write("g/prop.gltf", R"({"asset":{"version":"2.0"}})");
+    t.Write("g/prop.gltf.meta", R"({"guid":"7e5a8888-0004-4004-8004-000000000004","version":1,"scale":2})");
+    t.Scan();
+    const std::vector<std::string> rel = { "d/cfg.json", "a/hit.wav", "f/ui.ttf", "g/prop.gltf" };
+    std::vector<Arcane::Guid> src;
+    for (const std::string& r : rel) { src.push_back(t.GuidOf(r)); REQUIRE(src.back().IsValid()); }
+    const auto before = t.Snapshot();
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    const AssetOpPlan plan = PlanAssetOp({ .kind = AssetOpKind::Duplicate, .guids = src }, t.Facts());
+    REQUIRE(plan.refusals.empty());
+    REQUIRE(exec.Execute(plan, t.stack).ok);
+    REQUIRE(plan.newGuids.size() == src.size());
+    const std::vector<std::string> copies = { "d/cfg 1.json", "a/hit 1.wav", "f/ui 1.ttf", "g/prop 1.gltf" };
+    for (std::size_t i = 0; i < src.size(); ++i)
+    {
+        INFO(copies[i]);
+        CHECK(plan.newGuids[i] != src[i]);
+        CHECK(Arcane::AssetRegistry::PeekId(t.content / copies[i]) == plan.newGuids[i]);   // the on-disk id
+        CHECK(t.registry.Resolve(plan.newGuids[i]) == "game://" + copies[i]);
+        CHECK(t.registry.Resolve(src[i]) == "game://" + rel[i]);
+    }
+    CHECK(nlohmann::json::parse(std::ifstream(t.content / "d/cfg 1.json"))["rate"] == 3);         // every other field stays
+    CHECK(nlohmann::json::parse(std::ifstream(t.content / "g/prop 1.gltf.meta"))["scale"] == 2);
+    CHECK(Arcane::Test::Slurp(t.content / "a/hit 1.wav") == "RIFF");
+    t.stack.Undo();
+    CHECK(t.Snapshot() == before);
+    for (const Arcane::Guid& g : plan.newGuids) CHECK_FALSE(t.registry.Resolve(g).has_value());
+}
+
+// T5-B9 review (owed at T5-GATE): CopyForward's rollback -- a later copy failing undoes
+// every earlier copy of the batch (files and registrations); nothing is pushed.
+TEST_CASE("Duplicate: a copy failing mid-batch rolls back the earlier copies", "[editor][assetops]")
+{
+    AssetOpsTest::Tree t("arcane_ops_dup_rollback");
+    t.Write("m/gold.arcmat", R"({"id":"7e5a9999-0001-4001-8001-000000000001","name":"gold"})");
+    t.Write("m/iron.arcmat", R"({"id":"7e5a9999-0002-4002-8002-000000000002","name":"iron"})");
+    t.Scan();
+    const std::vector<Arcane::Guid> src = { t.GuidOf("m/gold.arcmat"), t.GuidOf("m/iron.arcmat") };
+    AssetOpsTest::Host h(t); AssetFileOpExecutor exec(h, t.stack, t.content);
+    const AssetOpPlan plan = PlanAssetOp({ .kind = AssetOpKind::Duplicate, .guids = src }, t.Facts());
+    REQUIRE((plan.refusals.empty() && plan.newGuids.size() == 2));
+    SECTION("the second copy's write fails (its source went unreadable)")
+    {
+        t.Write("m/iron.arcmat", "not json");
+    }
+    SECTION("the second copy registers under another id")
+    {
+        h.registerOverride = [&](const fs::path& p) -> std::optional<Arcane::Guid>
+        {
+            if (p.filename() == "iron 1.arcmat") return Arcane::Guid::Generate();
+            return t.registry.AddFile(p, t.content, "game");
+        };
+    }
+    const auto before = t.Snapshot();
+    CHECK_FALSE(exec.Execute(plan, t.stack).ok);
+    CHECK(t.Snapshot() == before);                                  // gold 1 and iron 1 are gone
+    CHECK_FALSE(t.registry.Resolve(plan.newGuids[0]).has_value());  // gold 1 unregistered
+    CHECK_FALSE(t.registry.Resolve(plan.newGuids[1]).has_value());
+    CHECK(t.registry.Resolve(src[0]) == "game://m/gold.arcmat");
+    CHECK_FALSE(t.stack.CanUndo());
+    CHECK(std::count(h.calls.begin(), h.calls.end(), "Error Duplicate 2 assets failed") == 1);
+}
 TEST_CASE("Duplicate: a scene copy re-mints every Identity id, leaves the original alone, and loads", "[editor][assetops]")
 {
     AssetOpsTest::Tree t("arcane_ops_dup_scene"); Arcane::Runtime rt{ Arcane::Test::Process() }; Arcane::RegisterSceneComponents(rt.Registry());

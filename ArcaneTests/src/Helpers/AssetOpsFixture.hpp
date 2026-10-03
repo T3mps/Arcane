@@ -21,6 +21,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -58,7 +59,9 @@ namespace AssetOpsTest
         AssetOpGates Gates() const override { return { true, true }; }
         Arcane::RebindResult Rebind(const Arcane::Guid& g, const fs::path& p) override { calls.push_back("Rebind"); return t.registry.Rebind(g, p, t.content, "game"); }
         bool Unregister(const Arcane::Guid& g) override { calls.push_back("Unregister"); return t.registry.Remove(g); }
-        std::optional<Arcane::Guid> Register(const fs::path& p) override { calls.push_back("Register"); return t.registry.AddFile(p, t.content, "game"); }
+        std::function<std::optional<Arcane::Guid>(const fs::path&)> registerOverride;   // set: replaces the registry's answer (a Register id mismatch)
+        std::optional<Arcane::Guid> Register(const fs::path& p) override
+        { calls.push_back("Register"); return registerOverride ? registerOverride(p) : t.registry.AddFile(p, t.content, "game"); }
         OsShell::RecycleResult Recycle(std::span<const fs::path> fl) override { calls.push_back("Recycle"); for (const auto& p : fl) { std::error_code e; fs::remove(p, e); } return { true, {}, {}, {} }; }
         bool CloseDocumentFor(const Arcane::Guid&, bool) override { calls.push_back("Close"); return true; }
         void NoteMoved(const Arcane::Guid&, const fs::path& a, const fs::path& b) override { calls.push_back("NoteMoved " + a.filename().string() + "->" + b.filename().string()); }

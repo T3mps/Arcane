@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <span>
@@ -105,6 +106,13 @@ namespace Arcane::Editor
     // with every source field and the new guid. False (and `error`) on failure, with
     // nothing of the copy left behind.
     [[nodiscard]] bool WriteAssetCopy(const FileMove& m, AssetKind kind, const Arcane::Guid& newId, std::string* error);
+
+    // WriteAssetCopy's atomic write: `<to>.arctmp`, then a rename over `to`. Every
+    // failure after the temp file opens (the write, its close, the rename) removes
+    // the temp, so a failed write leaves nothing behind. `write` replaces the stream
+    // write in tests (false = the write failed); empty = the real write.
+    [[nodiscard]] bool WriteTextFileAtomic(const std::filesystem::path& to, const std::string& text,
+                                           const std::function<bool(std::ostream&, const std::string&)>& write = {});
 
     // s7.8: the relative files a .gltf names -- buffers[].uri then images[].uri,
     // data: URIs skipped, percent-decoded. Empty for .glb (self-contained) and for an
