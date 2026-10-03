@@ -57,6 +57,7 @@
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
 #include "Project/ModuleBuild.hpp"
 #include "Project/ServerLaunch.hpp"   // ServerProcess is a BY-VALUE member (m_serverProcess)
+#include "Project/StartPageModel.hpp"   // StartPageFocus (m_startPageFocus, spec 2026-09-30 s8.4)
 #include "App/PlayMode.hpp"
 #include "App/EditorTitle.hpp"         // TitleParts (CurrentTitleParts)
 #include "Panels/ProblemsPanel.hpp"
@@ -2318,8 +2319,9 @@ namespace Arcane::Editor
         std::unordered_map<std::string, std::string> m_fileOpRefusalMemo; std::string m_fileOpRefusalMemoGate;   // dry-run memo
 
         // DrawStartPage's rising edge (visible = no project, derived every frame,
-        // never latched): refresh recents and focus the page once per appearance.
-        bool m_startPageWasVisible = false;
+        // never latched): refresh recents once per appearance, and focus the
+        // page once per appearance on its first docked frame (StepStartPageFocus).
+        Arcane::Editor::StartPageFocus m_startPageFocus;
 
         // Set by SwitchProject when its BootSequence reports the window closed
         // mid-switch (BootResult::quitRequested), instead of treating that

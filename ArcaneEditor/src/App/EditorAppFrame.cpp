@@ -2900,14 +2900,17 @@ namespace Arcane::Editor
         // Derived every frame, never latched: a switch that fails after
         // teardown brings the page back; a successful one hides it.
         const bool visible = m_runtime->CurrentProject() == nullptr;
-        const bool appearing = visible && !m_startPageWasVisible;
-        m_startPageWasVisible = visible;
+        // A focus lands only once the page is docked and no popup (a boot
+        // error modal) holds focus; until then it waits (StepStartPageFocus).
+        const bool canFocus = m_viewportDockId != 0 &&
+                              !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const Arcane::Editor::StartPageStep step =
+            Arcane::Editor::StepStartPageFocus(m_startPageFocus, visible, canFocus);
         if (!visible) return;
-        if (appearing)
-        {
+        if (step.appearing)
             m_recents.RefreshAll(nullptr);   // read-only: the page never writes the shared recents
-            ImGui::SetNextWindowFocus();
-        }
+        if (step.focusNow)
+            ImGui::SetNextWindowFocus();     // the first frame it can land, so the Start tab is in front
         if (m_viewportDockId != 0)
             ImGui::SetNextWindowDockID(static_cast<ImGuiID>(m_viewportDockId), ImGuiCond_Always);
         if (ImGui::Begin("Start###startpage", nullptr, ImGuiWindowFlags_NoSavedSettings))   // no Close X (9.27 #14)

@@ -68,3 +68,36 @@ TEST_CASE("start page: DialogStartDir is the parent of the first row's project f
     CHECK(DialogStartDir(Sel({ P("C:\\Games\\Alpha\\", "Alpha", 0) })) == "C:\\Games");                  // trailing separator
     CHECK(DialogStartDir(Sel({ P("C:\\Games\\Beta\\Beta.arcproj", "Beta", 0), P("D:\\x\\y", "y", 0) })) == "C:\\Games");   // .arcproj-shaped, first row wins
 }
+
+TEST_CASE("start page: the appearance focus waits until it can land (docked, no modal), then fires once", "[editor]")
+{
+    StartPageFocus focus;
+    // A bare launch: frame 1 draws the page before the Viewport's dock id is known.
+    StartPageStep s = StepStartPageFocus(focus, true, false);
+    CHECK(s.appearing);
+    CHECK_FALSE(s.focusNow);   // a focus spent on the floating frame leaves the Viewport tab in front
+    s = StepStartPageFocus(focus, true, true);
+    CHECK_FALSE(s.appearing);
+    CHECK(s.focusNow);         // the first docked frame brings the Start tab to the front
+    s = StepStartPageFocus(focus, true, true);
+    CHECK_FALSE(s.focusNow);   // once per appearance: the user may pick another tab
+    // A project opens (page hidden), then a failed switch brings it back while docked.
+    s = StepStartPageFocus(focus, false, true);
+    CHECK_FALSE(s.appearing);
+    CHECK_FALSE(s.focusNow);
+    s = StepStartPageFocus(focus, true, true);
+    CHECK(s.appearing);
+    CHECK(s.focusNow);
+    // A failed switch brings the page back under its error modal: the focus waits for OK.
+    (void)StepStartPageFocus(focus, false, true);
+    s = StepStartPageFocus(focus, true, false);   // modal up
+    CHECK(s.appearing);
+    CHECK_FALSE(s.focusNow);
+    CHECK_FALSE(StepStartPageFocus(focus, true, false).focusNow);
+    CHECK(StepStartPageFocus(focus, true, true).focusNow);   // modal dismissed
+    // Hidden before it ever docked: the pending focus is dropped, not carried over.
+    StartPageFocus early;
+    (void)StepStartPageFocus(early, true, false);
+    (void)StepStartPageFocus(early, false, false);
+    CHECK_FALSE(StepStartPageFocus(early, false, true).focusNow);
+}

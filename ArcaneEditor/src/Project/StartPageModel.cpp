@@ -46,4 +46,23 @@ namespace Arcane::Editor
         if (dir.extension() == ".arcproj") dir = dir.parent_path();   // a manifest names its folder (Project::Open's rule)
         return dir.parent_path().string();
     }
+
+    StartPageStep StepStartPageFocus(StartPageFocus& state, bool visible, bool canFocus)
+    {
+        StartPageStep step;
+        step.appearing = visible && !state.wasVisible;
+        state.wasVisible = visible;
+        if (!visible)
+        {
+            state.pending = false;
+            return step;
+        }
+        if (step.appearing) state.pending = true;
+        if (state.pending && canFocus)
+        {
+            step.focusNow = true;
+            state.pending = false;
+        }
+        return step;
+    }
 }
