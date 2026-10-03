@@ -39,7 +39,10 @@ namespace
         }
 
         // Two tabs in one dockspace node; returns that node after `frames` frames.
-        ImGuiDockNode* Run(ImGuiDockNodeFlags spaceFlags, int frames = 3)
+        bool openA = true, openB = true;
+
+        // closable: the two tabs carry close buttons (Begin with p_open).
+        ImGuiDockNode* Run(ImGuiDockNodeFlags spaceFlags, int frames = 3, bool closable = false)
         {
             const ImGuiID dockId = ImHashStr("InsetDock");
             for (int i = 0; i < frames; ++i)
@@ -60,8 +63,8 @@ namespace
                 ImGui::Begin("##insethost", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
                 ImGui::DockSpace(dockId, ImVec2(0.0f, 0.0f), spaceFlags);
                 ImGui::End();
-                ImGui::Begin("Inset A"); ImGui::TextUnformatted("a"); ImGui::End();
-                ImGui::Begin("Inset B"); ImGui::TextUnformatted("b"); ImGui::End();
+                ImGui::Begin("Inset A", closable ? &openA : nullptr); ImGui::TextUnformatted("a"); ImGui::End();
+                ImGui::Begin("Inset B", closable ? &openB : nullptr); ImGui::TextUnformatted("b"); ImGui::End();
                 ImGui::Render();
             }
             return ImGui::DockBuilderGetNode(dockId);
@@ -207,4 +210,35 @@ TEST_CASE("Dock tabs butt together: no gap between neighbouring tabs", "[editor]
         std::swap(a, b);
     CHECK(a->Offset == 0.0f);
     CHECK(b->Offset == a->Offset + a->Width);
+}
+
+TEST_CASE("Dock tab hover: the mouse on an unselected tab's close button keeps the whole tab lifted", "[editor][docking]")
+{
+    // ARCANE LOCAL FIX in imgui_widgets.cpp TabItemEx (user desk, 2026-10-02):
+    // upstream drops the tab's TabHovered fill while the mouse is on its X.
+    DockHarness h;
+    ImGui::GetIO().MousePos = ImVec2(-10000.0f, -10000.0f);
+    ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton, 3, true);
+    REQUIRE(node != nullptr);
+    REQUIRE(node->TabBar != nullptr);
+    const ImGuiTabItem* unselected = nullptr;
+    for (const ImGuiTabItem& tab : node->TabBar->Tabs)
+        if (tab.ID != node->TabBar->SelectedTabId)
+            unselected = &tab;
+    REQUIRE(unselected != nullptr);
+    const ImGuiID tabId = unselected->ID;
+    const ImRect bar = node->TabBar->BarRect;
+    const ImRect r(ImVec2(bar.Min.x + unselected->Offset, bar.Min.y),
+                   ImVec2(bar.Min.x + unselected->Offset + unselected->Width, bar.Max.y));
+    // The close button's centre, as TabItemLabelAndCloseButton places it.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float sz = ImGui::GetFontSize();
+    ImGui::GetIO().MousePos = ImVec2(r.Max.x - style.FramePadding.x - sz * 0.5f, r.Min.y + style.FramePadding.y + sz * 0.5f);
+    node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton, 3, true);
+    REQUIRE(node != nullptr);
+    // The mouse is on the X (something other than the tab itself is hovered) ...
+    REQUIRE(GImGui->HoveredId != 0);
+    REQUIRE(GImGui->HoveredId != tabId);
+    // ... and the tab is still painted in its hover fill.
+    CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TabHovered)) > 0);
 }

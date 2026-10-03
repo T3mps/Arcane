@@ -10884,7 +10884,13 @@ bool    ImGui::TabItemEx(ImGuiTabBar* tab_bar, const char* label, bool* p_open, 
         ImDrawList* display_draw_list = window->DrawList;
         // ARCANE LOCAL FIX (2026-10-02, user desk -- Visual Studio tab language): hover lifts only an UNSELECTED
         // tab; the selected tab keeps its fill under the mouse. Upstream paints TabHovered over any hovered tab.
-        const ImU32 tab_col = GetColorU32(((held || hovered) && !tab_contents_visible) ? ImGuiCol_TabHovered : tab_contents_visible ? (tab_bar_focused ? ImGuiCol_TabSelected : ImGuiCol_TabDimmedSelected) : (tab_bar_focused ? ImGuiCol_Tab : ImGuiCol_TabDimmed));
+        // Hovering or holding the tab's own close button counts as hovering the tab (the whole tab stays lifted,
+        // the X adds its own highlight); upstream drops the tab's hover while the mouse is on the X.
+        const ImGuiID arcane_close_id = p_open ? GetIDWithSeed("#CLOSE", NULL, docked_window ? docked_window->ID : id) : 0;
+        // (The X is submitted AFTER this fill, so this frame's HoveredId cannot name it yet: read the previous
+        // frame's, as the label does via is_hovered.)
+        const bool arcane_close_hot = arcane_close_id != 0 && (g.HoveredId == arcane_close_id || g.HoveredIdPreviousFrame == arcane_close_id || g.ActiveId == arcane_close_id);
+        const ImU32 tab_col = GetColorU32(((held || hovered || arcane_close_hot) && !tab_contents_visible) ? ImGuiCol_TabHovered : tab_contents_visible ? (tab_bar_focused ? ImGuiCol_TabSelected : ImGuiCol_TabDimmedSelected) : (tab_bar_focused ? ImGuiCol_Tab : ImGuiCol_TabDimmed));
         TabItemBackground(display_draw_list, bb, flags, tab_col);
         if (tab_contents_visible && (tab_bar->Flags & ImGuiTabBarFlags_DrawSelectedOverline) && style.TabBarOverlineSize > 0.0f)
         {
