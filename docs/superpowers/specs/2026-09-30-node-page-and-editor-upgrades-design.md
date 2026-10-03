@@ -101,6 +101,7 @@ Every NEW tunable is an Archive cvar, never a `constexpr`. It carries help text,
 | `editor.undo.byteBudgetMB` | Int | 512 (drafting pick, 9.28) | 16..65536 | T1 | byte-budget eviction |
 | `editor.undo.spillThresholdKB` | Int | 256 (drafting pick, 9.28) | 16..1048576 | T1 | payloads above it spill to `Saved/UndoCache/` |
 | `editor.graph.fitMaxZoom` | Float | 1.0 | 0.1..2.0 (the zoom table, `GraphZoomLevels.hpp`) | T2 | `GraphFit` zoom cap |
+| `editor.graph.fitMinZoom` | Float | 0.5 | 0.1..2.0 | post-phase (user, 2026-10-03; f2a6032d) | `GraphFit` zoom floor: fit-all never lands below it (navigation margin included); a graph too big for it frames its centre |
 | `editor.inspector.materialPreviewFraction` | Float | 0.45 (drafting pick, 9.28) | 0.2..0.8 | T3 | material preview box height |
 | `editor.inspector.assetThumbMinPx` | Int | 64 | 32..140 | T3 | asset-page thumbnail floor |
 | `editor.inspector.assetThumbHeightFraction` | Float | 0.30 (drafting pick, 9.28) | 0.1..0.6 | T3 | asset-page thumbnail height |
@@ -865,7 +866,7 @@ bool GraphFitToContent(float maxZoom, float durationSeconds = 0.0f);
 **Applied in T2: the shader editor.**
 - `m_fitPending`, and a twin flag for the pass canvas, are set on any frame that seeds positions.
 - They are consumed on the next canvas draw, once nodes have measured sizes (`NodeCulled` exempts unmeasured nodes, `:5194-5213`), with `GraphFitToContent(cvar, 0.0f)`.
-- **F keeps its meaning** (`:3895-3903`, `:3042-3049`): with a selection, `NavigateToSelection(true)`; otherwise `NavigateToContent()`. F is uncapped.
+- **F keeps its meaning** (`:3895-3903`, `:3042-3049`): with a selection, `NavigateToSelection(true)`; otherwise `NavigateToContent()`. F is uncapped. Amendment (2026-10-03, user ruling): F with nothing selected stays the UNFLOORED frame-everything ("I like that F allows you to see everything at once"); only fit-all (fit-on-open and the Asset Graph fit) honours `editor.graph.fitMinZoom`.
 
 **Applied in T4: the Asset Graph** (drafting pick, 9.28: it lands with T4's canvas shrink). See s6.9. The fit is armed in the lazy-create branch (`AssetGraphPanel.cpp:1312`) and in the rebuild caused by a focus or kind-filter change. It is never armed by a rebuild caused only by `entriesStamp`. Its tests live in s11 T4.
 
@@ -2889,7 +2890,7 @@ The user approved the whole plan on 2026-09-30 ("write what you need"); these de
 - **Load rejects recycled `nextVersion==0`** (deferred-placeholder encoding, `Commands/CommandBuffer.hpp:1192-1223`).
 - Selection: the placement review kept slot retirement (smallest change, makes `IsValid` real for every remaining raw holder) over the necessity review. Dropped: the Load generation fence (retired slots break its "max" rule; `ResetRegistry` bypasses Load, `ArcaneCore/src/Arcane/Base/Runtime.cpp:378-387`) and `CloneEntities`. `IEntityVisitor`, `RemapEntities`, payload remap → s10.1.
 
-**9.20 Every NEW tunable is an Archive cvar, never `constexpr`** (help, min/max, dotted category; `CVarFlags::Archive`, `ArcaneCore/src/Arcane/Config/CVarTypes.hpp:36`). This plan's (s2.4): `editor.undo.maxSteps`, `editor.undo.byteBudgetMB`, `editor.undo.spillThresholdKB`, `editor.graph.fitMaxZoom`, `editor.inspector.assetThumbMinPx` (64), `editor.inspector.assetThumbHeightFraction`, `editor.inspector.materialPreviewFraction`, `console.historySize`; `log.level` is Archive|Dev.
+**9.20 Every NEW tunable is an Archive cvar, never `constexpr`** (help, min/max, dotted category; `CVarFlags::Archive`, `ArcaneCore/src/Arcane/Config/CVarTypes.hpp:36`). This plan's (s2.4): `editor.undo.maxSteps`, `editor.undo.byteBudgetMB`, `editor.undo.spillThresholdKB`, `editor.graph.fitMaxZoom`, `editor.graph.fitMinZoom` (0.5, added 2026-10-03), `editor.inspector.assetThumbMinPx` (64), `editor.inspector.assetThumbHeightFraction`, `editor.inspector.materialPreviewFraction`, `console.historySize`; `log.level` is Archive|Dev.
 
 **9.21 Shared asset-reference field in `Panels/` (model-aware); `Widgets/` stays model-free.** One `EditorApp`-owned `AssetRefServices` feeds InspectorServices, DocServices and the Mesh/Sprite Services. Entity-page arm migrates **(default)**. Rejected: a third private picker.
 
