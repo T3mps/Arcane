@@ -12,6 +12,7 @@
 
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Project/MountTable.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
@@ -722,14 +723,19 @@ TEST_CASE("Delete: a .png restored from the Recycle Bin is rediscovered with its
 
     std::ofstream(meta, std::ios::binary) << metaBytes;   // the shell's Restore puts both files back
     std::ofstream(png, std::ios::binary) << pngBytes;
-    std::unordered_set<std::string> known;                // the registry's known Texture/Model sources
-    for (const auto& [g, mp] : r.w.registry.All())
-        if (mp.ends_with(".png")) known.insert((r.w.content / mp.substr(std::string_view("game://").size())).generic_string());
-    static constexpr std::string_view kExt[] = { ".png" };
-    const std::vector<fs::path> found = DiscoverUnknownSources(r.w.content, kExt, known);
+    // PollAssetWatch's own discovery step (EditorAppProject.cpp): the editor's
+    // known-set rule and extension set over the registry and a "game" mount,
+    // then the registration RegisterCreatedAsset reaches (Project::RegisterAsset
+    // -> AssetRegistry::AddFile under the matching mount root).
+    Arcane::MountTable mounts;
+    mounts.Mount("game", r.w.content);
+    const std::unordered_set<std::string> known = KnownDiscoverySourcePaths(r.w.registry, mounts);
+    CHECK_FALSE(known.contains(png.generic_string()));   // the delete unmapped it
+    const std::vector<fs::path> found = DiscoverUnknownSources(r.w.content, kDiscoveryExtensions, known);
     REQUIRE(found.size() == 1);
     CHECK(found[0].generic_string() == png.generic_string());
     CHECK(r.w.registry.AddFile(found[0], r.w.content, "game") == r.tex);   // the id from the restored .meta, not a mint
+    CHECK(KnownDiscoverySourcePaths(r.w.registry, mounts).contains(png.generic_string()));   // the next poll leaves it alone
     CHECK(r.w.registry.Resolve(r.tex) == "game://textures/uv_marker.png");
     CHECK(Arcane::Test::Slurp(meta) == metaBytes);                         // nothing re-minted or rewritten
 }

@@ -468,27 +468,19 @@ namespace Arcane::Editor
         // DiscoverUnknownSources now take an explicit extension set
         // (generalized here from the old hardcoded ".png" scan, the
         // identical widening CookSession::EnumerateSources went through in
-        // Task 8 on the pipeline side) -- kDiscoveryExtensions below is that
+        // Task 8 on the pipeline side) -- kDiscoveryExtensions (ContentDiscovery.hpp) is that
         // set, both kinds' extensions in one array.
         if (m_editorClock >= m_contentDiscoveryNext)
         {
             m_contentDiscoveryNext = m_editorClock + 2.0;
 
-            static constexpr std::string_view kDiscoveryExtensions[] = {
-                ".png",           // Texture
-                ".gltf", ".glb",  // Model (F2c s4.1)
-            };
+            using Arcane::Editor::kDiscoveryExtensions;   // ContentDiscovery.hpp: .png, .gltf, .glb
 
-            std::unordered_set<std::string> knownSourcePaths;
-            for (const Arcane::Editor::AssetEntry& known :
-                 Arcane::Editor::BuildAssetEntries(project->Registry()))
-            {
-                if (known.kind != Arcane::Editor::AssetKind::Texture &&
-                    known.kind != Arcane::Editor::AssetKind::Model)
-                    continue;
-                if (const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(known.guid)))
-                    knownSourcePaths.insert(p->generic_string());
-            }
+            // The registry's Texture/Model sources (ContentDiscovery.hpp's
+            // KnownDiscoverySourcePaths, the rule the suite's Recycle Bin
+            // rediscovery case drives too).
+            const std::unordered_set<std::string> knownSourcePaths =
+                Arcane::Editor::KnownDiscoverySourcePaths(project->Registry(), project->Mounts());
 
             // F2c Task 13 (s5.5, A4): a newly-discovered .gltf/.glb has its embedded
             // textures extracted to loose .png siblings BEFORE any registration --

@@ -112,20 +112,13 @@ namespace
         out << doc.dump(2);
     }
 
-    // Mirrors EditorAppProject.cpp's PollAssetWatch known-set build: every
-    // registered AssetKind::Texture entry, resolved back to a filesystem
-    // path, in generic-string form.
+    // PollAssetWatch's known set (EditorAppProject.cpp): the editor's own
+    // KnownDiscoverySourcePaths over the project's registry and mounts (it
+    // was a hand mirror here, Texture-only, until T5-GATE fix round 1 lifted
+    // the rule into ContentDiscovery).
     std::unordered_set<std::string> KnownTexturePaths(const Arcane::Project& project)
     {
-        std::unordered_set<std::string> known;
-        for (const AssetEntry& e : BuildAssetEntries(project.Registry()))
-        {
-            if (e.kind != AssetKind::Texture)
-                continue;
-            if (const auto p = project.ResolveAsset(Arcane::AssetId::FromGuid(e.guid)))
-                known.insert(p->generic_string());
-        }
-        return known;
+        return Arcane::Editor::KnownDiscoverySourcePaths(project.Registry(), project.Mounts());
     }
 }
 
@@ -310,8 +303,7 @@ TEST_CASE("F2b fix: discovery finds the drop, RegisterAsset mints its sidecar, a
     WritePngFile(dropped, 2, 2, SolidPixels(2, 2, 40, 50, 60, 255));
 
     // "the discovery probe reports it" -- exactly what PollAssetWatch's
-    // discovery step computes (KnownTexturePaths mirrors its known-set
-    // build verbatim).
+    // discovery step computes (KnownTexturePaths calls its known-set rule).
     const std::vector<fs::path> unknown =
         DiscoverUnknownSources(dir / "Content", kPngExtensions, KnownTexturePaths(*proj));
     REQUIRE(unknown.size() == 1u);

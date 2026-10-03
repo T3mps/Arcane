@@ -1,5 +1,10 @@
 #include "Project/ContentDiscovery.hpp"
 
+#include "Panels/AssetPanelModel.hpp"   // BuildAssetEntries, AssetKind
+
+#include <Arcane/Project/AssetRegistry.hpp>
+#include <Arcane/Project/MountTable.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <system_error>
@@ -77,6 +82,20 @@ namespace Arcane::Editor
                 unknown.push_back(candidate);
         }
         return unknown;
+    }
+
+    std::unordered_set<std::string> KnownDiscoverySourcePaths(const Arcane::AssetRegistry& registry,
+                                                              const Arcane::MountTable& mounts)
+    {
+        std::unordered_set<std::string> known;
+        for (const AssetEntry& e : BuildAssetEntries(registry))
+        {
+            if (e.kind != AssetKind::Texture && e.kind != AssetKind::Model)
+                continue;
+            if (const auto path = mounts.Resolve(e.mountPath))
+                known.insert(path->generic_string());
+        }
+        return known;
     }
 
     std::vector<std::filesystem::path> DiscoverUnknownSources(
