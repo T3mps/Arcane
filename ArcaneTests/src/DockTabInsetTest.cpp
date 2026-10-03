@@ -73,9 +73,9 @@ TEST_CASE("Dock tab bar: no left window-menu button -> the first tab is flush wi
     ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
     REQUIRE(node != nullptr);
     REQUIRE(node->TabBar != nullptr);
-    const ImGuiStyle& style = ImGui::GetStyle();
-    // Only the border separates the tab bar from the node edge -- no FramePadding.x.
-    CHECK(node->TabBar->BarRect.Min.x == node->Pos.x + style.WindowBorderSize);
+    // Nothing separates the tab bar from the node edge -- no border, no FramePadding.x
+    // (user desk, 2026-10-02: the remaining 1 px was WindowBorderSize).
+    CHECK(node->TabBar->BarRect.Min.x == node->Pos.x);
 }
 
 TEST_CASE("Dock tab bar: a left window-menu button keeps upstream's padding before it", "[editor][docking]")

@@ -19835,14 +19835,16 @@ static void ImGui::DockNodeCalcTabBarLayout(const ImGuiDockNode* node, ImRect* o
     ImRect r = ImRect(node->Pos.x, node->Pos.y, node->Pos.x + node->Size.x, node->Pos.y + g.FontSize + g.Style.FramePadding.y * 2.0f);
     if (out_title_rect) { *out_title_rect = r; }
 
-    r.Min.x += style.WindowBorderSize;
+    // ARCANE LOCAL FIX (2026-10-02, user desk): the LEFT insets (WindowBorderSize + FramePadding.x) only pad a
+    // left window-menu button; with none (Arcane's dockspace sets ImGuiDockNodeFlags_NoWindowMenuButton) the
+    // first tab sits exactly on the node's left edge, lining up with the panel below. Upstream always insets.
+    const bool arcane_left_menu_button = node->HasWindowMenuButton && style.WindowMenuButtonPosition == ImGuiDir_Left;
+    if (arcane_left_menu_button)
+        r.Min.x += style.WindowBorderSize;
     r.Max.x -= style.WindowBorderSize;
 
     float button_sz = g.FontSize;
-    // ARCANE LOCAL FIX (2026-10-02, user desk): the LEFT FramePadding inset only pads a left window-menu
-    // button; with none (Arcane's dockspace sets ImGuiDockNodeFlags_NoWindowMenuButton) the first tab sits
-    // flush with the node's left edge, lining up with the panel below. Upstream always insets.
-    if (node->HasWindowMenuButton && style.WindowMenuButtonPosition == ImGuiDir_Left)
+    if (arcane_left_menu_button)
         r.Min.x += style.FramePadding.x;
     r.Max.x -= style.FramePadding.x;
     ImVec2 window_menu_button_pos = ImVec2(r.Min.x, r.Min.y + style.FramePadding.y);
