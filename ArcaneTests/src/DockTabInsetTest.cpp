@@ -162,3 +162,29 @@ TEST_CASE("Dock tab labels: hovering an unselected tab brightens its label to Te
     CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_Text)) > 0);
     CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TextDisabled)) == 0);
 }
+
+TEST_CASE("Dock tab fill: hovering the SELECTED tab keeps its fill (no hover lift)", "[editor][docking]")
+{
+    DockHarness h;
+    ImGui::GetIO().MousePos = ImVec2(-10000.0f, -10000.0f);
+    ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
+    REQUIRE(node != nullptr);
+    REQUIRE(node->TabBar != nullptr);
+    const ImGuiTabItem* selected = nullptr;
+    for (const ImGuiTabItem& tab : node->TabBar->Tabs)
+        if (tab.ID == node->TabBar->SelectedTabId)
+            selected = &tab;
+    REQUIRE(selected != nullptr);
+    const ImRect bar = node->TabBar->BarRect;
+    const ImRect r(ImVec2(bar.Min.x + selected->Offset, bar.Min.y),
+                   ImVec2(bar.Min.x + selected->Offset + selected->Width, bar.Max.y));
+    ImGui::GetIO().MousePos = r.GetCenter();                // hover it (no click)
+    node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
+    REQUIRE(node != nullptr);
+    REQUIRE(ImGui::GetColorU32(ImGuiCol_TabHovered) != ImGui::GetColorU32(ImGuiCol_TabSelected));
+    REQUIRE(ImGui::GetColorU32(ImGuiCol_TabHovered) != ImGui::GetColorU32(ImGuiCol_TabDimmedSelected));
+    CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TabHovered)) == 0);
+    // Focused or not, the fill is one of the two SELECTED tones.
+    CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TabSelected)) +
+          CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TabDimmedSelected)) > 0);
+}
