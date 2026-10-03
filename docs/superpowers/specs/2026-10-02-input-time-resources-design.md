@@ -322,7 +322,7 @@ T1-T10 are required. Tags follow the existing suites. Run them from the exe dire
   12. the guard;
   13. docs;
   14. the gate.
-- **ABI.** Main is at 46. The node-page branch moves it to 48, and its T5 lane to 49. This branch takes the NEXT FREE number when it merges, after the node-page phase. It rebases onto the merged node-page work and bumps once (`LocalInputUser` layout, s4). ReferenceProject's `.arcproj` and Aphelyon's `Game/Aphelyon.arcproj` are restamped then. The Aphelyon example doc (s6.2) is swept in the same Aphelyon commit.
+- **ABI.** Main is at 46. The node-page branch moves it to 48, and its T5 lane to 49. This branch takes the NEXT FREE number when it merges, after the node-page phase. It rebases onto the merged node-page work and bumps once (`LocalInputUser` layout, s4). ReferenceProject's `.arcproj` and Aphelyon's `D:\dev\starworks\Aphelyon\Aphelyon.arcproj` (the repo-root project; built with `--project D:\dev\starworks\Aphelyon`) are restamped then. The Aphelyon example doc (s6.2) is swept in the same Aphelyon commit.
 - **Execution.** Subagent-driven, task by task with review, then a whole-branch review. Estimated 20-25 tasks.
 - **Never:** push; `git add -A`; touch the user's untracked files.
 

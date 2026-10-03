@@ -3357,9 +3357,9 @@ Spec s9. The controller does this when it integrates. It is listed here so nothi
    - Astra param systems keyed by functor type.
 3. **Restamp** `ReferenceProject/ReferenceProject.arcproj` (`engine.abi`) in the bump commit.
 4. **Aphelyon** (`D:\dev\starworks\Aphelyon`, its own commit, never pushed):
-   - restamp `Game/Aphelyon.arcproj`;
+   - restamp `D:\dev\starworks\Aphelyon\Aphelyon.arcproj` (the repo-root project; Aphelyon has no `Game/` dir since the relocation);
    - sweep `docs/examples/arcane-physics-example.cpp` to `Arcane::` (its `using namespace Manifold2D::Physics` becomes `Arcane::Phys::`, and any `Astra::` becomes the alias);
-   - rebuild the module through `arcbuild`, both configs, ending on Debug.
+   - rebuild the module through `arcbuild --project D:\dev\starworks\Aphelyon`, both configs, ending on Debug.
 5. **Re-run the full gate** on the merged result, including the golden gate in both configs, ending on Debug.
 
 ## Self-review notes (writing-plans checklist, done)
