@@ -36,23 +36,71 @@
 #include <string_view>
 
 using Arcane::Editor::GraphRect;
+using Arcane::Editor::GraphFitZoomRange;
 using Arcane::Editor::ComputeGraphFitRect;
+using Arcane::Editor::GraphFitLandedZoom;
 using Catch::Approx;
 
 namespace
 {
+    // The plain fit of a rect (CalcCenterView's scale, imgui_canvas.cpp:239-258),
+    // BEFORE NavigateTo's WithMargin growth. GraphFitLandedZoom is the scale the
+    // navigation actually lands at.
     float FitZoom(const GraphRect& r, ImVec2 view)
     {
         return std::min(view.x / (r.max.x - r.min.x), view.y / (r.max.y - r.min.y));
     }
     ImVec2 Mid(const GraphRect& r) { return ImVec2((r.min.x + r.max.x) * 0.5f, (r.min.y + r.max.y) * 0.5f); }
+
+    // No floor beyond the zoom table's own (kZoomLevels[0] = 0.1), cap 1.0: the
+    // pre-FIT-MINZOOM behaviour, which the cases below keep pinning.
+    constexpr GraphFitZoomRange kTableFloor{ .minZoom = 0.0f, .maxZoom = 1.0f };
+
+    // editor.graph.fitMinZoom's default, chosen from the 1080p logo_showcase
+    // captures (FIT-MINZOOM report): the smallest stop whose node titles and
+    // pin labels read as text.
+    constexpr float kFitMinZoomDefault = 0.5f;
+
+    // Sets a Float32 editor cvar for one scope, restoring the published value.
+    struct ScopedFloatCVar
+    {
+        Arcane::CVarHandle handle;
+        float before = 0.0f;
+        ScopedFloatCVar(std::string_view name, float value)
+        {
+            Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            handle = reg.Find(name);
+            REQUIRE_FALSE(handle.IsStale());
+            before = reg.Get(handle)->AsFloat32();
+            REQUIRE(reg.Set(handle, Arcane::CVarValue::Float32(value), Arcane::SetBy::Code) == Arcane::SetResult::Applied);
+            reg.Publish();
+        }
+        ~ScopedFloatCVar()
+        {
+            Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            reg.Set(handle, Arcane::CVarValue::Float32(before), Arcane::SetBy::Code);
+            reg.Publish();
+        }
+        ScopedFloatCVar(const ScopedFloatCVar&) = delete;
+        ScopedFloatCVar& operator=(const ScopedFloatCVar&) = delete;
+    };
+}
+
+TEST_CASE("GraphFitLandedZoom mirrors NavigateTo's WithMargin growth", "[editor][graphfit]")
+{
+    // imgui_node_editor.cpp:3556-3560: the rect grows by c_NavigationZoomMargin
+    // (0.1, :144) of its LONGER side, half on each edge, before the fit.
+    // 4000x1000 -> 4400x1400 in 1000x500: min(1000/4400, 500/1400) = 0.22727.
+    const GraphRect r{ ImVec2(0.0f, 0.0f), ImVec2(4000.0f, 1000.0f) };
+    CHECK(GraphFitLandedZoom(r, ImVec2(1000.0f, 500.0f)) == Approx(1000.0f / 4400.0f));
+    CHECK(GraphFitLandedZoom(r, ImVec2(0.0f, 500.0f)) == 0.0f);
 }
 
 TEST_CASE("ComputeGraphFitRect: a small graph grows about its centre to the cap", "[editor][graphfit]")
 {
     const ImVec2 view(1000.0f, 500.0f);
     const GraphRect content{ ImVec2(100.0f, 200.0f), ImVec2(300.0f, 260.0f) };   // 200x60
-    const GraphRect out = ComputeGraphFitRect(content, view, 1.0f);
+    const GraphRect out = ComputeGraphFitRect(content, view, kTableFloor);
     CHECK(out.max.x - out.min.x >= 1000.0f - 1e-3f);
     CHECK(out.max.y - out.min.y >= 500.0f - 1e-3f);
     CHECK(FitZoom(out, view) == Approx(1.0f));
@@ -64,7 +112,7 @@ TEST_CASE("ComputeGraphFitRect: a graph already in range is unchanged", "[editor
 {
     const ImVec2 view(1000.0f, 500.0f);
     const GraphRect content{ ImVec2(0.0f, 0.0f), ImVec2(4000.0f, 1000.0f) };
-    const GraphRect out = ComputeGraphFitRect(content, view, 1.0f);
+    const GraphRect out = ComputeGraphFitRect(content, view, kTableFloor);
     CHECK(out.min.x == Approx(0.0f)); CHECK(out.min.y == Approx(0.0f));
     CHECK(out.max.x == Approx(4000.0f)); CHECK(out.max.y == Approx(1000.0f));
     CHECK(FitZoom(out, view) == Approx(0.25f));
@@ -72,38 +120,113 @@ TEST_CASE("ComputeGraphFitRect: a graph already in range is unchanged", "[editor
 
 TEST_CASE("ComputeGraphFitRect: a huge graph frames its centre at the 0.1 floor", "[editor][graphfit]")
 {
+    // The floor holds for the zoom the navigation LANDS at, margin included.
     const ImVec2 view(1000.0f, 500.0f);
     const GraphRect content{ ImVec2(-10000.0f, 0.0f), ImVec2(10000.0f, 1000.0f) };   // 20000x1000
-    const GraphRect out = ComputeGraphFitRect(content, view, 1.0f);
-    CHECK(out.max.x - out.min.x == Approx(10000.0f));
-    CHECK(out.max.y - out.min.y == Approx(1000.0f));
-    CHECK(FitZoom(out, view) == Approx(0.1f));
+    const GraphRect out = ComputeGraphFitRect(content, view, kTableFloor);
+    CHECK(GraphFitLandedZoom(out, view) == Approx(0.1f));
     CHECK(Mid(out).x == Approx(0.0f));
     CHECK(Mid(out).y == Approx(500.0f));
+}
+
+TEST_CASE("ComputeGraphFitRect: a huge graph lands AT the min-zoom floor, framing its centre", "[editor][graphfit]")
+{
+    const ImVec2 view(1000.0f, 500.0f);
+    const GraphRect content{ ImVec2(-10000.0f, -300.0f), ImVec2(10000.0f, 3300.0f) };   // 20000x3600
+    const GraphRect out = ComputeGraphFitRect(content, view, { .minZoom = 0.5f, .maxZoom = 1.0f });
+    CHECK(GraphFitLandedZoom(out, view) == Approx(0.5f));
+    CHECK(Mid(out).x == Approx(0.0f));
+    CHECK(Mid(out).y == Approx(1500.0f));
+    // A floor under the zoom table's first stop is the table's: 0.1.
+    const GraphRect deep = ComputeGraphFitRect(content, view, { .minZoom = 0.05f, .maxZoom = 1.0f });
+    CHECK(GraphFitLandedZoom(deep, view) == Approx(0.1f));
+}
+
+TEST_CASE("ComputeGraphFitRect: the floor counts the navigation margin", "[editor][graphfit]")
+{
+    // 1950x400 in 1000x500: the plain fit (0.513) clears a 0.5 floor, but the
+    // WithMargin growth lands it at 1000/2145 = 0.466 -- under the floor, so
+    // it is floored, and lands at exactly 0.5.
+    const ImVec2 view(1000.0f, 500.0f);
+    const GraphRect content{ ImVec2(0.0f, 0.0f), ImVec2(1950.0f, 400.0f) };
+    REQUIRE(GraphFitLandedZoom(content, view) < 0.5f);
+    const GraphRect out = ComputeGraphFitRect(content, view, { .minZoom = 0.5f, .maxZoom = 1.0f });
+    CHECK(GraphFitLandedZoom(out, view) == Approx(0.5f));
+    CHECK(Mid(out).x == Approx(975.0f));
+    CHECK(Mid(out).y == Approx(200.0f));
+}
+
+TEST_CASE("ComputeGraphFitRect: a graph that lands above the floor is unchanged", "[editor][graphfit]")
+{
+    // 1600x400 in 1000x500 lands at 1000/1760 = 0.568, above a 0.5 floor.
+    const ImVec2 view(1000.0f, 500.0f);
+    const GraphRect content{ ImVec2(-800.0f, 0.0f), ImVec2(800.0f, 400.0f) };
+    const GraphRect out = ComputeGraphFitRect(content, view, { .minZoom = 0.5f, .maxZoom = 1.0f });
+    CHECK(out.min.x == Approx(-800.0f)); CHECK(out.min.y == Approx(0.0f));
+    CHECK(out.max.x == Approx(800.0f));  CHECK(out.max.y == Approx(400.0f));
+    CHECK(GraphFitLandedZoom(out, view) > 0.5f);
+}
+
+TEST_CASE("ComputeGraphFitRect: the cap still wins for a tiny graph under a floor", "[editor][graphfit]")
+{
+    const ImVec2 view(1000.0f, 500.0f);
+    const GraphRect content{ ImVec2(100.0f, 200.0f), ImVec2(300.0f, 260.0f) };   // 200x60
+    const GraphRect out = ComputeGraphFitRect(content, view, { .minZoom = 0.5f, .maxZoom = 1.0f });
+    CHECK(FitZoom(out, view) == Approx(1.0f));
+    CHECK(GraphFitLandedZoom(out, view) <= 1.0f + 1e-4f);
+    CHECK(GraphFitLandedZoom(out, view) >= 0.5f - 1e-4f);
+    CHECK(Mid(out).x == Approx(200.0f));
+    CHECK(Mid(out).y == Approx(230.0f));
+}
+
+TEST_CASE("ComputeGraphFitRect: min above max -- the min wins, every fit lands at it", "[editor][graphfit]")
+{
+    // The pinned rule: the floor is never given up, so the cap collapses onto it.
+    const ImVec2 view(1000.0f, 500.0f);
+    constexpr GraphFitZoomRange inverted{ .minZoom = 0.75f, .maxZoom = 0.5f };
+    for (const GraphRect content : { GraphRect{ ImVec2(100.0f, 200.0f), ImVec2(300.0f, 260.0f) },        // tiny
+                                     GraphRect{ ImVec2(0.0f, 0.0f), ImVec2(1300.0f, 600.0f) },           // mid
+                                     GraphRect{ ImVec2(-10000.0f, 0.0f), ImVec2(10000.0f, 1000.0f) } })  // huge
+    {
+        const GraphRect out = ComputeGraphFitRect(content, view, inverted);
+        CHECK(GraphFitLandedZoom(out, view) == Approx(0.75f));
+        CHECK(Mid(out).x == Approx(Mid(content).x));
+        CHECK(Mid(out).y == Approx(Mid(content).y));
+    }
 }
 
 TEST_CASE("ComputeGraphFitRect: zero-extent axes give a finite, positive rect", "[editor][graphfit]")
 {
     const ImVec2 view(1000.0f, 500.0f);
-    for (const GraphRect content : { GraphRect{ ImVec2(50.0f, 0.0f), ImVec2(50.0f, 300.0f) },     // zero width
-                                     GraphRect{ ImVec2(0.0f, 40.0f), ImVec2(300.0f, 40.0f) },     // zero height
-                                     GraphRect{ ImVec2(7.0f, 9.0f), ImVec2(7.0f, 9.0f) } })       // a point
+    for (const GraphFitZoomRange range : { kTableFloor, GraphFitZoomRange{ .minZoom = 0.5f, .maxZoom = 1.0f } })
     {
-        const GraphRect out = ComputeGraphFitRect(content, view, 1.0f);
-        CHECK(std::isfinite(out.min.x)); CHECK(std::isfinite(out.max.y));
-        CHECK(out.max.x - out.min.x > 0.0f);
-        CHECK(out.max.y - out.min.y > 0.0f);
-        CHECK(FitZoom(out, view) <= 1.0f + 1e-4f);
-        CHECK(Mid(out).x == Approx(Mid(content).x));
-        CHECK(Mid(out).y == Approx(Mid(content).y));
+        for (const GraphRect content : { GraphRect{ ImVec2(50.0f, 0.0f), ImVec2(50.0f, 300.0f) },     // zero width
+                                         GraphRect{ ImVec2(0.0f, 40.0f), ImVec2(300.0f, 40.0f) },     // zero height
+                                         GraphRect{ ImVec2(7.0f, 9.0f), ImVec2(7.0f, 9.0f) },         // a point
+                                         GraphRect{ ImVec2(0.0f, 40.0f), ImVec2(90000.0f, 40.0f) } }) // a huge line
+        {
+            CAPTURE(range.minZoom, content.max.x - content.min.x, content.max.y - content.min.y);
+            const GraphRect out = ComputeGraphFitRect(content, view, range);
+            CHECK(std::isfinite(out.min.x)); CHECK(std::isfinite(out.max.y));
+            CHECK(out.max.x - out.min.x > 0.0f);
+            CHECK(out.max.y - out.min.y > 0.0f);
+            CHECK(FitZoom(out, view) <= 1.0f + 1e-4f);
+            CHECK(GraphFitLandedZoom(out, view) >= std::max(0.1f, range.minZoom) - 1e-4f);
+            CHECK(Mid(out).x == Approx(Mid(content).x));
+            CHECK(Mid(out).y == Approx(Mid(content).y));
+        }
     }
 }
 
 TEST_CASE("ComputeGraphFitRect: a zero-size view leaves the content alone", "[editor][graphfit]")
 {
     const GraphRect content{ ImVec2(0.0f, 0.0f), ImVec2(10.0f, 10.0f) };
-    const GraphRect out = ComputeGraphFitRect(content, ImVec2(0.0f, 500.0f), 1.0f);
-    CHECK(out.min.x == 0.0f); CHECK(out.max.x == 10.0f);
+    for (const ImVec2 view : { ImVec2(0.0f, 500.0f), ImVec2(500.0f, 0.0f), ImVec2(0.0f, 0.0f) })
+    {
+        const GraphRect out = ComputeGraphFitRect(content, view, { .minZoom = 0.5f, .maxZoom = 1.0f });
+        CHECK(out.min.x == 0.0f); CHECK(out.max.x == 10.0f);
+        CHECK(out.min.y == 0.0f); CHECK(out.max.y == 10.0f);
+    }
 }
 
 TEST_CASE("editor.graph.fitMaxZoom is an Archive Float32 cvar defaulting to 1.0", "[editor][graphfit]")
@@ -120,6 +243,39 @@ TEST_CASE("editor.graph.fitMaxZoom is an Archive Float32 cvar defaulting to 1.0"
     REQUIRE(explain.has_value());
     CHECK((static_cast<std::uint32_t>(explain->flags) & static_cast<std::uint32_t>(Arcane::CVarFlags::Archive)) != 0u);
     CHECK(explain->help == "Largest zoom a graph's frame-to-fit may pick (1.0 = never magnify).");
+}
+
+TEST_CASE("editor.graph.fitMinZoom is an Archive Float32 cvar over 0.1..2.0, read by GraphFitMinZoom", "[editor][graphfit]")
+{
+    Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+    const Arcane::CVarHandle h = reg.Find("editor.graph.fitMinZoom");
+    REQUIRE_FALSE(h.IsStale());
+    const auto v = reg.Get(h);
+    REQUIRE(v.has_value());
+    CHECK(v->type == Arcane::CVarType::Float32);
+    CHECK(v->AsFloat32() == kFitMinZoomDefault);
+    CHECK(Arcane::Editor::GraphFitMinZoom() == kFitMinZoomDefault);
+    const auto explain = reg.Explain("editor.graph.fitMinZoom");
+    REQUIRE(explain.has_value());
+    CHECK((static_cast<std::uint32_t>(explain->flags) & static_cast<std::uint32_t>(Arcane::CVarFlags::Archive)) != 0u);
+    CHECK(explain->help == "Smallest zoom a graph's frame-to-fit may pick; a graph too big for it frames its "
+                           "centre (0.1 = the zoom table's floor, no extra limit).");
+    {
+        const ScopedFloatCVar set("editor.graph.fitMinZoom", 0.675f);
+        CHECK(Arcane::Editor::GraphFitMinZoom() == 0.675f);   // the PUBLISHED value
+        const GraphFitZoomRange range = Arcane::Editor::GraphFitZoomRangeFromCVars();
+        CHECK(range.minZoom == 0.675f);
+        CHECK(range.maxZoom == Arcane::Editor::GraphFitMaxZoom());
+    }
+    {
+        const ScopedFloatCVar low("editor.graph.fitMinZoom", 0.01f);
+        CHECK(Arcane::Editor::GraphFitMinZoom() == 0.1f);     // range min
+    }
+    {
+        const ScopedFloatCVar high("editor.graph.fitMinZoom", 9.0f);
+        CHECK(Arcane::Editor::GraphFitMinZoom() == 2.0f);     // range max
+    }
+    CHECK(Arcane::Editor::GraphFitMinZoom() == kFitMinZoomDefault);
 }
 
 TEST_CASE("CanvasNavLatch: issues once, confirms on a later draw at the issued size", "[editor][graphfit]")
@@ -214,7 +370,8 @@ namespace
 {
     namespace ne = ax::NodeEditor;
 
-    struct FitRun { bool allInside = true; bool inside[2] = { false, false }; float viewScale = 0.0f; int selectedBefore = -1, selectedAfter = -1; };
+    struct FitRun { bool allInside = true; bool inside[2] = { false, false }; float viewScale = 0.0f; int selectedBefore = -1, selectedAfter = -1;
+                   ImVec2 viewCentre{}, contentCentre{}; };
 
     // The New-Graph-Material seed (Output <- ConstColor) at caller positions,
     // through the REAL ShaderEditorDocument::Draw on a device-less frame
@@ -309,6 +466,8 @@ namespace
                 run.allInside = run.allInside && in;
             }
             run.viewScale = 1.0f / ne::GetCurrentZoom();   // GetCurrentZoom is the RECIPROCAL (InvScale, imgui_node_editor_api.cpp:665-668)
+            run.viewCentre = view.GetCenter();
+            run.contentCentre = editor->GetContentBounds().GetCenter();
             run.selectedAfter = ne::GetSelectedObjectCount();
             ne::SetCurrentEditor(nullptr);
         }
@@ -320,12 +479,33 @@ namespace
 
 TEST_CASE("Shader editor fit-on-open: a spread graph lands inside the canvas, selection untouched", "[editor][graphfit]")
 {
-    // Both nodes start outside the default (scale 1, origin 0) view.
+    // Both nodes start outside the default (scale 1, origin 0) view. The fit
+    // floor is the zoom table's (0.1) here: this graph needs ~0.27 to fit, so
+    // the default editor.graph.fitMinZoom would frame only its centre (the
+    // case below).
+    const ScopedFloatCVar tableFloor("editor.graph.fitMinZoom", 0.1f);
     const FitRun r = RunShaderFit(ImVec2(-1500.0f, -800.0f), ImVec2(2600.0f, 900.0f));
     CHECK(r.allInside);
     CHECK(r.viewScale <= Arcane::Editor::GraphFitMaxZoom() + 1e-3f);
     CHECK(r.selectedBefore == 1);
     CHECK(r.selectedAfter == 1);
+}
+
+TEST_CASE("Shader editor fit-on-open: a graph too big for the floor lands AT editor.graph.fitMinZoom, framing its centre",
+          "[editor][graphfit]")
+{
+    // FIT-MINZOOM (user, 2026-10-03): the same spread graph under the DEFAULT
+    // floor. The real node editor's WithMargin growth is in the loop, so this
+    // also proves GraphFitLandedZoom's mirror of it: the view lands at the
+    // floor, not ~15% under it.
+    const FitRun r = RunShaderFit(ImVec2(-1500.0f, -800.0f), ImVec2(2600.0f, 900.0f));
+    CHECK(Arcane::Editor::GraphFitMinZoom() == kFitMinZoomDefault);
+    CHECK(r.viewScale == Approx(Arcane::Editor::GraphFitMinZoom()).margin(1e-3f));
+    CHECK_FALSE(r.allInside);                                   // too big: the user pans for the rest
+    CHECK(r.viewCentre.x == Approx(r.contentCentre.x).margin(1.0f));
+    CHECK(r.viewCentre.y == Approx(r.contentCentre.y).margin(1.0f));
+    CHECK(r.selectedBefore == 1);
+    CHECK(r.selectedAfter == 1);                                // the selection is never read or written
 }
 
 TEST_CASE("Shader editor fit-on-open: a tiny off-screen graph is framed at the cap, not magnified", "[editor][graphfit]")
@@ -334,7 +514,7 @@ TEST_CASE("Shader editor fit-on-open: a tiny off-screen graph is framed at the c
     const FitRun r = RunShaderFit(ImVec2(3000.0f, 3000.0f), ImVec2(3200.0f, 3000.0f));
     CHECK(r.allInside);
     CHECK(r.viewScale <= Arcane::Editor::GraphFitMaxZoom() + 1e-3f);
-    CHECK(r.viewScale >= 0.1f - 1e-3f);
+    CHECK(r.viewScale >= Arcane::Editor::GraphFitMinZoom() - 1e-3f);   // the cap wins, and the margin never drops it under the floor
     CHECK(r.selectedAfter == r.selectedBefore);
 }
 
@@ -362,6 +542,7 @@ TEST_CASE("Shader editor fit-on-open survives a canvas resize on any settle draw
     // run grows the window on a different draw -- including the draw right
     // after a held-size pair (A,A,B), which a backward-looking held-size check
     // cannot survive.
+    const ScopedFloatCVar tableFloor("editor.graph.fitMinZoom", 0.1f);   // the whole graph fits only under the table floor
     for (const int resizeAtDraw : { 2, 3, 4, 5, 6, 7 })
     {
         CAPTURE(resizeAtDraw);
@@ -478,7 +659,7 @@ TEST_CASE("Pass canvas: a culled chain node keeps its measured size, so a later 
         // ... so the same capped fit the latch issues is issued by hand, with
         // the view still away: it must frame the same chain the opening fit
         // framed, not a taller phantom.
-        REQUIRE(Arcane::Editor::GraphFitToContent(Arcane::Editor::GraphFitMaxZoom(), 0.0f));
+        REQUIRE(Arcane::Editor::GraphFitToContent(Arcane::Editor::GraphFitZoomRangeFromCVars(), 0.0f));
         ne::SetCurrentEditor(nullptr);
         for (int i = 0; i < 10; ++i)
             frame();

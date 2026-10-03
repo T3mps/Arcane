@@ -3884,7 +3884,7 @@ namespace Arcane::Editor
         // The pass canvas's twin of the graph canvas's fit-on-open (s4.5),
         // through the same self-confirming latch (see the graph canvas).
         if (m_passFitPending.Update(ed::GetScreenSize(), ImGui::GetTime(), 0.0f, !seededThisFrame) &&
-            !GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            !GraphFitToContent(GraphFitZoomRangeFromCVars(), 0.0f))
             m_passFitPending.Disarm();   // nothing to fit
 
         // ---- double-click ENTERS a pass (UE's collapsed-graph gesture).
@@ -5034,11 +5034,13 @@ namespace Arcane::Editor
         // first later draw and re-issued until it LANDED (the latch, see the
         // focus block above), AFTER the node loop -- every node is live and
         // carries the size it measured last frame (NodeCulled exempts
-        // unmeasured nodes). Capped by editor.graph.fitMaxZoom; the selection
-        // is never touched. F above stays the uncapped frame-selection /
-        // frame-all. Duration 0: it lands at the next Begin, so settle 0.
+        // unmeasured nodes). Capped by editor.graph.fitMaxZoom and floored by
+        // editor.graph.fitMinZoom (a graph too big for the floor frames its
+        // centre); the selection is never touched. F above stays the uncapped
+        // frame-selection / frame-all. Duration 0: it lands at the next Begin,
+        // so settle 0.
         if (m_fitPending.Update(graphCanvasSize, graphCanvasNow, 0.0f, !seededThisFrame) &&
-            !GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            !GraphFitToContent(GraphFitZoomRangeFromCVars(), 0.0f))
             m_fitPending.Disarm();   // nothing to fit
 
         // Node context menu -> alignment over the current selection.

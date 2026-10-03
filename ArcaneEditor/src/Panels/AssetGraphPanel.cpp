@@ -10,7 +10,7 @@
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasBackdrop.hpp" // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"    // node chrome metrics + grid palette + accents -- one definition, both canvases
-#include "Widgets/GraphFit.hpp"            // GraphFitToContent + GraphFitMaxZoom -- the capped frame-to-fit and its cvar reader (T2-C3/C4, s4.5)
+#include "Widgets/GraphFit.hpp"            // GraphFitToContent + GraphFitZoomRangeFromCVars -- the capped, floored frame-to-fit and its cvar readers (T2-C3/C4, s4.5; FIT-MINZOOM)
 #include "Widgets/GraphLegend.hpp"         // the legend box chrome -- shared with the shader graph's pin legend
 #include "Widgets/GraphNodeLod.hpp"        // NodeLOD / NodeLODForScale -- the zoom table's third column
 #include "Widgets/GraphPinDot.hpp"         // DrawGraphPinDot -- the filled/ring port dot, paint only
@@ -2313,7 +2313,7 @@ namespace Arcane::Editor
         // without fitting.
         if (state.graphFitPending.Update(ed::GetScreenSize(), ImGui::GetTime(), 0.0f, !applyLayout))
         {
-            if (!nodes.empty() && GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            if (!nodes.empty() && GraphFitToContent(GraphFitZoomRangeFromCVars(), 0.0f))
             {
                 // The seam counts each ARMING's fit once, not its re-issues.
                 if (state.graphFitPending.Issues() == 1u)

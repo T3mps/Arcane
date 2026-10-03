@@ -4,8 +4,11 @@
 // ed::NavigateToContent adds a margin but has NO zoom cap, so a small graph
 // magnifies into the blurred-glyph range (AssetGraphPanel.cpp:1320-1328). This
 // caps the fit at editor.graph.fitMaxZoom (default 1.0 = never magnify) and
-// floors it at the zoom table's first stop (kZoomLevels[0] = 0.1), so a huge
-// graph frames its centre instead of zooming past the wheel's range.
+// floors it at editor.graph.fitMinZoom (FIT-MINZOOM, user 2026-10-03; never
+// under the zoom table's first stop, kZoomLevels[0] = 0.1), so a graph too big
+// to fit at a readable zoom frames its CENTRE and the user pans for the rest.
+// The floor holds for the zoom the navigation LANDS at, margin included
+// (GraphFitLandedZoom); a floor above the cap wins, and every fit lands on it.
 //
 // Header = imgui.h only; GraphFit.cpp alone includes imgui_node_editor_internal.h.
 // The SELECTION IS NEVER READ OR WRITTEN: the fit works from content bounds,
@@ -19,19 +22,46 @@ namespace Arcane::Editor
 {
     struct GraphRect { ImVec2 min, max; };
 
-    // PURE: resize `content` about its centre so fitting it into `viewPx` lands
-    // in [kZoomLevels[0], maxZoom]. Already in range: unchanged. Zero-extent axes
-    // never divide by zero. A zero-size view returns `content` unchanged.
-    [[nodiscard]] GraphRect ComputeGraphFitRect(const GraphRect& content, ImVec2 viewPx, float maxZoom);
+    // The zoom band a fit may land in. The effective floor is
+    // max(kZoomLevels[0], minZoom); the effective cap is max(maxZoom, floor),
+    // so a min above the max wins (both collapse onto the min).
+    struct GraphFitZoomRange
+    {
+        float minZoom = 0.0f;
+        float maxZoom = 1.0f;
+    };
+
+    // PURE: the view scale the node editor lands at when it navigates to
+    // `target` with ZoomMode::WithMargin (what GraphFitToContent issues): the
+    // rect grows by c_NavigationZoomMargin (0.1) of its longer side, half on
+    // each edge (imgui_node_editor.cpp:144, :3556-3560), then fits the view
+    // (CalcCenterView, imgui_canvas.cpp:239-258). 0 for a zero-size view or rect.
+    [[nodiscard]] float GraphFitLandedZoom(const GraphRect& target, ImVec2 viewPx);
+
+    // PURE: the rect to hand GraphFitToContent's WithMargin navigation for
+    // `content` in `viewPx`, about the content's centre:
+    //  - a fit above the cap grows to the cap's frame (the margin only lowers it);
+    //  - a fit that would LAND under the floor becomes the view-aspect frame
+    //    that lands exactly AT the floor (GraphFitLandedZoom), cropping the
+    //    content to its centre;
+    //  - otherwise `content` unchanged.
+    // Zero-extent axes never divide by zero. A zero-size view returns `content`.
+    [[nodiscard]] GraphRect ComputeGraphFitRect(const GraphRect& content, ImVec2 viewPx, GraphFitZoomRange zoom);
 
     // Between ed::Begin/ed::End of the CURRENT editor, AFTER this frame's nodes
     // were submitted (a node is live only once BeginNode ran this frame): fit
     // every node. false = nothing to fit (no current editor, no live node,
     // empty bounds, zero-size view) and nothing changed. Duration 0 lands now.
-    bool GraphFitToContent(float maxZoom, float durationSeconds = 0.0f);
+    bool GraphFitToContent(GraphFitZoomRange zoom, float durationSeconds = 0.0f);
 
     // editor.graph.fitMaxZoom's published value; 1.0 if it is absent.
     [[nodiscard]] float GraphFitMaxZoom();
+
+    // editor.graph.fitMinZoom's published value; its default if it is absent.
+    [[nodiscard]] float GraphFitMinZoom();
+
+    // { GraphFitMinZoom(), GraphFitMaxZoom() }: what every fit-on-open passes.
+    [[nodiscard]] GraphFitZoomRange GraphFitZoomRangeFromCVars();
 
     // CanvasNavLatch: a one-shot canvas navigation (the fit-on-open, a Problems
     // focus) that CONFIRMS it landed. The node editor's Begin answers a canvas
