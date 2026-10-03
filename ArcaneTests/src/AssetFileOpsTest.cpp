@@ -680,6 +680,30 @@ TEST_CASE("AssetFileOps: a failed capture or a recycle survivor deletes nothing"
     CHECK_FALSE(r.stack.CanUndo());
 }
 
+// User ruling (2026-10-02, option A): a confirmed delete closes the doomed assets'
+// documents only AFTER the files are verified gone. A failed recycle leaves every
+// document open, unsaved edits included; a successful one closes them before the
+// step is pushed.
+TEST_CASE("AssetFileOps: a failed delete keeps the dirty document open with its edits", "[editor][assetops]")
+{
+    DeleteRig r("delete_keeps_dirty_doc");
+    r.host.dirtyDocs.insert(r.tex);   // open in a document with unsaved edits
+    r.host.survivor = r.w.content / "textures" / "uv_marker.png";   // the shell leaves the primary in place
+
+    CHECK_FALSE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+    CHECK(r.host.recycleCalls == 1);
+    CHECK(r.host.closedDocs.empty());                 // the document (and its edits) stays
+    CHECK(r.host.dirtyDocs.count(r.tex) == 1);
+    CHECK(r.w.registry.Resolve(r.tex).has_value());
+    CHECK_FALSE(r.stack.CanUndo());
+
+    r.host.survivor.reset();                          // the retry succeeds
+    REQUIRE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+    REQUIRE(r.host.closedDocs.count(r.tex) == 1);
+    CHECK(r.host.closedDocs.at(r.tex) == 2);          // closed after the second (successful) recycle
+    CHECK(r.stack.CanUndo());
+}
+
 TEST_CASE("AssetFileOps: spill, nuked items and a dirty document on redo", "[editor][assetops]")
 {
     DeleteRig r("delete_spill");

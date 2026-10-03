@@ -180,11 +180,10 @@ namespace Arcane::Editor
         if (r == AE::DeleteModalResult::Confirm)
         {
             if (const std::string why = AssetOpGateReason(); !why.empty()) m_assetOpHost.ReportError("Can't delete", why);
-            else
-            {
-                for (const Arcane::Guid& g : m_deleteConfirm.plan.openDocs) (void)m_assetOpHost.CloseDocumentFor(g, true);   // (1) documents close FIRST, unsaved
-                (void)m_assetFileOps->Execute(m_deleteConfirm.plan, *m_undo);                                                // (2)+(3) one step, then the follow-up
-            }
+            // One step, then the follow-up. The executor closes the doomed assets' documents
+            // (unsaved) only once the recycle is verified, so a failed delete keeps them open
+            // with their edits (user ruling 2026-10-02, spec s7.5 amendment); it reports a failure once.
+            else (void)m_assetFileOps->Execute(m_deleteConfirm.plan, *m_undo);
         }
         if (r == AE::DeleteModalResult::Confirm || r == AE::DeleteModalResult::Cancel) m_deleteFacts.reset();
     }

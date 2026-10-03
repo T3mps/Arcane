@@ -245,8 +245,9 @@ namespace Arcane::Editor
         void ReportRefusal(std::string title, std::string message) { m_host.ReportError(std::move(title), std::move(message)); }
         [[nodiscard]] std::string Display(const std::filesystem::path& p) const;   // "textures/uv.png"
         void SetRenameForTest(RenameFn fn) { m_rename = std::move(fn); }
-        // Remove: docs close (a dirty one blocks unless discardDirty), capture EVERY
-        // file, ONE Recycle call, verify gone (a survivor fails + rewrites), Unregister.
+        // Remove: without discardDirty a dirty doc blocks and clean docs close first;
+        // capture EVERY file, ONE Recycle call, verify gone (a survivor fails + rewrites,
+        // every document stays open), then discardDirty closes the docs, Unregister.
         [[nodiscard]] std::optional<std::string> RemoveAssets(std::span<const AssetFiles> doomed,
                                                               std::vector<AssetPayloads>& out, bool discardDirty);
         // Restore: occupancy pre-check, write .meta -> primaries -> companions with

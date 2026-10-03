@@ -106,8 +106,14 @@ namespace Arcane::Test
         bool Unregister(const Arcane::Guid& g) override { calls.push_back("Unregister"); return world.registry.Remove(g); }
         std::optional<Arcane::Guid> Register(const std::filesystem::path& p) override
         { calls.push_back("Register " + Rel(p)); return world.registry.AddFile(p, world.content, "game"); }
+        std::map<Arcane::Guid, int> closedDocs;                     // a closed document -> recycleCalls when it closed
         bool CloseDocumentFor(const Arcane::Guid& g, bool discardDirty) override
-        { calls.push_back(discardDirty ? "Close discard" : "Close"); return discardDirty || !dirtyDocs.count(g); }
+        {
+            calls.push_back(discardDirty ? "Close discard" : "Close");
+            if (!discardDirty && dirtyDocs.count(g)) return false;
+            closedDocs.emplace(g, recycleCalls);
+            return true;
+        }
         void NoteMoved(const Arcane::Guid&, const std::filesystem::path&, const std::filesystem::path& to) override
         { calls.push_back("NoteMoved " + Rel(to)); }
         void AssetsChanged(std::span<const Arcane::Guid> removed, std::span<const Arcane::Guid> added) override

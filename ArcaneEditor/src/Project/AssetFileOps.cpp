@@ -623,9 +623,15 @@ namespace Arcane::Editor
         out.clear();
         if (FilesLost(doomed))
             return "An asset is missing or no longer holds its id.";
-        for (const AssetFiles& a : doomed)   // documents close FIRST (s7.5)
-            if (!m_host.CloseDocumentFor(a.guid, discardDirty))
-                return "Close or save " + Display(a.files[0]) + " first.";
+        // Undo/redo (!discardDirty): a dirty document blocks before anything is touched;
+        // a clean one closes here (nothing of it is lost). A confirmed delete
+        // (discardDirty) closes its documents only after (3) proves the files gone
+        // (the user's 2026-10-02 ruling, spec s7.5 amendment): a failed recycle must
+        // leave every document open with its unsaved edits.
+        if (!discardDirty)
+            for (const AssetFiles& a : doomed)
+                if (!m_host.CloseDocumentFor(a.guid, false))
+                    return "Close or save " + Display(a.files[0]) + " first.";
 
         std::vector<fs::path> all;
         for (const AssetFiles& a : doomed)   // (1) capture everything before anything is recycled
@@ -663,7 +669,9 @@ namespace Arcane::Editor
             out.clear();
             return error;
         }
-        // (4) registry + follow-up
+        // (4) documents (a confirmed delete's, unsaved), registry, follow-up
+        if (discardDirty)
+            for (const AssetFiles& a : doomed) (void)m_host.CloseDocumentFor(a.guid, true);
         for (const AssetFiles& a : doomed) m_host.Unregister(a.guid);
         RunAssetOpFollowUp(m_host, FollowUpPlan(doomed), AssetOpSide::Forward, m_contentDir, &m_lastRecycle);
         return std::nullopt;
