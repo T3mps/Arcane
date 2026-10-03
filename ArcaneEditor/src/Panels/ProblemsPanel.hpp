@@ -15,9 +15,8 @@ namespace Arcane::Editor
 {
     struct ProblemsUiState
     {
-        bool showWarnings = true;
-        bool showInfo     = true;
-        char search[128]  = {};
+        bool showError = true, showWarning = true, showInfo = true;
+        char search[128] = {};
     };
 
     [[nodiscard]] const char* ScopeLabel(Arcane::DiagScope scope) noexcept;

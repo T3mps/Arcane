@@ -36,7 +36,9 @@ namespace Arcane::Editor
         ImGui::SameLine();
         ImGui::TextColored(ImVec4(0.95f, 0.77f, 0.30f, 1.0f), ICON_LC_TRIANGLE_ALERT " %zu", nWarn);
         ImGui::SameLine();
-        ImGui::Checkbox("Warnings", &ui.showWarnings);
+        ImGui::Checkbox("Errors", &ui.showError);
+        ImGui::SameLine();
+        ImGui::Checkbox("Warnings", &ui.showWarning);
         ImGui::SameLine();
         ImGui::Checkbox("Info", &ui.showInfo);
 
@@ -44,12 +46,8 @@ namespace Arcane::Editor
         ImGui::InputTextWithHint("##problemsearch", "Search", ui.search, sizeof(ui.search));
         ImGui::Separator();
 
-        const Arcane::DiagSeverity floorSeverity =
-            ui.showInfo     ? Arcane::DiagSeverity::Info
-          : ui.showWarnings ? Arcane::DiagSeverity::Warning
-                            : Arcane::DiagSeverity::Error;
-
-        const std::vector<Arcane::Diagnostic> rows = store.Filtered(floorSeverity, ui.search);
+        const std::vector<Arcane::Diagnostic> rows =
+            store.Filtered(MaskFrom(ui.showError, ui.showWarning, ui.showInfo), ui.search);
 
         // Group by scope, preserving the severity-sorted order Snapshot produced.
         std::map<Arcane::DiagScope, std::vector<const Arcane::Diagnostic*>> grouped;

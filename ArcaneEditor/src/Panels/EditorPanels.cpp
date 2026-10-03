@@ -1152,7 +1152,7 @@ namespace Arcane::Editor
             Arcane::Diagnostic probe;               // reuse the one filter definition
             probe.severity = e.level;
             probe.message  = e.message;
-            return MatchesDiagnosticFilter(probe, Arcane::DiagSeverity::Info, ui.search);
+            return MatchesDiagnosticFilter(probe, SeverityMask::All, ui.search);
         };
 
         // The visible rows, resolved BEFORE the multi-select scope opens:

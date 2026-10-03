@@ -39,13 +39,11 @@ namespace Arcane::Editor
         }
     }
 
-    bool MatchesDiagnosticFilter(const Arcane::Diagnostic& d,
-                                 Arcane::DiagSeverity minSeverity,
-                                 std::string_view search) noexcept
+    bool MatchesDiagnosticFilter(const Arcane::Diagnostic& d, SeverityMask mask, std::string_view search) noexcept
     {
-        if (SeverityRank(d.severity) > SeverityRank(minSeverity))
+        if ((static_cast<std::uint8_t>(mask) & static_cast<std::uint8_t>(MaskOf(d.severity))) == 0)
             return false;
-        return ContainsNoCase(d.message, search) || ContainsNoCase(d.code, search);
+        return ContainsNoCase(d.message, search) || ContainsNoCase(d.code, search) || ContainsNoCase(d.detail, search);
     }
 
     DiagnosticStore::~DiagnosticStore()
@@ -100,13 +98,12 @@ namespace Arcane::Editor
         return out;
     }
 
-    std::vector<Arcane::Diagnostic> DiagnosticStore::Filtered(Arcane::DiagSeverity minSeverity,
-                                                              std::string_view search) const
+    std::vector<Arcane::Diagnostic> DiagnosticStore::Filtered(SeverityMask mask, std::string_view search) const
     {
         std::vector<Arcane::Diagnostic> out = Snapshot();
         out.erase(std::remove_if(out.begin(), out.end(),
                                  [&](const Arcane::Diagnostic& d)
-                                 { return !MatchesDiagnosticFilter(d, minSeverity, search); }),
+                                 { return !MatchesDiagnosticFilter(d, mask, search); }),
                   out.end());
         return out;
     }
