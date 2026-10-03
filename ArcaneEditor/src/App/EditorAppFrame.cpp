@@ -12,9 +12,14 @@
 // "above"/"below" locators in their comments stay true.
 
 #include "App/EditorApp.hpp"
+#include "App/HarnessRules.hpp"   // UnderVerifyHarness: badges + chip stay out of goldens (s8.2)
+#include "Panels/ConsoleModel.hpp"   // ProblemsChip (s8.2)
 #include "Panels/EditorPanels.hpp"
+#include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
+#include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
 #include "Scene/PhysicsOverlay.hpp"
 #include "Scene/SelectionOps.hpp"
+#include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Viewport/ViewportGrid.hpp"   // the 2D reference grid (F4 plan 1 T9, spec s5.1)
 #include "Viewport/ViewportImGuiInput.hpp"
 
@@ -47,12 +52,16 @@
 
 #include <glm/glm.hpp>
 
+#include "Widgets/EditorTheme.hpp"   // Theme::kTextDim (the start page's dim path / time)
+#include "Widgets/IconsLucide.h"   // the start page's Open Project... / Open Folder... icons
 #include <imgui.h>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>       // std::isfinite (the camera-rect overlay's projected corners)
 #include <cstdint>
+#include <cstdio>      // std::snprintf (the Rename modal's prefill)
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -60,17 +69,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <shellapi.h>   // ShellExecuteW (Assets -> Show in Explorer)
-#endif
 
 namespace Arcane::Editor
 {
@@ -184,33 +182,23 @@ namespace Arcane::Editor
             }
             if (showInExplorer)
             {
-                // explorer /select opens the folder WITH the file focused.
-                const std::wstring args = L"/select,\"" + assetPath->wstring() + L"\"";
-                ShellExecuteW(nullptr, L"open", L"explorer.exe",
-                              args.c_str(), nullptr, SW_SHOWNORMAL);
+                const OsShell::ShellResult r = OsShell::ShowInExplorer(*assetPath);
+                if (r != OsShell::ShellResult::Ok)
+                    ARC_WARN("Assets: Show in Explorer failed for '{}' ({})",
+                             assetPath->generic_string(), OsShell::Describe(r));
             }
             if (copyPath)
                 ImGui::SetClipboardText(assetPath->string().c_str());
             if (openAsText)
             {
-                // The OS default handler for the file (a .arcinput is JSON: the
-                // user's text editor). No SDL_OpenURL: a file path, not a URL.
-                // ShellExecuteW returns a value <= 32 on failure; an extension
-                // with no association (.arcinput/.json on a stock machine) has
-                // no `open` handler, so fall back to `openas` (the Windows Open
-                // With picker) and say so if even that fails -- with the JSON
-                // tab retired this is the repair banner's only route.
-                const std::wstring file = assetPath->wstring();
-                const auto opened = reinterpret_cast<INT_PTR>(
-                    ShellExecuteW(nullptr, L"open", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-                if (opened <= 32)
-                {
-                    const auto picked = reinterpret_cast<INT_PTR>(
-                        ShellExecuteW(nullptr, L"openas", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-                    if (picked <= 32)
-                        ARC_WARN("Assets: Open as text failed for '{}' (no handler; ShellExecute {} / openas {})",
-                                 assetPath->generic_string(), static_cast<long long>(opened), static_cast<long long>(picked));
-                }
+                // The OS default handler (a .arcinput is JSON: the user's text
+                // editor); no association falls back to Open With inside
+                // OsShell::OpenAsText. With the JSON tab retired this is the
+                // repair banner's only route.
+                const OsShell::ShellResult r = OsShell::OpenAsText(*assetPath);
+                if (r != OsShell::ShellResult::Ok)
+                    ARC_WARN("Assets: Open as text failed for '{}' ({})",
+                             assetPath->generic_string(), OsShell::Describe(r));
             }
         }
     }
@@ -439,6 +427,14 @@ namespace Arcane::Editor
             // visible here, to all of this frame's readers at once. The
             // runtime does the same at the top of AdvanceSim.
             Arcane::CVarRegistry::Get().Publish();
+            // editor.undo.* -> the stack (s2.4): pushed on change, never read by the stack.
+            if (m_undo)
+                if (const Arcane::UndoLimits limits = Arcane::Editor::ReadUndoLimits();
+                    limits != m_undoLimitsApplied)
+                {
+                    m_undo->SetLimits(limits);
+                    m_undoLimitsApplied = limits;
+                }
             FrameInput(ls, fs);
             AdvanceSim(ls);
             ApplyPendingViewportResize();
@@ -913,8 +909,9 @@ namespace Arcane::Editor
         // undo and clobbers the redo entry. Ctrl is also the gizmo SNAP
         // modifier, so Ctrl-held drags are the normal case, not an edge case.
         const bool noOpenTxn = !m_undo->InTransaction();
-        if (active && noOpenTxn && m_edges.undo.pressed) m_undo->Undo();
-        if (active && noOpenTxn && m_edges.redo.pressed) m_undo->Redo();
+        const bool barred    = Arcane::Editor::UndoBarred(InPlayMode());   // the ONE Play barrier (s3.3b)
+        if (active && !barred && noOpenTxn && m_edges.undo.pressed) m_undo->Undo();
+        if (active && !barred && noOpenTxn && m_edges.redo.pressed) m_undo->Redo();
 
         // Ctrl+N / Ctrl+O / Ctrl+S -- the shortcuts the File menu prints
         // beside New Scene / Open Scene / Save Scene. Raised as requests
@@ -1597,6 +1594,41 @@ namespace Arcane::Editor
         return !cfg.screenshotPath.empty() || !cfg.reportPath.empty();
     }
 
+    // T3-D6: the WINDOWED composited-frame capture, opt in. A windowed
+    // --screenshot captures the VIEWPORT texture (main.cpp's flag table);
+    // `--set editor.automation.windowedFrameCapture=true` makes it capture the
+    // swapchain backbuffer the editor just presented instead -- chrome,
+    // panels and viewport, the picture --headless captures offscreen -- so an
+    // automated desk pass can judge the WINDOWED editor (works-headless/
+    // broken-windowed is a bug class) without driving the desktop. Dev (never
+    // in Dist) and UserSettable (the command line's door), NOT Archive: an
+    // automation switch must never persist into a user's settings.
+    namespace
+    {
+        constexpr const char* kWindowedFrameCaptureCvar = "editor.automation.windowedFrameCapture";
+        const ::Arcane::CVarHandle kWindowedFrameCaptureHandle = []
+        {
+            ::Arcane::CVarDesc desc;
+            desc.name = kWindowedFrameCaptureCvar;
+            desc.type = ::Arcane::CVarType::Bool;
+            desc.defaultValue = ::Arcane::CVarValue::Bool(false);
+            desc.flags = ::Arcane::CVarFlags::Dev | ::Arcane::CVarFlags::UserSettable;
+            desc.help = "Windowed --screenshot captures the composited editor frame (the presented "
+                        "backbuffer: chrome, panels, viewport) instead of the viewport texture";
+            desc.module = "editor";
+            return ::Arcane::CVarRegistry::Get().Register(desc);
+        }();
+    }
+
+    static bool WindowedFrameCapture(const Arcane::HostConfig& cfg)
+    {
+        if (cfg.headless)
+            return false;   // --headless already captures the composited frame, offscreen
+        const ::Arcane::CVarRegistry& reg = ::Arcane::CVarRegistry::Get();
+        const auto v = reg.Get(reg.Find(kWindowedFrameCaptureCvar));
+        return v && v->type == ::Arcane::CVarType::Bool && v->AsBool();
+    }
+
     void EditorApp::RenderSceneToViewport()
     {
         // ================= THE VIEWPORT FRAME =============================
@@ -1697,10 +1729,14 @@ namespace Arcane::Editor
             // context is a swapchain nothing reads back, so the viewport
             // texture remains the only editor screenshot there is (main.cpp's
             // flag table says so).
+            // ...nor when the windowed composited capture is opted in (T3-D6,
+            // WindowedFrameCapture): then the chrome frame owns the PNG, for
+            // the same one-flag-one-meaning reason.
             const bool isCaptureLastFrame = m_config.maxFrames != 0 &&
                                             (m_frameCount + 1) >= m_config.maxFrames &&
                                             CaptureWanted(m_config) &&
-                                            !m_config.headless;
+                                            !m_config.headless &&
+                                            !WindowedFrameCapture(m_config);
             vp.capture = isCaptureLastFrame;
 
             const Arcane::NriGraphContext::FrameOutcome outcome =
@@ -2237,6 +2273,9 @@ namespace Arcane::Editor
         // ImGui: editor shell -- full-viewport dockspace + Sim toolbar + Console panel
         // + the Viewport panel showing the scene texture just rendered above.
         UpdateWindowTitle();   // project + scene name + unsaved marker
+        // Sampled ONCE before the toolbar (s6.4): a change consumed later this
+        // frame shows next frame, as the OS title already does.
+        const Arcane::Editor::TitleParts titleParts = CurrentTitleParts();
         m_gpu->Imgui().BeginFrame();
         Arcane::Editor::MenuRequests menuReq;
         // Build -> Rebuild Game Module gating inputs: the menu greys the item
@@ -2250,6 +2289,7 @@ namespace Arcane::Editor
                                        IdeMenuStateNow(),
                                        m_panelVis,
                                        m_selection.HasSelection(),
+                                       Arcane::Editor::IsSceneRootOnly(m_runtime->Registry(), m_selection.Entities()),
                                        m_assetModel.selected.IsValid(),
                                        m_physicsOverlay,
                                        &m_recents.projects,
@@ -2265,11 +2305,24 @@ namespace Arcane::Editor
         // business owning a process handle -- so the flip is OBSERVED here
         // (panel reports, app performs, same split as the two requests below).
         const bool wasPlaying = InPlayMode();
-        bool launchServerRequested = false;
-        if (Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
+        Arcane::Editor::ToolbarStatus stripStatus;
+        stripStatus.title     = titleParts;
+        stripStatus.scenePath = m_scene.Path().string();   // empty = never saved
+        // s8.2: the Problems chip. Never under the harness (goldens stay machine-free).
+        if (!Arcane::Editor::UnderVerifyHarness(m_config))
+        {
+            const std::size_t nErr  = m_consoleDiag.store.Count(Arcane::DiagSeverity::Error);
+            const std::size_t nWarn = m_consoleDiag.store.Count(Arcane::DiagSeverity::Warning);
+            if (const auto chip = Arcane::Editor::ProblemsChip(nErr, nWarn))
+                stripStatus.problems = Arcane::Editor::StripChip{ chip->label,
+                    nErr > 0 ? Arcane::Editor::Theme::kError : Arcane::Editor::Theme::kWarning, chip->tooltip };
+        }
+        const Arcane::Editor::ToolbarResult toolbar =
+            Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
                                                m_plugin ? &*m_plugin : nullptr, m_playMode,
-                                               launchServerRequested,
-                                               ToolbarLogoTextureId()))
+                                               ToolbarLogoTextureId(), stripStatus,
+                                               [this]() { m_documents.FlushGestures(); });   // T1-B14's beforePlay (s3.3b)
+        if (toolbar.launchStandalone)
         {
             // Mid-ImGui-pass site -> the deferral convention (SceneSession::Request's
             // comment): clean+saved acts next frame top; dirty/never-saved parks
@@ -2281,8 +2334,13 @@ namespace Arcane::Editor
         // gate: ArcaneServer boots the project MANIFEST's bootScene, so there
         // is no unsaved live document for it to get wrong (DoLaunchServer's
         // own declaration states the split).
-        if (launchServerRequested)
+        if (toolbar.launchServer)
             DoLaunchServer();
+        if (toolbar.problemsChipClicked)
+        {
+            m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
+            Arcane::Editor::SelectDockTab("Problems");
+        }
         // Stop is the end of the whole session, including the child process.
         // A no-op on every topology that never spawned one.
         if (wasPlaying && !InPlayMode())
@@ -2341,6 +2399,9 @@ namespace Arcane::Editor
         // instead of three lenses of one.
         const Arcane::Project* proj = m_runtime->CurrentProject();
         m_assetModel.RebuildIfDirty(proj ? &proj->Registry() : nullptr, m_assetPanelProviders);
+        // T5 s7.6: a rebuild (a rename/move landed, among others) refreshes the
+        // Inspector's history labels and pin names -- once per rebuild.
+        if (m_assetModel.entriesStamp != m_labelsAtEntriesStamp) { m_labelsAtEntriesStamp = m_assetModel.entriesStamp; m_inspectorHost.RefreshLabels(); }
 
         // Plan 1 Task 7's AssetServices seam, re-shaped into Task 9's
         // AssetPanelServices -- two distinct struct types (different
@@ -2382,6 +2443,25 @@ namespace Arcane::Editor
         assetPanelServices.graphOpen    = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetGraph);
         assetPanelServices.statusOpen   = m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetStatus);
         assetPanelServices.problemsOpen = m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems);
+        // T5 s7.1/s7.6: the file-op verbs' disabled reasons -- the gates, then
+        // a dry-run PlanAssetOp, memoized per request until the model rebuilds
+        // or the gate reason changes. RunAssetOp re-plans from fresh facts.
+        // T5 s7.5: Delete's open-scene and boot-scene refusals change with no
+        // model rebuild, so those two guids join the memo's invalidation key.
+        assetPanelServices.fileOpRefusal = [this](const Arcane::Editor::AssetOpRequest& r) -> std::string
+        {
+            const std::string gate = AssetOpGateReason();
+            const std::string memoGate = gate + "|" + m_scene.Id().ToString() + "|"
+                + Arcane::Editor::BootSceneGuid(m_runtime ? m_runtime->CurrentProject() : nullptr).ToString();
+            if (m_fileOpRefusalMemoStamp != m_assetModel.entriesStamp || m_fileOpRefusalMemoGate != memoGate)
+            { m_fileOpRefusalMemo.clear(); m_fileOpRefusalMemoStamp = m_assetModel.entriesStamp; m_fileOpRefusalMemoGate = memoGate; }
+            if (!gate.empty()) return gate;
+            std::string key = std::to_string(static_cast<int>(r.kind)) + "|" + r.newStem + "|" + r.destFolder + (r.cascadeDerived ? "|1" : "|0");
+            for (const Arcane::Guid& g : r.guids) key += "|" + g.ToString();
+            if (const auto it = m_fileOpRefusalMemo.find(key); it != m_fileOpRefusalMemo.end()) return it->second;
+            const auto plan = Arcane::Editor::PlanAssetOp(r, GatherAssetOpFacts(m_assetOpFacts, false));
+            return m_fileOpRefusalMemo[key] = plan.refusals.empty() ? std::string{} : plan.refusals.front().reason;
+        };
         // Inspector filters s6: the asset Inspector page draws in
         // DrawSelectionPanels, AFTER this function has returned, so it binds
         // a MEMBER copy -- a pointer to the local above would dangle. The
@@ -2408,6 +2488,10 @@ namespace Arcane::Editor
             statusActions = Arcane::Editor::DrawAssetStatusPanel(
                 m_assetModel, proj, m_documents, assetPanelServices,
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::AssetStatus));
+        // T5 s7.10: read by NEXT frame's clipboard fold in ConsumeMenuRequests,
+        // which runs before this draw (the DocumentHost::FocusedDoc one-frame
+        // tolerance). A hidden Browser leaves the default false.
+        m_browserOwnsEditKeys = browserActions.ownsEditKeys;
         ConsumeAssetPanelActions(browserActions, ls);
         ConsumeAssetPanelActions(graphActions, ls);
         ConsumeAssetPanelActions(statusActions, ls);
@@ -2416,12 +2500,36 @@ namespace Arcane::Editor
         // frame late, invisible, and the same handler as the three panels.
         ConsumeAssetPanelActions(m_assetPageActions, ls);
         m_assetPageActions = {};
-        m_assetSource.Bind({ &m_assetModel, proj, &m_documents, &m_assetPanelServices, &m_assetPageActions });
+        m_assetSource.Bind({ &m_assetModel, proj, &m_assetPanelServices, &m_assetPageActions });
+        // T5 s7.6: the asset page's Rename modal (opened by requestRename in
+        // ConsumeAssetPanelActions just above); a commit runs at once.
+        if (const auto req = Arcane::Editor::DrawRenameAssetModal(m_renameModal, m_assetPanelServices))
+            if (const auto plan = RunAssetOp(*req)) AfterAssetOp(*plan);
+        // T5 s7.5: the Delete confirm modal (opened by requestDelete above).
+        ConsumeDeleteConfirm();
+        // T5 s7.8: Move to... and New Folder. A folder made from INSIDE Move
+        // to... (its nested New Folder) is picked in Move's combo once the
+        // MarkAllDirty rebuild AssetsChanged arms lists it. The top-level New
+        // Folder (folder row, background) draws only while Move is shut, read
+        // BEFORE Move draws, so the two instances never share a frame -- an
+        // ungated top-level BeginPopupModal would close the nested one.
+        if (proj)
+        {
+            const bool moveWasOpen = m_moveTo.open;
+            const Arcane::Editor::MoveToResult moved = Arcane::Editor::DrawMoveToModal(m_moveTo, m_newFolder, m_assetModel, m_assetPanelServices, *proj);
+            if (moved.move) if (const auto plan = RunAssetOp(*moved.move)) AfterAssetOp(*plan);
+            if (moved.newFolder && RunAssetOp(*moved.newFolder) && m_moveTo.open)
+                m_moveTo.selectAfterCreate = moved.newFolder->destFolder.empty() ? moved.newFolder->newStem
+                                                                                  : moved.newFolder->destFolder + "/" + moved.newFolder->newStem;
+            if (!moveWasOpen)
+                if (const auto req = Arcane::Editor::DrawNewFolderModal(m_newFolder, *proj)) (void)RunAssetOp(*req);
+        }
 
         if (static_cast<std::size_t>(m_consoleDiag.ui.lineCap) != m_consoleDiag.console.Capacity())
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
             Arcane::Editor::DrawConsolePanel(m_consoleDiag.console, m_consoleDiag.ui,
+                Arcane::Editor::UnderVerifyHarness(m_config),
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Console));
 
         // Problems panel: current diagnostic STATE (Console above is the
@@ -2433,6 +2541,7 @@ namespace Arcane::Editor
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems))
             if (const std::optional<Arcane::DiagLocator> hit =
                     Arcane::Editor::DrawProblemsPanel(m_consoleDiag.store, m_consoleDiag.problemsUi,
+                        MakeRouteFacts(), Arcane::Editor::UnderVerifyHarness(m_config),
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
@@ -2492,6 +2601,13 @@ namespace Arcane::Editor
             if (const auto guid = Arcane::Guid::FromString(m_config.openAsset))
                 (void)OpenAssetDocument(*guid);
         }
+        // Start page (spec 2026-09-30 s8.4): drawn after this frame's menu
+        // requests were consumed, so its own requests take the one launch site.
+        {
+            Arcane::Editor::MenuRequests startReq;
+            DrawStartPage(startReq);
+            LaunchProjectOpenRequests(startReq);
+        }
         // New documents tab into the Viewport's node (captured last frame).
         m_documents.DrawAll(m_viewportDockId);
         // Input-editor spec s2.6: a saved input document pushed a republish
@@ -2545,26 +2661,7 @@ namespace Arcane::Editor
             if (primary && !*primary) *primary = true;       // hidden follower: bring it back, no new instance
             else (void)m_inspectorHost.AddInstance();        // visible: another instance with its own pin (-1 = pool full, no-op)
         }
-        // Bare interactive launch: raise the picker as if the user had clicked
-        // File -> Open Project, once. Routed through menuReq (rather than
-        // calling the dialog directly) so there is exactly ONE launch site and
-        // the cold-start path cannot drift from the menu path.
-        if (m_raiseOpenProjectOnStart)
-        {
-            m_raiseOpenProjectOnStart = false;
-            menuReq.openProject       = true;
-        }
-        if (menuReq.openProject)
-            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
-                new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() },
-                "Arcane Project", "arcproj");
-        // Open Recent lands in the SAME slot the file dialog's callback fills,
-        // so it flows through ConsumeProjectDialogResult and inherits every
-        // guard the menu path already has -- the unsaved-scene confirm, the
-        // rival-editor lock, the ABI gate, the failure modal. A second open
-        // path would have to re-earn all of them.
-        if (!menuReq.openRecentPath.empty())
-            m_dialogs.projectOpen.Stash(m_dialogs.projectOpen.Arm(), menuReq.openRecentPath);
+        LaunchProjectOpenRequests(menuReq);
         // A picked recent scene lands in the SAME slot the Open Scene dialog's
         // callback fills, so it flows through ConsumeSceneDialogResults and
         // inherits the unsaved-scene guard -- a second open path would have to
@@ -2643,11 +2740,11 @@ namespace Arcane::Editor
         // above). Folded in HERE, before the clipboard consume block below reads
         // menuReq -- same fold-in shape as the Ctrl+N/O/S scene shortcuts fold
         // further down, just earlier in the frame so the request this edge
-        // raises cannot lag a frame behind its own keypress.
-        menuReq.cutSelection       |= fs.scCut;
-        menuReq.copySelection      |= fs.scCopy;
-        menuReq.paste              |= fs.scPaste;
-        menuReq.duplicateSelection |= fs.scDuplicate;
+        // raises cannot lag a frame behind its own keypress. T5 s7.10: folded
+        // only while the Asset Browser does NOT own the keys (last frame's
+        // answer -- the Browser draws after this), so Ctrl+D in the Browser
+        // no longer duplicates the selected entity.
+        Arcane::Editor::FoldEntityClipboardShortcuts(menuReq, { fs.scCut, fs.scCopy, fs.scPaste, fs.scDuplicate }, m_browserOwnsEditKeys);
         // Edit -> clipboard (spec II.B), delegated to the shared functions
         // promoted in EditorPanels.cpp/.hpp -- the menu-bar consume, the
         // keybinds (folded in above), and the Outliner's context menus all
@@ -2705,6 +2802,13 @@ namespace Arcane::Editor
             // Create -> Mesh -> <primitive> (F4 plan 1 Task 11): the preset
             // rides the SAME request; -1 when the entry carried none.
             request.prefillMeshSource = menuReq.requestMeshSource;
+            // The Assets menu acts on the asset selection (Show in Explorer
+            // and Copy Path above do too), so its "Material Instance..." and
+            // "Sprite..." prefill from a selected material / texture exactly
+            // as the Asset Browser's `+ Create` does (T3-D4, T3-D5).
+            if (m_assetModel.selected.IsValid())
+                request.prefillParent = Arcane::Editor::CreatePrefillFor(
+                    request.kind, m_assetModel.Find(m_assetModel.selected));
             BeginCreateAsset(request);
         }
         if (menuReq.openMaterial)
@@ -2767,6 +2871,94 @@ namespace Arcane::Editor
             DoSaveScene(m_scene.Path());
         if (menuReq.saveSceneAs || (menuReq.saveScene && m_scene.Path().empty()))
             ShowSceneSaveDialog();
+    }
+
+    void EditorApp::LaunchProjectOpenRequests(const Arcane::Editor::MenuRequests& req)
+    {
+        if (req.openProject)
+        {
+            // Start beside the most recent project; null = the OS default.
+            const std::string start = Arcane::Editor::DialogStartDir(m_recents.projects);
+            m_gpu->Win().ShowOpenFileDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() },
+                "Arcane Project", "arcproj", start.empty() ? nullptr : start.c_str());
+        }
+        // Same slot, same thunk: FolderPickedCallback and FilePickedCallback share
+        // a signature (Window.hpp:93, 103).
+        if (req.openProjectFolder)
+            m_gpu->Win().ShowOpenFolderDialog(&EditorApp::PathPickedThunk,
+                new PathDialogRequest{ &m_dialogs.projectOpen, m_dialogs.projectOpen.Arm() });
+        // Open Recent lands in the SAME slot the dialogs' callback fills, so it
+        // flows through ConsumeProjectDialogResult and inherits every guard (the
+        // unsaved-scene confirm, the rival-editor lock, the ABI gate, the failure modal).
+        if (!req.openRecentPath.empty())
+            m_dialogs.projectOpen.Stash(m_dialogs.projectOpen.Arm(), req.openRecentPath);
+    }
+
+    void EditorApp::DrawStartPage(Arcane::Editor::MenuRequests& req)
+    {
+        // Derived every frame, never latched: a switch that fails after
+        // teardown brings the page back; a successful one hides it.
+        const bool visible = m_runtime->CurrentProject() == nullptr;
+        // A focus lands only once the page is docked and no popup (a boot
+        // error modal) holds focus; until then it waits (StepStartPageFocus).
+        const bool canFocus = m_viewportDockId != 0 &&
+                              !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const Arcane::Editor::StartPageStep step =
+            Arcane::Editor::StepStartPageFocus(m_startPageFocus, visible, canFocus);
+        if (!visible) return;
+        if (step.appearing)
+            m_recents.RefreshAll(nullptr);   // read-only: the page never writes the shared recents
+        if (step.focusNow)
+            ImGui::SetNextWindowFocus();     // the first frame it can land, so the Start tab is in front
+        if (m_viewportDockId != 0)
+            ImGui::SetNextWindowDockID(static_cast<ImGuiID>(m_viewportDockId), ImGuiCond_Always);
+        if (ImGui::Begin("Start###startpage", nullptr, ImGuiWindowFlags_NoSavedSettings))   // no Close X (9.27 #14)
+        {
+            const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+            const Arcane::Editor::StartPageModel page = Arcane::Editor::BuildStartPage(m_recents.projects, now);
+            const float avail = ImGui::GetContentRegionAvail().x;
+            const float width = std::min(640.0f, avail);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (avail - width) * 0.5f));
+            ImGui::BeginChild("##startcol", ImVec2(width, 0.0f));
+            // ---- section 1: heading + actions ---------------------------------
+            ImGui::Dummy(ImVec2(0.0f, 24.0f));
+            ImGui::TextUnformatted("No project open");
+            ImGui::Spacing();
+            if (ImGui::Button(ICON_LC_FOLDER_OPEN " Open Project...")) req.openProject = true;
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_LC_FOLDER " Open Folder...")) req.openProjectFolder = true;
+            ImGui::Dummy(ImVec2(0.0f, 16.0f));
+            // ---- (crash-window plan 3's "Recover" section slots in HERE) ------
+            // ---- section 2: recent projects -------------------------------------
+            ImGui::TextDisabled("Recent projects");
+            ImGui::Separator();
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float lineH = ImGui::GetTextLineHeight();
+            const float rowH = lineH * 2.0f + style.FramePadding.y * 3.0f;
+            for (std::size_t i = 0; i < page.rows.size(); ++i)
+            {
+                const Arcane::Editor::StartPageRow& row = page.rows[i];
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Selectable("##recent", false, ImGuiSelectableFlags_None, ImVec2(0.0f, rowH)))
+                    req.openRecentPath = row.path;   // the Open Recent slot
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip)) ImGui::SetTooltip("%s", row.path.c_str());
+                const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImU32 dim = ImGui::ColorConvertFloat4ToU32(Theme::kTextDim);
+                dl->AddText(ImVec2(lo.x + style.FramePadding.x, lo.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), row.name.c_str());
+                dl->AddText(ImVec2(hi.x - style.FramePadding.x - ImGui::CalcTextSize(row.opened.c_str()).x, lo.y + style.FramePadding.y), dim, row.opened.c_str());
+                dl->PushClipRect(lo, hi, true);
+                dl->AddText(ImVec2(lo.x + style.FramePadding.x, lo.y + style.FramePadding.y * 2.0f + lineH), dim, row.path.c_str());
+                dl->PopClipRect();
+                ImGui::PopID();
+            }
+            if (!page.hiddenLine.empty()) ImGui::TextDisabled("%s", page.hiddenLine.c_str());
+            else if (page.rows.empty())   ImGui::TextDisabled("No recent projects");
+            ImGui::EndChild();
+        }
+        ImGui::End();
     }
 
     void EditorApp::ConsumeAssetPanelActions(const Arcane::Editor::AssetPanelActions& panelActions,
@@ -2913,6 +3105,28 @@ namespace Arcane::Editor
                                                  panelActions.revealInBrowse);
             Arcane::Editor::FocusDockTab("Asset Browser");
         }
+        // `openAsset` (an asset-reference cell's name double-click, spec
+        // 2026-09-30 s4.2): opened HERE, a frame after the cell queued it,
+        // exactly like a Browser double-click (OpenAssetRow: a scene through
+        // openScene, a source file to the IDE). Its follow-ups are consumed at
+        // once; OpenAssetRow never sets openAsset, so this recurses one level.
+        if (panelActions.openAsset.IsValid())
+            if (const Arcane::Editor::AssetPanelEntry* e = m_assetModel.Find(panelActions.openAsset))
+            {
+                Arcane::Editor::AssetPanelActions follow;
+                Arcane::Editor::OpenAssetRow(*e, m_runtime->CurrentProject(), m_documents, follow);
+                ConsumeAssetPanelActions(follow, ls);
+            }
+        // T5 s7.6/s7.7: a committed inline rename or a Duplicate (Browser key,
+        // row menu, asset page) runs through the ONE front door, then the
+        // post-op selection step; the page's pencil opens the Rename modal.
+        if (panelActions.fileOp)
+            if (const auto plan = RunAssetOp(*panelActions.fileOp)) AfterAssetOp(*plan);
+        if (const auto* e = m_assetModel.Find(panelActions.requestRename))
+        { m_renameModal = { true, e->guid, {}, true }; std::snprintf(m_renameModal.buf, sizeof(m_renameModal.buf), "%s", e->name.c_str()); }
+        if (!panelActions.requestDelete.empty()) BeginAssetDelete(panelActions.requestDelete);   // T5 s7.5: Del, row menu, page trash
+        if (!panelActions.requestMoveTo.empty()) m_moveTo = { true, true, panelActions.requestMoveTo, 0, {} };   // T5 s7.8: row menu
+        if (panelActions.requestNewFolder) { m_newFolder = {}; m_newFolder.open = m_newFolder.justOpened = true; m_newFolder.parent = *panelActions.requestNewFolder; }   // folder row, background
 
         // ---- Status lens attention cards (asset-manager Plan 2 Task 7) -----
         // Recook, per the plan's Ruling 8: invalidate the artifact, ERASE this
@@ -2981,10 +3195,11 @@ namespace Arcane::Editor
             return;
         }
 
-        // Fresh state per request: a cancelled dialog must not leave a
-        // half-typed name or a stale parent for the next one to inherit.
-        m_createDialog = Arcane::Editor::CreateDialogState{};
-        m_createDialog.request = request;
+        // Fresh state per request (a cancelled dialog must not leave a
+        // half-typed name or a stale parent for the next one to inherit),
+        // seeded from the request by the dialog's own unit, which is where
+        // the prefill rules live and are tested (T3-D4).
+        m_createDialog = Arcane::Editor::MakeCreateDialogState(request, m_assetModel, project->Root());
         // A C++ Class's Location combo defaults to the game module's OWN
         // directory (CppClassDefaultFolder(manifest.sourceDir)), not Source/
         // itself -- the source:// mount stays Source/ (plan ruling S2); only
@@ -2992,45 +3207,6 @@ namespace Arcane::Editor
         if (request.kind == Arcane::Editor::CreateAssetKind::CppClass)
             m_createDialog.request.cppDefaultFolder =
                 Arcane::Editor::CppClassDefaultFolder(project->Manifest().sourceDir);
-        m_createDialog.open    = true;
-
-        // The Material surface combo's starting index. `prefillSurface` is a
-        // MaterialSurface VALUE (-1 = none), and the combo's own order is a
-        // different one -- converted through the single mapping in
-        // CreateAssetDialog.hpp rather than cast.
-        m_createDialog.surface =
-            (request.prefillSurface >= 0 &&
-             request.prefillSurface <= static_cast<int>(Arcane::MaterialSurface::Mesh))
-                ? Arcane::Editor::MaterialSurfaceComboIndex(
-                      static_cast<Arcane::MaterialSurface>(request.prefillSurface))
-                : Arcane::Editor::kMaterialSurfaceDefaultIndex;
-
-        // `prefillParent` is the kind's ONE asset-valued field (the field's own
-        // doc comment): an instance's parent, or -- Task 13 -- a sprite's
-        // source texture. Routed to whichever the requested kind actually has,
-        // so a prefill can never land in a field the dialog will not show.
-        switch (request.kind)
-        {
-            case Arcane::Editor::CreateAssetKind::MaterialInstance:
-                m_createDialog.parent = request.prefillParent;
-                // The picker starts EXPANDED when there is nothing to show for
-                // it yet -- the CreateFlow mock's own state, and the useful
-                // one: a request with no prefilled parent cannot be completed
-                // without picking one.
-                m_createDialog.pickerOpen = !request.prefillParent.IsValid();
-                break;
-            case Arcane::Editor::CreateAssetKind::Sprite:
-                m_createDialog.texture = request.prefillParent;
-                // Same "start expanded when there is nothing to show yet"
-                // rule as MaterialInstance's parent picker above -- a Sprite
-                // request with no prefilled texture (the rail `+`, the
-                // toolbar/Assets-menu "Sprite...", a row's Create submenu)
-                // cannot be completed without picking one either.
-                m_createDialog.pickerOpen = !request.prefillParent.IsValid();
-                break;
-            default:
-                break;
-        }
     }
 
     // THE ONE DISPATCHER. A completed dialog result -> the matching mint.
@@ -3054,10 +3230,11 @@ namespace Arcane::Editor
             d.code     = "assets.create.failed";
             d.message  = std::move(message);
             d.detail   = std::move(detail);
-            // A File locator, whose click is a DOCUMENTED no-op (RouteLocator's
-            // File branch only matches open shader documents) -- exactly the
-            // build.module.failed row's precedent. There is deliberately no
-            // Asset locator: the create FAILED, so no guid exists to point at.
+            // A File locator, routed by ClassifyLocator (s8.2): a row whose
+            // path does not exist is plain text, an existing one opens or shows
+            // in Explorer -- the build.module.failed row's precedent. There is
+            // deliberately no Asset locator: the create FAILED, so no guid
+            // exists to point at.
             if (!file.empty())
                 d.locator = Arcane::DiagLocator::File(std::move(file));
             m_createDiagnostics.push_back(std::move(d));
@@ -3474,7 +3651,10 @@ namespace Arcane::Editor
             };
         fs.vp = Arcane::Editor::DrawViewportPanel(vpTexture,
                                             ViewportWidth(), ViewportHeight(),
-                                            tools, /*showToolOverlay=*/!InPlayMode(),
+                                            tools,
+                                            Arcane::Editor::ViewportChrome{ /*showToolOverlay=*/!InPlayMode(),
+                                                                            /*playing=*/InPlayMode(),
+                                                                            /*sceneDirty=*/CurrentTitleParts().sceneDirty },
                                             gizmoOverlay);
         m_viewportDockId = fs.vp.dockId;
         m_viewportTargets.pendingW = fs.vp.desiredW;
@@ -3812,7 +3992,10 @@ namespace Arcane::Editor
         // runtime's own capture arm: "arm every frame past the base budget"
         // and "arm the one last frame" are one expression, not two.
         const bool offscreenChrome = ChromeGraph()->IsOffscreen();
-        const bool pastBase = offscreenChrome &&
+        // T3-D6: OR the windowed opt-in -- the capture node copies whichever
+        // backbuffer this frame writes, the swapchain's included (the
+        // runtime's windowed --screenshot already reads it the same way).
+        const bool pastBase = (offscreenChrome || WindowedFrameCapture(m_config)) &&
                               CaptureWanted(m_config) &&
                               m_config.maxFrames != 0 &&
                               (m_frameCount + 1) >= m_config.maxFrames;
@@ -4232,7 +4415,16 @@ namespace Arcane::Editor
 
     void EditorApp::EndFrame(LoopState& ls)
     {
-        if (m_plugin) m_plugin->Poll();
+        if (m_plugin)
+        {
+            // Poll decides internally whether to swap (PluginHost.cpp:1003-1006).
+            // Clear in the same EndFrame, before any undo can run: no command's
+            // destructor calls module code (spec s3.3f, verdict CONFIRMED).
+            const std::uint32_t generation = m_plugin->Generation();
+            m_plugin->Poll();
+            if (m_undo && m_plugin->Generation() != generation)
+                Arcane::Editor::ClearHistoryForModuleReload(*m_undo, m_scene);
+        }
 
         ++m_frameCount;
 

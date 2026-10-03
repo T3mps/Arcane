@@ -58,12 +58,15 @@
 // routing, and the unsaved-close confirm modal.
 
 #include "Scene/EditGesture.hpp"
+#include "Scene/UndoGate.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
+#include "Documents/PreviewStatus.hpp"
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>          // MeshAssetData; also brings MeshBuilder.hpp (MeshData)
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -79,7 +82,6 @@
 namespace Arcane
 {
     class CommandStack;
-    class Runtime;
 
     // Forward-declared, never included here: NriGraphContext.hpp pulls
     // <NRI.h> plus every render-graph node header, and this header is
@@ -88,38 +90,33 @@ namespace Arcane
     // ~MeshDocument is out of line (MeshDocument.cpp).
     struct HostConfig;
     class ImGuiNriNode;
-    class NriDevice;
     class NriGraphContext;
 }
 
 namespace Arcane::Editor
 {
+    struct AssetRefServices;   // Panels/AssetReferenceField.hpp (Services::assetRefs)
+    struct AssetRefEdit;       // Panels/AssetReferenceField.hpp (ApplySlotMaterialEdit)
+
     class MeshDocument final : public EditorDocument
     {
     public:
         // Everything the document borrows from the app. Two shapes glued
         // together: the small "services struct" SpriteDocument::Services
-        // uses (runtime + undo), plus the three-borrow preview seam
+        // uses (undo + invalidate), plus the three-borrow preview seam
         // DocServices carries for ShaderEditorDocument (ShaderEditorDocument.
         // hpp:120-172) -- read there for the full mechanism; restated only
         // briefly below.
         struct Services
         {
-            // Resolves the material Guid field's DISPLAY name (the current
-            // project's registry, mount path for a Guid) -- the only thing
-            // this document reads a Runtime for. Null just means the field
-            // shows the raw Guid instead of a mount path; the assignment
-            // itself (drag-drop from the Asset Browser) needs no Runtime at
-            // all.
-            Arcane::Runtime* runtime = nullptr;
-
-            // The SAME shared editor CommandStack every other surface pushes
-            // to (EditorAppProject.cpp's MakeDocServices hands the identical
-            // pointer to DocServices::undo) -- one global history, so a mesh
-            // param edit undoes alongside everything else in the order it
-            // happened. Null = no undo coverage (the EditGesture bracket
-            // no-ops whole); the document still edits and saves.
-            Arcane::CommandStack* undo = nullptr;
+            // Resolves to the SAME shared editor CommandStack every other
+            // surface pushes to (EditorApp::DocumentUndo, the resolver
+            // MakeDocServices hands DocServices::undo) -- one global history,
+            // so a mesh param edit undoes alongside everything else in the
+            // order it happened. Asked per edit (UndoStack()); unset or null
+            // (Play) = no undo coverage (the EditGesture bracket no-ops
+            // whole); the document still edits and saves.
+            UndoResolver undo;   // the ONE history, resolved per edit; returns null in Play (s3.3b)
 
             // Fired with this asset's Guid after a successful Save AND after
             // every undo/redo apply -- routed to SceneRenderResolver::
@@ -139,22 +136,23 @@ namespace Arcane::Editor
             // file", never to a lost edit.
             std::function<void(const Arcane::Guid&)> invalidateMesh;
 
-            // ===== THE PREVIEW SEAM ==========================================
+            // ===== THE PREVIEW SEAM (late-bound; node page + editor upgrades s3.2) =====
             // Borrowed from EditorApp, which outlives the document list.
-            //   nriDevice/hostConfig -- what CreateOffscreen needs to build
-            //                           this document's own small vehicle
-            //                           over the process's one device.
-            //   chromeHud            -- the chrome context's ImGuiNriNode,
-            //                           owed an InvalidateUserTextureNow
-            //                           before this preview's texture dies
-            //                           on the no-sink teardown path.
-            // All three null in the headless tests (no EditorApp at all) --
-            // what keeps EnsurePreviewContext() a single `if`, and what this
-            // task's pinned behaviour ("device-less services allocate no
-            // preview resources") exercises directly.
-            Arcane::NriDevice*        nriDevice  = nullptr;
+            //   chromeGraph -- resolves the CHROME context at each use (its
+            //                  Device() for CreateOffscreen). Late-bound because a
+            //                  document opened during boot (--open-asset opens
+            //                  inside StageFinalize) exists BEFORE
+            //                  CreateGraphVehicles makes that context; Tick
+            //                  retries the vehicle until it resolves (the
+            //                  material-preview harvester's precedent).
+            //   hostConfig  -- the knobs CreateOffscreen reads.
+            // The chrome ImGuiNriNode is NOT re-resolved at teardown: the
+            // document records the one it bound through (m_previewHud),
+            // because ChromeGraph() is null after ShutdownGraphPath.
+            // Both unset in the headless tests: EnsurePreviewContext is then a
+            // null check that never latches.
+            std::function<Arcane::NriGraphContext*()> chromeGraph;
             const Arcane::HostConfig* hostConfig = nullptr;
-            Arcane::ImGuiNriNode*     chromeHud  = nullptr;
 
             // ===== AND THE ONE-FRAME RETIRE, NOT OPTIONAL =====
             // A document can be destroyed INSIDE the editor's ImGui pass
@@ -165,6 +163,12 @@ namespace Arcane::Editor
             // tests and at shutdown; a document with no sink destroys its
             // vehicle inline (see DestroyPreviewContext).
             std::function<void(std::unique_ptr<Arcane::NriGraphContext>)> retireGraphPreview;
+
+            // The shared asset-reference cell's services (spec 2026-09-30 s4.2):
+            // EditorApp::m_assetRefServices, app-lifetime; its callables read state
+            // at call time, so a document made during a boot stage is not stale.
+            // Null in the headless tests (the cell's null services). T3's ports read it.
+            const AssetRefServices* assetRefs = nullptr;
         };
 
         // `data` is already loaded (LoadMeshAsset happens in the factory,
@@ -198,6 +202,9 @@ namespace Arcane::Editor
         bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
         void NoteReopened() override { m_pageSel.NoteReopened(); }
+        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
+        std::vector<Arcane::Guid> LiveReferences() const override;   // T5 s7.5
+        void FlushGesture() override;
 
         // Undo plumbing (doc-identity commands, the same shape as
         // SpriteDocument::ApplySpriteData): swap the whole authored data in
@@ -235,8 +242,18 @@ namespace Arcane::Editor
         //     material. Applied to EVERY imported slot count (a single-slot
         //     imported mesh keeps its one named-but-unassigned slot too --
         //     the correspondence rule has no size threshold).
-        // A no-op on an empty slot array.
+        // A no-op on an empty slot array. = ClearSlotMaterial(data, 0).
         static void ClearPrimarySlotMaterial(Arcane::MeshAssetData& data);
+
+        // s5.5: the I4 rule for any slot k -- imported meshes nil slots[k].material
+        // and KEEP the slot (positional correspondence with the artifact);
+        // generated meshes erase it. No-op when k is out of range.
+        static void ClearSlotMaterial(Arcane::MeshAssetData& data, std::size_t slot);
+        // One material row's AssetRefEdit (s5.5). Generated: Set creates slot 0
+        // when absent, else writes slots[0]; Clear = ClearPrimarySlotMaterial.
+        // Imported: Set/Clear on slots[k]. One step each ("Assign Material" /
+        // "Clear Material"); None does nothing.
+        void ApplySlotMaterialEdit(std::size_t slot, const AssetRefEdit& edit);
 
         // The CURRENT preview geometry, rebuilt every time m_data changes
         // (construction, ApplyMeshData, or a live field edit in the page).
@@ -278,12 +295,26 @@ namespace Arcane::Editor
             return m_previewGeometryInvalidations;
         }
 
+        // The PreviewStatus inputs (s3.2): a validation reason -> Errors,
+        // imported -> NotCompiledHere, no seam -> NoDevice, vehicle unavailable
+        // -> VehicleFailed, a rendered image -> Ready. What the report's
+        // documents[] carries; T3 reads it for the UI.
+        [[nodiscard]] PreviewStatus ComputeStatus() const;
+
+        // CreateOffscreen calls this document has made -- the [gpu] test's
+        // "the first non-null seam builds the vehicle exactly once" instrument.
+        [[nodiscard]] std::uint32_t PreviewVehicleAttempts() const noexcept { return m_previewVehicleAttempts; }
+
     private:
         // The mesh page: the form, drawn by the Inspector instance showing it.
         // Carries its own EditGesture::ScopeGuard (the topology drags that
         // open gestures are submitted inside it) and no Begin/End -- the
-        // Inspector window is its window.
-        void DrawFormBody();
+        // Inspector window is its window. Sections Mesh / Material / Info (s5.5).
+        void DrawFormBody(PropertyGrid& grid);
+
+        // A single-frame commit (the Source combo, a material Set/Clear): marks
+        // dirty, rebuilds the preview and pushes ONE step; nothing when unchanged.
+        void CommitDataEdit(const char* label, const Arcane::MeshAssetData& before);
 
         // The one page this document contributes (kind "mesh", key "mesh").
         // The base MUST be public: Page() hands &m_page out as InspectorPage*,
@@ -297,7 +328,7 @@ namespace Arcane::Editor
                 // One crumb; `select` is a no-op (the page IS the only level).
                 return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "mesh" } } };
             }
-            void Draw(PropertyGrid&) override { m_doc.DrawFormBody(); }
+            void Draw(PropertyGrid& g) override { m_doc.DrawFormBody(g); }
 
         private:
             MeshDocument& m_doc;
@@ -311,13 +342,11 @@ namespace Arcane::Editor
         // simpler than SpriteDocument's cache-invalidate story.
         void RebuildPreviewMesh();
 
-        // Build this document's own offscreen vehicle, once, the moment
-        // Services says a device exists. A no-op when one already exists or
-        // when nriDevice/hostConfig is null -- the whole of what makes
-        // "device-less services allocate no preview resources" true, and
-        // called from the CONSTRUCTOR (not lazily from Tick/Draw) because a
-        // mesh preview has no bind/compile event to wait for: the moment
-        // Services is known, whether a device exists is already decided.
+        // Build this document's own offscreen vehicle, once, when the chrome
+        // context resolves. Called from the constructor AND retried from Tick
+        // while there is no vehicle and neither latch is set (s3.2): a null
+        // chromeGraph() costs one check and never latches; the first non-null
+        // attempt builds the vehicle or latches m_previewVehicleFailed.
         void EnsurePreviewContext();
 
         // Render one frame of the preview: with a valid m_previewMesh, a
@@ -345,6 +374,7 @@ namespace Arcane::Editor
         // comment for the full ordering argument.
         void DestroyPreviewContext();
 
+        [[nodiscard]] Arcane::CommandStack* UndoStack() const { return m_services.undo ? m_services.undo() : nullptr; }
         Services                 m_services;
         std::filesystem::path    m_path;
         Arcane::MeshAssetData    m_data;
@@ -398,9 +428,18 @@ namespace Arcane::Editor
         std::shared_ptr<MeshDocument*> m_anchor;
 
         // This document's own offscreen preview vehicle -- null in every
-        // device-less test (Services carries no device there) and whenever
+        // device-less test (Services carries no chromeGraph there) and whenever
         // CreateOffscreen itself refuses (already logged).
         std::unique_ptr<Arcane::NriGraphContext> m_preview;
+
+        // ===== The late-bound seam's state (s3.2) =====
+        // The chrome ImGuiNriNode this vehicle's image was bound through,
+        // captured at creation -- the no-sink destroy invalidates against IT.
+        Arcane::ImGuiNriNode* m_previewHud = nullptr;
+        bool          m_previewVehicleFailed = false;   // CreateOffscreen returned null: Tick stops retrying
+        bool          m_previewFrameFailed   = false;   // a frame failed and dropped the vehicle (today's permanent drop)
+        bool          m_previewPresented     = false;   // a frame has landed in THIS vehicle's texture
+        std::uint32_t m_previewVehicleAttempts = 0;
 
         // Square, matching ShaderEditorDocument::kGraphPreviewSize -- there is
         // no shape reason for a mesh preview to differ, and reusing the same

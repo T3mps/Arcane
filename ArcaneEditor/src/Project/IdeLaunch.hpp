@@ -48,8 +48,9 @@ namespace Arcane::Editor::IdeLaunch
     // The devenv argv for a NEW instance: the solution, then the file when
     // there is one (UE's RunVisualStudioAndOpenSolutionAndFiles shape). Tokens
     // are UNQUOTED -- RuntimeLaunch::QuoteArg escapes them at spawn.
+    // line > 0 with a file appends `/Command`, `Edit.GoTo <line>`.
     [[nodiscard]] std::vector<std::wstring> ComposeLaunchArgs(
-        const std::filesystem::path& solution, const std::filesystem::path& file);
+        const std::filesystem::path& solution, const std::filesystem::path& file, int line = 0);
 
     // What a probe of the ROT concluded about THIS solution (UE's
     // EAccessVisualStudioResult, same four answers, same meanings):
@@ -103,4 +104,11 @@ namespace Arcane::Editor::IdeLaunch
     Outcome OpenFile(const std::filesystem::path& devenv,
                      const std::filesystem::path& solution,
                      const std::filesystem::path& file);
+
+    // OpenFile, then put the caret on `line` (> 0): in a running instance via
+    // DTE.ExecuteCommand("Edit.GoTo", "<line>") (a failure logs ARC_WARN and
+    // the outcome stays OpenedInInstance); in a new one via /Command.
+    Outcome OpenFileAtLine(const std::filesystem::path& devenv,
+                           const std::filesystem::path& solution,
+                           const std::filesystem::path& file, int line);
 }

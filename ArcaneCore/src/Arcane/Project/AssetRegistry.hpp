@@ -28,6 +28,7 @@
 #include <Arcane/Util/FunctionRef.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -38,6 +39,13 @@
 
 namespace Arcane
 {
+    // T5 s7.2: why AssetRegistry::Rebind refused (Ok = the mapping moved). NoProject
+    // is Runtime::RebindMovedAsset's answer when nothing is open.
+    enum class RebindResult : std::uint8_t
+    {
+        Ok, UnknownGuid, NotTrackable, OutsideContent, CrossMount, IdMismatch, PathTaken, NoProject,
+    };
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)  // unordered_map member on a dll-exported class: benign under /MD (shared CRT heap)
@@ -95,6 +103,25 @@ namespace Arcane
         std::optional<Guid> AddFile(const std::filesystem::path& file,
                                     const std::filesystem::path& contentDir,
                                     std::string_view scheme);
+
+        // T5 (spec 2026-09-30 s7.2): the id a scan WOULD read for `file` -- embedded
+        // "id" (native JSON), "<file>.meta" "guid" (imported binary), envelope "guid"
+        // (.arcdiag) -- but NEVER minted, written or warned about. nullopt for a missing
+        // file, a .meta, C/C++ source (its id is its path), an unknown kind, or an
+        // unreadable/absent id. The asset file-op executor's TOCTOU and expiry probe.
+        static std::optional<Guid> PeekId(const std::filesystem::path& file);
+
+        // T5 s7.2: drop `id`'s mapping (its file was deleted by the editor), retract
+        // its DiagLocator::Asset rows and republish "assets" whole-set. False if unknown.
+        bool Remove(const Guid& id);
+
+        // T5 s7.2: point `id` at `newFile` after the editor MOVED it (AddFile would
+        // keep the old path). Never mints, writes or publishes; the map is untouched
+        // unless the result is Ok. Checks, in order: unknown id; source (identity is
+        // the path); outside `contentDir`; `scheme` != the id's current mount;
+        // PeekId(newFile) != id; the mount path owned by another guid.
+        RebindResult Rebind(const Guid& id, const std::filesystem::path& newFile,
+                            const std::filesystem::path& contentDir, std::string_view scheme);
 
         // Guid -> mount path ("game://a/b.json"); nullopt if the id is unknown.
         std::optional<std::string> Resolve(const Guid& id) const;

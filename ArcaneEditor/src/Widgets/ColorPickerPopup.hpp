@@ -60,4 +60,26 @@ namespace Arcane::Editor
     //
     // Returns true only on frames ImGui reported a change.
     [[nodiscard]] bool ColorPopupBody(float linear[4], const float original[4], bool hdr);
+
+    // The colour VALUE cell (node-page spec s4.1(c)): no label, no undo, no
+    // draft. Submits, IN THIS ORDER:
+    //   1. the sRGB-encoded swatch, square at frame height; a click latches
+    //      `original` and opens the popup (ColorPopupId("##popup") under `id`);
+    //   2. while open, ColorPopupBody(linear, original, hdr);
+    //   3. the four LINEAR boxes LAST (Float|NoSmallPreview|NoPicker|NoOptions|
+    //      DisplayRGB|InputRGB, +HDR when hdr so a component above 1 is not
+    //      clamped by a box drag), filling the rest of the cell -- the width is
+    //      CalcItemWidth() at entry, so a caller's pending SetNextItemWidth (a
+    //      reserved reset strip) is honoured. A row whose boxes cannot hold
+    //      "0.000" (ColorEdit4's fixed format) draws the same boxes -- same group,
+    //      ids, split, clamp, markers and drop target -- at the 2 (else 1)
+    //      decimals that fit, display only (T3 gate: the 1080p material page).
+    // The boxes are therefore g.LastItemData on return: the popup's End()
+    // restores the parent's LastItemData (ShaderEditorDocument.cpp:5856-5866).
+    // Bracket the boxes with the activation pair right after the call, and the
+    // popup with BeginOnPopupOpen / EndOnPopupClose on `popupId`. The boxes keep
+    // `id` as their ImGui label, so a migrated site keeps its box ids.
+    // `original` is caller storage; one slot is enough (one colour popup at a time).
+    struct ColorValueResult { bool changed = false; ImGuiID popupId = 0; };
+    [[nodiscard]] ColorValueResult ColorValue(const char* id, float linear[4], float original[4], bool hdr = false);
 }

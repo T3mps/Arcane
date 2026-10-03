@@ -58,7 +58,12 @@ namespace Arcane
         // StageSplashReady, RuntimeApp::StageFinalize) reveal one statement
         // before destroying the foreground-holding splash, and the raise has to
         // happen in that order. See Window.cpp for the ordering argument.
-        void Show();
+        //
+        // activate = false (T3-D6 fix round 1): map the window WITHOUT taking
+        // the foreground and without the raise -- an automation run's reveal
+        // (Editor::HostPresentationFor). A person may be working at the desk
+        // while a scripted windowed capture runs; it must never steal focus.
+        void Show(bool activate = true);
 
         // Set the OS window icon (title bar + taskbar) from an image file. Opt-in per
         // host: only a host that calls this gets a custom icon -- others keep the SDL

@@ -83,6 +83,16 @@ namespace Arcane::Editor
         // dragged yet. Only ever consulted once per session -- after that
         // PropertyGridState::labelColWidth is the authority.
         constexpr float kLabelColumnFraction = 0.4f;
+        // The narrowest region a seed may be taken from, in font heights
+        // (T3-D6 fix round 1). A dock node's child can report a DEGENERATE
+        // width on its first frame -- measured: Inspector 2's ##page at
+        // avail 4.0 on frame 1 of a 1920x1080 boot with an asset selected --
+        // and the once-per-session seed taken there pinned the label column
+        // at its minimum for the whole session, every label elided to "..".
+        // Below this floor the grid stays unseeded (the column auto-sizes)
+        // and the seed is retried on the next frame. Not a tunable: a guard
+        // against a measurement that is not one.
+        constexpr float kLabelSeedMinAvailEm = 8.0f;
 
         // Open one field region's grid. Returns false exactly when
         // ImGui::BeginTable did (culled/clipped host window), in which case the
@@ -165,7 +175,7 @@ namespace Arcane::Editor
             if (labelColWidth <= 0.0f)
             {
                 const float avail = ImGui::GetContentRegionAvail().x;
-                if (avail > 0.0f)
+                if (avail > 0.0f && avail >= ImGui::GetFontSize() * kLabelSeedMinAvailEm)
                     labelColWidth = ImTrunc(avail * kLabelColumnFraction);
             }
             // NoSavedSettings is passed explicitly even though a table inside a
@@ -281,7 +291,7 @@ namespace Arcane::Editor
 
         // ---------------------------------------------------------------------
         // Asset panel vocabulary (asset-manager-redesign-design.md §11.1/§11.2):
-        // AssetPill, SegmentedStrip, RowWithThumb. Model-free -- the tooltip
+        // AssetPill, RowWithThumb. Model-free -- the tooltip
         // that additionally needs a thumbnail resolver lives with the panel
         // (Task 9), not here.
         // ---------------------------------------------------------------------
@@ -380,28 +390,30 @@ namespace Arcane::Editor
                                 StringResizeCallback, s);
     }
 
-    // The format strings are spelled out only because `flags` sits after them
-    // in the signature; both are the header's own defaults (imgui.h:687/692),
-    // so nothing about how a value reads changes.
+    // `format` reaches both arms: the unranged one passes DragFloat's/DragInt's
+    // own unbounded min/max (0, 0) so it can name the format. The header's
+    // defaults are those widgets' own (imgui.h:687/692), so a call that omits
+    // `format` reads exactly as before.
     bool RangedDragFloat(const char* label, float* v, float fallbackSpeed,
-                         const std::optional<Astra::Range>& range)
+                         const std::optional<Astra::Range>& range, const char* format)
     {
         if (range)
             return ImGui::DragFloat(label, v, DragSpeedFor(*range, fallbackSpeed),
                                     ToFloatClamped(range->min), ToFloatClamped(range->max),
-                                    "%.3f", ImGuiSliderFlags_ClampOnInput);
-        return ImGui::DragFloat(label, v, fallbackSpeed);
+                                    format, ImGuiSliderFlags_ClampOnInput);
+        return ImGui::DragFloat(label, v, fallbackSpeed, 0.0f, 0.0f, format);
     }
 
-    bool RangedDragInt(const char* label, int* v, const std::optional<Astra::Range>& range)
+    bool RangedDragInt(const char* label, int* v, const std::optional<Astra::Range>& range,
+                       const char* format)
     {
         if (range)
             // 1.0f is DragInt's own default speed (imgui.h:692), passed
             // explicitly because the bounded overload leaves no way to omit it.
             return ImGui::DragInt(label, v, DragSpeedFor(*range, 1.0f),
                                   ToInt32Clamped(range->min), ToInt32Clamped(range->max),
-                                  "%d", ImGuiSliderFlags_ClampOnInput);
-        return ImGui::DragInt(label, v);
+                                  format, ImGuiSliderFlags_ClampOnInput);
+        return ImGui::DragInt(label, v, 1.0f, 0, 0, format);
     }
 
     // Returns whether the LABEL is hovered. The label is its own ImGui item
@@ -413,7 +425,27 @@ namespace Arcane::Editor
     // edited. The color push is exactly what ImGui::TextDisabled does
     // (imgui_widgets.cpp:316-322), spelled out so the text can go through
     // TextUnformatted rather than a format string.
-    bool FieldLabelCell(const std::string& label, bool dimmed)
+    bool FieldLabelText(const std::string& label, bool dimmed, bool* truncated)
+    {
+        const std::string shown = EllipsisToWidth(label, ImGui::GetContentRegionAvail().x);
+        const bool cut = shown != label;
+        if (truncated)
+            *truncated = cut;
+        if (dimmed)
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextUnformatted(shown.c_str());
+        if (dimmed)
+            ImGui::PopStyleColor();
+        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
+        // Last-wins per frame: a caller's own tail tooltip (the entity row)
+        // replaces this one and carries the full label itself.
+        if (cut && hovered)
+            ImGui::SetTooltip("%s", label.c_str());
+        return hovered;
+    }
+
+    bool FieldLabelCell(const std::string& label, bool dimmed, bool* truncated)
     {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -425,13 +457,7 @@ namespace Arcane::Editor
         // RowTextBaseline for cells submitted LATER in the row
         // (imgui_tables.cpp:2273), and this is the first one.
         ImGui::AlignTextToFramePadding();
-        if (dimmed)
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextUnformatted(label.c_str());
-        if (dimmed)
-            ImGui::PopStyleColor();
-        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
+        const bool hovered = FieldLabelText(label, dimmed, truncated);
         ImGui::TableSetColumnIndex(1);
         // -FLT_MIN is ImGui's "fill the remaining width" spelling
         // (CalcItemWidth resolves a negative width against
@@ -480,12 +506,14 @@ namespace Arcane::Editor
     // here, against an internal layout detail no API contract holds still.
     //
     // This IS DragScalarN's body (imgui_widgets.cpp:2814-2849) specialised to
-    // float with no bounds, with the bar added, the trailing
-    // visible-label block (:2840-2845) dropped -- already dead for these
-    // callers, whose labels are the "##name" hidden-id form -- and the
-    // `flags` parameter dropped along with it, which also drops the
-    // ImGuiSliderFlags_ColorMarkers branch it gates (:2831-2832): none of
-    // these callers pass flags, so that branch was already unreachable
+    // float -- unbounded by default; an optional Astra::Range supplies the
+    // min/max and ImGuiSliderFlags_ClampOnInput, the one flag ever passed --
+    // with the bar added, the trailing visible-label block (:2840-2845)
+    // dropped -- already dead for these callers, whose labels are the
+    // "##name" hidden-id form -- and the caller-facing `flags` parameter
+    // dropped along with it, which also drops the
+    // ImGuiSliderFlags_ColorMarkers branch it gates (:2831-2832): no caller
+    // asks for colour markers, so that branch was already unreachable
     // here too. An ImGui upgrader re-diffing this against the vendored
     // body should expect both omissions, not just the label block:
     // FindRenderedTextEnd stops at the leading "##" (imgui.cpp:3918) and
@@ -496,7 +524,8 @@ namespace Arcane::Editor
     // each component keeps the exact ImGui id DragFloat2/3 gave it, and the
     // caller's BeginGestureIfActivated/EndGesture still read the id EndGroup
     // forwards out of the group (imgui.cpp:12477-12482) exactly as before.
-    bool AxisDragFloatN(const char* label, float* v, int count, float speed)
+    bool AxisDragFloatN(const char* label, float* v, int count, float speed,
+                        const std::optional<Astra::Range>& range, const char* format)
     {
         // DragScalarN's own guard (:2816-2818), kept in the same place and
         // for the same reason: it returns before the group opens, so there
@@ -512,14 +541,14 @@ namespace Arcane::Editor
             ImGui::PushID(i);
             if (i > 0)
                 ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-            // `speed` is the only argument these callers ever varied; every
-            // other one is DragFloat's default, and DragFloat's defaults ARE
-            // DragFloat2/3's defaults (imgui.h:687-689), so each component
-            // behaves exactly as it did inside the combined widget.
-            // Written as an if rather than |= only to keep the assignment
-            // bool-typed; like DragScalarN's |= it does not short-circuit,
-            // so every component is always submitted.
-            if (ImGui::DragFloat("", &v[i], speed))
+            // Each component is one RangedDragFloat: a ranged component clamps
+            // typed input too (ClampOnInput), and an unranged one is the plain
+            // DragFloat whose defaults ARE DragFloat2/3's (imgui.h:687-689), so
+            // the entity page's Vec arms behave exactly as they did inside the
+            // combined widget. Written as an if rather than |= only to keep the
+            // assignment bool-typed; like DragScalarN's |= it does not
+            // short-circuit, so every component is always submitted.
+            if (RangedDragFloat("", &v[i], speed, range, format))
                 changed = true;
             DrawAxisBar(i);
             ImGui::PopID();
@@ -559,6 +588,41 @@ namespace Arcane::Editor
         std::string out(text.substr(0, lo));
         out += tail;
         return out;
+    }
+
+    StripClusterLayout LayoutStripCluster(float minX, float rightEdge, float chipW,
+                                          float statusNaturalW, float statusMinW, float gap)
+    {
+        StripClusterLayout out{};
+        const float chipSpan = chipW > 0.0f ? chipW + gap : 0.0f;
+        const float room     = (std::max)(0.0f, rightEdge - minX - chipSpan);
+        // A status already narrower than its elision floor ("A > b" is under
+        // "..." + chevron + "...") is drawn whole whenever it fits: the floor
+        // never exceeds the natural width.
+        const float floorW = (std::min)(statusMinW, statusNaturalW);
+        out.statusBudget = (std::min)(statusNaturalW, room);
+        out.drawStatus   = statusNaturalW > 0.0f && out.statusBudget >= floorW;
+        if (!out.drawStatus)
+            out.statusBudget = 0.0f;
+        out.statusX = (std::max)(minX, rightEdge - out.statusBudget);
+        const float chipRight = out.drawStatus ? out.statusX - gap : rightEdge;
+        out.chipX = chipW > 0.0f ? (std::max)(minX, chipRight - chipW) : out.statusX;
+        return out;
+    }
+
+    void CenteredTextDisabled(std::string_view text)
+    {
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        const float wrap = (std::max)(avail.x, 1.0f);
+        const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size(), false, wrap);
+        const ImVec2 cur = ImGui::GetCursorPos();
+        ImGui::SetCursorPos(ImVec2(cur.x + (std::max)(0.0f, (avail.x - size.x) * 0.5f),
+                                   cur.y + (std::max)(0.0f, (avail.y - size.y) * 0.5f)));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + size.x + 1.0f);   // +1: re-wrap at the measured width, never earlier
+        ImGui::TextUnformatted(text.data(), text.data() + text.size());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
     }
 
     FieldGrid::FieldGrid(const char* id, float& labelColWidth)
@@ -699,53 +763,6 @@ namespace Arcane::Editor
         ImGui::PopFont();
     }
 
-    // N ImGui::Buttons with zero ItemSpacing, so each button's own
-    // FrameBorderSize edge (the theme's global style.FrameBorderSize = 1,
-    // EditorTheme.hpp) sits flush against its neighbour's rather than
-    // doubling up -- "collapsed shared borders" falls out of that geometry,
-    // not extra drawing. FrameRounding is pinned to 0 for the "square
-    // corners" requirement, even though that already IS the theme's default
-    // (EditorTheme.hpp never touches FrameRounding, so it stays ImGui's
-    // stock 0) -- pinned explicitly because this widget's contract depends
-    // on the value, not on the theme happening to agree with it today.
-    int SegmentedStrip(const char* id, const char* const* items, int count,
-                       int active, unsigned enabledMask)
-    {
-        int clicked = -1;
-
-        ImGui::PushID(id);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-
-        for (int i = 0; i < count; ++i)
-        {
-            if (i > 0)
-                ImGui::SameLine();
-
-            const bool isActive  = (i == active);
-            const bool isEnabled = (enabledMask & (1u << i)) != 0;
-
-            if (isActive)
-                ImGui::PushStyleColor(ImGuiCol_Button, Theme::kButtonActive);
-            if (!isEnabled)
-                ImGui::BeginDisabled();
-
-            ImGui::PushID(i);
-            if (ImGui::Button(items[i]))
-                clicked = i;
-            ImGui::PopID();
-
-            if (!isEnabled)
-                ImGui::EndDisabled();
-            if (isActive)
-                ImGui::PopStyleColor();
-        }
-
-        ImGui::PopStyleVar(2);
-        ImGui::PopID();
-        return clicked;
-    }
-
     // Selectable reserves the FULL row -- SpanAllColumns so the click/hover
     // surface covers every column when a caller draws this inside a table
     // row, and the window's own work rect otherwise (imgui.cpp sets every
@@ -812,6 +829,7 @@ namespace Arcane::Editor
                                            ImGuiSelectableFlags_AllowDoubleClick |
                                            ImGuiSelectableFlags_NoPadWithHalfSpacing,
                                            ImVec2(0.0f, rowHeight));
+        result.doubleClicked = result.clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
         result.hovered = ImGui::IsItemHovered();
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1195,6 +1213,145 @@ namespace Arcane::Editor
         ImGui::Dummy(ImVec2(width, y - pos.y));
         ImGui::PopID();
         return result;
+    }
+
+    PopupAnchor LastItemAnchor()
+    {
+        return { ImGui::GetItemRectMin(), ImGui::GetItemRectMax() };
+    }
+
+    // BeginComboPopup's placement (imgui_widgets.cpp:2059-2069), applied to an
+    // ordinary BeginPopup window. The popup's window name is formatted exactly
+    // as BeginPopupEx does (imgui.cpp:13155), so FindWindowByName finds the
+    // window BeginPopup is about to Begin. The size constraint goes in BEFORE
+    // the placement, as in BeginComboPopup (:2051): CalcWindowNextAutoFitSize
+    // applies a pending constraint (CalcWindowSizeAfterConstraint, imgui.cpp:7036),
+    // so the flip test measures the width the popup will really have.
+    bool BeginPopupBelow(const char* id, const PopupAnchor& anchor, float minWidth, ImGuiWindowFlags flags)
+    {
+        const ImGuiID popupId = ImGui::GetID(id);
+        if (!ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None))
+            return ImGui::BeginPopup(id, flags);   // false, and it clears NextWindowData like a bare BeginPopup
+
+        if (minWidth > 0.0f)
+            ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+
+        const ImRect anchorRect(anchor.min, anchor.max);
+        char name[20];
+        ImFormatString(name, IM_COUNTOF(name), "##Popup_%08x", popupId);
+        ImGuiWindow* popup = ImGui::FindWindowByName(name);
+        if (popup && popup->WasActive)
+        {
+            // Always override the last direction, as the combo does, so no past
+            // frame's choice can bias this one.
+            popup->AutoPosLastDirection = ImGuiDir_Down;
+            const ImVec2 expected = ImGui::CalcWindowNextAutoFitSize(popup);
+            const ImRect outer = ImGui::GetPopupAllowedExtentRect(popup);
+            const ImVec2 pos = ImGui::FindBestWindowPosForPopupEx(anchorRect.GetBL(), expected,
+                                                                  &popup->AutoPosLastDirection, outer, anchorRect,
+                                                                  ImGuiPopupPositionPolicy_ComboBox);
+            ImGui::SetNextWindowPos(pos);
+        }
+        else
+        {
+            // First frame: the size is not measured yet (auto-fit hides this
+            // frame), so start at the anchor's bottom-left.
+            ImGui::SetNextWindowPos(anchorRect.GetBL());
+        }
+        return ImGui::BeginPopup(id, flags);
+    }
+
+    bool LinkText(const char* label, bool live)
+    {
+        if (live)
+            return ImGui::TextLink(label);
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (window->SkipItems)
+            return false;
+        const char* labelEnd = ImGui::FindRenderedTextEnd(label);
+        const ImVec2 size = ImGui::CalcTextSize(label, labelEnd, false);
+        // InvisibleButton asserts a non-zero size; an all-"##" label still gets a hit cell.
+        (void)ImGui::InvisibleButton(label, ImVec2(std::max(size.x, 1.0f), std::max(size.y, 1.0f)));
+        window->DrawList->AddText(ImGui::GetItemRectMin(), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                  label, labelEnd);
+        return false;
+    }
+
+    LinkRowResult LinkRow(const char* id, std::string_view text, bool live,
+                          const char* leadIcon, ImU32 leadColor)
+    {
+        LinkRowResult r;
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        if (window->SkipItems)
+            return r;
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        // Where the Selectable puts its own text (imgui_widgets.cpp Selectable: pos.y += CurrLineTextBaseOffset).
+        const ImVec2 textPos(window->DC.CursorPos.x, window->DC.CursorPos.y + window->DC.CurrLineTextBaseOffset);
+
+        ImGui::PushID(id);
+        if (!live)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Header, Theme::kNone);
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, Theme::kNone);
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, Theme::kNone);
+        }
+        const bool pressed = ImGui::Selectable("##linkrow", false);
+        if (!live)
+            ImGui::PopStyleColor(3);
+        ImGui::PopID();
+
+        r.hovered = ImGui::IsItemHovered();
+        r.clicked = live && pressed;
+        if (live && r.hovered)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+        // Pure overdraw from here: the Selectable stays the last item.
+        ImDrawList* dl = window->DrawList;
+        float x = textPos.x;
+        if (leadIcon)
+        {
+            dl->AddText(ImVec2(x, textPos.y), leadColor != 0 ? leadColor : ImGui::GetColorU32(ImGuiCol_Text), leadIcon);
+            x += ImGui::CalcTextSize(leadIcon).x + g.Style.ItemInnerSpacing.x;
+        }
+        const char* b = text.data();
+        const char* e = text.data() + text.size();
+        const ImU32 col = ImGui::GetColorU32(live ? ImGuiCol_TextLink : ImGuiCol_Text);
+        dl->AddText(ImVec2(x, textPos.y), col, b, e);
+        if (live && r.hovered)
+        {
+            const ImVec2 ts = ImGui::CalcTextSize(b, e, false);
+            // TextLink's underline offset (imgui_widgets.cpp:1564).
+            const float lineY = textPos.y + ts.y + std::floor(g.FontBaked->Descent * g.FontBakedScale * 0.20f);
+            dl->AddLine(ImVec2(x, lineY), ImVec2(x + ts.x, lineY), col, 1.0f);
+        }
+        return r;
+    }
+
+    void PushToggleOnColors()
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, Theme::kToggleOn);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::kToggleOnHovered);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::kToggleOnActive);
+    }
+
+    void PopToggleOnColors() { ImGui::PopStyleColor(3); }
+
+    bool IconToggle(const char* label, bool on)
+    {
+        if (on) PushToggleOnColors();
+        const bool clicked = ImGui::Button(label);
+        if (on) PopToggleOnColors();
+        return clicked;
+    }
+
+    bool SeverityToggle(const char* id, const char* icon, ImVec4 tint, std::size_t count, bool& on)
+    {
+        const std::string label = std::string(icon) + " " + std::to_string(count) + "###" + id;
+        ImGui::PushStyleColor(ImGuiCol_Text, count == 0 ? Theme::kTextDim : tint);
+        const bool clicked = IconToggle(label.c_str(), on);
+        ImGui::PopStyleColor();
+        if (clicked) on = !on;
+        return clicked;
     }
 
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min

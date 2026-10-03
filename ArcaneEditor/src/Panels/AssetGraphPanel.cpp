@@ -10,6 +10,8 @@
 #include "Widgets/EditorWidgets.hpp"
 #include "Widgets/GraphCanvasBackdrop.hpp" // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"    // node chrome metrics + grid palette + accents -- one definition, both canvases
+#include "Widgets/GraphFit.hpp"            // GraphFitToContent + GraphFitMaxZoom -- the capped frame-to-fit and its cvar reader (T2-C3/C4, s4.5)
+#include "Widgets/GraphLegend.hpp"         // the legend box chrome -- shared with the shader graph's pin legend
 #include "Widgets/GraphNodeLod.hpp"        // NodeLOD / NodeLODForScale -- the zoom table's third column
 #include "Widgets/GraphPinDot.hpp"         // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"           // bezier/lerp/brighten/view-scale + the links channel
@@ -34,6 +36,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // AssetGraphPanel (panel-split arc): the "Asset Graph" window. Task 5 moved
@@ -524,7 +527,7 @@ namespace Arcane::Editor
         // the header.
 
         // Spec §11.3's kind-color table, VERBATIM, as a panel-local function
-        // in PinColorForWidth's shape (ShaderEditorDocument.cpp:491) --
+        // in PinColorForWidth's shape (Documents/ShaderGraphPinTypes.hpp) --
         // ruling 5: EditorTheme.hpp:27-32 rules domain colour-coding out of
         // the theme, and the kPillAmberBorder precedent (EditorWidgets.cpp:305)
         // covers a spec-pinned hex with no token.
@@ -1156,19 +1159,16 @@ namespace Arcane::Editor
         // them would be designing rather than transcribing.
         //
         // Chrome, NOT a node: drawn after ed::End in SCREEN space, so it does
-        // not pan, zoom or sort against the graph.
-        constexpr float kGraphLegendInset      = 12.0f;
-        constexpr float kGraphLegendPadX       = 10.0f;
-        constexpr float kGraphLegendPadY       = 5.0f;
-        constexpr float kGraphLegendEntryGap   = 14.0f;
-        constexpr float kGraphLegendSwatchGap  = 6.0f;
+        // not pan, zoom or sort against the graph. The BOX -- inset, padding,
+        // gaps, font size and the kChrome/kBorder/kTextDim tones -- moved to
+        // Widgets/GraphLegend.hpp (T3-D1) when the shader graph grew a pin
+        // legend in the same chrome; the swatches below stay this lens's own.
         constexpr float kGraphLegendSwatchW    = 18.0f;
         constexpr float kGraphLegendSwatchH    = 2.0f;
-        constexpr float kGraphLegendFontPx     = 13.0f;
         constexpr ImVec4 kGraphLegendEdgeColor   = ImVec4(0.361f, 0.361f, 0.361f, 1.0f); // #5c5c5c
         constexpr ImVec4 kGraphLegendUsedByColor = ImVec4(0.290f, 0.290f, 0.290f, 1.0f); // #4a4a4a
 
-        void DrawGraphLegend(const ImVec2& canvasMin, const ImVec2& canvasSize)
+        std::pair<ImVec2, ImVec2> DrawGraphLegend(const ImVec2& canvasMin, const ImVec2& canvasSize)
         {
             struct Entry { const char* text; ImVec4 color; bool dashed; };
             const Entry entries[] = {
@@ -1189,20 +1189,16 @@ namespace Arcane::Editor
                             ImGui::CalcTextSize(entries[i].text).x;
             }
 
-            // SNAPPED TO WHOLE PIXELS. A 2px rule and a 1px border are the two
-            // things here a half-pixel origin visibly softens (ImGui gives a
-            // fractional rect fractional coverage), and the board's are crisp.
-            // Safe to snap, unlike anything inside the canvas: the legend is
-            // chrome in SCREEN space, with no zoom to make the rounding lie.
+            // SNAPPED TO WHOLE PIXELS (GraphLegendBoxMin says why). A 2px rule
+            // and a 1px border are the two things here a half-pixel origin
+            // visibly softens, and the board's are crisp.
             const float boxW = std::floor(contentW) + kGraphLegendPadX * 2.0f;
             const float boxH = std::floor(lineH) + kGraphLegendPadY * 2.0f;
-            const ImVec2 boxMin(std::floor(canvasMin.x + kGraphLegendInset),
-                                std::floor(canvasMin.y + canvasSize.y - kGraphLegendInset - boxH));
+            const ImVec2 boxMin = GraphLegendBoxMin(canvasMin, canvasSize, boxH);
             const ImVec2 boxMax(boxMin.x + boxW, boxMin.y + boxH);
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled(boxMin, boxMax, ImGui::GetColorU32(Theme::kChrome));
-            dl->AddRect(boxMin, boxMax, ImGui::GetColorU32(Theme::kBorder));
+            DrawGraphLegendBox(dl, boxMin, boxMax);
 
             const ImU32 textCol = ImGui::GetColorU32(Theme::kTextDim);
             const float midY = boxMin.y + boxH * 0.5f;
@@ -1243,6 +1239,7 @@ namespace Arcane::Editor
                 x += ImGui::CalcTextSize(entries[i].text).x;
             }
             ImGui::PopFont();
+            return { boxMin, boxMax };
         }
     }   // end anonymous namespace: DrawAssetGraphBody below is the one
         // exported entry point (Task 5, panel-split) -- everything above it
@@ -1295,6 +1292,13 @@ namespace Arcane::Editor
             state.graphBuiltFocus != state.graphFocus ||
             state.graphBuiltKindFilter != state.graphKindFilter)
         {
+            // s6.9: a NEW scope (first build, focus, kind filter) frames itself;
+            // an entriesStamp-only rebuild keeps the user's view.
+            if (!state.graphBuilt || state.graphBuiltFocus != state.graphFocus ||
+                state.graphBuiltKindFilter != state.graphKindFilter)
+            {
+                state.graphFitPending.Arm();
+            }
             GraphBuildInput in;
             in.entries    = &model.Entries();
             in.index      = &model.RefIndex();
@@ -1336,6 +1340,7 @@ namespace Arcane::Editor
             ApplyGraphCanvasStyle(AssetGraphCanvasStyleDesc());
             ed::SetCurrentEditor(nullptr);
             state.graphLayoutDirty = true;
+            state.graphFitPending.Arm();   // s6.9: a fresh context frames itself
         }
         ed::SetCurrentEditor(static_cast<ed::EditorContext*>(state.graphCanvas));
 
@@ -1346,13 +1351,19 @@ namespace Arcane::Editor
         // under every channel the editor merges in. Both arguments, and the
         // disclosed one-frame view lag they buy, are written out once at
         // DrawGraphCanvasBackdrop (Widgets/GraphCanvasBackdrop.hpp).
-        const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
-        const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+        const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
+        // Shrunk by the selection strip (s6.9): the strip draws BELOW the canvas
+        // inside the body, so nodes, the legend and the hover surface all end
+        // above it. Clamped before the early-out.
+        const ImVec2 bodyAvail = ImGui::GetContentRegionAvail();
+        const ImVec2 canvasSize(bodyAvail.x, std::max(0.0f, bodyAvail.y - kAssetGraphSelectionStripH));
         if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f)
         {
             ed::SetCurrentEditor(nullptr);
             return;
         }
+        state.graphCanvasMin = canvasMin;
+        state.graphCanvasMax = ImVec2(canvasMin.x + canvasSize.x, canvasMin.y + canvasSize.y);
 
         DrawGraphCanvasBackdrop(canvasMin, canvasSize,
                                 kGraphCanvasColor, kGraphGridMinorColor, kGraphGridMajorColor,
@@ -2291,6 +2302,27 @@ namespace Arcane::Editor
             }
         }
 
+        // ---- s6.9: frame-to-fit, issued once the layout is measured --------
+        // AFTER 8b's select-and-centre, so when both fire on one frame the
+        // fitted view wins (8b's SelectNode mirror still happened). Content
+        // bounds only: the fit never touches selection (s4.5). The latch sees
+        // EVERY draw while armed (the layout-write draw too, which cannot
+        // issue: node sizes are unmeasured there) and re-issues the fit if a
+        // canvas resize discarded it (GraphFit.hpp's CanvasNavLatch, T2-C4).
+        // A duration-0 fit settles at once. An empty graph drops the request
+        // without fitting.
+        if (state.graphFitPending.Update(ed::GetScreenSize(), ImGui::GetTime(), 0.0f, !applyLayout))
+        {
+            if (!nodes.empty() && GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            {
+                // The seam counts each ARMING's fit once, not its re-issues.
+                if (state.graphFitPending.Issues() == 1u)
+                    ++state.graphFitCount;
+            }
+            else
+                state.graphFitPending.Disarm();
+        }
+
         ed::End();
         ed::SetCurrentEditor(nullptr);
 
@@ -2298,7 +2330,9 @@ namespace Arcane::Editor
         // AFTER ed::End, so it is chrome in SCREEN space: it does not pan,
         // zoom, or sort against the nodes. See DrawGraphLegend for the
         // board transcription and the two flagged mismatches.
-        DrawGraphLegend(canvasMin, canvasSize);
+        const auto [legendMin, legendMax] = DrawGraphLegend(canvasMin, canvasSize);
+        state.graphLegendMin = legendMin;
+        state.graphLegendMax = legendMax;
 
         // ---- 9. The peek tooltip (Task 4, plan ruling 14) -------------
         // WHERE it landed, and why HERE:
@@ -2532,10 +2566,10 @@ namespace Arcane::Editor
 
         // ---- body band -----------------------------------------------
         // Bottom bar reservation is UNCHANGED (24px). The selection strip
-        // overlays the canvas child's bottom so it cannot push the digest
-        // off the window -- a sibling child of 48px plus ItemSpacing was
-        // clipping the bar (and missing the digest-chip click test).
-        constexpr float kSelectionStripH = 48.0f;
+        // sits in the body's bottom `kAssetGraphSelectionStripH`, which
+        // DrawAssetGraphBody leaves free by shrinking the canvas (node page
+        // phase s6.9), so it neither pushes the digest off the window nor
+        // covers canvas.
         if (ImGui::BeginChild("##assetgraphbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
             if (!project)
@@ -2545,8 +2579,8 @@ namespace Arcane::Editor
 
             const ImVec2 bodyPos  = ImGui::GetWindowPos();
             const ImVec2 bodySize = ImGui::GetWindowSize();
-            ImGui::SetCursorScreenPos(ImVec2(bodyPos.x, bodyPos.y + bodySize.y - kSelectionStripH));
-            if (ImGui::BeginChild("##graphsel", ImVec2(bodySize.x, kSelectionStripH),
+            ImGui::SetCursorScreenPos(ImVec2(bodyPos.x, bodyPos.y + bodySize.y - kAssetGraphSelectionStripH));
+            if (ImGui::BeginChild("##graphsel", ImVec2(bodySize.x, kAssetGraphSelectionStripH),
                                  ImGuiChildFlags_None,
                                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
             {
@@ -2661,6 +2695,7 @@ namespace Arcane::Editor
         state.graphFocusFilterLen = 0;
         state.graphFocusTypedLen = 0;
         state.graphLayoutDirty = false;
+        state.graphFitPending.Disarm();   // the next lazy create re-arms it
         state.graphFocus = Arcane::Guid{};
         // ...and re-arm the boot-scene seed with it (Task 5): the incoming
         // project has its OWN boot scene, and this is the seam that tells the

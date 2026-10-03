@@ -5,7 +5,7 @@
 #include "Panels/AssetPanelModel.hpp"      // AssetPanelEntry/CookState/KindIcon/KindLabel/GroupParentOf
 #include "Panels/CreateAssetDialog.hpp"    // CreateAssetKind
 #include "Widgets/EditorFonts.hpp"         // PillWidth measures in AssetPill's own font
-#include "Widgets/EditorTheme.hpp"         // Theme::kAmber -- the digest chip's refused segment
+#include "Widgets/EditorTheme.hpp"         // Theme::kAmber / kTextDim -- DigestRefusedStyle's two looks
 #include "Widgets/EditorWidgets.hpp"       // AssetPill
 #include "Widgets/IconsLucide.h"
 
@@ -48,15 +48,40 @@
 //   * AssetsGraphProjectionIsCurrent -- DELETED, not moved (spec s7.4).
 namespace Arcane::Editor
 {
-    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled)
+    Arcane::Guid InstanceParentFor(const AssetPanelEntry* e)
+    {
+        return e && e->kind == AssetKind::Material ? e->guid : Arcane::Guid{};
+    }
+
+    Arcane::Guid SpriteTextureFor(const AssetPanelEntry* e)
+    {
+        return e && e->kind == AssetKind::Texture ? e->guid : Arcane::Guid{};
+    }
+
+    Arcane::Guid CreatePrefillFor(CreateAssetKind kind, const AssetPanelEntry* subject)
+    {
+        switch (kind)
+        {
+            case CreateAssetKind::MaterialInstance: return InstanceParentFor(subject);
+            case CreateAssetKind::Sprite:           return SpriteTextureFor(subject);
+            default:                                return {};
+        }
+    }
+
+    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled, const AssetPanelEntry* subject)
     {
         ImGui::BeginDisabled(!enabled);
+        // Every entry is the same request; the kinds that take an asset
+        // prefill it from the menu's subject (see the header).
         const auto entry = [&](const char* label, CreateAssetKind kind)
         {
             if (ImGui::MenuItem(label))
-                actions.requestCreateKind = static_cast<int>(kind);
+            {
+                actions.requestCreateKind   = static_cast<int>(kind);
+                actions.createPrefillParent = CreatePrefillFor(kind, subject);
+            }
         };
-        entry(ICON_LC_PALETTE " Material...",         CreateAssetKind::Material);
+        entry(ICON_LC_PALETTE " Material...",          CreateAssetKind::Material);
         entry(ICON_LC_LAYERS  " Material Instance...", CreateAssetKind::MaterialInstance);
         ImGui::Separator();
         // F4 plan 1 Task 11 (spec s8): Mesh is a SUBMENU of the five
@@ -87,11 +112,12 @@ namespace Arcane::Editor
         ImGui::EndDisabled();
     }
 
-    void DrawCreateMenu(AssetPanelActions& actions)
+    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor,
+                        const AssetPanelEntry* subject)
     {
-        if (!ImGui::BeginPopup("##createmenu"))
+        if (!BeginPopupBelow("##createmenu", anchor))
             return;
-        DrawCreateMenuEntries(actions, /*enabled=*/true);
+        DrawCreateMenuEntries(actions, /*enabled=*/true, subject);
         ImGui::EndPopup();
     }
 
@@ -99,7 +125,7 @@ namespace Arcane::Editor
     // `if (!project)` guard drew inline.
     void DrawAssetPanelNoProjectMessage()
     {
-        ImGui::TextDisabled("No project open (data/-next-to-exe)");
+        ImGui::TextDisabled("No project open");   // the start page (Viewport node) is the way in
     }
 
     // Panel-split spec s7.2 (Task 3). Ported verbatim from the Unreferenced
@@ -131,6 +157,22 @@ namespace Arcane::Editor
     // spelling the fold chevron's own toggle uses (the row expander
     // handler: state.childrenOpen + model.SetChildrenOpen, both keyed by
     // the parent's guid).
+    std::string MoveVerbRefusal(const std::vector<Arcane::Guid>& selection, const AssetPanelModel& model,
+                                const std::function<std::string(const AssetOpRequest&)>& refusal)
+    {
+        for (const Arcane::Guid& g : selection)
+        {
+            std::string here;   // the asset's own folder, relative to Content/ ("" = root or another mount)
+            if (const AssetPanelEntry* e = model.Find(g))
+                if (const auto rel = RelativeDirOfFolderKey(e->folder, "Content"))
+                    here = MakeFolderChoice(*rel, "Content").relative;   // no trailing '/', as the drop targets send
+            std::string why = refusal(AssetOpRequest{ .kind = AssetOpKind::Move, .guids = { g }, .destFolder = here });
+            if (!why.empty())
+                return why;
+        }
+        return {};
+    }
+
     void RevealAssetInBrowser(AssetBrowserPanelState& state, AssetPanelModel& model,
                               const Arcane::Guid& guid)
     {
@@ -156,6 +198,11 @@ namespace Arcane::Editor
         }
 
         model.Select(guid);
+        // Select() leaves the stamp alone when the guid is already the
+        // selection, which it always is after a context menu's opening
+        // right-click. The Browser scrolls on THIS flag as well (see
+        // AssetBrowserPanelState::revealPending).
+        state.revealPending = true;
     }
 
     // =====================================================================
@@ -327,8 +374,10 @@ namespace Arcane::Editor
         if (ImGui::BeginMenu("Create"))
         {
             // Live since Task 13 -- see DrawCreateMenuEntries's own
-            // comment on the `enabled` parameter.
-            DrawCreateMenuEntries(actions, /*enabled=*/true);
+            // comment on the `enabled` parameter. This row is the menu's
+            // subject: a material prefills "Material Instance..." (T3-D4), a
+            // texture "Sprite..." (T3-D5).
+            DrawCreateMenuEntries(actions, /*enabled=*/true, &e);
             ImGui::EndMenu();
         }
         ImGui::Separator();
@@ -553,30 +602,45 @@ namespace Arcane::Editor
         ImGui::EndChild();
     }
 
+    RefusedStyle DigestRefusedStyle(int refused)
+    {
+        RefusedStyle s;
+        s.alarm = refused > 0;
+        if (s.alarm)
+        {
+            char buf[48];
+            std::snprintf(buf, sizeof(buf), "%s %d refused", ICON_LC_TRIANGLE_ALERT, refused);
+            s.text = buf;
+        }
+        else
+            s.text = "0 refused";
+        s.color       = s.alarm ? Theme::kAmber : Theme::kTextDim;
+        s.tileVariant = s.alarm ? 1 : 0;
+        return s;
+    }
+
     void DrawAssetPanelHealthDigest(const AssetPanelBottomBar& bar, const AssetPanelModel& model,
                                     const AssetPanelServices& services, AssetPanelActions& actions)
     {
         const HealthCounts health = model.Health();
 
-        // `refusedPart` + `restPart` concatenated character-for-character is
+        // `refused.text` + `restPart` concatenated character-for-character is
         // what gets DRAWN below (two colored segments, zero SameLine spacing
         // between them), so measuring their concatenation is exactly the
         // width that draw occupies.
-        char refusedPart[48];
-        std::snprintf(refusedPart, sizeof(refusedPart), "%s %d refused",
-                      ICON_LC_TRIANGLE_ALERT, health.refused);
+        const RefusedStyle refused = DigestRefusedStyle(health.refused);
         char restPart[96];
         std::snprintf(restPart, sizeof(restPart),
                       " \xC2\xB7 %d cooking \xC2\xB7 %d unused", health.queued, health.unused);
         char digestFull[160];
-        std::snprintf(digestFull, sizeof(digestFull), "%s%s", refusedPart, restPart);
+        std::snprintf(digestFull, sizeof(digestFull), "%s%s", refused.text.c_str(), restPart);
         const float digestWidth = ImGui::CalcTextSize(digestFull).x;
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), bar.rightEdgeX - digestWidth));
         ImGui::SetCursorPosY(bar.padY);
         const ImVec2 digestScreenPos = ImGui::GetCursorScreenPos();
-        ImGui::TextColored(Theme::kAmber, "%s", refusedPart);
+        ImGui::TextColored(refused.color, "%s", refused.text.c_str());
         ImGui::SameLine(0.0f, 0.0f);
         ImGui::TextDisabled("%s", restPart);
 

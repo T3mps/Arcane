@@ -12,6 +12,7 @@
 #include <Astra/Registry/Registry.hpp>
 
 #include <new>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <unordered_map>
@@ -96,14 +97,28 @@ namespace Arcane::Edit
         return e;
     }
 
+    std::optional<Astra::Entity> LiveSceneRoot(const Astra::Registry& reg)
+    {
+        const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
+        if (!sceneRoot || !reg.IsValid(sceneRoot->entity))
+            return std::nullopt;
+        return sceneRoot->entity;
+    }
+
+    bool IsSceneRoot(const Astra::Registry& reg, Astra::Entity e)
+    {
+        const std::optional<Astra::Entity> root = LiveSceneRoot(reg);
+        return root.has_value() && e == *root;
+    }
+
     Astra::Entity CreateEntityInScene(Astra::Registry& reg, Astra::Entity parent)
     {
         if (parent.IsValid())
             return CreateEntity(reg, parent);
-        const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
-        if (!sceneRoot)
-            return Astra::Entity::Invalid();
-        return CreateEntity(reg, sceneRoot->entity);
+        const std::optional<Astra::Entity> root = LiveSceneRoot(reg);
+        if (!root)
+            return Astra::Entity::Invalid();   // no scene, or its root was deleted
+        return CreateEntity(reg, *root);
     }
 
     Astra::Entity AddPrimitiveEntity(Astra::Registry& reg, Astra::Entity parent,
@@ -195,6 +210,19 @@ namespace Arcane::Edit
             ++moved;
         }
         return moved;
+    }
+
+    std::size_t ReparentInScene(Astra::Registry& reg,
+                                std::span<const Astra::Entity> set,
+                                Astra::Entity parent)
+    {
+        if (parent.IsValid())
+            return Reparent(reg, set, parent);
+        const std::optional<Astra::Entity> root = LiveSceneRoot(reg);
+        if (!root)
+            return 0;   // nowhere in the scene to move to: refuse whole
+        // A set containing the root itself refuses inside Reparent (cycle).
+        return Reparent(reg, set, *root);
     }
 
     std::size_t SetHiddenRecursive(Astra::Registry& reg, Astra::Entity e,
@@ -436,9 +464,9 @@ namespace Arcane::Edit
     std::vector<Astra::Entity> InstantiateSubtrees(Astra::Registry& reg,
                                                    const nlohmann::json& payload)
     {
-        const SceneRoot* sceneRoot = reg.GetResource<SceneRoot>();
+        const std::optional<Astra::Entity> sceneRoot = LiveSceneRoot(reg);
         if (!sceneRoot)
-            return {};   // nowhere safe to live -- CreateEntityInScene's rule
+            return {};   // nowhere safe to live -- CreateEntityInScene's rule (dead root included)
 
         std::vector<Astra::Entity> created;
         const auto destroyPartial = [&]() -> std::vector<Astra::Entity>
@@ -650,7 +678,7 @@ namespace Arcane::Edit
                 }
                 else
                 {
-                    Astra::Entity target = sceneRoot->entity;
+                    Astra::Entity target = *sceneRoot;
                     if (const auto git = entry.find("rootParentGuid");
                         git != entry.end() && git->is_string())
                     {

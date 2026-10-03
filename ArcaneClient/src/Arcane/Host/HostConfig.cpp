@@ -22,7 +22,7 @@ namespace Arcane
         constexpr std::string_view kStripWithValue[] = {
             "crash-gpu", "hang-main", "frames", "report", "compare", "settle", "screenshot",
             "settle-timeout", "probe", "max-diff-pixels", "max-diff-pixel-ratio",
-            "fixed-dt", "fixed-time", "pick-probe",
+            "fixed-dt", "fixed-time", "pick-probe", "window-size",
         };
         constexpr std::string_view kStripBareFlags[] = { "headless", "bless" };
 
@@ -117,6 +117,9 @@ namespace Arcane
         cli.Option("select-asset", "", "editor only: select this asset guid in the Asset Browser at boot (its page shows in the Assets Inspector)");
         cli.Option("select-in-document", "", "editor only, with --open-asset: select this path inside "
                                              "the opened document, e.g. Player/Jump (empty = none)");
+        cli.Option("window-size", "",    "automation only (needs --frames N): the host window's "
+                                         "pixel extent WxH, e.g. 1920x1080 -- the headless chrome "
+                                         "frame and the default layout follow it (empty = 1280x720)");
         cli.Option("settle", "0",        "repeat the capture (render clock frozen) until two consecutive "
                                          "frames compare byte-equal AND the shader compiler is idle, "
                                          "for AT LEAST N attempts -- it gives up only once BOTH N attempts "
@@ -252,6 +255,47 @@ namespace Arcane
         cfg.crashGpuFrame = r.GetAs<std::uint64_t>("crash-gpu");
         cfg.hangMainFrame = r.GetAs<std::uint64_t>("hang-main");
 #endif
+
+        // --window-size WxH (T3-D6 fix round 1). Parsed and range-checked
+        // here (rule 3: a malformed extent is refused, never ignored), and
+        // automation only -- it requires --frames N, the unattended-run flag.
+        if (r.Supplied("window-size"))
+        {
+            const std::string text = r.Get("window-size");
+            const std::size_t x = text.find_first_of("xX");
+            auto side = [](std::string_view digits, std::uint32_t& out)
+            {
+                if (digits.empty() || digits.size() > 5)
+                    return false;
+                std::uint32_t v = 0;
+                for (const char c : digits)
+                {
+                    if (c < '0' || c > '9')
+                        return false;
+                    v = v * 10u + static_cast<std::uint32_t>(c - '0');
+                }
+                out = v;
+                return v >= kMinWindowSide && v <= kMaxWindowSide;
+            };
+            std::uint32_t w = 0, h = 0;
+            if (x == std::string::npos ||
+                !side(std::string_view(text).substr(0, x), w) ||
+                !side(std::string_view(text).substr(x + 1), h))
+            {
+                std::fprintf(stderr, "error: --window-size wants WxH with each side in [%u, %u] "
+                                     "(e.g. 1920x1080), got '%s'\n",
+                             kMinWindowSide, kMaxWindowSide, text.c_str());
+                return { std::nullopt, 2 };
+            }
+            if (cfg.maxFrames == 0)
+            {
+                std::fprintf(stderr, "error: --window-size requires --frames N (it is an "
+                                     "automation extent, not a user preference)\n");
+                return { std::nullopt, 2 };
+            }
+            cfg.windowWidth = w;
+            cfg.windowHeight = h;
+        }
 
         // --screenshot only ever fires on the last frame (both hosts gate it on
         // `lastFrame`, which requires maxFrames != 0). Without --frames it

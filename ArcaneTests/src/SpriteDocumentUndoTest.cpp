@@ -21,10 +21,13 @@
 
 #include "Documents/DocumentHost.hpp"
 #include "Documents/SpriteDocument.hpp"
+#include "Scene/UndoGate.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
+#include <Arcane/Assets/Assets.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Project/AssetId.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
 
 #include <Astra/Component/ComponentRegistry.hpp>
@@ -33,10 +36,14 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // FindWindowByName / GetActiveID / ActiveIdWindow
 
+#include <glm/glm.hpp>
+
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using Arcane::Editor::SpriteDocument;
@@ -113,7 +120,7 @@ TEST_CASE("SpriteDocument edits round-trip through the shared CommandStack", "[e
     const Arcane::SpriteAssetData before = Fixture();
 
     SpriteDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     SpriteDocument doc(services, FixturePath(), before);
 
     // What a completed drag does: the live edit already happened, then the
@@ -125,6 +132,7 @@ TEST_CASE("SpriteDocument edits round-trip through the shared CommandStack", "[e
 
     REQUIRE(fx.stack.CanUndo());
     CHECK(std::string(fx.stack.UndoLabel()) == "Edit Source Size");
+    CHECK(fx.stack.SceneStateId() == 0);   // a document step never dirties the scene (s3.3a)
 
     fx.stack.Undo();
     CHECK(doc.Data() == before);
@@ -140,7 +148,7 @@ TEST_CASE("SpriteDocument: a gesture that moved nothing pushes no step", "[edito
     const Arcane::SpriteAssetData data = Fixture();
 
     SpriteDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     SpriteDocument doc(services, FixturePath(), data);
 
     // Press-and-release on a drag without moving it: before == after.
@@ -162,7 +170,7 @@ TEST_CASE("SpriteDocument undo steps go inert once the document closes", "[edito
 
     {
         SpriteDocument::Services services;
-        services.undo = &fx.stack;
+        services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
         SpriteDocument doc(services, FixturePath(), before);
 
         Arcane::SpriteAssetData after = before;
@@ -176,6 +184,24 @@ TEST_CASE("SpriteDocument undo steps go inert once the document closes", "[edito
     // themselves rather than dereferencing a dead document.
     CHECK_NOTHROW(fx.stack.Undo());
     CHECK_NOTHROW(fx.stack.Redo());
+}
+
+TEST_CASE("SpriteDocument: closing the document expires its steps; they never cost a Ctrl+Z", "[editor][sprite][undo]")
+{
+    UndoFixture fx;
+    const Arcane::SpriteAssetData before = Fixture();
+    {
+        SpriteDocument::Services services;
+        services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
+        SpriteDocument doc(services, FixturePath(), before);
+        Arcane::SpriteAssetData after = before;
+        after.sourceSize = {48.0f, 24.0f};
+        doc.ApplySpriteData(after);
+        doc.PushDataEdit("Edit Source Size", before);
+        REQUIRE(fx.stack.CanUndo());
+    }   // the document closes: its anchor dies
+    CHECK_FALSE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()).empty());
 }
 
 // Inspector filters s6a: the document is an Inspector source of kind "sprite"
@@ -226,8 +252,10 @@ namespace
         ImGuiContext* prev = nullptr;
         ImGuiContext* ctx = nullptr;
         Arcane::Editor::PropertyGridState grid;
-        SpriteDocument doc{ SpriteDocument::Services{}, FixturePath(), Fixture() };
-        SpritePageUi()
+        std::unordered_map<std::string, ImVec2> probe;   // PropertyGrid's test seam: label -> the row's value centre
+        SpriteDocument doc;
+        explicit SpritePageUi(SpriteDocument::Services s = {}, Arcane::SpriteAssetData d = Fixture())
+            : doc(std::move(s), FixturePath(), std::move(d))
         {
             prev = ImGui::GetCurrentContext();
             ctx = ImGui::CreateContext();
@@ -237,11 +265,13 @@ namespace
             io.IniFilename = nullptr;
             unsigned char* px = nullptr; int w = 0, h = 0;
             io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+            grid.probe = &probe;
         }
         ~SpritePageUi() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
         void Frame()
         {
             ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_Always);
@@ -256,25 +286,58 @@ namespace
         }
         void Move(ImVec2 p) { ImGui::GetIO().AddMousePosEvent(p.x, p.y); Frame(); }
         void Button(int b, bool down) { ImGui::GetIO().AddMouseButtonEvent(b, down); Frame(); }
+        void Click(ImVec2 p) { Move(p); Button(0, true); Button(0, false); }
+        ImVec2 At(const std::string& label) { INFO(label); REQUIRE(probe.count(label) == 1); return probe.at(label); }
+    };
+
+    // An Assets facade that knows one texture size -- TextureInfoFor is all the page reads.
+    class DimsAssets final : public Arcane::Assets
+    {
+    public:
+        DimsAssets(std::uint32_t w, std::uint32_t h) { m_info.width = w; m_info.height = h; m_info.mipCount = 1; }
+        void SetContentRoot(const std::filesystem::path&) override {}
+        void SetAssetResolver(AssetResolver) override {}
+        const Arcane::TextureInfo* TextureInfoFor(const Arcane::Guid&) override { return &m_info; }
+        const Arcane::PixelData* PixelsFor(const Arcane::Guid&) override { return nullptr; }
+        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const std::filesystem::path&) override { return nullptr; }
+        std::shared_ptr<const std::vector<std::uint8_t>> GetBytes(const Arcane::AssetId&) override { return nullptr; }
+        std::shared_ptr<const nlohmann::json> GetJson(const std::filesystem::path&) override { return nullptr; }
+        std::shared_ptr<const nlohmann::json> GetJson(const Arcane::AssetId&) override { return nullptr; }
+        Arcane::AssetStats Stats() const override { return {}; }
+        const Arcane::LoadedClientArtifact* ArtifactFor(const Arcane::Guid&) override { return nullptr; }
+        void InvalidateArtifact(const Arcane::Guid&) override {}
+        void SetCookPendingProbe(std::function<bool(const Arcane::Guid&)>) override {}
+        std::optional<Arcane::MaterialSurface> MaterialSurfaceFor(const Arcane::Guid&) override { return std::nullopt; }
+        std::optional<std::vector<Arcane::AssetRef>> ListAssetReferences(const Arcane::Guid&) override { return std::nullopt; }
+        const Arcane::LoadedClientMesh* MeshArtifactFor(const Arcane::Guid&) override { return nullptr; }
+        void InvalidateMeshArtifact(const Arcane::Guid&) override {}
+        bool CookPending(const Arcane::Guid&) const override { return false; }
+        // T5 s7.2 (interface-completeness only): the page never evicts or retracts.
+        void EvictPath(const std::filesystem::path&) override {}
+        void ForgetUnresolved(const Arcane::Guid&) override {}
+    private:
+        Arcane::TextureInfo m_info;
     };
 }
 
-// The form moved OUT of the document window: its first widget ("Pixels Per
+// The form moved OUT of the document window: its first drag ("Pixels Per
 // Meter") is submitted in the Inspector window. Proven through the ACTIVE id
-// after a press on the page's first row -- ImGuiWindow::GetID only hashes a
-// label, and LastItemData is restored to the parent's at End()
-// (imgui.cpp:8849), so neither alone shows a submission.
+// after a press on that row (located by the PropertyGrid probe) --
+// ImGuiWindow::GetID only hashes a label, and LastItemData is restored to the
+// parent's at End() (imgui.cpp:8849), so neither alone shows a submission.
 TEST_CASE("SpriteDocument's form draws in the Inspector window, not the document's", "[editor][sprite][inspector]")
 {
     SpritePageUi h;
     h.Frame();                                         // warm-up: both windows exist
     ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
     REQUIRE(iw != nullptr);
-    const ImVec2 row(iw->ContentRegionRect.Min.x + 10.0f,
-                     iw->ContentRegionRect.Min.y + ImGui::GetFrameHeight() * 0.5f);   // the page's first row
-    h.Move(row);
+    h.Frame();
+    const ImVec2 at = h.At("Pixels Per Meter");
+    h.Move(at);
     h.Button(ImGuiMouseButton_Left, true);
-    CHECK(ImGui::GetActiveID() == iw->GetID("Pixels Per Meter"));
+    // PropertyGrid ids: PushID(label) + "##value" under the section's Rows table ("##sprite").
+    CHECK(ImGui::GetActiveID() == ImGui::GetIDWithSeed("##value", nullptr,
+                                  ImGui::GetIDWithSeed("Pixels Per Meter", nullptr, iw->GetID("##sprite"))));
     CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);   // in the Inspector, not the document window
     h.Button(ImGuiMouseButton_Left, false);
 }
@@ -327,4 +390,123 @@ TEST_CASE("SpriteDocument's window points at the Inspector and draws the sprite 
     CHECK(asked.back() == data.texture);               // the sprite's TEXTURE through the seam
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev);
+}
+
+TEST_CASE("SpriteDocument: the undo resolver is asked per edit -- null in Play pushes nothing", "[editor][sprite][undo]")
+{
+    UndoFixture fx;
+    const Arcane::SpriteAssetData before = Fixture();
+    bool playing = true;
+    SpriteDocument::Services services;
+    services.undo = [&]() { return Arcane::Editor::ResolveDocumentUndo(playing, &fx.stack); };
+    SpriteDocument doc(services, FixturePath(), before);
+
+    Arcane::SpriteAssetData after = before;
+    after.sourceSize = {48.0f, 24.0f};
+    doc.ApplySpriteData(after);
+    doc.PushDataEdit("Edit Source Size", before);
+    CHECK(doc.Data() == after);                 // the edit stands...
+    CHECK_FALSE(fx.stack.CanUndo());            // ...with no step in Play
+
+    playing = false;                            // Stop
+    Arcane::SpriteAssetData again = after;
+    again.sourceSize = {64.0f, 24.0f};
+    doc.ApplySpriteData(again);
+    doc.PushDataEdit("Edit Source Size", after);
+    CHECK(fx.stack.CanUndo());
+}
+
+TEST_CASE("SpriteDocument::SetWholeTexture: ticked is (0,0); unticked is the texture's size; unknown dims refuse", "[editor][sprite]")
+{
+    Arcane::SpriteAssetData d = Fixture();
+    REQUIRE(SpriteDocument::SetWholeTexture(d, true, 0, 0));
+    CHECK(d.sourcePos == glm::vec2(0.0f)); CHECK(d.sourceSize == glm::vec2(0.0f));
+    CHECK_FALSE(SpriteDocument::SetWholeTexture(d, false, 0, 0));      // dims unknown: untouched
+    CHECK(d.sourceSize == glm::vec2(0.0f));
+    REQUIRE(SpriteDocument::SetWholeTexture(d, false, 256, 128));
+    CHECK(d.sourcePos == glm::vec2(0.0f)); CHECK(d.sourceSize == glm::vec2(256.0f, 128.0f));
+    CHECK(SpriteDocument::TextureRefArgs(d).readOnly);                 // the Texture row: no picker, clear or drop
+    CHECK(SpriteDocument::TextureRefArgs(d).guid == d.texture);
+}
+
+TEST_CASE("SpriteDocument page: each Whole texture flip is one step and round-trips (0,0)", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    DimsAssets dims(256, 128);
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    s.assets = &dims;
+    SpritePageUi h(s);                                                   // Fixture: a (32, 32) sub-rect
+    h.Frame(); h.Frame();
+    h.Click(h.At("Whole texture"));
+    CHECK(h.doc.Data().sourceSize == glm::vec2(0.0f));
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Whole Texture");
+    h.Click(h.At("Whole texture"));
+    CHECK(h.doc.Data().sourceSize == glm::vec2(256.0f, 128.0f));
+    fx.stack.Undo();
+    CHECK(h.doc.Data().sourceSize == glm::vec2(0.0f));
+    fx.stack.Undo();
+    CHECK(h.doc.Data().sourceSize == glm::vec2(32.0f, 32.0f));
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+TEST_CASE("SpriteDocument page: with the texture size unknown the ticked box stays disabled", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };                              // no Assets: dims unknown
+    Arcane::SpriteAssetData d = Fixture();
+    d.sourceSize = { 0.0f, 0.0f };
+    SpritePageUi h(s, d);
+    h.Frame(); h.Frame();
+    h.Click(h.At("Whole texture"));
+    CHECK(h.doc.Data().sourceSize == glm::vec2(0.0f));
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+TEST_CASE("SpriteDocument page: a Pixels Per Meter drag is one step", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    SpritePageUi h(s);
+    h.Frame(); h.Frame();
+    const ImVec2 at = h.At("Pixels Per Meter");
+    h.Move(at); h.Button(0, true);
+    h.Move(ImVec2(at.x + 40.0f, at.y));
+    h.Button(0, false); h.Frame();
+    CHECK(h.doc.Data().ppu != 100.0f);
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Edit Pixels Per Meter");
+    fx.stack.Undo();
+    CHECK(h.doc.Data().ppu == 100.0f);
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+// The grouped VecRow bracket (closed by EndAfterRow) is its own path, apart
+// from the FloatRow one above: a Source Size drag is one step too (s5.4
+// "each drag is one step"). A 2-box group's probed centre is the 0|1 gap, so
+// the press lands 20 px left of it, inside box 0 (sourceSize.x).
+TEST_CASE("SpriteDocument page: a Source Size drag is one whole-pixel step", "[editor][sprite][inspector]")
+{
+    UndoFixture fx;
+    SpriteDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    SpritePageUi h(s);                                                   // Fixture: a (32, 32) sub-rect
+    h.Frame(); h.Frame();
+    const ImVec2 c = h.At("Source Size");
+    const ImVec2 at(c.x - 20.0f, c.y);
+    h.Move(at); h.Button(0, true);
+    h.Move(ImVec2(at.x + 40.0f, at.y));
+    h.Button(0, false); h.Frame();
+    const glm::vec2 dragged = h.doc.Data().sourceSize;
+    CHECK(dragged.x != 32.0f);
+    CHECK(dragged.x == std::floor(dragged.x));                          // "%.0f": a whole number of pixels
+    CHECK(dragged.y == 32.0f);
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Edit Source Size");
+    fx.stack.Undo();
+    CHECK(h.doc.Data().sourceSize == glm::vec2(32.0f, 32.0f));
+    CHECK_FALSE(fx.stack.CanUndo());
 }

@@ -77,6 +77,8 @@ namespace Arcane::Editor
             (dir / "data" / "font" / "inter" / "static" / "Inter_18pt-Regular.ttf").string();
         const std::string roboto =
             (dir / "data" / "font" / "roboto" / "static" / "Roboto-Regular.ttf").string();
+        const std::string mono =
+            (dir / "data" / "font" / "jetbrainsmono" / "JetBrainsMono-Regular.ttf").string();
 
         // Brand wordmark face (Aldo the Apache) -- a display face used ONLY for the "Arcane"
         // toolbar wordmark, rendered via PushFont(brand, size) at a display size. No lucide
@@ -87,6 +89,10 @@ namespace Arcane::Editor
         g_fonts = EditorFontSet{};
         g_fonts.interRegular = AddFaceWithIcons(io, inter,  lucide, sizePx);
         g_fonts.roboto       = AddFaceWithIcons(io, roboto, lucide, sizePx);
+        // Mono AFTER Roboto (Fonts[0] stays Inter), merged with lucide at the UI
+        // size so ICON_LC_* work in mono rows; AddFaceWithIcons' GlyphExcludeRanges
+        // keeps any PUA glyph of its own out of the icon block, as for Inter.
+        g_fonts.mono         = AddFaceWithIcons(io, mono,   lucide, sizePx);
         g_fonts.brand        = io.Fonts->AddFontFromFileTTF(brand.c_str(), sizePx);
         if (!g_fonts.brand)
             ARC_WARN("Arcane Editor: failed to load brand font '{}'", brand);
@@ -94,4 +100,19 @@ namespace Arcane::Editor
     }
 
     const EditorFontSet& GetEditorFonts() { return g_fonts; }
+
+    MonoFont::MonoFont()
+    {
+        if (ImFont* f = g_fonts.mono)
+        {
+            ImGui::PushFont(f, 0.0f);
+            m_pushed = true;
+        }
+    }
+
+    MonoFont::~MonoFont()
+    {
+        if (m_pushed)
+            ImGui::PopFont();
+    }
 }

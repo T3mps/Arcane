@@ -31,6 +31,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Arcane
@@ -198,6 +199,12 @@ namespace Arcane
         // Last on purpose: the member order is the table's initializer order,
         // so appending leaves all 49 existing rows' meaning untouched.
         GraphNodeCategory category;
+        // APPENDED (2026-09-30, node page s5.1.6), display-only: one plain
+        // sentence saying what the output is in terms of the inputs, naming
+        // the HLSL intrinsic where there is one. The Inspector's node page
+        // shows it under the header. Last for the same reason as `category`:
+        // appending leaves every existing initializer's meaning untouched.
+        const char*   description;
     };
 
     [[nodiscard]] ARCANE_CORE_API const GraphNodeTypeInfo& GraphNodeInfo(GraphNodeType t) noexcept;
@@ -217,8 +224,8 @@ namespace Arcane
     // carry a value without a Const node feeding it). Lane count is the pin's
     // DECLARED width -- 1/2/4 fixed, and a SCALAR for dynamic (width-0) pins.
     // A literal never enters dynamic-width resolution regardless of lane
-    // count -- that loop reads only CONNECTED inputs (MaterialGraph.cpp:
-    // 661-664). The scalar choice instead means a literal on a dynamic pin
+    // count -- that resolution reads only CONNECTED inputs
+    // (ResolveGraphNodeWidths). The scalar choice instead means a literal on a dynamic pin
     // splats to whatever width the node resolves to, so it never needs
     // re-authoring when wiring changes. Unused lanes stay 0.
     struct GraphPinLiteral
@@ -394,6 +401,25 @@ namespace Arcane
     [[nodiscard]] ARCANE_CORE_API bool GraphPinAcceptsLiteral(const GraphNode& n,
                                                     std::uint32_t pin) noexcept;
 
+    // What an UNWIRED, literal-free input pin reads -- codegen's NEUTRAL, the
+    // one truth codegen's argOr sites, its direct-read sites and the editor
+    // all take it from (node page s5.1.8). Constant: `lanes` numbers in `v`
+    // (a width-1 neutral splats, Adapt's scalar rule). Expression: a
+    // non-constant default ("v.uv"). Passthrough: only a wire contributes
+    // (Vertex Output's pins). `hlsl` is the EXACT text codegen emits, in
+    // static storage, nullptr for Passthrough; `lanes` is the neutral's own
+    // width (Adapt's defWidth), the pin's declared width for Passthrough.
+    enum class GraphPinNeutralKind : std::uint8_t { Constant, Expression, Passthrough };
+    struct GraphPinNeutral
+    {
+        GraphPinNeutralKind kind  = GraphPinNeutralKind::Constant;
+        int                 lanes = 1;
+        float               v[4]  = {};
+        const char*         hlsl  = "0.0";
+    };
+    [[nodiscard]] ARCANE_CORE_API GraphPinNeutral GraphPinNeutralDefault(const GraphNode& n,
+                                                                         std::uint32_t pin) noexcept;
+
     // How many lanes a literal stores for a pin of `declaredWidth` (the
     // GraphPinDesc.width of the pin, hence int): fixed 2/4 keep their lanes,
     // everything else -- INCLUDING dynamic (width-0) pins -- is a scalar.
@@ -401,6 +427,36 @@ namespace Arcane
     // rule; a widget that edits more lanes than the file stores would show
     // values that never survive a save.
     [[nodiscard]] ARCANE_CORE_API int GraphPinLiteralLanes(int declaredWidth) noexcept;
+
+    // What a node's DYNAMIC (width-0) pins resolve to on this graph -- the
+    // width rule at GraphPinDesc above, as one function. Codegen reads it
+    // (GenerateGraphSnippet), and so do the editor's pin paint and type text,
+    // so the canvas can never claim a width the HLSL does not have.
+    //   inputs  -- the dynamic INPUT pins: the minimum connected non-scalar
+    //              dynamic input; 1 when only scalars are wired (scalars
+    //              splat, never pinning a width); 0 = UNRESOLVED (no dynamic
+    //              input is wired; codegen then emits at width 1).
+    //   outputs -- the dynamic OUTPUT pin: `inputs`, except Param (its type's
+    //              lane count) and Swizzle (its mask's length; 0 for a mask
+    //              codegen refuses).
+    // Fixed-width pins are never resolved: ForPin hands their declared width
+    // back. A node with no dynamic pin maps to { 0, 0 }.
+    struct GraphNodeWidths
+    {
+        int inputs  = 0;
+        int outputs = 0;
+        [[nodiscard]] constexpr int ForPin(int declaredWidth, bool input) const noexcept
+        {
+            return declaredWidth != 0 ? declaredWidth : (input ? inputs : outputs);
+        }
+    };
+
+    // Every node's resolved widths, keyed by node id -- unreachable nodes
+    // included (the canvas draws them). Best effort on a graph codegen would
+    // refuse: links to a missing node or pin are ignored, the first of two
+    // duplicate ids wins, and an edge that closes a cycle contributes nothing.
+    [[nodiscard]] ARCANE_CORE_API std::unordered_map<std::uint32_t, GraphNodeWidths>
+    ResolveGraphNodeWidths(const MaterialGraph& graph);
 
     // Structured codegen diagnostics: the canvas badges the offending node (SG:
     // one badge per node, message on hover). nodeId 0 = graph-level message.

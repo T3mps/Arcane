@@ -13,6 +13,8 @@
 #include "Panels/InspectorHost.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
+#include <cstddef>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,13 +34,14 @@ namespace Arcane::Editor
 
     // The Inspector header's responsive layout (final fix H): one row --
     // arrows, filter combo, breadcrumb, pin -- while that row fits the combo
-    // and at least kInspectorHeaderMinCrumbWidth of breadcrumb; otherwise
-    // the breadcrumb takes its OWN full-width row under the others. The
-    // combo's face is always the filter's ICONS (user request 2026-09-30);
-    // on a wrapped header it gives way before the pin does, down to one icon
-    // + "+N" (the full label is always its tooltip). The pin is never
-    // clipped: it ends row 1, or leads the breadcrumb row when even arrows +
-    // combo + pin do not fit. Pure, so the thresholds are unit-tested.
+    // and the breadcrumb's natural width (kInspectorHeaderMinCrumbWidth when
+    // unmeasured); otherwise the breadcrumb takes its OWN full-width row
+    // under the others. The combo's face is always the filter's ICONS (user
+    // request 2026-09-30); on a wrapped header it gives way before the pin
+    // does, down to one icon + "+N" (the full label is always its tooltip).
+    // The pin is never clipped: it ends row 1, or leads the breadcrumb row
+    // when even arrows + combo + pin do not fit. Pure, so the thresholds are
+    // unit-tested.
     inline constexpr float kInspectorHeaderMinCrumbWidth = 120.0f;
     struct InspectorHeaderMetrics
     {
@@ -48,6 +51,7 @@ namespace Arcane::Editor
         float comboMin = 0.0f;    // the combo with one icon + "+N" + its chrome (the narrowest face)
         float pin = 0.0f;
         float spacing = 0.0f;     // ItemSpacing.x
+        float crumbsNatural = 0.0f;   // the trail's measured width (DrawHeader); 0 = unknown -> kInspectorHeaderMinCrumbWidth
     };
     struct InspectorHeaderLayout
     {
@@ -56,6 +60,20 @@ namespace Arcane::Editor
         float comboWidth = 0.0f;  // the combo's frame width as drawn (the face drops icons into "+N" to fit it)
     };
     [[nodiscard]] InspectorHeaderLayout LayoutInspectorHeader(const InspectorHeaderMetrics& m);
+
+    // The breadcrumb on a row too narrow for all of it (spec 2026-09-30 s4.3):
+    // head crumbs hide behind an overflow button until button + chevron + the
+    // rest fit; the LEAF is never hidden. When the leaf alone still does not
+    // fit, leafMax is what remains after the button and its chevron (the
+    // drawer floors it at "..."'s width). Everything fits: {0, false, leaf}.
+    // `chevron` = the separator's glyph + 2 * ItemSpacing.x. Pure.
+    struct CrumbFit
+    {
+        std::size_t firstShown = 0;
+        bool overflow = false;
+        float leafMax = 0.0f;
+    };
+    [[nodiscard]] CrumbFit FitCrumbs(std::span<const float> widths, float chevron, float overflowButton, float avail);
 
     struct InspectorWindowsState
     {

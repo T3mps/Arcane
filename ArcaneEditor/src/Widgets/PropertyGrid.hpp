@@ -15,11 +15,32 @@
 // keeps its own draft and writes the in-flight number back into `value`
 // every frame (a page may preview it) but commits nothing; on commit `value`
 // holds the gesture's final number. Escape during a numeric drag cancels (no
-// commit). TextRow selects all its text on activation (single-line rows).
+// commit; LastRowEvents().cancelled reports it). TextRow selects all its
+// text on activation (single-line rows).
 // An optional `validate` returns a refusal reason: a refused value draws red
 // (RefusedFieldStyle) with the reason as a hover tooltip; Enter on a refused value keeps the text and re-arms the box; focus
 // loss with a refused value reverts without committing. Mirrors the Input
 // Actions rename box.
+//
+// ROWS STAY UNDO-AGNOSTIC. THE EDITGESTURE-AFTER-ROW CONTRACT (node-page spec
+// s4.1(f)) is how a page brackets them:
+//   1. ACTIVATION. After IntRow / FloatRow / SliderRow / VecRow / ColorRow the
+//      VALUE widget is g.LastItemData -- decorations submit BEFORE it
+//      (SetNextRowDecor) -- so EditGesture::BeginOnActivate(stack, st, label,
+//      onOpened) called right after the row fires on the activation frame,
+//      grouped rows included (EndGroup forwards the active id,
+//      imgui.cpp:12477-12482). ColorRow's popup is bracketed separately:
+//      BeginOnPopupOpen / EndOnPopupClose on *popupIdOut.
+//   2. LIVE WRITE-THROUGH. A live-preview page writes `value` to its live
+//      target whenever the two differ -- including the seed Escape restored.
+//   3. CLOSE. EditGesture::EndAfterRow(stack, st, grid.LastRowEvents().cancelled).
+//      A grouped row's Escape is invisible to IsItemDeactivated, so
+//      EndOnDeactivate alone leaves the gesture parked until a ScopeGuard;
+//      EndAfterRow closes it at the row, before any later row can activate.
+//      Required for an adopter without a ScopeGuard.
+// After an Escape the close commits an UNCHANGED value: the page's
+// before == after guard (ShaderEditorDocument.cpp:5954-5957) or CommandStack's
+// unchanged-snapshot drop pushes nothing.
 //
 // A row's ImGui id must include the TARGET's id -- the caller pushes it
 // around the Rows scope (Task 10 does; the scene body's component rows
@@ -62,7 +83,7 @@ namespace Arcane::Editor
             bool focusPending = false;                    // SetKeyboardFocusHere on the next draw
         };
         std::unordered_map<unsigned int, TextDraft> textDrafts;   // keyed by ImGui id
-        // One in-flight numeric gesture per IntRow/FloatRow (drag, held step
+        // One in-flight numeric gesture per IntRow/FloatRow/VecRow (drag, held step
         // button, Ctrl+click text). The ROW owns the number while the widget
         // is active (UE SSpinBox InternalValue): pages re-derive their locals
         // from the draft every frame, and ImGui's drag accumulator is consumed
@@ -70,11 +91,66 @@ namespace Arcane::Editor
         // every frame and the release commits the untouched original. `seed`
         // is the value at activation; a commit is reported only when the
         // released value differs from it (UE: LastSliderCommittedValue != New).
-        struct NumericDraft { double value = 0.0; double seed = 0.0; bool active = false; };
+        // node-page s4.1(a): one draft for 1-4 components (IntRow/FloatRow/
+        // SliderRow = 1, VecRow = n, ColorRow's boxes = 4). Commit rule: the
+        // widget deactivated after an edit AND at least one component differs
+        // from its seed. Key unchanged: GetID("##value") under PushID(label).
+        struct NumericDraft { double value[4]{}; double seed[4]{}; int count = 1; bool active = false; };
         std::unordered_map<unsigned int, NumericDraft> numericDrafts;   // keyed by ImGui id
+        // Section(label, open, trailing): each trailing control's measured width
+        // (last frame), keyed by the header's id -- right-aligns it on the band.
+        std::unordered_map<unsigned int, float> trailingWidths;
+        // ColorRow (node-page s4.1(c)): the popup's Old swatch, latched at open
+        // (one slot -- one colour popup at a time), and the popup id live last
+        // frame, so the close frame can commit once.
+        float colorOriginal[4]{ 1.0f, 1.0f, 1.0f, 1.0f };
+        ImGuiID colorPopupLive = 0;
         // TEST SEAM (PropertyGridTest): when non-null every row records the
         // centre of its VALUE widget under its label. Production: nullptr.
         std::unordered_map<std::string, ImVec2>* probe = nullptr;
+    };
+
+    // What the LAST row reported this frame (node-page s4.1(d)); every row
+    // resets it. `cancelled` = Escape mid-drag on a numeric/vec/slider/colour
+    // row: the seed was restored and ActiveId cleared, and the row returned false.
+    struct RowEvents { bool overrideToggled = false; bool resetClicked = false; bool cancelled = false; };
+
+    // One-shot decoration for the NEXT row (ImGui SetNextItem* style;
+    // node-page s4.1(d)). `overridden` and `reset` are mutually exclusive
+    // (IM_ASSERT): on an instance the checkbox is the only override control.
+    //  - overridden: the label cell draws Checkbox("##override") then the
+    //    ellipsized label; while *overridden == false the value sits inside
+    //    BeginDisabled (inherited rows read dimmed + read-only). A toggle writes
+    //    *overridden and raises RowEvents::overrideToggled -- the PAGE routes the
+    //    undo step (as ShaderEditorDocument.cpp:5802-5827 does today).
+    //  - reset: ICON_LC_ROTATE_CCW "##reset" ("Reset to default"), right-aligned
+    //    in the value cell, drawn only when resetActive; otherwise the slot is
+    //    reserved but empty so values stay aligned. A click raises resetClicked.
+    // SUBMISSION ORDER (binding, R3): every decoration is submitted BEFORE the
+    // value widget -- the reset button is placed at the cell's right edge, the
+    // cursor returns to the cell start and the value is sized
+    // -(resetW + ItemSpacing.x) -- so the VALUE widget is always LastItemData
+    // when the row returns. Tab visiting reset before the value is accepted.
+    // Honoured by Checkbox/Int/Float/Slider/Vec/Color/Combo rows; Text,
+    // Button and Meter rows take none (IM_ASSERT). ReadOnly rows take `lead`
+    // and nothing else (IM_ASSERT).
+    //  - lead: a caller painter submitted FIRST in the value cell, on the
+    //    value's line (then SameLine) -- a row's type chip: the node page's
+    //    pin dot + type word (T3-D1). The reset slot and the value take the
+    //    width left after it; the value is still LastItemData. (The value
+    //    cell, not the label's: the label column is the narrower one at the
+    //    1080p Inspector, and a chip there would cut the very word it shows.)
+    //    It RETURNS the text it folded away (T3-D2: a narrow cell shows the
+    //    node page's dot alone): non-empty, the cell's hover tooltip leads
+    //    with it -- a ReadOnlyRow's tooltip is then "<folded>\n<whole text>"
+    //    whether or not the text was cut; a value row tooltips it on the value
+    //    widget. Empty = it drew everything.
+    struct RowDecor
+    {
+        bool* overridden = nullptr;   // instance override cell (UE shape)
+        bool  reset = false;          // base/default reset slot
+        bool  resetActive = false;    // value differs from its default: button drawn; else the slot is empty
+        std::function<std::string()> lead;   // value-cell lead painter -> its folded text (see above); empty = none
     };
 
     class PropertyGrid
@@ -84,6 +160,10 @@ namespace Arcane::Editor
 
         // Full-width headers -- draw these OUTSIDE a Rows scope.
         [[nodiscard]] bool Section(const char* label, bool defaultOpen = true);
+        // A header with a control on its band (UE's header-row widgets): `trailing`
+        // is drawn right-aligned on the header's line, under PushID(label); the
+        // header takes ImGuiTreeNodeFlags_AllowOverlap so clicks reach the control.
+        [[nodiscard]] bool Section(const char* label, bool defaultOpen, const std::function<void()>& trailing);
         // Tree-style sub-header (the scene Inspector's category band). When it
         // returns true the caller draws its content and calls EndSubSection().
         [[nodiscard]] bool SubSection(std::string_view label, bool defaultOpen = true);
@@ -114,8 +194,29 @@ namespace Arcane::Editor
         // WITHOUT `validate`: a commit that does not re-validate can land a
         // refused value that way.
         bool CheckboxRow(const char* label, bool& value);
-        bool IntRow(const char* label, int& value);                          // true once per gesture, on deactivate-after-edit AND value != seed; value follows the gesture every frame
-        bool FloatRow(const char* label, float& value, float speed = 0.01f); // same rule; Escape mid-drag = cancel, no commit
+        // Numeric rows: true once per gesture, on deactivate-after-edit AND
+        // value != seed; value follows the gesture every frame; Escape
+        // mid-drag = cancel (LastRowEvents().cancelled), no commit.
+        // IntRow: no range = InputInt with step buttons (the input page's
+        // Priority row); a range = DragInt + ClampOnInput.
+        bool IntRow(const char* label, int& value,
+                    const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%d");
+        // FloatRow: a range routes through RangedDragFloat (DragSpeedFor + ClampOnInput).
+        bool FloatRow(const char* label, float& value, float speed = 0.01f,
+                      const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%.2f");
+        // SliderRow (drafting pick, 9.28): SliderFloat(min, max, format), the
+        // widget material Float params use today; no clamp flags.
+        bool SliderRow(const char* label, float& value, float min, float max, const char* format = "%.3f");
+        // 2-4 float components through AxisDragFloatN (axis bars, per-component
+        // ids). Same draft/commit/Escape rules as FloatRow, across all n.
+        bool VecRow(const char* label, float* v, int n, float speed = 0.01f,
+                    const std::optional<Astra::Range>& range = std::nullopt, const char* format = "%.3f");
+        // FieldLabelCell + a 4-channel draft + ColorValue("##value"). The boxes
+        // behave like VecRow; the popup writes through every frame and commits
+        // on the frame it closes if the value differs from colorOriginal.
+        // *popupIdOut feeds the caller's EditGesture popup pair; `hdr` reaches
+        // ColorPopupBody (T3's ConstColor) and lifts the boxes' 0..1 clamp.
+        bool ColorRow(const char* label, float linear[4], ImGuiID* popupIdOut = nullptr, bool hdr = false);
         int  ComboRow(const char* label, const char* const* items, int count, int current);
         void ReadOnlyRow(const char* label, std::string_view text);
         int  ButtonRow(const char* label, const char* const* buttons, int count,
@@ -129,10 +230,34 @@ namespace Arcane::Editor
         // state BEFORE any window that draws this state Begins.
         void CommitOrphans();
 
+        void SetNextRowDecor(const RowDecor& decor) { m_decor = decor; m_hasDecor = true; }
+        [[nodiscard]] RowEvents LastRowEvents() const { return m_events; }
+        // TEST SEAM, public for model-aware wrappers (s4.2's AssetRow): records
+        // the LAST item's centre under `label` when PropertyGridState::probe is
+        // set. No-op in production.
+        void ProbeItem(const char* label);
+        // A custom value widget on a decorated row (s5.3): opens the label /
+        // override / reset cell under PushID(label) exactly as the built-in rows
+        // do (honours SetNextRowDecor, resets LastRowEvents). Draw ONE value
+        // widget, then EndCustomRow probes it and pops.
+        void BeginCustomRow(const char* label, bool dimmed) { BeginValueCell(label, dimmed); }
+        void EndCustomRow(const char* label) { EndValueCell(label); }
+
         PropertyGridState& State() noexcept { return m_state; }
 
     private:
-        void Probe(const char* label);
+        // Value rows: label cell (+ the pending RowDecor: override checkbox,
+        // reset slot, inherited BeginDisabled) + PushID(label) / ProbeItem +
+        // PopID. Plain rows (Text/ReadOnly/Button/Meter) reset the events and
+        // IM_ASSERT that no decoration is pending.
+        void BeginValueCell(const char* label, bool dimmed);
+        void EndValueCell(const char* label);
+        void BeginPlainRow();
         PropertyGridState& m_state;
+        RowEvents m_events{};
+        RowDecor m_decor{};
+        bool m_hasDecor = false;
+        bool m_valueDisabled = false;   // BeginValueCell opened a BeginDisabled for an inherited row
+        std::string m_leadFolded;       // BeginValueCell's lead folded this away: EndValueCell tooltips it
     };
 }

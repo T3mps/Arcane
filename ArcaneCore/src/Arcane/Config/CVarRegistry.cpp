@@ -117,6 +117,13 @@ namespace Arcane
                                                &ExplainCommand, this);
         (void)listed;
         (void)explained;
+        // node-page phase s8.2: the command line's history depth. Registered on
+        // EVERY registry (test registries included), so through CVarDesc rather
+        // than ARC_CVAR (which targets Get() only). ConsoleModel reads it.
+        const CVarHandle history = Register(CVarDesc{ "console.historySize", CVarType::Int32, CVarValue::Int32(64),
+                                                      CVarValue::Int32(1), CVarValue::Int32(1024), CVarFlags::Archive,
+                                                      "Command-line history depth.", "engine" });
+        (void)history;
     }
 
     CVarRegistry::~CVarRegistry() { delete m; }
@@ -345,6 +352,19 @@ namespace Arcane
         }
     }
 
+    void CVarRegistry::RevertLayer(SetBy by)
+    {
+        for (Slot& slot : m->slots)
+        {
+            if (!slot.alive) continue;
+            const auto before = slot.history.size();
+            std::erase_if(slot.history, [by](const CVarHistoryRecord& h) { return h.by == by; });
+            if (slot.history.size() != before) slot.dirty = true;
+            if (slot.history.empty())
+                slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
+        }
+    }
+
     void CVarRegistry::Publish()
     {
         if (m->publishing) return;
@@ -408,6 +428,19 @@ namespace Arcane
             if (Any(slot.flags, CVarFlags::Hidden)) continue;
             if (Any(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
             out.push_back(CVarListEntry{ slot.name, slot.help, slot.type, slot.flags });
+        }
+        return out;
+    }
+
+    std::vector<CVarListEntry> CVarRegistry::ListCommands() const
+    {
+        std::vector<CVarListEntry> out;
+        for (const Command& command : m->commands)
+        {
+            if (!command.alive) continue;
+            if (Any(command.flags, CVarFlags::Hidden)) continue;
+            if (Any(command.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            out.push_back(CVarListEntry{ command.name, command.help, CVarType::Bool, command.flags });
         }
         return out;
     }

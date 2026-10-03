@@ -4,7 +4,7 @@
 
 namespace Arcane::Reporter
 {
-    std::string ReadLogTail(const std::filesystem::path& stem, const std::filesystem::path& livePath, std::size_t lines)
+    std::filesystem::path ResolveLogPath(const std::filesystem::path& stem, const std::filesystem::path& livePath)
     {
         // <stem>.log.txt: path::operator+= appends to the last component with
         // no separator inserted, which is what turns ".../foo" into
@@ -14,12 +14,18 @@ namespace Arcane::Reporter
 
         std::error_code ec;
         if (std::filesystem::is_regular_file(folderCopy, ec))
-            return LastLines(Slurp(folderCopy), lines);
+            return folderCopy;
 
         ec.clear();
         if (!livePath.empty() && std::filesystem::is_regular_file(livePath, ec))
-            return LastLines(Slurp(livePath), lines);
+            return livePath;
 
         return {};
+    }
+
+    std::string ReadLogTail(const std::filesystem::path& stem, const std::filesystem::path& livePath, std::size_t lines)
+    {
+        const std::filesystem::path log = ResolveLogPath(stem, livePath);
+        return log.empty() ? std::string{} : LastLines(Slurp(log), lines);
     }
 }

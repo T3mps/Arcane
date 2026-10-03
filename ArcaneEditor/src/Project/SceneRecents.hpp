@@ -60,6 +60,13 @@ namespace Arcane::Editor::SceneRecents
     // than growing the list.
     void Push(List& list, const std::filesystem::path& scenePath);
 
+    // After an asset op moved or renamed a .arcscene (spec s7.11): `from`'s
+    // entry becomes `to` IN PLACE (a move is not an open, so it does not jump
+    // to the front). Both are normalised like Push. When `to` is already
+    // listed, that entry keeps its slot and `from`'s is dropped (no
+    // duplicates). An absent `from`, an empty `to`, or `from == to` is a no-op.
+    void Replace(List& list, const std::filesystem::path& from, const std::filesystem::path& to);
+
     // Drop entries whose file no longer exists. `exists` is injected so this
     // runs headlessly in tests and so callers can use disk truth at call
     // time rather than a snapshot flag this format does not carry.

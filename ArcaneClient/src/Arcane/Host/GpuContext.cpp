@@ -25,6 +25,13 @@ namespace Arcane
             wd.title  = "Arcane Runtime";
             wd.vulkan = (cfg.backend == GraphicsBackend::Vulkan);
             wd.hidden = true;
+            // --window-size WxH (automation only, T3-D6 fix round 1): the
+            // explicit extent; unset keeps the load-bearing default above.
+            if (cfg.windowWidth != 0 && cfg.windowHeight != 0)
+            {
+                wd.width  = cfg.windowWidth;
+                wd.height = cfg.windowHeight;
+            }
             return wd;
         }
     }

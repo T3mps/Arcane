@@ -30,12 +30,15 @@
 #include <Arcane/Material/MaterialSource.hpp>   // MaterialSurface (the Material kind combo)
 #include <Arcane/Mesh/MeshAsset.hpp>            // MeshSource (the Create > Mesh > preset, F4 plan 1 T11)
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Arcane { class Project; }
 
@@ -169,6 +172,7 @@ namespace Arcane::Editor
     // kind this enum does not carry yet.
     [[nodiscard]] inline const char* CreateNounForExtension(std::string_view extension)
     {
+        if (extension.empty())         return "folder";   // T5 s7.8: New Folder... validates a bare name
         if (extension == ".arcmat")    return "material";
         if (extension == ".arcmesh")   return "mesh";
         if (extension == ".arcsprite") return "sprite";
@@ -327,9 +331,11 @@ namespace Arcane::Editor
     // to sit exactly on it.
     inline constexpr std::size_t kCreateNameMaxPathChars = 240;
 
-    [[nodiscard]] inline CreateNameCheck ValidateCreateName(std::string_view name,
-                                                            const std::filesystem::path& targetDir,
-                                                            std::string_view extension)
+    // Rules 0-2 only (syntax + length) -- no filesystem. The asset file-op planner
+    // (Project/AssetFileOps) answers uniqueness from its own facts.
+    [[nodiscard]] inline CreateNameCheck ValidateCreateNameSyntax(std::string_view name,
+                                                                  const std::filesystem::path& targetDir,
+                                                                  std::string_view extension)
     {
         // ---- Rule 0/1: syntax. A pure string scan, first because it is the
         // cheapest and because a name that cannot be a file name at all makes
@@ -367,6 +373,42 @@ namespace Arcane::Editor
                             + std::to_string(total) + " of "
                             + std::to_string(kCreateNameMaxPathChars) + " characters)" };
 
+        return { true, {} };
+    }
+
+    // Rename-only (spec s7.6: "the extension is fixed (it is the kind)"): a stem
+    // that ends in the asset's own extension, in any letter case, is refused, so
+    // typing "wall.png" for a .png never plans a silent wall.png.png. Only the
+    // file's OWN extension is refused -- "ship.v2", or "wall.jpg" for a .png
+    // (wall.jpg.png), stays legal. Create and Duplicate never call this.
+    [[nodiscard]] inline CreateNameCheck RefuseTypedExtension(std::string_view stem, std::string_view ext)
+    {
+        const auto fold = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
+        if (!ext.empty() && stem.size() >= ext.size()
+            && std::equal(ext.begin(), ext.end(), stem.end() - static_cast<std::ptrdiff_t>(ext.size()),
+                          [&](char a, char b) { return fold(a) == fold(b); }))
+            return { false, "the extension is fixed; type the name without " + std::string(ext) };
+        return { true, {} };
+    }
+
+    // A rename stem's pure rules: rules 0-2 first (their messages and order kept),
+    // then the fixed-extension rule. No filesystem.
+    [[nodiscard]] inline CreateNameCheck ValidateRenameStemSyntax(std::string_view stem,
+                                                                  const std::filesystem::path& dir,
+                                                                  std::string_view ext)
+    {
+        if (CreateNameCheck syntax = ValidateCreateNameSyntax(stem, dir, ext); !syntax.ok)
+            return syntax;
+        return RefuseTypedExtension(stem, ext);
+    }
+
+    [[nodiscard]] inline CreateNameCheck ValidateCreateName(std::string_view name,
+                                                            const std::filesystem::path& targetDir,
+                                                            std::string_view extension)
+    {
+        if (CreateNameCheck syntax = ValidateCreateNameSyntax(name, targetDir, extension); !syntax.ok)
+            return syntax;
+
         // ---- Rule 3: uniqueness. LAST -- the only rule that touches the
         // filesystem. Its message is deliberately UNLIKE the two above: it
         // names the colliding asset and what kind it is, so the fix ("pick
@@ -380,6 +422,19 @@ namespace Arcane::Editor
                             + " named " + std::string(name) + " already exists here" };
 
         return { true, {} };
+    }
+
+    // T5 s7.6: the Rename validator -- rules 0-3 plus the fixed-extension rule
+    // (ValidateRenameStemSyntax), except a target equivalent to `currentFile`
+    // (case-only on NTFS) is free; a byte-identical stem is a no-op.
+    [[nodiscard]] inline CreateNameCheck ValidateRenameName(std::string_view stem, const std::filesystem::path& currentFile)
+    {
+        if (stem == currentFile.stem().string()) return { true, {} };
+        const std::filesystem::path dir = currentFile.parent_path(); const std::string ext = currentFile.extension().string();
+        if (CreateNameCheck c = ValidateRenameStemSyntax(stem, dir, ext); !c.ok) return c;
+        std::error_code ec; const std::filesystem::path target = dir / (std::string(stem) + ext);
+        if (std::filesystem::exists(target, ec) && std::filesystem::equivalent(target, currentFile, ec)) return { true, {} };
+        return ValidateCreateName(stem, dir, ext);
     }
 
     // ---- the modal --------------------------------------------------------
@@ -412,6 +467,11 @@ namespace Arcane::Editor
         // read as "just opened" and silently re-seed folderIndex over
         // whatever the user had already picked in the Location combo.
         bool seeded = false;
+        // The Location the dialog seeds on open, relative to the kind's root
+        // ("materials", "" = the root itself); nullopt = the kind's default
+        // folder. Set by MakeCreateDialogState for an instance created FROM a
+        // project material: it lands beside its parent (T3-D5, Unreal parity).
+        std::optional<std::string> defaultFolder;
     };
 
     // What a completed dialog hands back. `folder` is relative to the kind's
@@ -439,6 +499,141 @@ namespace Arcane::Editor
         // SOURCE texture the user picked, not the derived sprite to open).
         Arcane::Guid openExisting;
     };
+
+    // ---- Location-combo folder choices (T5 s7.8: hoisted out of
+    // CreateAssetDialog.cpp's anonymous namespace verbatim, so the Move to...
+    // modal and the tests share them) ----
+
+    // One entry in the Location combo. `display` is what the combo shows
+    // ("Content/materials"); `relative` is what CreateAssetResult carries
+    // ("materials", or "" for Content/ itself), which the dispatcher joins
+    // onto the project's content root.
+    struct FolderChoice
+    {
+        std::string display;
+        std::string relative;
+    };
+
+    // The model's folder strings are mount-path directories with a
+    // trailing slash ("materials/"), and root-level assets fold into the
+    // synthetic bucket "Content/" (MakeBaseEntry's own comment). Both
+    // shapes normalise to the same pair here. `root` is the kind's
+    // CreateKindRoot ("Content" / "Source"): the display is "<root>/rel".
+    inline FolderChoice MakeFolderChoice(const std::string& relDir, const char* root)
+    {
+        std::string rel = relDir;
+        while (!rel.empty() && rel.back() == '/')
+            rel.pop_back();
+        if (rel.empty())
+            return { root, "" };   // the root itself names no subdirectory
+        return { std::string(root) + "/" + rel, rel };
+    }
+
+    // A model folder KEY -> the directory relative to its mount root, or
+    // nullopt when the key belongs to another mount. Two key shapes
+    // (AssetPanelEntry::folder's own doc): the game mount is UNQUALIFIED
+    // ("Content/" is its root, "materials/" nested); every other mount is
+    // QUALIFIED ("source://" is its root, "source://combat/" nested).
+    inline std::optional<std::string> RelativeDirOfFolderKey(const std::string& key, const char* root)
+    {
+        const bool wantSource = std::string_view(root) == "Source";
+        if (const std::size_t sep = key.find("://"); sep != std::string::npos)
+        {
+            if (!wantSource || key.substr(0, sep) != "source")
+                return std::nullopt;
+            return key.substr(sep + 3);   // "" for the root, "combat/" nested
+        }
+        if (wantSource)
+            return std::nullopt;
+        return key == "Content/" ? std::string() : key;
+    }
+
+    // Distinct create-able folders: every directory the project's OWN
+    // files already use under the kind's root, plus the kind's default,
+    // plus the root itself.
+    //
+    // ONE mount only -- "game://" for every asset kind, "source://" for
+    // CppClass. The model groups folders across every mount (an engine://
+    // and a game:// "materials/" share one Browse group), but a created
+    // file can only land -- and only register + resolve by GUID -- under
+    // the project's own root for that kind (Project.cpp mounts "game" at
+    // root/Content and "source" at root/Source). Offering an engine or
+    // plugin folder here would offer a target RegisterCreatedAsset refuses.
+    inline std::vector<FolderChoice> BuildFolderChoices(const AssetPanelModel& model,
+                                                        CreateAssetKind kind,
+                                                        const std::string& cppDefaultFolder)
+    {
+        const char* root = CreateKindRoot(kind);
+        std::set<std::string> folders;                     // relative dirs, "" = root
+        folders.insert("");                                // always offer the root
+        // CppClass's default folder comes from the manifest's sourceDir
+        // (CppClassDefaultFolder, seeded onto the request by BeginCreateAsset);
+        // every other kind keeps its fixed CreateKindDefaultFolder.
+        folders.insert(kind == CreateAssetKind::CppClass
+                           ? cppDefaultFolder
+                           : std::string(CreateKindDefaultFolder(kind)));
+        for (const auto& [guid, e] : model.Entries())
+        {
+            (void)guid;
+            if (const auto rel = RelativeDirOfFolderKey(e.folder, root))
+                folders.insert(*rel);
+        }
+        // T5 s7.8: an empty Content/ folder has no entry, but is still a
+        // place to create into (its key is unqualified "game", so the
+        // "Source" root never matches it).
+        for (const std::string& key : model.EmptyFolders())
+            if (const auto rel = RelativeDirOfFolderKey(key, root))
+                folders.insert(*rel);
+
+        std::vector<FolderChoice> out;
+        out.reserve(folders.size());
+        // Root first (it is the parent of everything else), then the rest
+        // in the set's own alphabetical order -- a stable, predictable
+        // list rather than unordered_map iteration order.
+        out.push_back(MakeFolderChoice("", root));
+        for (const std::string& f : folders)
+            if (!f.empty())
+                out.push_back(MakeFolderChoice(f, root));
+        return out;
+    }
+
+    // The Content/ root, every folder an entry lives in, and every empty
+    // folder -- the Location list of the Move to... modal (s7.8), which is
+    // not tied to a CreateAssetKind's default folder.
+    [[nodiscard]] inline std::vector<FolderChoice> BuildContentFolderChoices(const AssetPanelModel& m)
+    {
+        std::set<std::string> folders;
+        for (const auto& [g, e] : m.Entries()) if (const auto rel = RelativeDirOfFolderKey(e.folder, "Content")) folders.insert(*rel);
+        for (const auto& k : m.EmptyFolders()) if (const auto rel = RelativeDirOfFolderKey(k, "Content")) folders.insert(*rel);
+        std::vector<FolderChoice> out{ MakeFolderChoice("", "Content") }; for (const auto& f : folders) if (!f.empty()) out.push_back(MakeFolderChoice(f, "Content"));
+        return out;
+    }
+    // The dialog's starting state for one request -- what
+    // EditorApp::BeginCreateAsset opens (it adds only the C++ Class default
+    // folder, which needs the project). `open` is set; every other field
+    // starts fresh, so a cancelled dialog leaves nothing behind for the next.
+    //   * `prefillSurface` (a MaterialSurface VALUE, -1 = none) becomes the
+    //     surface combo's index through MaterialSurfaceComboIndex.
+    //   * `prefillParent` lands in the one asset-valued field the kind has:
+    //     an instance's parent, a sprite's texture. Its picker starts
+    //     expanded only when there is nothing prefilled to show.
+    //   * A MaterialInstance whose parent the model knows is named
+    //     "<parent>_Inst" (Unreal's own default for a new instance, T3-D4),
+    //     suffixed "_Inst2", "_Inst3", ... while that file already exists, so
+    //     the dialog never opens on "already exists" (T3-D5). Its Location
+    //     defaults to the parent's own folder when the parent lives under the
+    //     project's Content/; an engine or plugin parent keeps materials/.
+    // `projectRoot` is the open project's root (the dialog's own
+    // `project.Root()`): the name's uniqueness is asked of the files there.
+    [[nodiscard]] CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
+                                                          const AssetPanelModel& model,
+                                                          const std::filesystem::path& projectRoot);
+
+    // T5 s7.8: the Location combo (a "Location" label over a full-width combo
+    // of `folders[i].display`), shared by the create dialog and the Move to...
+    // modal. Clamps `index` into range first; returns true the frame a row
+    // is picked. `folders` must not be empty (both builders lead with the root).
+    bool DrawLocationCombo(const std::vector<FolderChoice>& folders, int& index);
 
     // Draw the modal for `st.request.kind`. Returns a completed result the
     // frame Create (or Sprite's "Open existing") was clicked, nullopt

@@ -21,15 +21,21 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/MeshDocument.hpp"
+#include "Documents/PreviewStatus.hpp"
+#include "Helpers/GpuCapability.hpp"
+#include "Panels/AssetReferenceField.hpp"
 #include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Guid.hpp>
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Host/OffscreenVehicle.hpp>
 #include <Arcane/Host/SceneRenderResolver.hpp>
 #include <Arcane/Mesh/MeshAsset.hpp>
 #include <Arcane/Project/Project.hpp>
+#include <Arcane/Render/Nri/NriGraphContext.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 
@@ -41,11 +47,14 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // FindWindowByName / GetActiveID / ActiveIdWindow
 
+#include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 
 using Arcane::Editor::MeshDocument;
 namespace fs = std::filesystem;
@@ -94,8 +103,8 @@ namespace
 
 TEST_CASE("MeshDocument: device-less services allocate no preview resources", "[editor][mesh]")
 {
-    // Default-constructed Services carries nriDevice/hostConfig/chromeHud all
-    // null -- exactly what a headless run (no EditorApp at all) hands every
+    // Default-constructed Services carries no chromeGraph and no hostConfig --
+    // exactly what a headless run (no EditorApp at all) hands every
     // document. Construction itself calls EnsurePreviewContext(); this pins
     // that the call is a genuine no-op rather than a crash or a lazily-built
     // vehicle on the first Tick.
@@ -187,7 +196,7 @@ TEST_CASE("MeshDocument edits round-trip through the shared CommandStack", "[edi
     const Arcane::MeshAssetData before = Fixture();
 
     MeshDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     MeshDocument doc(services, FixturePath(), before);
 
     // What a completed drag does: the live edit already happened, then the
@@ -200,6 +209,7 @@ TEST_CASE("MeshDocument edits round-trip through the shared CommandStack", "[edi
 
     REQUIRE(fx.stack.CanUndo());
     CHECK(std::string(fx.stack.UndoLabel()) == "Edit Subdivisions");
+    CHECK(fx.stack.SceneStateId() == 0);
 
     fx.stack.Undo();
     CHECK(doc.Data() == before);
@@ -217,7 +227,7 @@ TEST_CASE("MeshDocument: an undo bracket that moved nothing pushes no step, "
     const Arcane::MeshAssetData data = Fixture();
 
     MeshDocument::Services services;
-    services.undo = &fx.stack;
+    services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
     MeshDocument doc(services, FixturePath(), data);
 
     // Press-and-release on a drag without moving it: before == after.
@@ -242,7 +252,7 @@ TEST_CASE("MeshDocument undo steps go inert once the document closes", "[editor]
 
     {
         MeshDocument::Services services;
-        services.undo = &fx.stack;
+        services.undo = [p = &fx.stack]() -> Arcane::CommandStack* { return p; };
         MeshDocument doc(services, FixturePath(), before);
 
         Arcane::MeshAssetData after = before;
@@ -521,15 +531,20 @@ namespace
     // InputActionsDocumentUiTest.cpp's DocUi shape: own context, software font
     // atlas, the document drawn FIRST (as DocumentHost::DrawAll does), then a
     // pinned "Inspector" window drawing its page (as DrawInspectorWindows does).
-    // Device-less services: the preview child shows its "(no preview -- no GPU
-    // device)" line, so the document window still has content.
+    // Device-less services: the preview child shows its "No preview -- no GPU
+    // device" line, so the document window still has content.
     struct MeshPageUi
     {
         ImGuiContext* prev = nullptr;
         ImGuiContext* ctx = nullptr;
         Arcane::Editor::PropertyGridState grid;
-        MeshDocument doc{ MeshDocument::Services{}, FixturePath(), Fixture() };   // a Cube: the form's first widget is the Source combo
-        MeshPageUi()
+        std::unordered_map<std::string, ImVec2> probe;     // value-widget centres by row label
+        std::function<void()> beforePage;                  // runs inside "Inspector" before the page (ActivateItemByID)
+        bool log = false;
+        std::string docLog, pageLog;                       // each window's LogToBuffer text, when `log`
+        MeshDocument doc;                                  // default Fixture(): a Cube, the form's first widget is the Source combo
+        explicit MeshPageUi(MeshDocument::Services s = {}, Arcane::MeshAssetData d = Fixture())
+            : doc(std::move(s), FixturePath(), std::move(d))
         {
             prev = ImGui::GetCurrentContext();
             ctx = ImGui::CreateContext();
@@ -539,32 +554,41 @@ namespace
             io.IniFilename = nullptr;
             unsigned char* px = nullptr; int w = 0, h = 0;
             io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+            grid.probe = &probe;
         }
         ~MeshPageUi() { ImGui::DestroyContext(ctx); ImGui::SetCurrentContext(prev); }
         void Frame()
         {
             ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+            probe.clear();
             ImGui::NewFrame();
             ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_Always);
             bool close = false;
+            if (log) ImGui::LogToBuffer();
             doc.Draw(close);
+            if (log) { docLog = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
             ImGui::SetNextWindowPos(ImVec2(820, 0), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2(700, 880), ImGuiCond_Always);
             ImGui::Begin("Inspector");
+            if (beforePage) beforePage();
+            if (log) ImGui::LogToBuffer();
             { Arcane::Editor::PropertyGrid g(grid); if (auto* page = doc.Page()) page->Draw(g); }
+            if (log) { pageLog = ctx->LogBuffer.c_str(); ImGui::LogFinish(); }
             ImGui::End();
             ImGui::Render();
         }
         void Move(ImVec2 p) { ImGui::GetIO().AddMousePosEvent(p.x, p.y); Frame(); }
         void Button(int b, bool down) { ImGui::GetIO().AddMouseButtonEvent(b, down); Frame(); }
+        ImVec2 At(const std::string& label) { INFO(label); REQUIRE(probe.count(label) == 1); return probe.at(label); }
     };
 }
 
 // The form moved OUT of the document window: its first widget (a generated
-// mesh's "Source" combo, MeshDocument.cpp's source section) is submitted in
-// the Inspector window. Proven through the ACTIVE id after a press on the
-// page's first row -- ImGuiWindow::GetID only hashes a label, and LastItemData
+// mesh's "Source" ComboRow, s5.5) is submitted in the Inspector window, keyed
+// "##value" under PushID("Source") inside the "##mesh" Rows table. Proven
+// through the ACTIVE id after a press on the row's probed value widget --
+// ImGuiWindow::GetID only hashes a label, and LastItemData
 // is restored to the parent's at End() (imgui.cpp:8849), so neither alone
 // shows a submission.
 TEST_CASE("MeshDocument's form draws in the Inspector window, not the document's", "[editor][mesh][inspector]")
@@ -573,11 +597,202 @@ TEST_CASE("MeshDocument's form draws in the Inspector window, not the document's
     h.Frame();                                         // warm-up: both windows exist
     ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
     REQUIRE(iw != nullptr);
-    const ImVec2 row(iw->ContentRegionRect.Min.x + 10.0f,
-                     iw->ContentRegionRect.Min.y + ImGui::GetFrameHeight() * 0.5f);   // the page's first row
-    h.Move(row);
+    h.Frame();
+    const ImVec2 at = h.At("Source");
+    h.Move(at);
     h.Button(ImGuiMouseButton_Left, true);
-    CHECK(ImGui::GetActiveID() == iw->GetID("Source"));
+    CHECK(ImGui::GetActiveID() == ImGui::GetIDWithSeed("##value", nullptr,
+                                  ImGui::GetIDWithSeed("Source", nullptr, iw->GetID("##mesh"))));
     CHECK(ImGui::GetCurrentContext()->ActiveIdWindow == iw);   // in the Inspector, not the document window
     h.Button(ImGuiMouseButton_Left, false);
+}
+
+// ---- Node page + editor upgrades s3.2: the late-bound seam + PreviewStatus ----
+TEST_CASE("MeshDocument status: no seam reads no-device and never latches; imported reads not-compiled-here; a validation reason reads errors", "[editor][mesh][preview]")
+{
+    using Arcane::Editor::CompileStatus;
+    using Arcane::Editor::PreviewAvailability;
+    {
+        MeshDocument doc(MeshDocument::Services{}, FixturePath(), Fixture());   // chromeGraph unset
+        for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+        const auto st = doc.ComputeStatus();
+        CHECK(st.compile == CompileStatus::Ok);
+        CHECK(st.preview == PreviewAvailability::NoDevice);
+        CHECK_FALSE(st.image);
+        CHECK(doc.PreviewVehicleAttempts() == 0);
+    }
+    {
+        // The boot window: the seam is WIRED but the chrome context is not up yet.
+        Arcane::HostConfig cfg;
+        MeshDocument::Services services;
+        services.hostConfig  = &cfg;
+        services.chromeGraph = [] { return static_cast<Arcane::NriGraphContext*>(nullptr); };
+        MeshDocument doc(services, FixturePath(), Fixture());
+        for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+        CHECK(doc.ComputeStatus().preview == PreviewAvailability::NoDevice);   // never vehicle-failed
+        CHECK(doc.PreviewVehicleAttempts() == 0);
+    }
+    {
+        Arcane::MeshAssetData imported = Fixture();
+        imported.source         = Arcane::MeshSource::Imported;
+        imported.importedSource = Arcane::Guid::Generate();
+        MeshDocument doc(MeshDocument::Services{}, FixturePath(), imported);
+        CHECK(doc.ComputeStatus().compile == CompileStatus::NotCompiledHere);
+    }
+    {
+        Arcane::MeshAssetData invalid = Fixture();
+        invalid.source   = Arcane::MeshSource::Cylinder;
+        invalid.segments = 1;   // floor is 3
+        MeshDocument doc(MeshDocument::Services{}, FixturePath(), invalid);
+        CHECK(doc.ComputeStatus().compile == CompileStatus::Errors);
+    }
+}
+
+TEST_CASE("MeshDocument: the first non-null chromeGraph makes Tick build the preview vehicle exactly once", "[editor][mesh][preview][gpu]")
+{
+    ARC_REQUIRE_BACKEND(Arcane::GraphicsBackend::D3D12);
+    using Arcane::Editor::PreviewAvailability;
+    Arcane::HostConfig cfg;
+    cfg.backend  = Arcane::GraphicsBackend::D3D12;
+    cfg.headless = true;
+    auto chrome = Arcane::OffscreenVehicle::Create(cfg, 256, 128);
+    REQUIRE(chrome != nullptr);
+
+    Arcane::NriGraphContext* live = nullptr;     // ChromeGraph() before CreateGraphVehicles
+    MeshDocument::Services services;
+    services.hostConfig  = &cfg;
+    services.chromeGraph = [&] { return live; };
+    MeshDocument doc(services, FixturePath(), Fixture());   // constructed during "boot"
+    for (int i = 0; i < 3; ++i) doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 0);
+    CHECK(doc.ComputeStatus().preview == PreviewAvailability::NoDevice);
+
+    live = &chrome->Graph();                     // CreateGraphVehicles ran
+    doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 1);
+    for (int i = 0; i < 5; ++i) doc.Tick(1.0 / 60.0);
+    CHECK(doc.PreviewVehicleAttempts() == 1);    // built: Tick stops retrying
+    const auto st = doc.ComputeStatus();
+    CHECK(st.preview == PreviewAvailability::Ready);
+    CHECK(st.image);                             // a Presented frame landed
+    CHECK(doc.PreviewTextureId() != 0);
+}   // no retire sink: ~MeshDocument invalidates against the hud recorded at creation, then chrome dies
+
+TEST_CASE("MeshDocument: a device-less document's preview box says why -- no GPU device (s5.2)", "[editor][mesh][preview]")
+{
+    MeshPageUi h;
+    h.log = true;
+    h.Frame(); h.Frame();
+    INFO(h.docLog);
+    CHECK(h.docLog.find("No preview -- no GPU device") != std::string::npos);
+    CHECK(Arcane::Editor::PreviewBoxText(h.doc.ComputeStatus()) == "No preview -- no GPU device");
+}
+
+// ---- Node page + editor upgrades s5.5: the mesh page on PropertyGrid ----
+TEST_CASE("MeshDocument::ClearSlotMaterial: imported nils slot k and keeps it; generated erases; out of range is a no-op", "[editor][mesh]")
+{
+    const Arcane::Guid matA = Arcane::Guid::Generate(), matB = Arcane::Guid::Generate();
+    Arcane::MeshAssetData imported = Fixture();
+    imported.source = Arcane::MeshSource::Imported;
+    imported.importedSource = Arcane::Guid::Generate();
+    imported.slots = { { "Metal", matA }, { "Paint", matB } };
+    MeshDocument::ClearSlotMaterial(imported, 1);
+    REQUIRE(imported.slots.size() == 2u);
+    CHECK(imported.slots[1].name == "Paint");
+    CHECK_FALSE(imported.slots[1].material.IsValid());
+    CHECK(imported.slots[0].material == matA);
+    MeshDocument::ClearSlotMaterial(imported, 7);
+    CHECK(imported.slots.size() == 2u);
+    Arcane::MeshAssetData generated = Fixture();
+    generated.slots = { { "", matA } };
+    MeshDocument::ClearSlotMaterial(generated, 0);
+    CHECK(generated.slots.empty());
+}
+
+TEST_CASE("MeshDocument::ApplySlotMaterialEdit: one step per Set and Clear, generated and imported", "[editor][mesh]")
+{
+    UndoFixture fx;
+    MeshDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    const Arcane::Guid matA = Arcane::Guid::Generate(), matB = Arcane::Guid::Generate();
+    Arcane::Editor::AssetRefEdit set, clear;
+    set.op = Arcane::Editor::AssetRefEdit::Op::Set;
+    clear.op = Arcane::Editor::AssetRefEdit::Op::Clear;
+    {
+        MeshDocument doc(s, FixturePath(), Fixture());               // a Cube with no slot
+        set.guid = matA;
+        doc.ApplySlotMaterialEdit(0, set);
+        REQUIRE(doc.Data().slots.size() == 1u);
+        CHECK(doc.Data().slots[0].material == matA);
+        CHECK(std::string(fx.stack.UndoLabel()) == "Assign Material");
+        doc.ApplySlotMaterialEdit(0, clear);
+        CHECK(doc.Data().slots.empty());                             // generated: erase
+        CHECK(std::string(fx.stack.UndoLabel()) == "Clear Material");
+        fx.stack.Undo(); CHECK(doc.Data().slots.size() == 1u);
+        fx.stack.Undo(); CHECK(doc.Data().slots.empty());
+        CHECK_FALSE(fx.stack.CanUndo());
+    }
+    {
+        Arcane::MeshAssetData d = Fixture();
+        d.source = Arcane::MeshSource::Imported;
+        d.importedSource = Arcane::Guid::Generate();
+        d.slots = { { "Metal", matA }, { "Paint", Arcane::Guid{} } };
+        MeshDocument doc(s, FixturePath(), d);
+        set.guid = matB;
+        doc.ApplySlotMaterialEdit(1, set);
+        CHECK(doc.Data().slots[1].material == matB);
+        doc.ApplySlotMaterialEdit(1, clear);
+        REQUIRE(doc.Data().slots.size() == 2u);                      // imported: nil, keep the slot
+        CHECK_FALSE(doc.Data().slots[1].material.IsValid());
+        CHECK(doc.Data().slots[1].name == "Paint");
+        fx.stack.Undo(); CHECK(doc.Data().slots[1].material == matB);
+        fx.stack.Undo(); CHECK_FALSE(doc.Data().slots[1].material.IsValid());
+        CHECK_FALSE(fx.stack.CanUndo());
+    }
+}
+
+TEST_CASE("MeshDocument page: a Source pick is one step and swaps the topology rows", "[editor][mesh][inspector]")
+{
+    UndoFixture fx;
+    MeshDocument::Services s;
+    s.undo = [&fx] { return &fx.stack; };
+    MeshPageUi h(s);
+    h.Frame(); h.Frame();
+    CHECK(h.probe.count("Rings") == 0);                              // a Cube has no topology rows
+    ImGuiWindow* iw = ImGui::FindWindowByName("Inspector");
+    REQUIRE(iw != nullptr);
+    const ImGuiID combo = ImGui::GetIDWithSeed("##value", nullptr, ImGui::GetIDWithSeed("Source", nullptr, iw->GetID("##mesh")));
+    h.beforePage = [&] { ImGui::ActivateItemByID(combo); };
+    h.Frame(); h.beforePage = nullptr; h.Frame();                    // the press lands: the popup opens
+    REQUIRE(ImGui::GetCurrentContext()->OpenPopupStack.Size == 1);
+    ImGuiWindow* popup = ImGui::GetCurrentContext()->OpenPopupStack.back().Window;
+    REQUIRE(popup != nullptr);
+    const ImGuiID sphere = popup->GetID("UV Sphere");                // ComboRow's Selectables push no index id
+    h.beforePage = [&] { ImGui::ActivateItemByID(sphere); };
+    h.Frame(); h.beforePage = nullptr; h.Frame();
+    CHECK(h.doc.Data().source == Arcane::MeshSource::UvSphere);
+    REQUIRE(fx.stack.CanUndo());
+    CHECK(std::string(fx.stack.UndoLabel()) == "Change Source");
+    CHECK(h.probe.count("Rings") == 1);
+    CHECK(h.probe.count("Segments") == 1);
+    fx.stack.Undo();
+    CHECK(h.doc.Data().source == Arcane::MeshSource::Cube);
+    CHECK_FALSE(fx.stack.CanUndo());
+}
+
+TEST_CASE("MeshDocument page: Info reads BuildMeshData's counts and the bounds", "[editor][mesh][inspector]")
+{
+    MeshPageUi h;
+    h.log = true;
+    h.Frame(); h.Frame();
+    const auto mesh = Arcane::BuildMeshData(Fixture());
+    REQUIRE(mesh.has_value());
+    const Arcane::MeshBounds b = Arcane::ComputeMeshBounds(*mesh);
+    char bounds[96];
+    std::snprintf(bounds, sizeof(bounds), "%.2f \xC3\x97 %.2f \xC3\x97 %.2f m", b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z);
+    INFO(h.pageLog);
+    for (const char* row : { "Vertices", "Triangles", "Bounds" }) { INFO(row); CHECK(h.probe.count(row) == 1); }
+    CHECK(h.pageLog.find(std::to_string(mesh->vertices.size())) != std::string::npos);
+    CHECK(h.pageLog.find(std::to_string(mesh->indices.size() / 3)) != std::string::npos);
+    CHECK(h.pageLog.find(bounds) != std::string::npos);
 }

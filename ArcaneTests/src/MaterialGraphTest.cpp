@@ -16,11 +16,14 @@
 #include <spdlog/sinks/callback_sink.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace Arcane;
 
@@ -120,9 +123,21 @@ TEST_CASE("Graph node table covers every type with round-tripping tokens", "[mat
         // only thing that can tell it from a deliberate one.
         INFO(info.token);
         CHECK(info.category != GraphNodeCategory::Uncategorized);
+        // Node page s5.1.6: every row describes itself (the Inspector header's
+        // wrapped line). Appended after category, so a forgotten row is a
+        // value-initialized null -- this is what tells it from a real one.
+        CHECK((info.description != nullptr && info.description[0] != '\0'));
     }
     GraphNodeType t{};
     CHECK_FALSE(GraphNodeTypeFromToken("not_a_node", t));
+
+    // The spec's three worked examples, verbatim (s5.1.6).
+    CHECK(std::string_view(GraphNodeInfo(GraphNodeType::Mul).description) ==
+          "A times B, per component (a * b); a scalar input splats to the other's width.");
+    CHECK(std::string_view(GraphNodeInfo(GraphNodeType::Panner).description) ==
+          "Scrolls UV by Time x Speed; Fractional wraps the offset to [0, 1) to keep precision.");
+    CHECK(std::string_view(GraphNodeInfo(GraphNodeType::Comment).description) ==
+          "A labelled box; nodes inside it move with it. It has no effect on the shader.");
 
     // Pin-order contract spot checks (append-only; these indices are serialized).
     CHECK(GraphNodeInfo(GraphNodeType::Lerp).inputs.size() == 3);
@@ -977,6 +992,122 @@ TEST_CASE("GraphPinAcceptsLiteral agrees with the emission switch, pin by pin",
             }
         }
     }
+}
+
+namespace
+{
+    // Every number in an HLSL constant, skipping digits inside identifiers
+    // ("float4(0.0, 1.0)" -> {0, 1}, never the 4).
+    std::vector<float> NumbersIn(std::string_view s)
+    {
+        std::vector<float> out;
+        const std::string str(s);
+        const char* p = str.c_str();
+        char prev = ' ';
+        while (*p)
+        {
+            const bool ident = std::isalnum(static_cast<unsigned char>(prev)) || prev == '_';
+            const bool start = !ident && (std::isdigit(static_cast<unsigned char>(*p)) ||
+                ((*p == '-' || *p == '.') && std::isdigit(static_cast<unsigned char>(p[1]))));
+            if (start)
+            {
+                char* end = nullptr;
+                out.push_back(std::strtof(p, &end));
+                prev = end[-1];
+                p = end;
+            }
+            else
+                prev = *p++;
+        }
+        return out;
+    }
+}
+
+TEST_CASE("GraphPinNeutralDefault: one truth table over every node type and input pin", "[material][graph]")
+{
+    // Node page s5.1.8. The rows are DATA, not a mirror of the switch. Every
+    // (type, pin) absent from kNonZero must read Constant 1 lane 0 / "0.0".
+    // `hlsl` is codegen's text VERBATIM ("1.0", never FormatF's "1"), which is
+    // why every snippet expectation in this file stays byte-identical.
+    struct Row { const char* token; std::uint32_t pin; GraphPinNeutralKind kind; int lanes;
+                 float v[4]; const char* hlsl; };
+    using K = GraphPinNeutralKind;
+    static const Row kNonZero[] = {
+        { "output",         0, K::Constant,    4, { 0, 0, 0, 1 }, "float4(0.0, 0.0, 0.0, 1.0)" },
+        { "texture_sample", 0, K::Expression,  2, {},             "v.uv" },
+        { "sprite_texture", 0, K::Expression,  2, {},             "v.uv" },
+        { "pass_input",     0, K::Expression,  2, {},             "v.uv" },
+        { "tiling_offset",  0, K::Expression,  2, {},             "v.uv" },
+        { "tiling_offset",  1, K::Constant,    1, { 1 },          "1.0" },   // splats to (1, 1)
+        { "simple_noise",   0, K::Expression,  2, {},             "v.uv" },
+        { "simple_noise",   1, K::Constant,    1, { 10 },         "10.0" },
+        { "panner",         0, K::Expression,  2, {},             "v.uv" },
+        { "combine",        3, K::Constant,    1, { 1 },          "1.0" },
+        { "clamp",          2, K::Constant,    1, { 1 },          "1.0" },
+        { "smoothstep",     1, K::Constant,    1, { 1 },          "1.0" },
+        { "power",          1, K::Constant,    1, { 1 },          "1.0" },
+        { "scale_offset",   2, K::Constant,    1, { 1 },          "1.0" },
+        { "remap",          1, K::Constant,    2, { 0, 1 },       "float2(0.0, 1.0)" },
+        { "remap",          2, K::Constant,    2, { 0, 1 },       "float2(0.0, 1.0)" },
+        { "vertex_output",  0, K::Passthrough, 2, {},             nullptr },
+        { "vertex_output",  1, K::Passthrough, 2, {},             nullptr },
+        { "vertex_output",  2, K::Passthrough, 4, {},             nullptr },
+    };
+    auto expect = [](const GraphPinNeutral& got, K kind, int lanes, const float* v, const char* hlsl)
+    {
+        CHECK(got.kind == kind);
+        CHECK(got.lanes == lanes);
+        for (int i = 0; i < 4; ++i)
+            CHECK(got.v[i] == (v ? v[i] : 0.0f));
+        if (hlsl == nullptr)
+            CHECK(got.hlsl == nullptr);
+        else
+        {
+            REQUIRE(got.hlsl != nullptr);
+            CHECK(std::string_view(got.hlsl) == hlsl);
+        }
+        // A Constant's text and its numbers are one fact (lanes numbers, = v).
+        if (got.kind == K::Constant && got.hlsl)
+        {
+            const std::vector<float> parsed = NumbersIn(got.hlsl);
+            REQUIRE(parsed.size() == static_cast<std::size_t>(got.lanes));
+            for (int i = 0; i < got.lanes; ++i)
+                CHECK(parsed[static_cast<std::size_t>(i)] == got.v[i]);
+        }
+    };
+
+    static constexpr float kZero[4] = { 0, 0, 0, 0 };
+    for (const GraphNodeTypeInfo& info : AllGraphNodeInfos())
+    {
+        const GraphNode n = Node(1, info.type);
+        for (std::uint32_t pin = 0; pin < GraphNodeInputCount(n); ++pin)
+        {
+            INFO(info.token << " pin " << pin);
+            const Row* row = nullptr;
+            for (const Row& r : kNonZero)
+                if (std::string_view(info.token) == r.token && r.pin == pin)
+                    row = &r;
+            const GraphPinNeutral got = GraphPinNeutralDefault(n, pin);
+            if (row)
+                expect(got, row->kind, row->lanes, row->v, row->hlsl);
+            else
+                expect(got, K::Constant, 1, kZero, "0.0");
+        }
+    }
+
+    // Custom pins are per-node data: plain argOr operands, neutral 0 whatever the width.
+    GraphNode custom = Node(1, GraphNodeType::Custom);
+    custom.customPins = { { "uv", 2 }, { "tint", 4 } };
+    for (std::uint32_t pin = 0; pin < 2; ++pin)
+    {
+        INFO("custom pin " << pin);
+        expect(GraphPinNeutralDefault(custom, pin), K::Constant, 1, kZero, "0.0");
+    }
+    // Out of range is harmless (the zero row), never a crash.
+    expect(GraphPinNeutralDefault(Node(1, GraphNodeType::Add), 7), K::Constant, 1, kZero, "0.0");
+    // Output included: its float4 neutral is pin 0 ONLY, so a stray pin is the
+    // zero row too (the one row that would otherwise ignore `pin`).
+    expect(GraphPinNeutralDefault(Node(1, GraphNodeType::Output), 1), K::Constant, 1, kZero, "0.0");
 }
 
 TEST_CASE("Codegen: Split lanes follow the SG rule", "[material]")
@@ -2230,4 +2361,73 @@ TEST_CASE("Graph-generated snippets compile on both targets and surfaces", "[sha
     }
 
     sc.Shutdown();
+}
+
+TEST_CASE("ResolveGraphNodeWidths: the one width rule codegen and the canvas share", "[material][graph]")
+{
+    // Output 1 <- Mul 4 (a <- Float4 2); Mul 5 (a <- Float 3, b <- Float2 6);
+    // Add 7 unwired; Mul 8 (a <- Float 3 only); Param 9 (float2); Swizzle 10
+    // ("x", a <- Float4 2); Length 11 (x <- Mul 4: dynamic in, fixed out).
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Output));
+    g.nodes.push_back(Node(2, GraphNodeType::ConstFloat4));
+    g.nodes.push_back(Node(3, GraphNodeType::ConstFloat));
+    g.nodes.push_back(Node(4, GraphNodeType::Mul));
+    g.nodes.push_back(Node(5, GraphNodeType::Mul));
+    g.nodes.push_back(Node(6, GraphNodeType::ConstFloat2));
+    g.nodes.push_back(Node(7, GraphNodeType::Add));
+    g.nodes.push_back(Node(8, GraphNodeType::Mul));
+    g.nodes.push_back(ParamNode(9, "Offset", MatParamType::Float2, MatParamValue::MakeFloat2(0.0f, 0.0f)));
+    GraphNode swz = Node(10, GraphNodeType::Swizzle);
+    swz.swizzleMask = "x";
+    g.nodes.push_back(swz);
+    g.nodes.push_back(Node(11, GraphNodeType::Length));
+    g.links = { Link(2, 0, 4, 0), Link(4, 0, 1, 0),
+                Link(3, 0, 5, 0), Link(6, 0, 5, 1),
+                Link(3, 0, 8, 0),
+                Link(2, 0, 10, 0),
+                Link(4, 0, 11, 0) };
+    g.nextId = 12;
+
+    const auto widths = ResolveGraphNodeWidths(g);
+    const auto at = [&](std::uint32_t id) { INFO("node " << id); REQUIRE(widths.count(id) == 1); return widths.at(id); };
+    CHECK(at(4).inputs == 4);    // a Mul fed by a float4
+    CHECK(at(4).outputs == 4);
+    CHECK(at(5).inputs == 2);    // float * float2: scalars never pin a width
+    CHECK(at(5).outputs == 2);
+    CHECK(at(7).inputs == 0);    // an unwired Add is unresolved
+    CHECK(at(7).outputs == 0);
+    CHECK(at(8).inputs == 1);    // only a scalar wired: resolved to float
+    CHECK(at(9).outputs == 2);   // Param: its type's lanes
+    CHECK(at(10).inputs == 4);   // Swizzle reads its source at native width...
+    CHECK(at(10).outputs == 1);  // ...and emits its mask's length
+    CHECK(at(11).inputs == 4);   // dynamic in from a resolved dynamic source
+    CHECK(at(2).inputs == 0);    // no dynamic pins at all
+    CHECK(at(2).outputs == 0);
+
+    // ForPin: fixed pins keep their declared width; dynamic pins take the resolution.
+    CHECK(at(4).ForPin(0, true) == 4);
+    CHECK(at(10).ForPin(0, false) == 1);
+    CHECK(at(11).ForPin(1, false) == 1);
+    CHECK(at(7).ForPin(0, true) == 0);
+
+    // Codegen agrees with the resolution it reads.
+    const GraphCodegenResult r = GenerateGraphSnippet(g);
+    REQUIRE(r.Ok());
+    CHECK(r.snippet.find("float4 _n4 = ") != std::string::npos);
+}
+
+TEST_CASE("ResolveGraphNodeWidths: a cycle and a dangling link resolve nothing through them", "[material][graph]")
+{
+    MaterialGraph g;
+    g.nodes.push_back(Node(1, GraphNodeType::Add));
+    g.nodes.push_back(Node(2, GraphNodeType::Add));
+    g.nodes.push_back(Node(3, GraphNodeType::ConstFloat2));
+    g.links = { Link(1, 0, 2, 0), Link(2, 0, 1, 0),   // 1 <-> 2
+                Link(3, 0, 2, 1),                     // 2.b <- float2
+                Link(99, 0, 1, 1) };                  // a missing source
+    const auto widths = ResolveGraphNodeWidths(g);
+    REQUIRE(widths.size() == 3);
+    CHECK(widths.at(2).inputs == 2);   // the float2 still pins node 2
+    CHECK(widths.at(1).inputs >= 0);   // terminates; the cycle is codegen's error to report
 }

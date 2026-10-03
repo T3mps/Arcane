@@ -8,6 +8,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <span>
@@ -17,11 +18,34 @@
 
 namespace Arcane::Editor
 {
-    // True when `d` passes BOTH the severity floor and the (case-insensitive)
-    // search text. Empty search matches everything. Free function so the panel
-    // and the store share one definition of "matches".
-    [[nodiscard]] bool MatchesDiagnosticFilter(const Arcane::Diagnostic& d,
-                                               Arcane::DiagSeverity minSeverity,
+    // Independent severity toggles (node-page phase s8.2): the floor model made
+    // Warnings a no-op while Info was on and Errors impossible to hide.
+    enum class SeverityMask : std::uint8_t { None = 0, Error = 1, Warning = 2, Info = 4, All = 7 };
+    [[nodiscard]] constexpr SeverityMask operator|(SeverityMask a, SeverityMask b) noexcept
+    {
+        return static_cast<SeverityMask>(static_cast<std::uint8_t>(a) | static_cast<std::uint8_t>(b));
+    }
+    [[nodiscard]] constexpr SeverityMask MaskOf(Arcane::DiagSeverity s) noexcept
+    {
+        switch (s)
+        {
+            case Arcane::DiagSeverity::Error:   return SeverityMask::Error;
+            case Arcane::DiagSeverity::Warning: return SeverityMask::Warning;
+            case Arcane::DiagSeverity::Info:    return SeverityMask::Info;
+        }
+        return SeverityMask::None;
+    }
+    [[nodiscard]] constexpr SeverityMask MaskFrom(bool error, bool warning, bool info) noexcept
+    {
+        return (error ? SeverityMask::Error : SeverityMask::None) | (warning ? SeverityMask::Warning : SeverityMask::None)
+             | (info ? SeverityMask::Info : SeverityMask::None);
+    }
+
+    // True when `d`'s severity is in `mask` AND the (case-insensitive) search
+    // text occurs in its message, code or detail. Empty search matches
+    // everything. Free function so the panel, the store and the Console share
+    // one definition of "matches".
+    [[nodiscard]] bool MatchesDiagnosticFilter(const Arcane::Diagnostic& d, SeverityMask mask,
                                                std::string_view search) noexcept;
 
     class DiagnosticStore
@@ -42,8 +66,7 @@ namespace Arcane::Editor
         // Flattened across keys, errors first, then warnings, then info. Stable
         // within a severity (key order, then publication order).
         [[nodiscard]] std::vector<Arcane::Diagnostic> Snapshot() const;
-        [[nodiscard]] std::vector<Arcane::Diagnostic> Filtered(Arcane::DiagSeverity minSeverity,
-                                                               std::string_view search) const;
+        [[nodiscard]] std::vector<Arcane::Diagnostic> Filtered(SeverityMask mask, std::string_view search) const;
 
         // Route Arcane::Diagnostics::Publish into THIS store. Uninstall is called
         // by the destructor too -- the sink slot outlives nothing, and a torn-down

@@ -92,6 +92,12 @@ namespace Arcane
         // content root -- such a file cannot resolve by GUID by design.
         std::optional<Guid> RegisterAsset(const std::filesystem::path& file);
 
+        // T5 s7.2: the editor deleted `id`'s file -- unmap it. False when unknown.
+        bool UnregisterAsset(const Guid& id);
+        // T5 s7.2: the editor moved `id` to `newFile` -- rebind under whichever root
+        // contains it (RegisterAsset's root list). OutsideContent when none does.
+        RebindResult RebindAsset(const Guid& id, const std::filesystem::path& newFile);
+
         // Point this project's bootScene at `id` (nil clears it), rewriting the
         // .arcproj in place. False on read/parse/write failure, leaving both the
         // file and the in-memory manifest untouched.
@@ -123,6 +129,12 @@ namespace Arcane
         // can reach this). std::optional<Project> in Runtime move-constructs, never
         // default-constructs, so a private default ctor is safe.
         Project() = default;
+
+        // The content root containing `file` (RegisterAsset's candidate list, in its
+        // order): the scheme, the dir as listed (the mount form), the canonical dir the
+        // relative match ran against, and the canonical file.
+        struct ContentRootMatch { std::string scheme; std::filesystem::path listedDir, rootDir, target; };
+        std::optional<ContentRootMatch> FindContentRoot(const std::filesystem::path& file) const;
 
         std::filesystem::path m_root;
         std::filesystem::path m_manifestFile;   // the .arcproj this project was opened from

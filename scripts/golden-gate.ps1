@@ -417,11 +417,12 @@ $script:ReportSchemaMin = 3
 # product and tier, so a red lane on a desk with an overlay is attributable
 # from the report alone; 11 since the inspector-ownership arc added the
 # editor's `inspector` {source, breadcrumb} block; 12 since the
-# inspector-filters arc added `inspector.instances` [{id, excluded, source}]
-# (VerifyReport::kSchemaVersion).
+# inspector-filters arc added `inspector.instances` [{id, excluded, source}];
+# 13 since the node page + editor upgrades phase added `documents` [{guid,
+# kind, name, compile, preview, image}] (VerifyReport::kSchemaVersion).
 # -SelfTest is what makes this a failure rather than a hope if the two halves
 # ever drift again.
-$script:ReportSchemaMax = 12
+$script:ReportSchemaMax = 13
 # Green SATISFIES the gate. Skipped is deliberately absent: it does not fail a
 # gate, but it must not count toward "at least one lane passed" either, or an
 # all-skipped run reports success having verified nothing.

@@ -391,6 +391,7 @@ namespace Arcane::Editor
                 case AssetActivityKind::CookRefused: return "cook refused";
                 case AssetActivityKind::Created:     return "created";
                 case AssetActivityKind::Deleted:     return "deleted";
+                case AssetActivityKind::Moved:       return "moved";
                 case AssetActivityKind::SourceChanged:
                 {
                     const AssetPanelEntry* e = model.Find(entry.guid);
@@ -647,9 +648,11 @@ namespace Arcane::Editor
 
         // ---- tiles row: four equal-width tiles carved out of the content
         // region (spec s9.2's "assets / cook refused / awaiting cook /
-        // unreferenced"). Only the refused tile is amber, and only its
+        // unreferenced"). Only the refused tile can be amber, and only its
         // ICON is -- StatTile's variant 1 keeps the number in text tokens
-        // (spec s11.2).
+        // (spec s11.2). Variant 1 is chosen through DigestRefusedStyle, so
+        // the icon is amber only while refused > 0 and Text-coloured at zero
+        // (node page phase s6.7).
         {
             const float tileW = std::max(kStatusTileMinWidth,
                 (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x * 3.0f) * 0.25f);
@@ -665,7 +668,8 @@ namespace Arcane::Editor
             };
             tile("##tileassets",  health.total,   "assets",        nullptr,                 0);
             ImGui::SameLine();
-            tile("##tilerefused", health.refused, "cook refused",  ICON_LC_TRIANGLE_ALERT,  1);
+            tile("##tilerefused", health.refused, "cook refused",  ICON_LC_TRIANGLE_ALERT,
+                 DigestRefusedStyle(health.refused).tileVariant);
             ImGui::SameLine();
             tile("##tilequeued",  health.queued,  "awaiting cook", ICON_LC_CLOCK,           0);
             ImGui::SameLine();

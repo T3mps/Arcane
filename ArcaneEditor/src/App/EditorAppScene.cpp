@@ -14,9 +14,9 @@
 #include "Project/ServerLaunch.hpp"   // DoLaunchServer's candidate list + argv
 
 #include <Arcane/Base/Log.hpp>
-#include <Arcane/Edit/EntityOps.hpp>   // AddPrimitiveEntity / WorldMatrix (ConsumeAddPrimitive, F4 plan 1 T11)
+#include <Arcane/Edit/EntityOps.hpp>   // AddPrimitiveEntity / WorldMatrix (ConsumeAddPrimitive, F4 plan 1 T11); LiveSceneRoot (DoSaveScene)
 #include <Arcane/Project/Project.hpp>
-#include <Arcane/Scene/SceneResources.hpp>   // Arcane::SceneRoot (DoSaveScene's empty-scene guard)
+#include <Arcane/Scene/SceneResources.hpp>   // Arcane::SceneRoot (EnsureScene; ConsumeAddPrimitive's spawn parent)
 #include <Arcane/Serialization/SceneAsset.hpp>   // .arcscene read/apply/save (New/Open/Save Scene)
 
 #include <Astra/Registry/Registry.hpp>
@@ -122,7 +122,7 @@ namespace Arcane::Editor
             dir.empty() ? nullptr : dir.c_str());
     }
 
-    void EditorApp::ClearSceneReferences()
+    void EditorApp::ClearSceneReferences(std::string reason)
     {
         // Every entity handle the editor is holding names an entity of the OUTGOING
         // scene, and none of them survive the registry swap that follows (Runtime::
@@ -159,12 +159,12 @@ namespace Arcane::Editor
         // the same keys name the same entities and pins/history survive it.
         m_inspectorHost.InvalidateSource(m_sceneSource);
         m_sceneSelectionEdge.lastEpoch = m_selection.Epoch();   // re-arm on the Clear() above: the first GESTURE in the new scene is the first event
-        if (m_undo) m_undo->Clear();
+        if (m_undo) m_undo->Clear(std::move(reason));
     }
 
     bool EditorApp::DoNewScene()
     {
-        ClearSceneReferences();
+        ClearSceneReferences("New scene");
         m_runtime->ResetRegistry();
         Arcane::Scene::CreateEmpty(m_runtime->Registry());
         m_scene.Reset(*m_undo);
@@ -192,7 +192,7 @@ namespace Arcane::Editor
             return false;
         }
 
-        ClearSceneReferences();
+        ClearSceneReferences("Opened scene " + file.stem().string());
         m_runtime->ResetRegistry();
         if (!Arcane::Scene::ApplySceneDocument(*doc, m_runtime->Registry()))
         {
@@ -251,11 +251,13 @@ namespace Arcane::Editor
         // that resource is absent (SceneSerializer.hpp), so without this guard a
         // rootless registry writes {version, entities: []} over the target file,
         // registers it, marks the session clean and logs success -- silent data
-        // loss dressed as a save. SceneAsset::CreateEmpty documents the same hazard
-        // for New Scene; the write path needs the same care.
-        if (!m_runtime->Registry().GetResource<Arcane::SceneRoot>())
+        // loss dressed as a save. A DEAD root is the same loss in a different
+        // shape: the resource survives a root delete, SaveJson seeds its walk
+        // with the dead handle and writes ONE EMPTY ENTITY. LiveSceneRoot is the
+        // one check for both (node page + editor upgrades s3.1).
+        if (!Arcane::Edit::LiveSceneRoot(m_runtime->Registry()))
         {
-            ARC_ERROR("Save Scene: refused -- the registry has no SceneRoot");
+            ARC_ERROR("Save Scene: refused -- the registry has no live scene root");
             m_modalErrors.Push("Scene Error", "There is no scene to save.\n"
                            "Create one with File -> New Scene, or open an existing scene.");
             return false;

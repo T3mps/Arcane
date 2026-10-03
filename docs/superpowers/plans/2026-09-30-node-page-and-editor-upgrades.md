@@ -4452,7 +4452,7 @@ Toolbar: in `EditorPanels.hpp:217-220` and `EditorPanels.cpp:645-648`, append th
 
 - [ ] **Step 4: Run the tests and confirm they pass.** Run `ArcaneTests.exe "[editor]"` and note the seed. Expected: PASS.
 
-- [ ] **Step 5: Desk check.** At 1920x1080, in the scratch `logo_showcase` material, start dragging a parameter slider and press F5 (Play) without releasing the mouse. After Stop, Edit > Undo shows the parameter step, and it undoes the drag in one press.
+- [ ] **Step 5: Desk check (deferred to the T1-GATE desk pass).** The editor has no F5 or keyboard Play, so the original "drag a slider and press F5" check cannot be reproduced. Instead, at 1920x1080 in the scratch `logo_showcase` material, ctrl+click a parameter field, type a new value without pressing Enter, then click toolbar Play. After Stop, Edit > Undo shows the parameter step, and one press undoes it. This checks the user-visible outcome only. The toolbar draws before documents (`EditorAppFrame.cpp:2280` vs `:2507`) and the Play button fires on release, so the gesture closes through `EndOnDeactivate` on the mouse-down frame. `FlushGestures` itself is therefore proven only by the headless `[undo]` case. It becomes desk-reachable once a Play hotkey exists (owed with the F5 arc or a future keybinding).
 
 - [ ] **Step 6: Commit.**
 
@@ -6103,7 +6103,7 @@ Rig:
 Verify each item:
 1. **Outliner data loss (s3.1).** Drag an entity onto the unparent strip, Save, close, reopen: the entity is still there under the scene root. A root-only selection shows Delete greyed, with the tooltip "The scene root can't be deleted" (and Cut/Duplicate/Copy/Drag likewise).
 2. **Ordered children (s3.4).** With no Outliner sort column active (`EntityList.cpp:66-69`, the default), under one parent with five children: Delete the middle one, and the other four keep their row order. Drag a middle child to another parent, and the remaining rows keep their order. Undo restores the original order.
-3. **Previews (s3.2).** Open `reference_cube.arcmesh`: its preview draws. Open the scratch `logo_showcase` and select a node: the material page preview draws (or shows its honest status, never a stuck spinner).
+3. **Previews (s3.2).** Open `reference_cube.arcmesh`: its preview draws; close it and reopen it from the Asset Browser: it previews again. Open the scratch `logo_showcase` BOTH at boot (`--open-asset ecf13066-28f5-492c-ae8d-8530b93bcce1`) AND interactively, and in each case select a node: the material page preview draws (or shows its honest status, never a stuck spinner), and the toolbar status reads `ok` (not `compiling...`) once the compile lands.
 4. **Undo (s3.3).** With the scene saved, make a material edit in the scratch `logo_showcase`. The OS title gains no trailing `*` (the scene-unsaved marker), and Save All writes the material but not the scene. Then Undo: still no `*`. (The Viewport-tab dirty dot is T4 s6.4 and does not exist yet.) Press Play: Edit > Undo/Redo are greyed, and Ctrl+Z inside an open document does nothing. Leave Play.
 
 A failure on any item is fixed forward inside T1 and the gate re-runs from Step 2.
@@ -18707,7 +18707,7 @@ git commit -m "feat(editor): the asset page fits the Assets-only Inspector at 10
 ### Task T3-C11: Re-bless the golden slots T3 forces, one slot at a time (s2.6, R1)
 
 **Files:**
-- Modify: `ReferenceProject/Verify/References/editor-material-page.png` and `ReferenceProject/Verify/References/editor-asset-page.png`, plus only those of `editor-ui.png`, `editor-ui-perspective.png` and `editor-input-doc.png` whose diff is attributable to T3. The fixture's asset counts were re-blessed in the fixture task, so what remains is the pinned header (5.7).
+- Modify: all five editor slots -- `ReferenceProject/Verify/References/editor-material-page.png`, `editor-asset-page.png`, `editor-ui.png`, `editor-ui-perspective.png` and `editor-input-doc.png`. The fixture's asset-count / Asset Browser row change (s5.1.10, owed by T3-A1: every editor slot shows the Asset Browser counts and the status-bar asset count) is blessed here, together with each slot's own T3 cause (5.3, 5.6, the 5.7 pinned header).
 
 **Interfaces:**
 - Consumes: every T3 commit before this one. This task changes no code.
@@ -18718,14 +18718,15 @@ git commit -m "feat(editor): the asset page fits the Assets-only Inspector at 10
 2. Delete `bin\Release-windows-x86_64-md\ArcaneEditor\imgui.ini` and `bin\Debug-windows-x86_64-md\ArcaneEditor\imgui.ini`.
 3. Run `powershell -File scripts\golden-gate.ps1 -Configuration Debug`. This leaves the single-slot `ReferenceProject\Binaries\` on Debug, which the Debug editor that blesses in Step 3 needs. Release is gated in Step 4.
 
-Expected: red `editor-material-page` (5.3) and `editor-asset-page` (5.6) lanes, plus possibly `editor-ui`, `editor-ui-perspective` and `editor-input-doc` (5.7). `runtime-scene` and `f3-cull-blend` should be green.
+Expected: all five editor slots red, dx12 and vulkan lanes: `editor-material-page` (s5.1.10 fixture counts + 5.3) and `editor-asset-page` (s5.1.10 fixture counts + 5.6), and `editor-ui` / `editor-ui-perspective` / `editor-input-doc` (the s5.1.10 fixture's Asset Browser count/row, plus the 5.7 header). `runtime-scene` and `f3-cull-blend` should be green.
 
 - [ ] **Step 2: Read every diff and attribute it**
 
-Open `bin\Debug-windows-x86_64-md\ArcaneEditor\ReferenceProject\Saved\Verify\<slot>-dx12-diff.png` for each red slot. Each slot's delta must be exactly one T3 cause:
-- `editor-material-page`: the Preview band with its one-line status, then Rendering and Parameters as rows;
-- `editor-asset-page`: the smaller thumb, the icon row, and the Derived and Import bands;
-- any other slot: only the scrollbar, now starting under the header (5.7).
+Open `bin\Debug-windows-x86_64-md\ArcaneEditor\ReferenceProject\Saved\Verify\<slot>-dx12-diff.png` for each red slot. Each slot's delta must be explained entirely by the T3 causes listed for it:
+- `editor-material-page`: s5.1.10 fixture counts (Asset Browser All/Material/materials-folder/status-bar counts); the toolbar's Surface label before the disabled surface combo (s5.3, T3-C5), the Preview band with its one-line status, then Rendering and Parameters as rows (s5.3); plus any T3-C3 toolbar status/toggle text change (s5.2) visible on this mesh material;
+- `editor-asset-page`: s5.1.10 fixture counts (Asset Browser All/Material/materials-folder/status-bar counts; the list shifted one row); the smaller thumb, the icon row, and the Derived and Import bands (s5.6);
+- `editor-ui` and `editor-ui-perspective`: the s5.1.10 fixture's Asset Browser count/row change (the new NodePageGraph entry) and the scrollbar now starting under the header (5.7);
+- `editor-input-doc`: s5.1.10 fixture counts (Asset Browser / status-bar counts) + the 5.7 scrollbar.
 
 Any other delta is a defect. Fix it forward before blessing.
 
@@ -18739,13 +18740,15 @@ Copy-Item .\ReferenceProject\Verify\References\editor-material-page.png D:\dev\s
 View the PNG, then:
 ```bash
 git add ReferenceProject/Verify/References/editor-material-page.png
-git commit -m "test(editor): re-bless editor-material-page for the PropertyGrid material page -- Preview band + one-line status, Rendering and Parameters rows (node page arc T3, s5.3)"
+git commit -m "test(editor): re-bless editor-material-page for the node-page fixture counts and the PropertyGrid material page -- Asset Browser counts, toolbar Surface label, Preview band + one-line status, Rendering and Parameters rows (node page arc T3, s5.1.10/s5.2/s5.3)"
 ```
-Repeat for each red slot, one commit each, naming its cause:
-- `editor-asset-page`: `--select-asset d7f389fd-f687-407d-b9d7-9753eb6b0258`, cause s5.6;
-- `editor-ui`: no extra args, cause s5.7;
-- `editor-ui-perspective`: `--view-mode perspective`, cause s5.7;
-- `editor-input-doc`: `--open-asset 97260310-8b35-4b29-b12f-1fd6f8e99071 --select-in-document Player/Jump`, cause s5.7.
+Repeat for each red slot, one commit each; every commit message names the s5.1.10 fixture-count cause alongside the slot's own cause:
+- `editor-asset-page`: `--select-asset d7f389fd-f687-407d-b9d7-9753eb6b0258`, cause s5.1.10 fixture counts (list shifted one row) + s5.6;
+- `editor-ui`: no extra args, cause s5.1.10 fixture counts + s5.7;
+- `editor-ui-perspective`: `--view-mode perspective`, cause s5.1.10 fixture counts + s5.7;
+- `editor-input-doc`: `--open-asset 97260310-8b35-4b29-b12f-1fd6f8e99071 --select-in-document Player/Jump`, cause s5.1.10 fixture counts + s5.7.
+
+This closes T3-A1's "owed: re-bless at T3 end (fixture counts)" ledger note (all five editor slots, dx12 and vulkan lanes).
 
 - [ ] **Step 4: Re-run the gate in both configs, ending on Debug**
 
@@ -18813,7 +18816,7 @@ Use a maximized window and a scratch `LOCALAPPDATA`. Vet graphs on a SCRATCH COP
   - **R5**: does clicking an inline widget (the Sine `x` drag) select the node? Record the answer; do not fix it.
 - **5.2:** the fixture's toolbar reads "ok" with an image; `reference_mesh` reads "not compiled here"; "Output preview" is greyed with its reason when there is no device.
 - **5.3:** an instance of a material with Color and Texture params shows labelled override cells, dimmed inherited rows and no "x"; a base shows the reset decoration; the preview is a square at 1080p; "Surface" labels the combo.
-- **5.4:** the pixel fields read as integers ("64", "0 0"); "Whole texture" ticks and unticks.
+- **5.4:** the pixel fields read as integers ("64", "0 0"); "Whole texture" ticks and unticks; hovering either Pivot value box shows the +Y-up tooltip (spec s5.4, :1515).
 - **5.5:** ReferenceCube shows its Source, topology and Info sections; one imported `.glb` with more than one slot shows one asset cell per slot.
 - **5.6:** the asset page fits the Assets-only Inspector with no scrollbar, with Derived and Import open.
 - **5.7:** scroll a long entity page and the asset page; the pin stays reachable.
@@ -18833,6 +18836,44 @@ git add docs/superpowers/plans/2026-09-30-node-page-and-editor-upgrades.md
 git commit -m "docs(editor): T3 gate green -- Debug+Release build, ~[gpu] + witnesses (seeds recorded), golden gate 14/14 ending on Debug, desk check at 1920x1080, ABI N restamped in Aphelyon; R5 finding recorded (node page arc T3)"
 ```
 Never push.
+
+#### T3 gate record (2026-10-01, T3-GATE; base 6365f361)
+
+- **Seeds.** `~[gpu]`: Release 3575318858, Debug 2190187028. `[witness]~[shell]`: Release 1082650076, Debug 3724494025.
+- **Counts.** `~[gpu]` 65508 assertions / 2436 cases (2440 incl. 4 SKIPs), 0 failed, in BOTH configs; booked over T2's 63795 / 2358 (+1713 / +78) in `38019ce4`. `[witness]~[shell]` 19 passed + 1 skipped (G1, desk-only) of 20 in both; E5, E8 and E9 green.
+- **Build + modules.** `Arcane.slnx` Release then Debug, 0 errors. Aphelyon and ReferenceProject arcbuilt Release then Debug, exit 0; ReferenceProject restaged beside the three hosts per config before each suite run.
+- **ABI.** N = 48 (`kGamePluginABIVersion`; `ReferenceProject.arcproj` and `Aphelyon.arcproj` both read 48). Aphelyon restamp = T3-A2's `0f393d4` (not stale; no new Aphelyon commit).
+- **Golden gate.** 14/14 Release, then 14/14 Debug (ended on Debug), exe-dir `imgui.ini` deleted first. Slots re-blessed in T3: `editor-material-page` `b087eebf`, `editor-asset-page` `3bf9af31`, `editor-ui` `844608e0`, `editor-ui-perspective` `4651b00f`, `editor-input-doc` `6365f361`.
+- **Desk (Step 5): PARTIAL, not green.** Run on a scratch Aphelyon copy, maximized 1920x1080 (client 1920x1027), fresh LOCALAPPDATA; stopped early because the user was using the desktop at the same time (SendInput races live input: an unexplained document close and entity selection appeared mid-run), and because the node-page click items are blocked on the pending fix/node-page-reselect cherry-pick (culled nodes' 0x0 pins swallow node clicks; a plain click on Add from an empty selection selected nothing). Seen: category colours read on the canvas (Math green, Input blue, Vector purple, Output red); the node page header, description, Inputs and Outputs render (Sine; Split through a marquee); logo_showcase's toolbar reads "ok"; the material page preview is a square and "Surface" labels the combo; the GlowTint VecRow clips its lane values at the 1080p Inspector width. **5.6 FAILS:** arcane_logo.png (one derived child) in Inspector 2 overflows by about 9 px with a scrollbar (Max Size cut), because the page child is about 288 px tall at 1080p while the s5.6 fit test draws in a 392x330 window. Owed after the reselect fix: the full s5.1.11 node-page list (click, marquee, Ctrl-click, LowDetail page edit, Esc mid-drag, Param rename with instances on disk, Edit HLSL with the HLSL view, canvas "Edit HLSL..." + one Ctrl+Z, pin + switch passes, A->B reselect), 5.2, 5.4, 5.5, 5.7, and the flush-band look (T3-C11 ruling).
+- **R5.** Not yet determined: node clicks select nothing until the reselect fix lands, so whether clicking the Sine `x` drag selects the node must be recorded at the post-fix desk.
+
+#### T3 gate record, amended (2026-10-01, T3-GATE fix round 1; base c7783af1)
+
+- **Status: NOT GREEN; T4 holds (s2.1).** 5.6 and the GlowTint clip are fixed forward. Step 5 stays PARTIAL and R5 stays undetermined: both need the fix/node-page-reselect cherry-pick on this branch AND an idle desk (or the user at it). The orchestrator's joint desk re-check after the cherry-pick (and T3-D1) closes this gate; append its record below this one.
+- **5.6 (FAILED, now fixed in code; the 1080p desk look is still owed).** The desk page child MEASURES 376x281, not the ruling's ~288: in desk-t3/02 the scrollbar track spans 281 px, and its 268 px grab is 277 x 281/290, i.e. content 290, ScrollMax 9. The new AssetInspectorSourceTest case draws DrawAssetPage in a `##page` child of that size, at the editor's 16 px font and theme metrics, with a texture, one derived child, and Derived + Import open. It REQUIREs width <= 376, height <= 288, zero WindowPadding and a 16 px font. RED before the fix: ScrollMax 9 / content 290, the desk's own numbers (4 at a 288 child). Fix 1 alone (the compact thumb capped at the measured `##previewMeta` height, floored at the cvar): content 282 in 281, still red. Fix 1 + fix 2 (asset-page-local: the header-to-action-row gap 4 -> 2 px, action-row FramePadding.y 3 -> 2): content 278, green. The 392x330 case is kept. AssetPageThumbSize, the 0.30 / 64 defaults and the T3-C9 tests are untouched, and Import stays open by default. Commit `d73b4e5f`.
+- **GlowTint clip (s5.3 port; also on the editor-material-page golden): fixed.** The row is a ColorRow (ColorEdit4's fixed "%0.3f"), not a VecRow. A row whose boxes cannot hold "0.000" now draws the same boxes (same ids, clamp, markers and drop target) at the decimals that fit, as display only. On the golden's 34 px boxes (the same width as the desk's GlowTint boxes in shot 05) baseColor now reads 0.20 0.70 0.65 1.00; the 1080p desk look itself is owed (below). Commit `113d6b09`.
+- **Re-blessed this round, one slot each, attributed:** `editor-asset-page` `665c8de5` (action row and bands up 4 px; the stacked form, so the thumb cap moves nothing there), `editor-material-page` `f23f458f` (the baseColor boxes only).
+- **Seeds and counts.** `~[gpu]`: Release 567756237, Debug 300018679: 65539 assertions / 2438 cases (2442 incl. 4 SKIPs), 0 failed, in both, booked +31 / +2 in `c0fb1c2e` (the fit case 13, the ColorRow case 18). `[witness]~[shell]`: Release 379174975, Debug 3808192452, 19 passed + 1 skipped (G1) of 20 in both.
+- **Build + golden gate.** `Arcane.slnx` Debug, Release, then Debug again, 0 errors. ReferenceProject arcbuilt and restaged per config before each suite run. Golden gate Release 14/14, then Debug 14/14 (ended on Debug). ABI unchanged at 48, so no module rebuild was needed for Aphelyon.
+- **Desk this round: no input was driven.** The user was active (last input 12 s earlier, Discord in the foreground). A no-input attempt (a windowed editor with `--select-asset`, resized with SWP_NOACTIVATE, maximized by a posted SC_MAXIMIZE, then PrintWindow) took the foreground for about 20 s and captured black (D3D12 flip model). It was not retried. Still owed, unchanged: the full s5.1.11 node-page list including the A->B reselect, R5, 5.2 `reference_mesh` "not compiled here" and the greyed Output preview, the 5.3 instance cells, dimmed inherited rows, no "x" and the base reset decoration, 5.4 (with the Pivot +Y-up tooltip), 5.5, the 5.6 look at 1080p, 5.7, the GlowTint look at 1080p, and the T3-C11 flush-band ruling.
+- **R5.** Not yet determined (same blocker as above).
+
+#### T3 gate record, fix round 2 (2026-10-01, T3-GATE fix round 2; base 4a7dca5d)
+
+- **Status: NOT GREEN; T4 holds (s2.1).** R5 is now recorded (below). The Step 5 windowed desk is still PARTIAL: fix/node-page-reselect (`f44ca11a`, `b93f5a1e`) is still not on this branch (`git branch --contains f44ca11a` = fix/node-page-reselect, feat/t3-d1-pin-legend only), and the desk was still in use (19:24 and 19:41: last input 6 s and 22 s earlier, Discord in the foreground), so no input was driven and no windowed editor was launched (round 1's no-input attempt stole the foreground). The orchestrator's joint desk re-check after the cherry-pick closes this gate; append its record below this one.
+- **R5 verdict: NO -- a click on a node's inline widget (the Sine `x` literal) does not select the node; the page stays on its previous key (the material, or the node selected before).** Mechanism: the press makes the DragFloat the active ImGui item, and imgui-node-editor's BuildControl returns an empty Control while any non-editor item is active (`ThirdParty/imgui-node-editor/imgui_node_editor.cpp:2576-2577`), so no node is clicked. Recorded, not fixed (s5.1.11). Evidence: the headless canvas case "Node page R5 record: ..." (`GraphCanvasHeadlessTest.cpp`, commit `90b874ff`) drives the real Draw(); a press-drag at the literal writes x 0.0 -> 0.3, proving the point is the widget, and the canvas and page selection stay put in all three sections. The harness has no culled node, so the verdict does not depend on the reselect fix. The 1080p desk should still eyeball it once, after the cherry-pick.
+- **Seeds and counts.** `~[gpu]`: Release 4169332750 (a same-seed rerun: the first run of that seed died mid-suite, exit -1, truncated JSON, no WER event; the rerun was clean), Debug 1425768452: 65558 assertions / 2439 cases (2443 incl. 4 SKIPs), 0 failed, in both, booked +19 / +1 in `e3ffa38a`. `[witness]~[shell]`: Release 1010068498, Debug 3173690104, 19 passed + 1 skipped (G1) of 20 in both.
+- **Build + golden gate.** This round changed one test file and the baselines only: ArcaneTests rebuilt in Debug and Release (0 errors); no host, module or golden input changed, so round 1's golden gate (14/14 Release, then 14/14 Debug) stands.
+- **Still owed at the desk (unchanged from round 1 minus R5):** the s5.1.11 list (click, marquee, Ctrl-click, LowDetail page edit, Esc mid-drag, Param rename with instances on disk, "Edit HLSL..." with the HLSL view, the canvas "Edit HLSL..." + ONE Ctrl+Z, pin + switch passes, the A->B reselect); 5.2 `reference_mesh` "not compiled here" and the greyed Output preview; the 5.3 instance cells, dimmed inherited rows, no "x" and the base reset decoration; 5.4; 5.5; the 5.6 look at 1080p; 5.7; the GlowTint look at 1080p; the T3-C11 flush-band ruling.
+
+#### T3 gate automated re-run after reselect + T3-D1 (orchestrator, 2026-10-01; base b5a3e431)
+
+- **Status: still NOT GREEN; T4 holds (s2.1).** This is the AUTOMATED half only (gate steps 2-4). The Step 5 windowed desk, which closes the gate, is still owed by the user. Now on this branch since fix round 2: the reselect test and the imgui-node-editor zero-size click fix (`c0d0d41b`, `e2342dfb`), T3-D1 (`3532ec18`, `15721a93`) and a test RAII fix (`b5a3e431`).
+- **Build.** `Arcane.slnx` Release x64, 0 errors (VS18 msbuild, `-m -nr:false`). Debug was already built at HEAD; a closing Debug msbuild was up to date, 0 errors. ReferenceProject was arcbuilt Release and restaged beside ArcaneEditor, ArcaneRuntime and ArcaneServer before the Release suite runs. The Debug golden gate rebuilt the Debug module; it was restaged beside all three Debug hosts (ArcaneServer by hand) before the Debug suite runs. The tree ends on Debug, with `ReferenceProject\Binaries` and all three staged copies byte-identical.
+- **Seeds and counts.** `~[gpu]~[shell]`: Release 338911260, Debug 1540767495 (the orchestrator's own Debug run, seed 1432326837, read the same): 65704 assertions / 2452 cases (2456 incl. 4 SKIPs), 0 failed, in both. Booked +146 / +13 over 65558 / 2439 in `3f7f96fa`; check-baselines read +0 after. By commit: `c0d0d41b` +15 / +1, `e2342dfb` +7 / +1, `3532ec18` +39 / +2, `15721a93` +85 / +9. `[witness]~[shell]`: Release 3072123514, Debug 1610921650 (orchestrator: 513606693), 19 passed + 1 skipped (G1) of 20 in both.
+- **Golden gate.** Exe-dir `imgui.ini` deleted first. Release 14/14, then Debug 14/14 (ended on Debug), every lane diffCount 0. The two dx12 runtime lanes pass on the shared reference ("PassedOnFallback"), as before. **No slot re-blessed:** no lane shows a shader-graph canvas (`editor-material-page` opens the mesh material `reference_mesh`, which has no graph), so T3-D1's ringed pins and legend reach no golden.
+- **Environment.** No flake. Other worktrees' hosts and ArcaneTests ran concurrently (Arcane-preview, Arcane-reselect, Arcane-t5, Arcane-t6b); none was touched.
+- **Still owed at the desk:** the fix-round-2 list unchanged (the s5.1.11 list including the A->B reselect, which is now on this branch; 5.2-5.7; the GlowTint look; the T3-C11 flush-band ruling). Add the T3-D1 look to it: ringed resolved pins, the pin tooltip, the node page's type dots and the bottom-left legend with its fold.
 
 ### Task T4-A1: Accent tokens, the tab overline, and `kToggleOn*` re-pointed (s6.1)
 

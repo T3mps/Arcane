@@ -9988,7 +9988,10 @@ static void ImGui::TabBarLayout(ImGuiTabBar* tab_bar)
         ImQsort(tab_bar->Tabs.Data, tab_bar->Tabs.Size, sizeof(ImGuiTabItem), TabItemComparerBySection);
 
     // Calculate spacing between sections
-    const float tab_spacing = g.Style.ItemInnerSpacing.x;
+    // ARCANE LOCAL FIX (2026-10-02, user desk -- Visual Studio tab language): tabs butt right up against each
+    // other -- no ItemInnerSpacing.x gap between neighbours (or sections). Upstream spaces them by
+    // ItemInnerSpacing.x; the same zero is used by the layout pass below and by TabBarProcessReorder.
+    const float tab_spacing = 0.0f;
     sections[0].Spacing = sections[0].TabCount > 0 && (sections[1].TabCount + sections[2].TabCount) > 0 ? tab_spacing : 0.0f;
     sections[1].Spacing = sections[1].TabCount > 0 && sections[2].TabCount > 0 ? tab_spacing : 0.0f;
 
@@ -10141,7 +10144,7 @@ static void ImGui::TabBarLayout(ImGuiTabBar* tab_bar)
             ImGuiTabItem* tab = &tab_bar->Tabs[section_tab_index + tab_n];
             tab->Offset = tab_offset;
             tab->NameOffset = -1;
-            tab_offset += tab->Width + (tab_n < section->TabCount - 1 ? g.Style.ItemInnerSpacing.x : 0.0f);
+            tab_offset += tab->Width + (tab_n < section->TabCount - 1 ? tab_spacing : 0.0f); // ARCANE LOCAL FIX: see tab_spacing
         }
         tab_bar->WidthAllTabs += ImMax(section->Width + section->Spacing, 0.0f);
         tab_offset += section->Spacing;
@@ -10403,7 +10406,8 @@ void ImGui::TabBarQueueReorderFromMousePos(ImGuiTabBar* tab_bar, ImGuiTabItem* s
     if ((tab_bar->Flags & ImGuiTabBarFlags_Reorderable) == 0)
         return;
 
-    const float tab_spacing = g.Style.ItemInnerSpacing.x;
+    const float tab_spacing = 0.0f; // ARCANE LOCAL FIX: tabs butt together (see TabBarLayout)
+    IM_UNUSED(g);
     const bool is_central_section = (src_tab->Flags & ImGuiTabItemFlags_SectionMask_) == 0;
     const float bar_offset = tab_bar->BarRect.Min.x - (is_central_section ? tab_bar->ScrollingTarget : 0);
 
@@ -10878,7 +10882,15 @@ bool    ImGui::TabItemEx(ImGuiTabBar* tab_bar, const char* label, bool* p_open, 
     if (is_visible)
     {
         ImDrawList* display_draw_list = window->DrawList;
-        const ImU32 tab_col = GetColorU32((held || hovered) ? ImGuiCol_TabHovered : tab_contents_visible ? (tab_bar_focused ? ImGuiCol_TabSelected : ImGuiCol_TabDimmedSelected) : (tab_bar_focused ? ImGuiCol_Tab : ImGuiCol_TabDimmed));
+        // ARCANE LOCAL FIX (2026-10-02, user desk -- Visual Studio tab language): hover lifts only an UNSELECTED
+        // tab; the selected tab keeps its fill under the mouse. Upstream paints TabHovered over any hovered tab.
+        // Hovering or holding the tab's own close button counts as hovering the tab (the whole tab stays lifted,
+        // the X adds its own highlight); upstream drops the tab's hover while the mouse is on the X.
+        const ImGuiID arcane_close_id = p_open ? GetIDWithSeed("#CLOSE", NULL, docked_window ? docked_window->ID : id) : 0;
+        // (The X is submitted AFTER this fill, so this frame's HoveredId cannot name it yet: read the previous
+        // frame's, as the label does via is_hovered.)
+        const bool arcane_close_hot = arcane_close_id != 0 && (g.HoveredId == arcane_close_id || g.HoveredIdPreviousFrame == arcane_close_id || g.ActiveId == arcane_close_id);
+        const ImU32 tab_col = GetColorU32(((held || hovered || arcane_close_hot) && !tab_contents_visible) ? ImGuiCol_TabHovered : tab_contents_visible ? (tab_bar_focused ? ImGuiCol_TabSelected : ImGuiCol_TabDimmedSelected) : (tab_bar_focused ? ImGuiCol_Tab : ImGuiCol_TabDimmed));
         TabItemBackground(display_draw_list, bb, flags, tab_col);
         if (tab_contents_visible && (tab_bar->Flags & ImGuiTabBarFlags_DrawSelectedOverline) && style.TabBarOverlineSize > 0.0f)
         {
@@ -11104,7 +11116,21 @@ void ImGui::TabItemLabelAndCloseButton(ImDrawList* draw_list, const ImRect& bb, 
         }
     }
     LogSetNextTextDecoration("/", "\\");
+    // ARCANE LOCAL FIX (2026-10-02, user desk -- Visual Studio tab language): an UNSELECTED tab's label draws in
+    // ImGuiCol_TextDisabled (the theme's dim text) and brightens to ImGuiCol_Text while hovered or held; the
+    // selected tab keeps ImGuiCol_Text. Upstream draws every label in ImGuiCol_Text (cf. the '#if 0' alpha idea below).
+    // (is_hovered above also matches close_button_id == 0 against an idle HoveredId/ActiveId of 0, so a tab
+    // without a close button would always read 'hovered'; test the tab's own interaction instead.)
+    const bool arcane_tab_hot = g.HoveredId == tab_id || g.ActiveId == tab_id ||
+        (close_button_id != 0 && (g.HoveredId == close_button_id || g.ActiveId == close_button_id));
+    // ARCANE LOCAL FIX (2026-10-03, node-page phase s8.2): ...except a label its window tinted on purpose
+    // (ImGuiTabItemFlags_ArcaneOwnLabelColor, set by DockNodeUpdateTabBar), which keeps its tint.
+    const bool arcane_dim_label = !is_contents_visible && !arcane_tab_hot && !(flags & ImGuiTabItemFlags_ArcaneOwnLabelColor);
+    if (arcane_dim_label)
+        PushStyleColor(ImGuiCol_Text, g.Style.Colors[ImGuiCol_TextDisabled]);
     RenderTextEllipsis(draw_list, text_ellipsis_clip_bb.Min, text_ellipsis_clip_bb.Max, ellipsis_max_x, label, label_end, &label_size);
+    if (arcane_dim_label)
+        PopStyleColor();
 
 #if 0
     if (!is_contents_visible)

@@ -89,33 +89,40 @@ TEST_CASE("Snapshot sorts errors before warnings before info", "[diagnostics]")
     CHECK(all[2].severity == Arcane::DiagSeverity::Info);
 }
 
-TEST_CASE("MatchesDiagnosticFilter gates on severity floor and case-insensitive text", "[diagnostics]")
+TEST_CASE("MatchesDiagnosticFilter gates on an independent severity mask and searches message, code and detail", "[diagnostics]")
 {
-    const Arcane::Diagnostic warn =
-        Diag(Arcane::DiagSeverity::Warning, Arcane::DiagScope::Assets, "assets.dup", "Duplicate id kept");
+    using Arcane::Editor::SeverityMask;
+    using Arcane::Editor::MaskFrom;
+    Arcane::Diagnostic warn = Diag(Arcane::DiagSeverity::Warning, Arcane::DiagScope::Assets, "assets.dup", "Duplicate id kept");
+    warn.detail = "The second file is ignored until renamed";
+    const Arcane::Diagnostic err = Diag(Arcane::DiagSeverity::Error, Arcane::DiagScope::Assets, "e", "broken");
 
-    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, Arcane::DiagSeverity::Info, ""));
-    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, Arcane::DiagSeverity::Warning, ""));
-    CHECK_FALSE(Arcane::Editor::MatchesDiagnosticFilter(warn, Arcane::DiagSeverity::Error, ""));
+    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, SeverityMask::All, ""));
+    CHECK_FALSE(Arcane::Editor::MatchesDiagnosticFilter(warn, MaskFrom(true, false, true), ""));   // Info on, Warnings off
+    CHECK_FALSE(Arcane::Editor::MatchesDiagnosticFilter(err, MaskFrom(false, true, true), ""));    // Errors hidden
+    CHECK(Arcane::Editor::MatchesDiagnosticFilter(err, MaskFrom(true, false, false), ""));
+    CHECK_FALSE(Arcane::Editor::MatchesDiagnosticFilter(err, SeverityMask::None, ""));
 
-    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, Arcane::DiagSeverity::Info, "duplicate"));
-    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, Arcane::DiagSeverity::Info, "DUPLICATE"));
-    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, Arcane::DiagSeverity::Info, "assets.dup"));
-    CHECK_FALSE(Arcane::Editor::MatchesDiagnosticFilter(warn, Arcane::DiagSeverity::Info, "nonsense"));
+    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, SeverityMask::All, "DUPLICATE"));
+    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, SeverityMask::All, "assets.dup"));
+    CHECK(Arcane::Editor::MatchesDiagnosticFilter(warn, SeverityMask::All, "until renamed"));     // detail is searched
+    CHECK_FALSE(Arcane::Editor::MatchesDiagnosticFilter(warn, SeverityMask::All, "nonsense"));
 }
 
-TEST_CASE("Filtered applies both the severity floor and the search text", "[diagnostics]")
+TEST_CASE("Filtered applies both the severity mask and the search text", "[diagnostics]")
 {
+    using Arcane::Editor::SeverityMask;
     Arcane::Editor::DiagnosticStore store;
     const Arcane::Diagnostic set[] = {
         Diag(Arcane::DiagSeverity::Error,   Arcane::DiagScope::Material, "m.err",  "broken shader"),
         Diag(Arcane::DiagSeverity::Warning, Arcane::DiagScope::Material, "m.warn", "unused param"),
+        Diag(Arcane::DiagSeverity::Info,    Arcane::DiagScope::Material, "m.info", "compiled"),
     };
     store.Publish("material:x", set);
-
-    CHECK(store.Filtered(Arcane::DiagSeverity::Error, "").size() == 1);
-    CHECK(store.Filtered(Arcane::DiagSeverity::Info, "param").size() == 1);
-    CHECK(store.Filtered(Arcane::DiagSeverity::Info, "").size() == 2);
+    CHECK(store.Filtered(SeverityMask::Error, "").size() == 1);
+    CHECK(store.Filtered(SeverityMask::Warning | SeverityMask::Info, "").size() == 2);
+    CHECK(store.Filtered(SeverityMask::All, "param").size() == 1);
+    CHECK(store.Filtered(SeverityMask::All, "").size() == 3);
 }
 
 TEST_CASE("The store receives diagnostics published through the engine seam", "[diagnostics]")

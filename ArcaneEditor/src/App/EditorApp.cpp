@@ -22,6 +22,7 @@
 //   EditorAppProject.cpp  Open Project, material/instance creation, the watcher.
 
 #include "App/EditorApp.hpp"
+#include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorTheme.hpp"
 #include "Panels/AssetGraphPanel.hpp"   // DestroyAssetGraphPanelCanvas (Task 5, panel-split)
@@ -46,6 +47,8 @@
 #include <Arcane/Material/MaterialAsset.hpp>   // Save/LoadMaterialAsset (New/Open Material flows)
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
+#include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
+#include "App/PluginLoadFailure.hpp"   // DescribePluginLoadFailure (StagePluginLoad's failure banner)
 #include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
@@ -79,6 +82,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -87,59 +91,10 @@ namespace Arcane::Editor
 {
     namespace
     {
-        // Window title: the project name when a project is open, else the bare
-        // editor name. Since the no-project gate landed (main.cpp), a
-        // project-less session is reachable ONLY via an explicit --plugin (the
-        // engine-dev path) or a --project that failed to open -- never from a
-        // bare launch. `scene` is SceneSession::DisplayName ("Untitled" until the
-        // scene has been saved somewhere); the trailing * is the unsaved marker,
-        // matching the one on File -> Save Scene.
-        std::string EditorTitle(const Arcane::Project* project, const std::string& scene, bool sceneDirty, const char* backend)
-        {
-            std::string title;
-            if (project)
-            {
-                title += project->Manifest().name;
-            }
-
-            if (!scene.empty())
-            {
-                if (!title.empty())
-                {
-                    title += " - ";
-                }
-                title += scene;
-
-                if (sceneDirty)
-                {
-                    title += "*";
-                }
-            }
-
-            if (!title.empty())
-            {
-                title += " - ";
-            }
-
-            // BuildInfo is the DLL's own "<version> [Debug|Release|Dist]" --
-            // compiled into Arcane.dll (Engine.cpp), so the title reports the
-            // engine actually loaded, never this exe's header copy.
-            title += Arcane::BuildInfo();
-            if (backend && *backend)
-            {
-                title += " <";
-                title += backend;
-                title += ">";
-            }
-            return title;
-        }
-
         // Persistence for EditorApp::m_playMode: an ImGuiSettingsHandler section
-        // "[EditorPlayMode][State]", one "Mode=%d" line -- same shape as
-        // ShaderEditorDocument's "[ArcaneEditorLayout][MaterialPanel]" handler
-        // (ShaderEditorDocument.cpp:757-815), registered at the same site
-        // (Init, right after ImGui's context exists and before the first
-        // NewFrame reads the ini).
+        // "[EditorPlayMode][State]", one "Mode=%d" line, registered in Init,
+        // right after ImGui's context exists and before the first NewFrame
+        // reads the ini.
         constexpr const char* kPlayModeIniType = "EditorPlayMode";
         constexpr const char* kPlayModeIniName = "State";
     }
@@ -151,10 +106,8 @@ namespace Arcane::Editor
     void* EditorApp::PlayModeSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler,
                                               const char* name)
     {
-        // handler->UserData is `this` (set in RegisterPlayModeSettings) -- there
-        // is exactly one EditorApp per process, so this doubles as the "entry"
-        // ReadLine receives, same as LayoutSettingsReadOpen returning
-        // &ShaderEditorDocument::Layout().
+        // handler->UserData is `this` (set in RegisterPlayModeSettings) -- exactly
+        // one EditorApp per process, so it doubles as the "entry" ReadLine receives.
         return std::strcmp(name, kPlayModeIniName) == 0 ? handler->UserData : nullptr;
     }
 
@@ -196,8 +149,7 @@ namespace Arcane::Editor
 
     void EditorApp::RegisterPlayModeSettings()
     {
-        // No context (headless) or already registered: nothing to do -- same
-        // idempotency guard as ShaderEditorDocument::RegisterLayoutSettings.
+        // No context (headless) or already registered: nothing to do.
         if (ImGui::GetCurrentContext() == nullptr ||
             ImGui::FindSettingsHandler(kPlayModeIniType) != nullptr)
             return;
@@ -408,6 +360,12 @@ namespace Arcane::Editor
         // until quit). The scripted "ArcaneEditor --frames N" GPU-verify is not interactive
         // -> false -> miniaudio's device-less null backend (no real device grabbed on a CI box).
         m_runtime.emplace(*m_process, m_config.maxFrames == 0);
+        // The user cvar archive (T3-D2, Runtime.hpp): an INTERACTIVE windowed
+        // session writes the open project's User-rung Archive cvars (the pin
+        // legend's fold, the undo budgets, ...) back to its Saved/Config/ on a
+        // project switch and at exit. A scripted --frames or --headless run
+        // reads them but never writes: a verify run must not rewrite them.
+        m_runtime->Core().SetUserCVarArchiving(m_config.maxFrames == 0 && !m_config.headless);
         // THIS EXE asks about ITS OWN caches (2026-09-16). VerifySharedTypeContext
         // is inline, so it only ever answers for the module holding the call --
         // ProjectBoot.cpp's type_context_install stage compiles into
@@ -557,13 +515,10 @@ namespace Arcane::Editor
         // interactive family is bright blue. It must run before the first frame --
         // ImGuiStyle is read live during widget submission, not latched.
         Arcane::Editor::ApplyEditorTheme(ImGui::GetStyle());
-        // The shader editor's pane splits are a persisted editor preference, and
-        // they ride the editor's imgui.ini through an ImGuiSettingsHandler. It
-        // has to be registered HERE -- after the context exists (GpuContext::
+        // The ini handlers register HERE -- after the context exists (GpuContext::
         // Create's ImGuiLayer::Create in StageGpuCore) and before the first
         // NewFrame, which is where ImGui reads the ini; a handler added later
         // would never see the saved entry.
-        ShaderEditorDocument::RegisterLayoutSettings();
         RegisterPlayModeSettings();
         RegisterPanelVisibilitySettings();
         Arcane::Editor::RegisterInspectorInstancesSettings(m_inspectorHost);
@@ -700,6 +655,8 @@ namespace Arcane::Editor
         // (stable across that swap -- only the registry INSIDE it is replaced),
         // safe because m_undo destructs before m_runtime (declaration order).
         m_undo.emplace([rt = &*m_runtime]() -> Astra::Registry& { return rt->Registry(); });
+        m_undoLimitsApplied = Arcane::Editor::ReadUndoLimits();
+        m_undo->SetLimits(m_undoLimitsApplied);
 
         // Structural-edit binding: whole-registry snapshot/restore through the
         // SAME Runtime the resolver reads, so the memento survives registry swaps.
@@ -759,17 +716,18 @@ namespace Arcane::Editor
         // factory+peek shape -- Diag::ReadFile stands in for LoadMaterialAsset,
         // both independently re-read the file, same as materialFactory/
         // materialPeek do today). CrashReportDocument is read-only (never
-        // dirty), so unlike the sprite/material routes it needs no
-        // DocServices/Services borrow from the app at all.
+        // dirty); unlike the sprite/material routes it borrows one service,
+        // OpenSourceAtLine (node-page phase s8.1).
         const auto crashReportFactory =
-            [](const std::filesystem::path& p)
+            [this](const std::filesystem::path& p)
                 -> std::unique_ptr<Arcane::Editor::EditorDocument>
             {
                 auto envelope = Arcane::Diag::ReadFile(p);
                 if (!envelope)
                     return nullptr;
-                return std::make_unique<Arcane::Editor::CrashReportDocument>(
-                    p, std::move(*envelope));
+                Arcane::Editor::CrashReportDocument::Services services;
+                services.openSourceAtLine = [this](const std::filesystem::path& f, int line) { OpenSourceAtLine(f, line); };
+                return std::make_unique<Arcane::Editor::CrashReportDocument>(p, std::move(*envelope), std::move(services));
             };
         const auto crashReportPeek =
             [](const std::filesystem::path& p) -> Arcane::Guid
@@ -799,11 +757,12 @@ namespace Arcane::Editor
                 Arcane::Editor::SpriteDocument::Services spriteDocServices;
                 spriteDocServices.assets = &m_runtime->AssetsFacade();
                 // The SAME shared stack MakeDocServices hands the material
-                // documents (EditorAppProject.cpp:39) and the Inspector/gizmo
-                // push to -- one editor-wide history, so Ctrl+Z walks back
-                // through sprite field edits in the order they happened
-                // alongside everything else.
-                spriteDocServices.undo = m_undo ? &*m_undo : nullptr;
+                // documents (through the same DocumentUndo resolver) and the
+                // Inspector/gizmo push to -- one editor-wide history, so Ctrl+Z
+                // walks back through sprite field edits in the order they
+                // happened alongside everything else. Null in Play (s3.3b).
+                spriteDocServices.undo = [this]() { return DocumentUndo(); };
+                spriteDocServices.assetRefs = &m_assetRefServices;
                 // Evict-then-re-resolve on a sprite re-save. The no-gap
                 // requirement (a frame must never render the 1x1 placeholder in
                 // between) is the resolver's contract now, so this is one call:
@@ -838,8 +797,8 @@ namespace Arcane::Editor
 
         // F2a, Task 9: .arcmesh -> MeshDocument routing, registered right
         // beside the .arcsprite route above (same factory+peek shape). The
-        // preview-seam wiring (nriDevice/hostConfig/chromeHud/
-        // retireGraphPreview) is the same four fields MakeDocServices sets
+        // preview-seam wiring (chromeGraph/hostConfig/retireGraphPreview)
+        // is the same three fields MakeDocServices sets
         // for the shader documents (EditorAppProject.cpp:57-94, read there
         // for the full ordering argument) -- inlined here rather than shared,
         // because MeshDocument::Services is deliberately its own small
@@ -853,8 +812,8 @@ namespace Arcane::Editor
                 if (!data)
                     return nullptr;
                 Arcane::Editor::MeshDocument::Services meshDocServices;
-                meshDocServices.runtime = &m_runtime->Core();
-                meshDocServices.undo = m_undo ? &*m_undo : nullptr;
+                meshDocServices.undo = [this]() { return DocumentUndo(); };   // null in Play (s3.3b)
+                meshDocServices.assetRefs = &m_assetRefServices;
                 // Evict-then-re-resolve on a mesh re-save OR an undo/redo,
                 // the same one-call route the .arcsprite factory above takes
                 // for its own asset: the no-gap requirement (no frame may
@@ -867,17 +826,18 @@ namespace Arcane::Editor
                     if (m_resolver)
                         m_resolver->InvalidateMesh(g);
                 };
-                if (ChromeGraph())
+                // The late-bound preview seam (s3.2), set UNCONDITIONALLY: a
+                // mesh opened by --open-asset is built inside StageFinalize,
+                // before CreateGraphVehicles makes the chrome context, so the
+                // document resolves ChromeGraph() at each use and retries its
+                // vehicle from Tick (the harvester's hs.chromeGraph precedent).
+                meshDocServices.chromeGraph = [this] { return ChromeGraph(); };
+                meshDocServices.hostConfig  = &m_config;
+                meshDocServices.retireGraphPreview =
+                    [this](std::unique_ptr<Arcane::NriGraphContext> v)
                 {
-                    meshDocServices.nriDevice  = &ChromeGraph()->Device();
-                    meshDocServices.hostConfig = &m_config;
-                    meshDocServices.chromeHud  = ChromeGraph()->ImGuiHud();
-                    meshDocServices.retireGraphPreview =
-                        [this](std::unique_ptr<Arcane::NriGraphContext> v)
-                    {
-                        RetireDocPreview(std::move(v));
-                    };
-                }
+                    RetireDocPreview(std::move(v));
+                };
                 return std::make_unique<Arcane::Editor::MeshDocument>(
                     std::move(meshDocServices), p, std::move(*data));
             };
@@ -891,7 +851,7 @@ namespace Arcane::Editor
         m_documents.RegisterFactory(".arcinput",
             [this](const std::filesystem::path& path) -> std::unique_ptr<Arcane::Editor::EditorDocument>
             {
-                auto doc = Arcane::Editor::InputActionsDocument::Open(path, m_undo ? &*m_undo : nullptr);
+                auto doc = Arcane::Editor::InputActionsDocument::Open(path, [this]() { return DocumentUndo(); });   // null in Play (s3.3b)
                 if (doc)
                     doc->SetOnSaved([this](const Arcane::Guid& g, const Arcane::InputActionAsset& a)
                     { if (IsDesignatedInputAsset(g)) m_pendingInputRepublish.emplace(g, a); });   // a non-designated save never displaces the designated one (Save All)
@@ -985,20 +945,26 @@ namespace Arcane::Editor
                 std::make_unique<Arcane::SceneRenderResolver>(std::move(rs));
         }
 
-        // Sprite-asset arc, Task 4: built once here rather than per-frame in
-        // DrawSelectionPanels -- the callback itself is stable (always routes
-        // through MintOrReuseSpriteForTexture), only the argument changes.
-        m_inspectorServices.mintSpriteForTexture =
+        // Spec 2026-09-30 s4.2: the asset-reference cell's services, built
+        // ONCE. Every callable reads app state at CALL time (a project switch,
+        // a document opened during a boot stage). reveal/open only QUEUE into
+        // m_assetPageActions: ConsumeAssetPanelActions performs them next
+        // frame, because opening mid-draw would mutate DocumentHost's list
+        // while a page from that list is being drawn. tombstoneName (T5
+        // s7.12): a deleted asset's last name, from the session activity log.
+        m_assetRefServices.model = &m_assetModel;
+        m_assetRefServices.project = [this]() -> const Arcane::Project*
+        { return m_runtime ? m_runtime->CurrentProject() : nullptr; };
+        m_assetRefServices.resolveThumb = [this](const Arcane::Guid& g) -> std::uint64_t
+        { return m_assetServices.resolveAssetThumb ? m_assetServices.resolveAssetThumb(g) : 0; };
+        m_assetRefServices.canReveal = [this]
+        { return m_panelVis.IsVisible(Arcane::Editor::PanelId::AssetBrowser); };
+        m_assetRefServices.reveal = [this](const Arcane::Guid& g) { m_assetPageActions.revealInBrowse = g; };
+        m_assetRefServices.open = [this](const Arcane::Guid& g) { m_assetPageActions.openAsset = g; };
+        m_assetRefServices.mintSpriteForTexture =
             [this](const Arcane::Guid& textureGuid) { return MintOrReuseSpriteForTexture(textureGuid); };
-
-        // Asset-manager arc, Task 14: the subkind-filtered material picker's
-        // surface lookup. Just a pointer, not a lambda -- m_assetModel is a
-        // stable member for the app's whole lifetime (it survives project
-        // switches via ResetForProjectSwitch, it is never re-seated), so
-        // there is nothing to look up live the way the ChromeGraph() lambdas
-        // below need to be. Wired here, alongside mintSpriteForTexture, for the same
-        // "built once at boot" reason.
-        m_inspectorServices.assetModel = &m_assetModel;
+        m_assetRefServices.tombstoneName = [this](const Arcane::Guid& g) { return Arcane::Editor::TombstoneName(m_assetActivity, g); };
+        m_inspectorServices.assetRefs = &m_assetRefServices;
 
         // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail
         // resolver, built here because ChromeGraph() doesn't exist yet at
@@ -1197,19 +1163,21 @@ namespace Arcane::Editor
                 // the "no game module" branch below produces on purpose (every
                 // m_plugin-> use in MainLoop is optional-guarded, per this
                 // function's opening comment), and a detailed banner -- naming
-                // the required ABI -- surfaces through m_modalErrors as the
-                // "Open Project Failed" modal (EditorAppFrame.cpp) once MainLoop
+                // the required ABI -- surfaces through m_modalErrors as a modal
+                // (EditorAppFrame.cpp; "Open Project Failed" with a project open,
+                // "Game Module Failed to Load" without one) once MainLoop
                 // starts, rather than only a Console line. Since Task 12
                 // (EditorAppProject.cpp) SwitchProject no longer has its own
                 // switch_plugin_load stage -- it MOVES this exact StagePluginLoad
                 // body (this whole function) and runs it verbatim, so a switch
                 // failure hits this SAME branch rather than a mirrored copy.
                 ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
-                m_modalErrors.Push("Open Project Failed",
-                                     "The project opened, but its game module / plugins "
-                                     "failed to load (see Console).\nCheck the DLL paths in "
-                                     "the manifest and that they are built against ABI " +
-                                     std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".");
+                // The banner follows what was attempted: a bare --plugin launch
+                // has no project, so it must not claim one opened.
+                auto failure = Arcane::Editor::DescribePluginLoadFailure(
+                    m_runtime->CurrentProject() != nullptr, gameModule,
+                    static_cast<int>(Arcane::kGamePluginABIVersion));
+                m_modalErrors.Push(std::move(failure.title), std::move(failure.body));
                 m_plugin.reset();
             }
         }
@@ -1365,6 +1333,7 @@ namespace Arcane::Editor
                                                                     : Topo::Standalone;
             // HostConfig::Parse already refused every other spelling, so the
             // fall-through above is "standalone" and nothing else.
+            m_documents.FlushGestures();
             if (!m_play.Play(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr, topo))
                 ARC_ERROR("--play-as {}: Play refused", m_config.playAs);
         }
@@ -1383,6 +1352,8 @@ namespace Arcane::Editor
     // never reorder the recents lists.
     void EditorApp::OnProjectOpened(bool recordRecents)
     {
+        RetargetUndoCache(m_runtime->CurrentProject());
+
         // Build -> Open Visual Studio needs to know whether devenv exists
         // BEFORE its first draw (it greys with a tooltip otherwise); resolve
         // once per process, here, rather than spawning vswhere from the menu
@@ -1789,18 +1760,27 @@ namespace Arcane::Editor
         return true;
     }
 
+    Arcane::Editor::TitleParts EditorApp::CurrentTitleParts() const
+    {
+        Arcane::Editor::TitleParts parts;
+        if (const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr)
+            parts.project = project->Manifest().name;
+        parts.scene = m_scene.DisplayName();
+        // m_undo is built later in Init than the first title push; a session with
+        // no command stack yet has nothing authored, so it reads as clean.
+        parts.sceneDirty = m_undo && m_scene.IsDirty(*m_undo);
+        return parts;
+    }
+
     void EditorApp::UpdateWindowTitle()
     {
-        // m_undo is built later in Init than the first title push; a session with no
-        // command stack yet has nothing authored, so it reads as clean.
-        const bool dirty = m_undo && m_scene.IsDirty(*m_undo);
         // THE BACKEND NAME: there is no RenderDevice to ask -- GpuContext
         // builds none -- so this reads the config, the same substitution
         // RuntimeApp::StageSpriteTables makes for the resolver's shader
         // flavor.
-        std::string title = EditorTitle(m_runtime ? m_runtime->CurrentProject() : nullptr,
-                                        m_scene.DisplayName(), dirty,
-                                        !m_gpu ? "" : Arcane::ToString(m_config.backend));
+        std::string title = Arcane::Editor::FormatOsTitle(
+            CurrentTitleParts(), Arcane::BuildInfo(),
+            !m_gpu ? "" : Arcane::ToString(m_config.backend));
         if (title == m_windowTitle)
             return;
         m_windowTitle = std::move(title);
@@ -2201,8 +2181,12 @@ namespace Arcane::Editor
         // backend-specific corner a desk-only machine cannot pre-clear. The
         // offscreen vehicle below builds no surface at all, which sidesteps
         // the corner instead of walking into it.
-        if (!m_config.headless)
-            m_gpu->Win().Show();
+        //
+        // An AUTOMATION run (--frames N, or the windowed self-capture cvar)
+        // maps the window without activating or raising it (T3-D6 fix round
+        // 1, HostPresentation.hpp): a person may be at the desk.
+        if (const HostPresentation pres = HostPresentationFor(m_config); pres.showWindow)
+            m_gpu->Win().Show(pres.activateOnShow);
 
         // THE LATCH BASELINE, taken HERE rather than at
         // process start for the reason RuntimeApp::MainLoop states for its own:
@@ -2893,6 +2877,24 @@ namespace Arcane::Editor
             inspectorInstances.push_back({ i.id, i.filter.excluded, s ? s->SourceName() : std::string{},
                                            s ? Arcane::Editor::InspectorCrumbText(*s, page) : std::string{} });
         }
+        // The open preview documents (schemaVersion 13, s3.2) -- snapshotted
+        // here for the inspector's reason: CloseAll destroys them, and the
+        // chrome context their status reads is still alive at this point.
+        std::vector<Arcane::VerifyReport::DocumentPreview> documentPreviews;
+        m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+        {
+            std::optional<Arcane::Editor::PreviewStatus> st;
+            if (auto* shader = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d))
+                st = shader->ComputeStatus();
+            else if (auto* mesh = dynamic_cast<Arcane::Editor::MeshDocument*>(&d))
+                st = mesh->ComputeStatus();
+            if (!st)
+                return;   // only shader and mesh documents preview
+            documentPreviews.push_back({ d.AssetGuid().ToString(), std::string(d.Kind()), d.Title(),
+                                         Arcane::Editor::CompileStatusId(st->compile),
+                                         Arcane::Editor::PreviewAvailabilityId(st->preview),
+                                         st->image });
+        });
         m_documents.CloseAll();
         // ...which hands their preview vehicles to the retire list rather than
         // destroying them inline, so the list has to be drained HERE, while
@@ -3290,6 +3292,10 @@ namespace Arcane::Editor
             // source it routed to, snapshotted beside the two above.
             report.SetInspector(inspectorSource, inspectorBreadcrumb, std::move(inspectorInstances));
 
+            // documents[] (schemaVersion 13, s3.2): every open shader/mesh
+            // document's PreviewStatus, snapshotted above before CloseAll.
+            report.SetDocumentPreviews(std::move(documentPreviews));
+
             // The --compare verdict (Task 9), ported from RuntimeApp::
             // ShutdownGraphPath verbatim (structure and field meanings
             // unchanged -- see that function's own comments for the full
@@ -3436,6 +3442,7 @@ namespace Arcane::Editor
         // Same reasoning, the per-refusal observer (F2b Task 12):
         // OnArtifactRefused's `user` is also `this`.
         Arcane::SetArtifactRefusalObserver(nullptr, nullptr);
+        RetargetUndoCache(nullptr);   // project close: wipe Saved/UndoCache
 
         // Reclaim the module-rebuild worker before member teardown: it only
         // touches its own mutex-guarded queue, but a thread outliving the
@@ -3480,6 +3487,12 @@ namespace Arcane::Editor
             ImGui::SaveIniSettingsToDisk(m_config.dumpLayoutPath.c_str());
             ARC_INFO("--dump-layout: wrote the live ImGui layout to {}", m_config.dumpLayoutPath);
         }
+
+        // The user cvar archive (T3-D2): written while the game module -- and
+        // every Archive cvar it declared -- is still loaded. A no-op unless
+        // this session archives (StageRuntimeCreate sets SetUserCVarArchiving).
+        if (m_bootCompleted && m_runtime)
+            (void)m_runtime->Core().SaveUserCVars();
 
         // Release the editor lock: this project is no longer open anywhere.
         if (m_bootCompleted && m_runtime)

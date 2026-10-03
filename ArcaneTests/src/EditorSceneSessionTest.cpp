@@ -5,14 +5,18 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Scene/SceneSession.hpp"
+#include "Helpers/AssetFileOpsFakes.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
 
 #include <Astra/Registry/Registry.hpp>
+
+#include <memory>
 
 using namespace Arcane::Editor;
 
@@ -34,7 +38,7 @@ namespace
         return nullptr;
     }
 
-    // A real CommandStack over a real Runtime -- StateId is what dirty rides on,
+    // A real CommandStack over a real Runtime -- SceneStateId is what dirty rides on,
     // and a fake would not exercise the undo/redo id restoration that matters.
     struct Harness
     {
@@ -59,6 +63,14 @@ namespace
             runtime.Registry().GetComponent<Arcane::Transform>(entity)->position.x = x;
             stack.Commit(t);
         }
+    };
+
+    struct DocumentStep final : Arcane::ICommand   // a material/sprite/mesh-style step
+    {
+        void Undo() override {}
+        void Redo() override {}
+        const char* Label() const override { return "Edit Param"; }
+        bool AffectsScene() const override { return false; }
     };
 }
 
@@ -90,7 +102,7 @@ TEST_CASE("editing dirties the session and saving cleans it", "[editor][scene]")
 
 TEST_CASE("undoing back to the save point goes clean again", "[editor][scene]")
 {
-    // The reason dirty rides StateId rather than an edit counter.
+    // The reason dirty rides SceneStateId rather than an edit counter.
     Harness h;
     SceneSession s;
 
@@ -103,6 +115,53 @@ TEST_CASE("undoing back to the save point goes clean again", "[editor][scene]")
     CHECK_FALSE(s.IsDirty(h.stack));
 
     h.stack.Redo();
+    CHECK(s.IsDirty(h.stack));
+}
+
+TEST_CASE("a document step leaves the scene clean", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    h.stack.Push(std::make_unique<DocumentStep>());
+    CHECK_FALSE(s.IsDirty(h.stack));
+}
+
+TEST_CASE("save, document step, undo: the scene stays clean throughout", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    h.Edit(1.0f);
+    s.MarkSaved(h.stack);
+    h.stack.Push(std::make_unique<DocumentStep>());
+    CHECK_FALSE(s.IsDirty(h.stack));
+    h.stack.Undo();                                 // the document step
+    CHECK_FALSE(s.IsDirty(h.stack));
+}
+
+TEST_CASE("document steps that evict the saved scene step leave the scene clean", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 2;
+    h.stack.SetLimits(limits);
+    h.Edit(1.0f);
+    s.MarkSaved(h.stack);
+    for (int i = 0; i < 3; ++i)
+        h.stack.Push(std::make_unique<DocumentStep>());   // the saved scene step falls off the cap
+    CHECK(h.stack.TouchedSinceState(s.SavedStateId()).baselineFound);   // no all-entities asterisks
+    CHECK_FALSE(s.IsDirty(h.stack));
+}
+
+TEST_CASE("undoing a scene step past the save point reads dirty, even under a document step", "[editor][scene][undo]")
+{
+    Harness h;
+    SceneSession s;
+    h.Edit(1.0f);
+    s.MarkSaved(h.stack);
+    h.stack.Push(std::make_unique<DocumentStep>());
+    h.stack.Undo();
+    h.stack.Undo();                                 // past the saved scene step
     CHECK(s.IsDirty(h.stack));
 }
 
@@ -134,7 +193,7 @@ TEST_CASE("Reset returns the session to Untitled and clean", "[editor][scene]")
     h.Edit(2.0f);
 
     // New Scene clears the undo stack, which is what the host does around Reset.
-    h.stack.Clear();
+    h.stack.Clear("New scene");
     s.Reset(h.stack);
 
     CHECK(s.Path().empty());
@@ -274,4 +333,58 @@ TEST_CASE("a second Request while LaunchStandalone is parked is ignored", "[edit
     CHECK_FALSE(s.Request(SceneIntent::LaunchStandalone, {}, h.stack));
     CHECK_FALSE(s.Request(SceneIntent::OpenScene, "other.arcscene", h.stack));
     CHECK(s.Pending() == SceneIntent::LaunchStandalone);
+}
+
+TEST_CASE("a module-reload clear names its cause and keeps dirty/clean as it was", "[editor][scene][undo][reload]")
+{
+    Harness h;
+    SceneSession s;
+    SECTION("clean stays clean")
+    {
+        h.Edit(1.0f);
+        s.MarkSaved(h.stack);
+        ClearHistoryForModuleReload(h.stack, s);
+        CHECK_FALSE(h.stack.CanUndo());
+        CHECK(h.stack.ClearedReason() == "Game module reloaded");
+        CHECK_FALSE(s.IsDirty(h.stack));
+    }
+    SECTION("dirty stays dirty, even saved at state 0")
+    {
+        s.MarkSaved(h.stack);                     // saved at 0
+        h.Edit(1.0f);
+        REQUIRE(s.IsDirty(h.stack));
+        ClearHistoryForModuleReload(h.stack, s);  // SceneStateId is 0 again...
+        CHECK(s.IsDirty(h.stack));                // ...but the edits are unsaved
+        h.Edit(2.0f);
+        CHECK(s.IsDirty(h.stack));
+    }
+}
+
+TEST_CASE("asset file steps never dirty the scene; scene steps still do", "[editor][scene][assetops]")
+{
+    using namespace Arcane::Editor;
+    Harness h;
+    SceneSession s;
+    s.MarkSaved(h.stack);
+    Arcane::Test::AssetOpsWorld w("scene_clean");
+    const Arcane::Guid tex = w.Write("uv_marker.png", "png");
+    Arcane::Test::FakeAssetOpHost host(w);
+    AssetFileOpExecutor exec(host, h.stack, w.content);
+
+    REQUIRE(exec.Execute(w.Plan(AssetOpKind::Delete, { tex }), h.stack).ok);
+    CHECK_FALSE(s.IsDirty(h.stack));
+    h.stack.Undo();
+    CHECK_FALSE(s.IsDirty(h.stack));
+    h.Edit(1.0f);
+    CHECK(s.IsDirty(h.stack));
+}
+
+TEST_CASE("SceneSession::NoteMoved retargets only a matching path; id and dirty untouched", "[editor][scene][assetops]")
+{
+    Harness h; SceneSession s; const Arcane::Guid id = Arcane::Guid::Generate();
+    s.Adopt("C:/p/Content/scenes/main.arcscene", id, h.stack); h.Edit(1.0f);
+    s.NoteMoved("C:/p/Content/scenes/other.arcscene", "C:/p/Content/x.arcscene");
+    CHECK(s.Path() == std::filesystem::path("C:/p/Content/scenes/main.arcscene"));
+    s.NoteMoved("C:/p/Content/scenes/./main.arcscene", "C:/p/Content/levels/main.arcscene");
+    CHECK((s.Path() == std::filesystem::path("C:/p/Content/levels/main.arcscene") && s.Id() == id && s.IsDirty(h.stack)));
 }

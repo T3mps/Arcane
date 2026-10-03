@@ -20,8 +20,10 @@
 // into a close or a pending confirm).
 
 #include "Scene/EditGesture.hpp"
+#include "Scene/UndoGate.hpp"
 #include "Documents/DocumentPageSelection.hpp"   // the page's one key + open/click epoch
 #include "Documents/EditorDocument.hpp"
+#include "Panels/AssetReferenceField.hpp"   // AssetRefArgs (TextureRefArgs), AssetRefServices (Services::assetRefs)
 
 #include <Arcane/Guid.hpp>
 #include <Arcane/Sprite/SpriteAsset.hpp>
@@ -47,9 +49,9 @@ namespace Arcane::Editor
         // document list -- same "services struct" shape as
         // ShaderEditorDocument's DocServices, ShaderEditorDocument.hpp:85-104,
         // just with far less in it: a sprite has no compiler and no clock,
-        // because it has nothing async to drive. `undo` IS the same one shared
+        // because it has nothing async to drive. `undo` resolves to the same one shared
         // editor CommandStack every other surface pushes to (the app hands the
-        // same pointer to DocServices::undo, EditorAppProject.cpp:39), so a
+        // same resolver to DocServices::undo, EditorApp::DocumentUndo), so a
         // sprite field edit is one step in the ONE global history -- Ctrl+Z
         // walks back through it exactly like an Inspector or graph edit.
         struct Services
@@ -66,11 +68,11 @@ namespace Arcane::Editor
             // An asset guid -> its display name (the texture line). Null or
             // "" = the guid is printed.
             std::function<std::string(const Arcane::Guid&)> assetName;
-            // Null = no undo coverage (the EditGesture bracket then no-ops
-            // whole, EditGesture.hpp:145-146) -- the document still edits and
-            // saves, so an unwired stack degrades to "no history", never to a
-            // lost edit.
-            Arcane::CommandStack* undo = nullptr;
+            // Asked per edit (UndoStack()). Unset, or returning null (Play), =
+            // no undo coverage (the EditGesture bracket then no-ops whole) --
+            // the document still edits and saves, so a missing stack degrades
+            // to "no history", never to a lost edit.
+            UndoResolver undo;   // the ONE history, resolved per edit; returns null in Play (s3.3b)
             // Fired after a successful Save with the asset's Guid -- lets the
             // app's SpriteCache drop its cached resolve
             // (Render/SpriteCache.hpp:69-76 Invalidate), so the NEXT Request()
@@ -78,6 +80,12 @@ namespace Arcane::Editor
             // an edit show up in the viewport (SpriteCache::Request is
             // otherwise a once-per-Guid cache, Render/SpriteCache.cpp:37).
             std::function<void(const Arcane::Guid&)> invalidateSprite;
+
+            // The shared asset-reference cell's services (spec 2026-09-30 s4.2):
+            // EditorApp::m_assetRefServices, app-lifetime; its callables read state
+            // at call time, so a document made during a boot stage is not stale.
+            // Null in the headless tests (the cell's null services). T3's ports read it.
+            const AssetRefServices* assetRefs = nullptr;
         };
 
         // `data` is already loaded (LoadSpriteAsset happens in the factory,
@@ -96,11 +104,12 @@ namespace Arcane::Editor
         void Draw(bool& requestClose) override;
 
         // ---- Inspector source (inspector filters spec s6a) ----------------
-        // Kind "sprite". ONE page, the whole sprite form (the four drags and
-        // the read-only Texture line), under ONE key, "sprite": opening the
-        // document selects it (m_pageSel starts at epoch 1) and a click in the
-        // document's content re-selects it (Draw's NoteContentClick). Tab
-        // switches and focus never do (the spec's one selection rule). The
+        // Kind "sprite". ONE page, the whole sprite form (s5.4: the read-only
+        // Texture row, the four drags and "Whole texture"), under ONE key,
+        // "sprite": opening the document selects it (m_pageSel starts at
+        // epoch 1) and a click in the document's content re-selects it
+        // (Draw's NoteContentClick). Tab switches and focus never do (the
+        // spec's one selection rule). The
         // document window keeps its toolbar, a "Sprite properties are in the
         // Inspector" hint, the texture line and the sprite image (final fix D).
         std::string_view Kind() const override { return "sprite"; }
@@ -112,6 +121,9 @@ namespace Arcane::Editor
         bool Resolves(std::string_view key) const override { return m_pageSel.Resolves(key); }
         std::uint64_t SelectionEpoch() const override { return m_pageSel.epoch; }
         void NoteReopened() override { m_pageSel.NoteReopened(); }
+        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
+        std::vector<Arcane::Guid> LiveReferences() const override;   // T5 s7.5
+        void FlushGesture() override;
 
         // Undo plumbing (doc-identity commands, the same shape as
         // ShaderEditorDocument::ApplyParamEdit, ShaderEditorDocument.hpp:
@@ -132,12 +144,21 @@ namespace Arcane::Editor
         // only ImGui methods), so this is how they observe what a command did.
         const Arcane::SpriteAssetData& Data() const noexcept { return m_data; }
 
+        // s5.4: "Whole texture" is a UI view over sourceSize == (0,0) (the file
+        // format is unchanged). Ticked writes sourcePos = sourceSize = (0,0);
+        // unticked writes sourcePos = (0,0), sourceSize = (texW, texH). False,
+        // data untouched, when unticking with unknown dims (0).
+        static bool SetWholeTexture(Arcane::SpriteAssetData& data, bool whole, std::uint32_t texW, std::uint32_t texH);
+        // The Texture row's cell: thumb + name + browse-to, READ-ONLY (v1:
+        // reassigning goes through "Create Sprite" on another texture).
+        static AssetRefArgs TextureRefArgs(const Arcane::SpriteAssetData& data);
+
     private:
         // The sprite page: the form, drawn by the Inspector instance showing
-        // it. Carries its own EditGesture::ScopeGuard (the drags that open
-        // gestures are submitted inside it) and no Begin/End -- the Inspector
-        // window is its window.
-        void DrawFormBody();
+        // it on that instance's PropertyGrid (s5.4). Carries its own
+        // EditGesture::ScopeGuard (the drags that open gestures are submitted
+        // inside it) and no Begin/End -- the Inspector window is its window.
+        void DrawFormBody(PropertyGrid& grid);
 
         // The one page this document contributes (kind "sprite", key
         // "sprite"). The base MUST be public: Page() hands &m_page out as
@@ -152,12 +173,13 @@ namespace Arcane::Editor
                 // One crumb; `select` is a no-op (the page IS the only level).
                 return { InspectorCrumb{ m_doc.m_title, [] {}, std::string{ "sprite" } } };
             }
-            void Draw(PropertyGrid&) override { m_doc.DrawFormBody(); }
+            void Draw(PropertyGrid& g) override { m_doc.DrawFormBody(g); }
 
         private:
             SpriteDocument& m_doc;
         };
 
+        [[nodiscard]] Arcane::CommandStack* UndoStack() const { return m_services.undo ? m_services.undo() : nullptr; }
         Services                 m_services;
         std::filesystem::path    m_path;
         Arcane::SpriteAssetData  m_data;

@@ -40,93 +40,6 @@ namespace Arcane::Editor
         // The mock's footer buttons.
         constexpr float kFooterButtonWidth = 92.0f;
 
-        // One entry in the Location combo. `display` is what the combo shows
-        // ("Content/materials"); `relative` is what CreateAssetResult carries
-        // ("materials", or "" for Content/ itself), which the dispatcher joins
-        // onto the project's content root.
-        struct FolderChoice
-        {
-            std::string display;
-            std::string relative;
-        };
-
-        // The model's folder strings are mount-path directories with a
-        // trailing slash ("materials/"), and root-level assets fold into the
-        // synthetic bucket "Content/" (MakeBaseEntry's own comment). Both
-        // shapes normalise to the same pair here. `root` is the kind's
-        // CreateKindRoot ("Content" / "Source"): the display is "<root>/rel".
-        FolderChoice MakeFolderChoice(const std::string& relDir, const char* root)
-        {
-            std::string rel = relDir;
-            while (!rel.empty() && rel.back() == '/')
-                rel.pop_back();
-            if (rel.empty())
-                return { root, "" };   // the root itself names no subdirectory
-            return { std::string(root) + "/" + rel, rel };
-        }
-
-        // A model folder KEY -> the directory relative to its mount root, or
-        // nullopt when the key belongs to another mount. Two key shapes
-        // (AssetPanelEntry::folder's own doc): the game mount is UNQUALIFIED
-        // ("Content/" is its root, "materials/" nested); every other mount is
-        // QUALIFIED ("source://" is its root, "source://combat/" nested).
-        std::optional<std::string> RelativeDirOfFolderKey(const std::string& key, const char* root)
-        {
-            const bool wantSource = std::string_view(root) == "Source";
-            if (const std::size_t sep = key.find("://"); sep != std::string::npos)
-            {
-                if (!wantSource || key.substr(0, sep) != "source")
-                    return std::nullopt;
-                return key.substr(sep + 3);   // "" for the root, "combat/" nested
-            }
-            if (wantSource)
-                return std::nullopt;
-            return key == "Content/" ? std::string() : key;
-        }
-
-        // Distinct create-able folders: every directory the project's OWN
-        // files already use under the kind's root, plus the kind's default,
-        // plus the root itself.
-        //
-        // ONE mount only -- "game://" for every asset kind, "source://" for
-        // CppClass. The model groups folders across every mount (an engine://
-        // and a game:// "materials/" share one Browse group), but a created
-        // file can only land -- and only register + resolve by GUID -- under
-        // the project's own root for that kind (Project.cpp mounts "game" at
-        // root/Content and "source" at root/Source). Offering an engine or
-        // plugin folder here would offer a target RegisterCreatedAsset refuses.
-        std::vector<FolderChoice> BuildFolderChoices(const AssetPanelModel& model,
-                                                     CreateAssetKind kind,
-                                                     const std::string& cppDefaultFolder)
-        {
-            const char* root = CreateKindRoot(kind);
-            std::set<std::string> folders;                     // relative dirs, "" = root
-            folders.insert("");                                // always offer the root
-            // CppClass's default folder comes from the manifest's sourceDir
-            // (CppClassDefaultFolder, seeded onto the request by BeginCreateAsset);
-            // every other kind keeps its fixed CreateKindDefaultFolder.
-            folders.insert(kind == CreateAssetKind::CppClass
-                               ? cppDefaultFolder
-                               : std::string(CreateKindDefaultFolder(kind)));
-            for (const auto& [guid, e] : model.Entries())
-            {
-                (void)guid;
-                if (const auto rel = RelativeDirOfFolderKey(e.folder, root))
-                    folders.insert(*rel);
-            }
-
-            std::vector<FolderChoice> out;
-            out.reserve(folders.size());
-            // Root first (it is the parent of everything else), then the rest
-            // in the set's own alphabetical order -- a stable, predictable
-            // list rather than unordered_map iteration order.
-            out.push_back(MakeFolderChoice("", root));
-            for (const std::string& f : folders)
-                if (!f.empty())
-                    out.push_back(MakeFolderChoice(f, root));
-            return out;
-        }
-
         int IndexOfRelativeFolder(const std::vector<FolderChoice>& choices, std::string_view relative)
         {
             for (int i = 0; i < static_cast<int>(choices.size()); ++i)
@@ -206,20 +119,7 @@ namespace Arcane::Editor
             // valid to invalid mid-typing.
             ImGui::TextDisabled("%s", check.ok ? "" : check.message.c_str());
 
-            ImGui::TextDisabled("Location");
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::BeginCombo("##createlocation", folder.display.c_str()))
-            {
-                for (int i = 0; i < static_cast<int>(folders.size()); ++i)
-                {
-                    const bool selected = (i == st.folderIndex);
-                    if (ImGui::Selectable(folders[static_cast<std::size_t>(i)].display.c_str(), selected))
-                        st.folderIndex = i;
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
+            (void)DrawLocationCombo(folders, st.folderIndex);
             return check;
         }
 
@@ -525,6 +425,92 @@ namespace Arcane::Editor
         }
     }
 
+    CreateDialogState MakeCreateDialogState(const CreateAssetRequest& request,
+                                            const AssetPanelModel& model,
+                                            const std::filesystem::path& projectRoot)
+    {
+        CreateDialogState st{};
+        st.request = request;
+        st.open    = true;
+
+        // The Material surface combo's starting index. `prefillSurface` is a
+        // MaterialSurface VALUE (-1 = none), and the combo's own order is a
+        // different one -- converted through the single mapping above rather
+        // than cast.
+        st.surface =
+            (request.prefillSurface >= 0 &&
+             request.prefillSurface <= static_cast<int>(Arcane::MaterialSurface::Mesh))
+                ? MaterialSurfaceComboIndex(static_cast<Arcane::MaterialSurface>(request.prefillSurface))
+                : kMaterialSurfaceDefaultIndex;
+
+        // `prefillParent` is the kind's ONE asset-valued field (the field's own
+        // doc comment): an instance's parent, or -- Task 13 -- a sprite's
+        // source texture. Routed to whichever the requested kind actually has,
+        // so a prefill can never land in a field the dialog will not show.
+        switch (request.kind)
+        {
+            case CreateAssetKind::MaterialInstance:
+                st.parent = request.prefillParent;
+                // The picker starts EXPANDED when there is nothing to show for
+                // it yet -- the CreateFlow mock's own state, and the useful
+                // one: a request with no prefilled parent cannot be completed
+                // without picking one.
+                st.pickerOpen = !request.prefillParent.IsValid();
+                // Created FROM a material: named after it, as Unreal names a
+                // new instance "<Parent>_Inst", and placed beside it. The name
+                // stays editable and is validated like any typed one.
+                if (const AssetPanelEntry* parent =
+                        request.prefillParent.IsValid() ? model.Find(request.prefillParent) : nullptr)
+                {
+                    const char* root = CreateKindRoot(request.kind);
+                    // Only a folder under the project's own Content/ can take
+                    // the file (BuildFolderChoices' one-mount rule); a parent
+                    // elsewhere keeps the kind's default folder.
+                    if (const auto rel = RelativeDirOfFolderKey(parent->folder, root))
+                        st.defaultFolder = MakeFolderChoice(*rel, root).relative;
+                    const std::string folder = st.defaultFolder.value_or(
+                        DefaultRelativeFolder(request.kind, request.cppDefaultFolder));
+                    const std::filesystem::path dir =
+                        folder.empty() ? projectRoot / root : projectRoot / root / folder;
+                    // "_Inst", then "_Inst2", "_Inst3", ... -- the first stem
+                    // with no file yet, the same question ValidateCreateName's
+                    // uniqueness rule asks.
+                    const std::string stem = parent->name + "_Inst";
+                    std::string name = stem;
+                    std::error_code ec;
+                    for (int n = 2; std::filesystem::exists(dir / (name + CreateKindExtension(request.kind)), ec); ++n)
+                        name = stem + std::to_string(n);
+                    std::snprintf(st.name, sizeof(st.name), "%s", name.c_str());
+                }
+                break;
+            case CreateAssetKind::Sprite:
+                st.texture = request.prefillParent;
+                // Same "start expanded when there is nothing to show yet"
+                // rule as MaterialInstance's parent picker above -- a Sprite
+                // request with no prefilled texture (the rail `+`, the
+                // toolbar/Assets-menu "Sprite...", a row's Create submenu)
+                // cannot be completed without picking one either.
+                st.pickerOpen = !request.prefillParent.IsValid();
+                break;
+            default:
+                break;
+        }
+        return st;
+    }
+
+    bool DrawLocationCombo(const std::vector<FolderChoice>& folders, int& index)   // T5 s7.8: shared with Move to...
+    {
+        bool picked = false; index = std::clamp(index, 0, static_cast<int>(folders.size()) - 1);
+        ImGui::TextDisabled("Location"); ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##createlocation", folders[static_cast<std::size_t>(index)].display.c_str()))
+        {
+            for (int i = 0; i < static_cast<int>(folders.size()); ++i)
+            { if (ImGui::Selectable(folders[static_cast<std::size_t>(i)].display.c_str(), i == index)) { index = i; picked = true; } if (i == index) ImGui::SetItemDefaultFocus(); }
+            ImGui::EndCombo();
+        }
+        return picked;
+    }
+
     std::optional<CreateAssetResult> DrawCreateAssetDialog(CreateDialogState& st,
                                                            const AssetPanelModel& model,
                                                            const Arcane::Project& project)
@@ -548,7 +534,8 @@ namespace Arcane::Editor
             ImGui::OpenPopup(title);
         if (!st.seeded)
         {
-            st.folderIndex = IndexOfRelativeFolder(folders, DefaultRelativeFolder(st.request.kind, st.request.cppDefaultFolder));
+            st.folderIndex = IndexOfRelativeFolder(
+                folders, st.defaultFolder.value_or(DefaultRelativeFolder(st.request.kind, st.request.cppDefaultFolder)));
             st.seeded = true;
         }
 

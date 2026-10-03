@@ -42,6 +42,14 @@ namespace Arcane::Editor
         char search[128] = {};
         int  railKind = -1;                 // -1 = All
         std::uint32_t seenSelectionStamp = 0; // scroll-to-selection once
+        // Set by RevealAssetInBrowser, cleared by the body once it has
+        // scrolled the selected row FULLY into view. Revealing cannot ride on
+        // selectionStamp alone: AssetPanelModel::Select bumps it only when
+        // the guid changes, and every context-menu Reveal follows a
+        // right-click that already selected the row. The body may even have
+        // spent that stamp while the row was still hidden by the search or a
+        // closed folder that the reveal then clears.
+        bool revealPending = false;
 
         // Task 10: session-only fold/group open state, MIRRORING
         // AssetPanelModel's own private m_groupOpen/m_childrenOpen (same
@@ -61,7 +69,31 @@ namespace Arcane::Editor
         // seam still resets only the Graph panel's canvas state.
         std::unordered_map<std::string, bool>  groupOpen;
         std::unordered_map<Arcane::Guid, bool> childrenOpen;
+
+        // T5 s7.6: the inline rename box (Outliner precedent, EditorPanels.cpp's
+        // entity rename). `renameTarget` invalid = no box; `renameBuf` holds the
+        // STEM only (the extension is fixed, drawn dim beside the box);
+        // `renameFocusPending` focuses the box on its first frame (and again
+        // after a refused Enter); `renameDrawn` is reset by DrawTable each
+        // frame so a target that scrolled out or was filtered away cancels
+        // instead of wedging the keys (the Outliner wedge lesson).
+        Arcane::Guid renameTarget; char renameBuf[128] = {}; bool renameFocusPending = false, renameDrawn = false;
+        // The row menu's file-op verbs' disabled reasons: ONE dry-run per
+        // menu open (computed on the popup's appearing frame), "" = enabled.
+        struct MenuRefusal { std::string rename, duplicate, del, moveTo; } menuRefusal;
+        // T5 s7.9: the row a mouse click landed on this frame (DrawTable resets
+        // it before BeginMultiSelect). It becomes the primary when
+        // EndMultiSelect's requests are applied: AssetPanelModel::ApplySelection.
+        Arcane::Guid msClicked;
+        // T5 s7.8: a folder group row is a Move drop target. ONE dry-run per
+        // (group, dragged guid) while a drag hovers it; DrawTable clears the
+        // key whenever no drag is active, so the next drag re-asks. "" = drops.
+        std::string dropDryRunKey, dropRefusal;
     };
+
+    // T5 s7.6: open the inline rename box on `e` (F2, the row menu's Rename):
+    // the box shows `e.name` (the stem) and takes keyboard focus next draw.
+    void BeginAssetRename(AssetBrowserPanelState& state, const AssetPanelEntry& e);
 
     // Draw the Browse lens body: the rail (all/per-kind counts + hover
     // create affordance, spec s6) + the grouped/folded asset table, which

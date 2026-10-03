@@ -1,9 +1,11 @@
 #include "Panels/TextureImportSettings.hpp"
 
 #include "Panels/TextureMetaPanel.hpp"   // the .meta "texture" block's PURE read/merge-write (F2b Task 13)
+#include "Widgets/PropertyGrid.hpp"
 
 #include <Arcane/AssetPipeline/TextureMetaSettings.hpp>   // the .meta "texture" block's four knobs (F2b Task 13)
 
+#include <Astra/Reflection/Attribute.hpp>   // Astra::Range (Max Size)
 #include <imgui.h>
 
 #include <algorithm>
@@ -12,10 +14,10 @@
 #include <string>
 #include <string_view>
 
-// F2b Task 13's texture import settings, moved verbatim out of
+// F2b Task 13's texture import settings, moved out of
 // EditorPanels.cpp (inspector filters Task 5): the Inspector's texture-asset
 // panel became the Asset page's import-settings block. Spec sec 4's four
-// .meta knobs exactly, never UE's eighty.
+// .meta knobs exactly, never UE's eighty; PropertyGrid rows since node-page s5.6.
 namespace Arcane::Editor
 {
     namespace
@@ -31,48 +33,19 @@ namespace Arcane::Editor
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return ext == want;
         }
-
-        // The four spec sec 4 knobs -- pinned, nothing more (the ceiling to
-        // grow into is UE's eight-ish core, never the eighty). Returns true
-        // on any edit THIS frame -- the caller merge-writes on that edge
-        // only, not every frame the block happens to be drawn.
-        bool DrawTextureMetaSettingsBlock(Arcane::AssetPipeline::TextureMetaSettings& settings)
-        {
-            bool changed = false;
-            int format = static_cast<int>(settings.format);
-            ImGui::SetNextItemWidth(120.0f);
-            if (ImGui::Combo("Format##texmeta", &format, "Auto\0Bc7\0Rgba8\0"))
-            {
-                settings.format =
-                    static_cast<Arcane::AssetPipeline::TextureMetaSettings::Format>(format);
-                changed = true;
-            }
-            if (ImGui::Checkbox("sRGB##texmeta", &settings.srgb))
-                changed = true;
-            if (ImGui::Checkbox("Generate Mips##texmeta", &settings.generateMips))
-                changed = true;
-            int maxSize = static_cast<int>(settings.maxSize);
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::DragInt("Max Size (0 = unlimited)##texmeta", &maxSize, 1.0f, 0, 16384);
-            // Minor fix (final-review wave, 2026-09-04): DragInt returns true on EVERY
-            // frame the value changes WHILE the drag is active -- against this function's
-            // OWN "true on any edit THIS frame" contract, a single drag gesture used to
-            // report `changed` (and so trigger the caller's sidecar write, and so the
-            // watcher's cook trigger) on every intermediate tick, not once per gesture.
-            // Keep the LIVE value flowing into `settings` every frame regardless (ImGui's
-            // own internal drag accumulator is what keeps the widget tracking the mouse
-            // smoothly -- it does not depend on the caller persisting intermediate values),
-            // but only report the edit -- the caller's actual write signal -- once the item
-            // DEACTIVATES after an edit (mouse release / Enter): one write per gesture.
-            settings.maxSize = maxSize > 0 ? static_cast<std::uint32_t>(maxSize) : 0;
-            if (ImGui::IsItemDeactivatedAfterEdit())
-                changed = true;
-            return changed;
-        }
     }
 
-    void DrawTextureImportSettings(const std::filesystem::path& sourcePath)
+    // The four spec sec 4 knobs -- pinned, nothing more (the ceiling to grow
+    // into is UE's eight-ish core, never the eighty) -- as PropertyGrid rows
+    // (node-page s5.6). Each row reports a COMMIT, not a live tick: the
+    // checkboxes and the combo on the click, Max Size once per gesture
+    // (IntRow's deactivate-after-edit contract) -- so the sidecar is
+    // merge-written once per edit, never per drag frame.
+    void DrawTextureImportSettings(PropertyGrid& grid, const std::filesystem::path& sourcePath)
     {
+        PropertyGrid::Rows rows(grid, "##texmeta");
+        if (!rows)
+            return;
         // The four .meta knobs apply to a COOKABLE source only: ".png" is
         // the one extension CookSession.cpp's EnumerateTextureSources
         // actually cooks this slice, even though AssetKindOf classifies
@@ -81,15 +54,27 @@ namespace Arcane::Editor
         // that silently writes settings nothing will ever read.
         if (!HasExtensionCI(sourcePath, ".png"))
         {
-            ImGui::TextDisabled("import settings apply to .png sources only");
+            grid.ReadOnlyRow("Import", "import settings apply to .png sources only");
             return;
         }
 
         std::filesystem::path metaPath = sourcePath;
         metaPath += ".meta";
-        Arcane::AssetPipeline::TextureMetaSettings settings =
-            ReadTextureMetaSettingsDisplay(metaPath);
-        if (DrawTextureMetaSettingsBlock(settings))
-            WriteTextureMetaSettingsMerged(metaPath, settings);
+        Arcane::AssetPipeline::TextureMetaSettings settings = ReadTextureMetaSettingsDisplay(metaPath);
+        bool changed = false;
+        static constexpr const char* kFormats[] = { "Auto", "Bc7", "Rgba8" };
+        if (const int f = grid.ComboRow("Format", kFormats, 3, static_cast<int>(settings.format)); f >= 0)
+        {
+            settings.format = static_cast<Arcane::AssetPipeline::TextureMetaSettings::Format>(f);
+            changed = true;
+        }
+        changed |= grid.CheckboxRow("sRGB", settings.srgb);
+        changed |= grid.CheckboxRow("Generate Mips", settings.generateMips);
+        int maxSize = static_cast<int>(settings.maxSize);
+        changed |= grid.IntRow("Max Size", maxSize, Astra::Range(0.0, 16384.0, 1.0));   // true once per gesture
+        ImGui::SetItemTooltip("0 = unlimited");
+        settings.maxSize = maxSize > 0 ? static_cast<std::uint32_t>(maxSize) : 0;
+        if (changed)
+            WriteTextureMetaSettingsMerged(metaPath, settings);   // one write per commit, as before
     }
 }

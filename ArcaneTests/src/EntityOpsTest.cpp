@@ -22,6 +22,7 @@
 #include <cmath>
 #include <memory>
 #include <span>
+#include <vector>
 
 #include "Helpers/TestTypeContext.hpp"
 
@@ -103,6 +104,31 @@ TEST_CASE("DeleteEntities splices children to the nearest survivor", "[outliner]
     const std::array<Astra::Entity, 2> doomed2{ mid2, mid3 };
     CHECK(Edit::DeleteEntities(w.reg, doomed2) == 2);
     CHECK(w.reg.GetParent(leaf2) == top);
+}
+
+TEST_CASE("DeleteEntities and Reparent keep the surviving siblings' Outliner order", "[outliner]")
+{
+    // Astra "now" batch (spec 2026-09-30 s3.4): RemoveParent erases in order,
+    // so deleting or moving out a middle child leaves the rest where they were.
+    // The Outliner draws reg.GetChildren order (Panels/EntityList.cpp:111). The
+    // old swap-and-pop moved the LAST sibling into the hole.
+    World w;
+    Astra::Entity top = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    Astra::Entity a = Edit::CreateEntity(w.reg, top);
+    Astra::Entity b = Edit::CreateEntity(w.reg, top);
+    Astra::Entity c = Edit::CreateEntity(w.reg, top);
+    Astra::Entity d = Edit::CreateEntity(w.reg, top);
+    Astra::Entity e = Edit::CreateEntity(w.reg, top);
+    REQUIRE(w.reg.GetChildren(top) == std::vector<Astra::Entity>{ a, b, c, d, e });
+
+    const std::array<Astra::Entity, 1> doomed{ b };
+    REQUIRE(Edit::DeleteEntities(w.reg, doomed) == 1);
+    CHECK(w.reg.GetChildren(top) == std::vector<Astra::Entity>{ a, c, d, e });
+
+    Astra::Entity other = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+    const std::array<Astra::Entity, 1> moved{ c };
+    REQUIRE(Edit::Reparent(w.reg, moved, other) == 1);
+    CHECK(w.reg.GetChildren(top) == std::vector<Astra::Entity>{ a, d, e });
 }
 
 TEST_CASE("Reparent refuses cycles wholesale, skips no-ops", "[outliner]")
@@ -624,4 +650,111 @@ TEST_CASE("AddPrimitiveEntity: a scene child at the given point carrying a MeshR
     World bare;
     CHECK_FALSE(Edit::AddPrimitiveEntity(bare.reg, Astra::Entity::Invalid(), glm::vec3(0.0f),
                                          mesh, "Cube").IsValid());
+}
+
+// ---- Node page + editor upgrades s3.1: the Outliner data-loss fix ----------
+
+TEST_CASE("LiveSceneRoot / IsSceneRoot: the live root, nullopt with no resource or a dead root", "[outliner]")
+{
+    World w;
+    CHECK_FALSE(Edit::LiveSceneRoot(w.reg).has_value());              // no SceneRoot resource
+    CHECK_FALSE(Edit::IsSceneRoot(w.reg, Astra::Entity::Invalid()));
+
+    const Astra::Entity root = Arcane::Scene::CreateEmpty(w.reg);
+    REQUIRE(Edit::LiveSceneRoot(w.reg).has_value());
+    CHECK(*Edit::LiveSceneRoot(w.reg) == root);
+    CHECK(Edit::IsSceneRoot(w.reg, root));
+    const Astra::Entity child = Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid());
+    CHECK_FALSE(Edit::IsSceneRoot(w.reg, child));
+
+    // The real failure shape: Delete on the root row. The resource keeps the
+    // dead handle, so "the resource exists" is not "there is a scene".
+    const std::array<Astra::Entity, 1> doomed{ root };
+    REQUIRE(Edit::DeleteEntities(w.reg, doomed) == 1);
+    REQUIRE(w.reg.GetResource<SceneRoot>() != nullptr);
+    CHECK_FALSE(Edit::LiveSceneRoot(w.reg).has_value());
+    CHECK_FALSE(Edit::IsSceneRoot(w.reg, root));
+}
+
+TEST_CASE("ReparentInScene(Invalid) moves the set under SceneRoot, surviving a save/load round trip", "[outliner]")
+{
+    // The Outliner strip used to call Reparent(Invalid) -> RemoveParent: the
+    // entity became a registry root BESIDE SceneRoot, rendered frozen, and the
+    // next Save dropped it (SaveJson walks only SceneRoot's subtree).
+    World w;
+    const Astra::Entity root   = Arcane::Scene::CreateEmpty(w.reg);
+    const Astra::Entity parent = Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid());
+    const Astra::Entity moved  = Edit::CreateEntity(w.reg, parent);
+    w.reg.GetComponent<Identity>(moved)->name = "Moved";
+
+    const std::array<Astra::Entity, 1> set{ moved };
+    CHECK(Edit::ReparentInScene(w.reg, set, Astra::Entity::Invalid()) == 1);
+    CHECK(w.reg.GetParent(moved) == root);                              // under the root, not beside it
+    CHECK(Edit::ReparentInScene(w.reg, set, Astra::Entity::Invalid()) == 0);   // already there: no-op
+    CHECK(Edit::ReparentInScene(w.reg, set, parent) == 1);              // a valid parent forwards to Reparent
+    CHECK(w.reg.GetParent(moved) == parent);
+    REQUIRE(Edit::ReparentInScene(w.reg, set, Astra::Entity::Invalid()) == 1);
+
+    const nlohmann::json doc = Arcane::Scene::SaveJson(w.reg);
+    auto components2 = std::make_shared<Astra::ComponentRegistry>();
+    Astra::Registry reg2(components2);
+    RegisterSceneComponents(reg2);
+    REQUIRE(Arcane::Scene::LoadJson(reg2, doc));
+    Astra::Entity loaded = Astra::Entity::Invalid();
+    reg2.CreateView<Identity>().ForEach(
+        [&](Astra::Entity e, Identity& info) { if (info.name == "Moved") loaded = e; });
+    REQUIRE(loaded.IsValid());                                          // saved, not silently dropped
+    const SceneRoot* root2 = reg2.GetResource<SceneRoot>();
+    REQUIRE(root2 != nullptr);
+    CHECK(reg2.GetParent(loaded) == root2->entity);
+}
+
+TEST_CASE("ReparentInScene refuses (0, nothing moved) with no SceneRoot or a dead root", "[outliner]")
+{
+    {
+        World w;   // no SceneRoot at all
+        const Astra::Entity a = Edit::CreateEntity(w.reg, Astra::Entity::Invalid());
+        const Astra::Entity b = Edit::CreateEntity(w.reg, a);
+        const std::array<Astra::Entity, 1> set{ b };
+        CHECK(Edit::ReparentInScene(w.reg, set, Astra::Entity::Invalid()) == 0);
+        CHECK(w.reg.GetParent(b) == a);
+    }
+    {
+        World w;
+        const Astra::Entity root = Arcane::Scene::CreateEmpty(w.reg);
+        const Astra::Entity a = Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid());
+        const Astra::Entity b = Edit::CreateEntity(w.reg, a);
+        const std::array<Astra::Entity, 1> doomed{ root };
+        REQUIRE(Edit::DeleteEntities(w.reg, doomed) == 1);              // a splices to a registry root
+        const std::array<Astra::Entity, 1> set{ b };
+        CHECK(Edit::ReparentInScene(w.reg, set, Astra::Entity::Invalid()) == 0);
+        CHECK(w.reg.GetParent(b) == a);
+    }
+}
+
+TEST_CASE("CreateEntityInScene and InstantiateSubtrees refuse with a dead SceneRoot", "[outliner]")
+{
+    // After a root delete, New Entity and Paste used to parent to the dead
+    // handle (SetParent no-ops on it): the entity was created OUTSIDE any
+    // scene and the next Save lost it.
+    World w;
+    const Astra::Entity root = Arcane::Scene::CreateEmpty(w.reg);
+    const Astra::Entity a = Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid());
+    const std::array<Astra::Entity, 1> copied{ a };
+    const nlohmann::json payload = Edit::SerializeSubtrees(w.reg, copied);
+    REQUIRE_FALSE(payload["entities"].empty());
+    const std::array<Astra::Entity, 1> doomed{ root };
+    REQUIRE(Edit::DeleteEntities(w.reg, doomed) == 1);
+
+    const auto identities = [&]
+    {
+        std::size_t n = 0;
+        w.reg.CreateView<const Identity>().ForEach([&](Astra::Entity, const Identity&) { ++n; });
+        return n;
+    };
+    const std::size_t before = identities();
+    CHECK_FALSE(Edit::CreateEntityInScene(w.reg, Astra::Entity::Invalid()).IsValid());
+    CHECK(Edit::InstantiateSubtrees(w.reg, payload).empty());
+    CHECK(identities() == before);                                      // nothing created
+    CHECK(Edit::CreateEntityInScene(w.reg, a).IsValid());               // an explicit live parent is unchanged
 }

@@ -1021,9 +1021,16 @@ project "ArcaneEditor"
     files {
         "%{prj.location}/src/**.cpp",
         "%{prj.location}/src/**.hpp",
+        -- node-page phase s8.1: the crash viewer source-compiles the reporter's
+        -- pure model (third consumer = promote to Core, spec 9.27 #12).
+        "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/LogTail.cpp",
     }
     includedirs {
         "%{prj.location}/src",
+        "%{wks.location}/ArcaneCrashReporter/src",
         "%{wks.location}/ArcaneClient/src",
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
@@ -1095,8 +1102,9 @@ project "ArcaneEditor"
         '{MKDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{RMDIR} "%{cfg.buildtarget.directory}/ReferenceProject/Verify"',
         '{COPYDIR} "%{wks.location}/ReferenceProject" "%{cfg.buildtarget.directory}/ReferenceProject"',
-        -- Editor fonts: Inter (default) + Roboto faces + lucide icon font, merged into
-        -- the ImGui atlas by EditorFonts.cpp (exe-relative paths -- must align w/ dests).
+        -- Editor fonts: Inter (default) + Roboto + JetBrains Mono faces + lucide icon
+        -- font, merged into the ImGui atlas by EditorFonts.cpp (exe-relative paths --
+        -- must align w/ dests).
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/lucide"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/inter/static"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/roboto/static"',
@@ -1105,6 +1113,8 @@ project "ArcaneEditor"
         '{COPYFILE} "%{wks.location}/data/font/lucide/lucide.ttf" "%{cfg.buildtarget.directory}/data/font/lucide/lucide.ttf"',
         '{MKDIR} "%{cfg.buildtarget.directory}/data/font/aldotheapache"',
         '{COPYFILE} "%{wks.location}/data/font/aldotheapache/AldotheApache.ttf" "%{cfg.buildtarget.directory}/data/font/aldotheapache/AldotheApache.ttf"',
+        '{MKDIR} "%{cfg.buildtarget.directory}/data/font/jetbrainsmono"',
+        '{COPYFILE} "%{wks.location}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf" "%{cfg.buildtarget.directory}/data/font/jetbrainsmono/JetBrainsMono-Regular.ttf"',
         -- Arcane logo: window/taskbar icon (Window::SetIcon) + transport-toolbar mark
         -- (LoadDisplayTexture). Same PNG, exe-relative at "data/images/arcane_logo.png".
         '{MKDIR} "%{cfg.buildtarget.directory}/data/images"',
@@ -1197,6 +1207,8 @@ project "ArcaneTests"
         -- into the test exe so the [editor] units drive the PURE close flow
         -- with fake documents -- DrawAll (the only ImGui method) is not called.
         "%{wks.location}/ArcaneEditor/src/Documents/DocumentHost.cpp",
+        -- Node page + editor upgrades s3.2: the pure PreviewStatus model.
+        "%{wks.location}/ArcaneEditor/src/Documents/PreviewStatus.cpp",
         -- Shader-editor review fixes: ShaderEditorDocument source-compiles into
         -- the test exe so the [editor] units drive its HEADLESS halves directly
         -- (save-before-bind, parent-chain resolution, compile-result routing).
@@ -1210,6 +1222,9 @@ project "ArcaneTests"
         -- source-compiles here for InputActionsRowsTest, and the rewritten
         -- InputActionsDocumentWidgets.cpp above links against it.
         "%{wks.location}/ArcaneEditor/src/Documents/InputActionsRows.cpp",
+        -- Node-page phase s8.3: the pure pending add (add-and-listen), compiled for InputPendingAddTest
+        -- and linked by InputActionsDocument/Widgets above.
+        "%{wks.location}/ArcaneEditor/src/Documents/InputPendingAdd.cpp",
         -- Input editor T10: InputActionsInspectorPage is a LINK dependency of
         -- InputActionsDocument.cpp (Page/PageFor construct it); Draw is never
         -- called headlessly, same reason as EditorWidgets.cpp below.
@@ -1224,6 +1239,9 @@ project "ArcaneTests"
         -- the [editor] units drive the PURE state machine directly -- there is
         -- no ImGui in it at all, same pattern as DocumentHost above.
         "%{wks.location}/ArcaneEditor/src/Scene/SceneSession.cpp",
+        -- editor.undo.* (T1-B10): the three Archive cvars + ReadUndoLimits, so
+        -- [undo] drives the read and its range clamps without EditorApp.
+        "%{wks.location}/ArcaneEditor/src/App/UndoSettings.cpp",
         -- Inspector polish: InspectorMeta (display-name derivation, attribute
         -- extraction, filter matching) source-compiles into the test exe so the
         -- [editor] units drive it directly. It is the whole surface the user
@@ -1304,6 +1322,14 @@ project "ArcaneTests"
         -- compiles into the test exe: PropertyGridTest drives it under a real
         -- ImGui context, and InputActionsInspectorPage.cpp (T10) links against it.
         "%{wks.location}/ArcaneEditor/src/Widgets/PropertyGrid.cpp",
+        -- Node-page phase T2 (s4.5): GraphFit -- the capped frame-to-fit. Its pure
+        -- maths + cvar are [graphfit]-tested, and ShaderEditorDocument.cpp
+        -- (compiled above) calls GraphFitToContent, so it is a link dependency too.
+        "%{wks.location}/ArcaneEditor/src/Widgets/GraphFit.cpp",
+        -- T3-D1: the shader graph's pin legend + its editor.graph.showPinLegend
+        -- cvar. ShaderEditorDocument.cpp (compiled above) calls it, so it is a
+        -- link dependency, and the cvar's default + toggle are unit-tested.
+        "%{wks.location}/ArcaneEditor/src/Documents/ShaderGraphPinLegend.cpp",
         -- Widget layer Task 7: SpriteDocument source-compiles into the test exe
         -- so the [editor] units drive its UNDO half directly (ApplySpriteData,
         -- the before/after step builder, and the doc-identity anchor after the
@@ -1348,6 +1374,8 @@ project "ArcaneTests"
         -- into the test exe so the [diagnostics] units drive it directly -- no
         -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
         "%{wks.location}/ArcaneEditor/src/Panels/DiagnosticStore.cpp",
+        -- node-page phase s8.2: which Problems rows route, and how (pure, fake facts in LocatorRouteTest).
+        "%{wks.location}/ArcaneEditor/src/Panels/LocatorRoute.cpp",
         -- Diagnostics arc: ConsoleModel (category derivation from the engine's
         -- "Subsystem: " log prefixes + identical-row collapsing) source-compiles
         -- into the test exe so the [editor] units drive the pure functions the
@@ -1361,6 +1389,9 @@ project "ArcaneTests"
         -- EditorCamera above. This file writes to a file the HUB owns, so the
         -- refuse-to-clobber rules are the ones most worth pinning.
         "%{wks.location}/ArcaneEditor/src/Project/RecentProjects.cpp",
+        -- Node-page phase s8.4: the start page's pure model (relative times, rows, the
+        -- dialog start dir), driven by StartPageModelTest. No ImGui in it.
+        "%{wks.location}/ArcaneEditor/src/Project/StartPageModel.cpp",
         -- File -> Open Recent Scene: SceneRecents' pure list ops (Parse/
         -- Serialize/Push, and the file I/O around them) source-compile into
         -- the test exe so the [editor] units drive them directly. Unlike
@@ -1383,6 +1414,14 @@ project "ArcaneTests"
         -- ARCANE_IDE_DESK is set) -- same desk-verify rule as ModuleBuild's
         -- Runner and RuntimeLaunch's SpawnDetached above.
         "%{wks.location}/ArcaneEditor/src/Project/IdeLaunch.cpp",
+        -- T5 asset file ops (spec 2026-09-30 s7.3/s7.4): the pure planner, the
+        -- executor and the undoable commands; AssetFileOpsTest.cpp drives them
+        -- over fake facts and a real TempDir (Recycle faked, never the shell).
+        "%{wks.location}/ArcaneEditor/src/Project/AssetFileOps.cpp",
+        -- Node-page phase T2 (s4.6): OsShell -- the one "open / show / open as
+        -- text" path helper. Pure halves [editor]-tested; the ShellExecuteW half is
+        -- compiled (CrashReportDocument.cpp above links it) but desk-verified.
+        "%{wks.location}/ArcaneEditor/src/Project/OsShell.cpp",
         -- Assets -> Create -> C++ Class: ClassTemplates (name validation, the
         -- project-name -> namespace rule, the three rendered templates as
         -- strings) source-compiles into the test exe so the [editor] units
@@ -1554,6 +1593,12 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneEditor/src/Panels/AssetStatusPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetGraphPanel.cpp",
         "%{wks.location}/ArcaneEditor/src/Panels/AssetBrowserPanel.cpp",
+        -- T3-D4: the create dialog's unit, for MakeCreateDialogState (the
+        -- request -> the dialog's starting state, BeginCreateAsset's whole
+        -- seeding), which CreateAssetDialogTest.cpp pins. Its other
+        -- dependencies (AssetPanelModel, EditorWidgets, ClassTemplates) are
+        -- already compiled here.
+        "%{wks.location}/ArcaneEditor/src/Panels/CreateAssetDialog.cpp",
         -- Inspector filters Task 5: the asset source + its page (the old
         -- preview pane's content) and the texture import settings block it
         -- draws. AssetInspectorSourceTest.cpp drives DrawAssetPage through
@@ -1573,6 +1618,10 @@ project "ArcaneTests"
         -- (CreateAssetDialog.hpp's pill text, AssetPanelModel.hpp's three
         -- field-name heuristics).
         "%{wks.location}/ArcaneEditor/src/Panels/InspectorView.cpp",
+        -- Node page + editor upgrades s4.2: the shared asset-reference field
+        -- (its pure halves here; the cell joins in T2-B2). InspectorView's
+        -- AssetRef arm draws it, AssetReferenceFieldTest.cpp drives it.
+        "%{wks.location}/ArcaneEditor/src/Panels/AssetReferenceField.cpp",
         -- Crash window plan 2, Task 4: the PURE halves of ArcaneCrashReporter
         -- source-compile into the test exe so the [reporter] units drive them
         -- directly -- same "pure logic, no spawn" pattern as arcbuild's core
@@ -1593,6 +1642,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/HangSession.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/MonitorRule.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/LogTail.cpp",   -- std-only; CrashReportDocument reads the log tail (node-page phase s8.1)
     }
 
     includedirs {

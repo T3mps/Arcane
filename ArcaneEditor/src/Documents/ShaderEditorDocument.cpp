@@ -1,6 +1,11 @@
 #include "Documents/ShaderEditorDocument.hpp"
 
+#include "Documents/MaterialSpherePreview.hpp"   // the mesh-surface preview sphere, shared with the thumbnails (T3-D6)
+#include "Documents/ShaderGraphCategoryColors.hpp"   // GraphCategoryHeaderColor: the node title band fill (s5.1.4)
+#include "Documents/ShaderGraphPinLegend.hpp"   // the canvas's pin colour legend (T3-D1)
+#include "Documents/ShaderGraphPinTypes.hpp"    // pin palette + paint rule + type/tooltip words (T3-D1)
 #include "Panels/AssetPanelModel.hpp"
+#include "Panels/AssetReferenceField.hpp"   // AssetRefRow: the texture param row (s5.3)
 #include "Widgets/CanvasEditScope.hpp"   // CanvasCreateScope/CanvasDeleteScope: the unconditional-End rule
 #include "Widgets/CanvasPopupScope.hpp"
 #include "Widgets/ColorPickerPopup.hpp"
@@ -8,11 +13,13 @@
 #include "Widgets/EditorWidgets.hpp"   // StableTextEdit: the stable-buffer text-commit helper
 #include "Widgets/GraphCanvasBackdrop.hpp"   // DrawGraphCanvasBackdrop -- the pre-ed::Begin grid blit
 #include "Widgets/GraphCanvasStyle.hpp"   // node chrome metrics + grid palette + accents -- shared with the Graph lens
+#include "Widgets/GraphFit.hpp"         // GraphFitToContent -- capped fit-on-open (s4.5)
 #include "Widgets/GraphPinDot.hpp"       // DrawGraphPinDot -- the filled/ring port dot, paint only
 #include "Widgets/GraphWire.hpp"         // bezier/lerp/brighten/view-scale + the links channel -- ditto
 #include "Widgets/GraphZoomLevels.hpp"   // kZoomLevels / ApplyZoomLevels -- shared with the Graph lens
 #include "Widgets/IconsLucide.h"   // ICON_LC_EYE: the pass-canvas preview-cut marker
 #include "Widgets/MaterialParamWidgets.hpp"
+#include "Widgets/PropertyGrid.hpp"   // the material page's sections (s5.3)
 
 // The preview vehicle. Include-order note
 // for anything moved above it: this header reaches <NRI.h> and
@@ -29,6 +36,7 @@
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/CVarDecl.hpp>   // ARC_CVAR_RANGED (s2.4)
 #include <Arcane/Edit/Command.hpp>
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Material/MaterialSource.hpp>
@@ -37,6 +45,8 @@
 #include <Arcane/Material/MaterialGraph.hpp>
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/ShaderConventions.hpp>
+
+#include <Astra/Reflection/Attribute.hpp>   // Astra::Range: the Alpha cutoff row
 
 #include <imgui.h>
 // AddSettingsHandler / FindSettingsHandler (:3502-3504), ImGuiSettingsHandler
@@ -59,6 +69,44 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // s5.3 (9.28 #25): the preview square's height cap, as a share of the page.
+        ARC_CVAR_RANGED("editor.inspector.materialPreviewFraction", "editor", Float32,
+                        ::Arcane::CVarValue::Float32(0.45f), ::Arcane::CVarValue::Float32(0.2f),
+                        ::Arcane::CVarValue::Float32(0.8f), ::Arcane::CVarFlags::Archive,
+                        "Largest share of the Inspector's height the material page's preview square may take");
+
+        // The mesh-surface preview box's caption (T3-D6): the line that used
+        // to BE the whole preview, kept as the honest note under the sphere.
+        constexpr const char* kMeshPreviewCaption =
+            "Mesh material: not compiled here -- preview it on a mesh in the viewport";
+
+        // The caption's height wrapped at `width`, plus the item spacing above it.
+        float MeshPreviewCaptionHeight(float width)
+        {
+            return ImGui::CalcTextSize(kMeshPreviewCaption, nullptr, false, (std::max)(1.0f, width)).y
+                 + ImGui::GetStyle().ItemSpacing.y;
+        }
+
+        float MaterialPreviewFraction()
+        {
+            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            const auto v = reg.Get(reg.Find("editor.inspector.materialPreviewFraction"));
+            return (v && v->type == Arcane::CVarType::Float32) ? v->AsFloat32() : 0.45f;
+        }
+
+        const AssetRefServices& NoAssetRefServices()
+        {
+            static const AssetRefServices none{};   // headless documents: the cell's null-services behaviour (s4.2)
+            return none;
+        }
+        // The label cell of the row just drawn is hovered: the value widget is
+        // LastItemData, so its rect bounds the row and its left edge ends the label.
+        bool LabelCellHovered()
+        {
+            const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax(), m = ImGui::GetMousePos();
+            return ImGui::IsWindowHovered() && m.y >= lo.y && m.y < hi.y && m.x < lo.x && m.x >= ImGui::GetWindowPos().x;
+        }
+
         // m_surface is an INDEX -- ImGui::Combo hands back an int -- and these
         // three functions are the ONLY conversion between it and the real
         // MaterialSurface / .arcmat `kind`. They are TOTAL in every direction
@@ -157,6 +205,14 @@ namespace Arcane::Editor
             void Undo() override { Apply(m_hadBefore, m_before); }
             void Redo() override { Apply(m_hasAfter, m_after); }
             const char* Label() const override { return m_label.c_str(); }
+            // Spec s3.3: a document step never dirties the scene, and it is
+            // EXPIRED once its document closed (the anchor died).
+            bool AffectsScene() const override { return false; }
+            bool IsExpired() const override
+            {
+                const auto doc = m_anchor.lock();
+                return !doc || !*doc;
+            }
 
         private:
             void Apply(bool hasValue, const Arcane::MatParamValue& value)
@@ -198,6 +254,14 @@ namespace Arcane::Editor
             void Undo() override { Apply(m_before); }
             void Redo() override { Apply(m_after); }
             const char* Label() const override { return m_label.c_str(); }
+            // Spec s3.3: a document step never dirties the scene, and it is
+            // EXPIRED once its document closed (the anchor died).
+            bool AffectsScene() const override { return false; }
+            bool IsExpired() const override
+            {
+                const auto doc = m_anchor.lock();
+                return !doc || !*doc;
+            }
 
         private:
             void Apply(const State& state)
@@ -296,22 +360,17 @@ namespace Arcane::Editor
         constexpr ImVec4 kGroupBgColor     = ImVec4(0.220f, 0.220f, 0.235f, 0.25f);
         constexpr ImVec4 kGroupBorderColor = ImVec4(0.290f, 0.290f, 0.310f, 0.60f);
 
-        // Pin/wire colors by PIN WIDTH. Unity's convention mapped onto Arcane's
-        // pin domain, which is 1 / 2 / 4 / 0-means-dynamic
-        // (GraphPinDesc::width, MaterialGraph.hpp:150-154). Unity's vec3-yellow
-        // has no counterpart here -- Arcane has no 3-lane pin -- so that row of
-        // the reference table is deliberately absent rather than mapped onto
-        // something it does not mean.
+        // Pin/wire colors by PIN WIDTH (kPinScalarColor / kPinVec2Color /
+        // kPinVec4Color / kPinDynamicColor, PinColorForWidth, and the paint
+        // rule for a resolved dynamic pin) live in
+        // Documents/ShaderGraphPinTypes.hpp (T3-D1), which the canvas, the
+        // node page and the canvas legend all read.
         //
-        // Its texture-red-orange row DOES have one, just not on this canvas: a
-        // material graph samples textures through params, but every pin on the
-        // PASS canvas is a full-frame RGBA render target. So kPinTextureColor
-        // below is that reserved row, finally spent where a texture pin
-        // actually exists.
-        constexpr ImVec4 kPinScalarColor  = ImVec4(0.502f, 0.808f, 1.0f,   1.0f); // pale azure
-        constexpr ImVec4 kPinVec2Color    = ImVec4(0.549f, 0.863f, 0.549f, 1.0f); // green
-        constexpr ImVec4 kPinVec4Color    = ImVec4(0.941f, 0.549f, 0.863f, 1.0f); // magenta
-        constexpr ImVec4 kPinDynamicColor = ImVec4(0.745f, 0.745f, 0.765f, 1.0f); // gray
+        // Unity's texture-red-orange row has a counterpart, just not on the
+        // graph canvas: a material graph samples textures through params, but
+        // every pin on the PASS canvas is a full-frame RGBA render target. So
+        // kPinTextureColor below is that reserved row, spent where a texture
+        // pin actually exists.
         // Every pass-canvas pin carries the same thing -- an RGBA render target
         // -- so the pass canvas uses ONE colour throughout rather than a type
         // scale it has no types to fill. Distinct from the 4-lane magenta on
@@ -389,23 +448,13 @@ namespace Arcane::Editor
         // Widgets/GraphCanvasBackdrop.hpp -- where it is the same four
         // assignments the Graph lens had written as an inline lambda.
 
-        ImVec4 PinColorForWidth(int width) noexcept
-        {
-            switch (width)
-            {
-                case 1:  return kPinScalarColor;
-                case 2:  return kPinVec2Color;
-                case 4:  return kPinVec4Color;
-                default: return kPinDynamicColor;   // 0 = adapts to what feeds it
-            }
-        }
-
         // One port dot: FILLED when a wire is attached, a hollow ring when not
         // (the Shader Graph reading -- "this port carries something" is visible
-        // without tracing the wire). Advances the cursor by exactly the dot, so
-        // the caller follows with SameLine + the label. Returns the dot's CENTRE
-        // in canvas space -- the pin rows anchor their wire pivot off it.
-        ImVec2 DrawPinDot(const ImVec4& color, bool connected)
+        // without tracing the wire), plus the grey "adapts" ring on a resolved
+        // dynamic pin (GraphPinPaint). Advances the cursor by exactly the dot,
+        // so the caller follows with SameLine + the label. Returns the dot's
+        // CENTRE in canvas space -- the pin rows anchor their wire pivot off it.
+        ImVec2 DrawPinDot(const GraphPinPaint& paint, bool connected)
         {
             const float lineH = ImGui::GetTextLineHeight();
             const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -415,9 +464,15 @@ namespace Arcane::Editor
             // what stays here is the LAYOUT -- the cursor advance and the centre
             // this function exists to hand back. The Graph lens shares the
             // paint and none of that.
-            DrawGraphPinDot(ImGui::GetWindowDrawList(), c, color,
-                            kNodeBodyColor, kPinDotRadius, connected);
+            DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
+                            kNodeBodyColor, kPinDotRadius, connected,
+                            paint.adapts ? &kPinDynamicColor : nullptr);
             return c;
+        }
+        // The pass canvas's dots: one colour, no type to resolve.
+        ImVec2 DrawPinDot(const ImVec4& color, bool connected)
+        {
+            return DrawPinDot(GraphPinPaint{ color, false }, connected);
         }
 
         // Horizontal spacer that right-aligns a row of `rowWidth` inside a
@@ -449,7 +504,7 @@ namespace Arcane::Editor
         // Returns the node's measured size (zero before its first layout), so a
         // caller that caches a width reads it off this same query instead of
         // asking the library twice.
-        ImVec2 DrawNodeTitleBand(std::uint32_t nodeId, float headerMaxY)
+        ImVec2 DrawNodeTitleBand(std::uint32_t nodeId, float headerMaxY, ImVec4 color = kNodeTitleColor)
         {
             const ImVec2 nodePos  = ed::GetNodePosition(ed::NodeId(nodeId));
             const ImVec2 nodeSize = ed::GetNodeSize(ed::NodeId(nodeId));
@@ -460,7 +515,7 @@ namespace Arcane::Editor
                     ImVec2(nodePos.x + kGraphNodeBorderWidth, nodePos.y + kGraphNodeBorderWidth),
                     ImVec2(nodePos.x + nodeSize.x - kGraphNodeBorderWidth,
                            headerMaxY + kNodePadY),
-                    ImGui::GetColorU32(kNodeTitleColor),
+                    ImGui::GetColorU32(color),
                     kGraphNodeRounding, ImDrawFlags_RoundCornersTop);
             return nodeSize;
         }
@@ -560,52 +615,186 @@ namespace Arcane::Editor
         // a silent dead widget with nothing to fail; the engine copy has a
         // truth-table test over every node type instead.
 
-        // What the widget shows on a pin that carries no literal yet: codegen's
-        // NEUTRAL for that pin, so an untouched field never lies about the
-        // value the shader is using and a first drag starts from it instead of
-        // snapping the material to zero. The eight argOr call sites that pass
-        // something other than "0.0" are enumerated at MaterialGraph.cpp:674-680
-        // and each is cited below. Returns false when the neutral is not a
-        // constant at all (Panner's v.uv), which the caller renders as a
-        // non-numeric placeholder.
-        bool PinNeutralDefault(const Arcane::GraphNode& n, std::uint32_t pin, float out[4])
+        // The literal widget's starting value on a pin with no literal yet:
+        // codegen's Constant neutral (Arcane::GraphPinNeutralDefault, the one
+        // truth -- node page s5.1.8), splatted to the widget's lanes the way
+        // Adapt splats a width-1 default (Tiling & Offset's tiling shows
+        // (1, 1)), so an untouched field never lies and a first drag starts
+        // from the value the shader uses. Expression/Passthrough leave 0 (the
+        // caller prints `hlsl` instead). Both surfaces -- canvas and node page
+        // -- seed through here.
+        void SeedPinNeutral(const Arcane::GraphPinNeutral& nd, int lanes, float out[4]) noexcept
         {
             out[0] = out[1] = out[2] = out[3] = 0.0f;
-            switch (n.type)
+            if (nd.kind != Arcane::GraphPinNeutralKind::Constant)
+                return;
+            for (int k = 0; k < lanes && k < 4; ++k)
+                out[k] = nd.lanes == 1 ? nd.v[0] : nd.v[k];
+        }
+
+        // Writes `pin`'s literal: ONE entry per pin, updated IN PLACE (born on
+        // first touch), its first `lanes` lanes from `v`, the rest zeroed. A
+        // duplicate would make serialization non-deterministic: the writer
+        // sorts by pin with std::sort, which is unstable
+        // (MaterialGraph.cpp:1382-1384), and the reader keeps the FIRST entry
+        // for a pin (:1561-1562). Both surfaces -- canvas and node page --
+        // write through here.
+        void SetPinLiteral(Arcane::GraphNode& node, std::uint32_t pin, int lanes, const float v[4])
+        {
+            Arcane::GraphPinLiteral* slot = nullptr;
+            for (Arcane::GraphPinLiteral& pl : node.pinLiterals)
+                if (pl.pin == pin)
+                {
+                    slot = &pl;
+                    break;
+                }
+            if (!slot)
             {
-                case Arcane::GraphNodeType::Combine:        // alpha opaque (:855)
-                    if (pin == 3)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::Clamp:          // max (:859)
-                    if (pin == 2)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::Smoothstep:     // edge1 (:862)
-                    if (pin == 1)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::Power:          // exponent (:869)
-                    if (pin == 1)
-                        out[0] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::TilingOffset:   // tiling, splat (:892)
-                    if (pin == 1)
-                        out[0] = out[1] = 1.0f;
-                    return true;
-                case Arcane::GraphNodeType::SimpleNoise:    // scale (:956)
-                    if (pin == 1)
-                        out[0] = 10.0f;
-                    return true;
-                case Arcane::GraphNodeType::Panner:         // uv -> v.uv (:1058)
-                    return pin != 0;
-                case Arcane::GraphNodeType::ScaleOffset:    // scale = identity (:1074)
-                    if (pin == 2)
-                        out[0] = 1.0f;
-                    return true;
-                default:
-                    return true;
+                Arcane::GraphPinLiteral fresh;
+                fresh.pin = pin;
+                node.pinLiterals.push_back(fresh);
+                slot = &node.pinLiterals.back();
             }
+            for (int i = 0; i < 4; ++i)
+                slot->v[i] = i < lanes ? v[i] : 0.0f;
+        }
+
+        // Drops `pin`'s literal (the pin reads its neutral again). Not for the
+        // custom-pin removal, which renumbers the surviving entries afterwards.
+        void ErasePinLiteral(Arcane::GraphNode& node, std::uint32_t pin)
+        {
+            std::erase_if(node.pinLiterals, [pin](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+        }
+
+        // The node page's target id scope (s5.1.4 step 3), RAII and pushed before
+        // any Rows: TextRow / numeric drafts key per node, and a Rows table always
+        // ends before its id pops (TargetIdScope's rule, InputActionsInspectorPage.cpp:51-61).
+        struct NodePageIdScope
+        {
+            NodePageIdScope(std::size_t pass, std::uint32_t id)
+            {
+                ImGui::PushID("node");
+                ImGui::PushID(static_cast<int>(pass));
+                ImGui::PushID(static_cast<int>(id));
+            }
+            ~NodePageIdScope() { ImGui::PopID(); ImGui::PopID(); ImGui::PopID(); }
+            NodePageIdScope(const NodePageIdScope&) = delete;
+            NodePageIdScope& operator=(const NodePageIdScope&) = delete;
+        };
+
+        // T3-D2 (user decision 2026-10-02): how much of a pin row's wiring /
+        // default text must stay readable AFTER the type word. Below dot + the
+        // widest type word + this many characters, the node page shows the dot
+        // alone and the word leads the row's hover tooltip. The WIDEST word any
+        // pin can show (PinTypeText over every declared/resolved pair), not the
+        // row's own: every row of a page makes the same call, so a page never
+        // mixes worded and dot-only rows and its dots stay in one column.
+        ARC_CVAR_RANGED("editor.inspector.nodePageMinTextRun", "editor", Int32,
+                        ::Arcane::CVarValue::Int32(16), ::Arcane::CVarValue::Int32(0),
+                        ::Arcane::CVarValue::Int32(256), ::Arcane::CVarFlags::Archive,
+                        "Characters of a node page pin row's wiring or default text that must stay readable "
+                        "after the widest pin type word (e.g. 'dynamic (unresolved)'); a value cell narrower "
+                        "than dot + that word + this run shows only the pin's dot on every row of the page "
+                        "and moves the type word into the row's hover tooltip");
+
+        int NodePageMinTextRun()
+        {
+            const Arcane::CVarRegistry& reg = Arcane::CVarRegistry::Get();
+            const auto v = reg.Get(reg.Find("editor.inspector.nodePageMinTextRun"));
+            return (v && v->type == Arcane::CVarType::Int32) ? v->AsInt32() : 16;
+        }
+
+        // The chip's dot slot: it fits a dot WITH its outer ring, ringed or
+        // not, so the type words of a section line up.
+        constexpr float kPinChipSlot = 2.0f * (kPinDotRadius + kGraphPinOuterRingGap + kGraphPinOuterRingWidth);
+
+        // The value-cell width the chip needs to show its word (T3-D2), from
+        // the CURRENT font: the dot slot, the widest word ANY pin shows (so
+        // every row of a page makes the same call and the dots line up), the
+        // gaps, and the cvar's run of 'x'-wide characters after it.
+        float NodePageTypeWordCellWidth()
+        {
+            float widest = 0.0f;
+            for (int declared = 0; declared <= 4; ++declared)
+                for (int resolved = 0; resolved <= 4; ++resolved)
+                    widest = std::max(widest, ImGui::CalcTextSize(PinTypeText(declared, resolved).c_str()).x);
+            const ImGuiStyle& style = ImGui::GetStyle();
+            return kPinChipSlot + style.ItemInnerSpacing.x + widest + style.ItemSpacing.x +
+                   ImGui::CalcTextSize("x").x * static_cast<float>(NodePageMinTextRun());
+        }
+
+        // A node page pin row's type chip (T3-D1): the pin's dot -- painted by
+        // the canvas's own rule and painter, ring included -- then its type
+        // word, dim. Submitted as a RowDecor::lead, so it leads the value cell
+        // and the word is never the part a narrow Inspector cuts (the wiring
+        // text after it is, with its whole text one hover away, s4.1(e)).
+        // Narrower than NodePageTypeWordCellWidth (T3-D2) it draws the dot
+        // alone and RETURNS the word: the row's hover tooltip leads with it
+        // (and the dot tooltips it), so the cell keeps its room for the text.
+        // Centred on the row's FRAME line (a framed value widget's text sits
+        // FramePadding.y down; a read-only row's text takes the same baseline),
+        // with a text-height dummy so a read-only row keeps its height.
+        std::string PinTypeChip(const GraphPinPaint& paint, bool wired, const std::string& type)
+        {
+            const bool showWord = ImGui::GetContentRegionAvail().x >= NodePageTypeWordCellWidth();
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::Dummy(ImVec2(kPinChipSlot, ImGui::GetTextLineHeight()));
+            const ImVec2 c(p.x + kPinChipSlot * 0.5f, p.y + ImGui::GetFrameHeight() * 0.5f);
+            DrawGraphPinDot(ImGui::GetWindowDrawList(), c, paint.color,
+                            ImGui::GetStyleColorVec4(ImGuiCol_WindowBg), kPinDotRadius, wired,
+                            paint.adapts ? &kPinDynamicColor : nullptr);
+            if (!showWord)
+            {
+                ImGui::SetItemTooltip("%s", type.c_str());
+                return type;
+            }
+            ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);   // the dot belongs to its word
+            ImGui::TextDisabled("%s", type.c_str());
+            return {};
+        }
+
+        // The resolved widths of node `id`, or { 0, 0 } (unresolved) when the
+        // map has no entry.
+        Arcane::GraphNodeWidths WidthsOf(const std::unordered_map<std::uint32_t, Arcane::GraphNodeWidths>& widths,
+                                         std::uint32_t id)
+        {
+            const auto it = widths.find(id);
+            return it != widths.end() ? it->second : Arcane::GraphNodeWidths{};
+        }
+
+        // "<display>[ '<param>'].<pin>" for a wired input's source (s5.1.4 pin table).
+        std::string WireSourceText(const Arcane::MaterialGraph& g, const Arcane::GraphLink& l)
+        {
+            const Arcane::GraphNode* src = g.FindNode(l.fromNode);
+            if (!src || l.fromPin >= Arcane::GraphNodeOutputCount(*src))
+                return "?";
+            std::string display = Arcane::GraphNodeInfo(src->type).display;
+            if (src->type == Arcane::GraphNodeType::Param || src->type == Arcane::GraphNodeType::TextureSample)
+                display += " '" + src->paramName + "'";
+            return display + "." + Arcane::GraphNodeOutputPin(*src, l.fromPin).name;
+        }
+
+        // Constant: %g for one lane, "(a, b[, c, d])" for more; Expression: its hlsl;
+        // Passthrough: the plain-language rule.
+        std::string FormatPinNeutral(const Arcane::GraphPinNeutral& p)
+        {
+            if (p.kind == Arcane::GraphPinNeutralKind::Expression)
+                return p.hlsl ? p.hlsl : "";
+            if (p.kind == Arcane::GraphPinNeutralKind::Passthrough)
+                return "unchanged (only a wire contributes)";
+            char buf[32];
+            if (p.lanes <= 1)
+            {
+                std::snprintf(buf, sizeof(buf), "%g", p.v[0]);
+                return buf;
+            }
+            std::string out = "(";
+            for (int i = 0; i < p.lanes && i < 4; ++i)
+            {
+                std::snprintf(buf, sizeof(buf), "%g", p.v[i]);
+                out += (i ? ", " : "") + std::string(buf);
+            }
+            return out + ")";
         }
 
         // Value equality for a pass's optional graph, for the gesture builders'
@@ -653,6 +842,14 @@ namespace Arcane::Editor
             void Undo() override { Apply(m_before); }
             void Redo() override { Apply(m_after); }
             const char* Label() const override { return m_label.c_str(); }
+            // Spec s3.3: a document step never dirties the scene, and it is
+            // EXPIRED once its document closed (the anchor died).
+            bool AffectsScene() const override { return false; }
+            bool IsExpired() const override
+            {
+                const auto doc = m_anchor.lock();
+                return !doc || !*doc;
+            }
 
         private:
             void Apply(const std::optional<Arcane::MaterialGraph>& state)
@@ -686,6 +883,14 @@ namespace Arcane::Editor
             void Undo() override { Apply(m_before); }
             void Redo() override { Apply(m_after); }
             const char* Label() const override { return m_label.c_str(); }
+            // Spec s3.3: a document step never dirties the scene, and it is
+            // EXPIRED once its document closed (the anchor died).
+            bool AffectsScene() const override { return false; }
+            bool IsExpired() const override
+            {
+                const auto doc = m_anchor.lock();
+                return !doc || !*doc;
+            }
 
         private:
             void Apply(const ShaderEditorDocument::PassListState& state)
@@ -700,165 +905,6 @@ namespace Arcane::Editor
             std::string m_label;
             ShaderEditorDocument::PassListState m_before, m_after;
         };
-
-        // ---- Pane splitters ------------------------------------------------
-        // Divider geometry and limits, shared by both of Draw's splits.
-        constexpr float kSplitBarPx  = 6.0f;     // the divider's hit width
-        constexpr float kSplitLinePx = 1.0f;     // hairline drawn at rest
-        constexpr float kSplitHotPx  = 2.0f;     // ... and while hovered/held
-        constexpr float kPaneMinPx   = 120.0f;   // neither pane goes under this
-        constexpr float kSplitMinF   = 0.15f;    // ... unless the span is too
-        constexpr float kSplitMaxF   = 0.85f;    //     small for two floors
-
-        // ---- Pane layout persistence (imgui.ini) ---------------------------
-        // The ini section the ratio lives in: "[ArcaneEditorLayout]
-        // [MaterialPanel]" (the name is kept for ini compatibility; the Material
-        // window itself retired into the Inspector page, inspector filters
-        // s6a, and the split now sizes that page). TypeName may not contain '[' or ']'
-        // (imgui_internal.h:2214); the entry name is what ReadOpen matches on,
-        // and the pair is what lets a future panel add its own entry under the
-        // same type without touching this handler.
-        //
-        // STALE ENTRIES from before the Material panel existed are inert, by
-        // the two mechanisms already in place: the retired "[ArcaneEditorLayout]
-        // [ShaderEditor]" section makes ReadOpen return null (which is how it
-        // has always rejected an unknown name -- ImGui then skips that entry's
-        // lines), and a retired "MainSplit=" line inside a section that IS
-        // matched simply fails both sscanf branches in ReadLine and is dropped.
-        // Neither path allocates or dereferences, so an old imgui.ini loads
-        // clean; the next save rewrites the file without them.
-        constexpr const char* kLayoutIniType = "ArcaneEditorLayout";
-        constexpr const char* kLayoutIniName = "MaterialPanel";
-
-        // A stored ratio arrives from a text file a human can edit, so it is
-        // not trusted: anything non-finite or outside the working range is
-        // pulled back to the fraction limits. The per-frame ClampSplit still
-        // applies the pixel floors on top of this -- this only has to keep a
-        // garbage line from parking a pane off-screen.
-        float SanitizeSplit(float v)
-        {
-            if (!(v > 0.0f) || !(v < 1.0f))   // false for NaN, by construction
-                return 0.5f;
-            return (std::min)((std::max)(v, kSplitMinF), kSplitMaxF);
-        }
-
-        // ReadOpen returns the entry the following lines write into; returning
-        // null makes ImGui skip the entry's lines, which is what an unknown
-        // name should do (imgui.cpp:4498-4505 registers the stock "Window"
-        // handler in this same shape).
-        void* LayoutSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name)
-        {
-            return std::strcmp(name, kLayoutIniName) == 0
-                       ? static_cast<void*>(&ShaderEditorDocument::Layout())
-                       : nullptr;
-        }
-
-        void LayoutSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*,
-                                    void* entry, const char* line)
-        {
-            auto* prefs = static_cast<ShaderEditorDocument::LayoutPrefs*>(entry);
-            float v = 0.0f;
-            if (std::sscanf(line, "PreviewSplit=%f", &v) == 1)
-                prefs->previewSplit = SanitizeSplit(v);
-        }
-
-        void LayoutSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler,
-                                    ImGuiTextBuffer* buf)
-        {
-            const ShaderEditorDocument::LayoutPrefs& prefs = ShaderEditorDocument::Layout();
-            buf->reserve(buf->size() + 64);
-            buf->appendf("[%s][%s]\n", handler->TypeName, kLayoutIniName);
-            buf->appendf("PreviewSplit=%.4f\n", prefs.previewSplit);
-            buf->append("\n");
-        }
-
-        // The fraction a split may actually use, given `span` pixels of shared
-        // extent. The PIXEL floor is what keeps a pane usable in a large
-        // window; the FRACTION floor is what keeps both panes alive in a small
-        // one -- under 2 * kPaneMinPx the two pixel floors would cross, so each
-        // is folded against 0.5 first, which leaves lo <= 0.5 <= hi always (an
-        // inverted range would make the clamp order-dependent).
-        float ClampSplit(float ratio, float span)
-        {
-            float lo = kSplitMinF, hi = kSplitMaxF;
-            if (span > 0.0f)
-            {
-                lo = (std::max)(lo, (std::min)(kPaneMinPx / span, 0.5f));
-                hi = (std::min)(hi, (std::max)(1.0f - kPaneMinPx / span, 0.5f));
-            }
-            return (std::min)((std::max)(ratio, lo), hi);
-        }
-
-        // A draggable divider between two sibling panes -- ImGui's standard
-        // splitter recipe: an InvisibleButton owns the gap, and because ImGui
-        // holds ActiveId for as long as the button is held, MouseDelta keeps
-        // arriving every frame even after the cursor leaves the rect. `span`
-        // is the extent the two panes SHARE (their region minus this divider),
-        // so pixels convert into the same fraction the caller laid out with.
-        // Double-click restores `defaultRatio` -- the only way back to a round
-        // split once dragged.
-        //
-        // Two axes, but only the vertical one (dragX=false) has a caller today
-        // -- the material page's preview/params divider. The horizontal branch
-        // is kept because the axis is the ONLY thing that differs between them
-        // (four ternaries), so specialising it would not shrink this function,
-        // and the node-properties section this panel is slated to grow is the
-        // obvious next horizontal split.
-        //
-        // Submit it OUTSIDE ed::Begin/End (both callers do; the canvas's
-        // Begin/End is down inside DrawGraphPanel): within the canvas the node editor
-        // takes ImGui's input for itself and moves ImGui into canvas space
-        // (imgui_canvas.cpp), so a divider there would both compete with the
-        // pan/zoom gestures and drag at the zoom's rate rather than the
-        // cursor's.
-        void PaneSplitter(const char* id, bool dragX, float crossSize, float span,
-                          float& ratio, float defaultRatio)
-        {
-            const ImVec2 size = dragX ? ImVec2(kSplitBarPx, crossSize)
-                                      : ImVec2(crossSize, kSplitBarPx);
-            if (size.x <= 0.0f || size.y <= 0.0f)
-                return;   // degenerate region (InvisibleButton asserts on zero)
-
-            const ImVec2 p0 = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton(id, size);
-            const bool held    = ImGui::IsItemActive();
-            const bool hovered = ImGui::IsItemHovered();
-            if (held || hovered)
-                ImGui::SetMouseCursor(dragX ? ImGuiMouseCursor_ResizeEW
-                                            : ImGuiMouseCursor_ResizeNS);
-            if (held && span > 0.0f)
-            {
-                const ImVec2 d = ImGui::GetIO().MouseDelta;
-                ratio = ClampSplit(ratio + (dragX ? d.x : d.y) / span, span);
-            }
-            // After the drag, so the reset wins on the frame it fires (that
-            // frame's own drag delta is ~0 anyway -- the click did not move).
-            const bool reset = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-            if (reset)
-                ratio = defaultRatio;
-            // Persist on RELEASE, not per frame: MarkIniSettingsDirty starts
-            // ImGui's own save timer (IniSavingRate), so marking every frame of
-            // a drag would keep re-arming a timer that writes the same file
-            // anyway. IsItemDeactivated is true on the frame the drag ends
-            // (imgui_internal.h's ActiveIdPreviousFrame bookkeeping), which is
-            // exactly one mark per gesture.
-            if (reset || ImGui::IsItemDeactivated())
-                ImGui::MarkIniSettingsDirty();
-
-            // Style-relative and three-tone, the same ramp ImGui's own docking
-            // splitter uses: a hairline in Separator at rest, one step brighter
-            // and one pixel wider on hover, brightest while held. The editor
-            // theme fills all three entries (EditorTheme.hpp:175-177).
-            const ImU32 col = ImGui::GetColorU32(held    ? ImGuiCol_SeparatorActive
-                                               : hovered ? ImGuiCol_SeparatorHovered
-                                                         : ImGuiCol_Separator);
-            const float line = (held || hovered) ? kSplitHotPx : kSplitLinePx;
-            const ImVec2 a = dragX ? ImVec2(p0.x + (size.x - line) * 0.5f, p0.y)
-                                   : ImVec2(p0.x, p0.y + (size.y - line) * 0.5f);
-            const ImVec2 b = dragX ? ImVec2(a.x + line, p0.y + size.y)
-                                   : ImVec2(p0.x + size.x, a.y + line);
-            ImGui::GetWindowDrawList()->AddRectFilled(a, b, col);
-        }
     }
 
     // InputTextMultiline over std::string (the imgui_stdlib resize pattern) +
@@ -967,8 +1013,8 @@ namespace Arcane::Editor
         // cost of ClosePending's commit-not-cancel rule, which exists because
         // Cancel would discard the transaction WITHOUT reverting the edits the
         // user already watched happen.
-        if (m_services.undo)
-            EditGesture::ClosePending(*m_services.undo, m_gesture);
+        if (UndoStack())
+            EditGesture::ClosePending(*UndoStack(), m_gesture);
 
         if (m_graphCtx)
         {
@@ -993,6 +1039,45 @@ namespace Arcane::Editor
         // teardown last is the same "borrower first, GPU last" shape
         // EditorApp::Shutdown uses, and it is what a reader will expect.
         DestroyGraphPreview();
+    }
+
+    void ShaderEditorDocument::NoteMoved(const std::filesystem::path& p)
+    {
+        m_path = p;
+        m_title = m_data.name.empty() ? m_path.stem().string() : m_data.name;
+        m_windowLabel = m_title + (m_data.IsInstance() ? " (Instance)###matdoc_" : " (Material)###matdoc_") + m_data.id.ToString();
+        PublishDiagnostics();   // the File locators carry m_path
+    }
+
+    // T5 s7.5: what Save would write (Save below) -- the parent plus every texture param. A bound instance's
+    // overrides are the truth Save harvests (only those the bound template declares); before the first bind
+    // the loaded m_data.params are kept, so they are the answer.
+    std::vector<Arcane::Guid> ShaderEditorDocument::LiveReferences() const
+    {
+        std::vector<Arcane::Guid> o;
+        if (m_data.parent.IsValid())
+            o.push_back(m_data.parent);
+        const auto tex = [&](const Arcane::MatParamValue& v)
+        {
+            if (v.type == Arcane::MatParamType::Texture && v.tex.IsValid())
+                o.push_back(v.tex);
+        };
+        if (m_instance && m_boundTemplate)
+        {
+            for (const auto& [h, v] : m_instance->Overrides())
+                if (m_boundTemplate->Find(h))
+                    tex(v);
+        }
+        else
+            for (const auto& [n, v] : m_data.params)
+                tex(v);
+        return o;
+    }
+
+    void ShaderEditorDocument::FlushGesture()
+    {
+        if (Arcane::CommandStack* s = UndoStack())
+            EditGesture::ClosePending(*s, m_gesture);
     }
 
     bool ShaderEditorDocument::ResolveParentChain()
@@ -1081,6 +1166,8 @@ namespace Arcane::Editor
         if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
         {
             m_vsJob = m_psJob = 0;
+            m_jobsInFlight  = 0;      // s3.2: every live id was just invalidated
+            m_submitRefused = false;
             m_vsBytes.clear();
             m_psBytes.clear();
             m_passJobs.clear();
@@ -1105,29 +1192,34 @@ namespace Arcane::Editor
         // Invalidate every in-flight job (both paths): a result for a source
         // this Rebuild replaced must not bind.
         m_vsJob = m_psJob = 0;
+        m_jobsInFlight  = 0;      // s3.2: every live id was just invalidated
+        m_submitRefused = false;
         m_vsBytes.clear();
         m_psBytes.clear();
         m_passJobs.clear();
 
-        if (ChainMode())
+        if (CompilesAsChain())
         {
+            // An instance compiles its BASE's chain (CompilesAsChain); a base
+            // compiles its own, with the LIVE base snippet (SnippetSource).
+            const Arcane::MaterialAssetData& src = *CompiledSource();
             std::vector<Arcane::MaterialChainPassDesc> descs;
-            descs.reserve(1 + m_data.passes.size());
-            descs.push_back({ m_snippet, m_data.baseInputs });
-            for (const Arcane::MaterialPass& p : m_data.passes)
+            descs.reserve(1 + src.passes.size());
+            descs.push_back({ SnippetSource(), src.baseInputs });
+            for (const Arcane::MaterialPass& p : src.passes)
                 descs.push_back({ p.snippet, p.inputs });
 
             // The editor ALWAYS builds in post mode: scene reads must author
             // and preview here (the stand-in feeds them); only a non-post
             // RUNTIME consumer refuses them.
             Arcane::MaterialChainBuildResult build = Arcane::BuildMaterialChainSource(
-                *templateText, descs, m_title, m_data.vertexSnippet,
+                *templateText, descs, m_title, src.vertexSnippet,
                 /*externalInput=*/true);
             m_passInputs = std::move(build.passInputs);
             m_chainInputSlots = build.chainInputSlots;
             m_vsLineOffset = 0;
-            if (!m_data.vertexSnippet.empty() && !build.hlsl.empty())
-                if (const std::size_t at = build.hlsl[0].find(m_data.vertexSnippet);
+            if (!src.vertexSnippet.empty() && !build.hlsl.empty())
+                if (const std::size_t at = build.hlsl[0].find(src.vertexSnippet);
                     at != std::string::npos)
                     m_vsLineOffset = static_cast<int>(std::count(
                         build.hlsl[0].begin(),
@@ -1158,19 +1250,17 @@ namespace Arcane::Editor
                 req.entry = Arcane::kPsEntry;
                 req.profile = Arcane::kPsProfile;
                 req.coalesceKey = StageKey(m_data.id, /*vertex=*/false, p);
-                m_passJobs[p].psJob = m_services.compiler->Submit(req, Now());
+                m_passJobs[p].psJob = SubmitCompile(req);   // a copy -- req is reused
                 req.entry = Arcane::kVsEntry;
                 req.profile = Arcane::kVsProfile;
                 req.coalesceKey = StageKey(m_data.id, /*vertex=*/true, p);
-                m_passJobs[p].vsJob = m_services.compiler->Submit(std::move(req), Now());
+                m_passJobs[p].vsJob = SubmitCompile(std::move(req));
             }
             return;
         }
 
         // Instances inherit the base's vertex stage (they carry no snippets).
-        const std::string& vertexSnippet =
-            IsInstance() && !m_parentChain.empty() ? m_parentChain.back().vertexSnippet
-                                                   : m_data.vertexSnippet;
+        const std::string& vertexSnippet = CompiledVertexSnippet();
         Arcane::MaterialBuildResult build =
             Arcane::BuildMaterialShaderSource(*templateText, SnippetSource(), m_title,
                                               SurfaceOf(m_surface), vertexSnippet);
@@ -1199,13 +1289,23 @@ namespace Arcane::Editor
         req.entry = Arcane::kPsEntry;
         req.profile = Arcane::kPsProfile;
         req.coalesceKey = StageKey(m_data.id, /*vertex=*/false);
-        m_psJob = m_services.compiler->Submit(req, Now());
+        m_psJob = SubmitCompile(req);   // a copy -- req is reused
         req.entry = Arcane::kVsEntry;
         req.profile = Arcane::kVsProfile;
         req.coalesceKey = StageKey(m_data.id, /*vertex=*/true);
-        m_vsJob = m_services.compiler->Submit(std::move(req), Now());
+        m_vsJob = SubmitCompile(std::move(req));
         m_vsBytes.clear();
         m_psBytes.clear();
+    }
+
+    std::uint64_t ShaderEditorDocument::SubmitCompile(Arcane::ShaderCompileRequest req)
+    {
+        const std::uint64_t id = m_services.compiler->Submit(std::move(req), Now());
+        if (id != 0)
+            ++m_jobsInFlight;
+        else
+            m_submitRefused = true;   // ShaderCompiler::Submit returns 0 when unavailable
+        return id;
     }
 
     bool ShaderEditorDocument::ConsumeResult(const Arcane::ShaderCompileResult& result)
@@ -1219,6 +1319,7 @@ namespace Arcane::Editor
             const bool chainPs = result.jobId == pj.psJob && pj.psJob != 0;
             if (!chainVs && !chainPs)
                 continue;
+            if (m_jobsInFlight > 0) --m_jobsInFlight;   // a live job answered (s3.2)
             const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
                                      ? result.spirv : result.dxil;
             if (chainPs)
@@ -1244,6 +1345,7 @@ namespace Arcane::Editor
         const bool isPs = result.jobId == m_psJob && m_psJob != 0;
         if (!isVs && !isPs)
             return false;
+        if (m_jobsInFlight > 0) --m_jobsInFlight;   // a live job answered (s3.2)
 
         const auto& target = m_services.backend == Arcane::GraphicsBackend::Vulkan
                                  ? result.spirv : result.dxil;
@@ -1264,7 +1366,7 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::BindIfComplete()
     {
-        if (ChainMode())
+        if (CompilesAsChain())
         {
             BindChainIfComplete();
             return;
@@ -1413,27 +1515,35 @@ namespace Arcane::Editor
     // contexts, neither of which is a preview.
     void ShaderEditorDocument::EnsureGraphPreviewContext()
     {
-        // The seam is null in every headless test (no EditorApp at all),
-        // which is the whole gate: this function is a no-op there.
-        if (m_graphPreview || !m_services.nriDevice || !m_services.hostConfig)
+        // The seam is unset in every headless test (no EditorApp at all),
+        // and its resolver returns null during boot: either way this is a
+        // null check that never latches (s3.2).
+        if (m_graphPreview || !m_services.hostConfig || !m_services.chromeGraph)
             return;
+        Arcane::NriGraphContext* chrome = m_services.chromeGraph();
+        if (!chrome)
+            return;   // the seam is not up yet (boot): a null check, never a latch
 
         // NodeSet{} -- batch + post + tonemap and nothing else. A preview has
         // no host chrome, no game HUD and nothing to pick, and NodeSet's own
         // doc says a node a context will never declare is a descriptor pool
         // nobody reads.
+        ++m_previewVehicleAttempts;
         m_graphPreview = Arcane::NriGraphContext::CreateOffscreen(
-            *m_services.hostConfig, *m_services.nriDevice,
+            *m_services.hostConfig, chrome->Device(),
             kGraphPreviewSize, kGraphPreviewSize);
         if (!m_graphPreview)
         {
             // Degraded, not fatal, and it degrades to exactly what a missing
             // device already degrades to: no preview image. The refusal is
-            // already logged + latched inside CreateOffscreen.
+            // already logged inside CreateOffscreen.
+            m_previewVehicleFailed = true;   // Tick stops retrying; a later bind still tries (s3.2)
             ARC_WARN("ShaderEditorDocument '{}': the graph preview context could not be created "
                      "-- this document shows no preview", m_title);
             return;
         }
+        m_previewVehicleFailed = false;
+        m_previewHud = chrome->ImGuiHud();
 
         // The two injected seams, copied from EditorApp::CreateGraphVehicles'
         // viewport block and for the same reason: a material's texture params
@@ -1455,6 +1565,20 @@ namespace Arcane::Editor
                     return rt->AssetsFacade().PixelsFor(id);
                 });
         }
+
+        // The mesh-surface preview's ONE mesh (T3-D6): the sphere, served by
+        // value-captured shared ownership so a retired vehicle never reaches
+        // back into a destroyed document.
+        if (!m_previewSphere)
+            m_previewSphere = std::make_shared<const Arcane::MeshData>(BuildMaterialPreviewSphere());
+        m_graphPreview->SetMeshSupply(
+            [sphere = m_previewSphere](const Arcane::Guid& id) -> Arcane::NriMeshBufferCache::SupplyResult
+            {
+                if (id == kMaterialPreviewSphereId && sphere && !sphere->vertices.empty())
+                    return { sphere.get(), Arcane::MeshResolveState::Ready };
+                return { nullptr, Arcane::MeshResolveState::Failed };
+            });
+        m_meshPreviewPresented = false;
 
         // The document's OWN recorder -- owned rather than borrowed from the
         // editor: this frame is declared from Tick (phase 13), long after
@@ -1527,16 +1651,20 @@ namespace Arcane::Editor
             return;
 
         const bool sprite = m_surface == 1;
+        const bool mesh = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh;
         const bool haveSprite =
             sprite && m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId;
-        const bool haveFullscreen =
-            !sprite && m_graphPost.templ && m_graphPost.instance && !m_graphPost.passes.empty();
+        const bool haveFullscreen = !sprite && !mesh &&
+            m_graphPost.templ && m_graphPost.instance && !m_graphPost.passes.empty();
+        // A mesh surface compiles nothing: it is ready the moment its params
+        // are bound (Rebuild's synchronous MeshParamTemplate promote).
+        const bool haveMesh = mesh && m_instance && m_previewSphere;
         // NOTHING COMPILED YET IS NOT A FRAME. Declaring one would clear the
         // output to the checkerboard and then show it as "the preview", which
         // is the blank-but-labeled failure this phase refuses; the panel draws
         // no image instead (DrawPreviewPanel gates on the same predicate,
         // PreviewReady()).
-        if (!haveSprite && !haveFullscreen)
+        if (!haveSprite && !haveFullscreen && !haveMesh)
             return;
 
         Arcane::GlobalParams globals;
@@ -1577,6 +1705,24 @@ namespace Arcane::Editor
         vp.batch   = &b;
         vp.globals = &globals;
 
+        // THE MESH SURFACE (T3-D6): the thumbnail's lit sphere, coloured from
+        // the bound instance's CURRENT values -- an edit (or an instance
+        // override) shows on the next frame, before any save. The albedo
+        // resolves to a slot in THIS vehicle's bindless table.
+        Arcane::MeshInstance sphereInstance;
+        Arcane::MeshSceneDesc meshScene;
+        if (haveMesh)
+        {
+            const MeshPreviewParams in = MeshPreviewInputs();
+            std::uint32_t slot = 0xFFFFFFFFu;   // BindlessTable::kInvalidSlot: the flat baseColor path
+            if (in.albedo.IsValid())
+                slot = m_graphPreview->ResolveMeshAlbedoSlot(in.albedo);
+            sphereInstance = MaterialPreviewSphereInstance(
+                glm::vec4(in.baseColor[0], in.baseColor[1], in.baseColor[2], in.baseColor[3]), slot);
+            meshScene = MaterialPreviewSphereScene(std::span<const Arcane::MeshInstance>(&sphereInstance, 1));
+            vp.mesh = &meshScene;
+        }
+
         // VIEW-ANY-INTERMEDIATE: the chain is TRUNCATED at the viewed pass,
         // so the last declared pass writes the output. The copy
         // is free of a rebuild -- PostChainNode's chain stamp is built from
@@ -1615,8 +1761,32 @@ namespace Arcane::Editor
         {
             ARC_ERROR("ShaderEditorDocument '{}': the graph preview frame failed -- dropping this "
                       "document's preview vehicle", m_title);
+            m_previewFrameFailed = true;   // Tick stops retrying; the next bind rebuilds (s3.2)
             DestroyGraphPreview();
         }
+        else if (outcome == Arcane::NriGraphContext::FrameOutcome::Presented)
+        {
+            m_previewFrameFailed = false;  // the next good frame clears the latch
+            m_meshPreviewPresented = haveMesh;
+        }
+    }
+
+    ShaderEditorDocument::MeshPreviewParams ShaderEditorDocument::MeshPreviewInputs() const
+    {
+        // The same two names MeshMaterialCache resolves off disk (and the
+        // thumbnail harvester through it), read off the LIVE instance -- which
+        // already layers the parent chain under this document's overrides
+        // (PromotePendingInstance), so an instance inherits exactly what the
+        // saved resolve would give it.
+        MeshPreviewParams out;
+        if (!m_instance)
+            return out;
+        Arcane::MatParamValue v;
+        if (m_instance->GetParam("baseColor", v) && v.type == Arcane::MatParamType::Color)
+            out.baseColor = { v.f[0], v.f[1], v.f[2], v.f[3] };
+        if (m_instance->GetParam("albedo", v) && v.type == Arcane::MatParamType::Texture)
+            out.albedo = v.tex;
+        return out;
     }
 
     void ShaderEditorDocument::DestroyGraphPreview()
@@ -1629,7 +1799,9 @@ namespace Arcane::Editor
         // document has ever seen it.
         m_graphSpriteMaterial = Arcane::Batcher2D::kInvalidMaterialId;
         m_graphSpriteStamp = nullptr;
+        m_meshPreviewPresented = false;
         m_graphBatch.reset();
+        Arcane::ImGuiNriNode* hud = std::exchange(m_previewHud, nullptr);
 
         // ===== THE VEHICLE IS RETIRED, NOT DESTROYED (see DocServices::
         // retireGraphPreview for the full reasoning) =====
@@ -1646,8 +1818,8 @@ namespace Arcane::Editor
 
         // ===== NO SINK: THE CROSS-CONTEXT INVALIDATE, OWED *BEFORE* =====
         // Reached only where no further frame will be recorded (the app drains
-        // its retire list and then closes every document at shutdown, and the
-        // headless tests build no vehicle at all).
+        // its retire list and then closes every document at shutdown, and a
+        // [gpu] test that wires no retire sink).
         //
         // The chrome context's ImGuiNri caches per texture BY RAW POINTER --
         // and NRI does not ref-count, so the next allocation may land on the
@@ -1661,8 +1833,8 @@ namespace Arcane::Editor
         //
         // Unconditional and idempotent: a miss is routine (a preview that
         // never drew), and a null node is an early-out inside the hook.
-        if (m_services.chromeHud)
-            (void)m_services.chromeHud->InvalidateUserTextureNow(m_graphPreview->OffscreenOutput());
+        if (hud)
+            (void)hud->InvalidateUserTextureNow(m_graphPreview->OffscreenOutput());   // the node recorded at creation (s3.2)
         m_graphPreview.reset();
     }
 
@@ -1678,11 +1850,11 @@ namespace Arcane::Editor
                 if (d.severity == Arcane::ShaderDiagSeverity::Error)
                     return true;
         // Vertex-stage errors, filtered to the vertex body (same filter as
-        // ForEachDiagnosticRow's vertex block).
-        if (!m_data.vertexSnippet.empty())
+        // ForEachDiagnosticRow's vertex block). CompiledVertexSnippet: an
+        // instance compiles its BASE's vertex stage (fix round 1).
+        if (const std::string& vs = CompiledVertexSnippet(); !vs.empty())
         {
-            const int vsLines = 1 + static_cast<int>(std::count(
-                m_data.vertexSnippet.begin(), m_data.vertexSnippet.end(), '\n'));
+            const int vsLines = 1 + static_cast<int>(std::count(vs.begin(), vs.end(), '\n'));
             for (const Arcane::ShaderDiag& d : m_vsDiags)
             {
                 const int rel = d.line - m_vsLineOffset;
@@ -1798,14 +1970,14 @@ namespace Arcane::Editor
         const std::optional<MeshMaterialMetadataState> after = CaptureMeshMaterialMetadata();
         if (!after || *after == before)
             return;   // nothing changed (or the clamp collapsed the request back) -- no step, redo intact
-        if (!m_services.undo)
+        if (!UndoStack())
             return;
         // Labelled by the field that changed, blend first when several did (a
         // blend switch is the edit the others ride along with).
         const char* label = before.blend != after->blend             ? "Edit Blend"
                           : before.alphaCutoff != after->alphaCutoff ? "Edit Alpha Cutoff"
                                                                      : "Edit Two Sided";
-        m_services.undo->Push(std::make_unique<MeshMaterialMetadataCommand>(m_anchor, label, before, *after));
+        UndoStack()->Push(std::make_unique<MeshMaterialMetadataCommand>(m_anchor, label, before, *after));
     }
 
     void ShaderEditorDocument::ApplyParamEdit(std::uint32_t nameHash, bool hasValue,
@@ -1830,10 +2002,27 @@ namespace Arcane::Editor
         // to create) there is nothing to be ready.
         if (!m_graphPreview)
             return false;
+        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
+            return m_meshPreviewPresented;   // the sphere frame landed (T3-D6)
         return m_surface == 1
                    ? m_graphSpriteMaterial != Arcane::Batcher2D::kInvalidMaterialId
                    : (m_graphPost.templ && m_graphPost.instance &&
                       !m_graphPost.passes.empty());
+    }
+
+    PreviewStatus ShaderEditorDocument::ComputeStatus() const
+    {
+        PreviewStatusInputs in;
+        in.notCompiledHere   = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh;
+        in.compilerAvailable = m_services.compiler && m_services.sources
+                            && m_services.compiler->IsAvailable() && !m_submitRefused;
+        in.jobsInFlight      = m_jobsInFlight;
+        in.hasErrors         = HasErrors();
+        in.deviceSeam        = m_services.chromeGraph && m_services.chromeGraph() != nullptr;
+        in.vehicleFailed     = m_previewVehicleFailed;
+        in.frameFailed       = m_previewFrameFailed;
+        in.imageBound        = PreviewReady();
+        return ComputePreviewStatus(in);
     }
 
     std::string& ShaderEditorDocument::ActiveSnippet()
@@ -1846,13 +2035,22 @@ namespace Arcane::Editor
         return m_snippet;
     }
 
+    const std::string& ShaderEditorDocument::CompiledVertexSnippet() const
+    {
+        static const std::string kNone;
+        const Arcane::MaterialAssetData* src = CompiledSource();
+        return src ? src->vertexSnippet : kNone;
+    }
+
     std::string ShaderEditorDocument::PassLabel(std::size_t pass) const
     {
         if (pass == 0)
             return "base";
-        if (pass <= m_data.passes.size())
+        // CompiledSource: an instance's pass errors name its BASE's passes.
+        const Arcane::MaterialAssetData* src = CompiledSource();
+        if (src && pass <= src->passes.size())
         {
-            const std::string& n = m_data.passes[pass - 1].name;
+            const std::string& n = src->passes[pass - 1].name;
             if (!n.empty())
                 return n;
         }
@@ -1869,41 +2067,20 @@ namespace Arcane::Editor
         // THE WHOLE RENDER PHASE. A missing vehicle simply means no preview
         // this Tick -- the same degraded-not-fatal outcome as any other
         // vehicle failure (see EnsureGraphPreviewContext).
+        //
+        // THE LATE-BOUND SEAM'S RETRY (s3.2): a document opened during boot
+        // compiled and bound with no vehicle; PublishGraphPreview builds it and
+        // re-registers the sprite binding the bind could not make. Not after a
+        // creation refusal, and not after a frame failure (that rebuilds on
+        // the next bind -- today's drop-and-rebuild-on-bind).
+        // A MESH-surface material builds its vehicle here too (T3-D6): it has
+        // no bind site (nothing compiles), and its preview -- the lit sphere,
+        // drawn by the document tab (instance) or the page square (base) --
+        // is a frame like any other surface's.
+        if (!m_graphPreview && !m_previewVehicleFailed && !m_previewFrameFailed)
+            PublishGraphPreview();
         if (m_graphPreview)
             RenderGraphPreview(dt);
-    }
-
-    ShaderEditorDocument::LayoutPrefs& ShaderEditorDocument::Layout()
-    {
-        // One per process, defaulted from the class constants. Function-local so
-        // there is no static-init order question with the ini handler, which is
-        // registered from EditorApp::Init and may read this on its first line.
-        static LayoutPrefs prefs;
-        return prefs;
-    }
-
-    void ShaderEditorDocument::RegisterLayoutSettings()
-    {
-        // No context (headless) or already registered: nothing to do. ImGui
-        // COPIES the handler into the context (imgui.cpp's AddSettingsHandler
-        // does a push_back by value), so the local below may die here -- the
-        // stock handlers are registered from a local exactly the same way.
-        if (ImGui::GetCurrentContext() == nullptr ||
-            ImGui::FindSettingsHandler(kLayoutIniType) != nullptr)
-            return;
-
-        ImGuiSettingsHandler handler;
-        handler.TypeName   = kLayoutIniType;
-        handler.TypeHash   = ImHashStr(kLayoutIniType);
-        handler.ReadOpenFn = LayoutSettingsReadOpen;
-        handler.ReadLineFn = LayoutSettingsReadLine;
-        handler.WriteAllFn = LayoutSettingsWriteAll;
-        // ImGui::ClearIniSettings (a windowed project switch, EditorApp::
-        // RetargetLayoutIni, before it reads the incoming file): back to the
-        // default, so a file without the section never inherits the outgoing
-        // project's split.
-        handler.ClearAllFn = [](ImGuiContext*, ImGuiSettingsHandler*) { ShaderEditorDocument::Layout() = LayoutPrefs{}; };
-        ImGui::AddSettingsHandler(&handler);
     }
 
     void ShaderEditorDocument::Draw(bool& requestClose)
@@ -1911,7 +2088,7 @@ namespace Arcane::Editor
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard. It
         // covers the early return below (Begin refused: collapsed window or a
         // background tab, where no widget inside can report its deactivation).
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         bool open = true;
         ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
@@ -1949,7 +2126,7 @@ namespace Arcane::Editor
         // window's right column and the horizontal "##splitmain" divider that
         // used to size it: with the right column gone there was nothing left
         // for a horizontal split to divide.
-        // The surviving split -- preview against params -- went with them.
+        // The page has no split either: its preview is a collapsible square (s5.3).
         if (!IsInstance())
         {
             if (m_activePass > static_cast<int>(m_data.passes.size()))
@@ -2001,7 +2178,7 @@ namespace Arcane::Editor
             else
                 m_inChainView = false;
 
-            if (chainAvailable && m_inChainView)
+            if (ChainViewShowing())
                 DrawPassCanvas();
             // A mesh base material has no snippet, no graph and no pass
             // canvas to show here (Rebuild()'s own guard) -- falling through
@@ -2029,12 +2206,15 @@ namespace Arcane::Editor
             // INSTANCE mode: an instance authors no source -- that belongs to
             // its base -- and its params now live in the Inspector's material
             // page, which would leave this tab empty. So the preview takes the
-            // whole tab: an instance IS its values, and the large preview is the
-            // one thing this window can still say about them that the page
-            // cannot (the page's preview is Inspector-column narrow). The toolbar
+            // whole tab: an instance IS its values, and this tab OWNS its
+            // preview (s5.3 amendment, user decision A): the page draws none
+            // for an instance, so there is one preview, not two. The toolbar
             // above keeps the parent-chain affordances reachable; saving is
             // Ctrl+S, which needs no toolbar room at all.
-            DrawPreviewPanel(ImGui::GetContentRegionAvail().y);
+            // A mesh surface's caption sits under the box (T3-D6).
+            const float caption = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh
+                                      ? MeshPreviewCaptionHeight(ImGui::GetContentRegionAvail().x) : 0.0f;
+            DrawPreviewPanel(ImVec2(0.0f, (std::max)(1.0f, ImGui::GetContentRegionAvail().y - caption)));
         }
 
         // Opened = selected; a click anywhere in the content (canvas
@@ -2052,56 +2232,42 @@ namespace Arcane::Editor
         requestClose = !open;
     }
 
-    void ShaderEditorDocument::DrawMaterialPageBody()
+    void ShaderEditorDocument::DrawMaterialPageBody(PropertyGrid& grid)
     {
         // FIRST local, so it destructs LAST -- see EditGesture::ScopeGuard.
-        // The param rows below open gestures against m_gesture. The body now
+        // The param rows below open gestures against m_gesture. The body
         // draws inside an Inspector instance window, AFTER the documents, and
-        // on collapsed/background-tab frames too (InspectorWindows calls
-        // page->Draw even when Begin returns false) -- where no widget inside
-        // can report its own deactivation, which is exactly what this guard
-        // covers. BeginChild/PaneSplitter are safe there.
-        const EditGesture::ScopeGuard gestureGuard{ m_services.undo, m_gesture };
+        // on collapsed/refused frames too (InspectorWindows, s5.7) -- where no
+        // widget inside can report its own deactivation, which is exactly
+        // what this guard covers.
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
 
         // The Inspector's Ctrl+S parks here too (RequestSaveFromInspector): the
         // page opens the confirm when the document window did not draw first.
         DrawSaveWithErrorsConfirm();
 
-        // Which material this is: the Inspector is a shared surface, so the
-        // page names its subject the way the scene page names the entity.
-        // m_title, NOT m_windowLabel -- the latter carries the "###matdoc_"
-        // id suffix that only ImGui::Begin strips, so a Text* call would
-        // print it verbatim.
-        ImGui::TextUnformatted(m_title.c_str());
-        if (IsInstance())
+        // No title line (spec 2026-09-30 s4.3): the Inspector header's crumb
+        // names this material ("<title> (Instance)" for an instance); the
+        // body opens on the Preview section.
+        // An INSTANCE's page has no Preview section (s5.3 amendment,
+        // 2026-10-02, user decision A -- UE's Material Instance editor): its
+        // document tab IS the preview, full-tab (Draw's INSTANCE mode), so
+        // the page opens on the parameters instead of showing a second one.
+        // The page child's height (s5.7), read before anything is laid out.
+        const float pageHeight = ImGui::GetWindowHeight();
+        if (!IsInstance() && grid.Section("Preview"))
         {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(Instance)");
+            // A square: the column's width, capped at a share of the page
+            // (editor.inspector.materialPreviewFraction), centred. A mesh
+            // surface gets the same square (T3-D6, the s5.3 amendment): its
+            // lit-sphere preview, with the "not compiled here" caption below.
+            const float availX = ImGui::GetContentRegionAvail().x;
+            const float side = (std::max)(1.0f, (std::min)(availX, MaterialPreviewFraction() * pageHeight));
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (std::max)(0.0f, (availX - side) * 0.5f));
+            DrawPreviewPanel(ImVec2(side, side));
         }
-        ImGui::Separator();
-
-        // The one surviving draggable split (PaneSplitter) over the SHARED
-        // layout preference -- every open shader document reads the same
-        // ratio, and a drag is the layout all of them use (Layout(), which
-        // the ini handler persists). Preview on top, params below; the
-        // divider sits BETWEEN them, so the height it occupies comes off
-        // the span the fraction divides.
-        // A mesh material never compiles here (Rebuild()'s guard): no preview
-        // box that would read "compiling..." forever -- one line, and the
-        // params take the whole page (final fix P).
-        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
-        {
-            DrawPreviewPanel(0.0f);
-            DrawParamsPanel();
-            return;
-        }
-        LayoutPrefs& layout = Layout();
-        const ImVec2 avail  = ImGui::GetContentRegionAvail();
-        const float span    = (std::max)(avail.y - kSplitBarPx, 1.0f);
-        DrawPreviewPanel(span * ClampSplit(layout.previewSplit, span));
-        PaneSplitter("##splitpreview", /*dragX=*/false, avail.x, span,
-                     layout.previewSplit, kPreviewSplitDefault);
-        DrawParamsPanel();   // fills whatever the preview left
+        DrawRenderingSection(grid, UndoStack());
+        DrawParamsSection(grid, UndoStack());
     }
 
     void ShaderEditorDocument::DrawToolbar()
@@ -2116,6 +2282,7 @@ namespace Arcane::Editor
         // and a SameLine as a window's first call pulls the cursor up onto the
         // line above. Hence the explicit flag rather than an unconditional
         // SameLine.
+        const PreviewStatus status = ComputeStatus();   // T1's model (s3.2): the toolbar and the toggle read one answer
         bool anyBefore = false;
         if (!IsInstance())
         {
@@ -2133,12 +2300,16 @@ namespace Arcane::Editor
                 ImGui::SameLine();
                 ImGui::Checkbox("HLSL", &m_showGeneratedText);
                 ImGui::SameLine();
-                // m_showNodePreviews gates DrawNodePreviewImage's Output-node
-                // branch -- the ONE live thumbnail on this canvas (the
-                // material's real preview). That is its whole job, which is
-                // why this is a plain Checkbox with no on-change action:
-                // there is nothing to resubmit on a flip.
-                ImGui::Checkbox("Thumbs", &m_showNodePreviews);
+                // "Output preview" (s5.2): gates DrawNodePreviewImage's
+                // Output-node copy only, and is disabled while there is no
+                // image to copy -- the tooltip says why.
+                ImGui::BeginDisabled(!status.image);
+                ImGui::Checkbox("Output preview", &m_showNodePreviews);
+                ImGui::EndDisabled();
+                if (!status.image &&
+                    ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Shows the material preview on the Output node. Unavailable: %s",
+                                      NoPreviewReason(status).c_str());
             }
             // The vertex stage (%{VERTEX_BODY}): graph-owned materials author
             // it with the Vertex Output NODE and view it inside the HLSL
@@ -2160,6 +2331,8 @@ namespace Arcane::Editor
         }
         if (anyBefore)
             ImGui::SameLine();
+        ImGui::TextDisabled("Surface");   // s5.3: the combo names itself; it stays here, so a re-kind is still no step
+        ImGui::SameLine();
         ImGui::SetNextItemWidth(120.0f);
         // Preview-surface selector (Slice 8). On a base material this is a
         // STRUCTURAL edit: it re-kinds the asset (the surface is what the
@@ -2219,17 +2392,15 @@ namespace Arcane::Editor
             RegenerateFromGraph();
         }
         ImGui::SameLine();
-        // Mesh materials never compile here (Rebuild()'s own guard) -- without
-        // this branch the fallback below would read "compiling..." forever,
-        // implying a stuck job that was never submitted in the first place.
-        if (meshSurface)
-            ImGui::TextDisabled("not compiled here");
-        else if (HasErrors())
-            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "errors");
-        else if (PreviewReady())
-            ImGui::TextDisabled("ok");
+        // Two statuses in one line, compile then preview (s5.2, 9.8): never
+        // "compiling..." for a finished compile that simply has no device.
+        const std::string statusText = ToolbarStatusText(status);
+        if (status.compile == CompileStatus::Errors)
+            ImGui::TextColored(Theme::kError, "%s", statusText.c_str());
+        else if (status.compile == CompileStatus::CompilerUnavailable)
+            ImGui::TextColored(Theme::kAmber, "%s", statusText.c_str());
         else
-            ImGui::TextDisabled("compiling...");
+            ImGui::TextDisabled("%s", statusText.c_str());
         ImGui::Separator();
         DrawSaveWithErrorsConfirm();
     }
@@ -2261,6 +2432,647 @@ namespace Arcane::Editor
             ImGui::EndPopup();
         }
 
+    }
+
+    // ---------------------------------------------- node page selection (s5.1.1)
+    const Arcane::GraphNode* ShaderEditorDocument::FindGraphNode(std::size_t pass, std::uint32_t id) const
+    {
+        if (IsInstance() || pass > m_data.passes.size())
+            return nullptr;
+        const std::optional<Arcane::MaterialGraph>& g =
+            pass == 0 ? m_data.graph : m_data.passes[pass - 1].graph;
+        return g ? g->FindNode(id) : nullptr;
+    }
+
+    Arcane::GraphNode* ShaderEditorDocument::FindGraphNode(std::size_t pass, std::uint32_t id)
+    {
+        return const_cast<Arcane::GraphNode*>(std::as_const(*this).FindGraphNode(pass, id));
+    }
+
+    bool ShaderEditorDocument::Resolves(std::string_view key) const
+    {
+        if (m_pageSel.Resolves(key))
+            return true;
+        const std::optional<NodeKey> k = ParseNodeKey(key);
+        return k && FindGraphNode(k->pass, k->id) != nullptr;
+    }
+
+    std::string ShaderEditorDocument::SelectionKey() const
+    {
+        // Chain-overview pass nodes keep the material page; the mirror
+        // survives the overview, so leaving it restores the node page with no
+        // event. An undo that deleted the node falls back here too.
+        if (m_nodeSel && !ChainViewShowing())
+            if (std::string k = FormatNodeKey(*m_nodeSel); Resolves(k))
+                return k;
+        return m_pageSel.SelectionKey();
+    }
+
+    bool ShaderEditorDocument::RestoreSelection(std::string_view key)
+    {
+        if (!Resolves(key))
+            return false;
+        if (m_pageSel.Resolves(key))
+        {
+            m_nodeSel.reset();
+            m_nodeSelRequest = NodeSelRequest{ NodeSelRequest::Clear, 0 };
+            return true;
+        }
+        const NodeKey k = *ParseNodeKey(key);
+        // Resolves range-checked the pass, so the cast cannot clamp. EnterPass
+        // leaves the overview and records the document's own navigation.
+        if (static_cast<int>(k.pass) != m_activePass || ChainViewShowing())
+            EnterPass(static_cast<int>(k.pass));
+        // IMMEDIATELY: InspectorHost::TryLand re-reads SelectionKey() right
+        // after this returns (Panels/InspectorHost.cpp:240-245).
+        m_nodeSel = k;
+        m_nodeSelRequest = NodeSelRequest{ NodeSelRequest::Select, k.id };
+        return true;
+    }
+
+    bool ShaderEditorDocument::SelectByPath(std::string_view path)
+    {
+        // StageFinalize runs this before the first draw: the key is valid at
+        // once (checked against the data), the request lands on the first
+        // canvas frame.
+        const std::optional<NodeKey> k =
+            ParseNodeSelectPath(path, static_cast<std::size_t>(std::max(0, m_activePass)));
+        if (!k || !RestoreSelection(FormatNodeKey(*k)))
+            return false;
+        ++m_pageSel.epoch;
+        return true;
+    }
+
+    InspectorPage* ShaderEditorDocument::PageFor(std::string_view key)
+    {
+        if (m_pageSel.Resolves(key))
+            return &m_page;
+        if (const std::optional<NodeKey> k = ParseNodeKey(key); k && FindGraphNode(k->pass, k->id))
+        {
+            m_nodePage.SetTarget(k->pass, k->id);
+            return &m_nodePage;
+        }
+        return nullptr;
+    }
+
+    void ShaderEditorDocument::SelectMaterialFromCrumb()
+    {
+        m_nodeSel.reset();
+        m_nodeSelRequest = NodeSelRequest{ NodeSelRequest::Clear, 0 };
+        ++m_pageSel.epoch;
+    }
+
+    std::vector<InspectorCrumb> ShaderEditorDocument::NodeInspectorPage::Breadcrumb() const
+    {
+        // node page s5.1.3. Landings on a node select it through the canvas
+        // request and NEVER call NavigateToSelection.
+        ShaderEditorDocument& d = m_doc;
+        std::vector<InspectorCrumb> crumbs;
+        // The material crumb's label is the material page's own (s4.3); a
+        // node page never exists on an instance, so it reads m_title.
+        crumbs.push_back({ d.m_title, [doc = &d] { doc->SelectMaterialFromCrumb(); },
+                           std::string{ "material" } });
+        if (d.ChainMode())   // every pass, base included
+            crumbs.push_back({ d.PassLabel(m_pass),
+                               [doc = &d, pass = m_pass]
+                               {
+                                   doc->EnterPass(static_cast<int>(pass));
+                                   doc->SelectMaterialFromCrumb();
+                               },
+                               std::nullopt });
+        const Arcane::GraphNode* n = d.FindGraphNode(m_pass, m_id);
+        crumbs.push_back({ n ? std::string(Arcane::GraphNodeInfo(n->type).display) : std::string("Node"),
+                           [] {}, FormatNodeKey({ m_pass, m_id }) });
+        return crumbs;
+    }
+
+    void ShaderEditorDocument::DrawNodePageBody(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        // FIRST local, destructs LAST (EditGesture::ScopeGuard): the page
+        // draws on collapsed and background frames too, like
+        // DrawMaterialPageBody.
+        // UndoStack() (T1-B12) is the null-tolerant resolver read: a default
+        // DocServices{} -- every headless page test -- holds an EMPTY
+        // std::function, and calling m_services.undo() directly would throw
+        // std::bad_function_call on the first page draw.
+        const EditGesture::ScopeGuard gestureGuard{ UndoStack(), m_gesture };
+        DrawSaveWithErrorsConfirm();
+        // In normal ImGui space, so "Edit HLSL..." and rename propagation work
+        // while the canvas is hidden (s5.1.7). Before the node's id scope:
+        // the popup ids must not depend on which node is shown.
+        DrawGraphModals();
+        // Re-resolved EVERY call (never a GraphNode* across frames): create
+        // and paste reallocate `nodes`. A gone node draws its one read-only
+        // line inside a Rows table -- a row outside one would hit
+        // ImGui::TableNextRow with no current table.
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+        {
+            PropertyGrid::Rows rows(grid, "##nodegone");
+            if (rows)
+                grid.ReadOnlyRow("Node", "This node no longer exists");
+            return;
+        }
+        const NodePageIdScope idScope{ pass, id };
+        // The sections. Discrete edits queue (DeferNodeEdit); numeric
+        // write-through stays inline (s5.1.5). `n` is read by the header
+        // only: every later section re-resolves.
+        m_nodePageDrawing = true;
+        DrawNodePageHeader(*n);
+        DrawNodePageInputs(grid, pass, id);
+        DrawNodePageSettings(grid, pass, id);
+        DrawNodePageOutputs(grid, pass, id);
+        DrawNodePageErrors(grid, pass, id);
+        m_nodePageDrawing = false;
+        // The queued discrete edits, in order, after the last row (a Remove
+        // Pin mid-loop would otherwise invalidate the loop).
+        std::vector<std::function<void()>> edits = std::move(m_nodePageEdits);
+        m_nodePageEdits.clear();
+        for (std::function<void()>& edit : edits)
+            edit();
+    }
+
+    void ShaderEditorDocument::DrawNodePageHeader(const Arcane::GraphNode& n)
+    {
+        // The crumb leaf's one sanctioned repeat (s5.1.4): it shares the chip's line.
+        const Arcane::GraphNodeTypeInfo& info = Arcane::GraphNodeInfo(n.type);
+        const char* category = Arcane::GraphNodeCategoryName(info.category);
+        const float padX = ImGui::GetStyle().FramePadding.x;
+        ImGui::AlignTextToFramePadding();
+        const ImVec2 start = ImGui::GetCursorScreenPos();
+        const ImVec2 text = ImGui::CalcTextSize(category);
+        const float h = ImGui::GetFrameHeight();
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            start, ImVec2(start.x + text.x + padX * 2.0f, start.y + h),
+            ImGui::GetColorU32(GraphCategoryHeaderColor(info.category)), h * 0.5f);
+        ImGui::SetCursorScreenPos(ImVec2(start.x + padX, start.y));
+        ImGui::PushStyleColor(ImGuiCol_Text, kNodeTitleText);
+        ImGui::TextUnformatted(category);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.0f, padX * 2.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::kTextDim);
+        ImGui::TextUnformatted(info.display);
+        if (info.description && info.description[0] != '\0')
+            ImGui::TextWrapped("%s", info.description);
+        ImGui::PopStyleColor();
+    }
+
+    void ShaderEditorDocument::DrawNodePageInputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || Arcane::GraphNodeInputCount(*n) == 0)
+            return;   // UV, Time, the Const nodes, Param, Comment, Vertex Color
+        if (!grid.Section("Inputs"))
+            return;
+        PropertyGrid::Rows rows(grid, "##inputs");
+        if (!rows)
+            return;
+        // Once for the section's rows (T3-D1): the type chips' resolution.
+        const int resolved = WidthsOf(Arcane::ResolveGraphNodeWidths(*GraphOptAt(pass)), id).inputs;
+        const std::uint32_t count = Arcane::GraphNodeInputCount(*n);   // pin edits are queued: stable here
+        for (std::uint32_t pin = 0; pin < count; ++pin)
+        {
+            ImGui::PushID(static_cast<int>(pin));
+            DrawNodePageInputRow(grid, pass, id, pin, resolved);
+            ImGui::PopID();
+        }
+    }
+
+    void ShaderEditorDocument::DrawNodePageInputRow(PropertyGrid& grid, std::size_t pass, std::uint32_t id,
+                                                    std::uint32_t pin, int resolvedInputs)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        const Arcane::MaterialGraph& g = *GraphOptAt(pass);   // FindGraphNode range-checked `pass`
+        const Arcane::GraphPinDesc desc = Arcane::GraphNodeInputPin(*n, pin);
+        const std::string label = desc.name;   // a Custom pin's name points into the node: copy
+        // The row's type chip (T3-D1): the pin's dot + type word, resolved
+        // exactly as the canvas paints it.
+        const Arcane::GraphLink* wire = nullptr;
+        for (const Arcane::GraphLink& l : g.links)
+            if (l.toNode == id && l.toPin == pin)
+                wire = &l;   // last wins, as codegen reads it
+        RowDecor typeChip;
+        typeChip.lead = [paint = PinPaintFor(desc.width, resolvedInputs), wired = wire != nullptr,
+                         type = PinTypeText(desc.width, resolvedInputs)] { return PinTypeChip(paint, wired, type); };
+        if (wire)
+        {
+            grid.SetNextRowDecor(typeChip);
+            grid.ReadOnlyRow(label.c_str(), "<- " + WireSourceText(g, *wire));
+            return;
+        }
+        const Arcane::GraphPinNeutral neutral = Arcane::GraphPinNeutralDefault(*n, pin);
+        if (!Arcane::GraphPinAcceptsLiteral(*n, pin))
+        {
+            grid.SetNextRowDecor(typeChip);
+            grid.ReadOnlyRow(label.c_str(), "default: " + FormatPinNeutral(neutral));
+            return;
+        }
+
+        // ---- The live literal row (s5.1.5) ----
+        const int lanes = Arcane::GraphPinLiteralLanes(desc.width);
+        const Arcane::GraphPinLiteral* lit = n->FindPinLiteral(pin);
+        // The neutral SPLATTED to this pin's lanes through SeedPinNeutral (the
+        // one seed canvas and page share): Tiling & Offset's width-1 `tiling`
+        // neutral (lanes 1, v {1}) must read (1, 1), not (1, 0). Zero for
+        // Expression/Passthrough.
+        float neutralV[4];
+        SeedPinNeutral(neutral, lanes, neutralV);
+        float shown[4] = {};
+        std::memcpy(shown, lit ? lit->v : neutralV, sizeof(shown));
+        // An Expression neutral (Panner uv) prints AS ITSELF: a format with no
+        // conversion is printed verbatim (the canvas trick, imgui_widgets.cpp:2496).
+        const char* format = (!lit && neutral.kind == Arcane::GraphPinNeutralKind::Expression) ? neutral.hlsl : "%.3f";
+        float local[4];
+        std::memcpy(local, shown, sizeof(local));
+        RowDecor decor = std::move(typeChip);
+        decor.reset = true;                  // the slot is always reserved: values stay aligned
+        decor.resetActive = lit != nullptr;  // drawn only while a literal exists
+        grid.SetNextRowDecor(decor);
+        if (lanes == 1)
+            (void)grid.FloatRow(label.c_str(), local[0], 0.01f, std::nullopt, format);
+        else
+            (void)grid.VecRow(label.c_str(), local, lanes, 0.01f, std::nullopt, format);
+        const RowEvents ev = grid.LastRowEvents();
+        Arcane::CommandStack* stack = UndoStack();
+        // The snapshot is taken BEFORE this frame's write, so it is pre-edit on the
+        // activation frame (the canvas pin-literal ordering).
+        // Latched on ANY activation: BeginOnActivate skips both callbacks when the
+        // stack is null (Play, s3.3), and a stale flag would erase an existing
+        // literal on Esc or keep a new one.
+        if (ImGui::IsItemActivated())
+            m_nodePageLiteralExisted = lit != nullptr;
+        EditGesture::BeginOnActivate(stack, m_gesture, [] { return std::string("Pin Value"); },
+                                     [&] { return GraphEditBuilder("Pin Value", pass); });
+        if (ev.resetClicked)
+            DeferNodeEdit([this, pass, id, pin]
+            {
+                (void)RunNodeEdit("Reset Pin Value", pass, id, [pin](Arcane::GraphNode& node, Arcane::MaterialGraph&)
+                {
+                    ErasePinLiteral(node, pin);
+                });
+            });
+        bool differs = false;
+        for (int i = 0; i < lanes; ++i)
+            differs = differs || local[i] != shown[i];
+        if (differs)
+            if (Arcane::GraphNode* w = FindGraphNode(pass, id))
+            {
+                bool onNeutral = neutral.kind == Arcane::GraphPinNeutralKind::Constant;
+                for (int i = 0; i < lanes && onNeutral; ++i)
+                    onNeutral = local[i] == neutralV[i];
+                // A cancelled gesture, or one dragged back onto the neutral, never
+                // leaves a NEW literal behind; an existing one updates in place.
+                if (!m_nodePageLiteralExisted && (ev.cancelled || onNeutral))
+                    ErasePinLiteral(*w, pin);
+                else
+                    SetPinLiteral(*w, pin, lanes, local);
+                NoteGraphValueEdited();
+            }
+        EditGesture::EndAfterRow(stack, m_gesture, ev.cancelled);
+    }
+
+    void ShaderEditorDocument::LiveNodeFloats(PropertyGrid& grid, const char* label, const char* undoLabel,
+                                              std::size_t pass, std::uint32_t id, int lanes,
+                                              Arcane::FunctionRef<float*(Arcane::GraphNode&)> field)
+    {
+        Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        float local[4] = {};
+        std::memcpy(local, field(*n), sizeof(float) * static_cast<std::size_t>(lanes));
+        if (lanes == 1)
+            (void)grid.FloatRow(label, local[0], 0.01f, std::nullopt, "%.3f");
+        else
+            (void)grid.VecRow(label, local, lanes, 0.01f, std::nullopt, "%.3f");
+        const bool cancelled = grid.LastRowEvents().cancelled;
+        Arcane::CommandStack* stack = UndoStack();
+        // The snapshot is taken BEFORE this frame's write: pre-edit on the activation frame.
+        EditGesture::BeginOnActivate(stack, m_gesture, [&] { return std::string(undoLabel); },
+                                     [&] { return GraphEditBuilder(undoLabel, pass); });
+        if (Arcane::GraphNode* w = FindGraphNode(pass, id))
+        {
+            float* dst = field(*w);
+            bool differs = false;
+            for (int i = 0; i < lanes; ++i)
+                differs = differs || dst[i] != local[i];
+            if (differs)   // includes the seed an Esc restored: written back, the graph compares equal, no step
+            {
+                std::memcpy(dst, local, sizeof(float) * static_cast<std::size_t>(lanes));
+                NoteGraphValueEdited();
+            }
+        }
+        EditGesture::EndAfterRow(stack, m_gesture, cancelled);
+    }
+
+    void ShaderEditorDocument::LiveNodeColor(PropertyGrid& grid, const char* label, const char* undoLabel,
+                                             const char* popupLabel, std::size_t pass, std::uint32_t id, bool hdr,
+                                             Arcane::FunctionRef<float*(Arcane::GraphNode&)> field)
+    {
+        Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        float local[4];
+        std::memcpy(local, field(*n), sizeof(local));
+        ImGuiID popupId = 0;
+        (void)grid.ColorRow(label, local, &popupId, hdr);
+        const bool cancelled = grid.LastRowEvents().cancelled;
+        Arcane::CommandStack* stack = UndoStack();
+        EditGesture::BeginOnActivate(stack, m_gesture, [&] { return std::string(undoLabel); },
+                                     [&] { return GraphEditBuilder(undoLabel, pass); });
+        if (popupId != 0)   // snapshot before this frame's write: pre-edit on the opening frame
+            EditGesture::BeginOnPopupOpen(stack, m_gesture, popupId, [&] { return std::string(popupLabel); },
+                                          [&] { return GraphEditBuilder(popupLabel, pass); });
+        if (Arcane::GraphNode* w = FindGraphNode(pass, id); w && std::memcmp(field(*w), local, sizeof(local)) != 0)
+        {
+            std::memcpy(field(*w), local, sizeof(local));
+            NoteGraphValueEdited();
+        }
+        EditGesture::EndAfterRow(stack, m_gesture, cancelled);
+        if (popupId != 0)
+            EditGesture::EndOnPopupClose(stack, m_gesture, popupId);
+    }
+
+    void ShaderEditorDocument::NodeTextRow(PropertyGrid& grid, const char* label, std::string_view current,
+                                           std::size_t pass, std::uint32_t id, NodeTextField field, std::uint32_t pin)
+    {
+        // CommitOrphans can fire this AFTER the selection moved or the document
+        // closed (InspectorWindows.cpp:337-340): never read the page's target or `this`.
+        std::weak_ptr<ShaderEditorDocument*> anchor = m_anchor;
+        (void)grid.TextRow(label, current, [anchor, pass, id, field, pin](std::string text)
+        {
+            const std::shared_ptr<ShaderEditorDocument*> doc = anchor.lock();
+            if (!doc || !*doc)
+                return;
+            (*doc)->DeferNodeEdit([anchor, pass, id, field, pin, text = std::move(text)]
+            {
+                const std::shared_ptr<ShaderEditorDocument*> live = anchor.lock();
+                if (live && *live)
+                    (*live)->CommitNodeText(pass, id, field, pin, text);
+            });
+        });
+    }
+
+    void ShaderEditorDocument::CommitNodeText(std::size_t pass, std::uint32_t id, NodeTextField field,
+                                              std::uint32_t pin, const std::string& text)
+    {
+        // No name validation here (drafting pick 9.28 #22): codegen is the one
+        // validator, and its verdict shows in Errors.
+        Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;   // the node died: drop the edit
+        switch (field)
+        {
+            case NodeTextField::ParamName:
+            {
+                const std::string oldName = n->paramName;
+                if (RunNodeEdit("Rename Param", pass, id, [&text](Arcane::GraphNode& node, Arcane::MaterialGraph&) { node.paramName = text; }))
+                    BeginParamRename(oldName, std::string(text));   // copies: it re-scans every pass's nodes
+                return;
+            }
+            case NodeTextField::SwizzleMask:
+                (void)RunNodeEdit("Edit Swizzle", pass, id, [&text](Arcane::GraphNode& node, Arcane::MaterialGraph&) { node.swizzleMask = text; });
+                return;
+            case NodeTextField::CommentText:
+                (void)RunNodeEdit("Edit Comment", pass, id, [&text](Arcane::GraphNode& node, Arcane::MaterialGraph&) { node.paramName = text; },
+                                  /*recompile*/ false);
+                return;
+            case NodeTextField::CustomPinName:
+                // Links address pins by index: nothing re-wires, and the HLSL body is never rewritten.
+                (void)RunNodeEdit("Rename Pin", pass, id, [&text, pin](Arcane::GraphNode& node, Arcane::MaterialGraph&)
+                                  { if (pin < node.customPins.size()) node.customPins[pin].name = text; });
+                return;
+        }
+    }
+
+    void ShaderEditorDocument::DrawNodePageSettings(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        using GT = Arcane::GraphNodeType;
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        switch (n->type)
+        {
+            case GT::ConstFloat: case GT::ConstFloat2: case GT::ConstFloat4: case GT::ConstColor:
+            case GT::Param: case GT::TextureSample: case GT::Swizzle: case GT::PassInput:
+            case GT::Panner: case GT::Custom: case GT::Comment:
+                break;
+            default:
+                return;   // pin literals only: no Settings section
+        }
+        if (!grid.Section("Settings"))
+            return;
+        static constexpr const char* kWidthNames[] = { "float", "float2", "float4" };
+        static constexpr int kWidths[] = { 1, 2, 4 };
+        const auto widthIndex = [](int w) { return w == 1 ? 0 : w == 2 ? 1 : 2; };
+        // Combos, checkboxes and buttons queue ONE discrete step each (s5.1.4 step 5).
+        const auto discrete = [this, pass, id](const char* label, std::function<void(Arcane::GraphNode&)> set)
+        {
+            DeferNodeEdit([this, pass, id, label, set = std::move(set)]
+            { (void)RunNodeEdit(label, pass, id, [&set](Arcane::GraphNode& node, Arcane::MaterialGraph&) { set(node); }); });
+        };
+
+        if (n->type == GT::Custom)
+        {
+            if (grid.SubSection("Pins"))
+            {
+                {
+                    PropertyGrid::Rows rows(grid, "##pins");
+                    if (rows)
+                    {
+                        const std::uint32_t count = static_cast<std::uint32_t>(n->customPins.size());
+                        for (std::uint32_t k = 0; k < count; ++k)
+                        {
+                            const Arcane::GraphNode* cur = FindGraphNode(pass, id);
+                            if (!cur || k >= cur->customPins.size())
+                                break;
+                            ImGui::PushID(static_cast<int>(k));
+                            NodeTextRow(grid, "Name", cur->customPins[k].name, pass, id, NodeTextField::CustomPinName, k);
+                            ImGui::SetItemTooltip("Renaming does not edit the HLSL body");
+                            if (const int picked = grid.ComboRow("Width", kWidthNames, 3, widthIndex(cur->customPins[k].width)); picked >= 0)
+                                discrete("Pin Width", [k, w = kWidths[picked]](Arcane::GraphNode& node)
+                                         { if (k < node.customPins.size()) node.customPins[k].width = w; });
+                            static constexpr const char* kRemove[] = { "Remove" };
+                            if (grid.ButtonRow("", kRemove, 1) == 0)
+                                DeferNodeEdit([this, pass, id, k] { (void)RemoveCustomPin(pass, id, k); });
+                            ImGui::PopID();
+                        }
+                        static constexpr const char* kAdd[] = { "Add Pin" };
+                        if (grid.ButtonRow("", kAdd, 1) == 0)
+                            DeferNodeEdit([this, pass, id] { (void)AddCustomPin(pass, id); });
+                    }
+                }
+                grid.EndSubSection();
+            }
+        }
+
+        PropertyGrid::Rows rows(grid, "##settings");
+        if (!rows)
+            return;
+        n = FindGraphNode(pass, id);
+        if (!n)
+            return;
+        switch (n->type)
+        {
+            case GT::ConstFloat:
+            case GT::ConstFloat2:
+            case GT::ConstFloat4:
+                LiveNodeFloats(grid, "Value", "Edit Value", pass, id,
+                               n->type == GT::ConstFloat ? 1 : n->type == GT::ConstFloat2 ? 2 : 4,
+                               [](Arcane::GraphNode& node) { return node.value; });
+                break;
+            case GT::ConstColor:   // hdr: a ConstColor feeds raw maths and may exceed 1
+                LiveNodeColor(grid, "Color", "Edit Value", "Edit Color", pass, id, /*hdr*/ true,
+                              [](Arcane::GraphNode& node) { return node.value; });
+                break;
+            case GT::Param:
+            {
+                NodeTextRow(grid, "Name", n->paramName, pass, id, NodeTextField::ParamName);
+                static constexpr const char* kTypeNames[] = { "float", "float2", "float4", "color" };
+                static constexpr Arcane::MatParamType kTypes[] = { Arcane::MatParamType::Float, Arcane::MatParamType::Float2,
+                                                                   Arcane::MatParamType::Float4, Arcane::MatParamType::Color };
+                int typeIdx = 0;
+                for (int t = 0; t < 4; ++t)
+                    if (kTypes[t] == n->paramType)
+                        typeIdx = t;
+                if (const int picked = grid.ComboRow("Type", kTypeNames, 4, typeIdx); picked >= 0)
+                    discrete("Param Type", [t = kTypes[picked]](Arcane::GraphNode& node) { node.paramType = t; node.paramDefault.type = t; });
+                // A Texture-typed Param loads (codegen diagnoses it) but has no
+                // lanes: ComponentCount(Texture) == 0 would reach VecRow's n >= 2
+                // assert. Read-only, so nothing writes paramDefault.f on it; the
+                // Type combo (index 0 'float') is the repair path.
+                if (n->paramType == Arcane::MatParamType::Texture)
+                    grid.ReadOnlyRow("Default", "n/a (texture is invalid on a Param)");
+                else if (n->paramType == Arcane::MatParamType::Color)
+                    LiveNodeColor(grid, "Default", "Param Default", "Param Default", pass, id, /*hdr*/ false,
+                                  [](Arcane::GraphNode& node) { return node.paramDefault.f; });
+                else
+                    LiveNodeFloats(grid, "Default", "Param Default", pass, id,
+                                   static_cast<int>(Arcane::ComponentCount(n->paramType)),
+                                   [](Arcane::GraphNode& node) { return node.paramDefault.f; });
+                n = FindGraphNode(pass, id);
+                if (!n)
+                    break;
+                bool ranged = n->hasRange;
+                if (grid.CheckboxRow("Range", ranged))
+                    discrete("Param Range", [ranged](Arcane::GraphNode& node) { node.hasRange = ranged; });
+                if (n->hasRange)
+                {
+                    LiveNodeFloats(grid, "Min", "Param Range", pass, id, 1, [](Arcane::GraphNode& node) { return &node.rangeMin; });
+                    LiveNodeFloats(grid, "Max", "Param Range", pass, id, 1, [](Arcane::GraphNode& node) { return &node.rangeMax; });
+                }
+                break;
+            }
+            case GT::TextureSample:
+                NodeTextRow(grid, "Texture Param", n->paramName, pass, id, NodeTextField::ParamName);
+                break;
+            case GT::Swizzle:
+                NodeTextRow(grid, "Mask", n->swizzleMask, pass, id, NodeTextField::SwizzleMask);
+                break;
+            case GT::PassInput:
+            {
+                static constexpr const char* kSlots[] = { "in0", "in1", "in2", "in3" };
+                static_assert(std::size(kSlots) == Arcane::kMaxPassInputs);
+                if (const int picked = grid.ComboRow("Slot", kSlots, 4, static_cast<int>(n->passInputSlot % Arcane::kMaxPassInputs)); picked >= 0)
+                    discrete("Input Slot", [picked](Arcane::GraphNode& node) { node.passInputSlot = static_cast<std::uint32_t>(picked); });
+                break;
+            }
+            case GT::Panner:
+            {
+                bool frac = n->pannerFractional;
+                if (grid.CheckboxRow("Fractional", frac))
+                    discrete("Panner Fraction", [frac](Arcane::GraphNode& node) { node.pannerFractional = frac; });
+                break;
+            }
+            case GT::Custom:
+            {
+                if (const int picked = grid.ComboRow("Output", kWidthNames, 3, widthIndex(n->customOutWidth)); picked >= 0)
+                    discrete("Output Width", [w = kWidths[picked]](Arcane::GraphNode& node) { node.customOutWidth = w; });
+                std::string_view first = n->customBody;
+                first = first.substr(0, first.find('\n'));
+                if (!first.empty() && first.back() == '\r')
+                    first.remove_suffix(1);
+                grid.ReadOnlyRow("Body", first);
+                if (!n->customBody.empty())
+                    ImGui::SetItemTooltip("%s", n->customBody.c_str());   // last-wins over the ellipsis tooltip
+                static constexpr const char* kEdit[] = { "Edit HLSL..." };
+                if (grid.ButtonRow("", kEdit, 1) == 0)
+                    RequestBodyEdit(pass, id);   // DrawGraphModals opens it, canvas drawn or not
+                break;
+            }
+            case GT::Comment:   // size is not exposed (s5.1.9)
+                NodeTextRow(grid, "Text", n->paramName, pass, id, NodeTextField::CommentText);
+                break;
+            default:
+                break;
+        }
+    }
+
+    void ShaderEditorDocument::DrawNodePageOutputs(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || Arcane::GraphNodeOutputCount(*n) == 0)
+            return;   // Output, Vertex Output, Comment
+        if (!grid.Section("Outputs"))
+            return;
+        PropertyGrid::Rows rows(grid, "##outputs");
+        if (!rows)
+            return;
+        const Arcane::MaterialGraph& g = *GraphOptAt(pass);   // FindGraphNode range-checked `pass`
+        const int resolved = WidthsOf(Arcane::ResolveGraphNodeWidths(g), id).outputs;
+        for (std::uint32_t pin = 0; pin < Arcane::GraphNodeOutputCount(*n); ++pin)
+        {
+            const Arcane::GraphPinDesc desc = Arcane::GraphNodeOutputPin(*n, pin);   // Custom: customOutWidth
+            std::string targets;
+            for (const Arcane::GraphLink& l : g.links)
+            {
+                if (l.fromNode != id || l.fromPin != pin)
+                    continue;
+                const Arcane::GraphNode* dst = g.FindNode(l.toNode);
+                if (!dst || l.toPin >= Arcane::GraphNodeInputCount(*dst))
+                    continue;
+                if (!targets.empty())
+                    targets += ", ";
+                targets += std::string(Arcane::GraphNodeInfo(dst->type).display) + "." +
+                           Arcane::GraphNodeInputPin(*dst, l.toPin).name;
+            }
+            // The type word rides the row's type chip (the dot, then the word),
+            // so the value text after it carries only the wiring.
+            RowDecor typeChip;
+            typeChip.lead = [paint = PinPaintFor(desc.width, resolved), wired = !targets.empty(),
+                             type = PinTypeText(desc.width, resolved)] { return PinTypeChip(paint, wired, type); };
+            grid.SetNextRowDecor(typeChip);
+            ImGui::PushID(static_cast<int>(pin));
+            grid.ReadOnlyRow(desc.name, targets.empty() ? std::string("(unused)") : "-> " + targets);
+            ImGui::PopID();
+        }
+    }
+
+    void ShaderEditorDocument::DrawNodePageErrors(PropertyGrid& grid, std::size_t pass, std::uint32_t id)
+    {
+        // Graph-level errors (nodeId 0) stay on the material page and in Problems.
+        std::vector<std::string> lines;
+        if (pass < m_passGraphErrors.size())
+            for (const Arcane::GraphError& e : m_passGraphErrors[pass])
+                if (e.nodeId == id)
+                    lines.push_back(e.message);
+        ForEachNodeDiagnostic(pass, id, [&](std::string_view m) { lines.emplace_back(m); });
+        if (lines.empty())
+            return;
+        const std::string label = "Errors (" + std::to_string(lines.size()) + ")###errors";   // stable id across N
+        if (!grid.Section(label.c_str()))
+            return;
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::kError);
+        for (const std::string& line : lines)
+            ImGui::TextWrapped("%s", line.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    void ShaderEditorDocument::ForEachNodeDiagnostic(std::size_t pass, std::uint32_t nodeId,
+                                                     const std::function<void(std::string_view)>& fn) const
+    {
+        ForEachPassErrorDiag(pass, [&](std::uint32_t id, std::string_view m) { if (id == nodeId) fn(m); });
     }
 
     void ShaderEditorDocument::DrawSnippetEditor()
@@ -2548,6 +3360,7 @@ namespace Arcane::Editor
             // feel and belongs on every canvas in the editor. (The LOD tiers
             // built on top of it are not -- see DrawPassCanvas's note below.)
             ApplyZoomLevels(cfg);
+            cfg.ShiftAddsToSelection = true;   // UE's modifiers, as on the graph canvas
             m_passCanvasCtx = ed::CreateEditor(&cfg);
             // Same node/canvas styling as the material graph, including the
             // switch that kills the vendored grid so the shader backdrop below
@@ -2557,6 +3370,7 @@ namespace Arcane::Editor
             ApplyGraphCanvasStyle(ShaderCanvasStyleDesc());
             ed::SetCurrentEditor(nullptr);
             m_passCanvasSeeded = false;
+            m_passFitOnSeed = true;
         }
         const std::size_t total = 1 + m_data.passes.size();
         auto nodeOf = [](std::size_t chain) { return static_cast<std::uint32_t>(chain) + 1; };
@@ -2610,6 +3424,14 @@ namespace Arcane::Editor
             ed::SetNodePosition(kPassSceneNodeId,
                                 ImVec2(m_data.chainSceneX, m_data.chainSceneY));
             m_passCanvasSeeded = true;
+            // Fit a FRESH view only (the context was just made, or the file
+            // reloaded), never the re-seed after a structural edit or a
+            // pass-list undo/redo: the user's view survives those (T3-D3).
+            if (m_passFitOnSeed)
+            {
+                m_passFitPending.Arm();
+                m_passFitOnSeed = false;
+            }
         }
 
         // ---- nodes
@@ -2626,6 +3448,7 @@ namespace Arcane::Editor
                 const ImVec2 size = ed::GetNodeSize(ed::NodeId(nodeId));
                 ed::BeginNode(ed::NodeId(nodeId));
                 ImGui::PushID(static_cast<int>(nodeId));
+                const float startY = ImGui::GetCursorPosY();
                 const std::vector<std::uint32_t>& culledInputs =
                     c >= 1 ? m_data.passes[c - 1].inputs : m_data.baseInputs;
                 const std::size_t pinCount =
@@ -2644,8 +3467,16 @@ namespace Arcane::Editor
                 SetPinPivot(OutPin(nodeId, 0).Get(), ImGui::GetCursorScreenPos());
                 ImGui::Dummy(ImVec2(0.0f, 0.0f));
                 ed::EndPin();
+                // Pad out to the remembered footprint MINUS what the pin row
+                // already advanced, exactly as the graph canvas's stand-in
+                // does: a FIXED POINT. Padding the full height on top of the
+                // pin row's line advance grew the node by one item spacing per
+                // culled draw, and GetContentBounds (F, the s4.5 fit) then
+                // framed phantom bounds once the view came back.
+                const float usedY = ImGui::GetCursorPosY() - startY;
+                const float wantY = size.y - 2.0f * kNodePadY;
                 ImGui::Dummy(ImVec2((std::max)(0.0f, size.x - 2.0f * kNodePadX),
-                                    (std::max)(0.0f, size.y - 2.0f * kNodePadY)));
+                                    (std::max)(0.0f, wantY - usedY)));
                 ImGui::PopID();
                 ed::EndNode();
                 continue;
@@ -3047,7 +3878,14 @@ namespace Arcane::Editor
                 ed::NavigateToSelection(true);
             else
                 ed::NavigateToContent();
+            m_passFitPending.Disarm();   // the user's own frame wins over a pending fit
         }
+
+        // The pass canvas's twin of the graph canvas's fit-on-open (s4.5),
+        // through the same self-confirming latch (see the graph canvas).
+        if (m_passFitPending.Update(ed::GetScreenSize(), ImGui::GetTime(), 0.0f, !seededThisFrame) &&
+            !GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            m_passFitPending.Disarm();   // nothing to fit
 
         // ---- double-click ENTERS a pass (UE's collapsed-graph gesture).
         //
@@ -3260,11 +4098,11 @@ namespace Arcane::Editor
         // Vertex-stage rows: ONLY diags whose line falls inside the vertex
         // body -- both stages compile the same TU, so pixel-body errors appear
         // in the vs result too and are already carried by the compile rows
-        // below. Same filter as HasErrors.
-        if (!m_data.vertexSnippet.empty())
+        // below. Same filter as HasErrors (the COMPILED vertex stage: an
+        // instance's is its base's).
+        if (const std::string& vs = CompiledVertexSnippet(); !vs.empty())
         {
-            const int vsLines = 1 + static_cast<int>(std::count(
-                m_data.vertexSnippet.begin(), m_data.vertexSnippet.end(), '\n'));
+            const int vsLines = 1 + static_cast<int>(std::count(vs.begin(), vs.end(), '\n'));
             for (const Arcane::ShaderDiag& d : m_vsDiags)
             {
                 const int rel = d.line - m_vsLineOffset;
@@ -3293,10 +4131,13 @@ namespace Arcane::Editor
                           "(" + std::to_string(line) + "): " + d.message;
             fn(row);
         };
-        if (ChainMode())
+        if (CompilesAsChain())
         {
-            // Chain mode owns them per pass; m_diags only MIRRORS pass 0 there
-            // (for the badges), so the single-path loop must not also run.
+            // A chain compile owns them per pass; m_diags only MIRRORS pass 0
+            // there (for the badges), so the single-path loop must not also
+            // run. CompilesAsChain, not the authoring ChainMode: an instance of
+            // a chain base compiles per pass too, and a failing pass 1+ must
+            // still reach the Problems pane (fix round 1).
             for (std::size_t p = 0; p < m_passJobs.size(); ++p)
             {
                 const int offset = p < m_passLineOffsets.size() ? m_passLineOffsets[p] : 0;
@@ -3359,32 +4200,45 @@ namespace Arcane::Editor
                  static_cast<float>(kGraphPreviewSize) };
     }
 
-    void ShaderEditorDocument::DrawPreviewPanel(float height)
+    void ShaderEditorDocument::DrawPreviewPanel(ImVec2 size)
     {
-        // Mirrors the toolbar's guard: a mesh surface is previewed in the
-        // viewport on its meshes, never compiled here -- a one-line note, no box.
-        if (SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh)
-        {
-            ImGui::TextDisabled("Mesh material: not compiled here -- preview it on a mesh in the viewport");
-            return;
-        }
-        ImGui::BeginChild("##preview", ImVec2(0, height), ImGuiChildFlags_Borders);
+        // A mesh surface is never compiled here, but it IS previewed (T3-D6,
+        // the s5.3 amendment): the thumbnail's lit sphere in the CURRENT
+        // params, in the same box, with the old one-line note as its caption
+        // (the caller leaves room for it: kMeshPreviewCaption).
+        const bool mesh = SurfaceOf(m_surface) == Arcane::MaterialSurface::Mesh;
+        ImGui::BeginChild("##preview", size, ImGuiChildFlags_Borders);
         const PreviewImage image = PreviewImageOf();
         if (image.id != 0)
         {
             const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const float texW = image.extent;
-            const float texH = image.extent;
-            const float scale = (std::min)(avail.x > 0 ? avail.x / texW : 1.0f,
-                                           avail.y > 0 ? avail.y / texH : 1.0f);
-            const float s = scale > 0.0f ? scale : 1.0f;
-            ImGui::Image(image.id, ImVec2(texW * s, texH * s));
+            const PreviewFit fit = FitPreviewImage(avail.x, avail.y, image.extent);
+            const ImVec2 at = ImGui::GetCursorPos();
+            ImGui::SetCursorPos(ImVec2(at.x + fit.x, at.y + fit.y));
+            ImGui::Image(image.id, ImVec2(fit.side, fit.side));
+        }
+        else if (mesh)
+        {
+            // PreviewBoxText's NotCompiledHere line names the IMPORTED mesh;
+            // a mesh material's box names why its sphere is missing instead.
+            const PreviewStatus st = ComputeStatus();
+            CenteredTextDisabled(st.preview != PreviewAvailability::Ready
+                                     ? "No preview -- " + NoPreviewReason(st)
+                                     : std::string("Preview pending -- nothing rendered yet"));
         }
         else
         {
-            ImGui::TextDisabled("compiling...");
+            CenteredTextDisabled(PreviewBoxText(ComputeStatus()));
         }
         ImGui::EndChild();
+        if (mesh)
+        {
+            // Wrapped: the page column is narrow (MeshPreviewCaptionHeight
+            // measures the same wrap for the full-tab reservation).
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", kMeshPreviewCaption);
+            ImGui::PopTextWrapPos();
+        }
     }
 
     // ------------------------------------------------------------ graph mode
@@ -3468,9 +4322,149 @@ namespace Arcane::Editor
         // covered by either check and would write to that other pass: a
         // pre-existing GraphEditCommand weakness (every step stores a bare
         // index), not one this bracket introduces.
-        if (m_services.undo)
-            m_services.undo->Push(std::make_unique<GraphEditCommand>(
+        if (UndoStack())
+            UndoStack()->Push(std::make_unique<GraphEditCommand>(
                 m_anchor, label, pass, std::move(before), GraphOptAt(pass)));
+    }
+
+    // -------------------------------- node-edit plumbing (s5.1.4/5.1.5)
+    std::function<void()> ShaderEditorDocument::GraphEditBuilder(const char* label, std::size_t pass)
+    {
+        // Whole-graph before AND the pass it belongs to, both pinned at
+        // activation. The command builds at CLOSE from this plus whatever the
+        // gesture did -- which is why an abandoned drag lands on the stack
+        // instead of vanishing. Pinning the PASS is what keeps that safe: a
+        // close can land after the active pass moved (a ctrl+click text entry
+        // parks a gesture without deactivating it, the pass canvas is submitted
+        // before the graph panel, and the abandoned close runs later still at
+        // the ScopeGuard), and a node page may be pinned to a pass other than
+        // the active one. A command pairing pass B's index with pass A's
+        // `before` would have Undo overwrite B's graph with A's.
+        //
+        // NO-OP GUARD: the close runs on EVERY close path, including the
+        // abandonment ones (stale-close, collapsed window, document teardown)
+        // where the gesture never edited anything. Pushing there would leave a
+        // junk step whose before == after AND clear the redo stack
+        // (CommandStack.cpp:70) -- a generic Push is its own transaction, so it
+        // never meets Commit's empty-transaction drop at :61-62. So compare
+        // first; an EDITED gesture still differs and still pushes one step.
+        return [this, label = std::string(label), pass, before = GraphOptAt(pass)]() mutable
+        {
+            if (GraphOptEqual(before, GraphOptAt(pass)))
+                return;   // nothing changed -- no step, redo intact
+            PushGraphUndo(label.c_str(), std::move(before), pass);
+        };
+    }
+
+    bool ShaderEditorDocument::CanvasDragEscape(const float (&pre)[4], bool preExisted, float* values,
+                                                int lanes, bool* existed)
+    {
+        // LastItemData.ID: the scalar drag's own id, or -- for DragFloat2/4,
+        // which close a group -- the live component's (EndGroup forwards the
+        // ActiveId), the same id on every frame of one drag.
+        const std::uint32_t item = ImGui::GetItemID();
+        if (ImGui::IsItemActivated())
+        {
+            m_canvasDragSeed.item = item;
+            std::memcpy(m_canvasDragSeed.v, pre, sizeof(pre));
+            m_canvasDragSeed.existed = preExisted;
+        }
+        if (m_canvasDragSeed.item == 0 || m_canvasDragSeed.item != item)
+            return false;
+        if (!ImGui::IsItemActive())
+        {
+            m_canvasDragSeed = {};   // the gesture ended its own way
+            return false;
+        }
+        // Mid-DRAG only: the text-entry mode (Ctrl+click / double-click) has no
+        // button down, and its InputText reverts on Esc by itself.
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            return false;
+        std::memcpy(values, m_canvasDragSeed.v, sizeof(float) * static_cast<std::size_t>(lanes));
+        if (existed)
+            *existed = m_canvasDragSeed.existed;
+        m_canvasDragSeed = {};
+        ImGui::ClearActiveID();
+        return true;
+    }
+
+    void ShaderEditorDocument::NoteGraphValueEdited()
+    {
+        m_dirty = true;
+        if (m_live)
+            RegenerateFromGraph();
+    }
+
+    bool ShaderEditorDocument::RunNodeEdit(const char* label, std::size_t pass, std::uint32_t id,
+                                           Arcane::FunctionRef<void(Arcane::GraphNode&, Arcane::MaterialGraph&)> mutate,
+                                           bool recompile)
+    {
+        Arcane::GraphNode* n = FindGraphNode(pass, id);   // range-checks the pass FIRST
+        if (!n)
+            return false;
+        std::optional<Arcane::MaterialGraph> before = GraphOptAt(pass);
+        mutate(*n, *GraphOptAt(pass));
+        if (GraphOptEqual(before, GraphOptAt(pass)))
+            return false;
+        if (recompile)
+            NoteGraphValueEdited();
+        else
+            m_dirty = true;   // annotation only (Comment text): no recompile
+        PushGraphUndo(label, std::move(before), pass);
+        return true;
+    }
+
+    void ShaderEditorDocument::DeferNodeEdit(std::function<void()> fn)
+    {
+        if (m_nodePageDrawing)
+            m_nodePageEdits.push_back(std::move(fn));
+        else
+            fn();
+    }
+
+    bool ShaderEditorDocument::AddCustomPin(std::size_t pass, std::uint32_t id)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || n->type != Arcane::GraphNodeType::Custom)
+            return false;
+        return RunNodeEdit("Add Pin", pass, id, [](Arcane::GraphNode& node, Arcane::MaterialGraph&)
+        {
+            Arcane::GraphCustomPin p;
+            for (std::uint32_t k = 1;; ++k)
+            {
+                p.name = "p" + std::to_string(k);
+                bool taken = false;
+                for (const Arcane::GraphCustomPin& other : node.customPins)
+                    taken = taken || other.name == p.name;
+                if (!taken)
+                    break;
+            }
+            node.customPins.push_back(std::move(p));
+        });
+    }
+
+    bool ShaderEditorDocument::RemoveCustomPin(std::size_t pass, std::uint32_t id, std::uint32_t pin)
+    {
+        const Arcane::GraphNode* n = FindGraphNode(pass, id);
+        if (!n || n->type != Arcane::GraphNodeType::Custom || pin >= n->customPins.size())
+            return false;
+        return RunNodeEdit("Remove Pin", pass, id, [id, pin](Arcane::GraphNode& node, Arcane::MaterialGraph& g)
+        {
+            // Drop the pin's links, re-index links to later pins (toPin is a
+            // bare index into this node's pin list).
+            std::erase_if(g.links, [&](const Arcane::GraphLink& l) { return l.toNode == id && l.toPin == pin; });
+            for (Arcane::GraphLink& l : g.links)
+                if (l.toNode == id && l.toPin > pin)
+                    --l.toPin;
+            node.customPins.erase(node.customPins.begin() + pin);
+            // Literals index pins exactly like links: same drop + re-index, or a
+            // removed pin's value resurfaces on whatever pin slid into its index
+            // (silently, since the reader only range-checks).
+            std::erase_if(node.pinLiterals, [&](const Arcane::GraphPinLiteral& pl) { return pl.pin == pin; });
+            for (Arcane::GraphPinLiteral& pl : node.pinLiterals)
+                if (pl.pin > pin)
+                    --pl.pin;
+        });
     }
 
     // --------------------------------------------- external file changes
@@ -3499,6 +4493,7 @@ namespace Arcane::Editor
         m_activePass = 0;
         m_viewPass = -1;
         m_passCanvasSeeded = false;
+        m_passFitOnSeed = true;   // the reloaded file is a fresh view (the graph canvas rebuilds its context)
         m_graphPositionsApplied = false;
         m_graphShownPass = -1;
         if (!IsInstance() || ResolveParentChain())
@@ -3671,9 +4666,53 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::PushPassUndo(const char* label, PassListState before)
     {
-        if (m_services.undo)
-            m_services.undo->Push(std::make_unique<PassListCommand>(
+        if (UndoStack())
+            UndoStack()->Push(std::make_unique<PassListCommand>(
                 m_anchor, label, std::move(before), CapturePassListState()));
+    }
+
+    GraphPinPaint ShaderEditorDocument::GraphPinPaintOn(const Arcane::GraphNode& node, std::uint32_t pin,
+                                                        bool input) const
+    {
+        const Arcane::GraphPinDesc desc = input ? Arcane::GraphNodeInputPin(node, pin)
+                                                : Arcane::GraphNodeOutputPin(node, pin);
+        const Arcane::GraphNodeWidths w = WidthsOf(m_canvasWidths, node.id);
+        return PinPaintFor(desc.width, input ? w.inputs : w.outputs);
+    }
+
+    GraphPinPaint ShaderEditorDocument::CanvasPinPaint(std::uint32_t id, std::uint32_t pin, bool input) const
+    {
+        const Arcane::MaterialGraph* g = PassGraph(static_cast<std::size_t>(std::max(0, m_activePass)));
+        const Arcane::GraphNode* n = g ? g->FindNode(id) : nullptr;
+        if (!n || pin >= (input ? Arcane::GraphNodeInputCount(*n) : Arcane::GraphNodeOutputCount(*n)))
+            return {};
+        return GraphPinPaintOn(*n, pin, input);
+    }
+
+    std::optional<ShaderEditorDocument::CanvasWireTint>
+    ShaderEditorDocument::CanvasWireTintOf(std::size_t linkIndex) const
+    {
+        if (linkIndex >= m_wireTints.size())
+            return std::nullopt;
+        return m_wireTints[linkIndex];
+    }
+
+    std::string ShaderEditorDocument::CanvasPinTooltip(const Arcane::MaterialGraph& graph, const Arcane::GraphNode& node,
+                                                       std::uint32_t pin, bool input) const
+    {
+        const Arcane::GraphPinDesc desc = input ? Arcane::GraphNodeInputPin(node, pin)
+                                                : Arcane::GraphNodeOutputPin(node, pin);
+        const Arcane::GraphNodeWidths w = WidthsOf(m_canvasWidths, node.id);
+        std::string source;
+        int fanout = 0;
+        for (const Arcane::GraphLink& l : graph.links)
+        {
+            if (input && l.toNode == node.id && l.toPin == pin)
+                source = WireSourceText(graph, l);   // last wins, as codegen reads it
+            if (!input && l.fromNode == node.id && l.fromPin == pin)
+                ++fanout;
+        }
+        return PinTooltipText(desc.name, desc.width, input ? w.inputs : w.outputs, input, source, fanout);
     }
 
     bool ShaderEditorDocument::NodeBadged(std::uint32_t nodeId) const
@@ -3691,21 +4730,32 @@ namespace Arcane::Editor
 
     void ShaderEditorDocument::RebuildDiagBadges()
     {
-        // Compile-diag badges for the ACTIVE pass's canvas: that pass's diags,
-        // line offset, and line map (single-path docs are pass 0 throughout).
+        // Compile-diag badges for the ACTIVE pass's canvas (single-path docs
+        // are pass 0 throughout); graph-level lines (node 0) badge nothing.
         m_diagBadgeNodes.clear();
-        const std::size_t c = static_cast<std::size_t>(std::max(0, m_activePass));
-        if (c >= m_passLineNodeIds.size() || m_passLineNodeIds[c].empty())
+        ForEachPassErrorDiag(static_cast<std::size_t>(std::max(0, m_activePass)),
+                             [&](std::uint32_t id, std::string_view)
+                             {
+                                 if (id != 0)
+                                     m_diagBadgeNodes.push_back(id);
+                             });
+    }
+
+    void ShaderEditorDocument::ForEachPassErrorDiag(
+        std::size_t pass, const std::function<void(std::uint32_t nodeId, std::string_view message)>& fn) const
+    {
+        // That pass's diags, line offset, and line map.
+        if (pass >= m_passLineNodeIds.size() || m_passLineNodeIds[pass].empty())
             return;
         const std::vector<Arcane::ShaderDiag>* diags = &m_diags;
         int offset = m_snippetLineOffset;
-        if (ChainMode() && c < m_passJobs.size())
+        if (CompilesAsChain() && pass < m_passJobs.size())   // the compile predicate (per-pass diags)
         {
-            diags = &m_passJobs[c].diags;
-            if (c < m_passLineOffsets.size())
-                offset = m_passLineOffsets[c];
+            diags = &m_passJobs[pass].diags;
+            if (pass < m_passLineOffsets.size())
+                offset = m_passLineOffsets[pass];
         }
-        const std::vector<std::uint32_t>& lineMap = m_passLineNodeIds[c];
+        const std::vector<std::uint32_t>& lineMap = m_passLineNodeIds[pass];
         for (const Arcane::ShaderDiag& d : *diags)
         {
             if (d.severity != Arcane::ShaderDiagSeverity::Error)
@@ -3713,8 +4763,8 @@ namespace Arcane::Editor
             // stitched line -> snippet line -> statement's node (the line map).
             const int snippetLine = d.line - offset;
             const std::size_t idx = static_cast<std::size_t>(snippetLine) - 1;
-            if (snippetLine >= 1 && idx < lineMap.size() && lineMap[idx] != 0)
-                m_diagBadgeNodes.push_back(lineMap[idx]);
+            if (snippetLine >= 1 && idx < lineMap.size())
+                fn(lineMap[idx], d.message);
         }
     }
 
@@ -3773,6 +4823,10 @@ namespace Arcane::Editor
             ed::Config cfg;
             cfg.SettingsFile = nullptr;   // layout persists in the .arcmat, not an ini
             ApplyZoomLevels(cfg);         // UE's 20 stops (see kZoomLevels)
+            // UE's selection modifiers (SNodePanel.cpp:194-212, MarqueeOperation.h:
+            // 50-68): Shift+click and Shift+drag ADD. Upstream's Shift+drag selects
+            // only groups (Comments), which read on the desk as a broken marquee.
+            cfg.ShiftAddsToSelection = true;
             m_graphCtx = ed::CreateEditor(&cfg);
             // The style is per-context state, so a rebuilt context re-applies
             // it -- including the switch that kills the vendored grid.
@@ -3791,6 +4845,9 @@ namespace Arcane::Editor
 
         ed::SetCurrentEditor(m_graphCtx);
         DrawCanvasBackdrop(m_gridPhase);
+        // The canvas's SCREEN rect, for the pin legend (screen space, T3-D1).
+        const ImVec2 canvasMin  = ImGui::GetCursorScreenPos();
+        const ImVec2 canvasSize = ImGui::GetContentRegionAvail();
         // Nothing is drawn above the canvas inside this function, so the
         // remaining region IS the canvas's height.
         ed::Begin("##graphcanvas", ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
@@ -3808,6 +4865,13 @@ namespace Arcane::Editor
                                                   (std::max)(60.0f, n.value[1])));
             }
             m_graphPositionsApplied = true;
+            // s4.5's fit belongs to a FRESH view: the open, a pass switch, a
+            // reload or a pass-list undo -- each rebuilt the context above, so
+            // there is no view to keep. An undo/redo of a graph edit
+            // (ApplyGraphState) re-seeds positions too, but on the SAME context,
+            // and the user's zoom and scroll must survive it (T3-D3).
+            if (switchedPass)
+                m_fitPending.Arm();
         }
 
         // ---- Rendering LOD: ONE read of the zoom, ONE tier, per frame ----
@@ -3827,6 +4891,20 @@ namespace Arcane::Editor
         // DrawGradientWire's miss path). Cleared here, refilled by the pin
         // rows below, consumed by the link loop after them.
         m_pinPivots.clear();
+        m_wireTints.clear();
+
+        // The dynamic-width resolution codegen emits from, ONCE per frame for
+        // this graph (T3-D1): every pin dot, wire end and tooltip below reads it.
+        m_canvasWidths = Arcane::ResolveGraphNodeWidths(g);
+        m_pinTip = {};
+        // The pin legend's click target, BEFORE any node: ImGui hands hover to
+        // the first item submitted over a point, and the canvas's own hit areas
+        // come later, in ed::End -- so a click on the legend folds it instead
+        // of reaching the graph (ShaderGraphPinLegend.hpp). Screen space.
+        {
+            const CanvasPopupScope screenSpace;
+            m_pinLegendHovered = GraphPinLegendInteract(canvasMin, canvasSize);
+        }
 
         for (Arcane::GraphNode& n : g.nodes)
             DrawGraphNode(n, lod);
@@ -3843,20 +4921,21 @@ namespace Arcane::Editor
             // of its ends. A dangling endpoint (should not survive an edit, but
             // the draw must not depend on that) falls back to the neutral
             // dynamic colour.
+            //
+            // Each end takes its PIN's paint colour (T3-D1): a resolved dynamic
+            // pin is the width it resolved to, the same colour as its dot.
             const Arcane::GraphNode* src = g.FindNode(l.fromNode);
             const bool srcPinValid =
                 src && l.fromPin < Arcane::GraphNodeOutputCount(*src);
             const ImVec4 srcTint =
-                srcPinValid ? PinColorForWidth(
-                                  Arcane::GraphNodeOutputPin(*src, l.fromPin).width)
+                srcPinValid ? GraphPinPaintOn(*src, l.fromPin, /*input*/ false).color
                             : kPinDynamicColor;
 
             const Arcane::GraphNode* dst = g.FindNode(l.toNode);
             const bool dstPinValid =
                 dst && l.toPin < Arcane::GraphNodeInputCount(*dst);
             const ImVec4 dstTint =
-                dstPinValid ? PinColorForWidth(
-                                  Arcane::GraphNodeInputPin(*dst, l.toPin).width)
+                dstPinValid ? GraphPinPaintOn(*dst, l.toPin, /*input*/ true).color
                             : kPinDynamicColor;
 
             const ed::LinkId linkId(i + 1);
@@ -3874,22 +4953,67 @@ namespace Arcane::Editor
             // does not flicker bright while it is being dragged past.
             const bool emphasize = ed::IsLinkSelected(linkId) ||
                                    ed::GetHoveredLink() == linkId;
+            m_wireTints.push_back({ srcTint, dstTint });   // index i: the CanvasWireTintOf seam
             DrawGradientWire(fromPin.Get(), toPin.Get(), srcTint, dstTint,
                              emphasize);
         }
 
+        // The hovered pin's tooltip (T3-D1): name, type word, wiring. The pin
+        // rows recorded the hover; the tooltip opens here, once, in screen
+        // space (CanvasPopupScope).
+        if (m_pinTip.valid)
+            if (const Arcane::GraphNode* tipNode = g.FindNode(m_pinTip.node))
+            {
+                const std::string tip = CanvasPinTooltip(g, *tipNode, m_pinTip.pin, m_pinTip.isInput);
+                const CanvasPopupScope screenSpace;
+                ImGui::SetTooltip("%s", tip.c_str());
+            }
+
         HandleGraphEdits();
+
+        // Node page selection mirror, WRITE half (s5.1.1): the only place the
+        // document writes `ed` selection besides the Problems locator below.
+        // Here, because this frame's nodes now exist (SelectNode resolves
+        // through the context's node list) and ed::End has not yet run this
+        // frame's selection actions. Never NavigateToSelection: history,
+        // crumb and restore landings select without framing (s5.1.3).
+        if (m_nodeSelRequest)
+        {
+            if (m_nodeSelRequest->op == NodeSelRequest::Select)
+                ed::SelectNode(ed::NodeId(m_nodeSelRequest->id));
+            else
+                ed::ClearSelection();
+            m_nodeSelApplying = true;
+            m_nodeSelRequest.reset();
+        }
 
         // Requested focus: select + frame the offending node. Written by
         // RequestFocusGraphNode (Task 5, the Problems panel's GraphNode
         // locator) -- the errors panel's rows were its only writer before
         // that panel was removed; console lines are not clickable.
-        if (m_focusNode != 0)
+        //
+        // Both this focus and the s4.5 fit below go through a CanvasNavLatch
+        // (Widgets/GraphFit.hpp): the node editor's Begin answers a canvas
+        // RESIZE by re-centring the view it showed LAST draw
+        // (imgui_node_editor.cpp:1221-1254), which discards any navigation
+        // still in flight -- and a freshly opened document's canvas changes
+        // width over its first draws (a scrollbar comes and goes while the
+        // layout settles), as can any dock/splitter drag. The latch re-issues
+        // the navigation on a draw that sees a new size and disarms once the
+        // size held across it (and, for this animated focus, the animation's
+        // ScrollDuration elapsed). Not on the seed draw: no node is measured.
+        const ImVec2 graphCanvasSize = ed::GetScreenSize();
+        const double graphCanvasNow = ImGui::GetTime();
+        if (m_focusNode != 0 &&
+            m_focusPending.Update(graphCanvasSize, graphCanvasNow, ed::GetStyle().ScrollDuration, !seededThisFrame))
         {
             ed::SelectNode(ed::NodeId(m_focusNode));
             ed::NavigateToSelection(true);
-            m_focusNode = 0;
         }
+        if (m_focusPending.Pending())
+            m_fitPending.Disarm();   // a Problems focus outranks the open fit
+        else
+            m_focusNode = 0;
 
         // F = frame (the UE/SG muscle memory): zoom to the selection, or to
         // everything when nothing is selected.
@@ -3900,7 +5024,22 @@ namespace Arcane::Editor
                 ed::NavigateToSelection(true);
             else
                 ed::NavigateToContent();
+            // The user's own frame wins over any pending automatic one.
+            m_fitPending.Disarm();
+            m_focusPending.Disarm();
+            m_focusNode = 0;
         }
+
+        // Frame-to-fit on open (s4.5): armed by a fresh-view seed above, issued on the
+        // first later draw and re-issued until it LANDED (the latch, see the
+        // focus block above), AFTER the node loop -- every node is live and
+        // carries the size it measured last frame (NodeCulled exempts
+        // unmeasured nodes). Capped by editor.graph.fitMaxZoom; the selection
+        // is never touched. F above stays the uncapped frame-selection /
+        // frame-all. Duration 0: it lands at the next Begin, so settle 0.
+        if (m_fitPending.Update(graphCanvasSize, graphCanvasNow, 0.0f, !seededThisFrame) &&
+            !GraphFitToContent(GraphFitMaxZoom(), 0.0f))
+            m_fitPending.Disarm();   // nothing to fit
 
         // Node context menu -> alignment over the current selection.
         {
@@ -3992,104 +5131,9 @@ namespace Arcane::Editor
             ImGui::OpenPopup("##graphcreate");
         }
 
-        // Custom-node body editor: a MODAL in suspended (screen) space -- the
-        // in-node widget can only be a preview (child windows drift under the
-        // canvas transform). Apply commits ONE undo step.
-        if (m_bodyEditRequest != 0)
-        {
-            if (const Arcane::GraphNode* n = g.FindNode(m_bodyEditRequest))
-            {
-                m_bodyEditNode = m_bodyEditRequest;
-                std::snprintf(m_bodyBuf, sizeof(m_bodyBuf), "%s", n->customBody.c_str());
-                ImGui::OpenPopup("Edit HLSL##graphbody");
-            }
-            m_bodyEditRequest = 0;
-        }
-        ImGui::SetNextWindowSize(ImVec2(560.0f, 380.0f), ImGuiCond_Appearing);
-        if (ImGui::BeginPopupModal("Edit HLSL##graphbody", nullptr))
-        {
-            ImGui::TextDisabled("Function body. Inputs arrive as the node's pins; params "
-                                "and Time are directly visible. End with a return.");
-            ImGui::InputTextMultiline("##bodyedit", m_bodyBuf, sizeof(m_bodyBuf),
-                                      ImVec2(-1.0f, ImGui::GetContentRegionAvail().y - 34.0f),
-                                      ImGuiInputTextFlags_AllowTabInput);
-            if (ImGui::Button("Apply"))
-            {
-                if (Arcane::GraphNode* n = g.FindNode(m_bodyEditNode);
-                    n && n->customBody != m_bodyBuf)
-                {
-                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                    n->customBody = m_bodyBuf;
-                    m_dirty = true;
-                    if (m_live)
-                        RegenerateFromGraph();
-                    PushGraphUndo("Edit HLSL Body", std::move(before));
-                }
-                m_bodyEditNode = 0;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel"))
-            {
-                m_bodyEditNode = 0;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-        // Assisted param rename: the consent modal (cross-FILE writes are not
-        // undoable -- this gate is their structural-edit standing).
-        if (m_renameRequest)
-        {
-            m_renameRequest = false;
-            ImGui::OpenPopup("Rename Param Everywhere?##prename");
-        }
-        if (ImGui::BeginPopupModal("Rename Param Everywhere?##prename", nullptr,
-                                   ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::Text("Renamed '%s' -> '%s'.", m_renameOld.c_str(), m_renameNew.c_str());
-            ImGui::Text("%zu instance file(s) carry a saved value under the old name:",
-                        m_renameTargets.size());
-            for (std::size_t i = 0; i < m_renameTargets.size() && i < 8; ++i)
-                ImGui::BulletText("%s", m_renameTargets[i].name.c_str());
-            if (m_renameTargets.size() > 8)
-                ImGui::TextDisabled("...and %zu more", m_renameTargets.size() - 8);
-            ImGui::TextDisabled("Files that already have a '%s' value keep it; the "
-                                "old entry drops.", m_renameNew.c_str());
-            ImGui::Separator();
-            if (ImGui::Button("Rename everywhere"))
-            {
-                for (const RenameTarget& t : m_renameTargets)
-                {
-                    auto data = Arcane::LoadMaterialAsset(t.path);
-                    if (!data)
-                    {
-                        ARC_ERROR("param rename: '{}' failed to load -- skipped",
-                                  t.path.generic_string());
-                        continue;
-                    }
-                    RekeySavedParam(data->params, m_renameOld, m_renameNew);
-                    if (!Arcane::SaveMaterialAsset(t.path, *data))
-                    {
-                        ARC_ERROR("param rename: '{}' failed to save -- skipped",
-                                  t.path.generic_string());
-                        continue;
-                    }
-                    if (m_services.onAssetSaved)
-                        m_services.onAssetSaved(t.id);   // sprite-cache invalidate
-                    if (m_services.onParamRenamed)
-                        m_services.onParamRenamed(t.id, m_renameOld, m_renameNew);
-                }
-                m_renameTargets.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Just here"))
-            {
-                m_renameTargets.clear();   // today's behavior: the wart, chosen
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
+        // The body editor and the rename consent modal (s5.1.7); still inside
+        // this Suspend, where they sat before the hoist.
+        DrawGraphModals();
 
         if (ImGui::BeginPopup("##graphcreate"))
         {
@@ -4309,7 +5353,134 @@ namespace Arcane::Editor
         }
 
         ed::End();
+
+        // READ half, AFTER ed::End (drafting pick, 9.28 #20): the library runs
+        // this frame's click/marquee selection actions inside End
+        // (imgui_node_editor.cpp:1353) against the snapshot Begin took
+        // (:1266-1269), and HasSelectionChanged compares the two (:1850-1853)
+        // -- a read before End would see last frame's selection and never a
+        // click. GetSelectedNodes caps at the buffer
+        // (imgui_node_editor_api.cpp:22-36), so 2 means "two or more".
+        {
+            ed::NodeId selected[2];
+            const int count = ed::GetSelectedNodes(selected, 2);
+            const CanvasSelectionRead read = ReadCanvasSelection(
+                count, count > 0 ? static_cast<std::uint32_t>(selected[0].Get()) : 0u,
+                static_cast<std::size_t>(std::max(0, m_activePass)),
+                ed::HasSelectionChanged(), m_nodeSelApplying);
+            m_nodeSel = read.sel;
+            if (read.event)
+                ++m_pageSel.epoch;   // click, Ctrl-click, marquee, background clear, paste, the locator
+            m_nodeSelApplying = false;
+        }
         ed::SetCurrentEditor(nullptr);
+
+        // The pin legend's PAINT, after ed::End: screen space, above every node.
+        DrawGraphPinLegend(canvasMin, canvasSize, m_pinLegendHovered);
+    }
+
+    void ShaderEditorDocument::DrawGraphModals()
+    {
+        // Custom-node body editor: a MODAL in screen space -- the in-node
+        // widget can only be a preview (child windows drift under the canvas
+        // transform). Bound to m_bodyEditPass, so Apply writes the pass the
+        // request named, not whatever the canvas shows. ONE undo step.
+        if (m_bodyEditRequest != 0)
+        {
+            if (const Arcane::GraphNode* n = FindGraphNode(m_bodyEditPass, m_bodyEditRequest))
+            {
+                m_bodyEditNode = m_bodyEditRequest;
+                std::snprintf(m_bodyBuf, sizeof(m_bodyBuf), "%s", n->customBody.c_str());
+                ImGui::OpenPopup("Edit HLSL##graphbody");
+            }
+            m_bodyEditRequest = 0;
+        }
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 380.0f), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal("Edit HLSL##graphbody", nullptr))
+        {
+            ImGui::TextDisabled("Function body. Inputs arrive as the node's pins; params "
+                                "and Time are directly visible. End with a return.");
+            ImGui::InputTextMultiline("##bodyedit", m_bodyBuf, sizeof(m_bodyBuf),
+                                      ImVec2(-1.0f, ImGui::GetContentRegionAvail().y - 34.0f),
+                                      ImGuiInputTextFlags_AllowTabInput);
+            if (ImGui::Button("Apply"))
+            {
+                if (Arcane::GraphNode* n = FindGraphNode(m_bodyEditPass, m_bodyEditNode);
+                    n && n->customBody != m_bodyBuf)
+                {
+                    std::optional<Arcane::MaterialGraph> before = GraphOptAt(m_bodyEditPass);
+                    n->customBody = m_bodyBuf;
+                    m_dirty = true;
+                    if (m_live)
+                        RegenerateFromGraph();
+                    PushGraphUndo("Edit HLSL Body", std::move(before), m_bodyEditPass);
+                }
+                m_bodyEditNode = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel"))
+            {
+                m_bodyEditNode = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        // Assisted param rename: the consent modal (cross-FILE writes are not
+        // undoable -- this gate is their structural-edit standing). Needs no
+        // pass: BeginParamRename already walked every pass.
+        if (m_renameRequest)
+        {
+            m_renameRequest = false;
+            ImGui::OpenPopup("Rename Param Everywhere?##prename");
+        }
+        if (ImGui::BeginPopupModal("Rename Param Everywhere?##prename", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Renamed '%s' -> '%s'.", m_renameOld.c_str(), m_renameNew.c_str());
+            ImGui::Text("%zu instance file(s) carry a saved value under the old name:",
+                        m_renameTargets.size());
+            for (std::size_t i = 0; i < m_renameTargets.size() && i < 8; ++i)
+                ImGui::BulletText("%s", m_renameTargets[i].name.c_str());
+            if (m_renameTargets.size() > 8)
+                ImGui::TextDisabled("...and %zu more", m_renameTargets.size() - 8);
+            ImGui::TextDisabled("Files that already have a '%s' value keep it; the "
+                                "old entry drops.", m_renameNew.c_str());
+            ImGui::Separator();
+            if (ImGui::Button("Rename everywhere"))
+            {
+                for (const RenameTarget& t : m_renameTargets)
+                {
+                    auto data = Arcane::LoadMaterialAsset(t.path);
+                    if (!data)
+                    {
+                        ARC_ERROR("param rename: '{}' failed to load -- skipped",
+                                  t.path.generic_string());
+                        continue;
+                    }
+                    RekeySavedParam(data->params, m_renameOld, m_renameNew);
+                    if (!Arcane::SaveMaterialAsset(t.path, *data))
+                    {
+                        ARC_ERROR("param rename: '{}' failed to save -- skipped",
+                                  t.path.generic_string());
+                        continue;
+                    }
+                    if (m_services.onAssetSaved)
+                        m_services.onAssetSaved(t.id);   // sprite-cache invalidate
+                    if (m_services.onParamRenamed)
+                        m_services.onParamRenamed(t.id, m_renameOld, m_renameNew);
+                }
+                m_renameTargets.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Just here"))
+            {
+                m_renameTargets.clear();   // today's behavior: the wart, chosen
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 
     void ShaderEditorDocument::DrawGraphNode(Arcane::GraphNode& n, NodeLOD canvasLod)
@@ -4548,63 +5719,33 @@ namespace Arcane::Editor
         // applied live and recorded nowhere.
         auto buildGraphEdit = [&](const char* label) -> std::function<void()>
         {
-            // Whole-graph before AND the pass it belongs to, both
-            // pinned at activation. The command builds at CLOSE from
-            // this plus whatever the drag did -- which is why an
-            // abandoned drag now lands on the stack instead of
-            // vanishing. Pinning the PASS is what keeps that safe: a
-            // close can land after the active pass moved (a ctrl+click
-            // text entry parks a gesture without deactivating it, the
-            // pass canvas is submitted before this panel, and the
-            // abandoned close runs later still at the ScopeGuard), and
-            // a command pairing pass B's index with pass A's `before`
-            // would have Undo overwrite B's graph with A's.
-            //
-            // NO-OP GUARD: the close runs on EVERY close path, including
-            // the abandonment ones (stale-close, collapsed window,
-            // document teardown) where the gesture never edited
-            // anything. Pushing there would leave a junk step whose
-            // before == after AND clear the redo stack
-            // (CommandStack.cpp:70) -- a generic Push is its own
-            // transaction, so it never meets Commit's empty-transaction
-            // drop at :61-62. So compare first; an EDITED gesture still
-            // differs and still pushes exactly one step.
-            return std::function<void()>(
-                [this, label = std::string(label),
-                 pass = static_cast<std::size_t>((std::max)(0, m_activePass)),
-                 before = ActiveGraphOpt()]() mutable
-                {
-                    if (GraphOptEqual(before, GraphOptAt(pass)))
-                        return;   // nothing changed -- no step, redo intact
-                    PushGraphUndo(label.c_str(), std::move(before), pass);
-                });
+            // GraphEditBuilder pins the pass AND `before` at activation and
+            // skips the push when the close finds nothing changed (the
+            // abandonment paths: stale-close, collapsed window, teardown).
+            return GraphEditBuilder(label, static_cast<std::size_t>((std::max)(0, m_activePass)));
         };
         auto gestureBegin = [&](const char* label)
         {
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
+            EditGesture::BeginOnActivate(UndoStack(), m_gesture,
                 [&] { return std::string(label); },
                 [&] { return buildGraphEdit(label); });
         };
-        auto gestureEnd = [&] { EditGesture::EndOnDeactivate(m_services.undo, m_gesture); };
+        // The close is EditGesture::EndAfterRow at each drag site (not a lambda):
+        // an Esc revert (CanvasDragEscape) closes as cancelled, at the row.
         // The popup pair, keyed on a popup id instead of the last submitted
         // item -- a hand-rolled popup's edits come from FOREIGN widgets, so
         // IsItemActivated() never fires for it (EditGesture.hpp:121-133).
         auto popupGestureBegin = [&](const char* label, std::uint32_t popupId)
         {
-            EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture, popupId,
+            EditGesture::BeginOnPopupOpen(UndoStack(), m_gesture, popupId,
                                           [&] { return std::string(label); },
                                           [&] { return buildGraphEdit(label); });
         };
         auto popupGestureEnd = [&](std::uint32_t popupId)
         {
-            EditGesture::EndOnPopupClose(m_services.undo, m_gesture, popupId);
+            EditGesture::EndOnPopupClose(UndoStack(), m_gesture, popupId);
         };
-        auto valueEdited = [&]
-        {
-            m_dirty = true;
-            if (m_live)
-                RegenerateFromGraph();
-        };
+        auto valueEdited = [&] { NoteGraphValueEdited(); };
 
         // An inline literal is hidden while a wire feeds the pin. One edge per
         // input is a canvas invariant (HandleGraphEdits replaces silently), so
@@ -4701,7 +5842,7 @@ namespace Arcane::Editor
             // (SGraphPin.cpp:354-364). The dot advances the cursor by a full
             // text line either way (DrawPinDot), so the row keeps its height
             // and the node keeps its shape across the transition.
-            const ImVec2 inDot = DrawPinDot(PinColorForWidth(inDesc.width), pinWired(pin));
+            const ImVec2 inDot = DrawPinDot(GraphPinPaintOn(n, pin, /*input*/ true), pinWired(pin));
             // One radius OUTBOARD of the dot's centre -- the row's left edge,
             // which is exactly where the (0, 0.5) alignment used to put the
             // pivot: the dot is the row's first item, so pinRect.Min.x is its
@@ -4716,6 +5857,9 @@ namespace Arcane::Editor
                 ImGui::TextUnformatted(inDesc.name);
             }
             ed::EndPin();
+            // EndPin closes the pin's group: the item is the dot + its label.
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                m_pinTip = { n.id, pin, true, true };
             // Custom pins are user-authored: width cycle + remove beside each.
             // Small per-pin controls, so they go with the labels -- UE collapses
             // its "+ Add pin" button at the same threshold
@@ -4736,28 +5880,9 @@ namespace Arcane::Editor
                 ImGui::SameLine();
                 if (ImGui::SmallButton("x"))
                 {
-                    // Remove the pin: drop its links, re-index links to later
-                    // pins (toPin is a bare index into this node's pin list).
-                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                    Arcane::MaterialGraph& gg = *ActiveGraphOpt();
-                    std::erase_if(gg.links, [&](const Arcane::GraphLink& l)
-                                  { return l.toNode == n.id && l.toPin == pin; });
-                    for (Arcane::GraphLink& l : gg.links)
-                        if (l.toNode == n.id && l.toPin > pin)
-                            --l.toPin;
-                    n.customPins.erase(n.customPins.begin() + pin);
-                    // Pin literals index pins exactly like links do, so they
-                    // need the same re-index -- otherwise a removed pin's
-                    // value would resurface on whatever pin slid into its
-                    // index (silently, since the reader only range-checks).
-                    std::erase_if(n.pinLiterals,
-                                  [&](const Arcane::GraphPinLiteral& pl)
-                                  { return pl.pin == pin; });
-                    for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
-                        if (pl.pin > pin)
-                            --pl.pin;
-                    valueEdited();
-                    PushGraphUndo("Remove Pin", std::move(before));
+                    // One step; drops the pin's links + literal and re-indexes
+                    // the later pins' (the node page calls the same member).
+                    (void)RemoveCustomPin(static_cast<std::size_t>((std::max)(0, m_activePass)), n.id, pin);
                     ImGui::PopID();
                     break;   // pin list changed under this loop -- redraw next frame
                 }
@@ -4780,56 +5905,55 @@ namespace Arcane::Editor
                     Arcane::GraphPinLiteralLanes(Arcane::GraphNodeInputPin(n, pin).width);
                 float buf[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
                 const Arcane::GraphPinLiteral* lit = n.FindPinLiteral(pin);
-                bool numericDefault = true;
-                if (lit)
-                    std::memcpy(buf, lit->v, sizeof(buf));
-                else
-                    numericDefault = PinNeutralDefault(n, pin, buf);
                 // A non-constant neutral (Panner's v.uv) prints as ITSELF: a
                 // format string carrying no conversion is explicitly tolerated
                 // by ImGui -- RoundScalarWithFormatT returns the value
                 // untouched when "the value is not visible in the format
                 // string" (ThirdParty/imgui/imgui_widgets.cpp:2496).
-                const char* fmt = numericDefault ? "%.3f" : "v.uv";
+                const char* fmt = "%.3f";
+                if (lit)
+                    std::memcpy(buf, lit->v, sizeof(buf));
+                else
+                {
+                    const Arcane::GraphPinNeutral nd = Arcane::GraphPinNeutralDefault(n, pin);
+                    SeedPinNeutral(nd, lanes, buf);
+                    if (nd.kind == Arcane::GraphPinNeutralKind::Expression)
+                        fmt = nd.hlsl;
+                }
                 ImGui::SetNextItemWidth(lanes == 1 ? 64.0f : lanes == 2 ? 106.0f : 190.0f);
+                float pre[4];
+                std::memcpy(pre, buf, sizeof(pre));
+                const bool litExisted = lit != nullptr;   // `lit` may dangle once SetPinLiteral runs
                 const bool changed =
                     lanes == 1 ? ImGui::DragFloat("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
                     : lanes == 2 ? ImGui::DragFloat2("##lit", buf, 0.01f, 0.0f, 0.0f, fmt)
                                  : ImGui::DragFloat4("##lit", buf, 0.01f, 0.0f, 0.0f, fmt);
+                bool existed = true;
+                const bool escaped = CanvasDragEscape(pre, litExisted, buf, lanes, &existed);
                 // Same bracketing as the Const payload drags below, and STRICTLY
                 // safer: the drag wrote `buf`, not the graph, so the snapshot
                 // this takes on the activation frame is always pre-edit.
                 gestureBegin("Pin Value");
-                if (changed)
+                if (escaped)
                 {
-                    // ONE entry per pin, updated IN PLACE. A duplicate would
-                    // make serialization non-deterministic: the writer sorts by
-                    // pin with std::sort, which is unstable
-                    // (MaterialGraph.cpp:1382-1384), and the reader keeps the
-                    // FIRST entry for a pin (:1561-1562).
-                    Arcane::GraphPinLiteral* slot = nullptr;
-                    for (Arcane::GraphPinLiteral& pl : n.pinLiterals)
-                        if (pl.pin == pin)
-                        {
-                            slot = &pl;
-                            break;
-                        }
-                    if (!slot)
-                    {
-                        // Absent-until-touched: the entry is BORN here, seeded
-                        // with what the field was already showing (the neutral),
-                        // so the first nudge moves the material by one drag step
-                        // instead of jumping to zero.
-                        Arcane::GraphPinLiteral fresh;
-                        fresh.pin = pin;
-                        n.pinLiterals.push_back(fresh);
-                        slot = &n.pinLiterals.back();
-                    }
-                    for (int i = 0; i < 4; ++i)
-                        slot->v[i] = i < lanes ? buf[i] : 0.0f;
+                    // Back to the drag's start: an absent-until-touched literal
+                    // is absent again, so the graph equals the gesture's before.
+                    if (existed)
+                        SetPinLiteral(n, pin, lanes, buf);
+                    else
+                        ErasePinLiteral(n, pin);
                     valueEdited();
                 }
-                gestureEnd();
+                else if (changed)
+                {
+                    // Absent-until-touched: a pin's first edit CREATES its entry
+                    // from what the field was already showing (`buf` was seeded
+                    // with the neutral), so the first nudge moves the material
+                    // by one drag step instead of jumping to zero.
+                    SetPinLiteral(n, pin, lanes, buf);
+                    valueEdited();
+                }
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 ImGui::PopID();
             }
         }
@@ -4853,29 +5977,38 @@ namespace Arcane::Editor
             case Arcane::GraphNodeType::ConstFloat:
             {
                 ImGui::SetNextItemWidth(90.0f);
+                float pre[4];
+                std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat("##v", &n.value[0], 0.01f);
+                const bool escaped = CanvasDragEscape(pre, true, n.value, 1);
                 gestureBegin("Edit Value");
-                if (changed) valueEdited();
-                gestureEnd();
+                if (changed || escaped) valueEdited();
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 break;
             }
             case Arcane::GraphNodeType::ConstFloat2:
             {
                 ImGui::SetNextItemWidth(140.0f);
+                float pre[4];
+                std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat2("##v", n.value, 0.01f);
+                const bool escaped = CanvasDragEscape(pre, true, n.value, 2);
                 gestureBegin("Edit Value");
-                if (changed) valueEdited();
-                gestureEnd();
+                if (changed || escaped) valueEdited();
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 break;
             }
             case Arcane::GraphNodeType::ConstFloat4:
             case Arcane::GraphNodeType::ConstColor:
             {
                 ImGui::SetNextItemWidth(220.0f);
+                float pre[4];
+                std::memcpy(pre, n.value, sizeof(pre));
                 const bool changed = ImGui::DragFloat4("##v", n.value, 0.01f);
+                const bool escaped = CanvasDragEscape(pre, true, n.value, 4);
                 gestureBegin("Edit Value");
-                if (changed) valueEdited();
-                gestureEnd();
+                if (changed || escaped) valueEdited();
+                EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                 if (n.type == Arcane::GraphNodeType::ConstColor)
                 {
                     ImGui::SameLine();
@@ -4975,15 +6108,18 @@ namespace Arcane::Editor
                         static_cast<int>(Arcane::ComponentCount(n.paramType));
                     ImGui::SetNextItemWidth(lanes == 1 ? 90.0f : lanes == 2 ? 140.0f : 220.0f);
                     bool changed = false;
+                    float pre[4];
+                    std::memcpy(pre, n.paramDefault.f, sizeof(pre));
                     if (lanes == 1)
                         changed = ImGui::DragFloat("##pdef", &n.paramDefault.f[0], 0.01f);
                     else if (lanes == 2)
                         changed = ImGui::DragFloat2("##pdef", n.paramDefault.f, 0.01f);
                     else
                         changed = ImGui::DragFloat4("##pdef", n.paramDefault.f, 0.01f);
+                    const bool escaped = CanvasDragEscape(pre, true, n.paramDefault.f, lanes);
                     gestureBegin("Param Default");
-                    if (changed) valueEdited();
-                    gestureEnd();
+                    if (changed || escaped) valueEdited();
+                    EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
 
                     bool ranged = n.hasRange;
                     if (ImGui::Checkbox("range", &ranged))
@@ -4998,15 +6134,17 @@ namespace Arcane::Editor
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(120.0f);
                         float mm[2] = { n.rangeMin, n.rangeMax };
+                        const float pre[4] = { mm[0], mm[1], 0.0f, 0.0f };
                         const bool rchanged = ImGui::DragFloat2("##prange", mm, 0.05f);
+                        const bool escaped = CanvasDragEscape(pre, true, mm, 2);
                         gestureBegin("Param Range");
-                        if (rchanged)
+                        if (rchanged || escaped)
                         {
                             n.rangeMin = mm[0];
                             n.rangeMax = mm[1];
                             valueEdited();
                         }
-                        gestureEnd();
+                        EditGesture::EndAfterRow(UndoStack(), m_gesture, escaped);
                     }
                 }
                 break;
@@ -5034,7 +6172,7 @@ namespace Arcane::Editor
                 // change -- so it takes this file's discrete-edit shape
                 // (snapshot inline, mutate, push immediately), copied from the
                 // "range" checkbox in the Param case above, which is the same
-                // widget doing the same job. The gestureBegin/gestureEnd
+                // widget doing the same job. The gestureBegin/EndAfterRow
                 // bracket beside it exists to coalesce a MULTI-FRAME drag into
                 // one undo step; a click has nothing to coalesce, and routing
                 // it through the bracket would push the step a frame late for
@@ -5071,22 +6209,7 @@ namespace Arcane::Editor
                 // Add-pin + output width; the pin rows above carry the per-pin
                 // width/remove controls.
                 if (ImGui::SmallButton("+ pin"))
-                {
-                    std::optional<Arcane::MaterialGraph> before = ActiveGraphOpt();
-                    Arcane::GraphCustomPin p;
-                    for (std::uint32_t k = 1;; ++k)
-                    {
-                        p.name = "p" + std::to_string(k);
-                        bool taken = false;
-                        for (const Arcane::GraphCustomPin& other : n.customPins)
-                            taken = taken || other.name == p.name;
-                        if (!taken)
-                            break;
-                    }
-                    n.customPins.push_back(std::move(p));
-                    valueEdited();
-                    PushGraphUndo("Add Pin", std::move(before));
-                }
+                    (void)AddCustomPin(static_cast<std::size_t>((std::max)(0, m_activePass)), n.id);
                 ImGui::SameLine();
                 const char* ow = n.customOutWidth == 1 ? "out: f1"
                                 : n.customOutWidth == 2 ? "out: f2" : "out: f4";
@@ -5126,7 +6249,7 @@ namespace Arcane::Editor
                         ImGui::TextDisabled("...");
                 }
                 if (ImGui::SmallButton("Edit HLSL..."))
-                    m_bodyEditRequest = n.id;
+                    RequestBodyEdit(static_cast<std::size_t>(std::max(0, m_activePass)), n.id);
                 break;
             }
             default:
@@ -5150,12 +6273,14 @@ namespace Arcane::Editor
                 ImGui::TextUnformatted(outDesc.name);
                 ImGui::SameLine();
             }
-            const ImVec2 outDot = DrawPinDot(PinColorForWidth(outDesc.width), pinFanout(pin));
+            const ImVec2 outDot = DrawPinDot(GraphPinPaintOn(n, pin, /*input*/ false), pinFanout(pin));
             // Mirror of the input row: the dot is the row's LAST item, so the
             // (1, 0.5) alignment's pinRect.Max.x was the dot's right edge.
             SetPinPivot(OutPin(n.id, pin).Get(),
                         ImVec2(outDot.x + kPinDotRadius, outDot.y));
             ed::EndPin();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                m_pinTip = { n.id, pin, false, true };
         }
 
         // Unconditional: a node that got here is on screen, and on-screen
@@ -5186,7 +6311,10 @@ namespace Arcane::Editor
         //
         // The band/gap relationship, and why headerMaxY is what it is, lives on
         // DrawNodeTitleBand -- shared with the pass canvas.
-        const ImVec2 nodeSize = DrawNodeTitleBand(n.id, headerMaxY);
+        // The band takes the node's CATEGORY colour (s5.1.4); at LowestDetail it is
+        // the whole node, so the category stays legible zoomed out. The pass canvas
+        // (three calls above) and comment boxes (returned early) keep the neutral.
+        const ImVec2 nodeSize = DrawNodeTitleBand(n.id, headerMaxY, GraphCategoryHeaderColor(info.category));
         if (nodeSize.x > 0.0f)
             m_nodeWidths[n.id] = nodeSize.x;
     }
@@ -5592,65 +6720,32 @@ namespace Arcane::Editor
         PushGraphUndo("Paste", std::move(before));
     }
 
-    // One texture param row: current binding + [pick] popup over the project's
-    // texture assets + a browser-drag drop target. All three routes land in
-    // SetParamWithUndo (single-step undo, no gesture bracketing needed).
-    void ShaderEditorDocument::DrawTextureParam(const Arcane::ParamDecl& d,
-                                                const Arcane::MatParamValue& current)
+    bool ShaderEditorDocument::ApplyParamRefEdit(std::uint32_t nameHash, const AssetRefEdit& edit)
     {
-        const Arcane::Project* project =
-            m_services.runtime ? m_services.runtime->CurrentProject() : nullptr;
-
-        std::string display = "(none)";
-        if (current.tex.IsValid())
+        if (!m_boundTemplate || !m_instance || edit.op == AssetRefEdit::Op::None)
+            return false;
+        for (const Arcane::ParamDecl& d : m_boundTemplate->Params())
         {
-            display = current.tex.ToString();
-            if (project)
-                if (const auto mount = project->Registry().Resolve(current.tex))
-                    display = *mount;
+            if (d.nameHash != nameHash || d.type != Arcane::MatParamType::Texture)
+                continue;
+            SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(
+                edit.op == AssetRefEdit::Op::Set ? edit.guid : Arcane::Guid::Nil()));
+            return true;
         }
-        ImGui::TextUnformatted(d.name.c_str());
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", display.c_str());
+        return false;
+    }
 
-        // Drop target: accept a texture asset dragged from the browser.
-        if (ImGui::BeginDragDropTarget())
-        {
-            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(kAssetDragType))
-            {
-                const auto* payload = static_cast<const AssetDragPayload*>(p->Data);
-                if (payload->kind == AssetKind::Texture)
-                    SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(payload->guid));
-            }
-            ImGui::EndDragDropTarget();
-        }
-
-        ImGui::SameLine();
-        const std::string pickId = "pick##" + d.name;
-        const std::string popupId = "##texpick_" + d.name;
-        if (ImGui::SmallButton(pickId.c_str()))
-            ImGui::OpenPopup(popupId.c_str());
-        if (ImGui::BeginPopup(popupId.c_str()))
-        {
-            if (!project)
-            {
-                ImGui::TextDisabled("no project open");
-            }
-            else
-            {
-                if (ImGui::Selectable("(none)"))
-                    SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(Arcane::Guid::Nil()));
-                for (const AssetEntry& e : BuildAssetEntries(project->Registry()))
-                {
-                    if (e.kind != AssetKind::Texture)
-                        continue;
-                    const std::string label = e.name + "##" + e.mountPath;
-                    if (ImGui::Selectable(label.c_str(), e.guid == current.tex))
-                        SetParamWithUndo(d, Arcane::MatParamValue::MakeTexture(e.guid));
-                }
-            }
-            ImGui::EndPopup();
-        }
+    void ShaderEditorDocument::ResetParamWithUndo(const Arcane::ParamDecl& d)
+    {
+        if (!m_instance || !m_instance->HasOverride(d.nameHash))
+            return;
+        Arcane::MatParamValue before;
+        m_instance->GetParam(d.nameHash, before);
+        m_instance->ClearOverride(d.nameHash);
+        if (Arcane::CommandStack* undo = m_services.undo ? m_services.undo() : nullptr)
+            undo->Push(std::make_unique<ParamEditCommand>(
+                m_anchor, d.nameHash, "Reset " + d.name,
+                /*hadBefore=*/true, before, /*hasAfter=*/false, Arcane::MatParamValue{}));
     }
 
     void ShaderEditorDocument::SetParamWithUndo(const Arcane::ParamDecl& d,
@@ -5664,8 +6759,8 @@ namespace Arcane::Editor
             m_instance->GetParam(d.nameHash, before);
         if (!m_instance->Set(d.nameHash, value))
             return;
-        if (m_services.undo)
-            m_services.undo->Push(std::make_unique<ParamEditCommand>(
+        if (UndoStack())
+            UndoStack()->Push(std::make_unique<ParamEditCommand>(
                 m_anchor, d.nameHash, "Edit " + d.name,
                 hadBefore, before, /*hasAfter=*/true, value));
         // No binding refresh on a texture pick: texture params resolve by
@@ -5673,341 +6768,222 @@ namespace Arcane::Editor
         // to invalidate.
     }
 
-    void ShaderEditorDocument::DrawParamsPanel()
+    void ShaderEditorDocument::DrawRenderingSection(PropertyGrid& grid, Arcane::CommandStack* undo)
     {
-        ImGui::BeginChild("##params", ImVec2(0, 0), ImGuiChildFlags_Borders);
+        std::optional<MeshMaterialMetadataState> metadata = CaptureMeshMaterialMetadata();
+        if (!metadata)
+            return;
+        Arcane::MaterialBlendMode inheritedBlend = Arcane::MaterialBlendMode::Opaque;
+        float inheritedCutoff = 0.5f;
+        bool inheritedTwoSided = false;
+        for (auto it = m_parentChain.rbegin(); it != m_parentChain.rend(); ++it)
+        {
+            if (it->blend) inheritedBlend = *it->blend;
+            if (it->alphaCutoff) inheritedCutoff = *it->alphaCutoff;
+            if (it->twoSided) inheritedTwoSided = *it->twoSided;
+        }
+        if (!grid.Section("Rendering"))
+            return;
+        PropertyGrid::Rows rows(grid, "##rendering");
+        if (!rows)
+            return;
+        const bool inst = IsInstance();
+        // EVERY ROW IS AN UNDO STEP (F3 plan 2, I2). On instances the T2
+        // override cell replaces the unlabelled ##*_override boxes; inherited
+        // rows draw dimmed and disabled.
+        static constexpr const char* kBlendItems[] = { "Opaque", "Masked", "Transparent" };
+        bool blendOverride = metadata->blend.has_value();
+        if (inst) grid.SetNextRowDecor(RowDecor{ &blendOverride });
+        const int picked = grid.ComboRow("Blend", kBlendItems, 3,
+                                         static_cast<int>(metadata->blend.value_or(inheritedBlend)));
+        if (inst && grid.LastRowEvents().overrideToggled)
+        {
+            metadata->blend = blendOverride ? std::optional<Arcane::MaterialBlendMode>(inheritedBlend) : std::nullopt;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+        else if (picked >= 0)
+        {
+            metadata->blend = static_cast<Arcane::MaterialBlendMode>(picked);
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+
+        bool cutoffOverride = metadata->alphaCutoff.has_value();
+        if (inst) grid.SetNextRowDecor(RowDecor{ &cutoffOverride });
+        const float shownCutoff = metadata->alphaCutoff.value_or(inheritedCutoff);
+        float cutoff = shownCutoff;
+        (void)grid.FloatRow("Alpha cutoff", cutoff, 0.01f, Astra::Range(0.0, 1.0), "%.2f");
+        const RowEvents cutoffEvents = grid.LastRowEvents();
+        // ONE DRAG = ONE STEP: the before-state is latched at activation, the
+        // step builds at close; live Apply while dragging (cpp :5747-5768).
+        EditGesture::BeginOnActivate(undo, m_gesture,
+            [] { return std::string("Edit Alpha Cutoff"); },
+            [&]() -> std::function<void()>
+            {
+                m_cutoffGestureBefore = *metadata;
+                return std::function<void()>([this, before = *metadata] { PushMeshMaterialMetadataUndo(before); });
+            });
+        if (inst && cutoffEvents.overrideToggled)
+        {
+            metadata->alphaCutoff = cutoffOverride ? std::optional<float>(inheritedCutoff) : std::nullopt;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+        else if (cutoffEvents.cancelled && m_cutoffGestureBefore)
+        {
+            *metadata = *m_cutoffGestureBefore;           // R2: back to the activation state, nullopt included
+            ApplyMeshMaterialMetadata(*metadata);
+        }
+        else if (cutoff != shownCutoff)
+        {
+            metadata->alphaCutoff = cutoff;
+            ApplyMeshMaterialMetadata(*metadata);         // LIVE; the step lands when the drag closes
+        }
+        EditGesture::EndAfterRow(undo, m_gesture, cutoffEvents.cancelled);
+        if (!ImGui::IsItemActive())
+            m_cutoffGestureBefore.reset();
+
+        bool twoSidedOverride = metadata->twoSided.has_value();
+        if (inst) grid.SetNextRowDecor(RowDecor{ &twoSidedOverride });
+        bool twoSided = metadata->twoSided.value_or(inheritedTwoSided);
+        const bool flipped = grid.CheckboxRow("Two sided", twoSided);
+        if (inst && grid.LastRowEvents().overrideToggled)
+        {
+            metadata->twoSided = twoSidedOverride ? std::optional<bool>(inheritedTwoSided) : std::nullopt;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+        else if (flipped)
+        {
+            metadata->twoSided = twoSided;
+            SetMeshMaterialMetadataWithUndo(*metadata);
+        }
+    }
+
+    void ShaderEditorDocument::DrawParamsSection(PropertyGrid& grid, Arcane::CommandStack* undo)
+    {
+        const bool inst = IsInstance();
+        const bool open = inst
+            ? grid.Section("Parameters", true, [this] { ImGui::Checkbox("Only overridden", &m_showOnlyOverridden); })
+            : grid.Section("Parameters");
+        if (!open)
+            return;
+        PropertyGrid::Rows rows(grid, "##params");
+        if (!rows)
+            return;
         if (!m_instance || !m_boundTemplate)
         {
-            ImGui::TextDisabled("params appear after the first successful compile");
-            ImGui::EndChild();
+            grid.ReadOnlyRow("Status", "params appear after the first successful compile");
             return;
         }
-
-        // Each param row's drag rides the document's EditGesture bracket
-        // (BeginOnActivate / EndOnDeactivate around the live Set below): before-
-        // state on activation, one undo step at close -- one drag = one step.
-        if (IsInstance())
-            ImGui::Checkbox("Only overridden", &m_showOnlyOverridden);
-
-        if (auto metadata = CaptureMeshMaterialMetadata())
-        {
-            Arcane::MaterialBlendMode inheritedBlend = Arcane::MaterialBlendMode::Opaque;
-            float inheritedCutoff = 0.5f;
-            bool inheritedTwoSided = false;
-            const auto applyLayer = [&](const Arcane::MaterialAssetData& layer)
-            {
-                if (layer.blend) inheritedBlend = *layer.blend;
-                if (layer.alphaCutoff) inheritedCutoff = *layer.alphaCutoff;
-                if (layer.twoSided) inheritedTwoSided = *layer.twoSided;
-            };
-            for (auto it = m_parentChain.rbegin(); it != m_parentChain.rend(); ++it)
-                applyLayer(*it);
-
-            ImGui::SeparatorText("Rendering");
-
-            // EVERY ROW HERE IS AN UNDO STEP (F3 plan 2 final review, I2), like
-            // the param rows below it: the single-shot widgets go through
-            // SetMeshMaterialMetadataWithUndo; the cutoff drag rides the
-            // document's EditGesture bracket so one drag is one step.
-            bool blendOverride = metadata->blend.has_value();
-            if (IsInstance())
-            {
-                if (ImGui::Checkbox("##blend_override", &blendOverride))
-                {
-                    metadata->blend = blendOverride
-                        ? std::optional<Arcane::MaterialBlendMode>(inheritedBlend)
-                        : std::nullopt;
-                    SetMeshMaterialMetadataWithUndo(*metadata);
-                }
-                ImGui::SameLine();
-            }
-            int blend = static_cast<int>(metadata->blend.value_or(inheritedBlend));
-            if (IsInstance() && !blendOverride) ImGui::BeginDisabled();
-            if (ImGui::Combo("Blend", &blend, "Opaque\0Masked\0Transparent\0"))
-            {
-                metadata->blend = static_cast<Arcane::MaterialBlendMode>(blend);
-                SetMeshMaterialMetadataWithUndo(*metadata);
-            }
-            if (IsInstance() && !blendOverride) ImGui::EndDisabled();
-
-            bool cutoffOverride = metadata->alphaCutoff.has_value();
-            if (IsInstance())
-            {
-                if (ImGui::Checkbox("##cutoff_override", &cutoffOverride))
-                {
-                    metadata->alphaCutoff = cutoffOverride
-                        ? std::optional<float>(inheritedCutoff)
-                        : std::nullopt;
-                    SetMeshMaterialMetadataWithUndo(*metadata);
-                }
-                ImGui::SameLine();
-            }
-            float cutoff = metadata->alphaCutoff.value_or(inheritedCutoff);
-            if (IsInstance() && !cutoffOverride) ImGui::BeginDisabled();
-            const bool cutoffEdited = ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f,
-                                                       "%.3f", ImGuiSliderFlags_AlwaysClamp);
-            // ONE DRAG = ONE STEP, the param rows' bracket: `*metadata` is the
-            // document's state at activation (this frame's earlier rows have
-            // already written through), parked as the step's before-state; the
-            // step itself is built at close, against whatever the drag left --
-            // and a pure click that moved nothing pushes nothing.
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
-                [] { return std::string("Edit Alpha Cutoff"); },
-                [&]() -> std::function<void()>
-                {
-                    return std::function<void()>(
-                        [this, before = *metadata] { PushMeshMaterialMetadataUndo(before); });
-                });
-            if (cutoffEdited)
-            {
-                metadata->alphaCutoff = cutoff;
-                ApplyMeshMaterialMetadata(*metadata);   // LIVE; the step lands when the drag closes
-            }
-            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
-            if (IsInstance() && !cutoffOverride) ImGui::EndDisabled();
-
-            bool twoSidedOverride = metadata->twoSided.has_value();
-            if (IsInstance())
-            {
-                if (ImGui::Checkbox("##twosided_override", &twoSidedOverride))
-                {
-                    metadata->twoSided = twoSidedOverride
-                        ? std::optional<bool>(inheritedTwoSided)
-                        : std::nullopt;
-                    SetMeshMaterialMetadataWithUndo(*metadata);
-                }
-                ImGui::SameLine();
-            }
-            bool twoSided = metadata->twoSided.value_or(inheritedTwoSided);
-            if (IsInstance() && !twoSidedOverride) ImGui::BeginDisabled();
-            if (ImGui::Checkbox("Two sided", &twoSided))
-            {
-                metadata->twoSided = twoSided;
-                SetMeshMaterialMetadataWithUndo(*metadata);
-            }
-            if (IsInstance() && !twoSidedOverride) ImGui::EndDisabled();
-            ImGui::Separator();
-        }
-
+        const AssetRefServices& refs = m_services.assetRefs ? *m_services.assetRefs : NoAssetRefServices();
         const auto& params = m_boundTemplate->Params();
         for (std::size_t i = 0; i < params.size(); ++i)
         {
             const Arcane::ParamDecl& d = params[i];
-            if (IsInstance() && m_showOnlyOverridden && !m_instance->HasOverride(d.nameHash))
+            if (inst && m_showOnlyOverridden && !m_instance->HasOverride(d.nameHash))
                 continue;
-
-            // Instance mode: the per-param override checkbox (UE's model) --
-            // checking materializes an override at the currently-resolved value,
-            // unchecking clears it (parent/default shows through). Undoable.
-            if (IsInstance())
-            {
-                bool ov = m_instance->HasOverride(d.nameHash);
-                const std::string ovId = "##ov_" + d.name;
-                if (ImGui::Checkbox(ovId.c_str(), &ov))
-                {
-                    if (ov)
-                    {
-                        Arcane::MatParamValue resolved;
-                        if (m_instance->GetParam(d.nameHash, resolved))
-                            SetParamWithUndo(d, resolved);
-                    }
-                    else
-                    {
-                        Arcane::MatParamValue before;
-                        m_instance->GetParam(d.nameHash, before);
-                        m_instance->ClearOverride(d.nameHash);
-                        if (m_services.undo)
-                            m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                                m_anchor, d.nameHash, "Reset " + d.name,
-                                /*hadBefore=*/true, before, /*hasAfter=*/false,
-                                Arcane::MatParamValue{}));
-                    }
-                }
-                ImGui::SameLine();
-            }
-            const Arcane::ParamMeta meta = i < m_boundMetas.size() ? m_boundMetas[i]
-                                                                   : Arcane::ParamMeta{};
+            const Arcane::ParamMeta meta = i < m_boundMetas.size() ? m_boundMetas[i] : Arcane::ParamMeta{};
             Arcane::MatParamValue value;
             if (!m_instance->GetParam(d.nameHash, value))
                 continue;
-
-            bool edited = false;
-            switch (WidgetFor(d.type))
+            const Arcane::MatParamValue shown = value;
+            bool overridden = m_instance->HasOverride(d.nameHash);
+            ImGui::PushID(d.name.c_str());
+            // Instances: the override cell (the only override control, no reset).
+            // Bases: the reset slot, live when an override exists (s4.1(d)).
+            if (inst) grid.SetNextRowDecor(RowDecor{ &overridden });
+            else      grid.SetNextRowDecor(RowDecor{ nullptr, true, overridden });
+            const ParamWidget widget = WidgetFor(d.type);
+            ImGuiID popupId = 0;
+            AssetRefEdit texEdit;
+            switch (widget)
             {
                 case ParamWidget::SliderFloat:
-                    edited = ImGui::SliderFloat(d.name.c_str(), &value.f[0],
-                                                meta.sliderMin, meta.sliderMax);
+                    (void)grid.SliderRow(d.name.c_str(), value.f[0], meta.sliderMin, meta.sliderMax);
                     break;
                 case ParamWidget::DragFloat2:
-                    edited = ImGui::DragFloat2(d.name.c_str(), value.f, 0.01f);
+                    (void)grid.VecRow(d.name.c_str(), value.f, 2, 0.01f, std::nullopt, "%.3f");
                     break;
                 case ParamWidget::DragFloat4:
-                    edited = ImGui::DragFloat4(d.name.c_str(), value.f, 0.01f);
+                    (void)grid.VecRow(d.name.c_str(), value.f, 4, 0.01f, std::nullopt, "%.3f");
                     break;
                 case ParamWidget::ColorEdit:
+                    (void)grid.ColorRow(d.name.c_str(), value.f, &popupId, /*hdr=*/false);   // a Color param IS a colour
+                    break;
+                case ParamWidget::TexturePicker:
                 {
-                    // Same shape as the Inspector row: an sRGB-ENCODED swatch that
-                    // opens the dense popup, beside four LINEAR float boxes.
-                    //
-                    // hdr = false because MatParamType::Color exists precisely so
-                    // "the editor shows a color picker" (MaterialTypes.hpp:26) -- it
-                    // IS a colour. Nothing declares one as HDR (ParamMeta carries
-                    // only sliderMin/sliderMax, MaterialTypes.hpp:133-139). A param
-                    // wanting an unclamped multiplier is a Float4.
-                    //
-                    // SUBMISSION ORDER IS LOAD-BEARING: the shared gesture pair
-                    // after this switch reads g.LastItemData, so the ColorEdit4 that
-                    // owns the box drags has to be the last item this arm submits
-                    // (EditGesture.hpp:176). Hence swatch first, boxes last, and the
-                    // name back on ColorEdit4's own label rather than a separate
-                    // TextUnformatted -- a text item carries id 0 and would make
-                    // IsItemActivated() unsatisfiable for the whole row.
-                    // BeginPopup/EndPopup in between are safe: End() restores
-                    // g.LastItemData from the parent window's backup.
-                    //
-                    // DisplayRGB and InputRGB PIN the mode: NoOptions only
-                    // suppresses this row's own right-click menu, and without a
-                    // display or input bit ColorEdit4 takes both from the global
-                    // g.ColorEditOptions (imgui_widgets.cpp:5830-5837), which any
-                    // colour widget lacking NoOptions can flip to HSV -- writing
-                    // HSV components into storage this row promises is linear.
-                    const std::string popupKey = d.name + "##colorpopup";
-                    const ImGuiID     popupId  = ColorPopupId(popupKey.c_str());
-
-                    // This loop has no PushID, so the swatch id must carry the
-                    // param name -- same reason "##ov_" and "x##reset_" do
-                    // above/below. A bare "##sw" would mint the same ImGuiID
-                    // for every Color param in the template, and with two the
-                    // first swatch would clear the shared ActiveId before the
-                    // second is even submitted, so the second could never
-                    // report a press.
-                    const std::string swatchId = "##sw_" + d.name;
-                    if (ColorSwatchButton(swatchId.c_str(), value.f))
-                    {
-                        std::memcpy(m_colorPopupOriginal, value.f, sizeof(m_colorPopupOriginal));
-                        ImGui::OpenPopup(popupId);
-                    }
-                    if (ImGui::BeginPopup(popupKey.c_str()))
-                    {
-                        if (ColorPopupBody(value.f, m_colorPopupOriginal, /*hdr*/ false))
-                            edited = true;
-                        ImGui::EndPopup();
-                    }
-                    ImGui::SameLine();
-                    const bool boxesEdited =
-                        ImGui::ColorEdit4(d.name.c_str(), value.f,
-                                          ImGuiColorEditFlags_Float
-                                          | ImGuiColorEditFlags_NoSmallPreview
-                                          | ImGuiColorEditFlags_NoPicker
-                                          | ImGuiColorEditFlags_NoOptions
-                                          | ImGuiColorEditFlags_DisplayRGB
-                                          | ImGuiColorEditFlags_InputRGB);
-                    edited = edited || boxesEdited;
+                    AssetRefArgs args;
+                    args.guid = value.tex;
+                    args.kindFilter = static_cast<int>(AssetKind::Texture);
+                    args.readOnly = inst && !overridden;   // inherited: shown, not editable
+                    texEdit = AssetRefRow(grid, d.name.c_str(), args, refs);
                     break;
                 }
-                case ParamWidget::TexturePicker:
-                    DrawTextureParam(d, value);
-                    break;
             }
+            const RowEvents events = grid.LastRowEvents();
+            if (!meta.tooltip.empty() && LabelCellHovered())
+                ImGui::SetTooltip("%s\n%s", d.name.c_str(), meta.tooltip.c_str());
 
-            // The override before-state is read INSIDE the open call, which runs
-            // on the activation frame only -- i.e. before the live Set below has
-            // touched anything. The step itself builds at close (an abandoned
-            // drag lands on the stack rather than vanishing), and the
-            // transaction carries the label CommandStack::Commit stamps.
-            //
-            // NO-OP GUARD: the close runs on EVERY close path, including the
-            // abandonment ones (stale-close, collapsed window, document
-            // teardown) where the gesture never edited anything. Pushing there
-            // would leave a junk step whose before == after AND clear the redo
-            // stack (CommandStack.cpp:70) -- a generic Push is its own
-            // transaction, so it never meets Commit's empty-transaction drop at
-            // :61-62. The after-state is the CLOSE-TIME override state, so
-            // "no override, nothing typed" reads as unchanged; an EDITED
-            // gesture still differs (its live Set both creates the override and
-            // moves the value) and still pushes exactly one step.
-            //
-            // ONE builder for both boundaries. The box row closes on widget
-            // deactivation and the popup closes on the popup going away, but the
-            // step they owe the stack is identical -- and an empty builder would
-            // record nothing at all here, because this document is not
-            // registry-backed, so Commit's empty-transaction drop
-            // (CommandStack.cpp:61-62) swallows the whole transaction.
+            // The step builder (unchanged contract, cpp :5915-5957): before-state
+            // read on the activation frame, the step built at close, a no-op
+            // guard for unchanged closes. It also latches m_liveParamSeed.
             auto buildParamEdit = [&]() -> std::function<void()>
             {
                 const bool hadBefore = m_instance->HasOverride(d.nameHash);
                 Arcane::MatParamValue before{};
                 if (hadBefore)
                     m_instance->GetParam(d.nameHash, before);
+                m_liveParamSeed = LiveParamSeed{ d.nameHash, hadBefore, before };
                 return std::function<void()>(
                     [this, nameHash = d.nameHash, name = d.name, hadBefore, before]
                     {
                         Arcane::MatParamValue after;
                         if (!m_instance || !m_instance->GetParam(nameHash, after))
-                            return;   // the snippet dropped the param
-                        // Read the override flag, not a hardcoded true: it
-                        // is what distinguishes "the drag created an
-                        // override" from "nothing happened", and it is the
-                        // truthful Redo target either way (ApplyParamEdit
-                        // clears the override when hasAfter is false, the
-                        // shape the reset button below pushes).
+                            return;
                         const bool hasAfter = m_instance->HasOverride(nameHash);
-                        if (hadBefore == hasAfter &&
-                            (!hadBefore || before == after))
+                        if (hadBefore == hasAfter && (!hadBefore || before == after))
                             return;   // nothing changed -- no step, redo intact
-                        m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                            m_anchor, nameHash, "Edit " + name,
-                            hadBefore, before, hasAfter, after));
+                        if (Arcane::CommandStack* s = m_services.undo ? m_services.undo() : nullptr)
+                            s->Push(std::make_unique<ParamEditCommand>(
+                                m_anchor, nameHash, "Edit " + name, hadBefore, before, hasAfter, after));
                     });
             };
-
-            EditGesture::BeginOnActivate(m_services.undo, m_gesture,
-                [&] { return "Edit " + d.name; },
-                buildParamEdit);
-
-            if (edited)
+            if (widget == ParamWidget::TexturePicker)
             {
-                // LIVE: straight into the instance -> next Tick packs the CB.
-                // No recompile -- the whole point of the declared-param model.
-                m_instance->Set(d.nameHash, value);
+                (void)ApplyParamRefEdit(d.nameHash, texEdit);   // single-shot: no gesture (cpp :5594-5596)
             }
-
-            EditGesture::EndOnDeactivate(m_services.undo, m_gesture);
-
-            // The popup gesture pair: separate from the box row's
-            // BeginOnActivate/EndOnDeactivate above because the popup's
-            // ActiveId is ImGui's own (EditGesture.hpp's ShouldClosePopup
-            // note) -- only sites with a ColorEdit case actually opened a
-            // popup this frame.
-            if (WidgetFor(d.type) == ParamWidget::ColorEdit)
+            else
             {
-                EditGesture::BeginOnPopupOpen(m_services.undo, m_gesture,
-                                              ColorPopupId((d.name + "##colorpopup").c_str()),
-                                              [&] { return std::string("Edit ") + d.name; },
-                                              buildParamEdit);
-                EditGesture::EndOnPopupClose(m_services.undo, m_gesture,
-                                             ColorPopupId((d.name + "##colorpopup").c_str()));
-            }
-
-            // Reset-to-default: clears the override so the //@param default (or
-            // a parent's value, Slice 7) shows through. Undoable.
-            if (m_instance->HasOverride(d.nameHash))
-            {
-                ImGui::SameLine();
-                std::string resetId = "x##reset_" + d.name;
-                if (ImGui::SmallButton(resetId.c_str()))
+                EditGesture::BeginOnActivate(undo, m_gesture, [&] { return "Edit " + d.name; }, buildParamEdit);
+                if (events.cancelled && m_liveParamSeed.nameHash == d.nameHash)
                 {
-                    Arcane::MatParamValue before;
-                    m_instance->GetParam(d.nameHash, before);
-                    m_instance->ClearOverride(d.nameHash);
-                    if (m_services.undo)
-                        m_services.undo->Push(std::make_unique<ParamEditCommand>(
-                            m_anchor, d.nameHash, "Reset " + d.name,
-                            /*hadBefore=*/true, before, /*hasAfter=*/false,
-                            Arcane::MatParamValue{}));
+                    if (m_liveParamSeed.hadBefore) m_instance->Set(d.nameHash, m_liveParamSeed.before);
+                    else                           m_instance->ClearOverride(d.nameHash);
+                }
+                else if (!(value == shown))
+                {
+                    m_instance->Set(d.nameHash, value);   // LIVE: the next Tick packs the CB, no recompile
+                }
+                EditGesture::EndAfterRow(undo, m_gesture, events.cancelled);
+                if (widget == ParamWidget::ColorEdit && popupId != 0)
+                {
+                    EditGesture::BeginOnPopupOpen(undo, m_gesture, popupId,
+                                                  [&] { return "Edit " + d.name; }, buildParamEdit);
+                    EditGesture::EndOnPopupClose(undo, m_gesture, popupId);
                 }
             }
+            if (inst && events.overrideToggled)
+            {
+                if (overridden)
+                {
+                    Arcane::MatParamValue resolved;
+                    if (m_instance->GetParam(d.nameHash, resolved))
+                        SetParamWithUndo(d, resolved);      // "Edit <name>" (cpp :5805-5812)
+                }
+                else
+                    ResetParamWithUndo(d);                  // "Reset <name>"
+            }
+            else if (!inst && events.resetClicked)
+                ResetParamWithUndo(d);
+            ImGui::PopID();
         }
-        ImGui::EndChild();
     }
 }

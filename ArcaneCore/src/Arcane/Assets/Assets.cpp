@@ -977,6 +977,28 @@ namespace Arcane
                 return m_cookPendingProbe && m_cookPendingProbe(id);
             }
 
+            // T5 s7.2: see Assets.hpp. Evict refuses a pinned entry (refs > 0), which
+            // only exists for the span of one accessor call on this thread.
+            void EvictPath(const std::filesystem::path& resolved) override
+            {
+                const std::string key = CacheKey(resolved);
+                m_bytes.Evict(key);
+                m_json.Evict(key);
+                m_pixels.Evict(key);
+                m_textureInfo.Evict(key);
+                m_artifacts.Evict(key);
+                m_meshes.Evict(key);
+            }
+
+            // T5 s7.2. KEY OWNERSHIP: "assets.unresolved" (this producer's own key) --
+            // republished whole-set, the same as every addition in ResolveId.
+            void ForgetUnresolved(const Guid& id) override
+            {
+                m_idFailures.erase(id);
+                std::erase(m_unresolvedDiagnosticIds, id);
+                PublishUnresolvedDiagnostics();
+            }
+
             // Asset-manager arc (ABI v22): see Assets.hpp's own doc comment for the
             // full contract. Takes the SAME resolution step (ResolveId, the SAME
             // installed resolver, the SAME warn-once memo on an unresolvable id) as

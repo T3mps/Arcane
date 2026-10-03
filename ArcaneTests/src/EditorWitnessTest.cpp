@@ -7,6 +7,8 @@
 #include "Helpers/HostWitness.hpp"
 #include "Helpers/ReferenceProjectDir.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <Arcane/Material/MaterialAsset.hpp>   // E9: the fixture's node id
+#include <Arcane/Material/MaterialGraph.hpp>
 #include <Panels/DefaultLayout.hpp>   // the default layout's pixel targets (E6/E7)
 #include <cmath>
 #include <cstdint>
@@ -302,11 +304,11 @@ TEST_CASE("E4: a selected asset routes the Assets Inspector to its page and matc
 // Assets-only Inspector is untouched.
 TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector to that document's page", "[witness][gpu]")
 {
-    struct Doc { const char* guid; const char* title; const char* compare; };
+    struct Doc { const char* guid; const char* title; const char* compare; const char* compile; };
     const Doc docs[] = {
-        { "7e5a0010-0010-4010-8010-000000000010", "ReferenceCubeMaterial", "editor-material-page" },   // materials/reference_mesh.arcmat
-        { "87bd4fd3-c9e6-4fc8-a8e0-cf799378f049", "UvMarkerSprite",        nullptr },                  // sprites/uv_marker.arcsprite
-        { "7e5a0011-0011-4011-8011-000000000011", "ReferenceCube",         nullptr },                  // meshes/reference_cube.arcmesh
+        { "7e5a0010-0010-4010-8010-000000000010", "ReferenceCubeMaterial", "editor-material-page", "not-compiled-here" },   // materials/reference_mesh.arcmat
+        { "87bd4fd3-c9e6-4fc8-a8e0-cf799378f049", "UvMarkerSprite",        nullptr,                nullptr },             // sprites/uv_marker.arcsprite
+        { "7e5a0011-0011-4011-8011-000000000011", "ReferenceCube",         nullptr,                nullptr },             // meshes/reference_cube.arcmesh
     };
     for (const Doc& d : docs)
     {
@@ -330,6 +332,14 @@ TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector 
             CHECK(run.report["inspector"]["instances"][0].at("source") == d.title);
             CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");   // untouched by a document open
             CHECK(run.report["inspector"]["instances"][1].at("breadcrumb") == "Assets");   // ...and still showing no selection
+            // s3.2: a mesh-surface material is never compiled in the editor, and
+            // the report says so instead of a permanent "compiling...".
+            if (d.compile)
+            {
+                REQUIRE(run.report.contains("documents"));
+                REQUIRE(run.report["documents"].size() == 1);
+                CHECK(run.report["documents"][0].at("compile") == d.compile);
+            }
             if (d.compare)
             {
                 REQUIRE(run.report.contains("compare"));
@@ -337,6 +347,51 @@ TEST_CASE("E5: opening a material, a sprite or a mesh routes the main Inspector 
             }
         }
     }
+}
+
+// E9: the NODE PAGE (spec 2026-09-30 s5.1.11). --select-in-document on the
+// graph-owned fixture selects its Multiply node: the main Inspector shows the
+// node page, the Assets-only Inspector is untouched, and the document compiled
+// and previews. No --compare: this spec adds no node-page golden slot.
+TEST_CASE("E9: --select-in-document on a shader node routes the main Inspector to the node page", "[witness][gpu]")
+{
+    // The node id comes from the fixture itself, so the witness never hard-codes it.
+    const auto fixture = Arcane::LoadMaterialAsset(FindReferenceProjectDir() / "Content" / "materials" / "node_page_graph.arcmat");
+    REQUIRE(fixture.has_value());
+    REQUIRE(fixture->graph.has_value());
+    std::uint32_t mulId = 0;
+    for (const Arcane::GraphNode& n : fixture->graph->nodes)
+        if (n.type == Arcane::GraphNodeType::Mul) mulId = n.id;
+    REQUIRE(mulId != 0);
+
+    WitnessScratch scratch(StagedEditorDir(), "e9-node-page");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+                 "--settle", "10", "--report", inv.reportPath.generic_string(),
+                 "--open-asset", "7e5a0012-0012-4012-8012-000000000012",
+                 "--select-in-document", std::to_string(mulId) };
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("inspector"));
+    CHECK(run.report["inspector"]["instances"][0].at("breadcrumb") == "NodePageGraph > Multiply");
+    CHECK(run.report["inspector"]["instances"][1].at("source") == "Assets");
+    CHECK(run.report["inspector"]["instances"][1].at("breadcrumb") == "Assets");
+    REQUIRE(run.report.contains("documents"));
+    bool found = false;
+    for (const auto& d : run.report["documents"])
+    {
+        if (d.at("name") != "NodePageGraph") continue;
+        found = true;
+        CHECK(d.at("compile") == "ok");
+        CHECK(d.at("preview") == "ready");
+        CHECK(d.at("image") == true);
+    }
+    CHECK(found);
 }
 
 // E3b: an unresolvable --select-in-document is loud (ERROR on stderr) but not
@@ -466,6 +521,10 @@ TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspe
     WitnessScratch scratch(StagedEditorDir(), "e7-legacy-upgrade");
     const std::filesystem::path seedPath = scratch.Dir() / "ReferenceProject" / "Saved" / "verify-layout.ini";
     std::string seed = ReadAllBytes(seedPath);
+    // A text=auto checkout under core.autocrlf stages the seed CRLF, and every
+    // edit below searches LF-anchored patterns ("\nIds=1\n", "\n[Window]..."):
+    // normalise THIS copy to LF first (ImGui's ini reader takes either).
+    std::erase(seed, '\r');
     {
         // Fold the band's split: drop the browser and Inspector 2 leaves, make
         // their parent the browser's node, retarget the tabs' DockIds to it.
@@ -546,4 +605,53 @@ TEST_CASE("E7: a pre-feature layout seed (no Filters=) is upgraded once -- Inspe
     const float share = assetsInsp->w / (browser->w + assetsInsp->w);
     INFO("SizeRef browser " << browser->w << " : Inspector 2 " << assetsInsp->w);
     CHECK(std::abs(share - Arcane::Editor::kDefaultAssetsInspectorBandFraction) <= 0.005f);
+}
+
+// E8: THE LATE-BOUND PREVIEW SEAM (node page + editor upgrades s3.2). A mesh
+// opened by --open-asset is built inside StageFinalize, BEFORE
+// CreateGraphVehicles makes the chrome context; its Tick retry must still
+// build the preview vehicle once the seam is up, so documents[] reads
+// "ready" -- not the old copied-null-seam "no GPU device".
+TEST_CASE("E8: a mesh opened by --open-asset during boot reaches a ready preview", "[witness][gpu]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e8-mesh-preview");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.reportPath = scratch.Dir() / "witness-report.json";
+    inv.args = { "--project", "ReferenceProject", "--headless", "--backend", "dx12", "--frames", "90",
+                 "--settle", "10", "--report", inv.reportPath.generic_string(),
+                 "--open-asset", "7e5a0011-0011-4011-8011-000000000011" };   // meshes/reference_cube.arcmesh (generated)
+    inv.hardCapMs = 180000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stdout: " << run.stdoutPath.string()); INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(GradeProcessFacts(run).has_value());
+    REQUIRE(run.exitCode == 0);
+    REQUIRE(run.report.contains("documents"));
+    const auto& docs = run.report["documents"];
+    REQUIRE(docs.size() == 1);
+    CHECK(docs[0].at("guid") == "7e5a0011-0011-4011-8011-000000000011");
+    CHECK(docs[0].at("kind") == "mesh");
+    CHECK(docs[0].at("name") == "ReferenceCube");
+    CHECK(docs[0].at("compile") == "ok");
+    CHECK(docs[0].at("preview") == "ready");
+}
+
+// E10 (node-page phase s8.4, R10): a SCRIPTED bare launch still refuses before any
+// window. The start page derives from project state, never CLI state, so this
+// refusal must stay ahead of EditorApp construction (main.cpp:559-566) or a
+// scripted run would open a window and hang CI. Not [gpu]: it returns before any
+// device exists, so `~[gpu]` runs it.
+TEST_CASE("E10: a scripted launch with no project exits 2 and names the reason on stderr", "[witness][editor]")
+{
+    WitnessScratch scratch(StagedEditorDir(), "e10-no-project");
+    WitnessInvocation inv;
+    inv.exePath = scratch.Dir() / "ArcaneEditor.exe"; inv.workingDir = scratch.Dir();
+    inv.args = { "--headless", "--frames", "1" };
+    inv.hardCapMs = 30000;
+    WitnessRun run = RunWitness(inv);
+    INFO("host stderr: " << run.stderrPath.string());
+    REQUIRE_FALSE(run.timedOut);
+    CHECK(run.exitCode == 2);
+    CHECK_FALSE(run.reportFound);
+    CHECK(ReadAllBytes(run.stderrPath).find("no project selected") != std::string::npos);
 }

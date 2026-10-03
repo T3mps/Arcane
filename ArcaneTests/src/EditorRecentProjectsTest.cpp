@@ -266,3 +266,39 @@ TEST_CASE("Recents load of a missing file is empty, not an error", "[editor]")
     CHECK(Recents::Load(missing).empty());
     CHECK(Recents::Load(std::filesystem::path()).empty());
 }
+
+TEST_CASE("Recents parse reads lastOpenedUtc as a string or a number and keeps the entry when it is missing or garbage", "[editor]")
+{
+    const auto all = Recents::Parse(Doc(
+        R"({"path":"C:/a","name":"A","lastOpenedUtc":"1700000000","engineAbi":1},)"   // the Hub's and the editor's decimal string
+        R"({"path":"C:/b","name":"B","lastOpenedUtc":1700000100,"engineAbi":1},)"     // a JSON number
+        R"({"path":"C:/c","name":"C","engineAbi":1},)"                                // missing
+        R"({"path":"C:/d","name":"D","lastOpenedUtc":"123abc","engineAbi":1},)"       // garbage text
+        R"({"path":"C:/e","name":"E","lastOpenedUtc":[1],"engineAbi":1})"));          // wrong type
+    REQUIRE(all.size() == 5);                             // never dropped for it
+    CHECK(all[0].lastOpenedUnix == 1700000000u);
+    CHECK(all[1].lastOpenedUnix == 1700000100u);
+    CHECK(all[2].lastOpenedUnix == 0u);
+    CHECK(all[3].lastOpenedUnix == 0u);
+    CHECK(all[4].lastOpenedUnix == 0u);
+}
+
+TEST_CASE("Recents hidden-for-ABI line counts in singular and plural", "[editor]")
+{
+    CHECK(Recents::HiddenForAbiLine(1) == "1 project hidden (built for another engine version)");
+    CHECK(Recents::HiddenForAbiLine(3) == "3 projects hidden (built for another engine version)");
+}
+
+TEST_CASE("Recents parse reads a fractional lastOpenedUtc and zeroes negative or out-of-range ones", "[editor]")
+{
+    const auto all = Recents::Parse(Doc(
+        R"({"path":"C:/a","name":"A","lastOpenedUtc":1700000000.75,"engineAbi":1},)"  // truncates
+        R"({"path":"C:/b","name":"B","lastOpenedUtc":-5,"engineAbi":1},)"             // negative number
+        R"({"path":"C:/c","name":"C","lastOpenedUtc":"-5","engineAbi":1},)"           // negative text
+        R"({"path":"C:/d","name":"D","lastOpenedUtc":1e30,"engineAbi":1})"));         // past 2^64
+    REQUIRE(all.size() == 4);
+    CHECK(all[0].lastOpenedUnix == 1700000000u);
+    CHECK(all[1].lastOpenedUnix == 0u);
+    CHECK(all[2].lastOpenedUnix == 0u);
+    CHECK(all[3].lastOpenedUnix == 0u);
+}

@@ -198,9 +198,23 @@ namespace Arcane
         SDL_SetWindowSize(m_window, (int)width, (int)height);
     }
 
-    void Window::Show()
+    void Window::Show(bool activate)
     {
         if (!m_window) return;
+        if (!activate)
+        {
+            // The automation reveal (T3-D6 fix round 1): shown, never
+            // activated, never raised. SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN=0
+            // makes SDL_ShowWindow map it without activation (SW_SHOWNA on
+            // Windows); the hint is put back at once so no later window (a
+            // multi-viewport ImGui platform window, the next interactive
+            // Show) inherits it. A window that is merely mapped still
+            // presents, so the windowed self-capture sees the real frame.
+            SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+            SDL_ShowWindow(m_window);
+            SDL_ResetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
+            return;
+        }
         SDL_ShowWindow(m_window);
         // Raise, not just show (2026-07-30 desk-check, Task 8d defect B): a
         // bare SDL_ShowWindow left the editor opening BEHIND the existing

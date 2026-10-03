@@ -30,6 +30,7 @@
 #include "Panels/AssetBrowserPanel.hpp"   // AssetBrowserPanelState (m_assetBrowserUi)
 #include "Panels/AssetGraphPanel.hpp"     // AssetGraphPanelState (m_assetGraphUi) + the canvas teardown seam
 #include "Panels/AssetPanelModel.hpp"
+#include "Panels/AssetReferenceField.hpp"   // m_assetRefServices
 #include "Panels/AssetStatusPanel.hpp"    // DrawAssetStatusPanel -- Status carries no state of its own
 #include "Panels/ConsoleBuffer.hpp"
 #include "Panels/CreateAssetDialog.hpp"
@@ -37,19 +38,28 @@
 #include "App/DialogSlot.hpp"
 #include "App/InputEdges.hpp"
 #include "App/ModalErrorQueue.hpp"
+#include "App/UndoSettings.hpp"           // m_undoLimitsApplied + ReadUndoLimits (editor.undo.*)
+#include "Scene/UndoGate.hpp"             // ResolveDocumentUndo (DocumentUndo)
 #include "Documents/DocumentHost.hpp"
 #include "Viewport/EditorCamera.hpp"
 #include "Viewport/ViewportSettings.hpp"
 #include "Panels/EditorPanels.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
+#include "Panels/LocatorRoute.hpp"           // RouteFacts (MakeRouteFacts, s8.2)
 #include "Panels/AssetInspectorSource.hpp"   // m_assetSource
+#include "Panels/AssetFileOpDialogs.hpp"     // m_renameModal (T5 s7.6)
 #include "Panels/SceneInspectorSource.hpp"   // m_sceneSource
+#include "Project/AssetFileOps.hpp"      // AssetFileOpHost/AssetFileOpExecutor (m_assetOpHost, m_assetFileOps)
 #include "Project/CookQueue.hpp"
+#include "Project/IdeLaunch.hpp"         // IdeLaunch::Outcome (OpenInIde's return)
+#include "Project/OsShell.hpp"           // OsShell::RecycleResult (AssetOpHost::Recycle)
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
 #include "Project/ModuleBuild.hpp"
 #include "Project/ServerLaunch.hpp"   // ServerProcess is a BY-VALUE member (m_serverProcess)
+#include "Project/StartPageModel.hpp"   // StartPageFocus (m_startPageFocus, spec 2026-09-30 s8.4)
 #include "App/PlayMode.hpp"
+#include "App/EditorTitle.hpp"         // TitleParts (CurrentTitleParts)
 #include "Panels/ProblemsPanel.hpp"
 #include "Project/EditorRecents.hpp"
 #include "Scene/EditModeSchedule.hpp"
@@ -108,11 +118,6 @@ namespace Arcane::Editor
         // is tolerated (no splash to hand off).
         explicit EditorApp(HostConfig cfg, Arcane::BootSplashWindow* splash = nullptr);
         int Run();   // BootSequence -> MainLoop() -> Shutdown(); process exit code
-
-        // Raise File -> Open Project on the FIRST frame. Set by main() for a bare
-        // interactive launch (no --project, no --plugin): the editor supports the
-        // project-less state, and this is its cold-start path into the picker.
-        void RaiseOpenProjectOnStart() noexcept { m_raiseOpenProjectOnStart = true; }
 
         // ---- The clean-exit hook (crash window plan 1, task 9; spec S5.7) ---
         // "Begin your ordinary exit now", for the paths the OS gives seconds
@@ -262,8 +267,8 @@ namespace Arcane::Editor
             // so the click-pick further down this same frame can also honor it.
             bool gameUiClaims = false;
             // File-menu scene shortcuts, raised in the input phase and folded
-            // into this frame's MenuRequests at the menu-request site (the same shape
-            // m_raiseOpenProjectOnStart uses) so the keybind and the menu item cannot
+            // into this frame's MenuRequests at the menu-request site (one launch
+            // site per verb) so the keybind and the menu item cannot
             // drift apart. Same shape for the Edit-menu clipboard shortcuts
             // (Ctrl+X/C/V/D) below.
             bool scNewScene = false, scOpenScene = false, scSaveScene = false;
@@ -325,6 +330,12 @@ namespace Arcane::Editor
         void DrawEditorUi(LoopState& ls, const FrameState& fs);
         void ConsumeMenuRequests(Arcane::Editor::MenuRequests& menuReq,
                                  const FrameState& fs, LoopState& ls);
+        // Start page (spec 2026-09-30 s8.4): drawn every frame no project is
+        // open, tabbed into the Viewport's node. Its buttons and rows fill `req`.
+        void DrawStartPage(Arcane::Editor::MenuRequests& req);
+        // THE launch site for Open Project / Open Folder / Open Recent, shared by
+        // the File menu (ConsumeMenuRequests) and the start page (drawn after it).
+        void LaunchProjectOpenRequests(const Arcane::Editor::MenuRequests& req);
         // Asset-manager redesign, Plan 1 Task 9: takes AssetPanelActions
         // (the panels' own action-report contract); the old AssetBrowserActions
         // overload (superseded when AssetBrowser.* was retired, Task 15) is
@@ -852,6 +863,12 @@ namespace Arcane::Editor
         // never m_play.IsPlaying() raw, so the predicate has one greppable name.
         [[nodiscard]] bool InPlayMode() const noexcept { return m_play.IsPlaying(); }
 
+        // Every document's undo resolver target (spec s3.3b): null while Play runs.
+        [[nodiscard]] Arcane::CommandStack* DocumentUndo() noexcept
+        {
+            return Arcane::Editor::ResolveDocumentUndo(InPlayMode(), m_undo ? &*m_undo : nullptr);
+        }
+
         // ---- THE HOVER predicate --------------------------------------------
         // "The pointer is over the Viewport panel AND that fact is allowed to
         // affect what is rendered." The second half is what this exists for:
@@ -921,13 +938,12 @@ namespace Arcane::Editor
         // m_play above, unchanged. SeparateWindow = LaunchStandalone (below) --
         // m_play/its toggle are never touched by that path. Persisted across
         // restarts via an ImGuiSettingsHandler ("[EditorPlayMode][State]"),
-        // registered in Init beside ShaderEditorDocument::RegisterLayoutSettings;
+        // registered in Init;
         // a malformed or absent ini line leaves this at its Viewport default.
         Arcane::Editor::PlayLaunchMode m_playMode = Arcane::Editor::PlayLaunchMode::Viewport;
 
-        // ImGuiSettingsHandler callbacks for m_playMode, mirroring
-        // ShaderEditorDocument's layout handler (same registration site, same
-        // read/write shape) -- static member functions rather than free
+        // ImGuiSettingsHandler callbacks for m_playMode, in the standard
+        // ImGuiSettingsHandler read/write shape -- static member functions rather than free
         // functions (like the scene/project dialog Thunks below) so they can
         // reach the private m_playMode of the instance handed through
         // handler->UserData; there is exactly one EditorApp per process.
@@ -941,7 +957,7 @@ namespace Arcane::Editor
         // project switch, RetargetLayoutIni) resets its members to a fresh
         // EditorApp's values before the incoming file is read.
         static void  PlayModeSettingsClearAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler);
-        void RegisterPlayModeSettings();   // called from Init, beside RegisterLayoutSettings
+        void RegisterPlayModeSettings();   // called from Init
 
         // ImGuiSettingsHandler callbacks for m_camera + m_viewSettings
         // ("[EditorViewport][Camera]", F4 plan 1 T7), mirroring the PlayMode
@@ -1059,11 +1075,12 @@ namespace Arcane::Editor
         // Inspector panel state: holds the field-edit gesture's CommandStack
         // ownership token across the frames the gesture spans (see InspectorState).
         Arcane::Editor::InspectorState  m_inspector;
-        // Sprite-asset arc, Task 4: built ONCE in Init (mintSpriteForTexture
-        // wraps MintOrReuseSpriteForTexture) and handed to DrawInspectorBody
-        // every frame, so the field visitor's texture-drop auto-mint branch
-        // never needs to know about EditorApp itself.
+        // Built ONCE in Init: the reflected rows' borrowed app seams (assetRefs).
         Arcane::Editor::InspectorServices m_inspectorServices;
+        // Spec 2026-09-30 s4.2: the ONE asset-reference services value. The
+        // Inspector and every document's Services point here (app lifetime;
+        // m_documents, declared below, destructs first).
+        Arcane::Editor::AssetRefServices  m_assetRefServices;
         // Inspector ownership (spec 2026-09-28): the scene source, the host
         // that routes the last-selecting source to every Inspector instance,
         // the per-instance draw state, and the two epoch watermarks (the
@@ -1106,7 +1123,7 @@ namespace Arcane::Editor
         // Editor undo/redo history. Deliberately NOT cleared on Play: Stop restores
         // the pre-Play registry, so the edits behind these entries are still on
         // screen and must stay undoable -- and because SceneSession reads this
-        // stack's StateId as the SOLE input to the scene's dirty flag
+        // stack's SceneStateId as the SOLE input to the scene's dirty flag
         // (SceneSession.hpp), clearing it would silently report an unsaved scene as
         // clean. It is cleared only where no entity handle in it could survive:
         // ClearSceneReferences, ahead of a registry swap. Constructed in
@@ -1115,6 +1132,7 @@ namespace Arcane::Editor
         // BEFORE them -- its resolver lambda captures `&*m_runtime` (a raw
         // Runtime*, dereferenced fresh each call), so it must not outlive it.
         std::optional<Arcane::CommandStack> m_undo;
+        Arcane::UndoLimits m_undoLimitsApplied;   // last limits pushed (per-frame change check)
 
         // Editor keybind + mouse edge tracking (architecture pass sec 6). All
         // Updated within FrameInput's phases (6a-6d) at the site each chord's
@@ -1430,6 +1448,7 @@ namespace Arcane::Editor
         // derived from the model and services, and by Task 3 its only state
         // writes had already become actions.
         Arcane::Editor::AssetBrowserPanelState  m_assetBrowserUi;   // search / rail / folds / preview width
+        bool m_browserOwnsEditKeys = false;   // T5 s7.10: last frame's Browser answer
         Arcane::Editor::AssetGraphPanelState    m_assetGraphUi;     // canvas + projection + focus + gesture stash
         // Asset-manager redesign, Plan 1 Task 12: the unified create dialog's
         // cross-frame state (a modal outlives the draw that opened it). Set up
@@ -1907,14 +1926,21 @@ namespace Arcane::Editor
         Arcane::Editor::DocServices MakeDocServices();
 
         // Problems-panel row click -> editor navigation. One switch over
-        // DiagLocator::Kind; performed from the frame loop, never mid-draw.
+        // ClassifyLocator's RouteAction (node-page phase s8.2): select the
+        // entity, open + focus the document (a shader at its line), reveal an
+        // editor-less asset, raise a graph node, Explorer for directories and
+        // binaries, open-as-text otherwise. Performed from the frame loop,
+        // never mid-draw.
         void RouteLocator(const Arcane::DiagLocator& locator);
+        // The Problems router's facts over live app state (node-page phase s8.2):
+        // entity alive, guid -> path, has an editor, directory, exists.
+        [[nodiscard]] Arcane::Editor::RouteFacts MakeRouteFacts();
 
-        // Thin wrappers RouteLocator needs, added here rather than on
+        // A thin wrapper RouteLocator needs, added here rather than on
         // DocumentHost: DocumentHost only indexes documents by asset Guid
         // (its own header comment -- "open/dirty/save lifecycle over one GUID
-        // asset"), so Guid->path resolution and path-based lookup are
-        // EditorApp-level concerns, the same way MintOrReuseSpriteForTexture
+        // asset"), so Guid->path resolution is an
+        // EditorApp-level concern, the same way MintOrReuseSpriteForTexture
         // above resolves through m_runtime->CurrentProject() rather than
         // living on DocumentHost.
         //
@@ -1923,11 +1949,6 @@ namespace Arcane::Editor
         // no project, an invalid guid, or an asset that does not resolve to a
         // file (mirrors MintOrReuseSpriteForTexture's failure shape).
         Arcane::Editor::EditorDocument* OpenAssetDocument(const Arcane::Guid& guid);
-        // The open ShaderEditorDocument whose on-disk path equals `path`, or
-        // null. ShaderEditorDocument is the only open-document type that
-        // exposes a stable Path() today (Problems-panel File locator is a
-        // shader-diagnostics producer only, per DiagLocator::File's callers).
-        Arcane::Editor::ShaderEditorDocument* FindByPath(const std::filesystem::path& path);
 
         // THE ARCANE LOGO shown at the left of the transport toolbar
         // (Unity-style), decoded device-free (Arcane::LoadDisplayPixels) and
@@ -2025,7 +2046,7 @@ namespace Arcane::Editor
         // solution up (the menu item). Both go: Toolchain::DiscoverSolution
         // -> if none, RegenerateSolution (arcbuild generate, SYNCHRONOUS, its
         // lines to the Console as "Build: ") -> rediscover ->
-        // IdeLaunch::OpenSolution/OpenFile, whose Outcome is logged in one
+        // IdeLaunch::OpenSolution/OpenFileAtLine, whose Outcome is logged in one
         // Console line. Reached from Build -> Open Visual Studio
         // (MenuRequests::openIde) and from a Source row's Open
         // (AssetPanelActions::openInIde), EditorAppFrame.cpp.
@@ -2034,7 +2055,12 @@ namespace Arcane::Editor
         // project open (vswhere spawns a process; ~100 ms, not per frame):
         // m_devenvResolved latches the attempt, m_devenv holds the answer
         // (empty = no install found -> the menu greys with a tooltip).
-        void OpenInIde(const std::filesystem::path& file);
+        // Returns the outcome (no project = NoSolution) so OpenSourceAtLine can
+        // fall back to the shell. `line` > 0 puts the caret there (IdeLaunch::OpenFileAtLine).
+        IdeLaunch::Outcome OpenInIde(const std::filesystem::path& file, int line = 0);
+        // The crash viewer's [file:line] link (node-page phase s8.1): OpenInIde,
+        // and on NoDevenv / NoSolution / DetectionFailed, OsShell::ShellOpen(file).
+        void OpenSourceAtLine(const std::filesystem::path& file, int line);
         [[nodiscard]] Arcane::Editor::IdeMenuState IdeMenuStateNow() const;
         void ResolveDevenvOnce();
         std::filesystem::path m_devenv;
@@ -2142,7 +2168,11 @@ namespace Arcane::Editor
 
         // Editor state naming entities of the OUTGOING scene, torn down before any
         // registry swap. Shared by SwitchProject and the scene effects below.
-        void ClearSceneReferences();
+        void ClearSceneReferences(std::string reason);
+        // Saved/UndoCache follows the project (spec s3.3, R12): wipe the
+        // outgoing dir, wipe the incoming one (crash leftovers), retarget the
+        // stack. Null = no project = memory-only.
+        void RetargetUndoCache(const Arcane::Project* project);
         // Establish an empty scene when nothing published a SceneRoot, so the editor
         // always has one open. Never clears a registry a plugin already populated.
         void EnsureScene();
@@ -2183,6 +2213,11 @@ namespace Arcane::Editor
         // and the string is identical on the overwhelming majority of frames).
         std::string m_windowTitle;
         void        UpdateWindowTitle();
+        // The ONLY assembly of the title parts (s6.4): the project name, the
+        // scene's display name, and SceneSession::IsDirty (scene-affecting steps
+        // only, after T1 s3.3). The OS title, the toolbar strip and the
+        // Viewport tab's dot (ViewportChrome) all read it.
+        [[nodiscard]] Arcane::Editor::TitleParts CurrentTitleParts() const;
 
         // ---- File -> Open Recent / Open Recent Scene ------------------------
         // Both recents lists live behind one facade (EditorRecents.hpp,
@@ -2220,10 +2255,73 @@ namespace Arcane::Editor
         // for the popup stack.
         Arcane::Editor::ModalErrorQueue m_modalErrors;
 
-        // One-shot latch for RaiseOpenProjectOnStart: consumed on the first frame
-        // that draws the menu bar, so the picker appears over a live editor window
-        // rather than before one exists.
-        bool m_raiseOpenProjectOnStart = false;
+        // ---- Asset file operations (T5 s7.3, s7.12) -------------------------
+        // Declared AFTER m_undo so the executor (which holds *m_undo) destructs
+        // BEFORE the stack it pushes to; Shutdown's RetargetUndoCache(nullptr)
+        // resets it earlier still.
+        class AssetOpHost final : public Arcane::Editor::AssetFileOpHost   // T5 s7.3: the executor's only door into the app
+        {
+        public:
+            explicit AssetOpHost(EditorApp& a) : m_app(a) {}
+            Arcane::Editor::AssetOpGates Gates() const override;   // T5-A9: AssetFileOpHost's first pure virtual
+            Arcane::RebindResult Rebind(const Arcane::Guid&, const std::filesystem::path&) override;
+            bool Unregister(const Arcane::Guid&) override;
+            std::optional<Arcane::Guid> Register(const std::filesystem::path&) override;
+            Arcane::Editor::OsShell::RecycleResult Recycle(std::span<const std::filesystem::path>) override;
+            bool CloseDocumentFor(const Arcane::Guid&, bool discardDirty) override;
+            void NoteMoved(const Arcane::Guid&, const std::filesystem::path&, const std::filesystem::path&) override;
+            void AssetsChanged(std::span<const Arcane::Guid>, std::span<const Arcane::Guid>) override;
+            void Invalidate(const Arcane::Guid&, Arcane::Editor::AssetKind) override;
+            void EvictPaths(std::span<const std::filesystem::path>) override;
+            void Activity(Arcane::Editor::AssetActivityEntry) override;
+            void ReportError(std::string title, std::string message) override;
+        private:
+            EditorApp& m_app;
+        };
+        struct AssetOpFactsStore   // AssetOpFacts' spans point in here; the delete modal keeps its own
+        { std::vector<std::pair<Arcane::Guid, std::string>> registry; std::vector<Arcane::Guid> sceneAssets; std::vector<Arcane::Editor::AssetOpFacts::Doc> docs; };
+        AssetOpHost m_assetOpHost{ *this };
+        // Per project: T5-A9's constructor takes (host, stack, contentDir), m_undo is emplaced in the ctor body and the
+        // content dir is the project's, so no member initializer can build it. RetargetUndoCache(project) (T1-B10,
+        // EditorAppProject.cpp), after SetSpillDirectory:
+        //   m_assetFileOps = project ? std::make_unique<Arcane::Editor::AssetFileOpExecutor>(m_assetOpHost, *m_undo, project->Root() / "Content") : nullptr;
+        std::unique_ptr<Arcane::Editor::AssetFileOpExecutor> m_assetFileOps;
+        AssetOpFactsStore m_assetOpFacts;
+        [[nodiscard]] std::string AssetOpGateReason();
+        [[nodiscard]] Arcane::Editor::AssetOpFacts GatherAssetOpFacts(AssetOpFactsStore&, bool withLiveScene);
+        std::optional<Arcane::Editor::AssetOpPlan> RunAssetOp(const Arcane::Editor::AssetOpRequest&);
+        // T5 s7.7: the post-op selection step every RunAssetOp caller runs on a returned plan (B17 and B20 extend it).
+        void AfterAssetOp(const Arcane::Editor::AssetOpPlan&);
+        void InvalidateAssetCaches(const Arcane::Guid&, Arcane::Editor::AssetKind);
+        // T5 s7.6: the asset page's Rename modal (requestRename opens it).
+        Arcane::Editor::RenameModalState m_renameModal;
+        // T5 s7.5: the ONE Delete confirm modal (requestDelete opens it). Its
+        // facts are gathered ONCE on open (live scene included) into their own
+        // store, so the cascade box re-plans against the same facts; reset on
+        // Confirm/Cancel.
+        Arcane::Editor::DeleteConfirmState m_deleteConfirm;
+        AssetOpFactsStore m_deleteFactsStore;
+        std::optional<Arcane::Editor::AssetOpFacts> m_deleteFacts;
+        void BeginAssetDelete(std::vector<Arcane::Guid>);
+        void ConsumeDeleteConfirm();
+        // T5 s7.8: the Move to... modal (requestMoveTo opens it) and the New
+        // Folder modal (requestNewFolder, or nested from Move to...'s button).
+        Arcane::Editor::MoveToState m_moveTo;
+        Arcane::Editor::NewFolderState m_newFolder;
+        // RefreshLabels runs once per model rebuild (an entriesStamp edge), so
+        // a renamed asset's Inspector history labels and pin names follow.
+        std::uint32_t m_labelsAtEntriesStamp = 0, m_fileOpRefusalMemoStamp = 0;
+        // AssetPanelServices::fileOpRefusal's dry-run memo: request key ->
+        // first refusal ("" = runs). Cleared when the model rebuilds, the
+        // gate reason changes or the open/boot scene changes (s7.5), so a
+        // per-frame caller (the rename box, the page pencil) plans once per
+        // distinct request, not once per frame.
+        std::unordered_map<std::string, std::string> m_fileOpRefusalMemo; std::string m_fileOpRefusalMemoGate;   // dry-run memo
+
+        // DrawStartPage's rising edge (visible = no project, derived every frame,
+        // never latched): refresh recents once per appearance, and focus the
+        // page once per appearance on its first docked frame (StepStartPageFocus).
+        Arcane::Editor::StartPageFocus m_startPageFocus;
 
         // Set by SwitchProject when its BootSequence reports the window closed
         // mid-switch (BootResult::quitRequested), instead of treating that

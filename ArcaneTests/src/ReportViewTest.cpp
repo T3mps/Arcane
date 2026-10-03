@@ -8,7 +8,11 @@
 // filesystem half) is NOT compiled here.
 
 #include "ReportView.hpp"
+#include "SymbolizedText.hpp"
 #include <catch2/catch_test_macros.hpp>
+
+#include <chrono>
+#include <vector>
 
 using namespace Arcane::Reporter;
 
@@ -145,4 +149,81 @@ TEST_CASE("report view: LastLines and DetailsText", "[reporter]")
     CHECK(d.find("crash (unhandled exception)") != std::string::npos);
     CHECK(d.find("thread 4242 (MAIN)") != std::string::npos);
     CHECK(d.find("L1") != std::string::npos);
+}
+
+TEST_CASE("report view: symbolized frames are kept per thread, the portable fallback has none", "[reporter]")
+{
+    Symbolized s;
+    s.engineAvailable = true;
+    s.threads.push_back({ 4242, true, { SymFrame{ 0, "ArcaneEditor", "Boom", 0x10, "D:\\a\\Boom.cpp", 9 } } });
+    const ReportView sym = BuildReportView(Crash(), Attended(), &s, "");
+    REQUIRE(sym.threads.size() == 1);
+    REQUIRE(sym.threads[0].frames.size() == 1);
+    CHECK(sym.threads[0].frames[0].file == "D:\\a\\Boom.cpp");
+    CHECK(sym.threads[0].text == "00 ArcaneEditor!Boom+0x10 [D:\\a\\Boom.cpp:9]\n");   // text unchanged
+    const ReportView portable = BuildReportView(Crash(), Attended(), nullptr, "");
+    REQUIRE(portable.threads.size() == 1);
+    CHECK(portable.threads[0].frames.empty());
+}
+
+TEST_CASE("report view: DisplayProduct spaces a leading Arcane and nothing else", "[reporter]")
+{
+    CHECK(DisplayProduct("ArcaneEditor") == "Arcane Editor");
+    CHECK(DisplayProduct("ArcaneRuntime") == "Arcane Runtime");
+    CHECK(DisplayProduct("Arcane") == "Arcane");
+    CHECK(DisplayProduct("Arcane Editor") == "Arcane Editor");
+    CHECK(DisplayProduct("Aphelyon") == "Aphelyon");
+    CHECK(DisplayProduct("") == "");
+}
+
+TEST_CASE("report view: DetailsText is DetailsHeader + DetailsBody, and the body never repeats the header", "[reporter]")
+{
+    const ReportView v = BuildReportView(Crash(), Attended(), nullptr, "line1\nline2\n");
+    CHECK(DetailsText(v, 0) == DetailsHeader(v) + DetailsBody(v, 0));
+    CHECK(DetailsHeader(v).find(v.headline) == 0);
+    CHECK(DetailsHeader(v).find("reason: " + v.reasonText) != std::string::npos);
+    const std::string body = DetailsBody(v, 0);
+    CHECK(body.find(v.headline) == std::string::npos);
+    CHECK(body.find(v.whenLine) == std::string::npos);
+    CHECK(body.find("reason:") == std::string::npos);
+    CHECK(body.find("--- thread 4242 (MAIN)") != std::string::npos);
+}
+
+TEST_CASE("report view: copy labels and the button order (Close last, Relaunch before it, hang buttons only for a hang)", "[reporter]")
+{
+    CHECK(CopyButtonLabel(CopyState::Idle) == "Copy Details");
+    CHECK(CopyButtonLabel(CopyState::Copied) == "Copied");
+    CHECK(CopyButtonLabel(CopyState::Failed) == "Copy failed");
+
+    using B = ReporterButton;
+    ReportView crash = BuildReportView(Crash(), Attended(), nullptr, "");
+    CHECK(VisibleButtons(crash) == std::vector<B>{ B::OpenFolder, B::Copy, B::Relaunch, B::Close });
+    crash.relaunchLine.clear();
+    CHECK(VisibleButtons(crash) == std::vector<B>{ B::OpenFolder, B::Copy, B::Close });
+    Arcane::Diag::Envelope h = Crash();
+    h.kind = "hang";
+    const ReportView hang = BuildReportView(h, Attended(), nullptr, "");
+    CHECK(VisibleButtons(hang) == std::vector<B>{ B::OpenFolder, B::Copy, B::KeepWaiting, B::Terminate, B::Relaunch, B::Close });
+    CHECK(static_cast<int>(B::Close) == 102);   // == ReporterWindow::kBtnClose, one to one
+}
+
+TEST_CASE("report view: FormatLocalStamp converts an ISO UTC stamp to local minutes", "[reporter]")
+{
+    CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", std::chrono::locate_zone("UTC")) == "2026-09-29 16:57");
+    CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", std::chrono::locate_zone("Asia/Tokyo")) == "2026-09-30 01:57");
+    CHECK(FormatLocalStamp("2026-13-29T16:57:12Z", std::chrono::locate_zone("UTC")).empty());
+    CHECK(FormatLocalStamp("yesterday", std::chrono::locate_zone("UTC")).empty());
+    CHECK(FormatLocalStamp("2026-09-29T-1:57:12Z", std::chrono::locate_zone("UTC")).empty());   // a signed field is not a digit field
+    CHECK(FormatLocalStamp("2026-09-29T16:57:12Z", nullptr).empty());
+}
+
+TEST_CASE("report view: a dbgeng verdict with no threads falls back to the portable stack", "[reporter]")
+{
+    Symbolized s;
+    s.engineAvailable = true;
+    s.symbolPath = "srv*";
+    const ReportView v = BuildReportView(Crash(), Attended(), &s, "");
+    REQUIRE(v.threads.size() == 1);
+    CHECK(v.threads[0].label == "thread 4242 (MAIN)");
+    CHECK(v.threads[0].frames.empty());
 }

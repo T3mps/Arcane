@@ -18,6 +18,7 @@
 
 #include <imgui.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -39,6 +40,9 @@ namespace Arcane::Editor
 
     // Drags that honour an Astra::Range when the caller resolved one, and are
     // otherwise the exact call these sites made before ranges were read.
+    // `format` is the display/round format, both ranged and not; its default
+    // is DragFloat's/DragInt's own (imgui.h:687/692), so a caller that omits
+    // it reads exactly as before.
     //
     // ClampOnInput is what makes the bound real. Dragging clamps on its own,
     // but Ctrl+click text entry into the same widget is clamped ONLY under
@@ -48,10 +52,12 @@ namespace Arcane::Editor
     // degenerate ranges bind -- see BindingRange in InspectorView.cpp, which
     // encodes that same binding rule for the rows ImGui does not clamp.
     [[nodiscard]] bool RangedDragFloat(const char* label, float* v, float fallbackSpeed,
-                                       const std::optional<Astra::Range>& range);
+                                       const std::optional<Astra::Range>& range,
+                                       const char* format = "%.3f");
 
     [[nodiscard]] bool RangedDragInt(const char* label, int* v,
-                                     const std::optional<Astra::Range>& range);
+                                     const std::optional<Astra::Range>& range,
+                                     const char* format = "%d");
 
     // One field row's label cell. Opens the row, writes the display name into
     // column 0, and leaves the cursor in column 1 with the next item sized to
@@ -60,8 +66,17 @@ namespace Arcane::Editor
     // the VALUE widget and would never fire over the name.
     //
     // `dimmed` is UE's disabled-label treatment for a field that cannot be
-    // edited.
-    [[nodiscard]] bool FieldLabelCell(const std::string& label, bool dimmed);
+    // edited. A label wider than the column is cut with the ASCII "..." the
+    // goldens already carry (node-page spec s4.1(e)); hovering a cut label
+    // tooltips the full one, and `truncated` (optional) reports the cut so a
+    // caller with its own last-wins tooltip can put the label first.
+    [[nodiscard]] bool FieldLabelCell(const std::string& label, bool dimmed, bool* truncated = nullptr);
+
+    // FieldLabelCell's text half: the ellipsized label at the CURSOR, cut to
+    // the remaining cell width, with the same dim/tooltip/truncated rules. For
+    // a label cell that draws something before the name (PropertyGrid's
+    // override checkbox, s4.1(d)).
+    [[nodiscard]] bool FieldLabelText(const std::string& label, bool dimmed, bool* truncated = nullptr);
 
     // Paint the axis strip (X red, Y green, Z blue) over the left edge of the
     // item just submitted. `component` indexes the palette; an index past it
@@ -72,8 +87,12 @@ namespace Arcane::Editor
     // The component drags for a single-selection Vec2/Vec3 row, spelled out
     // rather than calling ImGui::DragFloat2/3 so each component's OWN frame
     // rect is reachable for the bar. Each component keeps the exact ImGui id
-    // DragFloat2/3 gave it.
-    [[nodiscard]] bool AxisDragFloatN(const char* label, float* v, int count, float speed);
+    // DragFloat2/3 gave it. `range` and `format` (node-page s4.1(b)) default
+    // to the call these rows always made; a range binds every component the
+    // way RangedDragFloat binds one (min, max, ClampOnInput).
+    [[nodiscard]] bool AxisDragFloatN(const char* label, float* v, int count, float speed,
+                                      const std::optional<Astra::Range>& range = std::nullopt,
+                                      const char* format = "%.3f");
 
     // Truncate `text` with a trailing ellipsis so it fits `maxWidth` pixels of
     // the CURRENT font; unchanged when it already fits. UTF-8-safe: a cut never
@@ -90,6 +109,21 @@ namespace Arcane::Editor
     // passes it rather than moving everyone.
     [[nodiscard]] std::string EllipsisToWidth(std::string_view text, float maxWidth,
                                               std::string_view ellipsis = "...");
+
+    // The toolbar strip's right cluster (node page phase s6.5), window-local x:
+    // the scene status RIGHTMOST, ending at `rightEdge`; the Problems chip
+    // (s8.2) left of it, `gap` between them. chipW == 0 = no chip, no gap. The
+    // chip never shrinks (it is a count); the status gets what is left, down to
+    // statusMinW ("..." + chevron + "..."), below which drawStatus is false and
+    // the chip takes the edge. No x is ever below minX (the transport's right
+    // edge + 12, mirroring the left cluster's clamp).
+    struct StripClusterLayout { float chipX; float statusX; float statusBudget; bool drawStatus; };
+    [[nodiscard]] StripClusterLayout LayoutStripCluster(float minX, float rightEdge, float chipW,
+                                                        float statusNaturalW, float statusMinW, float gap);
+
+    // The no-image line of a preview box (s5.2): dim, wrapped to the current
+    // content region's width and centred in it on both axes.
+    void CenteredTextDisabled(std::string_view text);
 
     // Two-column field region (UE's Details-panel shape: label left in one
     // column, value right, one draggable split shared by every section).
@@ -213,14 +247,6 @@ namespace Arcane::Editor
     // with SameLine.
     void AssetPill(const char* text, int variant = 0);
 
-    // Right-most segmented switch (spec §11.1/§11.2, e.g. the Browse/Graph/
-    // Status lens strip). `items` are labels; `enabledMask` bit i gates item
-    // i (a cleared bit -> BeginDisabled); returns the clicked index or -1.
-    // Drawn with collapsed shared 1px borders and square corners, active =
-    // Theme::kButtonActive.
-    [[nodiscard]] int SegmentedStrip(const char* id, const char* const* items,
-                                     int count, int active, unsigned enabledMask);
-
     // Row thumb cell size (spec §11.2: "row thumb ... 18px"). Exposed
     // (rather than kept file-local to EditorWidgets.cpp) so a caller that
     // needs to compute a position against RowWithThumb's own thumb rect --
@@ -274,6 +300,7 @@ namespace Arcane::Editor
     struct [[nodiscard]] AssetRowResult
     {
         bool clicked = false;
+        bool doubleClicked = false;   // the second press of a left double-click (the Selectable passes AllowDoubleClick)
         bool hovered = false;
         ImVec2 trailingPos{};
     };
@@ -355,6 +382,63 @@ namespace Arcane::Editor
     // own drawlist paint, so the paint stays pure overdraw) giving each
     // entry its own hover/click hit target; see TimelineFeedResult.
     TimelineFeedResult TimelineFeed(const char* id, const TimelineEntry* entries, int count);
+
+    // ---- popups (node-page phase T2, spec 2026-09-30 s4.4) ------------------
+    // A bare OpenPopup + BeginPopup opens at the MOUSE and can cover the very
+    // button that opened it. BeginPopupBelow places the popup the way a combo
+    // places its list: below the anchor and left-aligned with it, flipped
+    // above when there is no room below, clamped to the viewport.
+    //
+    // Capture the anchor RIGHT AFTER the item that opens the popup, EVERY
+    // frame (the popup re-places itself every frame, as a combo does):
+    //     if (ImGui::Button("Add")) ImGui::OpenPopup("##add");
+    //     const PopupAnchor a = LastItemAnchor();
+    //     if (BeginPopupBelow("##add", a)) { ...; ImGui::EndPopup(); }
+    // Same id scope as the OpenPopup, same EndPopup contract as BeginPopup.
+    // Not for context menus (they stay at the mouse) and not for the viewport
+    // gear (its right-aligned pivot is deliberate).
+    struct PopupAnchor { ImVec2 min, max; };
+    [[nodiscard]] PopupAnchor LastItemAnchor();
+    [[nodiscard]] bool BeginPopupBelow(const char* id, const PopupAnchor& anchor,
+                                       float minWidth = 0.0f, ImGuiWindowFlags flags = 0);
+
+    // ---- links (s4.7) ----------------------------------------------------------
+    // A link says whether it goes anywhere. live: ImGui::TextLink (hand cursor,
+    // underline, ImGuiCol_TextLink). NOT live: the same text in TextDisabled, no
+    // underline, the arrow cursor, never returns true -- an InvisibleButton sized
+    // to the text, id = `label`, so a tooltip ("File not found on this machine")
+    // or a context menu still attaches. Either way the hit item stays
+    // LastItemData: SetItemTooltip / BeginPopupContextItem go right after.
+    [[nodiscard]] bool LinkText(const char* label, bool live = true);
+
+    struct LinkRowResult { bool clicked = false; bool hovered = false; };
+
+    // Full-width row (one text line). live: the Selectable hover highlight, hand
+    // cursor, text in ImGuiCol_TextLink, underlined while hovered. NOT live: NO
+    // hover highlight (Header/HeaderHovered/HeaderActive pushed to Theme::kNone),
+    // ambient ImGuiCol_Text, arrow cursor, `clicked` never true (`hovered` still
+    // reports, for tooltips). `id` scopes the row (PushID); `leadIcon` is drawn in
+    // `leadColor` (0 = ambient text) before the text, so Problems keeps its
+    // severity colour on the icon. Same LastItemData rule as LinkText.
+    [[nodiscard]] LinkRowResult LinkRow(const char* id, std::string_view text, bool live,
+                                        const char* leadIcon = nullptr, ImU32 leadColor = 0);
+
+    // ---- toggles (s4.9) -------------------------------------------------------
+    // THE definition of a lit toggle (s6.2 only adopts it). Push/Pop cover
+    // Button, ButtonHovered AND ButtonActive (Theme::kToggleOn*). IconToggle =
+    // Button(label) inside that push when `on`, nothing pushed when not; `label`
+    // carries the icon and the ## id. It draws NO tooltip: the button stays the
+    // last item, so callers attach their own (including AllowWhenDisabled ones).
+    void PushToggleOnColors();
+    void PopToggleOnColors();
+    [[nodiscard]] bool IconToggle(const char* label, bool on);
+
+    // One severity toggle (node-page phase s8.2): IconToggle labelled
+    // "<icon> <count>###<id>", so the count is inside the hit area while the
+    // ImGuiID hashes `id` alone -- a click spanning a count tick (streaming
+    // logs) still lands. The label is Theme::kTextDim at zero and `tint`
+    // above. Flips `on` on click; returns the click.
+    bool SeverityToggle(const char* id, const char* icon, ImVec4 tint, std::size_t count, bool& on);
 
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME

@@ -18,6 +18,8 @@
 
 namespace Arcane::Editor
 {
+    struct PopupAnchor;   // Widgets/EditorWidgets.hpp -- by reference only
+
     struct InputSelection
     {
         Guid map, action, binding, part;
@@ -35,6 +37,8 @@ namespace Arcane::Editor
         InputActionsInspectorPage(InputActionsEditorModel& model, std::string assetName,
                                   std::string assetPath, Services services);
         void SetSelection(const InputSelection& sel) { sel_ = sel; }
+        // T5 s7.11: the asset moved -- the asset page's name/path lines follow it.
+        void SetAssetLocation(std::string n, std::string p) { assetName_ = std::move(n); assetPath_ = std::move(p); }
 
         // Every crumb carries a `key` in the model's 4-segment format (three
         // slashes always): asset root "", map "<map>///", action
@@ -51,7 +55,7 @@ namespace Arcane::Editor
         void DrawAction(PropertyGrid& grid, const nlohmann::json& action);
         void DrawBinding(PropertyGrid& grid, const nlohmann::json& row, bool isPart);
         void DrawLivePreview(PropertyGrid& grid, const Guid& action);
-        void DrawPicker(const Guid& target);
+        void DrawPicker(const Guid& target, const PopupAnchor& anchor);
         // Edits never mutate the draft under the row loop: inside Draw they are
         // QUEUED (edit_, every commit appended, never overwritten -- two rows can
         // commit in the same Draw, e.g. a text row's deactivate-commit plus a

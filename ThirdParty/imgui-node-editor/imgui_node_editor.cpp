@@ -2383,8 +2383,14 @@ ed::Control ed::EditorContext::BuildControl(bool allowOffscreen)
         if (window->SkipItems)
             return -1;
 
+        // ARCANE LOCAL FIX (vendored imgui-node-editor): upstream returned
+        // `false` here, which this int lambda turns into 0 -- "clicked with
+        // mouse button 0" to every caller (`>= 0` means clicked). So every
+        // zero-size pin or node reported a left click on every frame, and
+        // BuildControl's clickedObject overwrite let it steal real node clicks.
+        // -1 is the not-clicked sentinel every other path here returns.
         if (size_arg.x == 0.0f || size_arg.y == 0.0f)
-            return false;
+            return -1;
 
         const ImGuiID id = window->GetID(str_id);
         ImVec2 size = CalcItemSize(size_arg, 0.0f, 0.0f);
@@ -2430,6 +2436,16 @@ ed::Control ed::EditorContext::BuildControl(bool allowOffscreen)
     // Check input interactions over area.
     auto checkInteractionsInArea = [this, &emitInteractiveArea, &hotObject, &activeObject, &clickedObject, &doubleClickedObject](ObjectId id, const ImRect& rect, Object* object)
     {
+        // ARCANE LOCAL FIX (vendored imgui-node-editor): a zero-size area
+        // submits NO ImGui item (invisibleButtonEx returns before ItemAdd), so
+        // the IsItemActive/IsItemHovered reads below would answer for the
+        // PREVIOUS item -- the node walked just before. An off-screen (culled)
+        // node's 0x0 pins walked right after a pressed node took over
+        // activeObject, and the drag became a link drag from that pin. An area
+        // with no item has no interaction state: skip it.
+        if (ImRect_IsEmpty(rect))
+            return;
+
         if (emitInteractiveArea(id, rect) >= 0)
             clickedObject = object;
         if (!doubleClickedObject && ImGui::IsMouseDoubleClicked(m_Config.DragButtonIndex) && ImGui::IsItemHovered())
@@ -4090,7 +4106,10 @@ ed::EditorAction::AcceptResult ed::SelectAction::Accept(const Control& control)
         return False;
 
     auto& io = ImGui::GetIO();
-    m_SelectGroups   = io.KeyShift;
+    // ARCANE LOCAL FIX (vendored imgui-node-editor): Config::ShiftAddsToSelection
+    // makes Shift additive (Unreal's graph editor) instead of "groups only".
+    const bool shiftAdds = io.KeyShift && Editor->GetConfig().ShiftAddsToSelection;
+    m_SelectGroups   = io.KeyShift && !shiftAdds;
     m_SelectLinkMode = io.KeyAlt;
 
     m_SelectedObjectsAtStart.clear();
@@ -4108,7 +4127,7 @@ ed::EditorAction::AcceptResult ed::SelectAction::Accept(const Control& control)
             Editor->ClearSelection();
         }
 
-        if (io.KeyCtrl)
+        if (io.KeyCtrl || shiftAdds)
             m_SelectedObjectsAtStart = Editor->GetSelectedObjects();
     }
     else if (control.BackgroundClickButtonIndex == Editor->GetConfig().SelectButtonIndex)
@@ -4130,6 +4149,11 @@ ed::EditorAction::AcceptResult ed::SelectAction::Accept(const Control& control)
 
             if (io.KeyCtrl)
                 Editor->ToggleObjectSelection(clickedObject);
+            else if (shiftAdds)
+            {
+                if (!Editor->IsSelected(clickedObject))   // SelectObject appends unconditionally
+                    Editor->SelectObject(clickedObject);
+            }
             else
                 Editor->SetSelectedObject(clickedObject);
         }

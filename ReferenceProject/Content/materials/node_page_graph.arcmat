@@ -1,0 +1,29 @@
+{
+  "graph": {
+    "links": [
+      { "from": 2, "fromPin": 0, "to": 4, "toPin": 0 },
+      { "from": 3, "fromPin": 0, "to": 4, "toPin": 1 },
+      { "from": 4, "fromPin": 0, "to": 1, "toPin": 0 }
+    ],
+    "nextId": 10,
+    "nodes": [
+      { "id": 1, "pos": [ 760.0, 200.0 ], "type": "output" },
+      { "id": 2, "pos": [ 120.0, 120.0 ], "type": "sprite_texture" },
+      { "id": 3, "param": { "decl": { "type": "color", "value": [ 1.0, 1.0, 1.0, 1.0 ] }, "name": "tint" },
+        "pos": [ 120.0, 300.0 ], "type": "param" },
+      { "id": 4, "pos": [ 440.0, 200.0 ], "type": "mul" },
+      { "id": 5, "pinDefaults": [ { "pin": 1, "value": 2.0 } ], "pos": [ 440.0, 420.0 ], "type": "power" },
+      { "id": 6, "mask": "xy", "pos": [ 440.0, 560.0 ], "type": "swizzle" },
+      { "custom": { "body": "return p1;", "out": 4, "pins": [ { "name": "p1", "width": 4 } ] },
+        "id": 7, "pos": [ 760.0, 420.0 ], "type": "custom" },
+      { "frac": true, "id": 8, "pos": [ 760.0, 600.0 ], "type": "panner" },
+      { "comment": { "size": [ 320.0, 120.0 ], "text": "Node page fixture" },
+        "id": 9, "pos": [ 60.0, 760.0 ], "type": "comment" }
+    ]
+  },
+  "id": "7e5a0012-0012-4012-8012-000000000012",
+  "kind": "sprite",
+  "name": "NodePageGraph",
+  "params": {},
+  "type": "material"
+}

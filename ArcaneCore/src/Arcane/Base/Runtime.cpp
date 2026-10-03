@@ -107,6 +107,7 @@ namespace Arcane
         Config                                      config;          // layered engine+project config (Slice 3)
         std::filesystem::path                       engineConfigDir; // <exe>/data/EngineConfig (shipped defaults)
         std::optional<Project>                      project;   // open project (Slice 1b); empty = none
+        bool                                        archiveUserCVars = false;   // SetUserCVarArchiving (T3-D2)
         // The client seam (spec s2, plan 1 P6). Both null on a headless host; a
         // ClientRuntime sets them from its own ctor and clears them from its dtor,
         // so neither can outlive the object it points at.
@@ -477,6 +478,26 @@ namespace Arcane
         m_impl->registry->RemoveResource<PhysicsInterpBuffer>();
     }
 
+    namespace
+    {
+        // The cvar User layer's home: read by OpenProject, written back by
+        // the archive (T3-D2). One definition, so the two can never disagree.
+        std::filesystem::path UserCVarDir(const Project& project)
+        {
+            return project.Root() / "Saved" / "Config";
+        }
+
+        // The outgoing project's User layer leaves with it (Runtime.hpp, the
+        // user cvar archive): written back first when this host archives.
+        void ReleaseUserCVarLayer(const Project& outgoing, bool archive)
+        {
+            CVarRegistry& cvars = CVarRegistry::Get();
+            if (archive)
+                WriteCVarArchive(cvars, UserCVarDir(outgoing));
+            cvars.RevertLayer(SetBy::User);
+        }
+    }
+
     bool Runtime::OpenProject(const std::filesystem::path& pathOrFile, AssetRegistry::ScanProgressFn onProgress,
                               ProjectOpenOptions opts)
     {
@@ -505,6 +526,10 @@ namespace Arcane
                      proj->Manifest().engineAbi, static_cast<int>(kGamePluginABIVersion));
         }
 
+        // A switch: the outgoing project's settings are archived (if this host
+        // archives) and its User layer dropped before the incoming one layers.
+        if (m_impl->project)
+            ReleaseUserCVarLayer(*m_impl->project, m_impl->archiveUserCVars);
         m_impl->project = std::move(*proj);
         // Route loose-file content loads under the project's game:// mount (Content/).
         m_impl->assets->SetContentRoot(m_impl->project->Root() / "Content");
@@ -527,7 +552,7 @@ namespace Arcane
         for (const auto& pluginRoot : m_impl->project->ActivePluginRoots())
             ApplyCVarDirectory(cvars, pluginRoot / "Config", SetBy::Plugin, pluginRoot.filename().string());
         ApplyCVarDirectory(cvars, m_impl->project->Root() / "Config", SetBy::Project, "project");
-        ApplyCVarDirectory(cvars, m_impl->project->Root() / "Saved" / "Config", SetBy::User, "user");
+        ApplyCVarDirectory(cvars, UserCVarDir(*m_impl->project), SetBy::User, "user");
         cvars.Publish();
         return true;
     }
@@ -544,6 +569,13 @@ namespace Arcane
         // resolver; `config.LoadEngineDefaults(engineConfigDir)` is the only
         // config call the ctor makes) -- so a project-less Runtime looks the
         // same whether it never opened a project or just closed one.
+        // The cvar User layer leaves with the project (archived first when
+        // this host archives); the other rungs are untouched, as before.
+        if (m_impl->project)
+        {
+            ReleaseUserCVarLayer(*m_impl->project, m_impl->archiveUserCVars);
+            CVarRegistry::Get().Publish();
+        }
         m_impl->project.reset();
         m_impl->assets->SetContentRoot({});
         m_impl->assets->SetAssetResolver({});
@@ -552,6 +584,19 @@ namespace Arcane
         // project/user layers entirely rather than leaving them shadowed by
         // nothing once nothing re-layers over them.
         m_impl->config.LoadEngineDefaults(m_impl->engineConfigDir);
+    }
+
+    void Runtime::SetUserCVarArchiving(bool enabled) noexcept
+    {
+        m_impl->archiveUserCVars = enabled;
+    }
+
+    bool Runtime::SaveUserCVars()
+    {
+        if (!m_impl->archiveUserCVars || !m_impl->project)
+            return false;
+        WriteCVarArchive(CVarRegistry::Get(), UserCVarDir(*m_impl->project));
+        return true;
     }
 
     std::optional<Guid> Runtime::RegisterCreatedAsset(const std::filesystem::path& file)
@@ -563,6 +608,26 @@ namespace Arcane
             return std::nullopt;
         }
         return m_impl->project->RegisterAsset(file);
+    }
+
+    bool Runtime::UnregisterAsset(const Guid& id)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::UnregisterAsset: no project open -- {} not unregistered", id.ToString());
+            return false;
+        }
+        return m_impl->project->UnregisterAsset(id);
+    }
+
+    RebindResult Runtime::RebindMovedAsset(const Guid& id, const std::filesystem::path& newFile)
+    {
+        if (!m_impl->project)
+        {
+            ARC_WARN("Runtime::RebindMovedAsset: no project open -- '{}' not rebound", newFile.generic_string());
+            return RebindResult::NoProject;
+        }
+        return m_impl->project->RebindAsset(id, newFile);
     }
 
     bool Runtime::SetProjectBootScene(const Guid& id)

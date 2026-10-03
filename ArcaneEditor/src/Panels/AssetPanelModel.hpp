@@ -430,6 +430,7 @@ namespace Arcane::Editor
         std::function<std::optional<Arcane::MaterialSurface>(const Arcane::Guid&)> surfaceFor;
         std::function<std::optional<std::vector<Arcane::AssetRef>>(const Arcane::Guid&)> refsFor;
         std::function<CookState(const Arcane::Guid&)> cookStateFor;
+        std::function<std::vector<std::string>()> emptyFolders;   // T5 s7.8: game keys under Content/ with no registered asset
     };
 
     // One registry entry's panel-facing view: classification, folder grouping,
@@ -505,6 +506,7 @@ namespace Arcane::Editor
                                    // group's depth), so the panel can compute the 20px/
                                    // level indent without re-deriving it from the guid.
         int          groupCount = 0;
+        bool         empty = false;   // Type::Group ONLY (T5 s7.8): an emptyFolders key -- drawn with a dim "(empty)"
         Arcane::Guid guid;        // Asset/Child
     };
 
@@ -701,6 +703,10 @@ namespace Arcane::Editor
         { return m_entries; }
         [[nodiscard]] int  ShownAssetCount() const { return m_shownAssetCount; }  // "X of N shown"
         [[nodiscard]] bool Filtered() const;             // search or kind filter active
+        // T5 s7.8: the providers' emptyFolders answer (game group keys,
+        // "materials/rocks/"), refreshed only on MarkAllDirty rebuilds. Rows
+        // carry them only while unfiltered; Location choices always do.
+        [[nodiscard]] const std::vector<std::string>& EmptyFolders() const { return m_emptyFolders; }
 
         // The live reference topology behind `unused` (Plan 2 Task 4), fed by
         // RebuildIfDirty from the very same refsFor answers each rebuilt entry
@@ -741,8 +747,29 @@ namespace Arcane::Editor
         // MONOTONIC: ResetForProjectSwitch deliberately leaves it alone, like
         // entriesStamp, so no consumer can hold a stale equal value.
         std::uint64_t  selectionGesture = 0;
-        void Select(const Arcane::Guid& g) { ++selectionGesture; if (g != selected) { selected = g; ++selectionStamp; } }
-        void ResetForProjectSwitch();                     // clears everything incl. selected
+
+        // T5 s7.9: the multi-selection. `selected` above stays THE primary
+        // (the Inspector, Graph and Status lenses read it), mirroring
+        // SelectionContext (Scene/SelectionContext.hpp): `selection` is the
+        // full set, `selected` the one guid inside it that pages show.
+        std::vector<Arcane::Guid> selection;
+        // Single-select: selection = {g}; signature and bumps unchanged.
+        void Select(const Arcane::Guid& g) { ++selectionGesture; selection.clear(); if (g.IsValid()) selection.push_back(g); if (g != selected) { selected = g; ++selectionStamp; } }
+        // Replaces the set (a Ctrl-toggle, Shift-range or Ctrl+A result).
+        // `clicked` becomes the primary if it is still in `sel`, else the
+        // last entry (nil when empty); selectionGesture bumps only then.
+        void ApplySelection(std::vector<Arcane::Guid> sel, const Arcane::Guid& clicked);
+        // A right-click inside the selection: re-points the primary, keeps
+        // the set. A guid outside the selection is ignored.
+        void SetPrimary(const Arcane::Guid& g);
+        [[nodiscard]] bool InSelection(const Arcane::Guid& g) const { return std::find(selection.begin(), selection.end(), g) != selection.end(); }
+        [[nodiscard]] int SelectionCount() const noexcept { return static_cast<int>(selection.size()); }
+        // Drops guids with no entry (RebuildIfDirty calls it when entries
+        // changed) and moves/clears `selected`. Bumps selectionStamp, NEVER
+        // selectionGesture: a removal is not a user gesture (the
+        // SelectionContext::Epoch rule).
+        void PruneSelection();
+        void ResetForProjectSwitch();                     // clears everything incl. selected + selection
 
     private:
         void RebuildRows();
@@ -769,6 +796,11 @@ namespace Arcane::Editor
 
         std::vector<AssetPanelRow> m_rows;
         std::vector<RailEntry>     m_rail;
+        std::vector<std::string>   m_emptyFolders;   // T5 s7.8: see EmptyFolders()
         int m_shownAssetCount = 0;
     };
+
+    // T5 s7.9: the Browser's bottom-bar context line -- "X of N shown" while
+    // a search or kind filter is active, else "N assets <U+00B7> M selected".
+    [[nodiscard]] std::string AssetBrowserContextLine(const AssetPanelModel& m);
 }

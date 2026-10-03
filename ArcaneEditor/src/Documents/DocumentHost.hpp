@@ -52,10 +52,19 @@ namespace Arcane::Editor
         // and calls its NoteReopened() (an explicit open re-selects its page).
         // Null when no factory matches or the factory fails.
         EditorDocument* OpenPath(const std::filesystem::path& path);
+        // True when an extension factory would take `path` (RegisterFactory's
+        // lowercase match) -- the Problems router's "has an editor" fact.
+        [[nodiscard]] bool HasFactory(const std::filesystem::path& path) const;
 
         // ---- list --------------------------------------------------------
         EditorDocument* Add(std::unique_ptr<EditorDocument> doc);
         EditorDocument* FindByGuid(const Arcane::Guid& guid);
+        // T5 s7.11: the asset `guid` moved to `newPath`; the open document showing it (if any) retargets
+        // through NoteMoved, so its next save writes the new path. No document open = nothing to do.
+        void NoteAssetMoved(const Arcane::Guid& guid, const std::filesystem::path& newPath);
+        // T5 s7.5: the asset under `doc` is being deleted. Close it UNSAVED with no confirm (a pending confirm on
+        // it is dropped); a parked edit gesture commits in the document's destructor. Null = nothing to do.
+        void CloseForAssetRemoval(EditorDocument* doc);
         std::size_t Count() const { return m_docs.size(); }
         bool AnyDirty() const;
         // Save every dirty document in place. Every document has a real path
@@ -89,6 +98,7 @@ namespace Arcane::Editor
 
         // ---- per-frame -----------------------------------------------------
         void TickAll(double dt);
+        void FlushGestures();   // FlushGesture on every open document (Play entry)
         // Draw every document window + the pending-close confirm modal.
         // `dockId` (an ImGuiID; 0 = none): the dock node a document window is
         // FORCED into on its first draw after opening -- the host passes the

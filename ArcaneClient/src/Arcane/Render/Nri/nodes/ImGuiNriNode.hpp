@@ -137,7 +137,7 @@ namespace Arcane
     // host's chrome context, and the editor's game/plugin context -- whose
     // io.IniFilename is deliberately null where the editor's is the per-project
     // layout file). One backend serving both would interleave two atlases in
-    // one pointer-keyed cache against a fixed kMaxTextures.
+    // one pointer-keyed cache and one descriptor-pool chain.
     enum class ImGuiNodeSlot : std::uint8_t
     {
         // The HOST CHROME hud, `FrameDesc::imgui`, declared LAST -- after the

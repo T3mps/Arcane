@@ -4,6 +4,8 @@
 #include "Documents/InputActionsEditorModel.hpp"
 #include "Documents/InputActionsDocumentWidgets.hpp"
 #include "Documents/InputActionsInspectorPage.hpp"
+#include "Documents/InputPendingAdd.hpp"
+#include "Scene/UndoGate.hpp"
 #include <Arcane/Base/Diagnostics.hpp>
 #include <Arcane/Input/InputRebindOperation.hpp>
 #include <Arcane/Input/InputSnapshot.hpp>
@@ -13,11 +15,10 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-
-namespace Arcane { class CommandStack; }
 
 namespace Arcane::Editor
 {
@@ -25,7 +26,7 @@ namespace Arcane::Editor
     {
     public:
         [[nodiscard]] static std::unique_ptr<InputActionsDocument> Open(
-            const std::filesystem::path& path, Arcane::CommandStack* commands = nullptr);
+            const std::filesystem::path& path, UndoResolver undo = {});
         [[nodiscard]] static Guid PeekGuid(const std::filesystem::path& path);
 
         const std::string& Title() const override { return title_; }
@@ -65,6 +66,7 @@ namespace Arcane::Editor
         bool Resolves(std::string_view key) const override { return model_.Resolves(key); }   // PURE: the host's PruneStale runs it once per frame per history entry
         std::uint64_t SelectionEpoch() const override { return model_.SelectionEpoch(); }
         void NoteReopened() override { model_.ReassertSelection(); }
+        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
         bool SelectByPath(std::string_view path) override { return model_.SelectByPath(path); }
 
         // The snapshot a rebind capture observes: the document is the sole
@@ -88,10 +90,24 @@ namespace Arcane::Editor
         // EditorApp::HandleUndoRedoAndSceneShortcuts), which run before the
         // document draws and must stand down while a capture is armed.
         [[nodiscard]] bool InputSwallowed() const noexcept { return captureTarget_.IsValid() || captureSwallowFrame_ == ImGui::GetFrameCount(); }
+        // Add-and-listen (spec 2026-09-30 s8.3): arm a capture for `add`'s first
+        // role. Each Completed result appends a path and the next role listens at
+        // once (the operation ignores controls held at Begin); Done, Esc, focus
+        // loss, click-away or the timeout make CommitPending's ONE model call.
+        // Refused while any capture is live.
+        void BeginPending(PendingAdd add);
+        [[nodiscard]] const PendingAdd* Pending() const noexcept { return pending_ ? &*pending_ : nullptr; }
+        // Play entry (DocumentHost::FlushGestures): a live pending add commits
+        // the parts heard so far as ONE undoable step while the resolver still
+        // returns the stack -- commit, not cancel, as Esc/click-away do.
+        void FlushGesture() override;
+        // The view state the document owns, writable: the tests' probe seam and
+        // scheme filter (production writes it only through the widgets).
+        [[nodiscard]] InputActionsDocumentState& MutableState() noexcept { return state_; }
 
     private:
         InputActionsDocument(std::filesystem::path path, nlohmann::json draft,
-                             Arcane::CommandStack* commands);
+                             UndoResolver undo);
         void SelectFirstMapAndAction();
         void TickCapture(bool bodyDrawn);
         void BeginRebind(const Guid& target);
@@ -101,6 +117,9 @@ namespace Arcane::Editor
         // scrolls the CAPTURE row into view (expanding its collapsed action;
         // a pinned page's binding need not be the selection), then arms the capture.
         void BeginRebindFromPage(const Guid& target);
+        void StartPendingCapture();
+        void FinishPending();
+        std::optional<PendingAdd> pending_;
 
         std::filesystem::path path_;
         std::string title_;

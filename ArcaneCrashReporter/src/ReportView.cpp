@@ -1,7 +1,9 @@
 #include "ReportView.hpp"
 #include <Arcane/Base/ForeignModules.hpp>
+#include <charconv>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 
 namespace Arcane::Reporter
 {
@@ -121,6 +123,7 @@ namespace Arcane::Reporter
                     std::snprintf(idx, sizeof(idx), "%02zu ", i);
                     tv.text += idx + FormatFrame(t.frames[i]) + "\n";
                 }
+                tv.frames = t.frames;
                 v.threads.push_back(std::move(tv));
             }
         }
@@ -131,14 +134,76 @@ namespace Arcane::Reporter
         return v;
     }
 
-    std::string DetailsText(const ReportView& v, std::size_t threadIndex)
+    std::string DetailsHeader(const ReportView& v)
     {
-        std::string d = v.headline + "\n" + v.whenLine + "\n\nreason: " + v.reasonText + "\n";
+        return v.headline + "\n" + v.whenLine + "\n\nreason: " + v.reasonText + "\n";
+    }
+
+    std::string DetailsBody(const ReportView& v, std::size_t threadIndex)
+    {
+        std::string d;
         if (!v.injectedText.empty()) d += "\ninjected modules:\n" + v.injectedText;
         if (threadIndex < v.threads.size()) d += "\n--- " + v.threads[threadIndex].label + "\n" + v.threads[threadIndex].text;
         if (!v.gpuText.empty()) d += "\n=== GPU ===\n" + v.gpuText;
         if (!v.logTail.empty()) d += "\n=== log (tail) ===\n" + v.logTail;
         d += "\nreport folder: " + v.reportFolder + "\n";
         return d;
+    }
+
+    std::string DetailsText(const ReportView& v, std::size_t threadIndex)
+    {
+        return DetailsHeader(v) + DetailsBody(v, threadIndex);
+    }
+
+    std::string DisplayProduct(std::string_view appName)
+    {
+        constexpr std::string_view kArcane = "Arcane";
+        if (appName.size() > kArcane.size() && appName.starts_with(kArcane) && appName[kArcane.size()] != ' ')
+            return std::string(kArcane) + " " + std::string(appName.substr(kArcane.size()));
+        return std::string(appName);
+    }
+
+    std::string_view CopyButtonLabel(CopyState state) noexcept
+    {
+        switch (state)
+        {
+            case CopyState::Copied: return "Copied";
+            case CopyState::Failed: return "Copy failed";
+            case CopyState::Idle:   break;
+        }
+        return "Copy Details";
+    }
+
+    std::vector<ReporterButton> VisibleButtons(const ReportView& v)
+    {
+        std::vector<ReporterButton> out{ ReporterButton::OpenFolder, ReporterButton::Copy };
+        if (v.isHang) { out.push_back(ReporterButton::KeepWaiting); out.push_back(ReporterButton::Terminate); }
+        if (!v.relaunchLine.empty()) out.push_back(ReporterButton::Relaunch);
+        out.push_back(ReporterButton::Close);
+        return out;
+    }
+
+    std::string FormatLocalStamp(std::string_view s, const std::chrono::time_zone* zone)
+    {
+        // Exactly "YYYY-MM-DDTHH:MM:SSZ" (Diagnostics.cpp's stamp shape).
+        if (!zone || s.size() != 20 || s[4] != '-' || s[7] != '-' || s[10] != 'T' ||
+            s[13] != ':' || s[16] != ':' || s[19] != 'Z')
+            return {};
+        // Digits only: from_chars would accept a '-' sign inside a field.
+        const auto num = [&](std::size_t at, std::size_t len, int& out)
+        {
+            const char* b = s.data() + at;
+            if (*b < '0' || *b > '9') return false;
+            const auto r = std::from_chars(b, b + len, out);
+            return r.ec == std::errc{} && r.ptr == b + len;
+        };
+        int y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
+        if (!num(0, 4, y) || !num(5, 2, mo) || !num(8, 2, d) || !num(11, 2, h) || !num(14, 2, mi) || !num(17, 2, sec))
+            return {};
+        using namespace std::chrono;
+        const year_month_day ymd{ year{ y }, month{ static_cast<unsigned>(mo) }, day{ static_cast<unsigned>(d) } };
+        if (!ymd.ok() || h > 23 || mi > 59 || sec > 60) return {};
+        const sys_seconds utc = sys_days{ ymd } + hours{ h } + minutes{ mi } + seconds{ sec };
+        return std::format("{:%Y-%m-%d %H:%M}", zone->to_local(utc));
     }
 }

@@ -107,6 +107,12 @@ struct Config
     int                     ContextMenuButtonIndex; // Mouse button index context menu action will react to (0-left, 1-right, 2-middle)
     bool                    EnableSmoothZoom;
     float                   SmoothZoomPower;
+    // ARCANE LOCAL FIX (vendored imgui-node-editor): Unreal's graph-editor
+    // modifiers. true = Shift ADDS to the selection -- Shift+drag keeps the
+    // selection the box started with (like Ctrl+drag), Shift+click adds the
+    // node or link (Ctrl+click still toggles). false = upstream: Shift+drag
+    // selects only groups and Shift+click replaces the selection.
+    bool                    ShiftAddsToSelection;
 
     Config()
         : SettingsFile("NodeEditor.json")
@@ -129,6 +135,7 @@ struct Config
 # else
         , SmoothZoomPower(1.3f)
 # endif
+        , ShiftAddsToSelection(false)
     {
     }
 };

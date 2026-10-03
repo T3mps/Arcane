@@ -25,6 +25,11 @@ namespace Arcane::Log
     ARCANE_CORE_API void Init(spdlog::level::level_enum level = spdlog::level::info);
     ARCANE_CORE_API void Shutdown();
 
+    // Runtime level for every sink (the logger's level gates them all; no
+    // sink is leveled individually). spdlog set_level is runtime-safe. Driven
+    // by the `log.level` cvar Init registers (node-page phase s8.2).
+    ARCANE_CORE_API void SetLevel(spdlog::level::level_enum level);
+
     // Never returns null: lazily calls Init() with defaults if needed.
     ARCANE_CORE_API spdlog::logger* Engine();
 

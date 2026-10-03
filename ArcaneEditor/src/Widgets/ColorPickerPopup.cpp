@@ -2,6 +2,9 @@
 
 #include "Widgets/EditorWidgets.hpp"   // SrgbToLinear / LinearToSrgb
 
+#include <imgui_internal.h>   // SetNextItemColorMarker, MarkItemEdited, LastItemData (the narrow boxes)
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -9,6 +12,82 @@ namespace Arcane::Editor
 {
     namespace
     {
+        // ---- the narrow colour boxes (T3 gate, finding 3) ----------------------
+        // ColorEdit4 prints its float boxes with a hard-coded "%0.3f"
+        // (imgui_widgets.cpp:5883-5888), so a box narrower than "0.000" clips
+        // the digits ("0.35C" on the 1080p material page).
+        // Decimals that fit a box of this row: 3 (the stock widget) when
+        // "0.000" fits, else 2, else 1. "Fits" = the CENTRED text's margin,
+        // (box - text) / 2, reaches the colour marker drawn on the box's left
+        // edge (style.ColorMarkerSize) less one pixel of glyph side bearing --
+        // CalcTextSize counts the bearings, so the ink still clears the marker.
+        // At 1080p a material-page box is 34 px and Inter 16's "0.00" 29 px:
+        // 2.5 px margins against a 3 px marker, two decimals.
+        int ColorBoxDecimals(float boxesWidth)
+        {
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float perBox = IM_TRUNC((boxesWidth - style.ItemInnerSpacing.x * 3.0f) / 4.0f)
+                               - std::max(style.ColorMarkerSize - 1.0f, 0.0f) * 2.0f;
+            if (perBox >= ImGui::CalcTextSize("0.000").x) return 3;
+            if (perBox >= ImGui::CalcTextSize("0.00").x)  return 2;
+            return 1;
+        }
+
+        // ColorEdit4's own RGBA box row (imgui_widgets.cpp:5866-5912 and its
+        // drop target, :6016-6036) at fewer decimals, for a row too narrow for
+        // three: the same group and ids (BeginGroup, PushID(id), "##X".."##W"),
+        // the same per-box split, speed 1/255, 0..1 clamp (lifted by hdr), RGBA
+        // markers and colour drop target, and MarkItemEdited on the group -- so
+        // EditGesture's activation pair reads it exactly as it reads the stock
+        // boxes. Display only: NoRoundToFormat keeps the stored precision.
+        bool NarrowColorBoxes(const char* id, float linear[4], float width, bool hdr, const char* format)
+        {
+            static const char* kIds[4] = { "##X", "##Y", "##Z", "##W" };
+            static const ImU32 kMarkers[4] = { IM_COL32(240, 20, 20, 255), IM_COL32(20, 240, 20, 255),
+                                               IM_COL32(20, 20, 240, 255), IM_COL32(140, 140, 140, 255) };   // GDefaultRgbaColorMarkers
+            if (ImGui::GetCurrentWindowRead()->SkipItems)   // ColorEdit4's own guard
+                return false;
+            ImGuiContext& g = *ImGui::GetCurrentContext();
+            const ImGuiStyle& style = g.Style;
+            bool changed = false;
+            ImGui::BeginGroup();
+            ImGui::PushID(id);
+            const float items = std::max(width, 1.0f) - style.ItemInnerSpacing.x * 3.0f;
+            float prevSplit = 0.0f;
+            for (int n = 0; n < 4; ++n)
+            {
+                if (n > 0)
+                    ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+                const float nextSplit = IM_TRUNC(items * static_cast<float>(n + 1) / 4.0f);
+                ImGui::SetNextItemWidth(std::max(nextSplit - prevSplit, 1.0f));
+                prevSplit = nextSplit;
+                ImGui::SetNextItemColorMarker(kMarkers[n]);
+                if (ImGui::DragFloat(kIds[n], &linear[n], 1.0f / 255.0f, 0.0f, hdr ? 0.0f : 1.0f, format,
+                                     ImGuiSliderFlags_ColorMarkers | ImGuiSliderFlags_NoRoundToFormat))
+                    changed = true;
+            }
+            ImGui::PopID();
+            ImGui::EndGroup();
+            if ((g.LastItemData.StatusFlags & ImGuiItemStatusFlags_HoveredRect)
+                && !(g.LastItemData.ItemFlags & ImGuiItemFlags_ReadOnly) && ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(IMGUI_PAYLOAD_TYPE_COLOR_3F))
+                {
+                    std::memcpy(linear, payload->Data, sizeof(float) * 3);   // alpha kept
+                    changed = true;
+                }
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(IMGUI_PAYLOAD_TYPE_COLOR_4F))
+                {
+                    std::memcpy(linear, payload->Data, sizeof(float) * 4);
+                    changed = true;
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if (changed && g.LastItemData.ID != 0)
+                ImGui::MarkItemEdited(g.LastItemData.ID);
+            return changed;
+        }
+
         // Encode for display. RGB converts, alpha never does.
         void EncodeForDisplay(const float lin[4], bool hdr, float out[4]) noexcept
         {
@@ -219,5 +298,49 @@ namespace Arcane::Editor
         }
 
         return changed;
+    }
+
+    ColorValueResult ColorValue(const char* id, float linear[4], float original[4], bool hdr)
+    {
+        ColorValueResult result;
+        const float total = ImGui::CalcItemWidth();   // read BEFORE the swatch consumes the pending width
+        const float swatch = ImGui::GetFrameHeight();
+        ImGui::PushID(id);
+        result.popupId = ColorPopupId("##popup");
+        if (ColorSwatchButton("##swatch", linear))
+        {
+            for (int i = 0; i < 4; ++i) original[i] = linear[i];
+            ImGui::OpenPopup(result.popupId);
+        }
+        if (ImGui::BeginPopup("##popup"))
+        {
+            if (ColorPopupBody(linear, original, hdr))
+                result.changed = true;
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        const float boxes = total - swatch - ImGui::GetStyle().ItemSpacing.x;
+        // Too narrow for "0.000" (the 1080p material page): the same boxes at
+        // the decimals that fit, instead of ColorEdit4's clipped digits.
+        if (const int decimals = ColorBoxDecimals(boxes); decimals < 3)
+        {
+            if (NarrowColorBoxes(id, linear, boxes, hdr, decimals == 2 ? "%.2f" : "%.1f"))
+                result.changed = true;
+            return result;
+        }
+        ImGui::SetNextItemWidth(boxes > 1.0f ? boxes : 1.0f);
+        // DisplayRGB and InputRGB PIN the mode: NoOptions only suppresses this
+        // row's menu, and without them ColorEdit4 reads the global
+        // g.ColorEditOptions, which another widget can flip to HSV -- InputHSV
+        // would write HSV components into linear storage. HDR (when `hdr`)
+        // lifts the boxes' 0..1 drag clamp, matching ColorPopupBody's Linear row.
+        if (ImGui::ColorEdit4(id, linear,
+                              ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoSmallPreview
+                              | ImGuiColorEditFlags_NoPicker | ImGuiColorEditFlags_NoOptions
+                              | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_InputRGB
+                              | (hdr ? ImGuiColorEditFlags_HDR : 0)))
+            result.changed = true;
+        return result;
     }
 }

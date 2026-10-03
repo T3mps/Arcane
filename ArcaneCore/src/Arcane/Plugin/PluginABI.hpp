@@ -984,7 +984,46 @@ namespace Arcane
     //     `m_inspectorInstances` behind a new `SetInspector(source, breadcrumb,
     //     instances)` signature (report schemaVersion 12) -- both layouts moved.
     //     ReferenceProject.arcproj restamped; the Aphelyon restamp is owed.
-    inline constexpr uint32_t kGamePluginABIVersion = 46;
+    // v47 (2026-10-01, node page + editor upgrades T1 correctness): `ICommand`
+    //     gained the virtuals `AffectsScene`, `IsExpired` and `PayloadBytes`
+    //     (vtable); `CommandStack` gained `UndoLimits`/`SetLimits` (the depth
+    //     ctor parameter is gone), `Clear(reason)`/`ClearedReason`,
+    //     `SceneStateId` and spill state (API and layout moved), beside the
+    //     newly exported `UndoPayload`/`Detail::UndoSpillFile`;
+    //     `RegistryStateCommand` holds `UndoPayload`s (layout); vendored Astra
+    //     975cdb7: `Registry` gained `m_instanceId` (layout), `SetParent`
+    //     returns `bool` and takes an index, exhausted entity slots retire
+    //     instead of wrapping and `Clear()` recycles (allocator rules both
+    //     sides must agree on); `VerifyReport` schemaVersion 13
+    //     (`documents[]`). A v46 module was compiled against the old vtables
+    //     and layouts; reject the pairing. ReferenceProject.arcproj and
+    //     Aphelyon.arcproj restamped.
+    // v48 (2026-09-30, node page T3): `GraphNodeTypeInfo` gained the appended
+    //     `description` column (an exported Core struct returned by reference
+    //     from GraphNodeInfo/AllGraphNodeInfos -- its layout moved), and Core
+    //     exports `GraphPinNeutralDefault` (same tranche, same bump; s5.1.8).
+    //     ReferenceProject.arcproj and Aphelyon.arcproj restamped; both game
+    //     modules rebuilt.
+    // v49 (2026-09-30, node page phase T5 -- asset file operations, s7.2):
+    //     ArcaneCore.dll exports AssetRegistry::PeekId/Remove/Rebind (+ the
+    //     RebindResult enum), Project::UnregisterAsset/RebindAsset and
+    //     Runtime::UnregisterAsset/RebindMovedAsset; the `Assets` facade APPENDED
+    //     the pure virtuals EvictPath and ForgetUnresolved (no existing slot moved,
+    //     but the vtable grew). The same stamp also covers two T3-D6 host
+    //     changes that landed after v48 (T4-GATE ruling, option a): `HostConfig`
+    //     gained `windowWidth`/`windowHeight` (--window-size, 6d6c1008), a layout
+    //     move like the v40/v45/v46 HostConfig fields, and `Window::Show()`
+    //     became `Show(bool activate = true)` (f35fd5b4), which moves the mangled
+    //     name (the v18 reasoning). A v48 module was compiled against the old
+    //     surface; reject the pairing. ReferenceProject.arcproj and
+    //     Aphelyon.arcproj restamped.
+    // v50 (2026-09-30, node-page phase T6): `ConsoleModel` gained history
+    //     (`m_history`/`m_draft`/`m_historyPos`) and `CompleteInput`/`HistoryPrev`/
+    //     `HistoryNext`; `CVarRegistry::ListCommands` and `Log::SetLevel` are new
+    //     ArcaneCore exports; ArcaneClient exports `DrawConsoleInputLine`. Every
+    //     registry now registers `console.historySize`, and Log::Init registers
+    //     `log.level`. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 50;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.

@@ -349,9 +349,9 @@ namespace Arcane
             return nullptr;
         }
 
-        ARC_INFO("[nri-graph] NriTextureCache: image {} ({}x{}, {}) is resident on the graph device",
-                 id.ToString(), pixels->width, pixels->height,
-                 space == ColorSpace::Display ? "display-referred" : "sRGB");
+        ARC_DEBUG("[nri-graph] NriTextureCache: image {} ({}x{}, {}) is resident on the graph device",
+                  id.ToString(), pixels->width, pixels->height,
+                  space == ColorSpace::Display ? "display-referred" : "sRGB");
         return resident.texture;
     }
 
@@ -585,10 +585,10 @@ namespace Arcane
             return false;
         }
 
-        ARC_INFO("[nri-graph] NriTextureCache: content artifact ({}x{}, {} mip(s), {}) is resident "
-                 "on the graph device",
-                 artifact.info.width, artifact.info.height, artifact.mips.size(),
-                 artifact.format == ArtifactPixelFormatValue::BC7 ? "BC7" : "RGBA8");
+        ARC_DEBUG("[nri-graph] NriTextureCache: content artifact ({}x{}, {} mip(s), {}) is resident "
+                  "on the graph device",
+                  artifact.info.width, artifact.info.height, artifact.mips.size(),
+                  artifact.format == ArtifactPixelFormatValue::BC7 ? "BC7" : "RGBA8");
         return true;
     }
 

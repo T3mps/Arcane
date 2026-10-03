@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -104,7 +105,16 @@ namespace Arcane::Editor
 
         // ---- Task 10: shared row context menu (spec s6) --------------------
         // The Browse-side bracket around DrawAssetMenuItems above.
-        void DrawRowContextMenu(AssetPanelModel& model, AssetPanelActions& actions,
+        // T5 s7.6: a row-menu file-op verb, disabled with its dry-run refusal
+        // as the hover tooltip ("" = enabled).
+        bool MenuVerb(const char* label, const char* shortcut, const std::string& refusal)
+        {
+            ImGui::BeginDisabled(!refusal.empty()); const bool hit = ImGui::MenuItem(label, shortcut); ImGui::EndDisabled();
+            if (!refusal.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", refusal.c_str());
+            return hit;
+        }
+
+        void DrawRowContextMenu(AssetBrowserPanelState& state, AssetPanelModel& model, AssetPanelActions& actions,
                                 const AssetPanelServices& services, const AssetPanelEntry& e,
                                 bool kindSpecific)
         {
@@ -118,10 +128,37 @@ namespace Arcane::Editor
             // call (a re-selection IS an Inspector selection event, spec
             // 2026-09-29 s3), so a per-frame call would re-fire the Inspector's
             // asset edge for as long as the menu stays open.
+            //
+            // T5 s7.9: a right-click INSIDE the multi-selection keeps the set
+            // and only re-points the primary; outside it, it selects the row
+            // alone. Either way the verbs below act on `model.selection`.
             if (ImGui::IsWindowAppearing())
-                model.Select(e.guid);
+            {
+                if (model.InSelection(e.guid)) model.SetPrimary(e.guid);
+                else                           model.Select(e.guid);
+            }
 
             DrawAssetMenuItems(actions, e, kindSpecific, services);
+
+            // T5 s7.6: the file-op verbs, each disabled with its reason. ONE
+            // dry-run per menu open (the appearing frame), not per frame.
+            ImGui::Separator();
+            if (ImGui::IsWindowAppearing())
+                state.menuRefusal.rename = model.SelectionCount() > 1 ? std::string("Select one asset to rename")
+                                         : services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
+            // The row drew this frame (its menu is open on it): mark it drawn, or the
+            // table's end-of-frame "target row not drawn" check cancels the box at once.
+            if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) { BeginAssetRename(state, e); state.renameDrawn = true; }
+            if (ImGui::IsWindowAppearing())   // T5 s7.7
+                state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = model.selection }) : "unavailable";
+            if (MenuVerb("Duplicate", "Ctrl+D", state.menuRefusal.duplicate))
+                actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
+            if (ImGui::IsWindowAppearing())   // T5 s7.5: the host's confirm modal re-plans with the live scene
+                state.menuRefusal.del = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Delete, .guids = model.selection }) : "unavailable";
+            if (MenuVerb("Delete", "Del", state.menuRefusal.del)) actions.requestDelete = model.selection;
+            if (ImGui::IsWindowAppearing())   // T5 s7.8: destination-independent refusals only (MoveVerbRefusal); the modal checks each destination
+                state.menuRefusal.moveTo = services.fileOpRefusal ? MoveVerbRefusal(model.selection, model, services.fileOpRefusal) : "unavailable";
+            if (MenuVerb("Move to...", nullptr, state.menuRefusal.moveTo)) actions.requestMoveTo = model.selection;
 
             ImGui::EndPopup();
         }
@@ -139,7 +176,7 @@ namespace Arcane::Editor
         // a same-size overlay submitted every frame starved the row's real
         // Selectable of that permanently, so `model.Select()` never fired
         // from a left-click).
-        void AttachRowInteractions(AssetPanelModel& model, const Arcane::Project* project,
+        void AttachRowInteractions(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                                    DocumentHost& docs, const AssetPanelServices& services,
                                    AssetPanelActions& actions, const AssetPanelEntry& e,
                                    bool kindSpecificMenu)
@@ -157,7 +194,7 @@ namespace Arcane::Editor
                 ImGui::EndDragDropSource();
             }
 
-            DrawRowContextMenu(model, actions, services, e, kindSpecificMenu);
+            DrawRowContextMenu(state, model, actions, services, e, kindSpecificMenu);
         }
 
         // ---- Task 10: the rail (spec s6/s11.2) -----------------------------
@@ -324,7 +361,8 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: one folder-group chrome row (spec s6/s11.2) ----------
-        void DrawGroupRow(AssetBrowserPanelState& state, AssetPanelModel& model, const AssetPanelRow& row)
+        void DrawGroupRow(AssetBrowserPanelState& state, AssetPanelModel& model, const AssetPanelRow& row,
+                          const AssetPanelServices& services, AssetPanelActions& actions)
         {
             ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ImGui::GetColorU32(Theme::kChrome));
 
@@ -348,6 +386,34 @@ namespace Arcane::Editor
                 state.groupOpen[row.groupName] = newOpen;
                 model.SetGroupOpen(row.groupName, newOpen);
             }
+
+            // T5 s7.8: a game-mount folder row is a Move drop target (the Selectable
+            // above is still the last item). Refused: the reason as a tooltip, no
+            // highlight. Accepted: the drop rect; delivery hands the request to the
+            // app, which runs it undoably with no modal (same folder = empty plan).
+            if (const auto rel = RelativeDirOfFolderKey(row.groupName, "Content"); rel && ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* pl = ImGui::AcceptDragDropPayload(kAssetDragType, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
+                {
+                    const AssetDragPayload& drag = *static_cast<const AssetDragPayload*>(pl->Data);
+                    const AssetOpRequest req{ .kind = AssetOpKind::Move,   // the selection moves when it holds the dragged guid
+                        .guids = model.InSelection(drag.guid) ? model.selection : std::vector<Arcane::Guid>{ drag.guid }, .destFolder = MakeFolderChoice(*rel, "Content").relative };
+                    if (const std::string key = row.groupName + "|" + drag.guid.ToString(); state.dropDryRunKey != key)
+                    { state.dropDryRunKey = key; state.dropRefusal = services.fileOpRefusal ? services.fileOpRefusal(req) : std::string("unavailable"); }
+                    if (!state.dropRefusal.empty()) ImGui::SetTooltip("%s", state.dropRefusal.c_str());   // refused: tooltip, no highlight
+                    else
+                    {
+                        ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ImGui::GetColorU32(ImGuiCol_DragDropTarget));
+                        if (req.guids.size() > 1) ImGui::SetTooltip("%d assets", static_cast<int>(req.guids.size()));
+                        if (pl->IsDelivery()) actions.fileOp = req;   // undoable: no modal; same folder = empty plan
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            // T5 s7.8: a game-mount folder row's context menu (the Selectable is
+            // still the last item) -- New Folder... under this folder.
+            if (const auto rel = RelativeDirOfFolderKey(row.groupName, "Content"); rel && ImGui::BeginPopupContextItem("##groupmenu"))
+            { if (ImGui::MenuItem("New Folder...")) actions.requestNewFolder = MakeFolderChoice(*rel, "Content").relative; ImGui::EndPopup(); }
 
             // Nested-groups review fix round 1, Important 2: the MODEL shows this group's content
             // regardless of `open` while search is active (RebuildRows' own
@@ -397,14 +463,18 @@ namespace Arcane::Editor
             // plainly is not (the very rows under it prove that). Suppressed
             // for groupCount == 0 only -- a real, populated group's count
             // still always shows, including a single-item "1".
+            constexpr float kGroupCountGap = 6.0f;
             if (row.groupCount > 0)
             {
-                constexpr float kGroupCountGap = 6.0f;
                 char countBuf[16];
                 std::snprintf(countBuf, sizeof(countBuf), "%d", row.groupCount);
                 dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY),
                            ImGui::GetColorU32(ImGuiCol_TextDisabled), countBuf);
             }
+            // T5 s7.8: an empty folder (no asset beneath it) has no count; it
+            // says so, dim, in the count's place.
+            if (row.empty)
+                dl->AddText(ImVec2(nameX + nameW + kGroupCountGap, textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), "(empty)");
 
             ImGui::PopID();
         }
@@ -457,10 +527,71 @@ namespace Arcane::Editor
                        ImGui::GetColorU32(Theme::kSeparator));
         }
 
+        // ---- T5 s7.6: the inline rename box (a row's stand-in) -------------
+        // Stem-only box + the dim, fixed extension; no drag source or menu
+        // while it stands in for the row. A valid Enter, or an edit followed
+        // by a click away, commits (fileOp); an invalid Enter keeps the box
+        // and its refusal tooltip; Esc, or a click away without an edit,
+        // cancels. The dry-run runs per frame through the host's memo.
+        // The row's thumb cell is painted first as drawlist overdraw (no
+        // ImGui item, so the 24px row pitch is unchanged), the same way
+        // RowWithThumb paints it: the thumb when resolved, else the kind's
+        // Lucide glyph centred in the cell (spec s7.6: "thumb + InputText").
+        void DrawRenameBox(AssetBrowserPanelState& st, const AssetPanelEntry& e, float indent, std::uint64_t thumbId, const char* icon,
+                           const AssetPanelServices& sv, AssetPanelActions& actions)
+        {
+            st.renameDrawn = true; const ImVec2 at = ImGui::GetCursorScreenPos();
+            {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const float thumbY = at.y + (kTableRowHeight - kAssetRowThumbSize) * 0.5f;
+                if (thumbId != 0)
+                    dl->AddImage(static_cast<ImTextureID>(thumbId), ImVec2(at.x + indent, thumbY),
+                                 ImVec2(at.x + indent + kAssetRowThumbSize, thumbY + kAssetRowThumbSize));
+                else
+                {
+                    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+                    dl->AddText(ImVec2(at.x + indent + (kAssetRowThumbSize - iconSize.x) * 0.5f,
+                                       at.y + (kTableRowHeight - iconSize.y) * 0.5f),
+                                ImGui::GetColorU32(ImGuiCol_Text), icon);
+                }
+            }
+            ImGui::SetCursorScreenPos(ImVec2(at.x + indent + kAssetRowThumbSize + ImGui::GetStyle().ItemSpacing.x, at.y + 2.0f));
+            const std::string ext = std::filesystem::path(e.fileName).extension().string();
+            ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ext.c_str()).x - 8.0f));
+            if (st.renameFocusPending) { ImGui::SetKeyboardFocusHere(); st.renameFocusPending = false; }
+            const bool enter = ImGui::InputText("##assetrename", st.renameBuf, sizeof(st.renameBuf), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+            const bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false), off = ImGui::IsItemDeactivated(), active = ImGui::IsItemActive();
+            const bool commit = enter || (ImGui::IsItemDeactivatedAfterEdit() && !esc);
+            const AssetOpRequest req{ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = st.renameBuf };
+            const std::string why = sv.fileOpRefusal ? sv.fileOpRefusal(req) : std::string{};
+            if (!why.empty() && active) ImGui::SetTooltip("%s", why.c_str());
+            ImGui::SameLine(0.0f, 2.0f); ImGui::TextDisabled("%s", ext.c_str());
+            // Esc cancels when it deactivated the box, OR when it lands on the
+            // box's activation frame: InputText skips key handling while
+            // ActiveIdIsJustActivated (imgui_widgets.cpp:5113), and the
+            // SetKeyboardFocusHere above activates two frames after F2, so an
+            // early Esc would otherwise be swallowed and the box stay open.
+            if (esc && (off || active)) { st.renameTarget = {}; return; }
+            if (commit && why.empty()) { actions.fileOp = req; st.renameTarget = {}; return; }
+            if (enter) { st.renameFocusPending = true; return; }
+            if (off) st.renameTarget = {};
+        }
+
+        // T5 s7.9: tag the row's Selectable (RowWithThumb's, the next item) with
+        // its Rows() INDEX for BeginMultiSelect. Skipped in a SkipItems window:
+        // RowWithThumb returns before its Selectable there, and an armed
+        // selection user data would leak to the next real item drawn this
+        // frame (the Console's crash, EditorPanels.cpp's multi-select gate).
+        void SetRowSelectionUserData(int rowIndex)
+        {
+            if (!ImGui::GetCurrentWindowRead()->SkipItems)
+                ImGui::SetNextItemSelectionUserData(rowIndex);
+        }
+
         // ---- Task 10: one top-level asset row (spec s6/s11.2) --------------
         void DrawAssetRow(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
-                          const AssetPanelEntry& e, const Arcane::Guid& bootGuid, int groupDepth)
+                          const AssetPanelEntry& e, const Arcane::Guid& bootGuid, int groupDepth, int rowIndex)
         {
             ImGui::PushID(e.guid.ToString().c_str());
 
@@ -503,13 +634,15 @@ namespace Arcane::Editor
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
-            const bool selected = (model.selected == e.guid);
+            const bool selected = model.InSelection(e.guid);   // T5 s7.9: the whole multi-selection highlights
 
+            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+            SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
             if (res.clicked)
-                model.Select(e.guid);
+                state.msClicked = e.guid;   // T5 s7.9: the primary once DrawTable applies EndMultiSelect's requests
 
             // Fix round 1 (Critical 1): attach drag/context-menu/tooltip/
             // double-click HERE, immediately -- the row's Selectable is
@@ -519,7 +652,7 @@ namespace Arcane::Editor
             // AFTER this call, not before -- each is either pure drawlist
             // (doesn't touch "last item") or a real item that would
             // otherwise steal that title away from the Selectable.
-            AttachRowInteractions(model, project, docs, services, actions, e, /*kindSpecificMenu=*/true);
+            AttachRowInteractions(state, model, project, docs, services, actions, e, /*kindSpecificMenu=*/true);
 
             // Expander: a REAL item submitted AFTER the row's Selectable
             // (which RowWithThumb flags AllowOverlap for exactly this), so
@@ -620,15 +753,15 @@ namespace Arcane::Editor
         }
 
         // ---- Task 10: one derived-child row (spec s6/s11.2) ----------------
-        void DrawChildRow(AssetBrowserPanelState& /*state*/, AssetPanelModel& model, const Arcane::Project* project,
+        void DrawChildRow(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
                           DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
-                          const AssetPanelEntry& e, int groupDepth)
+                          const AssetPanelEntry& e, int groupDepth, int rowIndex)
         {
             ImGui::PushID(e.guid.ToString().c_str());
 
             const std::uint64_t thumbId = services.resolveAssetThumb ? services.resolveAssetThumb(e.guid) : 0;
             const char* icon = KindIcon(e.kind);
-            const bool selected = (model.selected == e.guid);
+            const bool selected = model.InSelection(e.guid);   // T5 s7.9
 
             // 2026-09-07 nested folder groups: the fold-child's own +20px
             // indent (kChildIndent, unchanged) stacks ON TOP of its group's
@@ -641,16 +774,18 @@ namespace Arcane::Editor
             // fold child under a band at indent X now sits at X+40 (X+20 for
             // the level shift, +20 more for its own existing fold indent).
             const float indent = static_cast<float>(groupDepth + 1) * kGroupIndent + kChildIndent;
+            if (state.renameTarget == e.guid) { DrawRenameBox(state, e, indent, thumbId, icon, services, actions); ImGui::PopID(); return; }
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            SetRowSelectionUserData(rowIndex);
             const AssetRowResult res = RowWithThumb("##row", static_cast<ImTextureID>(thumbId), icon,
                                                     e.fileName.c_str(), selected, indent, kTableRowHeight);
             ImGui::PopStyleColor();
             if (res.clicked)
-                model.Select(e.guid);
+                state.msClicked = e.guid;   // T5 s7.9
 
             // Fix round 1 (Critical 1): attach interactions before drawing
             // the pill -- see DrawAssetRow's own comment on ordering.
-            AttachRowInteractions(model, project, docs, services, actions, e, /*kindSpecificMenu=*/false);
+            AttachRowInteractions(state, model, project, docs, services, actions, e, /*kindSpecificMenu=*/false);
 
             ImGui::SetCursorScreenPos(res.trailingPos);
             AssetPill("derived");
@@ -667,6 +802,8 @@ namespace Arcane::Editor
                        DocumentHost& docs, const AssetPanelServices& services, AssetPanelActions& actions,
                        const Arcane::Guid& bootGuid, float width)
         {
+            state.renameDrawn = false;   // T5 s7.6: set again by DrawRenameBox if the target's row draws
+            if (!ImGui::GetDragDropPayload()) state.dropDryRunKey.clear();   // T5 s7.8: each drag re-asks the dry-run
             if (!ImGui::BeginChild("##assetscenter", ImVec2(width, 0.0f)))
             {
                 ImGui::EndChild();
@@ -680,7 +817,10 @@ namespace Arcane::Editor
             // clipper can be told to include it even when it lies outside
             // the naturally visible range (ImGuiListClipper::IncludeItemByIndex
             // -- must be called before the first Step()).
-            const bool wantsScroll = (state.seenSelectionStamp != model.selectionStamp);
+            // A pending Reveal (RevealAssetInBrowser) asks for the same
+            // scroll even when the stamp has nothing new to say.
+            const bool wantsScroll = state.revealPending ||
+                                     (state.seenSelectionStamp != model.selectionStamp);
             int scrollTargetIndex = -1;
             if (wantsScroll && model.selected.IsValid())
             {
@@ -694,7 +834,10 @@ namespace Arcane::Editor
             // Nothing to scroll to (filtered out, or selection cleared) --
             // stop retrying every frame.
             if (wantsScroll && scrollTargetIndex < 0)
+            {
                 state.seenSelectionStamp = model.selectionStamp;
+                state.revealPending = false;
+            }
 
             // Fix round 1 (Important 2): TableNextRow(_, 24) actually grows
             // to 24 + CellPadding.y*2 (imgui_tables.cpp:1936-1937) -- the
@@ -752,20 +895,77 @@ namespace Arcane::Editor
                 // visible already), and checking it directly cannot drift
                 // out of sync the way remembering to tag every call site
                 // could.
+                //
+                // T3-D4: the test is in content space, and it counts the
+                // frozen Name header. Data row i spans [h*(i+1), h*(i+2)),
+                // because the header takes the first row height. The visible
+                // band is [scrollY + h, scrollY + inner height), because the
+                // frozen header covers the top of the view. The old
+                // row-index test left the header out, so it called a row
+                // visible while the row sat one or two rows below the bottom
+                // edge.
+                // An ordinary selection needs only part of the row visible:
+                // a row the mouse clicked always is, so it never re-centres.
+                // A Reveal needs the WHOLE row visible.
                 bool targetAlreadyVisible = false;
                 if (scrollTargetIndex >= 0)
                 {
                     const float scrollY = ImGui::GetScrollY();
-                    const float viewH = ImGui::GetWindowHeight();
-                    const int firstVisible = static_cast<int>(scrollY / kTableRowHeight);
-                    const int lastVisible = static_cast<int>((scrollY + viewH) / kTableRowHeight);
-                    targetAlreadyVisible = (scrollTargetIndex >= firstVisible && scrollTargetIndex <= lastVisible);
+                    const float viewTop = scrollY + kTableRowHeight;
+                    const float viewBottom = scrollY + ImGui::GetCurrentWindow()->InnerRect.GetHeight();
+                    const float rowTop = kTableRowHeight * static_cast<float>(scrollTargetIndex + 1);
+                    const float rowBottom = rowTop + kTableRowHeight;
+                    targetAlreadyVisible = state.revealPending
+                        ? (rowTop >= viewTop && rowBottom <= viewBottom)
+                        : (rowBottom > viewTop && rowTop < viewBottom);
                 }
+
+                // T5 s7.9: the multi-select scope (the Console precedent,
+                // EditorPanels.cpp's DrawConsolePanel). External storage: a
+                // guid is not an ImGuiID. The adapter maps a row INDEX to its
+                // guid and ignores group rows, because ApplyRequests visits
+                // every range/SetAll index (imgui_widgets.cpp:8762-8773).
+                struct MsAdapter { const std::vector<AssetPanelRow>* rows; std::vector<Arcane::Guid> next; bool changed = false; };
+                MsAdapter ad{ &rows, model.selection };
+                ImGuiSelectionExternalStorage storage;
+                storage.UserData = &ad;
+                storage.AdapterSetItemSelected = [](ImGuiSelectionExternalStorage* self, int idx, bool sel)
+                {
+                    auto& a = *static_cast<MsAdapter*>(self->UserData);
+                    // A range anchor is an index from an earlier frame's rows
+                    // (a fold or filter may have shrunk them since): ignore
+                    // anything out of bounds.
+                    if (idx < 0 || static_cast<std::size_t>(idx) >= a.rows->size()) return;
+                    const AssetPanelRow& r = (*a.rows)[static_cast<std::size_t>(idx)];
+                    if (r.type == AssetPanelRow::Type::Group) return;
+                    const auto it = std::find(a.next.begin(), a.next.end(), r.guid);
+                    if (sel && it == a.next.end()) { a.next.push_back(r.guid); a.changed = true; }
+                    else if (!sel && it != a.next.end()) { a.next.erase(it); a.changed = true; }
+                };
+                state.msClicked = {};
+                // T5-GATE fix round 1 (s7.13 check 4, box selection): the
+                // scope's focus scope is IDStack.back(), and inside the table
+                // that is the TABLE's id, not the ScrollY inner window's. A
+                // box started from the void focuses only the window
+                // (EndMultiSelect's FocusWindow), so the scope never entered
+                // the nav focus route, EndBoxSelect never ran and the box
+                // selected nothing (imgui_widgets.cpp BeginMultiSelect's
+                // IsFocused, EndMultiSelect's void branch). Keyed on the inner
+                // window's own id the scope IS the window's focus scope -- the
+                // Console's shape (a multi-select straight inside its child).
+                ImGui::PushOverrideID(ImGui::GetCurrentWindow()->ID);
+                ImGuiMultiSelectIO* ms = ImGui::BeginMultiSelect(ImGuiMultiSelectFlags_ClearOnEscape | ImGuiMultiSelectFlags_ClearOnClickVoid | ImGuiMultiSelectFlags_BoxSelect1d,
+                                                                 model.SelectionCount(), static_cast<int>(rows.size()));
+                storage.ApplyRequests(ms);
 
                 ImGuiListClipper clipper;
                 clipper.Begin(static_cast<int>(rows.size()), kTableRowHeight);
                 if (scrollTargetIndex >= 0 && !targetAlreadyVisible)
                     clipper.IncludeItemByIndex(scrollTargetIndex);
+                // The Shift-range source must be submitted even when clipped
+                // away, or a range from an off-screen anchor loses its start.
+                if (ms->RangeSrcItem >= 0 && ms->RangeSrcItem < static_cast<ImGuiSelectionUserData>(rows.size()))
+                    clipper.IncludeItemByIndex(static_cast<int>(ms->RangeSrcItem));
 
                 while (clipper.Step())
                 {
@@ -778,15 +978,15 @@ namespace Arcane::Editor
                         switch (row.type)
                         {
                             case AssetPanelRow::Type::Group:
-                                DrawGroupRow(state, model, row);
+                                DrawGroupRow(state, model, row, services, actions);
                                 break;
                             case AssetPanelRow::Type::Asset:
                                 if (const AssetPanelEntry* e = model.Find(row.guid))
-                                    DrawAssetRow(state, model, project, docs, services, actions, *e, bootGuid, row.groupDepth);
+                                    DrawAssetRow(state, model, project, docs, services, actions, *e, bootGuid, row.groupDepth, i);
                                 break;
                             case AssetPanelRow::Type::Child:
                                 if (const AssetPanelEntry* e = model.Find(row.guid))
-                                    DrawChildRow(state, model, project, docs, services, actions, *e, row.groupDepth);
+                                    DrawChildRow(state, model, project, docs, services, actions, *e, row.groupDepth, i);
                                 break;
                         }
 
@@ -795,19 +995,47 @@ namespace Arcane::Editor
                             if (!targetAlreadyVisible)
                                 ImGui::SetScrollHereY();
                             state.seenSelectionStamp = model.selectionStamp;
+                            state.revealPending = false;
                         }
                     }
                 }
+                // No trailing Dummy (unlike the Console's plain child): inside a
+                // table the clipper's final seek already closed the last row
+                // (ImGuiListClipper_SeekCursorAndSetupPrevLine sets RowPosY2 =
+                // cursor), and an item submitted outside a row moves the cursor
+                // past RowPosY2 -- EndTable's IM_ASSERT (imgui_tables.cpp:1444).
+                ms = ImGui::EndMultiSelect();
+                ImGui::PopID();   // the inner window's id, pushed above BeginMultiSelect
+                storage.ApplyRequests(ms);
+                if (ad.changed || state.msClicked.IsValid()) model.ApplySelection(std::move(ad.next), state.msClicked);
+                // T5 s7.8: the background menu (New Folder... under Content/).
+                // INSIDE the table, so the table's ScrollY inner window -- which
+                // covers the whole body -- is the one hovered; NoOpenOverItems
+                // leaves a row's own menu (assets, ##groupmenu) to win over it.
+                // It submits no item into the table, so EndTable's row-cursor
+                // assert above is untouched.
+                if (ImGui::BeginPopupContextWindow("##assetsbg", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+                { if (ImGui::MenuItem("New Folder...")) actions.requestNewFolder = std::string{}; ImGui::EndPopup(); }
                 ImGui::EndTable();
+                // T5 s7.6 (the Outliner wedge lesson): a rename target whose
+                // row did not draw this frame (scrolled out, filtered away,
+                // folded, deleted) cancels, so the box can never hold the
+                // keys from off screen.
+                if (state.renameTarget.IsValid() && !state.renameDrawn) state.renameTarget = {};
             }
             ImGui::PopStyleVar();
 
             // Step 3 tail: keyboard, minimal v1 (spec s8). Up/Down move
             // Select through the VISIBLE rows (group rows are not navigable
-            // targets); Enter opens. ChildWindows so focus anywhere inside
-            // the table's own implicit scroll region (BeginTable's ScrollY
-            // wraps itself in one) counts as "the table is focused".
-            if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
+            // targets); Enter opens. T5 s7.10: the guard is the Outliner's
+            // (focused incl. child windows, no popup over it, no text
+            // field), computed ONCE on the top "Asset Browser" window by
+            // DrawAssetBrowserPanel -- re-asking IsWindowFocused here, inside
+            // the body child, would miss a focused toolbar or tab. Ctrl+X/C/V
+            // are consumed with no action (v1 has no asset clipboard): owning
+            // the keys is what keeps them off the entity clipboard.
+            const bool keysLive = actions.ownsEditKeys;
+            if (keysLive)
             {
                 std::vector<Arcane::Guid> nav;
                 nav.reserve(rows.size());
@@ -834,6 +1062,13 @@ namespace Arcane::Editor
                     if (const AssetPanelEntry* e = model.Find(model.selected))
                         OpenAssetRow(*e, project, docs, actions);
                 }
+                // T5 s7.9: F2 renames ONE asset; Ctrl+D and Del act on the whole multi-selection.
+                if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && model.SelectionCount() == 1 && model.selected.IsValid())   // T5 s7.6
+                    if (const AssetPanelEntry* e = model.Find(model.selected)) BeginAssetRename(state, *e);
+                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && model.SelectionCount() > 0)   // T5 s7.7
+                    actions.fileOp = AssetOpRequest{ .kind = AssetOpKind::Duplicate, .guids = model.selection };
+                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && model.SelectionCount() > 0)   // T5 s7.5: the confirm modal, never a direct delete
+                    actions.requestDelete = model.selection;
             }
 
             ImGui::EndChild();
@@ -845,6 +1080,9 @@ namespace Arcane::Editor
         // implicit using-directive), so the body below still reaches every
         // helper and constant unqualified. Same technique AssetGraphPanel.cpp/
         // AssetStatusPanel.cpp use for their own exported bodies.
+
+    void BeginAssetRename(AssetBrowserPanelState& st, const AssetPanelEntry& e)
+    { st.renameTarget = e.guid; std::snprintf(st.renameBuf, sizeof(st.renameBuf), "%s", e.name.c_str()); st.renameFocusPending = true; }
 
     // ---- Task 10: the Browse lens body (rail + table) ------------------
     void DrawAssetBrowserBody(AssetBrowserPanelState& state, AssetPanelModel& model, const Arcane::Project* project,
@@ -898,9 +1136,19 @@ namespace Arcane::Editor
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                                 ImVec2(style.FramePadding.x, kAssetPanelToolbarFramePadY));
 
+            ImGui::BeginDisabled(project == nullptr);
             if (ImGui::Button(ICON_LC_PLUS " Create " ICON_LC_CHEVRON_DOWN))
                 ImGui::OpenPopup("##createmenu");
-            DrawCreateMenu(actions);
+            const PopupAnchor createAnchor = LastItemAnchor();   // T2-C2's anchor; EndDisabled leaves the button as the last item
+            ImGui::EndDisabled();
+            if (project == nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Open a project to create assets");
+            // The selection is the menu's subject: a selected material is what
+            // "Material Instance..." derives from (T3-D4), a selected texture
+            // what "Sprite..." is cut from (T3-D5); with none selected the
+            // dialog opens with an empty picker.
+            DrawCreateMenu(actions, createAnchor,
+                           model.selected.IsValid() ? model.Find(model.selected) : nullptr);
 
             ImGui::SameLine();
             ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x));
@@ -935,6 +1183,17 @@ namespace Arcane::Editor
         ImGui::Dummy(ImVec2(0.0f, kAssetPanelToolbarBodyGapPx));
         ImGui::PopStyleVar();
 
+        // T5 s7.10: the Browser's key guard, computed ONCE per frame while
+        // the current window is the TOP "Asset Browser" window, so focus on
+        // its toolbar, tab or table all count (ChildWindows); a popup over it
+        // (a row's context menu) does not (NoPopupHierarchy), nor does an
+        // active text field (the search box), nor an open inline rename box
+        // (T5 s7.6; also on its first frames, before it is active).
+        // DrawTable's key block and the app's entity-clipboard fold both read
+        // this one value.
+        actions.ownsEditKeys = ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) && !ImGui::GetIO().WantTextInput
+                            && !state.renameTarget.IsValid();   // T5 s7.6: an open rename box owns the keys
+
         // ---- body band -----------------------------------------------
         if (ImGui::BeginChild("##assetbrowserbody", ImVec2(0.0f, -kAssetPanelBottomBarHeight)))
         {
@@ -948,20 +1207,14 @@ namespace Arcane::Editor
         // ---- bottom bar band (spec s9.2) -----------------------------
         // LEFT: this panel's own context line, in the two forms it has
         // always had ("X of N shown" while a rail or search filter is on,
-        // "N assets - M selected" otherwise). RIGHT: the health digest chip.
+        // "N assets - K selected" otherwise, K the live multi-selection
+        // count since T5 s7.9: AssetBrowserContextLine). RIGHT: the health
+        // digest chip.
         {
             const AssetPanelBottomBar bar = BeginAssetPanelBottomBar("##assetbrowserbottombar");
             if (bar.visible)
             {
-                const HealthCounts health = model.Health();
-                char left[64];
-                if (model.Filtered())
-                    std::snprintf(left, sizeof(left), "%d of %d shown",
-                                  model.ShownAssetCount(), health.total);
-                else
-                    std::snprintf(left, sizeof(left), "%d assets \xC2\xB7 %d selected",
-                                  health.total, model.selected.IsValid() ? 1 : 0);
-                ImGui::TextUnformatted(left);
+                ImGui::TextUnformatted(AssetBrowserContextLine(model).c_str());
 
                 DrawAssetPanelHealthDigest(bar, model, services, actions);
             }

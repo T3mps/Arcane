@@ -5,7 +5,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Documents/DocumentHost.hpp"
+#include "Documents/SpriteDocument.hpp"
 #include "Widgets/MaterialParamWidgets.hpp"
+
+#include <Arcane/Sprite/SpriteAsset.hpp>
 
 #include <filesystem>
 #include <memory>
@@ -25,6 +28,7 @@ namespace
         bool saveSucceeds = true;
         int  saveCalls = 0;
         int  reopened = 0;
+        std::filesystem::path movedTo;
 
         FakeDoc(std::string t, Arcane::Guid g, bool d) : title(std::move(t)), guid(g), dirty(d) {}
 
@@ -39,6 +43,7 @@ namespace
         }
         void Draw(bool&) override {}
         void NoteReopened() override { ++reopened; }
+        void NoteMoved(const std::filesystem::path& p) override { movedTo = p; }
     };
 }
 
@@ -269,4 +274,38 @@ TEST_CASE("DocumentHost: an OpenPath that resolves to an open document re-select
         CHECK(host.OpenPath("materials/glow.arcmat") == first);
         CHECK(first->reopened == 1);
     }
+}
+
+TEST_CASE("NoteAssetMoved retargets only that guid; CloseForAssetRemoval closes a dirty doc unsaved", "[editor][assetops]")
+{
+    DocumentHost host; const Arcane::Guid a = Arcane::Guid::Generate();
+    auto* da = static_cast<FakeDoc*>(host.Add(std::make_unique<FakeDoc>("a", a, false)));
+    auto* db = static_cast<FakeDoc*>(host.Add(std::make_unique<FakeDoc>("b", Arcane::Guid::Generate(), true)));
+    host.NoteAssetMoved(a, "C:/p/Content/x/a2.arcmat");
+    CHECK((da->movedTo == std::filesystem::path("C:/p/Content/x/a2.arcmat") && db->movedTo.empty()));
+    host.RequestClose(db); REQUIRE(host.PendingConfirmDoc() == db);
+    host.CloseForAssetRemoval(db);
+    CHECK((host.Count() == 1 && !host.HasPendingConfirm()));
+}
+TEST_CASE("A SpriteDocument saved after NoteMoved writes the new path; the old path stays absent", "[editor][assetops]")
+{
+    namespace fs = std::filesystem; const fs::path d = fs::temp_directory_path() / "arcane_notemoved_sprite_test";
+    std::error_code ec; fs::remove_all(d, ec); fs::create_directories(d);
+    Arcane::SpriteAssetData data; data.id = Arcane::Guid::Generate(); REQUIRE(Arcane::SaveSpriteAsset(d / "old.arcsprite", data));
+    Arcane::Editor::SpriteDocument doc(Arcane::Editor::SpriteDocument::Services{}, d / "old.arcsprite", data);
+    fs::rename(d / "old.arcsprite", d / "new.arcsprite"); doc.NoteMoved(d / "new.arcsprite");
+    CHECK(doc.Title() == "new");                       // empty name: the stem fallback follows
+    REQUIRE(doc.Save());
+    CHECK((fs::exists(d / "new.arcsprite") && !fs::exists(d / "old.arcsprite")));
+    fs::remove_all(d, ec);
+}
+
+TEST_CASE("DocumentHost::HasFactory matches the registered extension case-insensitively", "[editor]")
+{
+    Arcane::Editor::DocumentHost host;
+    host.RegisterFactory(".arcmat", [](const std::filesystem::path&) -> std::unique_ptr<Arcane::Editor::EditorDocument> { return nullptr; });
+    CHECK(host.HasFactory("D:/p/a.arcmat"));
+    CHECK(host.HasFactory("D:/p/A.ARCMAT"));
+    CHECK_FALSE(host.HasFactory("D:/p/a.png"));
+    CHECK_FALSE(host.HasFactory("D:/p/noext"));
 }

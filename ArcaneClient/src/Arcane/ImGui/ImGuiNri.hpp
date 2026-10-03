@@ -84,10 +84,11 @@
 //   * one pipeline layout registered in the shared NriPipelineCache:
 //     ROOT CONSTANTS b0 (16 bytes, VERTEX) + one space-0 descriptor set
 //     { t0 texture, s0 sampler } -- see THE ROOT-CONSTANT FINDING below;
-//   * one descriptor pool holding kMaxTextures sets, ONE PER TEXTURE
-//     (never per frame slot: a set here is written exactly once, at the
-//     moment its texture is first seen, and never rewritten while the GPU
-//     might read it -- the same discipline Batch2DNode's built-in set has);
+//   * a GROWING CHAIN of descriptor pools (PoolCapacityFor sizes each link),
+//     handing out ONE SET PER TEXTURE (never per frame slot: a set here is
+//     written exactly once, at the moment its texture is first seen, and
+//     never rewritten while the GPU might read it -- the same discipline
+//     Batch2DNode's built-in set has);
 //   * every ImTextureData-owned nri::Texture + its SHADER_RESOURCE view.
 // The PSO comes from the shared cache, keyed on the target's format.
 //
@@ -258,7 +259,7 @@ namespace Arcane
         // Creates the view + descriptor set for a USER texture up front, if it
         // has none yet -- the SAME call RenderDrawData makes on first sight of
         // an ImTextureID, hoisted out of record time. False (already reported)
-        // when the pool is exhausted or NRI refused the view.
+        // when the pool chain could not grow or NRI refused the view.
         //
         // TWO CALLERS, both legitimate: a host that knows it is about to draw a
         // texture and would rather learn about a full pool where it can still
@@ -280,7 +281,7 @@ namespace Arcane
 
         // Buries every NRI object this backend owns at `fence` and empties
         // it. Safe to call more than once, though not free the second time:
-        // m_pool/m_sampler are cleared here so their teardown only runs once,
+        // m_pools/m_sampler are cleared here so their teardown only runs once,
         // and the platform-texture walk is harmless to repeat (a second pass
         // finds nothing left matching RefCount == 1). m_device itself is
         // NEVER cleared, so the `!m_device` early-out only guards an object
@@ -290,17 +291,56 @@ namespace Arcane
         // frame, so a later re-Init is clean.
         void Release(Graveyard& graveyard, std::uint64_t fence);
 
-        // How many distinct textures one context may have in flight here. A
-        // pool's capacity is fixed at creation and NRI cannot free a single
-        // descriptor set, so this is decided up front rather than discovered
-        // mid-frame -- the same reasoning as Batch2DNode::kMaxMaterialSlots.
-        // Sets from destroyed textures ARE recycled (see m_retired), so this
-        // caps CONCURRENT textures, not lifetime ones.
-        static constexpr std::uint32_t kMaxTextures = 32;
+        // ============ THE POOL CHAIN (no concurrent-texture cap) ============
+        // A pool's capacity is fixed at creation and NRI cannot free a single
+        // descriptor set, so the backend used to size ONE pool up front at 32
+        // sets and refuse the 33rd concurrent texture. The editor blows
+        // through that on an ordinary boot -- every Content Browser and
+        // Inspector thumbnail is its own user texture, on top of the font
+        // atlas and the material previews -- and the refusal was not benign:
+        // once the pool was full, a font atlas ImGui re-created (1.92 grows
+        // its dynamic atlas by re-creating it) could not get a set, kept an
+        // invalid TexID, and ImDrawCmd::GetTexID ASSERTED on the very next
+        // draw that named it.
+        //
+        // SO THE CAPACITY GROWS INSTEAD. When the newest pool is full,
+        // AcquireSet creates another, sized by PoolCapacityFor(its index):
+        // kFirstPoolSets, doubling per link, clamped at kMaxPoolSets. Earlier
+        // pools are never destroyed before Release -- their sets are live or
+        // retired, and a retired set is RECYCLED (m_retired) before any pool
+        // grows, so the chain tracks the PEAK concurrent texture count, not
+        // the lifetime one.
+        //
+        // WHY kMaxPoolSets CLAMPS A LINK (not the total): on D3D12 every pool
+        // owns its own shader-visible heaps, and a shader-visible SAMPLER heap
+        // may hold at most 2048 descriptors; each set here takes one sampler
+        // slot. 1024 keeps every link comfortably inside that limit while
+        // still meaning a pathological count needs only a handful of links.
+        //
+        // WHAT A SECOND LINK COSTS AT RECORD TIME: RenderDrawData re-binds the
+        // pool (CmdSetDescriptorPool -> ID3D12GraphicsCommandList::
+        // SetDescriptorHeaps on D3D12; a no-op on Vulkan) whenever two
+        // consecutive draws' sets live in different links. Geometric growth is
+        // what keeps the link count -- and so that switching -- small.
+        static constexpr std::uint32_t kFirstPoolSets = 64;
+        static constexpr std::uint32_t kMaxPoolSets   = 1024;
+
+        // The set capacity of the `poolIndex`-th link of the chain. PURE (no
+        // device), which is what lets a non-[nri] case pin the growth policy.
+        [[nodiscard]] static constexpr std::uint32_t PoolCapacityFor(std::size_t poolIndex) noexcept
+        {
+            std::uint32_t capacity = kFirstPoolSets;
+            for (std::size_t i = 0; i < poolIndex && capacity < kMaxPoolSets; ++i)
+                capacity *= 2u;
+            return capacity < kMaxPoolSets ? capacity : kMaxPoolSets;
+        }
 
         // Introspection for the [nri] tests and the node's logging. Not part
         // of any cross-task contract.
         [[nodiscard]] std::size_t LiveTextureCount() const noexcept { return m_textures.size(); }
+        // Links in the descriptor-pool chain -- 1 after Init, more once the
+        // peak concurrent texture count outgrew the earlier links.
+        [[nodiscard]] std::size_t PoolCount() const noexcept { return m_pools.size(); }
         // True while a cached view + descriptor set exists for `texture` --
         // i.e. while an ImTextureID naming it would report a cache HIT. The
         // observable InvalidateUserTexture flips.
@@ -328,9 +368,30 @@ namespace Arcane
             nri::Texture*       texture = nullptr;
             nri::Descriptor*    view    = nullptr;
             nri::DescriptorSet* set     = nullptr;
+            // The chain link `set` was allocated from -- what RenderDrawData
+            // must have bound (CmdSetDescriptorPool) before binding `set`.
+            nri::DescriptorPool* pool   = nullptr;
             // True when this backend created `texture` and must bury it. A
             // user texture is the host's; we only ever own the view + set.
             bool                owned   = false;
+        };
+
+        // A set handed out of the chain, with the link it came from.
+        struct AcquiredSet
+        {
+            nri::DescriptorSet*  set  = nullptr;
+            nri::DescriptorPool* pool = nullptr;
+        };
+
+        // One link of the pool chain. `allocated` is what AcquireSet
+        // range-checks against `capacity` -- a set is never returned to its
+        // pool (NRI has no per-set free), so it only ever counts up;
+        // m_retired is the recycling half.
+        struct PoolLink
+        {
+            nri::DescriptorPool* pool      = nullptr;
+            std::uint32_t        capacity  = 0;
+            std::uint32_t        allocated = 0;
         };
 
         // A descriptor set whose texture is gone. It cannot be freed (NRI has
@@ -342,22 +403,28 @@ namespace Arcane
         // NriSwapChain::AcquireNextTexture).
         struct RetiredSet
         {
-            nri::DescriptorSet* set       = nullptr;
-            std::uint64_t       retiredAt = 0;   // m_recordCount at retirement
+            nri::DescriptorSet*  set       = nullptr;
+            nri::DescriptorPool* pool      = nullptr;   // the link it belongs to
+            std::uint64_t        retiredAt = 0;         // m_recordCount at retirement
         };
 
         bool CreateSampler();
         bool CreateLayout();
+        // Appends one link, sized PoolCapacityFor(m_pools.size()). Init calls
+        // it once (so a device that cannot make even one pool fails at boot);
+        // AcquireSet calls it whenever the newest link is full.
         bool CreatePool();
 
         // The entry for `texture`, creating the view + descriptor set on
-        // first sight. Null (already reported) when the pool is exhausted or
-        // NRI refused a view.
+        // first sight. Null (already reported) when the pool chain could not
+        // grow or NRI refused a view.
         [[nodiscard]] Entry* EnsureEntry(const nri::CoreInterface& core, nri::Texture* texture,
                                           ImTextureData* owner);
         // A set to write into: a recycled one when a retirement has aged out,
-        // otherwise a fresh allocation. Null when the pool is exhausted.
-        [[nodiscard]] nri::DescriptorSet* AcquireSet(const nri::CoreInterface& core);
+        // otherwise a fresh allocation from the newest link -- growing the
+        // chain first when that link is full. A null set only when NRI refused
+        // a new pool or the allocation itself (already reported).
+        [[nodiscard]] AcquiredSet AcquireSet(const nri::CoreInterface& core);
 
         void UpdateTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence);
         void DestroyTexture(ImTextureData* tex, Graveyard& graveyard, std::uint64_t fence);
@@ -393,12 +460,10 @@ namespace Arcane
         nri::VertexInputDesc     m_vertexInput{};
 
         nri::Descriptor*     m_sampler = nullptr;
-        nri::DescriptorPool* m_pool    = nullptr;
         std::uint32_t        m_layoutId = NriPipelineCache::kInvalidLayout;
-        // Sets ever handed out of the pool. The pool's capacity is
-        // kMaxTextures and a set is never returned to it, so this is what
-        // AcquireSet range-checks -- m_retired is the recycling half.
-        std::uint32_t        m_setsAllocated = 0;
+        // The pool chain, oldest first. Only the LAST link can have room: a
+        // new one is appended only once the previous is full.
+        std::vector<PoolLink> m_pools;
 
         std::vector<Entry>      m_textures;
         std::vector<RetiredSet> m_retired;
@@ -449,8 +514,9 @@ namespace Arcane
         // it on the rebuilt node.
         void* m_imguiContext = nullptr;
 
-        bool m_warnedPoolFull = false;
-        bool m_warnedFormat   = false;
-        bool m_warnedRing     = false;
+        bool m_warnedPoolFull     = false;   // the chain could not grow
+        bool m_warnedUnregistered = false;   // a draw named an ImTextureData with no TexID
+        bool m_warnedFormat       = false;
+        bool m_warnedRing         = false;
     };
 }

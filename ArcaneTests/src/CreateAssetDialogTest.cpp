@@ -1,8 +1,8 @@
 // Asset-manager arc (Plan 1 Task 12): ValidateCreateName -- the PURE half of
-// the unified create dialog. This is the ONLY thing this file tests: the
-// dialog's other half is ImGui, and the test exe compiles no ImGui TU (see
-// CreateAssetDialog.hpp's own header comment on the split, and premake5.lua's
-// ArcaneTests file list, which source-compiles only the pure editor units).
+// the unified create dialog. The dialog's draw half is ImGui and is not
+// driven here. Since T3-D4 the dialog's unit is compiled into the test exe
+// (premake5.lua's ArcaneTests list) for one more pure function,
+// MakeCreateDialogState, pinned at the bottom of this file.
 //
 // Fixture shape follows AssetPanelModelTest.cpp / AssetBrowserTest.cpp: a REAL
 // temp directory with REAL files, so the uniqueness rule is exercised against
@@ -10,12 +10,18 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "Panels/AssetPanelModel.hpp"
 #include "Panels/CreateAssetDialog.hpp"
 #include "Project/ClassTemplates.hpp"
 
+#include <Arcane/Project/AssetRegistry.hpp>
+
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
+#include <vector>
 
 using namespace Arcane::Editor;
 namespace fs = std::filesystem;
@@ -283,4 +289,140 @@ TEST_CASE("Input Actions creation uses a native asset path and rejects name coll
     CHECK_FALSE(ValidateCreateName("Player", dir, ".arcinput").ok);
     std::error_code error;
     fs::remove_all(dir, error);
+}
+
+// T3-D4: MakeCreateDialogState -- the request -> the dialog's starting state,
+// the whole of what EditorApp::BeginCreateAsset opens with (it adds only the
+// C++ Class default folder). A Material Instance created FROM a material
+// starts with that parent picked and Unreal's "<Parent>_Inst" name.
+TEST_CASE("MakeCreateDialogState: an instance request from a material picks the parent and names it <parent>_Inst",
+          "[editor][create]")
+{
+    const fs::path dir = FreshDir("make_state");
+    std::ofstream(dir / "logo_showcase.arcmat", std::ios::binary)
+        << R"({"id":"eeee0000-0000-4000-8000-000000000011","type":"material","kind":"sprite"})";
+    std::ofstream(dir / "hero.png", std::ios::binary) << "not a real png";
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(dir, "game") == 2);
+    AssetPanelProviders providers;
+    providers.refsFor = [](const Arcane::Guid&) -> std::optional<std::vector<Arcane::AssetRef>>
+    { return std::vector<Arcane::AssetRef>{}; };
+    providers.cookStateFor = [](const Arcane::Guid&) { return CookState::Cooked; };
+    providers.surfaceFor = [](const Arcane::Guid&) -> std::optional<Arcane::MaterialSurface> { return std::nullopt; };
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    const Arcane::Guid parent = *Arcane::Guid::FromString("eeee0000-0000-4000-8000-000000000011");
+    REQUIRE(model.Find(parent) != nullptr);
+    Arcane::Guid texture;
+    for (const auto& [guid, entry] : model.Entries())
+        if (entry.kind == AssetKind::Texture)
+            texture = guid;
+    REQUIRE(texture.IsValid());
+
+    SECTION("from a material")
+    {
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, parent }, model, dir);
+        CHECK(st.open);
+        CHECK(st.parent == parent);
+        CHECK_FALSE(st.pickerOpen);
+        CHECK(std::string(st.name) == "logo_showcase_Inst");
+        CHECK(st.request.prefillParent == parent);
+    }
+    SECTION("from empty space: no parent, the picker open, no name")
+    {
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, {} }, model, dir);
+        CHECK_FALSE(st.parent.IsValid());
+        CHECK(st.pickerOpen);
+        CHECK(st.name[0] == '\0');
+    }
+    SECTION("a parent the model does not know is kept but names nothing")
+    {
+        const Arcane::Guid stale = *Arcane::Guid::FromString("eeee0000-0000-4000-8000-0000000000ff");
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::MaterialInstance, stale }, model, dir);
+        CHECK(st.parent == stale);
+        CHECK(st.name[0] == '\0');
+    }
+    SECTION("a sprite's prefill lands in the texture field, never the parent, and names nothing")
+    {
+        const CreateDialogState st = MakeCreateDialogState({ CreateAssetKind::Sprite, texture }, model, dir);
+        CHECK(st.texture == texture);
+        CHECK_FALSE(st.parent.IsValid());
+        CHECK_FALSE(st.pickerOpen);
+        CHECK(st.name[0] == '\0');
+    }
+    SECTION("the surface prefill maps through the combo order; none is the default index")
+    {
+        CreateAssetRequest mesh{ CreateAssetKind::Material, {} };
+        mesh.prefillSurface = static_cast<int>(Arcane::MaterialSurface::Mesh);
+        CHECK(MakeCreateDialogState(mesh, model, dir).surface == MaterialSurfaceComboIndex(Arcane::MaterialSurface::Mesh));
+        CHECK(MakeCreateDialogState({ CreateAssetKind::Material, {} }, model, dir).surface == kMaterialSurfaceDefaultIndex);
+    }
+}
+
+// T3-D5: the default "<parent>_Inst" is free on disk or it is suffixed --
+// "_Inst2", "_Inst3", ... -- in the folder the instance will land in (the
+// parent's own), so the dialog never opens on "already exists".
+TEST_CASE("MakeCreateDialogState: a colliding <parent>_Inst takes the next free _Inst<N> in the parent's folder",
+          "[editor][create]")
+{
+    const fs::path root = FreshDir("make_state_unique");
+    const fs::path folder = root / "Content" / "materials" / "sub";
+    fs::create_directories(folder);
+    std::ofstream(folder / "logo.arcmat", std::ios::binary)
+        << R"({"id":"eeee0000-0000-4000-8000-000000000021","type":"material","kind":"sprite"})";
+    Arcane::AssetRegistry registry;
+    REQUIRE(registry.ScanContent(root / "Content", "game") == 1);
+    AssetPanelProviders providers;
+    providers.refsFor = [](const Arcane::Guid&) -> std::optional<std::vector<Arcane::AssetRef>>
+    { return std::vector<Arcane::AssetRef>{}; };
+    providers.cookStateFor = [](const Arcane::Guid&) { return CookState::Cooked; };
+    providers.surfaceFor = [](const Arcane::Guid&) -> std::optional<Arcane::MaterialSurface> { return std::nullopt; };
+    AssetPanelModel model;
+    model.MarkAllDirty();
+    REQUIRE(model.RebuildIfDirty(&registry, providers));
+    const Arcane::Guid parent = *Arcane::Guid::FromString("eeee0000-0000-4000-8000-000000000021");
+    REQUIRE(model.Find(parent) != nullptr);
+    const CreateAssetRequest request{ CreateAssetKind::MaterialInstance, parent };
+
+    CreateDialogState st = MakeCreateDialogState(request, model, root);
+    CHECK(st.defaultFolder == std::optional<std::string>("materials/sub"));
+    CHECK(std::string(st.name) == "logo_Inst");
+
+    std::ofstream(folder / "logo_Inst.arcmat", std::ios::binary) << "{}";
+    st = MakeCreateDialogState(request, model, root);
+    CHECK(std::string(st.name) == "logo_Inst2");
+    CHECK(ValidateCreateName(st.name, folder, ".arcmat").ok);
+
+    std::ofstream(folder / "logo_Inst2.arcmat", std::ios::binary) << "{}";
+    CHECK(std::string(MakeCreateDialogState(request, model, root).name) == "logo_Inst3");
+
+    // Only the parent's folder counts: the same name elsewhere collides with nothing.
+    fs::create_directories(root / "Content" / "materials");
+    std::ofstream(root / "Content" / "materials" / "logo_Inst3.arcmat", std::ios::binary) << "{}";
+    CHECK(std::string(MakeCreateDialogState(request, model, root).name) == "logo_Inst3");
+    std::error_code error;
+    fs::remove_all(root, error);
+}
+
+TEST_CASE("ValidateRenameName: case-only rename accepted, real collision and bad characters refused", "[editor][create][assetops]")
+{
+    namespace fs = std::filesystem; const fs::path d = fs::temp_directory_path() / "arcane_rename_name_test";
+    std::error_code ec; fs::remove_all(d, ec); fs::create_directories(d); std::ofstream(d / "a.png") << "x"; std::ofstream(d / "b.png") << "x";
+    CHECK((ValidateRenameName("a", d / "a.png").ok && ValidateRenameName("A", d / "a.png").ok));   // no-op; case-only
+    CHECK(ValidateRenameName("b", d / "a.png").message.find("already exists") != std::string::npos);
+    CHECK(ValidateRenameName("a:b", d / "a.png").message.find("cannot contain") != std::string::npos);
+    CHECK_FALSE(ValidateRenameName("a ", d / "a.png").ok);                                       // rule 1 fires before rule 3
+    CHECK(ValidateRenameName("wall.png", d / "a.png").message.find("extension is fixed") != std::string::npos);   // s7.6: the extension is fixed; typing it must not yield wall.png.png
+    CHECK(ValidateRenameName("wall.PNG", d / "a.png").message.find("extension is fixed") != std::string::npos);
+    CHECK(ValidateRenameName("wall.jpg", d / "a.png").ok);                                       // only the file's OWN extension is refused
+    fs::remove_all(d, ec);
+}
+
+TEST_CASE("Folder names: ValidateCreateName with no extension speaks of folders", "[editor][create][assetops]")
+{
+    namespace fs = std::filesystem; const fs::path d = fs::temp_directory_path() / "arcane_folder_name_test"; std::error_code ec; fs::remove_all(d, ec); fs::create_directories(d / "rocks");
+    CHECK(ValidateCreateName("sand", d, "").ok);
+    CHECK(ValidateCreateName("rocks", d, "").message == "a folder named rocks already exists here");
+    CHECK_FALSE(ValidateCreateName("a/b", d, "").ok); fs::remove_all(d, ec);
 }

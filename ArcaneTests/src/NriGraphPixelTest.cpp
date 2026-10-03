@@ -104,6 +104,11 @@
 
 #include <stb_image_write.h>
 
+// The ImGui pool-chain case (the last section): it builds its OWN context and
+// draws through the vehicle's host HUD node. No ERROR clash -- the NRI-first
+// order above is already settled by here.
+#include <imgui.h>
+
 #include <Astra/Component/ComponentRegistry.hpp>  // the registry the T7 draws-and-culls case builds
 #include <Astra/Registry/Registry.hpp>
 
@@ -2412,4 +2417,166 @@ TEST_CASE("gpuscene: an Apply refusal suppresses registry cull and mesh draws fo
           "[gpu][gpuscene][mesh][nri][vulkan]")
 {
     CheckGpuSceneApplyRefusalSuppressesRegistryDraws(Arcane::GraphicsBackend::Vulkan);
+}
+
+// ---------------------------------------------------------------------------
+// THE IMGUI POOL CHAIN, on a device. The desk crash: the editor's chrome drew
+// more than 32 distinct ImGui textures (29 asset thumbnails + the font atlas +
+// previews), ImGuiNri's single 32-set descriptor pool refused the rest, and a
+// font atlas that then needed a set kept an Invalid TexID -- so the next draw
+// naming it asserted in ImDrawCmd::GetTexID (imgui.h) and aborted the editor.
+//
+// This case reproduces THE DESK ORDER: 100 user textures take their sets FIRST
+// (pre-warmed through EnsureUserTexture, the same EnsureEntry a draw makes),
+// and only then does frame 1 ask for the atlas. Under the old cap the atlas
+// could not register and the frame asserted; with the chain it lands in a
+// later link. The draws then span SEVERAL links in one pass, which is what
+// exercises the per-draw CmdSetDescriptorPool re-bind (SetDescriptorHeaps on
+// D3D12) -- and the readback proves each cell sampled ITS OWN texture, i.e.
+// every draw was bound, not merely recorded.
+// ---------------------------------------------------------------------------
+namespace
+{
+    void CheckImGuiDrawsPastOnePool(Arcane::GraphicsBackend backend)
+    {
+        ARC_REQUIRE_BACKEND(backend);
+        const std::uint64_t before = Arcane::RenderErrorCount();
+
+        // OUR OWN context, created BEFORE the vehicle so the HUD node's Init
+        // installs the backend flags on it (and adopted explicitly below).
+        // Restored at the end: Catch2 runs cases in random order.
+        ImGuiContext* const previous = ImGui::GetCurrentContext();
+        ImGuiContext* const imgui    = ImGui::CreateContext();
+        REQUIRE(imgui != nullptr);
+        ImGui::SetCurrentContext(imgui);
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = ImVec2((float)kW, (float)kH);
+        io.DeltaTime   = 1.0f / 60.0f;
+
+        Arcane::NriGraphContext::NodeSet nodes;
+        nodes.hostHud = true;
+        PixelVehicle v = MakeVehicle(backend, nodes);
+        Arcane::ImGuiNriNode* const hud = v.ctx->ImGuiHud();
+        REQUIRE(hud != nullptr);
+        hud->AdoptImGuiContext(imgui);
+        Arcane::ImGuiNri& renderer = hud->Renderer();
+        REQUIRE(renderer.PoolCount() == 1);
+
+        // 100 distinct solid colours, one per 16x9 cell of the 160x96 target.
+        constexpr std::uint32_t kCols  = 10;
+        constexpr std::uint32_t kCount = 100;
+        constexpr std::uint32_t kCellW = kW / kCols;   // 16
+        constexpr std::uint32_t kCellH = kH / 10u;     // 9
+        static_assert(kCount > 32u, "must exceed the old single-pool cap");
+        static_assert(kCount > Arcane::ImGuiNri::PoolCapacityFor(0),
+                      "must spill past the chain's first link");
+
+        const auto colourOf = [](std::uint32_t i)
+        {
+            return Rgba{ (std::uint8_t)(40u + i * 2u), (std::uint8_t)(250u - i * 2u),
+                         (std::uint8_t)((i % 10u) * 25u), 255 };
+        };
+
+        std::vector<SolidTexture> textures;
+        textures.reserve(kCount);
+        for (std::uint32_t i = 0; i < kCount; ++i)
+        {
+            const Rgba c = colourOf(i);
+            textures.push_back(MakeSolidTexture(*v.nri, c.r, c.g, c.b, c.a));
+        }
+
+        // THE DESK ORDER: every user texture registered before the atlas.
+        for (const SolidTexture& t : textures)
+            REQUIRE(renderer.EnsureUserTexture(t.texture));
+        CHECK(renderer.PoolCount() >= 2);
+        CHECK(Arcane::RenderErrorCount() == before);
+
+        // kSwapchainFramesInFlight + 1 frames, so a steady-state frame (the
+        // atlas already registered, every set reused) is recorded too; the
+        // last one is captured.
+        constexpr std::uint32_t kFrames = Arcane::kSwapchainFramesInFlight + 1u;
+        for (std::uint32_t frameIndex = 0; frameIndex < kFrames; ++frameIndex)
+        {
+            ImGui::NewFrame();
+            ImDrawList* const draw = ImGui::GetForegroundDrawList();
+            for (std::uint32_t i = 0; i < kCount; ++i)
+            {
+                const float x0 = (float)((i % kCols) * kCellW);
+                const float y0 = (float)((i / kCols) * kCellH);
+                draw->AddImage((ImTextureID)(intptr_t)textures[i].texture, ImVec2(x0, y0),
+                               ImVec2(x0 + (float)kCellW, y0 + (float)kCellH));
+            }
+            // The ATLAS, after every user texture -- top-left, over cells
+            // 0-2 and 10-12, which the pixel checks below avoid.
+            draw->AddText(ImVec2(2.0f, 2.0f), IM_COL32_WHITE, "imgui");
+            ImGui::Render();
+
+            Arcane::NriGraphContext::FrameDesc frame;
+            frame.imgui   = ImGui::GetDrawData();
+            frame.capture = frameIndex + 1u == kFrames;
+            RenderOne(*v.ctx, frame);
+        }
+
+        // EVERY ImGui-managed texture (the atlas) registered: a valid TexID and
+        // status OK -- the state whose absence made GetTexID assert.
+        const ImVector<ImTextureData*>& managed = ImGui::GetPlatformIO().Textures;
+        REQUIRE(managed.Size >= 1);
+        for (const ImTextureData* tex : managed)
+        {
+            CHECK(tex->TexID != ImTextureID_Invalid);
+            CHECK(tex->Status == ImTextureStatus_OK);
+        }
+        CHECK(renderer.LiveTextureCount() == (std::size_t)kCount + (std::size_t)managed.Size);
+        CHECK(renderer.PoolCount() >= 2);
+
+        std::uint32_t w = 0, h = 0;
+        std::vector<unsigned char> rgba;
+        REQUIRE(v.ctx->ReadCapture(w, h, rgba));
+        REQUIRE(w == kW);
+        REQUIRE(h == kH);
+
+        // Cells from the FIRST link (5), past it (70, 99) and the middle --
+        // each must carry its own texture's colour. A draw bound to the wrong
+        // link's heap, or left on a stale set, fails these.
+        for (const std::uint32_t i : { 5u, 37u, 55u, 70u, 99u })
+        {
+            const std::uint32_t cx = (i % kCols) * kCellW + kCellW / 2u;
+            const std::uint32_t cy = (i / kCols) * kCellH + kCellH / 2u;
+            const Rgba got  = At(rgba, w, cx, cy);
+            const Rgba want = colourOf(i);
+            INFO("cell " << i << " at (" << cx << ", " << cy << ")");
+            CHECK(std::abs((int)got.r - (int)want.r) <= 2);
+            CHECK(std::abs((int)got.g - (int)want.g) <= 2);
+            CHECK(std::abs((int)got.b - (int)want.b) <= 2);
+        }
+
+        CHECK(Arcane::RenderErrorCount() == before);
+
+        // ---- TEARDOWN: the vehicle first (it buries + drains every view the
+        // HUD built over these textures, and walks the adopted ImGui context,
+        // which must therefore still be alive), then our views and textures,
+        // then the context.
+        v.ctx.reset();
+        const nri::CoreInterface& core = v.nri->Core();
+        for (const SolidTexture& t : textures)
+        {
+            core.DestroyDescriptor(t.view);
+            core.DestroyTexture(t.texture);
+        }
+        ImGui::DestroyContext(imgui);
+        ImGui::SetCurrentContext(previous);
+    }
+}
+
+TEST_CASE("imgui: 100 concurrent textures grow the HUD's descriptor-pool chain and every draw "
+          "samples its own texture (d3d12)", "[gpu][pixel][imgui][nri][d3d12]")
+{
+    CheckImGuiDrawsPastOnePool(Arcane::GraphicsBackend::D3D12);
+}
+
+TEST_CASE("imgui: 100 concurrent textures grow the HUD's descriptor-pool chain and every draw "
+          "samples its own texture (vulkan)", "[gpu][pixel][imgui][nri][vulkan]")
+{
+    CheckImGuiDrawsPastOnePool(Arcane::GraphicsBackend::Vulkan);
 }

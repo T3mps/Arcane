@@ -28,6 +28,7 @@
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
 #include "Project/IdeLaunch.hpp"   // Build -> Open Visual Studio / open source in VS
 #include "Project/MeshImportWave.hpp"   // F2c Task 13: embedded-texture extraction at discovery
+#include "Project/OsShell.hpp"   // ShellOpen (OpenSourceAtLine's fallback without Visual Studio)
 #include "Project/SourceIncludes.hpp"   // Asset Graph: #include edges for source:// files
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
@@ -58,6 +59,7 @@
 #include <span>
 #include <string>
 #include <string_view>   // take()'s id parameter
+#include <system_error>  // RetargetUndoCache's remove_all error_code
 #include <unordered_map>   // F2c Task 15: MintImportMaterials' name -> Guid return map
 #include <unordered_set>   // SweepArtifactOrphans' live-guid set (F2b Task 12)
 #include <utility>       // std::move (F2b Task 12's cook-diagnostics bookkeeping)
@@ -65,7 +67,7 @@
 
 namespace Arcane::Editor
 {
-    // A document gets the GRAPH SEAM (nriDevice/hostConfig/chromeHud) rather
+    // A document gets the GRAPH SEAM (chromeGraph/hostConfig) rather
     // than a device handle of its own: one that needs a render target builds
     // its own small NriGraphContext::CreateOffscreen over the process's one
     // device.
@@ -80,47 +82,47 @@ namespace Arcane::Editor
         s.compiler = m_shaderCompiler.get();
         s.sources  = &m_shaderSources;
         s.runtime  = &m_runtime->Core();
-        s.undo     = m_undo ? &*m_undo : nullptr;
+        s.undo     = [this]() { return DocumentUndo(); };   // per edit; null in Play (s3.3b)
         s.clock    = &m_editorClock;
         s.backend  = m_config.backend;
-        if (ChromeGraph())
+        s.assetRefs = &m_assetRefServices;
+        // THE PREVIEW SEAM IS LATE-BOUND (node page + editor upgrades s3.2),
+        // and set UNCONDITIONALLY: a document opened during boot (--open-asset
+        // opens inside StageFinalize) is constructed BEFORE CreateGraphVehicles
+        // makes the chrome context, so it resolves ChromeGraph() at each use
+        // and retries its vehicle from Tick -- the material-preview harvester's
+        // precedent (hs.chromeGraph, EditorApp.cpp).
+        //
+        // THE PROCESS'S ONE DEVICE is owned by the chrome context: a
+        // document's preview context BORROWS it, exactly as the viewport
+        // context does, and must therefore be destroyed before the chrome
+        // context is.
+        //
+        // THE DECLARATION ORDER THAT MAKES THAT TRUE:
+        // m_graphChrome is declared FIRST (EditorApp.hpp:350) and
+        // m_documents LAST (:886), with m_retiredDocPreviews (:380)
+        // deliberately between them. Reverse-order destruction therefore
+        // runs ~m_documents -> ~m_retiredDocPreviews -> ~m_graphChrome:
+        // every borrower dies before the owner of the device it borrowed.
+        //
+        // BUT DESTRUCTION ORDER IS NOT WHAT ACTUALLY CLOSES THESE.
+        // EditorApp::ShutdownGraphPath destroys both contexts EXPLICITLY,
+        // long before any member destructor runs, so it does its own
+        // CloseAll + drain first -- and a project switch owes the same
+        // sequence, which is what EditorApp::TeardownGraphForSwitch is:
+        // ResetPerProjectState's CloseAll retires every open
+        // document's preview vehicle, and that function drains the retire
+        // list inside the same stage, while the chrome context whose node
+        // the drain invalidates against is still alive.
+        s.chromeGraph = [this] { return ChromeGraph(); };
+        s.hostConfig  = &m_config;
+        // ...and the one-frame retire, which is what makes closing a document
+        // safe at all on this arm. See DocServices' retireGraphPreview for why
+        // the destroy cannot happen inline.
+        s.retireGraphPreview = [this](std::unique_ptr<Arcane::NriGraphContext> v)
         {
-            // THE PROCESS'S ONE DEVICE is owned by the chrome context: a
-            // document's preview context BORROWS it, exactly as the viewport
-            // context does, and must therefore be destroyed before the chrome
-            // context is.
-            //
-            // THE DECLARATION ORDER THAT MAKES THAT TRUE:
-            // m_graphChrome is declared FIRST (EditorApp.hpp:350) and
-            // m_documents LAST (:886), with m_retiredDocPreviews (:380)
-            // deliberately between them. Reverse-order destruction therefore
-            // runs ~m_documents -> ~m_retiredDocPreviews -> ~m_graphChrome:
-            // every borrower dies before the owner of the device it borrowed.
-            //
-            // BUT DESTRUCTION ORDER IS NOT WHAT ACTUALLY CLOSES THESE.
-            // EditorApp::ShutdownGraphPath destroys both contexts EXPLICITLY,
-            // long before any member destructor runs, so it does its own
-            // CloseAll + drain first -- and a project switch owes the same
-            // sequence, which is what EditorApp::TeardownGraphForSwitch is:
-            // ResetPerProjectState's CloseAll retires every open
-            // document's preview vehicle, and that function drains the retire
-            // list inside the same stage, while the chrome context whose node
-            // the drain invalidates against is still alive.
-            s.nriDevice  = &ChromeGraph()->Device();
-            s.hostConfig = &m_config;
-            // The backend that will CACHE the preview texture when
-            // ImGui::Image draws it, and therefore the one owed an
-            // InvalidateUserTextureNow before that texture dies. The document
-            // makes that call from its destructor.
-            s.chromeHud  = ChromeGraph()->ImGuiHud();
-            // ...and the one-frame retire, which is what makes closing a
-            // document safe at all on this arm. See DocServices'
-            // retireGraphPreview for why the destroy cannot happen inline.
-            s.retireGraphPreview = [this](std::unique_ptr<Arcane::NriGraphContext> v)
-            {
-                RetireDocPreview(std::move(v));
-            };
-        }
+            RetireDocPreview(std::move(v));
+        };
         s.onAssetSaved = [this](const Arcane::Guid& id)
         {
             if (m_resolver)
@@ -192,62 +194,67 @@ namespace Arcane::Editor
         return m_documents.OpenPath(*path);
     }
 
-    Arcane::Editor::ShaderEditorDocument* EditorApp::FindByPath(const std::filesystem::path& path)
+    Arcane::Editor::RouteFacts EditorApp::MakeRouteFacts()
     {
-        Arcane::Editor::ShaderEditorDocument* found = nullptr;
-        m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+        Arcane::Editor::RouteFacts f;
+        f.entityAlive = [this](std::uint64_t id)
         {
-            if (found)
-                return;
-            if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
-                doc && doc->Path() == path)
-                found = doc;
-        });
-        return found;
+            // id is the packed id+version widened by the producer; narrow back.
+            return m_runtime &&
+                   m_runtime->Registry().IsValid(Astra::Entity(static_cast<Astra::Entity::StorageType>(id)));
+        };
+        f.resolveAsset = [this](const Arcane::Guid& g) -> std::optional<std::filesystem::path>
+        {
+            const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            if (!project || !g.IsValid()) return std::nullopt;
+            return project->ResolveAsset(Arcane::AssetId::FromGuid(g));
+        };
+        f.hasDocumentFactory = [this](const std::filesystem::path& p) { return m_documents.HasFactory(p); };
+        f.isDirectory = [](const std::filesystem::path& p) { std::error_code ec; return std::filesystem::is_directory(p, ec); };
+        f.exists = [](const std::filesystem::path& p) { std::error_code ec; return std::filesystem::exists(p, ec); };
+        return f;
     }
 
     void EditorApp::RouteLocator(const Arcane::DiagLocator& locator)
     {
-        switch (locator.kind)
+        namespace OsShell = Arcane::Editor::OsShell;
+        using Arcane::Editor::RouteAction;
+        const auto shell = [](OsShell::ShellResult r, const std::string& what)
         {
-            case Arcane::DiagLocator::Kind::Entity:
-            {
+            if (r != OsShell::ShellResult::Ok)
+                ARC_WARN("Problems: could not open {} -- {}", what, OsShell::Describe(r));
+        };
+        switch (Arcane::Editor::ClassifyLocator(locator, MakeRouteFacts()))
+        {
+            case RouteAction::SelectEntity:
                 // Selecting is enough: the Inspector follows the selection, and
                 // the Outliner scrolls to it on the next frame. locator.entity is
-                // the entity's raw packed value (id+version) widened to
-                // uint64_t by the producer; Astra::Entity's StorageType is the
-                // narrower type that value was minted from (32-bit by this
-                // project's ASTRA_ENTITY_BITS default), so this narrows back
-                // rather than using a nonexistent Astra::Entity::IDType.
-                m_selection.Select(Astra::Entity(
-                    static_cast<Astra::Entity::StorageType>(locator.entity)));
+                // the packed id+version widened by the producer; narrow back.
+                m_selection.Select(Astra::Entity(static_cast<Astra::Entity::StorageType>(locator.entity)));
                 break;
-            }
-            case Arcane::DiagLocator::Kind::Asset:
-            {
-                OpenAssetDocument(locator.asset);
+            case RouteAction::OpenDocument:
+                if (locator.kind == Arcane::DiagLocator::Kind::Asset)
+                    OpenAssetDocument(locator.asset);
+                else if (auto* doc = m_documents.OpenPath(std::filesystem::path(locator.file)))   // arms the tab focus
+                    if (auto* shader = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(doc))
+                        shader->RequestJumpToLine(locator.line);
                 break;
-            }
-            case Arcane::DiagLocator::Kind::File:
-            {
-                // Shader/material documents are the only ROUTABLE File target --
-                // FindByPath only ever matches an open ShaderEditorDocument. Other
-                // File-locator producers (plugin dll load failures, assets outside
-                // every content root, project manifest errors) point at paths that
-                // are never an open document, so this is a deliberate no-op for
-                // them today, not a bug.
-                if (auto* doc = FindByPath(locator.file))
-                    doc->RequestJumpToLine(locator.line);
+            case RouteAction::RevealAsset:
+                Arcane::Editor::RevealAssetInBrowser(m_assetBrowserUi, m_assetModel, locator.asset);
+                Arcane::Editor::FocusDockTab("Asset Browser");
                 break;
-            }
-            case Arcane::DiagLocator::Kind::GraphNode:
-            {
-                if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(
-                        OpenAssetDocument(locator.ownerAsset)))
+            case RouteAction::OpenGraphNode:
+                // T3 s5.1.1: this one call selects the node, frames it and raises the node page.
+                if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(OpenAssetDocument(locator.ownerAsset)))
                     doc->RequestFocusGraphNode(locator.nodeId);
                 break;
-            }
-            case Arcane::DiagLocator::Kind::None:
+            case RouteAction::ShowInExplorer:
+                shell(OsShell::ShowInExplorer(std::filesystem::path(locator.file)), locator.file);
+                break;
+            case RouteAction::OpenAsText:
+                shell(OsShell::OpenAsText(std::filesystem::path(locator.file)), locator.file);
+                break;
+            case RouteAction::None:
                 break;
         }
     }
@@ -467,27 +474,19 @@ namespace Arcane::Editor
         // DiscoverUnknownSources now take an explicit extension set
         // (generalized here from the old hardcoded ".png" scan, the
         // identical widening CookSession::EnumerateSources went through in
-        // Task 8 on the pipeline side) -- kDiscoveryExtensions below is that
+        // Task 8 on the pipeline side) -- kDiscoveryExtensions (ContentDiscovery.hpp) is that
         // set, both kinds' extensions in one array.
         if (m_editorClock >= m_contentDiscoveryNext)
         {
             m_contentDiscoveryNext = m_editorClock + 2.0;
 
-            static constexpr std::string_view kDiscoveryExtensions[] = {
-                ".png",           // Texture
-                ".gltf", ".glb",  // Model (F2c s4.1)
-            };
+            using Arcane::Editor::kDiscoveryExtensions;   // ContentDiscovery.hpp: .png, .gltf, .glb
 
-            std::unordered_set<std::string> knownSourcePaths;
-            for (const Arcane::Editor::AssetEntry& known :
-                 Arcane::Editor::BuildAssetEntries(project->Registry()))
-            {
-                if (known.kind != Arcane::Editor::AssetKind::Texture &&
-                    known.kind != Arcane::Editor::AssetKind::Model)
-                    continue;
-                if (const auto p = project->ResolveAsset(Arcane::AssetId::FromGuid(known.guid)))
-                    knownSourcePaths.insert(p->generic_string());
-            }
+            // The registry's Texture/Model sources (ContentDiscovery.hpp's
+            // KnownDiscoverySourcePaths, the rule the suite's Recycle Bin
+            // rediscovery case drives too).
+            const std::unordered_set<std::string> knownSourcePaths =
+                Arcane::Editor::KnownDiscoverySourcePaths(project->Registry(), project->Mounts());
 
             // F2c Task 13 (s5.5, A4): a newly-discovered .gltf/.glb has its embedded
             // textures extracted to loose .png siblings BEFORE any registration --
@@ -1217,6 +1216,31 @@ namespace Arcane::Editor
             // computed -- and computing it walks Content/. The oracle needs
             // the same gate on its own side, not a filter downstream of it.
             return Arcane::Editor::CookStateOf(kind, HasPermanentCookDiag(g), IsCookPending(g, kind));
+        };
+        // T5 s7.8: every directory under Content/ with no registered game://
+        // asset beneath it, as an unqualified group key ("materials/rocks/").
+        // Parse-free (a directory walk + mount-path prefixes); the model
+        // calls it only on MarkAllDirty rebuilds.
+        p.emptyFolders = [this]() -> std::vector<std::string>
+        {
+            std::vector<std::string> out, used;
+            const Arcane::Project* pr = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            if (!pr)
+                return out;
+            const std::filesystem::path content = pr->Root() / "Content";
+            for (const auto& [g, mp] : pr->Registry().All())
+                if (mp.rfind("game://", 0) == 0)
+                    used.push_back(mp.substr(7));
+            std::error_code ec;
+            for (auto it = std::filesystem::recursive_directory_iterator(content, ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+            {
+                if (!it->is_directory(ec))
+                    continue;
+                const std::string key = std::filesystem::relative(it->path(), content, ec).generic_string() + "/";
+                if (std::none_of(used.begin(), used.end(), [&](const std::string& rel) { return rel.rfind(key, 0) == 0; }))
+                    out.push_back(key);
+            }
+            return out;
         };
         return p;
     }
@@ -2181,7 +2205,8 @@ namespace Arcane::Editor
         if (m_resolver)
             m_resolver->Clear();
         m_consoleDiag.store.ClearAll();
-        ClearSceneReferences();
+        ClearSceneReferences("Switched project");
+        RetargetUndoCache(nullptr);   // the outgoing project's UndoCache, now that its steps are gone
         if (m_undo) m_scene.Reset(*m_undo);
         m_recents.scenes = {};
         // Asset-manager Task 12: an in-flight create dialog names the OUTGOING
@@ -2234,6 +2259,22 @@ namespace Arcane::Editor
             m_pendingReports.clear();
         }
         m_reportDiagnostics.clear();
+    }
+
+    void EditorApp::RetargetUndoCache(const Arcane::Project* project)
+    {
+        if (!m_undo) return;
+        std::error_code ec;
+        if (const std::filesystem::path& old = m_undo->SpillDirectory(); !old.empty())
+            std::filesystem::remove_all(old, ec);
+        const std::filesystem::path dir = project ? project->Root() / "Saved" / "UndoCache"
+                                                  : std::filesystem::path{};
+        if (!dir.empty())
+            std::filesystem::remove_all(dir, ec);   // safe: the stack is empty at open, editor.lock keeps one editor per project
+        m_undo->SetSpillDirectory(dir);
+        // T5 s7.3: the asset file-op executor is per project (its content dir is the
+        // project's); a reset makes the outgoing project's file-op steps inert.
+        m_assetFileOps = project ? std::make_unique<Arcane::Editor::AssetFileOpExecutor>(m_assetOpHost, *m_undo, project->Root() / "Content") : nullptr;
     }
 
     void EditorApp::SwitchProject(const std::filesystem::path& path)
@@ -2470,6 +2511,11 @@ namespace Arcane::Editor
             teardown.weight = 2;
             teardown.run = [&]
             {
+                // The outgoing project's user cvar archive (T3-D2), BEFORE its
+                // game module unloads below and takes that module's Archive
+                // cvars with it. OpenProject archives again and drops the
+                // User layer; this earlier write is the module's last chance.
+                (void)m_runtime->Core().SaveUserCVars();
                 ResetPerProjectState();
                 TeardownGraphForSwitch(keepViewportW, keepViewportH);
                 m_plugin.reset();
@@ -2891,13 +2937,13 @@ namespace Arcane::Editor
         return IdeMenuState::Available;
     }
 
-    void EditorApp::OpenInIde(const std::filesystem::path& file)
+    IdeLaunch::Outcome EditorApp::OpenInIde(const std::filesystem::path& file, int line)
     {
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj)
         {
             ARC_ERROR("IDE: no open project -- nothing to open");
-            return;
+            return IdeLaunch::Outcome::NoSolution;
         }
         ResolveDevenvOnce();
 
@@ -2914,13 +2960,14 @@ namespace Arcane::Editor
 
         const IdeLaunch::Outcome outcome = file.empty()
             ? IdeLaunch::OpenSolution(m_devenv, solution)
-            : IdeLaunch::OpenFile(m_devenv, solution, file);
+            : IdeLaunch::OpenFileAtLine(m_devenv, solution, file, line);
 
         // One Console line per click, its severity by whether the click did
         // what it asked: the three "it worked" outcomes are info, the
         // transient one (Blocked) a warning, everything else an error.
-        const std::string what = file.empty() ? solution.filename().string()
-                                              : file.filename().string();
+        const std::string what = file.empty()
+            ? solution.filename().string()
+            : file.filename().string() + (line > 0 ? ":" + std::to_string(line) : std::string());
         switch (outcome)
         {
             case IdeLaunch::Outcome::Activated:
@@ -2935,6 +2982,18 @@ namespace Arcane::Editor
                 ARC_ERROR("IDE: {} -- {}", what, IdeLaunch::Describe(outcome));
                 break;
         }
+        return outcome;
+    }
+
+    void EditorApp::OpenSourceAtLine(const std::filesystem::path& file, int line)
+    {
+        using IdeLaunch::Outcome;
+        const Outcome outcome = OpenInIde(file, line);
+        if (outcome != Outcome::NoDevenv && outcome != Outcome::NoSolution && outcome != Outcome::DetectionFailed)
+            return;
+        const auto r = Arcane::Editor::OsShell::ShellOpen(file);
+        if (r != Arcane::Editor::OsShell::ShellResult::Ok)
+            ARC_WARN("IDE: could not open {} -- {}", file.string(), Arcane::Editor::OsShell::Describe(r));
     }
 
     bool EditorApp::RegenerateSolution()
@@ -3104,10 +3163,10 @@ namespace Arcane::Editor
             d.message  = "Rebuild Game Module failed (exit code " +
                          std::to_string(*exit) + ")";
             d.detail   = "See the Console's Build lines";
-            // File locator = the project root: clicking the row is a
-            // DOCUMENTED no-op (RouteLocator's File branch only matches open
-            // shader documents) -- the row exists to persist the failure
-            // state; the Console's Build lines carry the detail.
+            // File locator = the project root: a directory, so clicking the
+            // row shows it in Explorer (ClassifyLocator, s8.2) -- the row
+            // exists to persist the failure state; the Console's Build lines
+            // carry the detail.
             d.locator  = Arcane::DiagLocator::File(m_moduleBuildRoot.generic_string());
             Arcane::Diagnostics::Publish(key, std::span<const Arcane::Diagnostic>(&d, 1));
             return;
@@ -3181,6 +3240,8 @@ namespace Arcane::Editor
         const auto pluginModules = Arcane::HostBoot::PluginModules(proj);
         if (gameModule.empty() && pluginModules.empty())
             return;
+        if (m_undo)
+            Arcane::Editor::ClearHistoryForModuleReload(*m_undo, m_scene);   // before the new image registers (s3.3f)
         m_plugin.emplace(*m_process,
             gameModule.empty() ? std::filesystem::path{}
                                : std::filesystem::path(gameModule));
@@ -3266,7 +3327,7 @@ namespace Arcane::Editor
             // KEY OWNERSHIP: "diagnostics:reports" -- accumulate (never
             // clear here) across the whole session; each report gets its
             // own row with its own Asset locator, so RouteLocator's
-            // Kind::Asset branch (OpenAssetDocument) opens exactly the
+            // OpenDocument action (OpenAssetDocument) opens exactly the
             // report that was clicked -- the same "open from the Assets
             // browser" action a double-click in the Asset Browser performs.
             Arcane::Diagnostic d;

@@ -66,4 +66,15 @@ namespace Arcane::Editor
         Arcane::Editor::SceneRecents::SaveFile(
             Arcane::Editor::SceneRecents::FileFor(proj->Root()), scenes);
     }
+
+    void EditorRecents::NoteSceneMoved(const Arcane::Project* proj,
+                                       const std::filesystem::path& from,
+                                       const std::filesystem::path& to)
+    {
+        if (!proj)
+            return;   // project-less session: nowhere durable to record
+        Arcane::Editor::SceneRecents::Replace(scenes, from, to);
+        Arcane::Editor::SceneRecents::SaveFile(
+            Arcane::Editor::SceneRecents::FileFor(proj->Root()), scenes);
+    }
 }

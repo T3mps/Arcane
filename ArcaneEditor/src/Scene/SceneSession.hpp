@@ -43,7 +43,7 @@ namespace Arcane::Editor
         [[nodiscard]] std::string DisplayName() const;
 
         // ---- dirty -------------------------------------------------------
-        // Compares the stack's CURRENT state against the one recorded at save.
+        // Compares the stack's topmost SCENE step against the one recorded at save.
         //
         // ASSUMPTION, and it is load-bearing: the CommandStack is a faithful
         // proxy for authored change. True today -- the RunLoop is paused in Edit
@@ -53,15 +53,27 @@ namespace Arcane::Editor
         // this.
         [[nodiscard]] bool IsDirty(const Arcane::CommandStack& stack) const noexcept
         {
-            return stack.StateId() != m_savedStateId;
+            // SCENE steps only (spec 2026-09-30 s3.3(a)): a material/sprite/
+            // mesh/input-actions step never parks Exit/Open behind the modal.
+            return stack.SceneStateId() != m_savedStateId;
         }
         void MarkSaved(const Arcane::CommandStack& stack) noexcept
         {
-            m_savedStateId = stack.StateId();
+            m_savedStateId = stack.SceneStateId();
         }
         // The recorded save baseline, for per-entity dirty queries
         // (CommandStack::TouchedSinceState -- the Outliner's asterisks).
         [[nodiscard]] std::uint64_t SavedStateId() const noexcept { return m_savedStateId; }
+        // After a history Clear that is NOT a scene swap (module reload): a
+        // clean scene re-baselines clean; a dirty one stays dirty even when it
+        // was saved at state 0, because SceneStateId() is 0 again after the
+        // clear (R15: never drop an unsaved warning).
+        void RebaseAfterHistoryClear(bool wasDirty, const Arcane::CommandStack& stack) noexcept
+        {
+            if (wasDirty) m_savedStateId = kUnreachableStateId;
+            else          MarkSaved(stack);
+        }
+        static constexpr std::uint64_t kUnreachableStateId = ~std::uint64_t{0};   // m_nextId never gets there
 
         // ---- retargeting -------------------------------------------------
         // After a successful save-as or open: adopt the file and go clean.
@@ -80,6 +92,12 @@ namespace Arcane::Editor
         // Reset can itself be the performed action for a parked NewScene intent,
         // and the host still needs TakePending() to have returned it first.
         void Reset(const Arcane::CommandStack& stack);
+        // After an asset op moved or renamed a .arcscene (spec s7.11): when
+        // `from` names the session's file, the session follows it to `to`.
+        // m_path ONLY -- the id, the saved baseline (dirty) and m_pending are
+        // untouched. `from` no longer exists on disk, so the match compares
+        // normalised spellings (case-folded on Windows), not equivalent().
+        void NoteMoved(const std::filesystem::path& from, const std::filesystem::path& to);
 
         // ---- confirm flow ------------------------------------------------
         // True  = nothing unsaved, act now.
@@ -138,4 +156,13 @@ namespace Arcane::Editor
         SceneIntent           m_pending = SceneIntent::None;
         std::filesystem::path m_pendingPath;
     };
+
+    // Spec s3.3(f) verdict CONFIRMED: a rebuilt module can keep a component's
+    // id with a new layout, so no undo step may survive the swap.
+    inline void ClearHistoryForModuleReload(Arcane::CommandStack& stack, SceneSession& scene)
+    {
+        const bool wasDirty = scene.IsDirty(stack);
+        stack.Clear("Game module reloaded");
+        scene.RebaseAfterHistoryClear(wasDirty, stack);
+    }
 }

@@ -19651,6 +19651,11 @@ static void ImGui::DockNodeUpdateTabBar(ImGuiDockNode* node, ImGuiWindow* host_w
             tab_item_flags |= ImGuiTabItemFlags_UnsavedDocument;
         if (tab_bar->Flags & ImGuiTabBarFlags_NoCloseWithMiddleMouseButton)
             tab_item_flags |= ImGuiTabItemFlags_NoCloseWithMiddleMouseButton;
+        // ARCANE LOCAL FIX (2026-10-03, node-page phase s8.2): a window whose stored label colour differs from the
+        // tab bar's own ImGuiCol_Text tinted its tab on purpose (the Problems/Console alert tint), so the unselected-
+        // label dim in TabItemLabelAndCloseButton must leave it alone.
+        if (window->DockStyle.Colors[ImGuiWindowDockStyleCol_Text] != ColorConvertFloat4ToU32(backup_style_cols[ImGuiWindowDockStyleCol_Text]))
+            tab_item_flags |= ImGuiTabItemFlags_ArcaneOwnLabelColor;
 
         // Apply stored style overrides for the window
         for (int color_n = 0; color_n < ImGuiWindowDockStyleCol_COUNT; color_n++)
@@ -19835,11 +19840,17 @@ static void ImGui::DockNodeCalcTabBarLayout(const ImGuiDockNode* node, ImRect* o
     ImRect r = ImRect(node->Pos.x, node->Pos.y, node->Pos.x + node->Size.x, node->Pos.y + g.FontSize + g.Style.FramePadding.y * 2.0f);
     if (out_title_rect) { *out_title_rect = r; }
 
-    r.Min.x += style.WindowBorderSize;
+    // ARCANE LOCAL FIX (2026-10-02, user desk): the LEFT insets (WindowBorderSize + FramePadding.x) only pad a
+    // left window-menu button; with none (Arcane's dockspace sets ImGuiDockNodeFlags_NoWindowMenuButton) the
+    // first tab sits exactly on the node's left edge, lining up with the panel below. Upstream always insets.
+    const bool arcane_left_menu_button = node->HasWindowMenuButton && style.WindowMenuButtonPosition == ImGuiDir_Left;
+    if (arcane_left_menu_button)
+        r.Min.x += style.WindowBorderSize;
     r.Max.x -= style.WindowBorderSize;
 
     float button_sz = g.FontSize;
-    r.Min.x += style.FramePadding.x;
+    if (arcane_left_menu_button)
+        r.Min.x += style.FramePadding.x;
     r.Max.x -= style.FramePadding.x;
     ImVec2 window_menu_button_pos = ImVec2(r.Min.x, r.Min.y + style.FramePadding.y);
     if (node->HasCloseButton)

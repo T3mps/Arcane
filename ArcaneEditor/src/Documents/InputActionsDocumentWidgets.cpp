@@ -131,6 +131,34 @@ namespace Arcane::Editor
             if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows | ImGuiFocusedFlags_NoPopupHierarchy) || ImGui::GetIO().WantTextInput) return false;
             return !state.renameTarget.IsValid();   // safe: DrawActions/DrawMaps sweep a target whose row is not drawn this frame
         }
+
+        // A pending add on this action replaces its + Binding ghost: nothing is
+        // in the draft yet. Simple add: one amber countdown row; composite: a
+        // header ghost, then per role the heard control, the live amber
+        // countdown, or a dim "<role> -- waiting".
+        void DrawPendingGhosts(const PendingAdd& p, float indent, const InputActionsDocumentWidgets::Services& services)
+        {
+            char countdown[64];
+            std::snprintf(countdown, sizeof countdown, "Press a control... Esc cancels · %.0f s",
+                          services.rebindRemaining ? services.rebindRemaining() : 0.0f);
+            auto line = [&](float extra, const ImVec4& color, const std::string& text)
+            {
+                const ImVec2 at = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddText(ImVec2(at.x + indent + extra, at.y + (24.0f - ImGui::GetFontSize()) * 0.5f),
+                                                    ImGui::ColorConvertFloat4ToU32(color), text.c_str());
+                ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, 24.0f));   // the RowWithThumb pitch
+            };
+            if (p.kind == PendingAdd::Kind::Binding) { line(0.0f, Theme::kAmber, countdown); return; }
+            const bool headed = p.kind != PendingAdd::Kind::Part;
+            if (headed) line(0.0f, Theme::kText, p.composite == "1DAxis" ? "1D Axis" : "2D Vector");
+            for (std::size_t i = 0; i < p.roles.size(); ++i)
+            {
+                const float extra = headed ? kIndent : 0.0f;
+                if (i < p.captured.size())       line(extra, Theme::kText, p.roles[i] + ": " + InputActions::DisplayForPath(p.captured[i]).control);
+                else if (i == p.captured.size()) line(extra, Theme::kAmber, p.roles[i] + ": " + countdown);
+                else                             line(extra, Theme::kTextDim, p.roles[i] + " -- waiting");
+            }
+        }
     }
 
     void InputActionsDocumentWidgets::SelectRow(InputActionsEditorModel& model, const InputRow& row)
@@ -175,7 +203,7 @@ namespace Arcane::Editor
         // completing click retargets nothing and no other row's menu opens.
         // Scrolling pauses for the capture's duration (<= 10 s; Escape ends it).
         ImGui::BeginDisabled(swallowed);
-        DrawToolbar(model, state, edit);
+        DrawToolbar(model, state, services, edit);
         ImGui::EndDisabled();
         ImGui::Separator();
         const ImGuiWindowFlags colFlags = swallowed ? ImGuiWindowFlags_NoInputs : 0;
@@ -191,21 +219,27 @@ namespace Arcane::Editor
         if (edit) edit();   // AFTER the draw: the draft must not mutate under the row loop
     }
 
-    void InputActionsDocumentWidgets::DrawToolbar(InputActionsEditorModel& model, InputActionsDocumentState& state, Edit& edit)
+    void InputActionsDocumentWidgets::DrawToolbar(InputActionsEditorModel& model, InputActionsDocumentState& state, const Services& services, Edit& edit)
     {
+        // A filter that names no scheme any more (EditScheme renamed it,
+        // RemoveScheme removed it) resets to All, so adds never inherit it.
+        if (!state.schemeFilter.empty() && !SchemeGroupExists(model.Draft(), state.schemeFilter)) state.schemeFilter.clear();
         const Guid map = model.SelectedMap(), action = model.SelectedAction();
         if (ImGui::Button(ICON_LC_PLUS " Add " ICON_LC_CHEVRON_DOWN)) ImGui::OpenPopup("##input_add");
-        if (ImGui::BeginPopup("##input_add"))
+        const PopupAnchor addAnchor = LastItemAnchor();
+        if (BeginPopupBelow("##input_add", addAnchor))
         {
             // The model selects the new row and gives it a unique sibling name
             // ("Action Map 2", "Action 3" -- Task 6); the new row opens in rename.
             if (ImGui::MenuItem("Action map")) edit = [&model, &state] { if (model.AddMap()) OpenRenameOn(model, state, model.SelectedMap()); };
             if (ImGui::MenuItem("Action", nullptr, false, map.IsValid())) edit = [&model, &state, map] { if (model.AddAction(map)) OpenRenameOn(model, state, model.SelectedAction()); };
-            if (ImGui::MenuItem("Binding", nullptr, false, action.IsValid())) edit = [&model, &state, map, action] { if (model.AddBinding(map, action)) state.scrollRowToSelection = true; };
+            const std::vector<std::string> groups = PrefillGroups(model.Draft(), state.schemeFilter);
+            auto listen = [&](PendingAdd add) { if (services.beginAdd) services.beginAdd(std::move(add)); };
+            if (ImGui::MenuItem("Binding", nullptr, false, action.IsValid())) listen(MakeAddBinding(map, action, groups));
             if (ImGui::BeginMenu("Composite", action.IsValid()))
             {
-                if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "1DAxis")) state.scrollRowToSelection = true; };
-                if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, action] { if (model.AddComposite(map, action, "2DVector")) state.scrollRowToSelection = true; };
+                if (ImGui::MenuItem("1D axis"))   listen(MakeAddComposite(map, action, "1DAxis", groups));
+                if (ImGui::MenuItem("2D vector")) listen(MakeAddComposite(map, action, "2DVector", groups));
                 ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Control scheme")) state.schemePopupPending = true;
@@ -231,9 +265,13 @@ namespace Arcane::Editor
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        if (state.previewArmed) ImGui::PushStyleColor(ImGuiCol_Button, Theme::WithAlpha(Theme::kAmber, 0.35f));
+        // The one "on" language (s6.2): the accent trio while armed. `armed` is
+        // read ONCE -- the click below flips previewArmed, and re-reading it for
+        // the pop unbalanced the colour stack on the arming/disarming frame.
+        const bool armed = state.previewArmed;
+        if (armed) PushToggleOnColors();
         if (ImGui::Button(ICON_LC_PLAY " Preview")) state.previewArmed = !state.previewArmed;
-        if (state.previewArmed) ImGui::PopStyleColor();
+        if (armed) PopToggleOnColors();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
             ImGui::SetTooltip("Live preview: bindings glow as they fire; the Inspector's Live preview block reads live values");
     }
@@ -323,6 +361,8 @@ namespace Arcane::Editor
         state.dragVerdictPrev = state.dragVerdict;
         state.dragVerdict = InputActionsDocumentState::DragVerdict::Illegal;   // hovering no row reads "Cannot move" (the drag op starts invalid)
         for (const InputRow& row : rows) DrawRow(row, model, state, services, edit, rows);
+        state.rebindColumnX = state.rebindColumnXNext;
+        state.rebindColumnXNext = 0.0f;
         // Empty space under the rows: the MAP is the container (spec A s3.1),
         // clearing action/binding/part SILENTLY (Ruling P18): not a selection
         // event, so it never takes the Inspector from the scene.
@@ -343,11 +383,21 @@ namespace Arcane::Editor
         const Guid map = model.SelectedMap();
         if (row.kind == InputRowKind::AddBinding)
         {
+            if (const PendingAdd* pending = services.pending ? services.pending() : nullptr; pending && pending->action == row.actionId)
+            {
+                DrawPendingGhosts(*pending, indent, services);
+                ImGui::PopID(); ImGui::PopID();
+                return;
+            }
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent);
             ImGui::PushStyleColor(ImGuiCol_Button, Theme::kNone);
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::kTextDim);
-            if (ImGui::SmallButton(ICON_LC_PLUS " Binding") && !swallowed)
-                edit = [&model, &state, map, action = row.actionId] { if (model.AddBinding(map, action)) state.scrollRowToSelection = true; };
+            const bool add = ImGui::SmallButton(ICON_LC_PLUS " Binding");
+            if (state.probe)   // TEST SEAM
+                (*state.probe)["add:" + row.actionId.ToString()] = ImVec2((ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x) * 0.5f,
+                                                                          (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
+            if (add && !swallowed && services.beginAdd)
+                services.beginAdd(MakeAddBinding(map, row.actionId, PrefillGroups(model.Draft(), state.schemeFilter)));
             ImGui::PopStyleColor(2);
             ImGui::PopID(); ImGui::PopID();
             return;
@@ -392,7 +442,25 @@ namespace Arcane::Editor
                                               row.kind == InputRowKind::Action ? ChevronCell() : indent);
         if (rebinding) ImGui::PopStyleColor();
         const ImVec2 rowBottom = ImGui::GetCursorScreenPos();   // RowWithThumb parked the cursor at the next row's start; restored at the end
+        if (state.probe) (*state.probe)[row.id.ToString()] = ImVec2(rowTop.x + 40.0f, (rowTop.y + rowBottom.y) * 0.5f);   // TEST SEAM (the maps column's rule)
         if (r.clicked && !swallowed) SelectRow(model, row);
+        // Double-click (spec 2026-09-30 s8.3). Safe while the button is still
+        // down: TickCapture already ran this frame (InputActionsDocument.cpp:260)
+        // and the held control is ignored until it is released.
+        if (r.doubleClicked && !swallowed)
+        {
+            switch (row.kind)
+            {
+            case InputRowKind::Binding:
+            case InputRowKind::Part:            if (services.beginRebind) services.beginRebind(row.id); break;
+            case InputRowKind::Action:          OpenRenameOn(model, state, row.id); break;
+            case InputRowKind::CompositeHeader:
+                if (services.beginAdd)
+                    if (auto add = MakeRebindComposite(model.Draft(), row.id)) services.beginAdd(std::move(*add));
+                break;
+            default: break;
+            }
+        }
         if (ScrollsIntoView(model, state, row))
         {
             ImGui::SetScrollHereY();
@@ -454,11 +522,12 @@ namespace Arcane::Editor
             {
                 if (ImGui::MenuItem("Rename", "F2")) OpenRenameOn(model, state, row.id);
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, map, id = row.id] { if (model.DuplicateAction(map, id)) state.scrollRowToSelection = true; };
-                if (ImGui::MenuItem("Add binding")) edit = [&model, &state, map, id = row.id] { if (model.AddBinding(map, id)) state.scrollRowToSelection = true; };
+                const std::vector<std::string> groups = PrefillGroups(model.Draft(), state.schemeFilter);
+                if (ImGui::MenuItem("Add binding") && services.beginAdd) services.beginAdd(MakeAddBinding(map, row.id, groups));
                 if (ImGui::BeginMenu("Add composite"))
                 {
-                    if (ImGui::MenuItem("1D axis"))   edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "1DAxis")) state.scrollRowToSelection = true; };
-                    if (ImGui::MenuItem("2D vector")) edit = [&model, &state, map, id = row.id] { if (model.AddComposite(map, id, "2DVector")) state.scrollRowToSelection = true; };
+                    if (ImGui::MenuItem("1D axis") && services.beginAdd)   services.beginAdd(MakeAddComposite(map, row.id, "1DAxis", groups));
+                    if (ImGui::MenuItem("2D vector") && services.beginAdd) services.beginAdd(MakeAddComposite(map, row.id, "2DVector", groups));
                     ImGui::EndMenu();
                 }
                 ImGui::Separator(); MoveRowMenu(model, row.id, edit); ImGui::Separator();
@@ -470,7 +539,12 @@ namespace Arcane::Editor
                 {
                     const bool axis = row.name == "1D Axis";
                     for (const char* role : axis ? std::vector<const char*>{ "negative", "positive" } : std::vector<const char*>{ "up", "down", "left", "right" })
-                        if (ImGui::MenuItem(role)) edit = [&model, &state, id = row.id, role] { if (model.AddPart(id, role)) state.scrollRowToSelection = true; };
+                        if (ImGui::MenuItem(role) && services.beginAdd)
+                        {
+                            PendingAdd add = MakeAddPart(row.id, role);
+                            add.map = map; add.action = row.actionId;   // its ghost rows draw under this action's + Binding row
+                            services.beginAdd(std::move(add));
+                        }
                     ImGui::EndMenu();
                 }
                 if (ImGui::MenuItem("Duplicate")) edit = [&model, &state, id = row.id] { if (model.DuplicateRow(id)) state.scrollRowToSelection = true; };
@@ -528,24 +602,30 @@ namespace Arcane::Editor
         {
             if (!row.detail.empty()) { ImGui::TextDisabled("%s", row.detail.c_str()); ImGui::SameLine(); }
             for (const auto& g : row.groups) { AssetPill(g.c_str(), SchemeVariant(g)); ImGui::SameLine(); }   // one tinted pill PER scheme
-            if (row.kind != InputRowKind::CompositeHeader && !rebinding && !swallowed)
+            if (row.kind != InputRowKind::CompositeHeader)
             {
-                // The Rebind button: its hit region is SUBMITTED every frame and
-                // only its PAINT is gated on hover/selection. Gating the submission
-                // on r.hovered oscillates on an AllowOverlap row (the Asset Browser
-                // rail's documented bug, AssetBrowserPanel.cpp:304-341): the rule
-                // for any trailing widget on a RowWithThumb row.
-                const ImVec2 sz(ImGui::CalcTextSize("Rebind").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFrameHeight());
-                const bool rbClicked = ImGui::InvisibleButton("##rebind", sz);
-                const bool rbHovered = ImGui::IsItemHovered();
-                if (r.hovered || selected || rbHovered)
+                const float origin = ImGui::GetWindowPos().x;
+                const float ownEnd = ImGui::GetCursorScreenPos().x;
+                const float contentMax = ownEnd + ImGui::GetContentRegionAvail().x;
+                state.rebindColumnXNext = std::max(state.rebindColumnXNext, ownEnd - origin);
+                if (!rebinding && !swallowed)
                 {
+                    // Hit region SUBMITTED every frame (the AllowOverlap rule,
+                    // AssetBrowserPanel.cpp:304-341), and now PAINTED every frame
+                    // too: dim at rest, kText on row hover/selection.
+                    const ImVec2 sz(ImGui::CalcTextSize("Rebind").x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFrameHeight());
+                    const float x = std::max(ownEnd, std::min(origin + state.rebindColumnX, contentMax - sz.x));
+                    ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+                    const bool rbClicked = ImGui::InvisibleButton("##rebind", sz);
+                    const bool rbHovered = ImGui::IsItemHovered();
                     const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
                     ImDrawList* dl = ImGui::GetWindowDrawList();
                     dl->AddRectFilled(lo, hi, ImGui::GetColorU32(rbHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button), ImGui::GetStyle().FrameRounding);
-                    dl->AddText(ImVec2(lo.x + ImGui::GetStyle().FramePadding.x, lo.y + ImGui::GetStyle().FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), "Rebind");
+                    const ImVec4& text = (r.hovered || selected || rbHovered) ? Theme::kText : Theme::kTextDim;
+                    dl->AddText(ImVec2(lo.x + ImGui::GetStyle().FramePadding.x, lo.y + ImGui::GetStyle().FramePadding.y), ImGui::ColorConvertFloat4ToU32(text), "Rebind");
+                    if (state.probe) (*state.probe)["rebind:" + row.id.ToString()] = ImVec2((lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f);   // TEST SEAM
+                    if (rbClicked && services.beginRebind) services.beginRebind(row.id);
                 }
-                if (rbClicked && services.beginRebind) services.beginRebind(row.id);
             }
         }
         ImGui::SetCursorScreenPos(rowBottom);   // every row pitches exactly one RowWithThumb height whatever the trailing item's height was

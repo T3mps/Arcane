@@ -41,6 +41,7 @@ namespace Arcane
         void Undo() override;   // deserialize `before` into the live component
         void Redo() override;   // deserialize `after`
         const char* Label() const override { return m_label.c_str(); }
+        std::size_t PayloadBytes() const override { return m_before.size() + m_after.size(); }   // in memory (s3.3e)
 
         // Serialize the live component for (registry, entity, descriptor) to a
         // blob. Empty if the entity/component is not present.

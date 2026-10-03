@@ -403,6 +403,20 @@ namespace Arcane
         // difference. Generic rather than mesh-specific: it says nothing about kind, and a
         // future consumer of the same distinction needs no fourth virtual.
         [[nodiscard]] virtual bool CookPending(const Guid& id) const = 0;
+
+        // ---- T5 asset file operations (spec 2026-09-30 s7.2): two virtuals, APPENDED
+        // AT THE END (this class's "new virtuals go at the end" rule; ABI bumped).
+
+        // Drop EVERY path-keyed memo -- bytes, JSON, pixels, texture info, artifacts,
+        // meshes; success or memoized failure -- for the file at `resolved` (one
+        // CacheKey). The editor calls it for both ends of a rename/move and for every
+        // deleted or restored file, so a reused path is never served stale contents.
+        virtual void EvictPath(const std::filesystem::path& resolved) = 0;
+
+        // Forget that `id` failed to resolve: erase its warn-once memo and its
+        // "assets.unresolved" row, republishing that key. The editor calls it when an
+        // undo restores a deleted asset (today the memo clears only on SetAssetResolver).
+        virtual void ForgetUnresolved(const Guid& id) = 0;
     };
 
     // -----------------------------------------------------------------

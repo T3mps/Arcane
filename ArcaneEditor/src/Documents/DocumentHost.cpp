@@ -63,6 +63,12 @@ namespace Arcane::Editor
         return nullptr;
     }
 
+    bool DocumentHost::HasFactory(const std::filesystem::path& path) const
+    {
+        const std::string ext = LowerExt(path);
+        return std::any_of(m_factories.begin(), m_factories.end(), [&](const Route& r) { return r.ext == ext; });
+    }
+
     EditorDocument* DocumentHost::Add(std::unique_ptr<EditorDocument> doc)
     {
         m_docs.push_back(std::move(doc));
@@ -76,6 +82,16 @@ namespace Arcane::Editor
             if (d->AssetGuid() == guid)
                 return d.get();
         return nullptr;
+    }
+
+    void DocumentHost::NoteAssetMoved(const Arcane::Guid& g, const std::filesystem::path& p) { if (EditorDocument* d = FindByGuid(g)) d->NoteMoved(p); }
+
+    void DocumentHost::CloseForAssetRemoval(EditorDocument* doc)   // T5 s7.5: unsaved, no confirm; a parked gesture commits in the dtor
+    {
+        if (!doc) return;
+        if (m_pendingClose == doc) m_pendingClose = nullptr;
+        if (m_focusRequest == doc) m_focusRequest = nullptr;
+        Close(doc);
     }
 
     bool DocumentHost::AnyDirty() const
@@ -162,6 +178,12 @@ namespace Arcane::Editor
     {
         for (const auto& d : m_docs)
             d->Tick(dt);
+    }
+
+    void DocumentHost::FlushGestures()
+    {
+        for (const auto& d : m_docs)
+            d->FlushGesture();
     }
 
     void DocumentHost::DrawAll(unsigned int dockId)

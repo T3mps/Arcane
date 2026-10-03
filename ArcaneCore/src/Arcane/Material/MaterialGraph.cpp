@@ -51,123 +51,173 @@ namespace Arcane
         constexpr std::span<const GraphPinDesc> Pins(const GraphPinDesc (&a)[N]) { return { a, N }; }
         constexpr std::span<const GraphPinDesc> NoPins() { return { kNoPins, std::size_t(0) }; }
 
-        // Row-local sugar for the last column only -- spelling
+        // Row-local sugar for the category column -- spelling
         // GraphNodeCategory in 49 rows buys nothing that Cat:: does not, while
         // GraphNodeType stays written out so the enum remains greppable from
-        // the table. Each row wraps onto two lines because the sixth column
-        // does not fit in one (the file's next-longest line is ~100 chars).
+        // the table. Each row wraps onto three lines (pins, then the category,
+        // then the description) because the sixth and seventh columns do not
+        // fit in one (a joined row would run past 200 chars).
         using Cat = GraphNodeCategory;
 
         const GraphNodeTypeInfo kNodeInfos[] = {
             { GraphNodeType::Output,        "output",         "Output",
-              Pins(kOutputIn),    NoPins(),         Cat::Output },
+              Pins(kOutputIn),    NoPins(),         Cat::Output,
+              "The pixel's final colour: color becomes shade()'s return; unwired it is opaque black." },
             { GraphNodeType::ConstFloat,    "const_float",    "Float",
-              NoPins(),           Pins(kOut1),      Cat::Input },
+              NoPins(),           Pins(kOut1),      Cat::Input,
+              "A constant scalar, the node's Value." },
             { GraphNodeType::ConstFloat2,   "const_float2",   "Float2",
-              NoPins(),           Pins(kOut2),      Cat::Input },
+              NoPins(),           Pins(kOut2),      Cat::Input,
+              "A constant float2, the node's Value." },
             { GraphNodeType::ConstFloat4,   "const_float4",   "Float4",
-              NoPins(),           Pins(kOut4),      Cat::Input },
+              NoPins(),           Pins(kOut4),      Cat::Input,
+              "A constant float4, the node's Value." },
             { GraphNodeType::ConstColor,    "const_color",    "Color",
-              NoPins(),           Pins(kOut4),      Cat::Input },
+              NoPins(),           Pins(kOut4),      Cat::Input,
+              "A constant linear RGBA colour as a float4; values above 1 pass through unchanged." },
             { GraphNodeType::Param,         "param",          "Param",
-              NoPins(),           Pins(kOutDyn),    Cat::Input },
+              NoPins(),           Pins(kOutDyn),    Cat::Input,
+              "Reads the material parameter Name (a //@param), so instances can override its value." },
             { GraphNodeType::TextureSample, "texture_sample", "Texture Sample",
-              Pins(kUvIn),        Pins(kSampleOut), Cat::Input },
+              Pins(kUvIn),        Pins(kSampleOut), Cat::Input,
+              "Samples the texture parameter at uv (Texture.Sample); outputs rgba and its alpha a." },
             { GraphNodeType::SpriteTexture, "sprite_texture", "Sprite Texture",
-              Pins(kUvIn),        Pins(kSampleOut), Cat::Input },
+              Pins(kUvIn),        Pins(kSampleOut), Cat::Input,
+              "Samples the sprite's own texture at uv (SpriteTexture.Sample); sprite surface only." },
             { GraphNodeType::UV,            "uv",             "UV",
-              NoPins(),           Pins(kOut2),      Cat::Input },
+              NoPins(),           Pins(kOut2),      Cat::Input,
+              "The interpolated texture coordinate, v.uv." },
             { GraphNodeType::Time,          "time",           "Time",
-              NoPins(),           Pins(kOut1),      Cat::Input },
+              NoPins(),           Pins(kOut1),      Cat::Input,
+              "The engine clock in seconds, Globals Time." },
             { GraphNodeType::VertexColor,   "vertex_color",   "Vertex Color",
-              NoPins(),           Pins(kOut4),      Cat::Input },
+              NoPins(),           Pins(kOut4),      Cat::Input,
+              "The sprite's per-vertex tint, v.color; sprite surface only." },
             { GraphNodeType::Add,           "add",            "Add",
-              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math,
+              "A plus B, per component (a + b); a scalar input splats to the other's width." },
             { GraphNodeType::Sub,           "sub",            "Subtract",
-              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math,
+              "A minus B, per component (a - b); a scalar input splats to the other's width." },
             { GraphNodeType::Mul,           "mul",            "Multiply",
-              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math,
+              "A times B, per component (a * b); a scalar input splats to the other's width." },
             { GraphNodeType::Lerp,          "lerp",           "Lerp",
-              Pins(kLerpIn),      Pins(kOutDyn),    Cat::Math },
+              Pins(kLerpIn),      Pins(kOutDyn),    Cat::Math,
+              "Blends A to B by T, per component (lerp): T = 0 gives A, T = 1 gives B." },
             { GraphNodeType::Sin,           "sin",            "Sine",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "The sine of X in radians, per component (sin)." },
             { GraphNodeType::Fraction,      "fraction",       "Fraction",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "The fractional part of X, per component (frac): x - floor(x)." },
             { GraphNodeType::Saturate,      "saturate",       "Saturate",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "X clamped to [0, 1], per component (saturate)." },
             { GraphNodeType::OneMinus,      "one_minus",      "One Minus",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "1 minus X, per component." },
             { GraphNodeType::Split,         "split",          "Split",
-              Pins(kUnaryIn),     Pins(kSplitOut),  Cat::Vector },
+              Pins(kUnaryIn),     Pins(kSplitOut),  Cat::Vector,
+              "X's r, g, b and a lanes as four scalars; a lane the input does not have reads 0." },
             // Custom's pins are PER-NODE data -- the table spans stay empty and
             // every pin query routes through GraphNodeInput/OutputPin below.
             { GraphNodeType::Custom,        "custom",         "Custom (HLSL)",
-              NoPins(),           NoPins(),         Cat::Utility },
+              NoPins(),           NoPins(),         Cat::Utility,
+              "Your HLSL function body, called with the node's pins as parameters; it returns the Output width." },
             { GraphNodeType::Combine,       "combine",        "Combine",
-              Pins(kCombineIn),   Pins(kOut4),      Cat::Vector },
+              Pins(kCombineIn),   Pins(kOut4),      Cat::Vector,
+              "A float4 built from scalars r, g, b and a; a defaults to 1." },
             { GraphNodeType::Clamp,         "clamp",          "Clamp",
-              Pins(kClampIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kClampIn),     Pins(kOutDyn),    Cat::Math,
+              "X limited to [Min, Max], per component (clamp); Max defaults to 1." },
             { GraphNodeType::Smoothstep,    "smoothstep",     "Smoothstep",
-              Pins(kSmoothIn),    Pins(kOutDyn),    Cat::Math },
+              Pins(kSmoothIn),    Pins(kOutDyn),    Cat::Math,
+              "A smooth 0-to-1 ramp of X between Edge0 and Edge1 (smoothstep); Edge1 defaults to 1." },
             { GraphNodeType::Step,          "step",           "Step",
-              Pins(kStepIn),      Pins(kOutDyn),    Cat::Math },
+              Pins(kStepIn),      Pins(kOutDyn),    Cat::Math,
+              "1 where X >= Edge, else 0, per component (step)." },
             { GraphNodeType::Power,         "power",          "Power",
-              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math,
+              "A raised to the power B, per component (pow); B defaults to 1." },
             { GraphNodeType::Remap,         "remap",          "Remap",
-              Pins(kRemapIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kRemapIn),     Pins(kOutDyn),    Cat::Math,
+              "X mapped linearly from In Range to Out Range; both ranges default to (0, 1)." },
             { GraphNodeType::TilingOffset,  "tiling_offset",  "Tiling & Offset",
-              Pins(kTileIn),      Pins(kOut2),      Cat::Procedural },
+              Pins(kTileIn),      Pins(kOut2),      Cat::Procedural,
+              "UV times Tiling plus Offset (uv * tiling + offset); Tiling defaults to 1." },
             { GraphNodeType::Cos,           "cos",            "Cosine",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "The cosine of X in radians, per component (cos)." },
             { GraphNodeType::Abs,           "abs",            "Absolute",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "The absolute value of X, per component (abs)." },
             { GraphNodeType::Min,           "min",            "Minimum",
-              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math,
+              "The smaller of A and B, per component (min)." },
             { GraphNodeType::Max,           "max",            "Maximum",
-              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math },
+              Pins(kBinaryIn),    Pins(kOutDyn),    Cat::Math,
+              "The larger of A and B, per component (max)." },
             // Swizzle's OUTPUT width is per-node data (the mask length) -- the
-            // dynamic 0 here resolves through widthOf, which the emission case
-            // pins to the mask (the Param pattern).
+            // dynamic 0 here resolves through ResolveGraphNodeWidths, which
+            // pins it to the mask (the Param pattern).
             { GraphNodeType::Swizzle,       "swizzle",        "Swizzle",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Vector },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Vector,
+              "X's lanes reordered or repeated by the Mask (xy, wzyx, ...); a lane the input lacks reads 0." },
             { GraphNodeType::SimpleNoise,   "simple_noise",   "Simple Noise",
-              Pins(kNoiseIn),     Pins(kOut1),      Cat::Procedural },
+              Pins(kNoiseIn),     Pins(kOut1),      Cat::Procedural,
+              "Value noise in [0, 1] at UV x Scale; Scale defaults to 10." },
             { GraphNodeType::PassInput,     "pass_input",     "Pass Input",
-              Pins(kUvIn),        Pins(kSampleOut), Cat::Input },
+              Pins(kUvIn),        Pins(kSampleOut), Cat::Input,
+              "Samples a wired input slot (InputTexture) at uv: an upstream pass's output or the scene." },
             { GraphNodeType::VertexOutput,  "vertex_output",  "Vertex Output",
-              Pins(kVertexOutIn), NoPins(),         Cat::Output },
+              Pins(kVertexOutIn), NoPins(),         Cat::Output,
+              "Offsets the vertex position and uv and tints its colour; an unwired pin passes it through." },
             { GraphNodeType::Comment,       "comment",        "Comment",
-              NoPins(),           NoPins(),         Cat::Utility },
+              NoPins(),           NoPins(),         Cat::Utility,
+              "A labelled box; nodes inside it move with it. It has no effect on the shader." },
             // Library growth batch 2 -- appended in the header's enum order.
             { GraphNodeType::Exp,           "exp",            "Exponential",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "e raised to the power X, per component (exp)." },
             { GraphNodeType::Negate,        "negate",         "Negate",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "Minus X, per component." },
             { GraphNodeType::Floor,         "floor",          "Floor",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "X rounded down to a whole number, per component (floor)." },
             { GraphNodeType::Ceil,          "ceil",           "Ceiling",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "X rounded up to a whole number, per component (ceil)." },
             { GraphNodeType::Round,         "round",          "Round",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "X rounded to the nearest whole number, per component (round)." },
             { GraphNodeType::Sign,          "sign",           "Sign",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Math,
+              "-1, 0 or 1 by the sign of X, per component (sign)." },
             { GraphNodeType::Normalize,     "normalize",      "Normalize",
-              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Vector },
+              Pins(kUnaryIn),     Pins(kOutDyn),    Cat::Vector,
+              "X scaled to unit length (normalize)." },
             // Fixed width-1 OUTPUT -- the SimpleNoise row above is the
             // fixed-out-1 precedent (its INPUTS are fixed-width, unlike
             // these): the emission case adapts the operands to the node's
             // resolved width, then the intrinsic collapses to one float.
             { GraphNodeType::Length,        "length",         "Length",
-              Pins(kUnaryIn),     Pins(kOut1),      Cat::Vector },
+              Pins(kUnaryIn),     Pins(kOut1),      Cat::Vector,
+              "The length of vector X as a scalar (length)." },
             { GraphNodeType::Distance,      "distance",       "Distance",
-              Pins(kBinaryIn),    Pins(kOut1),      Cat::Vector },
+              Pins(kBinaryIn),    Pins(kOut1),      Cat::Vector,
+              "The distance between A and B as a scalar (distance)." },
             { GraphNodeType::Dot,           "dot",            "Dot Product",
-              Pins(kBinaryIn),    Pins(kOut1),      Cat::Vector },
+              Pins(kBinaryIn),    Pins(kOut1),      Cat::Vector,
+              "The dot product of A and B as a scalar (dot)." },
             { GraphNodeType::Panner,        "panner",         "Panner",
-              Pins(kPannerIn),    Pins(kOut2),      Cat::Procedural },
+              Pins(kPannerIn),    Pins(kOut2),      Cat::Procedural,
+              "Scrolls UV by Time x Speed; Fractional wraps the offset to [0, 1) to keep precision." },
             // Gap-close -- appended in the header's enum order.
             { GraphNodeType::ScaleOffset,   "scale_offset",   "Scale & Offset",
-              Pins(kBiasScaleIn), Pins(kOutDyn),    Cat::Math },
+              Pins(kBiasScaleIn), Pins(kOutDyn),    Cat::Math,
+              "(X + Bias) times Scale, per component; unwired it leaves X unchanged." },
         };
     }
 
@@ -349,6 +399,16 @@ namespace Arcane
         int SwizzleLane(char c)
         {
             return c == 'x' ? 0 : c == 'y' ? 1 : c == 'z' ? 2 : c == 'w' ? 3 : -1;
+        }
+
+        // 1/2/4 lanes from xyzw (no float3 in the value set). Codegen's mask
+        // check and ResolveGraphNodeWidths's Swizzle width both ask this.
+        bool ValidSwizzleMask(const std::string& m)
+        {
+            bool ok = m.size() == 1 || m.size() == 2 || m.size() == 4;
+            for (char c : m)
+                ok = ok && SwizzleLane(c) >= 0;
+            return ok;
         }
 
         struct DeclInfo
@@ -591,10 +651,7 @@ namespace Arcane
             if (n->type != GraphNodeType::Swizzle)
                 continue;
             const std::string& m = n->swizzleMask;
-            bool ok = m.size() == 1 || m.size() == 2 || m.size() == 4;
-            for (char c : m)
-                ok = ok && SwizzleLane(c) >= 0;
-            if (!ok)
+            if (!ValidSwizzleMask(m))
                 fail(n->id, "Swizzle mask '" + m + "' must be 1, 2, or 4 chars from xyzw");
         }
 
@@ -610,9 +667,17 @@ namespace Arcane
         auto pinConsumed = [&](std::uint32_t node, std::uint32_t pin)
         { return consumed.count((std::uint64_t(node) << 32) | pin) != 0; };
 
-        // --- DFS from Output: resolve widths, emit SSA statements post-order
+        // --- DFS from Output: emit SSA statements post-order. Dynamic widths
+        // come from ResolveGraphNodeWidths -- the ONE resolution, which the
+        // editor's pin paint and type text read too. Codegen emits an
+        // unresolved (0) width as 1: nothing wired pins it, so it is a scalar.
+        const std::unordered_map<std::uint32_t, GraphNodeWidths> widths = ResolveGraphNodeWidths(graph);
+        auto widthsOf = [&widths](const GraphNode* n) -> GraphNodeWidths
+        {
+            const auto it = widths.find(n->id);
+            return it != widths.end() ? it->second : GraphNodeWidths{};
+        };
         std::unordered_map<std::uint32_t, int> state;    // 0 fresh / 1 on-stack / 2 done
-        std::unordered_map<std::uint32_t, int> widthOf;  // resolved primary width
         std::vector<std::pair<std::string, std::uint32_t>> body;   // statement, nodeId
         // Custom-node functions, emitted above shade() (line-mapped to their
         // node so compile errors INSIDE a body badge the Custom node).
@@ -636,7 +701,7 @@ namespace Arcane
         auto pinExpr = [&](const GraphNode* n, std::uint32_t pin, int& outWidth) -> std::string
         {
             const GraphPinDesc desc = GraphNodeOutputPin(*n, pin);
-            outWidth = desc.width == 0 ? widthOf[n->id] : desc.width;
+            outWidth = desc.width == 0 ? std::max(1, widthsOf(n).outputs) : desc.width;
             if (GraphNodeOutputCount(*n) == 1)
                 return "_n" + std::to_string(n->id);
             return "_n" + std::to_string(n->id) + "_" + desc.name;
@@ -685,22 +750,14 @@ namespace Arcane
                 in[pin].expr = pinExpr(src, it->second->fromPin, in[pin].width);
             }
 
-            // Resolved width: SG rule -- minimum connected non-scalar dynamic
-            // input, else 1 (scalars splat, never pinning the width).
+            // Resolved width of the dynamic inputs (ResolveGraphNodeWidths:
+            // SG rule -- minimum connected non-scalar dynamic input, else 1;
+            // scalars splat, never pinning the width). 0 on a node with no
+            // dynamic input, which never reads it.
             bool dynamic = false;
             for (std::uint32_t pin = 0; pin < inputCount; ++pin)
                 dynamic = dynamic || GraphNodeInputPin(*n, pin).width == 0;
-            int w = 0;
-            if (dynamic)
-            {
-                for (std::uint32_t pin = 0; pin < inputCount; ++pin)
-                    if (GraphNodeInputPin(*n, pin).width == 0 && in[pin].connected &&
-                        in[pin].width > 1)
-                        w = w == 0 ? in[pin].width : std::min(w, in[pin].width);
-                if (w == 0)
-                    w = 1;
-            }
-            widthOf[n->id] = w;
+            const int w = dynamic ? std::max(1, widthsOf(n).inputs) : 0;
 
             // Adapted expression for input `pin` at target width `t` (0 = the
             // node's resolved dynamic width). Precedence is WIRE > user
@@ -709,13 +766,16 @@ namespace Arcane
             // a literal outranks `def`, which is why it also overrides every
             // NON-ZERO neutral -- Combine alpha, Clamp max, Smoothstep edge1,
             // Power exponent, TilingOffset tiling, SimpleNoise scale, Panner
-            // uv, ScaleOffset scale: the eight argOr call sites that pass
-            // something other than "0.0". Unconnected and literal-free inputs
-            // read `def` exactly as before, so a graph with no literals emits
+            // uv, ScaleOffset scale. Every call site reaches argOr through
+            // `arg` below, which takes `def` and `defWidth` from
+            // GraphPinNeutralDefault (s5.1.8, the one neutral table; the
+            // direct-read sites take their text from it too, via
+            // `neutralText`). Unconnected and literal-free inputs read `def`
+            // exactly as before, so a graph with no literals emits
             // byte-identical text.
             //
-            // `defWidth` is the width of `def` ITSELF. Every constant neutral
-            // is a width-1 string that splats (the default), but Panner's
+            // `defWidth` is the width of `def` ITSELF. Every constant neutral argOr
+            // sees is a width-1 string that splats (the default), but Panner's
             // `v.uv` is already a float2 and must be handed to Adapt as one --
             // Adapt(.., 1, 2) would turn it into "(v.uv).xx" (Adapt's scalar
             // rule, this file's Adapt above), duplicating u into both lanes.
@@ -736,7 +796,17 @@ namespace Arcane
                 }
                 return Adapt(def, defWidth, t);
             };
-            auto arg = [&](std::uint32_t pin, int t) { return argOr(pin, t, "0.0"); };
+            // Every argOr operand's neutral comes from the one table
+            // (GraphPinNeutralDefault, s5.1.8); `def`/`defWidth` stay
+            // argOr's parameters so the seam's shape is unchanged.
+            auto arg = [&](std::uint32_t pin, int t)
+            {
+                const GraphPinNeutral nd = GraphPinNeutralDefault(*n, pin);
+                return argOr(pin, t, nd.hlsl ? nd.hlsl : "0.0", nd.lanes);
+            };
+            // A direct-read pin's unconnected text, same table.
+            auto neutralText = [&](std::uint32_t pin)
+            { return std::string(GraphPinNeutralDefault(*n, pin).hlsl); };
 
             const std::string id = std::to_string(n->id);
             auto stmt = [&](std::string s) { body.emplace_back(std::move(s), n->id); };
@@ -748,7 +818,7 @@ namespace Arcane
                 case GraphNodeType::Output:
                     stmt("return " + (in[0].connected
                                           ? Adapt(in[0].expr, in[0].width, 4)
-                                          : std::string("float4(0.0, 0.0, 0.0, 1.0)")) + ";");
+                                          : neutralText(0)) + ";");
                     break;
                 case GraphNodeType::ConstFloat:
                     local(1, FormatF(n->value[0]));
@@ -763,8 +833,7 @@ namespace Arcane
                     break;
                 case GraphNodeType::Param:
                 {
-                    const int pw = static_cast<int>(ComponentCount(n->paramType));
-                    widthOf[n->id] = pw;
+                    const int pw = static_cast<int>(ComponentCount(n->paramType));   // == its resolved output width
                     local(pw, n->paramName);
                     break;
                 }
@@ -774,7 +843,7 @@ namespace Arcane
                     const std::string tex =
                         n->type == GraphNodeType::SpriteTexture ? "SpriteTexture" : n->paramName;
                     const std::string uv = in[0].connected ? Adapt(in[0].expr, in[0].width, 2)
-                                                           : std::string("v.uv");
+                                                           : neutralText(0);
                     // The vertex stage samples at mip 0 explicitly -- Sample's
                     // implicit derivatives only exist in the pixel stage.
                     const std::string call = vertexWalk
@@ -868,7 +937,7 @@ namespace Arcane
                     // SG Split rule: lanes beyond the source width read 0. The
                     // input is read at its NATIVE width (no adaptation).
                     const int sw = in[0].connected ? in[0].width : 1;
-                    const std::string src = in[0].connected ? in[0].expr : std::string("0.0");
+                    const std::string src = in[0].connected ? in[0].expr : neutralText(0);
                     const char* lane[4] = { ".x", ".y", ".z", ".w" };
                     const auto& outs = GraphNodeInfo(n->type).outputs;
                     for (std::uint32_t pin = 0; pin < outs.size(); ++pin)
@@ -887,21 +956,21 @@ namespace Arcane
                 }
                 case GraphNodeType::Combine:
                     local(4, "float4(" + arg(0, 1) + ", " + arg(1, 1) + ", " + arg(2, 1) +
-                             ", " + argOr(3, 1, "1.0") + ")");
+                             ", " + arg(3, 1) + ")");
                     break;
                 case GraphNodeType::Clamp:
                     local(w, "clamp(" + arg(0, 0) + ", " + arg(1, 0) + ", " +
-                             argOr(2, 0, "1.0") + ")");
+                             arg(2, 0) + ")");
                     break;
                 case GraphNodeType::Smoothstep:
-                    local(w, "smoothstep(" + arg(0, 0) + ", " + argOr(1, 0, "1.0") + ", " +
+                    local(w, "smoothstep(" + arg(0, 0) + ", " + arg(1, 0) + ", " +
                              arg(2, 0) + ")");
                     break;
                 case GraphNodeType::Step:
                     local(w, "step(" + arg(0, 0) + ", " + arg(1, 0) + ")");
                     break;
                 case GraphNodeType::Power:
-                    local(w, "pow(" + arg(0, 0) + ", " + argOr(1, 0, "1.0") + ")");
+                    local(w, "pow(" + arg(0, 0) + ", " + arg(1, 0) + ")");
                     break;
                 case GraphNodeType::Remap:
                 {
@@ -911,10 +980,10 @@ namespace Arcane
                     const std::string x = arg(0, 0);
                     const std::string ir = in[1].connected
                                                ? Adapt(in[1].expr, in[1].width, 2)
-                                               : std::string("float2(0.0, 1.0)");
+                                               : neutralText(1);
                     const std::string outr = in[2].connected
                                                  ? Adapt(in[2].expr, in[2].width, 2)
-                                                 : std::string("float2(0.0, 1.0)");
+                                                 : neutralText(2);
                     local(w, "(" + outr + ").x + (" + x + " - (" + ir + ").x) * ((" + outr +
                              ").y - (" + outr + ").x) / ((" + ir + ").y - (" + ir + ").x)");
                     break;
@@ -923,8 +992,8 @@ namespace Arcane
                 {
                     const std::string uv = in[0].connected
                                                ? Adapt(in[0].expr, in[0].width, 2)
-                                               : std::string("v.uv");
-                    local(2, uv + " * " + argOr(1, 2, "1.0") + " + " + arg(2, 2));
+                                               : neutralText(0);
+                    local(2, uv + " * " + arg(1, 2) + " + " + arg(2, 2));
                     break;
                 }
                 case GraphNodeType::Cos:
@@ -945,10 +1014,9 @@ namespace Arcane
                     // (the Split rule). All-present masks emit a real HLSL
                     // swizzle; mixed masks build a constructor.
                     const int sw = in[0].connected ? in[0].width : 1;
-                    const std::string src = in[0].connected ? in[0].expr : std::string("0.0");
+                    const std::string src = in[0].connected ? in[0].expr : neutralText(0);
                     const std::string& mask = n->swizzleMask;
-                    const int mlen = static_cast<int>(mask.size());
-                    widthOf[n->id] = mlen;   // the output pin's dynamic width
+                    const int mlen = static_cast<int>(mask.size());   // == its resolved output width
                     bool allPresent = true;
                     for (char c : mask)
                         allPresent = allPresent && SwizzleLane(c) < sw;
@@ -987,8 +1055,8 @@ namespace Arcane
                     emitHelperOnce("simple_noise", kSimpleNoiseHelper);
                     local(1, "_g_simple_noise((" +
                              (in[0].connected ? Adapt(in[0].expr, in[0].width, 2)
-                                              : std::string("v.uv")) +
-                             ") * " + argOr(1, 1, "10.0") + ")");
+                                              : neutralText(0)) +
+                             ") * " + arg(1, 1) + ")");
                     break;
                 case GraphNodeType::VertexOutput:
                     // Only connected pins emit -- an untouched pin is a true
@@ -1009,7 +1077,7 @@ namespace Arcane
                             : "InputTexture" + std::to_string(n->passInputSlot);
                     const std::string uv = in[0].connected
                                                ? Adapt(in[0].expr, in[0].width, 2)
-                                               : std::string("v.uv");
+                                               : neutralText(0);
                     stmt("float4 _n" + id + "_rgba = " + tex +
                          ".Sample(MaterialSampler, " + uv + ");");
                     if (pinConsumed(n->id, 1))
@@ -1090,7 +1158,7 @@ namespace Arcane
                     // space; this form only bounds the offset. HLSL frac() is
                     // per-component, so one call covers UE's two.
                     const std::string scroll = "Time * " + arg(1, 2);
-                    local(2, argOr(0, 2, "v.uv", 2) + " + " +
+                    local(2, arg(0, 2) + " + " +
                              (n->pannerFractional ? "frac(" + scroll + ")" : scroll));
                     break;
                 }
@@ -1105,8 +1173,8 @@ namespace Arcane
                     // operand itself, which keeps the text readable when x is
                     // a float2/float4, and a wider wire narrows through the
                     // adaptation table exactly as a width-1 pin promises.
-                    local(w, "(" + arg(0, 0) + " + " + argOr(1, 1, "0.0") + ") * " +
-                             argOr(2, 1, "1.0"));
+                    local(w, "(" + arg(0, 0) + " + " + arg(1, 1) + ") * " +
+                             arg(2, 1));
                     break;
             }
 
@@ -1129,7 +1197,6 @@ namespace Arcane
         if (vertexOut)
         {
             state.clear();
-            widthOf.clear();
             vertexWalk = true;
             if (!visit(vertexOut) || !res.errors.empty())
             {
@@ -1276,11 +1343,82 @@ namespace Arcane
     int GraphPinLiteralLanes(int declaredWidth) noexcept
     {
         // Fixed 2/4 keep their lanes; everything else -- INCLUDING dynamic
-        // (width-0) pins -- is a scalar. Width resolution (:661-664) reads
+        // (width-0) pins -- is a scalar. Width resolution (ResolveGraphNodeWidths) reads
         // only CONNECTED inputs, so a literal never pins a node's width
         // regardless of lane count; the scalar choice instead splats it to
         // whatever width the node resolves to.
         return declaredWidth == 2 ? 2 : declaredWidth == 4 ? 4 : 1;
+    }
+
+    std::unordered_map<std::uint32_t, GraphNodeWidths> ResolveGraphNodeWidths(const MaterialGraph& graph)
+    {
+        // Codegen's indexing, minus its refusals: the first of a duplicate id
+        // wins, a link to a missing node or pin is skipped, and the last link
+        // into an input wins (the canvas's silent-replace).
+        std::unordered_map<std::uint32_t, const GraphNode*> byId;
+        byId.reserve(graph.nodes.size());
+        for (const GraphNode& n : graph.nodes)
+            if (n.id != 0)
+                byId.emplace(n.id, &n);
+        std::map<std::pair<std::uint32_t, std::uint32_t>, const GraphLink*> inputLink;
+        for (const GraphLink& l : graph.links)
+        {
+            const auto fromIt = byId.find(l.fromNode);
+            const auto toIt = byId.find(l.toNode);
+            if (fromIt == byId.end() || toIt == byId.end() ||
+                l.fromPin >= GraphNodeOutputCount(*fromIt->second) ||
+                l.toPin >= GraphNodeInputCount(*toIt->second))
+                continue;
+            inputLink[{ l.toNode, l.toPin }] = &l;
+        }
+
+        std::unordered_map<std::uint32_t, GraphNodeWidths> out;
+        out.reserve(byId.size());
+        std::unordered_set<std::uint32_t> onStack;
+        // Memoized post-order walk up the wires: a node's dynamic inputs need
+        // the widths their sources CARRY, which for a dynamic source is that
+        // source's own resolution.
+        std::function<GraphNodeWidths(const GraphNode&)> resolve = [&](const GraphNode& n) -> GraphNodeWidths
+        {
+            if (const auto done = out.find(n.id); done != out.end())
+                return done->second;
+            onStack.insert(n.id);
+            GraphNodeWidths w;
+            const std::uint32_t inputCount = GraphNodeInputCount(n);
+            bool dynamicIn = false, wired = false;
+            int minWide = 0;
+            for (std::uint32_t pin = 0; pin < inputCount; ++pin)
+            {
+                if (GraphNodeInputPin(n, pin).width != 0)
+                    continue;
+                dynamicIn = true;
+                const auto it = inputLink.find({ n.id, pin });
+                if (it == inputLink.end())
+                    continue;
+                const GraphNode& src = *byId.at(it->second->fromNode);
+                if (onStack.count(src.id))
+                    continue;   // the edge closing a cycle: codegen refuses the graph
+                wired = true;
+                const int carried = resolve(src).ForPin(GraphNodeOutputPin(src, it->second->fromPin).width,
+                                                        /*input*/ false);
+                if (carried > 1)
+                    minWide = minWide == 0 ? carried : std::min(minWide, carried);
+            }
+            if (dynamicIn)
+                w.inputs = minWide != 0 ? minWide : (wired ? 1 : 0);
+            if (n.type == GraphNodeType::Param)
+                w.outputs = static_cast<int>(ComponentCount(n.paramType));
+            else if (n.type == GraphNodeType::Swizzle)
+                w.outputs = ValidSwizzleMask(n.swizzleMask) ? static_cast<int>(n.swizzleMask.size()) : 0;
+            else
+                w.outputs = w.inputs;
+            onStack.erase(n.id);
+            out.emplace(n.id, w);
+            return w;
+        };
+        for (const auto& [id, n] : byId)
+            (void)resolve(*n);
+        return out;
     }
 
     bool GraphPinAcceptsLiteral(const GraphNode& n, std::uint32_t pin) noexcept
@@ -1316,6 +1454,50 @@ namespace Arcane
                 // uv, which -- unlike TilingOffset's -- takes its v.uv
                 // neutral THROUGH the seam as a width-2 default (:1058).
                 return true;
+        }
+    }
+
+    GraphPinNeutral GraphPinNeutralDefault(const GraphNode& n, std::uint32_t pin) noexcept
+    {
+        // THE neutral table (s5.1.8): the emission switch above reads `hlsl`
+        // and `lanes` from here, so a neutral changes in exactly one place.
+        // MaterialGraphTest's truth table is the tripwire.
+        using K = GraphPinNeutralKind;
+        constexpr GraphPinNeutral kZero{};
+        constexpr GraphPinNeutral kOne{ K::Constant, 1, { 1.0f, 0.0f, 0.0f, 0.0f }, "1.0" };
+        constexpr GraphPinNeutral kUv{ K::Expression, 2, {}, "v.uv" };
+        switch (n.type)
+        {
+            case GraphNodeType::Output:
+                return pin == 0
+                    ? GraphPinNeutral{ K::Constant, 4, { 0.0f, 0.0f, 0.0f, 1.0f }, "float4(0.0, 0.0, 0.0, 1.0)" }
+                    : kZero;
+            case GraphNodeType::TextureSample:
+            case GraphNodeType::SpriteTexture:
+            case GraphNodeType::PassInput:
+                return pin == 0 ? kUv : kZero;
+            case GraphNodeType::TilingOffset:
+                return pin == 0 ? kUv : pin == 1 ? kOne : kZero;
+            case GraphNodeType::SimpleNoise:
+                return pin == 0 ? kUv
+                     : pin == 1 ? GraphPinNeutral{ K::Constant, 1, { 10.0f, 0.0f, 0.0f, 0.0f }, "10.0" }
+                                : kZero;
+            case GraphNodeType::Panner:
+                return pin == 0 ? kUv : kZero;
+            case GraphNodeType::Combine:     return pin == 3 ? kOne : kZero;
+            case GraphNodeType::Clamp:       return pin == 2 ? kOne : kZero;
+            case GraphNodeType::Smoothstep:  return pin == 1 ? kOne : kZero;
+            case GraphNodeType::Power:       return pin == 1 ? kOne : kZero;
+            case GraphNodeType::ScaleOffset: return pin == 2 ? kOne : kZero;
+            case GraphNodeType::Remap:
+                return pin == 1 || pin == 2
+                    ? GraphPinNeutral{ K::Constant, 2, { 0.0f, 1.0f, 0.0f, 0.0f }, "float2(0.0, 1.0)" }
+                    : kZero;
+            case GraphNodeType::VertexOutput:
+                return pin < 3 ? GraphPinNeutral{ K::Passthrough, GraphNodeInputPin(n, pin).width, {}, nullptr }
+                               : kZero;
+            default:
+                return kZero;   // every other operand, Split/Swizzle's source, Custom pins
         }
     }
 

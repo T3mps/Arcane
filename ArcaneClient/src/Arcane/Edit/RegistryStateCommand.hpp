@@ -21,6 +21,7 @@
 
 #include <Arcane/Base/Api.hpp>
 #include <Arcane/Edit/Command.hpp>
+#include <Arcane/Edit/UndoPayload.hpp>
 #include <Arcane/Util/FunctionRef.hpp>
 
 #include <Astra/Entity/Entity.hpp>   // ApplyRegistryMutation's `touched` tags
@@ -48,23 +49,30 @@ namespace Arcane
         using SnapshotFn = std::function<std::vector<std::byte>()>;
         using RestoreFn  = std::function<bool(std::span<const std::byte>)>;
 
-        // `before` is the registry state BEFORE the (already applied) edit.
+        // `before` is the registry state BEFORE the (already applied) edit, as
+        // a stack-minted payload. `stack` mints the redo payload on first Undo
+        // (it lands in THIS step's spill file); the stack owns the command,
+        // so it outlives it.
         RegistryStateCommand(std::string label, SnapshotFn snapshot,
-                             RestoreFn restore, std::vector<std::byte> before);
+                             RestoreFn restore, UndoPayload before, CommandStack& stack);
 
         // First Undo captures the CURRENT state as the redo target, then
         // restores `before`. A failed capture warns and still restores
-        // (undo works; redo becomes a warned no-op).
+        // (undo works; redo becomes a warned no-op). An unreadable spilled
+        // payload logs an error and skips the step.
         void Undo() override;
         void Redo() override;
         const char* Label() const override;
+        // Both blobs, in memory or spilled (byteBudget bounds RAM + disk).
+        std::size_t PayloadBytes() const override { return m_before.Size() + m_after.Size(); }
 
     private:
-        std::string            m_label;
-        SnapshotFn             m_snapshot;
-        RestoreFn              m_restore;
-        std::vector<std::byte> m_before;
-        std::vector<std::byte> m_after;   // captured on first Undo
+        std::string   m_label;
+        SnapshotFn    m_snapshot;
+        RestoreFn     m_restore;
+        CommandStack* m_stack;
+        UndoPayload   m_before;
+        UndoPayload   m_after;     // captured on first Undo
         bool m_redoLost = false;   // first failed after-capture latches: redo stays a warned no-op
     };
 #if defined(_MSC_VER)

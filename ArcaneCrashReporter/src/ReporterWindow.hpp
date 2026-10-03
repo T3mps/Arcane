@@ -19,6 +19,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace Arcane::Reporter
 {
@@ -80,6 +81,11 @@ namespace Arcane::Reporter
         // button handler in ReporterMain.cpp has no other way at m_view.
         [[nodiscard]] std::string ReportFolder();      // m_view.reportFolder
         [[nodiscard]] std::string RelaunchLine();      // m_view.relaunchLine
+        // Window thread (OnButton's kBtnCopy): the Copy button reads "Copied" /
+        // "Copy failed" for 0.75 s (styled: until an ImGui::GetTime() deadline,
+        // reverting on the first input-driven frame after it; Win32: until the
+        // next ApplyView/RefreshDetails).
+        void NoteCopy(bool ok);
 
     private:
         friend std::intptr_t __stdcall ReporterStyledProc(void*, unsigned, std::uintptr_t, std::intptr_t);
@@ -134,5 +140,8 @@ namespace Arcane::Reporter
         void*       m_prevProc = nullptr;  // WNDPROC installed over, restored on destroy
         WarpImGui*  m_warp = nullptr;
         std::string m_detailsBuf;
+        CopyState   m_copyState = CopyState::Idle;
+        double      m_copyUntil = 0.0;
+        std::vector<ReporterButton> m_order;   // Win32: VisibleButtons of the last ApplyView, laid out right-aligned
     };
 }

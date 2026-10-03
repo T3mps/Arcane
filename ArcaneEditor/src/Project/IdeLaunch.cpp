@@ -23,6 +23,7 @@
 #include <objbase.h>   // CoInitializeEx, GetRunningObjectTable, CreateBindCtx
 #include <oaidl.h>     // IDispatch, VARIANT, DISPPARAMS
 #include <oleauto.h>   // SysAllocStringLen, VariantInit/Clear
+#include "Project/WinCom.hpp"   // CoScope, Com<T> (shared with OsShell)
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "uuid.lib")     // IID_IDispatch
@@ -67,12 +68,17 @@ namespace Arcane::Editor::IdeLaunch
     }
 
     std::vector<std::wstring> ComposeLaunchArgs(const std::filesystem::path& solution,
-                                                const std::filesystem::path& file)
+                                                const std::filesystem::path& file, int line)
     {
         std::vector<std::wstring> args;
         args.push_back(solution.wstring());
         if (!file.empty())
             args.push_back(file.wstring());
+        if (!file.empty() && line > 0)
+        {
+            args.push_back(L"/Command");
+            args.push_back(L"Edit.GoTo " + std::to_wstring(line));
+        }
         return args;
     }
 
@@ -108,47 +114,8 @@ namespace Arcane::Editor::IdeLaunch
 
     namespace
     {
-        // COM for the duration of one click. S_FALSE (already initialised on
-        // this thread, same model) is fine; RPC_E_CHANGED_MODE (already
-        // initialised with the OTHER model) is fine too -- the ROT and DTE
-        // proxies work from either apartment, and in that case the init is
-        // not ours to undo.
-        struct CoScope
-        {
-            HRESULT hr;
-            CoScope() : hr(::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)) {}
-            ~CoScope() { if (SUCCEEDED(hr)) ::CoUninitialize(); }
-            [[nodiscard]] bool Usable() const { return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE; }
-        };
-
-        // Owned COM reference; Release on scope exit. `Out()` hands the slot to
-        // an out-parameter API; `Detach()` gives the reference away.
-        template <class T>
-        class Com
-        {
-        public:
-            Com() = default;
-            Com(const Com&) = delete;
-            Com& operator=(const Com&) = delete;
-            Com(Com&& o) noexcept : m_p(std::exchange(o.m_p, nullptr)) {}
-            Com& operator=(Com&& o) noexcept
-            {
-                if (this != &o)
-                {
-                    if (m_p) m_p->Release();
-                    m_p = std::exchange(o.m_p, nullptr);
-                }
-                return *this;
-            }
-            ~Com() { if (m_p) m_p->Release(); }
-            T** Out() { return &m_p; }
-            T*  Get() const { return m_p; }
-            T*  operator->() const { return m_p; }
-            explicit operator bool() const { return m_p != nullptr; }
-            T*  Detach() { return std::exchange(m_p, nullptr); }
-        private:
-            T* m_p = nullptr;
-        };
+        using WinCom::CoScope;
+        template <class T> using Com = WinCom::Com<T>;
 
         struct Bstr
         {
@@ -375,6 +342,29 @@ namespace Arcane::Editor::IdeLaunch
             return SUCCEEDED(hr);
         }
 
+        // DTE.ExecuteCommand(CommandName, CommandArgs). DISPPARAMS order is LAST
+        // argument FIRST: [0] = "<line>", [1] = "Edit.GoTo". The Bstr locals own
+        // the strings (no VariantClear on the args, same as OpenFileIn).
+        bool GoToLine(IDispatch* dte, int line)
+        {
+            Bstr command(L"Edit.GoTo");
+            Bstr lineArg(std::to_wstring(line));
+            std::vector<VARIANT> args(2);
+            ::VariantInit(&args[0]);
+            args[0].vt      = VT_BSTR;
+            args[0].bstrVal = lineArg.b;
+            ::VariantInit(&args[1]);
+            args[1].vt      = VT_BSTR;
+            args[1].bstrVal = command.b;
+            VARIANT result;
+            ::VariantInit(&result);
+            const HRESULT hr = InvokeNamed(dte, L"ExecuteCommand", DISPATCH_METHOD, args, &result);
+            ::VariantClear(&result);
+            if (FAILED(hr))
+                ARC_WARN("IdeLaunch: DTE.ExecuteCommand('Edit.GoTo {}') failed (hr=0x{:08x})", line, static_cast<unsigned>(hr));
+            return SUCCEEDED(hr);
+        }
+
         // A NEW devenv, detached, with the solution's directory as cwd (the
         // one place a relative path in the args could ever resolve from). A
         // GUI app: no console, no redirect -- so this is deliberately not
@@ -414,10 +404,10 @@ namespace Arcane::Editor::IdeLaunch
             return true;
         }
 
-        // The shared body of both public entry points: `file` empty means
-        // "the solution only".
+        // The shared body of the public entry points: `file` empty means
+        // "the solution only"; `line` > 0 (with a file) also moves the caret.
         Outcome Open(const std::filesystem::path& devenv, const std::filesystem::path& solution,
-                     const std::filesystem::path& file)
+                     const std::filesystem::path& file, int line)
         {
             std::error_code ec;
             if (solution.empty() || !std::filesystem::is_regular_file(solution, ec))
@@ -440,12 +430,16 @@ namespace Arcane::Editor::IdeLaunch
                         return Outcome::ActivateFailed;
                     if (file.empty())
                         return Outcome::Activated;
-                    return OpenFileIn(dte.Get(), file) ? Outcome::OpenedInInstance : Outcome::OpenFailed;
+                    if (!OpenFileIn(dte.Get(), file))
+                        return Outcome::OpenFailed;
+                    if (line > 0)
+                        GoToLine(dte.Get(), line);   // a failed jump still opened the file
+                    return Outcome::OpenedInInstance;
 
                 case Access::NotOpen:
                     if (devenv.empty())
                         return Outcome::NoDevenv;
-                    return Launch(devenv, ComposeLaunchArgs(solution, file), solution.parent_path())
+                    return Launch(devenv, ComposeLaunchArgs(solution, file, line), solution.parent_path())
                                ? Outcome::Launched : Outcome::LaunchFailed;
 
                 case Access::Blocked:
@@ -469,13 +463,19 @@ namespace Arcane::Editor::IdeLaunch
 
     Outcome OpenSolution(const std::filesystem::path& devenv, const std::filesystem::path& solution)
     {
-        return Open(devenv, solution, {});
+        return Open(devenv, solution, {}, 0);
     }
 
     Outcome OpenFile(const std::filesystem::path& devenv, const std::filesystem::path& solution,
                      const std::filesystem::path& file)
     {
-        return Open(devenv, solution, file);
+        return Open(devenv, solution, file, 0);
+    }
+
+    Outcome OpenFileAtLine(const std::filesystem::path& devenv, const std::filesystem::path& solution,
+                           const std::filesystem::path& file, int line)
+    {
+        return Open(devenv, solution, file, line);
     }
 
 #else   // !_WIN32 -- Visual Studio is a Windows IDE; nothing to find or launch.
@@ -490,6 +490,13 @@ namespace Arcane::Editor::IdeLaunch
 
     Outcome OpenFile(const std::filesystem::path&, const std::filesystem::path&,
                      const std::filesystem::path&)
+    {
+        ARC_ERROR("IdeLaunch: Visual Studio integration is Windows-only");
+        return Outcome::DetectionFailed;
+    }
+
+    Outcome OpenFileAtLine(const std::filesystem::path&, const std::filesystem::path&,
+                           const std::filesystem::path&, int)
     {
         ARC_ERROR("IdeLaunch: Visual Studio integration is Windows-only");
         return Outcome::DetectionFailed;

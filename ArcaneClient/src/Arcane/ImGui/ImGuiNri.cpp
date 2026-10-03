@@ -299,25 +299,36 @@ namespace Arcane
         // might be reading -- the one path that reuses one (AcquireSet's
         // recycling of a retired set) waits kSwapchainFramesInFlight recorded
         // frames first.
+        //
+        // ONE LINK OF THE CHAIN per call -- see THE POOL CHAIN in the header
+        // for the sizing and why the chain grows rather than capping.
+        const std::uint32_t capacity = PoolCapacityFor(m_pools.size());
         nri::DescriptorPoolDesc poolDesc = {};
-        poolDesc.descriptorSetMaxNum = kMaxTextures;
-        poolDesc.textureMaxNum       = kMaxTextures;
-        poolDesc.samplerMaxNum       = kMaxTextures;
-        if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, m_pool)) || !m_pool)
+        poolDesc.descriptorSetMaxNum = capacity;
+        poolDesc.textureMaxNum       = capacity;
+        poolDesc.samplerMaxNum       = capacity;
+        nri::DescriptorPool* pool = nullptr;
+        if (!ARC_NRI_CHECK(core.CreateDescriptorPool(m_device->Device(), poolDesc, pool)) || !pool)
         {
-            ARC_ERROR("[nri-graph] ImGuiNri: descriptor pool creation failed");
+            ARC_ERROR("[nri-graph] ImGuiNri: descriptor pool creation failed ({} sets, link {})",
+                      capacity, m_pools.size());
             return false;
         }
+        m_pools.push_back(PoolLink{ pool, capacity, 0 });
 
-        // RESERVED, not merely sized: EnsureEntry returns an Entry* into this
-        // vector and the caller uses it after the push, so a reallocation
-        // would dangle it. The cap IS the reservation, so it never grows past
-        // it.
-        m_textures.reserve(kMaxTextures);
+        // RESERVED to the chain's total capacity. EnsureEntry hands back an
+        // Entry* into this vector, taken AFTER its push_back, and no caller
+        // holds one across a second EnsureEntry -- so a reallocation could not
+        // dangle anything today. The reservation keeps it that way within a
+        // link and costs one Entry per set.
+        std::size_t total = 0;
+        for (const PoolLink& link : m_pools)
+            total += link.capacity;
+        m_textures.reserve(total);
         return true;
     }
 
-    nri::DescriptorSet* ImGuiNri::AcquireSet(const nri::CoreInterface& core)
+    ImGuiNri::AcquiredSet ImGuiNri::AcquireSet(const nri::CoreInterface& core)
     {
         // A retired set is reusable once the submission that last bound it has
         // retired. kSwapchainFramesInFlight recorded frames is exactly that
@@ -329,34 +340,44 @@ namespace Arcane
         {
             if (m_recordCount - m_retired[i].retiredAt < kSwapchainFramesInFlight)
                 continue;
-            nri::DescriptorSet* set = m_retired[i].set;
+            const AcquiredSet recycled{ m_retired[i].set, m_retired[i].pool };
             m_retired.erase(m_retired.begin() + (std::ptrdiff_t)i);
-            return set;
+            return recycled;
         }
 
-        if (m_setsAllocated >= kMaxTextures)
+        // GROW rather than refuse: only the newest link can have room, and
+        // when it has none a new one is appended (THE POOL CHAIN, header).
+        if (m_pools.empty() || m_pools.back().allocated >= m_pools.back().capacity)
         {
-            if (!m_warnedPoolFull)
+            if (!CreatePool())
             {
-                m_warnedPoolFull = true;
-                GraphError("ImGuiNri: more than " + std::to_string(kMaxTextures)
-                           + " concurrent ImGui textures -- raise ImGuiNri::kMaxTextures. Draws "
-                             "using the extra textures are dropped.");
+                if (!m_warnedPoolFull)
+                {
+                    m_warnedPoolFull = true;
+                    GraphError("ImGuiNri: the descriptor pool chain could not grow past "
+                               + std::to_string(m_pools.size()) + " pool(s) -- draws using "
+                               "textures beyond its capacity are dropped until a set retires.");
+                }
+                return {};
             }
-            return nullptr;
+            if (m_pools.size() > 1)
+                ARC_INFO("[nri-graph] ImGuiNri: descriptor pool chain grew to {} pools ({} sets "
+                         "in the newest) -- {} concurrent ImGui textures live",
+                         m_pools.size(), m_pools.back().capacity, m_textures.size());
         }
 
+        PoolLink&            link   = m_pools.back();
         nri::PipelineLayout* layout = m_pipelines->Layout(m_layoutId);
         nri::DescriptorSet*  set    = nullptr;
         if (!layout
-            || !ARC_NRI_CHECK(core.AllocateDescriptorSets(*m_pool, *layout, 0, &set, 1, 0))
+            || !ARC_NRI_CHECK(core.AllocateDescriptorSets(*link.pool, *layout, 0, &set, 1, 0))
             || !set)
         {
             GraphError("ImGuiNri: descriptor set allocation failed");
-            return nullptr;
+            return {};
         }
-        ++m_setsAllocated;
-        return set;
+        ++link.allocated;
+        return AcquiredSet{ set, link.pool };
     }
 
     ImGuiNri::Entry* ImGuiNri::EnsureEntry(const nri::CoreInterface& core, nri::Texture* texture,
@@ -385,7 +406,8 @@ namespace Arcane
             return nullptr;
         }
 
-        nri::DescriptorSet* set = AcquireSet(core);
+        const AcquiredSet acquired = AcquireSet(core);
+        nri::DescriptorSet* const set = acquired.set;
         if (!set)
         {
             core.DestroyDescriptor(view);   // never bound, nothing can be reading it
@@ -407,7 +429,8 @@ namespace Arcane
         updates[1].descriptorNum = 1;
         core.UpdateDescriptorRanges(updates, 2);
 
-        m_textures.push_back(Entry{ owner, texture, view, set, /*owned=*/owner != nullptr });
+        m_textures.push_back(Entry{ owner, texture, view, set, acquired.pool,
+                                    /*owned=*/owner != nullptr });
         return &m_textures.back();
     }
 
@@ -457,11 +480,12 @@ namespace Arcane
         // DestroyTexture has always left one in: nothing can bind it, because
         // the entry that pointed at it is gone.
         if (entry.set)
-            m_retired.push_back(RetiredSet{ entry.set, m_recordCount });
+            m_retired.push_back(RetiredSet{ entry.set, entry.pool, m_recordCount });
 
         entry.view    = nullptr;
         entry.texture = nullptr;
         entry.set     = nullptr;
+        entry.pool    = nullptr;
         entry.owner   = nullptr;
         entry.owned   = false;
     }
@@ -711,6 +735,13 @@ namespace Arcane
                 // can still be reported before a command buffer is open.
                 if (!EnsureEntry(core, texture, tex))
                 {
+                    // RETRIED, NOT STRANDED: Status is deliberately left at
+                    // WantCreate (never stamped OK), so NewFrameTexUpdates
+                    // re-requests the create next frame -- by which time a set
+                    // may have retired or the chain may grow. Until then the
+                    // TexID stays Invalid, and RenderDrawData SKIPS every draw
+                    // naming it rather than letting ImDrawCmd::GetTexID assert
+                    // (its UNREGISTERED-TEXTURE GUARD).
                     const nri::CoreInterface* c = &core;
                     graveyard.Bury(fence, [c, texture] { c->DestroyTexture(texture); });
                     return;   // already reported
@@ -867,7 +898,12 @@ namespace Arcane
         if (!pipeline)
             return;   // already logged + latched by the cache
 
-        core.CmdSetDescriptorPool(context.cmd, *m_pool);
+        // The FIRST link is bound up front, ahead of the layout, as it always
+        // was; a draw whose set lives in a later link re-binds below.
+        if (m_pools.empty())
+            return;   // Init never made a pool (already reported)
+        nri::DescriptorPool* boundPool = m_pools.front().pool;
+        core.CmdSetDescriptorPool(context.cmd, *boundPool);
         core.CmdSetPipelineLayout(context.cmd, nri::BindPoint::GRAPHICS, *layout);
 
         nri::SetRootConstantsDesc rootConstants = {};
@@ -922,9 +958,42 @@ namespace Arcane
                 if (x1 <= x0 || y1 <= y0)
                     continue;   // entirely off-surface after clamping
 
+                // ===== THE UNREGISTERED-TEXTURE GUARD =====
+                // ImDrawCmd::GetTexID IM_ASSERTs (imgui.h) when the command
+                // names an ImTextureData whose TexID is still Invalid -- one
+                // whose create this backend has not completed (a failed
+                // upload, or no descriptor set to be had). It is retried next
+                // frame (UpdateTexture leaves it WantCreate); THIS frame the
+                // draw is dropped, and it must be dropped BEFORE GetTexID, or
+                // the "drop the draw" fallback below is unreachable and the
+                // assert aborts the host instead.
+                if (const ImTextureData* const managed = cmd->TexRef._TexData;
+                    managed != nullptr && managed->TexID == ImTextureID_Invalid)
+                {
+                    if (!m_warnedUnregistered)
+                    {
+                        m_warnedUnregistered = true;
+                        GraphError("ImGuiNri: a draw names an ImGui-managed texture that was never "
+                                   "registered (its create failed above) -- the draw is dropped and "
+                                   "the create is retried next frame.");
+                    }
+                    continue;
+                }
+
                 Entry* entry = EnsureEntry(core, (nri::Texture*)(intptr_t)cmd->GetTexID(), nullptr);
                 if (!entry || !entry->set)
                     continue;   // already reported; a bound-nothing draw is worse than no draw
+
+                // A set from another link of the chain needs ITS pool bound
+                // first. On D3D12 that is SetDescriptorHeaps, after which an
+                // earlier-bound table is not to be relied on -- so the set is
+                // re-bound too, even if it happens to compare equal.
+                if (entry->pool != nullptr && entry->pool != boundPool)
+                {
+                    boundPool = entry->pool;
+                    core.CmdSetDescriptorPool(context.cmd, *boundPool);
+                    lastSet = nullptr;
+                }
 
                 if (entry->set != lastSet)
                 {
@@ -1002,13 +1071,14 @@ namespace Arcane
         m_textures.clear();
         m_retired.clear();
 
+        // EVERY link of the chain, at the same fence, in the same lane -- the
+        // burial order above (views before pools) is what keeps a pool from
+        // dying under a set that still names a live view.
         const nri::CoreInterface* core = &m_device->Core();
-        if (m_pool)
-        {
-            graveyard.Bury(fence, [core, p = m_pool] { core->DestroyDescriptorPool(p); });
-            m_pool = nullptr;
-            m_setsAllocated = 0;
-        }
+        for (const PoolLink& link : m_pools)
+            if (link.pool)
+                graveyard.Bury(fence, [core, p = link.pool] { core->DestroyDescriptorPool(p); });
+        m_pools.clear();
         if (m_sampler)
         {
             graveyard.Bury(fence, [core, d = m_sampler] { core->DestroyDescriptor(d); });
@@ -1018,7 +1088,7 @@ namespace Arcane
 
     ImGuiNri::~ImGuiNri()
     {
-        if (!m_device || (!m_sampler && !m_pool && m_textures.empty()))
+        if (!m_device || (!m_sampler && m_pools.empty() && m_textures.empty()))
             return;
 
         ARC_WARN("[nri-graph] ImGuiNri destroyed with live NRI objects -- either Init() failed part "
@@ -1033,10 +1103,10 @@ namespace Arcane
         }
         m_textures.clear();
         m_retired.clear();
-        if (m_pool)    core.DestroyDescriptorPool(m_pool);
+        for (const PoolLink& link : m_pools)
+            if (link.pool) core.DestroyDescriptorPool(link.pool);
         if (m_sampler) core.DestroyDescriptor(m_sampler);
-        m_pool = nullptr;
+        m_pools.clear();
         m_sampler = nullptr;
-        m_setsAllocated = 0;
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "App/EditorTitle.hpp"   // TitleParts (ToolbarStatus)
 #include "Scene/EditGesture.hpp"   // EditGesture::GestureState (InspectorState parks one)
 #include "Panels/EntityList.hpp"
 #include "Panels/InspectorFields.hpp"   // Arcane::Editor::QuatEulerView (InspectorState::quatEulerViews)
@@ -9,16 +10,18 @@
 #include "Viewport/ViewportInput.hpp"
 #include "Viewport/ViewportSettings.hpp"   // ViewportToolState (ViewMode + ViewportSettings)
 #include "Widgets/PropertyGrid.hpp"   // PropertyGridState (InspectorState::grid)
+#include <Arcane/Config/ConsoleModel.hpp>   // ConsoleUiState::cvars (the command line's model)
 #include <Arcane/Edit/CommandStack.hpp>
 #include <imgui.h>   // ImDrawList / ImVec2 (ViewportImageOverlayFn)
 #include <Arcane/Edit/Gizmo.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
-#include <Arcane/Guid.hpp>   // InspectorServices::mintSpriteForTexture
+#include <Arcane/Guid.hpp>   // Arcane::Guid
 #include <Arcane/Util/FunctionRef.hpp>   // ApplyStructural's mutate callback
 #include <cstdint>
 #include <functional>
 #include <glm/vec2.hpp>   // InspectorState::vectorProbe
 #include <glm/vec4.hpp>   // InspectorState::colorPopupOriginal
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -33,13 +36,15 @@ namespace Arcane::Editor
     class PlaySession;
     enum class PlayLaunchMode;   // full definition in PlayMode.hpp
     struct SelectionContext;
-    class AssetPanelModel;   // full definition in AssetPanelModel.hpp (InspectorServices::assetModel)
+    class AssetPanelModel;   // full definition in AssetPanelModel.hpp
+    struct AssetRefServices;   // Panels/AssetReferenceField.hpp (InspectorServices::assetRefs)
 
     // Menu-bar requests the app resolves AFTER the frame's dockspace is drawn
     // (dialog launches happen at the call site, never inside the menu draw).
     struct MenuRequests
     {
         bool openProject = false;    // File -> Open Project      (file dialog)
+        bool openProjectFolder = false;   // File -> Open Folder... / the start page (folder dialog: a folder IS a project, Project.hpp:46-62)
         bool showProjectSettings = false;
         // A picked recent-project path. Empty = nothing picked this frame.
         // A path rather than a bool because a submenu carries the choice.
@@ -105,6 +110,12 @@ namespace Arcane::Editor
 #endif
     };
 
+    struct ClipboardShortcutEdges { bool cut = false, copy = false, paste = false, duplicate = false; };
+    // T5 s7.10: Ctrl+X/C/V/D reach the ENTITY clipboard only while the Asset Browser does not own the keys.
+    // Header-inline so ArcaneTests reaches it without EditorPanels.cpp.
+    inline void FoldEntityClipboardShortcuts(MenuRequests& r, const ClipboardShortcutEdges& s, bool browserOwnsEditKeys)
+    { if (browserOwnsEditKeys) return; r.cutSelection |= s.cut; r.copySelection |= s.copy; r.paste |= s.paste; r.duplicateSelection |= s.duplicate; }
+
     struct ProjectSettingsRequests
     {
         Guid selection;
@@ -136,7 +147,8 @@ namespace Arcane::Editor
     // point).
     // `hasSelection` gates the Edit menu's selection-dependent items
     // (Rename/Delete, and Cut/Copy/Duplicate -- Paste stays always-enabled,
-    // see its MenuItem call).
+    // see its MenuItem call). `selectionRootOnly` (s3.1): the selection is
+    // the scene root alone -- Cut/Copy/Duplicate/Delete grey with the reason.
     // `hasAssetSelection` gates the Assets menu's Show in Explorer / Copy
     // Path (the Assets panel's last-clicked row -- AssetPanelModel::selected).
     // `sceneRecents` is the PER-PROJECT scene history (SceneRecents.hpp) that
@@ -153,6 +165,7 @@ namespace Arcane::Editor
                         IdeMenuState ideState,
                         PanelVisibility& panels,
                         bool hasSelection,
+                        bool selectionRootOnly,
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents = nullptr,
@@ -198,26 +211,53 @@ namespace Arcane::Editor
     // here: the chevron button after Step opens a popup whose
     // rows set it directly. In Viewport mode the Play button behaves exactly as
     // before (play.Play/Stop). In SeparateWindow mode, clicking Play does NOT touch
-    // `play` at all (fire-and-forget: nothing to Stop) -- instead this returns true
-    // for that one frame, and the caller performs the actual ArcaneRuntime spawn
-    // via EditorApp::DoLaunchStandalone, the same "panel reports, app performs"
-    // split ViewportPanelResult's clicks already use. The project/dirty-scene
-    // checks are NOT owned by that spawn step -- they live in the SceneSession
-    // intent machine (SceneSession::Request, run by RunSceneAction before this
-    // ever returns true); DoLaunchStandalone keeps only a defensive backstop.
+    // `play` at all (fire-and-forget: nothing to Stop) -- instead it sets
+    // `result.launchStandalone` for that one frame, and the caller performs the
+    // actual ArcaneRuntime spawn via EditorApp::DoLaunchStandalone, the same
+    // "panel reports, app performs" split ViewportPanelResult's clicks already
+    // use. The project/dirty-scene checks are NOT owned by that spawn step --
+    // they live in the SceneSession intent machine (SceneSession::Request, which
+    // the caller runs on `result.launchStandalone` before any spawn);
+    // DoLaunchStandalone keeps only a defensive backstop.
     //
     // ListenServer/EmbeddedServer enter Play right here, like Viewport, differing
     // only in the PlayTopology handed to play.Play. SeparateServerProcess does
     // BOTH halves: it enters Play as a CLIENT world here AND sets
-    // `launchServerRequested` for that one frame, which the caller turns into an
+    // `result.launchServer` for that one frame, which the caller turns into an
     // ArcaneServer.exe spawn (EditorApp::DoLaunchServer) -- the same "panel
-    // reports, app performs" split as the return value above, in its own out
-    // parameter because the two requests are independent and can never both be
-    // true. It is always written (true or false) before this returns.
-    [[nodiscard]] bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                                          Arcane::PluginHost* host,
-                                          PlayLaunchMode& mode, bool& launchServerRequested,
-                                          uint64_t logoTex = 0);
+    // reports, app performs" split as `result.launchStandalone`, in its own
+    // field because the two requests are independent and can never both be
+    // true in one frame.
+    //
+    // `beforePlay` runs immediately before every play.Play this strip makes,
+    // while the editor is still in Edit: the host flushes open document
+    // gestures there (DocumentHost::FlushGestures, spec s3.3(b)), so a drag
+    // still held when Play is pressed lands as one Edit-mode undo step.
+    //
+    // The strip's right cluster (node page phase s6.4/s6.5). One layout owns
+    // both occupants, so two right-aligners never fight over the edge.
+    struct StripChip
+    {
+        std::string label;      // drawn text; the chip's ImGui id is "##strip_problems"
+        ImVec4      color;      // s8.2 picks it from the worst severity
+        std::string tooltip;
+    };
+    struct ToolbarStatus
+    {
+        TitleParts               title;      // 6.4: EditorApp::CurrentTitleParts()
+        std::string              scenePath;  // tooltip only; empty = never saved
+        std::optional<StripChip> problems;   // s8.2 (T6); nullopt = nothing drawn, no space reserved
+    };
+    struct ToolbarResult
+    {
+        bool launchStandalone    = false;    // SeparateWindow Play, this frame
+        bool launchServer        = false;    // SeparateServerProcess Play, this frame
+        bool problemsChipClicked = false;    // s8.2 routes it
+    };
+    [[nodiscard]] ToolbarResult DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                                                   Arcane::PluginHost* host, PlayLaunchMode& mode,
+                                                   uint64_t logoTex, const ToolbarStatus& status,
+                                                   const std::function<void()>& beforePlay = {});   // T1-B14 (s3.3b)
 
     // (The three asset panels are the REAL browser now --
     // AssetBrowserPanel/AssetGraphPanel/AssetStatusPanel, panel-split Task 7;
@@ -237,17 +277,21 @@ namespace Arcane::Editor
         bool autoScroll  = true;
         bool wrap        = true;
         char search[128] = {};
+        std::string categoryFilter;   // "" = All categories (optional s8.2 combo)
         int  lineCap     = 512;
         // Copy button's "Copied" feedback: the ImGui::GetTime() deadline the
         // swapped label holds until. A plain deadline the draw compares each
         // frame -- no timer, no animation state; 0 (any past time) = idle.
         double copyFlashUntil = 0.0;
+        std::uint64_t lastSeenSeq = 0;   // the newest seq the drawn rows showed; the badge counts past it
+        Arcane::ConsoleModel cvars;   // the command line's model (was a function-local static)
     };
 
     // Scrolling console of captured log lines: severity filters, text search,
     // collapse-identical, wrap toggle, Clear/Copy. Autoscroll pins to bottom.
     // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
-    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool* open = nullptr);
+    // `suppressBadges` (UnderVerifyHarness) keeps the tab title bare and untinted.
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool suppressBadges, bool* open = nullptr);
 
     struct ViewportPanelResult
     {
@@ -310,12 +354,24 @@ namespace Arcane::Editor
         float&                             speedScalar;
     };
 
+    // What the viewport window shows around the image (node page phase s6.3/s6.4):
+    // the edit tool overlay, Play presence, and the scene's unsaved dot on the
+    // Viewport tab. Built by the one caller from EditorApp state each frame.
+    struct ViewportChrome
+    {
+        bool showToolOverlay = true;
+        bool playing         = false;   // 6.3: the 2 px accent frame inside the image
+        bool sceneDirty      = false;   // 6.4: the Viewport tab's unsaved dot
+    };
+
     // Draw the scene texture into a dockable Viewport window; report its rect,
     // hover/focus, and the content-region size the offscreen canvas should match.
-    // showToolOverlay gates the top-right tool overlay (the 2D | Persp view
+    // chrome.showToolOverlay gates the top-right tool overlay (the 2D | Persp view
     // control, the view-settings gear, and the transform-tool buttons): the
     // host passes false in Play mode, where the game owns the viewport and
     // the edit tools (like the gizmo they drive) have no business on screen.
+    // chrome.playing draws a 2 px kAccent frame INSIDE the image rect (draw
+    // only: hover, click capture and game input are unchanged).
     // imageOverlay, when set, is called right after the image is drawn with
     // the Viewport window's draw list (clipped to the image) and the image's
     // screen origin -- the editor's FOREGROUND: the transform gizmo paints
@@ -323,7 +379,7 @@ namespace Arcane::Editor
     // (Viewport/GizmoOverlay.hpp). Skipped when there is no image.
     using ViewportImageOverlayFn = std::function<void(ImDrawList& list, ImVec2 origin)>;
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          ViewportToolState& tools, bool showToolOverlay,
+                                          ViewportToolState& tools, const ViewportChrome& chrome,
                                           const ViewportImageOverlayFn& imageOverlay = {});
 
     // The Outliner (replaces the flat Hierarchy panel). Pure row data comes
@@ -425,45 +481,15 @@ namespace Arcane::Editor
                            OutlinerState& state, std::uint64_t savedStateId,
                            bool* open = nullptr);
 
-    // App-level effect the Inspector panel triggers but does not own. UNLIKE
-    // AssetPanelActions -- which only RETURNS a request and defers every
-    // effect until AFTER the asset panels return ("Row actions the APP
-    // resolves after the draw", AssetPanelCommon.hpp) -- this callback runs
-    // its file IO + project-registry mutation SYNCHRONOUSLY, DURING
-    // DrawInspectorBody's own draw; there is no deferred step here. That is
-    // safe because the Inspector draws AFTER all three asset panels every
-    // frame (EditorApp::MainLoop: DrawEditorUi, which owns
-    // DrawAssetBrowserPanel/DrawAssetGraphPanel/DrawAssetStatusPanel, runs
-    // before DrawSelectionPanels, which owns DrawInspectorBody) -- the asset
-    // panels have already built and fully consumed their own per-frame entry
-    // snapshot by the time this callback can run, so mutating the project's
-    // asset registry here cannot invalidate anything an asset panel is still
-    // iterating this frame. The one rule that DOES carry over
-    // unchanged: no dialogs launch from inside a panel draw, on either path.
-    //
-    // Sprite-asset arc, Task 4: dropping a TEXTURE onto a sprite-typed
-    // AssetRef field mints (or reuses) the wrapping .arcsprite; EditorApp
-    // builds this ONCE (mintSpriteForTexture wraps
-    // EditorApp::MintOrReuseSpriteForTexture) and passes it in by pointer every
-    // frame, so the field visitor never needs to know about EditorApp itself.
+    // What the Inspector's reflected rows borrow from the app. The asset-
+    // reference cell (spec 2026-09-30 s4.2) reads EditorApp::m_assetRefServices
+    // through this pointer: thumbnails, the picker's model, browse-to/open
+    // (QUEUED -- performed next frame by ConsumeAssetPanelActions) and the
+    // texture->sprite mint (which writes a file, outside the field's undo).
+    // Null = the cell's null services (every headless caller).
     struct InspectorServices
     {
-        std::function<Arcane::Guid(const Arcane::Guid&)> mintSpriteForTexture;
-
-        // Asset-manager arc, Task 14: the subkind-filtered material picker's
-        // surface lookup. Points at EditorApp's OWN AssetPanelModel -- the
-        // SAME cached, already-invalidation-correct surface answer the
-        // Assets panel's Browse lens shows (AssetPanelModel::Find(guid)->
-        // surface), not a fresh facade query -- so the Inspector's picker and
-        // the Browse lens can never disagree about a material's surface. A
-        // raw pointer, not a callable, because the model IS the answer (no
-        // adaptation needed) and it is a stable member for the app's whole
-        // lifetime -- set ONCE (EditorApp::StageSpriteTables, beside
-        // mintSpriteForTexture above). Null for every caller that does not
-        // wire InspectorServices at all (same convention as
-        // mintSpriteForTexture): the picker then degrades to unfiltered, exactly like an
-        // unrecognised owning component.
-        const Arcane::Editor::AssetPanelModel* assetModel = nullptr;
+        const AssetRefServices* assetRefs = nullptr;
     };
 
     // Asset-manager redesign, Plan 1 Task 7: the Assets panel's thumbnail

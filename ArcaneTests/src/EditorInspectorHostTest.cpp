@@ -12,6 +12,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>   // ClearIniSettings (the windowed switch's reset)
 #include <cmath>
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,8 +25,14 @@ namespace
     struct FakePage final : InspectorPage
     {
         std::vector<InspectorCrumb> crumbs;
+        int rows = 0;    // s5.7: > 0 draws that many lines (a page taller than its window)
+        int draws = 0;   // Draw calls, collapsed and refused-Begin frames included
         std::vector<InspectorCrumb> Breadcrumb() const override { return crumbs; }
-        void Draw(PropertyGrid&) override {}
+        void Draw(PropertyGrid&) override
+        {
+            ++draws;
+            for (int i = 0; i < rows; ++i) ImGui::Text("row %d", i);
+        }
     };
     struct FakeSource final : InspectorSource
     {
@@ -968,6 +975,54 @@ TEST_CASE("Inspector header layout: one row when it fits; the breadcrumb wraps, 
     CHECK(l.comboWidth == 38.0f);
 }
 
+TEST_CASE("Inspector header layout: row 1 reserves the crumbs' NATURAL width (spec 2026-09-30 s4.3)", "[editor][inspector]")
+{
+    // 1080p main-Inspector metrics (s4.3): avail 380, arrows 56, combo 130,
+    // pin 24, stock ItemSpacing 8 -> row 1 holds at most 380 - 234 = 146 px
+    // of crumbs. (s4.3 names "~145" for "Scene > MeshCube"; at these exact
+    // metrics the boundary is 146, so the boundary itself is pinned.)
+    InspectorHeaderMetrics m;
+    m.avail = 380.0f; m.arrows = 56.0f; m.comboFull = 130.0f; m.comboMin = 42.0f; m.pin = 24.0f; m.spacing = 8.0f;
+    m.crumbsNatural = 60.0f;
+    CHECK_FALSE(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 146.0f;                             // exactly fits
+    CHECK_FALSE(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 147.0f;                             // one px over: its own row
+    CHECK(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 160.0f;
+    CHECK(LayoutInspectorHeader(m).crumbsOwnRow);
+    m.crumbsNatural = 0.0f;                               // unknown: the old 120 px reservation
+    CHECK_FALSE(LayoutInspectorHeader(m).crumbsOwnRow);
+}
+
+TEST_CASE("FitCrumbs: fits, one head hidden, two hidden, leaf ellipsized; a single crumb never overflows", "[editor][inspector]")
+{
+    const float chevron = 20.0f, more = 24.0f;
+    CrumbFit f = FitCrumbs(std::vector<float>{ 50.0f, 60.0f }, chevron, more, 200.0f);   // 130 <= 200
+    CHECK(f.firstShown == 0);
+    CHECK_FALSE(f.overflow);
+    CHECK(f.leafMax == 60.0f);
+    f = FitCrumbs(std::vector<float>{ 50.0f, 60.0f, 70.0f }, chevron, more, 200.0f);       // 220 > 200; 24+20+60+20+70 = 194
+    CHECK(f.firstShown == 1);
+    CHECK(f.overflow);
+    CHECK(f.leafMax == 70.0f);
+    f = FitCrumbs(std::vector<float>{ 50.0f, 60.0f, 70.0f }, chevron, more, 150.0f);       // 194 > 150; 24+20+70 = 114
+    CHECK(f.firstShown == 2);
+    CHECK(f.overflow);
+    CHECK(f.leafMax == 70.0f);
+    f = FitCrumbs(std::vector<float>{ 50.0f, 300.0f }, chevron, more, 200.0f);             // the leaf alone: 344 > 200
+    CHECK(f.firstShown == 1);                             // the leaf is never hidden
+    CHECK(f.overflow);
+    CHECK(f.leafMax == 200.0f - more - chevron);
+    f = FitCrumbs(std::vector<float>{ 300.0f }, chevron, more, 200.0f);
+    CHECK(f.firstShown == 0);
+    CHECK_FALSE(f.overflow);                              // nothing to hide behind a button
+    CHECK(f.leafMax == 200.0f);
+    f = FitCrumbs(std::vector<float>{ 100.0f }, chevron, more, 200.0f);
+    CHECK_FALSE(f.overflow);
+    CHECK(f.leafMax == 100.0f);
+}
+
 namespace
 {
     // One device-less Inspector frame loop at a forced window width; returns
@@ -1047,6 +1102,100 @@ TEST_CASE("DrawInspectorWindows: a narrow Inspector wraps the breadcrumb to its 
         REQUIRE(crumbs != nullptr);
         CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);
         CHECK(crumbs->Pos.y < w->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f);   // row 1
+    }
+}
+
+namespace
+{
+    // One logged frame with the primary Inspector forced to `size` at (100,100);
+    // `activate` (optional) is pressed through nav on the NEXT frame.
+    std::string DrawLoggedAt(InspectorHost& host, InspectorWindowsState& state, ImVec2 size, ImGuiID activate = 0)
+    {
+        ImGui::GetIO().DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        if (activate) ImGui::ActivateItemByID(activate);
+        ImGui::SetNextWindowPos(ImVec2(100.0f, 100.0f));
+        ImGui::SetNextWindowSize(size);
+        ImGui::LogToBuffer();
+        (void)DrawInspectorWindows(host, state, nullptr);
+        std::string logged = ImGui::GetCurrentContext()->LogBuffer.c_str();
+        ImGui::LogFinish();
+        ImGui::Render();
+        return logged;
+    }
+}
+
+TEST_CASE("DrawInspectorWindows: an overflowing breadcrumb hides its head behind \"...\", ellipsizes the leaf, never clips (s4.3)", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    const std::string name = "ReferenceCubeMaterialWithALongName";
+    bool headSelected = false;
+    FakeSource scene{ "Scene", "scene" };
+    scene.key = "7";
+    InspectorHost host{ scene };
+    host.NotifySelected(scene);
+    InspectorWindowsState state;
+    const ImVec2 size(392.0f, 330.0f);                    // the 1080p Assets-only Inspector (spec 9.3)
+
+    SECTION("the spec's pair fits its row whole at the test atlas: no overflow button")
+    {
+        scene.page.crumbs = { { "Scene", {}, {} }, { name, {}, {} } };
+        std::string logged;
+        for (int f = 0; f < 3; ++f) logged = DrawLoggedAt(host, state, size);
+        INFO(logged);
+        CHECK(logged.find(ICON_LC_ELLIPSIS) == std::string::npos);
+        CHECK(logged.find("Scene") != std::string::npos);
+        CHECK(logged.find(name) != std::string::npos);
+    }
+    SECTION("a leaf wider than the row: head behind \"...\", leaf cut, tooltip carries it")
+    {
+        // The spec's leaf, doubled: ~490 px at the test atlas's 7 px advance,
+        // wider than the 376 px row on any face >= 5.5 px (the single name
+        // fits whole here -- the section above).
+        const std::string leaf = name + name;
+        scene.page.crumbs = { { "Scene", [&] { headSelected = true; }, {} }, { leaf, {}, {} } };
+        std::string logged;
+        for (int f = 0; f < 3; ++f) logged = DrawLoggedAt(host, state, size);
+        ImGuiWindow* w = ImGui::FindWindowByName(kPrimaryInspectorWindowId);
+        REQUIRE(w != nullptr);
+        ImGuiWindow* crumbs = CrumbsChildOf(w);
+        REQUIRE(crumbs != nullptr);
+        INFO(logged);
+        CHECK(logged.find(ICON_LC_ELLIPSIS) != std::string::npos);    // the overflow button
+        CHECK(logged.find("Scene") == std::string::npos);             // the head hides behind it
+        CHECK(logged.find(leaf) == std::string::npos);                // the leaf is cut...
+        CHECK(logged.find(name.substr(0, 12)) != std::string::npos);  // ...its head shows
+        CHECK(crumbs->DC.CursorMaxPos.x <= crumbs->Pos.x + crumbs->Size.x + 0.5f);   // every crumb inside the row
+        CHECK(crumbs->Pos.x + crumbs->Size.x <= w->WorkRect.Max.x + 0.5f);
+        CHECK(w->DC.CursorMaxPos.x <= w->WorkRect.Max.x + 0.5f);
+
+        // Click "...": the popup lists the hidden head; its row performs the crumb's select.
+        const ImVec2 more(crumbs->Pos.x + 4.0f, crumbs->Pos.y + ImGui::GetTextLineHeight() * 0.5f);
+        io.AddMousePosEvent(more.x, more.y); (void)DrawLoggedAt(host, state, size);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true); (void)DrawLoggedAt(host, state, size);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false); (void)DrawLoggedAt(host, state, size);
+        const std::string listed = DrawLoggedAt(host, state, size);
+        CHECK(listed.find("Scene") != std::string::npos);
+        char popupName[32];
+        std::snprintf(popupName, sizeof(popupName), "##Popup_%08x", ImHashStr("##crumbmore", 0, crumbs->ID));
+        ImGuiWindow* popup = ImGui::FindWindowByName(popupName);
+        REQUIRE(popup != nullptr);
+        REQUIRE(popup->Active);
+        CHECK(popup->Pos.y >= crumbs->Pos.y + ImGui::GetTextLineHeight() - 0.5f);   // under the button
+        (void)DrawLoggedAt(host, state, size, ImHashStr("Scene##crumbhidden0", 0, popup->ID));
+        (void)DrawLoggedAt(host, state, size);
+        CHECK(headSelected);
+
+        // Hover the leaf (stationary): its tooltip is the full label.
+        io.AddMousePosEvent(crumbs->Pos.x + crumbs->Size.x * 0.6f, more.y);
+        bool tooltip = false;
+        for (int frame = 0; frame < 120 && !tooltip; ++frame)
+            tooltip = DrawLoggedAt(host, state, size).find(leaf) != std::string::npos;
+        CHECK(tooltip);
     }
 }
 
@@ -1135,4 +1284,89 @@ TEST_CASE("InspectorHost: a closed slot's filter comes back when Window > New In
     REQUIRE(host.SetFilter(fresh, InspectorFilter::Only("scene")));
     host.RemoveInstance(fresh);
     CHECK(host.Find(host.AddInstance())->filter == InspectorFilter::Only("scene"));
+}
+
+// s5.7: the header (crumbs, filter, pin) stays put while a tall page scrolls in
+// "##page"; the page still draws on collapsed frames (its ScopeGuard must run);
+// Ctrl+S still routes from inside it (the child is in the parent's focus route).
+TEST_CASE("DrawInspectorWindows: the page scrolls in ##page under a pinned header", "[editor][inspector]")
+{
+    IniContext ic;
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    unsigned char* px = nullptr; int tw = 0, th = 0;
+    io.Fonts->GetTexDataAsRGBA32(&px, &tw, &th);
+    FakeSource scene{ "Scene", "scene" };
+    scene.page.crumbs = { { "Scene", {}, {} }, { "Player", {}, {} } };
+    scene.page.rows = 60;
+    scene.key = "7";
+    InspectorHost host{ scene };
+    host.NotifySelected(scene);
+    InspectorWindowsState state;
+    const auto frame = [&](bool collapsed = false)
+    {
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(100.0f, 100.0f));   // the primary Inspector: the next Begin
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 300.0f));
+        ImGui::SetNextWindowCollapsed(collapsed);
+        InspectorWindowsResult r = DrawInspectorWindows(host, state, nullptr);
+        ImGui::Render();
+        return r;
+    };
+    const auto pageOf = [](ImGuiWindow* parent) -> ImGuiWindow*
+    {
+        for (ImGuiWindow* c : ImGui::GetCurrentContext()->Windows)
+            if (c->ParentWindow == parent && std::string(c->Name).find("##page") != std::string::npos) return c;
+        return nullptr;
+    };
+    frame(); frame();
+    ImGuiWindow* w = ImGui::FindWindowByName(kPrimaryInspectorWindowId);
+    REQUIRE(w != nullptr);
+    ImGuiWindow* page = pageOf(w);
+    REQUIRE(page != nullptr);
+
+    SECTION("scrolled to the end, the window never scrolls and the crumbs stay above the page")
+    {
+        REQUIRE(page->ScrollMax.y > 0.0f);                 // 60 rows overflow 300 px
+        ImGui::SetScrollY(page, page->ScrollMax.y);        // imgui_internal overload; lands next frame
+        frame(); frame();
+        CHECK(page->Scroll.y > 0.0f);
+        CHECK(w->ScrollMax.y == 0.0f);                     // the header's window has nothing to scroll
+        ImGuiWindow* crumbs = CrumbsChildOf(w);
+        REQUIRE(crumbs != nullptr);
+        CHECK(crumbs->Pos.y >= w->InnerRect.Min.y - 0.5f);
+        CHECK(crumbs->Pos.y + crumbs->Size.y <= page->Pos.y + 0.5f);
+    }
+    SECTION("a collapsed window still draws the page once per frame")
+    {
+        const int before = scene.page.draws;
+        frame(true); frame(true); frame(true);
+        CHECK(scene.page.draws == before + 3);
+    }
+    SECTION("Ctrl+S with focus inside ##page reports the source")
+    {
+        ImGui::FocusWindow(page);
+        frame(); frame();                                  // the focus route settles
+        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        io.AddKeyEvent(ImGuiKey_S, true);
+        const InspectorWindowsResult r = frame();
+        io.AddKeyEvent(ImGuiKey_S, false);
+        io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        frame();
+        REQUIRE(r.saveRequested.size() == 1);
+        CHECK(r.saveRequested[0] == &scene);
+        CHECK(r.focusedSource == &scene);
+    }
+}
+
+TEST_CASE("InspectorHost::RefreshLabels updates history labels and pin names after a rename", "[editor][inspector][assetops]")
+{
+    World w;
+    w.other.page.crumbs = { InspectorCrumb{ "Assets", [] {}, std::nullopt }, InspectorCrumb{ "old.png", [] {}, std::string{ "k" } } };
+    w.Select(w.other, "k"); const int pin = w.host.AddInstance(); w.host.SetPinned(pin, true);
+    REQUIRE(w.host.History().back().label == "Assets > old.png");
+    w.other.page.crumbs[1].label = "new.png"; w.other.name = "Assets (renamed)";
+    w.host.RefreshLabels();
+    CHECK((w.host.History().back().label == "Assets > new.png" && w.host.Find(pin)->pinnedName == "Assets (renamed)" && w.host.SourceFor(pin) == &w.other));
 }

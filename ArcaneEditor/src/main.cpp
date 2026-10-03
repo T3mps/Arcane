@@ -12,6 +12,7 @@
 #include <Arcane/Host/HostConfig.hpp>
 #include <Arcane/Host/ProjectBoot.hpp>   // HostBoot::EngineInfoJson (the --print-engine-info probe)
 #include "App/EditorApp.hpp"
+#include "App/HostPresentation.hpp"   // HostPresentationFor: the splash/activation rule (T3-D6 fix round 1)
 
 #include <cstdio>
 #include <filesystem>
@@ -151,12 +152,21 @@ extern "C" __declspec(dllexport) extern const char*    D3D12SDKPath    = ".\\D3D
 //   --project/--plugin/--frames/--backend/--no-vsync -- honoured.
 //   --screenshot        -- honoured. WINDOWED it captures the VIEWPORT panel's
 //                          texture, not the editor window (so the Inspector and
-//                          the asset browser are not in it). Under --headless
+//                          the asset browser are not in it) -- unless
+//                          `--set editor.automation.windowedFrameCapture=true`
+//                          (T3-D6, Dev): then it captures the presented
+//                          backbuffer, the whole composited editor window. Under --headless
 //                          it captures the COMPOSITED EDITOR FRAME instead --
 //                          chrome, docking, panels, and the viewport texture
 //                          inside its panel -- off the offscreen chrome
 //                          context's colour target (EditorAppFrame.cpp's
 //                          PresentChromeFrame).
+//   --window-size WxH   -- honoured (T3-D6 fix round 1; automation only, it
+//                          requires --frames N): the host window's pixel
+//                          extent, which the headless chrome frame and the
+//                          default dock layout both follow -- a capture at the
+//                          desk's 1920x1080 geometry. Unset = 1280x720, the
+//                          size every golden reference is captured at.
 //   --headless          -- honoured. No window is ever mapped and no swapchain
 //                          is built anywhere: the chrome context becomes an
 //                          OffscreenVehicle (EditorApp::CreateGraphVehicles),
@@ -536,13 +546,12 @@ int main(int argc, char** argv)
     // "data/-next-to-exe" session with no asset registry, no mounts and no
     // identity -- a half-configured editor nothing downstream expects.
     //
-    // An INTERACTIVE bare launch does NOT refuse. It boots and immediately raises
-    // the shipped File -> Open Project dialog (EditorApp::m_raiseOpenProjectOnStart).
-    // Exiting here removed the only cold-start path into that dialog, even though
-    // the project-less state is explicitly supported everywhere else -- see
-    // SwitchProject's failure path: "editor left with no plugin; user can Open
-    // another project". The Arcane Hub is the normal entry point and always passes
-    // --project; this is the fallback for anyone who runs the exe directly.
+    // An INTERACTIVE bare launch does NOT refuse. It boots project-less and the
+    // editor's start page (EditorApp::DrawStartPage, spec 2026-09-30 s8.4) offers
+    // the recent projects, Open Project... and Open Folder... -- derived from
+    // project state every frame, so a failed open brings it back. The editor
+    // never launches or mentions the Hub; this is the path for anyone who runs
+    // the exe directly.
     //
     // Both flags remain bypasses ON PURPOSE: CI and the scripted
     // `--project <p> --frames N` harness depend on --project, and --plugin is the
@@ -611,8 +620,13 @@ int main(int argc, char** argv)
     // call then degrades to do nothing"; EditorApp guards with `if
     // (m_splash)`). Destruction order is unchanged -- `app` still lives in the
     // nested scope below and is destroyed before this object.
+    //
+    // ...AND UNLESS this is an AUTOMATION run (--frames N, or the windowed
+    // self-capture cvar; T3-D6 fix round 1, App/HostPresentation.hpp): the
+    // splash is a TOPMOST popup that activates on show, and a scripted
+    // windowed capture runs while a person may be working at the desk.
     std::optional<Arcane::BootSplashWindow> splash;
-    if (!parsed.config->headless)
+    if (Arcane::Editor::HostPresentationFor(*parsed.config).bootSplash)
         splash.emplace("data/images/arcane_logo.png");
 
     // Scoped so ~EditorApp -- the load-bearing teardown sequence -- runs while
@@ -629,8 +643,6 @@ int main(int argc, char** argv)
     int rc = 0;
     {
         Arcane::Editor::EditorApp app(*parsed.config, splash ? &*splash : nullptr);
-        if (noProject)
-            app.RaiseOpenProjectOnStart();
         rc = app.Run();
         Arcane::Diagnostics::SetPhase("editor teardown");
         Arcane::Diagnostics::Heartbeat();

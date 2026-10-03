@@ -3,8 +3,11 @@
 #include <Arcane/Base/Log.hpp>
 
 #include <fstream>
+#include <iterator>
+#include <map>
+#include <optional>
 #include <system_error>
-#include <unordered_map>
+#include <utility>
 
 namespace Arcane
 {
@@ -13,6 +16,57 @@ namespace Arcane
         bool IsDocumentCategory(std::string_view category)
         {
             return category == "input";
+        }
+
+        // The value the User rung holds: its newest record, whatever rung
+        // currently wins. nullptr when the User rung never set this cvar.
+        const CVarValue* NewestUserValue(const CVarExplain& explained)
+        {
+            for (auto it = explained.history.rbegin(); it != explained.history.rend(); ++it)
+                if (it->by == SetBy::User)
+                    return &it->value;
+            return nullptr;
+        }
+
+        nlohmann::json ArchiveJson(const CVarValue& value)
+        {
+            switch (value.type)
+            {
+            case CVarType::Bool: return value.AsBool();
+            case CVarType::Int32: return value.AsInt32();
+            case CVarType::UInt32: return value.AsUInt32();
+            case CVarType::Int64: return value.AsInt64();
+            case CVarType::UInt64: return value.AsUInt64();
+            case CVarType::Float32: return value.AsFloat32();
+            case CVarType::Float64: return value.AsFloat64();
+            case CVarType::String: return value.AsString();
+            default: return nullptr;
+            }
+        }
+
+        // The leaf `key` names in `doc` the way Walk reads it: the flat key
+        // itself, or nested objects whose names join with dots to `key`.
+        // nullptr when the document holds no such leaf.
+        nlohmann::json* FindLeaf(nlohmann::json& doc, std::string_view key)
+        {
+            if (!doc.is_object()) return nullptr;
+            if (auto it = doc.find(std::string(key)); it != doc.end() && !it->is_object())
+                return &*it;
+            for (std::size_t dot = key.find('.'); dot != std::string_view::npos; dot = key.find('.', dot + 1))
+            {
+                auto it = doc.find(std::string(key.substr(0, dot)));
+                if (it == doc.end() || !it->is_object()) continue;
+                if (nlohmann::json* leaf = FindLeaf(*it, key.substr(dot + 1)))
+                    return leaf;
+            }
+            return nullptr;
+        }
+
+        std::optional<std::string> ReadWholeFile(const std::filesystem::path& file)
+        {
+            std::ifstream in(file, std::ios::binary);
+            if (!in) return std::nullopt;
+            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
 
         void Walk(CVarRegistry& registry, const std::string& prefix, const nlohmann::json& node,
@@ -111,40 +165,83 @@ namespace Arcane
 
     void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir)
     {
-        std::unordered_map<std::string, nlohmann::json> docs;
+        // category -> its owned (key, value) pairs; ordered, so the writes are too.
+        std::map<std::string, std::vector<std::pair<std::string, nlohmann::json>>> owned;
         for (const CVarListEntry& entry : registry.List())
         {
             if (!Any(entry.flags, CVarFlags::Archive)) continue;
-            const auto explained = registry.Explain(entry.name);
-            if (!explained || explained->setBy < SetBy::User) continue;
+            if (Any(entry.flags, CVarFlags::Dev) || Any(entry.flags, CVarFlags::Cheat)) continue;
             const auto dot = entry.name.find('.');
             if (dot == std::string::npos) continue;
-            const std::string category = entry.name.substr(0, dot);
-            const std::string key = entry.name.substr(dot + 1);
-            nlohmann::json& doc = docs[category];
-            if (!doc.is_object()) doc = nlohmann::json::object();
-            const CVarValue& value = explained->published;
-            switch (value.type)
-            {
-            case CVarType::Bool: doc[key] = value.AsBool(); break;
-            case CVarType::Int32: doc[key] = value.AsInt32(); break;
-            case CVarType::UInt32: doc[key] = value.AsUInt32(); break;
-            case CVarType::Int64: doc[key] = value.AsInt64(); break;
-            case CVarType::UInt64: doc[key] = value.AsUInt64(); break;
-            case CVarType::Float32: doc[key] = value.AsFloat32(); break;
-            case CVarType::Float64: doc[key] = value.AsFloat64(); break;
-            case CVarType::String: doc[key] = value.AsString(); break;
-            default: break;
-            }
+            std::string category = entry.name.substr(0, dot);
+            if (IsDocumentCategory(category)) continue;
+            const auto explained = registry.Explain(entry.name);
+            if (!explained) continue;
+            const CVarValue* value = NewestUserValue(*explained);
+            if (!value) continue;
+            nlohmann::json json = ArchiveJson(*value);
+            if (json.is_null()) continue;
+            owned[std::move(category)].emplace_back(entry.name.substr(dot + 1), std::move(json));
         }
-        if (docs.empty()) return;
+        if (owned.empty()) return;
         std::error_code ec;
         std::filesystem::create_directories(userDir, ec);
-        for (const auto& [category, doc] : docs)
+        for (auto& [category, values] : owned)
         {
-            std::ofstream out(userDir / (category + ".json"), std::ios::binary);
-            if (!out) continue;
-            out << doc.dump(2);
+            const std::filesystem::path file = userDir / (category + ".json");
+            const std::optional<std::string> before = ReadWholeFile(file);
+            nlohmann::json doc = nlohmann::json::object();
+            if (before)
+            {
+                auto parsed = nlohmann::json::parse(*before, nullptr, false);
+                if (!parsed.is_discarded() && parsed.is_object())
+                    doc = std::move(parsed);
+                else
+                {
+                    std::filesystem::path bad = file;
+                    bad += ".bad";
+                    std::error_code copied;
+                    std::filesystem::copy_file(file, bad, std::filesystem::copy_options::overwrite_existing, copied);
+                    if (copied)
+                    {
+                        // No backup, no overwrite: the unparsable file may be the
+                        // user's only copy of a hand edit.
+                        ARC_WARN("cvar: '{}' is not a JSON object and could not be kept as '{}' ({}) -- left untouched, not saved",
+                                 file.generic_string(), bad.generic_string(), copied.message());
+                        continue;
+                    }
+                    ARC_WARN("cvar: '{}' is not a JSON object -- kept as '{}', replaced",
+                             file.generic_string(), bad.generic_string());
+                }
+            }
+            for (auto& [key, value] : values)
+            {
+                if (nlohmann::json* leaf = FindLeaf(doc, key))
+                    *leaf = std::move(value);
+                else
+                    doc[key] = std::move(value);
+            }
+            const std::string text = doc.dump(2);
+            if (before && *before == text) continue;
+            std::filesystem::path tmp = file;
+            tmp += ".tmp";
+            bool written = false;
+            std::error_code renamed;
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                out << text;
+                out.flush();
+                written = static_cast<bool>(out);
+            }
+            if (written)
+                std::filesystem::rename(tmp, file, renamed);   // replaces: the old file or the new, never half of one
+            if (!written || renamed)
+            {
+                ARC_WARN("cvar: cannot write '{}'{}{}", file.generic_string(), renamed ? ": " : "",
+                         renamed ? renamed.message() : std::string());
+                std::error_code ignored;
+                std::filesystem::remove(tmp, ignored);
+            }
         }
     }
 

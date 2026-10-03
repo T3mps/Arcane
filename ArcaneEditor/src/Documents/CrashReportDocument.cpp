@@ -1,59 +1,32 @@
 #include "Documents/CrashReportDocument.hpp"
 
 #include "Widgets/EditorTheme.hpp"
+#include "Widgets/EditorWidgets.hpp"   // LinkText (s4.7)
+#include "Widgets/EditorFonts.hpp"     // MonoFont (s4.8)
+#include "Widgets/IconsLucide.h"
+#include "Project/OsShell.hpp"   // ShellOpen / ShowInExplorer -- the one shell route (s4.6)
+
+#include "FileText.hpp"   // ArcaneCrashReporter/src: Slurp
+#include "LogTail.hpp"    // ResolveLogPath / ReadLogTail
+
+#include <Arcane/Base/Log.hpp>
 
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // Diag::ReadGpuDump / ParseGpuDump
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <cfloat>
+#include <chrono>
+#include <cstdio>
 #include <system_error>
-
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <shellapi.h>   // ShellExecuteW -- mirrors EditorAppFrame.cpp's AssetPathAction show-in-explorer branch
-#endif
 
 namespace Arcane::Editor
 {
-    namespace
+    CrashReportDocument::CrashReportDocument(std::filesystem::path path, Arcane::Diag::Envelope envelope,
+                                             Services services)
+        : m_path(std::move(path)), m_envelope(std::move(envelope)), m_services(std::move(services))
     {
-        // Same recipe as EditorAppFrame.cpp's AssetPathAction show-in-
-        // explorer branch (:144-150): "explorer /select" opens the
-        // containing folder WITH the file focused. Duplicated in full
-        // (rather than shared) because that helper is a file-local
-        // (anonymous-namespace) function in a TU this task's binding file
-        // list does not include -- EditorAppFrame.cpp is not among the
-        // files this task modifies.
-#ifdef _WIN32
-        void ShowInExplorer(const std::string& path)
-        {
-            if (path.empty())
-                return;
-            const std::filesystem::path p(path);
-            const std::wstring args = L"/select,\"" + p.wstring() + L"\"";
-            ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
-        }
-#else
-        void ShowInExplorer(const std::string&) {}
-#endif
-    }
-
-    CrashReportDocument::CrashReportDocument(std::filesystem::path path, Arcane::Diag::Envelope envelope)
-        : m_path(std::move(path)), m_envelope(std::move(envelope))
-    {
-        // Same name-fallback shape as ShaderEditorDocument/SpriteDocument,
-        // but there is no authored "name" field on a crash report -- the
-        // file stem (Diagnostics.cpp's WriteReportImpl: "<appName>-<stamp>-
-        // pid<N>") is already unique per report, so it needs no fallback.
-        m_title = m_path.stem().string();
-        m_windowLabel = m_title + " (Crash Report)###crashdoc_" + m_envelope.guid.ToString();
-
         // Resolved ONCE here, never in Draw() (post-review fix): a moved or
         // copied reports folder leaves the envelope's ABSOLUTE paths stale,
         // so every sibling is resolved against disk exactly once, at load,
@@ -75,6 +48,69 @@ namespace Arcane::Editor
                 for (const auto& section : dump->sections)
                     m_gpuDumpTags.push_back(section.tag);
         }
+
+        // The title, the window label and the reporter model (s8.1) -- the
+        // same call every later re-check (NoteMoved, NoteReopened, Tick) makes.
+        LoadReport();
+    }
+
+    void CrashReportDocument::LoadReport()
+    {
+        namespace R = Arcane::Reporter;
+        // R64: siblings are built with path +=, never string concatenation.
+        const std::filesystem::path stem = m_path.parent_path() / m_path.stem();
+        m_symbolizedPath = stem;
+        m_symbolizedPath += ".symbolized.txt";
+
+        std::error_code ec;
+        m_symbolized.reset();
+        if (std::filesystem::is_regular_file(m_symbolizedPath, ec))
+            m_symbolized = R::ParseSymbolized(R::Slurp(m_symbolizedPath));
+
+        // <stem>.log.txt, else the live log the envelope recorded, else empty:
+        // ResolveLogPath is the one home of that order (ReadLogTail uses it too).
+        const std::filesystem::path livePath(m_envelope.logPath);
+        m_logResolved = R::ResolveLogPath(stem, livePath);
+
+        R::Args args;
+        args.product      = R::DisplayProduct(m_envelope.appName);
+        args.envelopePath = m_path.string();
+        m_view = R::BuildReportView(m_envelope, args, m_symbolized ? &m_symbolized->sym : nullptr,
+                                    R::ReadLogTail(stem, livePath, 200));
+
+        m_frameFileExists.assign(m_view.threads.size(), {});
+        for (std::size_t t = 0; t < m_view.threads.size(); ++t)
+            for (const R::SymFrame& f : m_view.threads[t].frames)
+            {
+                std::error_code fe;
+                m_frameFileExists[t].push_back(!f.file.empty() && std::filesystem::exists(f.file, fe));
+            }
+        if (m_threadIndex >= m_view.threads.size()) m_threadIndex = 0;
+
+        const std::chrono::time_zone* zone = nullptr;
+        try { zone = std::chrono::current_zone(); } catch (...) { zone = nullptr; }   // no tzdb: fall back to the stem
+        const std::string stamp = R::FormatLocalStamp(m_envelope.timestampUtc, zone);
+        m_title = stamp.empty() ? m_path.stem().string() : m_view.headline + " -- " + stamp;
+        m_windowLabel = m_title + "###crashdoc_" + m_envelope.guid.ToString();   // the id is unchanged
+    }
+
+    void CrashReportDocument::NoteReopened()
+    {
+        if (!m_symbolized) LoadReport();
+    }
+
+    void CrashReportDocument::Tick(double)
+    {
+        if (m_windowFocused && !m_wasFocused && !m_symbolized)
+            LoadReport();
+        m_wasFocused = m_windowFocused;
+    }
+
+    bool CrashReportDocument::OpenSource(const std::filesystem::path& file, int line) const
+    {
+        if (!m_services.openSourceAtLine) return false;
+        m_services.openSourceAtLine(file, line);
+        return true;
     }
 
     std::filesystem::path CrashReportDocument::ResolveSibling(const std::string& recorded,
@@ -120,146 +156,62 @@ namespace Arcane::Editor
         return out;
     }
 
+    // Controller ruling (s8.1 item 7 + s7.11): the title, the label (same id)
+    // and the .symbolized.txt / .log.txt / view resolution move to the new stem
+    // in one place.
+    void CrashReportDocument::NoteMoved(const std::filesystem::path& p) { m_path = p; LoadReport(); }
+
     void CrashReportDocument::Draw(bool& requestClose)
     {
+        namespace R = Arcane::Reporter;
         bool open = true;
-        ImGui::SetNextWindowSize(ImVec2(520.0f, 640.0f), ImGuiCond_FirstUseEver);
-        // Never dirty -> never ImGuiWindowFlags_UnsavedDocument (unlike
-        // SpriteDocument/ShaderEditorDocument, which flip that flag on
-        // Dirty()).
-        if (!ImGui::Begin(m_windowLabel.c_str(), &open, 0))
+        ImGui::SetNextWindowSize(ImVec2(760.0f, 760.0f), ImGuiCond_FirstUseEver);
+        const bool visible = ImGui::Begin(m_windowLabel.c_str(), &open, 0);
+        ImGui::SetItemTooltip("%s", m_path.stem().string().c_str());   // the tab (or title bar) is LastItemData after Begin
+        if (!visible)
         {
-            // Collapsed (not closed): same early-return shape as
-            // SpriteDocument::Draw (SpriteDocument.cpp:165-175).
             m_windowFocused = false;
             ImGui::End();
             requestClose = !open;
             return;
         }
         m_windowFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const R::ReportView& v = m_view;
 
-        // ---- header: kind / time / phase / build ---------------------------
-        ImGui::TextUnformatted(m_envelope.kind.empty() ? "(unknown kind)" : m_envelope.kind.c_str());
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", m_envelope.timestampUtc.c_str());
-        if (!m_envelope.phase.empty())
-            ImGui::Text("Phase: %s", m_envelope.phase.c_str());
-        if (!m_envelope.buildInfo.empty())
-            ImGui::Text("Build: %s", m_envelope.buildInfo.c_str());
-        ImGui::Separator();
+        // ---- header (no separators between fields; s8.1 item 5) ----------------
+        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.35f);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(v.headline.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopFont();
+        ImGui::TextDisabled("%s", v.whenLine.c_str());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(v.reasonText.c_str());
+        ImGui::PopTextWrapPos();
+        if (m_envelope.exitCode != 0)
+            ImGui::Text("Exit code: %d (0x%08X)", m_envelope.exitCode, static_cast<unsigned>(m_envelope.exitCode));
+        ImGui::Spacing();
 
-        // ---- activeLayers: one opaque summary line -------------------------
-        // Rendered as a joined line, never a per-value switch: the
-        // vocabulary (breadcrumbs:*, dred:*, dred-data:*, devicefault:*,
-        // devicefault-data:*, ...) is documented to grow, and an exhaustive
-        // switch would silently stop covering the day a new layer key ships.
-        if (!m_envelope.activeLayers.empty())
+        // ---- action row -----------------------------------------------------
+        const bool flash = ImGui::GetTime() < m_copyFlashUntil;
+        const float copyW = ImGui::CalcTextSize("Copy Details").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        const std::string copyLabel = std::string(R::CopyButtonLabel(flash ? R::CopyState::Copied : R::CopyState::Idle)) + "###crashcopy";
+        if (ImGui::Button(copyLabel.c_str(), ImVec2(copyW, 0.0f)))
         {
-            std::string line;
-            for (const std::string& layer : m_envelope.activeLayers)
-            {
-                if (!line.empty())
-                    line += "   ";
-                line += layer;
-            }
-            ImGui::TextWrapped("Layers: %s", line.c_str());
-            ImGui::Separator();
+            ImGui::SetClipboardText(R::DetailsText(v, m_threadIndex).c_str());
+            m_copyFlashUntil = ImGui::GetTime() + 0.75;
         }
-
-        // ---- foreignModules: the injected overlays the process carried ----
-        // Same joined-line shape as the layers: base names only (the
-        // envelope's contract), so a capture from a desk with GPU Tweak III's
-        // OSD in it says so on its first screen. Absent when none were
-        // recorded -- "none" and "not scanned" are told apart by the .txt
-        // sibling's header, not here.
-        if (!m_envelope.foreignModules.empty())
+        const auto shellOpen = [](const std::filesystem::path& p)
         {
-            std::string line;
-            for (const std::string& module : m_envelope.foreignModules)
-            {
-                if (!line.empty())
-                    line += "   ";
-                line += module;
-            }
-            ImGui::TextWrapped("Injected modules: %s", line.c_str());
-            ImGui::Separator();
-        }
-
-        // ---- per-queue timeline: lastCompleted then inFlight ----------------
-        const std::vector<const Arcane::Diag::Envelope::Queue*> queues = VisibleQueues();
-        if (ImGui::CollapsingHeader("GPU Queues", ImGuiTreeNodeFlags_DefaultOpen))
+            const auto r = OsShell::ShellOpen(p);
+            if (r != OsShell::ShellResult::Ok)
+                ARC_WARN("Crash report: could not open {} -- {}", p.string(), OsShell::Describe(r));
+        };
+        // Recorded + resolved = live; recorded + unresolved = disabled "(missing)"; never recorded = nothing.
+        const auto openButton = [&](const char* label, bool recorded, const std::filesystem::path& resolved)
         {
-            if (queues.empty())
-                ImGui::TextDisabled("(no GPU queue activity captured)");
-            for (const Arcane::Diag::Envelope::Queue* q : queues)
-            {
-                ImGui::TextUnformatted(q->name.empty() ? "(unnamed queue)" : q->name.c_str());
-                if (!q->lastCompleted.empty())
-                    ImGui::BulletText("last completed: %s", q->lastCompleted.c_str());
-                for (const std::string& scope : q->inFlight)
-                {
-                    // In-flight = the pass the GPU entered and never left --
-                    // highlighted with the theme's one non-gray accent
-                    // (Theme::kAmber). EditorTheme.hpp's own doc comment
-                    // names kAmber the editor's "this is the thing you are
-                    // acting on" language (the drop-target frame, the
-                    // selected shader-graph node border) -- there is no
-                    // separate "kWarning" token in the monochrome theme, so
-                    // this is its existing accessor for "pay attention
-                    // here", never a hard-coded literal.
-                    ImGui::PushStyleColor(ImGuiCol_Text, Theme::kAmber);
-                    ImGui::BulletText("in flight: %s", scope.c_str());
-                    ImGui::PopStyleColor();
-                }
-            }
-        }
-
-        // ---- fault block: hidden for CPU-report noise ------------------------
-        if (HasVisibleFault())
-        {
-            ImGui::Separator();
-            if (ImGui::CollapsingHeader("Fault", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                ImGui::Text("Type: %s", m_envelope.fault.type.c_str());
-                if (!m_envelope.fault.address.empty())
-                    ImGui::Text("Address: %s", m_envelope.fault.address.c_str());
-                if (!m_envelope.fault.resource.empty())
-                    ImGui::Text("Resource: %s", m_envelope.fault.resource.c_str());
-            }
-        }
-
-        // ---- CPU thread summary --------------------------------------------
-        if (!m_envelope.cpuThreadSummary.empty())
-        {
-            ImGui::Separator();
-            if (ImGui::CollapsingHeader("CPU Threads", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(m_envelope.cpuThreadSummary.c_str());
-                ImGui::PopTextWrapPos();
-            }
-        }
-
-        // ---- sibling files: shell-open buttons, truthful presence + resolved location --
-        // A button appears ONLY when its envelope field is non-empty:
-        // WriteReportImpl records a sibling path only when it actually
-        // wrote that file (Diagnostics.cpp:581-582 for txt/dmp;
-        // GpuCrashReport.hpp's EmitGpuDumpSibling doc comment for the
-        // gpudump), so an empty field means "not produced this run". The
-        // path a visible button OPENS is the one resolved at construction
-        // (ResolveSibling) -- when neither the stored path nor the
-        // beside-.arcdiag fallback exists, the button renders DISABLED with
-        // a "(missing)" hint instead of silently shelling a dead path.
-        ImGui::Separator();
-        bool anySibling = false;
-        const auto siblingButton = [&](const char* label, const std::string& recorded,
-                                       const std::filesystem::path& resolved)
-        {
-            if (recorded.empty())
-                return;
-            if (anySibling)
-                ImGui::SameLine();
-            anySibling = true;
+            if (!recorded && resolved.empty()) return;
+            ImGui::SameLine();
             if (resolved.empty())
             {
                 ImGui::BeginDisabled();
@@ -269,32 +221,171 @@ namespace Arcane::Editor
                 ImGui::TextDisabled("(missing)");
             }
             else if (ImGui::Button(label))
-            {
-                ShowInExplorer(resolved.string());
-            }
+                shellOpen(resolved);
         };
-        siblingButton("Show .txt", m_envelope.siblingTxt, m_siblingTxtResolved);
-        siblingButton("Show .dmp", m_envelope.siblingDmp, m_siblingDmpResolved);
-        siblingButton("Show .gpudump", m_envelope.siblingGpuDump, m_siblingGpuDumpResolved);
+        openButton("Open .txt", !m_envelope.siblingTxt.empty(), m_siblingTxtResolved);
+        openButton("Open .log", !m_envelope.logPath.empty(), m_logResolved);
+        openButton("Open .symbolized.txt", false, HasSymbolized() ? m_symbolizedPath : std::filesystem::path{});
+        openButton("Open .dmp", !m_envelope.siblingDmp.empty(), m_siblingDmpResolved);
+        ImGui::SameLine();
+        if (ImGui::Button("Show in Explorer"))
+            if (const auto r = OsShell::ShowInExplorer(m_path); r != OsShell::ShellResult::Ok)
+                ARC_WARN("Crash report: could not show {} -- {}", m_path.string(), OsShell::Describe(r));
+        ImGui::Spacing();
 
-        // The container's section inventory, rendered inline -- parsed ONCE
-        // at construction from the RESOLVED path (GpuDumpSectionTags),
-        // never re-read here. Empty whenever the gpudump sibling wasn't
-        // recorded, didn't resolve, or didn't parse.
-        if (!m_gpuDumpTags.empty())
+        // ---- injected modules (classified in InjectedLines) ---------------------
+        if (!v.injectedText.empty())
         {
-            std::string inventory;
-            for (const std::string& tag : m_gpuDumpTags)
+            std::size_t start = 0;
+            while (start < v.injectedText.size())
             {
-                if (!inventory.empty())
-                    inventory += ", ";
-                inventory += tag;
+                const std::size_t nl = v.injectedText.find('\n', start);
+                const std::string line = v.injectedText.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+                start = nl == std::string::npos ? v.injectedText.size() : nl + 1;
+                if (line.empty()) continue;
+                ImGui::TextColored(Theme::kWarning, ICON_LC_TRIANGLE_ALERT);
+                ImGui::SameLine();
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(line.c_str());
+                ImGui::PopTextWrapPos();
             }
-            ImGui::TextDisabled("Sections: %s", inventory.c_str());
+            ImGui::Spacing();
         }
 
-        if (!anySibling)
-            ImGui::TextDisabled("(no sibling files recorded)");
+        // ---- stack -----------------------------------------------------------
+        if (v.threads.empty())
+            ImGui::TextDisabled("No stack recorded");
+        else
+        {
+            if (v.threads.size() > 1)
+            {
+                ImGui::SetNextItemWidth(320.0f);
+                if (ImGui::BeginCombo("##thread", v.threads[m_threadIndex].label.c_str()))
+                {
+                    for (std::size_t i = 0; i < v.threads.size(); ++i)
+                        if (ImGui::Selectable(v.threads[i].label.c_str(), i == m_threadIndex)) m_threadIndex = i;
+                    ImGui::EndCombo();
+                }
+            }
+            if (m_symbolized && m_symbolized->sym.engineAvailable && !m_symbolized->sym.threads.empty())
+                ImGui::TextDisabled("Symbolized (dbgeng)");
+            else if (m_symbolized && m_symbolized->sym.engineAvailable)   // dbgeng ran but recovered no thread: BuildReportView fell back
+                ImGui::TextDisabled("Portable stack (module+offset) -- the symbolizer recovered no threads");
+            else if (m_symbolized)   // file present, engine was unavailable (case the spec leaves open)
+                ImGui::TextDisabled("Portable stack (module+offset) -- symbolizer unavailable (%s)",
+                                    m_symbolized->sym.engineError.c_str());
+            else
+                ImGui::TextDisabled("Portable stack (module+offset) -- %s not found",
+                                    m_symbolizedPath.filename().string().c_str());
+
+            const R::ThreadView& t = v.threads[m_threadIndex];
+            const float lineH = ImGui::GetTextLineHeightWithSpacing();
+            ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, lineH * 24.0f));
+            if (ImGui::BeginChild("##frames", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY))
+            {
+                MonoFont mono;
+                const auto row = [&](int i, const std::string& copyText, const auto& body)
+                {
+                    ImGui::PushID(i);
+                    const ImVec2 min = ImGui::GetCursorScreenPos();
+                    body();
+                    const ImVec2 max(min.x + ImGui::GetContentRegionAvail().x, ImGui::GetItemRectMax().y);
+                    if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(min, max) &&
+                        ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+                        ImGui::OpenPopup("##framectx");
+                    if (ImGui::BeginPopup("##framectx"))
+                    {
+                        if (ImGui::MenuItem("Copy line")) ImGui::SetClipboardText(copyText.c_str());
+                        ImGui::EndPopup();
+                    }
+                    ImGui::PopID();
+                };
+                if (!t.frames.empty())
+                {
+                    for (std::size_t i = 0; i < t.frames.size(); ++i)
+                    {
+                        const R::SymFrame& f = t.frames[i];
+                        R::SymFrame head = f;
+                        head.file.clear();
+                        char idx[16];
+                        std::snprintf(idx, sizeof(idx), "%02zu ", i);
+                        const std::string text = idx + R::FormatFrame(head);
+                        row(static_cast<int>(i), idx + R::FormatFrame(f), [&]
+                        {
+                            ImGui::TextUnformatted(text.c_str());
+                            if (f.file.empty()) return;
+                            ImGui::SameLine();
+                            const bool live = m_frameFileExists[m_threadIndex][i];
+                            const std::string link = "[" + f.file + ":" + std::to_string(f.line) + "]";
+                            if (LinkText(link.c_str(), live))
+                                (void)OpenSource(f.file, static_cast<int>(f.line));
+                            if (!live) ImGui::SetItemTooltip("Not on this machine");
+                        });
+                    }
+                }
+                else
+                {
+                    std::size_t start = 0;
+                    int i = 0;
+                    while (start < t.text.size())
+                    {
+                        const std::size_t nl = t.text.find('\n', start);
+                        const std::string line = t.text.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+                        start = nl == std::string::npos ? t.text.size() : nl + 1;
+                        row(i++, line, [&] { ImGui::TextUnformatted(line.c_str()); });
+                    }
+                }
+            }
+            ImGui::EndChild();
+        }
+        ImGui::Spacing();
+
+        // ---- GPU (only when something is worth showing) -----------------------
+        const std::vector<const Arcane::Diag::Envelope::Queue*> queues = VisibleQueues();
+        if ((!queues.empty() || HasVisibleFault()) && ImGui::CollapsingHeader("GPU", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            for (const Arcane::Diag::Envelope::Queue* q : queues)
+            {
+                ImGui::TextUnformatted(q->name.empty() ? "(unnamed queue)" : q->name.c_str());
+                if (!q->lastCompleted.empty()) ImGui::BulletText("last completed: %s", q->lastCompleted.c_str());
+                for (const std::string& scope : q->inFlight)
+                    ImGui::TextColored(Theme::kAmber, "  in flight: %s", scope.c_str());
+            }
+            if (HasVisibleFault())
+            {
+                ImGui::Text("Fault: %s", m_envelope.fault.type.c_str());
+                if (!m_envelope.fault.address.empty())  ImGui::Text("Address: %s", m_envelope.fault.address.c_str());
+                if (!m_envelope.fault.resource.empty()) ImGui::Text("Resource: %s", m_envelope.fault.resource.c_str());
+            }
+            if (!m_envelope.activeLayers.empty())
+            {
+                std::string line;
+                for (const std::string& layer : m_envelope.activeLayers) line += (line.empty() ? "" : "   ") + layer;
+                ImGui::TextWrapped("Layers: %s", line.c_str());   // moved here from top level (drafting pick, 9.28)
+            }
+            if (!m_envelope.siblingGpuDump.empty())
+            {
+                if (m_siblingGpuDumpResolved.empty())
+                    ImGui::TextDisabled(".gpudump (missing)");
+                else if (ImGui::Button("Show .gpudump"))
+                    if (const auto r = OsShell::ShowInExplorer(m_siblingGpuDumpResolved); r != OsShell::ShellResult::Ok)
+                        ARC_WARN("Crash report: could not show {} -- {}", m_siblingGpuDumpResolved.string(), OsShell::Describe(r));
+                if (!m_gpuDumpTags.empty())
+                {
+                    std::string inventory;
+                    for (const std::string& tag : m_gpuDumpTags) inventory += (inventory.empty() ? "" : ", ") + tag;
+                    ImGui::TextDisabled("Sections: %s", inventory.c_str());
+                }
+            }
+        }
+
+        // ---- log tail (closed by default) -----------------------------------------
+        if (!m_view.logTail.empty() && ImGui::CollapsingHeader("Log (last 200 lines)"))
+        {
+            MonoFont mono;
+            ImGui::InputTextMultiline("##logtail", m_view.logTail.data(), m_view.logTail.size() + 1,
+                                      ImVec2(-1.0f, ImGui::GetTextLineHeight() * 16.0f), ImGuiInputTextFlags_ReadOnly);
+        }
 
         ImGui::End();
         requestClose = !open;

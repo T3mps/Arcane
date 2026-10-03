@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <fstream>
 #include <optional>
@@ -67,6 +68,21 @@ namespace
                 return std::nullopt;
         }
         return doc;
+    }
+
+    // Tolerant: a decimal string (what both writers emit) or a JSON number;
+    // anything else is 0, and the entry is never dropped for it (R9).
+    std::uint64_t ParseUnixSeconds(const nlohmann::json& v)
+    {
+        if (v.is_number_unsigned()) return v.get<std::uint64_t>();
+        if (v.is_number_integer()) { const auto s = v.get<std::int64_t>(); return s > 0 ? static_cast<std::uint64_t>(s) : 0; }
+        // Bounded: a double at or past 2^64 would make the cast undefined.
+        if (v.is_number_float())   { const double s = v.get<double>(); return s > 0.0 && s < 18446744073709551616.0 ? static_cast<std::uint64_t>(s) : 0; }
+        if (!v.is_string()) return 0;
+        const std::string& s = v.get_ref<const std::string&>();
+        std::uint64_t out = 0;
+        const auto [end, ec] = std::from_chars(s.data(), s.data() + s.size(), out);
+        return !s.empty() && ec == std::errc{} && end == s.data() + s.size() ? out : 0;
     }
 }
 
@@ -139,6 +155,8 @@ std::vector<RecentProject> Parse(const std::string& json)
             r.name = it->get<std::string>();
         if (const auto it = e.find("engineAbi"); it != e.end() && it->is_number_unsigned())
             r.engineAbi = it->get<std::uint32_t>();
+        if (const auto it = e.find("lastOpenedUtc"); it != e.end())
+            r.lastOpenedUnix = ParseUnixSeconds(*it);
 
         // A nameless row still deserves a readable label rather than a blank
         // menu entry. Unreal labels with the base filename for the same reason.
@@ -213,6 +231,11 @@ RecentSelection Select(const std::vector<RecentProject>& all,
             sel.visible.push_back(r);
     }
     return sel;
+}
+
+std::string HiddenForAbiLine(std::size_t hidden)
+{
+    return std::to_string(hidden) + (hidden == 1 ? " project" : " projects") + " hidden (built for another engine version)";
 }
 
 std::string Touch(const std::string& json,

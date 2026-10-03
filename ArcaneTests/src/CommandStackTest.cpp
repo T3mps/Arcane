@@ -321,6 +321,42 @@ namespace
         void Redo() override { ++*redos; }
         const char* Label() const override { return label.c_str(); }
     };
+
+    // A document-style step (spec 2026-09-30 s3.3): never a scene step, and
+    // expired once its weak anchor (the "document") dies.
+    struct DocStep final : Arcane::ICommand
+    {
+        std::weak_ptr<int> anchor;
+        int* undos;
+        int* redos;
+        std::string label;
+
+        DocStep(std::weak_ptr<int> a, int* u, int* r, std::string l)
+            : anchor(std::move(a)), undos(u), redos(r), label(std::move(l)) {}
+        void Undo() override { if (!anchor.expired()) ++*undos; }
+        void Redo() override { if (!anchor.expired()) ++*redos; }
+        const char* Label() const override { return label.c_str(); }
+        bool AffectsScene() const override { return false; }
+        bool IsExpired() const override { return anchor.expired(); }
+    };
+
+    // Reports a fixed payload size: the byte-budget unit without real bytes.
+    struct SizedCommand final : Arcane::ICommand
+    {
+        std::size_t bytes;
+        explicit SizedCommand(std::size_t b) : bytes(b) {}
+        void Undo() override {}
+        void Redo() override {}
+        const char* Label() const override { return "sized"; }
+        std::size_t PayloadBytes() const override { return bytes; }
+    };
+
+    int UndoDepth(Arcane::CommandStack& s)   // destructive: undoes everything
+    {
+        int n = 0;
+        while (s.CanUndo()) { s.Undo(); ++n; }
+        return n;
+    }
 }
 
 TEST_CASE("CommandStack::Push: standalone step, transaction join, redo-clear", "[edit]")
@@ -382,7 +418,7 @@ TEST_CASE("CommandStack::Clear discards generics pushed into an open gesture", "
 
     (void)stack.Begin("doomed");
     stack.Push(std::make_unique<CountingCommand>(&undos, &redos, "leaky"));
-    stack.Clear();   // e.g. project switch mid-gesture
+    stack.Clear("project switch");   // e.g. project switch mid-gesture
 
     const Arcane::TransactionId fresh = stack.Begin("fresh");
     stack.SnapshotComponent(e, desc);
@@ -547,7 +583,10 @@ TEST_CASE("CommandStack: depth cap drops the oldest", "[edit]")
     reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
     const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
 
-    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; }, /*maxDepth*/ 2);
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 2;
+    stack.SetLimits(limits);
     for (int i = 1; i <= 3; ++i)
     {
         const Arcane::TransactionId txn = stack.Begin("e");
@@ -620,7 +659,7 @@ TEST_CASE("StateId identifies the current state, not the number of edits", "[edi
     CHECK(stack.StateId() != afterFirst);
     CHECK(stack.StateId() != afterSecond);
 
-    stack.Clear();
+    stack.Clear("test");
     CHECK(stack.StateId() == 0);
 }
 
@@ -681,7 +720,7 @@ TEST_CASE("StateId: Push (one-shot command path) mints and retires ids too, not 
 TEST_CASE("StateId: an id evicted by the depth cap is never observed again", "[edit]")
 {
     // Gap 2 (review of the StateId() work, 2026-07-27): CommandStack::Commit's
-    // depth cap -- `while (m_undo.size() > m_maxDepth) m_undo.pop_front();` --
+    // depth cap -- now `Evict()` over `UndoLimits::maxSteps`, oldest-first --
     // physically destroys the oldest Transaction, including its id, and ids
     // are never re-minted. CommandStack.hpp's StateId comment documents this
     // as the deliberately safe direction: a caller who recorded an evicted id
@@ -701,8 +740,10 @@ TEST_CASE("StateId: an id evicted by the depth cap is never observed again", "[e
     const Astra::ComponentDescriptor* desc = DescriptorFor(reg, e, "Arcane::Transform");
     REQUIRE(desc != nullptr);
 
-    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); },
-                                /*maxDepth*/ 2);
+    Arcane::CommandStack stack([&runtime]() -> Astra::Registry& { return runtime.Registry(); });
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 2;
+    stack.SetLimits(limits);
 
     auto edit = [&](float x)
     {
@@ -986,4 +1027,189 @@ TEST_CASE("TouchedSinceState: the per-entity diff against a saved baseline", "[e
     auto r5 = stack.TouchedSinceState(0);
     REQUIRE(r5.baselineFound);
     CHECK(r5.entities.size() == 1);
+}
+
+TEST_CASE("ICommand defaults: a scene step, never expired, holding no payload", "[edit][undo]")
+{
+    int u = 0, r = 0;
+    const CountingCommand c(&u, &r, "c");
+    CHECK(c.AffectsScene());
+    CHECK_FALSE(c.IsExpired());
+    CHECK(c.PayloadBytes() == 0);
+}
+
+TEST_CASE("SceneStateId follows scene steps only, through undo and redo", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0;
+    const auto anchor = std::make_shared<int>(0);
+
+    CHECK(stack.SceneStateId() == 0);
+    const Arcane::TransactionId t = stack.Begin("Move");
+    stack.SnapshotComponent(e, desc);
+    reg->GetComponent<Arcane::Transform>(e)->position.x = 1.0f;
+    stack.Commit(t);
+    const std::uint64_t sceneId = stack.SceneStateId();
+    CHECK(sceneId != 0);
+    CHECK(sceneId == stack.StateId());            // a Begin/Commit with a snapshot is a scene step
+
+    stack.Push(std::make_unique<DocStep>(anchor, &u, &r, "Edit Param"));
+    CHECK(stack.StateId() != sceneId);            // the document step moved StateId...
+    CHECK(stack.SceneStateId() == sceneId);       // ...but not the scene's
+
+    const Arcane::TransactionId g = stack.Begin("Drag Param");
+    stack.Push(std::make_unique<DocStep>(anchor, &u, &r, "joined"));
+    stack.Commit(g);
+    CHECK(stack.SceneStateId() == sceneId);       // a gesture of document commands only is not a scene step
+
+    stack.Undo();
+    stack.Undo();
+    CHECK(stack.SceneStateId() == sceneId);
+    stack.Undo();
+    CHECK(stack.SceneStateId() == 0);
+    stack.Redo();
+    CHECK(stack.SceneStateId() == sceneId);
+}
+
+TEST_CASE("an expired step is discarded, never spent on a Ctrl+Z", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0, du = 0, dr = 0;
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "Scene Step"));
+    auto anchor = std::make_shared<int>(0);
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "Edit Param"));
+    CHECK(std::string(stack.UndoLabel()) == "Edit Param");
+
+    anchor.reset();                                      // the document closed
+    REQUIRE(stack.CanUndo());
+    CHECK(std::string(stack.UndoLabel()) == "Scene Step");   // the label looks past it
+    stack.Undo();
+    CHECK(u == 1);                                       // ONE press undid the live step
+    CHECK(du == 0);
+    CHECK_FALSE(stack.CanUndo());
+    stack.Redo();
+    CHECK(r == 1);
+    CHECK_FALSE(stack.CanRedo());                        // discarded, not parked in redo
+}
+
+TEST_CASE("only expired entries left: nothing to undo or redo, empty labels", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int du = 0, dr = 0;
+    auto anchor = std::make_shared<int>(0);
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "a"));
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "b"));
+    stack.Undo();                                        // "b" moves to redo
+    REQUIRE(du == 1);
+
+    anchor.reset();
+    CHECK_FALSE(stack.CanUndo());
+    CHECK_FALSE(stack.CanRedo());
+    CHECK(std::string(stack.UndoLabel()).empty());
+    CHECK(std::string(stack.RedoLabel()).empty());
+    stack.Undo();
+    stack.Redo();
+    CHECK(du == 1);
+    CHECK(dr == 0);
+}
+
+TEST_CASE("an expired step buried under a live one is discarded when Undo reaches it", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0, du = 0, dr = 0;
+    auto anchor = std::make_shared<int>(0);
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "A"));
+    stack.Push(std::make_unique<DocStep>(anchor, &du, &dr, "Edit Param"));
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "B"));
+    anchor.reset();                                      // the document closed under B
+    stack.Undo();                                        // B
+    CHECK(u == 1);
+    CHECK(std::string(stack.UndoLabel()) == "A");        // the label looks past the buried step
+    stack.Undo();                                        // ONE press reaches A
+    CHECK(u == 2);
+    CHECK_FALSE(stack.CanUndo());
+    stack.Redo();
+    stack.Redo();
+    CHECK(r == 2);
+    CHECK_FALSE(stack.CanRedo());
+    CHECK(du == 0);
+    CHECK(dr == 0);
+}
+
+TEST_CASE("Clear(reason) drops history and remembers why until the next Clear", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    int u = 0, r = 0;
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "a"));
+    CHECK(stack.ClearedReason().empty());
+
+    stack.Clear("Opened scene level_one");
+    CHECK_FALSE(stack.CanUndo());
+    CHECK(stack.ClearedReason() == "Opened scene level_one");
+
+    stack.Push(std::make_unique<CountingCommand>(&u, &r, "b"));
+    CHECK(stack.ClearedReason() == "Opened scene level_one");   // a push does not retire it
+    stack.Clear("Switched project");
+    CHECK(stack.ClearedReason() == "Switched project");
+}
+
+TEST_CASE("UndoLimits: maxSteps 0 clamps to 1; the byte budget evicts oldest-first, never the top", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    CHECK(stack.Limits() == Arcane::UndoLimits{});
+    Arcane::UndoLimits limits;
+    limits.maxSteps = 0;
+    stack.SetLimits(limits);
+    CHECK(stack.Limits().maxSteps == 1);
+
+    limits.maxSteps = 100;
+    limits.byteBudget = 100;
+    stack.SetLimits(limits);
+    SECTION("over budget: the oldest goes")
+    {
+        stack.Push(std::make_unique<SizedCommand>(60));
+        stack.Push(std::make_unique<SizedCommand>(60));
+        CHECK(UndoDepth(stack) == 1);
+    }
+    SECTION("a single step over budget stays; everything older goes")
+    {
+        stack.Push(std::make_unique<SizedCommand>(10));
+        stack.Push(std::make_unique<SizedCommand>(500));
+        CHECK(UndoDepth(stack) == 1);
+    }
+    SECTION("under budget: nothing goes")
+    {
+        stack.Push(std::make_unique<SizedCommand>(40));
+        stack.Push(std::make_unique<SizedCommand>(40));
+        CHECK(UndoDepth(stack) == 2);
+    }
+}
+
+TEST_CASE("component steps report their blobs to the byte budget", "[edit][undo]")
+{
+    auto reg = MakeReg();
+    const Astra::Entity e = reg->CreateEntity();
+    reg->AddComponent<Arcane::Transform>(e, Arcane::Transform{});
+    const Astra::ComponentDescriptor* desc = DescriptorFor(*reg, e, "Arcane::Transform");
+    Arcane::CommandStack stack([&reg]() -> Astra::Registry& { return *reg; });
+    Arcane::UndoLimits limits;
+    limits.byteBudget = 1;
+    stack.SetLimits(limits);
+    for (float x : { 1.0f, 2.0f })
+    {
+        const Arcane::TransactionId t = stack.Begin("Move");
+        stack.SnapshotComponent(e, desc);
+        reg->GetComponent<Arcane::Transform>(e)->position.x = x;
+        stack.Commit(t);
+    }
+    CHECK(UndoDepth(stack) == 1);
 }

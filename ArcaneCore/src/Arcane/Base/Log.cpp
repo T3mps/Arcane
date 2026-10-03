@@ -6,6 +6,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>
 
 #include <Mosaic/Assert.hpp>
 #include <Mosaic/Log.hpp>
@@ -204,6 +205,14 @@ namespace Arcane::Log
             ~FlushHelperShutdownGuard() { StopFlushHelper(); }
         };
         FlushHelperShutdownGuard s_flushHelperShutdownGuard;
+
+        std::once_flag s_levelCvarOnce;
+
+        void OnLogLevelPublished(Arcane::CVarHandle handle, void*)
+        {
+            if (const auto v = Arcane::CVarRegistry::Get().Get(handle); v && v->type == Arcane::CVarType::Int32)
+                Arcane::Log::SetLevel(static_cast<spdlog::level::level_enum>(v->AsInt32()));
+        }
     }
 
     void Init(spdlog::level::level_enum level)
@@ -239,6 +248,31 @@ namespace Arcane::Log
             Mosaic::SetLogSink(MosaicSink(), nullptr);
             Mosaic::SetAssertHandler(Arcane::Assert::MosaicHandler(), nullptr);
         });
+
+        // `log.level` (s2.4's Core exception): registered HERE, not by ARC_CVAR,
+        // because its default is Init's runtime argument -- the first caller's
+        // level, so an explicit Init(level) is never overridden by a static
+        // default. An Archive value from Saved/Config applies through the
+        // callback when config loads and publishes.
+        std::call_once(s_levelCvarOnce, [level] {
+            Arcane::CVarDesc desc;
+            desc.name = "log.level";
+            desc.type = Arcane::CVarType::Int32;
+            desc.defaultValue = Arcane::CVarValue::Int32(static_cast<std::int32_t>(level));
+            desc.min = Arcane::CVarValue::Int32(0);
+            desc.max = Arcane::CVarValue::Int32(6);
+            desc.flags = Arcane::CVarFlags::Archive | Arcane::CVarFlags::Dev;
+            desc.help = "Engine log level: 0 trace, 1 debug, 2 info, 3 warn, 4 error, 5 critical, 6 off. "
+                        "Gates stderr, the log file and the Console.";
+            desc.module = "engine";
+            const Arcane::CVarHandle h = Arcane::CVarRegistry::Get().Register(desc);
+            if (!h.IsStale()) Arcane::CVarRegistry::Get().AddCallback(h, &OnLogLevelPublished, nullptr);   // Dist: refused (Dev)
+        });
+    }
+
+    void SetLevel(spdlog::level::level_enum level)
+    {
+        Engine()->set_level(level);
     }
 
     void Shutdown()

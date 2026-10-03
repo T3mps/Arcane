@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Arcane/Base/DiagEnvelope.hpp>
+#include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Material/MaterialAsset.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>
@@ -14,9 +15,12 @@
 
 #include <Panels/DiagnosticStore.hpp>
 
+#include "Helpers/TestTypeContext.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -575,4 +579,191 @@ TEST_CASE("AssetRegistry keeps embedded input action GUID across a rename", "[pr
     stream.close();
     std::error_code error;
     fs::remove_all(dir, error);
+}
+
+// T5 s7.2: PeekId is the scan's READ half -- the executor's TOCTOU check and the
+// commands' expiry probe call it on every op, so it must never mint or write.
+TEST_CASE("AssetRegistry::PeekId reads the id the scan would and never mints or writes", "[project][assetops]")
+{
+    namespace fs = std::filesystem;
+    const auto dir = TempDir("peek_id");
+    std::ofstream(dir / "a.arcmat", std::ios::binary) << R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })";
+    std::ofstream(dir / "noid.arcmat", std::ios::binary) << R"({ "name": "x" })";
+    std::ofstream(dir / "t.png", std::ios::binary) << "png";
+    std::ofstream(dir / "u.png", std::ios::binary) << "png";
+    std::ofstream(dir / "u.png.meta", std::ios::binary) << R"({ "guid": "bbbb2222-2222-4222-8222-222222222222", "version": 1 })";
+    std::ofstream(dir / "x.cpp", std::ios::binary) << "int x;";
+    std::ofstream(dir / "n.txt", std::ios::binary) << "n";
+    Arcane::Diag::Envelope env;
+    env.guid = Arcane::Guid::Generate();
+    env.kind = "hang";
+    REQUIRE(Arcane::Diag::WriteFile(env, dir / "r.arcdiag"));
+
+    const auto slurp = [](const fs::path& p)
+    { std::ifstream in(p, std::ios::binary); return std::string(std::istreambuf_iterator<char>(in), {}); };
+    const std::string noIdBefore = slurp(dir / "noid.arcmat");
+
+    using R = Arcane::AssetRegistry;
+    CHECK(R::PeekId(dir / "a.arcmat") == Arcane::Guid::FromString("aaaa1111-1111-4111-8111-111111111111"));
+    CHECK(R::PeekId(dir / "u.png") == Arcane::Guid::FromString("bbbb2222-2222-4222-8222-222222222222"));
+    CHECK(R::PeekId(dir / "r.arcdiag") == env.guid);
+    CHECK_FALSE(R::PeekId(dir / "noid.arcmat").has_value());   // would be minted by a scan
+    CHECK_FALSE(R::PeekId(dir / "t.png").has_value());         // no sidecar yet
+    CHECK_FALSE(R::PeekId(dir / "u.png.meta").has_value());    // a sidecar is not an asset
+    CHECK_FALSE(R::PeekId(dir / "x.cpp").has_value());         // a source id is its path
+    CHECK_FALSE(R::PeekId(dir / "n.txt").has_value());
+    CHECK_FALSE(R::PeekId(dir / "missing.arcmat").has_value());
+
+    CHECK(slurp(dir / "noid.arcmat") == noIdBefore);           // byte-identical
+    CHECK_FALSE(fs::exists(dir / "t.png.meta"));               // no sidecar written
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AssetRegistry::Rebind moves a native asset and an imported binary with its .meta", "[project][assetops]")
+{
+    namespace fs = std::filesystem;
+    const auto dir = TempDir("rebind_ok");
+    fs::create_directories(dir / "sub");
+    std::ofstream(dir / "a.arcmat", std::ios::binary) << R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })";
+    std::ofstream(dir / "t.png", std::ios::binary) << "png";
+    Arcane::AssetRegistry reg;
+    REQUIRE(reg.ScanContent(dir, "game") == 2);
+    const Arcane::Guid a = *Arcane::Guid::FromString("aaaa1111-1111-4111-8111-111111111111");
+    const Arcane::Guid t = *Arcane::AssetRegistry::PeekId(dir / "t.png");   // minted by the scan
+
+    fs::rename(dir / "a.arcmat", dir / "sub" / "b.arcmat");
+    fs::rename(dir / "t.png", dir / "sub" / "t.png");
+    fs::rename(dir / "t.png.meta", dir / "sub" / "t.png.meta");
+    CHECK(reg.Rebind(a, dir / "sub" / "b.arcmat", dir, "game") == Arcane::RebindResult::Ok);
+    CHECK(reg.Rebind(t, dir / "sub" / "t.png", dir, "game") == Arcane::RebindResult::Ok);
+    CHECK(reg.Resolve(a) == "game://sub/b.arcmat");
+    CHECK(reg.Resolve(t) == "game://sub/t.png");
+    CHECK(reg.Count() == 2);
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AssetRegistry::Rebind refuses and leaves the map untouched", "[project][assetops]")
+{
+    namespace fs = std::filesystem;
+    using RR = Arcane::RebindResult;
+    const auto dir = TempDir("rebind_refuse");
+    const auto game = dir / "Content", plugin = dir / "Plugin", src = dir / "Source";
+    fs::create_directories(game); fs::create_directories(plugin); fs::create_directories(src);
+    std::ofstream(game / "a.arcmat", std::ios::binary) << R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })";
+    std::ofstream(game / "b.arcmat", std::ios::binary) << R"({ "id": "bbbb2222-2222-4222-8222-222222222222" })";
+    std::ofstream(game / "t.png", std::ios::binary) << "png";
+    std::ofstream(plugin / "p.arcmat", std::ios::binary) << R"({ "id": "cccc3333-3333-4333-8333-333333333333" })";
+    std::ofstream(src / "x.cpp", std::ios::binary) << "int x;";
+    Arcane::AssetRegistry reg;
+    reg.ScanContent(game, "game");
+    reg.AddContent(plugin, "plugin/p");
+    reg.AddContent(src, "source");
+    const auto idOf = [&](std::string_view mount)
+    {
+        for (const auto& [g, m] : reg.All()) if (m == mount) return g;
+        FAIL("no asset at " << mount);
+        return Arcane::Guid{};
+    };
+    const auto before = reg.All();
+
+    SECTION("IdMismatch: the .meta was left behind")
+    {
+        const Arcane::Guid t = idOf("game://t.png");
+        fs::rename(game / "t.png", game / "moved.png");
+        CHECK(reg.Rebind(t, game / "moved.png", game, "game") == RR::IdMismatch);
+    }
+    SECTION("CrossMount: a plugin asset rebound into game://")
+    {
+        fs::copy_file(plugin / "p.arcmat", game / "p.arcmat");
+        CHECK(reg.Rebind(idOf("plugin/p://p.arcmat"), game / "p.arcmat", game, "game") == RR::CrossMount);
+    }
+    SECTION("PathTaken: the target mount path belongs to another guid")
+    {
+        std::ofstream(game / "b.arcmat", std::ios::binary | std::ios::trunc)
+            << R"({ "id": "aaaa1111-1111-4111-8111-111111111111" })";
+        CHECK(reg.Rebind(idOf("game://a.arcmat"), game / "b.arcmat", game, "game") == RR::PathTaken);
+    }
+    SECTION("NotTrackable: a source file's identity is its path")
+    {
+        CHECK(reg.Rebind(idOf("source://x.cpp"), src / "y.cpp", src, "source") == RR::NotTrackable);
+    }
+    SECTION("OutsideContent and UnknownGuid")
+    {
+        CHECK(reg.Rebind(idOf("game://a.arcmat"), dir / "elsewhere.arcmat", game, "game") == RR::OutsideContent);
+        CHECK(reg.Rebind(Arcane::Guid::Generate(), game / "a.arcmat", game, "game") == RR::UnknownGuid);
+    }
+    CHECK(reg.All() == before);
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AssetRegistry::Remove unmaps the guid and retracts its duplicate-id row", "[project][assetops][diagnostics]")
+{
+    Arcane::Editor::DiagnosticStore store;
+    store.InstallAsEngineSink();
+    const auto dir = TempDir("remove_dup");
+    Arcane::MaterialAssetData a;
+    a.id = Arcane::Guid::Generate(); a.name = "A"; a.snippet = "float4 shade(Varyings v) { return 1; }\n";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "a.arcmat", a));
+    Arcane::MaterialAssetData b = a; b.name = "B";
+    REQUIRE(Arcane::SaveMaterialAsset(dir / "b.arcmat", b));
+    Arcane::AssetRegistry reg;
+    reg.ScanContent(dir, "game");
+    const auto dupRows = [&]
+    {
+        std::size_t n = 0;
+        for (const auto& d : store.Snapshot()) n += d.code == "assets.id.duplicate" ? 1u : 0u;
+        return n;
+    };
+    REQUIRE(dupRows() == 1);
+
+    CHECK(reg.Remove(a.id));
+    CHECK_FALSE(reg.Resolve(a.id).has_value());
+    CHECK(dupRows() == 0);
+    CHECK_FALSE(reg.Remove(a.id));   // unknown now
+
+    store.UninstallEngineSink();
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("Project::RebindAsset finds the containing root; UnregisterAsset drops the guid", "[project][assetops]")
+{
+    namespace fs = std::filesystem;
+    const auto dir = TempDir("project_rebind");
+    auto proj = Arcane::Project::Create(dir, "Rebind");
+    REQUIRE(proj.has_value());
+    const auto content = dir / "Content";
+    Arcane::MaterialAssetData m;
+    m.id = Arcane::Guid::Generate(); m.name = "m"; m.snippet = "float4 shade(Varyings v) { return 1; }\n";
+    REQUIRE(Arcane::SaveMaterialAsset(content / "m.arcmat", m));
+    REQUIRE(proj->RegisterAsset(content / "m.arcmat") == m.id);
+
+    fs::create_directories(content / "mats");
+    fs::rename(content / "m.arcmat", content / "mats" / "m.arcmat");
+    CHECK(proj->RebindAsset(m.id, content / "mats" / "m.arcmat") == Arcane::RebindResult::Ok);
+    CHECK(proj->Registry().Resolve(m.id) == "game://mats/m.arcmat");
+    const auto file = proj->ResolveAsset(Arcane::AssetId::FromGuid(m.id));
+    REQUIRE(file.has_value());
+    CHECK(fs::exists(*file));
+    CHECK(proj->RebindAsset(m.id, dir / "Elsewhere" / "m.arcmat") == Arcane::RebindResult::OutsideContent);
+
+    CHECK(proj->UnregisterAsset(m.id));
+    CHECK_FALSE(proj->Registry().Resolve(m.id).has_value());
+    CHECK_FALSE(proj->UnregisterAsset(m.id));
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Runtime file-op seams answer NoProject without a project", "[project][assetops]")
+{
+    Arcane::Runtime runtime{ Arcane::Test::Process() };
+    CHECK(runtime.RebindMovedAsset(Arcane::Guid::Generate(), "x.arcmat") == Arcane::RebindResult::NoProject);
+    CHECK_FALSE(runtime.UnregisterAsset(Arcane::Guid::Generate()));
 }

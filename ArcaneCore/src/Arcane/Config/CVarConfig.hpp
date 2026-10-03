@@ -32,8 +32,20 @@ namespace Arcane
     ARCANE_CORE_API CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
                                                        SetBy by, std::string_view sourceModule);
 
-    // One <category>.json per category that has something to archive. A cvar
-    // is written only when it is Archive and its winning SetBy is User or stronger.
+    // The user layer's write half (T3-D2): one <category>.json per category
+    // with something to archive, in the shape ApplyCVarDirectory(..., SetBy::User)
+    // reads back. A cvar is written only when it is Archive, neither Dev nor
+    // Cheat, and the User rung holds a value for it -- that value (its newest
+    // User record), even when a stronger rung (command line, console, code)
+    // currently wins. Defaults and every other rung are never written; a
+    // document-shaped category (input) is never touched.
+    // An existing file is MERGED: keys this write does not own (another
+    // module's cvars, hand-written settings) stay, and a key already present
+    // -- flat ("graph.x") or nested ({"graph":{"x":..}}) -- is updated in
+    // place. An unreadable file is kept beside it as <category>.json.bad and
+    // replaced. Each file goes to <category>.json.tmp first and is renamed
+    // over the old one, so a crash mid-write never leaves a torn file; an
+    // unchanged file is not rewritten.
     ARCANE_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& userDir);
 
     // `--set name=value`, repeated. CommandLine rung. Does not publish.

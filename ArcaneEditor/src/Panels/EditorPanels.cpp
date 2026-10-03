@@ -4,11 +4,13 @@
 #include <cstdio>
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
 #include "Panels/DefaultLayout.hpp"   // the default layout's pixel geometry (BuildDefaultLayout)
 #include "Panels/DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
 #include "Widgets/EditorFonts.hpp"
 #include "Widgets/EditorWidgets.hpp"
+#include "Widgets/EditorTheme.hpp"
 #include "Scene/EntityClipboard.hpp"
 #include "Panels/EntityList.hpp"
 #include "Widgets/IconsLucide.h"
@@ -16,8 +18,11 @@
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
+#include "Panels/SeverityStyle.hpp"   // the Console toolbar's severity toggles (s8.2)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
+#include "Scene/SelectionOps.hpp"
+#include "Scene/UndoGate.hpp"   // UndoMenuState: Edit > Undo/Redo (spec s3.3b/d)
 
 #include <Arcane/Base/Diagnostics.hpp>   // the refused-Play Problems row (final-review fix wave, minor 11)
 #include <Arcane/Base/Log.hpp>   // ARC_INFO -- Paste's foreign-clipboard notice
@@ -51,12 +56,88 @@
 
 namespace Arcane::Editor
 {
+    namespace
+    {
+        // The root guard's visible half (s3.1, 9.27.1): a root-only selection
+        // greys the verb, and this says why. ForTooltip's default mouse flags
+        // include AllowWhenDisabled (imgui.cpp:1587), which is what lets it
+        // reach a greyed item.
+        void RootRefusalTooltip(bool rootOnly, SceneRootVerb verb)
+        {
+            if (rootOnly && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+                ImGui::SetTooltip("%s", SceneRootRefusal(verb));
+        }
+
+        // The strip status (node page phase s6.4): project (TextDisabled), the
+        // Inspector breadcrumb's chevron (TextDisabled), scene (Text), " *" when
+        // dirty; "No project" alone otherwise. Read-only, not clickable.
+        struct StripStatusMetrics { float naturalW; float minW; };
+
+        StripStatusMetrics MeasureStripStatus(const TitleParts& t)
+        {
+            if (t.project.empty())
+            {
+                const float w = ImGui::CalcTextSize("No project").x;
+                return { w, w };   // never elided: it is drawn whole or not at all
+            }
+            const float sp    = ImGui::GetStyle().ItemInnerSpacing.x;
+            const float chev  = ImGui::CalcTextSize(ICON_LC_CHEVRON_RIGHT).x;
+            const float star  = t.sceneDirty ? ImGui::CalcTextSize(" *").x : 0.0f;
+            const float dots  = ImGui::CalcTextSize("...").x;
+            const float fixed = 2.0f * sp + chev + star;
+            return { fixed + ImGui::CalcTextSize(t.project.c_str()).x + ImGui::CalcTextSize(t.scene.c_str()).x,
+                     fixed + 2.0f * dots };
+        }
+
+        // Draws at window-local `at` within `budget` px: elides the project
+        // first, then the scene (EllipsisToWidth), keeping the chevron and " *".
+        // The three-line tooltip always carries the full text.
+        void DrawStripStatus(const ToolbarStatus& status, ImVec2 at, float budget)
+        {
+            const TitleParts& t = status.title;
+            ImGui::SetCursorPos(at);
+            ImGui::BeginGroup();
+            if (t.project.empty())
+                ImGui::TextDisabled("No project");
+            else
+            {
+                const float sp    = ImGui::GetStyle().ItemInnerSpacing.x;
+                const float fixed = 2.0f * sp + ImGui::CalcTextSize(ICON_LC_CHEVRON_RIGHT).x
+                                  + (t.sceneDirty ? ImGui::CalcTextSize(" *").x : 0.0f);
+                const float dots  = ImGui::CalcTextSize("...").x;
+                float projW  = ImGui::CalcTextSize(t.project.c_str()).x;
+                float sceneW = ImGui::CalcTextSize(t.scene.c_str()).x;
+                if (fixed + projW + sceneW > budget) projW  = std::max(dots, budget - fixed - sceneW);
+                if (fixed + projW + sceneW > budget) sceneW = std::max(dots, budget - fixed - projW);
+                const std::string project = EllipsisToWidth(t.project, projW);
+                const std::string scene   = EllipsisToWidth(t.scene, sceneW);
+                ImGui::TextDisabled("%s", project.c_str());
+                ImGui::SameLine(0.0f, sp);
+                ImGui::TextDisabled(ICON_LC_CHEVRON_RIGHT);
+                ImGui::SameLine(0.0f, sp);
+                ImGui::TextUnformatted(scene.c_str());
+                if (t.sceneDirty) { ImGui::SameLine(0.0f, 0.0f); ImGui::TextUnformatted(" *"); }
+            }
+            ImGui::EndGroup();
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(FormatStripStatus(t).c_str());
+                if (status.scenePath.empty()) ImGui::TextUnformatted("Scene not saved yet");
+                else                          ImGui::Text("Scene file: %s", status.scenePath.c_str());
+                if (t.sceneDirty) ImGui::TextUnformatted("Unsaved changes");
+                ImGui::EndTooltip();
+            }
+        }
+    }
+
     void BeginDockSpace(Arcane::CommandStack& undo, MenuRequests& requests,
                         bool sceneDirty, bool playing,
                         bool buildingModule, bool hasGameModule,
                         IdeMenuState ideState,
                         PanelVisibility& panels,
                         bool hasSelection,
+                        bool selectionRootOnly,
                         bool hasAssetSelection,
                         bool physicsOverlayOn,
                         const RecentSelection* recents,
@@ -81,9 +162,9 @@ namespace Arcane::Editor
         // File's scene/project items (including both Open Recent submenus),
         // Save All, Exit, and Assets' Show in Explorer / Copy Path all land
         // in `requests` now, as do Edit's clipboard and selection items. The
-        // remaining placeholders (Preferences..., Project Settings...) stay
-        // in the file's established style (enabled no-ops) until later tasks
-        // wire them. Edit's Undo/Redo drive the CommandStack.
+        // one remaining placeholder, Edit > Preferences..., is disabled with
+        // a tooltip naming the configuration pass that will build it. Edit's
+        // Undo/Redo drive the CommandStack.
         if (ImGui::BeginMenuBar())
         {
             if (ImGui::BeginMenu("File"))
@@ -132,6 +213,7 @@ namespace Arcane::Editor
                     ImGui::SetTooltip("Stop play mode to save the scene");
                 ImGui::Separator();
                 if (ImGui::MenuItem("Open Project")) requests.openProject = true;
+                if (ImGui::MenuItem("Open Folder...")) requests.openProjectFolder = true;
                 // Open Recent Project: the Hub's shared list, already filtered
                 // to what THIS editor's ABI can open (RecentProjects.hpp).
                 // Greyed when there is nothing at all to show. The picked path
@@ -158,13 +240,9 @@ namespace Arcane::Editor
                     {
                         if (!recents->visible.empty())
                             ImGui::Separator();
-                        char hidden[128];
-                        std::snprintf(hidden, sizeof(hidden),
-                                      "%zu project%s hidden (built for another engine version)",
-                                      recents->hiddenForAbi,
-                                      recents->hiddenForAbi == 1 ? "" : "s");
+                        const std::string hidden = Recents::HiddenForAbiLine(recents->hiddenForAbi);
                         ImGui::BeginDisabled();
-                        ImGui::MenuItem(hidden);
+                        ImGui::MenuItem(hidden.c_str());
                         ImGui::EndDisabled();
                     }
                     ImGui::EndMenu();
@@ -186,33 +264,46 @@ namespace Arcane::Editor
             {
                 // Undo/Redo share the CommandStack with the Ctrl+Z / Ctrl+Y shortcuts
                 // (handled in the app input loop); the shortcut text here is display-only.
-                const bool canUndo = undo.CanUndo();
-                const bool canRedo = undo.CanRedo();
-                const std::string undoLabel = canUndo ? (std::string("Undo ") + undo.UndoLabel())
-                                                      : std::string("Undo");
-                const std::string redoLabel = canRedo ? (std::string("Redo ") + undo.RedoLabel())
-                                                      : std::string("Redo");
-                if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo)) undo.Undo();
-                if (ImGui::MenuItem(redoLabel.c_str(), "Ctrl+Y", false, canRedo)) undo.Redo();
+                const bool inTxn = undo.InTransaction();
+                const UndoMenuItem undoItem = UndoMenuState(undo.CanUndo(), playing, inTxn,
+                                                            undo.ClearedReason(), undo.UndoLabel());
+                const UndoMenuItem redoItem = UndoMenuState(undo.CanRedo(), playing, inTxn,
+                                                            {}, undo.RedoLabel(), /*redo*/ true);
+                if (ImGui::MenuItem(undoItem.label.c_str(), "Ctrl+Z", false, undoItem.enabled)) undo.Undo();
+                if (!undoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", undoItem.tooltip.c_str());
+                if (ImGui::MenuItem(redoItem.label.c_str(), "Ctrl+Y", false, redoItem.enabled)) undo.Redo();
+                if (!redoItem.tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", redoItem.tooltip.c_str());
                 ImGui::Separator();
                 // Play greys the whole group: structural edits refuse in Play
                 // (ApplyStructural's editMode gate), and the affordance rule is
                 // that a refusal is visible before the click -- 2026-08-10
                 // final review, user-ratified over the spec's old "no extra
                 // Play gating" line.
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSelection && !playing))
+                // The root guard (s3.1): a ROOT-ONLY selection greys the four
+                // structural verbs with the reason; a mixed one stays enabled
+                // and the verb drops the root itself (SelectionWithoutSceneRoot).
+                // Rename stays enabled: the root is renameable.
+                const bool structural     = hasSelection && !selectionRootOnly && !playing;
+                const bool showRootReason = selectionRootOnly && !playing;
+                if (ImGui::MenuItem("Cut", "Ctrl+X", false, structural))
                     requests.cutSelection = true;
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection && !playing))
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Cut);
+                if (ImGui::MenuItem("Copy", "Ctrl+C", false, structural))
                     requests.copySelection = true;
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Copy);
                 if (ImGui::MenuItem("Paste", "Ctrl+V", false, !playing))
                     requests.paste = true;
-                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, hasSelection && !playing))
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, structural))
                     requests.duplicateSelection = true;
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Duplicate);
                 // Same code paths as the Outliner's F2/Del bindings.
                 if (ImGui::MenuItem("Rename", "F2", false, hasSelection && !playing))
                     requests.renameSelected = true;
-                if (ImGui::MenuItem("Delete", "Del", false, hasSelection && !playing))
+                if (ImGui::MenuItem("Delete", "Del", false, structural))
                     requests.deleteSelected = true;
+                RootRefusalTooltip(showRootReason, SceneRootVerb::Delete);
                 ImGui::Separator();
                 if (ImGui::MenuItem("Select All"))       requests.selectAll = true;
                 if (ImGui::MenuItem("Deselect All"))     requests.deselectAll = true;
@@ -220,10 +311,13 @@ namespace Arcane::Editor
                 ImGui::Separator();
                 // UE's placement and order: the Edit menu's closing section is
                 // Editor Preferences... then Project Settings... (vendored
-                // MainMenu.cpp:261-276). Placeholders until the settings
-                // windows exist -- this absorbs the old top-level Preferences
-                // leaf.
-                ImGui::MenuItem("Preferences...");
+                // MainMenu.cpp:261-276). Project Settings is wired. Preferences
+                // is the ONE remaining placeholder: disabled with its reason
+                // until the configuration pass builds the settings window over
+                // the cvar registry here (node page phase s6.8, s10.2).
+                ImGui::MenuItem("Preferences...", nullptr, false, false);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Settings window coming in the configuration pass");
                 if (ImGui::MenuItem("Project Settings..."))
                     requests.showProjectSettings = true;
                 ImGui::EndMenu();
@@ -642,12 +736,12 @@ namespace Arcane::Editor
         return result;
     }
 
-    bool DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
-                            Arcane::PluginHost* host,
-                            PlayLaunchMode& mode, bool& launchServerRequested,
-                            uint64_t logoTex)
+    ToolbarResult DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
+                                     Arcane::PluginHost* host, PlayLaunchMode& mode,
+                                     uint64_t logoTex, const ToolbarStatus& status,
+                                     const std::function<void()>& beforePlay)
     {
-        launchServerRequested = false;   // always written before this returns
+        ToolbarResult result;
 
         // Icon button with a hover tooltip (icons need discoverable labels).
         // `id` is an ImGui ID-only suffix (e.g. "##sim_playstop") appended to the
@@ -660,17 +754,6 @@ namespace Arcane::Editor
         {
             const std::string label = std::string(icon) + id;
             const bool clicked = ImGui::Button(label.c_str());
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-            return clicked;
-        };
-        // Toggle-style icon button: tinted background when active (gizmo T/R/S).
-        auto iconToggle = [](const char* icon, const char* id, bool active, const char* tip) -> bool
-        {
-            if (active) ImGui::PushStyleColor(ImGuiCol_Button,
-                                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            const std::string label = std::string(icon) + id;
-            const bool clicked = ImGui::Button(label.c_str());
-            if (active) ImGui::PopStyleColor();
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             return clicked;
         };
@@ -742,7 +825,8 @@ namespace Arcane::Editor
         const float transportW = splitW + btnW(ICON_LC_PAUSE) + btnW(ICON_LC_STEP_FORWARD)
                                + kTransportGap * 2.0f;
         const float centerStart = lineStartX + (fullContentW - transportW) * 0.5f;
-        ImGui::SetCursorPos(ImVec2(std::max(centerStart, leftX + 12.0f), rowY));
+        const float transportX = std::max(centerStart, leftX + 12.0f);
+        ImGui::SetCursorPos(ImVec2(transportX, rowY));
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(kTransportGap, st.ItemSpacing.y));
 
@@ -753,10 +837,13 @@ namespace Arcane::Editor
         // (the editor takes no lock on the child and does not track it), so it
         // never lights this button -- Stop would have nothing of its own to
         // restore for a launch it never tracked.
-        bool launchStandaloneRequested = false;
         const bool playing = play.IsPlaying();
-        if (iconToggle(playing ? ICON_LC_SQUARE : ICON_LC_PLAY, "##sim_play",
-                       playing, playing ? "Stop" : "Play"))
+        // IconToggle (s4.9/s6.2): lit = the accent trio, so a playing Stop square
+        // reads as ON under the cursor too. Its tooltip stays this site's own.
+        const bool playClicked =
+            IconToggle(playing ? ICON_LC_SQUARE "##sim_play" : ICON_LC_PLAY "##sim_play", playing);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", playing ? "Stop" : "Play");
+        if (playClicked)
         {
             if (playing)
             {
@@ -791,6 +878,7 @@ namespace Arcane::Editor
                 };
                 const auto tryPlay = [&](PlayTopology topology, const char* what)
                 {
+                    if (beforePlay) beforePlay();   // flush document gestures while still in Edit (s3.3b)
                     if (play.Play(runtime, host, topology))
                         Arcane::Diagnostics::Clear("editor:play");
                     else
@@ -802,7 +890,7 @@ namespace Arcane::Editor
                         tryPlay(PlayTopology::Standalone, "in viewport");
                         break;
                     case PlayLaunchMode::SeparateWindow:
-                        launchStandaloneRequested = true;   // caller resolves + spawns; play/plugin untouched
+                        result.launchStandalone = true;   // caller resolves + spawns; play/plugin untouched
                         break;
                     case PlayLaunchMode::ListenServer:
                         tryPlay(PlayTopology::ListenServer, "listen server");
@@ -824,7 +912,7 @@ namespace Arcane::Editor
                         // holding -- the row below exists for a future refusal, not an
                         // observed one.
                         tryPlay(PlayTopology::ClientOnly, "client + separate server");
-                        launchServerRequested = true;
+                        result.launchServer = true;
                         break;
                 }
             }
@@ -838,11 +926,12 @@ namespace Arcane::Editor
         ImGui::SameLine(0.0f, 0.0f);
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - st.FrameBorderSize);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kCaretPadX, st.FramePadding.y));
-        if (playing) ImGui::PushStyleColor(ImGuiCol_Button,
-                                           ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        if (iconBtn(ICON_LC_CHEVRON_DOWN, "##sim_playmode", "Play mode"))
+        // Lit with Play (an unlit caret welded to a lit Play reads as a separate button).
+        const bool caretClicked = IconToggle(ICON_LC_CHEVRON_DOWN "##sim_playmode", playing);
+        const PopupAnchor caretAnchor = LastItemAnchor();   // T2-C2's BeginPopupBelow("##play_mode", caretAnchor) reads it
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Play mode");
+        if (caretClicked)
             ImGui::OpenPopup("##play_mode");
-        if (playing) ImGui::PopStyleColor();
         ImGui::PopStyleVar();
 
         // Play-mode dropdown (Task 6, runtime-host-fold arc): choose whether the Play
@@ -852,7 +941,7 @@ namespace Arcane::Editor
         // Core-DLL split's Task 7 is that future arriving: the three rows below are
         // the network TOPOLOGIES, landing here as rows rather than as a separate
         // UI-only concept bolted on elsewhere, exactly as promised.
-        if (ImGui::BeginPopup("##play_mode"))
+        if (BeginPopupBelow("##play_mode", caretAnchor))
         {
             // MarkIniSettingsDirty on change, as the shader editor's layout
             // handler does (ShaderEditorDocument.cpp): ImGui::Shutdown saves the
@@ -905,8 +994,9 @@ namespace Arcane::Editor
         // run the sim with no active Play session and no way to Stop. Pause only within
         // Play; tint only while actually playing so it never looks "armed" in Edit.
         ImGui::BeginDisabled(!play.IsPlaying());
-        if (iconToggle(ICON_LC_PAUSE, "##sim_pause", play.IsPlaying() && loop.IsPaused(),
-                       loop.IsPaused() ? "Resume" : "Pause"))
+        const bool pauseClicked = IconToggle(ICON_LC_PAUSE "##sim_pause", play.IsPlaying() && loop.IsPaused());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", loop.IsPaused() ? "Resume" : "Pause");
+        if (pauseClicked)
             loop.SetPaused(!loop.IsPaused());
         ImGui::EndDisabled();
         ImGui::SameLine();
@@ -918,18 +1008,62 @@ namespace Arcane::Editor
 
         ImGui::PopStyleVar();   // kTransportGap: the rest of the row keeps the global spacing
 
+        // -- RIGHT cluster (node page phase s6.4/s6.5): [chip] [status], laid out
+        // right to left by LayoutStripCluster, absolute SetCursorPos like the left
+        // cluster. The cursor is restored afterwards so the closing Dummy -- and
+        // with it the strip height -- is exactly where the transport left it.
+        {
+            const ImVec2 afterTransport = ImGui::GetCursorPos();
+            const float  rightEdge = lineStartX + fullContentW - leftPad;          // mirrors leftPad
+            const float  minX      = transportX + transportW + 12.0f;             // mirrors the left clamp
+            const float  gap       = st.ItemSpacing.x * 2.0f;
+            const float  lineH     = ImGui::GetTextLineHeight();
+            const StripStatusMetrics m = MeasureStripStatus(status.title);
+            const float  chipW = status.problems
+                ? ImGui::CalcTextSize(status.problems->label.c_str()).x + st.FramePadding.x * 2.0f : 0.0f;
+            const StripClusterLayout lay = LayoutStripCluster(minX, rightEdge, chipW, m.naturalW, m.minW, gap);
+            if (status.problems)
+            {
+                const StripChip& chip = *status.problems;
+                ImGui::SetCursorPos(ImVec2(lay.chipX, rowY));
+                result.problemsChipClicked = ImGui::InvisibleButton("##strip_problems", ImVec2(chipW, btnH));
+                const ImVec2 cmin = ImGui::GetItemRectMin(), cmax = ImGui::GetItemRectMax();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                dl->AddRectFilled(cmin, cmax, ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered
+                                                                                          : ImGuiCol_Button));
+                dl->AddRect(cmin, cmax, ImGui::GetColorU32(ImGuiCol_Border));
+                dl->AddText(ImVec2(cmin.x + st.FramePadding.x, cmin.y + (btnH - lineH) * 0.5f),
+                            ImGui::GetColorU32(chip.color), chip.label.c_str());
+                if (!chip.tooltip.empty() && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", chip.tooltip.c_str());
+            }
+            if (lay.drawStatus)
+                DrawStripStatus(status, ImVec2(lay.statusX, rowY + (btnH - lineH) * 0.5f), lay.statusBudget);
+            ImGui::SetCursorPos(afterTransport);
+        }
+
         ImGui::Dummy(ImVec2(0.0f, 3.0f + overhang));   // clear the logo's lower overhang too
         ImGui::Separator();
-        return launchStandaloneRequested;
+        return result;
     }
 
-    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool* open)
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool suppressBadges, bool* open)
     {
-        ImGui::Begin("Console", open);
-
         // Snapshot once: CollapseConsole holds pointers into its input, and a
-        // worker thread can push (and therefore evict) mid-frame.
+        // worker thread can push (and therefore evict) mid-frame. Snapshot
+        // BEFORE Begin: the tab title carries the unseen count (s8.2).
         const std::vector<ConsoleEntry> entries = console.Snapshot();
+        const std::size_t unseen = suppressBadges ? 0 : UnseenAlerts(entries, ui.lastSeenSeq);
+        const bool tint = unseen > 0;
+        if (tint)
+            ImGui::PushStyleColor(ImGuiCol_Text, UnseenErrors(entries, ui.lastSeenSeq) > 0 ? Theme::kError : Theme::kWarning);
+        ImGui::Begin(ConsoleTabTitle(unseen).c_str(), open);
+        if (tint) ImGui::PopStyleColor();   // only the tab label is tinted
+        // "Shown" is the window's own Hidden flag, not BeginChild's return:
+        // a new window's first frame is Hidden yet does NOT skip items
+        // (HiddenFramesCannotSkipItems), so the rows child still opens and
+        // would mark every startup warning seen before anyone could look.
+        const bool shown = !ImGui::GetCurrentWindowRead()->Hidden;
 
         std::size_t nInfo = 0, nWarn = 0, nErr = 0;
         for (const ConsoleEntry& e : entries)
@@ -982,16 +1116,22 @@ namespace Arcane::Editor
         ImGui::SameLine();
         ImGui::Checkbox("Wrap", &ui.wrap);
 
+        ImGui::SameLine(); (void)SeverityToggleFor("console_err",  Arcane::DiagSeverity::Error,   nErr,  ui.showError);
+        ImGui::SameLine(); (void)SeverityToggleFor("console_warn", Arcane::DiagSeverity::Warning, nWarn, ui.showWarning);
+        ImGui::SameLine(); (void)SeverityToggleFor("console_info", Arcane::DiagSeverity::Info,    nInfo, ui.showInfo);
         ImGui::SameLine();
-        ImGui::Text("|");
-        ImGui::SameLine(); ImGui::Checkbox("##infoT", &ui.showInfo);
-        ImGui::SameLine(); ImGui::Text(ICON_LC_INFO " %zu", nInfo);
-        ImGui::SameLine(); ImGui::Checkbox("##warnT", &ui.showWarning);
-        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.77f, 0.30f, 1.0f),
-                                              ICON_LC_TRIANGLE_ALERT " %zu", nWarn);
-        ImGui::SameLine(); ImGui::Checkbox("##errT", &ui.showError);
-        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.35f, 1.0f),
-                                              ICON_LC_CIRCLE_X " %zu", nErr);
+        ImGui::SetNextItemWidth(140.0f);
+        if (ImGui::BeginCombo("##consolecat", ui.categoryFilter.empty() ? "All categories" : ui.categoryFilter.c_str()))
+        {
+            if (ImGui::Selectable("All categories", ui.categoryFilter.empty())) ui.categoryFilter.clear();
+            std::vector<std::string> cats;
+            for (const ConsoleEntry& e : entries)
+                if (std::find(cats.begin(), cats.end(), e.category) == cats.end()) cats.push_back(e.category);
+            std::sort(cats.begin(), cats.end());
+            for (const std::string& c : cats)
+                if (ImGui::Selectable(c.c_str(), ui.categoryFilter == c)) ui.categoryFilter = c;
+            ImGui::EndCombo();
+        }
 
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##consolesearch", "Search", ui.search, sizeof(ui.search));
@@ -1012,8 +1152,7 @@ namespace Arcane::Editor
         // The cvar console's own history sits between the log rows and the
         // input line: reserve the input line plus up to six reply lines.
         // (Hygiene pass 2026-09-28: the replies were never drawn here.)
-        static Arcane::ConsoleModel cvars;
-        const std::size_t cvarLines = cvars.Lines().size() < 6 ? cvars.Lines().size() : std::size_t{ 6 };
+        const std::size_t cvarLines = ui.cvars.Lines().size() < 6 ? ui.cvars.Lines().size() : std::size_t{ 6 };
         const float reserved = ImGui::GetFrameHeightWithSpacing() * (1.0f + static_cast<float>(cvarLines));
         if (!ImGui::BeginChild("##consolerows", ImVec2(0.0f, -reserved)))
         {
@@ -1021,16 +1160,18 @@ namespace Arcane::Editor
             ImGui::End();
             return;
         }
+        if (shown && !entries.empty()) ui.lastSeenSeq = entries.back().seq;   // the badge clears next frame
 
         const auto visible = [&](const ConsoleEntry& e)
         {
             if (e.level == Arcane::DiagSeverity::Error   && !ui.showError)   return false;
             if (e.level == Arcane::DiagSeverity::Warning && !ui.showWarning) return false;
             if (e.level == Arcane::DiagSeverity::Info    && !ui.showInfo)    return false;
+            if (!ui.categoryFilter.empty() && e.category != ui.categoryFilter) return false;
             Arcane::Diagnostic probe;               // reuse the one filter definition
             probe.severity = e.level;
             probe.message  = e.message;
-            return MatchesDiagnosticFilter(probe, Arcane::DiagSeverity::Info, ui.search);
+            return MatchesDiagnosticFilter(probe, SeverityMask::All, ui.search);
         };
 
         // The visible rows, resolved BEFORE the multi-select scope opens:
@@ -1100,8 +1241,8 @@ namespace Arcane::Editor
             const ConsoleEntry& e = *row.e;
 
             ImVec4 col(0.80f, 0.80f, 0.80f, 1.0f);
-            if (e.level == Arcane::DiagSeverity::Error)        col = ImVec4(0.90f, 0.35f, 0.35f, 1.0f);
-            else if (e.level == Arcane::DiagSeverity::Warning) col = ImVec4(0.95f, 0.77f, 0.30f, 1.0f);
+            if (e.level == Arcane::DiagSeverity::Error)        col = Theme::kError;
+            else if (e.level == Arcane::DiagSeverity::Warning) col = Theme::kWarning;
 
             const std::string clock = ClockText(e.timestampMs);
             char cat[64];
@@ -1200,38 +1341,27 @@ namespace Arcane::Editor
         ImGui::EndChild();
         if (cvarLines > 0)
         {
-            const auto& lines = cvars.Lines();
+            const auto& lines = ui.cvars.Lines();
             for (std::size_t i = lines.size() - cvarLines; i < lines.size(); ++i)
             {
                 if (lines[i].ok) ImGui::TextUnformatted(lines[i].text.c_str());
                 else             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
             }
         }
-        char buffer[512];
-        std::snprintf(buffer, sizeof(buffer), "%s", cvars.Input().c_str());
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputText("##cvarline", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue))
-        {
-            cvars.SetInput(buffer);
-            cvars.Submit(Arcane::CVarRegistry::Get(), Arcane::Permission::Editor);
-        }
-        else
-        {
-            cvars.SetInput(buffer);
-        }
+        (void)Arcane::DrawConsoleInputLine("##cvarline", ui.cvars, Arcane::CVarRegistry::Get(), Arcane::Permission::Editor);
         ImGui::End();
     }
 
     ViewportPanelResult DrawViewportPanel(uint64_t textureId, uint32_t texW, uint32_t texH,
-                                          ViewportToolState& tools, bool showToolOverlay,
+                                          ViewportToolState& tools, const ViewportChrome& chrome,
                                           const ViewportImageOverlayFn& imageOverlay)
     {
         // The style alpha OUTSIDE any BeginDisabled scope, captured up front:
         // BeginDisabled multiplies g.Style.Alpha (imgui.cpp:8899-8900) and a
         // tooltip Begin()s under whatever alpha is current, so a greyed
-        // button's tooltip would itself come out at 60%. The helpers push
-        // this value back around SetTooltip so the explanation of WHY a tool
-        // is greyed is drawn at full strength.
+        // button's tooltip would itself come out at the disabled alpha. The
+        // helpers push this value back around SetTooltip so the explanation
+        // of WHY a tool is greyed is drawn at full strength.
         const float tooltipAlpha = ImGui::GetStyle().Alpha;
         auto tooltip = [tooltipAlpha](const char* tip)
         {
@@ -1242,25 +1372,21 @@ namespace Arcane::Editor
             ImGui::SetTooltip("%s", tip);
             ImGui::PopStyleVar();
         };
-        // Stateless icon-button helpers (mirrors the toolbar's).
+        // Stateless icon-button helper (mirrors the toolbar's).
         auto iconBtn = [&tooltip](const char* icon, const char* id, const char* tip) -> bool
         {
             const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
             tooltip(tip);
             return clicked;
         };
-        auto iconToggle = [&tooltip](const char* icon, const char* id, bool active, const char* tip) -> bool
-        {
-            if (active) ImGui::PushStyleColor(ImGuiCol_Button,
-                                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            const bool clicked = ImGui::Button((std::string(icon) + id).c_str());
-            if (active) ImGui::PopStyleColor();
-            tooltip(tip);
-            return clicked;
-        };
 
         ViewportPanelResult r;
-        ImGui::Begin("Viewport");
+        // The scene's unsaved dot on the Viewport tab (s6.4), beside the
+        // documents' own (every document raises UnsavedDocument when dirty).
+        // ImGui widens a marked tab by one glyph (imgui_widgets.cpp:10052-10053),
+        // so tabs to its right shift while the scene is dirty.
+        ImGui::Begin("Viewport", nullptr,
+                     chrome.sceneDirty ? ImGuiWindowFlags_UnsavedDocument : ImGuiWindowFlags_None);
         r.dockId = static_cast<unsigned int>(ImGui::GetWindowDockID());
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         r.desiredW = avail.x > 0 ? static_cast<uint32_t>(avail.x) : 1;
@@ -1279,6 +1405,24 @@ namespace Arcane::Editor
             imageOverlay(*dl, origin);
             dl->PopClipRect();
         }
+        // Play presence (s6.3): four 2 px kAccent bands INSIDE the image rect --
+        // inside, so there is no half-pixel stroke arithmetic and no bleed into the
+        // window padding. After the gizmo overlay, before the tool overlay (hidden
+        // in Play anyway). Draw only: r.hovered, the click capture below and game
+        // input are untouched. `playing` is PlaySession::IsPlaying(), so every
+        // in-editor topology frames and a Separate-window launch never does.
+        if (chrome.playing && textureId != 0 && texW > 0 && texH > 0)
+        {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImU32  col = ImGui::GetColorU32(Theme::kAccent);
+            constexpr float t = 2.0f;
+            const ImVec2 a = origin;
+            const ImVec2 b(origin.x + (float)texW, origin.y + (float)texH);
+            dl->AddRectFilled(a, ImVec2(b.x, a.y + t), col);                          // top
+            dl->AddRectFilled(ImVec2(a.x, b.y - t), b, col);                          // bottom
+            dl->AddRectFilled(ImVec2(a.x, a.y + t), ImVec2(a.x + t, b.y - t), col);   // left
+            dl->AddRectFilled(ImVec2(b.x - t, a.y + t), ImVec2(b.x, b.y - t), col);   // right
+        }
         r.hovered = ImGui::IsWindowHovered();
         r.focused = ImGui::IsWindowFocused();
 
@@ -1290,12 +1434,12 @@ namespace Arcane::Editor
         // gear opening the view-settings popup (grid, grid plane, fov, camera
         // speed, gizmo size). The transform tools on the right as before.
         // Drawn over the image; a click on it changes the tool/view and must
-        // NOT also pick an entity. Hidden in Play mode (showToolOverlay=false):
+        // NOT also pick an entity. Hidden in Play mode (chrome.showToolOverlay=false):
         // the game owns the viewport there, and with the overlay gone
         // overlayHovered stays false, so clicks in that corner fall through to
         // the game like anywhere else.
         bool overlayHovered = false;
-        if (showToolOverlay)
+        if (chrome.showToolOverlay)
         {
             using Arcane::Editor::ViewMode;
             using Arcane::Editor::GridPlane;
@@ -1322,11 +1466,13 @@ namespace Arcane::Editor
             // shader editor's preferences do (:716): the [EditorViewport]
             // handler only WRITES when ImGui next saves, and a camera or
             // settings change on its own dirties nothing.
-            if (iconToggle(ICON_LC_SQUARE, "##view_2d", tools.viewMode == ViewMode::TwoD, "2D view (Alt+J)"))
-            { tools.viewMode = ViewMode::TwoD; ImGui::MarkIniSettingsDirty(); }
+            const bool view2d = IconToggle(ICON_LC_SQUARE "##view_2d", tools.viewMode == ViewMode::TwoD);
+            tooltip("2D view (Alt+J)");
+            if (view2d) { tools.viewMode = ViewMode::TwoD; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_BOX, "##view_persp", tools.viewMode == ViewMode::Perspective, "Perspective view (Alt+G)"))
-            { tools.viewMode = ViewMode::Perspective; ImGui::MarkIniSettingsDirty(); }
+            const bool viewPersp = IconToggle(ICON_LC_BOX "##view_persp", tools.viewMode == ViewMode::Perspective);
+            tooltip("Perspective view (Alt+G)");
+            if (viewPersp) { tools.viewMode = ViewMode::Perspective; ImGui::MarkIniSettingsDirty(); }
             ImGui::SameLine();
             if (iconBtn(ICON_LC_SETTINGS_2, "##view_settings", "View settings"))
                 ImGui::OpenPopup("##viewsettings");
@@ -1373,17 +1519,21 @@ namespace Arcane::Editor
             ImGui::SameLine(0.0f, groupGap);
 
             // --- Transform tools ---------------------------------------------
-            if (iconToggle(ICON_LC_MOUSE_POINTER_2, "##tool_sel", !gizmoEnabled, "Select (Q)"))
-                gizmoEnabled = false;
+            const bool toolSel = IconToggle(ICON_LC_MOUSE_POINTER_2 "##tool_sel", !gizmoEnabled);
+            tooltip("Select (Q)");
+            if (toolSel) gizmoEnabled = false;
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_MOVE_3D, "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate, "Move (W)"))
-            { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
+            const bool toolT = IconToggle(ICON_LC_MOVE_3D "##tool_t", gizmoEnabled && mode == Arcane::GizmoMode::Translate);
+            tooltip("Move (W)");
+            if (toolT) { gizmoEnabled = true; mode = Arcane::GizmoMode::Translate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_ROTATE_3D, "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate, "Rotate (E)"))
-            { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
+            const bool toolR = IconToggle(ICON_LC_ROTATE_3D "##tool_r", gizmoEnabled && mode == Arcane::GizmoMode::Rotate);
+            tooltip("Rotate (E)");
+            if (toolR) { gizmoEnabled = true; mode = Arcane::GizmoMode::Rotate; }
             ImGui::SameLine();
-            if (iconToggle(ICON_LC_SCALE_3D, "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale, "Scale (R)"))
-            { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
+            const bool toolS = IconToggle(ICON_LC_SCALE_3D "##tool_s", gizmoEnabled && mode == Arcane::GizmoMode::Scale);
+            tooltip("Scale (R)");
+            if (toolS) { gizmoEnabled = true; mode = Arcane::GizmoMode::Scale; }
             ImGui::SameLine();
             {
                 const bool local = (space == Arcane::GizmoSpace::Local);
@@ -1494,7 +1644,9 @@ namespace Arcane::Editor
     void DeleteSelection(Astra::Registry& registry, SelectionContext& sel,
                          Arcane::CommandStack& undo, const SceneEditBinding& binding)
     {
-        const std::vector<Astra::Entity> doomed = sel.Entities();   // copy: sel mutates after
+        // The root guard (s3.1): a mixed selection drops the root, a
+        // root-only one deletes nothing and pushes no step.
+        const std::vector<Astra::Entity> doomed = SelectionWithoutSceneRoot(registry, sel.Entities());
         if (doomed.empty())
             return;
         if (ApplyStructural(undo, binding, "Delete",
@@ -1508,9 +1660,10 @@ namespace Arcane::Editor
     // structural half wraps in ApplyStructural like the Outliner's ops.
     bool CopySelectionToClipboard(Astra::Registry& registry, const SelectionContext& sel)
     {
-        if (!sel.HasSelection())
-            return false;
-        nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, sel.Entities());
+        const std::vector<Astra::Entity> copied = SelectionWithoutSceneRoot(registry, sel.Entities());
+        if (copied.empty())
+            return false;   // nothing, or the scene root alone (s3.1)
+        nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, copied);
         if (payload["entities"].empty())
             return false;
         ImGui::SetClipboardText(
@@ -1533,7 +1686,7 @@ namespace Arcane::Editor
         // children up, so passing only the roots would orphan what the
         // clipboard just took (EntityOps.hpp, SubtreeEntities).
         const std::vector<Astra::Entity> roots =
-            Arcane::Edit::SelectionRoots(registry, sel.Entities());
+            Arcane::Edit::SelectionRoots(registry, SelectionWithoutSceneRoot(registry, sel.Entities()));
         const std::vector<Astra::Entity> doomed =
             Arcane::Edit::SubtreeEntities(registry, roots);
         if (Arcane::Editor::ApplyStructural(undo, binding, "Cut",
@@ -1580,9 +1733,10 @@ namespace Arcane::Editor
     void DuplicateSelection(Astra::Registry& registry, SelectionContext& sel,
                             Arcane::CommandStack& undo, const SceneEditBinding& binding)
     {
-        if (!sel.HasSelection())
-            return;
-        const nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, sel.Entities());
+        const std::vector<Astra::Entity> duplicated = SelectionWithoutSceneRoot(registry, sel.Entities());
+        if (duplicated.empty())
+            return;   // the root alone never duplicates -- it nested a second scene + Camera (s3.1)
+        const nlohmann::json payload = Arcane::Edit::SerializeSubtrees(registry, duplicated);
         if (!payload["entities"].empty())
             InstantiateAndSelect(registry, sel, undo, binding, payload, "Duplicate");
     }
@@ -2139,17 +2293,25 @@ namespace Arcane::Editor
                         // it at the view's focus point, selected and framed).
                         DrawAddPrimitiveSubmenu(state, row.entity);
                         ImGui::Separator();
+                        // The root guard (s3.1). The right-click above already
+                        // selected this row when it was outside the selection.
+                        const bool rootOnly = sel.Contains(row.entity)
+                            ? IsSceneRootOnly(registry, sel.Entities())
+                            : Arcane::Edit::IsSceneRoot(registry, row.entity);
                         // Edit-menu parity via the shared functions above.
                         // Acts on the SELECTION -- the right-click already
                         // selected this row when it was outside it.
-                        if (ImGui::MenuItem("Cut", "Ctrl+X"))
+                        if (ImGui::MenuItem("Cut", "Ctrl+X", false, !rootOnly))
                             CutSelection(registry, sel, undo, binding);
-                        if (ImGui::MenuItem("Copy", "Ctrl+C"))
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Cut);
+                        if (ImGui::MenuItem("Copy", "Ctrl+C", false, !rootOnly))
                             CopySelectionToClipboard(registry, sel);
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Copy);
                         if (ImGui::MenuItem("Paste", "Ctrl+V"))
                             PasteFromClipboard(registry, sel, undo, binding);
-                        if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+                        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, !rootOnly))
                             DuplicateSelection(registry, sel, undo, binding);
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Duplicate);
                         ImGui::Separator();
                         // Disabled rather than hidden without an Identity, so
                         // the refusal is visible before the click -- the same
@@ -2169,12 +2331,13 @@ namespace Arcane::Editor
                         // scope below (the standard deferred-OpenPopup pattern).
                         if (ImGui::MenuItem("Add Component..."))
                             state.addComponentPending = true;
-                        if (ImGui::MenuItem("Delete", "Del"))
+                        if (ImGui::MenuItem("Delete", "Del", false, !rootOnly))
                         {
                             if (!sel.Contains(row.entity))
                                 sel.Select(row.entity);
                             DeleteSelection(registry, sel, undo, binding);
                         }
+                        RootRefusalTooltip(rootOnly, SceneRootVerb::Delete);
                         if (!canEditStructure)
                             ImGui::EndDisabled();
                         ImGui::EndPopup();
@@ -2182,7 +2345,11 @@ namespace Arcane::Editor
 
                     // Reparent-by-drag is structural too, so it honours the same
                     // predicate rather than starting a drag that will refuse.
-                    if (canEditStructure && ImGui::BeginDragDropSource())
+                    // The scene root is never a drag source (s3.1): dropping it
+                    // onto an orphan moved SceneRoot out of the subtree SaveJson
+                    // walks. Dropping ONTO the root row is unchanged.
+                    if (canEditStructure && !Arcane::Edit::IsSceneRoot(registry, row.entity)
+                        && ImGui::BeginDragDropSource())
                     {
                         ImGui::SetDragDropPayload(kOutlinerDragType,
                                                   &row.entity, sizeof(Astra::Entity));
@@ -2196,9 +2363,9 @@ namespace Arcane::Editor
                         {
                             Astra::Entity dragged;
                             std::memcpy(&dragged, p->Data, sizeof(dragged));
-                            const std::vector<Astra::Entity> moving =
+                            const std::vector<Astra::Entity> moving = SelectionWithoutSceneRoot(registry,
                                 sel.Contains(dragged) ? sel.Entities()
-                                                      : std::vector<Astra::Entity>{ dragged };
+                                                      : std::vector<Astra::Entity>{ dragged });
                             const Astra::Entity target = row.entity;
                             ApplyStructural(undo, binding, "Reparent",
                                 [&] { return Arcane::Edit::Reparent(registry, moving, target) > 0; },
@@ -2216,7 +2383,8 @@ namespace Arcane::Editor
             ImGui::EndTable();
         }
 
-        // Drop below the table = unparent to root. Only visible mid-drag, and
+        // Drop below the table = move to the TOP OF THE SCENE (s3.1: under
+        // SceneRoot, never a registry root beside it). Only visible mid-drag, and
         // only for our own entity payload -- GetDragDropPayload() returns
         // non-null for ANY active drag (e.g. an asset-browser drag), which
         // used to show this strip for foreign payloads too. The bool is kept:
@@ -2227,7 +2395,7 @@ namespace Arcane::Editor
             && activeDrag->IsDataType(kOutlinerDragType);
         if (droppingBelowTable)
         {
-            ImGui::Selectable("(drop here to unparent)", false,
+            ImGui::Selectable("(drop here to move to scene root)", false,
                               ImGuiSelectableFlags_Disabled);
             if (ImGui::BeginDragDropTarget())
             {
@@ -2236,12 +2404,14 @@ namespace Arcane::Editor
                 {
                     Astra::Entity dragged;
                     std::memcpy(&dragged, p->Data, sizeof(dragged));
-                    const std::vector<Astra::Entity> moving =
+                    const std::vector<Astra::Entity> moving = SelectionWithoutSceneRoot(registry,
                         sel.Contains(dragged) ? sel.Entities()
-                                              : std::vector<Astra::Entity>{ dragged };
+                                              : std::vector<Astra::Entity>{ dragged });
+                    // ONE undo step for a move; a refusal (no live root, or
+                    // nothing to move) returns 0 and pushes none.
                     ApplyStructural(undo, binding, "Unparent",
-                        [&] { return Arcane::Edit::Reparent(registry, moving,
-                                                            Astra::Entity::Invalid()) > 0; },
+                        [&] { return Arcane::Edit::ReparentInScene(registry, moving,
+                                                                   Astra::Entity::Invalid()) > 0; },
                         &moving);
                 }
                 ImGui::EndDragDropTarget();
@@ -2376,12 +2546,9 @@ namespace Arcane::Editor
         }
 
         const Astra::Entity primary = sel.Primary();
-        const std::string primaryName = Arcane::Edit::DisplayName(registry, primary);
-        if (sel.Count() > 1)
-            ImGui::Text("%s (+%zu)", primaryName.c_str(), sel.Count() - 1);
-        else
-            ImGui::TextUnformatted(primaryName.c_str());
-        ImGui::Separator();
+        // No name line (spec 2026-09-30 s4.3): the header's leaf crumb already
+        // names the entity and its " (+N)" (SceneInspectorSource::Breadcrumb);
+        // the body starts at its first control.
 
         // Search, UE's Details-panel shape (SDetailsViewBase.cpp:1016 --
         // OnFilterTextChanged -> FilterView). Filters components AND fields live.

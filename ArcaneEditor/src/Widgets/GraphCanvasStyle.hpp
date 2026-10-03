@@ -55,6 +55,12 @@ namespace Arcane::Editor
     // so it stays a parameter at the call.
     inline constexpr int   kGraphPinSegments  = 12;
     inline constexpr float kGraphPinRingWidth = 1.6f;
+    // The OPTIONAL outer ring DrawGraphPinDot adds around a dot (the shader
+    // canvas's "adapts to its input" mark on a resolved dynamic pin): its
+    // centreline sits this far outside the dot's radius, at this weight --
+    // thin, so it reads as a halo and not as a second, hollow pin.
+    inline constexpr float kGraphPinOuterRingGap   = 2.2f;
+    inline constexpr float kGraphPinOuterRingWidth = 1.0f;
 
     // ---- Grid palette -----------------------------------------------------
     // Display-referred RGBA (ImGui draws post-tonemap, imgui.hlsl:1-5). The

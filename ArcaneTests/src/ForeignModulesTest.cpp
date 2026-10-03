@@ -35,6 +35,14 @@ namespace
         return std::any_of(modules.begin(), modules.end(),
                            [&](const Arcane::ForeignModules::LoadedModule& m) { return Lower(m.name) == w; });
     }
+
+    std::string Join(const std::vector<std::string>& names)
+    {
+        std::string out;
+        for (const std::string& n : names)
+            out += (out.empty() ? "" : ", ") + n;
+        return out.empty() ? "(none)" : out;
+    }
 }
 
 TEST_CASE("foreign modules: the Tier 1 table classifies each documented overlay module, case-insensitively",
@@ -323,11 +331,15 @@ TEST_CASE("foreign modules: the live enumeration sees this process's own modules
     REQUIRE_FALSE(modules.empty());
     CHECK(ContainsInsensitive(modules, "ArcaneCore.dll"));
     CHECK(ContainsInsensitive(modules, "ArcaneTests.exe"));
+    // ONE assertion however many modules the process holds: how many are
+    // loaded depends on which cases the random order ran first, and a
+    // per-module CHECK made the committed assertion baseline seed-sensitive.
+    std::vector<std::string> unpathed;
     for (const Arcane::ForeignModules::LoadedModule& m : modules)
-    {
-        INFO("module " << m.name);
-        CHECK_FALSE(m.path.empty());
-    }
+        if (m.path.empty())
+            unpathed.push_back(m.name);
+    INFO("modules with no path: " << Join(unpathed));
+    CHECK(unpathed.empty());
 
     // The Windows directory is a real, non-empty root, and the OS's own
     // loader DLL resolves under it.
@@ -342,20 +354,24 @@ TEST_CASE("foreign modules: the live enumeration sees this process's own modules
     // where taking the loader lock is not an option. Every row it carries is
     // tiered and pathed, whatever this desk has injected.
     const std::vector<Arcane::ForeignModules::Match> scanned = Arcane::ForeignModules::Scan();
+    // Same rule as above: what a scan finds depends on what this desk has
+    // injected and on what the random order loaded, so the rows collapse
+    // into one assertion each.
+    std::vector<std::string> badScanRows;
     for (const Arcane::ForeignModules::Match& m : scanned)
-    {
-        INFO("scanned " << m.module);
-        CHECK((m.tier == 1 || m.tier == 2 || m.tier == Arcane::ForeignModules::kTierUncatalogued));
-        CHECK_FALSE(m.path.empty());
-    }
+        if (!(m.tier == 1 || m.tier == 2 || m.tier == Arcane::ForeignModules::kTierUncatalogued) || m.path.empty())
+            badScanRows.push_back(m.module);
+    INFO("scanned rows untiered or unpathed: " << Join(badScanRows));
+    CHECK(badScanRows.empty());
     const auto remembered = Arcane::ForeignModules::LastScan();
     REQUIRE(remembered.has_value());
     REQUIRE(remembered->size() == scanned.size());
+    std::vector<std::string> mismatched;
     for (std::size_t i = 0; i < scanned.size(); ++i)
-    {
-        CHECK((*remembered)[i].module == scanned[i].module);
-        CHECK((*remembered)[i].tier == scanned[i].tier);
-    }
+        if ((*remembered)[i].module != scanned[i].module || (*remembered)[i].tier != scanned[i].tier)
+            mismatched.push_back(scanned[i].module);
+    INFO("remembered rows differing from the scan: " << Join(mismatched));
+    CHECK(mismatched.empty());
 }
 
 TEST_CASE("foreign modules: Report says each module once per process -- a second call has nothing new",

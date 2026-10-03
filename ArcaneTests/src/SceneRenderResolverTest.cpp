@@ -253,6 +253,12 @@ namespace
         void InvalidateMeshArtifact(const Arcane::Guid&) override {}
         bool CookPending(const Arcane::Guid&) const override { return false; }
 
+        // T5 s7.2, the T5 ABI bump (interface-completeness only, same reasoning as
+        // ArtifactFor/InvalidateArtifact/SetCookPendingProbe above): nothing in
+        // this suite drives an asset file operation's path or unresolved retraction.
+        void EvictPath(const std::filesystem::path&) override {}
+        void ForgetUnresolved(const Arcane::Guid&) override {}
+
         int pixelsForCalls       = 0;
         int textureInfoForCalls  = 0;
         int evictingCalls        = 0;

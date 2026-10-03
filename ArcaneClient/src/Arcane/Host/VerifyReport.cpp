@@ -274,6 +274,12 @@ namespace Arcane
         m_inspectorInstances  = std::move(instances);
     }
 
+    void VerifyReport::SetDocumentPreviews(std::vector<DocumentPreview> documents)
+    {
+        m_documentsSet = true;
+        m_documents    = std::move(documents);
+    }
+
     void VerifyReport::SetForeignModules(std::vector<ForeignModules::Match> modules)
     {
         m_foreignModulesSet = true;
@@ -624,6 +630,11 @@ namespace Arcane
         // Bumped 11 -> 12 by the inspector-filters arc: `inspector` gained
         // `instances` [{id, excluded, source}] -- each Inspector instance's
         // filter and the source it routed to. 11 remains readable.
+        //
+        // Bumped 12 -> 13 by the node page + editor upgrades phase (s3.2): the
+        // report gained `documents` [{guid, kind, name, compile, preview,
+        // image}] -- each open preview document's PreviewStatus. 12 remains
+        // readable.
         j["schemaVersion"]   = kSchemaVersion;
         j["backend"]         = m_backend;
         // Always "headless" -- Fix 3 (final fix wave) removed the "windowed"
@@ -749,6 +760,17 @@ namespace Arcane
                                       { "breadcrumb", i.breadcrumb } });
             j["inspector"] = { { "source", m_inspectorSource }, { "breadcrumb", m_inspectorBreadcrumb },
                                { "instances", std::move(instances) } };
+        }
+
+        // The open preview documents (schemaVersion 13). ABSENT unless
+        // SetDocumentPreviews was called -- the runtime host has no documents.
+        if (m_documentsSet)
+        {
+            nlohmann::json docs = nlohmann::json::array();
+            for (const DocumentPreview& d : m_documents)
+                docs.push_back({ { "guid", d.guid }, { "kind", d.kind }, { "name", d.name },
+                                 { "compile", d.compile }, { "preview", d.preview }, { "image", d.image } });
+            j["documents"] = std::move(docs);
         }
 
         // The injected modules (schemaVersion 10). ABSENT unless

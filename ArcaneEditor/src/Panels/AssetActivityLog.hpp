@@ -25,29 +25,30 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace Arcane::Editor
 {
-    // What happened. Deleted is vocabulary only -- the editor has no delete
-    // flow and the registry no Remove API (Ruling 11); it is recorded here
-    // so Task 8's feed and any future delete flow share one enum, not
-    // invented as a producer today.
+    // What happened. T5 s7.12: Deleted and Moved are produced by
+    // RunAssetOpFollowUp (Project/AssetFileOps.cpp), the one asset-op follow-up.
     enum class AssetActivityKind : std::uint8_t
     {
         SourceChanged,   // external .arcmat edit, or a texture/.meta mtime change
         Cooked,          // a background cook finished successfully
         CookRefused,     // a cook failure OR an artifact refusal (Problems-pane twin)
         Created,         // drop discovery, the create dialog, a new-file scene save, a crash report
-        Deleted,         // no producer today -- see above
+        Deleted,         // T5 s7.12: delete / redo-delete / undo-duplicate
+        Moved,           // T5 s7.12: rename/move; detail "from <old mount path>"
     };
 
     // One row. `name` is a snapshot taken at push time -- the asset it
     // names may be renamed or vanish before the feed ever reads this back,
     // so the row must stand on its own rather than re-resolving the guid
-    // later. `detail` carries a refusal reason/kind string; empty for the
-    // kinds that have none (SourceChanged, Created).
+    // later. `detail` carries a refusal reason/kind string, or the T5
+    // asset-op note ("from game://...", "restored (undo)", "duplicate of
+    // ...", "restore from Recycle Bin"); empty where there is none.
     struct AssetActivityEntry
     {
         std::chrono::steady_clock::time_point when;
@@ -88,4 +89,7 @@ namespace Arcane::Editor
         std::vector<AssetActivityEntry> m_ring;   // grows to kCapacity, then wraps
         std::size_t m_next = 0;   // the slot the NEXT Push writes into
     };
+
+    // T5 s7.12: the newest Deleted entry's name; nullopt once a newer Created (a restore) heals the tombstone.
+    [[nodiscard]] std::optional<std::string> TombstoneName(const AssetActivityLog& log, const Arcane::Guid& guid);
 }

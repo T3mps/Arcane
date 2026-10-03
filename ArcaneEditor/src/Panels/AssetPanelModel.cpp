@@ -3,6 +3,7 @@
 #include <Arcane/Project/AssetRegistry.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <optional>
 #include <set>
@@ -156,6 +157,7 @@ namespace Arcane::Editor
             m_allDirty = false;
             m_rows.clear();
             m_rail.clear();
+            m_emptyFolders.clear();
             m_shownAssetCount = 0;
             m_rowsDirty = false;
             // Plan 3 Task 3: the entries + index the Graph lens projects from
@@ -299,6 +301,9 @@ namespace Arcane::Editor
 
         if (m_allDirty)
         {
+            // T5 s7.8: the empty-folder walk is parse-free and runs only on
+            // MarkAllDirty rebuilds, never per-guid ones.
+            m_emptyFolders = p.emptyFolders ? p.emptyFolders() : std::vector<std::string>{};
             // A full rebuild re-walks every asset, so the index is rebuilt
             // from scratch rather than incrementally patched -- this is also
             // what drops tombstones for targets nothing points at any more.
@@ -364,6 +369,10 @@ namespace Arcane::Editor
             // pass that only rebuilt ROWS (a search keystroke) deliberately
             // does NOT bump it: the graph does not read Rows().
             ++entriesStamp;
+            // T5 s7.9: a removed asset leaves the selection here. A
+            // pre-rebuild Select (--select-asset) survives: its guid is in
+            // the rebuilt entries.
+            PruneSelection();
         }
 
         if (m_rowsDirty)
@@ -574,6 +583,19 @@ namespace Arcane::Editor
                 parent = GroupParentOf(parent);
             }
         }
+        // T5 s7.8: an empty folder (no registered asset beneath it) gets its
+        // own group row plus its ancestor bridges, so it is a drop target and
+        // a New Folder parent. Unfiltered only: a search or kind filter shows
+        // matches, and an empty folder never matches anything.
+        std::set<std::string> emptyKeys;
+        if (!Filtered())
+            for (const std::string& key : m_emptyFolders)
+            {
+                emptyKeys.insert(key);
+                renderFolders.insert(key);
+                for (std::string up = GroupParentOf(key); !up.empty(); up = GroupParentOf(up))
+                    renderFolders.insert(up);
+            }
 
         // Iterates sorted under GroupKeyLess -- the same valid-preorder-per-
         // mount property byFolder relies on above, PLUS every mount's own
@@ -607,6 +629,7 @@ namespace Arcane::Editor
             group.groupLabel = GroupLabelOf(folder);      // leaf segment only
             group.groupDepth = depth;
             group.groupCount = ownCount;
+            group.empty = emptyKeys.count(folder) > 0;
             m_rows.push_back(std::move(group));
 
             // This folder's OWN closed flag gates its OWN content (its direct
@@ -741,6 +764,7 @@ namespace Arcane::Editor
         m_allDirty = true;
         m_rows.clear();
         m_rail.clear();
+        m_emptyFolders.clear();
         m_shownAssetCount = 0;
         m_rowsDirty = true;
         m_search.clear();
@@ -748,11 +772,65 @@ namespace Arcane::Editor
         m_groupOpen.clear();
         m_childrenOpen.clear();
         selected = Arcane::Guid{};
+        selection.clear();
         selectionStamp = 0;
         // entriesStamp and selectionGesture are deliberately NOT reset here --
         // see their declarations: a monotonic counter can never compare equal
         // to a stale "built at" value a consumer is still holding from the
         // outgoing project.
         ++entriesStamp;
+    }
+
+    void AssetPanelModel::ApplySelection(std::vector<Arcane::Guid> sel, const Arcane::Guid& clicked)
+    {
+        selection = std::move(sel);
+        const bool kept = clicked.IsValid() && InSelection(clicked);
+        const Arcane::Guid primary = kept ? clicked : (selection.empty() ? Arcane::Guid{} : selection.back());
+        if (kept)
+            ++selectionGesture;
+        if (primary != selected)
+        {
+            selected = primary;
+            ++selectionStamp;
+        }
+    }
+
+    // A right-click gesture, as Select was.
+    void AssetPanelModel::SetPrimary(const Arcane::Guid& g)
+    {
+        if (!InSelection(g))
+            return;
+        ++selectionGesture;
+        if (g != selected)
+        {
+            selected = g;
+            ++selectionStamp;
+        }
+    }
+
+    void AssetPanelModel::PruneSelection()
+    {
+        const auto gone = [this](const Arcane::Guid& g) { return m_entries.find(g) == m_entries.end(); };
+        const std::size_t n = selection.size();
+        std::erase_if(selection, gone);
+        bool changed = selection.size() != n;
+        if (selected.IsValid() && gone(selected))
+        {
+            selected = selection.empty() ? Arcane::Guid{} : selection.back();
+            changed = true;
+        }
+        if (changed)
+            ++selectionStamp;
+    }
+
+    std::string AssetBrowserContextLine(const AssetPanelModel& m)
+    {
+        char b[64];
+        const HealthCounts h = m.Health();
+        if (m.Filtered())
+            std::snprintf(b, sizeof(b), "%d of %d shown", m.ShownAssetCount(), h.total);
+        else
+            std::snprintf(b, sizeof(b), "%d assets \xC2\xB7 %d selected", h.total, m.SelectionCount());
+        return b;
     }
 }

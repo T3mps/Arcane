@@ -14,6 +14,9 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 #include <algorithm>
 #include <filesystem>
 
+static_assert(static_cast<int>(Arcane::Reporter::ReporterButton::OpenFolder) == Arcane::Reporter::ReporterWindow::kBtnOpenFolder);
+static_assert(static_cast<int>(Arcane::Reporter::ReporterButton::Terminate)  == Arcane::Reporter::ReporterWindow::kBtnTerminate);
+
 namespace Arcane::Reporter
 {
     namespace
@@ -272,13 +275,15 @@ namespace Arcane::Reporter
         ShowWindow(combo, v.threads.size() > 1 ? SW_SHOW : SW_HIDE);
         const int cur = ComboBox_GetCurSel(combo);
         const std::size_t sel = cur < 0 ? 0 : static_cast<std::size_t>(cur);
-        const std::string body = symbolizing ? "Symbolizing...\n\n" + DetailsText(v, sel) : DetailsText(v, sel);
+        const std::string body = symbolizing ? "Symbolizing...\n\n" + DetailsBody(v, sel) : DetailsBody(v, sel);
         SetWindowTextW(static_cast<HWND>(m_details), Crlf(body).c_str());
         // Buttons: [0] folder [1] copy [2] close [3] relaunch [4] keep waiting [5] terminate
         ShowWindow(static_cast<HWND>(m_buttons[4]), v.isHang ? SW_SHOW : SW_HIDE);
         ShowWindow(static_cast<HWND>(m_buttons[5]), v.isHang ? SW_SHOW : SW_HIDE);
         ShowWindow(static_cast<HWND>(m_buttons[3]), v.relaunchLine.empty() ? SW_HIDE : SW_SHOW);
         EnableWindow(static_cast<HWND>(m_buttons[3]), v.canRelaunch ? TRUE : FALSE);
+        SetWindowTextW(static_cast<HWND>(m_buttons[kBtnCopy - kBtnOpenFolder]), L"Copy Details");   // reverts NoteCopy
+        m_order = VisibleButtons(v);
         RECT rc{}; GetClientRect(static_cast<HWND>(m_hwnd), &rc);
         Layout(rc.right, rc.bottom);
     }
@@ -301,8 +306,9 @@ namespace Arcane::Reporter
             v = m_view;
             symbolizing = m_symbolizing;
         }
-        const std::string body = symbolizing ? "Symbolizing...\n\n" + DetailsText(v, sel) : DetailsText(v, sel);
+        const std::string body = symbolizing ? "Symbolizing...\n\n" + DetailsBody(v, sel) : DetailsBody(v, sel);
         SetWindowTextW(static_cast<HWND>(m_details), Crlf(body).c_str());
+        SetWindowTextW(static_cast<HWND>(m_buttons[kBtnCopy - kBtnOpenFolder]), L"Copy Details");   // reverts NoteCopy
     }
 
     // R85: NativeWindow's WM_DPICHANGED only resizes (SetWindowPos to the
@@ -356,23 +362,21 @@ namespace Arcane::Reporter
         // shortest label, "Close", with padding). Below the floor -- a window
         // the user dragged narrower than any sensible row -- the edge still
         // wins: the last buttons are clipped to end AT the edge rather than
-        // drawn past it. The style bit, not IsWindowVisible, decides which
-        // buttons count: IsWindowVisible is false for every child while the
-        // parent itself is not yet shown (the first Layout runs from OnCreate).
-        auto shown = [](void* c) { return (GetWindowLongW(static_cast<HWND>(c), GWL_STYLE) & WS_VISIBLE) != 0; };
-        int visible = 0;
-        for (void* b : m_buttons) if (shown(b)) ++visible;
+        // drawn past it.
+        // R92 shrink-to-fit, now RIGHT-aligned in VisibleButtons order (node-page
+        // phase s8.1): Close is the rightmost; the edge still wins below the floor.
+        const int visible = static_cast<int>(m_order.size());
         const int room = w - 2 * m - (visible > 1 ? (visible - 1) * gap : 0);
         int btnW = px(150);
         if (visible > 0 && visible * btnW > room) btnW = (std::max)(room / visible, px(72));
+        const int total = visible * btnW + (visible > 1 ? (visible - 1) * gap : 0);
         const int right = w - m;
-        int x = m;
-        for (int i = 0; i < 6; ++i)
+        int x = (std::max)(m, right - total);
+        for (const ReporterButton b : m_order)
         {
-            HWND b = static_cast<HWND>(m_buttons[i]);
-            if (!shown(b)) continue;
+            HWND btn = static_cast<HWND>(m_buttons[static_cast<int>(b) - kBtnOpenFolder]);
             const int bw = (std::max)(0, (std::min)(btnW, right - x));
-            MoveWindow(b, x, h - m - btnH, bw, btnH, TRUE);
+            MoveWindow(btn, x, h - m - btnH, bw, btnH, TRUE);
             x += btnW + gap;
         }
     }
@@ -568,7 +572,7 @@ namespace Arcane::Reporter
         if (m_threadIndex < 0 || m_threadIndex >= static_cast<int>(v.threads.size()))
             m_threadIndex = 0;
         const std::size_t sel = m_threadIndex < 0 ? 0 : static_cast<std::size_t>(m_threadIndex);
-        std::string body = DetailsText(v, sel);
+        std::string body = DetailsBody(v, sel);
         if (symbolizing) body.insert(0, "Symbolizing...\n\n");
         m_detailsBuf = std::move(body);
         m_detailsDirty = false;
@@ -638,24 +642,55 @@ namespace Arcane::Reporter
                                       ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_WordWrap);
             ImGui::PopFont();
 
-            bool placed = false;
-            auto button = [&](const char* label, int id, bool show, bool enabled)
+            const CopyState copyState = ImGui::GetTime() < m_copyUntil ? m_copyState : CopyState::Idle;
+            const ImGuiStyle& st = ImGui::GetStyle();
+            const auto labelFor = [&](ReporterButton b) -> std::string
             {
-                if (!show) return;
+                switch (b)
+                {
+                    case ReporterButton::OpenFolder:  return "Open Report Folder";
+                    case ReporterButton::Copy:        return std::string(CopyButtonLabel(copyState)) + "###copy";
+                    case ReporterButton::Close:       return "Close";
+                    case ReporterButton::Relaunch:    return "Relaunch";
+                    case ReporterButton::KeepWaiting: return "Keep Waiting";
+                    case ReporterButton::Terminate:   return "Terminate and Collect";
+                }
+                return "?";
+            };
+            float copyW = 0.0f;   // fixed: the widest of the three labels, so the row never shifts mid-flash
+            for (const CopyState s : { CopyState::Idle, CopyState::Copied, CopyState::Failed })
+                copyW = (std::max)(copyW, ImGui::CalcTextSize(std::string(CopyButtonLabel(s)).c_str()).x);
+            copyW += st.FramePadding.x * 2.0f;
+            const auto widthFor = [&](ReporterButton b)
+            {
+                return b == ReporterButton::Copy ? copyW
+                    : ImGui::CalcTextSize(labelFor(b).c_str(), nullptr, true).x + st.FramePadding.x * 2.0f;
+            };
+            const std::vector<ReporterButton> order = VisibleButtons(v);
+            float total = st.ItemSpacing.x * static_cast<float>(order.size() > 0 ? order.size() - 1 : 0);
+            for (const ReporterButton b : order) total += widthFor(b);
+            const float startX = ImGui::GetCursorPosX();
+            ImGui::SetCursorPosX((std::max)(startX, startX + ImGui::GetContentRegionAvail().x - total));
+            bool placed = false;
+            for (const ReporterButton b : order)
+            {
                 if (placed) ImGui::SameLine();
                 placed = true;
+                const int id = static_cast<int>(b);
+                const bool enabled = b != ReporterButton::Relaunch || v.canRelaunch;
+                const bool primary = b == ReporterButton::Close;   // accent-filled (drafting pick, 9.28)
                 if (!enabled) ImGui::BeginDisabled();
-                if (id == kBtnClose && m_focusClose) ImGui::SetKeyboardFocusHere();
-                if (ImGui::Button(label) && cmd == 0) cmd = id;
+                if (primary)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Button, Arcane::Editor::Theme::kAccent);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Arcane::Editor::Theme::kAccentHovered);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, Arcane::Editor::Theme::kAccentActive);
+                }
+                if (primary && m_focusClose) ImGui::SetKeyboardFocusHere();
+                if (ImGui::Button(labelFor(b).c_str(), ImVec2(widthFor(b), 0.0f)) && cmd == 0) cmd = id;
+                if (primary) ImGui::PopStyleColor(3);
                 if (!enabled) ImGui::EndDisabled();
-            };
-            // Same order and the same show/enable rules as the Win32 row.
-            button("Open Report Folder", kBtnOpenFolder, true, true);
-            button("Copy Details", kBtnCopy, true, true);
-            button("Close", kBtnClose, true, true);
-            button("Relaunch", kBtnRelaunch, !v.relaunchLine.empty(), v.canRelaunch);
-            button("Keep Waiting", kBtnKeepWaiting, v.isHang, true);
-            button("Terminate and Collect", kBtnTerminate, v.isHang, true);
+            }
             m_focusClose = false;
 
             const bool popup = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
@@ -670,6 +705,21 @@ namespace Arcane::Reporter
         }
         ImGui::End();
         return cmd;
+    }
+
+    void ReporterWindow::NoteCopy(bool ok)
+    {
+        const CopyState state = ok ? CopyState::Copied : CopyState::Failed;
+        if (m_styled)
+        {
+            ImGui::SetCurrentContext(static_cast<ImGuiContext*>(m_imgui));
+            m_copyState = state;
+            m_copyUntil = ImGui::GetTime() + 0.75;
+            if (m_window) m_window->PostUser(kUserViewChanged);   // repaint now; no timer
+            return;
+        }
+        if (HWND copy = static_cast<HWND>(m_buttons[kBtnCopy - kBtnOpenFolder]))
+            SetWindowTextW(copy, ToWide(std::string(CopyButtonLabel(state))).c_str());
     }
 
     void ReporterWindow::Frame()

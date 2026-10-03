@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Panels/AssetPanelModel.hpp"
+#include "Panels/CreateAssetDialog.hpp"   // T5 s7.8: BuildContentFolderChoices, FolderChoice
 
 #include <Arcane/Base/DiagEnvelope.hpp>   // Diag::Envelope/WriteFile -- valid .arcdiag fixtures
 #include <Arcane/Project/AssetRegistry.hpp>
@@ -2438,5 +2439,44 @@ TEST_CASE("asset model: an unreferenced Model reports as unused", "[editor]")
     CHECK(entry->unused);
     CHECK(ContainsGuid(model.UnusedGuids(), modelGuid));
 
+    fs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// T5 s7.9: multi-selection -- `selection` + the `selected` primary
+// ---------------------------------------------------------------------------
+
+TEST_CASE("AssetPanelModel multi-select: toggle/range semantics, primary fallback, prune on removal", "[editor][assetops]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_multiselect_test"; std::error_code ec; fs::remove_all(dir, ec); fs::create_directories(dir);
+    for (const char* n : { "a.png", "b.png", "c.png" }) WriteFile(dir, n, "px");
+    Arcane::AssetRegistry reg; REQUIRE(reg.ScanContent(dir, "game") == 3); const auto all = reg.All();
+    const Arcane::Guid a = GuidForPath(all, "game://a.png"), b = GuidForPath(all, "game://b.png"), c = GuidForPath(all, "game://c.png");
+    FakeProviders fake; AssetPanelModel m; REQUIRE(m.RebuildIfDirty(&reg, fake.Make()));
+    m.Select(a); CHECK(m.selection == std::vector<Arcane::Guid>{ a });
+    const std::uint64_t g0 = m.selectionGesture;
+    m.ApplySelection({ a, b, c }, b); CHECK((m.selected == b && m.SelectionCount() == 3 && m.selectionGesture == g0 + 1));
+    m.ApplySelection({ a, c }, b); CHECK((m.selected == c && m.selectionGesture == g0 + 1));   // b toggled off: last entry, no gesture
+    m.SetPrimary(a); CHECK((m.selected == a && m.InSelection(c)));
+    CHECK(AssetBrowserContextLine(m) == "3 assets \xC2\xB7 2 selected");
+    fs::remove(dir / "a.png", ec); fs::remove(dir / "a.png.meta", ec); REQUIRE(reg.Remove(a));
+    const std::uint32_t s0 = m.selectionStamp; const std::uint64_t g1 = m.selectionGesture;
+    m.MarkAllDirty(); REQUIRE(m.RebuildIfDirty(&reg, fake.Make()));
+    CHECK((m.selection == std::vector<Arcane::Guid>{ c } && m.selected == c && m.selectionStamp == s0 + 1 && m.selectionGesture == g1));   // prune: stamp only
+    m.ResetForProjectSwitch(); CHECK(m.selection.empty()); fs::remove_all(dir, ec);
+}
+
+TEST_CASE("AssetPanelModel: emptyFolders become '(empty)' group rows and Location choices", "[editor][assetops]")
+{
+    const fs::path dir = fs::temp_directory_path() / "arcane_asset_panel_model_emptyfolders_test"; std::error_code ec; fs::remove_all(dir, ec); fs::create_directories(dir);
+    WriteFile(dir, "a.png", "px"); Arcane::AssetRegistry reg; REQUIRE(reg.ScanContent(dir, "game") == 1);
+    FakeProviders fake; AssetPanelProviders p = fake.Make(); p.emptyFolders = [] { return std::vector<std::string>{ "materials/rocks/" }; };
+    AssetPanelModel m; REQUIRE(m.RebuildIfDirty(&reg, p));
+    const auto& rows = m.Rows();
+    const auto it = std::find_if(rows.begin(), rows.end(), [](const AssetPanelRow& r) { return r.groupName == "materials/rocks/"; });
+    REQUIRE(it != rows.end()); CHECK(it->empty);
+    CHECK(std::any_of(rows.begin(), rows.end(), [](const AssetPanelRow& r) { return r.groupName == "materials/"; }));   // its bridge
+    const auto ch = BuildContentFolderChoices(m);
+    CHECK(std::any_of(ch.begin(), ch.end(), [](const FolderChoice& c) { return c.relative == "materials/rocks"; }));
     fs::remove_all(dir, ec);
 }

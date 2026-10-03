@@ -9,15 +9,20 @@
 #include <Arcane/Edit/CommandStack.hpp>
 #include <Arcane/Edit/EntityOps.hpp>
 #include <Arcane/Edit/RegistryStateCommand.hpp>
+#include <Arcane/Guid.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/SceneModule.hpp>
+#include <Arcane/Serialization/SceneAsset.hpp>
 
 #include <Astra/Registry/Registry.hpp>
 
 #include <array>
+#include <filesystem>
 #include <memory>
+#include <vector>
 
 #include "Helpers/TestTypeContext.hpp"
+#include "Scene/SelectionOps.hpp"
 
 using namespace Arcane;
 
@@ -248,4 +253,78 @@ TEST_CASE("failed redo-capture latches: redo stays a warned no-op", "[outliner]"
     // re-invoke the snapshot fn (a retry would capture the already-restored
     // BEFORE state and make Redo silently "succeed" into a no-change state).
     CHECK(calls == 2);
+}
+
+TEST_CASE("a root-only Delete pushes NO step and destroys nothing; a mixed Delete keeps the root", "[outliner]")
+{
+    // The verbs' shape (EditorPanels.cpp DeleteSelection): the root filter
+    // first, then ApplyStructural -> ApplyRegistryMutation over what is left.
+    World w;
+    const Astra::Entity root = Scene::CreateEmpty(*w.reg);
+    const Astra::Entity a = Edit::CreateEntityInScene(*w.reg, Astra::Entity::Invalid());
+
+    const std::vector<Astra::Entity> rootOnly =
+        Editor::SelectionWithoutSceneRoot(*w.reg, std::vector<Astra::Entity>{ root });
+    CHECK(rootOnly.empty());
+    CHECK_FALSE(ApplyRegistryMutation(w.stack, "Delete", w.Snapshot(), w.Restore(),
+        [&] { return Edit::DeleteEntities(*w.reg, rootOnly) > 0; }));
+    CHECK_FALSE(w.stack.CanUndo());
+    CHECK(w.reg->IsValid(root));
+
+    const std::vector<Astra::Entity> mixed =
+        Editor::SelectionWithoutSceneRoot(*w.reg, std::vector<Astra::Entity>{ root, a });
+    REQUIRE(mixed == std::vector<Astra::Entity>{ a });
+    CHECK(ApplyRegistryMutation(w.stack, "Delete", w.Snapshot(), w.Restore(),
+        [&] { return Edit::DeleteEntities(*w.reg, mixed) > 0; }));
+    CHECK(w.reg->IsValid(root));
+    CHECK_FALSE(w.reg->IsValid(a));
+    REQUIRE(Edit::LiveSceneRoot(*w.reg).has_value());
+    CHECK(*Edit::LiveSceneRoot(*w.reg) == root);
+}
+
+TEST_CASE("a spilled structural memento still undoes and redoes, and frees its file", "[outliner][undo]")
+{
+    World w;
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("arcane-undo-" + Guid::Generate().ToString());
+    UndoLimits limits;
+    limits.spillThreshold = 16;                       // every registry blob is larger
+    w.stack.SetLimits(limits);
+    w.stack.SetSpillDirectory(dir);
+
+    const Astra::Entity top = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+    const std::array<Astra::Entity, 1> doomed{ top };
+    REQUIRE(ApplyRegistryMutation(w.stack, "Delete Entity", w.Snapshot(), w.Restore(),
+        [&] { return Edit::DeleteEntities(*w.reg, doomed) > 0; }));
+    REQUIRE(std::filesystem::exists(dir));
+    CHECK_FALSE(std::filesystem::is_empty(dir));      // the before blob left memory
+
+    w.stack.Undo();                                   // Load() from disk
+    CHECK(w.reg->GetComponent<Identity>(top) != nullptr);
+    w.stack.Redo();                                   // the after blob, captured on Undo, spilled too
+    CHECK(w.reg->GetComponent<Identity>(top) == nullptr);
+
+    w.stack.Clear("test");
+    CHECK(std::filesystem::is_empty(dir));            // freed with the step
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("structural mementos count toward the byte budget", "[outliner][undo]")
+{
+    World w;
+    UndoLimits limits;
+    limits.byteBudget = 1;                            // any memento busts it
+    w.stack.SetLimits(limits);
+    const Astra::Entity a = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+    const Astra::Entity b = Edit::CreateEntity(*w.reg, Astra::Entity::Invalid());
+    for (const Astra::Entity e : { a, b })
+    {
+        const std::array<Astra::Entity, 1> doomed{ e };
+        REQUIRE(ApplyRegistryMutation(w.stack, "Delete Entity", w.Snapshot(), w.Restore(),
+            [&] { return Edit::DeleteEntities(*w.reg, doomed) > 0; }));
+    }
+    w.stack.Undo();
+    CHECK(w.reg->GetComponent<Identity>(b) != nullptr);   // the top survives...
+    CHECK_FALSE(w.stack.CanUndo());                       // ...the older step was evicted
 }

@@ -96,4 +96,123 @@ namespace Arcane::Reporter
         if (it != s.threads.end() && it != s.threads.begin())
             std::rotate(s.threads.begin(), it, it + 1);
     }
+
+    namespace
+    {
+        // "NN <frame>": two or more digits, then exactly one space (%02zu).
+        [[nodiscard]] std::size_t FrameBodyAt(std::string_view line) noexcept
+        {
+            std::size_t i = 0;
+            while (i < line.size() && line[i] >= '0' && line[i] <= '9') ++i;
+            return (i >= 2 && i < line.size() && line[i] == ' ') ? i + 1 : 0;
+        }
+
+        // Parsed from the RIGHT, so "D:\..." paths and "operator!" survive:
+        // trailing " [file:line]", then the last "+0x", then module!function
+        // at the FIRST '!'.
+        [[nodiscard]] SymFrame ParseFrame(std::string_view rest)
+        {
+            SymFrame f;
+            if (rest.ends_with(']'))
+                if (const std::size_t open = rest.rfind(" ["); open != std::string_view::npos)
+                {
+                    const std::string_view body = rest.substr(open + 2, rest.size() - open - 3);
+                    const std::size_t colon = body.rfind(':');
+                    std::uint32_t line = 0;
+                    if (colon != std::string_view::npos)
+                    {
+                        const char* b = body.data() + colon + 1;
+                        const char* e = body.data() + body.size();
+                        if (const auto r = std::from_chars(b, e, line); r.ec == std::errc{} && r.ptr == e)
+                        {
+                            f.file = std::string(body.substr(0, colon));
+                            f.line = line;
+                            rest = rest.substr(0, open);
+                        }
+                    }
+                }
+            if (const std::size_t plus = rest.rfind("+0x"); plus != std::string_view::npos)
+            {
+                std::uint64_t d = 0;
+                const char* b = rest.data() + plus + 3;
+                const char* e = rest.data() + rest.size();
+                if (const auto r = std::from_chars(b, e, d, 16); r.ec == std::errc{} && r.ptr == e)
+                {
+                    f.displacement = d;
+                    rest = rest.substr(0, plus);
+                }
+            }
+            const std::size_t bang = rest.find('!');
+            f.module = std::string(rest.substr(0, bang));
+            if (bang != std::string_view::npos) f.function = std::string(rest.substr(bang + 1));
+            return f;
+        }
+    }
+
+    std::optional<ParsedSymbolized> ParseSymbolized(std::string_view text)
+    {
+        constexpr std::string_view kHeader       = "symbolized by ArcaneCrashReporter ";
+        constexpr std::string_view kEngineOk     = "engine      : dbgeng";
+        constexpr std::string_view kEngineNo     = "engine      : unavailable (";
+        constexpr std::string_view kEngineNoTail = ") -- module+offset from the portable stack";
+        constexpr std::string_view kSymbolPath   = "symbol path : ";
+        constexpr std::string_view kThread       = "--- thread ";
+        constexpr std::string_view kThreadCap    = "--- (truncated at ";
+        constexpr std::string_view kFrameCap     = "   ... (truncated at ";
+        constexpr std::string_view kNoFrames     = "  <no frames recovered>";
+        constexpr std::string_view kFaulting     = " (faulting)";
+
+        std::size_t pos = 0;
+        const auto nextLine = [&](std::string_view& line) -> bool
+        {
+            if (pos >= text.size()) return false;
+            const std::size_t nl = text.find('\n', pos);
+            const std::size_t end = nl == std::string_view::npos ? text.size() : nl;
+            line = text.substr(pos, end - pos);
+            pos = nl == std::string_view::npos ? text.size() : nl + 1;
+            return true;
+        };
+
+        std::string_view line;
+        if (!nextLine(line) || !line.starts_with(kHeader)) return std::nullopt;
+        ParsedSymbolized out;
+        out.buildInfo = std::string(line.substr(kHeader.size()));
+
+        while (nextLine(line))
+        {
+            if (line == kEngineOk) { out.sym.engineAvailable = true; continue; }
+            if (line.starts_with(kSymbolPath)) { out.sym.symbolPath = std::string(line.substr(kSymbolPath.size())); continue; }
+            if (line.starts_with(kEngineNo) && line.ends_with(kEngineNoTail)
+                && line.size() >= kEngineNo.size() + kEngineNoTail.size())
+            {
+                out.sym.engineAvailable = false;
+                out.sym.engineError = std::string(line.substr(kEngineNo.size(),
+                                                              line.size() - kEngineNo.size() - kEngineNoTail.size()));
+                const std::size_t bodyAt = pos;
+                std::string_view blank;
+                out.portableBody = std::string(nextLine(blank) && blank.empty() ? text.substr(pos) : text.substr(bodyAt));
+                return out;
+            }
+            if (line.starts_with(kThread))
+            {
+                std::string_view rest = line.substr(kThread.size());
+                SymThread t;
+                if (rest.ends_with(kFaulting)) { t.faulting = true; rest.remove_suffix(kFaulting.size()); }
+                if (rest != "<unknown>")
+                {
+                    std::uint32_t id = 0;
+                    const auto r = std::from_chars(rest.data(), rest.data() + rest.size(), id);
+                    t.systemId = r.ec == std::errc{} ? id : 0;
+                }
+                out.sym.threads.push_back(std::move(t));
+                continue;
+            }
+            if (line.starts_with(kThreadCap)) { out.sym.threadsTruncated = true; continue; }
+            if (out.sym.threads.empty() || line == kNoFrames) continue;
+            if (line.starts_with(kFrameCap)) { out.sym.threads.back().framesTruncated = true; continue; }
+            if (const std::size_t at = FrameBodyAt(line); at != 0)
+                out.sym.threads.back().frames.push_back(ParseFrame(line.substr(at)));
+        }
+        return out;
+    }
 }

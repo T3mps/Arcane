@@ -4,7 +4,11 @@
 // s5). One actions type, one services type, one create menu -- every panel
 // returns/consumes the same shapes so the host consumes them identically.
 
+#include "Project/AssetFileOps.hpp"   // AssetOpRequest (AssetPanelActions::fileOp, AssetPanelServices::fileOpRefusal)
+
 #include <Arcane/Guid.hpp>
+
+#include <imgui.h>   // ImVec4 (RefusedStyle)
 
 #include <cstdint>
 #include <filesystem>
@@ -30,12 +34,15 @@ namespace Arcane::Editor
     // pointer type is needed below (ScenesByName's return), and pulling the
     // full header in here is not required for that.
     struct AssetPanelEntry;
+    struct PopupAnchor;   // Widgets/EditorWidgets.hpp -- by reference only
     // AssetPanelModel.hpp's CookState enum (fixed std::uint8_t underlying
     // type, forward-declarable the same way a scoped enum with an explicit
     // base always is) -- CookStateLabel below only needs the TYPE for its
     // parameter, not the enumerators, so pulling in the model header for it
     // is not required.
     enum class CookState : std::uint8_t;
+    // Panels/CreateAssetDialog.hpp's create kind, by value only (CreatePrefillFor).
+    enum class CreateAssetKind : std::uint8_t;
     // Documents/DocumentHost.hpp -- forward-declared for OpenAssetRow below,
     // which only needs a reference to the type; the definition it calls into
     // (AssetPanelCommon.cpp) already includes the real header.
@@ -112,6 +119,33 @@ namespace Arcane::Editor
         bool         showStatus = false;   // digest chip (Browse/Graph -> Status)
         Arcane::Guid revealInBrowse;       // Unreferenced card -> Browse
         Arcane::Guid focusInGraph;         // Scenes card -> Graph
+        // An asset-reference cell's name double-click (spec 2026-09-30 s4.2):
+        // QUEUED so the open never mutates DocumentHost's list mid-draw; the
+        // host routes it through OpenAssetRow next frame.
+        Arcane::Guid openAsset;
+        // T5 s7.10: Browser focused, no popup over it, no text field, and no
+        // inline rename box open (T5 s7.6: the box owns the keys). Written
+        // once per frame by DrawAssetBrowserPanel on
+        // the TOP window (so a focused toolbar or tab counts, not only the
+        // table); its key block and the app's entity-clipboard fold
+        // (FoldEntityClipboardShortcuts) both read this one value.
+        bool ownsEditKeys = false;
+        // T5 s7.6: a file operation the user committed this frame (the
+        // inline rename box's Enter, later Duplicate/Delete/Move); the host
+        // runs it through EditorApp::RunAssetOp, which re-plans from fresh
+        // facts. `requestRename` asks the host for the Rename modal (the
+        // asset page's pencil: a page has no row to put a box on).
+        // `requestDelete` (s7.5: Del, the row menu, the page's trash) asks the
+        // host for the ONE delete-confirm modal; nothing deletes unconfirmed.
+        std::optional<AssetOpRequest> fileOp;
+        Arcane::Guid requestRename;
+        std::vector<Arcane::Guid> requestDelete;
+        // T5 s7.8: `requestMoveTo` (the row menu's Move to...) asks the host
+        // for the Move to... modal over these guids; `requestNewFolder` asks
+        // for the New Folder modal under that parent (relative to Content/,
+        // "" = Content/ itself: the Browser's background menu).
+        std::vector<Arcane::Guid> requestMoveTo;
+        std::optional<std::string> requestNewFolder;
     };
 
     // The Assets panel's read-only host seams. Originally just the
@@ -157,6 +191,14 @@ namespace Arcane::Editor
         // identically; now any of them can be closed while the others are
         // open, which is exactly what makes these gates load-bearing.
         bool browserOpen = false, graphOpen = false, statusOpen = false, problemsOpen = false;
+
+        // T5 s7.1/s7.6: the gates + a dry-run PlanAssetOp for one request,
+        // answered by the host. "" = the request would run; otherwise the
+        // first refusal's reason (the disabled verb's tooltip, the rename
+        // box's hint). Unset (no host): the row-menu verbs, the page pencil
+        // and the Rename modal read it as "unavailable"; the inline box still
+        // commits, because RunAssetOp re-plans and refuses on its own.
+        std::function<std::string(const AssetOpRequest&)> fileOpRefusal;   // T5: s7.1 gates + dry-run; "" = runs
     };
 
     // The unified Create menu's entries (spec s7), spelled ONCE and shared
@@ -170,14 +212,33 @@ namespace Arcane::Editor
     // disabled. Both are live as of Task 13 -- kept as a parameter rather
     // than collapsed to a bare call so a future producer (Plan 3's graph
     // pin-drag) can still gate itself the same way without a third copy
-    // of this list. No per-row prefill flows through here: a row's own
-    // "Create -> Sprite..." does not pre-pick THIS row's texture (the
-    // dedicated "Create Sprite" quick action above it already covers
-    // that exact case, mint-or-reuse and open included) -- the generic
-    // submenu opens the SAME dialog the toolbar's `+ Create` does, empty
-    // texture field and all.
-    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled);
-    void DrawCreateMenu(AssetPanelActions& actions);
+    // of this list.
+    //
+    // `subject` is the asset the menu was raised FROM (Unreal parity): a
+    // row's own Create submenu passes that row, the toolbar's `+ Create` the
+    // selection, empty space null. "Material Instance..." raised from a
+    // material names it as the parent (T3-D4); "Sprite..." raised from a
+    // texture names it as the source texture (T3-D5). Both ride
+    // `createPrefillParent` (CreatePrefillFor); from anything else it is nil
+    // and the dialog opens with an empty picker. No default: every producer
+    // states its subject.
+    void DrawCreateMenuEntries(AssetPanelActions& actions, bool enabled,
+                               const AssetPanelEntry* subject);
+    // `anchor` = the "+ Create" button (LastItemAnchor right after it): the
+    // menu opens under it (node-page phase s4.4).
+    void DrawCreateMenu(AssetPanelActions& actions, const PopupAnchor& anchor,
+                        const AssetPanelEntry* subject);
+    // The material a "Material Instance..." raised from `e` derives from:
+    // `e` itself when it is a material (a base or an instance -- an
+    // instance's own instance is a valid chain), nil otherwise or for null.
+    [[nodiscard]] Arcane::Guid InstanceParentFor(const AssetPanelEntry* e);
+    // The texture a "Sprite..." raised from `e` is cut from: `e` itself when
+    // it is a texture, nil otherwise or for null (T3-D5).
+    [[nodiscard]] Arcane::Guid SpriteTextureFor(const AssetPanelEntry* e);
+    // A create of `kind` raised from `subject`: the one asset-valued prefill
+    // that kind takes (CreateAssetRequest::prefillParent) -- a Material
+    // Instance's parent, a Sprite's texture -- nil for every other kind.
+    [[nodiscard]] Arcane::Guid CreatePrefillFor(CreateAssetKind kind, const AssetPanelEntry* subject);
 
     // Panel-split spec s7.2 (Task 3): today's Reveal sequence (the
     // Unreferenced card's own click handler, pre-split), extracted to a
@@ -193,6 +254,20 @@ namespace Arcane::Editor
     // panel ever reaches into a sibling's state.
     void RevealAssetInBrowser(AssetBrowserPanelState& state, AssetPanelModel& model,
                               const Arcane::Guid& guid);
+
+    // T5 s7.8: the row menu's "Move to..." refusal -- ONLY the refusals that
+    // do not depend on a destination (the Move to... modal re-checks every
+    // destination it is pointed at and carries THAT refusal inline). One Move
+    // dry-run per selected guid, each aimed at the asset's OWN Content-relative
+    // folder, so the planner's "already there" arm skips the clash check while
+    // the source/diag/plugin/engine scheme refusals, missing-on-disk and a
+    // missing .meta still fire. An asset outside the game mount (or with no
+    // model entry) gets "" and still refuses by its scheme. First non-empty
+    // reason wins; "" = the verb is enabled. A .gltf's companion refusals
+    // (a ../ URI, a shared buffer) are left to the modal.
+    [[nodiscard]] std::string MoveVerbRefusal(const std::vector<Arcane::Guid>& selection,
+                                              const AssetPanelModel& model,
+                                              const std::function<std::string(const AssetOpRequest&)>& refusal);
 
     // ---- The cross-panel helper set (Tasks 4-6, homed here in Task 7) -----
     // Eight helpers that more than one asset panel calls. Tasks 4-6 promoted
@@ -287,8 +362,22 @@ namespace Arcane::Editor
     AssetPanelBottomBar BeginAssetPanelBottomBar(const char* id);
     void EndAssetPanelBottomBar();
 
-    // The health-digest chip, right-aligned inside an open bottom bar: amber
-    // "N refused" + dim "- N cooking - N unused", drawn as two flush
+    // The refused count's look, shared by the health digest and the Status
+    // panel's refused tile (node page phase s6.7): amber + the triangle only
+    // when something actually refused; at zero, dim "0 refused" and a Text-
+    // coloured tile icon. A negative count reads as 0.
+    struct RefusedStyle
+    {
+        bool        alarm = false;   // refused > 0
+        std::string text;            // ICON_LC_TRIANGLE_ALERT " N refused" when alarm, else "0 refused"
+        ImVec4      color{};         // Theme::kAmber when alarm, else Theme::kTextDim
+        int         tileVariant = 0; // StatTile variant: 1 when alarm, else 0
+    };
+    [[nodiscard]] RefusedStyle DigestRefusedStyle(int refused);
+
+    // The health-digest chip, right-aligned inside an open bottom bar:
+    // "N refused" (amber with the triangle only when N > 0, DigestRefusedStyle)
+    // + dim "- N cooking - N unused", drawn as two flush
     // segments, with a single-hit-target click-through that raises
     // `actions.showStatus`. The counts ALWAYS render (spec s7.3: information
     // first, the chip never disappears); only the click goes inert when

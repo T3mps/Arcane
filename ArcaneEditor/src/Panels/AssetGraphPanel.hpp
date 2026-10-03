@@ -22,9 +22,12 @@
 
 #include "Panels/AssetGraphViewModel.hpp"   // AssetGraphViewModel -- the built projection state caches
 #include "Panels/AssetPanelCommon.hpp"      // AssetPanelActions/AssetPanelServices, BootSceneGuid
+#include "Widgets/GraphFit.hpp"             // CanvasNavLatch -- the s6.9 fit's resize-proof latch (imgui.h only)
 #include "Widgets/GraphGridPhase.hpp"       // GraphGridPhase -- ImGui-only, no node-editor coupling
 
 #include <Arcane/Guid.hpp>
+
+#include <imgui.h>   // ImVec2 (the s6.9 test seam)
 
 #include <cstdint>
 #include <optional>
@@ -35,6 +38,10 @@ namespace Arcane::Editor
 {
     class AssetPanelModel;
     class DocumentHost;
+
+    // The Graph window's selection strip height (node page phase s6.9): the
+    // strip draws it and the canvas is shrunk by it, so neither covers the other.
+    inline constexpr float kAssetGraphSelectionStripH = 48.0f;
 
     // The Asset Graph window's session-only UI state (spec s6). Panel-split
     // Task 7: the other of the two structs AssetsPanelState dissolved into,
@@ -165,6 +172,21 @@ namespace Arcane::Editor
         // contract that a reposition is TRANSIENT (the next rebuild snaps it
         // back). That is intended behavior, not a bug.
         bool          graphLayoutDirty = false;
+        // Frame-to-fit (node page phase s6.9). ARMED by canvas creation and by a
+        // rebuild whose focus or kind filter moved (never an entriesStamp-only
+        // rebuild: cook churn must not yank the view); ISSUED on the first
+        // canvas frame after the layout was written, once node sizes are
+        // measured. A CanvasNavLatch rather than a bool (the T2-C4 ruling): the
+        // node editor's Begin discards a navigation issued the draw before a
+        // canvas resize, so the fit is re-issued until a draw at the same size
+        // confirms it. A resize after that does not refit; F keeps the
+        // library's own frame.
+        CanvasNavLatch graphFitPending;
+        std::uint32_t  graphFitCount = 0;   // test seam: fits performed, one per arming (a latch re-issue is not a new fit)
+        // Test seam (s6.9): the last drawn canvas frame's canvas rect and legend
+        // box, screen space. Written every drawn frame; read by nothing in the editor.
+        ImVec2 graphCanvasMin{}, graphCanvasMax{};
+        ImVec2 graphLegendMin{}, graphLegendMax{};
     };
 
     // Seed `graphFocus` to the project's boot scene, once per project,

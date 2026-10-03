@@ -45,6 +45,8 @@ namespace Arcane::Editor
                 if (auto* m = Model()) { undoKey_ = m->SelectionKey(); m->RestoreDraft(after_); m->RestoreSelectionOrAncestor(redoKey_); }
             }
             const char* Label() const override { return label_.c_str(); }
+            bool AffectsScene() const override { return false; }
+            bool IsExpired() const override { return Model() == nullptr; }   // ~InputActionsEditorModel nulls the anchor
         private:
             [[nodiscard]] InputActionsEditorModel* Model() const
             {
@@ -204,11 +206,28 @@ namespace Arcane::Editor
                     if (DuplicateInArray(child, id)) return true;
             return false;
         }
+
+        // Every entry names a scheme's bindingGroup, once: the loader rejects an
+        // unknown or a duplicate group (InputActionAsset.cpp:73-87).
+        bool GroupsKnown(const nlohmann::json& draft, const std::vector<std::string>& groups)
+        {
+            for (std::size_t i = 0; i < groups.size(); ++i)
+            {
+                if (!SchemeGroupExists(draft, groups[i])) return false;
+                if (std::find(groups.begin(), groups.begin() + static_cast<std::ptrdiff_t>(i), groups[i]) != groups.begin() + static_cast<std::ptrdiff_t>(i)) return false;
+            }
+            return true;
+        }
+        bool ValidPartRole(std::string_view composite, std::string_view role)
+        {
+            if (composite == "1DAxis")   return role == "negative" || role == "positive";
+            if (composite == "2DVector") return role == "up" || role == "down" || role == "left" || role == "right";
+            return false;
+        }
     }
 
-    InputActionsEditorModel::InputActionsEditorModel(nlohmann::json draft,
-                                                     Arcane::CommandStack* commands)
-        : draft_(std::move(draft)), saved_(draft_), commands_(commands),
+    InputActionsEditorModel::InputActionsEditorModel(nlohmann::json draft, UndoResolver undo)
+        : draft_(std::move(draft)), saved_(draft_), undo_(std::move(undo)),
           anchor_(std::make_shared<InputActionsEditorModel*>(this))
     { Validate(); }
 
@@ -356,24 +375,26 @@ namespace Arcane::Editor
         if (before != draft_ || before == after) return false;
         std::string undoKey = SelectionKey();   // what was selected BEFORE the edit; ApplyEdit itself never touches the selection
         RestoreDraft(after);
-        if (commands_)
-            commands_->Push(std::make_unique<DraftEditCommand>(anchor_, std::move(label),
-                                                                std::move(before), std::move(after),
-                                                                std::move(undoKey)));
+        if (Arcane::CommandStack* stack = undo_ ? undo_() : nullptr)
+            stack->Push(std::make_unique<DraftEditCommand>(anchor_, std::move(label),
+                                                            std::move(before), std::move(after),
+                                                            std::move(undoKey)));
         return true;
     }
 
     bool InputActionsEditorModel::Undo()
     {
-        if (!commands_ || !commands_->CanUndo()) return false;
-        commands_->Undo();
+        Arcane::CommandStack* stack = undo_ ? undo_() : nullptr;
+        if (!stack || !stack->CanUndo()) return false;
+        stack->Undo();
         return true;
     }
 
     bool InputActionsEditorModel::Redo()
     {
-        if (!commands_ || !commands_->CanRedo()) return false;
-        commands_->Redo();
+        Arcane::CommandStack* stack = undo_ ? undo_() : nullptr;
+        if (!stack || !stack->CanRedo()) return false;
+        stack->Redo();
         return true;
     }
 
@@ -499,37 +520,41 @@ namespace Arcane::Editor
         return true;
     }
 
-    bool InputActionsEditorModel::AddBinding(const Guid& map, const Guid& action, std::string path)
+    bool InputActionsEditorModel::AddBinding(const Guid& map, const Guid& action, std::string path,
+                                              std::vector<std::string> groups)
     {
-        if (path.empty()) return false;
+        if (path.empty() || !GroupsKnown(draft_, groups)) return false;
         auto next = draft_;
         auto* owner = FindChild(next, map, "actions", action);
         if (!owner || !owner->contains("bindings") || !(*owner)["bindings"].is_array()) return false;
         const auto id = Guid::Generate();
-        (*owner)["bindings"].push_back({{"id", id.ToString()}, {"path", std::move(path)}});
+        nlohmann::json row = {{"id", id.ToString()}, {"path", std::move(path)}};
+        if (!groups.empty()) row["groups"] = std::move(groups);   // the loader's shape (InputActionAsset.cpp:73-87)
+        (*owner)["bindings"].push_back(std::move(row));
         if (!ApplyEdit("Add binding", draft_, next)) return false;
         SelectMap(map); SelectAction(action); SelectBinding(id);
         return true;
     }
 
-    bool InputActionsEditorModel::AddComposite(const Guid& map, const Guid& action,
-                                                std::string composite)
+    bool InputActionsEditorModel::AddComposite(const Guid& map, const Guid& action, std::string composite,
+                                                std::vector<std::pair<std::string, std::string>> parts,
+                                                std::vector<std::string> groups)
     {
-        if (composite != "1DAxis" && composite != "2DVector") return false;
+        if ((composite != "1DAxis" && composite != "2DVector") || parts.empty() || !GroupsKnown(draft_, groups)) return false;
+        nlohmann::json rows = nlohmann::json::array();
+        for (auto& [role, path] : parts)
+        {
+            if (path.empty() || !ValidPartRole(composite, role)) return false;
+            rows.push_back({{"id", Guid::Generate().ToString()}, {"name", std::move(role)}, {"path", std::move(path)}});
+        }
         auto next = draft_;
         auto* owner = FindChild(next, map, "actions", action);
         if (!owner || !owner->contains("bindings") || !(*owner)["bindings"].is_array()) return false;
         const auto id = Guid::Generate();
-        nlohmann::json parts = nlohmann::json::array();
-        const std::vector<std::string> names = composite == "1DAxis"
-            ? std::vector<std::string>{"negative", "positive"}
-            : std::vector<std::string>{"up", "down", "left", "right"};
-        for (const auto& name : names)
-            parts.push_back({{"id", Guid::Generate().ToString()}, {"name", name},
-                             {"path", "<Keyboard>/space"}});
-        (*owner)["bindings"].push_back({{"id", id.ToString()}, {"composite", composite},
-                                         {"parts", std::move(parts)}});
-        if (!ApplyEdit("Add composite binding", draft_, next)) return false;
+        nlohmann::json row = {{"id", id.ToString()}, {"composite", std::move(composite)}, {"parts", std::move(rows)}};
+        if (!groups.empty()) row["groups"] = std::move(groups);
+        (*owner)["bindings"].push_back(std::move(row));
+        if (!ApplyEdit("Add composite binding", draft_, next)) return false;   // ONE step, whatever was captured
         SelectMap(map); SelectAction(action); SelectBinding(id);
         return true;
     }
@@ -551,12 +576,7 @@ namespace Arcane::Editor
         auto* owner = FindId(next, binding);
         if (!owner || !owner->contains("composite") || !owner->contains("parts") ||
             !(*owner)["parts"].is_array() || path.empty()) return false;
-        const auto composite = Str(*owner, "composite");
-        const bool valid = composite == "1DAxis"
-            ? role == "negative" || role == "positive"
-            : composite == "2DVector" &&
-              (role == "up" || role == "down" || role == "left" || role == "right");
-        if (!valid) return false;
+        if (!ValidPartRole(Str(*owner, "composite"), role)) return false;
         const auto id = Guid::Generate();
         (*owner)["parts"].push_back({{"id", id.ToString()}, {"name", std::move(role)},
                                      {"path", std::move(path)}});
@@ -576,6 +596,23 @@ namespace Arcane::Editor
         if (!ApplyEdit("Remove composite part", draft_, next)) return false;
         SelectPart({});
         return true;
+    }
+
+    bool InputActionsEditorModel::SetPartPaths(const Guid& binding, std::vector<std::pair<Guid, std::string>> paths)
+    {
+        if (paths.empty()) return false;
+        auto next = draft_;
+        auto* owner = FindId(next, binding);
+        if (!owner || !owner->contains("composite") || !owner->contains("parts") || !(*owner)["parts"].is_array()) return false;
+        for (auto& [part, path] : paths)
+        {
+            if (path.empty()) return false;
+            nlohmann::json* row = nullptr;
+            for (auto& p : (*owner)["parts"]) if (IdIs(p, part)) { row = &p; break; }
+            if (!row) return false;
+            (*row)["path"] = std::move(path);
+        }
+        return ApplyEdit("Rebind composite", draft_, next);   // drafting pick 9.28 #41
     }
 
     bool InputActionsEditorModel::DuplicateRow(const Guid& id)

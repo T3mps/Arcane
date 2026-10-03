@@ -50,8 +50,32 @@
 #include <unordered_set>
 #include <vector>
 
+namespace Arcane
+{
+    class AssetRegistry;
+    class MountTable;
+}
+
 namespace Arcane::Editor
 {
+    // The extensions PollAssetWatch discovers mid-session: Texture (.png)
+    // and Model (.gltf/.glb, F2c s4.1). One definition, so the editor's poll
+    // and the suite's rediscovery cases scan the same set.
+    inline constexpr std::string_view kDiscoveryExtensions[] = {
+        ".png",           // Texture
+        ".gltf", ".glb",  // Model (F2c s4.1)
+    };
+
+    // The `knownPaths` PollAssetWatch hands DiscoverUnknownSources: every
+    // Texture/Model entry in `registry`, resolved through `mounts` (Guid ->
+    // mount path -> physical file, Project::ResolveAsset's two steps) to its
+    // generic_string(). An entry that does not resolve is left out, so its
+    // file (if one is on disk) is rediscovered. T5-GATE fix round 1: lifted
+    // out of PollAssetWatch so the "restored from the Recycle Bin" case
+    // (AssetFileOpsTest.cpp) drives the editor's own known-set rule.
+    std::unordered_set<std::string> KnownDiscoverySourcePaths(const Arcane::AssetRegistry& registry,
+                                                              const Arcane::MountTable& mounts);
+
     // Every regular file under `contentDir` (recursively) whose lowercased
     // extension matches one of `extensions` -- the SAME file-type/recursion
     // rule CookSession::EnumerateSources uses (ArcaneAssetPipeline/

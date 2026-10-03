@@ -25,5 +25,11 @@ namespace Arcane::Editor
         void NoteProjectOpened(const Arcane::Project* proj);
         void NoteSceneOpened(const Arcane::Project* proj,
                              const std::filesystem::path& file);
+        // An asset op moved/renamed a .arcscene (spec s7.11): rewrite its scene
+        // recents entry in place and save. The Hub's project-recents file is
+        // not touched.
+        void NoteSceneMoved(const Arcane::Project* proj,
+                            const std::filesystem::path& from,
+                            const std::filesystem::path& to);
     };
 }

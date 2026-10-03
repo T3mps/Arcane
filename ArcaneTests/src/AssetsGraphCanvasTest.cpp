@@ -53,6 +53,9 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -692,6 +695,166 @@ namespace
             REQUIRE(project.has_value());
         }
     };
+}
+
+// ---------------------------------------------------------------------------
+// s6.9 -- the canvas ends where the 48 px selection strip starts. The strip
+// used to OVERLAY the canvas's bottom edge, so the legend (canvas bottom - 12
+// - boxH) and the bottom layout row drew under it, and the strip stole canvas
+// hover. The canvas is now shrunk by kAssetGraphSelectionStripH.
+
+namespace
+{
+    // The strip child ("##graphsel", a child of the Graph body) by name:
+    // ImGui names a child "<parent>/##graphsel_<id>" (imgui_internal.h).
+    ImGuiWindow* FindWindowContaining(const char* needle)
+    {
+        for (ImGuiWindow* w : ImGui::GetCurrentContext()->Windows)
+            if (std::strstr(w->Name, needle)) return w;
+        return nullptr;
+    }
+
+    // s6.9 fixture: a hub referenced by four materials = five nodes, the
+    // referencer column four layout rows deep (3 x 90 + 54 = 324 px of nodes).
+    struct StripCanvasRig
+    {
+        MaterialHubFixture fx;
+        AssetPanelModel model;
+        AssetGraphPanelState state;
+        DocumentHost docs;
+        GraphMouseHarness hw;
+        ImGuiContext* prev = nullptr;
+        ImGuiContext* ctx = nullptr;
+
+        explicit StripCanvasRig(const char* name)
+        {
+            fx.Build(name, /*referencerCount=*/4);
+            model.MarkAllDirty();
+            REQUIRE(model.RebuildIfDirty(&fx.project->Registry(), fx.fake.Make()));
+            IMGUI_CHECKVERSION();
+            prev = ImGui::GetCurrentContext();
+            ctx = ImGui::CreateContext();
+            ImGui::SetCurrentContext(ctx);
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(1600.0f, 900.0f);
+            io.IniFilename = nullptr;
+            unsigned char* pixels = nullptr; int w = 0, h = 0;
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+            state.graphFocusSeeded = true;            // nil focus == everything-mode
+            hw.size    = ImVec2(1200.0f, 330.0f);     // ~200 px of canvas: less than the 324 px the rows need
+            hw.state   = &state;
+            hw.model   = &model;
+            hw.project = &*fx.project;
+            hw.docs    = &docs;
+            hw.services.resolveAssetThumb = [](const Guid&) -> std::uint64_t { return 0ull; };
+        }
+        ~StripCanvasRig()
+        {
+            DestroyAssetGraphPanelCanvas(state);
+            ImGui::DestroyContext(ctx);
+            ImGui::SetCurrentContext(prev);
+            std::error_code ec;
+            fs::remove_all(fx.root, ec);
+        }
+    };
+}
+
+TEST_CASE("Asset Graph (s6.9): the canvas ends where the selection strip starts, and the legend sits inside it",
+          "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_strip_test");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+
+    ImGuiWindow* strip = FindWindowContaining("##graphsel");
+    REQUIRE(strip != nullptr);
+    CHECK(strip->Size.y == kAssetGraphSelectionStripH);
+    // The strip covers no canvas: canvas bottom == strip top == body bottom - 48.
+    CHECK(rig.state.graphCanvasMax.y == strip->Pos.y);
+    CHECK(rig.state.graphCanvasMin.y < rig.state.graphCanvasMax.y);
+    // The legend box (DrawGraphLegend's own rect) lies inside the canvas.
+    CHECK(rig.state.graphLegendMin.x >= rig.state.graphCanvasMin.x);
+    CHECK(rig.state.graphLegendMin.y >= rig.state.graphCanvasMin.y);
+    CHECK(rig.state.graphLegendMax.x <= rig.state.graphCanvasMax.x);
+    CHECK(rig.state.graphLegendMax.y <= rig.state.graphCanvasMax.y);
+}
+
+// ---------------------------------------------------------------------------
+// s6.9 -- frame-to-fit. Armed by canvas creation and by a rebuild whose focus or
+// kind filter moved, never by an entriesStamp-only rebuild (cook churn must not
+// yank the view); consumed on the first canvas frame after the layout was
+// written. The rig's ~200 px canvas is shorter than the four-row referencer
+// column, so an UNFITTED view leaves the bottom row below the canvas.
+
+TEST_CASE("Asset Graph (s6.9): creation frames every node inside the shrunk canvas", "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_fit_test");
+    for (int i = 0; i < 4; ++i)
+        rig.hw.Frame();
+    CHECK(rig.state.graphFitCount == 1u);
+
+    int maxRow = 0;
+    for (const GraphNode& n : rig.state.graph.nodes) maxRow = std::max(maxRow, n.row);
+    REQUIRE(maxRow >= 2);                         // >= 3 layout rows: unfitted, the last one is below the canvas
+    for (std::size_t i = 0; i < rig.state.graph.nodes.size(); ++i)
+    {
+        const std::uint64_t id = i + 1;           // GraphNodeIdOf: index + 1
+        INFO(id);
+        const ImVec2 mn = rig.hw.NodeScreenMin(id), mx = rig.hw.NodeScreenMax(id);
+        CHECK(mn.x >= rig.state.graphCanvasMin.x);
+        CHECK(mn.y >= rig.state.graphCanvasMin.y);
+        CHECK(mx.x <= rig.state.graphCanvasMax.x);
+        CHECK(mx.y <= rig.state.graphCanvasMax.y);
+    }
+}
+
+TEST_CASE("Asset Graph (s6.9): only creation, a focus change and a kind-filter change refit -- never an entriesStamp rebuild",
+          "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_refit_test");
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    REQUIRE(rig.state.graphFitCount == 1u);
+
+    // Cook churn / a new reference: entriesStamp moves, the graph rebuilds, no refit.
+    const std::uint32_t stampBefore = rig.model.entriesStamp;
+    rig.fx.fake.refsByGuid[rig.fx.referencers[0]].push_back({ rig.fx.referencers[1], AssetRefKind::References });
+    rig.model.MarkAllDirty();
+    REQUIRE(rig.model.RebuildIfDirty(&rig.fx.project->Registry(), rig.fx.fake.Make()));
+    REQUIRE(rig.model.entriesStamp != stampBefore);
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    CHECK(rig.state.graphBuiltStamp == rig.model.entriesStamp);   // it DID rebuild
+    CHECK(rig.state.graphFitCount == 1u);
+
+    rig.state.graphFocus = rig.fx.hub;
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    CHECK(rig.state.graphFitCount == 2u);
+
+    rig.state.graphKindFilter = AssetKind::Material;
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    CHECK(rig.state.graphFitCount == 3u);
+}
+
+TEST_CASE("Asset Graph (s6.9): a fit frame leaves the model and canvas selections alone", "[editor][graphcanvas]")
+{
+    StripCanvasRig rig("arcane_assets_graph_fitsel_test");
+    for (int i = 0; i < 4; ++i) rig.hw.Frame();
+    rig.model.Select(rig.fx.referencers[1]);
+    for (int i = 0; i < 2; ++i) rig.hw.Frame();   // 8b mirrors the selection onto the canvas
+
+    rig.state.graphFocus = rig.fx.hub;            // arms a fit
+    rig.hw.Frame();                               // rebuild frame: layout written, fit still pending
+    REQUIRE(rig.state.graphFitCount == 1u);
+    auto* edCtx = static_cast<ax::NodeEditor::EditorContext*>(rig.state.graphCanvas);
+    ax::NodeEditor::SetCurrentEditor(edCtx);
+    const int selectedBefore = ax::NodeEditor::GetSelectedObjectCount();
+    ax::NodeEditor::SetCurrentEditor(nullptr);
+
+    rig.hw.Frame();                               // the fit frame
+    REQUIRE(rig.state.graphFitCount == 2u);
+    CHECK(rig.model.selected == rig.fx.referencers[1]);
+    ax::NodeEditor::SetCurrentEditor(edCtx);
+    CHECK(ax::NodeEditor::GetSelectedObjectCount() == selectedBefore);
+    ax::NodeEditor::SetCurrentEditor(nullptr);
 }
 
 // ---------------------------------------------------------------------------
