@@ -51,6 +51,7 @@
 #include "Panels/SceneInspectorSource.hpp"   // m_sceneSource
 #include "Project/AssetFileOps.hpp"      // AssetFileOpHost/AssetFileOpExecutor (m_assetOpHost, m_assetFileOps)
 #include "Project/CookQueue.hpp"
+#include "Project/IdeLaunch.hpp"         // IdeLaunch::Outcome (OpenInIde's return)
 #include "Project/OsShell.hpp"           // OsShell::RecycleResult (AssetOpHost::Recycle)
 #include "Project/MaterialPreviewHarvester.hpp"   // owned by value-in-unique_ptr (m_materialThumbs)
 #include "Project/ModuleBuild.hpp"
@@ -2041,7 +2042,7 @@ namespace Arcane::Editor
         // solution up (the menu item). Both go: Toolchain::DiscoverSolution
         // -> if none, RegenerateSolution (arcbuild generate, SYNCHRONOUS, its
         // lines to the Console as "Build: ") -> rediscover ->
-        // IdeLaunch::OpenSolution/OpenFile, whose Outcome is logged in one
+        // IdeLaunch::OpenSolution/OpenFileAtLine, whose Outcome is logged in one
         // Console line. Reached from Build -> Open Visual Studio
         // (MenuRequests::openIde) and from a Source row's Open
         // (AssetPanelActions::openInIde), EditorAppFrame.cpp.
@@ -2050,7 +2051,12 @@ namespace Arcane::Editor
         // project open (vswhere spawns a process; ~100 ms, not per frame):
         // m_devenvResolved latches the attempt, m_devenv holds the answer
         // (empty = no install found -> the menu greys with a tooltip).
-        void OpenInIde(const std::filesystem::path& file);
+        // Returns the outcome (no project = NoSolution) so OpenSourceAtLine can
+        // fall back to the shell. `line` > 0 puts the caret there (IdeLaunch::OpenFileAtLine).
+        IdeLaunch::Outcome OpenInIde(const std::filesystem::path& file, int line = 0);
+        // The crash viewer's [file:line] link (node-page phase s8.1): OpenInIde,
+        // and on NoDevenv / NoSolution / DetectionFailed, OsShell::ShellOpen(file).
+        void OpenSourceAtLine(const std::filesystem::path& file, int line);
         [[nodiscard]] Arcane::Editor::IdeMenuState IdeMenuStateNow() const;
         void ResolveDevenvOnce();
         std::filesystem::path m_devenv;

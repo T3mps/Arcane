@@ -127,3 +127,17 @@ TEST_CASE("IdeLaunch::OpenFile opens a file into the running instance on this de
     INFO("outcome: " << IdeLaunch::Describe(outcome));
     CHECK(outcome == IdeLaunch::Outcome::OpenedInInstance);
 }
+
+TEST_CASE("IdeLaunch::ComposeLaunchArgs appends /Command \"Edit.GoTo <line>\" only for a line", "[editor]")
+{
+    const fs::path sln  = L"D:\\dev\\My Game\\MyGame.slnx";
+    const fs::path file = L"D:\\dev\\My Game\\Source\\Game.cpp";
+    const std::vector<std::wstring> atLine = IdeLaunch::ComposeLaunchArgs(sln, file, 42);
+    REQUIRE(atLine.size() == 4);
+    CHECK(atLine[0] == sln.wstring());
+    CHECK(atLine[1] == file.wstring());
+    CHECK(atLine[2] == L"/Command");
+    CHECK(atLine[3] == L"Edit.GoTo 42");             // one token; QuoteArg quotes it at spawn
+    CHECK(IdeLaunch::ComposeLaunchArgs(sln, file, 0).size() == 2);
+    CHECK(IdeLaunch::ComposeLaunchArgs(sln, {}, 42).size() == 1);   // no file, no jump
+}

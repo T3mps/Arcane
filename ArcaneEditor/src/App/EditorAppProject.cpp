@@ -28,6 +28,7 @@
 #include "Project/ContentDiscovery.hpp"   // F2b desk-checkpoint fix: mid-session Content/ drop discovery
 #include "Project/IdeLaunch.hpp"   // Build -> Open Visual Studio / open source in VS
 #include "Project/MeshImportWave.hpp"   // F2c Task 13: embedded-texture extraction at discovery
+#include "Project/OsShell.hpp"   // ShellOpen (OpenSourceAtLine's fallback without Visual Studio)
 #include "Project/SourceIncludes.hpp"   // Asset Graph: #include edges for source:// files
 
 #include <Arcane/AssetPipeline/ArtifactStore.hpp>   // SweepArtifactOrphans (F2b Task 12)
@@ -2931,13 +2932,13 @@ namespace Arcane::Editor
         return IdeMenuState::Available;
     }
 
-    void EditorApp::OpenInIde(const std::filesystem::path& file)
+    IdeLaunch::Outcome EditorApp::OpenInIde(const std::filesystem::path& file, int line)
     {
         const Arcane::Project* proj = m_runtime->CurrentProject();
         if (!proj)
         {
             ARC_ERROR("IDE: no open project -- nothing to open");
-            return;
+            return IdeLaunch::Outcome::NoSolution;
         }
         ResolveDevenvOnce();
 
@@ -2954,13 +2955,14 @@ namespace Arcane::Editor
 
         const IdeLaunch::Outcome outcome = file.empty()
             ? IdeLaunch::OpenSolution(m_devenv, solution)
-            : IdeLaunch::OpenFile(m_devenv, solution, file);
+            : IdeLaunch::OpenFileAtLine(m_devenv, solution, file, line);
 
         // One Console line per click, its severity by whether the click did
         // what it asked: the three "it worked" outcomes are info, the
         // transient one (Blocked) a warning, everything else an error.
-        const std::string what = file.empty() ? solution.filename().string()
-                                              : file.filename().string();
+        const std::string what = file.empty()
+            ? solution.filename().string()
+            : file.filename().string() + (line > 0 ? ":" + std::to_string(line) : std::string());
         switch (outcome)
         {
             case IdeLaunch::Outcome::Activated:
@@ -2975,6 +2977,18 @@ namespace Arcane::Editor
                 ARC_ERROR("IDE: {} -- {}", what, IdeLaunch::Describe(outcome));
                 break;
         }
+        return outcome;
+    }
+
+    void EditorApp::OpenSourceAtLine(const std::filesystem::path& file, int line)
+    {
+        using IdeLaunch::Outcome;
+        const Outcome outcome = OpenInIde(file, line);
+        if (outcome != Outcome::NoDevenv && outcome != Outcome::NoSolution && outcome != Outcome::DetectionFailed)
+            return;
+        const auto r = Arcane::Editor::OsShell::ShellOpen(file);
+        if (r != Arcane::Editor::OsShell::ShellResult::Ok)
+            ARC_WARN("IDE: could not open {} -- {}", file.string(), Arcane::Editor::OsShell::Describe(r));
     }
 
     bool EditorApp::RegenerateSolution()
