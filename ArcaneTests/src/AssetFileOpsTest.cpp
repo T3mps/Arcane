@@ -8,6 +8,7 @@
 #include "Project/MeshImportWave.hpp"
 #include "Helpers/TestTypeContext.hpp"
 #include "Panels/AssetReferenceIndex.hpp"
+#include "Project/ContentDiscovery.hpp"
 
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Base/Runtime.hpp>
@@ -27,6 +28,7 @@
 #include <set>
 #include <string>
 #include <system_error>
+#include <unordered_set>
 #include <vector>
 
 using namespace Arcane::Editor;
@@ -702,6 +704,34 @@ TEST_CASE("AssetFileOps: a failed delete keeps the dirty document open with its 
     REQUIRE(r.host.closedDocs.count(r.tex) == 1);
     CHECK(r.host.closedDocs.at(r.tex) == 2);          // closed after the second (successful) recycle
     CHECK(r.stack.CanUndo());
+}
+
+// T5-GATE desk addition (s7.13), automated: a .png the editor deleted and the user restores
+// from the OS Recycle Bin mid-session comes back with its guid -- the mid-session discovery
+// (EditorAppProject.cpp's PollAssetWatch: DiscoverUnknownSources over the registry's known
+// sources, then RegisterCreatedAsset -> AddFile) finds it again and reads the id from its
+// restored .meta instead of minting one.
+TEST_CASE("Delete: a .png restored from the Recycle Bin is rediscovered with its guid", "[editor][assetops]")
+{
+    DeleteRig r("delete_restore_from_bin");
+    const fs::path png = r.w.content / "textures" / "uv_marker.png", meta = fs::path(png) += ".meta";
+    const std::string pngBytes = Arcane::Test::Slurp(png), metaBytes = Arcane::Test::Slurp(meta);
+    REQUIRE(r.exec.Execute(r.w.Plan(AssetOpKind::Delete, { r.tex }), r.stack).ok);
+    REQUIRE_FALSE(fs::exists(png));
+    REQUIRE_FALSE(r.w.registry.Resolve(r.tex).has_value());
+
+    std::ofstream(meta, std::ios::binary) << metaBytes;   // the shell's Restore puts both files back
+    std::ofstream(png, std::ios::binary) << pngBytes;
+    std::unordered_set<std::string> known;                // the registry's known Texture/Model sources
+    for (const auto& [g, mp] : r.w.registry.All())
+        if (mp.ends_with(".png")) known.insert((r.w.content / mp.substr(std::string_view("game://").size())).generic_string());
+    static constexpr std::string_view kExt[] = { ".png" };
+    const std::vector<fs::path> found = DiscoverUnknownSources(r.w.content, kExt, known);
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].generic_string() == png.generic_string());
+    CHECK(r.w.registry.AddFile(found[0], r.w.content, "game") == r.tex);   // the id from the restored .meta, not a mint
+    CHECK(r.w.registry.Resolve(r.tex) == "game://textures/uv_marker.png");
+    CHECK(Arcane::Test::Slurp(meta) == metaBytes);                         // nothing re-minted or rewritten
 }
 
 TEST_CASE("AssetFileOps: spill, nuked items and a dirty document on redo", "[editor][assetops]")
