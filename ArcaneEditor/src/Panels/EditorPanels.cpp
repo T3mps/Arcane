@@ -1119,6 +1119,19 @@ namespace Arcane::Editor
         ImGui::SameLine(); (void)SeverityToggleFor("console_err",  Arcane::DiagSeverity::Error,   nErr,  ui.showError);
         ImGui::SameLine(); (void)SeverityToggleFor("console_warn", Arcane::DiagSeverity::Warning, nWarn, ui.showWarning);
         ImGui::SameLine(); (void)SeverityToggleFor("console_info", Arcane::DiagSeverity::Info,    nInfo, ui.showInfo);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(140.0f);
+        if (ImGui::BeginCombo("##consolecat", ui.categoryFilter.empty() ? "All categories" : ui.categoryFilter.c_str()))
+        {
+            if (ImGui::Selectable("All categories", ui.categoryFilter.empty())) ui.categoryFilter.clear();
+            std::vector<std::string> cats;
+            for (const ConsoleEntry& e : entries)
+                if (std::find(cats.begin(), cats.end(), e.category) == cats.end()) cats.push_back(e.category);
+            std::sort(cats.begin(), cats.end());
+            for (const std::string& c : cats)
+                if (ImGui::Selectable(c.c_str(), ui.categoryFilter == c)) ui.categoryFilter = c;
+            ImGui::EndCombo();
+        }
 
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##consolesearch", "Search", ui.search, sizeof(ui.search));
@@ -1154,6 +1167,7 @@ namespace Arcane::Editor
             if (e.level == Arcane::DiagSeverity::Error   && !ui.showError)   return false;
             if (e.level == Arcane::DiagSeverity::Warning && !ui.showWarning) return false;
             if (e.level == Arcane::DiagSeverity::Info    && !ui.showInfo)    return false;
+            if (!ui.categoryFilter.empty() && e.category != ui.categoryFilter) return false;
             Arcane::Diagnostic probe;               // reuse the one filter definition
             probe.severity = e.level;
             probe.message  = e.message;

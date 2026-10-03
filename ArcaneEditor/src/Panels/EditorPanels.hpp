@@ -277,6 +277,7 @@ namespace Arcane::Editor
         bool autoScroll  = true;
         bool wrap        = true;
         char search[128] = {};
+        std::string categoryFilter;   // "" = All categories (optional s8.2 combo)
         int  lineCap     = 512;
         // Copy button's "Copied" feedback: the ImGui::GetTime() deadline the
         // swapped label holds until. A plain deadline the draw compares each
