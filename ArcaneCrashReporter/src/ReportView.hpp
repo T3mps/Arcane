@@ -14,13 +14,19 @@
 #include "SymbolizedText.hpp"
 #include <Arcane/Base/DiagEnvelope.hpp>
 
+#include <chrono>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace Arcane::Reporter
 {
-    struct ThreadView { std::string label; std::string text; };   // "thread 4242 (faulting)" + its frames
+    struct ThreadView
+    {
+        std::string label;              // "thread 4242 (faulting)"
+        std::string text;               // its frames as text (unchanged)
+        std::vector<SymFrame> frames;   // the symbolized branch only; empty on the portable fallback
+    };
 
     struct ReportView
     {
@@ -51,4 +57,27 @@ namespace Arcane::Reporter
 
     // Everything, as text: header, reason, injected, the selected thread, GPU, log tail.
     [[nodiscard]] std::string DetailsText(const ReportView& v, std::size_t threadIndex);
+
+    // "ArcaneEditor" -> "Arcane Editor": a space after a leading "Arcane" when
+    // more follows (and no space is already there); anything else unchanged.
+    // The envelope carries no product name, so the editor passes this as Args::product.
+    [[nodiscard]] std::string DisplayProduct(std::string_view appName);
+
+    // DetailsText split at the reason (node-page phase s8.1): the window draws
+    // the header above its well, so the well shows only the body.
+    [[nodiscard]] std::string DetailsHeader(const ReportView& v);                          // headline, when, reason
+    [[nodiscard]] std::string DetailsBody(const ReportView& v, std::size_t threadIndex);   // injected .. folder
+
+    enum class CopyState { Idle, Copied, Failed };
+    [[nodiscard]] std::string_view CopyButtonLabel(CopyState state) noexcept;
+
+    // ReporterWindow's kBtn* ids, one to one (same values).
+    enum class ReporterButton : int { OpenFolder = 100, Copy = 101, Close = 102, Relaunch = 103, KeepWaiting = 104, Terminate = 105 };
+    // Left to right: OpenFolder, Copy, [KeepWaiting, Terminate if isHang],
+    // [Relaunch if !relaunchLine.empty()], Close (always last).
+    [[nodiscard]] std::vector<ReporterButton> VisibleButtons(const ReportView& v);
+
+    // "2026-09-29T16:57:12Z" -> "2026-09-29 11:57" in `zone`; "" when the
+    // stamp does not parse or `zone` is null.
+    [[nodiscard]] std::string FormatLocalStamp(std::string_view isoUtc, const std::chrono::time_zone* zone);
 }
