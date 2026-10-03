@@ -22,6 +22,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <optional>
 #include <string>
 
 using namespace Arcane::Reporter;
@@ -124,4 +125,71 @@ TEST_CASE("symbolize options: the faulting thread's cap is deep (8192), other th
     CHECK(opt.maxFramesFaultingThread == 8192u);
     CHECK(opt.maxFramesPerThread == 64u);
     CHECK(opt.maxThreads == 64u);
+}
+
+TEST_CASE("symbolized text: ParseSymbolized round-trips FormatSymbolized byte for byte (engine available)", "[reporter]")
+{
+    Symbolized s;
+    s.engineAvailable = true;
+    s.symbolPath = "srv*C:\\sym*https://msdl.microsoft.com/download/symbols;D:\\bin";
+    s.threads.push_back({ 4242, true, {
+        SymFrame{ 0, "ArcaneEditor", "Arcane::Editor::Boom", 0x1a4, "D:\\dev\\Arcane\\Boom.cpp", 52 },
+        SymFrame{ 0, "KERNEL32", "BaseThreadInitThunk", 0x14, "", 0 },
+        SymFrame{ 0, "death-fixture.exe", "", 0x1234, "", 0 } }, true });
+    s.threads.push_back({ 0, false, {} });                       // <unknown> id, <no frames recovered>
+    s.threadsTruncated = true;
+    const std::string text = FormatSymbolized(s, "Arcane 0.1 Debug@deadbeef", "");
+
+    const std::optional<ParsedSymbolized> p = ParseSymbolized(text);
+    REQUIRE(p.has_value());
+    CHECK(p->buildInfo == "Arcane 0.1 Debug@deadbeef");
+    CHECK(FormatSymbolized(p->sym, p->buildInfo, p->portableBody) == text);
+    CHECK(p->sym.engineAvailable);
+    CHECK(p->sym.symbolPath == s.symbolPath);
+    CHECK(p->sym.threadsTruncated);
+    REQUIRE(p->sym.threads.size() == 2);
+    const SymThread& t = p->sym.threads[0];
+    CHECK(t.systemId == 4242);
+    CHECK(t.faulting);
+    CHECK(t.framesTruncated);
+    REQUIRE(t.frames.size() == 3);
+    CHECK(t.frames[0].module == "ArcaneEditor");
+    CHECK(t.frames[0].function == "Arcane::Editor::Boom");
+    CHECK(t.frames[0].displacement == 0x1a4);
+    CHECK(t.frames[0].file == "D:\\dev\\Arcane\\Boom.cpp");    // the drive colon survives
+    CHECK(t.frames[0].line == 52);
+    CHECK(t.frames[0].address == 0);                           // not in the text
+    CHECK(t.frames[2].module == "death-fixture.exe");
+    CHECK(t.frames[2].function.empty());
+    CHECK(p->sym.threads[1].systemId == 0);
+    CHECK(p->sym.threads[1].frames.empty());
+}
+
+TEST_CASE("symbolized text: ParseSymbolized keeps an engine error containing ')' and the portable body verbatim", "[reporter]")
+{
+    Symbolized s;
+    s.engineError = "LoadLibrary(dbgeng.dll) failed (126)";
+    const std::string portable = "--- thread 7 (MAIN)\n00 ArcaneCore.dll + 0x10\n";
+    const std::string text = FormatSymbolized(s, "b", portable);
+    const std::optional<ParsedSymbolized> p = ParseSymbolized(text);
+    REQUIRE(p.has_value());
+    CHECK_FALSE(p->sym.engineAvailable);
+    CHECK(p->sym.engineError == "LoadLibrary(dbgeng.dll) failed (126)");
+    CHECK(p->portableBody == portable);
+    CHECK(p->sym.threads.empty());
+    CHECK(FormatSymbolized(p->sym, p->buildInfo, p->portableBody) == text);
+}
+
+TEST_CASE("symbolized text: ParseSymbolized refuses a foreign file and skips malformed lines", "[reporter]")
+{
+    CHECK_FALSE(ParseSymbolized("").has_value());
+    CHECK_FALSE(ParseSymbolized("hello\nengine      : dbgeng\n").has_value());
+    const std::optional<ParsedSymbolized> p = ParseSymbolized(
+        "symbolized by ArcaneCrashReporter x\nengine      : dbgeng\nsymbol path : s\n\n"
+        "--- thread 9\n7 too-few-digits\n00 mod!fn+0xzz\nnonsense\n01 mod!fn+0x10\n");
+    REQUIRE(p.has_value());
+    REQUIRE(p->sym.threads.size() == 1);
+    REQUIRE(p->sym.threads[0].frames.size() == 2);
+    CHECK(p->sym.threads[0].frames[0].function == "fn+0xzz");   // unparsable offset: kept in the name, not dropped
+    CHECK(p->sym.threads[0].frames[1].displacement == 0x10);
 }

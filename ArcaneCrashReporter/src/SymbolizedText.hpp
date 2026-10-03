@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,4 +66,19 @@ namespace Arcane::Reporter
 
     // Moves the thread whose systemId matches (or the one flagged faulting) to the front.
     void PutFaultingFirst(Symbolized& s, std::uint32_t walkedThreadId);
+
+    // The pure INVERSE of FormatSymbolized (node-page phase s8.1): the editor's
+    // crash viewer reads <stem>.symbolized.txt back. FormatSymbolized takes
+    // buildInfo and the portable fallback as parameters and Symbolized stores
+    // neither, so the parse returns both. nullopt unless line 1 is the
+    // "symbolized by ArcaneCrashReporter " header; an unrecognised or
+    // malformed line is skipped, never a failure. SymFrame::address is not in
+    // the text and stays 0.
+    struct ParsedSymbolized
+    {
+        Symbolized  sym;
+        std::string buildInfo;      // the rest of line 1
+        std::string portableBody;   // engine unavailable: everything after the blank line, unparsed
+    };
+    [[nodiscard]] std::optional<ParsedSymbolized> ParseSymbolized(std::string_view text);
 }
