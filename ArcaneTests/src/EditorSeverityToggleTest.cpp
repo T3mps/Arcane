@@ -76,6 +76,33 @@ TEST_CASE("SeverityToggle: the count is in the label, tinted above zero, dim at 
     CHECK_FALSE(h.on);
 }
 
+TEST_CASE("SeverityToggle: Visual Studio Error List look -- ON is a faint raised button, OFF has no fill and a dim label", "[editor]")
+{
+    // User, 2026-10-03: the accent fill on all three (every severity starts
+    // shown) read as "selected". ON = kButton fill + the severity tint; OFF =
+    // no fill, label kTextDim; hovering OFF lifts to the ON fill.
+    using namespace Arcane::Editor;
+    ToggleHarness h;
+    h.Frame();
+    CHECK(h.DrewColour(Theme::kButton));
+    CHECK_FALSE(h.DrewColour(Theme::kToggleOn));
+    CHECK(h.DrewColour(Theme::kWarning));
+
+    h.on = false;
+    h.Frame();
+    CHECK_FALSE(h.DrewColour(Theme::kButton));
+    CHECK_FALSE(h.DrewColour(Theme::kToggleOn));
+    CHECK_FALSE(h.DrewColour(Theme::kWarning));
+    CHECK(h.DrewColour(Theme::kTextDim));
+
+    ImGui::GetIO().AddMousePosEvent(h.centre.x, h.centre.y);
+    h.Frame();
+    h.Frame();
+    CHECK(h.DrewColour(Theme::kButton));
+    CHECK_FALSE(h.on);
+    CHECK(h.stackDrift == 0);
+}
+
 TEST_CASE("SeverityStyle maps each severity to its icon and token", "[editor]")
 {
     using Arcane::Editor::StyleFor;

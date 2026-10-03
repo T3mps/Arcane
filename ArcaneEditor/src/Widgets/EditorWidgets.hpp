@@ -433,11 +433,13 @@ namespace Arcane::Editor
     void PopToggleOnColors();
     [[nodiscard]] bool IconToggle(const char* label, bool on);
 
-    // One severity toggle (node-page phase s8.2): IconToggle labelled
+    // One severity toggle (node-page phase s8.2): a button labelled
     // "<icon> <count>###<id>", so the count is inside the hit area while the
     // ImGuiID hashes `id` alone -- a click spanning a count tick (streaming
-    // logs) still lands. The label is Theme::kTextDim at zero and `tint`
-    // above. Flips `on` on click; returns the click.
+    // logs) still lands. Visual Studio Error List look (user, 2026-10-03):
+    // ON = a faint raised fill (Theme::kButton) with the label in `tint`
+    // (kTextDim at zero); OFF = no fill, label kTextDim, hover lifts to the ON
+    // fill. Not IconToggle's accent fill. Flips `on` on click; returns the click.
     bool SeverityToggle(const char* id, const char* icon, ImVec4 tint, std::size_t count, bool& on);
 
     // ---- colour ---------------------------------------------------------------

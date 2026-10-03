@@ -1346,10 +1346,17 @@ namespace Arcane::Editor
 
     bool SeverityToggle(const char* id, const char* icon, ImVec4 tint, std::size_t count, bool& on)
     {
+        // Visual Studio Error List look (user, 2026-10-03): ON is a faint raised
+        // button with the severity tint; OFF has no fill and a dim label, and
+        // hovering it lifts to the ON fill. Not IconToggle's accent: all three
+        // start ON, and three accent fills read as "selected".
         const std::string label = std::string(icon) + " " + std::to_string(count) + "###" + id;
-        ImGui::PushStyleColor(ImGuiCol_Text, count == 0 ? Theme::kTextDim : tint);
-        const bool clicked = IconToggle(label.c_str(), on);
-        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Text, (on && count != 0) ? tint : Theme::kTextDim);
+        ImGui::PushStyleColor(ImGuiCol_Button, on ? Theme::kButton : Theme::kNone);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? Theme::kButtonHovered : Theme::kButton);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::kButtonActive);
+        const bool clicked = ImGui::Button(label.c_str());
+        ImGui::PopStyleColor(4);
         if (clicked) on = !on;
         return clicked;
     }
