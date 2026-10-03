@@ -48,6 +48,7 @@
 #include <Arcane/Mesh/MeshAsset.hpp>   // Save/LoadMeshAsset (MeshDocument factory + peek)
 #include <Arcane/Plugin/PluginABI.hpp>   // Arcane::kGamePluginABIVersion (StagePluginLoad's failure banner)
 #include "App/EditorTitle.hpp"   // TitleParts / FormatOsTitle (UpdateWindowTitle, CurrentTitleParts)
+#include "App/PluginLoadFailure.hpp"   // DescribePluginLoadFailure (StagePluginLoad's failure banner)
 #include "Documents/InputActionsDocument.hpp"
 #include <Arcane/Project/AssetId.hpp>    // AssetId::FromGuid (sprite-material resolver)
 #include <Arcane/Project/Project.hpp>
@@ -1162,19 +1163,21 @@ namespace Arcane::Editor
                 // the "no game module" branch below produces on purpose (every
                 // m_plugin-> use in MainLoop is optional-guarded, per this
                 // function's opening comment), and a detailed banner -- naming
-                // the required ABI -- surfaces through m_modalErrors as the
-                // "Open Project Failed" modal (EditorAppFrame.cpp) once MainLoop
+                // the required ABI -- surfaces through m_modalErrors as a modal
+                // (EditorAppFrame.cpp; "Open Project Failed" with a project open,
+                // "Game Module Failed to Load" without one) once MainLoop
                 // starts, rather than only a Console line. Since Task 12
                 // (EditorAppProject.cpp) SwitchProject no longer has its own
                 // switch_plugin_load stage -- it MOVES this exact StagePluginLoad
                 // body (this whole function) and runs it verbatim, so a switch
                 // failure hits this SAME branch rather than a mirrored copy.
                 ARC_ERROR("Arcane Editor: failed to load the game module / project plugins");
-                m_modalErrors.Push("Open Project Failed",
-                                     "The project opened, but its game module / plugins "
-                                     "failed to load (see Console).\nCheck the DLL paths in "
-                                     "the manifest and that they are built against ABI " +
-                                     std::to_string(static_cast<int>(Arcane::kGamePluginABIVersion)) + ".");
+                // The banner follows what was attempted: a bare --plugin launch
+                // has no project, so it must not claim one opened.
+                auto failure = Arcane::Editor::DescribePluginLoadFailure(
+                    m_runtime->CurrentProject() != nullptr, gameModule,
+                    static_cast<int>(Arcane::kGamePluginABIVersion));
+                m_modalErrors.Push(std::move(failure.title), std::move(failure.body));
                 m_plugin.reset();
             }
         }
