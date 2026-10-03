@@ -117,6 +117,13 @@ namespace Arcane
                                                &ExplainCommand, this);
         (void)listed;
         (void)explained;
+        // node-page phase s8.2: the command line's history depth. Registered on
+        // EVERY registry (test registries included), so through CVarDesc rather
+        // than ARC_CVAR (which targets Get() only). ConsoleModel reads it.
+        const CVarHandle history = Register(CVarDesc{ "console.historySize", CVarType::Int32, CVarValue::Int32(64),
+                                                      CVarValue::Int32(1), CVarValue::Int32(1024), CVarFlags::Archive,
+                                                      "Command-line history depth.", "engine" });
+        (void)history;
     }
 
     CVarRegistry::~CVarRegistry() { delete m; }
@@ -421,6 +428,19 @@ namespace Arcane
             if (Any(slot.flags, CVarFlags::Hidden)) continue;
             if (Any(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
             out.push_back(CVarListEntry{ slot.name, slot.help, slot.type, slot.flags });
+        }
+        return out;
+    }
+
+    std::vector<CVarListEntry> CVarRegistry::ListCommands() const
+    {
+        std::vector<CVarListEntry> out;
+        for (const Command& command : m->commands)
+        {
+            if (!command.alive) continue;
+            if (Any(command.flags, CVarFlags::Hidden)) continue;
+            if (Any(command.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            out.push_back(CVarListEntry{ command.name, command.help, CVarType::Bool, command.flags });
         }
         return out;
     }

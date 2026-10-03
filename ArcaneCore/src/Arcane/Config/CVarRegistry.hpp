@@ -125,6 +125,9 @@ namespace Arcane
 
         [[nodiscard]] std::optional<CVarExplain> Explain(std::string_view name) const;
         [[nodiscard]] std::vector<CVarListEntry> List() const;   // skips Hidden; skips Dev if compiled out
+        // Live commands, with List()'s rule (skips Hidden; skips Dev when
+        // compiled out). `type` is meaningless for a command (left Bool).
+        [[nodiscard]] std::vector<CVarListEntry> ListCommands() const;
         [[nodiscard]] ExecResult Execute(std::string_view line, Permission permission,
                                         SetBy by = SetBy::Console);
 

@@ -7,11 +7,13 @@
 #include <Arcane/Base/Log.hpp>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
 #include <string>
+#include <vector>
 
 using namespace Arcane;
 
@@ -471,4 +473,67 @@ TEST_CASE("log.level exists with range 0..6 and its publish drives the engine lo
     REQUIRE(reg.Set(h, CVarValue::Int32(before), SetBy::Code) == SetResult::Applied);   // leave the suite's logging as found
     reg.Publish();
     REQUIRE(Arcane::Log::Engine()->level() == static_cast<spdlog::level::level_enum>(before));
+}
+
+TEST_CASE("ListCommands lists live commands with List's Hidden/Dev rule; Complete covers them", "[cvar]") {
+    CVarRegistry reg;
+    bool sawList = false;
+    for (const CVarListEntry& e : reg.ListCommands()) sawList = sawList || e.name == "cvarlist";
+    REQUIRE(sawList);
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "cvar.knob", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    ConsoleModel model;
+    model.SetInput("cvar");
+    REQUIRE(model.Complete(reg) == std::vector<std::string>{ "cvar.knob", "cvar_explain", "cvarlist" });   // sorted
+}
+
+TEST_CASE("CompleteInput: one match takes the name and a space; several take the common prefix and list them", "[cvar]") {
+    CVarRegistry reg;
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.speed", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    REQUIRE_FALSE(reg.Register(CVarDesc{ "game.spawnRate", CVarType::Int32, CVarValue::Int32(1), {}, {}, {}, "", "engine" }).IsStale());
+    ConsoleModel model;
+    model.SetInput("game.spe");
+    REQUIRE(model.CompleteInput(reg));
+    REQUIRE(model.Input() == "game.speed ");
+    model.SetInput("game.s");
+    const std::size_t lines = model.Lines().size();
+    REQUIRE(model.CompleteInput(reg));
+    REQUIRE(model.Input() == "game.sp");
+    REQUIRE(model.Lines().size() == lines + 1);
+    REQUIRE(model.Lines().back().text.find("game.spawnRate") != std::string::npos);
+    REQUIRE_FALSE(model.CompleteInput(reg));     // already the common prefix: nothing changes (the list repeats)
+    model.SetInput("zzz");
+    REQUIRE_FALSE(model.CompleteInput(reg));
+}
+
+TEST_CASE("Console history: Up/Down with the draft restored, consecutive duplicates skipped, capped by console.historySize", "[cvar]") {
+    CVarRegistry reg;
+    const CVarHandle cap = reg.Find("console.historySize");
+    REQUIRE_FALSE(cap.IsStale());
+    REQUIRE(reg.Get(cap)->AsInt32() == 64);
+    ConsoleModel model;
+    REQUIRE_FALSE(model.HistoryPrev());          // empty history
+    for (const char* line : { "cvarlist", "cvarlist", "cvar_explain cheats" })
+    {
+        model.SetInput(line);
+        model.Submit(reg, Permission::Editor);
+    }
+    REQUIRE(model.History().size() == 2);        // the duplicate was skipped
+    model.SetInput("dra");
+    REQUIRE(model.HistoryPrev());
+    REQUIRE(model.Input() == "cvar_explain cheats");
+    REQUIRE(model.HistoryPrev());
+    REQUIRE(model.Input() == "cvarlist");
+    REQUIRE_FALSE(model.HistoryPrev());          // at the oldest
+    REQUIRE(model.HistoryNext());
+    REQUIRE(model.HistoryNext());
+    REQUIRE(model.Input() == "dra");             // past the newest: the draft is back
+    REQUIRE_FALSE(model.HistoryNext());
+
+    REQUIRE(reg.Set(cap, CVarValue::Int32(2), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    for (const char* line : { "a", "b", "c" }) { model.SetInput(line); model.Submit(reg, Permission::Editor); }
+    REQUIRE(model.History() == std::deque<std::string>{ "b", "c" });
+    model.SetInput("");
+    model.Submit(reg, Permission::Editor);       // empty: not recorded
+    REQUIRE(model.History().size() == 2);
 }
