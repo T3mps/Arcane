@@ -6,6 +6,7 @@
 #include <Arcane/Input/InputBindingProfile.hpp>
 #include <Arcane/Input/InputRebindOperation.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -29,6 +30,10 @@ namespace Arcane
         void BeginFixedStep();
         [[nodiscard]] Guid ProjectId() const noexcept { return projectId_; }
         [[nodiscard]] bool Configured() const noexcept { return asset_.has_value(); }
+        // Bumps on every successful Configure (cold or same-project re-entry)
+        // and every Clear: an ActionRef (GameInput.hpp) re-resolves its cached
+        // action id when this moves (input-seam spec s4).
+        [[nodiscard]] std::uint64_t Generation() const noexcept { return generation_; }
 
         [[nodiscard]] std::optional<Guid> FindAction(std::string_view map,
                                                      std::string_view action) const;
@@ -98,5 +103,6 @@ namespace Arcane
         std::filesystem::path profileRoot_;
         std::string profileName_ = "Default";
         mutable std::unordered_set<std::string> reportedQueries_;
+        std::uint64_t generation_ = 0;
     };
 }

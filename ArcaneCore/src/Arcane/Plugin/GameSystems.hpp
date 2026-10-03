@@ -14,7 +14,7 @@
 // system instance: each world instantiates only the entries matching its role.
 //
 // Static initialization does not define semantic system order. Automatic
-// systems must express dependencies with Astra::Before/After traits; systems
+// systems must express dependencies with Arcane::Before/After traits; systems
 // whose construction requires runtime values remain explicit RegisterSystem
 // calls in GameModule::OnInit. Registrar nodes contain only pointers and enums,
 // so unloading a DLL never runs a registrar destructor under the loader lock.
@@ -22,8 +22,9 @@
 
 #include <Arcane/Plugin/SystemFactory.hpp>
 
+#include <Arcane/Ecs.hpp>   // Arcane::SystemScheduler + the parameter-system vocabulary
+
 #include <Astra/Core/TypeID.hpp>
-#include <Astra/System/SystemScheduler.hpp>
 
 #include <cstddef>
 #include <string>
@@ -57,10 +58,23 @@ namespace Arcane::Game
                               Args... args)
         {
             table.Add(SystemFactoryEntry{
+                // ARCANE_INTERNAL_BEGIN: the entry name is Astra's TypeID spelling of the system type
                 std::string(Astra::TypeID<System>::Name()), mask, phase,
-                [args...](Astra::SystemScheduler& scheduler)
+                // ARCANE_INTERNAL_END
+                [args...](Arcane::SystemScheduler& scheduler)
                 {
-                    std::ignore = scheduler.AddSystem<System>(args...);
+                    // Two system shapes (input-seam spec s5.2): a PARAMETER
+                    // system (operator() over View&/Res/ResMut/Commands --
+                    // the game-facing style) goes through Astra's param path,
+                    // keyed by its own type and ordered by its SystemTraits;
+                    // a registry-style system (operator()(Registry&) + traits)
+                    // through the typed path, as before.
+                    // ARCANE_INTERNAL_BEGIN: the shape test is Astra's own concept
+                    if constexpr (Astra::ParamFunctor<System>)
+                        std::ignore = scheduler.AddSystem(System{args...});
+                    else
+                        std::ignore = scheduler.AddSystem<System>(args...);
+                    // ARCANE_INTERNAL_END
                 },
                 nullptr });
         }

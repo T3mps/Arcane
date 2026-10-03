@@ -59,6 +59,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Arcane
@@ -575,6 +576,22 @@ namespace Arcane
         ASTRA_NODISCARD bool HasError() const noexcept { return m_error; }
         ASTRA_NODISCARD const std::string& Error() const noexcept { return m_errorMsg; }
 
+        // Top-level keys of the input object no reflected field (or AliasName)
+        // read -- a field removed or renamed since the file was written. Not an
+        // error: absent-vs-present tolerance is the forward/back-compat story;
+        // the scene loader warns once per type and key (input-seam spec s7).
+        // Only keys a Visit LOOKED UP count as consumed, so a key whose field
+        // is now Serializable(false) (never visited) is reported too -- a
+        // re-save drops it just the same, and the report only warns.
+        ASTRA_NODISCARD std::vector<std::string> UnconsumedKeys() const
+        {
+            std::vector<std::string> out;
+            if (!m_in.is_object()) return out;
+            for (auto it = m_in.begin(); it != m_in.end(); ++it)
+                if (!m_consumed.contains(it.key())) out.push_back(it.key());
+            return out;
+        }
+
     private:
         void Fail(std::string msg)
         {
@@ -585,7 +602,11 @@ namespace Arcane
         const nlohmann::json* Find(const Astra::FieldInfo& field) const
         {
             auto it = m_in.find(std::string(field.name));
-            if (it != m_in.end()) return &(*it);
+            if (it != m_in.end())
+            {
+                m_consumed.insert(std::string(field.name));
+                return &(*it);
+            }
 
             const nlohmann::json* found = nullptr;
             field.ForEachAttribute<Astra::AliasName>([&](const Astra::AliasName& a)
@@ -593,7 +614,11 @@ namespace Arcane
                 if (!found)
                 {
                     auto ai = m_in.find(std::string(a.name));
-                    if (ai != m_in.end()) found = &(*ai);
+                    if (ai != m_in.end())
+                    {
+                        m_consumed.insert(std::string(a.name));
+                        found = &(*ai);
+                    }
                 }
             });
             return found;
@@ -631,5 +656,6 @@ namespace Arcane
         const nlohmann::json& m_in;
         bool m_error = false;
         std::string m_errorMsg;
+        mutable std::unordered_set<std::string> m_consumed;   // keys Find matched (UnconsumedKeys)
     };
 }

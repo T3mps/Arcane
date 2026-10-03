@@ -4,6 +4,7 @@
 #include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
+#include <Arcane/Input/GameInput.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Render/RenderSystems.hpp>       // RenderSubmissionSystem -- instantiated IN this module
 #include <Arcane/Scene/SceneResources.hpp>
@@ -71,12 +72,31 @@ namespace Arcane
 
     void ClientRuntime::SetInputSnapshot(const InputSnapshot& snap) noexcept { m_pres.input = snap; }
     const InputSnapshot& ClientRuntime::Input() const noexcept { return m_pres.input; }
+
+    // Publish the read-only gameplay-input view (input-seam spec s4). Called on
+    // every configure, every frame and every fixed step, so a swapped-in
+    // registry carries it again on the very next pass.
+    static void PublishGameInput(Runtime& core, const LocalInputUser& user)
+    {
+        core.Registry().SetResource<::Arcane::GameInput>(::Arcane::GameInput{&user});
+    }
+
     bool ClientRuntime::ConfigureGameInput(const InputActionAsset& asset, const Guid& projectId)
-    { return m_pres.gameInput.Configure(asset, projectId); }
+    {
+        const bool ok = m_pres.gameInput.Configure(asset, projectId);
+        PublishGameInput(m_core, m_pres.gameInput);
+        return ok;
+    }
     void ClientRuntime::UpdateGameInput(double dt, const InputSnapshot& snapshot)
-    { m_pres.gameInput.Update(dt, snapshot); }
+    {
+        m_pres.gameInput.Update(dt, snapshot);
+        PublishGameInput(m_core, m_pres.gameInput);
+    }
     void ClientRuntime::BeginGameInputFixedStep()
-    { m_pres.gameInput.BeginFixedStep(); }
+    {
+        m_pres.gameInput.BeginFixedStep();
+        PublishGameInput(m_core, m_pres.gameInput);
+    }
 
     void ClientRuntime::SetImGui(void* context, void* alloc, void* freeFn, void* userData) noexcept
     {

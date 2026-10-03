@@ -14,15 +14,13 @@
 // embedded server world run with no client at all.
 
 #include <Arcane/Core/Api.hpp>
+#include <Arcane/Ecs.hpp>   // the Arcane:: names (aliases) this header's declarations spell; Result is by value
 #include <Arcane/Guid.hpp>
 #include <Arcane/Project/AssetRegistry.hpp>   // AssetRegistry::ScanProgressFn (OpenProject's progress param) -- light header, not Project.hpp
 #include <Arcane/Project/ProjectOpenOptions.hpp>   // ProjectOpenOptions (OpenProject's opts param) -- also light, also not Project.hpp
 #include <Arcane/Plugin/SystemFactory.hpp>   // NetMode (a ctor default argument) + the factory table this Runtime instantiates from
 #include <Arcane/Sim/RunLoop.hpp>
 #include <Arcane/Sim/SystemSchedulers.hpp>
-
-#include <Astra/Core/Result.hpp>
-#include <Astra/Serialization/SerializationError.hpp>
 
 #include <glm/glm.hpp>
 
@@ -32,9 +30,6 @@
 #include <optional>
 #include <span>
 #include <vector>
-
-namespace Astra { class Registry; class ComponentRegistry; class TypeContext; }
-namespace Mosaic { struct IWorkScheduler; }   // the shared data-parallel seam (Astra aliases this)
 
 namespace Arcane
 {
@@ -81,7 +76,7 @@ namespace Arcane
         // SECONDARY-WORLD ctor: build this world on an EXISTING ComponentRegistry --
         // the PRIMARY Runtime's (spec s4, the N-worlds-on-one-module invariant).
         //
-        // WHY IT EXISTS. A game module opens its Astra::ComponentModule on the
+        // WHY IT EXISTS. A game module opens its Arcane::ComponentModule on the
         // primary Runtime's registry and nowhere else (GameModule.hpp), so that is
         // the only registry its component descriptors reach. A secondary world with
         // a registry of its own would resolve NONE of the module's types: scene
@@ -96,7 +91,7 @@ namespace Arcane
         // whose Components() is not the primary's, so the invariant is enforced at
         // the one place it can be.
         Runtime(ProcessContext& process, NetMode mode,
-                std::shared_ptr<Astra::ComponentRegistry> sharedComponents);
+                std::shared_ptr<::Arcane::ComponentRegistry> sharedComponents);
         ~Runtime();
 
         Runtime(const Runtime&) = delete;
@@ -130,12 +125,12 @@ namespace Arcane
         [[nodiscard]] INetDriver*  NetDriver() const noexcept;
 
         // --- substrate the plugin registers into / the host drives ---
-        Astra::Registry&        Registry()      noexcept;
-        SystemSchedulers&       Schedulers()    noexcept;
-        RunLoop&                Loop()          noexcept;
-        Astra::TypeContext*     TypeContext()   noexcept;
-        Mosaic::IWorkScheduler* WorkScheduler() noexcept;
-        ITaskExecutor*          TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
+        ::Arcane::Registry&       Registry()      noexcept;
+        SystemSchedulers&         Schedulers()    noexcept;
+        RunLoop&                  Loop()          noexcept;
+        ::Arcane::TypeContext*    TypeContext()   noexcept;
+        ::Arcane::IWorkScheduler* WorkScheduler() noexcept;
+        ITaskExecutor*            TaskExecutor()  noexcept;   // enki pool, worker-index ParallelFor face
         // The shared background job queue (F2b Task 12): JobSystem::Submit for
         // fire-and-forget CPU work off the main thread -- the editor's
         // background texture cook (Arcane::Editor::CookQueue) is the first
@@ -143,10 +138,10 @@ namespace Arcane
         // already expose two other faces of; this is the third. Reference,
         // not pointer: the JobSystem is a fixed part of this Runtime's
         // substrate and outlives every caller that could hold the reference.
-        JobSystem&              Jobs() noexcept;
-        std::shared_ptr<Astra::ComponentRegistry> Components() noexcept;
-        Assets&                 AssetsFacade() noexcept;
-        Config&                 Configuration() noexcept;   // layered engine+project config (Slice 3)
+        JobSystem&                Jobs() noexcept;
+        std::shared_ptr<::Arcane::ComponentRegistry> Components() noexcept;
+        Assets&                   AssetsFacade() noexcept;
+        Config&                   Configuration() noexcept;   // layered engine+project config (Slice 3)
 
         // --- the client seam (Core-DLL split, spec s2 + plan 1 P6) ---
         // A ClientRuntime (ArcaneClient.dll) attaches itself here at construction. Core
@@ -277,7 +272,7 @@ namespace Arcane
         // Registry::Save() -> framed snapshot bytes. Returns a Result so a Save
         // failure surfaces as an actionable error at the call site rather than an
         // empty-but-"ok" vector that masks data loss as a later reload failure.
-        Astra::Result<std::vector<std::byte>, Astra::SerializationError> SnapshotRegistry() const;
+        ::Arcane::Result<std::vector<std::byte>, ::Arcane::SerializationError> SnapshotRegistry() const;
 
         // Swaps in a registry deserialized from bytes (3.3 Load keeps the workScheduler) and rebinds the
         // RunLoop. The SystemSchedulers are KEPT; the host clears + re-registers systems around a reload
@@ -305,7 +300,7 @@ namespace Arcane
         // calls this, and ClearSystems calls it again after clearing, so every
         // PluginHost load/reload/unload path keeps them. Idempotent (per-system
         // HasSystem guards). A game module registers ONLY its own systems and
-        // places them with Astra::Before/After against these types
+        // places them with Arcane::Before/After against these types
         // (GameModule.hpp).
         // EnsurePhysics runs once per frame before Loop().Advance
         // (beside SetRenderContext): it mints PhysicsResource + PhysicsInterp
@@ -325,9 +320,9 @@ namespace Arcane
         // reconciled is authoring state (the paused reconcile zeroes a body's
         // velocity on every author move, by design), and Play must start the
         // way ArcaneRuntime boots -- bodies at their authored poses WITH their
-        // authored RigidBody2D::velocity, applied by PASS 2's mint. The same
-        // strip RestoreRegistry performs on Stop, so Play and Stop are
-        // symmetric. Lives here rather than in the editor because destroying
+        // authored RigidBody2D::velocity, applied by PASS 2's mint. A restore
+        // on Stop never carries the pair either (both are transient resources),
+        // so Play and Stop are symmetric. Lives here rather than in the editor because destroying
         // PhysicsResource destroys the PhysicsWorld, and ArcaneEditor.exe does
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();

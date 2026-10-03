@@ -41,10 +41,14 @@
 #include <Json.hpp>
 
 #include <algorithm>
+#include <mutex>
 #include <new>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Arcane::Scene
@@ -329,6 +333,19 @@ namespace Arcane::Scene
         // partially-populated component with no signal anything went wrong.
         enum class AddComponentResult { SkippedUnknownType, SkippedUnregistered, Added, Error };
 
+        // True the FIRST time (type, key) is met as an unknown field, so a
+        // scene loaded every frame of an editor session warns once. The set is
+        // a function-local static of a header inline, so each binary that
+        // compiles a scene load keeps its own: "once" is per module, which at
+        // worst repeats a warning once per host/plugin that loads the scene.
+        inline bool NoteUnknownField(std::string_view type, std::string_view key)
+        {
+            static std::mutex m;
+            static std::set<std::pair<std::string, std::string>> seen;
+            std::lock_guard lock(m);
+            return seen.emplace(std::string(type), std::string(key)).second;
+        }
+
         // Add-by-descriptor factory: instantiate a component by its reflected type
         // name and populate it from JSON via the reflection reader. Never throws.
         //
@@ -368,6 +385,14 @@ namespace Arcane::Scene
                                                    // latches HasError() on an unsupported field TYPE
                                                    // and on a key that IS present but unreadable
                                                    // (wrong JSON type / arity) -- see ReflectionJson.hpp
+                // A key no field read: a field removed or renamed since the file
+                // was written (input-seam spec s7). Still loads; warned once per
+                // (type, key) per process.
+                for (const std::string& key : reader.UnconsumedKeys())
+                    if (NoteUnknownField(typeName, key))
+                        ARC_WARN("scene load: \"{}\" has no field \"{}\" -- its value is ignored and a re-save "
+                                 "drops it (a field removed or renamed; an AliasName keeps a rename)",
+                                 typeName, key);
                 fieldError = reader.HasError();
                 if (fieldError && error)
                     *error = reader.Error();

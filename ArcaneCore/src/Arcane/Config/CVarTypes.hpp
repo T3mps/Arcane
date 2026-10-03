@@ -54,7 +54,7 @@ namespace Arcane
     {
         return static_cast<CVarFlags>(static_cast<std::uint32_t>(a) & static_cast<std::uint32_t>(b));
     }
-    constexpr bool Any(CVarFlags set, CVarFlags bit) noexcept
+    constexpr bool HasFlag(CVarFlags set, CVarFlags bit) noexcept
     {
         return (static_cast<std::uint32_t>(set) & static_cast<std::uint32_t>(bit)) != 0;
     }

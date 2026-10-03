@@ -243,3 +243,24 @@ TEST_CASE("ClientRuntime: a re-Configure does not re-fire a control held across 
     runtime.UpdateGameInput(1.0 / 60.0, {});
     CHECK(runtime.GameInput().Released(*jump));                     // the held state was carried, not zeroed
 }
+
+TEST_CASE("LocalInputUser::Generation moves on every Configure and Clear, never on a failed Configure", "[client][input]")
+{
+    Arcane::LocalInputUser user;
+    const auto project = *Arcane::Guid::FromString("66666666-6666-4666-8666-666666666666");
+    const std::uint64_t g0 = user.Generation();
+
+    REQUIRE(user.Configure(RuntimeInputAsset(), project));          // cold
+    const std::uint64_t g1 = user.Generation();
+    CHECK(g1 > g0);
+
+    REQUIRE(user.Configure(RuntimeInputAsset(), project));          // same-project re-entry
+    const std::uint64_t g2 = user.Generation();
+    CHECK(g2 > g1);
+
+    CHECK_FALSE(user.Configure(RuntimeInputAsset(), Arcane::Guid::Nil()));   // refused
+    CHECK(user.Generation() == g2);
+
+    user.Clear();
+    CHECK(user.Generation() > g2);
+}

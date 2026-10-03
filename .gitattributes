@@ -37,6 +37,12 @@
 *.yaml  text eol=lf
 *.toml  text eol=lf
 
+# -- Byte-sensitive test fixtures ---------------------------------------------
+# The committed editor layout seed: EditorWitnessTest (E7) edits it with
+# LF-anchored finds (its whole Ids=1 line), and an autocrlf checkout used to
+# hand it CRLF lines, so the witness went red on the checkout, not the code.
+ReferenceProject/Saved/verify-layout.ini text eol=lf
+
 # -- Binaries (no diff, no eol conversion) -------------------------------------
 *.exe   binary
 *.dll   binary

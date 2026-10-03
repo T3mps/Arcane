@@ -48,7 +48,8 @@ namespace Arcane::Editor
         // here makes the first Play frame's EnsurePhysics mint a fresh one,
         // whose PASS 2 applies every authored velocity (2026-09-12 review).
         // AFTER the snapshot: what Stop restores is the registry, and the world
-        // is never part of it either way (RestoreRegistry strips the same two).
+        // is never part of it either way (both physics resources are transient:
+        // no snapshot carries them).
         runtime.ResetPhysics();
 
         // The TOPOLOGY switch happens AFTER the snapshot and the physics reset, so

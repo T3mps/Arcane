@@ -36,12 +36,14 @@ namespace Arcane::Log
     // Mosaic diagnostics: the log SINK that forwards Mosaic/Manifold2D/Astra
     // records into the engine logger (Engine()). Defined in Log.cpp so it lives
     // once, in Arcane.dll, routing every module's records to one spdlog instance.
+    // ARCANE_INTERNAL_BEGIN: the Mosaic log-sink seam is the library's own install point
     ARCANE_CORE_API Mosaic::LogSink MosaicSink() noexcept;
 
     // Install the sink into the CALLING module's Mosaic storage. Inline on
     // purpose: Mosaic's g_logSink is a per-module inline atomic, so each module
     // (Arcane.dll, ArcaneRuntime.exe, the plugin, tests) installs into its own copy.
     inline void InstallMosaicSink() noexcept { Mosaic::SetLogSink(MosaicSink(), nullptr); }
+    // ARCANE_INTERNAL_END
 
     // ------------------------------------------------------------------
     // File sink + backlog (spec S5.6, crash window plan 1 task 4).

@@ -1,9 +1,9 @@
-#include <Arcane/Scene/PhysicsCommands.hpp>
+// Arcane::Physics2D (input-seam spec 2026-10-02 s5.3): the game-facing physics
+// commands as exported members of the published PhysicsResource. The body
+// handle comes from entityToBody, never PhysicsBodyRef.
 
 #include <Arcane/Scene/PhysicsComponents.hpp>
 #include <Arcane/Scene/PhysicsSystem.hpp>
-
-#include <Astra/Registry/Registry.hpp>
 
 #include <cmath>
 
@@ -26,6 +26,10 @@ namespace Arcane
                 return true;
 
             // A sleeping body's contacts need not appear in the active solver.
+            // A resting body sits up to the linear slop INSIDE its support, and
+            // a cast that starts overlapped answers t=0 with a zero normal
+            // (Box2D-v3 parity), so the cast starts one slop higher and travels
+            // one slop further: the reach below the feet stays 0.05 m.
             Phys::ShapeCastOpts opts;
             opts.movers = true;
             opts.exclude = handle;
@@ -34,9 +38,10 @@ namespace Arcane
                 const auto fixture = world.GetBodyFixture(handle, i);
                 if (!world.IsValid(fixture))
                     continue;
+                const Phys::Vec2 origin = world.GetFixtureWorldPos(fixture);
                 const auto hit = world.ShapeCast(world.GetFixtureShape(fixture),
-                                                 world.GetFixtureWorldPos(fixture),
-                                                 Phys::Vec2(0, Phys::Real(-0.05)), opts,
+                                                 Phys::Vec2(origin.x, origin.y + Phys::kLinearSlop),
+                                                 Phys::Vec2(0, -(Phys::Real(0.05) + Phys::kLinearSlop)), opts,
                                                  world.GetFixtureWorldAngle(fixture));
                 if (hit && hit->normal.y > Phys::Real(0.5))
                     return true;
@@ -45,41 +50,37 @@ namespace Arcane
         }
     }
 
-    BodyMotion2D GetBodyMotion2D(Astra::Registry& registry, Astra::Entity entity)
+    BodyMotion2D PhysicsResource::Motion(Astra::Entity entity, const RigidBody2D& body) const
     {
         BodyMotion2D motion;
-        const RigidBody2D* rigidBody = registry.GetComponent<RigidBody2D>(entity);
-        if (!rigidBody || rigidBody->type != Phys::BodyType::Dynamic)
+        if (body.type != Phys::BodyType::Dynamic)
             return motion;
-        motion.velocityX = rigidBody->velocity.x;
-        motion.velocityY = rigidBody->velocity.y;
+        motion.velocityX = body.velocity.x;
+        motion.velocityY = body.velocity.y;
 
-        PhysicsResource* physics = registry.GetResource<PhysicsResource>();
-        const PhysicsBodyRef* body = registry.GetComponent<PhysicsBodyRef>(entity);
-        if (!physics || !physics->world || !body || !physics->world->IsValid(body->handle))
+        const auto it = entityToBody.find(entity);
+        if (!world || it == entityToBody.end() || !world->IsValid(it->second))
             return motion;
-        const Phys::Vec2 velocity = physics->world->Velocity(body->handle);
+        const Phys::Vec2 velocity = world->Velocity(it->second);
         motion.velocityX = static_cast<float>(velocity.x);
         motion.velocityY = static_cast<float>(velocity.y);
         motion.bodyReady = true;
         if (velocity.y <= Phys::Real(0))
-            motion.supported = HasFloorSupport(*physics->world, body->handle);
+            motion.supported = HasFloorSupport(*world, it->second);
         return motion;
     }
 
-    void SetBodyVelocity2D(Astra::Registry& registry, Astra::Entity entity,
-                           float velocityX, float velocityY)
+    void PhysicsResource::SetVelocity(Astra::Entity entity, RigidBody2D& body,
+                                      float velocityX, float velocityY)
     {
         if (!std::isfinite(velocityX) || !std::isfinite(velocityY))
             return;
-        RigidBody2D* rigidBody = registry.GetComponent<RigidBody2D>(entity);
-        if (!rigidBody || rigidBody->type != Phys::BodyType::Dynamic)
+        if (body.type != Phys::BodyType::Dynamic)
             return;
-        rigidBody->velocity = glm::vec2(velocityX, velocityY);
+        body.velocity = glm::vec2(velocityX, velocityY);
 
-        PhysicsResource* physics = registry.GetResource<PhysicsResource>();
-        const PhysicsBodyRef* body = registry.GetComponent<PhysicsBodyRef>(entity);
-        if (physics && physics->world && body && physics->world->IsValid(body->handle))
-            physics->world->SetVelocity(body->handle, Phys::Vec2(velocityX, velocityY));
+        const auto it = entityToBody.find(entity);
+        if (world && it != entityToBody.end() && world->IsValid(it->second))
+            world->SetVelocity(it->second, Phys::Vec2(velocityX, velocityY));
     }
 }

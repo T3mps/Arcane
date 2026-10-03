@@ -40,4 +40,17 @@ namespace Arcane::HotReloadTest
     // registrar and the pin would silently stop pinning anything. It is deliberately
     // absent from every other case, and its one case resolves it only AFTER Unload().
     struct ProbeResource { int value = 0; };
+
+    // The PlaySession path discriminator (EditorPlayModeTest, "PlaySession routes
+    // Play/Stop through the hosted module's SaveState/LoadState"): a TRANSIENT
+    // resource that ONLY this module's OnLoadState sets, counting its runs.
+    // Registry::Save skips transient resources, so no snapshot carries it and a
+    // plain Runtime::RestoreRegistry can never bring it back -- its presence after
+    // Stop says the module's LoadState ran, which SceneRoot (a snapshotted
+    // resource) cannot.
+    struct LoadStateMarker
+    {
+        int loads = 0;
+        static constexpr bool AstraTransientResource = true;
+    };
 }

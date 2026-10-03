@@ -3,9 +3,9 @@ change them in the Astra repo and re-run scripts\sync-astra.ps1, or the next
 sync silently reverts your edit.
 
 source  : D:\dev\starworks\Astra
-commit  : 975cdb776361ebbb4b539a8cb3b52f5ef905ed6d
+commit  : c46a90ede5584c5aae5692da02889e2f8f35425b
 branch  : dev
-subject : feat(registry): GetInstanceId -- a per-construction id from a static atomic (ParallelCommandBuffer idiom); Load mints a fresh one
-synced  : 2026-10-01 05:13:17
+subject : feat(resources): AstraTransientResource -- a resource that opts out is never written by ResourceStorage::Serialize, so Save/Load never revives it (a block from before the opt-out is decoded and discarded); for republished state such as a clock, an input view holding a pointer, or a physics world
+synced  : 2026-10-02 08:30:19
 scope   : include/ only (Arcane compiles nothing else from this tree --
           see Arcane/premake5.lua IncludeDir["Astra"])

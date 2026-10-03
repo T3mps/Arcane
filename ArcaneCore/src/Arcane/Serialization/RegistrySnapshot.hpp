@@ -4,8 +4,9 @@
 //
 // A snapshot is the Astra registry blob (entities/components/relations) plus an
 // engine-side serializable-resource section (ResourceSerialization.hpp). Astra's
-// Registry::Save() drops all resources, so SnapshotRegistry frames the two
-// together:
+// Registry::Save() carries resources only through their binary Serialize (and
+// never the AstraTransientResource ones), so SnapshotRegistry frames the
+// engine's own section beside it:
 //
 //   [u32 magic 'ARSS'][u16 version][u32 registryLen][registry blob][resource section]
 //

@@ -155,8 +155,9 @@ namespace Arcane
         // A TRANSIENT registry resource: never serialized, rebuilt on any
         // registry swap (a mirror from a swapped registry has a new
         // generation, and the device side sees the mismatch as a full
-        // rebuild). Registry::Save excludes resources entirely regardless;
-        // the no-op Serialize keeps the container members off Astra's
+        // rebuild). Registry::Save writes it through the no-op Serialize, so
+        // a restore default-constructs a mirror with a NEW generation; the
+        // no-op Serialize also keeps the container members off Astra's
         // reflected/trivially-copyable auto-serialization path at
         // registration, the same reason SceneVisibility (VisibilitySystem.hpp)
         // and BoundsSystemState (BoundsSystem.hpp) carry one.

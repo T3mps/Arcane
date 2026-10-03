@@ -55,9 +55,11 @@ namespace Arcane
         std::uint64_t lastSpriteGen = 0;
         std::vector<Astra::Entity> scratch;
 
-        // Transient derived state; Registry::Save excludes resources entirely.
-        // The no-op Serialize keeps the vector member off Astra's trivially-
-        // copyable path (TransformOrder carries one for the same reason).
+        // Transient derived state. Registry::Save writes it through the no-op
+        // Serialize below, so a restore brings back an EMPTY cache -- the same
+        // as a fresh one. The no-op Serialize also keeps the vector member off
+        // Astra's trivially-copyable path (TransformOrder carries one for the
+        // same reason).
         template<typename Archive> void Serialize(Archive& /*ar*/) {}
     };
 

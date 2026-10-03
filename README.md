@@ -11,7 +11,7 @@ https://starworks.dev/arcane
 | Project | What it is |
 |---|---|
 | `ArcaneCore` | Static lib: networking, types, logging, shared header-only utilities. Namespaced include root (`#include <Arcane/...>`), zero game references -- liftable into any project. |
-| `ArcaneClient` | The engine DLL: SDL3 window/input, NRI device (D3D12 + Vulkan, 2 frames in flight), linear-HDR Canvas -> sort-keyed Batcher2D -> ACES tonemap, MSDF text, asset cache, ImGui integration, enkiTS job system, ECS runtime (Astra), 2D physics (Manifold2D), scene save/load, plugin host. |
+| `ArcaneClient` | The engine DLL: SDL3 window/input, NRI device (D3D12 + Vulkan, 2 frames in flight), linear-HDR Canvas -> sort-keyed Batcher2D -> ACES tonemap, MSDF text, asset cache, ImGui integration, enkiTS job system, ECS runtime (Astra), exposed to game code as the `Arcane::` facade, 2D physics (Manifold2D), scene save/load, plugin host. |
 | `ArcaneRuntime` | Standalone runtime host: opens an `.arcproj` and runs its game module. `--frames N` is the scripted GPU-verify; F5 = reload with state, F6 = fresh reload. |
 | `ArcaneEditor` | The ImGui-on-NRI editor host (`ArcaneEditor.exe`). |
 | `ArcaneHub` | Tauri-based project launcher; owns the `.arcproj` file association and recents. |
@@ -182,6 +182,59 @@ arcane_game_module("MyGame")   -- SharedLib game module -> Binaries/MyGame.dll
 
 The host hot-reloads the module on rebuild (debounced mtime watcher, state
 preserved), with an ABI gate refusing cross-build mismatches.
+
+### Writing gameplay code
+
+Game code spells only `Arcane::` names. The ECS (Astra), the 2D physics
+(Manifold2D) and the core library (Mosaic) are standalone libraries with
+their own namespaces underneath; `<Arcane/Ecs.hpp>` and
+`<Arcane/Reflection.hpp>` re-export everything a game module needs.
+
+A **component** is reflected plain data:
+
+```cpp
+#include <Arcane/Reflection.hpp>
+
+struct Health { float current = 100.0f; };
+ARCANE_REFLECT_TYPE(Health)
+    ARCANE_REFLECT_FIELD(Health, current)
+        ARCANE_REFLECT_ATTR(Range, 0.0f, 100.0f)
+ARCANE_END_REFLECT_TYPE()
+```
+
+A **system** declares what it touches as parameters -- component views and
+engine resources -- and the scheduler orders and parallelises it from that:
+
+```cpp
+#include <Arcane/Ecs.hpp>
+#include <Arcane/Input/GameInput.hpp>
+#include <Arcane/Scene/PhysicsSystem.hpp>
+
+struct Jumper : Arcane::SystemTraits<Arcane::Before<Arcane::PhysicsSystem>>
+{
+    Arcane::ActionRef jump{"Player", "Jump"};
+
+    void operator()(Arcane::View<Arcane::RigidBody2D>& view,
+                    Arcane::Res<Arcane::Time> time,          // fixedDt, fixedStep, elapsed, ...
+                    Arcane::Res<Arcane::GameInput> input,    // actions from the project's input asset
+                    Arcane::ResMut<Arcane::Physics2D> physics)
+    {
+        if (!input->PressedThisFixedStep(jump)) return;
+        view.ForEach([&](Arcane::Entity e, Arcane::RigidBody2D& body)
+        {
+            const Arcane::BodyMotion2D m = physics->Motion(e, body);
+            if (m.supported) physics->SetVelocity(e, body, m.velocityX, 6.0f);
+        });
+    }
+};
+```
+
+and is registered with one line in its `.cpp`:
+`ARCANE_SYSTEM(MyGame::Jumper, Arcane::RoleMask::Client, Arcane::SystemPhase::FixedUpdate)`.
+
+- **Resources:** `Time` is present in every world. `GameInput` is present in every client world, and a server world has none. A system whose resource is missing is skipped with one log line.
+- **Code outside a system** (a module's `OnUpdate`/`OnDrawUI`) reads the same data with `Registry().GetResource<Arcane::Time>()`. There are no global accessors: one process can hold several worlds (edit, Play, an embedded server, tests).
+- **Templates:** the editor's *Create -> C++ Class* templates emit this shape.
 
 ### Driving it with `arcbuild`
 

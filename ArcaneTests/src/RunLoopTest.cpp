@@ -186,3 +186,146 @@ TEST_CASE("RunLoop unpause does not burst catch-up steps", "[sim][runloop]")
     // Paused frames accumulated NOTHING, so there is no 600-step debt to burn down.
     CHECK(reg.GetResource<Ticks>()->fixed <= 1);
 }
+
+// ---- Arcane::Time (input-seam spec s3) --------------------------------------
+#include <Arcane/Sim/Time.hpp>
+
+namespace
+{
+    // Records the Time each fixed step saw.
+    struct RecordFixedTime
+    {
+        std::vector<Arcane::Time>* seen;
+        explicit RecordFixedTime(std::vector<Arcane::Time>* s) : seen(s) {}
+        void operator()(Astra::Registry& r) const { seen->push_back(*r.GetResource<Arcane::Time>()); }
+    };
+    struct RecordUpdateTime
+    {
+        std::vector<Arcane::Time>* seen;
+        explicit RecordUpdateTime(std::vector<Arcane::Time>* s) : seen(s) {}
+        void operator()(Astra::Registry& r) const { seen->push_back(*r.GetResource<Arcane::Time>()); }
+    };
+}
+
+TEST_CASE("RunLoop publishes Time before every fixed step and before Update", "[sim][runloop][time]")
+{
+    Astra::Registry reg;
+    std::vector<Arcane::Time> fixedSeen, updateSeen;
+    Arcane::SystemSchedulers sch(nullptr);
+    REQUIRE(sch.fixedUpdate.AddSystem<RecordFixedTime>(&fixedSeen).IsOk());
+    REQUIRE(sch.update.AddSystem<RecordUpdateTime>(&updateSeen).IsOk());
+    Arcane::RunLoop loop(reg, sch);
+
+    for (int i = 0; i < 30; ++i) loop.Advance(1.0 / 60.0);
+
+    REQUIRE_FALSE(fixedSeen.empty());
+    REQUIRE(updateSeen.size() == 30);
+    for (std::size_t i = 0; i < fixedSeen.size(); ++i)
+    {
+        CHECK(fixedSeen[i].fixedStep == i + 1);                       // one per step, from 1
+        CHECK(fixedSeen[i].inFixedStep);
+        CHECK(fixedSeen[i].fixedDt == 1.0 / 60.0);
+        CHECK(fixedSeen[i].elapsed == static_cast<double>(i + 1) * (1.0 / 60.0));
+    }
+    const Arcane::Time& last = updateSeen.back();
+    CHECK_FALSE(last.inFixedStep);
+    CHECK(last.fixedStep == fixedSeen.size());
+    CHECK(last.realDt == 1.0 / 60.0);
+    CHECK(last.dt == 1.0 / 60.0);
+    CHECK(last.alpha == loop.Alpha());
+    CHECK_FALSE(last.paused);
+    CHECK(last.timeScale == 1.0);
+}
+
+TEST_CASE("Time: the plugin-callback Advance publishes too, before the plugin's fixed hook", "[sim][runloop][time]")
+{
+    Astra::Registry reg;
+    Arcane::SystemSchedulers sch(nullptr);
+    Arcane::RunLoop loop(reg, sch);
+    std::vector<std::uint64_t> pluginSaw;
+    for (int i = 0; i < 10; ++i)
+        loop.Advance(1.0 / 60.0,
+            [&](double){ pluginSaw.push_back(reg.GetResource<Arcane::Time>()->fixedStep); },
+            [&](double, double){ CHECK_FALSE(reg.GetResource<Arcane::Time>()->inFixedStep); });
+    REQUIRE_FALSE(pluginSaw.empty());
+    for (std::size_t i = 0; i < pluginSaw.size(); ++i) CHECK(pluginSaw[i] == i + 1);
+}
+
+TEST_CASE("Time: time scale shows in dt, the fixed step stays canonical", "[sim][runloop][time]")
+{
+    Astra::Registry reg;
+    Arcane::SystemSchedulers sch(nullptr);
+    Arcane::RunLoop loop(reg, sch);
+    loop.SetTimeScale(0.5);
+    loop.Advance(1.0 / 60.0);
+    const Arcane::Time* t = reg.GetResource<Arcane::Time>();
+    REQUIRE(t);
+    CHECK(t->dt == 0.5 / 60.0);
+    CHECK(t->realDt == 1.0 / 60.0);
+    CHECK(t->fixedDt == 1.0 / 60.0);
+    CHECK(t->timeScale == 0.5);
+}
+
+// Review Focus #2: Play started while paused, then single-stepped; Stop (Rebind).
+TEST_CASE("Time while paused: no steps, dt 0; each single step adds exactly 1; Rebind resets the clock but not the pause",
+          "[sim][runloop][time]")
+{
+    Astra::Registry reg;
+    Arcane::SystemSchedulers sch(nullptr);
+    Arcane::RunLoop loop(reg, sch);
+    loop.SetPaused(true);
+
+    for (int i = 0; i < 5; ++i) loop.Advance(1.0 / 60.0);
+    const Arcane::Time* t = reg.GetResource<Arcane::Time>();
+    REQUIRE(t);
+    CHECK(t->fixedStep == 0);
+    CHECK(t->paused);
+    CHECK(t->dt == 0.0);
+    CHECK(t->realDt == 1.0 / 60.0);
+
+    for (int s = 1; s <= 3; ++s)
+    {
+        loop.RequestSingleStep();
+        loop.Advance(1.0 / 60.0);
+        t = reg.GetResource<Arcane::Time>();
+        CHECK(t->fixedStep == static_cast<std::uint64_t>(s));
+        CHECK(t->paused);
+        CHECK(t->dt == 0.0);
+    }
+
+    Astra::Registry swapped;
+    loop.Rebind(swapped);
+    CHECK(loop.IsPaused());                                  // host mode survives (RunLoop.hpp:138)
+    loop.RequestSingleStep();
+    loop.Advance(1.0 / 60.0);
+    const Arcane::Time* t2 = swapped.GetResource<Arcane::Time>();
+    REQUIRE(t2);
+    CHECK(t2->fixedStep == 1);                               // counter restarted for the new registry
+    CHECK(t2->elapsed == 1.0 / 60.0);
+}
+
+// elapsed is fixedStep * fixedDt at a constant rate (pinned above); a SetFixedHz
+// change rebases it, so the steps before the change keep the time they took and
+// the clock never runs backwards.
+TEST_CASE("Time: elapsed stays monotonic across a SetFixedHz change", "[sim][runloop][time]")
+{
+    Astra::Registry reg;
+    std::vector<Arcane::Time> fixedSeen;
+    Arcane::SystemSchedulers sch(nullptr);
+    REQUIRE(sch.fixedUpdate.AddSystem<RecordFixedTime>(&fixedSeen).IsOk());
+    Arcane::RunLoop loop(reg, sch);
+
+    for (int i = 0; i < 10; ++i) loop.Advance(1.0 / 60.0);
+    REQUIRE(fixedSeen.size() == 10);
+    const double before = fixedSeen.back().elapsed;
+    CHECK(before == 10.0 * (1.0 / 60.0));
+
+    loop.SetFixedHz(30.0);
+    for (int i = 0; i < 10; ++i) loop.Advance(1.0 / 30.0);
+    REQUIRE(fixedSeen.size() == 20);
+    for (std::size_t i = 1; i < fixedSeen.size(); ++i)
+        CHECK(fixedSeen[i].elapsed > fixedSeen[i - 1].elapsed);
+    CHECK(fixedSeen.back().fixedStep == 20);
+    CHECK(fixedSeen.back().fixedDt == 1.0 / 30.0);
+    CHECK(fixedSeen.back().elapsed == before + 10.0 * (1.0 / 30.0));
+}

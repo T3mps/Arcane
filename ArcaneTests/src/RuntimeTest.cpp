@@ -201,7 +201,10 @@ TEST_CASE("EnsurePhysics mints a world once and again after RestoreRegistry", "[
     auto bytes = rt.SnapshotRegistry();
     REQUIRE(bytes.IsOk());
     REQUIRE(rt.RestoreRegistry(*bytes.GetValue()));              // replaces the registry: resources are gone
+    // No world-less zombie of either: both are transient resources
+    // (AstraTransientResource), so the snapshot never carried them.
     CHECK(rt.Registry().GetResource<Arcane::PhysicsResource>() == nullptr);
+    CHECK(rt.Registry().GetResource<Arcane::PhysicsInterpBuffer>() == nullptr);
     rt.EnsurePhysics();
     // Not compared against `first` by address: `first` now points at freed
     // memory, and a same-size allocation immediately after a free routinely

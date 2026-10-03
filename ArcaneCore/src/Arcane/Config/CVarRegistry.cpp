@@ -194,7 +194,7 @@ namespace Arcane
             m->lastError = "cvar '" + std::string(desc.name) + "' has no v1 accessor";
             return {};
         }
-        if (Any(desc.flags, CVarFlags::Dev) && !m->devCvars)
+        if (HasFlag(desc.flags, CVarFlags::Dev) && !m->devCvars)
         {
             m->lastError = "cvar '" + std::string(desc.name) + "' is Dev and this build compiled it out";
             return {};
@@ -230,7 +230,7 @@ namespace Arcane
         slot.alive = true;
         slot.type = desc.type;
         slot.flags = desc.flags;
-        if (Any(slot.flags, CVarFlags::Archive)) slot.flags = slot.flags | CVarFlags::UserSettable;
+        if (HasFlag(slot.flags, CVarFlags::Archive)) slot.flags = slot.flags | CVarFlags::UserSettable;
         slot.name = desc.name;
         slot.help = desc.help;
         slot.declaredBy = desc.module;
@@ -248,7 +248,7 @@ namespace Arcane
     {
         if (name.empty() || !fn) return false;
         if (m->byName.contains(name) || m->commandByName.contains(name)) return false;
-        if (Any(flags, CVarFlags::Dev) && !m->devCvars) return false;
+        if (HasFlag(flags, CVarFlags::Dev) && !m->devCvars) return false;
         const std::uint32_t index = static_cast<std::uint32_t>(m->commands.size());
         m->commands.push_back(Command{ std::move(name), std::move(help), std::move(module), flags, fn, user, true });
         m->commandByName.emplace(m->commands.back().name, index);
@@ -283,8 +283,8 @@ namespace Arcane
         const bool editor = permission == Permission::Editor;
         if (!editor)
         {
-            if (!Any(slot.flags, CVarFlags::UserSettable)) return SetResult::Denied;
-            if (Any(slot.flags, CVarFlags::Cheat) && !CheatsEnabled()) return SetResult::Denied;
+            if (!HasFlag(slot.flags, CVarFlags::UserSettable)) return SetResult::Denied;
+            if (HasFlag(slot.flags, CVarFlags::Cheat) && !CheatsEnabled()) return SetResult::Denied;
         }
 
         const SetBy winner = slot.history.empty() ? SetBy::Default : slot.history.back().by;
@@ -341,7 +341,7 @@ namespace Arcane
     {
         for (Slot& slot : m->slots)
         {
-            if (!slot.alive || !Any(slot.flags, CVarFlags::Cheat)) continue;
+            if (!slot.alive || !HasFlag(slot.flags, CVarFlags::Cheat)) continue;
             const auto before = slot.history.size();
             std::erase_if(slot.history, [](const CVarHistoryRecord& h) {
                 return h.by == SetBy::Console || h.by == SetBy::Code;
@@ -425,8 +425,8 @@ namespace Arcane
         for (const Slot& slot : m->slots)
         {
             if (!slot.alive) continue;
-            if (Any(slot.flags, CVarFlags::Hidden)) continue;
-            if (Any(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            if (HasFlag(slot.flags, CVarFlags::Hidden)) continue;
+            if (HasFlag(slot.flags, CVarFlags::Dev) && !m->devCvars) continue;
             out.push_back(CVarListEntry{ slot.name, slot.help, slot.type, slot.flags });
         }
         return out;
@@ -438,8 +438,8 @@ namespace Arcane
         for (const Command& command : m->commands)
         {
             if (!command.alive) continue;
-            if (Any(command.flags, CVarFlags::Hidden)) continue;
-            if (Any(command.flags, CVarFlags::Dev) && !m->devCvars) continue;
+            if (HasFlag(command.flags, CVarFlags::Hidden)) continue;
+            if (HasFlag(command.flags, CVarFlags::Dev) && !m->devCvars) continue;
             out.push_back(CVarListEntry{ command.name, command.help, CVarType::Bool, command.flags });
         }
         return out;
