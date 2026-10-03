@@ -63,6 +63,12 @@ namespace Arcane::Editor
         return nullptr;
     }
 
+    bool DocumentHost::HasFactory(const std::filesystem::path& path) const
+    {
+        const std::string ext = LowerExt(path);
+        return std::any_of(m_factories.begin(), m_factories.end(), [&](const Route& r) { return r.ext == ext; });
+    }
+
     EditorDocument* DocumentHost::Add(std::unique_ptr<EditorDocument> doc)
     {
         m_docs.push_back(std::move(doc));

@@ -299,3 +299,13 @@ TEST_CASE("A SpriteDocument saved after NoteMoved writes the new path; the old p
     CHECK((fs::exists(d / "new.arcsprite") && !fs::exists(d / "old.arcsprite")));
     fs::remove_all(d, ec);
 }
+
+TEST_CASE("DocumentHost::HasFactory matches the registered extension case-insensitively", "[editor]")
+{
+    Arcane::Editor::DocumentHost host;
+    host.RegisterFactory(".arcmat", [](const std::filesystem::path&) -> std::unique_ptr<Arcane::Editor::EditorDocument> { return nullptr; });
+    CHECK(host.HasFactory("D:/p/a.arcmat"));
+    CHECK(host.HasFactory("D:/p/A.ARCMAT"));
+    CHECK_FALSE(host.HasFactory("D:/p/a.png"));
+    CHECK_FALSE(host.HasFactory("D:/p/noext"));
+}

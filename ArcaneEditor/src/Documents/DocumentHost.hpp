@@ -52,6 +52,9 @@ namespace Arcane::Editor
         // and calls its NoteReopened() (an explicit open re-selects its page).
         // Null when no factory matches or the factory fails.
         EditorDocument* OpenPath(const std::filesystem::path& path);
+        // True when an extension factory would take `path` (RegisterFactory's
+        // lowercase match) -- the Problems router's "has an editor" fact.
+        [[nodiscard]] bool HasFactory(const std::filesystem::path& path) const;
 
         // ---- list --------------------------------------------------------
         EditorDocument* Add(std::unique_ptr<EditorDocument> doc);

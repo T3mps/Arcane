@@ -1374,6 +1374,8 @@ project "ArcaneTests"
         -- into the test exe so the [diagnostics] units drive it directly -- no
         -- ImGui in it at all, same pattern as SceneSession/EditorCamera above.
         "%{wks.location}/ArcaneEditor/src/Panels/DiagnosticStore.cpp",
+        -- node-page phase s8.2: which Problems rows route, and how (pure, fake facts in LocatorRouteTest).
+        "%{wks.location}/ArcaneEditor/src/Panels/LocatorRoute.cpp",
         -- Diagnostics arc: ConsoleModel (category derivation from the engine's
         -- "Subsystem: " log prefixes + identical-row collapsing) source-compiles
         -- into the test exe so the [editor] units drive the pure functions the
