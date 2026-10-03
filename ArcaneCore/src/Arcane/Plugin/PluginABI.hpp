@@ -1017,7 +1017,13 @@ namespace Arcane
     //     name (the v18 reasoning). A v48 module was compiled against the old
     //     surface; reject the pairing. ReferenceProject.arcproj and
     //     Aphelyon.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 49;
+    // v50 (2026-09-30, node-page phase T6): `ConsoleModel` gained history
+    //     (`m_history`/`m_draft`/`m_historyPos`) and `CompleteInput`/`HistoryPrev`/
+    //     `HistoryNext`; `CVarRegistry::ListCommands` and `Log::SetLevel` are new
+    //     ArcaneCore exports; ArcaneClient exports `DrawConsoleInputLine`. Every
+    //     registry now registers `console.historySize`, and Log::Init registers
+    //     `log.level`. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 50;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
