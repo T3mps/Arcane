@@ -9988,7 +9988,10 @@ static void ImGui::TabBarLayout(ImGuiTabBar* tab_bar)
         ImQsort(tab_bar->Tabs.Data, tab_bar->Tabs.Size, sizeof(ImGuiTabItem), TabItemComparerBySection);
 
     // Calculate spacing between sections
-    const float tab_spacing = g.Style.ItemInnerSpacing.x;
+    // ARCANE LOCAL FIX (2026-10-02, user desk -- Visual Studio tab language): tabs butt right up against each
+    // other -- no ItemInnerSpacing.x gap between neighbours (or sections). Upstream spaces them by
+    // ItemInnerSpacing.x; the same zero is used by the layout pass below and by TabBarProcessReorder.
+    const float tab_spacing = 0.0f;
     sections[0].Spacing = sections[0].TabCount > 0 && (sections[1].TabCount + sections[2].TabCount) > 0 ? tab_spacing : 0.0f;
     sections[1].Spacing = sections[1].TabCount > 0 && sections[2].TabCount > 0 ? tab_spacing : 0.0f;
 
@@ -10141,7 +10144,7 @@ static void ImGui::TabBarLayout(ImGuiTabBar* tab_bar)
             ImGuiTabItem* tab = &tab_bar->Tabs[section_tab_index + tab_n];
             tab->Offset = tab_offset;
             tab->NameOffset = -1;
-            tab_offset += tab->Width + (tab_n < section->TabCount - 1 ? g.Style.ItemInnerSpacing.x : 0.0f);
+            tab_offset += tab->Width + (tab_n < section->TabCount - 1 ? tab_spacing : 0.0f); // ARCANE LOCAL FIX: see tab_spacing
         }
         tab_bar->WidthAllTabs += ImMax(section->Width + section->Spacing, 0.0f);
         tab_offset += section->Spacing;
@@ -10403,7 +10406,8 @@ void ImGui::TabBarQueueReorderFromMousePos(ImGuiTabBar* tab_bar, ImGuiTabItem* s
     if ((tab_bar->Flags & ImGuiTabBarFlags_Reorderable) == 0)
         return;
 
-    const float tab_spacing = g.Style.ItemInnerSpacing.x;
+    const float tab_spacing = 0.0f; // ARCANE LOCAL FIX: tabs butt together (see TabBarLayout)
+    IM_UNUSED(g);
     const bool is_central_section = (src_tab->Flags & ImGuiTabItemFlags_SectionMask_) == 0;
     const float bar_offset = tab_bar->BarRect.Min.x - (is_central_section ? tab_bar->ScrollingTarget : 0);
 

@@ -10,6 +10,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <utility>
+
 namespace
 {
     struct DockHarness
@@ -187,4 +189,22 @@ TEST_CASE("Dock tab fill: hovering the SELECTED tab keeps its fill (no hover lif
     // Focused or not, the fill is one of the two SELECTED tones.
     CHECK(CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TabSelected)) +
           CountVerticesOfColor(r, ImGui::GetColorU32(ImGuiCol_TabDimmedSelected)) > 0);
+}
+
+TEST_CASE("Dock tabs butt together: no gap between neighbouring tabs", "[editor][docking]")
+{
+    // ARCANE LOCAL FIX in imgui_widgets.cpp TabBarLayout (user desk, 2026-10-02):
+    // upstream spaces tabs by ItemInnerSpacing.x.
+    DockHarness h;
+    ImGui::GetIO().MousePos = ImVec2(-10000.0f, -10000.0f);
+    ImGuiDockNode* node = h.Run(ImGuiDockNodeFlags_NoWindowMenuButton);
+    REQUIRE(node != nullptr);
+    REQUIRE(node->TabBar != nullptr);
+    REQUIRE(node->TabBar->Tabs.Size == 2);
+    const ImGuiTabItem* a = &node->TabBar->Tabs[0];
+    const ImGuiTabItem* b = &node->TabBar->Tabs[1];
+    if (b->Offset < a->Offset)
+        std::swap(a, b);
+    CHECK(a->Offset == 0.0f);
+    CHECK(b->Offset == a->Offset + a->Width);
 }
