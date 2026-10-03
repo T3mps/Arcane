@@ -4,6 +4,7 @@
 #include <Arcane/Render/Nri/nodes/MeshCullNode.hpp>
 #include <Arcane/Config/CVarDecl.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Base/Log.hpp>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -448,4 +449,26 @@ TEST_CASE("ARC_CVAR_RANGED registers its range and its module", "[cvar]") {
 
     reg.Set(h, CVarValue::Int32(5), SetBy::Console);
     reg.Publish();
+}
+
+TEST_CASE("log.level exists with range 0..6 and its publish drives the engine logger", "[cvar]") {
+    Arcane::Log::Init();
+    CVarRegistry& reg = CVarRegistry::Get();
+    const CVarHandle h = reg.Find("log.level");
+#if defined(ARCANE_DIST)
+    if (h.IsStale()) return;   // Dist compiles the Dev cvar out
+#endif
+    REQUIRE_FALSE(h.IsStale());   // Debug/Release: the pre-implementation run FAILS here
+    const std::int32_t before = reg.Get(h)->AsInt32();
+    REQUIRE(reg.Explain("log.level")->help.find("0 trace") != std::string::npos);
+    REQUIRE(reg.Set(h, CVarValue::Int32(9), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    REQUIRE(reg.Get(h)->AsInt32() == 6);                                        // clamped to max
+    REQUIRE(Arcane::Log::Engine()->level() == spdlog::level::off);
+    REQUIRE(reg.Set(h, CVarValue::Int32(1), SetBy::Code) == SetResult::Applied);
+    reg.Publish();
+    REQUIRE(Arcane::Log::Engine()->level() == spdlog::level::debug);
+    REQUIRE(reg.Set(h, CVarValue::Int32(before), SetBy::Code) == SetResult::Applied);   // leave the suite's logging as found
+    reg.Publish();
+    REQUIRE(Arcane::Log::Engine()->level() == static_cast<spdlog::level::level_enum>(before));
 }
