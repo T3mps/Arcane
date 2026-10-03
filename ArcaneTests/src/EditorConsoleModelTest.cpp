@@ -157,3 +157,31 @@ TEST_CASE("ProblemsChip: nothing at zero; the worst icon plus the count, and an 
     CHECK(warn->tooltip == "0 errors, 4 warnings");
     CHECK(ProblemsChip(2, 1)->label == std::string(ICON_LC_CIRCLE_X) + " 3");
 }
+
+TEST_CASE("CategoryForMessage reads a leading [tag] verbatim and leaves the message alone", "[editor]")
+{
+    using Arcane::Editor::CategoryForMessage;
+    const auto e = Entry(Arcane::DiagSeverity::Info, "[nri-graph] NriTextureCache: image x is resident");
+    CHECK(e.category == "nri-graph");
+    CHECK(e.message == "[nri-graph] NriTextureCache: image x is resident");   // copy fidelity
+    CHECK(CategoryForMessage("[thumbs] queued 4") == "thumbs");
+    CHECK(CategoryForMessage("[PERF] frame 16.6 ms") == "PERF");
+    CHECK(CategoryForMessage("[a_b-9] x") == "a_b-9");
+    CHECK(CategoryForMessage("[unclosed Build: x") == "General");                       // no ']': the prefix table, then General
+    CHECK(CategoryForMessage("[] x") == "General");                                     // empty tag
+    CHECK(CategoryForMessage("[has space] x") == "General");
+    CHECK(CategoryForMessage("[abcdefghijklmnopqrstuvwxy] x") == "General");             // 25 chars
+    CHECK(CategoryForMessage("[abcdefghijklmnopqrstuvwx] x") == "abcdefghijklmnopqrstuvwx"); // 24 chars
+}
+
+TEST_CASE("CategoryForMessage maps the new subsystem prefixes", "[editor]")
+{
+    using Arcane::Editor::CategoryForMessage;
+    CHECK(CategoryForMessage("Arcane Editor: layout restored") == "Editor");
+    CHECK(CategoryForMessage("input: rebind captured") == "Input");
+    CHECK(CategoryForMessage("IdeLaunch: ItemOperations.OpenFile failed") == "IDE");
+    CHECK(CategoryForMessage("IDE: Game.cpp -- opened") == "IDE");
+    CHECK(CategoryForMessage("Diagnostics: report written") == "Diagnostics");
+    CHECK(CategoryForMessage("AudioDevice: opened 48 kHz") == "Audio");
+    CHECK(CategoryForMessage("Arcane Editor host, backend Vulkan") == "General");      // the existing fallback holds
+}

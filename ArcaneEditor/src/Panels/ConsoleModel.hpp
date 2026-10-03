@@ -36,7 +36,8 @@ namespace Arcane::Editor
     // message prefixes. Deliberately stringly-typed: it is zero engine churn and
     // the prefixes are de facto stable. Anything that genuinely matters gets a
     // real Arcane::DiagScope through the diagnostic seam instead of this table.
-    // Returns "General" for anything unrecognized.
+    // A leading "[tag]" (1-24 of [A-Za-z0-9_-]) wins over the table and is
+    // returned verbatim. Returns "General" for anything unrecognized.
     [[nodiscard]] std::string_view CategoryForMessage(std::string_view message) noexcept;
 
     // One rendered row: the first entry of a run of identical entries, plus how
