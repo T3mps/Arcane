@@ -1004,6 +1004,22 @@ namespace Arcane
     //     exports `GraphPinNeutralDefault` (same tranche, same bump; s5.1.8).
     //     ReferenceProject.arcproj and Aphelyon.arcproj restamped; both game
     //     modules rebuilt.
+    // v48 addendum (2026-10-02, T4-GATE fix round 1; deliberately UNBUMPED):
+    //     two T3-D6 fix-round commits landed on the T4 line AFTER the v48
+    //     stamp and moved ARCANE_API surfaces. `HostConfig` gained
+    //     `windowWidth`/`windowHeight` (--window-size, 6d6c1008) -- a layout
+    //     move of the same class as the v40/v45/v46 HostConfig fields -- and
+    //     `Window::Show()` became `Show(bool activate = true)` (f35fd5b4) --
+    //     the defaulted parameter still moves the mangled name (the v18
+    //     reasoning). Left at 48 on purpose: MEASURED, `grep -rn` for
+    //     HostConfig and Window over ReferenceProject/Source and
+    //     Aphelyon/Source returns nothing, so no module in either tree can
+    //     misread the layout or miss the import; both modules were rebuilt
+    //     against these headers at T4-GATE; and the branch's next stamp,
+    //     T5's v49 (feat/t5-early already contains both commits), is the bump
+    //     that covers them -- T5-GATE names them in the v49 entry. The phase
+    //     reaches main only at its final stamp, so no 48-stamped module built
+    //     before these commits is ever paired with a host that has them.
     inline constexpr uint32_t kGamePluginABIVersion = 48;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
