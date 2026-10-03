@@ -347,9 +347,9 @@ namespace Arcane::Editor
         // by hash at the rebind, rename-translated).
         void RefreshParentChain();
 
-        // Stable on-disk identity, exposed for EditorApp::FindByPath (Problems
-        // panel, Task 5): DocumentHost only indexes documents by asset Guid, so
-        // File-locator navigation (shader diagnostics) resolves through here.
+        // Stable on-disk identity. Problems File-locator navigation
+        // (EditorApp::RouteLocator, node-page phase s8.2) reaches an open
+        // document through DocumentHost::OpenPath's focus-not-reopen, not here.
         const std::filesystem::path& Path() const noexcept { return m_path; }
 
         // Problems-panel navigation. Requests are recorded here and consumed on

@@ -2541,7 +2541,7 @@ namespace Arcane::Editor
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems))
             if (const std::optional<Arcane::DiagLocator> hit =
                     Arcane::Editor::DrawProblemsPanel(m_consoleDiag.store, m_consoleDiag.problemsUi,
-                        Arcane::Editor::UnderVerifyHarness(m_config),
+                        MakeRouteFacts(), Arcane::Editor::UnderVerifyHarness(m_config),
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
@@ -3227,10 +3227,11 @@ namespace Arcane::Editor
             d.code     = "assets.create.failed";
             d.message  = std::move(message);
             d.detail   = std::move(detail);
-            // A File locator, whose click is a DOCUMENTED no-op (RouteLocator's
-            // File branch only matches open shader documents) -- exactly the
-            // build.module.failed row's precedent. There is deliberately no
-            // Asset locator: the create FAILED, so no guid exists to point at.
+            // A File locator, routed by ClassifyLocator (s8.2): a row whose
+            // path does not exist is plain text, an existing one opens or shows
+            // in Explorer -- the build.module.failed row's precedent. There is
+            // deliberately no Asset locator: the create FAILED, so no guid
+            // exists to point at.
             if (!file.empty())
                 d.locator = Arcane::DiagLocator::File(std::move(file));
             m_createDiagnostics.push_back(std::move(d));

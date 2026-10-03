@@ -194,62 +194,67 @@ namespace Arcane::Editor
         return m_documents.OpenPath(*path);
     }
 
-    Arcane::Editor::ShaderEditorDocument* EditorApp::FindByPath(const std::filesystem::path& path)
+    Arcane::Editor::RouteFacts EditorApp::MakeRouteFacts()
     {
-        Arcane::Editor::ShaderEditorDocument* found = nullptr;
-        m_documents.ForEach([&](Arcane::Editor::EditorDocument& d)
+        Arcane::Editor::RouteFacts f;
+        f.entityAlive = [this](std::uint64_t id)
         {
-            if (found)
-                return;
-            if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(&d);
-                doc && doc->Path() == path)
-                found = doc;
-        });
-        return found;
+            // id is the packed id+version widened by the producer; narrow back.
+            return m_runtime &&
+                   m_runtime->Registry().IsValid(Astra::Entity(static_cast<Astra::Entity::StorageType>(id)));
+        };
+        f.resolveAsset = [this](const Arcane::Guid& g) -> std::optional<std::filesystem::path>
+        {
+            const Arcane::Project* project = m_runtime ? m_runtime->CurrentProject() : nullptr;
+            if (!project || !g.IsValid()) return std::nullopt;
+            return project->ResolveAsset(Arcane::AssetId::FromGuid(g));
+        };
+        f.hasDocumentFactory = [this](const std::filesystem::path& p) { return m_documents.HasFactory(p); };
+        f.isDirectory = [](const std::filesystem::path& p) { std::error_code ec; return std::filesystem::is_directory(p, ec); };
+        f.exists = [](const std::filesystem::path& p) { std::error_code ec; return std::filesystem::exists(p, ec); };
+        return f;
     }
 
     void EditorApp::RouteLocator(const Arcane::DiagLocator& locator)
     {
-        switch (locator.kind)
+        namespace OsShell = Arcane::Editor::OsShell;
+        using Arcane::Editor::RouteAction;
+        const auto shell = [](OsShell::ShellResult r, const std::string& what)
         {
-            case Arcane::DiagLocator::Kind::Entity:
-            {
+            if (r != OsShell::ShellResult::Ok)
+                ARC_WARN("Problems: could not open {} -- {}", what, OsShell::Describe(r));
+        };
+        switch (Arcane::Editor::ClassifyLocator(locator, MakeRouteFacts()))
+        {
+            case RouteAction::SelectEntity:
                 // Selecting is enough: the Inspector follows the selection, and
                 // the Outliner scrolls to it on the next frame. locator.entity is
-                // the entity's raw packed value (id+version) widened to
-                // uint64_t by the producer; Astra::Entity's StorageType is the
-                // narrower type that value was minted from (32-bit by this
-                // project's ASTRA_ENTITY_BITS default), so this narrows back
-                // rather than using a nonexistent Astra::Entity::IDType.
-                m_selection.Select(Astra::Entity(
-                    static_cast<Astra::Entity::StorageType>(locator.entity)));
+                // the packed id+version widened by the producer; narrow back.
+                m_selection.Select(Astra::Entity(static_cast<Astra::Entity::StorageType>(locator.entity)));
                 break;
-            }
-            case Arcane::DiagLocator::Kind::Asset:
-            {
-                OpenAssetDocument(locator.asset);
+            case RouteAction::OpenDocument:
+                if (locator.kind == Arcane::DiagLocator::Kind::Asset)
+                    OpenAssetDocument(locator.asset);
+                else if (auto* doc = m_documents.OpenPath(std::filesystem::path(locator.file)))   // arms the tab focus
+                    if (auto* shader = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(doc))
+                        shader->RequestJumpToLine(locator.line);
                 break;
-            }
-            case Arcane::DiagLocator::Kind::File:
-            {
-                // Shader/material documents are the only ROUTABLE File target --
-                // FindByPath only ever matches an open ShaderEditorDocument. Other
-                // File-locator producers (plugin dll load failures, assets outside
-                // every content root, project manifest errors) point at paths that
-                // are never an open document, so this is a deliberate no-op for
-                // them today, not a bug.
-                if (auto* doc = FindByPath(locator.file))
-                    doc->RequestJumpToLine(locator.line);
+            case RouteAction::RevealAsset:
+                Arcane::Editor::RevealAssetInBrowser(m_assetBrowserUi, m_assetModel, locator.asset);
+                Arcane::Editor::FocusDockTab("Asset Browser");
                 break;
-            }
-            case Arcane::DiagLocator::Kind::GraphNode:
-            {
-                if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(
-                        OpenAssetDocument(locator.ownerAsset)))
+            case RouteAction::OpenGraphNode:
+                // T3 s5.1.1: this one call selects the node, frames it and raises the node page.
+                if (auto* doc = dynamic_cast<Arcane::Editor::ShaderEditorDocument*>(OpenAssetDocument(locator.ownerAsset)))
                     doc->RequestFocusGraphNode(locator.nodeId);
                 break;
-            }
-            case Arcane::DiagLocator::Kind::None:
+            case RouteAction::ShowInExplorer:
+                shell(OsShell::ShowInExplorer(std::filesystem::path(locator.file)), locator.file);
+                break;
+            case RouteAction::OpenAsText:
+                shell(OsShell::OpenAsText(std::filesystem::path(locator.file)), locator.file);
+                break;
+            case RouteAction::None:
                 break;
         }
     }
@@ -3158,10 +3163,10 @@ namespace Arcane::Editor
             d.message  = "Rebuild Game Module failed (exit code " +
                          std::to_string(*exit) + ")";
             d.detail   = "See the Console's Build lines";
-            // File locator = the project root: clicking the row is a
-            // DOCUMENTED no-op (RouteLocator's File branch only matches open
-            // shader documents) -- the row exists to persist the failure
-            // state; the Console's Build lines carry the detail.
+            // File locator = the project root: a directory, so clicking the
+            // row shows it in Explorer (ClassifyLocator, s8.2) -- the row
+            // exists to persist the failure state; the Console's Build lines
+            // carry the detail.
             d.locator  = Arcane::DiagLocator::File(m_moduleBuildRoot.generic_string());
             Arcane::Diagnostics::Publish(key, std::span<const Arcane::Diagnostic>(&d, 1));
             return;
@@ -3322,7 +3327,7 @@ namespace Arcane::Editor
             // KEY OWNERSHIP: "diagnostics:reports" -- accumulate (never
             // clear here) across the whole session; each report gets its
             // own row with its own Asset locator, so RouteLocator's
-            // Kind::Asset branch (OpenAssetDocument) opens exactly the
+            // OpenDocument action (OpenAssetDocument) opens exactly the
             // report that was clicked -- the same "open from the Assets
             // browser" action a double-click in the Asset Browser performs.
             Arcane::Diagnostic d;

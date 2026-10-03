@@ -46,6 +46,7 @@
 #include "Panels/EditorPanels.hpp"
 #include "Panels/InspectorHost.hpp"          // m_inspectorHost (inspector ownership)
 #include "Panels/InspectorWindows.hpp"       // m_inspectorWindows
+#include "Panels/LocatorRoute.hpp"           // RouteFacts (MakeRouteFacts, s8.2)
 #include "Panels/AssetInspectorSource.hpp"   // m_assetSource
 #include "Panels/AssetFileOpDialogs.hpp"     // m_renameModal (T5 s7.6)
 #include "Panels/SceneInspectorSource.hpp"   // m_sceneSource
@@ -1924,14 +1925,21 @@ namespace Arcane::Editor
         Arcane::Editor::DocServices MakeDocServices();
 
         // Problems-panel row click -> editor navigation. One switch over
-        // DiagLocator::Kind; performed from the frame loop, never mid-draw.
+        // ClassifyLocator's RouteAction (node-page phase s8.2): select the
+        // entity, open + focus the document (a shader at its line), reveal an
+        // editor-less asset, raise a graph node, Explorer for directories and
+        // binaries, open-as-text otherwise. Performed from the frame loop,
+        // never mid-draw.
         void RouteLocator(const Arcane::DiagLocator& locator);
+        // The Problems router's facts over live app state (node-page phase s8.2):
+        // entity alive, guid -> path, has an editor, directory, exists.
+        [[nodiscard]] Arcane::Editor::RouteFacts MakeRouteFacts();
 
-        // Thin wrappers RouteLocator needs, added here rather than on
+        // A thin wrapper RouteLocator needs, added here rather than on
         // DocumentHost: DocumentHost only indexes documents by asset Guid
         // (its own header comment -- "open/dirty/save lifecycle over one GUID
-        // asset"), so Guid->path resolution and path-based lookup are
-        // EditorApp-level concerns, the same way MintOrReuseSpriteForTexture
+        // asset"), so Guid->path resolution is an
+        // EditorApp-level concern, the same way MintOrReuseSpriteForTexture
         // above resolves through m_runtime->CurrentProject() rather than
         // living on DocumentHost.
         //
@@ -1940,11 +1948,6 @@ namespace Arcane::Editor
         // no project, an invalid guid, or an asset that does not resolve to a
         // file (mirrors MintOrReuseSpriteForTexture's failure shape).
         Arcane::Editor::EditorDocument* OpenAssetDocument(const Arcane::Guid& guid);
-        // The open ShaderEditorDocument whose on-disk path equals `path`, or
-        // null. ShaderEditorDocument is the only open-document type that
-        // exposes a stable Path() today (Problems-panel File locator is a
-        // shader-diagnostics producer only, per DiagLocator::File's callers).
-        Arcane::Editor::ShaderEditorDocument* FindByPath(const std::filesystem::path& path);
 
         // THE ARCANE LOGO shown at the left of the transport toolbar
         // (Unity-style), decoded device-free (Arcane::LoadDisplayPixels) and

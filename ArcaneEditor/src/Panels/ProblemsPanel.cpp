@@ -2,10 +2,13 @@
 
 #include <Panels/ConsoleModel.hpp>   // ProblemsTabTitle (s8.2)
 #include <Panels/SeverityStyle.hpp>
+#include <Project/OsShell.hpp>   // row context menu: Show in Explorer (s8.2)
 #include <Widgets/EditorTheme.hpp>
 #include <Widgets/EditorWidgets.hpp>
+#include <Arcane/Base/Log.hpp>
 #include <imgui.h>
 
+#include <filesystem>
 #include <map>
 #include <vector>
 
@@ -26,8 +29,8 @@ namespace Arcane::Editor
     }
 
     std::optional<Arcane::DiagLocator> DrawProblemsPanel(const DiagnosticStore& store,
-                                                         ProblemsUiState& ui, bool suppressBadges,
-                                                         bool* open)
+                                                         ProblemsUiState& ui, const RouteFacts& facts,
+                                                         bool suppressBadges, bool* open)
     {
         std::optional<Arcane::DiagLocator> clicked;
 
@@ -71,18 +74,25 @@ namespace Arcane::Editor
                 {
                     ImGui::PushID(uid++);
                     const SeverityStyle st = StyleFor(d->severity);
-                    const ImVec4 col = st.color;
-                    const char* icon = st.icon;
-
-                    ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    const std::string label = std::string(icon) + " " + d->message;
-                    // Selectable spans the row so the whole line is the hit target.
-                    if (ImGui::Selectable(label.c_str()) &&
-                        d->locator.kind != Arcane::DiagLocator::Kind::None)
-                    {
+                    // Classified per frame: File rows stat the disk, which is
+                    // fine at Problems' row counts (tens, not thousands).
+                    const bool live = IsRoutable(d->locator, facts);
+                    const LinkRowResult r = LinkRow("##row", d->message, live, st.icon,
+                                                    ImGui::ColorConvertFloat4ToU32(st.color));
+                    if (r.clicked)
                         clicked = d->locator;
-                    }
-                    ImGui::PopStyleColor();
+                    if (const std::optional<std::filesystem::path> path = LocatorPath(d->locator, facts))
+                        if (ImGui::BeginPopupContextItem("##rowctx"))
+                        {
+                            if (ImGui::MenuItem("Open", nullptr, false, live))
+                                clicked = d->locator;
+                            if (ImGui::MenuItem("Show in Explorer"))
+                                if (const auto sr = OsShell::ShowInExplorer(*path); sr != OsShell::ShellResult::Ok)
+                                    ARC_WARN("Problems: could not show {} -- {}", path->string(), OsShell::Describe(sr));
+                            if (ImGui::MenuItem("Copy path"))
+                                ImGui::SetClipboardText(path->string().c_str());
+                            ImGui::EndPopup();
+                        }
 
                     if (!d->detail.empty())
                     {
