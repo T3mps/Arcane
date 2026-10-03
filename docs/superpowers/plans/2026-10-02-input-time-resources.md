@@ -3315,8 +3315,14 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 - Produces: a green branch, ready for **Merge prep**.
 
 - [ ] **Step 1: Delete the exe-dir `imgui.ini`** under `bin\Debug-windows-x86_64-md\ArcaneEditor\` and `bin\Release-windows-x86_64-md\ArcaneEditor\`. It vetoes authored UI changes and dirties goldens.
-- [ ] **Step 2: Full builds.** Regenerate, then build `Arcane.slnx` Release and Debug (`-m:4 -nr:false`). Then run `arcbuild build --project ReferenceProject` for Release, then Debug (end on Debug: single-slot `Binaries\`).
-- [ ] **Step 3: ArcaneTests, both configs, from each exe dir.** Run `.\ArcaneTests.exe "~[gpu]~[shell]"` and `.\ArcaneTests.exe "[witness]~[shell]"`. Record each seed, pass count and assertion count. Expected: all PASS, and `[trajectory]` passes in both.
+- [ ] **Step 2: Full builds, then the per-configuration gate order.** Regenerate, then build `Arcane.slnx` Release and Debug (`-m:4 -nr:false`). Then, PER CONFIGURATION (Release first, Debug last: single-slot `Binaries\`), in exactly this order -- amended at merge prep (2026-10-03): `Arcane.slnx`'s post-build mirrors `ReferenceProject\Binaries` into the staged hosts, so a module arcbuilt AFTER the last host build is never staged, and the IN-19 Release runs went red on the staged Debug `ReferenceGame.dll` (seeds 3332653597, 2471172462):
+  1. `arcbuild build --project ReferenceProject --config <cfg>`, with `ARCANE_SDK` set to THIS checkout in the same shell (the user-level value names the main checkout; the log must show `/I..\ArcaneCore\src`);
+  2. an incremental `Arcane.slnx` <cfg> build, which restages the module beside ArcaneEditor/ArcaneRuntime/ArcaneServer (or copy `ReferenceProject\Binaries\*` beside the three staged hosts, as `golden-gate.ps1` does);
+  3. ArcaneEditor built and staged (witness E10's `StagedEditorDir` REQUIREs it and its layout seed);
+  4. the exe-dir `imgui.ini` deleted in both ArcaneEditor dirs (Step 1);
+  5. Step 3's suites for <cfg>;
+  6. Step 4's `golden-gate.ps1 -Configuration <cfg>`.
+- [ ] **Step 3: ArcaneTests, both configs, from each exe dir (inside Step 2's per-configuration order).** Run `.\ArcaneTests.exe "~[gpu]~[shell]"` and `.\ArcaneTests.exe "[witness]~[shell]"`. Record each seed, pass count and assertion count. Expected: all PASS, and `[trajectory]` passes in both.
 - [ ] **Step 4: Golden gate.** Run `powershell -ExecutionPolicy Bypass -File scripts\golden-gate.ps1 -Configuration Release`, then `-Configuration Debug`.
   - Expected: green with NO re-bless.
   - **A difference is a bug in this branch.** Diff it, root-cause it, fix forward, and re-run. Never bless.

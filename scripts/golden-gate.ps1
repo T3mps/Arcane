@@ -1,5 +1,17 @@
 # golden-gate.ps1 -- the host-level golden-image gate (Task 12, plan-b comparator).
 #
+# GATE ORDER, per configuration (Release first, ending on Debug) -- run THIS
+# script last. Arcane.slnx's post-build mirrors ReferenceProject/Binaries into
+# the staged hosts, so a module arcbuilt after the last host build is never
+# staged and the suites load a stale (even other-config) ReferenceGame.dll:
+#   1. arcbuild build --project ReferenceProject --config <cfg>, with
+#      ARCANE_SDK set to THIS checkout in the same shell;
+#   2. an incremental Arcane.slnx <cfg> build (restages the module beside
+#      ArcaneEditor/ArcaneRuntime/ArcaneServer), ArcaneEditor included;
+#   3. delete the exe-dir imgui.ini in both ArcaneEditor dirs;
+#   4. ArcaneTests "~[gpu]" and "[witness]~[shell]" from the exe dir;
+#   5. this script, -Configuration <cfg>.
+#
 # THE HONEST SPLIT (see GoldenImageTest.cpp's own [gpu][golden] case and its
 # header comment): an in-process Catch2 case proves the RENDER PATH, but it
 # links neither RuntimeApp nor EditorApp, so it is silent about boot, settle,
