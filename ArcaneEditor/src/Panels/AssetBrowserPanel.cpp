@@ -146,7 +146,9 @@ namespace Arcane::Editor
             if (ImGui::IsWindowAppearing())
                 state.menuRefusal.rename = model.SelectionCount() > 1 ? std::string("Select one asset to rename")
                                          : services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Rename, .guids = { e.guid }, .newStem = e.name }) : "unavailable";
-            if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) BeginAssetRename(state, e);
+            // The row drew this frame (its menu is open on it): mark it drawn, or the
+            // table's end-of-frame "target row not drawn" check cancels the box at once.
+            if (MenuVerb("Rename", "F2", state.menuRefusal.rename)) { BeginAssetRename(state, e); state.renameDrawn = true; }
             if (ImGui::IsWindowAppearing())   // T5 s7.7
                 state.menuRefusal.duplicate = services.fileOpRefusal ? services.fileOpRefusal({ .kind = AssetOpKind::Duplicate, .guids = model.selection }) : "unavailable";
             if (MenuVerb("Duplicate", "Ctrl+D", state.menuRefusal.duplicate))

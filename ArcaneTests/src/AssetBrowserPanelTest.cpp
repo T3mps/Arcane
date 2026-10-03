@@ -32,6 +32,7 @@ namespace
     {
         fs::path root; std::optional<Arcane::Project> project; AssetPanelModel model; AssetBrowserPanelState state; DocumentHost docs;
         AssetPanelServices services; ImGuiContext* prev = ImGui::GetCurrentContext(); ImGuiContext* ctx = nullptr;
+        std::optional<AssetOpRequest> lastFileOp;   // the latest fileOp any Frame() raised (Click() drops its frames' actions)
         explicit BrowserHarness(const char* n, int pngs = 1) : root(fs::temp_directory_path() / n)
         {
             std::error_code ec; fs::remove_all(root, ec); REQUIRE(Arcane::Project::Create(root, "B").has_value());
@@ -46,7 +47,7 @@ namespace
             ImGui::GetIO().DeltaTime = 1.0f / 60.0f; ImGui::NewFrame(); if (activate) ImGui::ActivateItemByID(activate);
             ImGui::SetNextWindowPos(ImVec2(0, 0)); ImGui::SetNextWindowSize(ImVec2(800, 300)); if (focus) ImGui::SetNextWindowFocus();
             AssetPanelActions a = DrawAssetBrowserPanel(state, model, &*project, docs, services);
-            ImGui::Render(); (void)model.RebuildIfDirty(&project->Registry(), {}); return a;
+            ImGui::Render(); (void)model.RebuildIfDirty(&project->Registry(), {}); if (a.fileOp) lastFileOp = a.fileOp; return a;
         }
         ImVec2 RowCenter(int i) const   // Rows()[i] under the frozen 24 px header, inside the deepest child of "Asset Browser"
         {
@@ -63,6 +64,18 @@ namespace
             const ImVec2 p = RowCenter(row); io.AddMousePosEvent(p.x, p.y); Frame();
             io.AddMouseButtonEvent(b, true); Frame(); io.AddMouseButtonEvent(b, false); Frame(); Mods(m, false); Frame();
         }
+        // Sweeps the mouse down the open row menu until `label`'s item is hovered (a
+        // disabled item still sets HoveredId); false when no line of the menu is it.
+        bool HoverMenuItem(const char* label)
+        {
+            REQUIRE_FALSE(GImGui->OpenPopupStack.empty());
+            ImGuiWindow* menu = GImGui->OpenPopupStack.back().Window; REQUIRE(menu);
+            const ImGuiID id = menu->GetID(label); const ImVec2 pos = menu->Pos, size = menu->Size;
+            for (float y = pos.y + 2.0f; y < pos.y + size.y; y += 2.0f)
+            { ImGui::GetIO().AddMousePosEvent(pos.x + 30.0f, y); (void)Frame(); if (GImGui->HoveredId == id) return true; }
+            return false;
+        }
+        static bool TooltipShown() { const ImGuiWindow* t = ImGui::FindWindowByName("##Tooltip_00"); return t && t->Active; }
         AssetPanelActions Key(ImGuiKey k, ImGuiKeyChord m = 0)
         { Mods(m, true); ImGui::GetIO().AddKeyEvent(k, true); auto a = Frame(); ImGui::GetIO().AddKeyEvent(k, false); Mods(m, false); Frame(); return a; }
     };
@@ -131,4 +144,69 @@ TEST_CASE("Asset Browser batch keys: Del and Ctrl+D carry the whole selection; F
     (void)h.Key(ImGuiKey_F2); CHECK_FALSE(h.state.renameTarget.IsValid());
     h.Click(1, ImGuiMouseButton_Right);   // inside the selection: the set stays, the primary moves
     CHECK((h.model.selection == sel && h.model.selected == rows[1].guid));
+}
+// T5-B8 review (owed at T5-GATE): DrawRenameBox's refusal branches and the row menu's
+// Rename verb, with a host dry-run (services.fileOpRefusal) in place.
+TEST_CASE("Asset Browser rename: a refused Enter keeps the box with its reason; a valid Enter then commits", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_rename_refused_test");
+    h.services.fileOpRefusal = [](const AssetOpRequest& r) { return r.kind == AssetOpKind::Rename && r.newStem == "bad" ? std::string("A file named bad.png already exists") : std::string{}; };
+    (void)h.Frame(true);
+    const Arcane::Guid g = h.model.Rows()[1].guid; h.model.Select(g); (void)h.Key(ImGuiKey_F2);
+    REQUIRE(h.state.renameTarget == g); (void)h.Frame();             // the box activates two frames after F2
+    ImGui::GetIO().AddInputCharactersUTF8("bad"); (void)h.Frame();
+    CHECK(BrowserHarness::TooltipShown());                        // the refusal shows while the box is active
+    CHECK_FALSE(h.Key(ImGuiKey_Enter).fileOp);
+    CHECK(h.state.renameTarget == g);                             // refused: the box stays, the name is kept
+    CHECK(std::string(h.state.renameBuf) == "bad");
+    (void)h.Frame(); (void)h.Frame();                             // the box takes focus again (select-all)
+    ImGui::GetIO().AddInputCharactersUTF8("good"); (void)h.Frame();
+    const AssetPanelActions a = h.Key(ImGuiKey_Enter);
+    REQUIRE(a.fileOp); CHECK((a.fileOp->newStem == "good" && !h.state.renameTarget.IsValid()));
+}
+TEST_CASE("Asset Browser rename: a click away after an edit commits; without an edit it cancels", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_rename_clickaway_test", 2);
+    h.services.fileOpRefusal = [](const AssetOpRequest&) { return std::string{}; };
+    (void)h.Frame(true);
+    const Arcane::Guid g = h.model.Rows()[1].guid; h.model.Select(g); (void)h.Key(ImGuiKey_F2);
+    REQUIRE(h.state.renameTarget == g); (void)h.Frame();             // the box activates two frames after F2
+    SECTION("edited")
+    {
+        ImGui::GetIO().AddInputCharactersUTF8("wall"); (void)h.Frame();
+        h.Click(2, ImGuiMouseButton_Left);
+        REQUIRE(h.lastFileOp);
+        CHECK((h.lastFileOp->kind == AssetOpKind::Rename && h.lastFileOp->guids == std::vector<Arcane::Guid>{ g } && h.lastFileOp->newStem == "wall"));
+    }
+    SECTION("untouched") { h.Click(2, ImGuiMouseButton_Left); CHECK_FALSE(h.lastFileOp); }
+    CHECK_FALSE(h.state.renameTarget.IsValid());
+}
+TEST_CASE("Asset Browser row menu: Rename opens the inline box; refused, it is disabled with its reason", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_rename_menu_test");
+    std::string refusal;
+    h.services.fileOpRefusal = [&](const AssetOpRequest& r) { return r.kind == AssetOpKind::Rename ? refusal : std::string{}; };
+    (void)h.Frame(true);
+    const Arcane::Guid g = h.model.Rows()[1].guid;
+    SECTION("allowed: a click on the verb opens the box on the row")
+    {
+        h.Click(1, ImGuiMouseButton_Right); REQUIRE(h.state.menuRefusal.rename.empty());
+        REQUIRE(h.HoverMenuItem("Rename"));
+        CHECK_FALSE(GImGui->HoveredIdIsDisabled);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true); (void)h.Frame();
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false); (void)h.Frame();
+        CHECK(h.state.renameTarget == g);
+        CHECK(std::string(h.state.renameBuf) == "a00");
+    }
+    SECTION("refused: disabled, its tooltip carries the reason, a click does nothing")
+    {
+        refusal = "Stop play mode first";
+        h.Click(1, ImGuiMouseButton_Right); CHECK(h.state.menuRefusal.rename == refusal);
+        REQUIRE(h.HoverMenuItem("Rename"));
+        CHECK(GImGui->HoveredIdIsDisabled);
+        (void)h.Frame(); CHECK(BrowserHarness::TooltipShown());
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true); (void)h.Frame();
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false); (void)h.Frame();
+        CHECK_FALSE(h.state.renameTarget.IsValid());
+    }
 }
