@@ -49,12 +49,22 @@ namespace
             AssetPanelActions a = DrawAssetBrowserPanel(state, model, &*project, docs, services);
             ImGui::Render(); (void)model.RebuildIfDirty(&project->Registry(), {}); if (a.fileOp) lastFileOp = a.fileOp; return a;
         }
-        ImVec2 RowCenter(int i) const   // Rows()[i] under the frozen 24 px header, inside the deepest child of "Asset Browser"
+        static ImGuiWindow* RowsWindow()   // the deepest child of "Asset Browser": the table's scrolling inner window
         {
             ImGuiWindow* top = ImGui::FindWindowByName("Asset Browser"); ImGuiWindow* best = nullptr; int bd = 0;
             for (ImGuiWindow* w : GImGui->Windows) { if (w == top || w->RootWindow != top) continue; int d = 0;
                 for (ImGuiWindow* p = w; p != top; p = p->ParentWindow) ++d; if (d > bd) { best = w; bd = d; } }
-            REQUIRE(best); return ImVec2(best->Pos.x + 60, best->Pos.y + kTableRowHeight * (i + 1.5f));
+            REQUIRE(best); return best;
+        }
+        ImVec2 RowCenter(int i) const   // Rows()[i] under the frozen 24 px header
+        { const ImGuiWindow* w = RowsWindow(); return ImVec2(w->Pos.x + 60, w->Pos.y + kTableRowHeight * (i + 1.5f)); }
+        // A left-button drag from `a` to `b` in eight mouse steps, one frame each.
+        void Drag(ImVec2 a, ImVec2 b)
+        {
+            ImGuiIO& io = ImGui::GetIO(); io.AddMousePosEvent(a.x, a.y); Frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true); Frame();
+            for (int s = 1; s <= 8; ++s) { io.AddMousePosEvent(a.x + (b.x - a.x) * s / 8.0f, a.y + (b.y - a.y) * s / 8.0f); Frame(); }
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false); Frame(); Frame();
         }
         void Mods(ImGuiKeyChord m, bool d)
         { if (m & ImGuiMod_Ctrl) ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, d); if (m & ImGuiMod_Shift) ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, d); }
@@ -131,6 +141,38 @@ TEST_CASE("Asset Browser multi-select: Ctrl-click then Shift-click over a clippe
     h.Click(5, ImGuiMouseButton_Left, ImGuiMod_Shift);   // range from the Ctrl-click source
     CHECK((h.model.SelectionCount() == 3 && h.model.InSelection(rows[4].guid) && !h.model.InSelection(rows[1].guid)));
     (void)h.Key(ImGuiKey_A, ImGuiMod_Ctrl); CHECK(h.model.SelectionCount() == 40);   // the adapter skips the group row
+}
+// s7.9 / s7.13 check 4: box selection. The scope sits inside the table's
+// ScrollY inner window under the table's own ID, so a box started from the
+// void must still put the scope in the nav focus route (T5-GATE fix round 1).
+TEST_CASE("Asset Browser box selection: a drag from the void or from a row selects the rows it crosses", "[editor][assetops]")
+{
+    BrowserHarness h("arcane_browser_boxselect_test", 4); (void)h.Frame(true);   // 5 rows: void below them
+    const auto& rows = h.model.Rows(); REQUIRE(rows.size() == 5);
+    const ImGuiWindow* w = BrowserHarness::RowsWindow();
+    const ImVec2 voidPt(w->Pos.x + 60, w->Pos.y + kTableRowHeight * 6.0f + 12.0f);   // under the last row's bottom (6 x 24 px)
+    REQUIRE(w->InnerRect.Contains(voidPt));
+    SECTION("from the void, upward over rows 2..4")
+    {
+        h.Drag(voidPt, h.RowCenter(2));
+        CHECK(h.model.SelectionCount() == 3);
+        CHECK((h.model.InSelection(rows[2].guid) && h.model.InSelection(rows[3].guid) && h.model.InSelection(rows[4].guid)));
+        CHECK_FALSE(h.model.InSelection(rows[1].guid));
+    }
+    SECTION("from row 1, downward over rows 1..3")
+    {
+        h.Drag(h.RowCenter(1), h.RowCenter(3));
+        CHECK(h.model.SelectionCount() == 3);
+        CHECK((h.model.InSelection(rows[1].guid) && h.model.InSelection(rows[2].guid) && h.model.InSelection(rows[3].guid)));
+        CHECK_FALSE(h.model.InSelection(rows[4].guid));
+    }
+    SECTION("from the void after a row click, the old selection clears first")
+    {
+        h.Click(1, ImGuiMouseButton_Left); REQUIRE(h.model.SelectionCount() == 1);
+        h.Drag(voidPt, h.RowCenter(3));
+        CHECK(h.model.SelectionCount() == 2);
+        CHECK((h.model.InSelection(rows[3].guid) && h.model.InSelection(rows[4].guid) && !h.model.InSelection(rows[1].guid)));
+    }
 }
 TEST_CASE("Asset Browser batch keys: Del and Ctrl+D carry the whole selection; F2 needs exactly one", "[editor][assetops]")
 {

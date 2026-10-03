@@ -943,6 +943,17 @@ namespace Arcane::Editor
                     else if (!sel && it != a.next.end()) { a.next.erase(it); a.changed = true; }
                 };
                 state.msClicked = {};
+                // T5-GATE fix round 1 (s7.13 check 4, box selection): the
+                // scope's focus scope is IDStack.back(), and inside the table
+                // that is the TABLE's id, not the ScrollY inner window's. A
+                // box started from the void focuses only the window
+                // (EndMultiSelect's FocusWindow), so the scope never entered
+                // the nav focus route, EndBoxSelect never ran and the box
+                // selected nothing (imgui_widgets.cpp BeginMultiSelect's
+                // IsFocused, EndMultiSelect's void branch). Keyed on the inner
+                // window's own id the scope IS the window's focus scope -- the
+                // Console's shape (a multi-select straight inside its child).
+                ImGui::PushOverrideID(ImGui::GetCurrentWindow()->ID);
                 ImGuiMultiSelectIO* ms = ImGui::BeginMultiSelect(ImGuiMultiSelectFlags_ClearOnEscape | ImGuiMultiSelectFlags_ClearOnClickVoid | ImGuiMultiSelectFlags_BoxSelect1d,
                                                                  model.SelectionCount(), static_cast<int>(rows.size()));
                 storage.ApplyRequests(ms);
@@ -994,6 +1005,7 @@ namespace Arcane::Editor
                 // cursor), and an item submitted outside a row moves the cursor
                 // past RowPosY2 -- EndTable's IM_ASSERT (imgui_tables.cpp:1444).
                 ms = ImGui::EndMultiSelect();
+                ImGui::PopID();   // the inner window's id, pushed above BeginMultiSelect
                 storage.ApplyRequests(ms);
                 if (ad.changed || state.msClicked.IsValid()) model.ApplySelection(std::move(ad.next), state.msClicked);
                 // T5 s7.8: the background menu (New Folder... under Content/).
