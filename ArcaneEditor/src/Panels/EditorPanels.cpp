@@ -1046,13 +1046,23 @@ namespace Arcane::Editor
         return result;
     }
 
-    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool* open)
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool suppressBadges, bool* open)
     {
-        ImGui::Begin("Console", open);
-
         // Snapshot once: CollapseConsole holds pointers into its input, and a
-        // worker thread can push (and therefore evict) mid-frame.
+        // worker thread can push (and therefore evict) mid-frame. Snapshot
+        // BEFORE Begin: the tab title carries the unseen count (s8.2).
         const std::vector<ConsoleEntry> entries = console.Snapshot();
+        const std::size_t unseen = suppressBadges ? 0 : UnseenAlerts(entries, ui.lastSeenSeq);
+        const bool tint = unseen > 0;
+        if (tint)
+            ImGui::PushStyleColor(ImGuiCol_Text, UnseenErrors(entries, ui.lastSeenSeq) > 0 ? Theme::kError : Theme::kWarning);
+        ImGui::Begin(ConsoleTabTitle(unseen).c_str(), open);
+        if (tint) ImGui::PopStyleColor();   // only the tab label is tinted
+        // "Shown" is the window's own Hidden flag, not BeginChild's return:
+        // a new window's first frame is Hidden yet does NOT skip items
+        // (HiddenFramesCannotSkipItems), so the rows child still opens and
+        // would mark every startup warning seen before anyone could look.
+        const bool shown = !ImGui::GetCurrentWindowRead()->Hidden;
 
         std::size_t nInfo = 0, nWarn = 0, nErr = 0;
         for (const ConsoleEntry& e : entries)
@@ -1137,6 +1147,7 @@ namespace Arcane::Editor
             ImGui::End();
             return;
         }
+        if (shown && !entries.empty()) ui.lastSeenSeq = entries.back().seq;   // the badge clears next frame
 
         const auto visible = [&](const ConsoleEntry& e)
         {

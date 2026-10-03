@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -64,4 +65,17 @@ namespace Arcane::Editor
     // count > 1. Category is padded to the panel's own 8-column minimum. No
     // trailing newline; the caller joins rows.
     [[nodiscard]] std::string FormatConsoleRow(const ConsoleEntry& e, std::size_t count = 1);
+
+    // Tab titles (node-page phase s8.2). "###" hashes back to the bare name
+    // (imgui.cpp:2539-2544), so the ini entry, DockBuilderDockWindow,
+    // FindWindowByName and SelectDockTab("Problems") are unchanged.
+    [[nodiscard]] std::string ProblemsTabTitle(std::size_t nErr, std::size_t nWarn);   // count = errors + warnings
+    [[nodiscard]] std::string ConsoleTabTitle(std::size_t unseen);
+    // Warning + Error entries with seq > lastSeenSeq; UnseenErrors counts Errors only (the tint).
+    [[nodiscard]] std::size_t UnseenAlerts(std::span<const ConsoleEntry> entries, std::uint64_t lastSeenSeq) noexcept;
+    [[nodiscard]] std::size_t UnseenErrors(std::span<const ConsoleEntry> entries, std::uint64_t lastSeenSeq) noexcept;
+
+    // The strip chip's text (T4 s6.5's StripChip; the colour is the app's).
+    struct ProblemsChipText { std::string label; std::string tooltip; };
+    [[nodiscard]] std::optional<ProblemsChipText> ProblemsChip(std::size_t nErr, std::size_t nWarn);
 }

@@ -1,6 +1,7 @@
 // Console model: category derivation from the engine's "Subsystem: " prefixes,
 // and identical-row collapsing. Pure functions, no ImGui ([editor]).
 
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -8,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <Panels/ConsoleModel.hpp>
+#include <Widgets/IconsLucide.h>
 
 namespace
 {
@@ -116,4 +118,42 @@ TEST_CASE("CollapseConsole keeps first-seen order and does not merge across seve
 TEST_CASE("CollapseConsole on an empty span yields no rows", "[editor]")
 {
     CHECK(Arcane::Editor::CollapseConsole({}).empty());
+}
+
+TEST_CASE("Tab titles carry the count before ### so the window id stays the bare name", "[editor]")
+{
+    using namespace Arcane::Editor;
+    CHECK(ProblemsTabTitle(0, 0) == "Problems###Problems");
+    CHECK(ProblemsTabTitle(1, 2) == "Problems  3###Problems");
+    CHECK(ConsoleTabTitle(0) == "Console###Console");
+    CHECK(ConsoleTabTitle(5) == "Console  5###Console");
+}
+
+TEST_CASE("UnseenAlerts counts warnings and errors after the last seen seq", "[editor]")
+{
+    using namespace Arcane::Editor;
+    std::vector<ConsoleEntry> e;
+    for (std::uint64_t s = 1; s <= 5; ++s)
+    {
+        ConsoleEntry x;
+        x.seq = s;
+        x.level = s == 2 ? Arcane::DiagSeverity::Warning : s == 4 ? Arcane::DiagSeverity::Error : Arcane::DiagSeverity::Info;
+        e.push_back(x);
+    }
+    CHECK(UnseenAlerts(e, 0) == 2);
+    CHECK(UnseenErrors(e, 0) == 1);
+    CHECK(UnseenAlerts(e, 2) == 1);
+    CHECK(UnseenAlerts(e, 5) == 0);
+    CHECK(UnseenErrors(e, 4) == 0);
+}
+
+TEST_CASE("ProblemsChip: nothing at zero; the worst icon plus the count, and an errors/warnings tooltip", "[editor]")
+{
+    using namespace Arcane::Editor;
+    CHECK_FALSE(ProblemsChip(0, 0).has_value());
+    const std::optional<ProblemsChipText> warn = ProblemsChip(0, 4);
+    REQUIRE(warn.has_value());
+    CHECK(warn->label == std::string(ICON_LC_TRIANGLE_ALERT) + " 4");
+    CHECK(warn->tooltip == "0 errors, 4 warnings");
+    CHECK(ProblemsChip(2, 1)->label == std::string(ICON_LC_CIRCLE_X) + " 3");
 }

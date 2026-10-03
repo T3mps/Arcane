@@ -1,6 +1,8 @@
 #include <Panels/ProblemsPanel.hpp>
 
+#include <Panels/ConsoleModel.hpp>   // ProblemsTabTitle (s8.2)
 #include <Panels/SeverityStyle.hpp>
+#include <Widgets/EditorTheme.hpp>
 #include <Widgets/EditorWidgets.hpp>
 #include <imgui.h>
 
@@ -24,14 +26,18 @@ namespace Arcane::Editor
     }
 
     std::optional<Arcane::DiagLocator> DrawProblemsPanel(const DiagnosticStore& store,
-                                                         ProblemsUiState& ui, bool* open)
+                                                         ProblemsUiState& ui, bool suppressBadges,
+                                                         bool* open)
     {
         std::optional<Arcane::DiagLocator> clicked;
 
-        ImGui::Begin("Problems", open);
-
         const std::size_t nErr  = store.Count(Arcane::DiagSeverity::Error);
         const std::size_t nWarn = store.Count(Arcane::DiagSeverity::Warning);
+        const bool tint = !suppressBadges && nErr + nWarn > 0;
+        if (tint) ImGui::PushStyleColor(ImGuiCol_Text, nErr > 0 ? Theme::kError : Theme::kWarning);
+        ImGui::Begin(suppressBadges ? "Problems###Problems" : ProblemsTabTitle(nErr, nWarn).c_str(), open);
+        if (tint) ImGui::PopStyleColor();   // only the tab label is tinted
+
         const std::size_t nInfo = store.Count(Arcane::DiagSeverity::Info);
 
         // Three count-carrying severity toggles (s8.2): no always-drawn "0".

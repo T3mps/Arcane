@@ -281,12 +281,14 @@ namespace Arcane::Editor
         // swapped label holds until. A plain deadline the draw compares each
         // frame -- no timer, no animation state; 0 (any past time) = idle.
         double copyFlashUntil = 0.0;
+        std::uint64_t lastSeenSeq = 0;   // the newest seq the drawn rows showed; the badge counts past it
     };
 
     // Scrolling console of captured log lines: severity filters, text search,
     // collapse-identical, wrap toggle, Clear/Copy. Autoscroll pins to bottom.
     // `open` is forwarded to ImGui::Begin (the tab's X button; null = no X).
-    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool* open = nullptr);
+    // `suppressBadges` (UnderVerifyHarness) keeps the tab title bare and untinted.
+    void DrawConsolePanel(ConsoleBuffer& console, ConsoleUiState& ui, bool suppressBadges, bool* open = nullptr);
 
     struct ViewportPanelResult
     {

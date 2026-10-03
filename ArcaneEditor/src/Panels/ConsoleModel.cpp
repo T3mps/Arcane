@@ -1,5 +1,7 @@
 #include <Panels/ConsoleModel.hpp>
 
+#include <Widgets/IconsLucide.h>
+
 #include <cstdio>
 #include <ctime>
 #include <unordered_map>
@@ -100,5 +102,43 @@ namespace Arcane::Editor
             out += ')';
         }
         return out;
+    }
+
+    namespace
+    {
+        std::string BadgedTitle(std::string_view name, std::size_t n)
+        {
+            std::string t(name);
+            if (n > 0) t += "  " + std::to_string(n);
+            return t + "###" + std::string(name);
+        }
+    }
+
+    std::string ProblemsTabTitle(std::size_t nErr, std::size_t nWarn) { return BadgedTitle("Problems", nErr + nWarn); }
+    std::string ConsoleTabTitle(std::size_t unseen) { return BadgedTitle("Console", unseen); }
+
+    std::size_t UnseenAlerts(std::span<const ConsoleEntry> entries, std::uint64_t lastSeenSeq) noexcept
+    {
+        std::size_t n = 0;
+        for (const ConsoleEntry& e : entries)
+            if (e.seq > lastSeenSeq && e.level != Arcane::DiagSeverity::Info) ++n;
+        return n;
+    }
+
+    std::size_t UnseenErrors(std::span<const ConsoleEntry> entries, std::uint64_t lastSeenSeq) noexcept
+    {
+        std::size_t n = 0;
+        for (const ConsoleEntry& e : entries)
+            if (e.seq > lastSeenSeq && e.level == Arcane::DiagSeverity::Error) ++n;
+        return n;
+    }
+
+    std::optional<ProblemsChipText> ProblemsChip(std::size_t nErr, std::size_t nWarn)
+    {
+        if (nErr + nWarn == 0) return std::nullopt;
+        ProblemsChipText c;
+        c.label = std::string(nErr > 0 ? ICON_LC_CIRCLE_X : ICON_LC_TRIANGLE_ALERT) + " " + std::to_string(nErr + nWarn);
+        c.tooltip = std::to_string(nErr) + " errors, " + std::to_string(nWarn) + " warnings";
+        return c;
     }
 }

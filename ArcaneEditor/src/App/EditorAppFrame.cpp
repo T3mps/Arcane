@@ -12,6 +12,8 @@
 // "above"/"below" locators in their comments stay true.
 
 #include "App/EditorApp.hpp"
+#include "App/HarnessRules.hpp"   // UnderVerifyHarness: badges + chip stay out of goldens (s8.2)
+#include "Panels/ConsoleModel.hpp"   // ProblemsChip (s8.2)
 #include "Panels/EditorPanels.hpp"
 #include "Project/OsShell.hpp"   // AssetPathAction's Show in Explorer / Open as text (s4.6)
 #include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
@@ -2306,7 +2308,15 @@ namespace Arcane::Editor
         Arcane::Editor::ToolbarStatus stripStatus;
         stripStatus.title     = titleParts;
         stripStatus.scenePath = m_scene.Path().string();   // empty = never saved
-        // stripStatus.problems stays nullopt in T4; s8.2 (T6) fills it.
+        // s8.2: the Problems chip. Never under the harness (goldens stay machine-free).
+        if (!Arcane::Editor::UnderVerifyHarness(m_config))
+        {
+            const std::size_t nErr  = m_consoleDiag.store.Count(Arcane::DiagSeverity::Error);
+            const std::size_t nWarn = m_consoleDiag.store.Count(Arcane::DiagSeverity::Warning);
+            if (const auto chip = Arcane::Editor::ProblemsChip(nErr, nWarn))
+                stripStatus.problems = Arcane::Editor::StripChip{ chip->label,
+                    nErr > 0 ? Arcane::Editor::Theme::kError : Arcane::Editor::Theme::kWarning, chip->tooltip };
+        }
         const Arcane::Editor::ToolbarResult toolbar =
             Arcane::Editor::DrawSimTimeToolbar(m_play, m_runtime->Core(),
                                                m_plugin ? &*m_plugin : nullptr, m_playMode,
@@ -2326,6 +2336,11 @@ namespace Arcane::Editor
         // own declaration states the split).
         if (toolbar.launchServer)
             DoLaunchServer();
+        if (toolbar.problemsChipClicked)
+        {
+            m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
+            Arcane::Editor::SelectDockTab("Problems");
+        }
         // Stop is the end of the whole session, including the child process.
         // A no-op on every topology that never spawned one.
         if (wasPlaying && !InPlayMode())
@@ -2514,6 +2529,7 @@ namespace Arcane::Editor
             m_consoleDiag.console.SetCapacity(static_cast<std::size_t>(m_consoleDiag.ui.lineCap));
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Console))
             Arcane::Editor::DrawConsolePanel(m_consoleDiag.console, m_consoleDiag.ui,
+                Arcane::Editor::UnderVerifyHarness(m_config),
                 m_panelVis.OpenFlag(Arcane::Editor::PanelId::Console));
 
         // Problems panel: current diagnostic STATE (Console above is the
@@ -2525,6 +2541,7 @@ namespace Arcane::Editor
         if (m_panelVis.IsVisible(Arcane::Editor::PanelId::Problems))
             if (const std::optional<Arcane::DiagLocator> hit =
                     Arcane::Editor::DrawProblemsPanel(m_consoleDiag.store, m_consoleDiag.problemsUi,
+                        Arcane::Editor::UnderVerifyHarness(m_config),
                         m_panelVis.OpenFlag(Arcane::Editor::PanelId::Problems)))
                 RouteLocator(*hit);
 
