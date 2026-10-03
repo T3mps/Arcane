@@ -17,6 +17,7 @@
 #include "Panels/InspectorMeta.hpp"
 #include "Panels/InspectorView.hpp"
 #include "Panels/InspectorWindows.hpp"   // kPrimaryInspectorWindowId
+#include "Panels/SeverityStyle.hpp"   // the Console toolbar's severity toggles (s8.2)
 #include "App/PlayMode.hpp"
 #include "Scene/SelectionContext.hpp"
 #include "Scene/SelectionOps.hpp"
@@ -1104,16 +1105,9 @@ namespace Arcane::Editor
         ImGui::SameLine();
         ImGui::Checkbox("Wrap", &ui.wrap);
 
-        ImGui::SameLine();
-        ImGui::Text("|");
-        ImGui::SameLine(); ImGui::Checkbox("##infoT", &ui.showInfo);
-        ImGui::SameLine(); ImGui::Text(ICON_LC_INFO " %zu", nInfo);
-        ImGui::SameLine(); ImGui::Checkbox("##warnT", &ui.showWarning);
-        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.95f, 0.77f, 0.30f, 1.0f),
-                                              ICON_LC_TRIANGLE_ALERT " %zu", nWarn);
-        ImGui::SameLine(); ImGui::Checkbox("##errT", &ui.showError);
-        ImGui::SameLine(); ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.35f, 1.0f),
-                                              ICON_LC_CIRCLE_X " %zu", nErr);
+        ImGui::SameLine(); (void)SeverityToggleFor("console_err",  Arcane::DiagSeverity::Error,   nErr,  ui.showError);
+        ImGui::SameLine(); (void)SeverityToggleFor("console_warn", Arcane::DiagSeverity::Warning, nWarn, ui.showWarning);
+        ImGui::SameLine(); (void)SeverityToggleFor("console_info", Arcane::DiagSeverity::Info,    nInfo, ui.showInfo);
 
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##consolesearch", "Search", ui.search, sizeof(ui.search));
@@ -1222,8 +1216,8 @@ namespace Arcane::Editor
             const ConsoleEntry& e = *row.e;
 
             ImVec4 col(0.80f, 0.80f, 0.80f, 1.0f);
-            if (e.level == Arcane::DiagSeverity::Error)        col = ImVec4(0.90f, 0.35f, 0.35f, 1.0f);
-            else if (e.level == Arcane::DiagSeverity::Warning) col = ImVec4(0.95f, 0.77f, 0.30f, 1.0f);
+            if (e.level == Arcane::DiagSeverity::Error)        col = Theme::kError;
+            else if (e.level == Arcane::DiagSeverity::Warning) col = Theme::kWarning;
 
             const std::string clock = ClockText(e.timestampMs);
             char cat[64];

@@ -18,6 +18,7 @@
 
 #include <imgui.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -431,6 +432,11 @@ namespace Arcane::Editor
     void PushToggleOnColors();
     void PopToggleOnColors();
     [[nodiscard]] bool IconToggle(const char* label, bool on);
+
+    // One severity toggle (node-page phase s8.2): IconToggle labelled
+    // "<icon> <count>##<id>", so the count is inside the hit area. The label is
+    // Theme::kTextDim at zero and `tint` above. Flips `on` on click; returns the click.
+    bool SeverityToggle(const char* id, const char* icon, ImVec4 tint, std::size_t count, bool& on);
 
     // ---- colour ---------------------------------------------------------------
     // sRGB <-> linear, the IEC 61966-2-1 piecewise curve. This is the SAME

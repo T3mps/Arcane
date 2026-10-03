@@ -1344,6 +1344,16 @@ namespace Arcane::Editor
         return clicked;
     }
 
+    bool SeverityToggle(const char* id, const char* icon, ImVec4 tint, std::size_t count, bool& on)
+    {
+        const std::string label = std::string(icon) + " " + std::to_string(count) + "##" + id;
+        ImGui::PushStyleColor(ImGuiCol_Text, count == 0 ? Theme::kTextDim : tint);
+        const bool clicked = IconToggle(label.c_str(), on);
+        ImGui::PopStyleColor();
+        if (clicked) on = !on;
+        return clicked;
+    }
+
     // CURVE IS MIRRORED in data/shaders/tonemap.hlsl (HLSL, branchless min
     // form), which cites THIS file -- so an edit here changes rendered output.
     // NOTHING PINS THE TWO AGAINST EACH OTHER: no test evaluates both and

@@ -1,6 +1,7 @@
 #include <Panels/ProblemsPanel.hpp>
 
-#include <Widgets/IconsLucide.h>
+#include <Panels/SeverityStyle.hpp>
+#include <Widgets/EditorWidgets.hpp>
 #include <imgui.h>
 
 #include <map>
@@ -31,17 +32,12 @@ namespace Arcane::Editor
 
         const std::size_t nErr  = store.Count(Arcane::DiagSeverity::Error);
         const std::size_t nWarn = store.Count(Arcane::DiagSeverity::Warning);
+        const std::size_t nInfo = store.Count(Arcane::DiagSeverity::Info);
 
-        ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.35f, 1.0f), ICON_LC_CIRCLE_X " %zu", nErr);
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.95f, 0.77f, 0.30f, 1.0f), ICON_LC_TRIANGLE_ALERT " %zu", nWarn);
-        ImGui::SameLine();
-        ImGui::Checkbox("Errors", &ui.showError);
-        ImGui::SameLine();
-        ImGui::Checkbox("Warnings", &ui.showWarning);
-        ImGui::SameLine();
-        ImGui::Checkbox("Info", &ui.showInfo);
-
+        // Three count-carrying severity toggles (s8.2): no always-drawn "0".
+        (void)SeverityToggleFor("problems_err",  Arcane::DiagSeverity::Error,   nErr,  ui.showError);   ImGui::SameLine();
+        (void)SeverityToggleFor("problems_warn", Arcane::DiagSeverity::Warning, nWarn, ui.showWarning); ImGui::SameLine();
+        (void)SeverityToggleFor("problems_info", Arcane::DiagSeverity::Info,    nInfo, ui.showInfo);    ImGui::SameLine();
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputTextWithHint("##problemsearch", "Search", ui.search, sizeof(ui.search));
         ImGui::Separator();
@@ -68,18 +64,9 @@ namespace Arcane::Editor
                 for (const Arcane::Diagnostic* d : list)
                 {
                     ImGui::PushID(uid++);
-                    ImVec4 col(0.80f, 0.80f, 0.80f, 1.0f);
-                    const char* icon = ICON_LC_INFO;
-                    if (d->severity == Arcane::DiagSeverity::Error)
-                    {
-                        col = ImVec4(0.90f, 0.35f, 0.35f, 1.0f);
-                        icon = ICON_LC_CIRCLE_X;
-                    }
-                    else if (d->severity == Arcane::DiagSeverity::Warning)
-                    {
-                        col = ImVec4(0.95f, 0.77f, 0.30f, 1.0f);
-                        icon = ICON_LC_TRIANGLE_ALERT;
-                    }
+                    const SeverityStyle st = StyleFor(d->severity);
+                    const ImVec4 col = st.color;
+                    const char* icon = st.icon;
 
                     ImGui::PushStyleColor(ImGuiCol_Text, col);
                     const std::string label = std::string(icon) + " " + d->message;
