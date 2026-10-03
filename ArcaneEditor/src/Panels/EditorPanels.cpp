@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include "Panels/CreateAssetDialog.hpp"   // CreateAssetKind (Assets -> Create, Task 12)
 #include "Panels/DefaultLayout.hpp"   // the default layout's pixel geometry (BuildDefaultLayout)
 #include "Panels/DiagnosticStore.hpp"   // MatchesDiagnosticFilter, reused for the console's own text search
@@ -1138,8 +1139,7 @@ namespace Arcane::Editor
         // The cvar console's own history sits between the log rows and the
         // input line: reserve the input line plus up to six reply lines.
         // (Hygiene pass 2026-09-28: the replies were never drawn here.)
-        static Arcane::ConsoleModel cvars;
-        const std::size_t cvarLines = cvars.Lines().size() < 6 ? cvars.Lines().size() : std::size_t{ 6 };
+        const std::size_t cvarLines = ui.cvars.Lines().size() < 6 ? ui.cvars.Lines().size() : std::size_t{ 6 };
         const float reserved = ImGui::GetFrameHeightWithSpacing() * (1.0f + static_cast<float>(cvarLines));
         if (!ImGui::BeginChild("##consolerows", ImVec2(0.0f, -reserved)))
         {
@@ -1327,25 +1327,14 @@ namespace Arcane::Editor
         ImGui::EndChild();
         if (cvarLines > 0)
         {
-            const auto& lines = cvars.Lines();
+            const auto& lines = ui.cvars.Lines();
             for (std::size_t i = lines.size() - cvarLines; i < lines.size(); ++i)
             {
                 if (lines[i].ok) ImGui::TextUnformatted(lines[i].text.c_str());
                 else             ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", lines[i].text.c_str());
             }
         }
-        char buffer[512];
-        std::snprintf(buffer, sizeof(buffer), "%s", cvars.Input().c_str());
-        ImGui::SetNextItemWidth(-1.0f);
-        if (ImGui::InputText("##cvarline", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue))
-        {
-            cvars.SetInput(buffer);
-            cvars.Submit(Arcane::CVarRegistry::Get(), Arcane::Permission::Editor);
-        }
-        else
-        {
-            cvars.SetInput(buffer);
-        }
+        (void)Arcane::DrawConsoleInputLine("##cvarline", ui.cvars, Arcane::CVarRegistry::Get(), Arcane::Permission::Editor);
         ImGui::End();
     }
 

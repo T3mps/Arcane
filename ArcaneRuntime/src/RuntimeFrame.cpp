@@ -10,6 +10,7 @@
 #include <Arcane/Base/Diagnostics.hpp>    // Diagnostics::Heartbeat (PumpAndResize)
 #include <Arcane/Config/ConsoleModel.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/ImGui/ConsoleInputLine.hpp>   // the ONE command line (s8.2)
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Host/GpuSceneHost.hpp>   // PrepareSceneForRender (F3 plan 1 T8): visible set(s) + GPU-scene sync + the mesh pass's frame
 #include <Arcane/Host/VerifyReport.hpp>   // Arcane::FirstPickProbe (Task 9: pick@x,y -> FrameDesc::pickPixel)
@@ -356,17 +357,7 @@ void BuildHud(FrameIo& io)
             {
                 for (const Arcane::ConsoleLine& line : console.Lines())
                     ImGui::TextUnformatted(line.text.c_str());
-                char buffer[512];
-                std::snprintf(buffer, sizeof(buffer), "%s", console.Input().c_str());
-                if (ImGui::InputText("##cvar", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue))
-                {
-                    console.SetInput(buffer);
-                    console.Submit(Arcane::CVarRegistry::Get(), Arcane::Permission::Player);
-                }
-                else
-                {
-                    console.SetInput(buffer);
-                }
+                (void)Arcane::DrawConsoleInputLine("##cvar", console, Arcane::CVarRegistry::Get(), Arcane::Permission::Player);
             }
             ImGui::End();
             g_runtimeConsoleOpen = open;

@@ -10,6 +10,7 @@
 #include "Viewport/ViewportInput.hpp"
 #include "Viewport/ViewportSettings.hpp"   // ViewportToolState (ViewMode + ViewportSettings)
 #include "Widgets/PropertyGrid.hpp"   // PropertyGridState (InspectorState::grid)
+#include <Arcane/Config/ConsoleModel.hpp>   // ConsoleUiState::cvars (the command line's model)
 #include <Arcane/Edit/CommandStack.hpp>
 #include <imgui.h>   // ImDrawList / ImVec2 (ViewportImageOverlayFn)
 #include <Arcane/Edit/Gizmo.hpp>
@@ -282,6 +283,7 @@ namespace Arcane::Editor
         // frame -- no timer, no animation state; 0 (any past time) = idle.
         double copyFlashUntil = 0.0;
         std::uint64_t lastSeenSeq = 0;   // the newest seq the drawn rows showed; the badge counts past it
+        Arcane::ConsoleModel cvars;   // the command line's model (was a function-local static)
     };
 
     // Scrolling console of captured log lines: severity filters, text search,
