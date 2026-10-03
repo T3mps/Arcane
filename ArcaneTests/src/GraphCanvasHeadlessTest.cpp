@@ -1174,3 +1174,164 @@ TEST_CASE("Canvas marquee (T3-D3): a SLOW left-drag from empty canvas (1 px a fr
     CHECK_FALSE(Selected(h, 1));
     CHECK(h.doc->SelectionKey() == "material");
 }
+
+// ---- T3-D7 user desk bug (2026-10-02): "with a node selected [the Vertex
+// Output] and panned so it is off screen, trying to move another node draws a
+// white line connector leading from the selected node" -- a press-drag on a
+// visible node started a LINK drag from an off-screen node's pin. ----
+namespace
+{
+    ed::Detail::EditorContext& EditorOf(CanvasHarness& h)
+    {
+        return *reinterpret_cast<ed::Detail::EditorContext*>(h.doc->GraphCanvasContext());
+    }
+    ImRect NodeScreenRect(CanvasHarness& h, std::uint32_t id)
+    {
+        return h.InCanvas([id]
+        {
+            const ImVec2 p = ed::GetNodePosition(ed::NodeId(id));
+            const ImVec2 s = ed::GetNodeSize(ed::NodeId(id));
+            return ImRect(ed::CanvasToScreen(p), ed::CanvasToScreen(ImVec2(p.x + s.x, p.y + s.y)));
+        });
+    }
+    // The off-screen stand-in's tell (ShaderEditorDocument::DrawGraphNode,
+    // NodeCulled): every pin of a culled node is submitted as a 0x0 Dummy.
+    bool PinsCollapsed(CanvasHarness& h, std::uint32_t id)
+    {
+        const ed::Detail::Node* node = EditorOf(h).FindNode(ed::NodeId(id));
+        REQUIRE(node != nullptr);
+        REQUIRE(node->m_LastPin != nullptr);
+        for (const ed::Detail::Pin* pin = node->m_LastPin; pin; pin = pin->m_PreviousPin)
+            if (pin->m_Bounds.GetWidth() > 0.0f || pin->m_Bounds.GetHeight() > 0.0f)
+                return false;
+        return true;
+    }
+    bool FullyOnCanvas(CanvasHarness& h, std::uint32_t id)
+    {
+        const ImRect canvas = EditorOf(h).GetRect();
+        const ImRect r = NodeScreenRect(h, id);
+        return canvas.Contains(r);
+    }
+    // Wheel-zoom in with the cursor on `at` (the zoom keeps that point fixed).
+    void ZoomIn(CanvasHarness& h, ImVec2 at, int notches)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddMousePosEvent(at.x, at.y); h.Frame();
+        for (int i = 0; i < notches; ++i) { io.AddMouseWheelEvent(0.0f, 1.0f); h.Frame(); }
+        h.Frame(20);                                             // the zoom animation lands
+    }
+    // A right-drag pan (Config::NavigateButtonIndex) from `from` by `delta`.
+    void Pan(CanvasHarness& h, ImVec2 from, ImVec2 delta)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddMousePosEvent(from.x, from.y); h.Frame();
+        io.AddMouseButtonEvent(1, true); h.Frame();
+        for (int i = 1; i <= 4; ++i)
+        {
+            io.AddMousePosEvent(from.x + delta.x * float(i) / 4.0f, from.y + delta.y * float(i) / 4.0f);
+            h.Frame();
+        }
+        io.AddMouseButtonEvent(1, false); h.Frame(2);
+    }
+    // Press on `from`, move 1 px a frame for 8 px then on to from + delta,
+    // release; reports which editor actions ran while the button was held.
+    struct DragSeen { bool linkDrag = false; bool nodeDrag = false; std::uint64_t linkFromNode = 0; };
+    DragSeen PressDrag(CanvasHarness& h, ImVec2 from, ImVec2 delta)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        DragSeen seen;
+        auto observe = [&]
+        {
+            if (ed::Detail::EditorAction* a = EditorOf(h).GetCurrentAction())
+            {
+                if (ed::Detail::CreateItemAction* create = a->AsCreateItem())
+                {
+                    seen.linkDrag = true;
+                    if (create->m_DraggedPin && create->m_DraggedPin->m_Node)
+                        seen.linkFromNode = create->m_DraggedPin->m_Node->m_ID.Get();
+                }
+                seen.nodeDrag = seen.nodeDrag || a->AsDrag() != nullptr;
+            }
+        };
+        io.AddMousePosEvent(from.x, from.y); h.Frame();
+        io.AddMouseButtonEvent(0, true); h.Frame(); observe();
+        const float len = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+        for (int px = 1; px <= 8; ++px)
+        {
+            io.AddMousePosEvent(from.x + delta.x / len * float(px), from.y + delta.y / len * float(px));
+            h.Frame(); observe();
+        }
+        io.AddMousePosEvent(from.x + delta.x, from.y + delta.y); h.Frame(); observe();
+        h.Frame(); observe();
+        io.AddMouseButtonEvent(0, false); h.Frame(2);
+        return seen;
+    }
+}
+
+TEST_CASE("Canvas drag (T3-D7 user desk): a press-drag on a visible node MOVES it while another node is panned off-screen -- no link drag from the off-screen node's pins",
+          "[editor][graphcanvas][nodepage]")
+{
+    // The mechanism (imgui_node_editor.cpp BuildControl): a culled node's
+    // pins are 0x0 stand-ins that submit NO ImGui item, so the walk's
+    // IsItemActive() on them answered for the PREVIOUS item. The walk is
+    // m_Nodes back to front and a press rotates the pressed node to the back
+    // (End(), "Bring active node to front"), so the node walked right after it
+    // is the one just before it in m_Nodes: the node pressed before -- the
+    // SELECTED one -- or, with nothing pressed yet, the one created before it.
+    // When that node was off-screen its pins took activeObject; DragAction
+    // refuses a pin and CreateItemAction dragged a link from it. Pin kind
+    // never mattered.
+    //
+    // OutputAndFloats: the Output (1, input pins ONLY -- the user's Vertex
+    // Output) in the right column, Floats 2 and 3 (output pins only) left.
+    struct Variant { const char* name; std::uint32_t select; std::uint32_t offscreen; std::uint32_t drag; float panX; };
+    const Variant v = GENERATE(
+        Variant{ "the desk: input-only Output SELECTED off-screen, drag Float 2", 1, 1, 2, +60.0f },
+        Variant{ "a node WITH outputs (Float 3) selected off-screen, drag the Output", 3, 3, 1, -60.0f },
+        Variant{ "the Output off-screen, NOTHING selected, drag Float 2", 0, 1, 2, +60.0f });
+    INFO("variant: " << v.name);
+    CanvasHarness h(TwoNodeGraph("sprite", OutputAndFloats()));
+    h.Frame(3);
+    h.Click(ImVec2(1000.0f, 650.0f));                          // settles the open fit
+    if (v.select != 0)
+    {
+        h.Click(h.NodeTitle(v.select));
+        REQUIRE(Selected(h, v.select));
+    }
+
+    // The user's gesture: the view moves (wheel zoom on the node to be dragged,
+    // then right-drag pans) until the selected node is off-screen and culled.
+    ZoomIn(h, h.NodeTitle(v.drag), 5);
+    const ImRect canvas = EditorOf(h).GetRect();
+    const ImVec2 panFrom(canvas.GetCenter().x - v.panX * 0.5f, canvas.Max.y - 16.0f);   // empty canvas under the nodes
+    for (int i = 0; i < 40 && !PinsCollapsed(h, v.offscreen); ++i)
+        Pan(h, panFrom, ImVec2(v.panX, 0.0f));
+    INFO("drag node rect " << NodeScreenRect(h, v.drag).Min.x << ", " << NodeScreenRect(h, v.drag).Min.y
+         << "; off-screen node rect " << NodeScreenRect(h, v.offscreen).Min.x << ", " << NodeScreenRect(h, v.offscreen).Min.y
+         << "; canvas " << canvas.Min.x << ", " << canvas.Min.y << " -> " << canvas.Max.x << ", " << canvas.Max.y);
+    REQUIRE(PinsCollapsed(h, v.offscreen));                     // culled: its pins are the 0x0 stand-ins
+    REQUIRE(FullyOnCanvas(h, v.drag));
+    if (v.select != 0)
+        REQUIRE(Selected(h, v.select));                          // the pan kept the selection
+
+    // The node follows the mouse: the canvas offset is the drag in canvas
+    // units (GetCurrentZoom is canvas units per pixel), floored to the
+    // editor's 16-unit grid by DragAction::Process's pivot alignment
+    // (AlignPointToGrid: p - fmod(p, 16)) -- so within one grid cell under it.
+    const ImVec2 drag(60.0f, 40.0f);
+    auto canvasPos = [&] { return h.InCanvas([&] { return ed::GetNodePosition(ed::NodeId(v.drag)); }); };
+    const float unitsPerPixel = h.InCanvas([] { return ed::GetCurrentZoom(); });
+    const ImVec2 before = canvasPos();
+    const DragSeen seen = PressDrag(h, h.NodeTitle(v.drag), drag);
+    const ImVec2 moved(canvasPos().x - before.x, canvasPos().y - before.y);
+    const ImVec2 want(drag.x * unitsPerPixel, drag.y * unitsPerPixel);
+    INFO("moved " << moved.x << ", " << moved.y << " canvas units; the drag is " << want.x << ", " << want.y
+         << "; link drag from node " << seen.linkFromNode);
+    CHECK_FALSE(seen.linkDrag);                                 // no white connector
+    CHECK(seen.nodeDrag);
+    CHECK(moved.x > want.x - 16.5f);                            // the node followed the mouse
+    CHECK(moved.x < want.x + 0.5f);
+    CHECK(moved.y > want.y - 16.5f);
+    CHECK(moved.y < want.y + 0.5f);
+}
+

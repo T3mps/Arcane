@@ -2436,6 +2436,16 @@ ed::Control ed::EditorContext::BuildControl(bool allowOffscreen)
     // Check input interactions over area.
     auto checkInteractionsInArea = [this, &emitInteractiveArea, &hotObject, &activeObject, &clickedObject, &doubleClickedObject](ObjectId id, const ImRect& rect, Object* object)
     {
+        // ARCANE LOCAL FIX (vendored imgui-node-editor): a zero-size area
+        // submits NO ImGui item (invisibleButtonEx returns before ItemAdd), so
+        // the IsItemActive/IsItemHovered reads below would answer for the
+        // PREVIOUS item -- the node walked just before. An off-screen (culled)
+        // node's 0x0 pins walked right after a pressed node took over
+        // activeObject, and the drag became a link drag from that pin. An area
+        // with no item has no interaction state: skip it.
+        if (ImRect_IsEmpty(rect))
+            return;
+
         if (emitInteractiveArea(id, rect) >= 0)
             clickedObject = object;
         if (!doubleClickedObject && ImGui::IsMouseDoubleClicked(m_Config.DragButtonIndex) && ImGui::IsItemHovered())
