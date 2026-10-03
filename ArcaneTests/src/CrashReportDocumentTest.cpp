@@ -12,6 +12,8 @@
 #include "Documents/CrashReportDocument.hpp"
 #include "Documents/DocumentHost.hpp"
 #include "Panels/AssetPanelModel.hpp"
+#include "SymbolizedText.hpp"
+#include "FileText.hpp"
 
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Guid.hpp>
@@ -72,7 +74,7 @@ TEST_CASE("CrashReportDocument headless construction from a Diag::WriteFile fixt
     CrashReportDocument doc(path, *loaded);
 
     CHECK(doc.AssetGuid() == e.guid);
-    CHECK(doc.Title() == path.stem().string());
+    CHECK(doc.Title().rfind("Arcane Editor the GPU device was lost -- ", 0) == 0);   // headline + local stamp (s8.1 item 7)
     CHECK_FALSE(doc.Dirty());
     CHECK(doc.Save());   // read-only: unreachable via Dirty()-gated paths, trivially "succeeds"
     CHECK(doc.Envelope().kind == "gpu-crash");
@@ -285,4 +287,138 @@ TEST_CASE("AssetKindOf classifies .arcdiag as Diagnostic, case-insensitive", "[e
     CHECK(AssetKindOf("diag://reports/CRASH.ARCDIAG") == AssetKind::Diagnostic);
     CHECK(AssetKindOf("diag://reports/CRASH.ARCDIAG") != AssetKind::Other);
     CHECK(AssetKindOf("diag://reports/CRASH.ARCDIAG") != AssetKind::Data);
+}
+
+namespace
+{
+    std::filesystem::path Sibling(const std::filesystem::path& arcdiag, const char* suffix)
+    {
+        std::filesystem::path p = arcdiag.parent_path() / arcdiag.stem();
+        p += suffix;
+        return p;
+    }
+
+    Envelope CrashFixture(const std::filesystem::path& path)
+    {
+        Envelope e;
+        e.guid = Arcane::Guid::Generate();
+        e.kind = "crash";
+        e.appName = "ArcaneEditor";
+        e.timestampUtc = "2026-09-29T16:57:12Z";
+        e.reason = "crash (unhandled exception)";
+        e.cpuThreadSummary = "--- thread 77 (MAIN)\n00 ArcaneEditor.exe + 0x10\n";
+        REQUIRE(Arcane::Diag::WriteFile(e, path));
+        return e;
+    }
+
+    std::string SymbolizedFixture()
+    {
+        Arcane::Reporter::Symbolized s;
+        s.engineAvailable = true;
+        s.symbolPath = "srv*";
+        s.threads.push_back({ 77, true, { Arcane::Reporter::SymFrame{ 0, "ArcaneEditor", "Boom", 0x1a, "D:\\dev\\Boom.cpp", 42 } } });
+        s.threads.push_back({ 78, false, {} });
+        return Arcane::Reporter::FormatSymbolized(s, "Debug@x", "");
+    }
+}
+
+TEST_CASE("CrashReportDocument reads its .symbolized.txt and .log.txt siblings once, at construction", "[editor][diag]")
+{
+    const auto dir  = TempDir("symbolized");
+    const auto path = dir / "ArcaneEditor-20260929-165712-pid77.arcdiag";
+    CrashFixture(path);
+    REQUIRE(Arcane::Reporter::WriteText(Sibling(path, ".symbolized.txt"), SymbolizedFixture()));
+    REQUIRE(Arcane::Reporter::WriteText(Sibling(path, ".log.txt"), "first\nlast line\n"));
+
+    CrashReportDocument doc(path, *Arcane::Diag::ReadFile(path));
+    REQUIRE(doc.HasSymbolized());
+    CHECK(doc.SymbolizedPath() == Sibling(path, ".symbolized.txt"));
+    REQUIRE(doc.View().threads.size() == 2);
+    CHECK(doc.View().threads[0].label == "thread 77 (faulting)");
+    REQUIRE(doc.View().threads[0].frames.size() == 1);
+    CHECK(doc.View().threads[0].frames[0].file == "D:\\dev\\Boom.cpp");
+    CHECK(doc.View().threads[0].frames[0].line == 42);
+    CHECK(doc.View().logTail.find("last line") != std::string::npos);
+    CHECK(doc.LogPath() == Sibling(path, ".log.txt"));
+    CHECK(doc.Title().rfind("Arcane Editor crashed -- ", 0) == 0);
+}
+
+TEST_CASE("CrashReportDocument falls back to the portable stack, then picks up a late .symbolized.txt on NoteReopened", "[editor][diag]")
+{
+    const auto dir  = TempDir("late_symbolized");
+    const auto path = dir / "ArcaneEditor-20260929-165712-pid77.arcdiag";
+    CrashFixture(path);
+
+    CrashReportDocument doc(path, *Arcane::Diag::ReadFile(path));
+    CHECK_FALSE(doc.HasSymbolized());
+    REQUIRE(doc.View().threads.size() == 1);
+    CHECK(doc.View().threads[0].label == "thread 77 (MAIN)");
+    CHECK(doc.View().threads[0].frames.empty());
+    CHECK(doc.LogPath().empty());
+
+    REQUIRE(Arcane::Reporter::WriteText(Sibling(path, ".symbolized.txt"), SymbolizedFixture()));
+    doc.NoteReopened();
+    REQUIRE(doc.HasSymbolized());
+    CHECK(doc.View().threads[0].label == "thread 77 (faulting)");
+}
+
+TEST_CASE("CrashReportDocument carries the openSourceAtLine service", "[editor][diag]")
+{
+    const auto dir  = TempDir("services");
+    const auto path = dir / "ArcaneEditor-20260929-165712-pid77.arcdiag";
+    CrashFixture(path);
+    std::filesystem::path seenFile;
+    int seenLine = 0;
+    CrashReportDocument::Services services;
+    services.openSourceAtLine = [&](const std::filesystem::path& f, int l) { seenFile = f; seenLine = l; };
+    CrashReportDocument doc(path, *Arcane::Diag::ReadFile(path), services);
+    REQUIRE(doc.OpenSource("D:\\dev\\Boom.cpp", 42));
+    CHECK(seenFile == std::filesystem::path("D:\\dev\\Boom.cpp"));
+    CHECK(seenLine == 42);
+
+    // No service wired: OpenSource reports false and calls nothing.
+    CrashReportDocument bare(path, *Arcane::Diag::ReadFile(path));
+    CHECK_FALSE(bare.OpenSource("D:\\dev\\Boom.cpp", 7));
+    CHECK(seenLine == 42);
+}
+
+TEST_CASE("CrashReportDocument: an engine-unavailable .symbolized.txt counts as present and keeps the portable stack", "[editor][diag]")
+{
+    const auto dir  = TempDir("unavailable_symbolized");
+    const auto path = dir / "ArcaneEditor-20260929-165712-pid77.arcdiag";
+    const Envelope e = CrashFixture(path);
+    Arcane::Reporter::Symbolized s;
+    s.engineError = "LoadLibrary(dbgeng.dll) failed (126)";
+    REQUIRE(Arcane::Reporter::WriteText(Sibling(path, ".symbolized.txt"),
+                                        Arcane::Reporter::FormatSymbolized(s, "Debug@x", e.cpuThreadSummary)));
+    CrashReportDocument doc(path, *Arcane::Diag::ReadFile(path));
+    REQUIRE(doc.HasSymbolized());
+    REQUIRE(doc.View().threads.size() == 1);
+    CHECK(doc.View().threads[0].label == "thread 77 (MAIN)");
+    CHECK(doc.View().threads[0].frames.empty());
+    doc.NoteReopened();   // present: nothing to re-check, same view
+    CHECK(doc.View().threads[0].label == "thread 77 (MAIN)");
+}
+
+TEST_CASE("CrashReportDocument::NoteMoved reloads the title and the symbolized sibling at the new stem", "[editor][diag]")
+{
+    // Controller ruling (carry T6-A5): NoteMoved is `m_path = p; LoadReport();`
+    // so a moved report keeps the headline title and re-keys its siblings.
+    const auto dir  = TempDir("moved");
+    const auto path = dir / "ArcaneEditor-20260929-165712-pid77.arcdiag";
+    CrashFixture(path);
+    REQUIRE(Arcane::Reporter::WriteText(Sibling(path, ".symbolized.txt"), SymbolizedFixture()));
+
+    CrashReportDocument doc(path, *Arcane::Diag::ReadFile(path));
+    REQUIRE(doc.HasSymbolized());
+
+    const auto moved = dir / "Renamed-pid77.arcdiag";
+    std::filesystem::rename(path, moved);
+    std::filesystem::rename(Sibling(path, ".symbolized.txt"), Sibling(moved, ".symbolized.txt"));
+    doc.NoteMoved(moved);
+
+    CHECK(doc.Path() == moved);
+    CHECK(doc.Title().rfind("Arcane Editor crashed -- ", 0) == 0);
+    REQUIRE(doc.HasSymbolized());
+    CHECK(doc.SymbolizedPath() == Sibling(moved, ".symbolized.txt"));
 }

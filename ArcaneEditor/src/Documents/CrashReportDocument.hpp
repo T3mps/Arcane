@@ -24,14 +24,21 @@
 //      ResolveSibling tries the stored path first, then falls back to a
 //      same-named file beside THIS document's own .arcdiag (siblings are
 //      minted at the same stem, beside each other, by WriteReportImpl --
-//      Diagnostics.cpp:335-339), then gives up (empty = missing). A report
-//      whose sibling appears LATER than this document's construction is an
-//      accepted non-goal.
+//      Diagnostics.cpp:335-339), then gives up (empty = missing). A
+//      `.symbolized.txt` that appears later (a hang report's, written after
+//      the host registered the report, `CrashPathTest.cpp:488-498`) is
+//      re-checked on the rising edge of window focus (`Tick`) and on
+//      `NoteReopened()`, never on a timer (node-page phase s8.1).
 //   2. The .gpudump container itself: when the gpudump sibling RESOLVES,
 //      the constructor reads and parses it (Diag::ReadGpuDump,
 //      IGpuCrashBackend.hpp) so the parsed section-tag inventory is exactly
 //      what a headless test can assert on (CrashReportDocumentTest.cpp)
 //      without touching ImGui.
+//   3. The reporter's model (node-page phase s8.1, LoadReport): the
+//      <stem>.symbolized.txt (ParseSymbolized), the log tail (<stem>.log.txt,
+//      else the envelope's live log), the ReportView (BuildReportView) and
+//      the "<headline> -- <local stamp>" title. Loaded at construction and
+//      again only on NoteMoved and the late-.symbolized.txt re-checks above.
 //
 // Known CPU-report noise (Task 5 deferred minor, restated in the Task 10
 // brief): a plain crash/hang envelope today carries fault.type ==
@@ -45,10 +52,15 @@
 
 #include "Documents/EditorDocument.hpp"
 
+#include "ReportView.hpp"        // ArcaneCrashReporter/src: the reporter's pure model (s8.1)
+#include "SymbolizedText.hpp"
+
 #include <Arcane/Base/DiagEnvelope.hpp>
 #include <Arcane/Guid.hpp>
 
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -59,7 +71,12 @@ namespace Arcane::Editor
     public:
         // `envelope` is already loaded (Diag::ReadFile happens in the
         // factory -- see EditorApp.cpp's crashReportFactory).
-        CrashReportDocument(std::filesystem::path path, Arcane::Diag::Envelope envelope);
+        struct Services
+        {
+            // [file:line] frame links; EditorApp::OpenSourceAtLine in the app, null in most tests.
+            std::function<void(const std::filesystem::path&, int)> openSourceAtLine;
+        };
+        CrashReportDocument(std::filesystem::path path, Arcane::Diag::Envelope envelope, Services services = {});
 
         const std::string& Title() const override { return m_title; }
         Arcane::Guid AssetGuid() const override { return m_envelope.guid; }
@@ -76,7 +93,16 @@ namespace Arcane::Editor
         bool Save() override { return true; }
         bool WindowFocused() const override { return m_windowFocused; }
         void Draw(bool& requestClose) override;
-        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11
+        void NoteMoved(const std::filesystem::path& p) override;   // T5 s7.11; reloads at the new stem (s8.1)
+        void Tick(double dt) override;    // rising focus edge: re-check a missing .symbolized.txt
+        void NoteReopened() override;     // DocumentHost focus-not-reopen: the same re-check
+
+        [[nodiscard]] const Arcane::Reporter::ReportView& View() const noexcept { return m_view; }
+        [[nodiscard]] bool HasSymbolized() const noexcept { return m_symbolized.has_value(); }
+        [[nodiscard]] const std::filesystem::path& SymbolizedPath() const noexcept { return m_symbolizedPath; }   // <stem>.symbolized.txt; HasSymbolized = it existed AND parsed at the last load
+        [[nodiscard]] const std::filesystem::path& LogPath() const noexcept { return m_logResolved; }             // <stem>.log.txt, else envelope.logPath, else empty
+        // Calls Services::openSourceAtLine; false when no service is wired.
+        bool OpenSource(const std::filesystem::path& file, int line) const;
 
         // ---- headless-testable model half (no ImGui below this line) -----
 
@@ -141,15 +167,27 @@ namespace Arcane::Editor
         }
 
     private:
+        void LoadReport();   // symbolized + log + view + title; the ctor and every re-check
+
         std::filesystem::path    m_path;
         Arcane::Diag::Envelope   m_envelope;
-        std::string              m_title;         // Title() -- the file stem (already unique: appName-stamp-pidN)
-        std::string              m_windowLabel;    // "title (Crash Report)###crashdoc_<guid>"
+        std::string              m_title;         // headline + " -- " + local stamp; the stem when the stamp does not parse
+        std::string              m_windowLabel;    // "<title>###crashdoc_<guid>"
         bool                     m_windowFocused = false;
         // Resolved once at construction (ResolveSibling); see the accessors above.
         std::filesystem::path    m_siblingTxtResolved;
         std::filesystem::path    m_siblingDmpResolved;
         std::filesystem::path    m_siblingGpuDumpResolved;
         std::vector<std::string> m_gpuDumpTags;    // parsed at construction; see GpuDumpSectionTags
+
+        Services                                          m_services;
+        std::optional<Arcane::Reporter::ParsedSymbolized> m_symbolized;
+        Arcane::Reporter::ReportView                      m_view;
+        std::filesystem::path                             m_symbolizedPath;
+        std::filesystem::path                             m_logResolved;
+        std::vector<std::vector<bool>>                    m_frameFileExists;   // [thread][frame]: probed once per load, never per frame
+        std::size_t                                       m_threadIndex = 0;
+        double                                            m_copyFlashUntil = 0.0;
+        bool                                              m_wasFocused = false;
     };
 }

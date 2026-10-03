@@ -3,26 +3,24 @@
 #include "Widgets/EditorTheme.hpp"
 #include "Project/OsShell.hpp"   // ShowInExplorer -- the one shell route (s4.6)
 
+#include "FileText.hpp"   // ArcaneCrashReporter/src: Slurp
+#include "LogTail.hpp"    // ResolveLogPath / ReadLogTail
+
 #include <Arcane/Base/Log.hpp>
 
 #include <Arcane/Render/IGpuCrashBackend.hpp>   // Diag::ReadGpuDump / ParseGpuDump
 
 #include <imgui.h>
 
+#include <chrono>
 #include <system_error>
 
 namespace Arcane::Editor
 {
-    CrashReportDocument::CrashReportDocument(std::filesystem::path path, Arcane::Diag::Envelope envelope)
-        : m_path(std::move(path)), m_envelope(std::move(envelope))
+    CrashReportDocument::CrashReportDocument(std::filesystem::path path, Arcane::Diag::Envelope envelope,
+                                             Services services)
+        : m_path(std::move(path)), m_envelope(std::move(envelope)), m_services(std::move(services))
     {
-        // Same name-fallback shape as ShaderEditorDocument/SpriteDocument,
-        // but there is no authored "name" field on a crash report -- the
-        // file stem (Diagnostics.cpp's WriteReportImpl: "<appName>-<stamp>-
-        // pid<N>") is already unique per report, so it needs no fallback.
-        m_title = m_path.stem().string();
-        m_windowLabel = m_title + " (Crash Report)###crashdoc_" + m_envelope.guid.ToString();
-
         // Resolved ONCE here, never in Draw() (post-review fix): a moved or
         // copied reports folder leaves the envelope's ABSOLUTE paths stale,
         // so every sibling is resolved against disk exactly once, at load,
@@ -44,6 +42,69 @@ namespace Arcane::Editor
                 for (const auto& section : dump->sections)
                     m_gpuDumpTags.push_back(section.tag);
         }
+
+        // The title, the window label and the reporter model (s8.1) -- the
+        // same call every later re-check (NoteMoved, NoteReopened, Tick) makes.
+        LoadReport();
+    }
+
+    void CrashReportDocument::LoadReport()
+    {
+        namespace R = Arcane::Reporter;
+        // R64: siblings are built with path +=, never string concatenation.
+        const std::filesystem::path stem = m_path.parent_path() / m_path.stem();
+        m_symbolizedPath = stem;
+        m_symbolizedPath += ".symbolized.txt";
+
+        std::error_code ec;
+        m_symbolized.reset();
+        if (std::filesystem::is_regular_file(m_symbolizedPath, ec))
+            m_symbolized = R::ParseSymbolized(R::Slurp(m_symbolizedPath));
+
+        // <stem>.log.txt, else the live log the envelope recorded, else empty:
+        // ResolveLogPath is the one home of that order (ReadLogTail uses it too).
+        const std::filesystem::path livePath(m_envelope.logPath);
+        m_logResolved = R::ResolveLogPath(stem, livePath);
+
+        R::Args args;
+        args.product      = R::DisplayProduct(m_envelope.appName);
+        args.envelopePath = m_path.string();
+        m_view = R::BuildReportView(m_envelope, args, m_symbolized ? &m_symbolized->sym : nullptr,
+                                    R::ReadLogTail(stem, livePath, 200));
+
+        m_frameFileExists.assign(m_view.threads.size(), {});
+        for (std::size_t t = 0; t < m_view.threads.size(); ++t)
+            for (const R::SymFrame& f : m_view.threads[t].frames)
+            {
+                std::error_code fe;
+                m_frameFileExists[t].push_back(!f.file.empty() && std::filesystem::exists(f.file, fe));
+            }
+        if (m_threadIndex >= m_view.threads.size()) m_threadIndex = 0;
+
+        const std::chrono::time_zone* zone = nullptr;
+        try { zone = std::chrono::current_zone(); } catch (...) { zone = nullptr; }   // no tzdb: fall back to the stem
+        const std::string stamp = R::FormatLocalStamp(m_envelope.timestampUtc, zone);
+        m_title = stamp.empty() ? m_path.stem().string() : m_view.headline + " -- " + stamp;
+        m_windowLabel = m_title + "###crashdoc_" + m_envelope.guid.ToString();   // the id is unchanged
+    }
+
+    void CrashReportDocument::NoteReopened()
+    {
+        if (!m_symbolized) LoadReport();
+    }
+
+    void CrashReportDocument::Tick(double)
+    {
+        if (m_windowFocused && !m_wasFocused && !m_symbolized)
+            LoadReport();
+        m_wasFocused = m_windowFocused;
+    }
+
+    bool CrashReportDocument::OpenSource(const std::filesystem::path& file, int line) const
+    {
+        if (!m_services.openSourceAtLine) return false;
+        m_services.openSourceAtLine(file, line);
+        return true;
     }
 
     std::filesystem::path CrashReportDocument::ResolveSibling(const std::string& recorded,
@@ -89,12 +150,10 @@ namespace Arcane::Editor
         return out;
     }
 
-    void CrashReportDocument::NoteMoved(const std::filesystem::path& p)
-    {
-        m_path = p;
-        m_title = m_path.stem().string();
-        m_windowLabel = m_title + " (Crash Report)###crashdoc_" + m_envelope.guid.ToString();
-    }
+    // Controller ruling (s8.1 item 7 + s7.11): the title, the label (same id)
+    // and the .symbolized.txt / .log.txt / view resolution move to the new stem
+    // in one place.
+    void CrashReportDocument::NoteMoved(const std::filesystem::path& p) { m_path = p; LoadReport(); }
 
     void CrashReportDocument::Draw(bool& requestClose)
     {

@@ -6,8 +6,9 @@
 // (premake5.lua, ArcaneTests' `files` list) so the [reporter] units drive
 // the wording and the thread ordering directly. That list is NOT gated on
 // the target OS, so nothing here -- and nothing ReportView.cpp includes --
-// may reach windows.h. LogTail.hpp/.cpp (the filesystem half) are NOT
-// compiled into the tests and stay out of this header's includes.
+// may reach windows.h. LogTail.hpp/.cpp (the filesystem half) stay out of
+// this header's includes; since node-page phase s8.1 they compile into the
+// tests and the editor too, std-only like the rest.
 #pragma once
 
 #include "ReporterArgs.hpp"

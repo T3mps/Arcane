@@ -1021,9 +1021,16 @@ project "ArcaneEditor"
     files {
         "%{prj.location}/src/**.cpp",
         "%{prj.location}/src/**.hpp",
+        -- node-page phase s8.1: the crash viewer source-compiles the reporter's
+        -- pure model (third consumer = promote to Core, spec 9.27 #12).
+        "%{wks.location}/ArcaneCrashReporter/src/ReporterArgs.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/SymbolizedText.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/LogTail.cpp",
     }
     includedirs {
         "%{prj.location}/src",
+        "%{wks.location}/ArcaneCrashReporter/src",
         "%{wks.location}/ArcaneClient/src",
         "%{IncludeDir.ArcaneCore}",
         "%{IncludeDir.nlohmann}",
@@ -1633,6 +1640,7 @@ project "ArcaneTests"
         "%{wks.location}/ArcaneCrashReporter/src/ReportView.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/HangSession.cpp",
         "%{wks.location}/ArcaneCrashReporter/src/MonitorRule.cpp",
+        "%{wks.location}/ArcaneCrashReporter/src/LogTail.cpp",   -- std-only; CrashReportDocument reads the log tail (node-page phase s8.1)
     }
 
     includedirs {
