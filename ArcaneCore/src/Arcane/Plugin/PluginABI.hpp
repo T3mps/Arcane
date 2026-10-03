@@ -1021,7 +1021,26 @@ namespace Arcane
     //     ArcaneCore exports; ArcaneClient exports `DrawConsoleInputLine`. Every
     //     registry now registers `console.historySize`, and Log::Init registers
     //     `log.level`. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
-    inline constexpr uint32_t kGamePluginABIVersion = 50;
+    // v51 (2026-10-03, input and time as resources -- input-seam spec s9): the
+    //     one bump for the input seam. `LocalInputUser` (held by value inside
+    //     `ARCANE_API ClientRuntime`) gained `generation_` (layout). Vendored
+    //     Astra 0743077 + c46a90e: `ComponentDescriptor` gained
+    //     `isTransientResource` -- a layout change in a header every module
+    //     compiles and both sides of the boundary build descriptors from;
+    //     param systems take ordering traits and are keyed by their own functor
+    //     type (scheduler keying and ordering both sides must agree on); an
+    //     `AstraTransientResource` is never serialized, so a snapshot written by
+    //     one side no longer carries the resources the other side expects to
+    //     republish. RunLoop publishes `Arcane::Time` and ClientRuntime
+    //     publishes `Arcane::GameInput` (+ `ActionRef`) as registry resources;
+    //     `Arcane::Physics2D` (= the published PhysicsResource) exports
+    //     `Motion`/`SetVelocity`; `Scene/PhysicsCommands.hpp` is deleted with its
+    //     exports `GetBodyMotion2D`/`SetBodyVelocity2D` (v41-v43), and the
+    //     reflected sample component PlayerController2D lost its copied input
+    //     and time fields. A v50 module was compiled against the old layouts and
+    //     exports; reject the pairing. ReferenceProject.arcproj and
+    //     Aphelyon.arcproj restamped.
+    inline constexpr uint32_t kGamePluginABIVersion = 51;
 
     // The ABI version compiled into the LOADED Arcane.dll -- i.e. the one the
     // plugin gate actually enforces at runtime.
