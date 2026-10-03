@@ -715,17 +715,18 @@ namespace Arcane::Editor
         // factory+peek shape -- Diag::ReadFile stands in for LoadMaterialAsset,
         // both independently re-read the file, same as materialFactory/
         // materialPeek do today). CrashReportDocument is read-only (never
-        // dirty), so unlike the sprite/material routes it needs no
-        // DocServices/Services borrow from the app at all.
+        // dirty); unlike the sprite/material routes it borrows one service,
+        // OpenSourceAtLine (node-page phase s8.1).
         const auto crashReportFactory =
-            [](const std::filesystem::path& p)
+            [this](const std::filesystem::path& p)
                 -> std::unique_ptr<Arcane::Editor::EditorDocument>
             {
                 auto envelope = Arcane::Diag::ReadFile(p);
                 if (!envelope)
                     return nullptr;
-                return std::make_unique<Arcane::Editor::CrashReportDocument>(
-                    p, std::move(*envelope));
+                Arcane::Editor::CrashReportDocument::Services services;
+                services.openSourceAtLine = [this](const std::filesystem::path& f, int line) { OpenSourceAtLine(f, line); };
+                return std::make_unique<Arcane::Editor::CrashReportDocument>(p, std::move(*envelope), std::move(services));
             };
         const auto crashReportPeek =
             [](const std::filesystem::path& p) -> Arcane::Guid

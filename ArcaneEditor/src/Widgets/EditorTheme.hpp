@@ -153,6 +153,10 @@ namespace Arcane::Editor
         // text), named here so a new error mark reuses it rather than another
         // copy of the literal.
         inline constexpr ImVec4 kError      = ImVec4(0.900f, 0.350f, 0.350f, 1.00f); // #e65959
+        // "Look at this": DiagSeverity::Warning (Problems, Console, the crash
+        // viewer's injected rows, the tab/chip tint). The literal the panels
+        // already drew, named (node-page phase s8.2).
+        inline constexpr ImVec4 kWarning    = ImVec4(0.950f, 0.770f, 0.300f, 1.00f); // #f2c44d
 
         // Fully transparent -- spelled once so the entries that mean "draw
         // nothing here" say so rather than repeating a zero vector.
