@@ -1346,7 +1346,7 @@ namespace Arcane::Editor
 
     bool SeverityToggle(const char* id, const char* icon, ImVec4 tint, std::size_t count, bool& on)
     {
-        const std::string label = std::string(icon) + " " + std::to_string(count) + "##" + id;
+        const std::string label = std::string(icon) + " " + std::to_string(count) + "###" + id;
         ImGui::PushStyleColor(ImGuiCol_Text, count == 0 ? Theme::kTextDim : tint);
         const bool clicked = IconToggle(label.c_str(), on);
         ImGui::PopStyleColor();

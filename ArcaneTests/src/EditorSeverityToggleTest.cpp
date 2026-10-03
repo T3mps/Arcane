@@ -86,3 +86,21 @@ TEST_CASE("SeverityStyle maps each severity to its icon and token", "[editor]")
     CHECK(std::string_view(StyleFor(Arcane::DiagSeverity::Warning).icon) == ICON_LC_TRIANGLE_ALERT);
     CHECK(std::string_view(StyleFor(Arcane::DiagSeverity::Info).icon)    == ICON_LC_INFO);
 }
+
+TEST_CASE("SeverityToggle: a click that spans a count change still registers (the ID is the id alone)", "[editor]")
+{
+    // Streaming logs tick the count between mouse-down and mouse-up; under
+    // "##" the ID hashed the count too and the release landed on a new ID.
+    ToggleHarness h;
+    h.count = 3;
+    h.Frame();
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(h.centre.x, h.centre.y); h.Frame();
+    io.AddMouseButtonEvent(0, true);  h.Frame();
+    CHECK_FALSE(h.clicked);
+    h.count = 4;
+    io.AddMouseButtonEvent(0, false); h.Frame();
+    CHECK(h.clicked);
+    CHECK_FALSE(h.on);
+    CHECK(h.stackDrift == 0);
+}
