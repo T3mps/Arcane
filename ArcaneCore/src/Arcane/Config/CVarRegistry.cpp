@@ -59,9 +59,38 @@ namespace Arcane
             }
         }
 
-        bool Implemented(CVarType t)
+        bool TakesRange(CVarType t)
         {
-            return t <= CVarType::String;
+            return (t >= CVarType::Int32 && t <= CVarType::Float64) || (t >= CVarType::Color && t <= CVarType::Vec4);
+        }
+
+        // True when some component of `lo` exceeds `hi` (same type, checked by the caller).
+        bool RangeEmpty(const CVarValue& lo, const CVarValue& hi)
+        {
+            switch (lo.type)
+            {
+            case CVarType::Int32: return lo.AsInt32() > hi.AsInt32();
+            case CVarType::UInt32: return lo.AsUInt32() > hi.AsUInt32();
+            case CVarType::Int64: return lo.AsInt64() > hi.AsInt64();
+            case CVarType::UInt64: return lo.AsUInt64() > hi.AsUInt64();
+            case CVarType::Float32: return lo.AsFloat32() > hi.AsFloat32();
+            case CVarType::Float64: return lo.AsFloat64() > hi.AsFloat64();
+            case CVarType::Color:
+            {
+                const CVarColor a = lo.AsColor();
+                const CVarColor b = hi.AsColor();
+                return a.r > b.r || a.g > b.g || a.b > b.b || a.a > b.a;
+            }
+            case CVarType::Vec2: { const CVarVec2 a = lo.AsVec2(); const CVarVec2 b = hi.AsVec2(); return a.x > b.x || a.y > b.y; }
+            case CVarType::Vec3: { const CVarVec3 a = lo.AsVec3(); const CVarVec3 b = hi.AsVec3(); return a.x > b.x || a.y > b.y || a.z > b.z; }
+            case CVarType::Vec4:
+            {
+                const CVarVec4 a = lo.AsVec4();
+                const CVarVec4 b = hi.AsVec4();
+                return a.x > b.x || a.y > b.y || a.z > b.z || a.w > b.w;
+            }
+            default: return false;
+            }
         }
 
         // settings spec s4.1: the hint a String (or, for "slider", a number)
@@ -213,33 +242,65 @@ namespace Arcane
     CVarHandle CVarRegistry::Register(const CVarDesc& desc)
     {
         m->lastError.clear();
-        if (desc.name.empty() || !Implemented(desc.type))
+        const std::string name{ desc.name };
+        const auto refuse = [&](const std::string& why) {
+            m->lastError = "cvar '" + name + "' " + why;
+            return CVarHandle{};
+        };
+        if (name.empty())
         {
-            m->lastError = "cvar '" + std::string(desc.name) + "' has no v1 accessor";
+            m->lastError = "a cvar needs a name";
             return {};
         }
+        if (desc.type > CVarType::Enum)
+            return refuse("has an unknown type");
+        // settings spec s4.2: every row shows its help as the tooltip.
+        if (desc.help.empty() && !HasFlag(desc.flags, CVarFlags::Hidden))
+            return refuse("has no help text (every setting that is not Hidden needs one)");
+        // O4: a default of another type would publish a value its readers cannot take.
+        if (desc.defaultValue.type != desc.type)
+            return refuse(std::string("has a ") + CVarTypeName(desc.defaultValue.type) + " default but is declared " +
+                          CVarTypeName(desc.type));
+        if (desc.min || desc.max)
+        {
+            if (!TakesRange(desc.type))
+                return refuse(std::string("is ") + CVarTypeName(desc.type) + ", which takes no min/max");
+            for (const std::optional<CVarValue>* bound : { &desc.min, &desc.max })
+                if (*bound && (*bound)->type != desc.type)
+                    return refuse(std::string("has a ") + CVarTypeName((*bound)->type) + " bound but is declared " +
+                                  CVarTypeName(desc.type));
+            if (desc.min && desc.max && RangeEmpty(*desc.min, *desc.max))
+                return refuse("has an empty range (min > max)");
+        }
+        if (desc.type == CVarType::Enum)
+        {
+            if (desc.enumNames.empty())
+                return refuse("is an Enum with no names (a reflected enum needs ARC_REFLECT_ENUM, not FLAGS, "
+                              "visible ahead of its ARC_CVAR)");
+            for (std::size_t i = 0; i < desc.enumNames.size(); ++i)
+            {
+                if (desc.enumNames[i].empty())
+                    return refuse("has an empty Enum name");
+                for (std::size_t j = 0; j < i; ++j)
+                    if (desc.enumNames[j] == desc.enumNames[i])
+                        return refuse("names the Enum value '" + desc.enumNames[i] + "' twice");
+            }
+            const std::int32_t ordinal = desc.defaultValue.AsEnum();
+            if (ordinal < 0 || static_cast<std::size_t>(ordinal) >= desc.enumNames.size())
+                return refuse("has an Enum default outside its " + std::to_string(desc.enumNames.size()) + " names");
+        }
+        else if (!desc.enumNames.empty())
+            return refuse(std::string("declares Enum names but is ") + CVarTypeName(desc.type));
         if (!WidgetFits(desc.widget, desc.type))
-        {
-            m->lastError = "cvar '" + std::string(desc.name) + "' has widget '" + std::string(desc.widget) +
-                           "', which does not fit its type (" + CVarTypeName(desc.type) + ")";
-            return {};
-        }
+            return refuse("has widget '" + std::string(desc.widget) + "', which does not fit its type (" +
+                          CVarTypeName(desc.type) + ")");
         if (HasFlag(desc.flags, CVarFlags::Dev) && !m->devCvars)
-        {
-            m->lastError = "cvar '" + std::string(desc.name) + "' is Dev and this build compiled it out";
-            return {};
-        }
-        if (const auto existing = m->byName.find(std::string(desc.name)); existing != m->byName.end())
-        {
-            m->lastError = "cvar '" + std::string(desc.name) + "' already registered by module '"
-                         + m->slots[existing->second].declaredBy + "', refused from '" + std::string(desc.module) + "'";
-            return {};
-        }
-        if (m->commandByName.contains(std::string(desc.name)))
-        {
-            m->lastError = "cvar '" + std::string(desc.name) + "' collides with a command";
-            return {};
-        }
+            return refuse("is Dev and this build compiled it out");
+        if (const auto existing = m->byName.find(name); existing != m->byName.end())
+            return refuse("already registered by module '" + m->slots[existing->second].declaredBy +
+                          "', refused from '" + std::string(desc.module) + "'");
+        if (m->commandByName.contains(name))
+            return refuse("collides with a command");
 
         std::uint32_t index = 0;
         if (!m->freeSlots.empty())
@@ -345,6 +406,9 @@ namespace Arcane
         Slot& slot = m->slots[handle.index];
         if (!slot.alive || slot.generation != handle.generation) return SetResult::Stale;
         if (value.type != slot.type) return SetResult::TypeMismatch;
+        if (slot.type == CVarType::Enum &&
+            (value.AsEnum() < 0 || static_cast<std::size_t>(value.AsEnum()) >= slot.enumNames.size()))
+            return SetResult::TypeMismatch;   // an ordinal outside the declared names
 
         const bool editor = permission == Permission::Editor;
         if (!editor)

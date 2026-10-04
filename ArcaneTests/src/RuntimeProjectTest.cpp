@@ -179,9 +179,9 @@ TEST_CASE("Runtime user cvar archive: a project switch writes the OLD project's 
         ~Unregister() { Arcane::CVarRegistry::Get().UnregisterModule("t3d2-runtime-test"); Arcane::CVarRegistry::Get().Publish(); }
     } unregister;
     const Arcane::CVarHandle legend = cvars.Register(Arcane::CVarDesc{ "t3d2test.legend", Arcane::CVarType::Bool,
-        Arcane::CVarValue::Bool(true), {}, {}, Arcane::CVarFlags::Archive, "", "t3d2-runtime-test" });
+        Arcane::CVarValue::Bool(true), {}, {}, Arcane::CVarFlags::Archive, "test cvar", "t3d2-runtime-test" });
     const Arcane::CVarHandle plain = cvars.Register(Arcane::CVarDesc{ "t3d2test.plain", Arcane::CVarType::Int32,
-        Arcane::CVarValue::Int32(1), {}, {}, Arcane::CVarFlags::UserSettable, "", "t3d2-runtime-test" });
+        Arcane::CVarValue::Int32(1), {}, {}, Arcane::CVarFlags::UserSettable, "test cvar", "t3d2-runtime-test" });
     REQUIRE_FALSE(legend.IsStale());
     REQUIRE_FALSE(plain.IsStale());
     const fs::path fileA = dir / "A" / "Saved" / "Config" / "t3d2test.json";

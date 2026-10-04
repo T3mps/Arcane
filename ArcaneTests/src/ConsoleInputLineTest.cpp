@@ -17,7 +17,7 @@ namespace
         LineHarness()
         {
             REQUIRE_FALSE(reg.Register(Arcane::CVarDesc{ "game.speed", Arcane::CVarType::Int32, Arcane::CVarValue::Int32(1),
-                                                         {}, {}, {}, "", "engine" }).IsStale());
+                                                         {}, {}, {}, "test cvar", "engine" }).IsStale());
             ctx = ImGui::CreateContext();
             ImGui::SetCurrentContext(ctx);
             ImGuiIO& io = ImGui::GetIO();
