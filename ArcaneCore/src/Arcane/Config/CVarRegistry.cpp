@@ -256,6 +256,66 @@ namespace Arcane
                 std::chrono::system_clock::now().time_since_epoch()).count();
             audit(record, auditUser);
         }
+
+        // Move each listed dirty slot's winning record into `published`.
+        // Returns the slots whose value changed.
+        std::vector<std::uint32_t> Promote(const std::vector<std::uint32_t>& indices)
+        {
+            std::vector<std::uint32_t> changed;
+            for (const std::uint32_t i : indices)
+            {
+                if (i >= slots.size()) continue;
+                Slot& slot = slots[i];
+                if (!slot.alive || !slot.dirty) continue;
+                slot.dirty = false;
+                const CVarValue& next = slot.history.back().value;
+                if (!(next == slot.published))
+                {
+                    slot.published = next;
+                    changed.push_back(i);
+                }
+            }
+            return changed;
+        }
+
+        // Fire each changed slot's callbacks. Each list is COPIED first (spec
+        // s4.5, O4): a callback may add a callback, which first fires on the
+        // next change, or register a cvar, which can move the slot array.
+        void Dispatch(const std::vector<std::uint32_t>& changed)
+        {
+            for (const std::uint32_t i : changed)
+            {
+                if (i >= slots.size() || !slots[i].alive) continue;
+                const CVarHandle handle{ i, slots[i].generation };
+                const std::vector<Slot::Callback> callbacks = slots[i].callbacks;
+                for (const Slot::Callback& cb : callbacks)
+                    if (cb.fn) cb.fn(handle, cb.user);
+            }
+        }
+
+        // Drop the Console and Code records of every Cheat cvar. Returns the
+        // slots whose history changed; they are now dirty.
+        std::vector<std::uint32_t> DropCheatHistory()
+        {
+            std::vector<std::uint32_t> touched;
+            for (std::uint32_t i = 0; i < slots.size(); ++i)
+            {
+                Slot& slot = slots[i];
+                if (!slot.alive || !HasFlag(slot.flags, CVarFlags::Cheat)) continue;
+                const auto before = slot.history.size();
+                std::erase_if(slot.history, [](const CVarHistoryRecord& h) {
+                    return h.by == SetBy::Console || h.by == SetBy::Code;
+                });
+                if (slot.history.empty())
+                    slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
+                if (slot.history.size() != before)
+                {
+                    slot.dirty = true;
+                    touched.push_back(i);
+                }
+            }
+            return touched;
+        }
     };
 
     CVarRegistry::CVarRegistry() : CVarRegistry(true) {}
@@ -654,17 +714,7 @@ namespace Arcane
 
     void CVarRegistry::RevertCheats()
     {
-        for (Slot& slot : m->slots)
-        {
-            if (!slot.alive || !HasFlag(slot.flags, CVarFlags::Cheat)) continue;
-            const auto before = slot.history.size();
-            std::erase_if(slot.history, [](const CVarHistoryRecord& h) {
-                return h.by == SetBy::Console || h.by == SetBy::Code;
-            });
-            if (slot.history.size() != before) slot.dirty = true;
-            if (slot.history.empty())
-                slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
-        }
+        (void)m->DropCheatHistory();
     }
 
     void CVarRegistry::RevertLayer(SetBy by)
@@ -698,34 +748,19 @@ namespace Arcane
         if (m->publishing) return;
         m->publishing = true;
         const bool cheatsWere = CheatsEnabled();
-        std::vector<std::uint32_t> changed;
+        std::vector<std::uint32_t> dirty;
         for (std::uint32_t i = 0; i < m->slots.size(); ++i)
-        {
-            Slot& slot = m->slots[i];
-            if (!slot.alive || !slot.dirty) continue;
-            const CVarValue next = slot.history.back().value;
-            slot.dirty = false;
-            if (!(next == slot.published))
-            {
-                slot.published = next;
-                changed.push_back(i);
-            }
-        }
-        for (std::uint32_t index : changed)
-        {
-            Slot& slot = m->slots[index];
-            for (const Slot::Callback& cb : slot.callbacks)
-                if (cb.fn) cb.fn(CVarHandle{ index, slot.generation }, cb.user);
-        }
+            if (m->slots[i].alive && m->slots[i].dirty) dirty.push_back(i);
+        const std::vector<std::uint32_t> changed = m->Promote(dirty);
+        m->Dispatch(changed);
+        // server.cheats went off in this publish (spec s4.5, O4). The Cheat
+        // settings revert through the SAME promote-and-dispatch path, so their
+        // callbacks fire. Only the reverted slots are promoted here, so a set
+        // made by a callback above still waits for the next Publish.
         if (cheatsWere && !CheatsEnabled())
         {
-            RevertCheats();
-            for (Slot& slot : m->slots)
-            {
-                if (!slot.alive || !slot.dirty) continue;
-                slot.published = slot.history.back().value;
-                slot.dirty = false;
-            }
+            const std::vector<std::uint32_t> reverted = m->Promote(m->DropCheatHistory());
+            m->Dispatch(reverted);
         }
         m->publishing = false;
     }
