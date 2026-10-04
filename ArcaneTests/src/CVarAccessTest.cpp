@@ -287,6 +287,16 @@ TEST_CASE("CVarPolicy: Allow widens, Deny narrows, Default keeps the table; it n
 
     reg.UnregisterModule("game");                                  // the game module unloaded
     CHECK(reg.Set(rounds, CVarValue::Int32(7), SetBy::Console, {}, CVarContext::Client, &moderator) == SetResult::Denied);
+
+    // A Dev setting a Dist build compiled out is not there for the policy to
+    // bring back: a `net.` name LobbyPolicy would Allow, never asked about.
+    CVarRegistry dist{ false };
+    PolicyProbe distProbe;
+    dist.SetPolicy(&LobbyPolicy, &distProbe, "game");
+    CHECK(dist.Register(Test::Desc("net.devKnob", CVarValue::Int32(1), Audience::Game, CVarFlags::Dev)).IsStale());
+    CHECK(dist.Execute("net.devKnob", CVarContext::LocalHost, SetBy::Console, &moderator).text.find("unknown") != std::string::npos);
+    CHECK(dist.Execute("net.devKnob 2", CVarContext::LocalHost, SetBy::Console, &moderator).text.find("unknown") != std::string::npos);
+    CHECK(distProbe.asked == 0);
 }
 
 TEST_CASE("cvar audit sink: every non-Editor change of a Server setting, and every policy denial of one, is recorded with caller, old, new and verdict", "[cvar]")
@@ -326,4 +336,107 @@ TEST_CASE("cvar audit sink: every non-Editor change of a Server setting, and eve
     REQUIRE(records.size() == 3);
     CHECK(records[2].verdict == PolicyVerdict::Allow);
     reg.SetAuditSink(nullptr, nullptr);
+}
+
+namespace
+{
+    // A ranked lock on READING: a player may not see render.quality, a moderator may.
+    PolicyVerdict ReadLockPolicy(const CVarInfo& cvar, const CVarRequest& req, void* user)
+    {
+        ++static_cast<PolicyProbe*>(user)->asked;
+        const bool moderator = req.caller && (req.caller->roles & kModerator) != 0;
+        if (!req.write && cvar.name == "render.quality" && !moderator) return PolicyVerdict::Deny;
+        return PolicyVerdict::Default;
+    }
+
+    // Game code that REGISTERS during the policy's write question: the slot
+    // array may move under the registry's own references.
+    struct GrowingPolicyState { CVarRegistry* reg = nullptr; int grown = 0; };
+
+    PolicyVerdict GrowingPolicy(const CVarInfo& cvar, const CVarRequest& req, void* user)
+    {
+        auto* state = static_cast<GrowingPolicyState*>(user);
+        const bool rotation = cvar.name == "lobby.mapRotation";   // read BEFORE growing: cvar.name points into the slot
+        if (req.write)
+        {
+            for (int i = 0; i < 128; ++i)
+            {
+                const std::string name = "lobby.grown." + std::to_string(state->grown);
+                if (state->reg->Register(Test::Desc(name, CVarValue::Int32(0), Audience::Game)).IsStale()) break;
+                ++state->grown;
+            }
+        }
+        return rotation ? PolicyVerdict::Allow : PolicyVerdict::Default;
+    }
+}
+
+// cvar_explain carries no caller of its own (a CommandFn), so it asks the same
+// read question as a plain `name` through the Execute that dispatched it: the
+// table, then the game's policy. A Deny prints no value.
+TEST_CASE("cvar_explain honours the game's policy: a read Deny for the caller refuses it and prints no value; a moderator, or the editor, reads it", "[cvar]")
+{
+    CVarRegistry reg;
+    const CVarHandle quality = reg.Register(Test::Desc("render.quality", CVarValue::Int32(2), Audience::PlayerSafe));
+    REQUIRE_FALSE(quality.IsStale());
+    PolicyProbe probe;
+    reg.SetPolicy(&ReadLockPolicy, &probe, "game");
+    const CVarCaller moderator{ "mod-7", kModerator, nullptr };
+    const CVarCaller player{ "player-3", 0, nullptr };
+
+    const ExecResult denied = reg.Execute("cvar_explain render.quality", CVarContext::LocalHost, SetBy::Console, &player);
+    CHECK_FALSE(denied.ok);
+    CHECK(denied.text.find("= 2") == std::string::npos);
+    CHECK(denied.text.find("policy") != std::string::npos);
+    CHECK(reg.Execute("cvar_explain render.quality", CVarContext::LocalHost, SetBy::Console, &moderator).text.find("= 2") != std::string::npos);
+    CHECK(reg.Execute("cvar_explain render.quality", CVarContext::ServerAdmin, SetBy::Console, &moderator).ok);
+    const int asked = probe.asked;
+    CHECK(reg.Execute("cvar_explain render.quality", CVarContext::Editor, SetBy::Console, &player).text.find("= 2") != std::string::npos);
+    CHECK(probe.asked == asked);                                   // the editor never consults the policy
+    // The plain read is the same question.
+    CHECK_FALSE(reg.Execute("render.quality", CVarContext::LocalHost, SetBy::Console, &player).ok);
+    CHECK(reg.Execute("render.quality", CVarContext::LocalHost, SetBy::Console, &moderator).ok);
+    // A Protected read outside ServerAdmin is the table's refusal, not the policy's: still "protected".
+    REQUIRE_FALSE(reg.Register(Test::Desc("net.secret", CVarValue::String("hunter2"), Audience::Server, CVarFlags::Protected)).IsStale());
+    const ExecResult secret = reg.Execute("cvar_explain net.secret", CVarContext::LocalHost, SetBy::Console, &moderator);
+    CHECK_FALSE(secret.ok);
+    CHECK(secret.text.find("hunter2") == std::string::npos);
+    CHECK(secret.text.find("protected") != std::string::npos);
+    // Absent stays unknown, whatever the policy would say.
+    REQUIRE_FALSE(reg.Register(Test::Desc("editor.knob", CVarValue::Int32(0), Audience::Editor)).IsStale());
+    CHECK(reg.Execute("cvar_explain editor.knob", CVarContext::LocalHost, SetBy::Console, &moderator).text.find("unknown") != std::string::npos);
+
+    // The query the command asks, on its own.
+    CHECK(reg.CanRead(quality, CVarContext::LocalHost, &moderator));
+    CHECK_FALSE(reg.CanRead(quality, CVarContext::LocalHost, &player));
+    CHECK(reg.CanRead(quality, CVarContext::Editor, &player));
+    CHECK_FALSE(reg.CanRead(reg.Find("net.secret"), CVarContext::Client, &moderator));
+    CHECK(reg.CanRead(reg.Find("net.secret"), CVarContext::ServerAdmin, &player));
+    CHECK_FALSE(reg.CanRead(reg.Find("editor.knob"), CVarContext::LocalHost, &moderator));
+    CHECK_FALSE(reg.CanRead(CVarHandle{}, CVarContext::Editor));
+}
+
+// The policy is game code and may Register; Register may grow the slot
+// vector. Nothing in Execute may hold a Slot reference across Set.
+TEST_CASE("cvar policy: a policy that registers cvars during the write question moves the slot array; Execute still names the setting it set", "[cvar]")
+{
+    CVarRegistry reg;
+    const CVarHandle rotation = reg.Register(Test::Desc("lobby.mapRotation", CVarValue::Int32(1), Audience::Game));
+    REQUIRE_FALSE(rotation.IsStale());
+    GrowingPolicyState state{ &reg, 0 };
+    reg.SetPolicy(&GrowingPolicy, &state, "game");
+    const CVarCaller host{ "host", 0, nullptr };
+
+    const ExecResult set = reg.Execute("lobby.mapRotation 4", CVarContext::LocalHost, SetBy::Console, &host);
+    CHECK(state.grown == 128);
+    CHECK(set.ok);
+    CHECK(set.text.find("lobby.mapRotation") != std::string::npos);
+    CHECK(reg.Find("lobby.mapRotation") == rotation);          // the handle is stable: Register never moves a live slot
+    reg.Publish();
+    CHECK(reg.Get(rotation)->AsInt32() == 4);
+
+    const ExecResult weaker = reg.Execute("lobby.mapRotation 5", CVarContext::LocalHost, SetBy::Code, &host);
+    CHECK(state.grown == 256);
+    CHECK_FALSE(weaker.ok);                                        // Code sits beneath the Console record
+    CHECK(weaker.text.find("lobby.mapRotation") != std::string::npos);
+    CHECK(reg.Find("lobby.grown.255") != CVarHandle{});
 }

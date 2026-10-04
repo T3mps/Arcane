@@ -189,6 +189,13 @@ namespace Arcane
         [[nodiscard]] std::optional<CVarValue> Get(CVarHandle handle) const;
         // The declaration's metadata. nullopt for a stale handle.
         [[nodiscard]] std::optional<CVarMetadata> Metadata(CVarHandle handle) const;
+        // May `ctx`, for `caller`, READ this setting: the Editor always; any
+        // other context through the audience x context table, then the game's
+        // policy (settings spec s3.2). False for a stale handle and for a
+        // setting absent there (Editor or Hidden outside the editor). The
+        // registry's own commands (cvar_explain) ask it, since a CommandFn
+        // carries no caller: the Execute that dispatched them lends its own.
+        [[nodiscard]] bool CanRead(CVarHandle handle, CVarContext ctx, const CVarCaller* caller = nullptr) const;
 
         // sourceModule tags the history record so UnregisterModule can pop it.
         // Outside the Editor context the write goes through the audience x

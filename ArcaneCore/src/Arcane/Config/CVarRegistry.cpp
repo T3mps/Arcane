@@ -114,16 +114,28 @@ namespace Arcane
             return v && v->type == CVarType::Bool ? v->AsBool() : fallback;
         }
 
-        // The context of the Execute that is dispatching the current command.
-        // CommandFn carries none, and the registry's own cvarlist / cvar_explain
-        // must list and print only what that context may read (s3.2).
+        // The context and caller of the Execute that is dispatching the current
+        // command. CommandFn carries neither, and the registry's own cvarlist /
+        // cvar_explain must list and print only what that context, for that
+        // caller, may read (s3.2: the table, then the game's policy).
         thread_local CVarContext tExecutingContext = CVarContext::Editor;
+        thread_local const CVarCaller* tExecutingCaller = nullptr;
 
         struct ExecutingContextScope
         {
-            CVarContext outer;
-            explicit ExecutingContextScope(CVarContext ctx) : outer(tExecutingContext) { tExecutingContext = ctx; }
-            ~ExecutingContextScope() { tExecutingContext = outer; }
+            CVarContext outerContext;
+            const CVarCaller* outerCaller;
+            ExecutingContextScope(CVarContext ctx, const CVarCaller* caller)
+                : outerContext(tExecutingContext), outerCaller(tExecutingCaller)
+            {
+                tExecutingContext = ctx;
+                tExecutingCaller = caller;
+            }
+            ~ExecutingContextScope()
+            {
+                tExecutingContext = outerContext;
+                tExecutingCaller = outerCaller;
+            }
         };
 
         void ListCommand(std::string_view, std::string& out, void* user);
@@ -328,24 +340,29 @@ namespace Arcane
             auto* self = static_cast<CVarRegistry*>(user);
             while (!args.empty() && args.front() == ' ') args.remove_prefix(1);
             const auto explained = self->Explain(args);
-            const auto meta = explained ? self->Metadata(self->Find(explained->name)) : std::nullopt;
+            const CVarHandle handle = explained ? self->Find(explained->name) : CVarHandle{};
+            const auto meta = self->Metadata(handle);
             // The same read rule as a plain `name` (s3.2): absent outside the
             // editor reads as unknown; a Protected value never prints where the
-            // plain read is refused.
-            const AccessRule read = meta ? DefaultAccess(meta->audience, meta->flags, tExecutingContext, false, false, false)
-                                         : AccessRule{ true, false };
-            if (read.absent)
+            // plain read is refused; the game's policy may refuse the caller of
+            // the Execute that dispatched this command.
+            const AccessRule table = meta ? DefaultAccess(meta->audience, meta->flags, tExecutingContext, false, false, false)
+                                          : AccessRule{ true, false };
+            if (table.absent)
             {
                 out = "unknown cvar '";
                 out += args;
                 out += "'";
                 return;
             }
-            if (!read.allowed)
+            if (!self->CanRead(handle, tExecutingContext, tExecutingCaller))
             {
+                // The table refuses a read for one reason only (Protected outside
+                // ServerAdmin), and the policy is never asked about that one; any
+                // other refusal is the policy's Deny.
                 out = "denied: '";
                 out += explained->name;
-                out += "' is protected";
+                out += table.allowed ? "' by the game's policy" : "' is protected";
                 return;
             }
             const std::vector<std::string>& enumNames = meta->enumNames;
@@ -532,6 +549,18 @@ namespace Arcane
         out.categoryPath = slot.categoryPath;
         out.enumNames = slot.enumNames;
         return out;
+    }
+
+    bool CVarRegistry::CanRead(CVarHandle handle, CVarContext ctx, const CVarCaller* caller) const
+    {
+        if (handle.index >= m->slots.size()) return false;
+        const Slot& slot = m->slots[handle.index];
+        if (!slot.alive || slot.generation != handle.generation) return false;
+        if (ctx == CVarContext::Editor) return true;
+        // Decide runs the policy (game code), which may move the slot array:
+        // `slot` is not read after it.
+        const Impl::Decision read = m->Decide(*this, slot, ctx, caller, false, nullptr);
+        return !read.absent && read.allowed;
     }
 
     SetResult CVarRegistry::Set(CVarHandle handle, CVarValue value, SetBy by,
@@ -766,7 +795,7 @@ namespace Arcane
                 return { false, "denied: '" + name + "' needs server.cheats" };
             std::string text;
             {
-                const ExecutingContextScope scope{ ctx };
+                const ExecutingContextScope scope{ ctx, caller };
                 command.fn(args, text, command.user);
             }
             const bool ok = text.rfind("unknown", 0) != 0 && text.rfind("denied", 0) != 0;
@@ -790,21 +819,31 @@ namespace Arcane
                                                                         : "denied: '" + name + "' is protected" };
             }
         }
-        // After the policy (game code) has run: it may have moved the slot array.
-        const Slot& slot = m->slots[handle.index];
-        if (args.empty())
-            return { true, slot.name + " = " + FormatCVarValue(slot.published, slot.enumNames) };
-        // The console and --set (ApplyCVarCommandLine) parse every type the same way.
-        std::string token{ args };
-        while (!token.empty() && token.back() == ' ') token.pop_back();
-        std::string error;
-        std::optional<CVarValue> parsed = ParseCVarText(token, slot.type, slot.enumNames, error);
-        if (!parsed) return { false, error };
+        // The policy is game code: it may Register, and Register may grow the
+        // slot vector. So a Slot reference is taken only AFTER the read-path
+        // policy above has run, and lives in a block that ends BEFORE Set runs
+        // the write-path policy. The echo after Set uses a copy of the name.
+        // (handle.index itself is stable: Register appends or reuses a DEAD
+        // slot, never moves a live one.)
+        std::optional<CVarValue> parsed;
+        std::string canonical;
+        {
+            const Slot& slot = m->slots[handle.index];
+            if (args.empty())
+                return { true, slot.name + " = " + FormatCVarValue(slot.published, slot.enumNames) };
+            // The console and --set (ApplyCVarCommandLine) parse every type the same way.
+            std::string token{ args };
+            while (!token.empty() && token.back() == ' ') token.pop_back();
+            std::string error;
+            parsed = ParseCVarText(token, slot.type, slot.enumNames, error);
+            if (!parsed) return { false, error };
+            canonical = slot.name;
+        }
         const SetResult result = Set(handle, std::move(*parsed), by, {}, ctx, caller);
         if (result == SetResult::Denied) return { false, "denied" };
-        if (result == SetResult::RefusedWeaker) return { false, "refused: a stronger source holds " + slot.name };
+        if (result == SetResult::RefusedWeaker) return { false, "refused: a stronger source holds " + canonical };
         if (result != SetResult::Applied) return { false, "rejected" };
-        return { true, slot.name + " set (pending publish)" };
+        return { true, canonical + " set (pending publish)" };
     }
 
     void CVarRegistry::AddCallback(CVarHandle handle, ChangeFn fn, void* user)
