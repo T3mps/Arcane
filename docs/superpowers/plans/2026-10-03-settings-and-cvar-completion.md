@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Macro names:** this plan uses the final `ARC_` prefix everywhere (S0-1 renames the codebase first; user decision 2026-10-03). Environment variables such as `ARCANE_SDK` keep their names.
+
 **Goal:** Every setting in Arcane is one cvar in one registry, reachable from the console, `--set`, the config files, two generated editor windows (Editor Preferences and Project Settings), a game's own player menu and an authenticated server admin. Each setting carries its audience, scope and apply mode. Every hard-coded tunable the audit found becomes such a setting, with an identical default.
 
 **Architecture:**
@@ -136,7 +138,7 @@ using CommandFn = CommandResult (*)(std::string_view args, void* user);
 
 class CVarModuleScope { public: explicit CVarModuleScope(std::string_view module); ~CVarModuleScope(); };  // RAII, thread_local current module
 // CVarRegistry:
-static std::string_view CurrentModule();                     // innermost CVarModuleScope, else ARCANE_MODULE_NAME of the calling DLL
+static std::string_view CurrentModule();                     // innermost CVarModuleScope, else ARC_MODULE_NAME of the calling DLL
 void UnregisterModule(std::string_view module);              // existing; now WIRED from PluginHost unload
 void ApplyLayersFor(std::string_view module, const LayerSources& layers);   // re-applies every config rung to that module's cvars, then publishes
 SetResult Set(CVarHandle, CVarValue, SetBy, std::string_view sourceModule = {}, CVarContext ctx = CVarContext::Editor, const CVarCaller* caller = nullptr);
@@ -174,9 +176,9 @@ namespace Arcane::Paths {
       ProjectSaved, ProjectIntermediate, ProjectCache, EditorUserDir, GameUserDir, DiagnosticsDir, TempDir };
   struct Config { std::filesystem::path engineDir; std::optional<std::filesystem::path> projectDir;
                   std::string companyName, gameName; bool dist = false; };
-  ARCANE_CORE_API void Configure(const Config&);                 // hosts call at boot and on project open/close
-  ARCANE_CORE_API std::filesystem::path Get(Location);          // creates nothing
-  ARCANE_CORE_API std::filesystem::path EnsureDir(Location);    // creates if writable
+  ARC_CORE_API void Configure(const Config&);                 // hosts call at boot and on project open/close
+  ARC_CORE_API std::filesystem::path Get(Location);          // creates nothing
+  ARC_CORE_API std::filesystem::path EnsureDir(Location);    // creates if writable
 }
 ```
 The EditorUser rung's directory is `Get(EditorUserDir) / "Config"`.
@@ -256,7 +258,7 @@ The seven chunks below were drafted in parallel against the shared contract. The
 
   ReferenceProject and Aphelyon are restamped at each. This replaces the Global Constraints' "one bump".
 - **I2. Early config rungs move to S2.** `HostBoot::ApplyEarlyConfigRungs`, specified in S6-2, is implemented in **S2-10** using S6-2's text: engine, project, EditorUser, user and command-line rungs are applied before `Diagnostics::Install`, `gpu_core` and the Runtime constructor. S6-2 then only consumes it.
-- **I3. `--set` context.** The command-line rung executes in `CVarContext::Editor` in Debug/Release and in `CVarContext::LocalHost` in Dist (`ARC_BUILD_DIST` / `ARCANE_DIST`). The runtime console overlay still uses the session role (S7).
+- **I3. `--set` context.** The command-line rung executes in `CVarContext::Editor` in Debug/Release and in `CVarContext::LocalHost` in Dist (`ARC_BUILD_DIST`). The runtime console overlay still uses the session role (S7).
 - **I4. Axis colours: S4-3's derivation is the R1 implementation.** It keeps one token per axis, every consumer keeps its exact legacy colour at the Dark default, and every consumer follows the token's hue otherwise. As a result:
   - S6-21 and S6-31 do NOT hold grid/gizmo axis colours under `ARC_CONSTANT`;
   - S5-2 drops the axis-colour question;
@@ -271,7 +273,164 @@ The seven chunks below were drafted in parallel against the shared contract. The
 - **I12. Line numbers** are from Arcane main `8926eecb`. Earlier tranches move lines, so every task locates its edit by the quoted symbol, as each chunk's preamble says.
 
 ## Execution order
-S1 (S1-1..S1-11, S1-20..S1-33, S1-GATE) -> S2 (S2-1..S2-13, S2-GATE) -> S3 (S3-*, S3-GATE), with S5-1 and S5-2 run beside S3 (S5-2 STOPS for the user) -> S4 (S4-1..S4-20, S4-GATE) -> S6 (S6-1 requires the FROZEN marker; ... S6-GATE) -> S7 (S7-*, S7-GATE, S7-CLOSE).
+S0 (S0-1: the ARC_ macro prefix; it stops once to ask about the user's Aphelyon WIP) -> S1 (S1-1..S1-11, S1-20..S1-33, S1-GATE) -> S2 (S2-1..S2-13, S2-GATE) -> S3 (S3-*, S3-GATE), with S5-1 and S5-2 run beside S3 (S5-2 STOPS for the user) -> S4 (S4-1..S4-20, S4-GATE) -> S6 (S6-1 requires the FROZEN marker; ... S6-GATE) -> S7 (S7-*, S7-GATE, S7-CLOSE).
+
+---
+
+## Tranche S0: one macro prefix (user decision, 2026-10-03)
+
+### Task S0-1: Rename every `ARCANE_` C++ macro to the `ARC_` prefix (no aliases)
+
+**Why.** The user decided (2026-10-03): one short prefix for every Arcane macro, the way Unreal is converging on `UE_`. No permanent aliases. Today `ARC_` holds the in-function macros (logging, asserts) and `ARCANE_` holds declarations, exports and build configuration. That split confuses users. This task runs before S1, so the whole settings arc is written in final names (the plan text already uses them).
+
+**Scope.** C++ preprocessor macros only: anything `#define`d in source, or passed through premake `defines {}`. NOT in scope:
+- **environment variables**, which keep their names: `ARCANE_SDK`, `ARCANE_BUILD_MACHINE`, `ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE`, `ARCANE_IDE_DESK(_FILE)`, `ARCANE_DIAG_DESK`, `ARCANE_BUILD_DESK`, `ARCANE_THUMBS_BLESS`, `ARCANE_TEST_CAPTURE_DIR`, `ARCANE_RESAVE_SCENES`, `ARCANE_RECORD_TRAJECTORY`. Users set these in shells, CI and the CLAUDE.md files.
+- **Lua variables** in premake (`ARCANE_TP`, `ARCANE_BIN`).
+- **Any token read with `getenv` / `os.getenv`.** Classify each remaining token: a `#define` or `defines {}` entry is a macro and is renamed; a `getenv` name is not.
+
+**Files:**
+- Create: `scripts/rename-arc-macros.py`, the one-shot rename. It is kept as a record and deleted in the commit after S0-1.
+- Modify: every file the script touches under ArcaneCore, ArcaneClient, ArcaneEditor, ArcaneRuntime, ArcaneServer, ArcaneTests, ArcaneCrashReporter, ReferenceProject, `build/*.lua`, `premake5.lua`, `ArcaneEditor/src/Project/ClassTemplates.cpp` (the generated game code), README.md and `docs/` (current docs only; dated specs and plans keep their historical text, except this plan, which already uses the new names).
+- Modify (Aphelyon, `D:\dev\starworks\Aphelyon`, its own commit): `Source/**` (10 x `ARCANE_COMPONENT`, 4 x `ARCANE_GAME_MODULE`, 1 x `ARCANE_SYSTEM`) and `docs/examples/arcane-physics-example.cpp`. Never touch `Content/` or `Source/Game/TestComponent*` (the user's WIP), even if they contain old names. Report them instead.
+- Test: `ArcaneTests/src/MacroPrefixGuardTest.cpp` (new, tag `[guard]`).
+
+**The mapping** (exact; the script's table):
+
+| Old | New |
+|---|---|
+| `ARCANE_API`, `ARCANE_CORE_API` | `ARC_API`, `ARC_CORE_API` |
+| `ARCANE_BUILD_DLL`, `ARCANE_CORE_BUILD_DLL`, `ARCANE_CORE_STATIC` | `ARC_API_EXPORTS`, `ARC_CORE_API_EXPORTS`, `ARC_CORE_STATIC` |
+| `ARCANE_DEBUG`, `ARCANE_RELEASE`, `ARCANE_DIST` | `ARC_BUILD_DEBUG`, `ARC_BUILD_RELEASE`, `ARC_BUILD_DIST` (avoids the `ARC_DEBUG` log macro) |
+| `ARCANE_REFLECT_*`, `ARCANE_END_REFLECT_*`, `ARCANE_REFLECT` | `ARC_REFLECT_*`, `ARC_END_REFLECT_*`, `ARC_REFLECT` |
+| `ARCANE_COMPONENT*`, `ARCANE_SYSTEM*`, `ARCANE_GAME_MODULE*`, `ARCANE_CHANGE_TRACKED` | `ARC_` + the same suffix |
+| `ARCANE_INTERNAL`, `ARCANE_INTERNAL_BEGIN`, `ARCANE_INTERNAL_END` | `ARC_INTERNAL`, `ARC_INTERNAL_BEGIN`, `ARC_INTERNAL_END` |
+| `ARCANE_ASSET` and any other `#define`d `ARCANE_*` the classification finds | `ARC_` + the same suffix |
+
+- [ ] **Step 1: Write the failing guard test.** `ArcaneTests/src/MacroPrefixGuardTest.cpp`:
+  ```cpp
+  // One macro prefix (user, 2026-10-03): no C++ macro is spelled ARCANE_*.
+  // Environment variables (getenv names) keep ARCANE_ and are allow-listed here.
+  #include <catch2/catch_test_macros.hpp>
+  #include <filesystem>
+  #include <fstream>
+  #include <regex>
+  #include <set>
+  #include <string>
+
+  namespace
+  {
+      const std::set<std::string> kEnvNames = {
+          "ARCANE_SDK", "ARCANE_BUILD_MACHINE", "ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE", "ARCANE_IDE_DESK",
+          "ARCANE_IDE_DESK_FILE", "ARCANE_DIAG_DESK", "ARCANE_BUILD_DESK", "ARCANE_THUMBS_BLESS",
+          "ARCANE_TEST_CAPTURE_DIR", "ARCANE_RESAVE_SCENES", "ARCANE_RECORD_TRAJECTORY" };
+  }
+
+  TEST_CASE("Macro prefix guard: no ARCANE_* token outside the environment-variable allow-list", "[guard]")
+  {
+      namespace fs = std::filesystem;
+      const fs::path root = fs::path(ARC_SOURCE_ROOT);   // premake define: the repo root
+      const std::regex token(R"(\bARCANE_[A-Z0-9_]+)");
+      std::vector<std::string> hits;
+      for (const char* dir : { "ArcaneCore", "ArcaneClient", "ArcaneEditor", "ArcaneRuntime", "ArcaneServer",
+                               "ArcaneTests/src", "ArcaneCrashReporter", "ReferenceProject/Source" })
+      {
+          for (const auto& e : fs::recursive_directory_iterator(root / dir))
+          {
+              const auto ext = e.path().extension().string();
+              if (ext != ".cpp" && ext != ".hpp" && ext != ".h" && ext != ".inl") continue;
+              if (e.path().filename() == "MacroPrefixGuardTest.cpp") continue;
+              std::ifstream in(e.path());
+              std::string line; int n = 0;
+              while (std::getline(in, line))
+              {
+                  ++n;
+                  for (std::sregex_iterator it(line.begin(), line.end(), token), end; it != end; ++it)
+                      if (!kEnvNames.contains(it->str()))
+                          hits.push_back(e.path().string() + ":" + std::to_string(n) + " " + it->str());
+              }
+          }
+      }
+      INFO("first hits: " << (hits.empty() ? std::string{} : hits.front()));
+      CHECK(hits.empty());
+  }
+  ```
+  Add `ARC_SOURCE_ROOT="%{wks.location}"` to the ArcaneTests `defines` in `premake5.lua`, unless an equivalent repo-root define exists (grep `SOURCE_ROOT`); if one exists, use it. Then regenerate premake.
+
+- [ ] **Step 2: Build and run it. Expected: FAIL** with hundreds of hits (e.g. `ArcaneCore/src/Arcane/Core/Api.hpp:… ARCANE_CORE_API`).
+  ```powershell
+  Set-Location D:\dev\starworks\Arcane-settings
+  cmd /c "echo.|scripts\generate.bat"
+  msbuild Arcane.slnx -p:Configuration=Debug -p:Platform=x64 -m:4 -nr:false -p:SolutionDir=D:\dev\starworks\Arcane-settings\
+  Set-Location bin\Debug-windows-x86_64-md\ArcaneTests; $env:TEMP='D:\dev\starworks\Arcane-settings\.tmp-tests'
+  & .\ArcaneTests.exe "[guard]" 2>&1 | Tee-Object -FilePath D:\dev\starworks\Arcane-settings\.tmp-tests\S0-1-red.log
+  ```
+
+- [ ] **Step 3: Write and run the rename script.** `scripts/rename-arc-macros.py`:
+  ```python
+  # One-shot: ARCANE_* C++ macros -> ARC_* (user decision 2026-10-03). Env vars keep ARCANE_.
+  import re, sys, pathlib
+  ENV = {"ARCANE_SDK","ARCANE_BUILD_MACHINE","ARCANE_ALLOW_REPORTER_ON_BUILD_MACHINE","ARCANE_IDE_DESK",
+         "ARCANE_IDE_DESK_FILE","ARCANE_DIAG_DESK","ARCANE_BUILD_DESK","ARCANE_THUMBS_BLESS",
+         "ARCANE_TEST_CAPTURE_DIR","ARCANE_RESAVE_SCENES","ARCANE_RECORD_TRAJECTORY","ARCANE_TP","ARCANE_BIN"}
+  EXPLICIT = {"ARCANE_DEBUG":"ARC_BUILD_DEBUG","ARCANE_RELEASE":"ARC_BUILD_RELEASE","ARCANE_DIST":"ARC_BUILD_DIST",
+              "ARCANE_BUILD_DLL":"ARC_API_EXPORTS","ARCANE_CORE_BUILD_DLL":"ARC_CORE_API_EXPORTS"}
+  TOKEN = re.compile(r"\bARCANE_[A-Z0-9_]+")
+  def repl(m):
+      t = m.group(0)
+      if t in ENV: return t
+      return EXPLICIT.get(t, "ARC_" + t[len("ARCANE_"):])
+  roots = [pathlib.Path(p) for p in sys.argv[1:]]
+  exts = {".cpp",".hpp",".h",".inl",".lua",".hlsl",".md",".json"}
+  changed = 0
+  for root in roots:
+      files = [root] if root.is_file() else [p for p in root.rglob("*") if p.suffix in exts]
+      for p in files:
+          if any(part in ("ThirdParty","bin","out",".git",".superpowers") for part in p.parts): continue
+          if "docs" in p.parts and ("specs" in p.parts or "plans" in p.parts or "audits" in p.parts): continue
+          if p.name.startswith("TestComponent") or "Content" in p.parts:
+              print("SKIPPED (user WIP):", p); continue
+          raw = p.read_bytes()
+          text = raw.decode("utf-8")
+          new = TOKEN.sub(repl, text)
+          if new != text:
+              p.write_bytes(new.encode("utf-8")); changed += 1; print(p)
+  print("files changed:", changed)
+  ```
+  It reads and writes bytes, so line endings are preserved and there is no CRLF churn. It never touches the user's WIP: `TestComponent*` files and any `Content/` path are skipped and printed. Run it over the Arcane roots, then over Aphelyon's `Source`:
+  ```powershell
+  Set-Location D:\dev\starworks\Arcane-settings
+  python scripts\rename-arc-macros.py ArcaneCore ArcaneClient ArcaneEditor ArcaneRuntime ArcaneServer ArcaneTests ArcaneCrashReporter ReferenceProject build premake5.lua README.md docs
+  python scripts\rename-arc-macros.py D:\dev\starworks\Aphelyon\Source D:\dev\starworks\Aphelyon\docs\examples
+  git -C D:\dev\starworks\Aphelyon status --short
+  ```
+  **USER GATE (verified 2026-10-03).** The user's untracked WIP `Source/Game/TestComponent.cpp/.hpp`, `TestComponent2.*` and `TestComponent3.*` use `ARCANE_` macros (1-3 each). Premake globs `Source/**`, so Aphelyon's module will NOT build after the rename until those spellings change. Before running the script on Aphelyon:
+  1. stop and ask the user: "S0 renames macros; your TestComponent* WIP files use ARCANE_COMPONENT etc. May I change only those macro spellings in them (6 files, nothing else, not staged or committed)?"
+  2. On yes: run the script on those files too (pass them explicitly, with the skip removed for this run), and leave them untracked.
+  3. On no: skip Aphelyon's build in Step 4, report it, and leave the Aphelyon source rename uncommitted for the user.
+
+- [ ] **Step 4: Regenerate, build both configs, and run the guard plus the full suite.**
+  ```powershell
+  cmd /c "echo.|scripts\generate.bat"
+  msbuild Arcane.slnx -p:Configuration=Debug -p:Platform=x64 -m:4 -nr:false -p:SolutionDir=D:\dev\starworks\Arcane-settings\
+  msbuild Arcane.slnx -p:Configuration=Release -p:Platform=x64 -m:4 -nr:false -p:SolutionDir=D:\dev\starworks\Arcane-settings\
+  ```
+  Run `"[guard]"` (expect PASS) and then `"~[gpu]"` in Debug, both from the exe dir, keeping the full log and the seed. Expected: green, with the same case and assertion counts as before plus the one guard case.
+
+  Then rebuild both game modules (`$env:ARCANE_SDK='D:\dev\starworks\Arcane-settings'` in the same shell):
+  ```powershell
+  bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build --project ReferenceProject --config Debug
+  bin\Debug-windows-x86_64-md\arcbuild\arcbuild.exe build --project D:\dev\starworks\Aphelyon --config Debug
+  bin\Debug-windows-x86_64-md\ArcaneEditor\ArcaneEditor.exe --project D:\dev\starworks\Aphelyon --headless --frames 30
+  ```
+  Expected: exit 0 and "plugin loaded". There is no ABI change: macros are source-only.
+
+  Finally, regenerate a class template through the editor's template smoke test (`"[templates]"` or the ClassTemplatesTest tag) and confirm the emitted code says `ARC_COMPONENT` / `ARC_SYSTEM`.
+
+- [ ] **Step 5: Commit** (Arcane, then Aphelyon). Stage the changed files by name: `git status --short` lists them; stage that list explicitly, never `git add -A`.
+  - Arcane: `refactor(core): one macro prefix -- every ARCANE_* C++ macro is ARC_* (build config ARC_BUILD_*, exports ARC_API/ARC_CORE_API, reflection/registration ARC_REFLECT_*/ARC_COMPONENT/ARC_SYSTEM/ARC_GAME_MODULE); environment variables keep ARCANE_; MacroPrefixGuardTest pins it; no aliases (user, 2026-10-03)`
+  - Aphelyon: `refactor(game): ARC_ macro prefix (Arcane S0-1)`
+
+  Both messages end with the two attribution lines. Then delete `scripts/rename-arc-macros.py` in a follow-up commit: `chore(scripts): drop the one-shot macro rename script (S0-1 done)`.
 
 ---
 
@@ -642,7 +801,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
 
 **Interfaces:**
 - Consumes: S1-1's value types.
-- Produces (all `ARCANE_CORE_API`, namespace `Arcane`):
+- Produces (all `ARC_CORE_API`, namespace `Arcane`):
   - `std::string CVarColorToHex(const CVarColor&)`;
   - `std::optional<CVarColor> CVarColorFromHex(std::string_view)`;
   - `std::string FormatCVarValue(const CVarValue&, const std::vector<std::string>& enumNames = {})`;
@@ -802,15 +961,15 @@ namespace Arcane
     // "#RRGGBBAA", upper case. RGB are linear floats encoded through the sRGB
     // transfer and rounded to 8 bits; alpha is linear. Channels outside
     // [0,1] clamp. Decode(Encode(byte)) is exact for every byte value.
-    ARCANE_CORE_API std::string CVarColorToHex(const CVarColor& linear);
+    ARC_CORE_API std::string CVarColorToHex(const CVarColor& linear);
     // "#RRGGBB" (alpha 1) or "#RRGGBBAA", either case. nullopt otherwise.
-    ARCANE_CORE_API std::optional<CVarColor> CVarColorFromHex(std::string_view text);
+    ARC_CORE_API std::optional<CVarColor> CVarColorFromHex(std::string_view text);
 
     // The console's spelling. Bool "true"/"false"; integers decimal;
     // Float32/Float64 std::to_string (v1's form, unchanged); Vec* components
     // space-separated in shortest round-trip form; Color as hex; Enum as its
     // name, or the ordinal's digits when it is outside `enumNames`.
-    ARCANE_CORE_API std::string FormatCVarValue(const CVarValue& value, const std::vector<std::string>& enumNames = {});
+    ARC_CORE_API std::string FormatCVarValue(const CVarValue& value, const std::vector<std::string>& enumNames = {});
 
     // Parse console / --set text as `type`. On failure: nullopt, and `error`
     // holds the reason the console shows ("expected int32", ...).
@@ -819,15 +978,15 @@ namespace Arcane
     //   Color:    "#RRGGBB", "#RRGGBBAA", or 3 or 4 finite linear floats.
     //   Enum:     an exact name from `enumNames`, or a decimal ordinal inside it.
     // The eight v1 types parse exactly as v1's Execute did.
-    ARCANE_CORE_API std::optional<CVarValue> ParseCVarText(std::string_view text, CVarType type,
+    ARC_CORE_API std::optional<CVarValue> ParseCVarText(std::string_view text, CVarType type,
                                                            const std::vector<std::string>& enumNames, std::string& error);
 
     // The name's ordinal in `enumNames`, or nullopt.
-    ARCANE_CORE_API std::optional<std::int32_t> CVarEnumOrdinal(const std::vector<std::string>& enumNames, std::string_view name);
+    ARC_CORE_API std::optional<std::int32_t> CVarEnumOrdinal(const std::vector<std::string>& enumNames, std::string_view name);
 
     // "bool", "int32", "uint32", "int64", "uint64", "float", "double",
     // "string", "color", "vec2", "vec3", "vec4", "enum".
-    ARCANE_CORE_API const char* CVarTypeName(CVarType type);
+    ARC_CORE_API const char* CVarTypeName(CVarType type);
 }
 ```
 `ArcaneCore/src/Arcane/Config/CVarFormat.cpp`:
@@ -1153,7 +1312,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
   - `enum class Audience { Editor, Game, PlayerSafe, Server }`, `enum class SettingScope { PreferencesMachine, PreferencesProject, Project }` and `enum class ApplyMode { Live, NextWorld, Restart }` (contract);
   - the `CVarDesc` fields `displayName, keywords, widget, audience, scope, apply, order, categoryPath, enumNames`, appended in the contract's order;
   - `struct CVarMetadata` (below) and `std::optional<CVarMetadata> CVarRegistry::Metadata(CVarHandle) const`;
-  - `std::string DeriveCVarDisplayName(std::string_view cvarName)` and `std::string DeriveCVarCategoryPath(std::string_view cvarName)` (`ARCANE_CORE_API`, CVarFormat.hpp).
+  - `std::string DeriveCVarDisplayName(std::string_view cvarName)` and `std::string DeriveCVarCategoryPath(std::string_view cvarName)` (`ARC_CORE_API`, CVarFormat.hpp).
   - **The categoryPath format** (S3's tree consumes it): display segments joined by `/` with no spaces around it (`"Physics/Solver"`). A dot-less name gives `"General"`. There is no Engine/Editor/Plugins/Game root; S3 adds that from audience and module.
 
 - [ ] **Step 1: Write the failing test** (`ArcaneTests/src/CVarMetadataTest.cpp`)
@@ -1368,10 +1527,10 @@ After `Get` (`:97`), declare:
     // The settings windows' label for a cvar, from its last dotted segment:
     // "fitMinZoom" -> "Fit Min Zoom", "byteBudgetMB" -> "Byte Budget MB",
     // "HTTPPort" -> "HTTP Port", "grid3D" -> "Grid3D", "max_players" -> "Max Players".
-    ARCANE_CORE_API std::string DeriveCVarDisplayName(std::string_view cvarName);
+    ARC_CORE_API std::string DeriveCVarDisplayName(std::string_view cvarName);
     // Every segment but the last, through the same word split, joined by '/':
     // "physics.solver.substeps" -> "Physics/Solver". A dot-less name -> "General".
-    ARCANE_CORE_API std::string DeriveCVarCategoryPath(std::string_view cvarName);
+    ARC_CORE_API std::string DeriveCVarCategoryPath(std::string_view cvarName);
 ```
 `CVarFormat.cpp`: inside the existing anonymous namespace, append:
 ```cpp
@@ -1853,7 +2012,7 @@ Replace the refusal block at the head of `Register` (everything before `std::uin
         if (desc.type == CVarType::Enum)
         {
             if (desc.enumNames.empty())
-                return refuse("is an Enum with no names (a reflected enum needs ARCANE_REFLECT_ENUM, not FLAGS, "
+                return refuse("is an Enum with no names (a reflected enum needs ARC_REFLECT_ENUM, not FLAGS, "
                               "visible ahead of its ARC_CVAR)");
             for (std::size_t i = 0; i < desc.enumNames.size(); ++i)
             {
@@ -2549,8 +2708,8 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
   - `template <class T> struct CVarSpec` (contract shape and order: `min, max, flags, audience, scope, apply, help, displayName, keywords, widget, categoryPath, order`).
   - `template <class T> class CVarRef { T Get() const; CVarHandle Handle() const noexcept; std::string_view Name() const; }`. `Get` reads `CVarRegistry::Get().Get(handle)` for now, and S1b moves it onto the snapshot. A stale handle reads the declared default.
   - `template <class T> CVarRef<T> Detail::RegisterCVar(std::string_view name, T defaultValue, const CVarSpec<T>&)`.
-  - `ARCANE_CORE_API CVarHandle Detail::RegisterDeclaredCVar(const CVarDesc&)`, which logs one `ARC_ERROR` when a declaration is refused (not for a Dev cvar in Dist).
-  - `std::string_view Detail::DeclaringModule()`: the binary's `ARCANE_MODULE_NAME` (a BARE TOKEN define, stringized), else `"engine"`. This chunk sets it for ArcaneEditor (`editor`) and ArcaneTests (`tests`). S1b's `CurrentModule()` fallback should read this same macro and extend it to the remaining projects and `build/arcane.lua`.
+  - `ARC_CORE_API CVarHandle Detail::RegisterDeclaredCVar(const CVarDesc&)`, which logs one `ARC_ERROR` when a declaration is refused (not for a Dev cvar in Dist).
+  - `std::string_view Detail::DeclaringModule()`: the binary's `ARC_MODULE_NAME` (a BARE TOKEN define, stringized), else `"engine"`. This chunk sets it for ArcaneEditor (`editor`) and ArcaneTests (`tests`). S1b's `CurrentModule()` fallback should read this same macro and extend it to the remaining projects and `build/arcane.lua`.
   - `ARC_CVAR_STRINGIZE(x)`.
 
 - [ ] **Step 1: Write the failing test** (`ArcaneTests/src/CVarRefTest.cpp`)
@@ -2576,11 +2735,11 @@ using namespace Arcane;
 namespace
 {
     enum class CVarRefMode : std::uint8_t { Off = 0, Low = 2, High = 7 };   // non-contiguous on purpose
-    ARCANE_REFLECT_ENUM(CVarRefMode)
-        ARCANE_REFLECT_ENUM_VALUE(CVarRefMode, Off)
-        ARCANE_REFLECT_ENUM_VALUE(CVarRefMode, Low)
-        ARCANE_REFLECT_ENUM_VALUE(CVarRefMode, High)
-    ARCANE_END_REFLECT_ENUM()
+    ARC_REFLECT_ENUM(CVarRefMode)
+        ARC_REFLECT_ENUM_VALUE(CVarRefMode, Off)
+        ARC_REFLECT_ENUM_VALUE(CVarRefMode, Low)
+        ARC_REFLECT_ENUM_VALUE(CVarRefMode, High)
+    ARC_END_REFLECT_ENUM()
 
     const CVarRef<std::int32_t> probeInt = Detail::RegisterCVar<std::int32_t>("tests.ref.int", 5,
         CVarSpec<std::int32_t>{ .min = 1, .max = 10, .flags = CVarFlags::Archive, .audience = Audience::Editor,
@@ -2626,7 +2785,7 @@ TEST_CASE("CVarRef reads its value by handle and carries the declared metadata a
     CHECK(meta->order == 4);
     CHECK(meta->displayName == "Int");
     CHECK(meta->categoryPath == "Tests/Ref");
-    CHECK(meta->module == "tests");                               // ArcaneTests' ARCANE_MODULE_NAME token
+    CHECK(meta->module == "tests");                               // ArcaneTests' ARC_MODULE_NAME token
 }
 
 TEST_CASE("CVarRef covers float, Color, Vec3 and string, with per-component clamping", "[cvar]")
@@ -2813,16 +2972,16 @@ namespace Arcane
 
         // Register through CVarRegistry::Get() and log a refusal (a Dev cvar
         // compiled out of Dist is not a refusal worth a line).
-        ARCANE_CORE_API CVarHandle RegisterDeclaredCVar(const CVarDesc& desc);
+        ARC_CORE_API CVarHandle RegisterDeclaredCVar(const CVarDesc& desc);
 
         // The module a static declaration in THIS binary belongs to (O1):
-        // the project's ARCANE_MODULE_NAME define (a bare token, e.g.
-        // ARCANE_MODULE_NAME=editor), else "engine". Inline in the header on
+        // the project's ARC_MODULE_NAME define (a bare token, e.g.
+        // ARC_MODULE_NAME=editor), else "engine". Inline in the header on
         // purpose: it must expand in the DECLARING binary, not in ArcaneCore.
         inline std::string_view DeclaringModule() noexcept
         {
-#if defined(ARCANE_MODULE_NAME)
-            return ARC_CVAR_STRINGIZE(ARCANE_MODULE_NAME);
+#if defined(ARC_MODULE_NAME)
+            return ARC_CVAR_STRINGIZE(ARC_MODULE_NAME);
 #else
             return "engine";
 #endif
@@ -2875,7 +3034,7 @@ namespace Arcane
         {
             static_assert(CVarStorable<T>,
                           "ARC_CVAR: T must be bool, std::int32_t, std::uint32_t, std::int64_t, std::uint64_t, float, "
-                          "double, std::string, CVarColor, CVarVec2/3/4, or an enum reflected with ARCANE_REFLECT_ENUM");
+                          "double, std::string, CVarColor, CVarVec2/3/4, or an enum reflected with ARC_REFLECT_ENUM");
             CVarDesc desc;
             desc.name = name;
             desc.flags = spec.flags;
@@ -2900,7 +3059,7 @@ namespace Arcane
                 // pending-reflection queue into its default TypeContext before
                 // the host installs the shared one (Astra/Core/TypeContext.hpp,
                 // SetTypeContext). MetaFactory builds the enum's TypeMeta from
-                // its ARCANE_REFLECT_ENUM block locally and registers nothing.
+                // its ARC_REFLECT_ENUM block locally and registers nothing.
                 if (::Astra::Detail::MetaFactory<T>::fn)
                 {
                     const ::Astra::TypeMeta meta = ::Astra::Detail::MetaFactory<T>::fn();
@@ -2938,7 +3097,7 @@ namespace Arcane
     {
         CVarRegistry& registry = CVarRegistry::Get();
         const CVarHandle handle = registry.Register(desc);
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
         const bool compiledOut = HasFlag(desc.flags, CVarFlags::Dev);   // Get()'s registry is built without Dev cvars
 #else
         const bool compiledOut = false;
@@ -2951,13 +3110,13 @@ namespace Arcane
 ```
 `premake5.lua`: change the ArcaneEditor line (`:1072`) to
 ```lua
-    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)", "ARCANE_MODULE_NAME=editor" }
+    defines { "_CRT_SECURE_NO_WARNINGS", "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING", "IMGUI_API=__declspec(dllimport)", "ARC_MODULE_NAME=editor" }
 ```
 and in the ArcaneTests `defines` block (`:1822-1828`), add a line after `"_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",`:
 ```lua
         -- settings S1-7: the module the test exe's static cvar declarations
         -- belong to (Detail::DeclaringModule, CVarRef.hpp). A bare token.
-        "ARCANE_MODULE_NAME=tests",
+        "ARC_MODULE_NAME=tests",
 ```
 
 - [ ] **Step 4: Run it and see it pass**
@@ -2980,7 +3139,7 @@ Expected:
 Set-Location D:\dev\starworks\Arcane-settings
 git add ArcaneCore/src/Arcane/Config/CVarRef.hpp ArcaneCore/src/Arcane/Config/CVarRegistry.cpp premake5.lua ArcaneTests/src/CVarRefTest.cpp
 git commit -m @'
-feat(cvar): CVarSpec, CVarRef<T> and Detail::RegisterCVar<T> -- a nameable handle that reads by handle and falls back to its declared default; reflected enums by ordinal via Astra's MetaFactory (no pending-meta drain); the ARCANE_MODULE_NAME token for editor and tests (settings S1-7)
+feat(cvar): CVarSpec, CVarRef<T> and Detail::RegisterCVar<T> -- a nameable handle that reads by handle and falls back to its declared default; reflected enums by ordinal via Astra's MetaFactory (no pending-meta drain); the ARC_MODULE_NAME token for editor and tests (settings S1-7)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
@@ -3113,7 +3272,7 @@ TEST_CASE("the Dev declarations keep their defaults and drive their CVarRef cons
     Log::Init();
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle markers = reg.Find("diagnostics.drawMarkers");
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     CHECK(markers.IsStale());                      // Dev: compiled out
     CHECK_FALSE(GpuDrawMarkersEnabled());          // the declared default
     CHECK(MeshCullFrustumEnabled());
@@ -3403,7 +3562,7 @@ TEST_CASE("ARC_CVAR registers its range and its module", "[cvar]") {
     CHECK(h == cvar_rangedProbe.Handle());
     CHECK(cvar_rangedProbe.Get() == 5);
 ```
-The rest of the case (`:439-454`) is kept, including the `"module 'tests'"` check, which now comes from `ARCANE_MODULE_NAME=tests`.
+The rest of the case (`:439-454`) is kept, including the `"module 'tests'"` check, which now comes from `ARC_MODULE_NAME=tests`.
 
 `EditorUndoSettingsTest.cpp:1-2`: the comment becomes `// editor.undo.* (spec 2026-09-30 s2.4): declared with ARC_CVAR (settings S1-8) and`.
 
@@ -3463,7 +3622,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
   - `bool CVarRegistry::RegisterAlias(std::string_view oldName, std::string_view newName)` (contract);
   - `CVarHandle CVarRegistry::Resolve(std::string_view name)`: exact `Find`, then the alias table, with ONE `ARC_WARN` per old name per registry;
   - `std::string CVarRegistry::AliasTarget(std::string_view) const` and `std::vector<std::pair<std::string, std::string>> CVarRegistry::Aliases() const` (sorted by old name);
-  - `ARC_CVAR_ALIAS(oldLit, newLit)` and `ARCANE_CORE_API bool Detail::RegisterDeclaredAlias(std::string_view, std::string_view)`.
+  - `ARC_CVAR_ALIAS(oldLit, newLit)` and `ARC_CORE_API bool Detail::RegisterDeclaredAlias(std::string_view, std::string_view)`.
   - `Find` stays exact. `Explain` follows an alias silently.
   - `Register` refuses a name that is an alias's old name, and `RegisterCommand` likewise.
   - `WriteCVarArchive` drops an alias's old key wherever it writes the new name.
@@ -3725,7 +3884,7 @@ In `Execute` (S1-5), change `const CVarHandle handle = Find(name);` to `const CV
 `CVarRef.hpp`: beside `RegisterDeclaredCVar`, declare:
 ```cpp
         // ARC_CVAR_ALIAS: register on CVarRegistry::Get() and log a refusal.
-        ARCANE_CORE_API bool RegisterDeclaredAlias(std::string_view oldName, std::string_view newName);
+        ARC_CORE_API bool RegisterDeclaredAlias(std::string_view oldName, std::string_view newName);
 ```
 `CVarDecl.hpp`: after `ARC_CVAR_EXTERN`, add:
 ```cpp
@@ -4035,7 +4194,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
 - Consumes: `Arcane::Test::FindReferenceProjectDir()` (`ArcaneTests/src/Helpers/ReferenceProjectDir.hpp`).
 - Produces:
   - `Arcane::AgilitySdk::kVersion` (619) and `Arcane::AgilitySdk::kPath` (`".\\D3D12\\"`);
-  - `ARCANE_AGILITY_SDK_EXPORTS()`, used once at global scope in an EXE's main TU.
+  - `ARC_AGILITY_SDK_EXPORTS()`, used once at global scope in an EXE's main TU.
 
 - [ ] **Step 1: Write the failing test** (`ArcaneTests/src/AgilitySdkTest.cpp`)
 
@@ -4093,7 +4252,7 @@ TEST_CASE("Agility SDK: every EXE uses the macro, and the version matches the ve
         INFO(rel);
         const std::string text = ReadText(root / rel);
         REQUIRE_FALSE(text.empty());
-        CHECK(text.find("ARCANE_AGILITY_SDK_EXPORTS();") != std::string::npos);
+        CHECK(text.find("ARC_AGILITY_SDK_EXPORTS();") != std::string::npos);
         CHECK(text.find("D3D12SDKVersion = ") == std::string::npos);       // no literal copy left
     }
     const std::string readme = ReadText(root / "ThirdParty" / "AgilitySDK" / "README.md");
@@ -4124,7 +4283,7 @@ Expected: `AgilitySdkTest.cpp(...): fatal error C1083: Cannot open include file:
 // ID3D12Device10+" is the proof the redirect took. CONSTANT: changing it
 // without re-vendoring the DLLs breaks device creation.
 //
-// Use: ARCANE_AGILITY_SDK_EXPORTS(); once, at global scope, in an EXE's main
+// Use: ARC_AGILITY_SDK_EXPORTS(); once, at global scope, in an EXE's main
 // translation unit. The loader ignores exports from a DLL.
 
 namespace Arcane::AgilitySdk
@@ -4134,11 +4293,11 @@ namespace Arcane::AgilitySdk
 }
 
 #if defined(_WIN32)
-#define ARCANE_AGILITY_SDK_EXPORTS()                                                                   \
+#define ARC_AGILITY_SDK_EXPORTS()                                                                   \
     extern "C" __declspec(dllexport) extern const unsigned D3D12SDKVersion = ::Arcane::AgilitySdk::kVersion; \
     extern "C" __declspec(dllexport) extern const char* D3D12SDKPath = ::Arcane::AgilitySdk::kPath
 #else
-#define ARCANE_AGILITY_SDK_EXPORTS() static_assert(true, "no Agility SDK off Windows")
+#define ARC_AGILITY_SDK_EXPORTS() static_assert(true, "no Agility SDK off Windows")
 #endif
 ```
 In each of the three main TUs, replace the comment and the two `extern "C"` lines with the code below, at the same global position:
@@ -4147,7 +4306,7 @@ In each of the three main TUs, replace the comment and the two `extern "C"` line
 - `ArcaneTests/src/test_main.cpp:12-17`
 ```cpp
 // Agility SDK handshake: the exported version/path pair (Arcane/Render/AgilitySdk.hpp).
-ARCANE_AGILITY_SDK_EXPORTS();
+ARC_AGILITY_SDK_EXPORTS();
 ```
 Add `#include <Arcane/Render/AgilitySdk.hpp>` to each file's include block: after `#include <Arcane/Host/HostConfig.hpp>` in the two host mains, and after `#include <Arcane/Client/ClientRuntime.hpp>` in `test_main.cpp`.
 
@@ -4166,7 +4325,7 @@ Expected: both `[agility]` cases pass. The ArcaneRuntime and ArcaneEditor builds
 Set-Location D:\dev\starworks\Arcane-settings
 git add ArcaneClient/src/Arcane/Render/AgilitySdk.hpp ArcaneRuntime/src/main.cpp ArcaneEditor/src/main.cpp ArcaneTests/src/test_main.cpp ArcaneTests/src/AgilitySdkTest.cpp
 git commit -m @'
-fix(render): one AgilitySdk.hpp names the D3D12SDKVersion/D3D12SDKPath pair -- ArcaneRuntime, ArcaneEditor and ArcaneTests export it through ARCANE_AGILITY_SDK_EXPORTS(), pinned against the vendored 1.619 package (settings inventory R3)
+fix(render): one AgilitySdk.hpp names the D3D12SDKVersion/D3D12SDKPath pair -- ArcaneRuntime, ArcaneEditor and ArcaneTests export it through ARC_AGILITY_SDK_EXPORTS(), pinned against the vendored 1.619 package (settings inventory R3)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
@@ -4176,16 +4335,16 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
 ---
 
 ### Review Focus candidates (S1a)
-- **An enum reflected in another TU.** If an enum's `ARCANE_REFLECT_ENUM` lives in a different translation unit from its `ARC_CVAR` (or after it in the same TU), `MetaFactory<T>::fn` may still be empty at static init. The declaration is then refused and logged, and the setting silently disappears from the console and the windows. No test covers a cross-TU or late reflection block. S1-7 should add a two-TU probe, or S1b's module-load re-apply should retry. Pin in S1-7.
+- **An enum reflected in another TU.** If an enum's `ARC_REFLECT_ENUM` lives in a different translation unit from its `ARC_CVAR` (or after it in the same TU), `MetaFactory<T>::fn` may still be empty at static init. The declaration is then refused and logged, and the setting silently disappears from the console and the windows. No test covers a cross-TU or late reflection block. S1-7 should add a two-TU probe, or S1b's module-load re-apply should retry. Pin in S1-7.
 - **NaN reaches Float32/Float64 through the old parser.** The v1 path for these types still parses with `std::stof`/`std::stod`, so `nan`, `inf` and a numeric prefix (`1.5abc`) are accepted. A published NaN never compares equal, so it fires callbacks on every Publish, and nlohmann archives it as `null`. S1-2 refuses non-finite values only for Vec and Color. Pin in S1-5, which would mean tightening v1 parsing.
 - **Colour hex is 8-bit sRGB.** A linear colour written to a file and read back is not bit-identical. The Modified filter (value != default) and the reset arrow can then disagree after a save/reload, even when the user picked the default swatch. Pin in S1-6 by comparing with a quantisation tolerance in S3's Modified filter, or by archiving exact arrays.
 - **Both names in one rung.** If a user file still holds an alias's OLD key and also the new key (two category files, or a hand edit), both apply at the same rung. Directory iteration order then decides the winner. Pin in S1-9 by preferring the new name when both are present, with a warning.
-- **Game modules still tag "engine".** Game modules define no `ARCANE_MODULE_NAME` yet, so their `ARC_CVAR`s are tagged `"engine"` until S1b. A hot-reloaded game module's cvars then collide as duplicates, and `UnregisterModule` never drops them. O1 stays open for game modules. S1b's module-capture task pins this.
+- **Game modules still tag "engine".** Game modules define no `ARC_MODULE_NAME` yet, so their `ARC_CVAR`s are tagged `"engine"` until S1b. A hot-reloaded game module's cvars then collide as duplicates, and `UnregisterModule` never drops them. O1 stays open for game modules. S1b's module-capture task pins this.
 
 ### Open questions (S1a)
 - **Enum storage.** Decided: an Enum stores the ORDINAL into its declared names, not the enumerator's numeric value. The contract gives `enumNames` only, with no values. `CVarRef<E>` keeps the reflected enumerators in declared order and maps ordinal to E. Tested with the non-contiguous `{0, 2, 7}`.
 - **Reading enum names at registration.** Decided: names come from `Astra::Detail::MetaFactory<T>::fn`, not `Astra::GetMeta<T>()`. `GetMeta` at static init drains the module's whole pending-reflection queue into its DEFAULT TypeContext, before a host installs the shared one. That would steal every reflected type in a game module. This makes Arcane depend on an Astra `Detail` symbol; promoting it to a public Astra API is an Astra-first change.
-- **Module capture before S1b.** Decided: `Detail::DeclaringModule()` reads a BARE-TOKEN define, stringized (`ARCANE_MODULE_NAME=editor`), so no escaped quotes have to survive premake, MSBuild, Ninja and Make. This chunk sets it only for ArcaneEditor (`editor`) and ArcaneTests (`tests`), which preserves today's `ARC_CVAR_RANGED` tags. Everything else falls back to `"engine"`, as before. S1b's `CurrentModule()` should read the same macro and extend it to ArcaneCore, ArcaneClient and `build/arcane.lua`.
+- **Module capture before S1b.** Decided: `Detail::DeclaringModule()` reads a BARE-TOKEN define, stringized (`ARC_MODULE_NAME=editor`), so no escaped quotes have to survive premake, MSBuild, Ninja and Make. This chunk sets it only for ArcaneEditor (`editor`) and ArcaneTests (`tests`), which preserves today's `ARC_CVAR_RANGED` tags. Everything else falls back to `"engine"`, as before. S1b's `CurrentModule()` should read the same macro and extend it to ArcaneCore, ArcaneClient and `build/arcane.lua`.
 - **categoryPath format.** Decided: display segments joined by `/` with no spaces (`"Physics/Solver"`), and `"General"` for a dot-less name. There is no Engine/Editor/Plugins/Game root: S3 adds the root from audience and module, since s6.2's "Plugins › name" and "Game › module" need the module.
 - **displayName rule.** Decided:
   - a word starts at a capital after a lower-case letter, or at the last capital of an acronym or digit run that a lower-case letter follows;
@@ -4390,7 +4549,7 @@ In `CVarConfig.hpp`:
 ```cpp
     // `--set name=value`, repeated. CommandLine rung, in `ctx` (the editor:
     // Editor; ArcaneRuntime: LocalHost). Does not publish.
-    ARCANE_CORE_API void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets,
+    ARC_CORE_API void ApplyCVarCommandLine(CVarRegistry& registry, const std::vector<std::string>& sets,
                                               CVarContext ctx);
 ```
 
@@ -4404,7 +4563,7 @@ In `ConsoleModel.hpp:29` and `ConsoleModel.cpp:7`, change the signature to `void
 In `ConsoleInputLine.hpp`:
 ```cpp
     // True on submit (the model already ran Submit with `ctx`).
-    ARCANE_API bool DrawConsoleInputLine(const char* id, ConsoleModel& model, CVarRegistry& registry,
+    ARC_API bool DrawConsoleInputLine(const char* id, ConsoleModel& model, CVarRegistry& registry,
                                          CVarContext ctx);
 ```
 In `ConsoleInputLine.cpp`, change the definition at `:36` to match, and use `model.Submit(registry, ctx);` at `:50`.
@@ -5989,7 +6148,7 @@ Subject: `feat(cvar): the immutable CVarSnapshot, swapped through an atomic shar
 
 ---
 
-### Task S1-27: Module capture -- `CVarModuleScope`, per-DLL `ARCANE_MODULE_NAME`, and the end of the `"engine"` literal
+### Task S1-27: Module capture -- `CVarModuleScope`, per-DLL `ARC_MODULE_NAME`, and the end of the `"engine"` literal
 
 **Files:**
 - Create: `ArcaneCore/src/Arcane/Config/CVarModule.hpp`
@@ -6015,18 +6174,18 @@ Subject: `feat(cvar): the immutable CVarSnapshot, swapped through an atomic shar
   - `static std::string_view CVarRegistry::ScopedModule() noexcept`: the innermost scope, else empty;
   - `static std::string_view CVarRegistry::CurrentModule() noexcept`: `ScopedModule()`, else `"ArcaneCore"`;
   - `std::string CVarRegistry::ModuleOf(CVarHandle) const`;
-  - `Arcane::Detail::CallerModule()` and the `ARCANE_MODULE_NAME_STRING` macro (`CVarModule.hpp`);
+  - `Arcane::Detail::CallerModule()` and the `ARC_MODULE_NAME_STRING` macro (`CVarModule.hpp`);
   - `Register` fills an empty `desc.module` from `CurrentModule()`;
   - callbacks record their `ScopedModule()` and leave with it;
   - built-in commands survive `UnregisterModule`;
-  - every premake project compiles with `ARCANE_MODULE_NAME=<project name>`.
+  - every premake project compiles with `ARC_MODULE_NAME=<project name>`.
 
 - [ ] **Step 1: Write the failing test**
 
 `ArcaneTests/src/CVarModuleTest.cpp`:
 ```cpp
 // Module capture (settings spec s4.3, O1): a registration names its module --
-// the innermost CVarModuleScope, else the caller's ARCANE_MODULE_NAME. [cvar]
+// the innermost CVarModuleScope, else the caller's ARC_MODULE_NAME. [cvar]
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -6046,9 +6205,9 @@ namespace S1ModuleTest
              .help = "Module-capture probe (CVarModuleTest).");
 }
 
-TEST_CASE("module capture: the scope, else the caller's ARCANE_MODULE_NAME; ArcaneCore names itself", "[cvar]")
+TEST_CASE("module capture: the scope, else the caller's ARC_MODULE_NAME; ArcaneCore names itself", "[cvar]")
 {
-    CHECK(std::string_view(ARCANE_MODULE_NAME_STRING) == "ArcaneTests");
+    CHECK(std::string_view(ARC_MODULE_NAME_STRING) == "ArcaneTests");
     CHECK(CVarRegistry::ScopedModule().empty());
     CHECK(Detail::CallerModule() == "ArcaneTests");
     CHECK(CVarRegistry::CurrentModule() == "ArcaneCore");
@@ -6111,11 +6270,11 @@ Expected: `fatal error C1083: Cannot open include file: 'Arcane/Config/CVarModul
     -- ARC_CVAR/ARC_COMMAND outside a plugin host's CVarModuleScope names the
     -- module that declared it. Workspace scope, so every project -- engine,
     -- hosts, tests, test plugins -- gets its own project name.
-    defines { "ARCANE_MODULE_NAME=%{prj.name}" }
+    defines { "ARC_MODULE_NAME=%{prj.name}" }
 ```
 `build/arcane.lua`:
-- in `arcane_game_module`'s `defines { ... }` list, add `"ARCANE_MODULE_NAME=" .. name,   -- the cvar module (settings spec s4.3)`;
-- in `arcane_core_consumer`, after its `includedirs { ... }`, add `defines { "ARCANE_MODULE_NAME=%{prj.name}" }`.
+- in `arcane_game_module`'s `defines { ... }` list, add `"ARC_MODULE_NAME=" .. name,   -- the cvar module (settings spec s4.3)`;
+- in `arcane_core_consumer`, after its `includedirs { ... }`, add `defines { "ARC_MODULE_NAME=%{prj.name}" }`.
 
 `ArcaneCore/src/Arcane/Config/CVarModule.hpp`:
 ```cpp
@@ -6123,7 +6282,7 @@ Expected: `fatal error C1083: Cannot open include file: 'Arcane/Config/CVarModul
 
 // The calling module's own name, for cvar and command registration (settings
 // spec s4.3, O1). Every engine, host, tool and test project, and every game
-// module, is built with ARCANE_MODULE_NAME=<its premake project name>
+// module, is built with ARC_MODULE_NAME=<its premake project name>
 // (premake5.lua's workspace block; build/arcane.lua for game modules and Core
 // consumers). Inline, so it expands in the CALLER's module, not in ArcaneCore.dll.
 
@@ -6133,20 +6292,20 @@ Expected: `fatal error C1083: Cannot open include file: 'Arcane/Config/CVarModul
 
 #define ARC_MODULE_STRINGIZE2(x) #x
 #define ARC_MODULE_STRINGIZE(x) ARC_MODULE_STRINGIZE2(x)
-#if defined(ARCANE_MODULE_NAME)
-#define ARCANE_MODULE_NAME_STRING ARC_MODULE_STRINGIZE(ARCANE_MODULE_NAME)
+#if defined(ARC_MODULE_NAME)
+#define ARC_MODULE_NAME_STRING ARC_MODULE_STRINGIZE(ARC_MODULE_NAME)
 #else
-#define ARCANE_MODULE_NAME_STRING "unnamed-module"
+#define ARC_MODULE_NAME_STRING "unnamed-module"
 #endif
 
 namespace Arcane::Detail
 {
     // The innermost CVarModuleScope on this thread (a plugin host names the
-    // module it is loading), else this module's ARCANE_MODULE_NAME.
+    // module it is loading), else this module's ARC_MODULE_NAME.
     [[nodiscard]] inline std::string_view CallerModule() noexcept
     {
         const std::string_view scoped = CVarRegistry::ScopedModule();
-        return scoped.empty() ? std::string_view(ARCANE_MODULE_NAME_STRING) : scoped;
+        return scoped.empty() ? std::string_view(ARC_MODULE_NAME_STRING) : scoped;
     }
 }
 ```
@@ -6157,7 +6316,7 @@ namespace Arcane::Detail
     // plugin host opens one around a module's load (its statics run inside
     // LoadLibrary, on this thread) and around its Init. Scopes nest; the
     // innermost one wins.
-    class ARCANE_CORE_API CVarModuleScope
+    class ARC_CORE_API CVarModuleScope
     {
     public:
         explicit CVarModuleScope(std::string_view module);
@@ -6170,7 +6329,7 @@ In the class:
 ```cpp
         // The innermost CVarModuleScope on this thread, else empty.
         [[nodiscard]] static std::string_view ScopedModule() noexcept;
-        // ScopedModule(), else ArcaneCore's own ARCANE_MODULE_NAME ("ArcaneCore").
+        // ScopedModule(), else ArcaneCore's own ARC_MODULE_NAME ("ArcaneCore").
         // Code in another module names ITSELF through Detail::CallerModule()
         // (CVarModule.hpp), which falls back to that module's own define.
         [[nodiscard]] static std::string_view CurrentModule() noexcept;
@@ -6196,7 +6355,7 @@ In the class:
     std::string_view CVarRegistry::CurrentModule() noexcept
     {
         const std::string_view scoped = ScopedModule();
-        return scoped.empty() ? std::string_view(ARCANE_MODULE_NAME_STRING) : scoped;
+        return scoped.empty() ? std::string_view(ARC_MODULE_NAME_STRING) : scoped;
     }
 
     std::string CVarRegistry::ModuleOf(CVarHandle handle) const
@@ -6245,13 +6404,13 @@ $env:TEMP = 'D:\dev\starworks\Arcane-settings\.tmp-tests'; $env:TMP = $env:TEMP
 & "D:\dev\starworks\Arcane-settings\bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe" "[cvar]" 2>&1 | Tee-Object -FilePath D:\dev\starworks\Arcane-settings\.tmp-tests\S1-27.log
 & "D:\dev\starworks\Arcane-settings\bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe" "[editor]" 2>&1 | Tee-Object -FilePath D:\dev\starworks\Arcane-settings\.tmp-tests\S1-27-editor.log
 ```
-Expected: green. `Select-String -Path ArcaneTests\ArcaneTests.vcxproj -Pattern 'ARCANE_MODULE_NAME=ArcaneTests'` finds the define.
+Expected: green. `Select-String -Path ArcaneTests\ArcaneTests.vcxproj -Pattern 'ARC_MODULE_NAME=ArcaneTests'` finds the define.
 
 - [ ] **Step 5: Commit**
 ```powershell
 git add ArcaneCore/src/Arcane/Config/CVarModule.hpp ArcaneTests/src/CVarModuleTest.cpp premake5.lua build/arcane.lua ArcaneCore/src/Arcane/Config/CVarRegistry.hpp ArcaneCore/src/Arcane/Config/CVarRegistry.cpp ArcaneCore/src/Arcane/Config/CVarDecl.hpp ArcaneCore/src/Arcane/Config/CVarRef.hpp ArcaneCore/src/Arcane/Base/Log.cpp
 ```
-Subject: `feat(cvar): module capture -- CVarModuleScope + a per-DLL ARCANE_MODULE_NAME (premake workspace, arcane.lua); ARC_CVAR/ARC_COMMAND/Register name their module, callbacks leave with theirs, built-in commands survive; the "engine" literal is gone (settings spec s4.3, O1)`
+Subject: `feat(cvar): module capture -- CVarModuleScope + a per-DLL ARC_MODULE_NAME (premake workspace, arcane.lua); ARC_CVAR/ARC_COMMAND/Register name their module, callbacks leave with theirs, built-in commands survive; the "engine" literal is gone (settings spec s4.3, O1)`
 
 ---
 
@@ -6285,7 +6444,7 @@ Subject: `feat(cvar): module capture -- CVarModuleScope + a per-DLL ARCANE_MODUL
 
 - [ ] **Step 1: Write the failing test**
 
-`ArcaneTests/plugins/HotReloadPlugin.cpp`: after `#include <Arcane/Plugin/GameModule.hpp>`, add `#include <Arcane/Config/CVarDecl.hpp>` and `#include <string>`. After the `ARCANE_SYSTEM(...)` block (`:41-43`), add:
+`ArcaneTests/plugins/HotReloadPlugin.cpp`: after `#include <Arcane/Plugin/GameModule.hpp>`, add `#include <Arcane/Config/CVarDecl.hpp>` and `#include <string>`. After the `ARC_SYSTEM(...)` block (`:41-43`), add:
 ```cpp
 // The cvar-lifetime probes (settings spec s4.4; CVarModuleLifetimeTest):
 //   - one Archive cvar whose default is this build's step;
@@ -6503,7 +6662,7 @@ $env:TEMP = 'D:\dev\starworks\Arcane-settings\.tmp-tests'; $env:TMP = $env:TEMP
 & "D:\dev\starworks\Arcane-settings\bin\Debug-windows-x86_64-md\ArcaneTests\ArcaneTests.exe" "a module's cvars, commands and callbacks leave with its image" "an unload flushes the module's unsaved User values*" 2>&1 | Tee-Object -FilePath D:\dev\starworks\Arcane-settings\.tmp-tests\S1-28-red.log
 ```
 Expected:
-- case 1: `ModuleOf == "HotReloadPluginV1"` holds (the stem matches ARCANE_MODULE_NAME), then `REQUIRE(reg.Find("hotreload.step").IsStale())` fails;
+- case 1: `ModuleOf == "HotReloadPluginV1"` holds (the stem matches ARC_MODULE_NAME), then `REQUIRE(reg.Find("hotreload.step").IsStale())` fails;
 - case 3: `REQUIRE(fs::exists(file))` fails.
 
 - [ ] **Step 3: Implement**
@@ -6779,7 +6938,7 @@ In the class, after `UnregisterModule`:
     // Every *.json in dir. "input" is document-shaped; the rest are cvars.
     // `onlyModule` non-empty: apply only that module's cvars, and report no
     // unknown keys (ApplyLayersFor; settings spec s4.4).
-    ARCANE_CORE_API CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
+    ARC_CORE_API CVarApplyReport ApplyCVarDirectory(CVarRegistry& registry, const std::filesystem::path& dir,
                                                        SetBy by, std::string_view sourceModule,
                                                        std::string_view onlyModule = {});
 ```
@@ -7173,12 +7332,12 @@ Expected: `error C2039: 'CVarConfigIssue': is not a member of 'Arcane'`, and `Va
     // Read every rung's files WITHOUT applying them, and report each key no cvar
     // declares and each value of the wrong JSON type. Rows are ordered by rung,
     // then file name.
-    ARCANE_CORE_API std::vector<CVarConfigIssue> ValidateCVarLayers(CVarRegistry& registry, const LayerSources& layers);
+    ARC_CORE_API std::vector<CVarConfigIssue> ValidateCVarLayers(CVarRegistry& registry, const LayerSources& layers);
 
     // Replace the Problems set "config.cvars" with one row per issue: the File
     // locator is the file at the key's line, and the message names the key.
     // Logs one warning per issue for headless runs.
-    ARCANE_CORE_API void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues);
+    ARC_CORE_API void PublishCVarConfigDiagnostics(const std::vector<CVarConfigIssue>& issues);
 ```
 `CVarRegistry.hpp`: add `[[nodiscard]] bool IsCompiledOut(std::string_view name) const;   // a Dev cvar this registry refused (devCvars=false)`. In `CVarRegistry.cpp`:
 - add `#include <unordered_set>`;
@@ -7530,24 +7689,24 @@ namespace Arcane::Paths
         bool                                 dist = false;
     };
 
-    ARCANE_CORE_API void Configure(const Config& config);
-    [[nodiscard]] ARCANE_CORE_API Config Current();
+    ARC_CORE_API void Configure(const Config& config);
+    [[nodiscard]] ARC_CORE_API Config Current();
     // Current() with `projectDir` = projectRoot: for code that is handed a
     // project root (Project::Open, an outgoing project) rather than the open one.
-    [[nodiscard]] ARCANE_CORE_API Config ForProject(const std::filesystem::path& projectRoot);
+    [[nodiscard]] ARC_CORE_API Config ForProject(const std::filesystem::path& projectRoot);
     // The pure resolver. Empty when the location does not exist for `config`.
-    [[nodiscard]] ARCANE_CORE_API std::filesystem::path Resolve(Location location, const Config& config);
+    [[nodiscard]] ARC_CORE_API std::filesystem::path Resolve(Location location, const Config& config);
     // Resolve(location, config) / rel, or EMPTY when the location is empty --
     // never a relative path that would land in the working directory.
-    [[nodiscard]] ARCANE_CORE_API std::filesystem::path Join(Location location, const Config& config,
+    [[nodiscard]] ARC_CORE_API std::filesystem::path Join(Location location, const Config& config,
                                                              const std::filesystem::path& rel);
     // Resolve(location, Current()). Creates nothing.
-    [[nodiscard]] ARCANE_CORE_API std::filesystem::path Get(Location location);
+    [[nodiscard]] ARC_CORE_API std::filesystem::path Get(Location location);
     // Get, creating the directory when the location is writable (spec s11.0).
-    ARCANE_CORE_API std::filesystem::path EnsureDir(Location location);
+    ARC_CORE_API std::filesystem::path EnsureDir(Location location);
     // %LOCALAPPDATA%\Arcane (Windows), $XDG_DATA_HOME/Arcane or ~/.local/share/Arcane;
     // empty when the base is unset. The Hub's files live under it too.
-    [[nodiscard]] ARCANE_CORE_API std::filesystem::path UserRoot();
+    [[nodiscard]] ARC_CORE_API std::filesystem::path UserRoot();
 }
 ```
 `ArcaneCore/src/Arcane/Platform/Paths.cpp`:
@@ -8167,7 +8326,7 @@ In `PluginABI.hpp`, after the v51 paragraph:
     //     - Runtime::CVarLayerSources and SetCVarCommandLine;
     //     - Arcane::Paths.
     //   - Declarations: the positional ARC_CVAR and ARC_CVAR_RANGED forms are
-    //     removed, and every module registers under its own ARCANE_MODULE_NAME.
+    //     removed, and every module registers under its own ARC_MODULE_NAME.
     // A v51 module was compiled against the old layouts and signatures; reject
     // the pairing. ReferenceProject.arcproj and Aphelyon.arcproj restamped.
     inline constexpr uint32_t kGamePluginABIVersion = 52;
@@ -8339,7 +8498,7 @@ Do not push either repo.
 
 These are the gaps in the spec or contract that drafting had to close, with what was decided:
 
-1. **`CurrentModule()`'s fallback.** The contract says "else ARCANE_MODULE_NAME of the calling DLL", but an inline static member of a dllimport class may resolve to ArcaneCore's copy (MSVC Debug does not inline it). Decided:
+1. **`CurrentModule()`'s fallback.** The contract says "else ARC_MODULE_NAME of the calling DLL", but an inline static member of a dllimport class may resolve to ArcaneCore's copy (MSVC Debug does not inline it). Decided:
    - `CVarRegistry::ScopedModule()` returns the scope or empty;
    - `CurrentModule()` returns the scope or `"ArcaneCore"`;
    - the per-caller fallback is the header-inline `Arcane::Detail::CallerModule()` in `CVarModule.hpp`, which the macros use;
@@ -8415,11 +8574,11 @@ These come from the contract's core section. S2 edits them by these names; if S1
 
 ---
 
-### Task S2-1: The settings attributes, the field-type map, and the codec that ARCANE_REFLECT_FIELD attaches
+### Task S2-1: The settings attributes, the field-type map, and the codec that ARC_REFLECT_FIELD attaches
 
 **Files:**
 - Create: `ArcaneCore/src/Arcane/Config/SettingsField.hpp`
-- Modify: `ArcaneCore/src/Arcane/Reflection.hpp:17-45` (the attribute block `:21-38`, `ARCANE_REFLECT_FIELD` `:41` and `ARCANE_REFLECT_TYPE_ATTR` `:43`)
+- Modify: `ArcaneCore/src/Arcane/Reflection.hpp:17-45` (the attribute block `:21-38`, `ARC_REFLECT_FIELD` `:41` and `ARC_REFLECT_TYPE_ATTR` `:43`)
 - Create: `ArcaneTests/src/Helpers/SettingsProbe.hpp`
 - Create: `ArcaneTests/compile-fail/SettingsUnmappableField.cpp`. This sits outside `src/`, so no project compiles it.
 - Create: `scripts/settings-compile-fail.ps1`
@@ -8437,7 +8596,7 @@ These come from the contract's core section. S2 edits them by these names; if S1
     - `SettingsEnumTable<E>`;
     - `SettingsCodec{type, read, write, bound, enumNames}`;
     - `ReflectField<IsSettings, C, F, Ptr>(builder, name)`.
-  - **Macro change:** `ARCANE_REFLECT_FIELD` now goes through `Detail::ReflectField`. Inside a block that carries `ARCANE_REFLECT_TYPE_ATTR(Settings, ...)` it static_asserts the type and attaches a `SettingsCodec`. Everywhere else it is exactly Astra's `Field()`.
+  - **Macro change:** `ARC_REFLECT_FIELD` now goes through `Detail::ReflectField`. Inside a block that carries `ARC_REFLECT_TYPE_ATTR(Settings, ...)` it static_asserts the type and attaches a `SettingsCodec`. Everywhere else it is exactly Astra's `Field()`.
   - **Enum storage:** an Enum field stores the INDEX of the value in declared order.
   - **Compile-fail guard:** `scripts/settings-compile-fail.ps1`.
 
@@ -8463,11 +8622,11 @@ namespace SettingsProbe
     // index<->value mapping is exercised, not assumed.
     enum class Quality : std::uint8_t { Low = 0, Medium = 1, High = 4 };
 
-    ARCANE_REFLECT_ENUM(Quality)
-        ARCANE_REFLECT_ENUM_VALUE(Quality, Low)
-        ARCANE_REFLECT_ENUM_VALUE(Quality, Medium)
-        ARCANE_REFLECT_ENUM_VALUE(Quality, High)
-    ARCANE_END_REFLECT_ENUM()
+    ARC_REFLECT_ENUM(Quality)
+        ARC_REFLECT_ENUM_VALUE(Quality, Low)
+        ARC_REFLECT_ENUM_VALUE(Quality, Medium)
+        ARC_REFLECT_ENUM_VALUE(Quality, High)
+    ARC_END_REFLECT_ENUM()
 
     struct ProbeSettings
     {
@@ -8486,54 +8645,54 @@ namespace SettingsProbe
         Quality              quality = Quality::High;
     };
 
-    ARCANE_REFLECT_TYPE(ProbeSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "tests.settingsProbe", ::Arcane::SettingScope::PreferencesProject,
+    ARC_REFLECT_TYPE(ProbeSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "tests.settingsProbe", ::Arcane::SettingScope::PreferencesProject,
                                  ::Arcane::ApplyMode::Live, ::Arcane::Audience::Editor)
-        ARCANE_REFLECT_FIELD(ProbeSettings, toggle)
-            ARCANE_REFLECT_ATTR(Tooltip, "A bool.")
-        ARCANE_REFLECT_FIELD(ProbeSettings, count)
-            ARCANE_REFLECT_ATTR(Tooltip, "An int32 with a range.")
-            ARCANE_REFLECT_ATTR(Range, 1.0, 100.0)
-            ARCANE_REFLECT_ATTR(DisplayName, "Item count")
-            ARCANE_REFLECT_ATTR(Keywords, "items amount")
-        ARCANE_REFLECT_FIELD(ProbeSettings, mask)
-            ARCANE_REFLECT_ATTR(Tooltip, "A uint32.")
-            ARCANE_REFLECT_ATTR(Range, 0.0, 255.0)
-        ARCANE_REFLECT_FIELD(ProbeSettings, offset)
-            ARCANE_REFLECT_ATTR(Tooltip, "An int64.")
-        ARCANE_REFLECT_FIELD(ProbeSettings, bytes)
-            ARCANE_REFLECT_ATTR(Tooltip, "A uint64, Dev.")
-            ARCANE_REFLECT_ATTR(Flags, ::Arcane::CVarFlags::Dev)
-        ARCANE_REFLECT_FIELD(ProbeSettings, ratio)
-            ARCANE_REFLECT_ATTR(Tooltip, "A float that changes a simulation.")
-            ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Apply, ::Arcane::ApplyMode::NextWorld)
-        ARCANE_REFLECT_FIELD(ProbeSettings, seconds)
-            ARCANE_REFLECT_ATTR(Tooltip, "A double whose default lives in Project.")
-            ARCANE_REFLECT_ATTR(Scope, ::Arcane::SettingScope::Project)
-        ARCANE_REFLECT_FIELD(ProbeSettings, label)
-            ARCANE_REFLECT_ATTR(Tooltip, "A string with a widget hint and a former name.")
-            ARCANE_REFLECT_ATTR(Widget, "path:file")
-            ARCANE_REFLECT_ATTR(AliasName, "caption")
-        ARCANE_REFLECT_FIELD(ProbeSettings, tint)
-            ARCANE_REFLECT_ATTR(Tooltip, "A colour players may change.")
-            ARCANE_REFLECT_ATTR(PlayerSafe)
-        ARCANE_REFLECT_FIELD(ProbeSettings, size)
-            ARCANE_REFLECT_ATTR(Tooltip, "A Vec2.")
-        ARCANE_REFLECT_FIELD(ProbeSettings, axis)
-            ARCANE_REFLECT_ATTR(Tooltip, "A Vec3.")
-        ARCANE_REFLECT_FIELD(ProbeSettings, rect)
-            ARCANE_REFLECT_ATTR(Tooltip, "A Vec4.")
-        ARCANE_REFLECT_FIELD(ProbeSettings, quality)
-            ARCANE_REFLECT_ATTR(Tooltip, "A reflected enum.")
-    ARCANE_END_REFLECT_TYPE()
+        ARC_REFLECT_FIELD(ProbeSettings, toggle)
+            ARC_REFLECT_ATTR(Tooltip, "A bool.")
+        ARC_REFLECT_FIELD(ProbeSettings, count)
+            ARC_REFLECT_ATTR(Tooltip, "An int32 with a range.")
+            ARC_REFLECT_ATTR(Range, 1.0, 100.0)
+            ARC_REFLECT_ATTR(DisplayName, "Item count")
+            ARC_REFLECT_ATTR(Keywords, "items amount")
+        ARC_REFLECT_FIELD(ProbeSettings, mask)
+            ARC_REFLECT_ATTR(Tooltip, "A uint32.")
+            ARC_REFLECT_ATTR(Range, 0.0, 255.0)
+        ARC_REFLECT_FIELD(ProbeSettings, offset)
+            ARC_REFLECT_ATTR(Tooltip, "An int64.")
+        ARC_REFLECT_FIELD(ProbeSettings, bytes)
+            ARC_REFLECT_ATTR(Tooltip, "A uint64, Dev.")
+            ARC_REFLECT_ATTR(Flags, ::Arcane::CVarFlags::Dev)
+        ARC_REFLECT_FIELD(ProbeSettings, ratio)
+            ARC_REFLECT_ATTR(Tooltip, "A float that changes a simulation.")
+            ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Apply, ::Arcane::ApplyMode::NextWorld)
+        ARC_REFLECT_FIELD(ProbeSettings, seconds)
+            ARC_REFLECT_ATTR(Tooltip, "A double whose default lives in Project.")
+            ARC_REFLECT_ATTR(Scope, ::Arcane::SettingScope::Project)
+        ARC_REFLECT_FIELD(ProbeSettings, label)
+            ARC_REFLECT_ATTR(Tooltip, "A string with a widget hint and a former name.")
+            ARC_REFLECT_ATTR(Widget, "path:file")
+            ARC_REFLECT_ATTR(AliasName, "caption")
+        ARC_REFLECT_FIELD(ProbeSettings, tint)
+            ARC_REFLECT_ATTR(Tooltip, "A colour players may change.")
+            ARC_REFLECT_ATTR(PlayerSafe)
+        ARC_REFLECT_FIELD(ProbeSettings, size)
+            ARC_REFLECT_ATTR(Tooltip, "A Vec2.")
+        ARC_REFLECT_FIELD(ProbeSettings, axis)
+            ARC_REFLECT_ATTR(Tooltip, "A Vec3.")
+        ARC_REFLECT_FIELD(ProbeSettings, rect)
+            ARC_REFLECT_ATTR(Tooltip, "A Vec4.")
+        ARC_REFLECT_FIELD(ProbeSettings, quality)
+            ARC_REFLECT_ATTR(Tooltip, "A reflected enum.")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 
 `ArcaneTests/src/SettingsFieldTest.cpp`:
 ```cpp
 // The settings-field map (settings arc S2, spec s4.3): the compile-time type
-// map, the codec ARCANE_REFLECT_FIELD attaches inside a Settings block (and
+// map, the codec ARC_REFLECT_FIELD attaches inside a Settings block (and
 // ONLY there), and the Arcane::Attr settings attributes. The compile-FAIL half
 // (an unmappable field stops the build) is scripts/settings-compile-fail.ps1.
 #include <catch2/catch_test_macros.hpp>
@@ -8575,7 +8734,7 @@ namespace
     static_assert(Detail::SettingsCVarType<SettingsProbe::Quality>() == CVarType::Enum);
 
     // A plain reflected struct: an unmappable field is fine here, and no field
-    // may carry a codec -- ARCANE_REFLECT_FIELD is Astra's Field() outside a
+    // may carry a codec -- ARC_REFLECT_FIELD is Astra's Field() outside a
     // Settings block.
     struct PlainComponent
     {
@@ -8583,10 +8742,10 @@ namespace
         std::vector<int> path;
     };
 
-    ARCANE_REFLECT_TYPE(PlainComponent)
-        ARCANE_REFLECT_FIELD(PlainComponent, speed)
-        ARCANE_REFLECT_FIELD(PlainComponent, path)
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(PlainComponent)
+        ARC_REFLECT_FIELD(PlainComponent, speed)
+        ARC_REFLECT_FIELD(PlainComponent, path)
+    ARC_END_REFLECT_TYPE()
 
     template <class T>
     Astra::TypeMeta BuildMeta()
@@ -8626,7 +8785,7 @@ TEST_CASE("Settings attributes: the type attribute and every field attribute lan
     CHECK(meta.GetField("bytes")->GetAttribute<Attr::Flags>()->flags == CVarFlags::Dev);
 }
 
-TEST_CASE("ARCANE_REFLECT_FIELD attaches a codec inside a Settings block and nothing anywhere else", "[settings]")
+TEST_CASE("ARC_REFLECT_FIELD attaches a codec inside a Settings block and nothing anywhere else", "[settings]")
 {
     const Astra::TypeMeta probe = BuildMeta<SettingsProbe::ProbeSettings>();
     REQUIRE(probe.fields.size() == 13);
@@ -8747,9 +8906,9 @@ Regenerate premake, then build Debug. Expected: `SettingsFieldTest.cpp` fails to
 ```cpp
 #pragma once
 
-// The settings-field codec (settings arc S2, spec s4.3). ARCANE_REFLECT_FIELD
+// The settings-field codec (settings arc S2, spec s4.3). ARC_REFLECT_FIELD
 // (Reflection.hpp) routes every reflected field through Detail::ReflectField.
-// Inside a reflection block that carries ARCANE_REFLECT_TYPE_ATTR(Settings, ...)
+// Inside a reflection block that carries ARC_REFLECT_TYPE_ATTR(Settings, ...)
 // it also (a) static_asserts that the field's type maps onto a cvar type -- the
 // spec's "an unmappable field fails the build" -- and (b) attaches a
 // SettingsCodec attribute: the typed read/write thunks ARC_SETTINGS and the
@@ -8975,9 +9134,9 @@ namespace Arcane::Detail
             : type(t), read(r), write(w), bound(b), enumNames(n) {}
     };
 
-    // ARCANE_REFLECT_FIELD's body. `IsSettings` is ArcaneReflectTypeAttr_Settings
+    // ARC_REFLECT_FIELD's body. `IsSettings` is ArcaneReflectTypeAttr_Settings
     // as seen at that point of the reflection block (Reflection.hpp). Returns the
-    // builder, so ARCANE_REFLECT_ATTR chains onto the field as before.
+    // builder, so ARC_REFLECT_ATTR chains onto the field as before.
     template <bool IsSettings, class C, class F, auto Ptr, class Builder>
     Builder& ReflectField(Builder& builder, std::string_view name)
     {
@@ -9058,22 +9217,22 @@ namespace Arcane::Detail
 ```
 3. After the namespace, at GLOBAL scope:
 ```cpp
-// ARCANE_REFLECT_FIELD asks "is this a settings block?" through this name.
-// ARCANE_REFLECT_TYPE_ATTR(Settings, ...) declares a LOCAL constexpr `true` of
+// ARC_REFLECT_FIELD asks "is this a settings block?" through this name.
+// ARC_REFLECT_TYPE_ATTR(Settings, ...) declares a LOCAL constexpr `true` of
 // the same name inside its reflection block, which shadows this `false` for
 // every field reflected AFTER it (settings arc S2). Put the Settings attribute
 // first. ARC_SETTINGS refuses a struct with a field reflected before it.
 inline constexpr bool ArcaneReflectTypeAttr_Settings = false;
 ```
-4. Replace `ARCANE_REFLECT_FIELD` (`:41`) and `ARCANE_REFLECT_TYPE_ATTR` (`:43`) with:
+4. Replace `ARC_REFLECT_FIELD` (`:41`) and `ARC_REFLECT_TYPE_ATTR` (`:43`) with:
 ```cpp
-#define ARCANE_REFLECT_FIELD(Type, FieldName) \
+#define ARC_REFLECT_FIELD(Type, FieldName) \
     ; ::Arcane::Detail::ReflectField<ArcaneReflectTypeAttr_Settings, Type, decltype(Type::FieldName), &Type::FieldName>(_astra_builder_, #FieldName)
-#define ARCANE_REFLECT_TYPE_ATTR(AttrType, ...) \
+#define ARC_REFLECT_TYPE_ATTR(AttrType, ...) \
     ; _astra_builder_.TypeAttr<::Arcane::Attr::AttrType>(__VA_ARGS__) \
     ; [[maybe_unused]] constexpr bool ArcaneReflectTypeAttr_##AttrType = true
 ```
-5. In the header comment (`:3-15`), add one line: "Settings structs (`ARCANE_REFLECT_TYPE_ATTR(Settings, ...)` + `ARC_SETTINGS`): see Config/Settings.hpp."
+5. In the header comment (`:3-15`), add one line: "Settings structs (`ARC_REFLECT_TYPE_ATTR(Settings, ...)` + `ARC_SETTINGS`): see Config/Settings.hpp."
 
 `ArcaneTests/compile-fail/SettingsUnmappableField.cpp`:
 ```cpp
@@ -9098,12 +9257,12 @@ namespace CompileFail
 #endif
     };
 
-    ARCANE_REFLECT_TYPE(BadSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "compileFail", ::Arcane::SettingScope::Project,
+    ARC_REFLECT_TYPE(BadSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "compileFail", ::Arcane::SettingScope::Project,
                                  ::Arcane::ApplyMode::Live, ::Arcane::Audience::Game)
-        ARCANE_REFLECT_FIELD(BadSettings, badField)
-            ARCANE_REFLECT_ATTR(Tooltip, "A field the settings map refuses.")
-    ARCANE_END_REFLECT_TYPE()
+        ARC_REFLECT_FIELD(BadSettings, badField)
+            ARC_REFLECT_ATTR(Tooltip, "A field the settings map refuses.")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 
@@ -9175,7 +9334,7 @@ Expected: every case passes, and the script prints `settings-compile-fail: PASS`
 - [ ] **Step 5: Commit**
 ```powershell
 git add ArcaneCore/src/Arcane/Config/SettingsField.hpp ArcaneCore/src/Arcane/Reflection.hpp ArcaneTests/src/Helpers/SettingsProbe.hpp ArcaneTests/src/SettingsFieldTest.cpp ArcaneTests/compile-fail/SettingsUnmappableField.cpp scripts/settings-compile-fail.ps1
-git commit -m "feat(config): settings attributes (Settings, Keywords, Widget, Deterministic, PlayerSafe, Apply, Scope, Flags) and the field codec -- ARCANE_REFLECT_FIELD static_asserts the cvar mapping and attaches typed read/write thunks inside a Settings block only; enums store their declared index; compile-fail guard script (settings arc S2)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`nClaude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+git commit -m "feat(config): settings attributes (Settings, Keywords, Widget, Deterministic, PlayerSafe, Apply, Scope, Flags) and the field codec -- ARC_REFLECT_FIELD static_asserts the cvar mapping and attaches typed read/write thunks inside a Settings block only; enums store their declared index; compile-fail guard script (settings arc S2)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`nClaude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 ```
 
 ---
@@ -9254,10 +9413,10 @@ namespace
         std::int32_t x = 1;
     };
 
-    ARCANE_REFLECT_TYPE(NotSettings)
-        ARCANE_REFLECT_FIELD(NotSettings, x)
-            ARCANE_REFLECT_ATTR(Tooltip, "x")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(NotSettings)
+        ARC_REFLECT_FIELD(NotSettings, x)
+            ARC_REFLECT_ATTR(Tooltip, "x")
+    ARC_END_REFLECT_TYPE()
 
     // The Settings attribute AFTER a field: that field has no codec.
     struct LateAttr
@@ -9266,14 +9425,14 @@ namespace
         std::int32_t late = 2;
     };
 
-    ARCANE_REFLECT_TYPE(LateAttr)
-        ARCANE_REFLECT_FIELD(LateAttr, early)
-            ARCANE_REFLECT_ATTR(Tooltip, "Reflected before the Settings attribute.")
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "tests.lateAttr", ::Arcane::SettingScope::Project,
+    ARC_REFLECT_TYPE(LateAttr)
+        ARC_REFLECT_FIELD(LateAttr, early)
+            ARC_REFLECT_ATTR(Tooltip, "Reflected before the Settings attribute.")
+        ARC_REFLECT_TYPE_ATTR(Settings, "tests.lateAttr", ::Arcane::SettingScope::Project,
                                  ::Arcane::ApplyMode::Live, ::Arcane::Audience::Game)
-        ARCANE_REFLECT_FIELD(LateAttr, late)
-            ARCANE_REFLECT_ATTR(Tooltip, "Reflected after it.")
-    ARCANE_END_REFLECT_TYPE()
+        ARC_REFLECT_FIELD(LateAttr, late)
+            ARC_REFLECT_ATTR(Tooltip, "Reflected after it.")
+    ARC_END_REFLECT_TYPE()
 
     const SettingsFieldDesc& FieldOf(const SettingsTypeDesc& d, std::string_view field)
     {
@@ -9392,9 +9551,9 @@ TEST_CASE("RegisterSettings refuses a struct with no reflection, no Settings att
 {
     CVarRegistry reg;
     CHECK_FALSE(RegisterSettings<Unreflected>(reg, kModule));
-    CHECK(reg.LastError().find("no ARCANE_REFLECT_TYPE") != std::string::npos);
+    CHECK(reg.LastError().find("no ARC_REFLECT_TYPE") != std::string::npos);
     CHECK_FALSE(RegisterSettings<NotSettings>(reg, kModule));
-    CHECK(reg.LastError().find("ARCANE_REFLECT_TYPE_ATTR(Settings") != std::string::npos);
+    CHECK(reg.LastError().find("ARC_REFLECT_TYPE_ATTR(Settings") != std::string::npos);
     CHECK_FALSE(RegisterSettings<LateAttr>(reg, kModule));
     CHECK(reg.LastError().find("field 'early' has no settings codec") != std::string::npos);
     CHECK(reg.Find("tests.lateAttr.late").IsStale());                    // nothing half-registered
@@ -9683,11 +9842,11 @@ Regenerate premake, then build Debug. Expected: `cannot open include file 'Arcan
 // fields are cvars, read as one typed block of the published snapshot.
 //
 //     struct PhysicsSettings { std::uint32_t substeps = 4; };
-//     ARCANE_REFLECT_TYPE(PhysicsSettings)
-//         ARCANE_REFLECT_TYPE_ATTR(Settings, "physics", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
-//         ARCANE_REFLECT_FIELD(PhysicsSettings, substeps)
-//             ARCANE_REFLECT_ATTR(Range, 1, 16) ARCANE_REFLECT_ATTR(Tooltip, "Solver substeps") ARCANE_REFLECT_ATTR(Deterministic)
-//     ARCANE_REFLECT_TYPE_END()
+//     ARC_REFLECT_TYPE(PhysicsSettings)
+//         ARC_REFLECT_TYPE_ATTR(Settings, "physics", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
+//         ARC_REFLECT_FIELD(PhysicsSettings, substeps)
+//             ARC_REFLECT_ATTR(Range, 1, 16) ARC_REFLECT_ATTR(Tooltip, "Solver substeps") ARC_REFLECT_ATTR(Deterministic)
+//     ARC_REFLECT_TYPE_END()
 //
 //     ARC_SETTINGS(PhysicsSettings);          // in ONE .cpp of the declaring module, after that header
 //     const PhysicsSettings& s = Arcane::Settings<PhysicsSettings>();
@@ -9736,7 +9895,7 @@ namespace Arcane
             const auto* type = meta.GetAttribute<Attr::Settings>();
             if (!type)
             {
-                desc.error = "the reflection block has no ARCANE_REFLECT_TYPE_ATTR(Settings, ...)";
+                desc.error = "the reflection block has no ARC_REFLECT_TYPE_ATTR(Settings, ...)";
                 return;
             }
             desc.category = std::string(type->category);
@@ -9750,7 +9909,7 @@ namespace Arcane
                 if (!codec)
                 {
                     desc.error = "field '" + std::string(field.name) + "' has no settings codec: reflect it with "
-                                 "ARCANE_REFLECT_FIELD AFTER ARCANE_REFLECT_TYPE_ATTR(Settings, ...)";
+                                 "ARC_REFLECT_FIELD AFTER ARC_REFLECT_TYPE_ATTR(Settings, ...)";
                     return;
                 }
                 SettingsFieldDesc out;
@@ -9805,7 +9964,7 @@ namespace Arcane
         desc.make     = &Detail::MakeSettingsBlock<T>;
         if (!::Astra::Detail::MetaFactory<T>::fn)
         {
-            desc.error = "no ARCANE_REFLECT_TYPE block for this type has run: include the header holding the "
+            desc.error = "no ARC_REFLECT_TYPE block for this type has run: include the header holding the "
                          "struct's reflection block BEFORE ARC_SETTINGS, in the same .cpp";
             return desc;
         }
@@ -10292,7 +10451,7 @@ Public section, after `RevertLayer`:
     // - Any other rung: nothing.
     // Same merge, .bad, atomic-rename and unchanged-file rules.
     // The two-argument form is WriteCVarArchive(registry, userDir, SetBy::User).
-    ARCANE_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& dir, SetBy rung);
+    ARC_CORE_API void WriteCVarArchive(const CVarRegistry& registry, const std::filesystem::path& dir, SetBy rung);
 ```
 
 `CVarConfig.cpp`:
@@ -10553,24 +10712,24 @@ namespace Arcane
 {
     enum class PreferenceTarget : std::uint8_t { AllProjects, ThisProject };
 
-    ARCANE_CORE_API SetBy PreferenceRung(SettingScope scope, PreferenceTarget target) noexcept;
+    ARC_CORE_API SetBy PreferenceRung(SettingScope scope, PreferenceTarget target) noexcept;
 
     // ThisProject when `name` is a PreferencesMachine cvar the User rung holds a value for; else AllProjects.
-    ARCANE_CORE_API PreferenceTarget PreferenceTargetOf(const CVarRegistry& registry, std::string_view name);
+    ARC_CORE_API PreferenceTarget PreferenceTargetOf(const CVarRegistry& registry, std::string_view name);
 
     // Flip the switch.
     // - ThisProject copies the cvar's pending value into the User rung, so the row keeps its value.
     // - AllProjects drops the User record.
     // Returns Stale for an unknown name, and Denied for a cvar that is not PreferencesMachine.
     // Does not publish.
-    ARCANE_CORE_API SetResult SetPreferenceTarget(CVarRegistry& registry, std::string_view name, PreferenceTarget target);
+    ARC_CORE_API SetResult SetPreferenceTarget(CVarRegistry& registry, std::string_view name, PreferenceTarget target);
 
     // Write `value` on the rung this row's edits belong to:
     // PreferenceRung(scope, PreferenceTargetOf(name)), in the Editor context. Does not publish.
-    ARCANE_CORE_API SetResult EditPreference(CVarRegistry& registry, std::string_view name, CVarValue value);
+    ARC_CORE_API SetResult EditPreference(CVarRegistry& registry, std::string_view name, CVarValue value);
 
     // The Modified filter's "Project overrides": every PreferencesMachine cvar the User rung holds, sorted.
-    ARCANE_CORE_API std::vector<std::string> ProjectOverrides(const CVarRegistry& registry);
+    ARC_CORE_API std::vector<std::string> ProjectOverrides(const CVarRegistry& registry);
 }
 ```
 `PreferenceScope.cpp`:
@@ -11068,7 +11227,7 @@ TEST_CASE("astra.memory.* are registered with the inventory's metadata and defau
     CHECK_FALSE(HasFlag(maxChunks->flags, CVarFlags::Dev));     // the one Game (not Dev) row: a world-size ceiling
     CHECK(maxChunks->scope == SettingScope::Project);
     CHECK(maxChunks->apply == ApplyMode::NextWorld);
-#if !defined(ARCANE_DIST)
+#if !defined(ARC_BUILD_DIST)
     const auto chunkSize = reg.Explain("astra.memory.chunkSize");
     REQUIRE(chunkSize);
     CHECK(HasFlag(chunkSize->flags, CVarFlags::Dev));
@@ -11128,54 +11287,54 @@ namespace Arcane
         std::uint64_t initialResourceCapacity = 32;
     };
 
-    ARCANE_REFLECT_TYPE(AstraMemorySettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "astra.memory", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, chunkSize)
-            ARCANE_REFLECT_ATTR(Range, 4096.0, 1048576.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Archetype chunk size in bytes (cache tuning).")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, chunksPerBlock)
-            ARCANE_REFLECT_ATTR(Range, 1.0, 4096.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Chunks allocated per pool block.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, maxChunks)
-            ARCANE_REFLECT_ATTR(Range, 64.0, 1e7)
-            ARCANE_REFLECT_ATTR(Tooltip, "Hard ceiling on archetype chunks: the world-size limit.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, initialBlocks)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 1024.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Pool blocks preallocated when a registry is created.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, chunkHugePages)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Try OS huge pages for chunk blocks (needs the OS permission).")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, minChunkBytes)
-            ARCANE_REFLECT_ATTR(Range, 4096.0, 1048576.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Smallest grow-as-populate chunk, in bytes.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, maxChunkBytes)
-            ARCANE_REFLECT_ATTR(Range, 4096.0, 1048576.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Largest grow-as-populate chunk, in bytes.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, growDivisor)
-            ARCANE_REFLECT_ATTR(Range, 1.0, 64.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "A new chunk is about the archetype's bytes divided by this.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, entitiesPerSegment)
-            ARCANE_REFLECT_ATTR(Range, 1024.0, 65536.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Entities per entity-table segment (rounded down to a power of two).")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, entityReleaseThreshold)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 1.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Segment use below which it is released (serialized; no Astra consumer yet).")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, entityAutoRelease)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Release empty entity segments automatically.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, maxEmptySegments)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 64.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Empty entity segments kept ready.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, maxPooledSegments)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 64.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Entity segments pooled for reuse.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, entityHugePages)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Try OS huge pages for the entity table.")
-        ARCANE_REFLECT_FIELD(AstraMemorySettings, initialResourceCapacity)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 4096.0) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Initial registry-resource slots.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(AstraMemorySettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "astra.memory", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
+        ARC_REFLECT_FIELD(AstraMemorySettings, chunkSize)
+            ARC_REFLECT_ATTR(Range, 4096.0, 1048576.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Archetype chunk size in bytes (cache tuning).")
+        ARC_REFLECT_FIELD(AstraMemorySettings, chunksPerBlock)
+            ARC_REFLECT_ATTR(Range, 1.0, 4096.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Chunks allocated per pool block.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, maxChunks)
+            ARC_REFLECT_ATTR(Range, 64.0, 1e7)
+            ARC_REFLECT_ATTR(Tooltip, "Hard ceiling on archetype chunks: the world-size limit.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, initialBlocks)
+            ARC_REFLECT_ATTR(Range, 0.0, 1024.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Pool blocks preallocated when a registry is created.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, chunkHugePages)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Try OS huge pages for chunk blocks (needs the OS permission).")
+        ARC_REFLECT_FIELD(AstraMemorySettings, minChunkBytes)
+            ARC_REFLECT_ATTR(Range, 4096.0, 1048576.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Smallest grow-as-populate chunk, in bytes.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, maxChunkBytes)
+            ARC_REFLECT_ATTR(Range, 4096.0, 1048576.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Largest grow-as-populate chunk, in bytes.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, growDivisor)
+            ARC_REFLECT_ATTR(Range, 1.0, 64.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "A new chunk is about the archetype's bytes divided by this.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, entitiesPerSegment)
+            ARC_REFLECT_ATTR(Range, 1024.0, 65536.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Entities per entity-table segment (rounded down to a power of two).")
+        ARC_REFLECT_FIELD(AstraMemorySettings, entityReleaseThreshold)
+            ARC_REFLECT_ATTR(Range, 0.0, 1.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Segment use below which it is released (serialized; no Astra consumer yet).")
+        ARC_REFLECT_FIELD(AstraMemorySettings, entityAutoRelease)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Release empty entity segments automatically.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, maxEmptySegments)
+            ARC_REFLECT_ATTR(Range, 0.0, 64.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Empty entity segments kept ready.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, maxPooledSegments)
+            ARC_REFLECT_ATTR(Range, 0.0, 64.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Entity segments pooled for reuse.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, entityHugePages)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Try OS huge pages for the entity table.")
+        ARC_REFLECT_FIELD(AstraMemorySettings, initialResourceCapacity)
+            ARC_REFLECT_ATTR(Range, 0.0, 4096.0) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Initial registry-resource slots.")
+    ARC_END_REFLECT_TYPE()
 
     // The ONE Registry::Config construction path (settings arc S2). Pure.
     inline Astra::Registry::Config ToAstraConfig(const AstraMemorySettings& s,
@@ -11346,7 +11505,7 @@ TEST_CASE("physics.parallelSolver: off by default (the serial solver, as before)
 {
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("physics.parallelSolver");
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     if (h.IsStale()) return;   // Dev: compiled out in Dist, so the default (serial) stands
 #endif
     REQUIRE_FALSE(h.IsStale());
@@ -11405,11 +11564,11 @@ namespace Arcane
     // unqualified enum here, and vendored code never includes Arcane headers.
     enum class Physics2DBroadphase : std::uint8_t { Tree = 0, Hash = 1, Sap = 2 };
 
-    ARCANE_REFLECT_ENUM(Physics2DBroadphase)
-        ARCANE_REFLECT_ENUM_VALUE(Physics2DBroadphase, Tree)
-        ARCANE_REFLECT_ENUM_VALUE(Physics2DBroadphase, Hash)
-        ARCANE_REFLECT_ENUM_VALUE(Physics2DBroadphase, Sap)
-    ARCANE_END_REFLECT_ENUM()
+    ARC_REFLECT_ENUM(Physics2DBroadphase)
+        ARC_REFLECT_ENUM_VALUE(Physics2DBroadphase, Tree)
+        ARC_REFLECT_ENUM_VALUE(Physics2DBroadphase, Hash)
+        ARC_REFLECT_ENUM_VALUE(Physics2DBroadphase, Sap)
+    ARC_END_REFLECT_ENUM()
 
     struct Physics2DWorldSettings
     {
@@ -11425,39 +11584,39 @@ namespace Arcane
         bool                parallelSolver         = false;
     };
 
-    ARCANE_REFLECT_TYPE(Physics2DWorldSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "physics", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, broadphase)
-            ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "2D broadphase: dynamic tree, spatial hash or sweep-and-prune.")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, hashCellSize)
-            ARCANE_REFLECT_ATTR(Range, 0.05, 100.0) ARCANE_REFLECT_ATTR(Deterministic) ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Spatial-hash cell size in metres (Hash broadphase only).")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, substepCount)
-            ARCANE_REFLECT_ATTR(Range, 1.0, 16.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Solver sub-steps per fixed step.")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, contactHertz)
-            ARCANE_REFLECT_ATTR(Range, 1.0, 240.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Soft-contact stiffness in Hz.")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, contactDampingRatio)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 100.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Soft-contact damping ratio.")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, restitutionThreshold)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 100.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Approach speed (m/s) below which bounces are suppressed.")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, contactPushMaxVelocity)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 100.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Clamp (m/s) on the penetration push-out speed.")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, maxLinearVelocity)
-            ARCANE_REFLECT_ATTR(Range, 1.0, 1e5) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Hard cap on body speed (m/s).")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, sleepThreshold)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 10.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Speed (m/s) under which a body may sleep.")
-        ARCANE_REFLECT_FIELD(Physics2DWorldSettings, parallelSolver)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Solve on the job system. Off = the serial solver. Results are thread-count invariant.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(Physics2DWorldSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "physics", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, broadphase)
+            ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "2D broadphase: dynamic tree, spatial hash or sweep-and-prune.")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, hashCellSize)
+            ARC_REFLECT_ATTR(Range, 0.05, 100.0) ARC_REFLECT_ATTR(Deterministic) ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Spatial-hash cell size in metres (Hash broadphase only).")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, substepCount)
+            ARC_REFLECT_ATTR(Range, 1.0, 16.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Solver sub-steps per fixed step.")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, contactHertz)
+            ARC_REFLECT_ATTR(Range, 1.0, 240.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Soft-contact stiffness in Hz.")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, contactDampingRatio)
+            ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Soft-contact damping ratio.")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, restitutionThreshold)
+            ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Approach speed (m/s) below which bounces are suppressed.")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, contactPushMaxVelocity)
+            ARC_REFLECT_ATTR(Range, 0.0, 100.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Clamp (m/s) on the penetration push-out speed.")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, maxLinearVelocity)
+            ARC_REFLECT_ATTR(Range, 1.0, 1e5) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Hard cap on body speed (m/s).")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, sleepThreshold)
+            ARC_REFLECT_ATTR(Range, 0.0, 10.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Speed (m/s) under which a body may sleep.")
+        ARC_REFLECT_FIELD(Physics2DWorldSettings, parallelSolver)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Solve on the job system. Off = the serial solver. Results are thread-count invariant.")
+    ARC_END_REFLECT_TYPE()
 
     inline Manifold2D::Physics::BroadphaseKind ToBroadphaseKind(Physics2DBroadphase b) noexcept
     {
@@ -11603,16 +11762,16 @@ namespace Arcane
         double maxFrameDeltaSeconds = 0.25;
     };
 
-    ARCANE_REFLECT_TYPE(SimSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "sim", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
-        ARCANE_REFLECT_FIELD(SimSettings, fixedHz)
-            ARCANE_REFLECT_ATTR(Range, 10.0, 480.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Fixed simulation rate in Hz.")
-        ARCANE_REFLECT_FIELD(SimSettings, maxFrameDeltaSeconds)
-            ARCANE_REFLECT_ATTR(Range, 0.01, 1.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Apply, ApplyMode::Live)
-            ARCANE_REFLECT_ATTR(Tooltip, "Longest wall-clock frame (s) the simulation catches up on after a stall.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(SimSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "sim", SettingScope::Project, ApplyMode::NextWorld, Audience::Game)
+        ARC_REFLECT_FIELD(SimSettings, fixedHz)
+            ARC_REFLECT_ATTR(Range, 10.0, 480.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Fixed simulation rate in Hz.")
+        ARC_REFLECT_FIELD(SimSettings, maxFrameDeltaSeconds)
+            ARC_REFLECT_ATTR(Range, 0.01, 1.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
+            ARC_REFLECT_ATTR(Tooltip, "Longest wall-clock frame (s) the simulation catches up on after a stall.")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 `SimSettings.cpp`:
@@ -11740,16 +11899,16 @@ namespace Arcane
         std::uint32_t workerThreads = 0;   // threads IN TOTAL (the calling thread included); 0 = hardware threads
     };
 
-    ARCANE_REFLECT_TYPE(JobsSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "jobs", SettingScope::PreferencesProject, ApplyMode::Restart, Audience::Game)
-        ARCANE_REFLECT_FIELD(JobsSettings, workerThreads)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 256.0)
-            ARCANE_REFLECT_ATTR(Tooltip, "Job-system threads in total, the main thread included. 0 = one per hardware thread.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(JobsSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "jobs", SettingScope::PreferencesProject, ApplyMode::Restart, Audience::Game)
+        ARC_REFLECT_FIELD(JobsSettings, workerThreads)
+            ARC_REFLECT_ATTR(Range, 0.0, 256.0)
+            ARC_REFLECT_ATTR(Tooltip, "Job-system threads in total, the main thread included. 0 = one per hardware thread.")
+    ARC_END_REFLECT_TYPE()
 
     // The JobSystem ctor's argument. 0 resolves to enkiTS' hardware count, so
     // JobSystem(ResolveWorkerThreads({})) == JobSystem(0) (JobSystem.cpp:102-104).
-    ARCANE_CORE_API unsigned ResolveWorkerThreads(const JobsSettings& settings);
+    ARC_CORE_API unsigned ResolveWorkerThreads(const JobsSettings& settings);
 }
 ```
 `JobsBinding.cpp`:
@@ -11866,7 +12025,7 @@ TEST_CASE("log.level is LogSettings' field: same flags and scope as before, and 
     Log::InstallMosaicSink();
     CVarRegistry& reg = CVarRegistry::Get();
     const CVarHandle h = reg.Find("log.level");
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     if (h.IsStale()) return;   // Dev: compiled out in Dist
 #endif
     REQUIRE_FALSE(h.IsStale());
@@ -11894,10 +12053,10 @@ Regenerate premake and build Debug. Expected compile errors: `cannot open includ
 
 - [ ] **Step 3: Implement**
 
-`Log.hpp`: replace the `// ARCANE_INTERNAL_BEGIN ... InstallMosaicSink ... // ARCANE_INTERNAL_END` block (`:38-45`) with:
+`Log.hpp`: replace the `// ARC_INTERNAL_BEGIN ... InstallMosaicSink ... // ARC_INTERNAL_END` block (`:38-45`) with:
 ```cpp
-    // ARCANE_INTERNAL_BEGIN: the Mosaic log-sink seam is the library's own install point
-    ARCANE_CORE_API Mosaic::LogSink MosaicSink() noexcept;
+    // ARC_INTERNAL_BEGIN: the Mosaic log-sink seam is the library's own install point
+    ARC_CORE_API Mosaic::LogSink MosaicSink() noexcept;
 
     // Mosaic's LEVEL is a per-module inline atomic too (Mosaic/Log.hpp
     // detail::g_logLevel). log.level therefore reaches Astra/Manifold2D output
@@ -11906,12 +12065,12 @@ Regenerate premake and build Debug. Expected compile errors: `cannot open includ
     // registers its own setter, and ApplyLogSettings calls them all.
     // Registering applies the current level at once.
     using MosaicLevelFn = void (*)(Mosaic::LogLevel level) noexcept;
-    ARCANE_CORE_API void RegisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
-    ARCANE_CORE_API void UnregisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
+    ARC_CORE_API void RegisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
+    ARC_CORE_API void UnregisterMosaicLevelTarget(MosaicLevelFn fn) noexcept;
     // Sets ArcaneCore.dll's own copy and every registered module's.
-    ARCANE_CORE_API void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept;
+    ARC_CORE_API void SetMosaicLevelEverywhere(Mosaic::LogLevel level) noexcept;
     // ArcaneCore.dll's own copy. Other modules read theirs with Mosaic::GetLogLevel().
-    ARCANE_CORE_API Mosaic::LogLevel CoreMosaicLevel() noexcept;
+    ARC_CORE_API Mosaic::LogLevel CoreMosaicLevel() noexcept;
 
     // THIS module's setter. It is inline, so its address is the CALLING module's copy.
     inline void SetThisModuleMosaicLevel(Mosaic::LogLevel level) noexcept { Mosaic::SetLogLevel(level); }
@@ -11927,7 +12086,7 @@ Regenerate premake and build Debug. Expected compile errors: `cannot open includ
     }
     // A module that unloads (GameModule.hpp's Shutdown) unregisters its setter first.
     inline void UninstallMosaicLevelTarget() noexcept { UnregisterMosaicLevelTarget(&SetThisModuleMosaicLevel); }
-    // ARCANE_INTERNAL_END
+    // ARC_INTERNAL_END
 ```
 `Log.cpp`:
 - Delete `std::once_flag s_levelCvarOnce;` and `OnLogLevelPublished` (`:209-216`).
@@ -11996,18 +12155,18 @@ namespace Arcane
         std::int32_t level = 2;   // spdlog::level::info == Mosaic::LogLevel::Info
     };
 
-    ARCANE_REFLECT_TYPE(LogSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "log", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
-        ARCANE_REFLECT_FIELD(LogSettings, level)
-            ARCANE_REFLECT_ATTR(Range, 0.0, 6.0)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Engine log level: 0 trace, 1 debug, 2 info, 3 warn, 4 error, 5 critical, 6 off. "
+    ARC_REFLECT_TYPE(LogSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "log", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
+        ARC_REFLECT_FIELD(LogSettings, level)
+            ARC_REFLECT_ATTR(Range, 0.0, 6.0)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Engine log level: 0 trace, 1 debug, 2 info, 3 warn, 4 error, 5 critical, 6 off. "
                                          "Gates stderr, the log file and the Console.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_END_REFLECT_TYPE()
 
     // spdlog's level and Mosaic's level in EVERY module (Log::SetMosaicLevelEverywhere).
     // The two scales match: 0 trace ... 6 off.
-    ARCANE_CORE_API void ApplyLogSettings(const LogSettings& settings);
+    ARC_CORE_API void ApplyLogSettings(const LogSettings& settings);
 }
 ```
 `LogBinding.cpp`:
@@ -12105,7 +12264,7 @@ TEST_CASE("render.meshCull and diagnostics.drawMarkers keep their names, types, 
     CHECK(RenderDebugSettings{}.meshCull == true);
     CHECK(DiagnosticsSettings{}.drawMarkers == false);
     CVarRegistry& reg = CVarRegistry::Get();
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     CHECK(reg.Find("render.meshCull").IsStale());                // Dev: compiled out, so the defaults stand
     CHECK(MeshCullFrustumEnabled());
     CHECK_FALSE(GpuDrawMarkersEnabled());
@@ -12156,12 +12315,12 @@ namespace Arcane
         bool drawMarkers = false;
     };
 
-    ARCANE_REFLECT_TYPE(DiagnosticsSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "diagnostics", SettingScope::Project, ApplyMode::Live, Audience::Game)
-        ARCANE_REFLECT_FIELD(DiagnosticsSettings, drawMarkers)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(DiagnosticsSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "diagnostics", SettingScope::Project, ApplyMode::Live, Audience::Game)
+        ARC_REFLECT_FIELD(DiagnosticsSettings, drawMarkers)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Per-draw GPU markers for PIX/RenderDoc. Pass-level scopes stay on.")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 `DiagnosticsSettings.cpp`:
@@ -12187,12 +12346,12 @@ namespace Arcane
         bool meshCull = true;
     };
 
-    ARCANE_REFLECT_TYPE(RenderDebugSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "render", SettingScope::Project, ApplyMode::Live, Audience::Game)
-        ARCANE_REFLECT_FIELD(RenderDebugSettings, meshCull)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)
-            ARCANE_REFLECT_ATTR(Tooltip, "Frustum-cull mesh instances on the GPU.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(RenderDebugSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "render", SettingScope::Project, ApplyMode::Live, Audience::Game)
+        ARC_REFLECT_FIELD(RenderDebugSettings, meshCull)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)
+            ARC_REFLECT_ATTR(Tooltip, "Frustum-cull mesh instances on the GPU.")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 `RenderDebugSettings.cpp`:
@@ -12258,7 +12417,7 @@ git commit -m "refactor(render): render.meshCull -> RenderDebugSettings, diagnos
   - `RegisterSettings`/`SettingsBlock` through `ARC_SETTINGS`;
   - `RegisterMosaicLevelTarget` through `InstallMosaicSink`, which every module calls;
   - `UnregisterMosaicLevelTarget` through `GameModule::Shutdown`.
-- **Reflection:** `ARCANE_REFLECT_FIELD` now instantiates `Arcane::Detail::ReflectField`.
+- **Reflection:** `ARC_REFLECT_FIELD` now instantiates `Arcane::Detail::ReflectField`.
 
 A v52 module and a v53 host must refuse each other.
 
@@ -12296,7 +12455,7 @@ In `PluginABI.hpp`, append to the history comment, after S1's v52 entry:
     //     Log::*MosaicLevel* family (InstallMosaicSink and GameModule::Shutdown
     //     now call them), WriteCVarArchive(dir, SetBy), the PreferenceScope API,
     //     ResolveWorkerThreads, ApplyLogSettings and Runtime::SetEditorUserConfigDir.
-    //     ARCANE_REFLECT_FIELD routes through Arcane::Detail::ReflectField. A v52
+    //     ARC_REFLECT_FIELD routes through Arcane::Detail::ReflectField. A v52
     //     module was compiled against the old layouts and lacks the new
     //     imports; reject the pairing. ReferenceProject.arcproj and
     //     Aphelyon.arcproj restamped.
@@ -12326,7 +12485,7 @@ Expected: the restamp check from Step 1 now matches all three, and the tests pas
 In the Arcane worktree:
 ```powershell
 git add ArcaneCore/src/Arcane/Plugin/PluginABI.hpp ReferenceProject/ReferenceProject.arcproj
-git commit -m "chore(plugin): plugin ABI 52 -> 53 for the settings structs -- CVarSnapshot settings blocks and CVarExplain metadata (layouts), RegisterSettings/SettingsBlock/ClearRung and the Mosaic level-target exports reached from inline headers, ARCANE_REFLECT_FIELD through Detail::ReflectField; ReferenceProject restamped (settings arc S2)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`nClaude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
+git commit -m "chore(plugin): plugin ABI 52 -> 53 for the settings structs -- CVarSnapshot settings blocks and CVarExplain metadata (layouts), RegisterSettings/SettingsBlock/ClearRung and the Mosaic level-target exports reached from inline headers, ARC_REFLECT_FIELD through Detail::ReflectField; ReferenceProject restamped (settings arc S2)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`nClaude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 ```
 In the Aphelyon repo (never push):
 ```powershell
@@ -13057,7 +13216,7 @@ TEST_CASE("WriteCVarRungArchive creates a category, updates a nested leaf, and d
     // category (input) are never written. Merge / .bad / .tmp+rename /
     // unchanged-file rules as WriteCVarArchive; a file this write empties is
     // deleted.
-    ARCANE_CORE_API void WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung,
+    ARC_CORE_API void WriteCVarRungArchive(const CVarRegistry& registry, SetBy rung,
                                               const std::filesystem::path& dir,
                                               std::span<const std::string> names);
 ```
@@ -17729,7 +17888,7 @@ Stage `scripts/automation-baselines.json` only. Never stage `bin/` or `.tmp-test
 - **Overridden rows are read-only.** They carry Clear override. This follows s12: "Overrides are shown, not edited, in the other window".
 - **What the window persists.** Archive is not required for a window edit; Cheat is never persisted; Dev and Hidden rows edited under Show advanced are persisted (the editor never runs in Dist).
 - **Window open state is not persisted.** Dock placement persists by window title through ImGui's ini. Neither window joins `PanelRegistry`, whose default is "visible", so they would open on every first run.
-- **Module branches.** A cvar is filed under Game or Plugins by matching `CVarDescInfo::module` case-insensitively against the manifest's `gameModule` stem and the enabled plugin names. This assumes S1's `ARCANE_MODULE_NAME` for a game or plugin DLL is its file stem.
+- **Module branches.** A cvar is filed under Game or Plugins by matching `CVarDescInfo::module` case-insensitively against the manifest's `gameModule` stem and the enabled plugin names. This assumes S1's `ARC_MODULE_NAME` for a game or plugin DLL is its file stem.
 - **Category sub-headers.** These are the selected node's child categories, one `SubSection` per child. No `Category`-attribute grouping syntax was invented.
 - **The Restart relaunch.**
   - It passes `--project` only. Re-passing `--set` would pin over the settings the restart is meant to apply.
@@ -18228,41 +18387,41 @@ namespace Arcane::Editor
 
 namespace Arcane::Editor
 {
-    ARCANE_REFLECT_TYPE(EditorThemeSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "editor.theme", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor)
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, chromeDeep)    ARCANE_REFLECT_ATTR(DisplayName, "Chrome (deep)")       ARCANE_REFLECT_ATTR(Category, "Chrome")               ARCANE_REFLECT_ATTR(Tooltip, "Title bars and the scrollbar track: the darkest chrome tone.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, chrome)        ARCANE_REFLECT_ATTR(DisplayName, "Chrome")              ARCANE_REFLECT_ATTR(Category, "Chrome")               ARCANE_REFLECT_ATTR(Tooltip, "The menu bar, popups and table headers.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, panel)         ARCANE_REFLECT_ATTR(DisplayName, "Panel")               ARCANE_REFLECT_ATTR(Category, "Panels")               ARCANE_REFLECT_ATTR(Tooltip, "The base surface of every panel and of the selected tab.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, panelRaised)   ARCANE_REFLECT_ATTR(DisplayName, "Panel (raised)")      ARCANE_REFLECT_ATTR(Category, "Panels")               ARCANE_REFLECT_ATTR(Tooltip, "Row and tab hover: one step up from the panel.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, well)          ARCANE_REFLECT_ATTR(DisplayName, "Field")               ARCANE_REFLECT_ATTR(Category, "Fields")               ARCANE_REFLECT_ATTR(Tooltip, "Input fields (drags, text boxes, combos): the inset well.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, wellHovered)   ARCANE_REFLECT_ATTR(DisplayName, "Field (hovered)")     ARCANE_REFLECT_ATTR(Category, "Fields")               ARCANE_REFLECT_ATTR(Tooltip, "An input field under the cursor.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, wellActive)    ARCANE_REFLECT_ATTR(DisplayName, "Field (active)")      ARCANE_REFLECT_ATTR(Category, "Fields")               ARCANE_REFLECT_ATTR(Tooltip, "An input field being edited, and a checked box.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, button)        ARCANE_REFLECT_ATTR(DisplayName, "Button")              ARCANE_REFLECT_ATTR(Category, "Buttons")              ARCANE_REFLECT_ATTR(Tooltip, "Buttons and scrollbar grabs.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, buttonHovered) ARCANE_REFLECT_ATTR(DisplayName, "Button (hovered)")    ARCANE_REFLECT_ATTR(Category, "Buttons")              ARCANE_REFLECT_ATTR(Tooltip, "A button under the cursor.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, buttonActive)  ARCANE_REFLECT_ATTR(DisplayName, "Button (pressed)")    ARCANE_REFLECT_ATTR(Category, "Buttons")              ARCANE_REFLECT_ATTR(Tooltip, "A button being pressed.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, selection)     ARCANE_REFLECT_ATTR(DisplayName, "Selection")           ARCANE_REFLECT_ATTR(Category, "Selection and accent") ARCANE_REFLECT_ATTR(Tooltip, "Selected rows, selected text and the docking preview.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, accent)        ARCANE_REFLECT_ATTR(DisplayName, "Accent")              ARCANE_REFLECT_ATTR(Category, "Selection and accent") ARCANE_REFLECT_ATTR(Tooltip, "On, active and playing: lit toggles, the selected tab's overline, Play presence.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, accentHovered) ARCANE_REFLECT_ATTR(DisplayName, "Accent (hovered)")    ARCANE_REFLECT_ATTR(Category, "Selection and accent") ARCANE_REFLECT_ATTR(Tooltip, "A lit toggle under the cursor.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, accentActive)  ARCANE_REFLECT_ATTR(DisplayName, "Accent (pressed)")    ARCANE_REFLECT_ATTR(Category, "Selection and accent") ARCANE_REFLECT_ATTR(Tooltip, "A lit toggle being pressed.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, text)          ARCANE_REFLECT_ATTR(DisplayName, "Text")                ARCANE_REFLECT_ATTR(Category, "Text and lines")       ARCANE_REFLECT_ATTR(Tooltip, "Body text.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, textDim)       ARCANE_REFLECT_ATTR(DisplayName, "Text (dim)")          ARCANE_REFLECT_ATTR(Category, "Text and lines")       ARCANE_REFLECT_ATTR(Tooltip, "Secondary and disabled text.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, border)        ARCANE_REFLECT_ATTR(DisplayName, "Border")              ARCANE_REFLECT_ATTR(Category, "Text and lines")       ARCANE_REFLECT_ATTR(Tooltip, "The 1 px edge around field wells and windows.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, separator)     ARCANE_REFLECT_ATTR(DisplayName, "Separator")           ARCANE_REFLECT_ATTR(Category, "Text and lines")       ARCANE_REFLECT_ATTR(Tooltip, "Separators, table lines and the dock splitter.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, separatorHot)  ARCANE_REFLECT_ATTR(DisplayName, "Separator (hovered)") ARCANE_REFLECT_ATTR(Category, "Text and lines")       ARCANE_REFLECT_ATTR(Tooltip, "A splitter under the cursor.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, separatorHeld) ARCANE_REFLECT_ATTR(DisplayName, "Separator (dragged)") ARCANE_REFLECT_ATTR(Category, "Text and lines")       ARCANE_REFLECT_ATTR(Tooltip, "A splitter being dragged.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, grab)          ARCANE_REFLECT_ATTR(DisplayName, "Grab")                ARCANE_REFLECT_ATTR(Category, "Marks")                ARCANE_REFLECT_ATTR(Tooltip, "Slider grabs, resize grips and plot lines.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, grabActive)    ARCANE_REFLECT_ATTR(DisplayName, "Grab (dragged)")      ARCANE_REFLECT_ATTR(Category, "Marks")                ARCANE_REFLECT_ATTR(Tooltip, "A slider grab being dragged.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, check)         ARCANE_REFLECT_ATTR(DisplayName, "Check mark")          ARCANE_REFLECT_ATTR(Category, "Marks")                ARCANE_REFLECT_ATTR(Tooltip, "Check marks, radio dots and link text.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, amber)         ARCANE_REFLECT_ATTR(DisplayName, "Amber")               ARCANE_REFLECT_ATTR(Category, "Status")               ARCANE_REFLECT_ATTR(Tooltip, "The thing you are acting on: drop targets, histogram bars and the viewport selection outline.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, amberLight)    ARCANE_REFLECT_ATTR(DisplayName, "Amber (light)")       ARCANE_REFLECT_ATTR(Category, "Status")               ARCANE_REFLECT_ATTR(Tooltip, "Hovered histogram bars.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, error)         ARCANE_REFLECT_ATTR(DisplayName, "Error")               ARCANE_REFLECT_ATTR(Category, "Status")               ARCANE_REFLECT_ATTR(Tooltip, "Errors and refused values.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, warning)       ARCANE_REFLECT_ATTR(DisplayName, "Warning")             ARCANE_REFLECT_ATTR(Category, "Status")               ARCANE_REFLECT_ATTR(Tooltip, "Warnings.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, axisX)         ARCANE_REFLECT_ATTR(DisplayName, "X axis")              ARCANE_REFLECT_ATTR(Category, "Axes")                 ARCANE_REFLECT_ATTR(Tooltip, "The X axis colour: the inspector bars, the viewport grids and the gizmo all derive from it.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, axisY)         ARCANE_REFLECT_ATTR(DisplayName, "Y axis")              ARCANE_REFLECT_ATTR(Category, "Axes")                 ARCANE_REFLECT_ATTR(Tooltip, "The Y axis colour: the inspector bars, the viewport grids and the gizmo all derive from it.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, axisZ)         ARCANE_REFLECT_ATTR(DisplayName, "Z axis")              ARCANE_REFLECT_ATTR(Category, "Axes")                 ARCANE_REFLECT_ATTR(Tooltip, "The Z axis colour: the inspector bars, the 3D grid and the gizmo all derive from it.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, modalDim)      ARCANE_REFLECT_ATTR(DisplayName, "Modal dim")           ARCANE_REFLECT_ATTR(Category, "Overlays")             ARCANE_REFLECT_ATTR(Tooltip, "The wash behind a modal dialog.")
-        ARCANE_REFLECT_FIELD(EditorThemeSettings, rowStripe)     ARCANE_REFLECT_ATTR(DisplayName, "Row stripe")          ARCANE_REFLECT_ATTR(Category, "Overlays")             ARCANE_REFLECT_ATTR(Tooltip, "The alternate table row stripe, a wash over the row.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(EditorThemeSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.theme", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_FIELD(EditorThemeSettings, chromeDeep)    ARC_REFLECT_ATTR(DisplayName, "Chrome (deep)")       ARC_REFLECT_ATTR(Category, "Chrome")               ARC_REFLECT_ATTR(Tooltip, "Title bars and the scrollbar track: the darkest chrome tone.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, chrome)        ARC_REFLECT_ATTR(DisplayName, "Chrome")              ARC_REFLECT_ATTR(Category, "Chrome")               ARC_REFLECT_ATTR(Tooltip, "The menu bar, popups and table headers.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, panel)         ARC_REFLECT_ATTR(DisplayName, "Panel")               ARC_REFLECT_ATTR(Category, "Panels")               ARC_REFLECT_ATTR(Tooltip, "The base surface of every panel and of the selected tab.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, panelRaised)   ARC_REFLECT_ATTR(DisplayName, "Panel (raised)")      ARC_REFLECT_ATTR(Category, "Panels")               ARC_REFLECT_ATTR(Tooltip, "Row and tab hover: one step up from the panel.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, well)          ARC_REFLECT_ATTR(DisplayName, "Field")               ARC_REFLECT_ATTR(Category, "Fields")               ARC_REFLECT_ATTR(Tooltip, "Input fields (drags, text boxes, combos): the inset well.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, wellHovered)   ARC_REFLECT_ATTR(DisplayName, "Field (hovered)")     ARC_REFLECT_ATTR(Category, "Fields")               ARC_REFLECT_ATTR(Tooltip, "An input field under the cursor.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, wellActive)    ARC_REFLECT_ATTR(DisplayName, "Field (active)")      ARC_REFLECT_ATTR(Category, "Fields")               ARC_REFLECT_ATTR(Tooltip, "An input field being edited, and a checked box.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, button)        ARC_REFLECT_ATTR(DisplayName, "Button")              ARC_REFLECT_ATTR(Category, "Buttons")              ARC_REFLECT_ATTR(Tooltip, "Buttons and scrollbar grabs.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, buttonHovered) ARC_REFLECT_ATTR(DisplayName, "Button (hovered)")    ARC_REFLECT_ATTR(Category, "Buttons")              ARC_REFLECT_ATTR(Tooltip, "A button under the cursor.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, buttonActive)  ARC_REFLECT_ATTR(DisplayName, "Button (pressed)")    ARC_REFLECT_ATTR(Category, "Buttons")              ARC_REFLECT_ATTR(Tooltip, "A button being pressed.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, selection)     ARC_REFLECT_ATTR(DisplayName, "Selection")           ARC_REFLECT_ATTR(Category, "Selection and accent") ARC_REFLECT_ATTR(Tooltip, "Selected rows, selected text and the docking preview.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, accent)        ARC_REFLECT_ATTR(DisplayName, "Accent")              ARC_REFLECT_ATTR(Category, "Selection and accent") ARC_REFLECT_ATTR(Tooltip, "On, active and playing: lit toggles, the selected tab's overline, Play presence.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, accentHovered) ARC_REFLECT_ATTR(DisplayName, "Accent (hovered)")    ARC_REFLECT_ATTR(Category, "Selection and accent") ARC_REFLECT_ATTR(Tooltip, "A lit toggle under the cursor.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, accentActive)  ARC_REFLECT_ATTR(DisplayName, "Accent (pressed)")    ARC_REFLECT_ATTR(Category, "Selection and accent") ARC_REFLECT_ATTR(Tooltip, "A lit toggle being pressed.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, text)          ARC_REFLECT_ATTR(DisplayName, "Text")                ARC_REFLECT_ATTR(Category, "Text and lines")       ARC_REFLECT_ATTR(Tooltip, "Body text.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, textDim)       ARC_REFLECT_ATTR(DisplayName, "Text (dim)")          ARC_REFLECT_ATTR(Category, "Text and lines")       ARC_REFLECT_ATTR(Tooltip, "Secondary and disabled text.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, border)        ARC_REFLECT_ATTR(DisplayName, "Border")              ARC_REFLECT_ATTR(Category, "Text and lines")       ARC_REFLECT_ATTR(Tooltip, "The 1 px edge around field wells and windows.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, separator)     ARC_REFLECT_ATTR(DisplayName, "Separator")           ARC_REFLECT_ATTR(Category, "Text and lines")       ARC_REFLECT_ATTR(Tooltip, "Separators, table lines and the dock splitter.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, separatorHot)  ARC_REFLECT_ATTR(DisplayName, "Separator (hovered)") ARC_REFLECT_ATTR(Category, "Text and lines")       ARC_REFLECT_ATTR(Tooltip, "A splitter under the cursor.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, separatorHeld) ARC_REFLECT_ATTR(DisplayName, "Separator (dragged)") ARC_REFLECT_ATTR(Category, "Text and lines")       ARC_REFLECT_ATTR(Tooltip, "A splitter being dragged.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, grab)          ARC_REFLECT_ATTR(DisplayName, "Grab")                ARC_REFLECT_ATTR(Category, "Marks")                ARC_REFLECT_ATTR(Tooltip, "Slider grabs, resize grips and plot lines.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, grabActive)    ARC_REFLECT_ATTR(DisplayName, "Grab (dragged)")      ARC_REFLECT_ATTR(Category, "Marks")                ARC_REFLECT_ATTR(Tooltip, "A slider grab being dragged.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, check)         ARC_REFLECT_ATTR(DisplayName, "Check mark")          ARC_REFLECT_ATTR(Category, "Marks")                ARC_REFLECT_ATTR(Tooltip, "Check marks, radio dots and link text.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, amber)         ARC_REFLECT_ATTR(DisplayName, "Amber")               ARC_REFLECT_ATTR(Category, "Status")               ARC_REFLECT_ATTR(Tooltip, "The thing you are acting on: drop targets, histogram bars and the viewport selection outline.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, amberLight)    ARC_REFLECT_ATTR(DisplayName, "Amber (light)")       ARC_REFLECT_ATTR(Category, "Status")               ARC_REFLECT_ATTR(Tooltip, "Hovered histogram bars.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, error)         ARC_REFLECT_ATTR(DisplayName, "Error")               ARC_REFLECT_ATTR(Category, "Status")               ARC_REFLECT_ATTR(Tooltip, "Errors and refused values.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, warning)       ARC_REFLECT_ATTR(DisplayName, "Warning")             ARC_REFLECT_ATTR(Category, "Status")               ARC_REFLECT_ATTR(Tooltip, "Warnings.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, axisX)         ARC_REFLECT_ATTR(DisplayName, "X axis")              ARC_REFLECT_ATTR(Category, "Axes")                 ARC_REFLECT_ATTR(Tooltip, "The X axis colour: the inspector bars, the viewport grids and the gizmo all derive from it.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, axisY)         ARC_REFLECT_ATTR(DisplayName, "Y axis")              ARC_REFLECT_ATTR(Category, "Axes")                 ARC_REFLECT_ATTR(Tooltip, "The Y axis colour: the inspector bars, the viewport grids and the gizmo all derive from it.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, axisZ)         ARC_REFLECT_ATTR(DisplayName, "Z axis")              ARC_REFLECT_ATTR(Category, "Axes")                 ARC_REFLECT_ATTR(Tooltip, "The Z axis colour: the inspector bars, the 3D grid and the gizmo all derive from it.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, modalDim)      ARC_REFLECT_ATTR(DisplayName, "Modal dim")           ARC_REFLECT_ATTR(Category, "Overlays")             ARC_REFLECT_ATTR(Tooltip, "The wash behind a modal dialog.")
+        ARC_REFLECT_FIELD(EditorThemeSettings, rowStripe)     ARC_REFLECT_ATTR(DisplayName, "Row stripe")          ARC_REFLECT_ATTR(Category, "Overlays")             ARC_REFLECT_ATTR(Tooltip, "The alternate table row stripe, a wash over the row.")
+    ARC_END_REFLECT_TYPE()
 
     ARC_SETTINGS(EditorThemeSettings);
 
@@ -19857,7 +20016,7 @@ namespace Arcane
         inline constexpr std::uint32_t kScanRCtrl = 228, kScanRShift = 229, kScanRAlt = 230, kScanRGui = 231;
     }
 
-    class ARCANE_API KeyLayout
+    class ARC_API KeyLayout
     {
     public:
         virtual ~KeyLayout() = default;
@@ -19866,8 +20025,8 @@ namespace Arcane
         [[nodiscard]] virtual std::string KeyName(std::int32_t keycode) const = 0;         // "Z", "F2", "Delete"
     };
 
-    [[nodiscard]] ARCANE_API const KeyLayout& QwertyKeyLayout();
-    [[nodiscard]] ARCANE_API const KeyLayout& SystemKeyLayout();
+    [[nodiscard]] ARC_API const KeyLayout& QwertyKeyLayout();
+    [[nodiscard]] ARC_API const KeyLayout& SystemKeyLayout();
 }
 ```
 
@@ -22712,24 +22871,24 @@ namespace Arcane::Editor
 
 namespace Arcane::Editor
 {
-    ARCANE_REFLECT_TYPE(EditorUiSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "editor.ui", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor)
-        ARCANE_REFLECT_FIELD(EditorUiSettings, fontFamily)
-            ARCANE_REFLECT_ATTR(DisplayName, "UI font") ARCANE_REFLECT_ATTR(Widget, "font")
-            ARCANE_REFLECT_ATTR(Tooltip, "The editor's text face: a bundled family or any .ttf/.otf in your Fonts folder. Rebuilds the font atlas at the next frame.")
-        ARCANE_REFLECT_FIELD(EditorUiSettings, monoFontFamily)
-            ARCANE_REFLECT_ATTR(DisplayName, "Monospace font") ARCANE_REFLECT_ATTR(Widget, "font")
-            ARCANE_REFLECT_ATTR(Tooltip, "The face for code, paths and log rows.")
-        ARCANE_REFLECT_FIELD(EditorUiSettings, fontSize)
-            ARCANE_REFLECT_ATTR(DisplayName, "Font size") ARCANE_REFLECT_ATTR(Range, 10.0f, 32.0f)
-            ARCANE_REFLECT_ATTR(Tooltip, "UI text size in pixels at scale 1.0. Text-relative sizes follow it.")
-        ARCANE_REFLECT_FIELD(EditorUiSettings, scale)
-            ARCANE_REFLECT_ATTR(DisplayName, "UI scale") ARCANE_REFLECT_ATTR(Range, 0.75f, 2.0f) ARCANE_REFLECT_ATTR(Widget, "slider")
-            ARCANE_REFLECT_ATTR(Tooltip, "Multiplies every editor size: spacing, widgets, fonts.")
-        ARCANE_REFLECT_FIELD(EditorUiSettings, followDpi)
-            ARCANE_REFLECT_ATTR(DisplayName, "Follow monitor DPI")
-            ARCANE_REFLECT_ATTR(Tooltip, "Also multiply the UI scale by the monitor's display scale.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(EditorUiSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "editor.ui", SettingScope::PreferencesMachine, ApplyMode::Live, Audience::Editor)
+        ARC_REFLECT_FIELD(EditorUiSettings, fontFamily)
+            ARC_REFLECT_ATTR(DisplayName, "UI font") ARC_REFLECT_ATTR(Widget, "font")
+            ARC_REFLECT_ATTR(Tooltip, "The editor's text face: a bundled family or any .ttf/.otf in your Fonts folder. Rebuilds the font atlas at the next frame.")
+        ARC_REFLECT_FIELD(EditorUiSettings, monoFontFamily)
+            ARC_REFLECT_ATTR(DisplayName, "Monospace font") ARC_REFLECT_ATTR(Widget, "font")
+            ARC_REFLECT_ATTR(Tooltip, "The face for code, paths and log rows.")
+        ARC_REFLECT_FIELD(EditorUiSettings, fontSize)
+            ARC_REFLECT_ATTR(DisplayName, "Font size") ARC_REFLECT_ATTR(Range, 10.0f, 32.0f)
+            ARC_REFLECT_ATTR(Tooltip, "UI text size in pixels at scale 1.0. Text-relative sizes follow it.")
+        ARC_REFLECT_FIELD(EditorUiSettings, scale)
+            ARC_REFLECT_ATTR(DisplayName, "UI scale") ARC_REFLECT_ATTR(Range, 0.75f, 2.0f) ARC_REFLECT_ATTR(Widget, "slider")
+            ARC_REFLECT_ATTR(Tooltip, "Multiplies every editor size: spacing, widgets, fonts.")
+        ARC_REFLECT_FIELD(EditorUiSettings, followDpi)
+            ARC_REFLECT_ATTR(DisplayName, "Follow monitor DPI")
+            ARC_REFLECT_ATTR(Tooltip, "Also multiply the UI scale by the monitor's display scale.")
+    ARC_END_REFLECT_TYPE()
 
     ARC_SETTINGS(EditorUiSettings);
 
@@ -24533,12 +24692,12 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 
 - **Only frozen rows.** A row converts with the name, audience, scope, apply, range and det the frozen inventory gives it. A field the recipe shows that disagrees with the frozen row follows the row.
 - **The recipe, every time:**
-  1. A settings struct per category (`<category>` = the name minus its last segment) in `<Module>/src/.../<Name>Settings.hpp`, its default member initializers being the deleted constexprs' exact type and value; a reflection block in the same header (inside the struct's namespace, like `Scene/Components.hpp:316`) with `ARCANE_REFLECT_TYPE_ATTR(Settings, "<category>", SettingScope::..., ApplyMode::..., Audience::...)` and per-field `Range`, `Tooltip` (required: S1 refuses empty help), `Deterministic`, `Flags`, `Widget` as the row says; and `ARC_SETTINGS(<ns>::<Name>Settings);` in a `<Name>Settings.cpp` beside it.
+  1. A settings struct per category (`<category>` = the name minus its last segment) in `<Module>/src/.../<Name>Settings.hpp`, its default member initializers being the deleted constexprs' exact type and value; a reflection block in the same header (inside the struct's namespace, like `Scene/Components.hpp:316`) with `ARC_REFLECT_TYPE_ATTR(Settings, "<category>", SettingScope::..., ApplyMode::..., Audience::...)` and per-field `Range`, `Tooltip` (required: S1 refuses empty help), `Deterministic`, `Flags`, `Widget` as the row says; and `ARC_SETTINGS(<ns>::<Name>Settings);` in a `<Name>Settings.cpp` beside it.
   2. The consumer reads `Arcane::Settings<T>()` (or a `CVarRef`) once per frame/step/creation, never by string.
   3. The constexpr is deleted (no shadow copy: a second spelling of a default becomes a read of the struct or of `T{}`).
   4. Its PENDING line in `scripts/constant-allowlist.txt` is deleted in the same commit (S6-1's stale-entry test fails otherwise; that is the per-task grep proof).
 - **Binding points.** `Live` reads every frame. `NextWorld` reads at world/registry/physics creation. `Restart` reads at the boot point where its rungs exist: anything read before `OpenProject` sees the **early rungs** S6-2's `HostBoot::ApplyEarlyConfigRungs` applies in both hosts' `main` (engine config, the project's `Config/`, EditorUser, the user rung, `--set`); history replaces per (rung, source) since S1, so `OpenProject` re-applying the same rungs is idempotent.
-- **`Dev` on struct fields** is `ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)` (S6-1 produces `Attr::Flags`).
+- **`Dev` on struct fields** is `ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)` (S6-1 produces `Attr::Flags`).
 - **Editor-side registration TUs** (`ArcaneEditor/src/Settings/*.cpp`) are added to ArcaneTests' explicit file list in `premake5.lua` (`:1186-1240`, the `ArcaneEditor/src/...` block) so `[sweep]` cases see them; Core/Client/AssetPipeline files are globbed. Any added file: `cmd /c "echo.|scripts\generate.bat"`.
 - **Identical-default proof (every task's Step 1):** (a) `T{}` field == the old literal, with `STATIC_REQUIRE(std::is_same_v<...>)` on the type; (b) `Test::RequireDefault("<name>", CVarValue::...)` (the registered Default record); (c) one binding assertion showing the consumer reads the setting (a `Set` at `SetBy::Code` + `PublishImmediate()` moves the consumer). Floats compare with `Test::SameBits`.
 - **Build and run** (PowerShell, from the worktree):
@@ -24876,7 +25035,7 @@ namespace Arcane::Test
             if (const auto* tf = type.GetAttribute<Attr::Flags>())  desc.flags = desc.flags | tf->set;
             if (const auto* ff = field.GetAttribute<Attr::Flags>()) desc.flags = desc.flags | ff->set;
 ```
-(`type` / `field` are the loop's `Astra` TypeMeta / FieldInfo; both expose `GetAttribute<A>()`, `TypeMeta.hpp:247`, `FieldInfo.hpp:204`.) Add a `[settings]` case to S2's `SettingsTest.cpp`: a test struct with `ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev)` registers a cvar whose flags carry `Dev`.
+(`type` / `field` are the loop's `Astra` TypeMeta / FieldInfo; both expose `GetAttribute<A>()`, `TypeMeta.hpp:247`, `FieldInfo.hpp:204`.) Add a `[settings]` case to S2's `SettingsTest.cpp`: a test struct with `ARC_REFLECT_ATTR(Flags, CVarFlags::Dev)` registers a cvar whose flags carry `Dev`.
 
 `scripts/seed-constant-allowlist.ps1`:
 ```powershell
@@ -25083,35 +25242,35 @@ namespace Arcane
         std::uint32_t perfLogIntervalFrames = 60;
     };
 
-    ARCANE_REFLECT_ENUM(MinidumpKind)
-        ARCANE_REFLECT_ENUM_VALUE(MinidumpKind, Small)
-        ARCANE_REFLECT_ENUM_VALUE(MinidumpKind, Default)
-        ARCANE_REFLECT_ENUM_VALUE(MinidumpKind, Full)
-    ARCANE_END_REFLECT_ENUM()
+    ARC_REFLECT_ENUM(MinidumpKind)
+        ARC_REFLECT_ENUM_VALUE(MinidumpKind, Small)
+        ARC_REFLECT_ENUM_VALUE(MinidumpKind, Default)
+        ARC_REFLECT_ENUM_VALUE(MinidumpKind, Full)
+    ARC_END_REFLECT_ENUM()
 
-    ARCANE_REFLECT_TYPE(DiagnosticsSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "diagnostics", SettingScope::PreferencesProject, ApplyMode::Restart, Audience::Game)
-        ARCANE_REFLECT_FIELD(DiagnosticsSettings, dumpDir)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev) ARCANE_REFLECT_ATTR(Widget, "path:dir")
-            ARCANE_REFLECT_ATTR(Tooltip, "Where crash and hang reports land. Empty = <exe dir>/diagnostics.")
-        ARCANE_REFLECT_FIELD(DiagnosticsSettings, hangSeconds)
-            ARCANE_REFLECT_ATTR(Range, 1u, 600u)
-            ARCANE_REFLECT_ATTR(Tooltip, "A main-thread stall this long (seconds) is reported as a hang.")
-        ARCANE_REFLECT_FIELD(DiagnosticsSettings, gpuStallSeconds)
-            ARCANE_REFLECT_ATTR(Range, 1u, 599u)
-            ARCANE_REFLECT_ATTR(Tooltip, "A GPU-progress stall this long (seconds) is reported as a GPU hang. Keep it below hangSeconds.")
-        ARCANE_REFLECT_FIELD(DiagnosticsSettings, installCrashHandler)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev | CVarFlags::CommandLineOnly)
-            ARCANE_REFLECT_ATTR(Tooltip, "Install the unhandled-exception filter. --set only (debugger sessions); always on in Dist.")
-        ARCANE_REFLECT_FIELD(DiagnosticsSettings, hangWatchdog)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev | CVarFlags::CommandLineOnly)
-            ARCANE_REFLECT_ATTR(Tooltip, "Start the hang watchdog. --set only (debugger sessions); always on in Dist.")
+    ARC_REFLECT_TYPE(DiagnosticsSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "diagnostics", SettingScope::PreferencesProject, ApplyMode::Restart, Audience::Game)
+        ARC_REFLECT_FIELD(DiagnosticsSettings, dumpDir)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Widget, "path:dir")
+            ARC_REFLECT_ATTR(Tooltip, "Where crash and hang reports land. Empty = <exe dir>/diagnostics.")
+        ARC_REFLECT_FIELD(DiagnosticsSettings, hangSeconds)
+            ARC_REFLECT_ATTR(Range, 1u, 600u)
+            ARC_REFLECT_ATTR(Tooltip, "A main-thread stall this long (seconds) is reported as a hang.")
+        ARC_REFLECT_FIELD(DiagnosticsSettings, gpuStallSeconds)
+            ARC_REFLECT_ATTR(Range, 1u, 599u)
+            ARC_REFLECT_ATTR(Tooltip, "A GPU-progress stall this long (seconds) is reported as a GPU hang. Keep it below hangSeconds.")
+        ARC_REFLECT_FIELD(DiagnosticsSettings, installCrashHandler)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev | CVarFlags::CommandLineOnly)
+            ARC_REFLECT_ATTR(Tooltip, "Install the unhandled-exception filter. --set only (debugger sessions); always on in Dist.")
+        ARC_REFLECT_FIELD(DiagnosticsSettings, hangWatchdog)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev | CVarFlags::CommandLineOnly)
+            ARC_REFLECT_ATTR(Tooltip, "Start the hang watchdog. --set only (debugger sessions); always on in Dist.")
         // reporterPath, spawnReporter, exitSeconds, crashHandlingTimeoutSeconds,
         // minidumpKind, logFlushTimeoutMs, watchdogPollMs, watchdogJoinTimeoutMs,
         // minFatalWaitMs, perfLog, perfLogIntervalFrames: one FIELD line each,
         // Range + Flags(Dev) exactly as their frozen rows give, and a Tooltip
         // taken from the row's "why" cell. spawnReporter is the one non-Dev field.
-    ARCANE_END_REFLECT_TYPE()
+    ARC_END_REFLECT_TYPE()
 }
 ```
 (Write the eleven remaining FIELD entries out in full; the comment above is the instruction, not code to leave in.)
@@ -25141,7 +25300,7 @@ and, beside `Install`:
 ```cpp
     // The host's Config from the settings (identity fields -- appName,
     // productName, unattended, launchMonitor, commandLine -- stay the host's).
-    [[nodiscard]] ARCANE_CORE_API Config ConfigFromSettings(const DiagnosticsSettings& s);
+    [[nodiscard]] ARC_CORE_API Config ConfigFromSettings(const DiagnosticsSettings& s);
 ```
 `Diagnostics.cpp`:
 ```cpp
@@ -25175,7 +25334,7 @@ The literals become `g_cfg` reads: `:1329` `Log::FlushFileSinkBounded(g_cfg.logF
             type = static_cast<MINIDUMP_TYPE>(type | MiniDumpWithFullMemory | MiniDumpWithFullMemoryInfo);
 ```
 
-`EarlyConfig.hpp` / `.cpp` (ArcaneClient, `ARCANE_API`):
+`EarlyConfig.hpp` / `.cpp` (ArcaneClient, `ARC_API`):
 ```cpp
 #pragma once
 // The config rungs that exist BEFORE Runtime::OpenProject (settings arc S6-2):
@@ -25189,7 +25348,7 @@ The literals become `g_cfg` reads: `:1329` `Log::FlushFileSinkBounded(g_cfg.logF
 namespace Arcane { struct HostConfig; }
 namespace Arcane::HostBoot
 {
-    ARCANE_API void ApplyEarlyConfigRungs(const HostConfig& cfg, CVarContext ctx, bool editor);
+    ARC_API void ApplyEarlyConfigRungs(const HostConfig& cfg, CVarContext ctx, bool editor);
 }
 ```
 ```cpp
@@ -25329,16 +25488,16 @@ namespace Arcane
         std::int32_t keepCount = 5;   // rotated files kept beside the live one
         std::int32_t flushLevel = 3;  // spdlog level: 0 trace .. 3 warn .. 6 off
     };
-    ARCANE_REFLECT_TYPE(LogFileSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "log.file", SettingScope::PreferencesProject, ApplyMode::Restart, Audience::Game)
-        ARCANE_REFLECT_FIELD(LogFileSettings, keepCount)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev) ARCANE_REFLECT_ATTR(Range, 0, 100)
-            ARCANE_REFLECT_ATTR(Tooltip, "Rotated engine log files kept (name.1.log .. name.N.log).")
-        ARCANE_REFLECT_FIELD(LogFileSettings, flushLevel)
-            ARCANE_REFLECT_ATTR(Flags, CVarFlags::Dev) ARCANE_REFLECT_ATTR(Range, 0, 6)
-            ARCANE_REFLECT_ATTR(Apply, ApplyMode::Live)
-            ARCANE_REFLECT_ATTR(Tooltip, "Log level at which the file sink flushes immediately: 0 trace .. 3 warn .. 6 off.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(LogFileSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "log.file", SettingScope::PreferencesProject, ApplyMode::Restart, Audience::Game)
+        ARC_REFLECT_FIELD(LogFileSettings, keepCount)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 0, 100)
+            ARC_REFLECT_ATTR(Tooltip, "Rotated engine log files kept (name.1.log .. name.N.log).")
+        ARC_REFLECT_FIELD(LogFileSettings, flushLevel)
+            ARC_REFLECT_ATTR(Flags, CVarFlags::Dev) ARC_REFLECT_ATTR(Range, 0, 6)
+            ARC_REFLECT_ATTR(Apply, ApplyMode::Live)
+            ARC_REFLECT_ATTR(Tooltip, "Log level at which the file sink flushes immediately: 0 trace .. 3 warn .. 6 off.")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 `Log.cpp:329` (delete `constexpr int keep = 5;`):
@@ -25588,19 +25747,19 @@ TEST_CASE("sweep: an absent .meta field takes the project default; a present one
 - [ ] **Step 3: Implement**
 - `TextureMetaSettings.hpp`: include `<Arcane/Config/Settings.hpp>` and `<Arcane/Reflection.hpp>`; change the declaration to `static TextureMetaSettings FromMetaJson(const nlohmann::json& j, const TextureMetaSettings& defaults);`; after the struct:
 ```cpp
-    ARCANE_REFLECT_ENUM(TextureMetaSettings::Format)
-        ARCANE_REFLECT_ENUM_VALUE(TextureMetaSettings::Format, Auto)
-        ARCANE_REFLECT_ENUM_VALUE(TextureMetaSettings::Format, Bc7)
-        ARCANE_REFLECT_ENUM_VALUE(TextureMetaSettings::Format, Rgba8)
-    ARCANE_END_REFLECT_ENUM()
-    ARCANE_REFLECT_TYPE(TextureMetaSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "assets.import.texture", ::Arcane::SettingScope::Project, ::Arcane::ApplyMode::Live, ::Arcane::Audience::Editor)
-        ARCANE_REFLECT_FIELD(TextureMetaSettings, format)       ARCANE_REFLECT_ATTR(Tooltip, "Cooked format for a texture whose .meta does not choose one. Changes cooked bytes.")
-        ARCANE_REFLECT_FIELD(TextureMetaSettings, srgb)         ARCANE_REFLECT_ATTR(Tooltip, "Treat colour data as sRGB unless a texture's .meta says otherwise.")
-        ARCANE_REFLECT_FIELD(TextureMetaSettings, generateMips) ARCANE_REFLECT_ATTR(Tooltip, "Generate mips unless a texture's .meta says otherwise.")
-        ARCANE_REFLECT_FIELD(TextureMetaSettings, maxSize)      ARCANE_REFLECT_ATTR(Range, 0u, 16384u)
-                                                                 ARCANE_REFLECT_ATTR(Tooltip, "Largest cooked dimension (0 = unlimited) unless a texture's .meta says otherwise.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_ENUM(TextureMetaSettings::Format)
+        ARC_REFLECT_ENUM_VALUE(TextureMetaSettings::Format, Auto)
+        ARC_REFLECT_ENUM_VALUE(TextureMetaSettings::Format, Bc7)
+        ARC_REFLECT_ENUM_VALUE(TextureMetaSettings::Format, Rgba8)
+    ARC_END_REFLECT_ENUM()
+    ARC_REFLECT_TYPE(TextureMetaSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "assets.import.texture", ::Arcane::SettingScope::Project, ::Arcane::ApplyMode::Live, ::Arcane::Audience::Editor)
+        ARC_REFLECT_FIELD(TextureMetaSettings, format)       ARC_REFLECT_ATTR(Tooltip, "Cooked format for a texture whose .meta does not choose one. Changes cooked bytes.")
+        ARC_REFLECT_FIELD(TextureMetaSettings, srgb)         ARC_REFLECT_ATTR(Tooltip, "Treat colour data as sRGB unless a texture's .meta says otherwise.")
+        ARC_REFLECT_FIELD(TextureMetaSettings, generateMips) ARC_REFLECT_ATTR(Tooltip, "Generate mips unless a texture's .meta says otherwise.")
+        ARC_REFLECT_FIELD(TextureMetaSettings, maxSize)      ARC_REFLECT_ATTR(Range, 0u, 16384u)
+                                                                 ARC_REFLECT_ATTR(Tooltip, "Largest cooked dimension (0 = unlimited) unless a texture's .meta says otherwise.")
+    ARC_END_REFLECT_TYPE()
 ```
 - `TextureMetaSettings.cpp`: `ARC_SETTINGS(Arcane::AssetPipeline::TextureMetaSettings);` in THIS TU (it defines `FromMetaJson`, which every cooker calls, so the static-lib object is always linked); `FromMetaJson(j, defaults)` starts from `TextureMetaSettings settings = defaults;` instead of `{}`.
 - `CookSession`: member `TextureMetaSettings m_textureDefaults{};`, setter `SetTextureDefaults`; the three `FromMetaJson(ReadMetaBlock(...))` calls pass `m_textureDefaults`. The cook key already hashes the RESOLVED fields (`CookKey.cpp`), so a project-default change invalidates exactly the affected artifacts.
@@ -25826,24 +25985,24 @@ namespace Arcane
         return dt > cap ? cap : dt;
     }
 
-    ARCANE_REFLECT_TYPE(SimSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "sim", SettingScope::Project, ApplyMode::Live, Audience::Game)
-        ARCANE_REFLECT_FIELD(SimSettings, fixedHz)
-            ARCANE_REFLECT_ATTR(Range, 10.0, 480.0) ARCANE_REFLECT_ATTR(Apply, ApplyMode::NextWorld) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Fixed simulation steps per second. Applies when the world is next created.")
-        ARCANE_REFLECT_FIELD(SimSettings, maxStepsPerFrame)
-            ARCANE_REFLECT_ATTR(Range, 1, 64) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Most fixed steps one frame may run (the spiral-of-death clamp).")
-        ARCANE_REFLECT_FIELD(SimSettings, maxFrameDeltaSeconds)
-            ARCANE_REFLECT_ATTR(Range, 0.01, 1.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Longest wall-clock frame the simulation catches up on; longer hitches are dropped. Runtime and Play-in-editor alike.")
-    ARCANE_END_REFLECT_TYPE()
-    ARCANE_REFLECT_TYPE(ServerSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "server", SettingScope::Project, ApplyMode::Restart, Audience::Server)
-        ARCANE_REFLECT_FIELD(ServerSettings, tickHz)
-            ARCANE_REFLECT_ATTR(Range, 1.0, 240.0) ARCANE_REFLECT_ATTR(Deterministic)
-            ARCANE_REFLECT_ATTR(Tooltip, "Dedicated-server fixed ticks per second (--fixed-dt overrides).")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(SimSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "sim", SettingScope::Project, ApplyMode::Live, Audience::Game)
+        ARC_REFLECT_FIELD(SimSettings, fixedHz)
+            ARC_REFLECT_ATTR(Range, 10.0, 480.0) ARC_REFLECT_ATTR(Apply, ApplyMode::NextWorld) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Fixed simulation steps per second. Applies when the world is next created.")
+        ARC_REFLECT_FIELD(SimSettings, maxStepsPerFrame)
+            ARC_REFLECT_ATTR(Range, 1, 64) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Most fixed steps one frame may run (the spiral-of-death clamp).")
+        ARC_REFLECT_FIELD(SimSettings, maxFrameDeltaSeconds)
+            ARC_REFLECT_ATTR(Range, 0.01, 1.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Longest wall-clock frame the simulation catches up on; longer hitches are dropped. Runtime and Play-in-editor alike.")
+    ARC_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(ServerSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "server", SettingScope::Project, ApplyMode::Restart, Audience::Server)
+        ARC_REFLECT_FIELD(ServerSettings, tickHz)
+            ARC_REFLECT_ATTR(Range, 1.0, 240.0) ARC_REFLECT_ATTR(Deterministic)
+            ARC_REFLECT_ATTR(Tooltip, "Dedicated-server fixed ticks per second (--fixed-dt overrides).")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 - `RunLoop.hpp:39-40`: `double fixedHz = SimSettings{}.fixedHz; int maxStepsPerFrame = SimSettings{}.maxStepsPerFrame;`. `Runtime.cpp` Impl ctor: `loopCfg.fixedHz = Settings<SimSettings>().fixedHz; loopCfg.maxStepsPerFrame = Settings<SimSettings>().maxStepsPerFrame;` before `loop` is built (and in Restore/ResetRegistry, which reuse `loopCfg`, re-read them: NextWorld).
@@ -25991,7 +26150,7 @@ The cvar name IS `<category>.<field>`, so the fields carry the frozen names (`de
         // ... the per-call members (alpha, interp, onlyBody, the Slice A toggles that are not rows) unchanged ...
     };
     // A fresh options block holding the PUBLISHED debug.physics.* values.
-    [[nodiscard]] ARCANE_API PhysicsDebugDrawOptions MakePhysicsDebugDrawOptions();
+    [[nodiscard]] ARC_API PhysicsDebugDrawOptions MakePhysicsDebugDrawOptions();
 ```
 ```cpp
     PhysicsDebugDrawOptions MakePhysicsDebugDrawOptions()
@@ -26346,14 +26505,14 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 - Consumes: S6-2's early rungs (applied before `gpu_core`).
 - Produces:
   - `RenderSettings { GraphicsBackend backend = GraphicsBackend::D3D12; bool vsync = true; std::int32_t adapter = -1 /* auto */; bool allowTearing = false; }` (PlayerSafe, Project default, Restart; S1's PlayerSafe override rung is per-machine);
-  - `RenderDebugSettings { bool validation = kDebugDefault; bool d3d12DebugLayer = kDebugDefault; bool vkSyncValidation = kDebugDefault; BreakSeverity breakOnSeverity = BreakSeverity::None; MinSeverity minSeverity = MinSeverity::Warning; CVarColor pendingCookCheckerA = magenta, pendingCookCheckerB = (16,16,16); }` where `kDebugDefault` is `true` under `ARCANE_DEBUG`, else `false` (the per-configuration defaults the Debug forcing at `NriGraphContext.cpp:176-178` / `OffscreenVehicle.cpp:48-50` implemented; inventory Part 2 DERIVED row);
+  - `RenderDebugSettings { bool validation = kDebugDefault; bool d3d12DebugLayer = kDebugDefault; bool vkSyncValidation = kDebugDefault; BreakSeverity breakOnSeverity = BreakSeverity::None; MinSeverity minSeverity = MinSeverity::Warning; CVarColor pendingCookCheckerA = magenta, pendingCookCheckerB = (16,16,16); }` where `kDebugDefault` is `true` under `ARC_BUILD_DEBUG`, else `false` (the per-configuration defaults the Debug forcing at `NriGraphContext.cpp:176-178` / `OffscreenVehicle.cpp:48-50` implemented; inventory Part 2 DERIVED row);
   - `RenderD3d12Settings { std::uint64_t zeroBufferBytes = 0; bool enhancedBarriers = true; std::uint32_t deviceArmorRefs = 65536; }`; `RenderVulkanSettings { bool foreignModuleFallback = true; }`;
   - `RenderDeviceDesc MakeRenderDeviceDesc()` (the published values).
 - `--backend` and `--no-vsync` stay flags (BOTH rows): HostConfig applies them as `--set render.backend=...` / `render.vsync=false` on the CommandLine rung inside `ApplyEarlyConfigRungs`.
 
 **Rows:** Part 2 "Host command line" `HostConfig.cpp:85, :87`; "Host boot, window and splash" `GpuContext.cpp:66`; "Renderer device creation" `RenderDeviceDesc.hpp:21-23, :31, :54`, `NriDevice.cpp:317, :326`, `DeviceCreationD3D12.cpp:401-402, :171-173/:487-489, :499-503, :728`, `DeviceCreationVulkan.cpp:391-399, :367`; "Swapchain" `NriSwapChain.cpp:145`; "Texture and mesh caches" `NriTextureCache.cpp:386-397`. ~16 rows.
 
-**Shadow copies:** `NriGraphContext.cpp:176-178` and `OffscreenVehicle.cpp:48-50` (the Debug forcing), `RenderDeviceDesc.hpp`'s `#if ARCANE_DEBUG` pair, `NriSwapChain.hpp:220` / `NriGraphContext.hpp:1573` `m_vsync = true` (DERIVED from `render.vsync`).
+**Shadow copies:** `NriGraphContext.cpp:176-178` and `OffscreenVehicle.cpp:48-50` (the Debug forcing), `RenderDeviceDesc.hpp`'s `#if ARC_BUILD_DEBUG` pair, `NriSwapChain.hpp:220` / `NriGraphContext.hpp:1573` `m_vsync = true` (DERIVED from `render.vsync`).
 
 - [ ] **Step 1: Write the failing test**
 ```cpp
@@ -26364,7 +26523,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 using namespace Arcane;
 TEST_CASE("sweep: render device defaults are the pre-sweep values, per configuration", "[sweep][render-device]")
 {
-#if defined(ARCANE_DEBUG)
+#if defined(ARC_BUILD_DEBUG)
     constexpr bool debugOn = true;
 #else
     constexpr bool debugOn = false;
@@ -26405,7 +26564,7 @@ TEST_CASE("sweep: render device defaults are the pre-sweep values, per configura
         return desc;
     }
 ```
-- `NriGraphContext.cpp:170-183`: `RenderDeviceDesc dd = MakeRenderDeviceDesc(); dd.backend = config.backend;` and the `#if defined(ARCANE_DEBUG)` forcing block is deleted (its comment's reasoning moves into `RenderDebugSettings`'s Tooltip). `OffscreenVehicle.cpp:44-50`: same.
+- `NriGraphContext.cpp:170-183`: `RenderDeviceDesc dd = MakeRenderDeviceDesc(); dd.backend = config.backend;` and the `#if defined(ARC_BUILD_DEBUG)` forcing block is deleted (its comment's reasoning moves into `RenderDebugSettings`'s Tooltip). `OffscreenVehicle.cpp:44-50`: same.
 - `GpuContext.cpp:46-63`: the foreign-module fallback runs only when `Settings<RenderVulkanSettings>().foreignModuleFallback`.
 - `NriDevice.cpp:317`: `desc.d3dZeroBufferSize = Settings<RenderD3d12Settings>().zeroBufferBytes;` `:326`: `desc.disableD3D12EnhancedBarriers = !Settings<RenderD3d12Settings>().enhancedBarriers;`.
 - `DeviceCreationD3D12.cpp:401-402`: `adapter >= 0` picks that DXGI index (falling back with a WARN when absent), `-1` keeps index 0 / HIGH_PERFORMANCE; `DeviceCreationVulkan.cpp:391-399`: `adapter >= 0` picks that physical device, `-1` keeps "first discrete, else [0]". `:171-173, :487-489`: `SetBreakOnSeverity` per `breakOnSeverity` (None = today's FALSE x3). `:499-503` and Vulkan `:367`: the deny list / messenger mask from `minSeverity` (Warning = today's). `:728`: `kDeviceArmorRefs` -> `Settings<RenderD3d12Settings>().deviceArmorRefs` read once at device creation.
@@ -26476,8 +26635,8 @@ namespace Arcane
 {
     ARC_CONSTANT("storage ceiling for per-frame arrays; render.framesInFlight is clamped to it")
     inline constexpr std::uint32_t kMaxFramesInFlight = 3;
-    ARCANE_API std::uint32_t FramesInFlight() noexcept;
-    ARCANE_API void LatchFramesInFlight();
+    ARC_API std::uint32_t FramesInFlight() noexcept;
+    ARC_API void LatchFramesInFlight();
 }
 ```
 `FramePacing.cpp`:
@@ -26925,7 +27084,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 - Test: `ArcaneTests/src/SweepRuntimeHudTest.cpp`
 
 **Interfaces:**
-- Produces: `RuntimeHudSettings { bool show = kHudDefault; }` with `kHudDefault` = `false` under `ARCANE_DIST`, else `true` (Game, Pref-P, Live; NOT Dev: a Dist player may turn it on from a settings menu). Goldens are captured from Debug/Release, so they keep it on (R4).
+- Produces: `RuntimeHudSettings { bool show = kHudDefault; }` with `kHudDefault` = `false` under `ARC_BUILD_DIST`, else `true` (Game, Pref-P, Live; NOT Dev: a Dist player may turn it on from a settings menu). Goldens are captured from Debug/Release, so they keep it on (R4).
 
 **Rows:** Part 2 "Runtime host" `RuntimeFrame.cpp:302-310`; R4 "Debug HUD in Dist".
 
@@ -26937,7 +27096,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi"
 using namespace Arcane;
 TEST_CASE("sweep: the runtime HUD is on in Debug/Release and off in Dist", "[sweep][hud]")
 {
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     CHECK_FALSE(RuntimeHudSettings{}.show);
     Test::RequireDefault("runtime.hud.show", CVarValue::Bool(false));
 #else
@@ -26958,17 +27117,17 @@ TEST_CASE("sweep: the runtime HUD is on in Debug/Release and off in Dist", "[swe
 #include <Arcane/Reflection.hpp>
 namespace Arcane
 {
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
     inline constexpr bool kRuntimeHudDefault = false;
 #else
     inline constexpr bool kRuntimeHudDefault = true;
 #endif
     struct RuntimeHudSettings { bool show = kRuntimeHudDefault; };
-    ARCANE_REFLECT_TYPE(RuntimeHudSettings)
-        ARCANE_REFLECT_TYPE_ATTR(Settings, "runtime.hud", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
-        ARCANE_REFLECT_FIELD(RuntimeHudSettings, show)
-            ARCANE_REFLECT_ATTR(Tooltip, "Show the runtime's stats window (backend, quads, draws, visibility). Off by default in shipped builds.")
-    ARCANE_END_REFLECT_TYPE()
+    ARC_REFLECT_TYPE(RuntimeHudSettings)
+        ARC_REFLECT_TYPE_ATTR(Settings, "runtime.hud", SettingScope::PreferencesProject, ApplyMode::Live, Audience::Game)
+        ARC_REFLECT_FIELD(RuntimeHudSettings, show)
+            ARC_REFLECT_ATTR(Tooltip, "Show the runtime's stats window (backend, quads, draws, visibility). Off by default in shipped builds.")
+    ARC_END_REFLECT_TYPE()
 }
 ```
 `BuildHud`: wrap the `ImGui::Begin("ArcaneRuntime") ... ImGui::End();` block in `if (Arcane::Settings<Arcane::RuntimeHudSettings>().show) { ... }`; `BeginFrame`, `DrawUIAll` and the console are unchanged.
@@ -27220,7 +27379,7 @@ TEST_CASE("sweep: an old [EditorViewport][Camera] block is imported once and no 
 ```
 - [ ] **Step 2: Run it and see it fail.**
 - [ ] **Step 3: Implement**
-- `ViewportSettings.hpp`: remove the three fields and the four DERIVED range constants; keep `kMinFovYDeg/kMaxFovYDeg/kMaxPitchDeg` (CONSTANT: projection/NaN guards) and the ini names; new signatures above; `GridPlane` gets `ARCANE_REFLECT_ENUM(GridPlane)` (XZ, XY) in `EditorViewportSettings.hpp`.
+- `ViewportSettings.hpp`: remove the three fields and the four DERIVED range constants; keep `kMinFovYDeg/kMaxFovYDeg/kMaxPitchDeg` (CONSTANT: projection/NaN guards) and the ini names; new signatures above; `GridPlane` gets `ARC_REFLECT_ENUM(GridPlane)` (XZ, XY) in `EditorViewportSettings.hpp`.
 - `ViewportSettings.cpp`: `WriteIni` drops `Speed=`, `Grid=`, `GizmoSize=` and writes `Orbit=%f %f %f %f %f %f` (pivot, yaw, pitch, distance). `ReadIniLine`: `Orbit=` first tries seven values (fov validated `InRange(fov, kMinFovYDeg, kMaxFovYDeg)` into `legacy.fovYDeg`), then six; `Speed=` / `Grid=` / `GizmoSize=` validate exactly as today and fill `legacy` instead of state.
 - `ImportLegacyViewportPrefs`:
 ```cpp
@@ -28583,23 +28742,23 @@ Build Debug. Expected: `cannot open include file 'Arcane/Config/PlayerSettings.h
 
 namespace Arcane
 {
-    [[nodiscard]] ARCANE_CORE_API CVarContext CVarContextFor(NetMode mode) noexcept;
+    [[nodiscard]] ARC_CORE_API CVarContext CVarContextFor(NetMode mode) noexcept;
 
     namespace PlayerSettings
     {
-        ARCANE_CORE_API void SetSessionMode(NetMode mode) noexcept;
-        [[nodiscard]] ARCANE_CORE_API NetMode SessionMode() noexcept;
-        [[nodiscard]] ARCANE_CORE_API CVarContext SessionContext() noexcept;
+        ARC_CORE_API void SetSessionMode(NetMode mode) noexcept;
+        [[nodiscard]] ARC_CORE_API NetMode SessionMode() noexcept;
+        [[nodiscard]] ARC_CORE_API CVarContext SessionContext() noexcept;
 
         // The process registry, in the session's context (the contract's pair).
-        [[nodiscard]] ARCANE_CORE_API std::vector<CVarListEntryEx> List(std::string_view categoryPrefix);
-        ARCANE_CORE_API SetResult Set(std::string_view name, const CVarValue& value);
+        [[nodiscard]] ARC_CORE_API std::vector<CVarListEntryEx> List(std::string_view categoryPrefix);
+        ARC_CORE_API SetResult Set(std::string_view name, const CVarValue& value);
 
         // The same on an explicit registry and context (tests, tools).
         // categoryPrefix: "" = all; "audio" matches "audio.x" but not "audiox.y".
-        [[nodiscard]] ARCANE_CORE_API std::vector<CVarListEntryEx> List(const CVarRegistry& registry,
+        [[nodiscard]] ARC_CORE_API std::vector<CVarListEntryEx> List(const CVarRegistry& registry,
                                                                         std::string_view categoryPrefix);
-        ARCANE_CORE_API SetResult Set(CVarRegistry& registry, std::string_view name, const CVarValue& value,
+        ARC_CORE_API SetResult Set(CVarRegistry& registry, std::string_view name, const CVarValue& value,
                                       CVarContext context);
     }
 }
@@ -29019,7 +29178,7 @@ TEST_CASE("Runtime: the User rung is GameUserDir/Config -- a player's PlayerSafe
     {
         Runtime runtime(Test::Process());
         REQUIRE(runtime.OpenProject(root));
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
         CHECK(Paths::Get(Paths::Location::GameUserDir)
               == Paths::ResolveGameUserDir(PathsConfigFor(*runtime.CurrentProject(), "", true),
                                            Paths::kHostPlatform, Paths::CurrentPlatformDirs()));
@@ -29084,13 +29243,13 @@ Regenerate premake, then build Debug. Expected: compile errors for `ResolveGameU
   // One folder name from a company or game name: path separators, reserved
   // characters and controls become '_', trailing dots/spaces go, a Windows
   // device name gains a leading '_'. "." and ".." become empty.
-  [[nodiscard]] ARCANE_CORE_API std::string SanitizePathSegment(std::string_view name);
+  [[nodiscard]] ARC_CORE_API std::string SanitizePathSegment(std::string_view name);
   // GameUserDir. Not dist: <projectDir>/Saved (empty with no project). Dist:
   // Windows <localAppData>/<company>/<game>; Posix <xdgConfigHome or home/.config>/<company>/<game>.
   // An empty company drops its segment; an empty game is "ArcaneGame"; no base -> empty.
-  [[nodiscard]] ARCANE_CORE_API std::filesystem::path ResolveGameUserDir(const Config& config, HostPlatform platform,
+  [[nodiscard]] ARC_CORE_API std::filesystem::path ResolveGameUserDir(const Config& config, HostPlatform platform,
                                                                          const PlatformDirs& dirs);
-  [[nodiscard]] ARCANE_CORE_API PlatformDirs CurrentPlatformDirs();
+  [[nodiscard]] ARC_CORE_API PlatformDirs CurrentPlatformDirs();
 ```
 `Paths.cpp`: add the definitions, and make the `GameUserDir` case of `Get` return `ResolveGameUserDir(<S1's stored Config>, kHostPlatform, CurrentPlatformDirs());`:
 ```cpp
@@ -29180,15 +29339,15 @@ namespace Arcane
     class Project;
 
     inline constexpr bool kDistBuild =
-#if defined(ARCANE_DIST)
+#if defined(ARC_BUILD_DIST)
         true;
 #else
         false;
 #endif
 
-    [[nodiscard]] ARCANE_CORE_API Paths::Config PathsConfigFor(const Project& project, std::filesystem::path engineDir,
+    [[nodiscard]] ARC_CORE_API Paths::Config PathsConfigFor(const Project& project, std::filesystem::path engineDir,
                                                                bool dist);
-    [[nodiscard]] ARCANE_CORE_API Paths::Config PathsConfigWithoutProject(std::filesystem::path engineDir, bool dist);
+    [[nodiscard]] ARC_CORE_API Paths::Config PathsConfigWithoutProject(std::filesystem::path engineDir, bool dist);
 }
 ```
 `ProjectPaths.cpp`:
@@ -29529,7 +29688,7 @@ namespace Arcane
 #pragma warning(push)
 #pragma warning(disable: 4251)
 #endif
-    class ARCANE_CORE_API RemoteCVarService
+    class ARC_CORE_API RemoteCVarService
     {
     public:
         explicit RemoteCVarService(CVarRegistry& registry, CVarAuditFn sink = nullptr, void* sinkUser = nullptr) noexcept;
@@ -30450,7 +30609,7 @@ namespace ReferenceGame
     };
 }
 
-ARCANE_GAME_MODULE(ReferenceGame::Module)
+ARC_GAME_MODULE(ReferenceGame::Module)
 ```
 
 - [ ] **Step 4: Run it and see it pass**
@@ -31325,7 +31484,7 @@ msbuild Arcane.slnx -p:Configuration=Dist -p:Platform=x64 -m:4 -nr:false -p:Solu
 Set-Location bin\Dist-windows-x86_64-md\ArcaneTests
 & .\ArcaneTests.exe "[paths],[player-settings],[remote-cvar]" 2>&1 | Tee-Object -FilePath D:\dev\starworks\Arcane-settings\.tmp-tests\s7-gate-dist.log
 ```
-Expected: green. The Runtime `[paths]` case takes its `ARCANE_DIST` branch: `GameUserDir` is `%LOCALAPPDATA%\Starworks QA\S7PathsProbe`, and nothing is written there. Then rebuild Debug once more (Step 2's slnx line with Debug), so the slot ends on Debug.
+Expected: green. The Runtime `[paths]` case takes its `ARC_BUILD_DIST` branch: `GameUserDir` is `%LOCALAPPDATA%\Starworks QA\S7PathsProbe`, and nothing is written there. Then rebuild Debug once more (Step 2's slnx line with Debug), so the slot ends on Debug.
 
 - [ ] **Step 4: Desk checks, by automation only (no SendInput, no focus)**
 1. Runtime, LocalHost: PS-W1 in Step 2 is the record.
