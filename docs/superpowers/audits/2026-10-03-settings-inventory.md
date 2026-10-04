@@ -86,7 +86,7 @@ The three parts were audited in parallel, so some values were inventoried twice 
 - **`D3D12SDKVersion = 619`** is defined twice (Runtime main.cpp:24, Editor main.cpp:43). It stays CONSTANT, moved into one shared header (a must-match pair).
 
 ### R4. Pulled forward (not settings work)
-- **`Message::ToString` password exposure: latent, not live.** It would include the first 100 payload characters, enough for a Login password. But a 2026-10-03 search found **no caller** in Arcane, Aphelyon or the Gacha Server, and the services never log payloads. So no existing log holds credentials, and no purge is needed. The fix stays: redact auth-message payloads in `ToString`, so the trap can't be sprung later. It is a small Core fix, separate from the settings tranches.
+- **`Message::ToString` password exposure: latent, not live.** It would include the first 100 payload characters, enough for a Login password. But a 2026-10-03 search found **no caller** in Arcane, Aphelyon (including the live services, `Source/Services`) or the Gacha archaeology copy, and the services never log payloads. So no existing log holds credentials, and no purge is needed. The fix stays: redact auth-message payloads in `ToString`, so the trap can't be sprung later. It is a small Core fix, separate from the settings tranches.
 - **Debug HUD in Dist:** a per-configuration default (on in Debug/Release, off in Dist), the same pattern as the validation cvars. Goldens are captured from Debug/Release, so they keep it on.
 
 ## Findings that need the user's eyes
