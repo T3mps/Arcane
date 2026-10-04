@@ -1,13 +1,17 @@
 #include <Arcane/Config/CVarRegistry.hpp>
 
 #include <Arcane/Config/CVarFormat.hpp>
+#include <Arcane/Base/Assert.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRef.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <map>
+#include <memory>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -195,6 +199,23 @@ namespace Arcane
         bool publishing = false;
         std::string lastError;
 
+        // The published snapshot (settings spec s4.6, O5). Readers load it
+        // wait-free from any thread; only the main thread stores, and never
+        // mutates one it has stored.
+        std::atomic<std::shared_ptr<const CVarSnapshot>> snapshot;
+        std::uint64_t                                    serial = 0;
+        std::thread::id                                  mainThread = std::this_thread::get_id();
+
+        void RebuildSnapshot()
+        {
+            auto next = std::make_shared<CVarSnapshot>();
+            next->serial = ++serial;
+            next->entries.reserve(slots.size());
+            for (const Slot& s : slots)
+                next->entries.push_back(CVarSnapshot::Entry{ s.generation, s.alive, s.published });
+            snapshot.store(std::shared_ptr<const CVarSnapshot>(std::move(next)), std::memory_order_release);
+        }
+
         // Both RegisterCommand overloads land here; exactly one of fn / legacy is set.
         bool AddCommand(std::string name, CVarFlags flags, std::string help, std::string module,
                         CommandFn fn, LegacyCommandFn legacy, void* user)
@@ -345,6 +366,7 @@ namespace Arcane
     CVarRegistry::CVarRegistry(bool devCvars) : m(new Impl)
     {
         m->devCvars = devCvars;
+        m->RebuildSnapshot();   // readers never see a null snapshot
         const bool listed = RegisterCommand("cvarlist", CVarFlags::None, "List registered cvars.", "engine", &ListCommand, this);
         const bool explained = RegisterCommand("cvar_explain", CVarFlags::None, "Show who set a cvar and the history under it.", "engine",
                                                &ExplainCommand, this);
@@ -570,6 +592,7 @@ namespace Arcane
         slot.history.push_back(CVarHistoryRecord{ SetBy::Default, slot.published, {} });
         slot.dirty = false;
         m->byName.emplace(slot.name, index);
+        m->RebuildSnapshot();
         return CVarHandle{ index, generation };
     }
 
@@ -727,6 +750,7 @@ namespace Arcane
         // The module's policy leaves with it: never call into an unloaded image.
         if (m->policy && m->policyModule == module)
             SetPolicy(nullptr, nullptr, {});
+        m->RebuildSnapshot();
     }
 
     void CVarRegistry::RevertCheats()
@@ -768,7 +792,10 @@ namespace Arcane
         std::vector<std::uint32_t> dirty;
         for (std::uint32_t i = 0; i < m->slots.size(); ++i)
             if (m->slots[i].alive && m->slots[i].dirty) dirty.push_back(i);
+        // The snapshot is swapped between the promote and the dispatch, so the
+        // callbacks and the CVarRef readers inside them already see the new values.
         const std::vector<std::uint32_t> changed = m->Promote(dirty);
+        if (!changed.empty()) m->RebuildSnapshot();
         m->Dispatch(changed);
         // server.cheats went off in this publish (spec s4.5, O4). The Cheat
         // settings revert through the SAME promote-and-dispatch path, so their
@@ -777,9 +804,22 @@ namespace Arcane
         if (cheatsWere && !CheatsEnabled())
         {
             const std::vector<std::uint32_t> reverted = m->Promote(m->DropCheatHistory());
+            if (!reverted.empty()) m->RebuildSnapshot();
             m->Dispatch(reverted);
         }
         m->publishing = false;
+    }
+
+    std::shared_ptr<const CVarSnapshot> CVarRegistry::Snapshot() const
+    {
+        return m->snapshot.load(std::memory_order_acquire);
+    }
+
+    void CVarRegistry::PublishImmediate()
+    {
+        ARC_ASSERT(std::this_thread::get_id() == m->mainThread,
+                   "CVarRegistry::PublishImmediate: main thread only (settings spec s4.6)");
+        Publish();   // inside a running Publish (a callback), this is the documented no-op
     }
 
     std::optional<CVarExplain> CVarRegistry::Explain(std::string_view name) const

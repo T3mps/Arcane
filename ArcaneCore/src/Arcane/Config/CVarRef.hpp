@@ -5,9 +5,9 @@
 // with no string lookup. The value lives in the registry, not here, so
 // unloading the declaring module does not free it; the handle goes stale.
 //
-// Get() reads the registry's published value by handle (S1b moves it onto
-// the published snapshot). A stale handle -- a Dev cvar compiled out of
-// Dist, or a refused declaration -- reads the DECLARED default, so a
+// Get() reads the published snapshot by handle (settings spec s4.6): a
+// wait-free load any thread may make. A stale handle -- a Dev cvar compiled
+// out of Dist, or a refused declaration -- reads the DECLARED default, so a
 // consumer never needs a shadow fallback of its own.
 
 #include <Arcane/Config/CVarRegistry.hpp>
@@ -137,7 +137,7 @@ namespace Arcane
 
         [[nodiscard]] T Get() const
         {
-            const std::optional<CVarValue> value = CVarRegistry::Get().Get(m_handle);
+            const std::optional<CVarValue> value = CVarRegistry::Get().Snapshot()->Get(m_handle);
             if (!value) return m_fallback;
             if constexpr (std::is_enum_v<T>)
             {

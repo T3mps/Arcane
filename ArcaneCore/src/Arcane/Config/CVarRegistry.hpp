@@ -5,6 +5,7 @@
 #include <Arcane/Core/Api.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -153,6 +154,29 @@ namespace Arcane
     };
     using CVarAuditFn = void (*)(const CVarAuditRecord&, void* user);
 
+    // The published values, immutable once built (settings spec s4.6). Publish
+    // swaps a fresh one in atomically. A reader keeps the copy it loaded alive
+    // for as long as it holds it, so worker threads never see a torn value.
+    struct CVarSnapshot
+    {
+        struct Entry
+        {
+            std::uint32_t generation = 0;
+            bool          alive = false;
+            CVarValue     value = CVarValue::Bool(false);
+        };
+        std::uint64_t      serial = 0;    // +1 per swap
+        std::vector<Entry> entries;       // indexed by CVarHandle::index
+
+        [[nodiscard]] std::optional<CVarValue> Get(CVarHandle h) const
+        {
+            if (h.index >= entries.size()) return std::nullopt;
+            const Entry& e = entries[h.index];
+            if (!e.alive || e.generation != h.generation) return std::nullopt;
+            return e.value;
+        }
+    };
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4251)
@@ -223,6 +247,13 @@ namespace Arcane
         // the swap, on this thread, and a Set from a callback waits for the
         // next Publish.
         void Publish();
+
+        // Wait-free for readers (any thread). The snapshot changes only at a
+        // Publish that changed a value, and at Register/UnregisterModule.
+        [[nodiscard]] std::shared_ptr<const CVarSnapshot> Snapshot() const;
+        // Publish now, outside the frame boundary, for tools and tests. Main
+        // thread only (the thread that constructed this registry); asserts.
+        void PublishImmediate();
 
         // Fires on the publishing thread when the published value changes.
         // A Set from the callback is pending until the next Publish.
